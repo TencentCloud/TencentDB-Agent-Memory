@@ -12,12 +12,30 @@
 
 ### 🔧 兼容性 / 安全增强
 
-- **Gateway 可选 Bearer Token 鉴权**：当设置 `TDAI_GATEWAY_TOKEN` 环境变量时，Gateway 要求所有非 OPTIONS 请求带 `Authorization: Bearer <token>`。未设置时行为不变，与 Hermes 完全向后兼容。Claude Code 插件每次 spawn daemon 时生成随机 256-bit token 写入权限 0600 文件。
-- **新增 `tdai-memory-gateway` bin**（`./dist/src/gateway/cli.mjs`）：作为独立可执行 Gateway entry point，支持 `SIGTERM/SIGINT` 优雅关闭、可选父进程 PID liveness 探活（`TDAI_CC_PID` 环境变量）。供 Claude Code / Codex CLI 插件通过 `npx tdai-memory-gateway` 调用，无需把 npm 依赖打包进插件。
+- **Gateway 可选 Bearer Token 鉴权**：当设置 `TDAI_GATEWAY_TOKEN` 环境变量时，Gateway 要求所有非 OPTIONS 请求带 `Authorization: Bearer <token>`。未设置时行为不变，与 Hermes 完全向后兼容。Claude Code 插件每次 spawn daemon 时生成随机 256-bit token 写入权限 0600 文件。Bearer 字符串比较升级为 `crypto.timingSafeEqual`，Scheme 关键字按 RFC 6750 §2.1 大小写不敏感匹配（`Bearer`/`bearer`/`BEARER` 均可），401 响应携带 `WWW-Authenticate: Bearer realm="tdai-gateway"`。
+- **Token 通过文件路径（`TDAI_TOKEN_PATH`）传递给 daemon 子进程**，不再注入到 `TDAI_GATEWAY_TOKEN` 环境变量。后者会随 execve() 写入子进程初始 environment block，使 token 暴露于 `/proc/<pid>/environ` 与 `ps -E`；改为文件传递后只剩 0o600 token 文件这一面，daemon 加载时还会校验文件 owner uid。
+- **daemon 主机绑定加固**：cli.ts 启动时拒绝非 loopback 的 `TDAI_GATEWAY_HOST`，除非显式 `TDAI_GATEWAY_ALLOW_REMOTE=1` 打开开关；防止误把记忆端口曝露到 LAN/公网。
+- **新增 `tdai-memory-gateway` bin**（`./dist/src/gateway/cli.mjs`）：作为独立可执行 Gateway entry point，支持 `SIGTERM/SIGINT` 优雅关闭、可选父进程 PID liveness 探活（`TDAI_CC_PID` 环境变量，轮询间隔 15s）。供 Claude Code / Codex CLI 插件通过 `npx tdai-memory-gateway` 调用，无需把 npm 依赖打包进插件。
+- **daemon 进程管理重写**：基于 `O_CREAT|O_EXCL` 的 `spawn.lock` 互斥，并发触发的 SessionStart / UserPromptSubmit / Stop hook 中只有一个会真正 spawn，其余复用结果，根本性解决双 daemon / 端口与 token 错配问题；`state.json` 改 tmp + rename 原子写；`ensureRunning` 复用旧 daemon 前校验 `state.ccPid` 与当前 cc 一致，避免跨用户/跨会话错用旧 daemon；spawn 时显式设置 `cwd` 与 `TDAI_DATA_DIR` 注入，避免数据目录受 hook 进程 cwd 漂移影响；token 文件权限校验在 Windows 上跳过 `0o077` 位检测（Node `fs` 在 Win 下返回固定 mode 会误报），改用 NTFS ACL。
+- **`$ARGUMENTS` 命令注入面收敛**：cc 当前对 SKILL.md ``!`...` `` 块内的 `$ARGUMENTS` 执行字面 `replaceAll`，用户输入 `foo"; curl evil; "` 可注入到 shell（详见 anthropics/claude-code#16163）。重写 `memory-search/SKILL.md` 去掉 ``!`...` `` bash 块，改为引导 Claude 以 heredoc 通过 Bash 工具向 `hook.mjs search-stdin` 的 stdin 喂查询，用户输入不再经过 shell 词法解析。
+
+### 🐛 修复
+
+- **Stop hook 反复重写 L0**：之前每次 Stop 都向 `/capture` 全量发送最近 10 个 turn，而 Gateway 端 `originalUserMessageCount` 位置切片与 `afterTimestamp` 游标都缺失（`CaptureRequest` 不携带这两个字段），导致长会话前 N 个 turn 在每次 Stop 时反复写入 L0，污染 FTS5 与向量索引。改为基于 `$CLAUDE_PLUGIN_DATA/cursors/<sessionId>.json` 持久化的 `lastSentIndex` 取增量，首次发送以 50 turn 封顶，cursor 文件 tmp + rename 原子写。
+- **CJK 召回退化**：底层 2-gram 停用词表此前包含 `我们/你们/他们/这个/那个/可以/有没/没有/就是/不是` 等普通双字实义词，"我们的部署方案" 被切成 `[们的, 的部, 部署, 署方, 方案]`、丢失 "我们" 锚点 token，中文查询召回受损。停用词表缩到真正低信息量的疑问/连接片段。
+- **transcript 等待逻辑**：Stop hook 等待 cc 落盘从硬 sleep(800ms) 改为 `waitForTranscriptStable(2s)`：每 100ms 轮询 `stat().size`，连续两次相同字节数即视为 flush 完成；慢盘场景更稳。
+- **L0 jsonl 直查内存压力**：`searchL0JsonlDirect` 从 `readFile` 整体加载改为 `readline + createReadStream` 流式扫描，避免长会话 jsonl 触发 OOM；文件遍历从字符串排序+reverse（依赖 `YYYY-MM-DD.jsonl` 命名）改为 mtime 倒序，对 cc UUID 命名也工作正常。
+- **GatewayClient silent-failure 可观测**：所有 catch 块新增 `logPath` 失败追加，handleStatus 在 `/memory-status` 输出 `hook.log` / `daemon.log` 路径；daemon spawn 的 stdio stderr 重定向到 `daemon.log` 替代静默丢弃。
+
+### ✅ 测试
+
+- `auth.test.ts`：从 5 个 case 扩展到 14 个，覆盖鉴权对所有 POST 业务端点的矩阵、Bearer scheme 大小写、mangled Authorization 头、`WWW-Authenticate` 响应。
+- `hook.test.ts`：新增 cursor 增量、无新 turn 跳过 captureTurn、`MAX_CAPTURE_TURNS=50` 边界 3 个 case，且把 stop describe 整体 stub `CLAUDE_PLUGIN_DATA` 到 mkdtemp 隔离 cursor 状态。
+- `daemon.test.ts`：新增 `ensureRunning` 拒绝 ccPid 不匹配旧 state 的回归。
 
 ### 📚 文档
 
-- `claude-code-plugin/README.md` 与 `README_CN.md`：安装、配置、数据布局、排障与安全模型完整说明。
+- `claude-code-plugin/README.md` 与 `README_CN.md`：安装、配置、数据布局、排障与安全模型完整说明，新增 `TDAI_TOKEN_PATH` / `TDAI_GATEWAY_ALLOW_REMOTE` / `TDAI_GATEWAY_CORS_ORIGIN` / Windows 兼容性说明。
 
 ---
 

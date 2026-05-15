@@ -47,22 +47,29 @@ No `~/.claude/settings.json` or `~/.codex/config.toml` mutation. The first time 
 
 ## Configuration
 
-The plugin reads three optional environment variables:
+The plugin reads these optional environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `TDAI_SESSION_KEY` | `hash(cwd)` | Override the per-project memory partition |
-| `TDAI_GATEWAY_TOKEN` | auto-generated | Bearer token for daemon ↔ hook IPC |
+| `TDAI_TOKEN_PATH` | auto-generated 0o600 file | Path to a file the daemon reads the Bearer token from (preferred over `TDAI_GATEWAY_TOKEN`; the env-var form puts the token into `/proc/<pid>/environ` and `ps -E`) |
+| `TDAI_GATEWAY_TOKEN` | unset | Bearer token via env (fallback for the Hermes sidecar mode) |
+| `TDAI_GATEWAY_HOST` | `127.0.0.1` | Daemon bind host. Non-loopback values are refused unless `TDAI_GATEWAY_ALLOW_REMOTE=1` is set, to avoid exposing the memory port to the LAN. |
+| `TDAI_GATEWAY_ALLOW_REMOTE` | unset | Opt-in switch required to bind a non-loopback `TDAI_GATEWAY_HOST` |
+| `TDAI_GATEWAY_CORS_ORIGIN` | unset | When set, enables CORS with the given Origin; the default disables CORS so cross-origin pages cannot probe the daemon's port. |
 | `TDAI_GATEWAY_COMMAND` | `npx` | Override daemon spawn command (advanced; e.g. `node /path/to/cli.mjs` for development) |
 
 Most users never need to set any of these. `TDAI_SESSION_KEY=shared-with-other-project` is the most common power-user override.
 
 ## Data location
 
-- `${CLAUDE_PLUGIN_DATA}/state.json` — daemon PID + port
-- `${CLAUDE_PLUGIN_DATA}/token` — Bearer token (chmod 600)
+- `${CLAUDE_PLUGIN_DATA}/state.json` — daemon PID + port (tmp+rename atomic)
+- `${CLAUDE_PLUGIN_DATA}/token` — Bearer token (chmod 600, owner-uid checked)
+- `${CLAUDE_PLUGIN_DATA}/spawn.lock` — O_CREAT|O_EXCL daemon-spawn mutex (stale after 60s)
+- `${CLAUDE_PLUGIN_DATA}/cursors/<sessionId>.json` — per-cc-session `lastSentIndex` so Stop only POSTs new turns
 - `${CLAUDE_PLUGIN_DATA}/memory-tdai/` — SQLite + sqlite-vec database, scene blocks, persona snapshots
-- `${CLAUDE_PLUGIN_DATA}/hook.log` — hook diagnostic log
+- `${CLAUDE_PLUGIN_DATA}/hook.log` — hook diagnostic log (gateway-client failures, etc.)
+- `${CLAUDE_PLUGIN_DATA}/daemon.log` — daemon stderr/stdout (cold-start crashes, etc.)
 
 ## How it works
 
@@ -77,7 +84,7 @@ All hook handlers fail silently (writing to `hook.log`) — memory is never on t
 ## Troubleshooting
 
 **`/memory-status` says "unreachable"**:
-- Check `${CLAUDE_PLUGIN_DATA}/hook.log` for the most recent error
+- Check `${CLAUDE_PLUGIN_DATA}/hook.log` (gateway-client request failures) and `${CLAUDE_PLUGIN_DATA}/daemon.log` (daemon cold-start crashes)
 - Restart your cc session — the SessionStart hook re-probes and re-spawns the daemon
 
 **Multiple cc terminals on the same project**:
@@ -89,7 +96,11 @@ All hook handlers fail silently (writing to `hook.log`) — memory is never on t
 
 ## Security model
 
-The daemon listens only on `127.0.0.1` and requires a Bearer token on every request. The token is generated freshly at each spawn and stored at `${CLAUDE_PLUGIN_DATA}/token` with permission 0600. Any process that cannot read that file cannot read your memories.
+- The daemon listens only on `127.0.0.1` by default. Non-loopback `TDAI_GATEWAY_HOST` is refused unless `TDAI_GATEWAY_ALLOW_REMOTE=1` is also set.
+- Every request requires `Authorization: Bearer <token>`. Comparison is timing-safe; the scheme keyword is RFC 6750 §2.1 case-insensitive; 401 responses include `WWW-Authenticate: Bearer realm="tdai-gateway"`.
+- The token is generated freshly at each daemon spawn, written to `${CLAUDE_PLUGIN_DATA}/token` (chmod 600), and passed to the daemon child process **by file path** (`TDAI_TOKEN_PATH`) rather than as an env var, so the token does not surface via `/proc/<pid>/environ` or `ps -E`. Token-file owner is checked against the current uid on read.
+- The `memory-search` skill passes the user query to the daemon over **stdin** via a heredoc, never as a shell argv element — this avoids the literal-`replaceAll` `$ARGUMENTS` injection surface in cc (anthropics/claude-code#16163).
+- On Windows the 0o077 mode check is skipped (Node's `fs` returns fixed mode bits there); the OS-provided NTFS ACL on the token file is relied on instead.
 
 ## Building from source
 
