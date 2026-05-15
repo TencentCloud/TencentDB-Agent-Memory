@@ -41,6 +41,8 @@ codex plugin marketplace add <marketplace-url>
 
 （一旦发布到 Codex marketplace，将变为一条命令安装。）
 
+> **已知限制（Codex CLI ≤ v0.130）。** 通过 `source_type = "local"` 的本地 marketplace 安装本插件，目前受 Codex 上游 issue [openai/codex#22078](https://github.com/openai/codex/issues/22078) 影响：插件 manifest 能被正确解析、`/plugin` 列表里可见并可切换，但声明的 `skills/` 与 `hooks/hooks.json` 不会暴露到运行中的 session。这是 Codex 侧的 plugin discovery bug，与本插件无关——我们的 `.codex-plugin/plugin.json` 已经同时声明了 `skills` 与 `hooks`，且现有 hook 事件名与 `${CLAUDE_PLUGIN_ROOT}` 环境变量在 Codex `hooks/src/engine/discovery.rs` 的 backcompat 分支里已经支持。绕过办法：暂用 Claude Code 安装，或等本插件发布到 `source_type = "git"` marketplace。
+
 ---
 
 不需要改 `~/.claude/settings.json` 或 `~/.codex/config.toml`。第一次启动 session 时，插件通过 `npx tdai-memory-gateway` 在 8421–8430 端口拉起 daemon，并生成随机 Bearer token。状态保存在 `${CLAUDE_PLUGIN_DATA}`。

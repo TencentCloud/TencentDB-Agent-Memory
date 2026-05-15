@@ -41,6 +41,8 @@ codex plugin marketplace add <marketplace-url>
 
 (Once published to the Codex marketplace, this becomes a one-liner.)
 
+> **Known limitation (Codex CLI ≤ v0.130).** Installing this plugin from a `source_type = "local"` marketplace is currently affected by Codex upstream issue [openai/codex#22078](https://github.com/openai/codex/issues/22078): the plugin manifest is parsed and the plugin is toggleable in `/plugin`, but the declared `skills/` and `hooks/hooks.json` are not exposed to the running session. This is a Codex-side discovery bug unrelated to the plugin itself — our `.codex-plugin/plugin.json` already declares both `skills` and `hooks`, and Codex accepts the existing hook event names + `${CLAUDE_PLUGIN_ROOT}` env var via its `hooks/src/engine/discovery.rs` backcompat path. Workaround: use Claude Code for now, or wait for the upcoming `source_type = "git"` marketplace publication.
+
 ---
 
 No `~/.claude/settings.json` or `~/.codex/config.toml` mutation. The first time a session starts after installation, the plugin spawns the local daemon (via `npx tdai-memory-gateway`) on port 8421–8430 with a randomly generated Bearer token. State persists under `${CLAUDE_PLUGIN_DATA}`.

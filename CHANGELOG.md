@@ -26,6 +26,7 @@
 - **transcript 等待逻辑**：Stop hook 等待 cc 落盘从硬 sleep(800ms) 改为 `waitForTranscriptStable(2s)`：每 100ms 轮询 `stat().size`，连续两次相同字节数即视为 flush 完成；慢盘场景更稳。
 - **L0 jsonl 直查内存压力**：`searchL0JsonlDirect` 从 `readFile` 整体加载改为 `readline + createReadStream` 流式扫描，避免长会话 jsonl 触发 OOM；文件遍历从字符串排序+reverse（依赖 `YYYY-MM-DD.jsonl` 命名）改为 mtime 倒序，对 cc UUID 命名也工作正常。
 - **GatewayClient silent-failure 可观测**：所有 catch 块新增 `logPath` 失败追加，handleStatus 在 `/memory-status` 输出 `hook.log` / `daemon.log` 路径；daemon spawn 的 stdio stderr 重定向到 `daemon.log` 替代静默丢弃。
+- **Codex CLI plugin 端 hooks 注册补全**：`.codex-plugin/plugin.json` 之前只声明了 `"skills": "./skills/"`，缺 `"hooks": "./hooks/hooks.json"` —— Codex CLI 与 Claude Code 不同，plugin-local hooks 不走"约定俗成路径"，而是强制从 manifest 的 `hooks` 字段读取（见 `codex-rs/core-plugins/src/manifest.rs::RawPluginManifest`）。补上字段后，已声明的 `SessionStart`/`UserPromptSubmit`/`Stop` 三个 hook 与现有 `${CLAUDE_PLUGIN_ROOT}` env var 在 Codex 侧均原生兼容（Codex `hooks/src/engine/discovery.rs` 注入了 `CLAUDE_PLUGIN_ROOT` backcompat alias，同时配 `PLUGIN_ROOT` 新名）。
 
 ### ✅ 测试
 
@@ -36,6 +37,7 @@
 ### 📚 文档
 
 - `claude-code-plugin/README.md` 与 `README_CN.md`：安装、配置、数据布局、排障与安全模型完整说明，新增 `TDAI_TOKEN_PATH` / `TDAI_GATEWAY_ALLOW_REMOTE` / `TDAI_GATEWAY_CORS_ORIGIN` / Windows 兼容性说明。
+- `claude-code-plugin/README.md` 与 `README_CN.md`：Codex CLI 安装段下新增"已知限制"小节，标注 Codex CLI ≤ v0.130 通过 `source_type = "local"` marketplace 安装时受上游 [openai/codex#22078](https://github.com/openai/codex/issues/22078) 影响，`skills/` 与 `hooks/` 不会暴露到 session；插件这一侧 manifest + hook 协议已就绪，等上游修复或本插件正式发布到 `source_type = "git"` marketplace 后即恢复。
 
 ---
 

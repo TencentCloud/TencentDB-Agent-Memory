@@ -20,6 +20,7 @@
     "scene-extraction"
   ],
   "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "TDAI Memory",
     "shortDescription": "Long-term + short-term memory for AI coding agents",
