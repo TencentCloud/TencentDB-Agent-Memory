@@ -270,11 +270,18 @@ export interface IMemoryStore {
 
   // ── L1 Search ────────────────────────────────────────────
 
-  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number): MaybePromise<L1FtsResult[]>;
+  searchL1Vector(
+    queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+    filter?: L1QueryFilter,
+  ): MaybePromise<L1SearchResult[]>;
+  searchL1Fts(ftsQuery: string, limit?: number, filter?: L1QueryFilter): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;
+    sessionId?: string;
+    sessionKey?: string;
     sparseVector?: Array<[number, number]>;
     topK?: number;
   }): MaybePromise<L1SearchResult[]>;

@@ -28,6 +28,7 @@ import type {
   IMemoryStore,
   StoreCapabilities,
   L0Record,
+  L1QueryFilter,
   L1SearchResult,
   L1FtsResult,
   L0SearchResult,
@@ -94,16 +95,6 @@ export interface L0RecordRow {
   message_text: string;
   recorded_at: string;
   timestamp: number;
-}
-
-/** Filter options for querying L1 records from SQLite. */
-export interface L1QueryFilter {
-  /** If provided, only return records for this session key (conversation channel). */
-  sessionKey?: string;
-  /** If provided, only return records for this session ID (single conversation instance). */
-  sessionId?: string;
-  /** If provided, only return records with updated_time strictly after this ISO 8601 UTC timestamp. */
-  updatedAfter?: string;
 }
 
 interface Logger {
@@ -300,6 +291,36 @@ export function bm25RankToScore(rank: number): number {
     return relevance / (1 + relevance);
   }
   return 1 / (1 + rank);
+}
+
+function hasL1ScopeFilter(filter?: L1QueryFilter): boolean {
+  return Boolean(filter?.sessionKey || filter?.sessionId);
+}
+
+function matchesL1ScopeFilter(
+  row: { session_key: string; session_id: string },
+  filter?: L1QueryFilter,
+): boolean {
+  if (filter?.sessionKey && row.session_key !== filter.sessionKey) return false;
+  if (filter?.sessionId && row.session_id !== filter.sessionId) return false;
+  return true;
+}
+
+function buildL1ScopeSql(filter?: L1QueryFilter): {
+  clauses: string[];
+  values: string[];
+} {
+  const clauses: string[] = [];
+  const values: string[] = [];
+  if (filter?.sessionKey) {
+    clauses.push("session_key = ?");
+    values.push(filter.sessionKey);
+  }
+  if (filter?.sessionId) {
+    clauses.push("session_id = ?");
+    values.push(filter.sessionId);
+  }
+  return { clauses, values };
 }
 
 /** FTS5 search result for L1 records. */
@@ -1109,7 +1130,12 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns an empty array on any error (e.g. dimension
    * mismatch, corrupted DB) so callers can fall back to keyword search.
    */
-  searchL1Vector(queryEmbedding: Float32Array, topK = 5): VectorSearchResult[] {
+  searchL1Vector(
+    queryEmbedding: Float32Array,
+    topK = 5,
+    _queryText?: string,
+    filter?: L1QueryFilter,
+  ): VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
       return [];
@@ -1123,7 +1149,9 @@ export class VectorStore implements IMemoryStore {
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
       const ZERO_VEC_BUFFER = 10;
-      const retrieveCount = topK + ZERO_VEC_BUFFER;
+      const retrieveCount = hasL1ScopeFilter(filter)
+        ? Math.max(this.countL1(), topK + ZERO_VEC_BUFFER)
+        : topK + ZERO_VEC_BUFFER;
 
       this.logger?.debug?.(
         `${TAG} [L1-search] START topK=${topK}, retrieveCount=${retrieveCount}, ` +
@@ -1171,6 +1199,7 @@ export class VectorStore implements IMemoryStore {
           this.logger?.warn(`${TAG} [L1-search] record_id=${record_id} has vector but NO metadata (orphan)`);
           continue;
         }
+        if (!matchesL1ScopeFilter(meta, filter)) continue;
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -2026,10 +2055,25 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
+  searchL1Fts(ftsQuery: string, limit = 20, filter?: L1QueryFilter): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
+      const scopeSql = buildL1ScopeSql(filter);
+      const rows = (scopeSql.clauses.length === 0
+        ? this.stmtL1FtsSearch.all(ftsQuery, limit)
+        : this.db
+            .prepare(`
+              SELECT record_id, content_original AS content, type, priority, scene_name,
+                     session_key, session_id, timestamp_str, timestamp_start, timestamp_end,
+                     metadata_json,
+                     bm25(l1_fts) AS rank
+              FROM l1_fts
+              WHERE l1_fts MATCH ?
+                AND ${scopeSql.clauses.join(" AND ")}
+              ORDER BY rank ASC
+              LIMIT ?
+            `)
+            .all(ftsQuery, ...scopeSql.values, limit)) as Array<{
         record_id: string;
         content: string;
         type: string;

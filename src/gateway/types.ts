@@ -66,6 +66,8 @@ export interface CaptureResponse {
 export interface MemorySearchRequest {
   query: string;
   limit?: number;
+  session_key?: string;
+  session_id?: string;
   type?: string;
   scene?: string;
 }

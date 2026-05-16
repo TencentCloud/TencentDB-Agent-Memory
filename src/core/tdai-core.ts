@@ -291,6 +291,8 @@ export class TdaiCore {
     const result = await executeMemorySearch({
       query: params.query,
       limit: params.limit ?? 5,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       type: params.type,
       scene: params.scene,
       vectorStore: this.vectorStore,

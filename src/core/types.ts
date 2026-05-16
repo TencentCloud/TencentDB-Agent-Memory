@@ -229,6 +229,8 @@ export interface CaptureResult {
 export interface MemorySearchParams {
   query: string;
   limit?: number;
+  sessionKey?: string;
+  sessionId?: string;
   type?: string;
   scene?: string;
 }

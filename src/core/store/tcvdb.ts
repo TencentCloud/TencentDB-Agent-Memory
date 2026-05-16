@@ -98,6 +98,25 @@ function epochMsToIso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+function escapeFilterString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildL1FilterExpression(filter?: L1QueryFilter): string | undefined {
+  const conditions: string[] = [];
+  if (filter?.sessionKey) {
+    conditions.push(`session_key = "${escapeFilterString(filter.sessionKey)}"`);
+  }
+  if (filter?.sessionId) {
+    conditions.push(`session_id = "${escapeFilterString(filter.sessionId)}"`);
+  }
+  if (filter?.updatedAfter) {
+    const afterMs = isoToEpochMs(filter.updatedAfter);
+    if (afterMs > 0) conditions.push(`updated_time_ms > ${afterMs}`);
+  }
+  return conditions.length > 0 ? conditions.join(" and ") : undefined;
+}
+
 /**
  * Extract agent ID from a sessionKey like `agent:<agentId>:<channel>`.
  * Returns empty string if the format doesn't match.
@@ -552,15 +571,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return [];
 
-      // Build TCVDB filter expression from L1QueryFilter
-      const conditions: string[] = [];
-      if (filter?.sessionKey) conditions.push(`session_key = "${filter.sessionKey}"`);
-      if (filter?.sessionId) conditions.push(`session_id = "${filter.sessionId}"`);
-      if (filter?.updatedAfter) {
-        const afterMs = isoToEpochMs(filter.updatedAfter);
-        if (afterMs > 0) conditions.push(`updated_time_ms > ${afterMs}`);
-      }
-      const filterExpr = conditions.length > 0 ? conditions.join(" and ") : undefined;
+      const filterExpr = buildL1FilterExpression(filter);
 
       const docs = await this._queryAllDocs(
         this.l1Collection,
@@ -615,21 +626,26 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L1 Search Operations ─────────────────────────────────
 
-  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string): Promise<L1SearchResult[]> {
+  async searchL1Vector(
+    _queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+    filter?: L1QueryFilter,
+  ): Promise<L1SearchResult[]> {
     // TCVDB uses server-side embedding — delegate to hybrid search with text
     if (queryText) {
-      return this.searchL1HybridAsync({ queryText, topK });
+      return this.searchL1HybridAsync({ queryText, topK, filter });
     }
     // No queryText and TCVDB can't use client embeddings directly via embeddingItems
     // Return empty — callers should pass queryText for TCVDB
     return [];
   }
 
-  async searchL1Fts(ftsQuery: string, limit?: number): Promise<L1FtsResult[]> {
+  async searchL1Fts(ftsQuery: string, limit?: number, filter?: L1QueryFilter): Promise<L1FtsResult[]> {
     // TCVDB has no pure FTS — use hybrid search with sparse-only path
     // The ftsQuery is raw text, use it as queryText for hybrid
     if (!ftsQuery) return [];
-    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit });
+    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit, filter });
     // L1SearchResult and L1FtsResult have identical shapes
     return results;
   }
@@ -637,12 +653,21 @@ export class TcvdbMemoryStore implements IMemoryStore {
   async searchL1Hybrid(params: {
     query?: string;
     queryEmbedding?: Float32Array;
+    sessionId?: string;
+    sessionKey?: string;
     sparseVector?: SparseVector;
     topK?: number;
   }): Promise<L1SearchResult[]> {
     const queryText = params.query;
     if (!queryText) return [];
-    return this.searchL1HybridAsync({ queryText, topK: params.topK });
+    return this.searchL1HybridAsync({
+      queryText,
+      topK: params.topK,
+      filter: {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      },
+    });
   }
 
   /**
@@ -650,10 +675,11 @@ export class TcvdbMemoryStore implements IMemoryStore {
    * Call this directly from async contexts (hooks, tools).
    */
   async searchL1HybridAsync(params: {
+    filter?: L1QueryFilter;
     queryText: string;
     topK?: number;
   }): Promise<L1SearchResult[]> {
-    const { queryText, topK = 10 } = params;
+    const { filter, queryText, topK = 10 } = params;
     if (!queryText) return [];
 
     try {
@@ -665,6 +691,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
         limit: topK,
         outputFields: L1_OUTPUT_FIELDS,
       };
+      const filterExpr = buildL1FilterExpression(filter);
+      if (filterExpr) searchParams.filter = filterExpr;
 
       // ann: use embedding field name "text" for server-side embedding
       // (per SDK: AnnSearch(field_name="text", data='query string'))
@@ -702,6 +730,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
           retrieveVector: false,
           outputFields: L1_OUTPUT_FIELDS,
         };
+        if (filterExpr) denseSearch.filter = filterExpr;
         const resp = await this.client.search(this.l1Collection, denseSearch);
         return this._parseL1SearchResults(resp.documents);
       }

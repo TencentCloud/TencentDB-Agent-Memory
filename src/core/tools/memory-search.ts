@@ -10,7 +10,7 @@
  * The tool is registered via `api.registerTool()` in index.ts.
  */
 
-import type { IMemoryStore, L1SearchResult } from "../store/types.js";
+import type { IMemoryStore, L1QueryFilter, L1SearchResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 
@@ -45,6 +45,26 @@ export interface MemorySearchResult {
 }
 
 const TAG = "[memory-tdai][tdai_memory_search]";
+
+function matchesL1Scope(
+  item: { session_key?: string; session_id?: string },
+  sessionKey?: string,
+  sessionId?: string,
+): boolean {
+  if (sessionKey && item.session_key !== sessionKey) return false;
+  if (sessionId && item.session_id !== sessionId) return false;
+  return true;
+}
+
+function buildL1ScopeFilter(params: {
+  sessionKey?: string;
+  sessionId?: string;
+}): L1QueryFilter | undefined {
+  const filter: L1QueryFilter = {};
+  if (params.sessionKey) filter.sessionKey = params.sessionKey;
+  if (params.sessionId) filter.sessionId = params.sessionId;
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
 
 // ============================
 // RRF (Reciprocal Rank Fusion)
@@ -88,6 +108,8 @@ function rrfMergeL1(...lists: MemorySearchResultItem[][]): MemorySearchResultIte
 export async function executeMemorySearch(params: {
   query: string;
   limit: number;
+  sessionKey?: string;
+  sessionId?: string;
   type?: string;
   scene?: string;
   vectorStore?: IMemoryStore;
@@ -97,6 +119,8 @@ export async function executeMemorySearch(params: {
   const {
     query,
     limit,
+    sessionKey,
+    sessionId,
     type: typeFilter,
     scene: sceneFilter,
     vectorStore,
@@ -106,6 +130,7 @@ export async function executeMemorySearch(params: {
 
   logger?.debug?.(
     `${TAG} CALLED: query="${query.slice(0, 100)}", limit=${limit}, ` +
+    `sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, ` +
     `typeFilter=${typeFilter ?? "(none)"}, sceneFilter=${sceneFilter ?? "(none)"}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
@@ -124,6 +149,7 @@ export async function executeMemorySearch(params: {
   // ── Determine available capabilities ──
   const hasEmbedding = !!embeddingService;
   const hasFts = vectorStore.isFtsAvailable();
+  const scopeFilter = buildL1ScopeFilter({ sessionKey, sessionId });
 
   if (!hasEmbedding && !hasFts) {
     logger?.warn?.(`${TAG} Neither EmbeddingService nor FTS5 available — cannot search`);
@@ -153,9 +179,9 @@ export async function executeMemorySearch(params: {
           return [];
         }
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+        const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK, scopeFilter);
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
-        return ftsResults.map((r) => ({
+        return ftsResults.filter((r) => matchesL1Scope(r, sessionKey, sessionId)).map((r) => ({
           id: r.record_id,
           content: r.content,
           type: r.type,
@@ -182,9 +208,14 @@ export async function executeMemorySearch(params: {
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, candidateK, query);
+        const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(
+          queryEmbedding,
+          candidateK,
+          query,
+          scopeFilter,
+        );
         logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
-        return vecResults.map((r) => ({
+        return vecResults.filter((r) => matchesL1Scope(r, sessionKey, sessionId)).map((r) => ({
           id: r.record_id,
           content: r.content,
           type: r.type,

@@ -290,6 +290,8 @@ export class TdaiGateway {
     const result = await this.core.searchMemories({
       query: body.query,
       limit: body.limit,
+      sessionKey: body.session_key,
+      sessionId: body.session_id,
       type: body.type,
       scene: body.scene,
     });

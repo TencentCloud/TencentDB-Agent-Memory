@@ -4,6 +4,14 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 改进
+
+- **L1 作用域过滤**：`searchMemories()` 支持 `sessionKey` / `sessionId`，Gateway `/search/memories` 支持 `session_key` / `session_id`，避免共享后端里的结构化记忆跨 session 召回。
+
+---
+
 ## [0.3.4] - 2026-05-12
 
 ### 🐛 修复
