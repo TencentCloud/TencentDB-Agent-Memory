@@ -92,6 +92,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    disableThinking: envBool("TDAI_LLM_DISABLE_THINKING") ?? bool(llmConfig, "disableThinking") ?? false,
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)
@@ -182,6 +183,17 @@ function envInt(key: string): number | undefined {
   if (!v) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function envBool(key: string): boolean | undefined {
+  const v = env(key);
+  if (!v) return undefined;
+  return v === "1" || v.toLowerCase() === "true";
+}
+
+function bool(src: Record<string, unknown>, key: string): boolean | undefined {
+  const v = src[key];
+  return typeof v === "boolean" ? v : undefined;
 }
 
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
