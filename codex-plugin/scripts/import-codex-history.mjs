@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
   ensureGateway,
@@ -10,11 +11,13 @@ import {
   sanitizeMemoryText,
   sha1
 } from "./lib.mjs";
+import { normalizeL1Concurrency, positiveInteger } from "./seed-constants.mjs";
 
 const DEFAULT_SESSIONS_DIR = "~/.codex/sessions";
 const DEFAULT_ARCHIVED_DIR = "~/.codex/archived_sessions";
 const DEFAULT_FULL_PIPELINE_TIMEOUT_MS = 900_000;
 const DEFAULT_SEED_TIMEOUT_MS = 960_000;
+const DEFAULT_MAX_JSONL_BYTES = 100 * 1024 * 1024;
 
 export async function importCodexHistoryCli(args = process.argv.slice(2)) {
   const opts = parseArgs(args);
@@ -34,7 +37,8 @@ export async function importCodexHistoryCli(args = process.argv.slice(2)) {
     byDate: 0,
     byCwd: 0,
     empty: 0,
-    parseError: 0
+    parseError: 0,
+    tooLarge: 0
   };
 
   for (const entry of files) {
@@ -105,6 +109,7 @@ async function collectJsonlFiles(root, kind) {
     const entries = await fs.readdir(current, { withFileTypes: true });
     for (const entry of entries) {
       const full = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
         await walk(full);
       } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
@@ -117,9 +122,13 @@ async function collectJsonlFiles(root, kind) {
 }
 
 async function parseCodexRollout(entry, opts) {
-  let text;
   try {
-    text = await fs.readFile(entry.file, "utf-8");
+    const stat = await fs.stat(entry.file);
+    const configuredMaxBytes = Number(process.env.TDAI_CODEX_IMPORT_MAX_JSONL_BYTES || DEFAULT_MAX_JSONL_BYTES);
+    const maxBytes = Number.isFinite(configuredMaxBytes) && configuredMaxBytes > 0
+      ? configuredMaxBytes
+      : DEFAULT_MAX_JSONL_BYTES;
+    if (stat.size > maxBytes) return { ok: false, reason: "tooLarge" };
   } catch {
     return { ok: false, reason: "parseError" };
   }
@@ -131,38 +140,46 @@ async function parseCodexRollout(entry, opts) {
   const messages = [];
   let messageIndex = 0;
 
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      continue;
-    }
-
-    const payload = row.payload || {};
-    if (row.type === "session_meta") {
-      sessionId = payload.id || sessionId;
-      sessionCwd = payload.cwd || sessionCwd;
-      sessionTimestamp = timestampMs(payload.timestamp || row.timestamp) || sessionTimestamp;
-      source = sourceLabel(payload.source);
-      continue;
-    }
-
-    if (row.type !== "response_item" || payload.type !== "message") continue;
-    if (payload.role !== "user" && payload.role !== "assistant") continue;
-
-    const content = sanitizeMemoryText(contentToText(payload.content));
-    if (shouldSkipMessage(payload.role, content)) continue;
-
-    const timestamp = timestampMs(row.timestamp) || sessionTimestamp || Date.now();
-    messages.push({
-      id: stableMessageId(entry.file, sessionId, messageIndex, payload.role, timestamp, content),
-      role: payload.role,
-      content,
-      timestamp
+  try {
+    const lines = createInterface({
+      input: fsSync.createReadStream(entry.file, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
     });
-    messageIndex++;
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const payload = row.payload || {};
+      if (row.type === "session_meta") {
+        sessionId = payload.id || sessionId;
+        sessionCwd = payload.cwd || sessionCwd;
+        sessionTimestamp = timestampMs(payload.timestamp || row.timestamp) || sessionTimestamp;
+        source = sourceLabel(payload.source);
+        continue;
+      }
+
+      if (row.type !== "response_item" || payload.type !== "message") continue;
+      if (payload.role !== "user" && payload.role !== "assistant") continue;
+
+      const content = sanitizeMemoryText(contentToText(payload.content));
+      if (shouldSkipMessage(payload.role, content)) continue;
+
+      const timestamp = timestampMs(row.timestamp) || sessionTimestamp || Date.now();
+      messages.push({
+        id: stableMessageId(entry.file, sessionId, messageIndex, payload.role, timestamp, content),
+        role: payload.role,
+        content,
+        timestamp
+      });
+      messageIndex++;
+    }
+  } catch {
+    return { ok: false, reason: "parseError" };
   }
 
   if (opts.since && sessionTimestamp && sessionTimestamp < opts.since) {
@@ -287,7 +304,7 @@ function parseArgs(args) {
     fullPipeline: true,
     importIntoCurrentStore: true,
     waitForL1: true,
-    l1Concurrency: positiveInteger(process.env.TDAI_CODEX_IMPORT_L1_CONCURRENCY, 8),
+    l1Concurrency: normalizeL1Concurrency(process.env.TDAI_CODEX_IMPORT_L1_CONCURRENCY, 8),
     l2BatchSize: positiveInteger(process.env.TDAI_CODEX_IMPORT_L2_BATCH_SIZE, 32, 128),
     fullPipelineTimeoutMs: positiveNumber(process.env.TDAI_CODEX_FULL_PIPELINE_TIMEOUT_MS, DEFAULT_FULL_PIPELINE_TIMEOUT_MS),
     dryRun: false,
@@ -311,7 +328,7 @@ function parseArgs(args) {
     else if (arg === "--no-wait-for-l1") opts.waitForL1 = false;
     else if (arg === "--snapshot-seed") opts.importIntoCurrentStore = false;
     else if (arg === "--full-pipeline-timeout-ms") opts.fullPipelineTimeoutMs = positiveNumber(next(args, ++i, arg), 0);
-    else if (arg === "--l1-concurrency") opts.l1Concurrency = positiveInteger(next(args, ++i, arg), 1);
+    else if (arg === "--l1-concurrency") opts.l1Concurrency = normalizeL1Concurrency(next(args, ++i, arg), 1);
     else if (arg === "--l2-batch-size") opts.l2BatchSize = positiveInteger(next(args, ++i, arg), 1, 128);
     else if (arg === "--sessions-dir") opts.sessionsDir = path.resolve(expandHome(next(args, ++i, arg)));
     else if (arg === "--archived-dir") opts.archivedDir = path.resolve(expandHome(next(args, ++i, arg)));
@@ -342,11 +359,6 @@ function parseSince(value) {
 function positiveNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function positiveInteger(value, fallback, max = 32) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(1, Math.floor(n))) : fallback;
 }
 
 function timestampMs(value) {

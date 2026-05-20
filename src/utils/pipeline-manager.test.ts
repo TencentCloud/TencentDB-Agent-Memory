@@ -75,6 +75,27 @@ describe("MemoryPipelineManager", () => {
     await scheduler.destroy();
   });
 
+  it("flushSession waits for DB-backed work even when timers were evicted", async () => {
+    const scheduler = new MemoryPipelineManager(config, logger);
+    let completed = false;
+
+    scheduler.setL1Runner(async () => {
+      await delay(20);
+      completed = true;
+      return { processedCount: 1 };
+    });
+
+    await scheduler.notifyConversation("seed-restored-session", []);
+    (scheduler as unknown as { sessionTimers: Map<string, unknown> }).sessionTimers.delete("seed-restored-session");
+
+    await scheduler.flushSession("seed-restored-session");
+
+    expect(completed).toBe(true);
+    expect(scheduler.getSessionState("seed-restored-session")?.conversation_count).toBe(0);
+
+    await scheduler.destroy();
+  });
+
   it("can run L1 work for multiple sessions concurrently", async () => {
     const scheduler = new MemoryPipelineManager({
       ...config,

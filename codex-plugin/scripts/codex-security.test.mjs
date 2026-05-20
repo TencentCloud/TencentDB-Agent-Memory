@@ -113,6 +113,14 @@ ${privateKeyBlock}
     expect(cleaned).toContain("[REDACTED_PRIVATE_KEY]");
   });
 
+  it("redacts local Gateway token diagnostics", () => {
+    const token = "a".repeat(43);
+    const cleaned = sanitizeMemoryText(`gateway token: ${token}`);
+
+    expect(cleaned).not.toContain(token);
+    expect(cleaned).toContain("[REDACTED");
+  });
+
   it("redacts JSON-style credential fields", () => {
     const cleaned = sanitizeMemoryText(JSON.stringify({
       apiKey: "plain-secret-123",
@@ -312,6 +320,22 @@ ${privateKeyBlock}
     expect(all.matches.map((entry) => entry.tool_call_id).sort()).toEqual(["tool-a", "tool-b"]);
   });
 
+  it("escapes Mermaid labels for offloaded tool results", async () => {
+    const cwd = path.join(tmpDir, "project-mermaid");
+    fs.mkdirSync(cwd);
+    const result = await recordCodexToolOffload({
+      ...offloadParams(cwd, "session-mermaid", "tool-mermaid"),
+      toolName: "tool\"] --> EVIL[\"x",
+      inputSummary: "payload <script>alert(1)</script> [brackets]",
+    });
+
+    const canvas = fs.readFileSync(result.paths.canvasPath, "utf-8");
+    expect(canvas).not.toContain("<script>");
+    expect(canvas).not.toContain("\"] --> EVIL");
+    expect(canvas).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(canvas).toContain("&#91;brackets&#93;");
+  });
+
   it("falls back to project-scoped local L0 JSONL search when Gateway recall is unavailable", async () => {
     process.env.TDAI_CODEX_AUTOSTART = "false";
     process.env.TDAI_CODEX_GATEWAY_URL = "http://127.0.0.1:9";
@@ -424,6 +448,17 @@ ${privateKeyBlock}
 
     expect(unique.size).toBe(1);
     expect(fs.readFileSync(tokenPath, "utf-8").trim()).toBe(tokens[0]);
+  });
+
+  it("does not overwrite an empty token file after an atomic-create race", async () => {
+    const tokenPath = path.join(tmpDir, "empty-raced-token");
+    fs.writeFileSync(tokenPath, "", { mode: 0o600 });
+    process.env.TDAI_TOKEN_PATH = tokenPath;
+    delete process.env.TDAI_CODEX_GATEWAY_TOKEN;
+    delete process.env.TDAI_GATEWAY_TOKEN;
+
+    await expect(ensureGatewayAuthToken()).rejects.toThrow(/already exists but is empty/);
+    expect(fs.readFileSync(tokenPath, "utf-8")).toBe("");
   });
 
   it("does not send auth or payloads to non-loopback Gateway URLs unless explicitly enabled", async () => {

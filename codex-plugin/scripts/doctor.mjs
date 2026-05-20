@@ -23,6 +23,7 @@ export async function buildAdapterDoctorReport(options = {}) {
   const profile = await readJson(profilePath);
   const checks = [];
 
+  addCheck(checks, "profile_readable", Boolean(profile), { profilePath });
   addCheck(checks, "profile", Boolean(profile?.adapterId), {
     adapterId: profile?.adapterId || null,
     profilePath,
@@ -209,8 +210,12 @@ function addCheck(checks, name, ok, details = {}) {
 }
 
 async function readJson(filePath) {
-  const text = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(text);
+  try {
+    const text = await fs.readFile(filePath, "utf-8");
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(args) {

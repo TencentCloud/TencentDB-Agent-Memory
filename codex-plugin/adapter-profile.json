@@ -36,6 +36,13 @@
       "TDAI_CODEX_GATEWAY_TOKEN",
       "TDAI_GATEWAY_TOKEN",
       "TDAI_TOKEN_PATH"
+    ],
+    "behaviorEnv": [
+      "TDAI_CODEX_TOOL_OFFLOAD",
+      "TDAI_CODEX_AUTOSTART",
+      "TDAI_CODEX_CIRCUIT_BREAKER",
+      "TDAI_CODEX_ALLOW_NON_LOOPBACK",
+      "TDAI_CODEX_DEBUG"
     ]
   },
   "reuseContract": {

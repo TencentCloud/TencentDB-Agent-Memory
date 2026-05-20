@@ -1184,7 +1184,9 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.  A small buffer of 10 is sufficient for remnants.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
-      const scopeExtra = hasSearchScope(scope) ? VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES : 0;
+      const scopeExtra = hasSearchScope(scope)
+        ? Math.max(VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES, topK * 20)
+        : 0;
       const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER + scopeExtra;
 
       this.logger?.debug?.(
@@ -1627,7 +1629,9 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
-      const scopeExtra = hasSearchScope(scope) ? VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES : 0;
+      const scopeExtra = hasSearchScope(scope)
+        ? Math.max(VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES, topK * 20)
+        : 0;
       const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER + scopeExtra;
 
       this.logger?.debug?.(

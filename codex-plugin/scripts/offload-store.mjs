@@ -205,6 +205,12 @@ export async function lookupCodexOffload(params = {}) {
   const matches = [];
 
   for (const root of roots) {
+    let realRoot;
+    try {
+      realRoot = fsSync.realpathSync(root);
+    } catch {
+      continue;
+    }
     const files = await listOffloadJsonlFiles(root);
     for (const file of files) {
       const entries = await readEntries(file);
@@ -214,7 +220,7 @@ export async function lookupCodexOffload(params = {}) {
         if (query && !entryMatchesQuery(entry, query)) continue;
         if (cwd && normalizePath(entry.codex?.cwd) !== cwd) continue;
 
-        const resultPath = entry.result_ref ? path.join(root, entry.result_ref) : "";
+        const resultPath = entry.result_ref ? safeResolveUnderRoot(root, realRoot, entry.result_ref) : "";
         const item = {
           node_id: entry.node_id,
           tool_call_id: entry.tool_call_id,
@@ -241,6 +247,21 @@ export async function lookupCodexOffload(params = {}) {
   }
 
   return { matches, total: matches.length, truncated: false };
+}
+
+function safeResolveUnderRoot(root, resolvedRoot, relativePath) {
+  const resolved = path.resolve(root, relativePath);
+  const parent = path.dirname(resolved);
+  let realParent;
+  try {
+    realParent = fsSync.realpathSync(parent);
+  } catch {
+    return "";
+  }
+  if (realParent !== resolvedRoot && !realParent.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return "";
+  }
+  return path.join(realParent, path.basename(resolved));
 }
 
 export async function offloadCli(args, context = {}) {
@@ -408,8 +429,8 @@ function buildMermaidCanvas(entries, paths) {
       `policy: ${entry.codex?.policy || "unknown"}`,
       `summary: ${singleLine(entry.summary, 130)}`,
       `ref: ${path.basename(entry.result_ref || "")}`,
-    ].join("<br/>");
-    lines.push(`  ${entry.node_id}["${escapeMermaidLabel(label)}"]`);
+    ].map(escapeMermaidLabel).join("<br/>");
+    lines.push(`  ${entry.node_id}["${label}"]`);
   }
 
   for (let i = 1; i < entries.length; i++) {
@@ -668,6 +689,9 @@ function escapeAttr(value) {
 function escapeMermaidLabel(value) {
   return String(value)
     .replace(/\\/g, "\\\\")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/\[/g, "&#91;")
     .replace(/\]/g, "&#93;")

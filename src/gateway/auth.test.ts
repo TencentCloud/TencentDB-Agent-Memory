@@ -154,6 +154,33 @@ describe("Gateway bearer auth", () => {
     });
     expect(result.status).toBe(403);
   });
+
+  it("allows RFC loopback CORS origins", async () => {
+    const result = await request({
+      port,
+      path: "/seed",
+      method: "OPTIONS",
+      headers: { Origin: "http://127.0.0.2:3000" },
+    });
+    expect(result.status).toBe(204);
+  });
+
+  it("rejects oversized JSON bodies with 413", async () => {
+    const previousMaxBody = process.env.TDAI_GATEWAY_MAX_JSON_BODY_BYTES;
+    vi.stubEnv("TDAI_GATEWAY_MAX_JSON_BODY_BYTES", "64");
+    try {
+      const result = await request({
+        port,
+        path: "/seed",
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: { data: "x".repeat(128) },
+      });
+      expect(result.status).toBe(413);
+    } finally {
+      vi.stubEnv("TDAI_GATEWAY_MAX_JSON_BODY_BYTES", previousMaxBody ?? "");
+    }
+  });
 });
 
 describe("Gateway loopback compatibility without a token", () => {
@@ -327,5 +354,54 @@ describe("Gateway non-loopback tokenless safety", () => {
   it("rejects tokenless non-loopback access even when auth-disabled is set", async () => {
     const result = await request({ port, path: "/health" });
     expect(result.status).toBe(401);
+  });
+});
+
+describe("Gateway POST rate limiting", () => {
+  const port = 18457;
+  let gateway: TdaiGateway;
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-gateway-rate-limit-"));
+    vi.stubEnv("TDAI_DATA_DIR", tmpDir);
+    vi.stubEnv("TDAI_GATEWAY_TOKEN", "");
+    vi.stubEnv("TDAI_TOKEN_PATH", "");
+    vi.stubEnv("TDAI_GATEWAY_AUTH_DISABLED", "true");
+    vi.stubEnv("TDAI_GATEWAY_POST_RATE_LIMIT_PER_MINUTE", "1");
+    gateway = new TdaiGateway({ server: { port, host: "127.0.0.1" } } as never);
+    await gateway.start();
+  });
+
+  beforeEach(() => {
+    vi.stubEnv("TDAI_GATEWAY_TOKEN", "");
+    vi.stubEnv("TDAI_TOKEN_PATH", "");
+    vi.stubEnv("TDAI_GATEWAY_AUTH_DISABLED", "true");
+    vi.stubEnv("TDAI_GATEWAY_POST_RATE_LIMIT_PER_MINUTE", "1");
+  });
+
+  afterAll(async () => {
+    await gateway.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    delete process.env.TDAI_GATEWAY_POST_RATE_LIMIT_PER_MINUTE;
+  });
+
+  it("returns 429 after the configured per-minute POST limit is exceeded", async () => {
+    const first = await request({
+      port,
+      path: "/search/memories",
+      method: "POST",
+      body: {},
+    });
+    expect(first.status).toBe(400);
+
+    const second = await request({
+      port,
+      path: "/search/memories",
+      method: "POST",
+      body: {},
+    });
+    expect(second.status).toBe(429);
+    expect(second.body).toContain("Too many POST requests");
   });
 });

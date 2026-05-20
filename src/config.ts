@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { normalizeL1Concurrency } from "./core/seed/constants.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -480,7 +482,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
       enableWarmup: bool(pipelineGroup, "enableWarmup") ?? true,
       l1IdleTimeoutSeconds: num(pipelineGroup, "l1IdleTimeoutSeconds") ?? 600,
-      l1Concurrency: Math.min(32, Math.max(1, Math.floor(num(pipelineGroup, "l1Concurrency") ?? 1))),
+      l1Concurrency: normalizeL1Concurrency(num(pipelineGroup, "l1Concurrency"), 1),
       l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 90,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,

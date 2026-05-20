@@ -11,12 +11,11 @@ import { readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { TdaiGateway } from "./server.js";
-
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]", "::ffff:127.0.0.1"]);
+import { isLoopbackHost } from "./loopback.js";
 
 function assertSafeHost(): void {
   const host = process.env.TDAI_GATEWAY_HOST?.trim();
-  if (!host || LOOPBACK_HOSTS.has(host)) return;
+  if (!host || isLoopbackHost(host)) return;
   if (process.env.TDAI_GATEWAY_ALLOW_REMOTE === "1" || process.env.TDAI_CODEX_ALLOW_NON_LOOPBACK === "true") {
     return;
   }

@@ -39,6 +39,7 @@ export interface ManifestSeedInfo {
   sessions: number;
   rounds: number;
   messages: number;
+  fullPipelineFlushed?: boolean;
   startedAt: string;
   completedAt: string;
 }

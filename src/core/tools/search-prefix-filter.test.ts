@@ -39,8 +39,34 @@ describe("session-prefix search filters", () => {
     expect(result.results.map((item) => item.id)).toEqual(["a", "c"]);
     expect(countL1).not.toHaveBeenCalled();
     expect(searchL1Fts).toHaveBeenCalledTimes(1);
-    expect(searchL1Fts.mock.calls[0][1]).toBeLessThan(rows.length);
+    expect(searchL1Fts.mock.calls[0][1]).toBe(50);
     expect(searchL1Fts.mock.calls[0][2]).toEqual({ sessionKeyPrefixes: prefixes });
+  });
+
+  it("leaves L1 search unscoped when session-key prefixes are empty or undefined", async () => {
+    for (const prefixes of [undefined, []]) {
+      const rows = [
+        l1Result("a", "codex:abc123:session-a"),
+        l1Result("b", "codex:def456:session-b"),
+      ];
+      const searchL1Fts = vi.fn((_query: string, limit: number) => rows.slice(0, limit));
+      const vectorStore = {
+        isFtsAvailable: () => true,
+        searchL1Fts,
+      };
+
+      const result = await executeMemorySearch({
+        query: "project note",
+        limit: 2,
+        sessionKeyPrefixes: prefixes,
+        vectorStore: vectorStore as any,
+        logger,
+      });
+
+      expect(result.results.map((item) => item.id)).toEqual(["a", "b"]);
+      expect(searchL1Fts.mock.calls[0][1]).toBe(6);
+      expect(searchL1Fts.mock.calls[0][2]).toBeUndefined();
+    }
   });
 
   it("filters L0 conversation search results by session-key prefix", async () => {
@@ -73,8 +99,34 @@ describe("session-prefix search filters", () => {
     expect(result.results.map((item) => item.id)).toEqual(["a", "c"]);
     expect(countL0).not.toHaveBeenCalled();
     expect(searchL0Fts).toHaveBeenCalledTimes(1);
-    expect(searchL0Fts.mock.calls[0][1]).toBeLessThan(rows.length);
+    expect(searchL0Fts.mock.calls[0][1]).toBe(50);
     expect(searchL0Fts.mock.calls[0][2]).toEqual({ sessionKeyPrefixes: prefixes });
+  });
+
+  it("leaves L0 search unscoped when session-key prefixes are empty or undefined", async () => {
+    for (const prefixes of [undefined, []]) {
+      const rows = [
+        l0Result("a", "codex:abc123:session-a"),
+        l0Result("b", "codex:def456:session-b"),
+      ];
+      const searchL0Fts = vi.fn((_query: string, limit: number) => rows.slice(0, limit));
+      const vectorStore = {
+        isFtsAvailable: () => true,
+        searchL0Fts,
+      };
+
+      const result = await executeConversationSearch({
+        query: "previous command",
+        limit: 2,
+        sessionKeyPrefixes: prefixes,
+        vectorStore: vectorStore as any,
+        logger,
+      });
+
+      expect(result.results.map((item) => item.id)).toEqual(["a", "b"]);
+      expect(searchL0Fts.mock.calls[0][1]).toBe(6);
+      expect(searchL0Fts.mock.calls[0][2]).toBeUndefined();
+    }
   });
 });
 

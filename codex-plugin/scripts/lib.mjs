@@ -16,6 +16,7 @@ import {
   recordCodexToolOffload,
   selectToolOffloadPolicy
 } from "./offload-store.mjs";
+import { isLoopbackHost } from "./loopback.mjs";
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8420";
 const DEFAULT_CONTEXT_MAX_CHARS = 12000;
@@ -48,6 +49,22 @@ const INJECTED_MEMORY_TAGS = [
   "current_task_context",
   "history_task_context",
 ];
+const SENSITIVE_JSON_KEY = "[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|token|password|authorization)[A-Za-z0-9_-]*";
+const REDACTION_PATTERNS = Object.freeze({
+  privateKey: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+  authorizationLine: /(^|[\r\n])(\s*(?:proxy-)?authorization\s*[:=]\s*)[^\r\n]*/gi,
+  bearer: /Bearer\s+[A-Za-z0-9._~+/-]+=*/g,
+  gatewayToken: /(\bgateway[-_\s]?token\b[^A-Za-z0-9_-]{0,20})[A-Za-z0-9_-]{43}\b/gi,
+  openAiKey: /\b(sk-[A-Za-z0-9_-]{16,})\b/g,
+  githubPat: /\b(github_pat_[A-Za-z0-9_]{20,})\b/g,
+  githubToken: /\b(gh[pousr]_[A-Za-z0-9_]{30,})\b/g,
+  slackToken: /\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+  awsAccessKey: /\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/g,
+  jsonDouble: new RegExp(`(["'])(${SENSITIVE_JSON_KEY})\\1\\s*:\\s*"[^"]*"`, "gi"),
+  jsonSingle: new RegExp(`(["'])(${SENSITIVE_JSON_KEY})\\1\\s*:\\s*'[^']*'`, "gi"),
+  jsonBare: new RegExp(`(["'])(${SENSITIVE_JSON_KEY})\\1\\s*:\\s*[^,}\\]\\s]+`, "gi"),
+  envLike: new RegExp(`\\b(${SENSITIVE_JSON_KEY})\\b\\s*[:=]\\s*['"]?[^'\"\\s,}]+`, "gi"),
+});
 
 export function pluginRoot() {
   const configured = process.env.PLUGIN_ROOT || process.env.CLAUDE_PLUGIN_ROOT;
@@ -232,6 +249,15 @@ function userPromptFromTranscriptLine(line) {
 function isSyntheticUserPrompt(text) {
   const trimmed = text.trim();
   return trimmed.startsWith("<turn_aborted>") || trimmed.startsWith("<tdai-codex-");
+}
+
+function isSyntheticAssistantText(text) {
+  const trimmed = text.trim();
+  return trimmed === "NO_REPLY" ||
+    trimmed.startsWith("<turn_aborted>") ||
+    trimmed.startsWith("<tdai-codex-") ||
+    /^✅\s*New session started/.test(trimmed) ||
+    /^Pre-compaction memory flush/i.test(trimmed);
 }
 
 export function sessionKeyFromPayload(payload) {
@@ -1238,6 +1264,7 @@ async function extractAssistantFromTranscript(transcriptPath, sinceMs) {
       const ts = timestampFromAny(parsed);
       if (sinceMs && ts && ts < sinceMs - 1000) continue;
       const text = extractAssistantText(parsed).trim();
+      if (isSyntheticAssistantText(text)) continue;
       if (text.length > 20) candidates.push(text);
     }
     return truncate(sanitizeMemoryText(candidates.at(-1) || ""), 10000);
@@ -1405,20 +1432,20 @@ function truncate(value, maxChars) {
 }
 
 function redact(value) {
-  const sensitiveJsonKey = "[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|token|password|authorization)[A-Za-z0-9_-]*";
   return String(value ?? "")
-    .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
-    .replace(/(^|[\r\n])(\s*(?:proxy-)?authorization\s*[:=]\s*)[^\r\n]*/gi, "$1$2[REDACTED]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]")
-    .replace(/\b(sk-[A-Za-z0-9_-]{16,})\b/g, "[REDACTED_API_KEY]")
-    .replace(/\b(github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\b(gh[pousr]_[A-Za-z0-9_]{30,})\b/g, "[REDACTED_GITHUB_TOKEN]")
-    .replace(/\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[REDACTED_SLACK_TOKEN]")
-    .replace(/\b((?:AKIA|ASIA)[0-9A-Z]{16})\b/g, "[REDACTED_AWS_ACCESS_KEY]")
-    .replace(new RegExp(`(["'])(${sensitiveJsonKey})\\1\\s*:\\s*"[^"]*"`, "gi"), "$1$2$1: \"[REDACTED]\"")
-    .replace(new RegExp(`(["'])(${sensitiveJsonKey})\\1\\s*:\\s*'[^']*'`, "gi"), "$1$2$1: '[REDACTED]'")
-    .replace(new RegExp(`(["'])(${sensitiveJsonKey})\\1\\s*:\\s*[^,}\\]\\s]+`, "gi"), "$1$2$1: [REDACTED]")
-    .replace(new RegExp(`\\b(${sensitiveJsonKey})\\b\\s*[:=]\\s*['"]?[^'\"\\s,}]+`, "gi"), "$1=[REDACTED]");
+    .replace(REDACTION_PATTERNS.privateKey, "[REDACTED_PRIVATE_KEY]")
+    .replace(REDACTION_PATTERNS.authorizationLine, "$1$2[REDACTED]")
+    .replace(REDACTION_PATTERNS.bearer, "Bearer [REDACTED]")
+    .replace(REDACTION_PATTERNS.gatewayToken, "$1[REDACTED_GATEWAY_TOKEN]")
+    .replace(REDACTION_PATTERNS.openAiKey, "[REDACTED_API_KEY]")
+    .replace(REDACTION_PATTERNS.githubPat, "[REDACTED_GITHUB_TOKEN]")
+    .replace(REDACTION_PATTERNS.githubToken, "[REDACTED_GITHUB_TOKEN]")
+    .replace(REDACTION_PATTERNS.slackToken, "[REDACTED_SLACK_TOKEN]")
+    .replace(REDACTION_PATTERNS.awsAccessKey, "[REDACTED_AWS_ACCESS_KEY]")
+    .replace(REDACTION_PATTERNS.jsonDouble, "$1$2$1: \"[REDACTED]\"")
+    .replace(REDACTION_PATTERNS.jsonSingle, "$1$2$1: '[REDACTED]'")
+    .replace(REDACTION_PATTERNS.jsonBare, "$1$2$1: [REDACTED]")
+    .replace(REDACTION_PATTERNS.envLike, "$1=[REDACTED]");
 }
 
 function stripTagBlock(value, tag) {
@@ -1507,11 +1534,19 @@ export async function ensureGatewayAuthToken() {
       }
     }
     if (err?.code !== "EEXIST") throw err;
-    const racedToken = (await fs.readFile(tokenPath, "utf-8")).trim();
+    const racedToken = await readTokenWithRetry(tokenPath);
     if (racedToken) return racedToken;
-    await writePrivateFile(tokenPath, `${token}\n`);
-    return token;
+    throw new Error(`Gateway token file already exists but is empty: ${tokenPath}`);
   }
+}
+
+async function readTokenWithRetry(tokenPath, attempts = 5, delayMs = 100) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const token = (await fs.readFile(tokenPath, "utf-8")).trim();
+    if (token) return token;
+    await delay(delayMs);
+  }
+  return "";
 }
 
 export function configuredGatewayTokenPath() {
@@ -1520,14 +1555,6 @@ export function configuredGatewayTokenPath() {
 
 function gatewayTokenPath() {
   return path.join(tdaiDataDir(), "codex-adapter", "gateway-token");
-}
-
-function isLoopbackHost(host) {
-  const normalized = String(host || "").trim().toLowerCase();
-  return normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized === "[::1]";
 }
 
 async function ensurePrivateDir(dir) {
@@ -1569,6 +1596,7 @@ async function hydrateLoginShellEnv(env, names) {
   const missing = names.filter((name) => !env[name]);
   if (missing.length === 0) return;
   try {
+    // Values are serialized one variable per line; multiline env values are intentionally unsupported here.
     const script = missing.map((name) => `printf '%s=%s\\n' ${shellQuote(name)} "${"$"}${name}"`).join("; ");
     const output = await captureCommand("zsh", ["-lc", script], 1500);
     for (const line of output.split(/\r?\n/)) {

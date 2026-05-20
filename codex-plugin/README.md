@@ -162,7 +162,8 @@ export TDAI_CODEX_DATA_DIR="$HOME/.memory-tencentdb/codex-memory-tdai"
 export TDAI_CODEX_GATEWAY_URL="http://127.0.0.1:8420"
 export TDAI_CODEX_AUTOSTART=true
 export TDAI_CODEX_FLUSH_EVERY_N_TURNS=5
-export TDAI_CODEX_TOOL_OFFLOAD=true
+# Tool-output offload is enabled by default; uncomment to disable it.
+# export TDAI_CODEX_TOOL_OFFLOAD=false
 ```
 
 When the adapter autostarts the Gateway it keeps the service on loopback by
@@ -282,7 +283,7 @@ By default it reads:
 
 ```text
 ~/.codex/sessions/**/*.jsonl
-~/.codex/archived_sessions/*.jsonl
+~/.codex/archived_sessions/**/*.jsonl
 ```
 
 The importer is opt-in and runs as a dry run unless `--yes` is provided:

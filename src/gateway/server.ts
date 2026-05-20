@@ -23,6 +23,7 @@ import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
+import { isLoopbackHost } from "./loopback.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import type {
@@ -49,6 +50,10 @@ import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+const DEFAULT_MAX_JSON_BODY_BYTES = 100 * 1024 * 1024;
+const DEFAULT_POST_RATE_LIMIT_PER_MINUTE = 600;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const INVALID_GATEWAY_TOKEN = crypto.randomBytes(32).toString("base64url");
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -70,9 +75,32 @@ function createConsoleLogger(): Logger {
 async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const configuredMaxBytes = Number(process.env.TDAI_GATEWAY_MAX_JSON_BODY_BYTES || DEFAULT_MAX_JSON_BODY_BYTES);
+    const maxBytes = Number.isFinite(configuredMaxBytes) && configuredMaxBytes > 0
+      ? configuredMaxBytes
+      : DEFAULT_MAX_JSON_BODY_BYTES;
+    let totalBytes = 0;
+    let bodyTooLarge = false;
+    const contentLength = Number(req.headers["content-length"] || 0);
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      req.resume();
+      reject(new HttpError(413, "Request body too large"));
+      return;
+    }
+    req.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        bodyTooLarge = true;
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
       try {
+        if (bodyTooLarge) {
+          reject(new HttpError(413, "Request body too large"));
+          return;
+        }
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(JSON.parse(body) as T);
       } catch (err) {
@@ -81,6 +109,12 @@ async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
     });
     req.on("error", reject);
   });
+}
+
+class HttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -106,10 +140,13 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  private readonly expectedAuthToken: string;
+  private readonly postRateLimits = new Map<string, { windowStart: number; count: number }>();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
     this.logger = createConsoleLogger();
+    this.expectedAuthToken = expectedGatewayToken();
 
     // Create host adapter
     const adapter = new StandaloneHostAdapter({
@@ -186,6 +223,7 @@ export class TdaiGateway {
     }
 
     if (!this.authorizeRequest(req, res, method)) return;
+    if (method === "POST" && !this.checkPostRateLimit(req, res)) return;
 
     try {
       switch (`${method} ${pathname}`) {
@@ -211,7 +249,7 @@ export class TdaiGateway {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
-      sendError(res, 500, msg);
+      sendError(res, err instanceof HttpError ? err.status : 500, msg);
     }
   }
 
@@ -236,7 +274,7 @@ export class TdaiGateway {
   }
 
   private authorizeRequest(req: http.IncomingMessage, res: http.ServerResponse, method: string): boolean {
-    const token = expectedGatewayToken();
+    const token = this.expectedAuthToken;
 
     if (!token) {
       if (!isLoopbackHost(this.config.server.host)) {
@@ -265,6 +303,26 @@ export class TdaiGateway {
       return false;
     }
     return true;
+  }
+
+  private checkPostRateLimit(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const limit = numericEnv("TDAI_GATEWAY_POST_RATE_LIMIT_PER_MINUTE", DEFAULT_POST_RATE_LIMIT_PER_MINUTE);
+    if (limit <= 0) return true;
+
+    const now = Date.now();
+    const key = req.socket.remoteAddress || "unknown";
+    const bucket = this.postRateLimits.get(key);
+    if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      this.postRateLimits.set(key, { windowStart: now, count: 1 });
+      return true;
+    }
+
+    bucket.count += 1;
+    if (bucket.count <= limit) return true;
+
+    res.setHeader("Retry-After", String(Math.ceil((RATE_LIMIT_WINDOW_MS - (now - bucket.windowStart)) / 1000)));
+    sendError(res, 429, "Too many POST requests");
+    return false;
   }
 
   private handleRoot(res: http.ServerResponse): void {
@@ -439,7 +497,7 @@ export class TdaiGateway {
       throw err;
     }
 
-    this.logger.info(
+    this.logger.debug?.(
       `Seed request: ${input.sessions.length} session(s), ` +
       `${input.totalRounds} round(s), ${input.totalMessages} message(s), ` +
       `waitL1=${body.wait_for_l1 !== false}, ` +
@@ -465,6 +523,7 @@ export class TdaiGateway {
     const baseConfig = this.config.memory as unknown as Record<string, unknown>;
     let pluginConfig: Record<string, unknown> = {
       ...baseConfig,
+      // Gateway-owned LLM settings intentionally override plugin memory.llm for seed calls.
       llm: {
         enabled: true,
         baseUrl: this.config.llm.baseUrl,
@@ -483,17 +542,16 @@ export class TdaiGateway {
         });
         return;
       }
-
-      for (const key of Object.keys(body.config_override)) {
-        const baseVal = pluginConfig[key];
-        const overVal = body.config_override[key];
-        if (baseVal && typeof baseVal === "object" && !Array.isArray(baseVal) &&
-            overVal && typeof overVal === "object" && !Array.isArray(overVal)) {
-          pluginConfig[key] = { ...(baseVal as Record<string, unknown>), ...(overVal as Record<string, unknown>) };
-        } else {
-          pluginConfig[key] = overVal;
-        }
+      const unknownOverrideKeys = Object.keys(body.config_override).filter((key) => !(key in pluginConfig));
+      if (unknownOverrideKeys.length > 0) {
+        sendJson(res, 400, {
+          error: "config_override contains unknown top-level keys",
+          blocked_paths: unknownOverrideKeys,
+        });
+        return;
       }
+
+      pluginConfig = deepMergeConfig(pluginConfig, body.config_override);
     }
 
     // Execute seed pipeline (blocking — this may take minutes for large inputs)
@@ -544,13 +602,13 @@ function expectedGatewayToken(): string {
   if (!tokenPath) return "";
   try {
     const stat = fs.statSync(tokenPath);
-    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) return "\0";
+    if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) return INVALID_GATEWAY_TOKEN;
     if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid !== process.getuid()) {
-      return "\0";
+      return INVALID_GATEWAY_TOKEN;
     }
-    return fs.readFileSync(tokenPath, "utf-8").trim() || "\0";
+    return fs.readFileSync(tokenPath, "utf-8").trim() || INVALID_GATEWAY_TOKEN;
   } catch {
-    return "\0";
+    return INVALID_GATEWAY_TOKEN;
   }
 }
 
@@ -570,16 +628,9 @@ function isAllowedCorsOrigin(origin: string): boolean {
   }
 }
 
-function isLoopbackHost(host: string): boolean {
-  const normalized = String(host || "").trim().toLowerCase();
-  return normalized === "localhost" ||
-    normalized === "127.0.0.1" ||
-    normalized === "::1" ||
-    normalized === "[::1]";
-}
-
 function findBlockedConfigOverridePaths(value: unknown, prefix = ""): string[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  if (prefix.split(".").filter(Boolean).length > 16) return [prefix || "<root>"];
   const blocked: string[] = [];
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     const current = prefix ? `${prefix}.${key}` : key;
@@ -602,11 +653,38 @@ function isBlockedConfigOverridePath(path: string): boolean {
   return /(?:apikey|secret|token|password|authorization|credential|baseurl|backendurl|proxyurl)$/.test(leaf);
 }
 
+function numericEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function deepMergeConfig(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, overrideValue] of Object.entries(override)) {
+    const baseValue = merged[key];
+    if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+      merged[key] = deepMergeConfig(baseValue, overrideValue);
+    } else {
+      merged[key] = overrideValue;
+    }
+  }
+  return merged;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function safeTokenEqual(actual: string, expected: string): boolean {
   const actualBuffer = Buffer.from(actual);
   const expectedBuffer = Buffer.from(expected);
-  if (actualBuffer.length !== expectedBuffer.length) return false;
-  return crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+  const paddedLength = Math.max(64, actualBuffer.length, expectedBuffer.length);
+  const paddedActual = Buffer.alloc(paddedLength);
+  const paddedExpected = Buffer.alloc(paddedLength);
+  actualBuffer.copy(paddedActual);
+  expectedBuffer.copy(paddedExpected);
+  const equal = crypto.timingSafeEqual(paddedActual, paddedExpected);
+  return equal && actualBuffer.length === expectedBuffer.length;
 }
 
 // ============================

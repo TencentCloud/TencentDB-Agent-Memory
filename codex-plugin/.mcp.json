@@ -3,7 +3,7 @@
     "tdai-memory": {
       "command": "node",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-server.mjs"
+        "${PLUGIN_ROOT}/scripts/mcp-server.mjs"
       ],
       "env": {
         "TDAI_CODEX_AUTOSTART": "true"

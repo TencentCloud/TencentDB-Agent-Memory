@@ -37,6 +37,7 @@ import type {
   SeedProgress,
   SeedSummary,
 } from "./types.js";
+import { normalizeL1Concurrency } from "./constants.js";
 
 const TAG = "[memory-tdai] [seed]";
 
@@ -85,7 +86,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
   // Parse config — all values come from pluginConfig (or parseConfig defaults)
   const cfg = parseConfig(pluginConfig);
   if (opts.l1Concurrency !== undefined) {
-    cfg.pipeline.l1Concurrency = Math.min(32, Math.max(1, Math.floor(opts.l1Concurrency)));
+    cfg.pipeline.l1Concurrency = normalizeL1Concurrency(opts.l1Concurrency, cfg.pipeline.l1Concurrency);
   }
   if (opts.waitForFullPipeline) {
     // Seed/import should not let L2/L3 consume LLM capacity while L0/L1 is
@@ -344,6 +345,7 @@ async function flushSeedFullPipelineInBatches(
   }
 
   const chunks = chunkPendingL2Groups(groups, batchSize);
+  const checkpoint = new CheckpointManager(outputDir, logger);
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]!;
     const records = chunk.flatMap((group) => group.records);
@@ -364,7 +366,6 @@ async function flushSeedFullPipelineInBatches(
       llmRunner,
     });
 
-    const checkpoint = new CheckpointManager(outputDir, logger);
     const preState = await checkpoint.read();
     const extractResult = await extractor.extract(records.map((r) => ({
       content: r.content,
@@ -411,7 +412,6 @@ async function flushSeedFullPipelineInBatches(
   }
 
   if (recordCount > 0) {
-    const checkpoint = new CheckpointManager(outputDir, logger);
     await checkpoint.setPersonaUpdateRequest("seed full-pipeline bulk L2 flush completed");
     logger.info(`${TAG} Bulk L2 flush complete; running final L3 persona pass`);
   } else {

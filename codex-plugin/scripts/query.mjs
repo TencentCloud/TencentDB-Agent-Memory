@@ -18,6 +18,7 @@ import {
   sessionKeyFromPayload,
   sessionKeyPrefixesForCwd
 } from "./lib.mjs";
+import { normalizeL1Concurrency } from "./seed-constants.mjs";
 
 const command = process.argv[2] || "status";
 const args = process.argv.slice(3);
@@ -74,7 +75,7 @@ if (command === "status") {
   }
   const fullPipelineTimeoutMs = positiveNumber(process.env.TDAI_CODEX_FULL_PIPELINE_TIMEOUT_MS, 900000);
   const seedTimeoutMs = positiveNumber(process.env.TDAI_CODEX_SEED_TIMEOUT_MS, 960000);
-  const l1Concurrency = positiveInteger(process.env.TDAI_CODEX_SEED_L1_CONCURRENCY, 1);
+  const l1Concurrency = normalizeL1Concurrency(process.env.TDAI_CODEX_SEED_L1_CONCURRENCY, 1);
   const dataPath = path.resolve(expandHome(file));
   const data = JSON.parse(await readFile(dataPath, "utf-8"));
   const result = await httpPost("/seed", {
@@ -116,9 +117,4 @@ async function readTextFromStdin() {
 function positiveNumber(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function positiveInteger(value, fallback) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? Math.min(32, Math.max(1, Math.floor(n))) : fallback;
 }

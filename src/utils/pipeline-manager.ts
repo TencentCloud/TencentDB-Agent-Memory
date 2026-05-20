@@ -534,12 +534,12 @@ export class MemoryPipelineManager {
         `${TAG} [${sessionKey}] flushSession: enqueuing L1 for ` +
         `${buffer?.length ?? 0} buffered message(s), conversations=${state?.conversation_count ?? 0}`,
       );
-      this.enqueueL1(sessionKey, "flush");
+      await this.enqueueL1(sessionKey, "flush");
     }
 
     // Step 3: wait for this session's L1 task only. Waiting for the shared
     // queue to become globally idle would serialize unrelated seed workers.
-    await timers?.l1Promise;
+    await this.sessionTimers.get(sessionKey)?.l1Promise;
 
     this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: complete`);
   }
@@ -749,13 +749,13 @@ export class MemoryPipelineManager {
   // Internal: L1 queue
   // ============================
 
-  private enqueueL1(sessionKey: string, triggerReason: "threshold" | "idle_timeout" | "flush" = "threshold"): void {
+  private enqueueL1(sessionKey: string, triggerReason: "threshold" | "idle_timeout" | "flush" = "threshold"): Promise<void> | undefined {
     const timers = this.getOrCreateTimers(sessionKey);
 
     // Don't double-queue
     if (timers.l1Queued) {
       this.logger?.debug?.(`${TAG} [${sessionKey}] L1 already queued, skipping`);
-      return;
+      return timers.l1Promise;
     }
 
     // Cancel idle timer if running (threshold beat it)
@@ -787,6 +787,7 @@ export class MemoryPipelineManager {
       timers.l1Promise = undefined;
     });
     timers.l1Promise = taskPromise;
+    return taskPromise;
   }
 
   /**
