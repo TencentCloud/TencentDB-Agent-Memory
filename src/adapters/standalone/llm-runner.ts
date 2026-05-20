@@ -16,6 +16,7 @@
  *   All file paths are resolved relative to `workspaceDir`, enforcing sandbox boundaries.
  */
 
+import { constants as fsConstants } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { generateText, tool, stepCountIs, jsonSchema } from "ai";
@@ -55,12 +56,88 @@ export interface StandaloneLLMConfig {
 // Sandboxed tool execution helpers
 // ============================
 
-function resolveSandboxedPath(workspaceDir: string, relativePath: string): string | null {
-  const resolved = path.resolve(workspaceDir, relativePath);
-  if (!resolved.startsWith(path.resolve(workspaceDir))) {
+export function resolveSandboxedPath(workspaceDir: string, relativePath: string): string | null {
+  const root = path.resolve(workspaceDir);
+  const resolved = path.resolve(root, relativePath);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     return null;
   }
   return resolved;
+}
+
+export async function resolveSandboxedExistingPath(workspaceDir: string, relativePath: string): Promise<string | null> {
+  const resolved = resolveSandboxedPath(workspaceDir, relativePath);
+  if (!resolved) return null;
+
+  try {
+    const linkStat = await fsPromises.lstat(resolved);
+    if (linkStat.isSymbolicLink()) return null;
+    const [realRoot, realResolved] = await Promise.all([
+      fsPromises.realpath(workspaceDir),
+      fsPromises.realpath(resolved),
+    ]);
+    return isWithinPath(realRoot, realResolved) ? realResolved : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveSandboxedWritablePath(workspaceDir: string, relativePath: string): Promise<string | null> {
+  const resolved = resolveSandboxedPath(workspaceDir, relativePath);
+  if (!resolved) return null;
+
+  try {
+    const linkStat = await fsPromises.lstat(resolved);
+    if (linkStat.isSymbolicLink()) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") return null;
+  }
+
+  const parent = await nearestExistingParent(path.dirname(resolved));
+  if (!parent) return null;
+
+  try {
+    const [realRoot, realParent] = await Promise.all([
+      fsPromises.realpath(workspaceDir),
+      fsPromises.realpath(parent),
+    ]);
+    return isWithinPath(realRoot, realParent) ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+async function nearestExistingParent(dir: string): Promise<string | null> {
+  let current = path.resolve(dir);
+  while (true) {
+    try {
+      const stat = await fsPromises.stat(current);
+      return stat.isDirectory() ? current : null;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+}
+
+async function writeSandboxedUtf8File(filePath: string, content: string): Promise<void> {
+  const flags = fsConstants.O_WRONLY |
+    fsConstants.O_CREAT |
+    fsConstants.O_TRUNC |
+    ((fsConstants as Record<string, number>).O_NOFOLLOW ?? 0);
+  const handle = await fsPromises.open(filePath, flags, 0o600);
+  try {
+    await handle.writeFile(content, "utf-8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function isWithinPath(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 // ============================
@@ -79,7 +156,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path"],
       }),
       execute: (async (args: { path: string }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedExistingPath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           return await fsPromises.readFile(resolved, "utf-8");
@@ -102,11 +179,11 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path", "content"],
       }),
       execute: (async (args: { path: string; content: string }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedWritablePath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         try {
           await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
-          await fsPromises.writeFile(resolved, args.content, "utf-8");
+          await writeSandboxedUtf8File(resolved, args.content);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -128,7 +205,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         required: ["path", "old_str", "new_str"],
       }),
       execute: (async (args: { path: string; old_str: string; new_str: string }) => {
-        const resolved = resolveSandboxedPath(workspaceDir, args.path);
+        const resolved = await resolveSandboxedExistingPath(workspaceDir, args.path);
         if (!resolved) return JSON.stringify({ error: `Path "${args.path}" escapes workspace boundary.` });
         if (!args.old_str) return JSON.stringify({ error: "old_str cannot be empty." });
         try {
@@ -137,7 +214,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
             return JSON.stringify({ error: `old_str not found in file "${args.path}".` });
           }
           const updated = existing.replace(args.old_str, args.new_str);
-          await fsPromises.writeFile(resolved, updated, "utf-8");
+          await writeSandboxedUtf8File(resolved, updated);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -147,12 +224,6 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
       }) as any,
     }),
   };
-}
-
-/** Read-only tool subset — used when enableTools=false to avoid empty tools rejection. */
-function createReadOnlyTools(workspaceDir: string, logger?: Logger) {
-  const all = createSandboxedTools(workspaceDir, logger);
-  return { read_file: all.read_file };
 }
 
 // ============================
@@ -197,18 +268,19 @@ export class StandaloneLLMRunner implements LLMRunner {
       compatibility: "compatible",
     });
 
-    // Select tools based on mode
+    // Text-only tasks (L1 extraction, dedup) must not receive tools. Even a
+    // read-only tool lets models drift into "I'll inspect a file first" instead
+    // of returning the strict JSON the pipeline expects.
     const tools = this.enableTools
       ? createSandboxedTools(workspaceDir, this.logger)
-      : createReadOnlyTools(workspaceDir, this.logger);
+      : undefined;
 
     try {
       const result = await generateText({
         model: provider.chat(this.model),
         system: params.systemPrompt,
         prompt: params.prompt,
-        tools,
-        stopWhen: stepCountIs(this.enableTools ? MAX_TOOL_ITERATIONS : 1),
+        ...(tools ? { tools, stopWhen: stepCountIs(MAX_TOOL_ITERATIONS) } : {}),
         maxOutputTokens: maxTokens,
         abortSignal: AbortSignal.timeout(timeoutMs),
       });

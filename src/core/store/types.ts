@@ -236,6 +236,13 @@ export interface ProfileSyncRecord extends ProfileRecord {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
+export interface SearchScopeOptions {
+  /** Exact session key constraint. */
+  sessionKey?: string;
+  /** Prefix constraints used by Codex project-scoped sessions. */
+  sessionKeyPrefixes?: string[];
+}
+
 export interface IMemoryStore {
   // ── Capabilities ───────────────────────────────────────────
 
@@ -270,13 +277,14 @@ export interface IMemoryStore {
 
   // ── L1 Search ────────────────────────────────────────────
 
-  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number): MaybePromise<L1FtsResult[]>;
+  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, scope?: SearchScopeOptions): MaybePromise<L1SearchResult[]>;
+  searchL1Fts(ftsQuery: string, limit?: number, scope?: SearchScopeOptions): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;
     sparseVector?: Array<[number, number]>;
     topK?: number;
+    scope?: SearchScopeOptions;
   }): MaybePromise<L1SearchResult[]>;
 
   // ── L0 Write ─────────────────────────────────────────────
@@ -296,8 +304,8 @@ export interface IMemoryStore {
 
   // ── L0 Search ────────────────────────────────────────────
 
-  searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L0SearchResult[]>;
-  searchL0Fts(ftsQuery: string, limit?: number): MaybePromise<L0FtsResult[]>;
+  searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, scope?: SearchScopeOptions): MaybePromise<L0SearchResult[]>;
+  searchL0Fts(ftsQuery: string, limit?: number, scope?: SearchScopeOptions): MaybePromise<L0FtsResult[]>;
 
   pullProfiles?(): Promise<ProfileRecord[]>;
   syncProfiles?(records: ProfileSyncRecord[]): Promise<void>;

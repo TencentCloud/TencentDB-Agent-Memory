@@ -10,7 +10,7 @@
  * The tool is registered via `api.registerTool()` in index.ts.
  */
 
-import type { IMemoryStore, L1SearchResult } from "../store/types.js";
+import type { IMemoryStore, L1SearchResult, SearchScopeOptions } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 
@@ -31,6 +31,8 @@ export interface MemorySearchResultItem {
   type: string;
   priority: number;
   scene_name: string;
+  session_key: string;
+  session_id: string;
   score: number;
   created_at: string;
   updated_at: string;
@@ -45,6 +47,7 @@ export interface MemorySearchResult {
 }
 
 const TAG = "[memory-tdai][tdai_memory_search]";
+const FILTERED_SEARCH_INITIAL_CANDIDATES = 50;
 
 // ============================
 // RRF (Reciprocal Rank Fusion)
@@ -90,6 +93,7 @@ export async function executeMemorySearch(params: {
   limit: number;
   type?: string;
   scene?: string;
+  sessionKeyPrefixes?: string[];
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   logger?: Logger;
@@ -99,14 +103,17 @@ export async function executeMemorySearch(params: {
     limit,
     type: typeFilter,
     scene: sceneFilter,
+    sessionKeyPrefixes,
     vectorStore,
     embeddingService,
     logger,
   } = params;
+  const normalizedSessionPrefixes = normalizeSessionPrefixes(sessionKeyPrefixes);
 
   logger?.debug?.(
     `${TAG} CALLED: query="${query.slice(0, 100)}", limit=${limit}, ` +
     `typeFilter=${typeFilter ?? "(none)"}, sceneFilter=${sceneFilter ?? "(none)"}, ` +
+    `sessionPrefixFilter=${normalizedSessionPrefixes.join("|") || "(none)"}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
   );
@@ -138,12 +145,62 @@ export async function executeMemorySearch(params: {
     };
   }
 
-  // ── Over-retrieve for later filtering and RRF merging ──
-  const candidateK = limit * 3;
+  const searchScope: SearchScopeOptions | undefined = normalizedSessionPrefixes.length > 0
+    ? { sessionKeyPrefixes: normalizedSessionPrefixes }
+    : undefined;
+  const candidateK = normalizedSessionPrefixes.length > 0
+    ? Math.max(limit * 6, FILTERED_SEARCH_INITIAL_CANDIDATES)
+    : limit * 3;
 
-  // ── Run available search strategies in parallel ──
+  const search = await collectMemoryCandidates({
+    query,
+    candidateK,
+    hasFts,
+    hasEmbedding,
+    vectorStore,
+    embeddingService,
+    searchScope,
+    logger,
+  });
+
+  if (search.results.length === 0) {
+    logger?.debug?.(`${TAG} Both search paths returned 0 results`);
+    return { results: [], total: 0, strategy: hasEmbedding ? "embedding" : "fts" };
+  }
+
+  const filtered = filterMemoryResults(search.results, {
+    typeFilter,
+    sceneFilter,
+    sessionPrefixes: normalizedSessionPrefixes,
+    logger,
+  });
+  const trimmed = filtered.slice(0, limit);
+
+  logger?.debug?.(
+    `${TAG} RESULT (strategy=${search.strategy}, candidateK=${candidateK}): returning ${trimmed.length} memories ` +
+    `(scores: [${trimmed.map((r) => r.score.toFixed(3)).join(", ")}])`,
+  );
+
+  return {
+    results: trimmed,
+    total: trimmed.length,
+    strategy: search.strategy,
+  };
+}
+
+async function collectMemoryCandidates(params: {
+  query: string;
+  candidateK: number;
+  hasFts: boolean;
+  hasEmbedding: boolean;
+  vectorStore: IMemoryStore;
+  embeddingService?: EmbeddingService;
+  searchScope?: SearchScopeOptions;
+  logger?: Logger;
+}): Promise<{ results: MemorySearchResultItem[]; strategy: string; mayHaveMore: boolean }> {
+  const { query, candidateK, hasFts, hasEmbedding, vectorStore, embeddingService, searchScope, logger } = params;
+
   const [ftsItems, vecItems] = await Promise.all([
-    // FTS5 keyword search
     (async (): Promise<MemorySearchResultItem[]> => {
       if (!hasFts) return [];
       try {
@@ -153,18 +210,9 @@ export async function executeMemorySearch(params: {
           return [];
         }
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+        const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK, searchScope);
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
-        return ftsResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
+        return ftsResults.map(memoryResultItemFromStore);
       } catch (err) {
         logger?.warn?.(
           `${TAG} [hybrid-fts] FTS5 search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -172,8 +220,6 @@ export async function executeMemorySearch(params: {
         return [];
       }
     })(),
-
-    // Vector embedding search
     (async (): Promise<MemorySearchResultItem[]> => {
       if (!hasEmbedding) return [];
       try {
@@ -182,18 +228,9 @@ export async function executeMemorySearch(params: {
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, candidateK, query);
+        const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, candidateK, query, searchScope);
         logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
-        return vecResults.map((r) => ({
-          id: r.record_id,
-          content: r.content,
-          type: r.type,
-          priority: r.priority,
-          scene_name: r.scene_name,
-          score: r.score,
-          created_at: r.timestamp_start,
-          updated_at: r.timestamp_end,
-        }));
+        return vecResults.map(memoryResultItemFromStore);
       } catch (err) {
         logger?.warn?.(
           `${TAG} [hybrid-vec] Embedding search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -203,61 +240,80 @@ export async function executeMemorySearch(params: {
     })(),
   ]);
 
-  // ── Determine effective strategy ──
   const ftsOk = ftsItems.length > 0;
   const vecOk = vecItems.length > 0;
-  let strategy: string;
+  const strategy = ftsOk && vecOk ? "hybrid" : vecOk ? "embedding" : ftsOk ? "fts" : "none";
+  const results = strategy === "hybrid"
+    ? rrfMergeL1(ftsItems, vecItems)
+    : ftsOk ? ftsItems : vecItems;
 
-  if (ftsOk && vecOk) {
-    strategy = "hybrid";
-  } else if (vecOk) {
-    strategy = "embedding";
-  } else if (ftsOk) {
-    strategy = "fts";
-  } else {
-    logger?.debug?.(`${TAG} Both search paths returned 0 results`);
-    return { results: [], total: 0, strategy: hasEmbedding ? "embedding" : "fts" };
-  }
-
-  // ── Merge results ──
-  let results: MemorySearchResultItem[];
   if (strategy === "hybrid") {
-    results = rrfMergeL1(ftsItems, vecItems);
     logger?.debug?.(
       `${TAG} [hybrid] RRF merged: fts=${ftsItems.length}, vec=${vecItems.length} → ${results.length} unique`,
     );
-  } else {
-    // Single-source: use whichever list has results (already sorted by score)
-    results = ftsOk ? ftsItems : vecItems;
   }
 
-  // ── Apply secondary filters (type, scene) ──
+  return {
+    results,
+    strategy,
+    mayHaveMore: (hasFts && ftsItems.length >= candidateK) || (hasEmbedding && vecItems.length >= candidateK),
+  };
+}
+
+function memoryResultItemFromStore(r: L1SearchResult): MemorySearchResultItem {
+  return {
+    id: r.record_id,
+    content: r.content,
+    type: r.type,
+    priority: r.priority,
+    scene_name: r.scene_name,
+    session_key: r.session_key,
+    session_id: r.session_id,
+    score: r.score,
+    created_at: r.timestamp_start,
+    updated_at: r.timestamp_end,
+  };
+}
+
+function filterMemoryResults(
+  results: MemorySearchResultItem[],
+  filters: {
+    typeFilter?: string;
+    sceneFilter?: string;
+    sessionPrefixes: string[];
+    logger?: Logger;
+  },
+): MemorySearchResultItem[] {
+  const { typeFilter, sceneFilter, sessionPrefixes, logger } = filters;
   const preFilterCount = results.length;
+  let filtered = results;
   if (typeFilter) {
-    results = results.filter((r) => r.type === typeFilter);
-    logger?.debug?.(`${TAG} After type filter "${typeFilter}": ${results.length}/${preFilterCount}`);
+    filtered = filtered.filter((r) => r.type === typeFilter);
+    logger?.debug?.(`${TAG} After type filter "${typeFilter}": ${filtered.length}/${preFilterCount}`);
   }
   if (sceneFilter) {
     const normalizedScene = sceneFilter.toLowerCase();
-    results = results.filter((r) =>
+    filtered = filtered.filter((r) =>
       r.scene_name.toLowerCase().includes(normalizedScene),
     );
-    logger?.debug?.(`${TAG} After scene filter "${sceneFilter}": ${results.length}/${preFilterCount}`);
+    logger?.debug?.(`${TAG} After scene filter "${sceneFilter}": ${filtered.length}/${preFilterCount}`);
   }
+  if (sessionPrefixes.length > 0) {
+    const beforeSessionFilter = filtered.length;
+    filtered = filtered.filter((r) =>
+      sessionPrefixes.some((prefix) => r.session_key.startsWith(prefix)),
+    );
+    logger?.debug?.(`${TAG} After session-prefix filter: ${filtered.length}/${beforeSessionFilter}`);
+  }
+  return filtered;
+}
 
-  // ── Trim to requested limit ──
-  const trimmed = results.slice(0, limit);
-
-  logger?.debug?.(
-    `${TAG} RESULT (strategy=${strategy}): returning ${trimmed.length} memories ` +
-    `(scores: [${trimmed.map((r) => r.score.toFixed(3)).join(", ")}])`,
-  );
-
-  return {
-    results: trimmed,
-    total: trimmed.length,
-    strategy,
-  };
+function normalizeSessionPrefixes(prefixes: string[] | undefined): string[] {
+  if (!Array.isArray(prefixes)) return [];
+  return prefixes
+    .map((prefix) => typeof prefix === "string" ? prefix.trim() : "")
+    .filter(Boolean)
+    .slice(0, 20);
 }
 
 // ============================

@@ -296,6 +296,10 @@ export class BackendClient {
     const parsed = new URL(url);
     const isHttps = parsed.protocol === "https:";
     const transport = isHttps ? https : http;
+    const allowInsecureTls = process.env.TDAI_OFFLOAD_INSECURE_TLS === "true";
+    if (isHttps && allowInsecureTls) {
+      this.logger.warn("[context-offload] TDAI_OFFLOAD_INSECURE_TLS=true disables backend TLS certificate verification");
+    }
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -309,7 +313,7 @@ export class BackendClient {
           path: parsed.pathname + parsed.search,
           method: "POST",
           headers: reqHeaders,
-          ...(isHttps ? { rejectUnauthorized: false } : {}),
+          ...(isHttps && allowInsecureTls ? { rejectUnauthorized: false } : {}),
         },
         (res) => {
           let data = "";

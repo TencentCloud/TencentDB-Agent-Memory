@@ -1,9 +1,9 @@
 /**
- * SerialQueue: a lightweight task queue with concurrency=1.
+ * SerialQueue: a lightweight FIFO task queue.
  *
- * Equivalent to `new PQueue({ concurrency: 1 })` but with zero external
+ * Equivalent to `new PQueue({ concurrency })` but with zero external
  * dependencies. Supports:
- * - Serial execution (FIFO)
+ * - FIFO execution with bounded concurrency
  * - `add(fn)` to enqueue a task (returns the task's result promise)
  * - `onIdle()` to wait until all queued tasks have completed
  * - `pause()` / `start()` to suspend/resume execution
@@ -22,17 +22,19 @@ interface QueueEntry {
 export class SerialQueue {
   /** Human-readable name for logging / diagnostics. */
   public readonly name: string;
+  public readonly concurrency: number;
 
   private queue: QueueEntry[] = [];
-  private running = false;
+  private runningCount = 0;
   private paused = false;
   private idleResolvers: Array<() => void> = [];
 
   /** Optional debug logger — receives diagnostic messages for enqueue/dequeue/complete. */
   private debugFn?: (msg: string) => void;
 
-  constructor(name = "unnamed") {
+  constructor(name = "unnamed", concurrency = 1) {
     this.name = name;
+    this.concurrency = Math.max(1, Math.floor(concurrency));
   }
 
   /** Set a debug logger for queue diagnostics. */
@@ -47,12 +49,12 @@ export class SerialQueue {
 
   /** Whether a task is currently executing. */
   get pending(): boolean {
-    return this.running;
+    return this.runningCount > 0;
   }
 
   /** Whether the queue is idle (no queued tasks and nothing running). */
   get idle(): boolean {
-    return this.queue.length === 0 && !this.running;
+    return this.queue.length === 0 && this.runningCount === 0;
   }
 
   /** Add a task to the queue. Returns the task's result promise. */
@@ -63,7 +65,10 @@ export class SerialQueue {
         resolve: resolve as (value: unknown) => void,
         reject,
       });
-      this.debugFn?.(`[queue:${this.name}] enqueued, pending=${this.queue.length}, running=${this.running}`);
+      this.debugFn?.(
+        `[queue:${this.name}] enqueued, pending=${this.queue.length}, ` +
+        `running=${this.runningCount}/${this.concurrency}`,
+      );
       this.drain();
     });
   }
@@ -81,7 +86,7 @@ export class SerialQueue {
 
   /** Returns a promise that resolves when all queued tasks have completed. */
   onIdle(): Promise<void> {
-    if (this.queue.length === 0 && !this.running) {
+    if (this.queue.length === 0 && this.runningCount === 0) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -98,28 +103,46 @@ export class SerialQueue {
   }
 
   private drain(): void {
-    if (this.running || this.paused || this.queue.length === 0) return;
+    while (!this.paused && this.runningCount < this.concurrency && this.queue.length > 0) {
+      const entry = this.queue.shift()!;
+      this.runningCount++;
 
-    const entry = this.queue.shift()!;
-    this.running = true;
+      this.debugFn?.(
+        `[queue:${this.name}] dequeued, starting execution ` +
+        `(remaining=${this.queue.length}, running=${this.runningCount}/${this.concurrency})`,
+      );
 
-    this.debugFn?.(`[queue:${this.name}] dequeued, starting execution (remaining=${this.queue.length})`);
-
-    entry
-      .task()
-      .then((result) => entry.resolve(result))
-      .catch((err) => entry.reject(err))
-      .finally(() => {
-        this.running = false;
-        this.debugFn?.(`[queue:${this.name}] task completed (remaining=${this.queue.length})`);
-        if (this.queue.length === 0) {
-          // Notify idle waiters
-          const resolvers = this.idleResolvers;
-          this.idleResolvers = [];
-          for (const resolve of resolvers) resolve();
-        } else {
-          this.drain();
+      void (async () => {
+        let result: unknown;
+        let error: unknown;
+        let failed = false;
+        try {
+          result = await entry.task();
+        } catch (err) {
+          error = err;
+          failed = true;
+        } finally {
+          this.runningCount--;
+          this.debugFn?.(
+            `[queue:${this.name}] task completed ` +
+            `(remaining=${this.queue.length}, running=${this.runningCount}/${this.concurrency})`,
+          );
+          if (this.queue.length === 0 && this.runningCount === 0) {
+            // Notify idle waiters
+            const resolvers = this.idleResolvers;
+            this.idleResolvers = [];
+            for (const resolve of resolvers) resolve();
+          } else {
+            this.drain();
+          }
         }
-      });
+
+        if (failed) {
+          entry.reject(error);
+        } else {
+          entry.resolve(result);
+        }
+      })();
+    }
   }
 }

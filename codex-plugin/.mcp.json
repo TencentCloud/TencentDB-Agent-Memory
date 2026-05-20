@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "tdai-memory": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/mcp-server.mjs"
+      ],
+      "env": {
+        "TDAI_CODEX_AUTOSTART": "true"
+      },
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 60
+    }
+  }
+}

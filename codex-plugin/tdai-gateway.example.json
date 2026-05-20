@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8420
+  },
+  "data": {
+    "baseDir": "${TDAI_DATA_DIR}"
+  },
+  "llm": {
+    "baseUrl": "${TDAI_LLM_BASE_URL}",
+    "apiKey": "${TDAI_LLM_API_KEY}",
+    "model": "${TDAI_LLM_MODEL}",
+    "maxTokens": 4096,
+    "timeoutMs": 120000
+  },
+  "memory": {
+    "capture": {
+      "enabled": true,
+      "l0l1RetentionDays": 0
+    },
+    "recall": {
+      "enabled": true,
+      "maxResults": 8,
+      "strategy": "hybrid",
+      "timeoutMs": 5000
+    },
+    "pipeline": {
+      "everyNConversations": 3,
+      "enableWarmup": true,
+      "l1IdleTimeoutSeconds": 300,
+      "l1Concurrency": 1
+    },
+    "extraction": {
+      "enabled": true,
+      "enableDedup": true,
+      "maxMemoriesPerSession": 20
+    },
+    "persona": {
+      "triggerEveryN": 30,
+      "maxScenes": 20
+    },
+    "embedding": {
+      "provider": "none",
+      "enabled": false
+    },
+    "storeBackend": "sqlite"
+  }
+}

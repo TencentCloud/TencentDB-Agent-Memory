@@ -4,6 +4,24 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 新功能
+
+- **Codex adapter**：新增独立 `codex-plugin/` 适配层，覆盖 Codex CLI 与 Codex App 的生命周期 hook、MCP 检索工具、历史 JSONL 导入、工具输出 offload 与本地 Gateway 自动启动，并包含 Codex App 的额外适配与验证。
+
+### 🔒 安全增强
+
+- Gateway 默认要求 tokenized POST；无 token 时仅保留 loopback GET 探活，loopback tokenless POST 必须显式启用开发开关。
+- Codex adapter 默认拒绝非 loopback Gateway URL，MCP 默认不暴露跨项目检索或完整 offload 内容。
+- Gateway token 文件改为私有权限、owner 校验、atomic create；并发 autostart 不再可能生成互相覆盖的 token。
+- Codex hook 诊断写入私有 `hook.log`，日志内容先经过敏感字段 redaction。
+
+### 🐛 修复
+
+- scoped memory/conversation search 会扩展候选窗口到 store 记录总数，避免当前项目结果被其他项目的前 500 个候选挤掉。
+- `prepack` 不再因为已缺失的历史可选 bin-script 源目录而失败；存在对应 `tsconfig.json` 时仍会构建这些脚本。
+
 ## [0.3.4] - 2026-05-12
 
 ### 🐛 修复

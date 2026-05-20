@@ -57,6 +57,7 @@
           "everyNConversations": { "type": "number", "default": 5, "description": "每 N 轮对话触发 L1 批处理" },
           "enableWarmup": { "type": "boolean", "default": true, "description": "Warm-up 模式：新 session 从 1 轮触发开始，每次 L1 后翻倍（1→2→4→...→everyN），加速早期记忆提取" },
           "l1IdleTimeoutSeconds": { "type": "number", "default": 600, "description": "L1 空闲超时（秒）：用户停止对话后多久触发 L1 批处理" },
+          "l1Concurrency": { "type": "number", "default": 1, "description": "L1 抽取任务并发数；默认 1 保持实时宿主顺序，历史 seed/import 可提高此值" },
           "l2DelayAfterL1Seconds": { "type": "number", "default": 90, "description": "L1 完成后延迟多久触发 L2（秒）" },
           "l2MinIntervalSeconds": { "type": "number", "default": 900, "description": "同一 session 两次 L2 抽取的最小间隔（秒）" },
           "l2MaxIntervalSeconds": { "type": "number", "default": 3600, "description": "同一活跃 session 的 L2 最大轮询间隔（秒）" },

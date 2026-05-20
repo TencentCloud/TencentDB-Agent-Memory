@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { normalizeL1Concurrency } from "./core/seed/constants.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -64,6 +66,8 @@ export interface PipelineTriggerConfig {
   enableWarmup: boolean;
   /** L1 idle timeout: trigger L1 after this many seconds of inactivity (default: 600) */
   l1IdleTimeoutSeconds: number;
+  /** L1 task concurrency. Default 1 preserves live-host ordering; seed/import can raise it. */
+  l1Concurrency: number;
   /** L2 delay after L1: wait this many seconds after L1 completes before triggering L2 (default: 90) */
   l2DelayAfterL1Seconds: number;
   /** L2 min interval: minimum seconds between L2 runs per session (default: 900 = 15 min) */
@@ -478,6 +482,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
       enableWarmup: bool(pipelineGroup, "enableWarmup") ?? true,
       l1IdleTimeoutSeconds: num(pipelineGroup, "l1IdleTimeoutSeconds") ?? 600,
+      l1Concurrency: normalizeL1Concurrency(num(pipelineGroup, "l1Concurrency"), 1),
       l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 90,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,

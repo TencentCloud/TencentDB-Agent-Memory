@@ -73,6 +73,11 @@ export interface PipelineFactoryOptions {
   l1LlmRunner?: import("../core/types.js").LLMRunner;
   /** Host-neutral LLM runner for L2/L3 (tool-call enabled, enableTools=true). */
   l2l3LlmRunner?: import("../core/types.js").LLMRunner;
+  /**
+   * Whether this pipeline owns the shared store resources for `pluginDataDir`.
+   * Set false for sidecar/seed pipelines that target an already-live store.
+   */
+  ownsStoreResources?: boolean;
 }
 
 // ============================
@@ -664,7 +669,10 @@ export function createPipelineManager(
     {
       everyNConversations: cfg.pipeline.everyNConversations,
       enableWarmup: cfg.pipeline.enableWarmup,
-      l1: { idleTimeoutSeconds: cfg.pipeline.l1IdleTimeoutSeconds },
+      l1: {
+        idleTimeoutSeconds: cfg.pipeline.l1IdleTimeoutSeconds,
+        concurrency: cfg.pipeline.l1Concurrency,
+      },
       l2: {
         delayAfterL1Seconds: cfg.pipeline.l2DelayAfterL1Seconds,
         minIntervalSeconds: cfg.pipeline.l2MinIntervalSeconds,
@@ -691,6 +699,7 @@ export function createPipelineManager(
  */
 export async function createPipeline(opts: PipelineFactoryOptions): Promise<PipelineInstance> {
   const { pluginDataDir, cfg, openclawConfig, logger, sessionFilter, l1LlmRunner } = opts;
+  const ownsStoreResources = opts.ownsStoreResources !== false;
 
   // Ensure data directories exist
   initDataDirectories(pluginDataDir);
@@ -720,11 +729,11 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
   const destroy = async () => {
     logger.info(`${TAG} Destroying pipeline...`);
     await scheduler.destroy();
-    if (vectorStore) {
+    if (ownsStoreResources && vectorStore) {
       logger.info(`${TAG} Closing VectorStore`);
       vectorStore.close();
     }
-    if (embeddingService?.close) {
+    if (ownsStoreResources && embeddingService?.close) {
       try {
         logger.info(`${TAG} Closing EmbeddingService`);
         await embeddingService.close();
@@ -732,7 +741,9 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
         logger.warn(`${TAG} Error closing EmbeddingService: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    resetStores(pluginDataDir);
+    if (ownsStoreResources) {
+      resetStores(pluginDataDir);
+    }
     logger.info(`${TAG} Pipeline destroyed`);
   };
 

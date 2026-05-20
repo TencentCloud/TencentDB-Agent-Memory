@@ -1,0 +1,20 @@
+{
+  "name": "tencentdb-agent-memory-local",
+  "interface": {
+    "displayName": "TencentDB Agent Memory Local"
+  },
+  "plugins": [
+    {
+      "name": "memory-tencentdb-codex",
+      "source": {
+        "source": "local",
+        "path": "./codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

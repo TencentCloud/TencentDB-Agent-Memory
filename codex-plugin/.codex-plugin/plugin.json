@@ -1,0 +1,30 @@
+{
+  "name": "memory-tencentdb-codex",
+  "version": "0.1.0",
+  "description": "Codex adapter for TencentDB Agent Memory: auto-recall, auto-capture, hook context injection, MCP search/offload tools, compaction flush, and seed through the TDAI Gateway.",
+  "author": {
+    "name": "TencentDB Agent Memory Codex adapter"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/Tencent/TencentDB-Agent-Memory",
+  "repository": "https://github.com/Tencent/TencentDB-Agent-Memory",
+  "interface": {
+    "displayName": "TencentDB Agent Memory",
+    "shortDescription": "Automatic recall, capture, flush, offload, and MCP search for Codex sessions through TencentDB Agent Memory.",
+    "longDescription": "Adds Codex hooks that recall relevant memory before each prompt, inject model-visible memory hints, capture completed turns, track tool and permission activity, offload large tool results into JSONL/ref/Mermaid artifacts, flush session memory after compaction or every N turns, expose memory and offload lookup as MCP tools, seed historical conversations, and manage a local TencentDB Agent Memory Gateway. The adapter supports Codex CLI and Codex App, with additional Codex App adaptation and validation.",
+    "developerName": "TencentDB Agent Memory Codex adapter",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use TencentDB Agent Memory to recall prior context before answering and capture important session details after the turn."
+    ],
+    "brandColor": "#2563EB"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.codex.json"
+}

@@ -27,6 +27,7 @@ import type {
   L0SessionGroup,
   ProfileRecord,
   ProfileSyncRecord,
+  SearchScopeOptions,
   StoreLogger,
 } from "./types.js";
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
@@ -110,6 +111,68 @@ function extractAgentId(sessionKey: string): string {
     return parts[1];
   }
   return "";
+}
+
+function normalizeSearchScope(scope?: SearchScopeOptions): { sessionKey?: string; sessionKeyPrefixes: string[] } {
+  const sessionKey = typeof scope?.sessionKey === "string" ? scope.sessionKey.trim() : "";
+  const sessionKeyPrefixes = Array.isArray(scope?.sessionKeyPrefixes)
+    ? scope.sessionKeyPrefixes
+        .map((prefix) => typeof prefix === "string" ? prefix.trim() : "")
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  const normalized: { sessionKey?: string; sessionKeyPrefixes: string[] } = { sessionKeyPrefixes };
+  if (sessionKey) normalized.sessionKey = sessionKey;
+  return normalized;
+}
+
+function hasSearchScope(scope?: SearchScopeOptions): boolean {
+  const normalized = normalizeSearchScope(scope);
+  return !!normalized.sessionKey || normalized.sessionKeyPrefixes.length > 0;
+}
+
+function matchesSearchScope(sessionKey: string, scope?: SearchScopeOptions): boolean {
+  const normalized = normalizeSearchScope(scope);
+  if (normalized.sessionKey && sessionKey !== normalized.sessionKey) return false;
+  if (
+    normalized.sessionKeyPrefixes.length > 0 &&
+    !normalized.sessionKeyPrefixes.some((prefix) => sessionKey.startsWith(prefix))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function escapeTcvdbFilterString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+}
+
+function buildTcvdbSessionScopeFilter(scope?: SearchScopeOptions): string | undefined {
+  const normalized = normalizeSearchScope(scope);
+  const clauses: string[] = [];
+
+  if (normalized.sessionKey) {
+    clauses.push(`session_key = "${escapeTcvdbFilterString(normalized.sessionKey)}"`);
+  }
+
+  if (normalized.sessionKeyPrefixes.length > 0) {
+    const prefixClauses = normalized.sessionKeyPrefixes.map(
+      (prefix) => `session_key like "${escapeTcvdbFilterString(prefix)}%"`,
+    );
+    clauses.push(`(${prefixClauses.join(" or ")})`);
+  }
+
+  return clauses.length > 0 ? clauses.join(" and ") : undefined;
+}
+
+function filterL1ResultsByScope(results: L1SearchResult[], scope?: SearchScopeOptions): L1SearchResult[] {
+  if (!hasSearchScope(scope)) return results;
+  return results.filter((result) => matchesSearchScope(result.session_key, scope));
+}
+
+function filterL0ResultsByScope(results: L0SearchResult[], scope?: SearchScopeOptions): L0SearchResult[] {
+  if (!hasSearchScope(scope)) return results;
+  return results.filter((result) => matchesSearchScope(result.session_key, scope));
 }
 
 // ============================
@@ -615,21 +678,26 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L1 Search Operations ─────────────────────────────────
 
-  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string): Promise<L1SearchResult[]> {
+  async searchL1Vector(
+    _queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+    scope?: SearchScopeOptions,
+  ): Promise<L1SearchResult[]> {
     // TCVDB uses server-side embedding — delegate to hybrid search with text
     if (queryText) {
-      return this.searchL1HybridAsync({ queryText, topK });
+      return this.searchL1HybridAsync({ queryText, topK, scope });
     }
     // No queryText and TCVDB can't use client embeddings directly via embeddingItems
     // Return empty — callers should pass queryText for TCVDB
     return [];
   }
 
-  async searchL1Fts(ftsQuery: string, limit?: number): Promise<L1FtsResult[]> {
+  async searchL1Fts(ftsQuery: string, limit?: number, scope?: SearchScopeOptions): Promise<L1FtsResult[]> {
     // TCVDB has no pure FTS — use hybrid search with sparse-only path
     // The ftsQuery is raw text, use it as queryText for hybrid
     if (!ftsQuery) return [];
-    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit });
+    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit, scope });
     // L1SearchResult and L1FtsResult have identical shapes
     return results;
   }
@@ -639,10 +707,11 @@ export class TcvdbMemoryStore implements IMemoryStore {
     queryEmbedding?: Float32Array;
     sparseVector?: SparseVector;
     topK?: number;
+    scope?: SearchScopeOptions;
   }): Promise<L1SearchResult[]> {
     const queryText = params.query;
     if (!queryText) return [];
-    return this.searchL1HybridAsync({ queryText, topK: params.topK });
+    return this.searchL1HybridAsync({ queryText, topK: params.topK, scope: params.scope });
   }
 
   /**
@@ -652,8 +721,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
   async searchL1HybridAsync(params: {
     queryText: string;
     topK?: number;
+    scope?: SearchScopeOptions;
   }): Promise<L1SearchResult[]> {
-    const { queryText, topK = 10 } = params;
+    const { queryText, topK = 10, scope } = params;
     if (!queryText) return [];
 
     try {
@@ -665,6 +735,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
         limit: topK,
         outputFields: L1_OUTPUT_FIELDS,
       };
+      const filterExpr = buildTcvdbSessionScopeFilter(scope);
+      if (filterExpr) searchParams.filter = filterExpr;
 
       // ann: use embedding field name "text" for server-side embedding
       // (per SDK: AnnSearch(field_name="text", data='query string'))
@@ -693,7 +765,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         searchParams.rerank = { method: "rrf", k: 60 };
 
         const resp = await this.client.hybridSearch(this.l1Collection, searchParams);
-        return this._parseL1SearchResults(resp.documents);
+        return filterL1ResultsByScope(this._parseL1SearchResults(resp.documents), scope);
       } else {
         // Dense-only fallback (BM25 unavailable) — use /document/search with embeddingItems
         const denseSearch: Record<string, unknown> = {
@@ -702,8 +774,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
           retrieveVector: false,
           outputFields: L1_OUTPUT_FIELDS,
         };
+        if (filterExpr) denseSearch.filter = filterExpr;
         const resp = await this.client.search(this.l1Collection, denseSearch);
-        return this._parseL1SearchResults(resp.documents);
+        return filterL1ResultsByScope(this._parseL1SearchResults(resp.documents), scope);
       }
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-hybridSearch] FAILED: ${err instanceof Error ? err.message : String(err)}`);
@@ -929,18 +1002,23 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L0 Search Operations ─────────────────────────────────
 
-  async searchL0Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string): Promise<L0SearchResult[]> {
+  async searchL0Vector(
+    _queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+    scope?: SearchScopeOptions,
+  ): Promise<L0SearchResult[]> {
     // TCVDB uses server-side embedding — delegate to hybrid search with text
     if (queryText) {
-      return this.searchL0HybridAsync({ queryText, topK });
+      return this.searchL0HybridAsync({ queryText, topK, scope });
     }
     return [];
   }
 
-  async searchL0Fts(ftsQuery: string, limit?: number): Promise<L0FtsResult[]> {
+  async searchL0Fts(ftsQuery: string, limit?: number, scope?: SearchScopeOptions): Promise<L0FtsResult[]> {
     if (!ftsQuery) return [];
     // Use hybrid search; L0SearchResult and L0FtsResult have identical shapes
-    return this.searchL0HybridAsync({ queryText: ftsQuery, topK: limit });
+    return this.searchL0HybridAsync({ queryText: ftsQuery, topK: limit, scope });
   }
 
   /**
@@ -949,8 +1027,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
   async searchL0HybridAsync(params: {
     queryText: string;
     topK?: number;
+    scope?: SearchScopeOptions;
   }): Promise<L0SearchResult[]> {
-    const { queryText, topK = 10 } = params;
+    const { queryText, topK = 10, scope } = params;
     if (!queryText) return [];
 
     try {
@@ -961,6 +1040,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
         limit: topK,
         outputFields: L0_OUTPUT_FIELDS,
       };
+      const filterExpr = buildTcvdbSessionScopeFilter(scope);
+      if (filterExpr) searchParams.filter = filterExpr;
 
       // ann: use embedding field name "message_text" for L0 server-side embedding
       const ann = [{
@@ -986,7 +1067,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
         searchParams.match = match;
         searchParams.rerank = { method: "rrf", k: 60 };
         const resp = await this.client.hybridSearch(this.l0Collection, searchParams);
-        return this._parseL0SearchResults(resp.documents);
+        return filterL0ResultsByScope(this._parseL0SearchResults(resp.documents), scope);
       } else {
         const denseSearch: Record<string, unknown> = {
           embeddingItems: [queryText],
@@ -994,8 +1075,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
           retrieveVector: false,
           outputFields: L0_OUTPUT_FIELDS,
         };
+        if (filterExpr) denseSearch.filter = filterExpr;
         const resp = await this.client.search(this.l0Collection, denseSearch);
-        return this._parseL0SearchResults(resp.documents);
+        return filterL0ResultsByScope(this._parseL0SearchResults(resp.documents), scope);
       }
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-hybridSearch] FAILED: ${err instanceof Error ? err.message : String(err)}`);

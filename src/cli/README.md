@@ -4,7 +4,8 @@
 
 ## seed — 导入历史对话数据
 
-将历史对话 JSON 文件导入到记忆管线中，完整执行 L0→L1→L2→L3 流程。适用于：
+将历史对话 JSON 文件导入到记忆管线中。默认等待 L0→L1；如果需要 seed 返回前立即产出
+L2 场景块和 L3 persona，使用 `--wait-for-full-pipeline` 完整等待 L0→L1→L2→L3。适用于：
 
 - 将已有对话数据灌入记忆系统
 - 批量测试记忆提取效果
@@ -25,6 +26,10 @@ openclaw memory-tdai seed --input <file> [options]
 | `--session-key <key>` | — | 回退 session key（当输入数据缺少时使用） |
 | `--config <file>` | — | 配置覆盖文件（JSON，与 openclaw.json 插件配置深度合并） |
 | `--strict-round-role` | — | 严格校验每轮对话必须包含 user 和 assistant 消息 |
+| `--no-wait-for-l1` | — | 不在每批 L1 边界暂停；通常只用于大规模导入 |
+| `--l1-concurrency <n>` | — | 本次 seed 的 L1 抽取并发数（默认使用配置值） |
+| `--wait-for-full-pipeline` | — | 返回前等待最终 L1→L2→L3 flush 完成 |
+| `--full-pipeline-timeout-ms <ms>` | — | 最终 L1→L2→L3 flush 的最长等待时间（默认 900000） |
 | `--yes` | — | 跳过交互确认（如时间戳自动填充确认） |
 
 ### 示例
@@ -41,6 +46,9 @@ openclaw memory-tdai seed --input data.json --config seed-config.json
 
 # 跳过所有确认
 openclaw memory-tdai seed --input data.json --yes
+
+# 返回前完整等待 L1/L2/L3
+openclaw memory-tdai seed --input data.json --wait-for-full-pipeline --yes
 
 # 严格模式 + 自定义配置
 openclaw memory-tdai seed --input data.json --config seed-config.json --strict-round-role --yes
@@ -115,6 +123,7 @@ openclaw memory-tdai seed --input data.json --config seed-config.json --strict-r
     "everyNConversations": 3,
     "enableWarmup": false,
     "l1IdleTimeoutSeconds": 2,
+    "l1Concurrency": 4,
     "l2DelayAfterL1Seconds": 1,
     "l2MinIntervalSeconds": 1,
     "l2MaxIntervalSeconds": 10
@@ -133,7 +142,8 @@ openclaw memory-tdai seed --input data.json --config seed-config.json --strict-r
   "pipeline": {
     "everyNConversations": 3,
     "enableWarmup": false,
-    "l1IdleTimeoutSeconds": 2
+    "l1IdleTimeoutSeconds": 2,
+    "l1Concurrency": 4
   }
 }
 ```
@@ -167,6 +177,7 @@ Seed 完成后，`manifest.json` 会记录本次运行信息：
     "sessions": 3,
     "rounds": 42,
     "messages": 128,
+    "fullPipelineFlushed": true,
     "startedAt": "2026-04-01T22:00:00.000Z",
     "completedAt": "2026-04-01T22:05:30.000Z"
   }

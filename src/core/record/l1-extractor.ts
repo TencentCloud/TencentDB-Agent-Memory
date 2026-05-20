@@ -365,24 +365,17 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
 
-    // Try to extract JSON array
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in extraction response`);
+    // Try to extract the first valid JSON array. Avoid a greedy regex here:
+    // narrative failures can contain message IDs like "[l0_xxx]" before the
+    // real array, and matching from the first "[" corrupts parsing.
+    const parsed = parseFirstJsonArray(cleaned);
+    if (!parsed) {
+      logger?.warn?.(`${TAG} No valid JSON array found in extraction response`);
       // [l1-debug] NO_JSON — dump the full raw so we can see what the LLM actually said
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
         `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
-    }
-
-    // Sanitize control characters inside JSON string literals that LLM may produce
-    const sanitized = sanitizeJsonForParse(arrayMatch[0]);
-    const parsed = JSON.parse(sanitized) as unknown[];
-
-    if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Extraction response is not an array`);
       return [];
     }
 
@@ -413,6 +406,50 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
     return [];
   }
+}
+
+function parseFirstJsonArray(text: string): unknown[] | null {
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== "[") continue;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let end = start; end < text.length; end++) {
+      const ch = text[end];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === "\"") {
+        inString = true;
+      } else if (ch === "[") {
+        depth += 1;
+      } else if (ch === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = sanitizeJsonForParse(text.slice(start, end + 1));
+          try {
+            const parsed = JSON.parse(candidate) as unknown;
+            if (Array.isArray(parsed)) return parsed;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 // ============================
@@ -524,12 +561,13 @@ const VALID_TYPES: MemoryType[] = ["persona", "episodic", "instruction"];
 
 function normalizeType(raw: string): MemoryType | null {
   const lower = raw.toLowerCase().trim();
+  const compact = lower.replace(/[^a-z]/g, "");
   if (VALID_TYPES.includes(lower as MemoryType)) {
     return lower as MemoryType;
   }
   // Handle legacy type names
-  if (lower === "episode") return "episodic";
-  if (lower === "instruct") return "instruction";
-  if (lower === "preference") return "persona"; // fold preference into persona
+  if (compact === "episode") return "episodic";
+  if (compact === "instruct" || compact === "insruction") return "instruction";
+  if (compact === "preference") return "persona"; // fold preference into persona
   return null;
 }

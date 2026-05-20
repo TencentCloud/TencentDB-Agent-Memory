@@ -32,6 +32,7 @@ import type {
   L1FtsResult,
   L0SearchResult,
   L0FtsResult,
+  SearchScopeOptions,
 } from "./types.js";
 
 // ============================
@@ -300,6 +301,59 @@ export function bm25RankToScore(rank: number): number {
     return relevance / (1 + relevance);
   }
   return 1 / (1 + rank);
+}
+
+function normalizeSearchScope(scope?: SearchScopeOptions): { sessionKey?: string; sessionKeyPrefixes: string[] } {
+  const sessionKey = typeof scope?.sessionKey === "string" ? scope.sessionKey.trim() : "";
+  const sessionKeyPrefixes = Array.isArray(scope?.sessionKeyPrefixes)
+    ? scope.sessionKeyPrefixes
+        .map((prefix) => typeof prefix === "string" ? prefix.trim() : "")
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  const normalized: { sessionKey?: string; sessionKeyPrefixes: string[] } = { sessionKeyPrefixes };
+  if (sessionKey) normalized.sessionKey = sessionKey;
+  return normalized;
+}
+
+function hasSearchScope(scope?: SearchScopeOptions): boolean {
+  const normalized = normalizeSearchScope(scope);
+  return !!normalized.sessionKey || normalized.sessionKeyPrefixes.length > 0;
+}
+
+function matchesSearchScope(sessionKey: string, scope?: SearchScopeOptions): boolean {
+  const normalized = normalizeSearchScope(scope);
+  if (normalized.sessionKey && sessionKey !== normalized.sessionKey) return false;
+  if (
+    normalized.sessionKeyPrefixes.length > 0 &&
+    !normalized.sessionKeyPrefixes.some((prefix) => sessionKey.startsWith(prefix))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function escapeSqliteLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+function buildSqliteSessionScopeFilter(scope?: SearchScopeOptions): { clause: string; params: string[] } | undefined {
+  const normalized = normalizeSearchScope(scope);
+  const clauses: string[] = [];
+  const params: string[] = [];
+
+  if (normalized.sessionKey) {
+    clauses.push("session_key = ?");
+    params.push(normalized.sessionKey);
+  }
+
+  if (normalized.sessionKeyPrefixes.length > 0) {
+    clauses.push(`(${normalized.sessionKeyPrefixes.map(() => "session_key LIKE ? ESCAPE '\\'").join(" OR ")})`);
+    params.push(...normalized.sessionKeyPrefixes.map((prefix) => `${escapeSqliteLike(prefix)}%`));
+  }
+
+  if (clauses.length === 0) return undefined;
+  return { clause: clauses.join(" AND "), params };
 }
 
 /** FTS5 search result for L1 records. */
@@ -935,6 +989,9 @@ export class VectorStore implements IMemoryStore {
    */
   private static readonly ZERO_VEC_BUFFER = 10;
 
+  /** Bounded extra vector candidates when a metadata scope must be applied. */
+  private static readonly SCOPED_VECTOR_EXTRA_CANDIDATES = 200;
+
   /** Default result limit for FTS5 keyword searches. */
   private static readonly FTS_DEFAULT_LIMIT = 20;
 
@@ -1109,7 +1166,12 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns an empty array on any error (e.g. dimension
    * mismatch, corrupted DB) so callers can fall back to keyword search.
    */
-  searchL1Vector(queryEmbedding: Float32Array, topK = 5): VectorSearchResult[] {
+  searchL1Vector(
+    queryEmbedding: Float32Array,
+    topK = 5,
+    _queryText?: string,
+    scope?: SearchScopeOptions,
+  ): VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
       return [];
@@ -1122,8 +1184,10 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.  A small buffer of 10 is sufficient for remnants.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
-      const ZERO_VEC_BUFFER = 10;
-      const retrieveCount = topK + ZERO_VEC_BUFFER;
+      const scopeExtra = hasSearchScope(scope)
+        ? Math.max(VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES, topK * 20)
+        : 0;
+      const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER + scopeExtra;
 
       this.logger?.debug?.(
         `${TAG} [L1-search] START topK=${topK}, retrieveCount=${retrieveCount}, ` +
@@ -1171,6 +1235,9 @@ export class VectorStore implements IMemoryStore {
           this.logger?.warn(`${TAG} [L1-search] record_id=${record_id} has vector but NO metadata (orphan)`);
           continue;
         }
+        if (!matchesSearchScope(meta.session_key, scope)) {
+          continue;
+        }
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -1192,6 +1259,7 @@ export class VectorStore implements IMemoryStore {
           session_id: meta.session_id,
           metadata_json: meta.metadata_json,
         });
+        if (results.length >= topK) break;
       }
 
       // Trim back to the caller's requested topK (we over-fetched above).
@@ -1543,7 +1611,12 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL0Vector(queryEmbedding: Float32Array, topK = 5): L0VectorSearchResult[] {
+  searchL0Vector(
+    queryEmbedding: Float32Array,
+    topK = 5,
+    _queryText?: string,
+    scope?: SearchScopeOptions,
+  ): L0VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
       return [];
@@ -1556,7 +1629,10 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
-      const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER;
+      const scopeExtra = hasSearchScope(scope)
+        ? Math.max(VectorStore.SCOPED_VECTOR_EXTRA_CANDIDATES, topK * 20)
+        : 0;
+      const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER + scopeExtra;
 
       this.logger?.debug?.(
         `${TAG} [L0-search] START topK=${topK}, retrieveCount=${retrieveCount}, ` +
@@ -1600,6 +1676,9 @@ export class VectorStore implements IMemoryStore {
           this.logger?.warn(`${TAG} [L0-search] record_id=${record_id} has vector but NO metadata (orphan)`);
           continue;
         }
+        if (!matchesSearchScope(meta.session_key, scope)) {
+          continue;
+        }
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -1617,6 +1696,7 @@ export class VectorStore implements IMemoryStore {
           recorded_at: meta.recorded_at,
           timestamp: meta.timestamp ?? 0,
         });
+        if (results.length >= topK) break;
       }
 
       // Trim back to the caller's requested topK (we over-fetched above).
@@ -2026,10 +2106,22 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
+  searchL1Fts(ftsQuery: string, limit = 20, scope?: SearchScopeOptions): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
+      const scopeFilter = buildSqliteSessionScopeFilter(scope);
+      const rows = (scopeFilter
+        ? this.db.prepare(`
+            SELECT record_id, content_original AS content, type, priority, scene_name,
+                   session_key, session_id, timestamp_str, timestamp_start, timestamp_end,
+                   metadata_json,
+                   bm25(l1_fts) AS rank
+            FROM l1_fts
+            WHERE l1_fts MATCH ? AND ${scopeFilter.clause}
+            ORDER BY rank ASC
+            LIMIT ?
+          `).all(ftsQuery, ...scopeFilter.params, limit)
+        : this.stmtL1FtsSearch.all(ftsQuery, limit)) as Array<{
         record_id: string;
         content: string;
         type: string;
@@ -2075,10 +2167,25 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
+  searchL0Fts(
+    ftsQuery: string,
+    limit = VectorStore.FTS_DEFAULT_LIMIT,
+    scope?: SearchScopeOptions,
+  ): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL0FtsSearch.all(ftsQuery, limit) as Array<{
+      const scopeFilter = buildSqliteSessionScopeFilter(scope);
+      const rows = (scopeFilter
+        ? this.db.prepare(`
+            SELECT record_id, message_text_original AS message_text, session_key,
+                   session_id, role, recorded_at, timestamp,
+                   bm25(l0_fts) AS rank
+            FROM l0_fts
+            WHERE l0_fts MATCH ? AND ${scopeFilter.clause}
+            ORDER BY rank ASC
+            LIMIT ?
+          `).all(ftsQuery, ...scopeFilter.params, limit)
+        : this.stmtL0FtsSearch.all(ftsQuery, limit)) as Array<{
         record_id: string;
         message_text: string;
         session_key: string;

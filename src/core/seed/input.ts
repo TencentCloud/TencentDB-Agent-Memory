@@ -356,6 +356,17 @@ function validateSessions(
           });
         }
 
+        if (msg.id !== undefined && (typeof msg.id !== "string" || msg.id.trim() === "")) {
+          errors.push({
+            stage: "message",
+            sourceIndex: si,
+            sessionKey: session.sessionKey,
+            roundIndex: ri,
+            messageIndex: mi,
+            message: '"id" must be a non-empty string when provided.',
+          });
+        }
+
         if (!msg.content || typeof msg.content !== "string" || msg.content.trim() === "") {
           errors.push({
             stage: "message",
@@ -465,6 +476,7 @@ function normalizeSessions(
       if (!Array.isArray(rawRound)) continue;
 
       const messages: NormalizedMessage[] = rawRound.map((msg) => ({
+        id: msg.id,
         role: msg.role,
         content: msg.content,
         // Normalize timestamp: ISO string → epoch ms, number → pass-through, missing → 0 (filled later)

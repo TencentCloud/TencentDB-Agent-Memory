@@ -43,7 +43,16 @@ export interface AutoCaptureResult {
  * Generate a unique L0 record ID for vector indexing.
  * Includes an index to distinguish multiple messages within the same round.
  */
-function generateL0RecordId(sessionKey: string, index: number): string {
+function generateL0RecordId(sessionKey: string, msg: ConversationMessage, index: number): string {
+  if (msg.id && msg.id.trim()) {
+    const digest = crypto
+      .createHash("sha1")
+      .update(["l0", sessionKey, msg.id].join("\0"))
+      .digest("hex")
+      .slice(0, 32);
+    return `l0_${digest}`;
+  }
+
   return `l0_${sessionKey}_${Date.now()}_${index}_${crypto.randomBytes(3).toString("hex")}`;
 }
 
@@ -183,7 +192,7 @@ export async function performAutoCapture(params: {
       const msg = filteredMessages[i];
       try {
         const l0Record: L0Record = {
-          id: generateL0RecordId(sessionKey, i),
+          id: generateL0RecordId(sessionKey, msg, i),
           sessionKey,
           sessionId: sessionId || "",
           role: msg.role,
@@ -304,7 +313,7 @@ export async function performAutoCapture(params: {
   // ============================
   const tNotifyStart = performance.now();
   // Pass empty array: L1 Runner reads from VectorStore DB (or L0 JSONL fallback), not from in-memory buffers.
-  if (scheduler) {
+  if (scheduler && filteredMessages.length > 0) {
     await scheduler.notifyConversation(sessionKey, []);
     logger?.debug?.(`${TAG} Scheduler notified of conversation round (sessionKey=${sessionKey})`);
 
@@ -325,6 +334,10 @@ export async function performAutoCapture(params: {
       l0VectorsWritten,
       filteredMessages,
     };
+  }
+
+  if (scheduler && filteredMessages.length === 0) {
+    logger?.debug?.(`${TAG} Scheduler notification skipped: no captured L0 messages (sessionKey=${sessionKey})`);
   }
 
   const totalMs = performance.now() - tCaptureStart;

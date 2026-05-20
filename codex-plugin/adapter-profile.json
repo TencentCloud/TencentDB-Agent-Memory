@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "adapterId": "memory-tencentdb-codex",
+  "displayName": "TencentDB Agent Memory Codex Adapter",
+  "host": "codex",
+  "packageName": "@tencentdb-agent-memory/memory-tencentdb",
+  "entrypoints": {
+    "pluginManifest": ".codex-plugin/plugin.json",
+    "hooks": "hooks/hooks.codex.json",
+    "mcp": ".mcp.json",
+    "skill": "skills/tdai-memory/SKILL.md",
+    "doctor": "scripts/doctor.mjs",
+    "gateway": "scripts/gateway.mjs",
+    "query": "scripts/query.mjs"
+  },
+  "requiredRuntime": {
+    "node": ">=22.16.0",
+    "gatewayDefaultUrl": "http://127.0.0.1:8420"
+  },
+  "installContract": {
+    "rootEnv": [
+      "PLUGIN_ROOT",
+      "CLAUDE_PLUGIN_ROOT"
+    ],
+    "dataDirEnv": [
+      "TDAI_CODEX_DATA_DIR",
+      "TDAI_DATA_DIR"
+    ],
+    "gatewayRootEnv": [
+      "TDAI_CODEX_TDAI_ROOT",
+      "TDAI_INSTALL_DIR"
+    ],
+    "gatewayPackageEnv": "TDAI_CODEX_GATEWAY_PACKAGE",
+    "gatewayUrlEnv": "TDAI_CODEX_GATEWAY_URL",
+    "tokenEnv": [
+      "TDAI_CODEX_GATEWAY_TOKEN",
+      "TDAI_GATEWAY_TOKEN",
+      "TDAI_TOKEN_PATH"
+    ],
+    "behaviorEnv": [
+      "TDAI_CODEX_TOOL_OFFLOAD",
+      "TDAI_CODEX_AUTOSTART",
+      "TDAI_CODEX_CIRCUIT_BREAKER",
+      "TDAI_CODEX_ALLOW_NON_LOOPBACK",
+      "TDAI_CODEX_DEBUG"
+    ]
+  },
+  "reuseContract": {
+    "noRepositoryAbsolutePathsRequired": true,
+    "safeDefaultGatewayScope": "loopback-only",
+    "authDefault": "private bearer token generated under the adapter data directory",
+    "stateIsolation": "per-user data lives under TDAI_CODEX_DATA_DIR or ~/.memory-tencentdb/codex-memory-tdai",
+    "sourceCheckoutOptional": "package-bin autostart is the default; TDAI_CODEX_TDAI_ROOT is only for source-tree development",
+    "extensionPoints": [
+      "override TDAI_CODEX_GATEWAY_PACKAGE to validate a fork, version, or tarball",
+      "override TDAI_CODEX_TDAI_ROOT to run the Gateway from a local source checkout",
+      "override TDAI_CODEX_DATA_DIR to isolate state for another user, test, or product",
+      "extend hooks/hooks.codex.json with host-specific hooks while keeping shared scripts intact",
+      "extend .mcp.json with additional MCP tools while preserving tdai-memory tools"
+    ]
+  },
+  "diagnosticChecks": [
+    "manifest files exist relative to the plugin root",
+    "hook and MCP configs do not require machine-specific absolute paths",
+    "data directory is writable and private when created",
+    "Gateway URL is loopback unless explicitly overridden",
+    "Gateway can be launched from package-bin or an explicit source checkout"
+  ]
+}

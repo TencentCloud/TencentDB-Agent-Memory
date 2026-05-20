@@ -12,6 +12,22 @@ export interface GatewayErrorResponse {
 }
 
 // ============================
+// /
+// ============================
+
+export interface RootResponse {
+  service: "TencentDB Agent Memory Gateway";
+  kind: "api";
+  version: string;
+  message: string;
+  endpoints: {
+    method: "GET" | "POST";
+    path: string;
+    description: string;
+  }[];
+}
+
+// ============================
 // /health
 // ============================
 
@@ -50,6 +66,8 @@ export interface CaptureRequest {
   assistant_content: string;
   session_key: string;
   session_id?: string;
+  /** Epoch ms when the captured turn began. Hosts that reconstruct turns out-of-process should set this. */
+  started_at?: number;
   user_id?: string;
   messages?: unknown[];
 }
@@ -68,6 +86,8 @@ export interface MemorySearchRequest {
   limit?: number;
   type?: string;
   scene?: string;
+  /** Optional session-key prefixes for host/project scoped search. */
+  session_key_prefixes?: string[];
 }
 
 export interface MemorySearchResponse {
@@ -84,6 +104,8 @@ export interface ConversationSearchRequest {
   query: string;
   limit?: number;
   session_key?: string;
+  /** Optional session-key prefixes for host/project scoped search. */
+  session_key_prefixes?: string[];
 }
 
 export interface ConversationSearchResponse {
@@ -129,6 +151,21 @@ export interface SeedRequest {
   strict_round_role?: boolean;
   /** Auto-fill missing timestamps (default: true). */
   auto_fill_timestamps?: boolean;
+  /** Wait for L1 extraction to drain before returning (default: true). */
+  wait_for_l1?: boolean;
+  /** Bounded L1 extraction concurrency for this seed run. */
+  l1_concurrency?: number;
+  /** Coalesce pending L2 records into batches during final full-pipeline flush. */
+  l2_batch_size?: number;
+  /** Wait for final L1→L2→L3 processing before returning (default: false). */
+  wait_for_full_pipeline?: boolean;
+  /** Max wait time for final L1→L2→L3 processing. */
+  full_pipeline_timeout_ms?: number;
+  /**
+   * Write seed output into the currently running memory store instead of an
+   * isolated timestamped seed directory. Intended for trusted local importers.
+   */
+  import_into_current_store?: boolean;
   /** Plugin config overrides (deep-merged on top of gateway memory config). */
   config_override?: Record<string, unknown>;
 }
@@ -138,6 +175,7 @@ export interface SeedResponse {
   rounds_processed: number;
   messages_processed: number;
   l0_recorded: number;
+  full_pipeline_flushed?: boolean;
   duration_ms: number;
   output_dir: string;
 }

@@ -17,6 +17,18 @@ export function sanitizeText(text: string): string {
   cleaned = cleaned.replace(/<user-persona>[\s\S]*?<\/user-persona>/g, "");
   cleaned = cleaned.replace(/<relevant-scenes>[\s\S]*?<\/relevant-scenes>/g, "");
   cleaned = cleaned.replace(/<scene-navigation>[\s\S]*?<\/scene-navigation>/g, "");
+  cleaned = cleaned.replace(/<memory-tools-guide[\s\S]*?<\/memory-tools-guide>/g, "");
+
+  // Remove Codex adapter injected context before L0/L1 persistence. Codex does
+  // not expose an OpenClaw-style before_message_write rewrite hook, so the
+  // Gateway-side sanitizer is the final guard against recall feedback loops.
+  cleaned = cleaned.replace(/<tdai-codex-memory-context[\s\S]*?<\/tdai-codex-memory-context>/g, "");
+  cleaned = cleaned.replace(/<structured-memory-results[\s\S]*?<\/structured-memory-results>/g, "");
+  cleaned = cleaned.replace(/<tdai-recall-context[\s\S]*?<\/tdai-recall-context>/g, "");
+  cleaned = cleaned.replace(/<raw-conversation-results[\s\S]*?<\/raw-conversation-results>/g, "");
+  cleaned = cleaned.replace(/<tdai-codex-context-offload[\s\S]*?<\/tdai-codex-context-offload>/g, "");
+  cleaned = cleaned.replace(/<tdai-codex-tool-memory-hint[\s\S]*?<\/tdai-codex-tool-memory-hint>/g, "");
+  cleaned = cleaned.replace(/<tdai-codex-tool-output-offload[\s\S]*?<\/tdai-codex-tool-output-offload>/g, "");
 
   // Remove offload-injected task context blocks (MMD mermaid diagrams)
   cleaned = cleaned.replace(/<current_task_context>[\s\S]*?<\/current_task_context>/g, "");
@@ -150,7 +162,7 @@ export function shouldExtractL1(text: string): boolean {
   // ── Security filters ──
   // Reject prompt-injection payloads — prevent malicious content from being
   // persisted into structured memory and re-injected on future recalls.
-  // if (looksLikePromptInjection(text)) return false;
+  if (looksLikePromptInjection(text)) return false;
 
   return true;
 }
