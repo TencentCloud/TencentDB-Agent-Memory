@@ -14,6 +14,7 @@ import {
   loadSessionState,
   recallForPrompt,
   readGatewayAuthToken,
+  promptFromPayload,
   sanitizeMemoryText,
   sessionKeyFromPayload,
 } from "./lib.mjs";
@@ -146,6 +147,104 @@ ${privateKeyBlock}
     expect(cleaned).toContain("CLIENT_SECRET=[REDACTED]");
     expect(cleaned).toContain("ACCESS_TOKEN=[REDACTED]");
     expect(cleaned).toContain("DB_PASSWORD=[REDACTED]");
+  });
+
+  it("extracts Codex App prompts from user message content arrays", () => {
+    const payload = {
+      message: {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "capture this Codex App prompt" },
+        ],
+      },
+    };
+
+    expect(promptFromPayload(payload)).toBe("capture this Codex App prompt");
+  });
+
+  it("does not treat assistant messages as user prompts", () => {
+    const payload = {
+      message: {
+        type: "message",
+        role: "assistant",
+        content: [
+          { type: "output_text", text: "assistant output should not be captured" },
+        ],
+      },
+      prompt: "",
+    };
+
+    expect(promptFromPayload(payload)).toBe("");
+  });
+
+  it("falls back to the latest real user message in the Codex transcript", () => {
+    const transcriptPath = path.join(tmpDir, "rollout.jsonl");
+    fs.writeFileSync(transcriptPath, [
+      JSON.stringify({
+        timestamp: "2026-05-20T05:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "earlier real prompt" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-05-20T05:01:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "<turn_aborted>\nsynthetic interruption" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-05-20T05:02:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "assistant response" }],
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-05-20T05:03:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "latest real Codex App prompt" }],
+        },
+      }),
+    ].join("\n") + "\n");
+
+    expect(promptFromPayload({ transcript_path: transcriptPath })).toBe("latest real Codex App prompt");
+  });
+
+  it("stores transcript fallback text when beginning a turn", async () => {
+    const transcriptPath = path.join(tmpDir, "begin-turn-rollout.jsonl");
+    fs.writeFileSync(transcriptPath, JSON.stringify({
+      timestamp: "2026-05-20T05:10:00.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "write this prompt into memory" }],
+      },
+    }) + "\n");
+
+    const payload = {
+      cwd: process.cwd(),
+      session_id: "transcript-fallback",
+      transcript_path: transcriptPath,
+    };
+    const sessionKey = sessionKeyFromPayload(payload);
+
+    await beginTurn(payload);
+    const state = await loadSessionState(sessionKey);
+
+    expect(state.currentTurn.userPrompt).toBe("write this prompt into memory");
   });
 
   it("redacts full Authorization and Proxy-Authorization header values", () => {

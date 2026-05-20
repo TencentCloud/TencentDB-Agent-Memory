@@ -147,13 +147,91 @@ export function sessionIdFromPayload(payload) {
 }
 
 export function promptFromPayload(payload) {
-  return String(
-    payload.prompt ??
-    payload.user_prompt ??
-    payload.userPrompt ??
-    payload.input ??
-    ""
-  );
+  const directPrompt = firstNonEmptyText([
+    payload.prompt,
+    payload.user_prompt,
+    payload.userPrompt,
+    payload.message,
+    payload.input,
+    payload.payload
+  ]);
+  return directPrompt || transcriptPromptFromPayload(payload);
+}
+
+function firstNonEmptyText(values) {
+  for (const value of values) {
+    const text = textFromCodexContent(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function textFromCodexContent(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value.map(textFromCodexContent).filter(Boolean).join("\n");
+  }
+  if (typeof value === "object") {
+    if (value.type === "message") {
+      return value.role === "user" ? textFromCodexContent(value.content) : "";
+    }
+    if (typeof value.text === "string") return value.text;
+    if (typeof value.content === "string" || Array.isArray(value.content)) {
+      return textFromCodexContent(value.content);
+    }
+  }
+  return "";
+}
+
+function transcriptPromptFromPayload(payload) {
+  const transcriptPath = payload.transcript_path || payload.transcriptPath;
+  if (!transcriptPath || typeof transcriptPath !== "string") return "";
+  return latestUserPromptFromTranscript(transcriptPath);
+}
+
+function latestUserPromptFromTranscript(transcriptPath) {
+  try {
+    const resolved = path.resolve(expandHome(transcriptPath));
+    const stat = fsSync.statSync(resolved);
+    if (!stat.isFile() || stat.size === 0) return "";
+    const maxBytes = 1_000_000;
+    const start = Math.max(0, stat.size - maxBytes);
+    const fd = fsSync.openSync(resolved, "r");
+    try {
+      const buffer = Buffer.alloc(stat.size - start);
+      fsSync.readSync(fd, buffer, 0, buffer.length, start);
+      const chunk = buffer.toString("utf-8");
+      const lines = chunk.slice(start === 0 ? 0 : chunk.indexOf("\n") + 1).trimEnd().split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const text = userPromptFromTranscriptLine(lines[i]);
+        if (text && !isSyntheticUserPrompt(text)) return text;
+      }
+    } finally {
+      fsSync.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function userPromptFromTranscriptLine(line) {
+  if (!line?.trim()) return "";
+  try {
+    const entry = JSON.parse(line);
+    const payload = entry?.payload;
+    if (!payload || payload.type !== "message" || payload.role !== "user") return "";
+    return textFromCodexContent(payload.content).trim();
+  } catch {
+    return "";
+  }
+}
+
+function isSyntheticUserPrompt(text) {
+  const trimmed = text.trim();
+  return trimmed.startsWith("<turn_aborted>") || trimmed.startsWith("<tdai-codex-");
 }
 
 export function sessionKeyFromPayload(payload) {
