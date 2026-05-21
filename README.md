@@ -259,6 +259,8 @@ docker exec -it hermes-memory hermes
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
 | `recall.maxResults` | `5` | Number of items returned per recall |
+| `recall.maxCharsPerMemory` | `800` | Max characters injected for one recalled L1 memory; `0` disables this guard |
+| `recall.maxTotalRecallChars` | `3000` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
 | `pipeline.everyNConversations` | `5` | Trigger an L1 memory extraction every N turns |
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |

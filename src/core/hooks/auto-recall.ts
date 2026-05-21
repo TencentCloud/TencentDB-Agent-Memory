@@ -22,6 +22,8 @@ import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.
 import { sanitizeText } from "../../utils/sanitize.js";
 
 const TAG = "[memory-tdai] [recall]";
+const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
+const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -127,6 +129,7 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
@@ -704,6 +707,83 @@ function formatMemoryLine(m: FormatableMemory): string {
   // If all three are empty → no time info appended (graceful)
 
   return line;
+}
+
+function applyRecallBudget(
+  lines: string[],
+  recall: MemoryTdaiConfig["recall"],
+  logger?: Logger,
+): string[] {
+  const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
+  const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
+
+  if (!maxCharsPerMemory && !maxTotalRecallChars) {
+    return lines;
+  }
+
+  const budgeted: string[] = [];
+  let usedChars = 0;
+  let truncatedCount = 0;
+  let droppedCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const perMemoryBounded = maxCharsPerMemory
+      ? truncateRecallLine(line, maxCharsPerMemory)
+      : line;
+    if (perMemoryBounded !== line) truncatedCount++;
+
+    if (!maxTotalRecallChars) {
+      budgeted.push(perMemoryBounded);
+      continue;
+    }
+
+    const separatorChars = budgeted.length > 0 ? 1 : 0;
+    const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
+    if (remainingChars <= 0) {
+      droppedCount += lines.length - i;
+      break;
+    }
+
+    if (perMemoryBounded.length > remainingChars) {
+      if (remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS) {
+        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
+        budgeted.push(totalBounded);
+        usedChars += separatorChars + totalBounded.length;
+        if (totalBounded !== perMemoryBounded) truncatedCount++;
+      } else {
+        droppedCount++;
+      }
+      droppedCount += lines.length - i - 1;
+      break;
+    }
+
+    budgeted.push(perMemoryBounded);
+    usedChars += separatorChars + perMemoryBounded.length;
+  }
+
+  if (truncatedCount > 0 || droppedCount > 0) {
+    logger?.debug?.(
+      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
+      `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
+      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
+    );
+  }
+
+  return budgeted;
+}
+
+function normalizeBudgetLimit(value: number | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
+}
+
+function truncateRecallLine(line: string, maxChars: number): string {
+  if (line.length <= maxChars) return line;
+  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) {
+    return line.slice(0, maxChars);
+  }
+  return `${line.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
 }
 
 /**

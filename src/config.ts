@@ -80,6 +80,10 @@ export interface RecallConfig {
   enabled: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
+  /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
+  maxCharsPerMemory: number;
+  /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
+  maxTotalRecallChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -486,6 +490,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
+      maxCharsPerMemory: normalizeNonNegativeInt(num(recallGroup, "maxCharsPerMemory"), 800),
+      maxTotalRecallChars: normalizeNonNegativeInt(num(recallGroup, "maxTotalRecallChars"), 3000),
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -564,6 +570,12 @@ function optStr(src: Record<string, unknown>, key: string): string | undefined {
 function num(src: Record<string, unknown>, key: string): number | undefined {
   const v = src[key];
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function normalizeNonNegativeInt(value: number | undefined, fallback: number): number {
+  if (value == null) return fallback;
+  if (value < 0) return fallback;
+  return Math.floor(value);
 }
 
 function bool(src: Record<string, unknown>, key: string): boolean | undefined {

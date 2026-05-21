@@ -262,6 +262,8 @@ docker exec -it hermes-memory hermes
 | `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
 | `recall.maxResults` | `5` | 每次召回条数 |
+| `recall.maxCharsPerMemory` | `800` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
+| `recall.maxTotalRecallChars` | `3000` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
