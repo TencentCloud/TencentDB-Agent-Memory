@@ -49,8 +49,6 @@ export interface StandaloneLLMConfig {
   maxTokens?: number;
   /** Request timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
-  /** Disable thinking/reasoning mode (DeepSeek: sets thinking.type=disabled in request body). */
-  disableThinking?: boolean;
 }
 
 // ============================
@@ -181,39 +179,19 @@ export class StandaloneLLMRunner implements LLMRunner {
 
     this.logger?.debug?.(
       `${TAG} run() start: taskId=${params.taskId}, model=${this.model}, ` +
-      `tools=${this.enableTools}, disableThinking=${this.config.disableThinking === true}, timeout=${timeoutMs}ms`,
+      `tools=${this.enableTools}, timeout=${timeoutMs}ms`,
     );
 
     // Create OpenAI-compatible provider via AI SDK
     // Use "compatible" mode to call /chat/completions (not Responses API),
     // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
-    const disableThinking = this.config.disableThinking === true;
     const provider = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
-      ...(disableThinking
-        ? {
-            fetch: async (url, init) => {
-              if (typeof init?.body === "string") {
-                try {
-                  const body = JSON.parse(init.body);
-                  body.thinking = { type: "disabled" };
-                  init = { ...init, body: JSON.stringify(body) };
-                } catch (error) {
-                  const errMsg = error instanceof Error ? error.message : String(error);
-                  this.logger?.warn?.(`${TAG} failed to inject thinking=disabled: ${errMsg}`);
-                }
-              }
-              return fetch(url, init);
-            },
-          }
-        : {}),
     });
 
     // For pure text tasks like L1 extraction, avoid exposing any tools.
-    // DeepSeek may opportunistically issue tool calls even when the prompt
-    // asks for plain JSON, which can lead to empty/non-JSON output.
     const tools = this.enableTools
       ? createSandboxedTools(workspaceDir, this.logger)
       : undefined;
