@@ -134,7 +134,7 @@ export interface ModelProvider {
  * All fields are optional; defaults are used when not specified.
  */
 export interface PluginConfig {
-  /** Explicit LLM model for offload tasks, format: "provider/model-id" (e.g. "dashscope/kimi-k2.5") */
+  /** Explicit LLM model for offload tasks, format: "provider/model-id"; model-id may contain "/" (e.g. "siliconflow/deepseek-ai/DeepSeek-V4-Flash"). */
   model?: string;
   /** LLM temperature for offload tasks. Default: 0.2 */
   temperature?: number;

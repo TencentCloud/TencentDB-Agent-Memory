@@ -16,7 +16,10 @@ import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getEnv } from "./env.js";
+import { parseModelRef, type ModelRef } from "./model-ref.js";
 import { report } from "../core/report/reporter.js";
+export type { ModelRef } from "./model-ref.js";
+export { parseModelRef } from "./model-ref.js";
 
 /**
  * Resolve a preferred temporary directory for memory-tdai operations.
@@ -186,36 +189,6 @@ function collectText(payloads: Array<{ text?: string; isError?: boolean }> | und
 }
 
 // ── Model resolution utilities ──
-
-/** Parsed model reference: { provider, model } */
-export interface ModelRef {
-  provider: string;
-  model: string;
-}
-
-/**
- * Parse a "provider/model" string into its components.
- * Returns undefined if the input is empty or doesn't contain a "/".
- *
- * Examples:
- *   "azure/gpt-5.2-chat"          → { provider: "azure", model: "gpt-5.2-chat" }
- *   "custom-host/org/model-v2"    → { provider: "custom-host", model: "org/model-v2" }
- *   ""                            → undefined
- *   "bare-model-name"             → undefined (no "/" — may be an alias)
- */
-export function parseModelRef(raw: string | undefined): ModelRef | undefined {
-  if (!raw) return undefined;
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-
-  const slashIdx = trimmed.indexOf("/");
-  if (slashIdx <= 0 || slashIdx === trimmed.length - 1) return undefined;
-
-  return {
-    provider: trimmed.slice(0, slashIdx),
-    model: trimmed.slice(slashIdx + 1),
-  };
-}
 
 /**
  * Resolve the user's default model from the main OpenClaw config.

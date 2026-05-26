@@ -139,7 +139,7 @@
         "description": "Context Offload 设置 — 多层上下文压缩系统（独立开关，默认关闭）",
         "properties": {
           "enabled": { "type": "boolean", "default": false, "description": "是否启用 Context Offload（默认关闭，不影响 Memory 功能）" },
-          "model": { "type": "string", "description": "Offload 使用的 LLM 模型（格式: provider/model），未填写时使用 openclaw 默认模型" },
+          "model": { "type": "string", "description": "Offload 使用的 LLM 模型（格式: provider/model-id，model-id 可包含 /，如 siliconflow/deepseek-ai/DeepSeek-V4-Flash），未填写时使用 openclaw 默认模型" },
           "temperature": { "type": "number", "default": 0.2, "description": "LLM 温度参数" },
           "forceTriggerThreshold": { "type": "number", "default": 4, "description": "累积多少个 tool pair 后强制触发 L1" },
           "dataDir": { "type": "string", "description": "自定义数据目录（绝对路径），默认 ~/.openclaw/context-offload" },

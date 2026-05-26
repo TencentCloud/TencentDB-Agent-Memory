@@ -205,7 +205,7 @@ export interface OffloadConfig {
    * Default: "local" (auto-detects based on backendUrl presence for backward compat)
    */
   mode: "local" | "backend";
-  /** LLM model for offload tasks, format: "provider/model-id". Falls back to agents.defaults.model when omitted. */
+  /** LLM model for offload tasks, format: "provider/model-id"; model-id may contain "/". Falls back to agents.defaults.model when omitted. */
   model?: string;
   /** LLM temperature (default: 0.2) */
   temperature: number;

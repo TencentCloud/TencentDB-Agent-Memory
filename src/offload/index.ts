@@ -65,6 +65,7 @@ import { SessionRegistry } from "./session-registry.js";
 import { reclaimOffloadData } from "./reclaimer.js";
 import { buildL3TriggerReport, reportL3Trigger } from "./state-reporter.js";
 import { resolveUserId, getUserIdSource } from "./user-id.js";
+import { parseModelRef } from "../utils/model-ref.js";
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 // OpenClaw calls registerOffload() multiple times during lifecycle.
@@ -351,24 +352,31 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     }
 
     if (resolvedModelRef) {
-      const modelParts = resolvedModelRef.split("/", 2);
-      const providerKey = modelParts[0];
-      const modelId = modelParts[1] ?? resolvedModelRef;
-      const models = (api.config as any)?.models;
-      const providerCfg = models?.providers?.[providerKey];
-      const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
-      const apiKey = providerCfg?.apiKey;
-
-      if (baseUrl && apiKey) {
-        backendClient = new LocalLlmClient(
-          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
-          logger,
+      const modelRef = parseModelRef(resolvedModelRef);
+      if (!modelRef) {
+        logger.error(
+          `[context-offload] Local LLM mode failed: invalid model reference "${resolvedModelRef}". ` +
+          `Expected "provider/model". L1/L1.5/L2 disabled.`,
         );
       } else {
-        logger.error(
-          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
-          `L1/L1.5/L2 disabled.`,
-        );
+        const providerKey = modelRef.provider;
+        const modelId = modelRef.model;
+        const models = (api.config as any)?.models;
+        const providerCfg = models?.providers?.[providerKey];
+        const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
+        const apiKey = providerCfg?.apiKey;
+
+        if (baseUrl && apiKey) {
+          backendClient = new LocalLlmClient(
+            { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
+            logger,
+          );
+        } else {
+          logger.error(
+            `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
+            `L1/L1.5/L2 disabled.`,
+          );
+        }
       }
     } else {
       logger.warn("[context-offload] No model resolved (offload.model not set, agents.defaults.model not found). L1/L1.5/L2 disabled.");
@@ -838,12 +846,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const models = config?.models;
       // 1. If we know the model, find its exact contextWindow from providers
       if (defaultModel && models) {
-        const [providerKey, modelId] = defaultModel.split("/", 2);
-        const provider = models.providers?.[providerKey];
-        if (provider?.models) {
-          const modelList = Array.isArray(provider.models) ? provider.models : [];
-          for (const m of modelList) {
-            if (m.id === modelId && typeof m.contextWindow === "number") return m.contextWindow;
+        const modelRef = parseModelRef(defaultModel);
+        if (modelRef) {
+          const provider = models.providers?.[modelRef.provider];
+          if (provider?.models) {
+            const modelList = Array.isArray(provider.models) ? provider.models : [];
+            for (const m of modelList) {
+              if (m.id === modelRef.model && typeof m.contextWindow === "number") return m.contextWindow;
+            }
           }
         }
       }
