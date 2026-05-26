@@ -65,11 +65,34 @@ export interface EmbeddedAgentRuntimeLike {
 }
 
 let _preferredAgentRuntime: EmbeddedAgentRuntimeLike | undefined;
+let _preferredOpenClawVersion: unknown;
 
 export function setPreferredEmbeddedAgentRuntime(
   agentRuntime: EmbeddedAgentRuntimeLike | undefined,
+  openClawVersion?: unknown,
 ): void {
   _preferredAgentRuntime = agentRuntime;
+  _preferredOpenClawVersion = openClawVersion;
+}
+
+export function shouldPassExtraSystemPrompt(openClawVersion: unknown): boolean {
+  const parsed = parseVersionXYZ(openClawVersion);
+  if (!parsed) return true;
+  return compareVersionXYZ(parsed, [2026, 4, 7]) < 0;
+}
+
+function parseVersionXYZ(v: unknown): [number, number, number] | null {
+  if (typeof v !== "string") return null;
+  const m = v.match(/^(\d+)\.(\d+)\.(\d+)(?:[-.].*)?$/);
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function compareVersionXYZ(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
 function resolveInjectedRunEmbeddedPiAgent(
@@ -439,12 +462,15 @@ export class CleanContextRunner {
 
       // Phase 2: Embedded agent run (LLM call + tool calls)
       const agentStartMs = Date.now();
-      // extraSystemPrompt: fallback for openclaw < 2026.4.7 which does not support
-      // config.agents.defaults.systemPromptOverride. On newer versions the
-      // override takes precedence and this becomes a no-op append.
+      // extraSystemPrompt is only needed for old OpenClaw builds that do not
+      // support config.agents.defaults.systemPromptOverride. Newer builds append
+      // it after the override, duplicating the full system prompt.
       const effectiveSystemPrompt =
         params.systemPrompt ||
         "You are a precise data extraction and generation assistant. Follow the user instructions exactly. Respond only with the requested output format.";
+      const extraSystemPrompt = shouldPassExtraSystemPrompt(_preferredOpenClawVersion)
+        ? effectiveSystemPrompt
+        : undefined;
       const result = await runEmbeddedPiAgent({
         sessionId,
         sessionFile,
@@ -460,7 +486,7 @@ export class CleanContextRunner {
         // Instead rely on cleanConfig.tools.allow to restrict the tool set
         // to a minimal read-only tool (when enableTools=false).
         disableTools: false,
-        extraSystemPrompt: effectiveSystemPrompt,
+        ...(extraSystemPrompt ? { extraSystemPrompt } : {}),
         streamParams: {
           maxTokens: params.maxTokens,
         },
