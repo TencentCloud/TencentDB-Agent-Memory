@@ -909,6 +909,11 @@ export class MemoryPipelineManager {
     // Advance cursor using the record timestamp returned by the runner
     if (result?.latestCursor) {
       state.last_extraction_updated_time = result.latestCursor;
+    } else if (!state.last_extraction_updated_time) {
+      // Runner returned void (zero records or extraction failed) and cursor
+      // is still empty.  Seed with current time so the next L2 run fetches
+      // incrementally instead of re-scanning all records.
+      state.last_extraction_updated_time = new Date().toISOString();
     }
 
     await this.persistStates();
