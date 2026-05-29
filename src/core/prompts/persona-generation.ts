@@ -19,6 +19,12 @@ export interface PersonaPromptParams {
   personaFilePath: string;
   /** @deprecated Kept for call-site compatibility; no longer used in prompt. */
   checkpointPath: string;
+  /**
+   * Which runner's file-tool names the prompt should instruct the model to use.
+   * "standalone" = gateway/Hermes (write_to_file / replace_in_file);
+   * "openclaw" = OpenClaw runtime (write / edit). Default "openclaw" (upstream).
+   */
+  toolDialect?: PersonaToolDialect;
 }
 
 export interface PersonaPromptResult {
@@ -27,10 +33,42 @@ export interface PersonaPromptResult {
 }
 
 // ============================
+// Tool dialects
+// ============================
+// The standalone gateway/Hermes runner exposes file tools named
+// `write_to_file` / `replace_in_file`; the OpenClaw runtime exposes `write` /
+// `edit` (with a different edit-param shape). The persona prompt MUST name the
+// tools the ACTIVE runner actually has — otherwise the model cannot call the
+// write tool and emits the persona as plain text instead of a file write.
+
+export type PersonaToolDialect = "openclaw" | "standalone";
+
+interface ToolNames {
+  write: string;
+  edit: string;
+  /** Chinese hint describing the edit tool's parameters. */
+  editParams: string;
+}
+
+const TOOL_DIALECTS: Record<PersonaToolDialect, ToolNames> = {
+  openclaw: {
+    write: "write",
+    edit: "edit",
+    editParams: "`path`=`persona.md`, `edits`=[{`oldText`: 旧内容片段, `newText`: 新内容片段}]",
+  },
+  standalone: {
+    write: "write_to_file",
+    edit: "replace_in_file",
+    editParams: "`path`=`persona.md`, `old_str`=旧内容片段, `new_str`=新内容片段",
+  },
+};
+
+// ============================
 // System Prompt (stable: role + constraints + logic + template)
 // ============================
 
-const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution Protocol
+function personaSystemPrompt(t: ToolNames): string {
+  return `# 🧬 Persona Architect - Incremental Evolution Protocol
 
 **输出语言**：\`persona.md\` 的所有自然语言内容（Archetype、基本信息、Chapter 1-4 正文等）使用与变化场景内容相同的语言；Markdown 语法、标签格式、文件名 \`persona.md\` 保持英文。模板里 Chapter 标识保留作骨架，非中文输出时请改用目标语言的对照说明。
 
@@ -39,8 +77,8 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 ## ⛔ 文件操作约束（必须严格遵守）
 
 1. **必须使用文件工具将最终 persona 内容写入 \`persona.md\`**。当前工作目录已设为数据目录，直接使用文件名 \`persona.md\`。
-   - **首次生成 / 大幅重写**：使用 **write** 工具整体写入。参数：\`path\`=\`persona.md\`, \`content\`=完整内容
-   - **增量更新（局部修改）**：使用 **edit** 工具精确替换。参数：\`path\`=\`persona.md\`, \`edits\`=[{\`oldText\`: 旧内容片段, \`newText\`: 新内容片段}]
+   - **首次生成 / 大幅重写**：使用 **${t.write}** 工具整体写入。参数：\`path\`=\`persona.md\`, \`content\`=完整内容
+   - **增量更新（局部修改）**：使用 **${t.edit}** 工具精确替换。参数：${t.editParams}
 2. **只能操作 \`persona.md\` 这一个文件**，禁止读取或写入任何其他文件（包括 scene_blocks/、.metadata/ 等）。
 3. **写入的内容必须只包含最终的 persona 文档**，不要包含你的思考过程、分析步骤或任何非 persona 内容。
 4. **无需 read 工具**：当前 persona.md 的完整内容已在用户消息中提供，直接基于它进行更新即可。
@@ -85,7 +123,7 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 
 ## 📝 输出模板 (The Persona Template)
 
-请参考以下格式，使用 **write** 工具写入最终内容。可以做自主调整（信息不足时可以减少或新增 chapter）（**必须保持 Markdown 格式**）：
+请参考以下格式，使用 **${t.write}** 工具写入最终内容。可以做自主调整（信息不足时可以减少或新增 chapter）（**必须保持 Markdown 格式**）：
 
 \`\`\`\`markdown
 # User Narrative Profile
@@ -130,12 +168,13 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 ---
 
 ### ⚠️ 成功标准
-- ✅ **必须使用 write 或 edit 工具写入最终结果到 \`persona.md\`**
+- ✅ **必须使用 ${t.write} 或 ${t.edit} 工具写入最终结果到 \`persona.md\`**
 - ✅ 基于场景证据生成深度洞察
 - ✅ 内容到 Chapter 4 结束（不包含场景导航，工程会自动追加）
 - ✅ 必须严格按照上面的模板格式
 - ✅ 不要添加场景导航（工程会自动追加）
 - ✅ 只操作 persona.md，不要操作其他文件`;
+}
 
 // ============================
 // User Prompt builder (dynamic data)
@@ -186,8 +225,10 @@ ${changedScenesContent}
 ${existingPersonaSection}
 ${iterationGuide}`;
 
+  const tools = TOOL_DIALECTS[params.toolDialect ?? "openclaw"];
+
   return {
-    systemPrompt: PERSONA_SYSTEM_PROMPT,
+    systemPrompt: personaSystemPrompt(tools),
     userPrompt,
   };
 }
