@@ -178,6 +178,7 @@ export function createLlmInputL3Handler(
     let _mildReplaced = 0;
     let _emergencyTriggered = false;
     let _emergencyDeleted = 0;
+    let _emergencyCycleDetected = false;  // A2-lite: prevent emergency compression cycle
     try {
       const historyMessages = Array.isArray(event.historyMessages) ? event.historyMessages : [];
       if (historyMessages.length > 0) filterHeartbeatMessages(historyMessages, logger);
@@ -313,7 +314,14 @@ export function createLlmInputL3Handler(
       if (forceEmergency) stateManager._forceEmergencyNext = false;
 
       if ((workingTokens >= emergencyThreshold || forceEmergency) && historyMessages.length > EMERGENCY_MIN_MESSAGES_TO_KEEP) {
+        // A2-lite: prevent infinite cycle when emergency compression creates markers
+        // that keep tokens above threshold
+        if (_emergencyCycleDetected) {
+          logger.warn(`[context-offload] L3(llm_input) EMERGENCY CYCLE DETECTED: tokens≈${workingTokens} still >= ${emergencyThreshold} after previous compression, skipping to prevent infinite loop`);
+          break;
+        }
         _emergencyTriggered = true;
+        _emergencyCycleDetected = true;  // Mark as triggered for cycle detection
         logger.warn(`[context-offload] L3(llm_input) EMERGENCY: tokens≈${workingTokens} >= ${emergencyThreshold} (force=${forceEmergency}), target=${emergencyTarget}`);
         const emergencyResult = emergencyCompress(historyMessages, emergencyTarget, countTokens, sysPrompt, promptText, logger);
         _emergencyDeleted = emergencyResult.deletedCount;
