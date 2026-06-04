@@ -52,6 +52,7 @@ import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { resolveLocalLlmConfig } from "./local-llm/config-resolver.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
 import { sanitizeText, writeRefMd } from "./storage.js";
@@ -362,22 +363,24 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     }
 
     if (resolvedModelRef) {
-      const modelParts = resolvedModelRef.split("/", 2);
-      const providerKey = modelParts[0];
-      const modelId = modelParts[1] ?? resolvedModelRef;
-      const models = (api.config as any)?.models;
-      const providerCfg = models?.providers?.[providerKey];
-      const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
-      const apiKey = providerCfg?.apiKey;
+      const resolved = resolveLocalLlmConfig(api, resolvedModelRef, logger);
 
-      if (baseUrl && apiKey) {
+      if (resolved) {
         backendClient = new LocalLlmClient(
-          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
+          {
+            baseUrl: resolved.baseUrl,
+            apiKey: resolved.apiKey,
+            model: resolved.modelId,
+            temperature: offloadConfig.temperature,
+            timeoutMs: offloadConfig.backendTimeoutMs,
+          },
           logger,
         );
       } else {
+        const providerKey = resolvedModelRef.split("/", 2)[0];
         logger.error(
-          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
+          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey. ` +
+          `Ensure either (1) models.providers.${providerKey}.apiKey is set, or (2) auth-profiles has credentials for "${providerKey}". ` +
           `L1/L1.5/L2 disabled.`,
         );
       }
