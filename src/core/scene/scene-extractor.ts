@@ -18,6 +18,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { BackupManager } from "../../utils/backup.js";
@@ -25,18 +26,14 @@ import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
 import { parseSceneBlock } from "../scene/scene-format.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { normalizeSceneFilenames } from "./filename-normalizer.js";
 import { buildSceneExtractionPrompt } from "../prompts/scene-extraction.js";
 import { report } from "../report/reporter.js";
-import type { LLMRunner } from "../types.js";
+import type { LLMRunner, Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [extractor]";
 
-interface ExtractorLogger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+type ExtractorLogger = Logger;
 
 export interface ExtractionResult {
   memoriesProcessed: number;
@@ -183,7 +180,7 @@ export class SceneExtractor {
     const memoriesJson = JSON.stringify(
       memories.map((m) => ({
         content: m.content,
-        created_at: m.created_at,
+        created_at: m.created_at ? formatForLLM(m.created_at) : m.created_at,
         id: m.id ?? "",
       })),
       null,
@@ -222,6 +219,22 @@ export class SceneExtractor {
       const errMsg = err instanceof Error ? err.message : String(err);
       const totalMs = Date.now() - extractStartMs;
       this.logger?.error(`${TAG} extract() LLM runner failed after ${totalMs}ms: ${errMsg}`);
+
+      // Restore scene_blocks/ from the Phase 1 backup so partial LLM writes
+      // (or a wiped sandbox) don't leak into the next recall cycle.
+      // Fail-soft: a restore failure must never mask the original LLM error.
+      try {
+        const result = await bm.restoreLatestDirectory("scene_blocks", sceneBlocksDir);
+        if (result.restored) {
+          this.logger?.warn(`${TAG} extract() restored scene_blocks/ from backup: ${result.from}`);
+        } else {
+          this.logger?.debug?.(`${TAG} extract() no scene_blocks backup to restore from (first run or empty)`);
+        }
+      } catch (restoreErr) {
+        const rMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        this.logger?.warn(`${TAG} extract() restore failed (non-fatal, original LLM error preserved): ${rMsg}`);
+      }
+
       return { memoriesProcessed: 0, success: false, error: errMsg };
     }
 
@@ -263,6 +276,33 @@ export class SceneExtractor {
       this.logger?.warn(`${TAG} extract() soft-delete cleanup error: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
     }
     this.logger?.debug?.(`${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files (${Date.now() - cleanupStartMs}ms)`);
+
+    // Phase 5b: Normalize filenames (defensive — LLM occasionally produces names
+    // with spaces / punctuation despite the prompt forbidding them, e.g.
+    // "Daily Rhythm in Shanghai.md". Such names break downstream consumers
+    // that parse Markdown navigation refs with `\S+\.md` style regexes
+    // (health-checker), shell tools, and URL-encoded path consumers.
+    //
+    // Renaming here — *before* syncSceneIndex — means scene_index.json and
+    // every downstream reader (PersonaGenerator, recall, profile-sync) only
+    // ever sees canonical filenames. Idempotent and safe to run repeatedly.
+    const normStartMs = Date.now();
+    try {
+      const normResult = await normalizeSceneFilenames(sceneBlocksDir, this.logger);
+      if (normResult.renamed > 0) {
+        this.logger?.info(
+          `${TAG} extract() filename normalization: renamed ${normResult.renamed}, skipped ${normResult.skipped} (${Date.now() - normStartMs}ms)`,
+        );
+      } else {
+        this.logger?.debug?.(
+          `${TAG} extract() filename normalization: skipped ${normResult.skipped} (${Date.now() - normStartMs}ms)`,
+        );
+      }
+    } catch (normErr) {
+      // Non-fatal — log and continue. Index sync below will simply pick up
+      // whatever names are present on disk.
+      this.logger?.warn(`${TAG} extract() filename normalization error: ${normErr instanceof Error ? normErr.message : String(normErr)}`);
+    }
 
     // Phase 6: Sync scene index (rebuilds from remaining non-empty files)
     const syncStartMs = Date.now();
@@ -436,5 +476,5 @@ export class SceneExtractor {
 }
 
 function formatTimestamp(d: Date): string {
-  return d.toISOString();
+  return formatForLLM(d);
 }

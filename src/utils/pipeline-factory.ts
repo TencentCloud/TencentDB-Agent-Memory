@@ -36,6 +36,7 @@ import { SceneExtractor } from "../core/scene/scene-extractor.js";
 import { PersonaTrigger } from "../core/persona/persona-trigger.js";
 import { PersonaGenerator } from "../core/persona/persona-generator.js";
 import { pullProfilesToLocal, syncLocalProfilesToStore } from "../core/profile/profile-sync.js";
+import type { Logger } from "../core/types.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
 
@@ -47,12 +48,8 @@ function supportsProfileSyncWrite(store?: IMemoryStore): boolean {
 // Logger interface
 // ============================
 
-export interface PipelineLogger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+/** @deprecated Use `Logger` from `../core/types.js` directly. */
+export type PipelineLogger = Logger;
 
 // ============================
 // Factory options
@@ -466,7 +463,7 @@ export function createL2Runner(opts: {
         logger.debug?.(
           `${TAG} [L2] No new L1 records since cursor (session=${sessionKey}, updatedAfter=${cursor ?? "(full)"}), skipping scene extraction`,
         );
-        return;
+        return { skipped: true };
       }
 
       logger.debug?.(

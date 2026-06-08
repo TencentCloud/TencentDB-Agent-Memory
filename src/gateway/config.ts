@@ -24,6 +24,39 @@ export interface GatewayConfig {
   server: {
     port: number;
     host: string;
+    /**
+     * Optional API token for HTTP authentication.
+     *
+     * When set (non-empty string), every route except `GET /health` and CORS
+     * preflight (`OPTIONS *`) requires an `Authorization: Bearer <apiKey>`
+     * header. Requests without a valid token receive HTTP 401.
+     *
+     * **Default: undefined** — authentication is disabled, all routes are
+     * open (preserves legacy behaviour). A WARN is emitted at startup if the
+     * gateway binds to a non-loopback host without an API key set, to avoid
+     * silently exposing an unauthenticated endpoint to the network.
+     *
+     * env: `TDAI_GATEWAY_API_KEY`
+     * yaml: `server.apiKey`
+     */
+    apiKey?: string;
+    /**
+     * Optional CORS allow-list.
+     *
+     * When empty (default), the gateway sends **no** `Access-Control-Allow-*`
+     * headers and rejects CORS preflight (`OPTIONS`) with 403 if an `Origin`
+     * header is present — browsers will then block all cross-origin requests
+     * via same-origin policy.
+     *
+     * When set, each request's `Origin` is matched against this list and
+     * `Access-Control-Allow-Origin` is echoed back only on match. Use the
+     * single entry `"*"` to restore the legacy permissive behaviour (only
+     * appropriate for local development).
+     *
+     * env: `TDAI_CORS_ORIGINS` (comma-separated)
+     * yaml: `server.corsOrigins` (string[])
+     */
+    corsOrigins: string[];
   };
   data: {
     /** Base directory for TDAI data storage. */
@@ -78,6 +111,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const port = envInt("TDAI_GATEWAY_PORT") ?? num(serverConfig, "port") ?? 8420;
   const host = env("TDAI_GATEWAY_HOST") ?? str(serverConfig, "host") ?? "127.0.0.1";
 
+  // Optional auth / CORS — both default to "disabled" so existing setups keep
+  // working unchanged. When unset the gateway behaves exactly like before this
+  // change (open v1 routes, permissive CORS *will not* be re-introduced — see
+  // resolveCorsOrigins below: empty list means "send no CORS headers").
+  const apiKey = env("TDAI_GATEWAY_API_KEY") ?? str(serverConfig, "apiKey");
+  const corsOrigins = resolveCorsOrigins(serverConfig);
+
   // Data config (expand leading ~ to $HOME so Node.js fs/path can resolve it)
   const dataConfig = obj(fileConfig, "data");
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
@@ -98,15 +138,24 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const memoryRaw = obj(fileConfig, "memory");
   const memory = parseMemoryConfig(memoryRaw as Record<string, unknown> | undefined);
 
-  const config: GatewayConfig = {
-    server: { port, host },
+  const base: GatewayConfig = {
+    server: { port, host, apiKey, corsOrigins },
     data: { baseDir },
     llm,
     memory,
-    ...overrides,
   };
 
-  return config;
+  // Merge overrides one level deep so partial `server`/`data`/`llm` patches
+  // (frequently used by e2e tests) don't accidentally drop sibling fields
+  // such as `corsOrigins` introduced after they were written.
+  if (!overrides) return base;
+  return {
+    ...base,
+    ...overrides,
+    server: { ...base.server, ...(overrides.server ?? {}) },
+    data: { ...base.data, ...(overrides.data ?? {}) },
+    llm: { ...base.llm, ...(overrides.llm ?? {}) },
+  };
 }
 
 // ============================
@@ -197,6 +246,37 @@ function str(src: Record<string, unknown>, key: string): string | undefined {
 function num(src: Record<string, unknown>, key: string): number | undefined {
   const v = src[key];
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Read `server.corsOrigins` from yaml or `TDAI_CORS_ORIGINS` from env.
+ *
+ * Accepted yaml shapes (yaml has precedence over env):
+ *   server:
+ *     corsOrigins: []                              # explicit empty → no CORS
+ *     corsOrigins: ["https://app.example.com"]     # array of allowed origins
+ *     corsOrigins: "https://a,https://b"           # comma-separated string
+ *
+ * Env: `TDAI_CORS_ORIGINS="https://a,https://b"`
+ *
+ * Returns `[]` when nothing is set — the server interprets that as
+ * "do not emit any CORS headers" (most restrictive default).
+ */
+function resolveCorsOrigins(serverConfig: Record<string, unknown>): string[] {
+  // 1. YAML takes precedence so an explicit `corsOrigins: []` can mean
+  //    "I want CORS off" even when the env var leaks in from the shell.
+  const raw = serverConfig["corsOrigins"];
+  if (Array.isArray(raw)) {
+    return raw.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map(s => s.trim());
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.split(",").map(s => s.trim()).filter(Boolean);
+  }
+
+  // 2. Fall back to env. Empty string from env is treated as "not set".
+  const envValue = env("TDAI_CORS_ORIGINS");
+  if (!envValue) return [];
+  return envValue.split(",").map(s => s.trim()).filter(Boolean);
 }
 
 /**

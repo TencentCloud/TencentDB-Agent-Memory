@@ -44,6 +44,8 @@ export interface SceneExtractionPromptResult {
 function buildSceneSystemPrompt(maxScenes: number): string {
   return `# Memory Consolidation Architect
 
+**输出语言**：\`.md\` 场景文件的所有自然语言内容（文件名、章节标题、正文）使用与"New Memories List"中记忆相同的语言；META 字段名（created/updated/summary/heat）和 \`[DELETED]\` 等标记保持英文。模板中给出的中文章节标题（\`## 用户核心特征\` 等）作为结构骨架——非中文输出时请用目标语言的等价表达替换。
+
 ## 角色定义 (Role Definition)
 你是记忆整合架构师。你的目标是为用户构建一个"数字第二大脑"。你不仅仅是在记录数据，你更像是一位人类学家和心理学家，负责分析原始记忆，从中提取核心特征、捕捉隐性信号，并构建不断演变的叙事。
 
@@ -78,6 +80,30 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 5. **场景索引和系统配置由工程系统自动维护**，你只需专注于操作 \`.md\` 场景文件
 6. **删除文件的唯一方式**：使用 **write** 工具将文件内容写为 \`[DELETED]\` 标记（\`path\`=文件名, \`content\`=\`[DELETED]\`）。系统会自动清理带有此标记的文件。**禁止**写入空字符串（会被系统拒绝）。**禁止**用 \`[ARCHIVE]\`、\`[CONSOLIDATED]\` 等其他标记替代删除——只有 \`[DELETED]\` 标记会触发系统清理。
 7. **禁止创建报告/整合/汇总类文件**。你的输出必须是有意义的场景叙事文件（如"技术架构与工程实践.md"、"日常生活与工作节奏.md"）。禁止创建以 BATCH、REPORT、CONSOLIDATION、INTEGRATION、ARCHIVE、SUMMARY 等为前缀的文件。
+
+## 📛 文件命名规范（强制）
+
+为保证下游工具（场景导航、健康检查、对象存储同步等）能正确解析路径引用，**新建文件**或 **MERGE 后的目标文件**必须遵守以下命名规则：
+
+- **允许字符**：英文字母、数字、CJK 中日韩文字、短横线 \`-\`、下划线 \`_\`、点号 \`.\`
+- **必须以 \`.md\` 结尾**（小写）
+- **❌ 禁止包含**：空格、全角空格、引号、括号 \`( ) [ ] { }\`、斜杠 \`/ \\\`、冒号 \`:\`、分号 \`;\`、问号 \`?\`、感叹号 \`!\`、星号 \`*\`、竖线 \`|\`、其他标点
+- **多词分隔**：使用 \`-\`（短横线）连接，不要用空格
+- **更新现有文件**时，沿用清单中给出的文件名，不要改名
+
+✅ 正确示例：
+- \`Daily-Rhythm-in-Shanghai.md\`
+- \`日常生活-健康管理.md\`
+- \`技术研究-Rust学习.md\`
+- \`Coffee-Yirgacheffe.md\`
+
+❌ 错误示例（每次都会触发工程兜底重命名）：
+- \`Daily Rhythm in Shanghai.md\`（含空格）
+- \`Coffee (Yirgacheffe).md\`（含括号）
+- \`Q1 Milestone?.md\`（含空格和问号）
+
+> 提示：即使你没遵守，工程系统会自动归一化文件名（空格替换为短横线、删除括号等），但这会增加日志噪音和潜在冲突。请在 \`write\` 时直接使用合规名字。
+
 
 ## 工作流与逻辑 (Workflow & Logic)
 在生成输出之前，你必须执行以下"思维链"过程：
@@ -158,6 +184,8 @@ function buildSceneSystemPrompt(maxScenes: number): string {
 ### 📄 场景文件内容（必须输出）
 
 请你参考这个模板输出 .md 文件的内容或基于已有md进行更新，每个md控制在1500字符内。不要把模板本身放在 Markdown 代码块中，只需直接输出要写入文件的原始文本。
+
+> 模板中的中文章节标题（\`## 用户核心特征\` 等）和示例文本仅作为**结构骨架**参考；**实际章节标题与正文必须按上述输出语言书写**（例如英文场景：\`## User Core Traits\`、\`## User Preferences\`、\`## Implicit Signals\`、\`## Core Narrative\` 等）。
 
 \`\`\`markdown
 -----META-START-----
@@ -244,7 +272,8 @@ export function buildSceneExtractionPrompt(params: SceneExtractionPromptParams):
     ? `### 📁 已有场景文件清单（仅以下文件可 read）\n${existingSceneFiles.map((f) => `- \`${f}\``).join("\n")}\n`
     : `### 📁 已有场景文件清单\n（当前无已有场景文件）\n`;
 
-  const userPrompt = `${warningSection}
+  const userPrompt = `**输出语言**：场景文件内容使用下方 New Memories List 中记忆的主导语言。
+${warningSection}
 ### 1️⃣ New Memories List
 ${memoriesJson}
 

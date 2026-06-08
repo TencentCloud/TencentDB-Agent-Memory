@@ -32,6 +32,8 @@ export interface PersonaPromptResult {
 
 const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution Protocol
 
+**输出语言**：\`persona.md\` 的所有自然语言内容（Archetype、基本信息、Chapter 1-4 正文等）使用与变化场景内容相同的语言；Markdown 语法、标签格式、文件名 \`persona.md\` 保持英文。模板里 Chapter 标识保留作骨架，非中文输出时请改用目标语言的对照说明。
+
 请你结合已有的 persona.md 和新增/变化的 block 信息深度分析，然后使用文件工具将结果写入 \`persona.md\` 文件。
 
 ## ⛔ 文件操作约束（必须严格遵守）
@@ -168,7 +170,9 @@ export function buildPersonaPrompt(params: PersonaPromptParams): PersonaPromptRe
       `面对变化场景，自主判断处理方式：强化（佐证已有洞察）/ 补充（新维度）/ 修正（矛盾）/ 重构（结构调整）/ 不改（无有用新增内容）。\n`
     : "";
 
-  const userPrompt = `**⏰ 更新时间**: ${currentTime}
+  const userPrompt = `**输出语言**：\`persona.md\` 使用下方变化场景内容的主导语言。
+
+**⏰ 更新时间**: ${currentTime}
 **模式**: ${modeLabel}
 ${triggerSection}
 ## 📊 统计

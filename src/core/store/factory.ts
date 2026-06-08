@@ -98,6 +98,7 @@ export function createStoreBundle(
           apiKey: config.embedding.apiKey,
           model: config.embedding.model,
           dimensions: config.embedding.dimensions,
+          sendDimensions: config.embedding.sendDimensions,
           maxInputChars: config.embedding.maxInputChars,
         }, logger);
       }

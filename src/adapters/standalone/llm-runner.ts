@@ -149,12 +149,6 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
   };
 }
 
-/** Read-only tool subset — used when enableTools=false to avoid empty tools rejection. */
-function createReadOnlyTools(workspaceDir: string, logger?: Logger) {
-  const all = createSandboxedTools(workspaceDir, logger);
-  return { read_file: all.read_file };
-}
-
 // ============================
 // StandaloneLLMRunner
 // ============================
@@ -197,17 +191,17 @@ export class StandaloneLLMRunner implements LLMRunner {
       compatibility: "compatible",
     });
 
-    // Select tools based on mode
+    // For pure text tasks like L1 extraction, avoid exposing any tools.
     const tools = this.enableTools
       ? createSandboxedTools(workspaceDir, this.logger)
-      : createReadOnlyTools(workspaceDir, this.logger);
+      : undefined;
 
     try {
       const result = await generateText({
         model: provider.chat(this.model),
         system: params.systemPrompt,
         prompt: params.prompt,
-        tools,
+        ...(tools ? { tools } : {}),
         stopWhen: stepCountIs(this.enableTools ? MAX_TOOL_ITERATIONS : 1),
         maxOutputTokens: maxTokens,
         abortSignal: AbortSignal.timeout(timeoutMs),

@@ -80,6 +80,10 @@ export interface RecallConfig {
   enabled: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
+  /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
+  maxCharsPerMemory: number;
+  /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
+  maxTotalRecallChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -102,6 +106,13 @@ export interface EmbeddingConfig {
   model: string;
   /** Vector dimensions (required for remote provider, must match model). */
   dimensions: number;
+  /**
+   * Whether to send the `dimensions` field in the embeddings request body.
+   * Default true (compatible with OpenAI text-embedding-3-* Matryoshka models).
+   * Set to false for self-hosted / OSS models that reject unknown `dimensions`
+   * (e.g. BGE-M3, which returns HTTP 400 "does not support matryoshka representation").
+   */
+  sendDimensions: boolean;
   /** Top-K candidates to recall during conflict detection (default: 5) */
   conflictRecallTopK: number;
   /** Proxy URL for qclaw provider — when provider="qclaw", requests are forwarded through this local proxy */
@@ -202,9 +213,11 @@ export interface OffloadConfig {
    * LLM execution mode for L1/L1.5/L2 tasks.
    * - "local": call LLM directly via AI SDK (uses offload.model or main agent model)
    * - "backend": route through remote backend service (requires backendUrl)
+   * - "collect": data collection only — runs L1/L1.5/L2 asynchronously but disables
+   *   L3 compression and does NOT occupy the contextEngine slot (uses legacy compaction)
    * Default: "local" (auto-detects based on backendUrl presence for backward compat)
    */
-  mode: "local" | "backend";
+  mode: "local" | "backend" | "collect";
   /** LLM model for offload tasks, format: "provider/model-id". Falls back to agents.defaults.model when omitted. */
   model?: string;
   /** LLM temperature (default: 0.2) */
@@ -256,6 +269,15 @@ export interface OffloadConfig {
 
 /** Fully resolved plugin configuration (v3). */
 export interface MemoryTdaiConfig {
+  /**
+   * Timezone for user/LLM-facing timestamps and local-day boundaries.
+   * - "system" (default): follow process system timezone
+   * - IANA name: "Asia/Shanghai", "Europe/Berlin", "UTC"
+   * - UTC offset string: "+08:00", "-05:30" (ECMA-402 2024)
+   *
+   * Storage instants (SQLite/TCVDB) are always UTC regardless of this setting.
+   */
+  timezone: string;
   capture: CaptureConfig;
   extraction: ExtractionConfig;
   persona: PersonaConfig;
@@ -426,9 +448,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   // --- Offload ---
   const offloadGroup = obj(c, "offload");
 
-  const offloadMode: "local" | "backend" = (() => {
+  const offloadMode: "local" | "backend" | "collect" = (() => {
     const raw = optStr(offloadGroup, "mode");
-    if (raw === "local" || raw === "backend") return raw;
+    if (raw === "local" || raw === "backend" || raw === "collect") return raw;
     return optStr(offloadGroup, "backendUrl") ? "backend" : "local";
   })();
 
@@ -455,6 +477,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   };
 
   return {
+    timezone: str(c, "timezone") ?? "system",
     capture: {
       enabled: bool(captureGroup, "enabled") ?? true,
       excludeAgents: strArray(captureGroup, "excludeAgents") ?? [],
@@ -478,7 +501,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
       enableWarmup: bool(pipelineGroup, "enableWarmup") ?? true,
       l1IdleTimeoutSeconds: num(pipelineGroup, "l1IdleTimeoutSeconds") ?? 600,
-      l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 90,
+      l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 10,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,
       sessionActiveWindowHours: num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
@@ -486,6 +509,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
+      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
+      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -497,6 +522,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       apiKey: embeddingApiKey,
       model: str(embeddingGroup, "model") ?? defaultModel,
       dimensions: num(embeddingGroup, "dimensions") ?? defaultDimensions,
+      sendDimensions: bool(embeddingGroup, "sendDimensions") ?? true,
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,

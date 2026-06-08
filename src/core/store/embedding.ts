@@ -13,6 +13,8 @@
  * - Throws on failure; callers decide fallback strategy.
  */
 
+import type { Logger } from "../types.js";
+
 // ============================
 // Types
 // ============================
@@ -28,6 +30,13 @@ export interface OpenAIEmbeddingConfig {
   model: string;
   /** Output dimensions (required — must match the chosen model) */
   dimensions: number;
+  /**
+   * Whether to include the `dimensions` field in the embeddings request body.
+   * Defaults to `true` for backward compatibility with OpenAI's `text-embedding-3-*`
+   * (Matryoshka representation). Some self-hosted / OSS models (e.g. BGE-M3) reject
+   * unknown `dimensions` parameters with HTTP 400; set this to `false` for those.
+   */
+  sendDimensions?: boolean;
   /** Local proxy URL (only for provider="qclaw") — requests are forwarded through this proxy with Remote-URL header */
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). */
@@ -95,17 +104,6 @@ export class EmbeddingNotReadyError extends Error {
     super(message ?? "Local embedding model is not ready yet (still downloading or loading)");
     this.name = "EmbeddingNotReadyError";
   }
-}
-
-// ============================
-// Logger interface
-// ============================
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
 }
 
 const TAG = "[memory-tdai][embedding]";
@@ -401,11 +399,107 @@ interface OpenAIEmbeddingResponse {
   };
 }
 
+/**
+ * ZeroEntropy's `/v1/models/embed` returns input order via `results[i]`
+ * (no `index` field) and omits the OpenAI `data` envelope. See:
+ *   https://docs.zeroentropy.dev/api-reference/models/embed
+ */
+interface ZeroEntropyEmbeddingResponse {
+  results: Array<{
+    embedding: number[];
+  }>;
+}
+
+// ============================
+// Shared HTTP helpers (provider-agnostic)
+// ============================
+
+/**
+ * Truncate every text to `maxInputChars` (when set), emitting one warning
+ * per text that exceeded the limit. Returns the input array untouched when
+ * no limit is configured.
+ */
+function truncateEmbeddingInputs(
+  texts: string[],
+  maxInputChars: number | undefined,
+  logger?: Logger,
+): string[] {
+  if (!maxInputChars) return texts;
+  return texts.map((text) => {
+    if (text.length <= maxInputChars) return text;
+    logger?.warn?.(
+      `${TAG} Input truncated from ${text.length} to ${maxInputChars} chars (maxInputChars limit)`,
+    );
+    return text.slice(0, maxInputChars);
+  });
+}
+
+/**
+ * POST a remote embedding request with the project's standard timeout +
+ * retry behaviour, returning the parsed JSON body. Provider-specific
+ * services own body construction and response shape — this helper handles
+ * fetch, abort-on-timeout, exponential backoff, and the `EmbeddingApiError`
+ * non-retry rule for 4xx responses (except 429).
+ */
+async function postEmbeddingRequest(params: {
+  fetchUrl: string;
+  headers: Record<string, string>;
+  body: Record<string, unknown>;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const { fetchUrl, headers, body, timeoutMs } = params;
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(fetchUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => "(unable to read body)");
+          const err = new EmbeddingApiError(
+            `Embedding API error: HTTP ${resp.status} ${resp.statusText} — ${errBody.slice(0, 500)}`,
+            resp.status,
+          );
+          // Don't retry 4xx client errors (except 429 rate limit).
+          if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+            throw err;
+          }
+          lastError = err;
+          continue;
+        }
+        return await resp.json();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    } catch (err) {
+      // Non-retryable errors (4xx client errors) — rethrow immediately
+      if (err instanceof EmbeddingApiError && err.isClientError()) {
+        throw err;
+      }
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // AbortError = timeout, retry
+      if (attempt < MAX_RETRIES) {
+        // Exponential backoff: 500ms, 1000ms
+        const delay = 500 * (attempt + 1);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+  }
+  throw lastError ?? new Error("Embedding API call failed after retries");
+}
+
 export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly dims: number;
+  private readonly sendDimensions: boolean;
   private readonly providerName: string;
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
@@ -429,6 +523,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.apiKey = config.apiKey;
     this.model = config.model;
     this.dims = config.dimensions;
+    this.sendDimensions = config.sendDimensions ?? true;
     this.providerName = config.provider || "openai";
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
@@ -497,10 +592,12 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
-      dimensions: this.dims,
     };
+    if (this.sendDimensions) {
+      body.dimensions = this.dims;
+    }
 
-    // Determine fetch URL and headers based on proxy mode
+    // Determine fetch URL and headers based on proxy mode.
     const useProxy = this.providerName === "qclaw" && !!this.proxyUrl;
     const fetchUrl = useProxy ? this.proxyUrl! : `${this.baseUrl}/embeddings`;
     const headers: Record<string, string> = {
@@ -514,63 +611,161 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       );
     }
 
-    // Retry loop with timeout
-    let lastError: Error | undefined;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutOverride ?? this.timeoutMs);
+    const json = (await postEmbeddingRequest({
+      fetchUrl,
+      headers,
+      body,
+      timeoutMs: timeoutOverride ?? this.timeoutMs,
+    })) as OpenAIEmbeddingResponse;
 
-        try {
-          const resp = await fetch(fetchUrl, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(body),
-            signal: controller.signal,
-          });
-
-          if (!resp.ok) {
-            const errBody = await resp.text().catch(() => "(unable to read body)");
-            const err = new EmbeddingApiError(
-              `Embedding API error: HTTP ${resp.status} ${resp.statusText} — ${errBody.slice(0, 500)}`,
-              resp.status,
-            );
-            // Don't retry on 4xx client errors (except 429 rate limit)
-            if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
-              throw err;
-            }
-            lastError = err;
-            continue;
-          }
-
-          const json = (await resp.json()) as OpenAIEmbeddingResponse;
-
-          if (!json.data || !Array.isArray(json.data)) {
-            throw new Error("Embedding API returned unexpected format: missing 'data' array");
-          }
-
-          // Sort by index to ensure correct order, then sanitize+normalize for consistency with local provider
-          const sorted = [...json.data].sort((a, b) => a.index - b.index);
-          return sorted.map((d) => sanitizeAndNormalize(d.embedding));
-        } finally {
-          clearTimeout(timeoutId);
-        }
-      } catch (err) {
-        // Non-retryable errors (4xx client errors) — rethrow immediately
-        if (err instanceof EmbeddingApiError && err.isClientError()) {
-          throw err;
-        }
-        lastError = err instanceof Error ? err : new Error(String(err));
-        // AbortError = timeout, retry
-        if (attempt < MAX_RETRIES) {
-          // Exponential backoff: 500ms, 1000ms
-          const delay = 500 * (attempt + 1);
-          await new Promise((r) => setTimeout(r, delay));
-        }
-      }
+    if (!json.data || !Array.isArray(json.data)) {
+      throw new Error("Embedding API returned unexpected format: missing 'data' array");
     }
 
-    throw lastError ?? new Error("Embedding API call failed after retries");
+    // Sort by index to ensure correct order, then sanitize+normalize for consistency with local provider.
+    const sorted = [...json.data].sort((a, b) => a.index - b.index);
+    return sorted.map((d) => sanitizeAndNormalize(d.embedding));
+  }
+}
+
+// ============================
+// ZeroEntropy embedding service
+// ============================
+
+/**
+ * ZeroEntropy native embedding adapter.
+ *
+ * Reuses {@link OpenAIEmbeddingConfig} for the wire-config shape (baseUrl /
+ * apiKey / model / dimensions / sendDimensions are identical), but the wire
+ * format diverges in three places, so we keep this provider on its own class
+ * instead of branching {@link OpenAIEmbeddingService}:
+ *
+ * 1. Endpoint is `${baseUrl}/models/embed` (not `/embeddings`).
+ * 2. Request body requires `input_type` (`"query"` or `"document"`).
+ *    `dimensions` is optional — for `zembed-1` the accepted values are the
+ *    Matryoshka set [2560, 1280, 640, 320, 160, 80, 40]; any other value is
+ *    rejected by the server. The config's `sendDimensions` flag (default
+ *    true) controls whether it is forwarded, matching the OpenAI path.
+ * 3. Response envelope is `{ results: [{ embedding }] }` and preserves
+ *    input order via array position rather than an `index` field.
+ *
+ * Everything else (timeout, retry, batching, char-cap truncation,
+ * sanitize+normalize) is shared via the module-level
+ * `postEmbeddingRequest` / `truncateEmbeddingInputs` helpers. See
+ * https://docs.zeroentropy.dev/api-reference/models/embed and issue #68.
+ */
+export class ZeroEntropyEmbeddingService implements EmbeddingService {
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
+  private readonly model: string;
+  private readonly dims: number;
+  private readonly sendDimensions: boolean;
+  private readonly maxInputChars?: number;
+  private readonly timeoutMs: number;
+  private readonly logger?: Logger;
+
+  constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
+    if (!config.apiKey) {
+      throw new Error("ZeroEntropyEmbeddingService: apiKey is required");
+    }
+    if (!config.baseUrl) {
+      throw new Error("ZeroEntropyEmbeddingService: baseUrl is required");
+    }
+    if (!config.model) {
+      throw new Error("ZeroEntropyEmbeddingService: model is required");
+    }
+    if (!config.dimensions || config.dimensions <= 0) {
+      throw new Error("ZeroEntropyEmbeddingService: dimensions is required (must be a positive integer)");
+    }
+    this.baseUrl = config.baseUrl.replace(/\/+$/, "");
+    this.apiKey = config.apiKey;
+    this.model = config.model;
+    this.dims = config.dimensions;
+    this.sendDimensions = config.sendDimensions ?? true;
+    this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
+    this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
+    this.logger = logger;
+  }
+
+  getDimensions(): number {
+    return this.dims;
+  }
+
+  getProviderInfo(): EmbeddingProviderInfo {
+    return { provider: "zeroentropy", model: this.model };
+  }
+
+  /** Remote embedding is always ready (stateless HTTP). */
+  isReady(): boolean {
+    return true;
+  }
+
+  /** No-op for remote embedding (no local model to warm up). */
+  startWarmup(): void {
+    // nothing to do — remote API is stateless
+  }
+
+  async embed(text: string, options?: EmbeddingCallOptions): Promise<Float32Array> {
+    const [result] = await this.embedBatch([text], options);
+    return result;
+  }
+
+  async embedBatch(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]> {
+    if (texts.length === 0) return [];
+
+    const processedTexts = truncateEmbeddingInputs(texts, this.maxInputChars, this.logger);
+
+    if (processedTexts.length > MAX_BATCH_SIZE) {
+      const results: Float32Array[] = [];
+      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
+        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        results.push(...chunkResults);
+      }
+      return results;
+    }
+
+    return this._callApi(processedTexts, options?.timeoutMs);
+  }
+
+  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+    // ZeroEntropy rejects requests without `input_type`. We default to
+    // "query" because the recall hot path is the only caller of embed()
+    // that returns a Float32Array; capture-side batches eventually feed
+    // the same vector store, and ZeroEntropy's symmetry between "query"
+    // and "document" makes a single type safe across both directions.
+    const body: Record<string, unknown> = {
+      input: texts,
+      model: this.model,
+      input_type: "query",
+    };
+    if (this.sendDimensions) {
+      // ZeroEntropy's docs list `dimensions` as optional. For zembed-1 the
+      // accepted set is [2560, 1280, 640, 320, 160, 80, 40] (Matryoshka);
+      // any other value is rejected server-side. We forward the user's
+      // configured value verbatim — clamping silently would surprise users
+      // who deliberately picked a smaller dim for storage savings.
+      body.dimensions = this.dims;
+    }
+
+    const fetchUrl = `${this.baseUrl}/models/embed`;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+
+    const json = (await postEmbeddingRequest({
+      fetchUrl,
+      headers,
+      body,
+      timeoutMs: timeoutOverride ?? this.timeoutMs,
+    })) as ZeroEntropyEmbeddingResponse;
+
+    if (!json.results || !Array.isArray(json.results)) {
+      throw new Error("ZeroEntropy embedding API returned unexpected format: missing 'results' array");
+    }
+    // ZeroEntropy preserves input order via array position (no `index` field).
+    return json.results.map((r) => sanitizeAndNormalize(r.embedding));
   }
 }
 
@@ -595,6 +790,12 @@ export function createEmbeddingService(
   config: EmbeddingConfig | undefined,
   logger?: Logger,
 ): EmbeddingService {
+  // ZeroEntropy speaks a non-OpenAI wire format and has its own service class.
+  if (config && config.provider === "zeroentropy" && "apiKey" in config && config.apiKey) {
+    logger?.debug?.(`${TAG} Using ZeroEntropy embedding (model=${config.model})`);
+    return new ZeroEntropyEmbeddingService(config as OpenAIEmbeddingConfig, logger);
+  }
+
   // Remote OpenAI-compatible provider: any provider value other than "local"
   if (config && config.provider !== "local" && "apiKey" in config && config.apiKey) {
     logger?.debug?.(`${TAG} Using remote embedding (provider=${config.provider}, model=${config.model})`);

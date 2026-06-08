@@ -13,19 +13,14 @@
  * check health to dynamically downgrade to pure semantic search.
  */
 
+import type { Logger } from "../types.js";
+
 // ============================
 // Types
 // ============================
 
 /** Sparse vector: array of [token_hash, weight] pairs. */
 export type SparseVector = Array<[number, number]>;
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
 
 export interface BM25ClientConfig {
   /** Sidecar service URL (default: "http://127.0.0.1:8084") */

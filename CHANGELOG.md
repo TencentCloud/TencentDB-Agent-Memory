@@ -4,6 +4,111 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 新功能
+
+- **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
+  - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
+  - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
+  - **L0 JSONL 分片日**和 **cleaner 清理边界**跟随配置时区（默认仍为系统时区）。
+  - 存储层（SQLite / TCVDB）时间戳始终为 UTC instant，**无需数据迁移**。
+  - 统一收敛原有 4 处分散的时间格式化 helper 到 `src/utils/time.ts`，减少代码重复。
+
+### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
+
+如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
+
+1. **L0 JSONL 分片日**：将以配置时区的午夜为界。如果你的服务器系统时区与配置时区不同，升级当天的分片文件名可能与之前一天有重叠——不会丢数据（cursor 按 instant 比较）。如有外部工具按文件名做去重/归档，请确认其能正确处理同一日期出现两次的情况。
+2. **cleaner `cleanTime` 触发时机**：从"系统时区的指定时刻"改为"配置时区的指定时刻"。
+3. **scene/persona META 头部时间戳格式**：新写入将使用 `YYYY-MM-DDTHH:mm:ss±HH:MM` 完整 ISO 8601。老数据保持原样，召回展示时由系统统一换算。
+
+不动配置 = 行为完全不变。
+
+---
+
+## [0.3.6] - 2026-05-27
+
+### ✨ 新功能
+
+- **Recall 上下文预算控制** ([#71](https://github.com/Tencent/TencentDB-Agent-Memory/pull/71) / [#70](https://github.com/Tencent/TencentDB-Agent-Memory/issues/70))：新增 `recall.maxCharsPerMemory` 与 `recall.maxTotalRecallChars` 两项配置，默认 `0` 不改变现有行为；设置为正整数后，会在 L1 召回完成、注入 `<relevant-memories>` 之前按分数顺序裁剪超长条目并丢弃溢出部分，避免长会话因记忆膨胀挤占上下文。已在 README、README_CN 与 `openclaw.plugin.json` 同步说明。
+- **L1 / L2 / L3 提示词按用户输入语言自适应** ([#38](https://github.com/Tencent/TencentDB-Agent-Memory/issues/38))：`l1-extraction`、`l1-dedup`、`scene-extraction`、`persona-generation` 四个 prompt 中所有自由文本字段（`scene_name`、记忆 `content`、scene `.md` 标题/正文、`persona.md` 各章节）现在跟随用户消息的主导语言书写；JSON 字段名、枚举值、ISO 时间戳、`persona.md` 等结构化文件名继续保持英文作为稳定契约。无需配置 `locale`，任意语言（en / fr / ja / es / …）均可直接使用。
+- **Embedding `sendDimensions` 可选关闭**：`OpenAIEmbeddingService` 默认仍会在请求体携带 `dimensions` 字段（兼容 OpenAI `text-embedding-3-*` Matryoshka 截断）；新增 `embedding.sendDimensions` 配置项，设置为 `false` 时省略该字段，可对接 BGE-M3 等不支持自定义维度的固定维度模型（原会被服务端 HTTP 400 拒绝 `does not support matryoshka representation`）。
+- **Gateway 可选 Bearer 鉴权 + CORS 白名单**：新增 `server.apiKey` / `TDAI_GATEWAY_API_KEY` 配置项，设置后所有非 `/health` 路由需携带 `Authorization: Bearer <key>`（`crypto.timingSafeEqual` 防时序攻击）；新增 `server.corsOrigins` / `TDAI_CORS_ORIGINS` 配置项，显式指定允许的 CORS 来源列表（空列表 = 不发送 CORS 头，`"*"` = 保留旧版宽松行为）。启动时打印安全态势摘要，非回环地址 + 无 apiKey 时输出 WARN。两项均默认关闭，现有部署无需改动。Hermes Python 客户端同步支持 `MEMORY_TENCENTDB_GATEWAY_API_KEY` 环境变量自动附加 Bearer 头。
+- **Offload `collect` 模式**：新增 `offload.mode: "collect"` 配置，仅执行数据采集（L0 捕获 + 向量写入）而不触发 L3 压缩，适用于纯数据积累阶段或调试场景。
+
+### 🐛 修复
+
+#### 数据安全 / 数据隔离
+- **L2 LLM 提取失败导致 `scene_blocks/` 被清空 / 半写入** ([#88](https://github.com/Tencent/TencentDB-Agent-Memory/issues/88))：Phase 1 已对 `scene_blocks/` 做完整快照，但 LLM 抛错时 `catch` 直接 `return`，沙箱里的部分写入 / 删除不会回滚，后续 recall 因此看不到场景导航，降级为碎片召回。新增 `BackupManager.findLatestBackup` + `restoreLatestDirectory`，在 LLM 失败时自动从最新备份恢复；采用 fail-soft 设计：无备份时不动目标目录，恢复过程自身的错误也不会替换原始 LLM 错误。
+- **Cleaner 安全加固**：`computeCutoffMsByLocalDay` 拒绝无效 cutoff（未来时间 / 距今不足 24h）；SQLite 与 TCVDB 在 `expired/total > 80%` 时阻止删除；`runOnce` 增加最小保留护栏（L0:50 / L1:20）并产出 `cleaner_summary` JSON 审计日志；新增 `__tests__/cleaner/verify-cleaner-safety.ts` E2E 校验。
+- **场景文件名含空格导致 Persona Scene Navigation 引用失效**：LLM 在 L2 偶发用 `Daily Rhythm in Shanghai.md` 这类含空格的名字创建 scene block，导致 `persona.md` 中 `### Path: scene_blocks/<name>.md` 引用无法被下游 `\S+\.md` 风格解析器（health-checker 等）识别，soak 后健康检查必报 `Scene Navigation 存在但无场景引用`。修复：(1) `scene-extraction` prompt 增加"📛 文件命名规范（强制）"段，禁止空格 / 括号 / 引号等标点；(2) 新增 `core/scene/filename-normalizer.ts`，在 `SceneExtractor.extract` Phase 5b（cleanup 后、`syncSceneIndex` 前）自动归一化文件名（空格 → `-`、剥离危险标点、冲突时追加 `-2` 后缀），下游 PersonaGenerator / recall / profile-sync 自动使用干净名，无需改动。
+
+#### OpenClaw 宿主兼容
+- **`api.runtime.state` 在新版 OpenClaw 上为 `undefined` 导致注册时崩溃** ([#78](https://github.com/Tencent/TencentDB-Agent-Memory/issues/78) / [#85](https://github.com/Tencent/TencentDB-Agent-Memory/pull/85) / [#79](https://github.com/Tencent/TencentDB-Agent-Memory/pull/79))：为两处调用点加可选链 + fallback，优先调用宿主 `runtimeState.resolveStateDir()`，缺失时退到 `OPENCLAW_STATE_DIR` 环境变量，再退到 `~/.openclaw`。同时修复 cli-metadata 注册模式下 `runtime` 为空对象 `{}` 仍会触发 `TypeError` 的问题（在该模式下提前 return，只调用 `registerCli`）。
+- **`contextEngine` slot ID 与插件名不一致**：`registerContextEngine` 的 ID 从 `openclaw-context-offload` 改为 `memory-tencentdb`，避免 `openclaw doctor --fix` 把 slot 重置；`setup-offload.sh` 中的 `CONTEXT_ENGINE_ID` 同步更新。
+- **L1.5 settle 永不返回导致 L2 卡死**：在 L2 poll 中为 L1.5 settle 增加 60s 超时，当未配置 Context Engine slot 导致 `assemble` 永不被调用时，自动 force-settle 解锁 L2。
+- **Standalone 文本任务仍暴露工具导致 DeepSeek 等后端 L1 抽取不稳定** ([#58](https://github.com/Tencent/TencentDB-Agent-Memory/issues/58) / [#59](https://github.com/Tencent/TencentDB-Agent-Memory/pull/59))：`enableTools=false` 时彻底不传工具列表（此前即便只读子集也会鼓励 OpenAI 兼容后端尝试 tool calling，DeepSeek 上尤其明显）。
+- **L2 cold-start skip 被错误地更新 `l2LastRunTime`**：导致首次 skip 后必须等满 `l2MaxInterval` 才会真正运行 L2；现在仅在确实跑过的情况下更新时间戳。
+
+#### Offload（Context Engine）稳定性
+- **`sanitizeText` 误删 emoji / CJK Extension B / Math Bold 等非 BMP 字符** ([#30](https://github.com/Tencent/TencentDB-Agent-Memory/issues/30) / [#31](https://github.com/Tencent/TencentDB-Agent-Memory/pull/31))：`UNSAFE_CHAR_RE` 含 `[\uD800-\uDFFF]` 但缺 `u` flag，JS 按 UTF-16 code unit 处理时会把每个非 BMP 码点的两个 surrogate 各自 strip 掉。加上 `u` flag 后只匹配孤立（畸形）surrogate，emoji / 扩展 CJK / 数学加粗等正常恢复；新增 vitest 套件覆盖保留与剥离两类 case。
+- **Emergency 截断在 `MIN_KEEP` 拒绝下死锁**：`EMERGENCY_MIN_MESSAGES_TO_KEEP` 由 4 降到 2；新增 `_emergencyTruncateOversized`，当 head/tail 删除均被阻塞时就地截断超大消息（保留 `tool_use` 块结构），最后兜底强制删除并配对清理 `toolResult`，在 LLM 可见的内容里加截断告示。
+- **多轮 aggressive compression 累计耗时**：由 6 轮 `O(N × rounds)` 全量 tiktoken 改为单趟 `O(N × 1)` 直接计算到目标阈值的精确切点。615 条消息从 84s 降到 ~14s；tool 配对、user 消息保护、MMD 保留、stall 检测等安全机制全部保留。
+- **FP-HEAD-DELETE 在多轮 FAST-SKIP 后误删新消息**：移除该路径，改用 `FP-BOUNDARY-DELETE`（基于上一轮 aggressive 边界的 O(1) 头部删除，index + fingerprint 双重验证、tool-pair 安全）+ `BOUNDARY-INCR-SKIP`（增量估算低于阈值时跳过 tiktoken）。重放场景下 `assemble` 38s → 122ms（310×）。
+- **首次 assemble 慢**：为 `TAIL-ACCUMULATE` 增加 fast-token-estimate（基于字符，~51× 快于 tiktoken）前置短路，无边界且 fast estimate 明显高于阈值时跳过全量 tiktoken；同时为 `TAIL-ACCUMULATE` 增加向后 tool-pair 校正、user 消息保护、最少保留 10 条等安全检查。首次 assemble 29s → ~1.4s。
+- **Token 计算精度**：`details` 字段加入 `INTERNAL_KEYS`（框架在送 LLM 前 strip 掉，不应计入 token）；新增 `_stripLargeFields()` 移除非内容大字段；就地截断后调用 `invalidateTokenCache(msg)` 修正 WeakMap 缓存陈旧问题；`bestTokens < 600` 时跳过截断防反向膨胀；stub 文本简化为纯英文避免触发模型内容过滤；`l3TiktokenEncoding` 默认从 `o200k_base` 改为 `cl100k_base`（匹配 DeepSeek / GLM / MiniMax 分词器）。
+- **Offload 日志降级**：`AGGRESSIVE` / `EMERGENCY` 等多数日志降到 debug，仅当超过 10s 时才输出 `SLOW` warn；Opik tracer 初始化、`after_tool_call` 无 session 等"正常 fallback"场景日志同步降级，减少 `plugins list` 噪音。
+
+#### Hermes / Docker 部署
+- **`Dockerfile.hermes` 生成的 `config.yaml` 缺 `api_key`** ([#77](https://github.com/Tencent/TencentDB-Agent-Memory/issues/77) / [#81](https://github.com/Tencent/TencentDB-Agent-Memory/pull/81))：`provider: custom` 模式下 Hermes 从 `config.yaml.model.api_key` 读密钥，而原 CMD 脚本仅写入 `.env` 的 `OPENAI_API_KEY`，造成容器内首条对话即报 401。修复为同步写入 `model.api_key: "${MODEL_API_KEY}"`。
+- **安装脚本多处问题** ([#18](https://github.com/Tencent/TencentDB-Agent-Memory/issues/18) / [#19](https://github.com/Tencent/TencentDB-Agent-Memory/issues/19) / [#20](https://github.com/Tencent/TencentDB-Agent-Memory/issues/20) / [#54](https://github.com/Tencent/TencentDB-Agent-Memory/pull/54) / [#55](https://github.com/Tencent/TencentDB-Agent-Memory/pull/55))：
+  - 支持 `HERMES_AGENT_DIR` 环境变量覆盖，适配 FHS 布局（把 hermes-agent 装在 `/usr/local/lib/hermes-agent` 等）。
+  - root 用户执行时不再 `su - root` 无限递归。
+  - `MEMORY_TENCENTDB_GATEWAY_CMD` 在 systemd 环境下用 `command -v node` 解析的绝对路径，`npx tsx` 改为 `node --import tsx/esm`，避免 nvm PATH 不可见时找不到 node。
+
+### ✨ 改进
+
+- **L1.5 settle 60s 超时保护**（详见上）。
+- **OpenAI-style standalone runner** 在 `enableTools=false` 时不再传任何工具（详见上）。
+- **`l3TiktokenEncoding` 默认改为 `cl100k_base`**，匹配主流国产/开源模型分词器。
+- **Docker 文档**：补充 `cd docker/opensource` 前置步骤；新增 question/consultation issue 模板。
+
+### 🧪 测试 / 内部
+
+- 新增 `src/utils/backup.test.ts`：`findLatestBackup` 4 个用例 + `restoreLatestDirectory` 5 个用例，真 fs 沙箱。
+- 新增 `src/core/scene/scene-extractor.restore.integration.test.ts`：用真临时目录 + 真 BackupManager 验证 LLM 失败时 `scene_blocks/` 被恢复（含 step 日志，沙箱保留供人工 inspect）。
+- 新增 `src/utils/openclaw-state-dir.test.ts` + `index.test.ts` cli-metadata 模式安全性用例。
+- 新增 `__tests__/cleaner/verify-cleaner-safety.ts` E2E（SQLite + live VDB）。
+- 新增 `src/offload/fast-token-estimate.ts` + `benchmark-token-estimate.ts` 基线脚本。
+
+### ⚠️ 配置项变化（向后兼容）
+
+| Key | 默认值 | 说明 |
+|---|---|---|
+| `recall.maxCharsPerMemory` | `0` | `0`/未设置 = 不裁剪 |
+| `recall.maxTotalRecallChars` | `0` | `0`/未设置 = 不裁剪 |
+| `embedding.sendDimensions` | `true` | `false` 时不在请求体携带 `dimensions`，适配 BGE-M3 等 |
+| `l3TiktokenEncoding` | `cl100k_base`（原 `o200k_base`） | 仅在显式依赖 `o200k_base` 时需手动覆盖回去 |
+
+---
+
+## [0.3.5] - 2026-05-15
+
+### 🐛 修复
+
+- **兼容 OpenClaw v2026.5.7 zod v4 子路径**：显式声明 `zod@^4.4.3` 依赖，解决 `@ai-sdk/provider-utils@4.x` 需要 `zod/v4` 子路径导出但宿主环境可能 hoist zod@3.x 引发 `Cannot find module zod/v4` 的运行时错误。
+
+### ✨ 改进
+
+- **L1→L2 延迟从 90s 降至 10s**：`l2DelayAfterL1Seconds` 默认值 90→10，冷启动用户不再需要等待 ~90s 才能看到 L2 场景提取结果，体感更及时。
+
+### 📖 文档
+
+- README 新增 Docker Quick Start 章节，说明模型 URL/Name 环境变量配置方式。
+
+---
+
 ## [0.3.4] - 2026-05-12
 
 ### 🐛 修复

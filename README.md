@@ -176,7 +176,7 @@ Add the `slots` field so OpenClaw routes context-offload requests to this plugin
 {
   "plugins": {
     "slots": {
-      "contextEngine": "openclaw-context-offload"
+      "contextEngine": "memory-tencentdb"
     }
   }
 }
@@ -217,6 +217,9 @@ MODEL_PROVIDER="custom"
 # -e MODEL_*                  Inject the config parameters above as env vars
 # -v hermes_data:/opt/data    Persist memory data to a named volume (survives restart)
 
+# Enter the Docker build directory (already cloned the repo and at the repo root)
+cd docker/opensource
+
 # Build
 docker build -f Dockerfile.hermes -t hermes-memory .
 
@@ -244,6 +247,45 @@ docker exec -it hermes-memory hermes
 ---
 
 
+## 🔒 Gateway Security (optional)
+
+The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**
+
+| Field | env | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `server.apiKey` | `TDAI_GATEWAY_API_KEY` | _(unset)_ | When set, every route except `GET /health` requires `Authorization: Bearer <apiKey>`; missing or wrong tokens get HTTP 401. Comparison is constant-time. |
+| `server.corsOrigins` | `TDAI_CORS_ORIGINS` (comma-separated) | `[]` | CORS allow-list. Empty list emits **no** `Access-Control-Allow-*` headers — browsers then block all cross-origin requests. Use `["*"]` only for local development. |
+
+When `apiKey` is unset, the gateway prints a startup `WARN`. If it is bound to a non-loopback host (e.g. `0.0.0.0`) without an apiKey, a second louder warning is emitted.
+
+Clients call protected routes with a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer $TDAI_GATEWAY_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"query":"...","session_key":"..."}' \
+     http://127.0.0.1:8420/recall
+```
+
+`GET /health` stays open without a token so orchestrator probes (`docker healthcheck`, `kubectl liveness`) keep working.
+
+### Hermes plugin side
+
+The Hermes `memory_tencentdb` plugin is a **client** of the Gateway. To make it talk to a Gateway that has auth enabled, set:
+
+```bash
+export MEMORY_TENCENTDB_GATEWAY_API_KEY="<same-secret-as-gateway>"
+```
+
+The plugin will then attach `Authorization: Bearer <key>` to every request it sends to the Gateway. If the variable is unset, the plugin sends no auth header — which matches the Gateway's legacy default and is fine for a Gateway that has not opted into `TDAI_GATEWAY_API_KEY`.
+
+Important: the plugin only handles the **client half**. Whether the Gateway actually enforces a Bearer check is decided on the Gateway side (`TDAI_GATEWAY_API_KEY` / `server.apiKey`). Configure the same secret on both ends — the plugin does not propagate the secret across, since the Gateway might be started by Docker, systemd, or any other means outside the plugin's control.
+
+If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_GATEWAY_API_KEY` as a fallback — handy when both processes share an env file and the operator only wants to set one variable name. The Gateway never reads `MEMORY_TENCENTDB_GATEWAY_API_KEY`; that name is plugin-side only.
+
+---
+
+
 ## 🔧 Configurable Parameters
 
 **Every field has a sensible default — it runs with zero configuration.** When you want to tune, peel back the layers based on how deep you go.
@@ -253,9 +295,12 @@ docker exec -it hermes-memory hermes
 
 | Field | Default | Description |
 | :--- | :--- | :--- |
+| `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
 | `recall.maxResults` | `5` | Number of items returned per recall |
+| `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
+| `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
 | `pipeline.everyNConversations` | `5` | Trigger an L1 memory extraction every N turns |
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |
@@ -288,6 +333,20 @@ docker exec -it hermes-memory hermes
 For all fields, types, and constraints see [`openclaw.plugin.json`](./openclaw.plugin.json)。
 
 - `embedding.*` — remote embedding service (OpenAI-compatible API)
+  - `embedding.sendDimensions` (default `true`): whether to include the `dimensions` field in the request body. OpenAI `text-embedding-3-*` models rely on it for Matryoshka truncation, but some self-hosted / OSS models (e.g. **BGE-M3**) do not support custom dimensions and will reject the request with HTTP 400 `does not support matryoshka representation`. Set it to `false` for those backends, e.g.:
+    ```json
+    {
+      "embedding": {
+        "enabled": true,
+        "provider": "openai",
+        "baseUrl": "http://your-host:your-port/v1",
+        "apiKey": "<KEY>",
+        "model": "bge-m3",
+        "dimensions": 1024,
+        "sendDimensions": false
+      }
+    }
+    ```
 - `llm.*` — standalone LLM mode (bypass OpenClaw's built-in model and run L1/L2/L3 with a designated API)
 - `offload.backendUrl / backendApiKey` — offload the L1/L1.5/L2/L4 flow to a backend service
 - `report.*` — metrics reporting

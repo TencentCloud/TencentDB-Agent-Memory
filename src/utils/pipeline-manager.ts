@@ -81,17 +81,11 @@ import { SessionFilter } from "./session-filter.js";
 import { ManagedTimer } from "./managed-timer.js";
 import { SerialQueue } from "./serial-queue.js";
 import { report } from "../core/report/reporter.js";
+import type { Logger } from "../core/types.js";
 
 // ============================
 // Types
 // ============================
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
 
 /** A single captured message ready for L1 processing. */
 export interface CapturedMessage {
@@ -163,6 +157,8 @@ export type L1Runner = (params: {
 export interface L2RunnerResult {
   /** The latest `updated_at` cursor from the processed batch. */
   latestCursor?: string;
+  /** True if no new records were found and extraction was skipped. */
+  skipped?: boolean;
 }
 
 /** L2 extraction runner — processes a single session's records. */
@@ -902,6 +898,24 @@ export class MemoryPipelineManager {
     // After L2: update state
     const now = Date.now();
     state.l2_pending_l1_count = 0;
+
+    // Cold-start optimization: if this is the very first L2 run for this session
+    // and it was skipped (no new records), do NOT update l2LastRunTime.
+    // This prevents l2MinIntervalSeconds from blocking the next L2 trigger
+    // when the first L1 extraction produces actual memories shortly after.
+    const isFirstL2 = !this.l2LastRunTime.has(sessionKey);
+    const wasSkipped = result?.skipped === true;
+
+    if (isFirstL2 && wasSkipped) {
+      this.logger?.info?.(
+        `${TAG} [${sessionKey}] L2 cold-start skip: not updating l2LastRunTime ` +
+        `(minInterval won't block next trigger)`,
+      );
+      this.armL2MaxInterval(sessionKey);
+      await this.persistStates();
+      return;
+    }
+
     state.last_extraction_time = new Date().toISOString();
     state.l2_last_extraction_time = new Date().toISOString();
     this.l2LastRunTime.set(sessionKey, now);
