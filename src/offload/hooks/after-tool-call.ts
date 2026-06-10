@@ -52,6 +52,30 @@ function isHeartbeatToolCall(event: any, cachedParams: any): boolean {
   }
 }
 
+export function resolveAfterToolCallMessages(event: any, ctx: any): { messages: any[] | undefined; source: string } {
+  const candidates: Array<{ source: string; value: unknown }> = [
+    { source: "event.messages", value: event?.messages },
+    { source: "ctx.messages", value: ctx?.messages },
+    { source: "ctx.historyMessages", value: ctx?.historyMessages },
+    { source: "ctx.params.session.messages", value: ctx?.params?.session?.messages },
+    { source: "ctx.params.messages", value: ctx?.params?.messages },
+    { source: "event.historyMessages", value: event?.historyMessages },
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate.value) && candidate.value.length > 0) {
+      return { messages: candidate.value, source: candidate.source };
+    }
+  }
+
+  const empty = candidates.find((candidate) => Array.isArray(candidate.value));
+  if (empty) {
+    return { messages: empty.value as any[], source: empty.source };
+  }
+
+  return { messages: undefined, source: "missing" };
+}
+
 function _extractParamsFromMessages(messages: any[], toolCallId: string): any {
   if (!messages || !Array.isArray(messages) || !toolCallId) return null;
   const normId = toolCallId.replace(/_/g, "");
@@ -107,6 +131,15 @@ export function createAfterToolCallHandler(
     // any early-return branch so the counter reflects the real invocation
     // rate, not just the cases where L3 actually runs.
     recordToolCall();
+
+    const resolvedMessages = resolveAfterToolCallMessages(event, ctx);
+    if (resolvedMessages.messages && resolvedMessages.source !== "event.messages") {
+      event.messages = resolvedMessages.messages;
+      logger.debug?.(
+        `[context-offload] after_tool_call recovered messages from ${resolvedMessages.source} ` +
+        `(len=${resolvedMessages.messages.length})`,
+      );
+    }
 
     const eventKeys = event ? Object.keys(event) : [];
     const hasMsgsKey = "messages" in (event ?? {});
