@@ -9,6 +9,7 @@
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
  *   POST /seed               — Batch seed historical conversations (L0 → L1)
+ *   GET  /diagnostics/sessions — Read-only session/pipeline diagnostics
  *
  * Built with Node.js native `http` module — no Express/Fastify dependency.
  * Designed to run as a managed sidecar alongside Hermes.
@@ -37,6 +38,7 @@ import type {
   SessionEndResponse,
   SeedRequest,
   SeedResponse,
+  DiagnosticsResponse,
   GatewayErrorResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
@@ -272,6 +274,8 @@ export class TdaiGateway {
           return await this.handleSessionEnd(req, res);
         case "POST /seed":
           return await this.handleSeed(req, res);
+        case "GET /diagnostics/sessions":
+          return await this.handleDiagnosticsSessions(res);
         default:
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
@@ -365,6 +369,11 @@ export class TdaiGateway {
         embeddingService: !!this.core.getEmbeddingService(),
       },
     };
+    sendJson(res, 200, response);
+  }
+
+  private async handleDiagnosticsSessions(res: http.ServerResponse): Promise<void> {
+    const response: DiagnosticsResponse = await this.core.getDiagnostics();
     sendJson(res, 200, response);
   }
 
