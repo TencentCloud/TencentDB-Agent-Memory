@@ -434,6 +434,85 @@ export default function register(api: OpenClawPluginApi) {
     { name: "tdai_memory_search" },
   );
 
+  api.registerTool(
+    {
+      name: "tdai_memory_write",
+      label: "Memory Write",
+      description:
+        "Write an explicit, user-confirmed entry into long-term memory. " +
+        "Use sparingly for durable facts, preferences, or instructions that should be remembered across sessions. " +
+        "Do not use for transient task progress or unverified guesses.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description: "The memory content to store",
+          },
+          type: {
+            type: "string",
+            enum: ["persona", "episodic", "instruction"],
+            description: "Memory type. Defaults to episodic.",
+          },
+          scene_name: {
+            type: "string",
+            description: "Optional scene/category name. Defaults to manual.",
+          },
+        },
+        required: ["content"],
+      },
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const startMs = Date.now();
+        const content = String(params.content ?? "");
+        const type = typeof params.type === "string" ? params.type : undefined;
+        const sceneName = typeof params.scene_name === "string" ? params.scene_name : undefined;
+
+        api.logger.debug?.(
+          `${TAG} [tool] tdai_memory_write called: ` +
+          `contentLen=${content.length}, type=${type ?? "(default)"}, scene=${sceneName ?? "(default)"}`,
+        );
+
+        try {
+          const result = await core.writeMemory({ content, type, sceneName });
+          const elapsedMs = Date.now() - startMs;
+          api.logger.debug?.(
+            `${TAG} [tool] tdai_memory_write completed (${elapsedMs}ms): id=${result.record.id}`,
+          );
+          report("tool_call", {
+            tool: "tdai_memory_write",
+            type: result.record.type,
+            sceneName: result.record.scene_name,
+            durationMs: elapsedMs,
+            success: true,
+          });
+          return {
+            content: [{ type: "text" as const, text: result.text }],
+            details: {
+              id: result.record.id,
+              type: result.record.type,
+              scene_name: result.record.scene_name,
+            },
+          };
+        } catch (err) {
+          const elapsedMs = Date.now() - startMs;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          api.logger.error(`${TAG} [tool] tdai_memory_write failed (${elapsedMs}ms): ${errMsg}`);
+          report("tool_call", {
+            tool: "tdai_memory_write",
+            durationMs: elapsedMs,
+            success: false,
+            error: errMsg,
+          });
+          return {
+            content: [{ type: "text" as const, text: `Memory write failed: ${errMsg}` }],
+            details: { error: errMsg },
+          };
+        }
+      },
+    },
+    { name: "tdai_memory_write" },
+  );
+
   // tdai_conversation_search — Agent-callable L0 conversation search tool
   // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
   api.registerTool(
