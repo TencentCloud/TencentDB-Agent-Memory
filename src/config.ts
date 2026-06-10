@@ -87,6 +87,8 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /** Preserve injected recall context in persisted user messages for transparency (default: false). */
+  showInjected: boolean;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -532,6 +534,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
