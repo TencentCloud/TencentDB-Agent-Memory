@@ -27,8 +27,16 @@ export interface OpenClawRuntimeStateLike {
 export function resolveOpenClawStateDir(
   runtimeState: OpenClawRuntimeStateLike | undefined,
 ): string {
+  let runtimeStateDir: string | undefined;
+  try {
+    runtimeStateDir = runtimeState?.resolveStateDir?.()?.trim();
+  } catch {
+    // Some host registration paths expose `runtime.state` before it is fully
+    // initialized. Falling back keeps plugin registration non-fatal.
+  }
+
   return (
-    runtimeState?.resolveStateDir?.() ||
+    runtimeStateDir ||
     getEnv("OPENCLAW_STATE_DIR")?.trim() ||
     path.join(homedir(), ".openclaw")
   );
