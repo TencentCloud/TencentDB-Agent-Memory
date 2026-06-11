@@ -375,6 +375,7 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._user_id = ""
         self._gateway_available = False
         self._initialized = False  # Track if initialize() has been called
+        self._latest_system_context = ""
 
         # Background sync threads.
         # We allow at most _MAX_INFLIGHT_SYNCS in-flight sync threads at any
@@ -816,7 +817,7 @@ class MemoryTencentdbProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         if not self._gateway_available:
             return ""
-        return (
+        block = (
             "# memory-tencentdb Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Four-layer memory system (L0→L1→L2→L3) with automatic conversation "
@@ -824,6 +825,9 @@ class MemoryTencentdbProvider(MemoryProvider):
             "Use memory_tencentdb_memory_search to find specific memories, "
             "memory_tencentdb_conversation_search to search raw conversation history."
         )
+        if self._latest_system_context:
+            block = f"{block}\n\n{self._latest_system_context}"
+        return block
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Synchronous recall — fetch memories in real-time for the current turn."""
@@ -844,7 +848,11 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_key=effective_session,
                 user_id=self._user_id,
             )
-            context = result.get("context", "")
+            system_context = result.get("system_context", "")
+            if system_context:
+                self._latest_system_context = system_context
+
+            context = result.get("prepend_context") or result.get("context", "")
             self._record_success()
             if context:
                 return f"## memory-tencentdb Memory\n{context}"

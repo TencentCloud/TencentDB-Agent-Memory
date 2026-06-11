@@ -357,6 +357,36 @@ def test_prefetch_recovers_when_stuck_false_and_breaker_closed(
     assert fake.ensure_running_calls >= 1
 
 
+def test_prefetch_uses_dynamic_recall_and_caches_system_context(
+    provider_with_fake_supervisor,
+):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+    fake.client.recall.return_value = {
+        "context": "legacy combined context",
+        "system_context": "<user-persona>stable persona</user-persona>",
+        "prepend_context": "<relevant-memories>L1 fact</relevant-memories>",
+    }
+
+    result = provider.prefetch(query="hello", session_id="test-session")
+
+    assert "<relevant-memories>L1 fact</relevant-memories>" in result
+    assert "legacy combined context" not in result
+    assert "<user-persona>stable persona</user-persona>" in provider.system_prompt_block()
+
+
+def test_prefetch_falls_back_to_legacy_context(
+    provider_with_fake_supervisor,
+):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+    fake.client.recall.return_value = {"context": "legacy context only"}
+
+    result = provider.prefetch(query="hello", session_id="test-session")
+
+    assert "legacy context only" in result
+
+
 def test_prefetch_respects_open_breaker(provider_with_fake_supervisor):
     """Breaker should still take precedence — the lazy probe must not
     turn every request into a respawn attempt during a confirmed outage."""
