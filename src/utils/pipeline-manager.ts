@@ -858,7 +858,7 @@ export class MemoryPipelineManager {
     this.logger?.debug?.(`${TAG} [${sessionKey}] Enqueuing L2 (trigger=${trigger}, queue=${this.l2Queue.name})`);
 
     this.l2Queue.add(async () => {
-      await this.runL2(sessionKey);
+      await this.runL2(sessionKey, trigger);
     }).catch((err) => {
       this.logger?.error(
         `${TAG} [${sessionKey}] L2 task failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
@@ -868,7 +868,7 @@ export class MemoryPipelineManager {
     });
   }
 
-  private async runL2(sessionKey: string): Promise<void> {
+  private async runL2(sessionKey: string, trigger: string): Promise<void> {
     const state = this.sessionStates.get(sessionKey);
     if (!state) return;
 
@@ -903,15 +903,26 @@ export class MemoryPipelineManager {
     // and it was skipped (no new records), do NOT update l2LastRunTime.
     // This prevents l2MinIntervalSeconds from blocking the next L2 trigger
     // when the first L1 extraction produces actual memories shortly after.
+    //
+    // If the follow-up maxInterval retry still has no cursor, this session has
+    // no known extractable L1 data yet. Stop the periodic timer instead of
+    // polling SQLite forever during idle; the next L1 completion will re-arm L2.
     const isFirstL2 = !this.l2LastRunTime.has(sessionKey);
     const wasSkipped = result?.skipped === true;
+    const shouldStopIdleColdStartPolling = trigger === "timer:max-interval" && !state.last_extraction_updated_time;
 
     if (isFirstL2 && wasSkipped) {
       this.logger?.info?.(
         `${TAG} [${sessionKey}] L2 cold-start skip: not updating l2LastRunTime ` +
         `(minInterval won't block next trigger)`,
       );
-      this.armL2MaxInterval(sessionKey);
+      if (shouldStopIdleColdStartPolling) {
+        this.logger?.debug?.(
+          `${TAG} [${sessionKey}] L2 cold-start skip: stopping idle maxInterval polling until next L1 event`,
+        );
+      } else {
+        this.armL2MaxInterval(sessionKey);
+      }
       await this.persistStates();
       return;
     }
