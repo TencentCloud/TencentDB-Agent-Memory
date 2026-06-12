@@ -303,6 +303,17 @@ def _coerce_limit(
     return value
 
 
+def _recall_context_from_response(result: Dict[str, Any]) -> str:
+    """Prefer split Gateway recall fields, falling back to legacy context."""
+    if "appendSystemContext" in result or "prependContext" in result:
+        parts = [
+            result.get("appendSystemContext") or "",
+            result.get("prependContext") or "",
+        ]
+        return "\n\n".join(part for part in parts if part)
+    return result.get("context", "") or ""
+
+
 # ---------------------------------------------------------------------------
 # Tool schemas
 # ---------------------------------------------------------------------------
@@ -844,7 +855,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_key=effective_session,
                 user_id=self._user_id,
             )
-            context = result.get("context", "")
+            context = _recall_context_from_response(result)
             self._record_success()
             if context:
                 return f"## memory-tencentdb Memory\n{context}"
