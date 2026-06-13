@@ -33,6 +33,7 @@ import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import type { StorageAdapter } from "./storage/adapter.js";
+import { LocalStorageBackend } from "./storage/local-backend.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
 import { reportRecallMetrics } from "./report/metric-tracking-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
@@ -136,7 +137,16 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
-    this.storage = opts.storage;
+    // CR-2 (2026-05-19): the l1-writer CR-2 guard expects every writeMemory call
+    // to be backed by a StorageAdapter. In service mode the caller passes one
+    // (e.g. CosStorageBackend). In standalone mode (the typical install on a
+    // single host) the caller usually omits it, expecting the gateway to
+    // auto-wire a LocalStorageBackend. That auto-wire was documented in
+    // l1-writer.ts:202-217 ("server.ts:199-203") but is missing in this build
+    // for the OpenClaw host-adapter entry. We restore the auto-wire here so
+    // standalone installs stop emitting the CR-2 guard warning, while
+    // service-mode callers that pass a custom storage still win.
+    this.storage = opts.storage ?? new LocalStorageBackend({ rootDir: this.dataDir, logger: this.logger });
   }
 
   // ============================
