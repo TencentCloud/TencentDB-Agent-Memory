@@ -43,6 +43,9 @@
 
 > 超长 Session 评测不是单题清空上下文，而是把多个任务拼接到同一个 Session 中连续执行。例如 SWE-bench 每个 Session 连续执行 50 个任务，用来模拟真实长程 Agent 的上下文累积压力。
 
+如需复现 benchmark 或接入新的评测框架，请参考
+[可复现实验评测指南](./docs/reproducible-memory-evaluation.md)。
+
 ---
 
 ## 项目简介
