@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
+import { candidateAppConfigFiles, optionalConfigFileExists, resolveHomeDir } from "../utils/config-paths.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
@@ -77,8 +78,9 @@ export interface GatewayConfig {
  * Resolution order for config file:
  * 1. `TDAI_GATEWAY_CONFIG` env var (explicit path)
  * 2. `./tdai-gateway.yaml` or `./tdai-gateway.json` in CWD
- * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
- * 4. Pure environment-variable config (no file)
+ * 3. Linux/macOS/Windows app config dir (`~/.config/memory-tencentdb/` on Linux)
+ * 4. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
+ * 5. Pure environment-variable config (no file)
  */
 export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
@@ -121,7 +123,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // Data config (expand leading ~ to $HOME so Node.js fs/path can resolve it)
   const dataConfig = obj(fileConfig, "data");
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+  const home = resolveHomeDir();
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
 
   // LLM config
@@ -165,26 +167,33 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 function resolveConfigPath(): string | null {
   // 1. Explicit env var
   const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (explicit && optionalConfigFileExists(explicit, { missingLogLevel: "silent" })) return explicit;
 
   // 2. CWD
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(process.cwd(), name);
-    if (fs.existsSync(p)) return p;
+    if (optionalConfigFileExists(p, { missingLogLevel: "silent" })) return p;
   }
 
-  // 3. Default data dir
+  // 3. Standard per-user config dir. On Linux this is
+  //    $XDG_CONFIG_HOME/memory-tencentdb or ~/.config/memory-tencentdb.
+  const home = resolveHomeDir();
+  for (const p of candidateAppConfigFiles("memory-tencentdb", ["tdai-gateway.yaml", "tdai-gateway.json"], home)) {
+    if (optionalConfigFileExists(p, { missingLogLevel: "silent" })) return p;
+  }
+
+  // 4. Default data dir
   const dataDir = resolveDefaultDataDir();
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(dataDir, name);
-    if (fs.existsSync(p)) return p;
+    if (optionalConfigFileExists(p, { missingLogLevel: "silent" })) return p;
   }
 
   return null;
 }
 
 function resolveDefaultDataDir(): string {
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+  const home = resolveHomeDir();
 
   // New canonical location: everything related to standalone/Hermes-mode TDAI
   // is collected under ~/.memory-tencentdb/ to avoid scattering top-level dirs
