@@ -29,6 +29,7 @@ import {
   dumpMessagesSnapshot,
 } from "./llm-input-l3.js";
 import { MMD_MESSAGE_MARKER, findActiveMmdInsertionPoint, findHistoryMmdInsertionPoint } from "../mmd-injector.js";
+import { parseMmdHeaderMeta } from "../mmd-meta.js";
 import type { OffloadStateManager } from "../state-manager.js";
 import type { PluginConfig, PluginLogger, ToolPair } from "../types.js";
 import type { BackendClient } from "../backend-client.js";
@@ -206,11 +207,7 @@ export function createAfterToolCallHandler(
         } else {
           const mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
           if (mmdContent) {
-            let taskGoal = "";
-            const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
-            if (metaMatch) {
-              try { const meta = JSON.parse(`{${metaMatch[1]}}`); taskGoal = meta.taskGoal || ""; } catch { /* */ }
-            }
+            const { taskGoal } = parseMmdHeaderMeta(mmdContent);
             const mmdText = [
               `<current_task_context>`,
               `【当前活跃任务的mermaid流程图】这是你最近正在执行的任务的阶段性记录（此条下方的tool use未被汇总，进程可能有延迟，仅供参考）。`,

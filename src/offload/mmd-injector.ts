@@ -14,6 +14,7 @@ import { PLUGIN_DEFAULTS, type PluginConfig, type PluginLogger } from "./types.j
 import { createL3TokenCounter } from "./l3-token-counter.js";
 import { traceOffloadDecision } from "./opik-tracer.js";
 import { isToolResultMessage, isAssistantMessageWithToolUse } from "./l3-helpers.js";
+import { parseMmdHeaderMeta } from "./mmd-meta.js";
 import type { OffloadStateManager } from "./state-manager.js";
 
 /** Marker property on the injected message object. */
@@ -329,16 +330,7 @@ async function buildActiveMmdBlock(
       activeMmdFile,
       computeFingerprint(mmdContent),
     );
-    const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
-    let taskGoal = "";
-    if (metaMatch) {
-      try {
-        const meta = JSON.parse(`{${metaMatch[1]}}`);
-        taskGoal = meta.taskGoal || "";
-      } catch {
-        /* ignore */
-      }
-    }
+    const { taskGoal } = parseMmdHeaderMeta(mmdContent);
     const nodePattern = /\b(\d+-N\d+|N\d+)\b/g;
     const nodeIds: string[] = [];
     let match: RegExpExecArray | null;

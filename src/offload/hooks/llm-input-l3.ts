@@ -8,6 +8,7 @@ import { readOffloadEntries, readMmd, listMmds, markOffloadStatus } from "../sto
 import { traceOffloadDecision } from "../opik-tracer.js";
 import { createL3TokenCounter } from "../l3-token-counter.js";
 import { injectMmdIntoMessages, findHistoryMmdInsertionPoint, findActiveMmdInsertionPoint } from "../mmd-injector.js";
+import { parseMmdHeaderMeta } from "../mmd-meta.js";
 import { buildTiktokenContextSnapshot, tiktokenCount, jsonReplacer, invalidateTokenCache } from "../context-token-tracker.js";
 import {
   normalizeToolCallIdForLookup,
@@ -1252,11 +1253,7 @@ export async function buildHistoryMmdInjection(
 }
 
 function buildHistoryMmdText(filename: string, mmdContent: string): string {
-  let taskGoal = "";
-  const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
-  if (metaMatch) {
-    try { const meta = JSON.parse(`{${metaMatch[1]}}`); taskGoal = meta.taskGoal || ""; } catch { /* */ }
-  }
+  const { taskGoal } = parseMmdHeaderMeta(mmdContent);
   return [
     `<history_task_context file="${filename}">`,
     `【历史任务上下文】以下是一个已完成/暂停的历史任务的状态图。`,
@@ -1267,11 +1264,7 @@ function buildHistoryMmdText(filename: string, mmdContent: string): string {
 
 /** Compact meta-only version when full MMD exceeds token budget */
 function buildHistoryMmdMetaText(filename: string, mmdContent: string): string {
-  let taskGoal = "";
-  const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
-  if (metaMatch) {
-    try { const meta = JSON.parse(`{${metaMatch[1]}}`); taskGoal = meta.taskGoal || ""; } catch { /* */ }
-  }
+  const { taskGoal } = parseMmdHeaderMeta(mmdContent);
   // Extract node summaries from mermaid: lines like `001-N1["some label"]`
   const nodePattern = /(\d{3}-N\d+)\["([^"]+)"\]/g;
   const nodes: string[] = [];
