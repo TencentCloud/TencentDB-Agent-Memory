@@ -246,62 +246,99 @@ export default function register(api: OpenClawPluginApi) {
 
   // Resolve plugin data directory via runtime API (avoid importing internal paths directly)
   const openclawStateDir = resolveOpenClawStateDir((api.runtime as any)?.state);
-  const pluginDataDir = path.join(openclawStateDir, "memory-tdai");
-  initDataDirectories(pluginDataDir);
-  api.logger.debug?.(`${TAG} Data dir: ${pluginDataDir} (all subdirectories initialized)`);
+  const baseDataDir = path.join(openclawStateDir, "memory-tdai");
+  initDataDirectories(baseDataDir);
+  api.logger.debug?.(`${TAG} Base data dir: ${baseDataDir}`);
 
   // ============================
-  // Create OpenClawHostAdapter + TdaiCore
+  // Per-Agent Core Factory
   // ============================
-  const hostAdapter = new OpenClawHostAdapter({
-    api,
-    pluginDataDir,
-    openclawConfig: api.config,
-  });
+  // Each agent gets its own TdaiCore + data directory for full memory isolation:
+  //   ~/.openclaw/memory-tdai/{agentId}/
+  //     persona.md, scene_blocks/, conversations/, records/, vectors.db, .metadata/
 
   const sessionFilter = new SessionFilter(cfg.capture.excludeAgents);
   if (cfg.capture.excludeAgents.length > 0) {
     api.logger.debug?.(`${TAG} Agent exclude patterns: ${cfg.capture.excludeAgents.join(", ")}`);
   }
 
-  const core = new TdaiCore({
-    hostAdapter,
-    config: cfg,
-    sessionFilter,
-  });
+  interface AgentState {
+    core: TdaiCore;
+    ready: Promise<void>;
+    pluginDataDir: string;
+  }
+  const agentStates = new Map<string, AgentState>();
 
-  // Initialize TdaiCore (async — store init, pipeline wiring)
-  const coreReady = core.initialize().then(() => {
-    // Keep cleaner's SQLite handle updated after store init
-    memoryCleaner?.setVectorStore(core.getVectorStore());
-
-    // Pull L2/L3 profiles if remote store supports it
-    const vs = core.getVectorStore();
-    if (vs?.pullProfiles) {
-      ensureL2L3Local(pluginDataDir, vs, api.logger).catch((err) => {
-        api.logger.warn(`${TAG} Startup L2/L3 pull failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
-      });
+  const resolveAgentId = (ctx: any): string => {
+    if (ctx?.agentId) return ctx.agentId;
+    const sk = ctx?.sessionKey as string | undefined;
+    if (sk) {
+      const parts = sk.split(":");
+      if (parts.length >= 2 && parts[0] === "agent") return parts[1];
     }
-  }).catch((err) => {
-    api.logger.error(`${TAG} Core init failed: ${err instanceof Error ? err.message : String(err)}`);
+    return "main";
+  };
+
+  const getOrCreateAgentCore = async (agentId: string): Promise<AgentState> => {
+    const existing = agentStates.get(agentId);
+    if (existing) return existing;
+
+    const agentDir = path.join(baseDataDir, agentId);
+    initDataDirectories(agentDir);
+    api.logger.debug?.(`${TAG} Agent "${agentId}" data dir: ${agentDir}`);
+
+    const hostAdapter = new OpenClawHostAdapter({
+      api,
+      pluginDataDir: agentDir,
+      openclawConfig: api.config,
+    });
+
+    const core = new TdaiCore({
+      hostAdapter,
+      config: cfg,
+      sessionFilter,
+    });
+
+    const ready = core.initialize().then(() => {
+      memoryCleaner?.setVectorStore(core.getVectorStore());
+      const vs = core.getVectorStore();
+      if (vs?.pullProfiles) {
+        ensureL2L3Local(agentDir, vs, api.logger).catch((err) => {
+          api.logger.warn(`${TAG} L2/L3 pull failed for "${agentId}": ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+    }).catch((err) => {
+      api.logger.error(`${TAG} Core init failed for agent "${agentId}": ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+    const state: AgentState = { core, ready, pluginDataDir: agentDir };
+    agentStates.set(agentId, state);
+
+    getOrCreateInstanceId(agentDir).then((id) => {
+      core.setInstanceId(id);
+      if (agentId === "main") instanceId = id;
+      initReporter({ enabled: cfg.report.enabled, type: cfg.report.type, logger: api.logger, instanceId: id, pluginVersion });
+    }).catch((err) => {
+      api.logger.warn(`${TAG} InstanceId init failed for "${agentId}": ${err instanceof Error ? err.message : String(err)}`);
+    });
+
+    return state;
+  };
+
+  // Eagerly initialize the main agent's core
+  getOrCreateAgentCore("main").catch((err) => {
+    api.logger.warn(`${TAG} Eager main agent init failed: ${err instanceof Error ? err.message : String(err)}`);
   });
 
-  // Kick off instanceId resolution immediately after data dir is ready.
+  // Lazy binding: resolved when the main agent core is created
   let instanceId: string | undefined;
-  getOrCreateInstanceId(pluginDataDir).then((id) => {
-    instanceId = id;
-    core.setInstanceId(id);
-    initReporter({ enabled: cfg.report.enabled, type: cfg.report.type, logger: api.logger, instanceId: id, pluginVersion });
-  }).catch((err) => {
-    api.logger.warn(`${TAG} Failed to initialize instanceId for metrics: ${err instanceof Error ? err.message : String(err)}`);
-  });
 
   // Daily local JSONL cleaner (L0/L1), enabled only when retentionDays is configured.
   let memoryCleaner: LocalMemoryCleaner | undefined;
   if (cfg.memoryCleanup.enabled && cfg.memoryCleanup.retentionDays != null) {
     if (!sharedMemoryCleaner) {
       sharedMemoryCleaner = new LocalMemoryCleaner({
-        baseDir: pluginDataDir,
+        baseDir: baseDataDir,
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
@@ -328,7 +365,8 @@ export default function register(api: OpenClawPluginApi) {
    */
   let embeddingWarmupTriggered = false;
   const ensureEmbeddingWarmup = (): void => {
-    const svc = core.getEmbeddingService();
+    const mainState = agentStates.get("main");
+    const svc = mainState?.core.getEmbeddingService();
     if (!svc) return;
     if (!embeddingWarmupTriggered) {
       embeddingWarmupTriggered = true;
@@ -393,7 +431,8 @@ export default function register(api: OpenClawPluginApi) {
         );
 
         try {
-          const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
+          const { core: searchCore } = await getOrCreateAgentCore("main");
+          const result = await searchCore.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(
@@ -477,7 +516,8 @@ export default function register(api: OpenClawPluginApi) {
         );
 
         try {
-          const result = await core.searchConversations({ query, limit, sessionKey: sessionKeyFilter });
+          const { core: convCore } = await getOrCreateAgentCore("main");
+          const result = await convCore.searchConversations({ query, limit, sessionKey: sessionKeyFilter });
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(
@@ -562,9 +602,11 @@ export default function register(api: OpenClawPluginApi) {
       }
 
       try {
-        await coreReady;
+        const agentId = resolveAgentId(ctx);
+        const { core: recallCore, ready: recallReady } = await getOrCreateAgentCore(agentId);
+        await recallReady;
         const recallStartMs = Date.now();
-        const result = await core.handleBeforeRecall(userText, resolvedSessionKey);
+        const result = await recallCore.handleBeforeRecall(userText, resolvedSessionKey);
         const elapsedMs = Date.now() - startMs;
         const recallDurationMs = Date.now() - recallStartMs;
 
@@ -693,14 +735,16 @@ export default function register(api: OpenClawPluginApi) {
       const originalUserText = cachedPrompt?.text;
 
       try {
-        await coreReady;
+        const agentId = resolveAgentId(ctx);
+        const { core: captureCore, ready: captureReady } = await getOrCreateAgentCore(agentId);
+        await captureReady;
 
         // Pre-warm the embedded agent on first conversation
-        if (!core.isSchedulerStarted()) {
+        if (!captureCore.isSchedulerStarted()) {
           prewarmEmbeddedAgent(api.logger, api.runtime.agent);
         }
 
-        const captureResult = await core.handleTurnCommitted({
+        const captureResult = await captureCore.handleTurnCommitted({
           userText: originalUserText ?? "",
           assistantText: "",
           messages,
@@ -761,7 +805,7 @@ export default function register(api: OpenClawPluginApi) {
       const GATEWAY_STOP_TIMEOUT_MS = 3_000;
       const hookStartMs = Date.now();
 
-      await coreReady.catch(() => {});
+      await Promise.allSettled([...agentStates.values()].map((s) => s.ready.catch(() => {})));
 
       const doCleanup = async (): Promise<void> => {
         // 1. Stop memory cleaner first
@@ -776,8 +820,8 @@ export default function register(api: OpenClawPluginApi) {
           }
         }
 
-        // 2. Destroy TdaiCore (scheduler flush + VectorStore close + EmbeddingService close)
-        await core.destroy();
+        // 2. Destroy all agent TdaiCore instances
+        await Promise.allSettled([...agentStates.values()].map((s) => s.core.destroy()));
       };
 
       // Race cleanup against a hard timeout

@@ -122,7 +122,7 @@ async function performAutoRecallInner(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService, params.sessionKey);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -313,6 +313,7 @@ async function searchMemories(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  sessionKey?: string,
 ): Promise<SearchResult> {
   const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
@@ -357,17 +358,18 @@ async function searchMemories(
   // Falls back to global embedding.timeoutMs when recallTimeoutMs is not configured.
   const recallEmbeddingTimeoutMs = cfg.embedding?.recallTimeoutMs ?? cfg.embedding?.timeoutMs;
   const embeddingCallOpts: EmbeddingCallOptions = { timeoutMs: recallEmbeddingTimeoutMs };
+  const agentPrefix = sessionKey?.split(":").slice(0, 2).join(":") ?? "";
 
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore, agentPrefix);
       return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, agentPrefix);
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
 
@@ -376,7 +378,8 @@ async function searchMemories(
     // to avoid a redundant second HTTP request and a wasted local embed().
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      let results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      if (agentPrefix) results = results.filter((r) => (r.session_key ?? "").startsWith(agentPrefix));
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
@@ -384,7 +387,7 @@ async function searchMemories(
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, agentPrefix);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -402,13 +405,15 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
+  agentPrefix?: string,
 ): Promise<string[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
     if (ftsQuery) {
       logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
+      let ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
+      if (agentPrefix) ftsResults = ftsResults.filter((r) => (r.session_key ?? "").startsWith(agentPrefix));
       if (ftsResults.length > 0) {
         logger?.debug?.(
           `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
@@ -455,6 +460,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  agentPrefix?: string,
 ): Promise<string[]> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
@@ -466,7 +472,8 @@ async function searchByEmbedding(
     `searching top-${maxResults * 2}...`,
   );
   // Retrieve more candidates for subsequent filtering
-  const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, maxResults * 2);
+  let vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, maxResults * 2);
+  if (agentPrefix) vecResults = vecResults.filter((r) => (r.session_key ?? "").startsWith(agentPrefix));
 
   if (vecResults.length === 0) {
     logger?.debug?.(`${TAG} [embedding-search] Returned 0 results`);
@@ -517,6 +524,7 @@ async function searchHybrid(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  agentPrefix?: string,
 ): Promise<SearchResult> {
   // Run keyword and embedding searches in parallel
   const candidateK = maxResults * 3; // retrieve more for merging
@@ -582,8 +590,10 @@ async function searchHybrid(
     })(),
   ]);
 
-  const keywordResults = keywordResult.records;
-  const embeddingResults = embeddingResult.results;
+  let keywordResults = keywordResult.records;
+  if (agentPrefix) keywordResults = keywordResults.filter((r) => (r.record.sessionKey ?? "").startsWith(agentPrefix));
+  let embeddingResults = embeddingResult.results;
+  if (agentPrefix) embeddingResults = embeddingResults.filter((r) => (r.session_key ?? "").startsWith(agentPrefix));
   const timing: SearchTiming = {
     ftsMs: keywordResult.ms,
     embeddingMs: embeddingResult.ms,
