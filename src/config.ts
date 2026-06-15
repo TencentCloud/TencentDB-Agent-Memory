@@ -46,7 +46,7 @@ export interface ExtractionConfig {
 export interface PersonaConfig {
   /** Trigger persona generation every N new memories (default: 50) */
   triggerEveryN: number;
-  /** Max scene blocks (default: 20) */
+  /** Max scene blocks (default: 15) */
   maxScenes: number;
   /** Persona backup count (default: 3) */
   backupCount: number;
@@ -64,7 +64,7 @@ export interface PipelineTriggerConfig {
   enableWarmup: boolean;
   /** L1 idle timeout: trigger L1 after this many seconds of inactivity (default: 600) */
   l1IdleTimeoutSeconds: number;
-  /** L2 delay after L1: wait this many seconds after L1 completes before triggering L2 (default: 90) */
+  /** L2 delay after L1: wait this many seconds after L1 completes before triggering L2 (default: 10) */
   l2DelayAfterL1Seconds: number;
   /** L2 min interval: minimum seconds between L2 runs per session (default: 900 = 15 min) */
   l2MinIntervalSeconds: number;
@@ -175,7 +175,7 @@ export type StoreBackend = "sqlite" | "tcvdb";
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
-  /** Enable reporting (default: true) */
+  /** Enable reporting (default: false) */
   enabled: boolean;
   /** Reporter type: "local" logs structured JSON via logger (default: "local") */
   type: string;
