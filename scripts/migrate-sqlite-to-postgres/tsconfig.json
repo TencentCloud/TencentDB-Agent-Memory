@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "declaration": false,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "paths": {
+      "node-llama-cpp": ["../migrate-sqlite-to-tcvdb/node-llama-cpp.d.ts"]
+    },
+    "outDir": "dist",
+    "rootDir": "../.."
+  },
+  "files": [
+    "cli-entry.ts",
+    "index.ts"
+  ]
+}

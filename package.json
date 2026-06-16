@@ -6,6 +6,7 @@
   "main": "./dist/index.mjs",
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
+    "migrate-sqlite-to-postgres": "./bin/migrate-sqlite-to-postgres.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
     "read-local-memory": "./bin/read-local-memory.mjs"
   },
@@ -18,10 +19,12 @@
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
     "build:plugin": "tsdown",
-    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
+    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:migrate-sqlite-to-postgres && npm run build:export-tencent-vdb && npm run build:read-local-memory",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",
+    "build:migrate-sqlite-to-postgres": "tsc -p scripts/migrate-sqlite-to-postgres/tsconfig.json --noEmitOnError false",
     "migrate-sqlite-to-tcvdb": "node ./bin/migrate-sqlite-to-tcvdb.mjs",
+    "migrate-sqlite-to-postgres": "node ./bin/migrate-sqlite-to-postgres.mjs",
     "build:export-tencent-vdb": "tsc --project scripts/export-tencent-vdb/tsconfig.json",
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
@@ -36,6 +39,7 @@
     "bin/",
     "index.ts",
     "scripts/migrate-sqlite-to-tcvdb/dist/",
+    "scripts/migrate-sqlite-to-postgres/dist/",
     "scripts/export-tencent-vdb/dist/",
     "scripts/read-local-memory/dist/",
     "scripts/memory-tencentdb-ctl.sh",
@@ -79,6 +83,7 @@
     "ai": "^6.0.164",
     "js-tiktoken": "^1.0.18",
     "json5": "^2.2.3",
+    "pg": "^8.16.3",
     "sqlite-vec": "0.1.7-alpha.2",
     "tsx": "^4.21.0",
     "undici": "^8.1.0",
@@ -118,6 +123,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.2",
+    "@types/pg": "^8.15.6",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
