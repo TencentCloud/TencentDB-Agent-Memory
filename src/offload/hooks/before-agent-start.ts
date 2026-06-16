@@ -31,6 +31,22 @@ export function normalizeJudgment(raw: Record<string, unknown>): TaskJudgment | 
   };
 }
 
+/**
+ * An MMD is a deletable "empty shell" only when it carries NO real content:
+ * no metadata header (either format) AND no node status/summary/Timestamp
+ * marker, within the tiny auto-created skeleton size. Any content-bearing
+ * graph is always preserved — we favor keeping data over reclaiming litter,
+ * since deletion is an irreversible unlink.
+ */
+export function isEmptyShellMmdContent(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  if (hasMmdHeaderMeta(trimmed)) return false;
+  if (/(?:status|summary|timestamp)\s*:/i.test(trimmed)) return false;
+  const lines = trimmed.split("\n").filter((l) => l.trim().length > 0);
+  return lines.length <= 3;
+}
+
 export async function handleTaskTransition(
   stateManager: OffloadStateManager,
   judgment: TaskJudgment,
@@ -45,10 +61,7 @@ export async function handleTaskTransition(
     try {
       const content = await readMmd(ctx, filename);
       if (!content) return false;
-      const trimmed = content.trim();
-      if (hasMmdHeaderMeta(trimmed)) return false;
-      const lines = trimmed.split("\n").filter((l) => l.trim().length > 0);
-      return lines.length <= 3;
+      return isEmptyShellMmdContent(content);
     } catch {
       return false;
     }
