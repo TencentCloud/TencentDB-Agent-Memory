@@ -6,6 +6,7 @@
  * Only normalizeJudgment and handleTaskTransition are exported for use by index.ts.
  */
 import { readMmd, writeMmd, deleteMmd, type StorageContext } from "../storage.js";
+import { hasMmdHeaderMeta } from "../mmd-meta.js";
 import type { OffloadStateManager } from "../state-manager.js";
 import type { PluginLogger, TaskJudgment } from "../types.js";
 
@@ -45,7 +46,7 @@ export async function handleTaskTransition(
       const content = await readMmd(ctx, filename);
       if (!content) return false;
       const trimmed = content.trim();
-      if (trimmed.includes("%%{")) return false;
+      if (hasMmdHeaderMeta(trimmed)) return false;
       const lines = trimmed.split("\n").filter((l) => l.trim().length > 0);
       return lines.length <= 3;
     } catch {

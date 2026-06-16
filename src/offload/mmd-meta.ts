@@ -21,6 +21,16 @@ export interface MmdHeaderMeta {
   updatedTime: string | null;
 }
 
+/**
+ * Returns true when the MMD carries a header metadata block in either the
+ * render-safe comment form (`%% mmd-meta: {...}`) or the legacy directive form
+ * (`%%{...}%%`). Presence-only: does not require any field (e.g. taskGoal) to be
+ * populated, matching the original "has metadata => not an empty shell" guard.
+ */
+export function hasMmdHeaderMeta(content: string): boolean {
+  return /^%%\s*mmd-meta:\s*\{/m.test(content) || /^%%\{/m.test(content);
+}
+
 export function parseMmdHeaderMeta(content: string): MmdHeaderMeta {
   const emptyMeta: MmdHeaderMeta = {
     taskGoal: "",

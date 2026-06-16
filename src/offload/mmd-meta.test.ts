@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseMmdMeta } from "./mmd-meta.js";
+import { hasMmdHeaderMeta, parseMmdMeta } from "./mmd-meta.js";
 
 describe("parseMmdMeta", () => {
   it("reads render-safe Mermaid comment metadata", () => {
@@ -29,5 +29,29 @@ describe("parseMmdMeta", () => {
     expect(meta.taskGoal).toBe("旧任务");
     expect(meta.createdTime).toBe("2026-06-02T07:02:05+08:00");
     expect(meta.updatedTime).toBe("2026-06-14T18:39:06+08:00");
+  });
+});
+
+describe("hasMmdHeaderMeta", () => {
+  it("detects render-safe comment metadata", () => {
+    expect(hasMmdHeaderMeta('%% mmd-meta: {"taskGoal":"x"}\nflowchart TD')).toBe(true);
+  });
+
+  it("detects legacy directive metadata", () => {
+    expect(hasMmdHeaderMeta('%%{ "taskGoal": "x" }%%\nflowchart TD')).toBe(true);
+  });
+
+  it("treats metadata with empty taskGoal as present", () => {
+    expect(hasMmdHeaderMeta('%% mmd-meta: {"taskGoal":""}\nflowchart TD')).toBe(true);
+  });
+
+  it("treats timestamp-only metadata as present", () => {
+    expect(
+      hasMmdHeaderMeta('%% mmd-meta: {"createdTime":"2026-06-14T18:39:06+08:00"}\nflowchart TD'),
+    ).toBe(true);
+  });
+
+  it("returns false for a bare skeleton with no metadata", () => {
+    expect(hasMmdHeaderMeta('flowchart TD\n    001-N1["task"]')).toBe(false);
   });
 });
