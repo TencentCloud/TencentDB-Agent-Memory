@@ -530,6 +530,7 @@ export class TdaiGateway {
         model: this.config.llm.model,
         maxTokens: this.config.llm.maxTokens,
         timeoutMs: this.config.llm.timeoutMs,
+        disableThinking: this.config.llm.disableThinking,
       },
     };
     if (body.config_override) {

@@ -21,6 +21,7 @@ import path from "node:path";
 import { generateText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
+import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
 import type {
   LLMRunner,
   LLMRunParams,
@@ -49,6 +50,16 @@ export interface StandaloneLLMConfig {
   maxTokens?: number;
   /** Request timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the LLM endpoint.
+   * - `false` (default): no thinking-disabling wrapper
+   * - `"vllm"`: vLLM/SGLang chat_template_kwargs
+   * - `"deepseek"` / `"dashscope"`: top-level enable_thinking: false
+   * - `"openai"`: reasoning_effort: "low"
+   * - `"anthropic"` / `"kimi"`: thinking: { type: "disabled" }
+   * - `"gemini"`: thinking_config: { thinking_budget: 0 }
+   */
+  disableThinking?: DisableThinkingStrategy;
 }
 
 // ============================
@@ -158,6 +169,7 @@ export class StandaloneLLMRunner implements LLMRunner {
   private model: string;
   private enableTools: boolean;
   private logger?: Logger;
+  private readonly customFetch?: typeof globalThis.fetch;
 
   constructor(opts: {
     config: StandaloneLLMConfig;
@@ -169,6 +181,9 @@ export class StandaloneLLMRunner implements LLMRunner {
     this.model = opts.model ?? opts.config.model;
     this.enableTools = opts.enableTools ?? false;
     this.logger = opts.logger;
+    this.customFetch = opts.config.disableThinking
+      ? createNoThinkFetch(opts.config.disableThinking)
+      : undefined;
   }
 
   async run(params: LLMRunParams): Promise<string> {
@@ -189,6 +204,7 @@ export class StandaloneLLMRunner implements LLMRunner {
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
       compatibility: "compatible",
+      ...(this.customFetch ? { fetch: this.customFetch } : {}),
     });
 
     // For pure text tasks like L1 extraction, avoid exposing any tools.

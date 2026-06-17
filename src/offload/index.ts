@@ -376,7 +376,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
 
       if (baseUrl && apiKey) {
         backendClient = new LocalLlmClient(
-          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
+          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs, disableThinking: offloadConfig.disableThinking },
           logger,
         );
       } else {
