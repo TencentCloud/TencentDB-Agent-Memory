@@ -163,8 +163,46 @@ openclaw gateway restart
 
 启用后，TencentDB Agent Memory 会自动完成对话录制、记忆提取、场景归纳、用户画像生成和下一轮对话前召回。
 
+### 1.3 使用 PostgreSQL 作为记忆存储
 
-### 1.3 启用短期记忆压缩（可选，要求版本 ≥ 0.3.4）
+如果希望用 PostgreSQL + `pgvector` + `vectorscale` + `pg_textsearch` 存储 L0/L1/profile 数据，可配置：
+
+```jsonc
+{
+  "memory-tencentdb": {
+    "enabled": true,
+    "config": {
+      "storeBackend": "postgres",
+      "postgres": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "database": "postgres",
+        "user": "postgres",
+        "schema": "agent_memory",
+        "textConfig": "simple",
+        "vectorIndex": "hnsw"
+      }
+    }
+  }
+}
+```
+
+目标数据库需可用 `vector`、`vectorscale`、`pg_textsearch` 扩展；其中 `pg_textsearch` 还需要加入 `shared_preload_libraries` 后重启数据库。
+
+已有 SQLite 数据可先 dry-run 迁移：
+
+```bash
+npm run build:migrate-sqlite-to-postgres
+node ./bin/migrate-sqlite-to-postgres.mjs \
+  --plugin-data-dir ~/.openclaw/data/memory-tencentdb \
+  --sqlite-path ~/.openclaw/data/memory-tencentdb/vectors.db \
+  --pg-host 127.0.0.1 --pg-port 5432 --pg-database postgres --pg-user postgres \
+  --pg-schema agent_memory --dry-run
+```
+
+确认摘要无误后，加 `--yes` 执行真实迁移。
+
+### 1.4 启用短期记忆压缩（可选，要求版本 ≥ 0.3.4）
 
 ```jsonc
 {
@@ -404,7 +442,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 字段 | 默认 | 说明 |
 | :--- | :--- | :--- |
 | `timezone` | `"system"` | 时区：`"system"`（跟随系统）/ IANA 名（`Asia/Shanghai`）/ offset 串（`+08:00`） |
-| `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
+| `storeBackend` | `"sqlite"` | 存储后端：`sqlite` / `tcvdb` / `postgres` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |

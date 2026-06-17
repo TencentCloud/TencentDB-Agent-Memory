@@ -697,6 +697,122 @@ PYEOF
     [[ $restart -eq 1 ]] && cmd_restart || log "tip: 追加 --restart 让回退立即生效"
 }
 
+# ---- config postgres (PostgreSQL + pgvector) ----
+# 把 PG 连接信息合并写入 tdai-gateway.json 的 memory.postgres.*，
+# 并默认把 memory.storeBackend 切到 "postgres"（可用 --no-set-backend 关闭）。
+# 配置项含义见 docs/design/postgres-backend.md 第 8 节。
+cmd_config_postgres() {
+    local host="127.0.0.1" port="5432" database="postgres" user="postgres"
+    local password="" schema="agent_memory" ssl="" pool_max="" stmt_timeout=""
+    local text_config="" vector_index="" use_vector_scale="" restart=0
+    local set_backend=1
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --host)                 host="$2"; shift 2 ;;
+            --port)                 port="$2"; shift 2 ;;
+            --database)             database="$2"; shift 2 ;;
+            --user)                 user="$2"; shift 2 ;;
+            --password)             password="$2"; shift 2 ;;
+            --schema)               schema="$2"; shift 2 ;;
+            --ssl)                  ssl="true"; shift ;;
+            --no-ssl)               ssl="false"; shift ;;
+            --pool-max)             pool_max="$2"; shift 2 ;;
+            --statement-timeout-ms) stmt_timeout="$2"; shift 2 ;;
+            --text-config)          text_config="$2"; shift 2 ;;
+            --vector-index)         vector_index="$2"; shift 2 ;;
+            --use-vector-scale)     use_vector_scale="true"; shift ;;
+            --no-vector-scale)      use_vector_scale="false"; shift ;;
+            --no-set-backend)       set_backend=0; shift ;;
+            --restart)              restart=1; shift ;;
+            *) die "config postgres: 未知参数 $1" 1 ;;
+        esac
+    done
+    [[ -n "$database" ]] || die "--database 必填"
+    [[ -n "$user"     ]] || die "--user 必填"
+    [[ "$port" =~ ^[0-9]+$ ]] || die "--port 必须为正整数: $port" 1
+    if [[ -n "$pool_max" && ! "$pool_max" =~ ^[0-9]+$ ]]; then
+        die "--pool-max 必须为正整数: $pool_max" 1
+    fi
+    if [[ -n "$stmt_timeout" && ! "$stmt_timeout" =~ ^[0-9]+$ ]]; then
+        die "--statement-timeout-ms 必须为正整数: $stmt_timeout" 1
+    fi
+    if [[ -n "$vector_index" ]]; then
+        case "$vector_index" in
+            none|hnsw|ivfflat|diskann) ;;
+            *) die "--vector-index 只能是 none|hnsw|ivfflat|diskann: $vector_index" 1 ;;
+        esac
+    fi
+
+    log "configure PostgreSQL: host=$host port=$port db=$database user=$user schema=$schema$([[ -n "$password" ]] && echo " password=<${#password} chars>")"
+
+    local frag
+    frag=$(
+        HOST="$host" PORT="$port" DB="$database" USR="$user" PWD_="$password" \
+        SCHEMA="$schema" SSL="$ssl" POOL="$pool_max" STMT="$stmt_timeout" \
+        TEXTCFG="$text_config" VIDX="$vector_index" VSCALE="$use_vector_scale" python3 -c '
+import json, os
+out = {
+    "host": os.environ["HOST"],
+    "port": int(os.environ["PORT"]),
+    "database": os.environ["DB"],
+    "user": os.environ["USR"],
+    "schema": os.environ["SCHEMA"],
+}
+pwd = os.environ.get("PWD_", "")
+if pwd:
+    out["password"] = pwd
+ssl = os.environ.get("SSL", "")
+if ssl:
+    out["ssl"] = (ssl == "true")
+pool = os.environ.get("POOL", "")
+if pool:
+    out["poolMax"] = int(pool)
+stmt = os.environ.get("STMT", "")
+if stmt:
+    out["statementTimeoutMs"] = int(stmt)
+tc = os.environ.get("TEXTCFG", "")
+if tc:
+    out["textConfig"] = tc
+vidx = os.environ.get("VIDX", "")
+if vidx:
+    out["vectorIndex"] = vidx
+vscale = os.environ.get("VSCALE", "")
+if vscale:
+    out["useVectorScale"] = (vscale == "true")
+print(json.dumps(out))
+')
+    printf '%s' "$frag" | merge_gateway_json postgres
+
+    # 默认把 storeBackend 切到 postgres（--no-set-backend 可关闭）
+    if [[ $set_backend -eq 1 ]]; then
+        if [[ $DRY_RUN -eq 1 ]]; then
+            log "[dry-run] would set memory.storeBackend=postgres in $GATEWAY_CFG"
+        else
+            printf '%s' '{"storeBackend":"postgres"}' | CFG="$GATEWAY_CFG" python3 -c '
+import json, os, sys, tempfile
+path = os.environ["CFG"]
+fragment = json.loads(sys.stdin.read())
+cfg = {}
+if os.path.isfile(path):
+    try:
+        cfg = json.load(open(path, "r", encoding="utf-8")) or {}
+    except Exception:
+        cfg = {}
+mem = cfg.get("memory") or {}
+mem.update(fragment)
+cfg["memory"] = mem
+d = os.path.dirname(path) or "."
+fd, tmp = tempfile.mkstemp(prefix=".tdai-gateway.", dir=d); os.close(fd)
+json.dump(cfg, open(tmp, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+os.chmod(tmp, 0o600); os.replace(tmp, path)
+' || warn "设置 storeBackend 失败"
+            log "memory.storeBackend = postgres"
+        fi
+    fi
+
+    [[ $restart -eq 1 ]] && cmd_restart || log "tip: 追加 --restart 让 PostgreSQL 配置立即生效"
+}
+
 # ---- config show ----
 cmd_config_show() {
     echo "== $GATEWAY_CFG =="
@@ -963,6 +1079,15 @@ memory-tencentdb-ctl.sh — memory_tencentdb (TDAI) Gateway 管理脚本
   memory-tencentdb-ctl config vdb-off [--purge-creds] [--restart]
                                                 # 切回本地 sqlite 存储；默认保留 tcvdb 凭据
                                                 # （仅改 storeBackend），加 --purge-creds 才清除凭据
+  memory-tencentdb-ctl config postgres --database D --user U [--password P] \
+                                       [--host 127.0.0.1] [--port 5432] [--schema agent_memory] \
+                                       [--ssl|--no-ssl] [--pool-max 5] [--statement-timeout-ms 10000] \
+                                       [--text-config simple|jieba] \
+                                       [--vector-index hnsw|ivfflat|diskann|none] \
+                                       [--use-vector-scale|--no-vector-scale] \
+                                       [--no-set-backend] [--restart]
+                                                # 配置 PostgreSQL(pgvector) 后端并切到 storeBackend=postgres
+                                                # 配置项含义见 docs/design/postgres-backend.md 第 8 节
   memory-tencentdb-ctl config show                                 # 打印配置（apiKey 已脱敏）
 
 Hermes 集成 (需 --hermes):
@@ -1014,13 +1139,14 @@ case "$SUB" in
     health)   cmd_health "$@" ;;
     logs)     cmd_logs "$@" ;;
     config)
-        [[ $# -ge 1 ]] || die "config 需要子命令: llm | embedding | vdb | vdb-off | show" 1
+        [[ $# -ge 1 ]] || die "config 需要子命令: llm | embedding | vdb | vdb-off | postgres | show" 1
         SECTION="$1"; shift || true
         case "$SECTION" in
             llm)       cmd_config_llm "$@" ;;
             embedding) cmd_config_embedding "$@" ;;
             vdb)       cmd_config_vdb "$@" ;;
             vdb-off)   cmd_config_vdb_off "$@" ;;
+            postgres)  cmd_config_postgres "$@" ;;
             show)      cmd_config_show "$@" ;;
             *) die "未知 config 子命令: $SECTION" 1 ;;
         esac

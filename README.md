@@ -159,7 +159,46 @@ Defaults to a local `SQLite + sqlite-vec` backend.
 
 Once enabled, TencentDB Agent Memory automatically handles conversation capture, memory extraction, scene aggregation, persona generation, and recall before the next turn.
 
-### 1.3 Enable short-term compression (optional, requires version ≥ 0.3.4)
+### 1.3 Use PostgreSQL as the memory store
+
+To store L0/L1/profile data in PostgreSQL with `pgvector`, `vectorscale`, and `pg_textsearch`:
+
+```jsonc
+{
+  "memory-tencentdb": {
+    "enabled": true,
+    "config": {
+      "storeBackend": "postgres",
+      "postgres": {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "database": "postgres",
+        "user": "postgres",
+        "schema": "agent_memory",
+        "textConfig": "simple",
+        "vectorIndex": "hnsw"
+      }
+    }
+  }
+}
+```
+
+Requirements: `CREATE EXTENSION vector`, `CREATE EXTENSION vectorscale`, and `CREATE EXTENSION pg_textsearch` must be available in the target database; `pg_textsearch` must also be listed in `shared_preload_libraries`.
+
+For an existing local store, migrate with:
+
+```bash
+npm run build:migrate-sqlite-to-postgres
+node ./bin/migrate-sqlite-to-postgres.mjs \
+  --plugin-data-dir ~/.openclaw/data/memory-tencentdb \
+  --sqlite-path ~/.openclaw/data/memory-tencentdb/vectors.db \
+  --pg-host 127.0.0.1 --pg-port 5432 --pg-database postgres --pg-user postgres \
+  --pg-schema agent_memory --dry-run
+```
+
+Re-run with `--yes` to apply after checking the dry-run summary.
+
+### 1.4 Enable short-term compression (optional, requires version ≥ 0.3.4)
 
 ```jsonc
 {
@@ -401,7 +440,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | Field | Default | Description |
 | :--- | :--- | :--- |
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
-| `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
+| `storeBackend` | `"sqlite"` | Storage backend: `sqlite` / `tcvdb` / `postgres` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
