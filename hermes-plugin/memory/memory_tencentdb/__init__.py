@@ -816,7 +816,7 @@ class MemoryTencentdbProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         if not self._gateway_available:
             return ""
-        return (
+        block = (
             "# memory-tencentdb Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Four-layer memory system (L0→L1→L2→L3) with automatic conversation "
@@ -824,6 +824,23 @@ class MemoryTencentdbProvider(MemoryProvider):
             "Use memory_tencentdb_memory_search to find specific memories, "
             "memory_tencentdb_conversation_search to search raw conversation history."
         )
+        if not self._client:
+            return block
+        try:
+            result = self._client.recall(
+                query="system prompt memory context",
+                session_key=self._session_id,
+                user_id=self._user_id,
+            )
+            self._record_success()
+            context = result.get("context", "")
+            if context:
+                return f"{block}\n\n## Recalled memory context\n{context}"
+        except Exception as e:
+            self._record_failure()
+            logger.debug("memory-tencentdb system_prompt_block recall failed: %s", e)
+            self._try_recover_gateway()
+        return block
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Synchronous recall — fetch memories in real-time for the current turn."""
