@@ -32,6 +32,7 @@ import type {
   L1FtsResult,
   L0SearchResult,
   L0FtsResult,
+  L0SearchFilter,
 } from "./types.js";
 import type { Logger } from "../types.js";
 
@@ -397,6 +398,7 @@ export class VectorStore implements IMemoryStore {
   private stmtL0FtsInsert!: StatementSync;
   private stmtL0FtsDelete!: StatementSync;
   private stmtL0FtsSearch!: StatementSync;
+  private stmtL0FtsSearchBySessionKey!: StatementSync;
 
   /**
    * Create a VectorStore instance.
@@ -817,6 +819,15 @@ export class VectorStore implements IMemoryStore {
                bm25(l0_fts) AS rank
         FROM l0_fts
         WHERE l0_fts MATCH ?
+        ORDER BY rank ASC
+        LIMIT ?
+      `);
+
+      this.stmtL0FtsSearchBySessionKey = this.db.prepare(`
+        SELECT record_id, message_text_original AS message_text, session_key, session_id, role, recorded_at, timestamp,
+               bm25(l0_fts) AS rank
+        FROM l0_fts
+        WHERE l0_fts MATCH ? AND session_key = ?
         ORDER BY rank ASC
         LIMIT ?
       `);
@@ -1554,7 +1565,7 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL0Vector(queryEmbedding: Float32Array, topK = 5): L0VectorSearchResult[] {
+  searchL0Vector(queryEmbedding: Float32Array, topK = 5, _queryText?: string, filter?: L0SearchFilter): L0VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
       return [];
@@ -1567,7 +1578,9 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
-      const retrieveCount = topK + VectorStore.ZERO_VEC_BUFFER;
+      const retrieveCount = filter?.sessionKey
+        ? Math.max(topK * 20, topK + VectorStore.ZERO_VEC_BUFFER)
+        : topK + VectorStore.ZERO_VEC_BUFFER;
 
       this.logger?.debug?.(
         `${TAG} [L0-search] START topK=${topK}, retrieveCount=${retrieveCount}, ` +
@@ -1609,6 +1622,10 @@ export class VectorStore implements IMemoryStore {
 
         if (!meta) {
           this.logger?.warn(`${TAG} [L0-search] record_id=${record_id} has vector but NO metadata (orphan)`);
+          continue;
+        }
+
+        if (filter?.sessionKey && meta.session_key !== filter.sessionKey) {
           continue;
         }
 
@@ -2103,10 +2120,12 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
+  searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT, filter?: L0SearchFilter): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL0FtsSearch.all(ftsQuery, limit) as Array<{
+      const rows = (filter?.sessionKey
+        ? this.stmtL0FtsSearchBySessionKey.all(ftsQuery, filter.sessionKey, limit)
+        : this.stmtL0FtsSearch.all(ftsQuery, limit)) as Array<{
         record_id: string;
         message_text: string;
         session_key: string;
