@@ -285,14 +285,38 @@ export interface CleanContextRunnerOptions {
   logger?: RunnerLogger;
 }
 
-// Stable empty directory used as default workspaceDir so that:
-// 1. Bootstrap/skills scans find nothing → clean LLM context
+const CLEAN_WORKSPACE_AGENTS_MD = `# TencentDB Agent Memory Background Task
+
+This is an isolated workspace for TencentDB Agent Memory background LLM tasks.
+Do not infer task requirements from repository files in this directory.
+Follow the explicit system prompt and user prompt passed with the current run.
+Return only the output format requested by that prompt.
+`;
+
+const CLEAN_WORKSPACE_SOUL_MD = `You are running an isolated TencentDB Agent Memory background task.
+The real task instructions are supplied directly in the current system and user prompts.
+Ignore the absence of project files here and answer according to those prompts only.
+`;
+
+async function ensureCleanWorkspaceBrief(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await Promise.all([
+    fs.writeFile(path.join(dir, "AGENTS.md"), CLEAN_WORKSPACE_AGENTS_MD, "utf8"),
+    fs.writeFile(path.join(dir, "SOUL.md"), CLEAN_WORKSPACE_SOUL_MD, "utf8"),
+  ]);
+}
+
+// Stable low-context directory used as default workspaceDir so that:
+// 1. Bootstrap/skills scans see only a tiny task brief → clean LLM context
 // 2. The path is constant → plugin cacheKey stays stable (no re-registration)
 let _cleanWorkspaceDir: string | undefined;
 async function getCleanWorkspaceDir(): Promise<string> {
-  if (_cleanWorkspaceDir) return _cleanWorkspaceDir;
+  if (_cleanWorkspaceDir) {
+    await ensureCleanWorkspaceBrief(_cleanWorkspaceDir);
+    return _cleanWorkspaceDir;
+  }
   const dir = path.join(resolveOpenClawTmpDir(), "memory-tdai-clean-workspace");
-  await fs.mkdir(dir, { recursive: true });
+  await ensureCleanWorkspaceBrief(dir);
   _cleanWorkspaceDir = dir;
   return dir;
 }
