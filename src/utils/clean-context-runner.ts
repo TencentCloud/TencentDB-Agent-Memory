@@ -18,6 +18,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getEnv } from "./env.js";
 import { report } from "../core/report/reporter.js";
 import type { Logger } from "../core/types.js";
+import { parseModelRef, resolveModelFromMainConfig } from "./model-ref.js";
+export { parseModelRef, resolveModelFromMainConfig, type ModelRef } from "./model-ref.js";
 
 /**
  * Resolve a preferred temporary directory for memory-tdai operations.
@@ -179,91 +181,6 @@ function collectText(payloads: Array<{ text?: string; isError?: boolean }> | und
     .filter((p) => !p.isError && typeof p.text === "string")
     .map((p) => p.text ?? "");
   return texts.join("\n").trim();
-}
-
-// ── Model resolution utilities ──
-
-/** Parsed model reference: { provider, model } */
-export interface ModelRef {
-  provider: string;
-  model: string;
-}
-
-/**
- * Parse a "provider/model" string into its components.
- * Returns undefined if the input is empty or doesn't contain a "/".
- *
- * Examples:
- *   "azure/gpt-5.2-chat"          → { provider: "azure", model: "gpt-5.2-chat" }
- *   "custom-host/org/model-v2"    → { provider: "custom-host", model: "org/model-v2" }
- *   ""                            → undefined
- *   "bare-model-name"             → undefined (no "/" — may be an alias)
- */
-export function parseModelRef(raw: string | undefined): ModelRef | undefined {
-  if (!raw) return undefined;
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-
-  const slashIdx = trimmed.indexOf("/");
-  if (slashIdx <= 0 || slashIdx === trimmed.length - 1) return undefined;
-
-  return {
-    provider: trimmed.slice(0, slashIdx),
-    model: trimmed.slice(slashIdx + 1),
-  };
-}
-
-/**
- * Resolve the user's default model from the main OpenClaw config.
- *
- * Resolution order:
- * 1. Read `agents.defaults.model` (string or { primary })
- * 2. If the value contains "/", parse directly
- * 3. If not (may be an alias), look up in `agents.defaults.models` alias table
- * 4. Return undefined if nothing resolves — let the core use its built-in default
- */
-export function resolveModelFromMainConfig(config: unknown): ModelRef | undefined {
-  if (!config || typeof config !== "object") return undefined;
-
-  const cfg = config as Record<string, unknown>;
-  const agents = cfg.agents as Record<string, unknown> | undefined;
-  if (!agents || typeof agents !== "object") return undefined;
-
-  const defaults = agents.defaults as Record<string, unknown> | undefined;
-  if (!defaults || typeof defaults !== "object") return undefined;
-
-  // Step 1: extract raw model value (string | { primary?: string })
-  const modelCfg = defaults.model;
-  let raw: string | undefined;
-  if (typeof modelCfg === "string") {
-    raw = modelCfg.trim();
-  } else if (modelCfg && typeof modelCfg === "object") {
-    const primary = (modelCfg as Record<string, unknown>).primary;
-    raw = typeof primary === "string" ? primary.trim() : undefined;
-  }
-  if (!raw) return undefined;
-
-  // Step 2: try direct "provider/model" parse
-  const direct = parseModelRef(raw);
-  if (direct) return direct;
-
-  // Step 3: alias lookup — raw doesn't contain "/", check agents.defaults.models
-  const models = defaults.models as Record<string, unknown> | undefined;
-  if (!models || typeof models !== "object") return undefined;
-
-  const rawLower = raw.toLowerCase();
-  for (const [key, entry] of Object.entries(models)) {
-    if (!entry || typeof entry !== "object") continue;
-    const alias = (entry as Record<string, unknown>).alias;
-    if (typeof alias !== "string") continue;
-    if (alias.trim().toLowerCase() !== rawLower) continue;
-
-    // key is "provider/model" format
-    const resolved = parseModelRef(key);
-    if (resolved) return resolved;
-  }
-
-  return undefined;
 }
 
 export interface CleanContextRunnerOptions {
