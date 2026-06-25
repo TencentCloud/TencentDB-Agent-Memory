@@ -12,6 +12,9 @@
  * 4. Write to L1 JSONL files
  */
 
+import fs from "node:fs/promises";
+import path from "node:path";
+import crypto from "node:crypto";
 import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
@@ -41,6 +44,16 @@ interface SceneSegment {
     source_message_ids: string[];
     metadata: Record<string, unknown>;
   }>;
+}
+
+type ExtractionFailureReason = "empty_response" | "no_json_array" | "parse_error";
+
+interface ParsedExtractionResult {
+  scenes: SceneSegment[];
+  failure?: {
+    reason: ExtractionFailureReason;
+    message: string;
+  };
 }
 
 export interface L1ExtractionResult {
@@ -156,6 +169,9 @@ export async function extractL1Memories(params: {
       backgroundMessages,
       previousSceneName: options.previousSceneName,
       config,
+      baseDir,
+      sessionKey,
+      sessionId,
       logger,
       model: options.model,
       llmRunner: options.llmRunner,
@@ -298,12 +314,15 @@ async function callLlmExtraction(params: {
   backgroundMessages: ConversationMessage[];
   previousSceneName?: string;
   config: unknown;
+  baseDir: string;
+  sessionKey: string;
+  sessionId?: string;
   logger?: Logger;
   model?: string;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
 }): Promise<SceneSegment[]> {
-  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, llmRunner } = params;
+  const { newMessages, backgroundMessages, previousSceneName, config, baseDir, sessionKey, sessionId, logger, model, llmRunner } = params;
 
   const userPrompt = formatExtractionPrompt({
     newMessages,
@@ -343,17 +362,40 @@ async function callLlmExtraction(params: {
     });
   }
 
-  return parseExtractionResult(result, logger);
+  const parsed = parseExtractionResult(result, logger);
+  if (parsed.failure) {
+    await writeExtractionFailureDiagnostic({
+      baseDir,
+      sessionKey,
+      sessionId,
+      reason: parsed.failure.reason,
+      message: parsed.failure.message,
+      rawResponse: result,
+      newMessages,
+      backgroundMessages,
+      model,
+      previousSceneName,
+      logger,
+    });
+  }
+
+  return parsed.scenes;
 }
 
 /**
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+function parseExtractionResult(raw: string, logger?: Logger): ParsedExtractionResult {
   try {
     // Strip markdown code block wrappers if present
     let cleaned = raw.trim();
+    if (!cleaned) {
+      const message = "LLM returned an empty extraction response";
+      logger?.warn?.(`${TAG} ${message}`);
+      return { scenes: [], failure: { reason: "empty_response", message } };
+    }
+
     if (cleaned.startsWith("```")) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
@@ -361,13 +403,14 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     // Try to extract JSON array
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in extraction response`);
+      const message = "No JSON array found in extraction response";
+      logger?.warn?.(`${TAG} ${message}`);
       // [l1-debug] NO_JSON — dump the full raw so we can see what the LLM actually said
       const rawPreview = raw.slice(0, 2048);
       logger?.warn?.(
         `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
+      return { scenes: [], failure: { reason: "no_json_array", message } };
     }
 
     // Sanitize control characters inside JSON string literals that LLM may produce
@@ -375,8 +418,9 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
     const parsed = JSON.parse(sanitized) as unknown[];
 
     if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
+      const message = "Extraction response is not an array";
+      logger?.warn?.(`${TAG} ${message}`);
+      return { scenes: [], failure: { reason: "parse_error", message } };
     }
 
     const scenes: SceneSegment[] = [];
@@ -401,10 +445,58 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       });
     }
 
-    return scenes;
+    return { scenes };
   } catch (err) {
-    logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    const message = `Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`;
+    logger?.warn?.(`${TAG} ${message}`);
+    return { scenes: [], failure: { reason: "parse_error", message } };
+  }
+}
+
+async function writeExtractionFailureDiagnostic(params: {
+  baseDir: string;
+  sessionKey: string;
+  sessionId?: string;
+  reason: ExtractionFailureReason;
+  message: string;
+  rawResponse: string;
+  newMessages: ConversationMessage[];
+  backgroundMessages: ConversationMessage[];
+  model?: string;
+  previousSceneName?: string;
+  logger?: Logger;
+}): Promise<void> {
+  const diagnosticsDir = path.join(params.baseDir, ".metadata");
+  const filePath = path.join(diagnosticsDir, "l1-extraction-failures.jsonl");
+  const rawResponseLimit = 20_000;
+  const rawResponseTruncated = params.rawResponse.length > rawResponseLimit;
+  const entry = {
+    id: `l1fail_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+    timestamp: new Date().toISOString(),
+    reason: params.reason,
+    message: params.message,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId ?? "",
+    model: params.model ?? "",
+    previousSceneName: params.previousSceneName ?? "",
+    newMessageIds: params.newMessages.map((m) => m.id),
+    backgroundMessageIds: params.backgroundMessages.map((m) => m.id),
+    rawResponse: params.rawResponse.slice(0, rawResponseLimit),
+    rawResponseLength: params.rawResponse.length,
+    rawResponseTruncated,
+  };
+
+  try {
+    await fs.mkdir(diagnosticsDir, { recursive: true });
+    await fs.appendFile(filePath, `${JSON.stringify(entry)}\n`, "utf-8");
+    params.logger?.warn?.(
+      `${TAG} Wrote L1 extraction failure diagnostic: ${filePath} ` +
+      `(reason=${params.reason}, rawLen=${params.rawResponse.length})`,
+    );
+  } catch (err) {
+    params.logger?.warn?.(
+      `${TAG} Failed to write L1 extraction failure diagnostic: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
