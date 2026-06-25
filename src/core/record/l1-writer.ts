@@ -147,8 +147,10 @@ export async function writeMemory(params: {
   vectorStore?: IMemoryStore;
   /** Optional embedding service (required when vectorStore is provided) */
   embeddingService?: EmbeddingService;
+  /** Override embedding timeout for capture-path calls (milliseconds) */
+  embeddingTimeoutMs?: number;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService } = params;
+  const { memory, decision, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService, embeddingTimeoutMs } = params;
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
@@ -231,7 +233,10 @@ export async function writeMemory(params: {
 
       if (embeddingService) {
         try {
-          embedding = await embeddingService.embed(record.content);
+          embedding = await embeddingService.embed(
+            record.content,
+            embeddingTimeoutMs ? { timeoutMs: embeddingTimeoutMs } : undefined,
+          );
           logger?.debug?.(
             `${TAG} [vec-dual-write] Embedding OK: dims=${embedding.length}, ` +
             `norm=${Math.sqrt(Array.from(embedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}`,
