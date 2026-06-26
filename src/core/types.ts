@@ -231,6 +231,12 @@ export interface MemorySearchParams {
   limit?: number;
   type?: string;
   scene?: string;
+  /**
+   * Restrict results to records captured under this session_key.
+   * Used by the auto-recall hook for agent/user isolation and exposed
+   * as an optional filter on `tdai_memory_search`.
+   */
+  sessionKey?: string;
 }
 
 /** Search parameters for L0 conversation search. */

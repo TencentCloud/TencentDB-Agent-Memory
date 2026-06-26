@@ -122,7 +122,16 @@ async function performAutoRecallInner(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(
+      userText,
+      pluginDataDir,
+      cfg,
+      logger,
+      effectiveStrategy as "keyword" | "embedding" | "hybrid",
+      vectorStore,
+      embeddingService,
+      params.sessionKey,
+    );
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -263,6 +272,26 @@ interface SearchResult {
 }
 
 /**
+ * Filter raw search results down to a single session_key for agent/user isolation.
+ * Returns the input unchanged when no session filter is supplied.
+ */
+function applySessionFilter<T extends { session_key: string }>(
+  items: T[],
+  sessionKey: string | undefined,
+  logger?: Logger,
+  label?: string,
+): T[] {
+  if (!sessionKey) return items;
+  const filtered = items.filter((r) => r.session_key === sessionKey);
+  if (filtered.length !== items.length && logger?.debug) {
+    logger.debug(
+      `${TAG} [session-filter${label ? ":" + label : ""}] sessionKey="${sessionKey}": kept ${filtered.length}/${items.length}`,
+    );
+  }
+  return filtered;
+}
+
+/**
  * Search memories and return both formatted lines and structured details.
  *
  * This is a thin wrapper around `searchMemories` that also captures
@@ -277,8 +306,9 @@ async function searchMemoriesWithDetails(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  sessionKey?: string,
 ): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
+  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService, sessionKey);
 
   // Extract structured data from formatted memory lines.
   // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
@@ -313,6 +343,7 @@ async function searchMemories(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  sessionKey?: string,
 ): Promise<SearchResult> {
   const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
@@ -361,13 +392,13 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore, sessionKey);
       return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, sessionKey);
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
 
@@ -376,7 +407,10 @@ async function searchMemories(
     // to avoid a redundant second HTTP request and a wasted local embed().
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      // Over-retrieve when filtering to absorb the post-filter drop.
+      const nativeTopK = sessionKey ? maxResults * 4 : maxResults;
+      const rawResults = await vectorStore.searchL1Hybrid({ query: cleanText, topK: nativeTopK });
+      const results = applySessionFilter(rawResults, sessionKey, logger, "hybrid-native").slice(0, maxResults);
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
@@ -384,7 +418,7 @@ async function searchMemories(
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, sessionKey);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -402,13 +436,18 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
+  sessionKey?: string,
 ): Promise<string[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
     if (ftsQuery) {
       logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
+      // Over-retrieve when filtering by session_key — l1_fts has session_key UNINDEXED,
+      // so we can only filter client-side after the FTS5 MATCH.
+      const candidateK = sessionKey ? maxResults * 4 : maxResults * 2;
+      const ftsResultsRaw = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+      const ftsResults = applySessionFilter(ftsResultsRaw, sessionKey, logger, "keyword-fts");
       if (ftsResults.length > 0) {
         logger?.debug?.(
           `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
@@ -455,7 +494,11 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  sessionKey?: string,
 ): Promise<string[]> {
+  // Over-retrieve when filtering by session_key — the underlying ANN index has no
+  // session-aware filter, so we apply it client-side after retrieval.
+  const candidateK = sessionKey ? maxResults * 4 : maxResults * 2;
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
   );
@@ -463,10 +506,10 @@ async function searchByEmbedding(
   logger?.debug?.(
     `${TAG} [embedding-search] Query embedding OK: dims=${queryEmbedding.length}, ` +
     `norm=${Math.sqrt(Array.from(queryEmbedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}, ` +
-    `searching top-${maxResults * 2}...`,
+    `searching top-${candidateK}...`,
   );
-  // Retrieve more candidates for subsequent filtering
-  const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, maxResults * 2);
+  const vecResultsRaw: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, candidateK);
+  const vecResults = applySessionFilter(vecResultsRaw, sessionKey, logger, "embedding-search");
 
   if (vecResults.length === 0) {
     logger?.debug?.(`${TAG} [embedding-search] Returned 0 results`);
@@ -517,9 +560,12 @@ async function searchHybrid(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  sessionKey?: string,
 ): Promise<SearchResult> {
-  // Run keyword and embedding searches in parallel
-  const candidateK = maxResults * 3; // retrieve more for merging
+  // Run keyword and embedding searches in parallel.
+  // Over-retrieve more when a session filter is active so the post-filter
+  // RRF still has enough candidates to fill maxResults.
+  const candidateK = sessionKey ? maxResults * 5 : maxResults * 3;
 
   const [keywordResult, embeddingResult] = await Promise.all([
     // Keyword search: FTS5 only (no in-memory fallback)
@@ -530,7 +576,8 @@ async function searchHybrid(
         if (vectorStore.isFtsAvailable()) {
           const ftsQuery = buildFtsQuery(userText);
           if (ftsQuery) {
-            const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+            const ftsResultsRaw = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+            const ftsResults = applySessionFilter(ftsResultsRaw, sessionKey, logger, "hybrid-keyword-fts");
             if (ftsResults.length > 0) {
               logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
               // Convert FtsSearchResult to ScoredRecord for RRF merge
@@ -572,7 +619,8 @@ async function searchHybrid(
         logger?.debug?.(
           `${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const results = await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText);
+        const resultsRaw = await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText);
+        const results = applySessionFilter(resultsRaw, sessionKey, logger, "hybrid-embedding");
         logger?.debug?.(`${TAG} [hybrid-embedding] Got ${results.length} candidates`);
         return { results, ms: performance.now() - tStart };
       } catch (err) {

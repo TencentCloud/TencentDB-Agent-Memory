@@ -376,6 +376,13 @@ export default function register(api: OpenClawPluginApi) {
             type: "string",
             description: "Optional filter by scene name",
           },
+          session_key: {
+            type: "string",
+            description:
+              "Optional: restrict results to memories captured under this session_key. " +
+              "Use this to keep agent/user memories isolated — pass the current session's " +
+              "key to avoid recalling other agents' or users' records.",
+          },
         },
         required: ["query"],
       },
@@ -385,15 +392,16 @@ export default function register(api: OpenClawPluginApi) {
         const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
         const typeFilter = typeof params.type === "string" ? params.type : undefined;
         const sceneFilter = typeof params.scene === "string" ? params.scene : undefined;
+        const sessionKeyFilter = typeof params.session_key === "string" ? params.session_key : undefined;
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_memory_search called: ` +
           `query="${query.length > 80 ? query.slice(0, 80) + "…" : query}", ` +
-          `limit=${limit}, type=${typeFilter ?? "(all)"}, scene=${sceneFilter ?? "(all)"}`,
+          `limit=${limit}, type=${typeFilter ?? "(all)"}, scene=${sceneFilter ?? "(all)"}, session_key=${sessionKeyFilter ?? "(all)"}`,
         );
 
         try {
-          const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
+          const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter, sessionKey: sessionKeyFilter });
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(

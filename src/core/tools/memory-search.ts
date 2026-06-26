@@ -25,6 +25,8 @@ export interface MemorySearchResultItem {
   type: string;
   priority: number;
   scene_name: string;
+  /** Session_key the record belongs to. Used by the agent/user isolation filter. */
+  session_key: string;
   score: number;
   created_at: string;
   updated_at: string;
@@ -84,6 +86,7 @@ export async function executeMemorySearch(params: {
   limit: number;
   type?: string;
   scene?: string;
+  sessionKey?: string;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   logger?: Logger;
@@ -93,6 +96,7 @@ export async function executeMemorySearch(params: {
     limit,
     type: typeFilter,
     scene: sceneFilter,
+    sessionKey: sessionFilter,
     vectorStore,
     embeddingService,
     logger,
@@ -101,6 +105,7 @@ export async function executeMemorySearch(params: {
   logger?.debug?.(
     `${TAG} CALLED: query="${query.slice(0, 100)}", limit=${limit}, ` +
     `typeFilter=${typeFilter ?? "(none)"}, sceneFilter=${sceneFilter ?? "(none)"}, ` +
+    `sessionFilter=${sessionFilter ?? "(none)"}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
   );
@@ -133,7 +138,9 @@ export async function executeMemorySearch(params: {
   }
 
   // ── Over-retrieve for later filtering and RRF merging ──
-  const candidateK = limit * 3;
+  // Session-filtered queries need extra candidates because the underlying
+  // FTS5 / ANN index has no session-aware filter.
+  const candidateK = sessionFilter ? limit * 5 : limit * 3;
 
   // ── Run available search strategies in parallel ──
   const [ftsItems, vecItems] = await Promise.all([
@@ -155,6 +162,7 @@ export async function executeMemorySearch(params: {
           type: r.type,
           priority: r.priority,
           scene_name: r.scene_name,
+          session_key: r.session_key,
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
@@ -184,6 +192,7 @@ export async function executeMemorySearch(params: {
           type: r.type,
           priority: r.priority,
           scene_name: r.scene_name,
+          session_key: r.session_key,
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
@@ -225,8 +234,12 @@ export async function executeMemorySearch(params: {
     results = ftsOk ? ftsItems : vecItems;
   }
 
-  // ── Apply secondary filters (type, scene) ──
+  // ── Apply secondary filters (session_key, type, scene) ──
   const preFilterCount = results.length;
+  if (sessionFilter) {
+    results = results.filter((r) => r.session_key === sessionFilter);
+    logger?.debug?.(`${TAG} After session filter "${sessionFilter}": ${results.length}/${preFilterCount}`);
+  }
   if (typeFilter) {
     results = results.filter((r) => r.type === typeFilter);
     logger?.debug?.(`${TAG} After type filter "${typeFilter}": ${results.length}/${preFilterCount}`);
