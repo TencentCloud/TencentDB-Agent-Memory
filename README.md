@@ -505,6 +505,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
+| [`integrations/codex/README.md`](./integrations/codex/README.md) | Codex MCP integration guide |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 
