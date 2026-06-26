@@ -375,6 +375,14 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._user_id = ""
         self._gateway_available = False
         self._initialized = False  # Track if initialize() has been called
+        # L3 persona cache: {"ts": float, "value": str}. Read by
+        # _get_cached_persona() on every system_prompt_block() call;
+        # refreshed at most every _PERSONA_CACHE_TTL_SECS to keep the
+        # prompt builder cheap. Keyed implicitly on (session_id,
+        # user_id) because the provider is constructed per-session in
+        # Hermes — when session_id changes, the provider instance is
+        # re-created and the cache is naturally cleared.
+        self._persona_cache: Dict[str, Any] = {"ts": 0.0, "value": ""}
 
         # Background sync threads.
         # We allow at most _MAX_INFLIGHT_SYNCS in-flight sync threads at any
@@ -816,7 +824,7 @@ class MemoryTencentdbProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         if not self._gateway_available:
             return ""
-        return (
+        base = (
             "# memory-tencentdb Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Four-layer memory system (L0→L1→L2→L3) with automatic conversation "
@@ -824,6 +832,96 @@ class MemoryTencentdbProvider(MemoryProvider):
             "Use memory_tencentdb_memory_search to find specific memories, "
             "memory_tencentdb_conversation_search to search raw conversation history."
         )
+        # Inject the L3 persona (long-term user profile) if the Gateway has
+        # generated one. Without this, L3 compute is paid but never surfaced
+        # to the agent — see issue #205. We do not call /recall on every
+        # turn: the persona only regenerates every ~50 L1 memories, so a
+        # short TTL cache is sufficient. Caching also keeps the prompt
+        # builder cheap when the Gateway is slow or temporarily down.
+        persona = self._get_cached_persona()
+        if persona:
+            return f"{base}\n\n## User Persona\n{persona}"
+        return base
+
+    # ------------------------------------------------------------------
+    # L3 persona cache (system_prompt_block only)
+    # ------------------------------------------------------------------
+    # L3 regenerates infrequently (every N new L1 memories, default 50),
+    # so a short TTL avoids re-paying the /recall cost on every turn
+    # while still picking up persona changes within a few turns. The
+    # cache is keyed on (session_id, user_id) so a session switch or
+    # user switch cannot serve a stale persona to the wrong scope.
+    _PERSONA_CACHE_TTL_SECS = 60.0
+
+    def _get_cached_persona(self) -> str:
+        """Return the cached L3 persona, refreshing when stale.
+
+        Always returns a string (empty when no persona is available or
+        the Gateway is unreachable). Never raises — system_prompt_block
+        must remain a pure function from the caller's perspective.
+
+        The TTL governs re-fetch cadence only. A failed fetch does
+        **not** update the cache timestamp, so the next call retries
+        the Gateway (until one succeeds). Once a fetch succeeds, the
+        timestamp is set, and subsequent failures within the TTL fall
+        back to the cached value rather than retrying — this keeps
+        the prompt builder cheap when the Gateway is flaky but still
+        has a usable persona.
+        """
+        now = time.monotonic()
+        cached_ts = self._persona_cache.get("ts", 0.0)
+        cached_value = self._persona_cache.get("value", "")
+        # `cached_ts == 0.0` is the "never fetched" sentinel from __init__.
+        # Treat it as always-stale so the first call after startup always
+        # attempts a fetch, regardless of how soon it comes after init.
+        if cached_ts > 0.0 and (now - cached_ts) < self._PERSONA_CACHE_TTL_SECS:
+            return cached_value
+        try:
+            persona = self._fetch_persona()
+        except Exception as e:
+            logger.debug("memory-tencentdb L3 persona fetch failed: %s", e)
+            # Do NOT update the cache on failure: leave `ts` at its
+            # previous value (0.0 on first failure → next call
+            # retries; non-zero on later failure → next call after
+            # TTL retries). Returning the previously cached value
+            # means a partially-warm cache degrades gracefully when
+            # the Gateway dies mid-session.
+            return cached_value
+        # Only update the cache on a successful fetch. A successful
+        # fetch returning an empty persona (i.e. the user has not
+        # generated any L3 memories yet) still counts as success —
+        # we have a fresh answer and there is no need to ask again
+        # for another TTL window.
+        self._persona_cache = {"ts": now, "value": persona or ""}
+        return persona or ""
+
+    def _fetch_persona(self) -> str:
+        """One-shot L3 persona fetch via the Gateway's /recall endpoint.
+
+        Uses an empty query so the Gateway's L1/L2 vector search does
+        not dominate the response — we only want the persona block,
+        which is keyed on user_id, not on the query. The persona is
+        generated by the L3 pipeline (L0→L1→L2→L3) on a separate
+        schedule; an empty query is a documented no-op for the recall
+        path and the persona field is returned regardless.
+        """
+        if not self._ensure_alive_for_request() or not self._client:
+            return ""
+        result = self._client.recall(
+            query="",
+            session_key=self._session_id,
+            user_id=self._user_id,
+        )
+        # `recalledL3_persona` is the field added by the Gateway for
+        # this exact purpose. Older Gateways (pre-fix) simply do not
+        # include the key, which we treat as "no persona available yet"
+        # — no error, no deprecation warning (the field is documented
+        # in src/gateway/types.ts and clients must tolerate its
+        # absence per the issue's "fall back to static block" guidance).
+        persona = result.get("recalledL3_persona") or ""
+        if persona:
+            self._record_success()
+        return persona
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Synchronous recall — fetch memories in real-time for the current turn."""
