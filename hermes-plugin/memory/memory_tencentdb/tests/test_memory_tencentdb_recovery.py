@@ -19,6 +19,7 @@ real Node processes nor open network sockets.
 
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 import sys
@@ -229,6 +230,36 @@ def test_reap_dead_process_keeps_alive_handle():
     sup._process = alive
     sup._reap_dead_process()
     assert sup._process is alive
+
+
+# ---------------------------------------------------------------------------
+# Startup observability
+# ---------------------------------------------------------------------------
+
+
+def test_initialize_logs_why_provider_runs(monkeypatch, fast_watchdog, caplog):
+    import plugins.memory.memory_tencentdb as mod
+
+    fake = FakeSupervisor()
+
+    def _factory(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(mod, "GatewaySupervisor", _factory)
+    monkeypatch.setenv("MEMORY_TENCENTDB_GATEWAY_CMD", "fake-cmd")
+    caplog.set_level(logging.INFO, logger=mod.__name__)
+
+    provider = MemoryTencentdbProvider()
+    try:
+        provider.initialize(session_id="startup-banner-session", user_id="tester")
+        assert _wait_until(lambda: provider._gateway_available, timeout=2.0)
+
+        text = caplog.text
+        assert "memory-tencentdb provider loaded because Hermes memory.provider=memory_tencentdb" in text
+        assert "memory.memory_enabled only controls Hermes system-prompt advertising" in text
+        assert "disable memory_tencentdb by clearing memory.provider" in text
+    finally:
+        provider.shutdown()
 
 
 # ---------------------------------------------------------------------------

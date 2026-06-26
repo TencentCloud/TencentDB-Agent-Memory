@@ -249,6 +249,46 @@ def _discover_gateway_cmd() -> Optional[str]:
     return None
 
 
+def _log_provider_startup_state(
+    *,
+    host: str,
+    port: int,
+    gateway_cmd: Optional[str],
+    init_kwargs: Dict[str, Any],
+) -> None:
+    """Explain why the provider is running and what it will do.
+
+    Hermes loads this module when ``memory.provider`` is set to
+    ``memory_tencentdb``. Host-side fields named ``memory_enabled`` and
+    ``user_profile_enabled`` only affect Hermes prompt advertising in current
+    Hermes releases, so the provider needs to make that runtime state explicit.
+    """
+    gateway_mode = "managed sidecar" if gateway_cmd else "external Gateway only"
+    logger.info(
+        "memory-tencentdb provider loaded because Hermes "
+        "memory.provider=memory_tencentdb; memory.memory_enabled only controls "
+        "Hermes system-prompt advertising and does not disable this provider. "
+        "You can disable memory_tencentdb by clearing memory.provider. "
+        "Runtime: gateway=%s:%d, startup=%s, features=watchdog,gateway,recall,"
+        "capture,L1/L2/L3 pipeline.",
+        host,
+        port,
+        gateway_mode,
+    )
+
+    memory_enabled = init_kwargs.get("memory_enabled")
+    user_profile_enabled = init_kwargs.get("user_profile_enabled")
+    if memory_enabled is False or user_profile_enabled is False:
+        logger.warning(
+            "memory-tencentdb host config appears to pass memory_enabled=%r, "
+            "user_profile_enabled=%r. These Hermes fields only affect host "
+            "system-prompt advertising; the plugin still runs because "
+            "memory.provider=memory_tencentdb.",
+            memory_enabled,
+            user_profile_enabled,
+        )
+
+
 # Search tool limit bounds (shared by memory_search and conversation_search).
 _DEFAULT_SEARCH_LIMIT = 5
 _MAX_SEARCH_LIMIT = 20
@@ -750,6 +790,13 @@ class MemoryTencentdbProvider(MemoryProvider):
         # configure ``TDAI_GATEWAY_API_KEY`` / ``server.apiKey`` on the
         # Gateway side directly so both ends agree on the secret.
         api_key = _resolve_gateway_api_key()
+
+        _log_provider_startup_state(
+            host=host,
+            port=port,
+            gateway_cmd=gateway_cmd,
+            init_kwargs=kwargs,
+        )
 
         self._supervisor = GatewaySupervisor(
             host=host,
