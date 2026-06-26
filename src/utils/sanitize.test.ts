@@ -20,3 +20,22 @@ describe("prompt injection filtering", () => {
     expect(shouldExtractL1("Please remember that I prefer concise TypeScript examples.")).toBe(true);
   });
 });
+
+describe("L1 quality gate", () => {
+  it("keeps L0 archival permissive while dropping trivial L1 extraction inputs", () => {
+    expect(shouldCaptureL0("OK")).toBe(true);
+    expect(shouldCaptureL0("好的")).toBe(true);
+
+    expect(shouldExtractL1("OK")).toBe(false);
+    expect(shouldExtractL1("hi")).toBe(false);
+    expect(shouldExtractL1("好的")).toBe(false);
+    expect(shouldExtractL1("好的，谢谢")).toBe(false);
+  });
+
+  it("rejects oversized messages before LLM extraction", () => {
+    const pastedLog = "a".repeat(5001);
+
+    expect(shouldCaptureL0(pastedLog)).toBe(true);
+    expect(shouldExtractL1(pastedLog)).toBe(false);
+  });
+});
