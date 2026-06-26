@@ -9,6 +9,7 @@
  */
 
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
@@ -16,6 +17,9 @@ import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
+
+const warnedMissingConfigPaths = new Set<string>();
+const warnedLegacyDataDirs = new Set<string>();
 
 // ============================
 // Gateway config types
@@ -169,26 +173,38 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 function resolveConfigPath(): string | null {
   // 1. Explicit env var
   const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (explicit) {
+    if (safeExists(explicit)) return explicit;
+    warnMissingConfigOnce(explicit, "TDAI_GATEWAY_CONFIG");
+    return null;
+  }
 
   // 2. CWD
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(process.cwd(), name);
-    if (fs.existsSync(p)) return p;
+    if (safeExists(p)) return p;
   }
 
-  // 3. Default data dir
+  // 3. Platform config dir (Linux: $XDG_CONFIG_HOME/tencentdb-agent-memory)
+  for (const dir of resolvePlatformConfigDirs()) {
+    for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
+      const p = path.join(dir, name);
+      if (safeExists(p)) return p;
+    }
+  }
+
+  // 4. Default data dir
   const dataDir = resolveDefaultDataDir();
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(dataDir, name);
-    if (fs.existsSync(p)) return p;
+    if (safeExists(p)) return p;
   }
 
   return null;
 }
 
 function resolveDefaultDataDir(): string {
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+  const home = resolveHomeDir();
 
   // New canonical location: everything related to standalone/Hermes-mode TDAI
   // is collected under ~/.memory-tencentdb/ to avoid scattering top-level dirs
@@ -199,30 +215,74 @@ function resolveDefaultDataDir(): string {
   // Note: this only governs the standalone/Hermes fallback. Under the openclaw
   // host the plugin data dir is decided by `resolveStateDir() + "memory-tdai"`
   // (typically ~/.openclaw/memory-tdai/) which is intentionally NOT changed.
-  const root = getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
+  const root = getEnv("MEMORY_TENCENTDB_ROOT")?.trim() || path.join(home, ".memory-tencentdb");
   const newDefault = path.join(root, "memory-tdai");
 
   // Backward compatibility: if the new location does not yet exist but the
   // legacy ~/memory-tdai still has data, keep using the legacy dir so existing
   // users don't silently lose their memory store. The install script
   // (install_hermes_memory_tencentdb.sh, Step 0) will migrate it on next run.
-  try {
-    if (!fs.existsSync(newDefault)) {
-      const legacy = path.join(home, "memory-tdai");
-      if (fs.existsSync(legacy)) {
-        // Stderr-only deprecation hint; doesn't pollute structured logs.
-        process.stderr.write(
-          `[tdai-gateway] DEPRECATED: using legacy data dir ${legacy}; ` +
-          `move it to ${newDefault} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
-        );
-        return legacy;
-      }
+  if (!safeExists(newDefault)) {
+    const legacy = path.join(home, "memory-tdai");
+    if (safeExists(legacy)) {
+      // Stderr-only deprecation hint; doesn't pollute structured logs.
+      warnLegacyDataDirOnce(legacy, newDefault);
+      return legacy;
     }
-  } catch {
-    // existsSync should not throw, but guard anyway.
   }
 
   return newDefault;
+}
+
+function resolvePlatformConfigDirs(): string[] {
+  const home = resolveHomeDir();
+
+  if (process.platform === "win32") {
+    const appData = getEnv("APPDATA")?.trim() || path.join(home, "AppData", "Roaming");
+    return [path.join(appData, "tencentdb-agent-memory")];
+  }
+
+  if (process.platform === "darwin") {
+    return [path.join(home, "Library", "Application Support", "tencentdb-agent-memory")];
+  }
+
+  const xdgConfigHome = getEnv("XDG_CONFIG_HOME")?.trim() || path.join(home, ".config");
+  return [path.join(xdgConfigHome, "tencentdb-agent-memory")];
+}
+
+function resolveHomeDir(): string {
+  return getEnv("HOME")?.trim() || getEnv("USERPROFILE")?.trim() || homedir() || "/tmp";
+}
+
+function safeExists(p: string): boolean {
+  try {
+    return fs.existsSync(p);
+  } catch {
+    return false;
+  }
+}
+
+function warnMissingConfigOnce(configPath: string, source: string): void {
+  const key = `${source}:${configPath}`;
+  if (warnedMissingConfigPaths.has(key)) return;
+  warnedMissingConfigPaths.add(key);
+  process.stderr.write(
+    `[tdai-gateway] WARN: ${source} points to missing config ${configPath}; using defaults.\n`,
+  );
+}
+
+function warnLegacyDataDirOnce(legacy: string, replacement: string): void {
+  if (warnedLegacyDataDirs.has(legacy)) return;
+  warnedLegacyDataDirs.add(legacy);
+  process.stderr.write(
+    `[tdai-gateway] DEPRECATED: using legacy data dir ${legacy}; ` +
+    `move it to ${replacement} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
+  );
+}
+
+export function _resetGatewayConfigWarningsForTest(): void {
+  warnedMissingConfigPaths.clear();
+  warnedLegacyDataDirs.clear();
 }
 
 function env(key: string): string | undefined {
