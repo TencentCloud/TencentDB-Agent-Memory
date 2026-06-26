@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Backward-compatible combined context for older clients. */
   context: string;
+  /** Stable persona / scene / tool guidance context for system prompt injection. */
+  system_context?: string;
+  /** Dynamic L1 recall context for per-turn prefetch injection. */
+  prepend_context?: string;
   strategy?: string;
   memory_count?: number;
 }
