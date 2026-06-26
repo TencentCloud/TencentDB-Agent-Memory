@@ -288,10 +288,11 @@ aliases:
   specific path, set `MEMORY_TENCENTDB_GATEWAY_CMD` explicitly — it always
   wins over discovery.
 - **Search tools silently missing from the LLM**: `get_tool_schemas()`
-  returns `[]` until either the Gateway is reachable or one of
-  `MEMORY_TENCENTDB_GATEWAY_CMD` / `MEMORY_TENCENTDB_GATEWAY_PORT` is set
-  in the environment. Set the env var so the tools are advertised
-  optimistically at registration time.
+  advertises both search tools before Gateway startup, so Hermes should not
+  show this provider as `tools=0` in zero-config mode. If it still does,
+  verify Hermes is loading this provider checkout/version rather than a stale
+  copy in another plugin directory, then restart Hermes so it rebuilds the
+  provider routing table.
 - **"circuit breaker tripped"** warnings: five consecutive Gateway errors
   were observed. Calls are paused for 60 s; check Gateway health and logs.
 - **Capture backlog warnings**: Gateway is slow or hung — `sync_turn` is
