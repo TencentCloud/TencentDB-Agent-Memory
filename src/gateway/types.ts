@@ -26,6 +26,41 @@ export interface HealthResponse {
 }
 
 // ============================
+// /diagnostics/sessions
+// ============================
+
+export interface DiagnosticsResponse {
+  dataDir: string;
+  store: {
+    vectorStore: boolean;
+    embeddingService: boolean;
+    l0Count: number | null;
+    l1Count: number | null;
+    countError?: string;
+  };
+  scheduler: {
+    enabled: boolean;
+    started: boolean;
+    queues: unknown;
+  };
+  checkpoint: {
+    totalProcessed: number;
+    l0ConversationsCount: number;
+    totalMemoriesExtracted: number;
+    memoriesSinceLastPersona: number;
+    scenesProcessed: number;
+  };
+  sessions: Array<{
+    sessionKey: string;
+    trackedInMemory: boolean;
+    bufferedMessages: number;
+    schedulerState: unknown;
+    checkpointRunnerState: unknown;
+    checkpointPipelineState: unknown;
+  }>;
+}
+
+// ============================
 // /recall
 // ============================
 
