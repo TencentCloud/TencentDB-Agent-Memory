@@ -31,6 +31,7 @@ import {
 } from "./src/utils/clean-context-runner.js";
 import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
+import { stripRelevantMemoriesFromContent } from "./src/utils/recall-visibility.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
@@ -624,30 +625,13 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    const stripped = stripRelevantMemoriesFromContent(msg.content, {
+      showInjected: cfg.recall.showInjected,
+    });
+    if (!stripped.changed) return;
 
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
-    }
-
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
-    }
+    api.logger.debug?.(`${TAG} [before_message_write] Stripped recalled context: removed ${stripped.removedChars} chars`);
+    return { message: { ...event.message, content: stripped.content } as typeof event.message };
   });
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule

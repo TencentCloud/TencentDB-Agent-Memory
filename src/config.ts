@@ -93,6 +93,8 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Preserve injected recall context in visible conversation history (default: false). */
+  showInjected: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +537,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
     },
     embedding: {
       enabled: embeddingEnabled,
