@@ -346,6 +346,28 @@ curl http://127.0.0.1:8420/health
 # Should return {"status":"ok"} or {"status":"degraded"}
 ```
 
+**8. Troubleshoot unexpected recall data**
+
+If `/recall` returns another user's persona, scene paths, or data while your
+own data directory is empty, first confirm which Gateway process is actually
+serving port `8420`. On shared machines, WSL hosts, Docker hosts, SSH tunnels,
+or port-forwarded environments, `127.0.0.1:8420` may point to an older process
+or another user's sidecar.
+
+```bash
+sudo lsof -iTCP:8420 -sTCP:LISTEN -nP
+PID=$(sudo lsof -tiTCP:8420 -sTCP:LISTEN | head -1)
+sudo readlink /proc/$PID/cwd
+sudo tr '\0' '\n' < /proc/$PID/environ | grep -E '^(HOME|USER|TDAI_DATA_DIR)='
+sudo lsof -p $PID | grep memory-tencentdb
+```
+
+If the `cwd`, `HOME`, `USER`, or `TDAI_DATA_DIR` values point to another user
+or checkout, stop that Gateway or run your instance on a different port. Common
+causes are a previous process surviving a restart, two users sharing the same
+host port, Docker publishing `8420` only once per host, or an SSH/nginx/kubectl
+forward targeting the wrong process.
+
 > For the complete provider reference (environment variables, troubleshooting, LLM tool schemas, supervisor behavior), see [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md). Please read it before adjusting the supervisor / circuit-breaker defaults.
 
 
