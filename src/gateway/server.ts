@@ -3,6 +3,7 @@
  *
  * Exposes TDAI Core capabilities as HTTP endpoints:
  *   GET  /health              — Health check
+ *   GET  /status              — Read-only pipeline diagnostics
  *   POST /recall              — Memory recall (prefetch)
  *   POST /capture             — Conversation capture (sync_turn)
  *   POST /search/memories     — L1 memory search
@@ -25,6 +26,7 @@ import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import type {
   HealthResponse,
+  StatusResponse,
   RecallRequest,
   RecallResponse,
   CaptureRequest,
@@ -260,6 +262,8 @@ export class TdaiGateway {
       if (!this.checkAuth(req, res)) return;
 
       switch (`${method} ${pathname}`) {
+        case "GET /status":
+          return this.handleStatus(url, res);
         case "POST /recall":
           return await this.handleRecall(req, res);
         case "POST /capture":
@@ -365,6 +369,12 @@ export class TdaiGateway {
         embeddingService: !!this.core.getEmbeddingService(),
       },
     };
+    sendJson(res, 200, response);
+  }
+
+  private handleStatus(url: URL, res: http.ServerResponse): void {
+    const sessionKey = url.searchParams.get("session_key") ?? undefined;
+    const response: StatusResponse = this.core.getDiagnostics(sessionKey);
     sendJson(res, 200, response);
   }
 

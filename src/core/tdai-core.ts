@@ -392,6 +392,51 @@ export class TdaiCore {
     return this.schedulerStartPromise !== undefined;
   }
 
+  /** Read-only runtime diagnostics for status/debug endpoints. */
+  getDiagnostics(sessionKey?: string): {
+    stores: { vectorStore: boolean; embeddingService: boolean };
+    scheduler: {
+      enabled: boolean;
+      started: boolean;
+      destroyed: boolean;
+      queues: ReturnType<MemoryPipelineManager["getQueueSizes"]>;
+    };
+    sessions: ReturnType<MemoryPipelineManager["getAllSessionDiagnostics"]>;
+  } {
+    const emptyQueues: ReturnType<MemoryPipelineManager["getQueueSizes"]> = {
+      l1: 0,
+      l2: 0,
+      l3: 0,
+      l1Pending: false,
+      l2Pending: false,
+      l3Pending: false,
+      l1Idle: true,
+      l2Idle: true,
+      l3Idle: true,
+    };
+
+    const scheduler = this.scheduler;
+    const sessions = scheduler
+      ? sessionKey
+        ? [scheduler.getSessionDiagnostics(sessionKey)]
+        : scheduler.getAllSessionDiagnostics()
+      : [];
+
+    return {
+      stores: {
+        vectorStore: !!this.vectorStore,
+        embeddingService: !!this.embeddingService,
+      },
+      scheduler: {
+        enabled: !!scheduler,
+        started: this.isSchedulerStarted(),
+        destroyed: scheduler?.isDestroyed ?? false,
+        queues: scheduler?.getQueueSizes() ?? emptyQueues,
+      },
+      sessions,
+    };
+  }
+
   /** Set the instance ID for metrics (may be resolved asynchronously). */
   setInstanceId(id: string): void {
     this.instanceId = id;
