@@ -170,6 +170,24 @@ export type L3Runner = () => Promise<void>;
 /** Callback to persist session states to checkpoint. */
 export type PipelineStatePersister = (states: Record<string, PipelineSessionState>) => Promise<void>;
 
+export interface PipelineSessionDiagnostics {
+  sessionKey: string;
+  known: boolean;
+  state?: PipelineSessionState;
+  effectiveL1Threshold?: number;
+  bufferedMessageCount: number;
+  timers: {
+    l1IdlePending: boolean;
+    l1IdleScheduledTime: number;
+    l2SchedulePending: boolean;
+    l2ScheduleScheduledTime: number;
+    l1Queued: boolean;
+    l2Queued: boolean;
+    l1RetryCount: number;
+  };
+  queues: ReturnType<MemoryPipelineManager["getQueueSizes"]>;
+}
+
 const TAG = "[memory-tdai] [pipeline]";
 
 // ============================
@@ -1150,6 +1168,35 @@ export class MemoryPipelineManager {
   /** Get all session keys being tracked. */
   getSessionKeys(): string[] {
     return Array.from(this.sessionStates.keys());
+  }
+
+  /** Read-only diagnostics for one tracked or requested session. */
+  getSessionDiagnostics(sessionKey: string): PipelineSessionDiagnostics {
+    const state = this.sessionStates.get(sessionKey);
+    const timers = this.sessionTimers.get(sessionKey);
+
+    return {
+      sessionKey,
+      known: !!state,
+      state: state ? { ...state } : undefined,
+      effectiveL1Threshold: state ? this.getEffectiveThreshold(state) : undefined,
+      bufferedMessageCount: this.getBufferedMessageCount(sessionKey),
+      timers: {
+        l1IdlePending: timers?.l1Idle.pending ?? false,
+        l1IdleScheduledTime: timers?.l1Idle.scheduledTime ?? 0,
+        l2SchedulePending: timers?.l2Schedule.pending ?? false,
+        l2ScheduleScheduledTime: timers?.l2Schedule.scheduledTime ?? 0,
+        l1Queued: timers?.l1Queued ?? false,
+        l2Queued: timers?.l2Queued ?? false,
+        l1RetryCount: timers?.l1RetryCount ?? 0,
+      },
+      queues: this.getQueueSizes(),
+    };
+  }
+
+  /** Read-only diagnostics for every tracked session. */
+  getAllSessionDiagnostics(): PipelineSessionDiagnostics[] {
+    return this.getSessionKeys().map((sessionKey) => this.getSessionDiagnostics(sessionKey));
   }
 
   /** Whether the pipeline has been destroyed. */

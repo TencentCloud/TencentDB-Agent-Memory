@@ -26,6 +26,58 @@ export interface HealthResponse {
 }
 
 // ============================
+// /status
+// ============================
+
+export interface StatusResponse {
+  stores: {
+    vectorStore: boolean;
+    embeddingService: boolean;
+  };
+  scheduler: {
+    enabled: boolean;
+    started: boolean;
+    destroyed: boolean;
+    queues: {
+      l1: number;
+      l2: number;
+      l3: number;
+      l1Pending: boolean;
+      l2Pending: boolean;
+      l3Pending: boolean;
+      l1Idle: boolean;
+      l2Idle: boolean;
+      l3Idle: boolean;
+    };
+  };
+  sessions: Array<{
+    sessionKey: string;
+    known: boolean;
+    state?: {
+      conversation_count: number;
+      last_extraction_time: string;
+      last_extraction_updated_time: string;
+      last_active_time: number;
+      l2_pending_l1_count: number;
+      warmup_threshold: number;
+      l2_last_extraction_time: string;
+    };
+    effectiveL1Threshold?: number;
+    bufferedMessageCount: number;
+    timers: {
+      l1IdlePending: boolean;
+      l1IdleScheduledTime: number;
+      l2SchedulePending: boolean;
+      l2ScheduleScheduledTime: number;
+      l1Queued: boolean;
+      l2Queued: boolean;
+      l1RetryCount: number;
+    };
+    queues: StatusResponse["scheduler"]["queues"];
+  }>;
+}
+
+// ============================
 // /recall
 // ============================
 
