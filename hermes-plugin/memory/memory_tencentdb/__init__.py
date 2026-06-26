@@ -1020,6 +1020,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                     query=query,
                     limit=_coerce_limit(args.get("limit")),
                     type_filter=args.get("type", ""),
+                    user_id=self._user_id,
                 )
                 self._record_success()
                 return json.dumps(result)
@@ -1031,6 +1032,7 @@ class MemoryTencentdbProvider(MemoryProvider):
                 result = self._client.search_conversations(
                     query=query,
                     limit=_coerce_limit(args.get("limit")),
+                    user_id=self._user_id,
                 )
                 self._record_success()
                 return json.dumps(result)

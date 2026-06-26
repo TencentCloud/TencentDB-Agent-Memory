@@ -15,8 +15,9 @@
  */
 
 import http from "node:http";
+import path from "node:path";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -46,6 +47,12 @@ import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+const DEFAULT_USER_SCOPE = "__default__";
+
+interface ScopedCoreEntry {
+  core: TdaiCore;
+  ready: Promise<void>;
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -107,6 +114,22 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
+function isDefaultUserId(userId: string | undefined): boolean {
+  const normalized = userId?.trim().toLowerCase();
+  return !normalized || normalized === "default" || normalized === "default_user";
+}
+
+function userScopeKey(userId: string | undefined): string {
+  if (isDefaultUserId(userId)) return DEFAULT_USER_SCOPE;
+  return createHash("sha256").update(userId!.trim()).digest("hex").slice(0, 32);
+}
+
+function scopedDataDir(baseDir: string, userId: string | undefined): string {
+  const scope = userScopeKey(userId);
+  if (scope === DEFAULT_USER_SCOPE) return baseDir;
+  return path.join(baseDir, "users", `u_${scope}`);
+}
+
 // ============================
 // Gateway Server
 // ============================
@@ -114,28 +137,13 @@ function safeEqual(a: string, b: string): boolean {
 export class TdaiGateway {
   private config: GatewayConfig;
   private logger: Logger;
-  private core: TdaiCore;
+  private cores = new Map<string, ScopedCoreEntry>();
   private server: http.Server | null = null;
   private startTime = Date.now();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
     this.logger = createConsoleLogger();
-
-    // Create host adapter
-    const adapter = new StandaloneHostAdapter({
-      dataDir: this.config.data.baseDir,
-      llmConfig: this.config.llm,
-      logger: this.logger,
-      platform: "gateway",
-    });
-
-    // Create core
-    this.core = new TdaiCore({
-      hostAdapter: adapter,
-      config: this.config.memory,
-      sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
-    });
   }
 
   /**
@@ -145,8 +153,9 @@ export class TdaiGateway {
     // Initialize data directories
     initDataDirectories(this.config.data.baseDir);
 
-    // Initialize core
-    await this.core.initialize();
+    // Initialize the legacy/default user scope eagerly so /health reflects
+    // startup readiness while non-default users are created lazily per request.
+    await this.getCoreForUser(undefined);
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -224,8 +233,60 @@ export class TdaiGateway {
       });
     }
 
-    await this.core.destroy();
+    const entries = [...this.cores.values()];
+    this.cores.clear();
+    for (const entry of entries) {
+      await entry.ready.catch(() => {});
+      await entry.core.destroy();
+    }
     this.logger.info("Gateway stopped");
+  }
+
+  private createCore(dataDir: string, userId: string | undefined): TdaiCore {
+    const adapter = new StandaloneHostAdapter({
+      dataDir,
+      llmConfig: this.config.llm,
+      logger: this.logger,
+      defaultUserId: isDefaultUserId(userId) ? "default_user" : userId!.trim(),
+      platform: "gateway",
+    });
+
+    return new TdaiCore({
+      hostAdapter: adapter,
+      config: this.config.memory,
+      sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
+    });
+  }
+
+  private getOrCreateCoreEntry(userId: string | undefined): ScopedCoreEntry {
+    const userScope = userScopeKey(userId);
+    const existing = this.cores.get(userScope);
+    if (existing) return existing;
+
+    const dataDir = scopedDataDir(this.config.data.baseDir, userId);
+    const core = this.createCore(dataDir, userId);
+    const entry: ScopedCoreEntry = {
+      core,
+      ready: (async () => {
+        initDataDirectories(dataDir);
+        await core.initialize();
+      })(),
+    };
+    entry.ready.catch(() => {
+      this.cores.delete(userScope);
+    });
+    this.cores.set(userScope, entry);
+    return entry;
+  }
+
+  private async getCoreForUser(userId: string | undefined): Promise<TdaiCore> {
+    const entry = this.getOrCreateCoreEntry(userId);
+    await entry.ready;
+    return entry.core;
+  }
+
+  private getDataDirForUser(userId: string | undefined): string {
+    return scopedDataDir(this.config.data.baseDir, userId);
   }
 
   // ============================
@@ -356,13 +417,14 @@ export class TdaiGateway {
   // ============================
 
   private handleHealth(res: http.ServerResponse): void {
+    const defaultCore = this.cores.get(DEFAULT_USER_SCOPE)?.core;
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: defaultCore?.getVectorStore() ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
-        embeddingService: !!this.core.getEmbeddingService(),
+        vectorStore: !!defaultCore?.getVectorStore(),
+        embeddingService: !!defaultCore?.getEmbeddingService(),
       },
     };
     sendJson(res, 200, response);
@@ -377,7 +439,8 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const core = await this.getCoreForUser(body.user_id);
+    const result = await core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
     this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
@@ -399,7 +462,8 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
+    const core = await this.getCoreForUser(body.user_id);
+    const result = await core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
       messages: body.messages ?? [
@@ -428,7 +492,8 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchMemories({
+    const core = await this.getCoreForUser(body.user_id);
+    const result = await core.searchMemories({
       query: body.query,
       limit: body.limit,
       type: body.type,
@@ -451,7 +516,8 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchConversations({
+    const core = await this.getCoreForUser(body.user_id);
+    const result = await core.searchConversations({
       query: body.query,
       limit: body.limit,
       sessionKey: body.session_key,
@@ -472,7 +538,8 @@ export class TdaiGateway {
       return;
     }
 
-    await this.core.handleSessionEnd(body.session_key);
+    const core = await this.getCoreForUser(body.user_id);
+    await core.handleSessionEnd(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
@@ -516,7 +583,7 @@ export class TdaiGateway {
     const ts =
       `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
       `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const outputDir = `${this.config.data.baseDir}/seed-${ts}`;
+    const outputDir = `${this.getDataDirForUser(body.user_id)}/seed-${ts}`;
 
     // Merge config overrides if provided
     // Start with the base memory config + inject llm config from gateway settings

@@ -139,18 +139,35 @@ class MemoryTencentdbSdkClient:
             body["user_id"] = user_id
         return self._post("/capture", body)
 
-    def search_memories(self, query: str, limit: int = 5, type_filter: str = "", scene: str = "") -> Dict[str, Any]:
+    def search_memories(
+        self,
+        query: str,
+        limit: int = 5,
+        type_filter: str = "",
+        scene: str = "",
+        user_id: str = "",
+    ) -> Dict[str, Any]:
         """Search L1 structured memories."""
         body: Dict[str, Any] = {"query": query, "limit": limit}
+        if user_id:
+            body["user_id"] = user_id
         if type_filter:
             body["type"] = type_filter
         if scene:
             body["scene"] = scene
         return self._post("/search/memories", body)
 
-    def search_conversations(self, query: str, limit: int = 5, session_key: str = "") -> Dict[str, Any]:
+    def search_conversations(
+        self,
+        query: str,
+        limit: int = 5,
+        session_key: str = "",
+        user_id: str = "",
+    ) -> Dict[str, Any]:
         """Search L0 raw conversations."""
         body: Dict[str, Any] = {"query": query, "limit": limit}
+        if user_id:
+            body["user_id"] = user_id
         if session_key:
             body["session_key"] = session_key
         return self._post("/search/conversations", body)
@@ -166,6 +183,7 @@ class MemoryTencentdbSdkClient:
         self,
         data: Any,
         session_key: str = "",
+        user_id: str = "",
         strict_round_role: bool = False,
         auto_fill_timestamps: bool = True,
         config_override: Optional[Dict[str, Any]] = None,
@@ -187,6 +205,8 @@ class MemoryTencentdbSdkClient:
         body: Dict[str, Any] = {"data": data}
         if session_key:
             body["session_key"] = session_key
+        if user_id:
+            body["user_id"] = user_id
         if strict_round_role:
             body["strict_round_role"] = True
         if not auto_fill_timestamps:

@@ -65,6 +65,7 @@ export interface CaptureResponse {
 
 export interface MemorySearchRequest {
   query: string;
+  user_id?: string;
   limit?: number;
   type?: string;
   scene?: string;
@@ -82,6 +83,7 @@ export interface MemorySearchResponse {
 
 export interface ConversationSearchRequest {
   query: string;
+  user_id?: string;
   limit?: number;
   session_key?: string;
 }
@@ -125,6 +127,8 @@ export interface SeedRequest {
   data: unknown;
   /** Fallback session key when input sessions lack one. */
   session_key?: string;
+  /** User scope for imported memories. */
+  user_id?: string;
   /** Require each round to have both user and assistant messages. */
   strict_round_role?: boolean;
   /** Auto-fill missing timestamps (default: true). */
