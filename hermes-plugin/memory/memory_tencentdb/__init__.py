@@ -186,14 +186,14 @@ def _discover_gateway_cmd() -> Optional[str]:
          ``~/tdai-memory-openclaw-plugin`` and
          ``~/.hermes/plugins/tdai-memory-openclaw-plugin``).
 
-    Returns a ready-to-``Popen`` command string wrapping a ``sh -c`` that
-    ``cd``-s into the plugin root before exec-ing ``pnpm exec tsx
-    src/gateway/server.ts``. The ``cd`` is required because ``tsx`` is
-    installed under ``<plugin-root>/node_modules`` and Node's ESM resolver
-    searches ``package.json`` from the cwd upward — if we launched ``tsx``
-    with the hermes-agent cwd, resolution would fail with
-    ``ERR_MODULE_NOT_FOUND``. Using ``sh -c`` keeps the supervisor's
-    ``shlex.split`` + ``Popen(argv)`` contract intact (no ``shell=True``).
+    Returns a ready-to-``Popen`` command string that ``cd``-s into the plugin
+    root before exec-ing the Gateway. The ``cd`` is required because ``tsx``
+    is installed under ``<plugin-root>/node_modules`` and Node's ESM resolver
+    searches ``package.json`` from the cwd upward — if we launched from the
+    hermes-agent cwd, resolution would fail with ``ERR_MODULE_NOT_FOUND``.
+    POSIX uses ``sh -c`` so the supervisor can keep its ``shlex.split`` +
+    ``Popen(argv)`` path. Windows returns an explicit ``cmd /d /s /c ...``
+    command and the supervisor starts it with ``shell=True``.
 
     Returns ``None`` if no ``server.ts`` candidate exists. The function never
     raises: supervisor-side validation will surface a friendly warning if the
@@ -231,6 +231,18 @@ def _discover_gateway_cmd() -> Optional[str]:
                     "(override with MEMORY_TENCENTDB_GATEWAY_CMD)",
                     candidate,
                 )
+                if os.name == "nt":
+                    # cmd.exe needs /d so autorun hooks do not mutate the
+                    # environment, /s for predictable quote stripping, and
+                    # /c so Hermes can supervise the process lifetime.
+                    # `node --import tsx/esm` mirrors the packaged Windows
+                    # bootstrap script and avoids relying on npx/pnpm.
+                    inner = (
+                        f'cd /d "{str(plugin_root)}" && '
+                        "node --import tsx/esm src\\gateway\\server.ts"
+                    )
+                    return f'cmd /d /s /c "{inner}"'
+
                 # shlex.quote guards against spaces / shell metachars in paths.
                 # The inner command mirrors start-memory-tencentdb-gateway.sh:
                 #   cd <plugin-root> && exec pnpm exec tsx src/gateway/server.ts
@@ -971,15 +983,19 @@ class MemoryTencentdbProvider(MemoryProvider):
             except Exception as e:
                 logger.debug("memory-tencentdb session end failed: %s", e)
 
-        # Note: do NOT shut down the supervisor/Gateway here — it may serve
-        # other sessions. The Gateway manages its own lifecycle.
-        # We *do* drop our reference to the supervisor so any in-flight
-        # _try_recover_gateway() call sees self._supervisor is None and
-        # bails out instead of resurrecting a released provider.
+        # Shut down only the Gateway process this supervisor started itself.
+        # External Gateways are safe: GatewaySupervisor.shutdown() is a no-op
+        # when it never spawned a child (self._process is None).
+        supervisor = self._supervisor
         self._client = None
         self._gateway_available = False
         self._initialized = False
         self._supervisor = None
+        if supervisor is not None:
+            try:
+                supervisor.shutdown()
+            except Exception as e:
+                logger.warning("memory-tencentdb supervisor shutdown failed: %s", e)
 
     # -- Tools ----------------------------------------------------------------
 

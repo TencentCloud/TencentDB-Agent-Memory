@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import subprocess
 import sys
 import threading
 import time
@@ -190,9 +191,19 @@ def provider_with_fake_supervisor(monkeypatch, fast_watchdog):
 class _FakePopen:
     def __init__(self, returncode: Optional[int] = None) -> None:
         self._returncode = returncode
+        self.pid = 12345
+        self.signals = []
+        self.wait_timeouts = []
 
     def poll(self):
         return self._returncode
+
+    def wait(self, timeout=None):
+        self.wait_timeouts.append(timeout)
+        return self._returncode or 0
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
 
     @property
     def returncode(self):
@@ -229,6 +240,25 @@ def test_reap_dead_process_keeps_alive_handle():
     sup._process = alive
     sup._reap_dead_process()
     assert sup._process is alive
+
+
+def test_windows_shutdown_terminates_process_tree(monkeypatch):
+    sup = supervisor_module.GatewaySupervisor(gateway_cmd="")
+    proc = _FakePopen(returncode=None)
+    sup._process = proc
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(supervisor_module.os, "name", "nt")
+    monkeypatch.setattr(supervisor_module.subprocess, "run", fake_run)
+
+    sup.shutdown()
+
+    assert ["taskkill", "/T", "/PID", str(proc.pid)] in calls
+    assert sup._process is None
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +457,17 @@ def test_shutdown_drops_supervisor_blocks_recovery(provider_with_fake_supervisor
     before = fake.ensure_running_calls
     assert provider._try_recover_gateway() is False
     assert fake.ensure_running_calls == before
+
+
+def test_shutdown_stops_supervisor_owned_gateway(provider_with_fake_supervisor):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+
+    provider.shutdown()
+
+    assert fake.shutdown_calls == 1
+    assert fake.alive is False
+    assert fake.healthy is False
 
 
 def test_shutdown_is_idempotent(provider_with_fake_supervisor):

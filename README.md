@@ -351,6 +351,36 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+### 3. Hermes (Windows native)
+
+For a Windows-native Hermes install, run the bundled batch script from the
+repository root in Command Prompt or PowerShell:
+
+```powershell
+$env:TDAI_LLM_API_KEY="your-api-key"
+$env:TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+$env:TDAI_LLM_MODEL="gpt-4o"
+.\scripts\setup-hermes-memory-tencentdb.bat
+```
+
+The script checks `node`, `npm`, Python, and Hermes, requires Node.js
+`>=22.16.0`, runs `npm install --omit=dev` when Gateway dependencies are
+missing, creates `%USERPROFILE%\.memory-tencentdb\memory-tdai`, copies the
+provider to `%USERPROFILE%\.hermes\plugins\memory_tencentdb`, writes Gateway
+environment variables to `%USERPROFILE%\.hermes\.env`, and starts the Gateway
+before polling:
+
+```powershell
+curl.exe http://127.0.0.1:8420/health
+```
+
+If `%USERPROFILE%\.hermes\config.yaml` already exists, make sure it contains:
+
+```yaml
+memory:
+  provider: memory_tencentdb
+```
+
 
 ## 🔒 Gateway Security (optional)
 

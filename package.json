@@ -29,7 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "files": [
     "dist/",
@@ -40,6 +40,8 @@
     "scripts/read-local-memory/dist/",
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
+    "scripts/setup-hermes-memory-tencentdb.bat",
+    "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",

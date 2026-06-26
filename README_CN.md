@@ -353,8 +353,37 @@ curl http://127.0.0.1:8420/health
 
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
-
 ---
+
+### 3. Hermes（Windows 原生安装）
+
+Windows 原生 Hermes 环境下，在仓库根目录用 Command Prompt 或 PowerShell
+运行内置批处理脚本：
+
+```powershell
+$env:TDAI_LLM_API_KEY="your-api-key"
+$env:TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+$env:TDAI_LLM_MODEL="gpt-4o"
+.\scripts\setup-hermes-memory-tencentdb.bat
+```
+
+脚本会检查 `node`、`npm`、Python 和 Hermes，要求 Node.js `>=22.16.0`；
+当 Gateway 依赖缺失时执行 `npm install --omit=dev`，创建
+`%USERPROFILE%\.memory-tencentdb\memory-tdai`，复制插件到
+`%USERPROFILE%\.hermes\plugins\memory_tencentdb`，把 Gateway 环境变量写入
+`%USERPROFILE%\.hermes\.env`，随后启动 Gateway 并轮询：
+
+```powershell
+curl.exe http://127.0.0.1:8420/health
+```
+
+如果 `%USERPROFILE%\.hermes\config.yaml` 已存在，请确认包含：
+
+```yaml
+memory:
+  provider: memory_tencentdb
+```
+
 
 ## 🔒 Gateway 安全配置（可选）
 
