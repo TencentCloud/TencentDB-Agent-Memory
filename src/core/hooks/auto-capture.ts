@@ -165,6 +165,9 @@ export async function performAutoCapture(params: {
   );
 
   const supportsBgEmbed = vectorStore?.supportsDeferredEmbedding === true;
+  const captureEmbeddingCallOptions = {
+    timeoutMs: cfg.embedding.captureTimeoutMs ?? cfg.embedding.timeoutMs,
+  };
 
   if (filteredMessages.length > 0 && vectorStore) {
     const now = new Date().toISOString();
@@ -199,7 +202,7 @@ export async function performAutoCapture(params: {
           } else {
             const tEmbedStart = performance.now();
             try {
-              embedding = await embeddingService.embed(msg.content);
+              embedding = await embeddingService.embed(msg.content, captureEmbeddingCallOptions);
               l0EmbedTotalMs += performance.now() - tEmbedStart;
               logger?.debug?.(
                 `${TAG} [L0-vec-index] Embedding OK: dims=${embedding.length}, ` +
@@ -243,6 +246,7 @@ export async function performAutoCapture(params: {
       const bgEmbeddingService = embeddingService;
       const bgSnapshot = [...bgRecords];
       const bgLogger = logger;
+      const bgEmbeddingCallOptions = captureEmbeddingCallOptions;
 
       // Do NOT await — runs in background after response is sent.
       //
@@ -255,7 +259,7 @@ export async function performAutoCapture(params: {
         const tBgStart = performance.now();
         try {
           const texts = bgSnapshot.map((r) => r.content);
-          const embeddings = await bgEmbeddingService.embedBatch(texts);
+          const embeddings = await bgEmbeddingService.embedBatch(texts, bgEmbeddingCallOptions);
 
           let bgUpdated = 0;
           for (let i = 0; i < bgSnapshot.length; i++) {
