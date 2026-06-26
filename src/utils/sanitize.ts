@@ -136,23 +136,34 @@ export function shouldExtractL1(text: string): boolean {
   // First apply the same structural filters as L0
   if (!shouldCaptureL0(text)) return false;
 
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const charCount = Array.from(normalized).length;
+
   // ── Length filters ──
-  // const isCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
-  // if (isCJK && text.length < 2) return false;
-  // if (!isCJK && text.length < 2) return false;
-  // if (text.length > 5000) return false;
+  const isCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(normalized);
+  if (isCJK && charCount < 4) return false;
+  if (!isCJK && charCount < 10) return false;
+  if (charCount > 5000) return false;
 
   // ── Content-quality filters ──
+  if (isConversationalFiller(normalized)) return false;
+
   // Match strings composed entirely of non-word, non-space, non-CJK characters (1–5 chars).
-  if (/^[^\w\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,5}$/.test(text)) return false;
-  if (/^[?？]+$/.test(text)) return false;
+  if (/^[^\w\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,5}$/.test(normalized)) return false;
+  if (/^[?？]+$/.test(normalized)) return false;
 
   // ── Security filters ──
   // Reject prompt-injection payloads — prevent malicious content from being
   // persisted into structured memory and re-injected on future recalls.
-  if (looksLikePromptInjection(text)) return false;
+  if (looksLikePromptInjection(normalized)) return false;
 
   return true;
+}
+
+function isConversationalFiller(text: string): boolean {
+  const compact = text.toLowerCase().replace(/[，,。.!！?？~～\s]+/g, "");
+  if (!compact) return true;
+  return /^(?:好的?|好呀|谢谢|多谢|收到|明白|了解|嗯+|哦+|ok|okay|thanks|thankyou|hi|hello)+$/i.test(compact);
 }
 
 /**
