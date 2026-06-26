@@ -67,6 +67,7 @@ import { SessionRegistry } from "./session-registry.js";
 import { reclaimOffloadData } from "./reclaimer.js";
 import { buildL3TriggerReport, reportL3Trigger } from "./state-reporter.js";
 import { resolveUserId, getUserIdSource } from "./user-id.js";
+import { parseModelRef } from "../utils/model-ref.js";
 
 // ─── Module-level state ──────────────────────────────────────────────────────
 // OpenClaw calls registerOffload() multiple times during lifecycle.
@@ -362,10 +363,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       }
     }
 
-    if (resolvedModelRef) {
-      const modelParts = resolvedModelRef.split("/", 2);
-      const providerKey = modelParts[0];
-      const modelId = modelParts[1] ?? resolvedModelRef;
+    const parsedModelRef = parseModelRef(resolvedModelRef);
+    if (parsedModelRef) {
+      const providerKey = parsedModelRef.provider;
+      const modelId = parsedModelRef.model;
       const models = (api.config as any)?.models;
       const providerCfg = models?.providers?.[providerKey];
       const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
@@ -385,6 +386,11 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           `L1/L1.5/L2 disabled.`,
         );
       }
+    } else if (resolvedModelRef) {
+      logger.error(
+        `[context-offload] Local LLM mode failed: invalid model ref "${resolvedModelRef}". Expected "provider/model". ` +
+        `L1/L1.5/L2 disabled.`,
+      );
     } else {
       logger.warn("[context-offload] No model resolved (offload.model not set, agents.defaults.model not found). L1/L1.5/L2 disabled.");
     }
@@ -852,12 +858,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const models = config?.models;
       // 1. If we know the model, find its exact contextWindow from providers
       if (defaultModel && models) {
-        const [providerKey, modelId] = defaultModel.split("/", 2);
-        const provider = models.providers?.[providerKey];
-        if (provider?.models) {
-          const modelList = Array.isArray(provider.models) ? provider.models : [];
-          for (const m of modelList) {
-            if (m.id === modelId && typeof m.contextWindow === "number") return m.contextWindow;
+        const parsedModelRef = parseModelRef(defaultModel);
+        if (parsedModelRef) {
+          const provider = models.providers?.[parsedModelRef.provider];
+          if (provider?.models) {
+            const modelList = Array.isArray(provider.models) ? provider.models : [];
+            for (const m of modelList) {
+              if (m.id === parsedModelRef.model && typeof m.contextWindow === "number") return m.contextWindow;
+            }
           }
         }
       }
