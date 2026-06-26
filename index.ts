@@ -155,6 +155,26 @@ export default function register(api: OpenClawPluginApi) {
   // ─── Full / discovery mode: complete runtime initialization ───
   pluginStartTimestamp = Date.now();
   setPreferredEmbeddedAgentRuntime(api.runtime.agent);
+
+  // Declare ourselves as the host's active memory plugin so `openclaw doctor`
+  // and the slot loader can see this plugin occupies the memory slot. Paired
+  // with `"kind": "memory"` in openclaw.plugin.json — the host rejects the
+  // call when manifest kind does not include "memory". Feature-detected for
+  // OpenClaw hosts older than the version that introduced this API.
+  // See issue #119.
+  const registerMemoryCapability = (api as unknown as {
+    registerMemoryCapability?: (capability: Record<string, unknown>) => void;
+  }).registerMemoryCapability;
+  if (typeof registerMemoryCapability === "function") {
+    try {
+      registerMemoryCapability.call(api, {});
+      api.logger.debug?.(`${TAG} Registered memory capability (slot declared)`);
+    } catch (err) {
+      api.logger.warn(
+        `${TAG} registerMemoryCapability failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   // Reset reporter singleton so config changes take effect on hot-reload.
   resetReporter();
   const _require = createRequire(import.meta.url);
