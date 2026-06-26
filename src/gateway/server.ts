@@ -64,11 +64,72 @@ function createConsoleLogger(): Logger {
 // Request body parser
 // ============================
 
-async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+/** Default cap on request body size (bytes). Large enough for /seed payloads
+ *  with hundreds of historical sessions; small enough that a single malicious
+ *  /capture cannot OOM the daemon. Override at runtime via the
+ *  TDAI_GATEWAY_MAX_BODY_BYTES env var. */
+const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024; // 8 MiB
+
+function resolveMaxBodyBytes(): number {
+  const raw = process.env.TDAI_GATEWAY_MAX_BODY_BYTES;
+  if (!raw) return DEFAULT_MAX_BODY_BYTES;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BODY_BYTES;
+}
+
+/** Thrown when an incoming request body exceeds the size cap. The dispatcher
+ *  catches this and replies with HTTP 413, NOT 500. */
+class PayloadTooLargeError extends Error {
+  constructor(public readonly limitBytes: number) {
+    super(`Request body exceeds ${limitBytes} bytes`);
+    this.name = "PayloadTooLargeError";
+  }
+}
+
+async function parseJsonBody<T>(
+  req: http.IncomingMessage,
+  maxBytes: number = resolveMaxBodyBytes(),
+): Promise<T> {
   return new Promise((resolve, reject) => {
+    // Fast path: trust a present Content-Length header to fail before we
+    // buffer anything. A lying client (CL smaller than actual body) is still
+    // caught by the running-total check below.
+    const cl = req.headers["content-length"];
+    if (cl !== undefined) {
+      const declared = Number.parseInt(cl, 10);
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        // Pause the request stream instead of destroying it: the
+        // dispatcher needs the response side of this socket to be writable
+        // to send the 413. The handler returns immediately after writing
+        // the response, after which Node will close the keep-alive socket
+        // and the lying client's residual upload bytes are discarded.
+        req.pause();
+        reject(new PayloadTooLargeError(maxBytes));
+        return;
+      }
+    }
+
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let received = 0;
+    let rejected = false;
+    req.on("data", (chunk: Buffer) => {
+      if (rejected) return;
+      received += chunk.length;
+      if (received > maxBytes) {
+        rejected = true;
+        // Pause the request stream instead of destroying it: the
+        // dispatcher needs the response side of this socket to be writable
+        // to send the 413. The handler returns immediately after writing
+        // the response, after which Node will close the keep-alive socket
+        // and the lying client's residual upload bytes are discarded.
+        req.pause();
+        reject(new PayloadTooLargeError(maxBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (rejected) return;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(JSON.parse(body) as T);
@@ -276,6 +337,11 @@ export class TdaiGateway {
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
     } catch (err) {
+      if (err instanceof PayloadTooLargeError) {
+        this.logger.warn(`Request body too large [${method} ${pathname}]: ${err.message}`);
+        sendError(res, 413, err.message);
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
       sendError(res, 500, msg);
