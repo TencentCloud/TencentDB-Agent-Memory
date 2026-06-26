@@ -241,13 +241,14 @@ export async function extractL1Memories(params: {
         logger,
         vectorStore: options.vectorStore,
         embeddingService: options.embeddingService,
+        embeddingTimeoutMs: options.embeddingTimeoutMs,
       });
     } catch (err) {
       logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
-      storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService);
+      storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService, options.embeddingTimeoutMs);
     }
   } else {
-    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService);
+    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService, options.embeddingTimeoutMs);
   }
 
   logger?.info(`${TAG} Extraction complete: extracted=${extracted.length}, stored=${storedRecords.length}`);
@@ -350,7 +351,7 @@ async function callLlmExtraction(params: {
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+export function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
   try {
     // Strip markdown code block wrappers if present
     let cleaned = raw.trim();
@@ -358,9 +359,8 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
     }
 
-    // Try to extract JSON array
-    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
+    const scenePayload = parseFirstScenePayload(cleaned);
+    if (!scenePayload) {
       logger?.warn?.(`${TAG} No JSON array found in extraction response`);
       // [l1-debug] NO_JSON — dump the full raw so we can see what the LLM actually said
       const rawPreview = raw.slice(0, 2048);
@@ -370,17 +370,8 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       return [];
     }
 
-    // Sanitize control characters inside JSON string literals that LLM may produce
-    const sanitized = sanitizeJsonForParse(arrayMatch[0]);
-    const parsed = JSON.parse(sanitized) as unknown[];
-
-    if (!Array.isArray(parsed)) {
-      logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
-    }
-
     const scenes: SceneSegment[] = [];
-    for (const item of parsed) {
+    for (const item of scenePayload) {
       if (!item || typeof item !== "object") continue;
       const s = item as Record<string, unknown>;
 
@@ -408,6 +399,84 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
   }
 }
 
+function parseFirstScenePayload(text: string): unknown[] | null {
+  for (let start = 0; start < text.length; start++) {
+    const first = text[start];
+    if (first !== "[" && first !== "{") continue;
+
+    const candidate = readBalancedJsonValue(text, start);
+    if (!candidate) continue;
+
+    try {
+      const parsed = JSON.parse(sanitizeJsonForParse(candidate));
+      const scenePayload = normalizeScenePayload(parsed);
+      if (scenePayload) {
+        return scenePayload;
+      }
+    } catch {
+      // Keep scanning: model output may contain non-JSON bracketed text
+      // before the actual payload, e.g. "[姓名]）在 [时间] ...".
+    }
+  }
+
+  return null;
+}
+
+function readBalancedJsonValue(text: string, start: number): string | null {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "[" || ch === "{") {
+      stack.push(ch === "[" ? "]" : "}");
+      continue;
+    }
+
+    if (ch === "]" || ch === "}") {
+      if (stack.length === 0 || stack[stack.length - 1] !== ch) {
+        return null;
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeScenePayload(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) return parsed;
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const obj = parsed as Record<string, unknown>;
+  for (const key of ["scenes", "scene_segments", "segments", "results", "memories"]) {
+    if (Array.isArray(obj[key])) return obj[key] as unknown[];
+  }
+
+  return null;
+}
+
 // ============================
 // Write helpers
 // ============================
@@ -424,8 +493,9 @@ async function applyDecisions(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  embeddingTimeoutMs?: number;
 }): Promise<MemoryRecord[]> {
-  const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService } = params;
+  const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService, embeddingTimeoutMs } = params;
   const storedRecords: MemoryRecord[] = [];
 
   // Build a map from record_id → decision
@@ -451,6 +521,7 @@ async function applyDecisions(params: {
         logger,
         vectorStore,
         embeddingService,
+        embeddingTimeoutMs,
       });
 
       if (record) {
@@ -477,6 +548,7 @@ async function storeAllDirectly(
   logger?: Logger,
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  embeddingTimeoutMs?: number,
 ): Promise<MemoryRecord[]> {
   const storedRecords: MemoryRecord[] = [];
 
@@ -495,6 +567,7 @@ async function storeAllDirectly(
         logger,
         vectorStore,
         embeddingService,
+        embeddingTimeoutMs,
       });
       if (record) {
         storedRecords.push(record);
