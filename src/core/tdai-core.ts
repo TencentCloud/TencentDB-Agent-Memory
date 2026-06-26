@@ -36,6 +36,7 @@ import { performAutoRecall } from "./hooks/auto-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
+import { executeMemoryWrite } from "./tools/memory-write.js";
 import {
   initDataDirectories,
   initStores,
@@ -323,6 +324,32 @@ export class TdaiCore {
       text: formatConversationSearchResponse(result),
       total: result.total,
     };
+  }
+
+  /**
+   * Write an explicit L1 memory.
+   * Maps to: `tdai_memory_write` tool.
+   */
+  async writeMemory(params: {
+    content: string;
+    type?: string;
+    sceneName?: string;
+    priority?: number;
+    sessionKey?: string;
+    sessionId?: string;
+  }): Promise<Awaited<ReturnType<typeof executeMemoryWrite>>> {
+    await this.storeReady?.catch(() => {});
+
+    const runtime = this.hostAdapter.getRuntimeContext();
+    return executeMemoryWrite({
+      ...params,
+      baseDir: this.dataDir,
+      sessionKey: params.sessionKey ?? runtime.sessionKey,
+      sessionId: params.sessionId ?? runtime.sessionId,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+      logger: this.logger,
+    });
   }
 
   /**

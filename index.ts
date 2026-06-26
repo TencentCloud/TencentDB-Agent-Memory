@@ -434,6 +434,113 @@ export default function register(api: OpenClawPluginApi) {
     { name: "tdai_memory_search" },
   );
 
+  // tdai_memory_write — Agent-callable explicit L1 memory write tool
+  api.registerTool(
+    {
+      name: "tdai_memory_write",
+      label: "Memory Write",
+      description:
+        "Write a concise, explicit long-term memory supplied by the user or agent. " +
+        "Use only when the user asks you to remember something, or when you need to store a verified note from a subagent. " +
+        "This bypasses automatic L1 extraction and conflict detection, so do not use it for guesses or inferred preferences.",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "string",
+            description: "The exact memory content to store",
+          },
+          type: {
+            type: "string",
+            enum: ["persona", "episodic", "instruction"],
+            description: "Memory type: persona (identity/preferences), episodic (events/activities), instruction (user rules/commands). Defaults to episodic.",
+          },
+          scene_name: {
+            type: "string",
+            description: "Optional scene name for this memory. Defaults to manual.",
+          },
+          priority: {
+            type: "number",
+            description: "Optional importance score from 0 to 100. Defaults by type.",
+          },
+          session_key: {
+            type: "string",
+            description: "Optional session key to scope the memory. Defaults to manual-tool-write when unavailable.",
+          },
+          session_id: {
+            type: "string",
+            description: "Optional conversation session ID for traceability.",
+          },
+        },
+        required: ["content"],
+      },
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const startMs = Date.now();
+        const content = String(params.content ?? "");
+        const type = typeof params.type === "string" ? params.type : undefined;
+        const sceneName = typeof params.scene_name === "string" ? params.scene_name : undefined;
+        const priority = typeof params.priority === "number" ? params.priority : undefined;
+        const sessionKey = typeof params.session_key === "string" ? params.session_key : undefined;
+        const sessionId = typeof params.session_id === "string" ? params.session_id : undefined;
+
+        api.logger.debug?.(
+          `${TAG} [tool] tdai_memory_write called: ` +
+          `contentLen=${content.length}, type=${type ?? "(default)"}, ` +
+          `scene=${sceneName ?? "(default)"}, sessionKey=${sessionKey ?? "(default)"}`,
+        );
+
+        try {
+          const result = await core.writeMemory({
+            content,
+            type,
+            sceneName,
+            priority,
+            sessionKey,
+            sessionId,
+          });
+
+          const elapsedMs = Date.now() - startMs;
+          api.logger.debug?.(
+            `${TAG} [tool] tdai_memory_write completed (${elapsedMs}ms): ` +
+            `id=${result.record.id}, type=${result.record.type}, sessionKey=${result.record.sessionKey}`,
+          );
+          report("tool_call", {
+            tool: "tdai_memory_write",
+            type: result.record.type,
+            sceneName: result.record.scene_name,
+            sessionKey: result.record.sessionKey,
+            durationMs: elapsedMs,
+            success: true,
+          });
+          return {
+            content: [{ type: "text" as const, text: result.text }],
+            details: {
+              id: result.record.id,
+              type: result.record.type,
+              priority: result.record.priority,
+              sessionKey: result.record.sessionKey,
+            },
+          };
+        } catch (err) {
+          const elapsedMs = Date.now() - startMs;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          api.logger.error(`${TAG} [tool] tdai_memory_write failed (${elapsedMs}ms): ${errMsg}`);
+          report("tool_call", {
+            tool: "tdai_memory_write",
+            durationMs: elapsedMs,
+            success: false,
+            error: errMsg,
+          });
+          return {
+            content: [{ type: "text" as const, text: `Memory write failed: ${errMsg}` }],
+            details: { error: errMsg },
+          };
+        }
+      },
+    },
+    { name: "tdai_memory_write" },
+  );
+
   // tdai_conversation_search — Agent-callable L0 conversation search tool
   // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
   api.registerTool(
@@ -516,7 +623,7 @@ export default function register(api: OpenClawPluginApi) {
     { name: "tdai_conversation_search" },
   );
   } else {
-    api.logger.debug?.(`${TAG} Memory tools (tdai_memory_search, tdai_conversation_search) not registered — memory features disabled`);
+    api.logger.debug?.(`${TAG} Memory tools (tdai_memory_search, tdai_memory_write, tdai_conversation_search) not registered — memory features disabled`);
   }
 
   // ============================
