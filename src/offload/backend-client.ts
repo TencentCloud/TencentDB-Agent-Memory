@@ -106,8 +106,9 @@ export interface StoreStateResponse {
 export class BackendClient {
   private baseUrl: string;
   private apiKey: string | undefined;
-  /** Hardcoded timeout for all backend calls (L1/L1.5/L2/L4) */
-  private static readonly TIMEOUT_MS = 120_000;
+  /** Default timeout for backend calls when the caller does not provide one. */
+  private static readonly DEFAULT_TIMEOUT_MS = 120_000;
+  private readonly timeoutMs: number;
   private logger: PluginLogger;
   private sessionKeyFn: () => string | null;
   /** Resolves the value of the `X-User-Id` header sent on every call. */
@@ -119,13 +120,16 @@ export class BackendClient {
     baseUrl: string,
     logger: PluginLogger,
     apiKey?: string,
-    _defaultTimeoutMs?: number, // kept for backward compat, ignored
+    defaultTimeoutMs?: number,
     sessionKeyFn?: () => string | null,
     userIdFn?: () => string | null,
     taskIdFn?: () => string | null,
   ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.apiKey = apiKey;
+    this.timeoutMs = typeof defaultTimeoutMs === "number" && Number.isFinite(defaultTimeoutMs) && defaultTimeoutMs > 0
+      ? defaultTimeoutMs
+      : BackendClient.DEFAULT_TIMEOUT_MS;
     this.logger = logger;
     this.sessionKeyFn = sessionKeyFn ?? (() => null);
     this.userIdFn = userIdFn ?? (() => null);
@@ -137,7 +141,7 @@ export class BackendClient {
     const pairNames = req.toolPairs.map((p) => `${p.toolName}(${p.toolCallId})`).join(", ");
     this.logger.debug?.(`[context-offload] L1 >>> summarize ${req.toolPairs.length} pairs: [${pairNames}]`);
     const startMs = Date.now();
-    const resp = await this.post<L1Response>("/offload/v1/l1/summarize", req, BackendClient.TIMEOUT_MS);
+    const resp = await this.post<L1Response>("/offload/v1/l1/summarize", req, this.timeoutMs);
     const durationMs = Date.now() - startMs;
     const entryCount = resp.entries?.length ?? 0;
     const scores = resp.entries?.map((e) => `${e.tool_call_id}:score=${e.score}`).join(", ") ?? "";
@@ -165,7 +169,7 @@ export class BackendClient {
       `[context-offload] L1.5 >>> judge: currentMmd=${req.currentMmd?.filename ?? "null"}, availableMmds=${req.availableMmdMetas.length}, recentMessages=${req.recentMessages.length} chars`,
     );
     const startMs = Date.now();
-    const resp = await this.post<L15Response>("/offload/v1/l15/judge", req, BackendClient.TIMEOUT_MS);
+    const resp = await this.post<L15Response>("/offload/v1/l15/judge", req, this.timeoutMs);
     const durationMs = Date.now() - startMs;
     this.logger.debug?.(
       `[context-offload] L1.5 <<< completed=${resp.taskCompleted}, continuation=${resp.isContinuation}, continuationFile=${resp.continuationMmdFile ?? "null"}, newLabel=${resp.newTaskLabel ?? "null"}, longTask=${resp.isLongTask}`,
@@ -193,7 +197,7 @@ export class BackendClient {
       `[context-offload] L2 >>> generate: task=${req.taskLabel}, prefix=${req.mmdPrefix}, entries=${req.newEntries.length} [${entryIds}], existingMmd=${req.existingMmd ? `${req.mmdCharCount} chars` : "null (new)"}`,
     );
     const startMs = Date.now();
-    const resp = await this.post<L2Response>("/offload/v1/l2/generate", req, BackendClient.TIMEOUT_MS);
+    const resp = await this.post<L2Response>("/offload/v1/l2/generate", req, this.timeoutMs);
     const durationMs = Date.now() - startMs;
     const mappingCount = Object.keys(resp.nodeMapping ?? {}).length;
     const mappingStr = Object.entries(resp.nodeMapping ?? {}).map(([k, v]) => `${k}->${v}`).join(", ");
@@ -222,7 +226,7 @@ export class BackendClient {
       `[context-offload] L4 >>> generate: mmd=${req.mmdFilename}, entries=${req.offloadEntries.length}, skillFocus=${req.skillFocus ?? "null"}`,
     );
     const startMs = Date.now();
-    const resp = await this.post<L4Response>("/offload/v1/l4/generate", req, BackendClient.TIMEOUT_MS);
+    const resp = await this.post<L4Response>("/offload/v1/l4/generate", req, this.timeoutMs);
     const durationMs = Date.now() - startMs;
     this.logger.debug?.(
       `[context-offload] L4 <<< skill="${resp.skillName}", content=${resp.skillContent?.length ?? 0} chars`,
@@ -246,14 +250,13 @@ export class BackendClient {
   /**
    * Upload an arbitrary state payload to the backend `/offload/v1/store` endpoint.
    * Fire-and-forget style — the caller is expected to `.catch(...)` rejections.
-   * Uses a short timeout so reporting never blocks hook execution meaningfully.
+   * Uses the configured backend timeout so large report payloads can follow
+   * the same deployment-specific timeout budget as other backend calls.
    */
   async storeState(payload: StoreStatePayload): Promise<StoreStateResponse> {
-    // Short timeout — reporting must never stall the plugin
-    const timeoutMs = 10_000;
     const startMs = Date.now();
     try {
-      const resp = await this.post<StoreStateResponse>("/offload/v1/store", payload, timeoutMs);
+      const resp = await this.post<StoreStateResponse>("/offload/v1/store", payload, this.timeoutMs);
       const durationMs = Date.now() - startMs;
       this.logger.debug?.(
         `[context-offload] store <<< insertedId=${resp.insertedId ?? "?"} (${durationMs}ms)`,
