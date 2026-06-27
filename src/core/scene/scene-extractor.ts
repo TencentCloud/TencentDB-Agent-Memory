@@ -471,7 +471,12 @@ export class SceneExtractor {
 
     const updated = nav ? `${stripped}\n\n${nav}\n` : `${stripped}\n`;
 
-    // persona.md is at dataDir root, no subdir needed
+    // persona.md is at dataDir root, no subdir needed.
+    // KNOWN ISSUE — lost-update race: this L2 nav write and the L3 persona regen
+    // run on different SerialQueues and both read-modify-write persona.md.
+    // atomicWriteFile avoids torn reads, NOT lost updates — see the detailed
+    // INVARIANT note in persona-generator.ts (step 11). Single-writer fix tracked
+    // separately.
     await atomicWriteFile(personaPath, updated);
   }
 }

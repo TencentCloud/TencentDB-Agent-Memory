@@ -181,6 +181,19 @@ export class PersonaGenerator {
     }
 
     // 11. Append fresh scene navigation and write final content
+    //
+    // KNOWN ISSUE — lost-update race (tracked for a dedicated fix): persona.md is
+    // written by multiple stages on DIFFERENT SerialQueues — this L3 generator,
+    // the L2 scene-extractor's updateSceneNavigation, and (on the tcvdb path)
+    // profile-sync. atomicWriteFile() guards against a TORN READ but NOT a lost
+    // update: an L2 nav write interleaving with this L3 regen can clobber the
+    // freshly generated body, or vice-versa. It is not fixable with a short lock
+    // *here* because the LLM (step 8 above) writes persona.md directly during a
+    // ~180s run, so a correct critical section would span that whole run. The
+    // proper fix routes the LLM to a staging path and finalizes persona.md under
+    // a per-account lock shared by all writers. Mitigations today: the window is
+    // small and self-heals on the next L2/L3 pass, and tcvdb+multiTenant (which
+    // adds the profile-sync writer) is rejected at config load.
     const nav = generateSceneNavigation(index);
     const finalContent = nav ? `${personaText}\n\n${nav}\n` : personaText;
     await atomicWriteFile(personaPath, finalContent);
