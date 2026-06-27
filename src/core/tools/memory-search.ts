@@ -12,7 +12,7 @@
 
 import type { IMemoryStore, L1SearchResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
-import type { EmbeddingService } from "../store/embedding.js";
+import type { EmbeddingCallOptions, EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 
 // ============================
@@ -86,6 +86,7 @@ export async function executeMemorySearch(params: {
   scene?: string;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  embeddingTimeoutMs?: number;
   logger?: Logger;
 }): Promise<MemorySearchResult> {
   const {
@@ -95,6 +96,7 @@ export async function executeMemorySearch(params: {
     scene: sceneFilter,
     vectorStore,
     embeddingService,
+    embeddingTimeoutMs,
     logger,
   } = params;
 
@@ -134,6 +136,8 @@ export async function executeMemorySearch(params: {
 
   // ── Over-retrieve for later filtering and RRF merging ──
   const candidateK = limit * 3;
+  const embeddingCallOpts: EmbeddingCallOptions | undefined =
+    typeof embeddingTimeoutMs === "number" ? { timeoutMs: embeddingTimeoutMs } : undefined;
 
   // ── Run available search strategies in parallel ──
   const [ftsItems, vecItems] = await Promise.all([
@@ -172,7 +176,9 @@ export async function executeMemorySearch(params: {
       if (!hasEmbedding) return [];
       try {
         logger?.debug?.(`${TAG} [hybrid-vec] Generating query embedding...`);
-        const queryEmbedding = await embeddingService!.embed(query);
+        const queryEmbedding = embeddingCallOpts
+          ? await embeddingService!.embed(query, embeddingCallOpts)
+          : await embeddingService!.embed(query);
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
