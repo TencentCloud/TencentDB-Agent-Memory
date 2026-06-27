@@ -95,6 +95,30 @@ node --env-file=.env --import tsx src/gateway/server.ts
 > DashScope/Bailian (`text-embedding-v3`, 1024-dim) example, and set
 > `memory.recall.strategy: hybrid` for vector + BM25 fusion.
 
+### Storage backend & embedding — the supported stack
+
+These are two **independent** layers; this deployment fixes both:
+
+| Layer | Job | What we use |
+|---|---|---|
+| **Embedding** | text → vector (semantic encoding) | **Alibaba DashScope** `text-embedding-v3` (1024-dim), via `memory.embedding.*` |
+| **Vector store** | store vectors + nearest-neighbour & keyword search | **local SQLite** (`sqlite-vec` for vectors + FTS5/BM25 for keyword), one DB file per account |
+
+This is the **only supported multi-tenant stack.** The code also contains a
+**Tencent Cloud VectorDB (`tcvdb`) backend**, but it is a fully separate design —
+tcvdb does its *own* server-side embedding (it would replace DashScope, not work
+alongside it) and keeps all data in shared cloud collections. Because shared
+collections defeat the per-account physical isolation this Gateway relies on,
+**`multiTenant=true` + `storeBackend=tcvdb` is rejected at startup by design.**
+
+> If you only ever run DashScope + SQLite (the default — `storeBackend` is
+> `sqlite` unless you set it), the tcvdb path is never exercised and the
+> "tcvdb breaks multi-tenant isolation" issue **does not apply to you**. It is a
+> guard against an unsupported combination, not a bug to fix in this deployment.
+> Switching to tcvdb would mean re-embedding all history with Tencent's model and
+> doing dedicated isolation work first — only worth it if local SQLite outgrows
+> your scale/ops needs.
+
 Minimal multi-tenant `.env`:
 
 ```bash
