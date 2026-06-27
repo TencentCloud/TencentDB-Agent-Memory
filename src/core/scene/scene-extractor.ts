@@ -19,6 +19,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { atomicWriteFile } from "../../utils/atomic-write.js";
+import { fileWriteMutex } from "../../utils/keyed-mutex.js";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
@@ -445,39 +446,39 @@ export class SceneExtractor {
    */
   private async updateSceneNavigation(): Promise<void> {
     const personaPath = path.join(this.dataDir, "persona.md");
-    const index = await readSceneIndex(this.dataDir);
-    const nav = generateSceneNavigation(index);
+    // The whole read-modify-write runs under the shared per-path mutex so this
+    // L2 nav write and the L3 persona regen (which take the same lock, keyed by
+    // persona.md's absolute path) cannot lost-update each other — they run on
+    // different SerialQueues and would otherwise interleave. atomicWriteFile
+    // alone only prevents a torn read. See fileWriteMutex / persona-generator.ts.
+    await fileWriteMutex.run(personaPath, async () => {
+      const index = await readSceneIndex(this.dataDir);
+      const nav = generateSceneNavigation(index);
 
-    let existing = "";
-    try {
-      existing = await fs.readFile(personaPath, "utf-8");
-    } catch {
-      // No persona file yet — PersonaGenerator will create it with navigation.
-      // Don't write a navigation-only file.
-      this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: no persona file yet, waiting for PersonaGenerator`);
-      return;
-    }
+      let existing = "";
+      try {
+        existing = await fs.readFile(personaPath, "utf-8");
+      } catch {
+        // No persona file yet — PersonaGenerator will create it with navigation.
+        // Don't write a navigation-only file.
+        this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: no persona file yet, waiting for PersonaGenerator`);
+        return;
+      }
 
-    if (!existing.trim() && !nav) return;
+      if (!existing.trim() && !nav) return;
 
-    const stripped = stripSceneNavigation(existing).trimEnd();
+      const stripped = stripSceneNavigation(existing).trimEnd();
 
-    // If the persona body is empty (only navigation existed), don't overwrite
-    // with a navigation-only file. Let PersonaGenerator handle full generation.
-    if (!stripped) {
-      this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: persona body is empty, waiting for PersonaGenerator`);
-      return;
-    }
+      // If the persona body is empty (only navigation existed), don't overwrite
+      // with a navigation-only file. Let PersonaGenerator handle full generation.
+      if (!stripped) {
+        this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: persona body is empty, waiting for PersonaGenerator`);
+        return;
+      }
 
-    const updated = nav ? `${stripped}\n\n${nav}\n` : `${stripped}\n`;
-
-    // persona.md is at dataDir root, no subdir needed.
-    // KNOWN ISSUE — lost-update race: this L2 nav write and the L3 persona regen
-    // run on different SerialQueues and both read-modify-write persona.md.
-    // atomicWriteFile avoids torn reads, NOT lost updates — see the detailed
-    // INVARIANT note in persona-generator.ts (step 11). Single-writer fix tracked
-    // separately.
-    await atomicWriteFile(personaPath, updated);
+      const updated = nav ? `${stripped}\n\n${nav}\n` : `${stripped}\n`;
+      await atomicWriteFile(personaPath, updated);
+    });
   }
 }
 
