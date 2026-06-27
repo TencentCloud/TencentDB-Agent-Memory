@@ -96,6 +96,11 @@ describe("TdaiGateway HTTP wiring", () => {
     const health0 = await getJson(`${origin}/health`);
     expect(health0.json.multi_tenant).toBe(true);
     expect(health0.json.active_cores).toBe(0);
+    // Embedding *config intent* is reported even with no cores resident. This
+    // boot forces provider "none" + keyword recall, so vector recall is off.
+    expect(health0.json.embedding.configured).toBe(false);
+    expect(health0.json.embedding.provider).toBe("none");
+    expect(health0.json.embedding.recallStrategy).toBe("keyword");
 
     // Routed endpoints require session_key.
     for (const ep of ["/recall", "/capture", "/search/memories", "/search/conversations"]) {

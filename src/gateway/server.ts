@@ -395,10 +395,30 @@ export class TdaiGateway {
   // Route handlers
   // ============================
 
+  /**
+   * Summarise embedding *configuration intent* for /health — config-only, no
+   * network probe (health is a hot liveness path). `configured` is true only
+   * when embedding is enabled, the provider is not the "none" disable sentinel,
+   * and the config carries no error. The live signal stays the `strategy` field
+   * on /search/memories responses.
+   */
+  private embeddingSummary(): NonNullable<HealthResponse["embedding"]> {
+    const emb = this.config.memory.embedding;
+    return {
+      configured: emb.enabled && emb.provider !== "none" && !emb.configError,
+      provider: emb.provider,
+      model: emb.model || undefined,
+      dimensions: emb.dimensions || undefined,
+      recallStrategy: this.config.memory.recall.strategy,
+    };
+  }
+
   private handleHealth(res: http.ServerResponse): void {
     if (this.multiTenant) {
-      // No single shared store to probe — cores are per-account and lazy.
-      // Report liveness + how many accounts are currently resident.
+      // No single shared store to probe — cores are per-account and lazy. Report
+      // liveness, resident-core stats, and embedding *config intent* (the only
+      // embedding signal possible without spinning up a core), since
+      // stores.embeddingService cannot reflect per-account lazy services here.
       const response: HealthResponse = {
         status: "ok",
         version: VERSION,
@@ -408,6 +428,7 @@ export class TdaiGateway {
         active_cores: this.registry.size,
         extraction: this.registry.extractionStats(),
         resident: this.registry.residentStats(),
+        embedding: this.embeddingSummary(),
       };
       sendJson(res, 200, response);
       return;
@@ -424,6 +445,7 @@ export class TdaiGateway {
         embeddingService: !!core?.getEmbeddingService(),
       },
       multi_tenant: false,
+      embedding: this.embeddingSummary(),
     };
     sendJson(res, 200, response);
   }

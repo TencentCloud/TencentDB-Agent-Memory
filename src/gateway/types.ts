@@ -45,6 +45,26 @@ export interface HealthResponse {
    * past its bound because every candidate core is busy — transient and safe.
    */
   resident?: { count: number; limit: number; pinned: number };
+  /**
+   * Embedding **configuration intent** — answers "is vector recall supposed to
+   * be on?" without a network probe (health must stay a cheap liveness check).
+   *
+   * `configured` is `true` only when embedding is enabled, the provider is not
+   * the `"none"` disable sentinel, and the config carries no error. It does NOT
+   * confirm the embedding endpoint is reachable — for the live runtime signal,
+   * read the `strategy` field returned by `POST /search/memories` (`hybrid` /
+   * `embedding` mean vectors actually fired). In multi-tenant mode this is the
+   * embedding signal health can give, since cores (and their embedding services)
+   * are lazy and per-account — `stores.embeddingService` stays `false` there.
+   */
+  embedding?: {
+    configured: boolean;
+    provider: string;
+    model?: string;
+    dimensions?: number;
+    /** Configured recall strategy: "hybrid" | "embedding" | "keyword". */
+    recallStrategy: string;
+  };
 }
 
 // ============================
