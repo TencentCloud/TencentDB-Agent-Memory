@@ -213,6 +213,9 @@ The Docker image bundles `hermes-agent` and the `memory_tencentdb` provider toge
 
 ```bash
 # ============ Configuration Parameters ============
+
+[![Listed on TakoAPI](https://img.shields.io/badge/Listed%20on-TakoAPI-7c3aed)](https://takoapi.com/agents/tencentcloud-tencentdb-agent-memory)
+
 # MODEL_API_KEY    LLM API key (required) — replace with your own credential
 # MODEL_BASE_URL   LLM endpoint, defaults to Tencent Cloud LKE (Large Model Knowledge Engine)
 # MODEL_NAME       Model name, defaults to DeepSeek-V3.2
