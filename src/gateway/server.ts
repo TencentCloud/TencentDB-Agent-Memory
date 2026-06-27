@@ -15,14 +15,14 @@
  */
 
 import http from "node:http";
+import fs from "node:fs";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
-import { TdaiCore } from "../core/tdai-core.js";
-import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
+import { CoreRegistry } from "./core-registry.js";
+import type { TdaiCore } from "../core/tdai-core.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
-import { SessionFilter } from "../utils/session-filter.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -35,6 +35,8 @@ import type {
   ConversationSearchResponse,
   SessionEndRequest,
   SessionEndResponse,
+  WipeRequest,
+  WipeResponse,
   SeedRequest,
   SeedResponse,
   GatewayErrorResponse,
@@ -114,39 +116,61 @@ function safeEqual(a: string, b: string): boolean {
 export class TdaiGateway {
   private config: GatewayConfig;
   private logger: Logger;
-  private core: TdaiCore;
+  private registry: CoreRegistry;
+  private multiTenant: boolean;
   private server: http.Server | null = null;
   private startTime = Date.now();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
     this.logger = createConsoleLogger();
+    this.multiTenant = this.config.data.multiTenant;
 
-    // Create host adapter
-    const adapter = new StandaloneHostAdapter({
-      dataDir: this.config.data.baseDir,
+    // Route requests to a per-account TdaiCore (or one shared core in
+    // single-tenant mode). The registry owns core lifecycle + dataDir binding.
+    this.registry = new CoreRegistry({
+      baseDir: this.config.data.baseDir,
       llmConfig: this.config.llm,
+      memory: this.config.memory,
       logger: this.logger,
-      platform: "gateway",
+      multiTenant: this.multiTenant,
+      excludeAgents: this.config.memory.capture.excludeAgents,
+      maxConcurrentExtractions: this.config.data.maxConcurrentExtractions,
+      maxResidentCores: this.config.data.maxResidentCores,
     });
+  }
 
-    // Create core
-    this.core = new TdaiCore({
-      hostAdapter: adapter,
-      config: this.config.memory,
-      sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
-    });
+  /**
+   * Resolve the core for a request, enforcing the multi-tenant `session_key`
+   * contract. Returns `null` (after writing a 400) when multi-tenant mode is on
+   * but the caller omitted `session_key`, so handlers must short-circuit.
+   */
+  private async coreFor(
+    sessionKey: string | undefined,
+    res: http.ServerResponse,
+  ): Promise<TdaiCore | null> {
+    if (this.multiTenant && !sessionKey) {
+      sendError(res, 400, "Missing required field in multi-tenant mode: session_key");
+      return null;
+    }
+    return this.registry.getCore(sessionKey ?? "");
   }
 
   /**
    * Start the Gateway HTTP server.
    */
   async start(): Promise<void> {
-    // Initialize data directories
-    initDataDirectories(this.config.data.baseDir);
-
-    // Initialize core
-    await this.core.initialize();
+    if (this.multiTenant) {
+      // baseDir is only the *parent* of per-account dataDirs; each account core
+      // builds its own subdir layout lazily. Just ensure the parent exists.
+      fs.mkdirSync(this.config.data.baseDir, { recursive: true });
+    } else {
+      // Single-tenant: baseDir IS the shared core's dataDir. Build the full
+      // layout and eagerly create + initialize the one shared core so the first
+      // request (and /health) sees a ready store, matching legacy startup.
+      initDataDirectories(this.config.data.baseDir);
+      await this.registry.getCore("");
+    }
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -213,6 +237,15 @@ export class TdaiGateway {
   }
 
   /**
+   * The actual bound address after {@link start}. Returns `null` before the
+   * server is listening. Primarily for tests / orchestration that bind port 0.
+   */
+  address(): { host: string; port: number } | null {
+    const a = this.server?.address();
+    return a && typeof a === "object" ? { host: a.address, port: a.port } : null;
+  }
+
+  /**
    * Gracefully stop the Gateway.
    */
   async stop(): Promise<void> {
@@ -224,7 +257,7 @@ export class TdaiGateway {
       });
     }
 
-    await this.core.destroy();
+    await this.registry.destroyAll();
     this.logger.info("Gateway stopped");
   }
 
@@ -270,6 +303,8 @@ export class TdaiGateway {
           return await this.handleSearchConversations(req, res);
         case "POST /session/end":
           return await this.handleSessionEnd(req, res);
+        case "POST /namespace/wipe":
+          return await this.handleWipe(req, res);
         case "POST /seed":
           return await this.handleSeed(req, res);
         default:
@@ -356,14 +391,34 @@ export class TdaiGateway {
   // ============================
 
   private handleHealth(res: http.ServerResponse): void {
+    if (this.multiTenant) {
+      // No single shared store to probe — cores are per-account and lazy.
+      // Report liveness + how many accounts are currently resident.
+      const response: HealthResponse = {
+        status: "ok",
+        version: VERSION,
+        uptime: Math.floor((Date.now() - this.startTime) / 1000),
+        stores: { vectorStore: false, embeddingService: false },
+        multi_tenant: true,
+        active_cores: this.registry.size,
+        extraction: this.registry.extractionStats(),
+        resident: this.registry.residentStats(),
+      };
+      sendJson(res, 200, response);
+      return;
+    }
+
+    // Single-tenant: probe the one shared core (created eagerly in start()).
+    const core = this.registry.peek("");
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: core?.getVectorStore() ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
-        embeddingService: !!this.core.getEmbeddingService(),
+        vectorStore: !!core?.getVectorStore(),
+        embeddingService: !!core?.getEmbeddingService(),
       },
+      multi_tenant: false,
     };
     sendJson(res, 200, response);
   }
@@ -376,14 +431,21 @@ export class TdaiGateway {
       return;
     }
 
+    const core = await this.coreFor(body.session_key, res);
+    if (!core) return;
+
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const result = await core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars, ` +
+      `prepend=${(result.prependContext?.length ?? 0)} chars`,
+    );
 
     const response: RecallResponse = {
       context: result.appendSystemContext ?? "",
+      prepend_context: result.prependContext ?? "",
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
@@ -398,16 +460,34 @@ export class TdaiGateway {
       return;
     }
 
+    // Capture the turn-start timestamp BEFORE resolving the core. On the first
+    // capture to a brand-new account the core is created lazily here (open DB,
+    // warm store), which puts real wall-clock distance between startMs and the
+    // moment messages are stamped during extraction — so startMs is reliably
+    // earlier than any message timestamp, even for caller-supplied messages
+    // that lack one.
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
+
+    const core = await this.coreFor(body.session_key, res);
+    if (!core) return;
+
+    // Stamp the synthesized messages explicitly (startMs+1/+2) and pass
+    // startedAt=startMs as the cold-start L0 cursor floor. The recorder keeps
+    // messages with timestamp strictly greater than the floor, so the floor
+    // MUST be below the turn's own messages. Previously no startedAt was passed,
+    // so the floor fell back to Date.now() inside TdaiCore — landing in the same
+    // millisecond as the messages and silently dropping the first turn's L0 rows
+    // on every freshly-created account (see cold-start capture regression test).
+    const result = await core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
       messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
+        { role: "user", content: body.user_content, timestamp: startMs + 1 },
+        { role: "assistant", content: body.assistant_content, timestamp: startMs + 2 },
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: startMs,
     });
     const elapsed = Date.now() - startMs;
 
@@ -428,7 +508,10 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchMemories({
+    const core = await this.coreFor(body.session_key, res);
+    if (!core) return;
+
+    const result = await core.searchMemories({
       query: body.query,
       limit: body.limit,
       type: body.type,
@@ -451,7 +534,10 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchConversations({
+    const core = await this.coreFor(body.session_key, res);
+    if (!core) return;
+
+    const result = await core.searchConversations({
       query: body.query,
       limit: body.limit,
       sessionKey: body.session_key,
@@ -472,9 +558,34 @@ export class TdaiGateway {
       return;
     }
 
-    await this.core.handleSessionEnd(body.session_key);
+    // Only flush a session that already has a resident core; never spin one up
+    // just to tear its buffers down. Unknown/evicted sessions are a no-op.
+    const core = this.registry.peek(body.session_key);
+    if (core) await core.handleSessionEnd(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
+    sendJson(res, 200, response);
+  }
+
+  private async handleWipe(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<WipeRequest>(req);
+
+    if (!body.session_key) {
+      sendError(res, 400, "Missing required field: session_key");
+      return;
+    }
+
+    if (!this.multiTenant) {
+      // No per-account dataDir exists in single-tenant mode; refuse rather than
+      // risk deleting the shared store out from under the process.
+      sendError(res, 400, "namespace wipe is only supported in multi-tenant mode");
+      return;
+    }
+
+    const dataDir = await this.registry.wipe(body.session_key);
+    this.logger.info(`Wiped account namespace for ${body.session_key} (${dataDir})`);
+
+    const response: WipeResponse = { wiped: true };
     sendJson(res, 200, response);
   }
 

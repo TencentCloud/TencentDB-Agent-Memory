@@ -62,6 +62,51 @@ export interface GatewayConfig {
   data: {
     /** Base directory for TDAI data storage. */
     baseDir: string;
+    /**
+     * Multi-tenant mode. When `true`, one Gateway process safely serves many
+     * end-user accounts: each `session_key` is routed to its own `TdaiCore`
+     * with a dedicated dataDir under `baseDir/{account}` (structural isolation
+     * — see design §8.4). When `false` (default), the Gateway behaves exactly
+     * as before: a single shared core rooted at `baseDir`, `session_key` only
+     * isolates L0/pipeline state.
+     *
+     * In multi-tenant mode `session_key` becomes **required** on every routed
+     * endpoint (`/recall`, `/capture`, `/search/*`, `/session/end`).
+     *
+     * env: `TDAI_MULTI_TENANT`
+     * yaml: `data.multiTenant`
+     */
+    multiTenant: boolean;
+    /**
+     * Max concurrent background extraction runs (L1/L2/L3) across ALL per-account
+     * cores. Structural multi-tenant gives each account its own pipeline, so `N`
+     * active accounts otherwise fan out to up to `~3N` simultaneous LLM
+     * extraction calls (design §8.4 #5). One shared limiter caps the total.
+     *
+     * - `> 0` — hard cap.
+     * - `0`   — unbounded.
+     * - unset — multi-tenant defaults to a safe internal cap; single-tenant
+     *   stays unbounded (a lone core can't fan out).
+     *
+     * env: `TDAI_MAX_CONCURRENT_EXTRACTIONS`
+     * yaml: `data.maxConcurrentExtractions`
+     */
+    maxConcurrentExtractions?: number;
+    /**
+     * Max number of per-account cores kept resident at once (multi-tenant LRU
+     * eviction). When a request would exceed this, the least-recently-used idle
+     * core is flushed + torn down to bound process memory. Must exceed the peak
+     * number of concurrently active accounts.
+     *
+     * - `> 0` — keep at most this many cores warm.
+     * - `0` / unset — unlimited (legacy: every account stays warm forever).
+     *
+     * Ignored in single-tenant mode.
+     *
+     * env: `TDAI_MAX_RESIDENT_CORES`
+     * yaml: `data.maxResidentCores`
+     */
+    maxResidentCores?: number;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -124,6 +169,11 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
+  const multiTenant = envBool("TDAI_MULTI_TENANT") ?? bool(dataConfig, "multiTenant") ?? false;
+  const maxConcurrentExtractions =
+    envInt("TDAI_MAX_CONCURRENT_EXTRACTIONS") ?? num(dataConfig, "maxConcurrentExtractions");
+  const maxResidentCores =
+    envInt("TDAI_MAX_RESIDENT_CORES") ?? num(dataConfig, "maxResidentCores");
 
   // LLM config
   const llmConfig = obj(fileConfig, "llm");
@@ -144,7 +194,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir },
+    data: { baseDir, multiTenant, maxConcurrentExtractions, maxResidentCores },
     llm,
     memory,
   };
@@ -235,6 +285,26 @@ function envInt(key: string): number | undefined {
   if (!v) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Read a strict boolean env var. Accepts true/1/yes/on and false/0/no/off
+ * (case-insensitive); anything else (including unset) returns undefined so the
+ * caller can fall through to the next source / default.
+ */
+function envBool(key: string): boolean | undefined {
+  const v = env(key);
+  if (v === undefined) return undefined;
+  const s = v.toLowerCase();
+  if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
+  if (s === "false" || s === "0" || s === "no" || s === "off") return false;
+  return undefined;
+}
+
+/** Read a boolean field from a config object (non-boolean → undefined). */
+function bool(src: Record<string, unknown>, key: string): boolean | undefined {
+  const v = src[key];
+  return typeof v === "boolean" ? v : undefined;
 }
 
 /**
