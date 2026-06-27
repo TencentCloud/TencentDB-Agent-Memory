@@ -92,6 +92,15 @@ describe("TdaiGateway HTTP wiring", () => {
       expect(status, `${ep} should 400 without session_key`).toBe(400);
     }
 
+    // /seed is refused in multi-tenant mode: it writes a shared snapshot dir,
+    // not the per-account store, so a "successful" seed would be invisible to
+    // recall/search. Even a well-formed body (session_key + data) must 400.
+    const seedMt = await post(`${origin}/seed`, {
+      session_key: "ai4all:alice",
+      data: [{ sessionKey: "ai4all:alice", conversations: [[{ role: "user", content: "x" }, { role: "assistant", content: "y" }]] }],
+    });
+    expect(seedMt.status, "/seed should 400 in multi-tenant mode").toBe(400);
+
     // Capture two accounts. This is the FIRST capture to each freshly-created
     // account core, which is exactly the cold-start path: the gateway must stamp
     // the turn's messages strictly after the cold-start L0 cursor floor, so BOTH

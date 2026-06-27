@@ -592,6 +592,24 @@ export class TdaiGateway {
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<SeedRequest>(req);
 
+    if (this.multiTenant) {
+      // /seed writes to a shared `baseDir/seed-<ts>` snapshot dir, NOT the
+      // per-account store under `baseDir/{account}` that recall/search read — so
+      // in multi-tenant mode a "successful" seed (200, l0_recorded > 0) is
+      // invisible to every core. Refuse rather than silently no-op. Backfill an
+      // account by running `executeSeed` into `registry.resolveDataDir(key)`
+      // (the exact per-account dir); see scripts/import-psydt.ts for the pattern.
+      sendError(
+        res,
+        400,
+        "POST /seed is not supported in multi-tenant mode: it writes a shared snapshot " +
+        "dir, not the per-account store, so seeded memory is invisible to /recall and " +
+        "/search. Seed per-account into registry.resolveDataDir(session_key) — see " +
+        "scripts/import-psydt.ts.",
+      );
+      return;
+    }
+
     if (!body.data) {
       sendError(res, 400, "Missing required field: data");
       return;
