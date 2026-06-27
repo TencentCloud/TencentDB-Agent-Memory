@@ -19,7 +19,7 @@ import fs from "node:fs";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { CoreRegistry } from "./core-registry.js";
-import type { TdaiCore } from "../core/tdai-core.js";
+import type { CoreLease } from "./core-registry.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
@@ -141,19 +141,24 @@ export class TdaiGateway {
   }
 
   /**
-   * Resolve the core for a request, enforcing the multi-tenant `session_key`
+   * Lease the core for a request, enforcing the multi-tenant `session_key`
    * contract. Returns `null` (after writing a 400) when multi-tenant mode is on
    * but the caller omitted `session_key`, so handlers must short-circuit.
+   *
+   * The returned lease pins the core for the duration of the request — handlers
+   * MUST `release()` it in a `finally` so it becomes eligible for LRU eviction
+   * again. The pin is what prevents another account's request from evicting +
+   * destroying this core while we're mid-`capture`/`recall`/`search`.
    */
-  private async coreFor(
+  private async leaseFor(
     sessionKey: string | undefined,
     res: http.ServerResponse,
-  ): Promise<TdaiCore | null> {
+  ): Promise<CoreLease | null> {
     if (this.multiTenant && !sessionKey) {
       sendError(res, 400, "Missing required field in multi-tenant mode: session_key");
       return null;
     }
-    return this.registry.getCore(sessionKey ?? "");
+    return this.registry.acquire(sessionKey ?? "");
   }
 
   /**
@@ -431,25 +436,29 @@ export class TdaiGateway {
       return;
     }
 
-    const core = await this.coreFor(body.session_key, res);
-    if (!core) return;
+    const lease = await this.leaseFor(body.session_key, res);
+    if (!lease) return;
 
-    const startMs = Date.now();
-    const result = await core.handleBeforeRecall(body.query, body.session_key);
-    const elapsed = Date.now() - startMs;
+    try {
+      const startMs = Date.now();
+      const result = await lease.core.handleBeforeRecall(body.query, body.session_key);
+      const elapsed = Date.now() - startMs;
 
-    this.logger.info(
-      `Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars, ` +
-      `prepend=${(result.prependContext?.length ?? 0)} chars`,
-    );
+      this.logger.info(
+        `Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars, ` +
+        `prepend=${(result.prependContext?.length ?? 0)} chars`,
+      );
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      prepend_context: result.prependContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
-    sendJson(res, 200, response);
+      const response: RecallResponse = {
+        context: result.appendSystemContext ?? "",
+        prepend_context: result.prependContext ?? "",
+        strategy: result.recallStrategy,
+        memory_count: result.recalledL1Memories?.length ?? 0,
+      };
+      sendJson(res, 200, response);
+    } finally {
+      lease.release();
+    }
   }
 
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -468,36 +477,40 @@ export class TdaiGateway {
     // that lack one.
     const startMs = Date.now();
 
-    const core = await this.coreFor(body.session_key, res);
-    if (!core) return;
+    const lease = await this.leaseFor(body.session_key, res);
+    if (!lease) return;
 
-    // Stamp the synthesized messages explicitly (startMs+1/+2) and pass
-    // startedAt=startMs as the cold-start L0 cursor floor. The recorder keeps
-    // messages with timestamp strictly greater than the floor, so the floor
-    // MUST be below the turn's own messages. Previously no startedAt was passed,
-    // so the floor fell back to Date.now() inside TdaiCore — landing in the same
-    // millisecond as the messages and silently dropping the first turn's L0 rows
-    // on every freshly-created account (see cold-start capture regression test).
-    const result = await core.handleTurnCommitted({
-      userText: body.user_content,
-      assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content, timestamp: startMs + 1 },
-        { role: "assistant", content: body.assistant_content, timestamp: startMs + 2 },
-      ],
-      sessionKey: body.session_key,
-      sessionId: body.session_id,
-      startedAt: startMs,
-    });
-    const elapsed = Date.now() - startMs;
+    try {
+      // Stamp the synthesized messages explicitly (startMs+1/+2) and pass
+      // startedAt=startMs as the cold-start L0 cursor floor. The recorder keeps
+      // messages with timestamp strictly greater than the floor, so the floor
+      // MUST be below the turn's own messages. Previously no startedAt was passed,
+      // so the floor fell back to Date.now() inside TdaiCore — landing in the same
+      // millisecond as the messages and silently dropping the first turn's L0 rows
+      // on every freshly-created account (see cold-start capture regression test).
+      const result = await lease.core.handleTurnCommitted({
+        userText: body.user_content,
+        assistantText: body.assistant_content,
+        messages: body.messages ?? [
+          { role: "user", content: body.user_content, timestamp: startMs + 1 },
+          { role: "assistant", content: body.assistant_content, timestamp: startMs + 2 },
+        ],
+        sessionKey: body.session_key,
+        sessionId: body.session_id,
+        startedAt: startMs,
+      });
+      const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+      this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
 
-    const response: CaptureResponse = {
-      l0_recorded: result.l0RecordedCount,
-      scheduler_notified: result.schedulerNotified,
-    };
-    sendJson(res, 200, response);
+      const response: CaptureResponse = {
+        l0_recorded: result.l0RecordedCount,
+        scheduler_notified: result.schedulerNotified,
+      };
+      sendJson(res, 200, response);
+    } finally {
+      lease.release();
+    }
   }
 
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -508,22 +521,26 @@ export class TdaiGateway {
       return;
     }
 
-    const core = await this.coreFor(body.session_key, res);
-    if (!core) return;
+    const lease = await this.leaseFor(body.session_key, res);
+    if (!lease) return;
 
-    const result = await core.searchMemories({
-      query: body.query,
-      limit: body.limit,
-      type: body.type,
-      scene: body.scene,
-    });
+    try {
+      const result = await lease.core.searchMemories({
+        query: body.query,
+        limit: body.limit,
+        type: body.type,
+        scene: body.scene,
+      });
 
-    const response: MemorySearchResponse = {
-      results: result.text,
-      total: result.total,
-      strategy: result.strategy,
-    };
-    sendJson(res, 200, response);
+      const response: MemorySearchResponse = {
+        results: result.text,
+        total: result.total,
+        strategy: result.strategy,
+      };
+      sendJson(res, 200, response);
+    } finally {
+      lease.release();
+    }
   }
 
   private async handleSearchConversations(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -534,20 +551,24 @@ export class TdaiGateway {
       return;
     }
 
-    const core = await this.coreFor(body.session_key, res);
-    if (!core) return;
+    const lease = await this.leaseFor(body.session_key, res);
+    if (!lease) return;
 
-    const result = await core.searchConversations({
-      query: body.query,
-      limit: body.limit,
-      sessionKey: body.session_key,
-    });
+    try {
+      const result = await lease.core.searchConversations({
+        query: body.query,
+        limit: body.limit,
+        sessionKey: body.session_key,
+      });
 
-    const response: ConversationSearchResponse = {
-      results: result.text,
-      total: result.total,
-    };
-    sendJson(res, 200, response);
+      const response: ConversationSearchResponse = {
+        results: result.text,
+        total: result.total,
+      };
+      sendJson(res, 200, response);
+    } finally {
+      lease.release();
+    }
   }
 
   private async handleSessionEnd(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

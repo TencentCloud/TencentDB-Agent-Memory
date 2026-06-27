@@ -196,6 +196,79 @@ describe("CoreRegistry LRU eviction (multi-tenant)", () => {
   });
 });
 
+describe("CoreRegistry lease / refcount (LRU eviction safety)", () => {
+  let baseDir: string;
+  const registries: CoreRegistry[] = [];
+
+  function reg(maxResidentCores?: number): CoreRegistry {
+    const r = makeRegistry(baseDir, true, maxResidentCores);
+    registries.push(r);
+    return r;
+  }
+
+  beforeEach(async () => {
+    baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-lease-"));
+  });
+
+  afterEach(async () => {
+    await Promise.all(registries.splice(0).map((r) => r.destroyAll()));
+    await fs.rm(baseDir, { recursive: true, force: true });
+  });
+
+  it("a leased core is NOT LRU-evicted even past the cap, and is evictable once released", async () => {
+    const r = reg(1); // cap of 1 — any second resident core would normally evict the first
+    const leaseA = await r.acquire("ai4all:a");
+    // Touch a second account while a is still leased. With a refcount, a cannot
+    // be torn down mid-request, so the registry holds BOTH (transient over-limit)
+    // rather than destroy a's store underneath the live lease.
+    await r.getCore("ai4all:b");
+    expect(r.size).toBe(2);
+    expect(r.peek("ai4all:a")).toBeDefined();
+    expect(r.residentStats().pinned).toBe(1);
+
+    // The leased core's store is still open: it can serve work.
+    const conv = await leaseA.core.searchConversations({ query: "x", limit: 1, sessionKey: "ai4all:a" });
+    expect(conv.total).toBe(0); // empty store, but a LIVE one (no closed-handle throw)
+
+    // Release a → it is now an eligible victim; the next get past the cap evicts it.
+    leaseA.release();
+    expect(r.residentStats().pinned).toBe(0);
+    await delay(5);
+    await r.getCore("ai4all:c"); // size 3 > 1 → evict the now-unpinned LRU
+    expect(r.peek("ai4all:a")).toBeUndefined();
+  });
+
+  it("wipe of a leased account defers teardown until the lease is released", async () => {
+    const r = reg();
+    const dir = r.resolveDataDir("ai4all:erin");
+    const lease = await r.acquire("ai4all:erin");
+
+    // Kick off wipe while the lease is held; it must not resolve before release.
+    let wiped = false;
+    const wipePromise = r.wipe("ai4all:erin").then((d) => { wiped = true; return d; });
+    await delay(20);
+    expect(wiped).toBe(false); // teardown is parked on the in-flight lease
+
+    lease.release();
+    await wipePromise;
+    expect(wiped).toBe(true);
+    expect(r.peek("ai4all:erin")).toBeUndefined();
+    await expect(fs.stat(dir)).rejects.toBeTruthy(); // dir gone only after drain
+  });
+
+  it("double-release is idempotent (does not under-count pins)", async () => {
+    const r = reg();
+    const lease = await r.acquire("ai4all:a");
+    lease.release();
+    lease.release(); // second call must be a no-op
+    expect(r.residentStats().pinned).toBe(0);
+    // A fresh acquire still works and is correctly counted.
+    const again = await r.acquire("ai4all:a");
+    expect(r.residentStats().pinned).toBe(1);
+    again.release();
+  });
+});
+
 describe("CoreRegistry wipe guards", () => {
   it("refuses namespace wipe in single-tenant mode", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-wipe-st-"));

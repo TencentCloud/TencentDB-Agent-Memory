@@ -102,8 +102,29 @@ interface CoreEntry {
   dataDir: string;
   /** Resolves once the core has finished `initialize()`. */
   ready: Promise<void>;
-  /** Last time this core served a request (epoch ms) — for future LRU eviction. */
+  /** Last time this core served a request (epoch ms) — for LRU eviction. */
   lastUsedMs: number;
+  /**
+   * Active leases: in-flight requests currently holding this core (see
+   * {@link CoreRegistry.acquire}). A core with `pins > 0` is **never** an LRU
+   * eviction victim, and manual evict/wipe defers its teardown until pins drain
+   * — so a request mid-`capture`/`recall`/`search` can never have its SQLite
+   * handle closed underneath it.
+   */
+  pins: number;
+  /** Set while a teardown is waiting for {@link pins} to reach 0; fired by the last release. */
+  onIdle?: () => void;
+}
+
+/**
+ * A held reference to an account's core. The core is guaranteed alive (its store
+ * open) until {@link release} is called. Always release exactly once — a
+ * `try/finally` around the handler body is the intended usage. Release is
+ * idempotent, so a double-release is harmless.
+ */
+export interface CoreLease {
+  core: TdaiCore;
+  release: () => void;
 }
 
 /**
@@ -184,9 +205,16 @@ export class CoreRegistry {
     return DEFAULT_MAX_RESIDENT_CORES;
   }
 
-  /** Live resident-core stats (for health/metrics). `limit` 0 = unlimited. */
-  residentStats(): { count: number; limit: number } {
-    return { count: this.cores.size, limit: this.maxResidentCores };
+  /**
+   * Live resident-core stats (for health/metrics). `limit` 0 = unlimited;
+   * `pinned` is how many resident cores currently have in-flight leases (a
+   * `pinned` near `count` while `count > limit` means the limiter is holding
+   * cores past the cap because they are all busy — transient, expected).
+   */
+  residentStats(): { count: number; limit: number; pinned: number } {
+    let pinned = 0;
+    for (const e of this.cores.values()) if (e.pins > 0) pinned++;
+    return { count: this.cores.size, limit: this.maxResidentCores, pinned };
   }
 
   /** Live extraction-limiter stats (for health/metrics). */
@@ -218,13 +246,14 @@ export class CoreRegistry {
   }
 
   /**
-   * Get (lazily creating + initializing) the core for a `session_key`.
+   * Ensure an entry exists for `session_key` (lazily creating + scheduling its
+   * `initialize()`), returning it **synchronously** without awaiting `ready`.
    *
-   * Concurrent calls for the same key share a single `initialize()` — the entry
-   * is inserted synchronously before the await, so a second caller racing in
-   * finds it and awaits the same `ready` promise.
+   * Synchronous on purpose: callers increment `pins` in the same tick before
+   * the first `await`, so a concurrent `evictLruIfNeeded` (which only runs from
+   * this method's own create branch) can never select a just-acquired core.
    */
-  async getCore(sessionKey: string): Promise<TdaiCore> {
+  private ensureEntry(sessionKey: string): CoreEntry {
     const { key, dataDir } = this.resolve(sessionKey);
 
     let entry = this.cores.get(key);
@@ -239,7 +268,7 @@ export class CoreRegistry {
       const ready = prevClosing
         ? prevClosing.then(() => core.initialize())
         : core.initialize();
-      entry = { core, dataDir, ready, lastUsedMs: Date.now() };
+      entry = { core, dataDir, ready, lastUsedMs: Date.now(), pins: 0 };
       this.cores.set(key, entry);
       this.opts.logger.debug?.(
         `[tdai-gateway] [registry] Core created for ${this.multiTenant ? key : "single-tenant"} (dataDir=${dataDir}, active=${this.cores.size})`,
@@ -247,8 +276,63 @@ export class CoreRegistry {
       this.evictLruIfNeeded(key);
     }
     entry.lastUsedMs = Date.now();
+    return entry;
+  }
+
+  /**
+   * Get (lazily creating + initializing) the core for a `session_key`.
+   *
+   * Concurrent calls for the same key share a single `initialize()`. **Does not
+   * pin** — the returned core may be LRU-evicted at any time, so this is only
+   * safe for callers that use it synchronously or tolerate eviction (health,
+   * single-tenant eager warm-up, tests). Request handlers must use
+   * {@link acquire} so the core can't be torn down mid-request.
+   */
+  async getCore(sessionKey: string): Promise<TdaiCore> {
+    const entry = this.ensureEntry(sessionKey);
     await entry.ready;
     return entry.core;
+  }
+
+  /**
+   * Acquire a **lease** on the core for a `session_key`: like {@link getCore},
+   * but pins the core so LRU eviction and manual teardown cannot close its store
+   * until the lease is released. This closes the race where one account's
+   * request triggers eviction of another account's core while a request is still
+   * using it (`maxResidentCores` below peak concurrency). Always release in a
+   * `finally`.
+   */
+  async acquire(sessionKey: string): Promise<CoreLease> {
+    const entry = this.ensureEntry(sessionKey);
+    entry.pins++; // synchronous, same tick as ensureEntry — no eviction can interleave
+
+    let released = false;
+    const release = (): void => {
+      if (released) return; // idempotent: only the first call counts
+      released = true;
+      this.unpin(entry);
+    };
+
+    try {
+      await entry.ready;
+    } catch (err) {
+      release(); // init failed — don't leak the pin
+      throw err;
+    }
+    return { core: entry.core, release };
+  }
+
+  /**
+   * Drop one lease. When the last lease for a core that is awaiting teardown is
+   * released, the deferred teardown (set up in {@link beginTeardown}) is woken.
+   */
+  private unpin(entry: CoreEntry): void {
+    if (entry.pins > 0) entry.pins--;
+    if (entry.pins === 0 && entry.onIdle) {
+      const wake = entry.onIdle;
+      entry.onIdle = undefined;
+      wake();
+    }
   }
 
   /**
@@ -342,12 +426,16 @@ export class CoreRegistry {
       let lru: CoreEntry | undefined;
       for (const [k, e] of this.cores) {
         if (k === protectKey) continue;
+        if (e.pins > 0) continue; // never evict a core with in-flight leases
         if (!lru || e.lastUsedMs < lru.lastUsedMs) {
           lruKey = k;
           lru = e;
         }
       }
-      if (!lruKey || !lru) break; // only the protected core remains
+      // No evictable (unpinned) victim: every other core is busy. Stop and allow
+      // a transient over-limit rather than tear down a live request — the cap
+      // bounds *idle* warm cores, and correctness wins over the memory bound.
+      if (!lruKey || !lru) break;
       this.cores.delete(lruKey);
       void this.beginTeardown(lruKey, lru);
       this.opts.logger.debug?.(
@@ -363,6 +451,15 @@ export class CoreRegistry {
    */
   private beginTeardown(key: string, entry: CoreEntry): Promise<void> {
     const done = (async () => {
+      // Wait for in-flight leases to release before closing the store, so a
+      // request holding this core never hits a closed SQLite handle. LRU
+      // eviction only ever tears down UNPINNED cores, so this await is a no-op
+      // there; it matters for manual evict()/wipe() of a still-busy account.
+      if (entry.pins > 0) {
+        await new Promise<void>((resolve) => {
+          entry.onIdle = resolve;
+        });
+      }
       await entry.ready.catch(() => {});
       try {
         await entry.core.destroy(); // flushes pipeline queues, then closes store

@@ -39,9 +39,12 @@ export interface HealthResponse {
   extraction?: { limit: number; active: number; waiting: number };
   /**
    * Multi-tenant only: resident-core LRU state. `count` is how many per-account
-   * cores are warm right now, `limit` the configured cap (0 = unlimited).
+   * cores are warm right now, `limit` the configured cap (0 = unlimited), and
+   * `pinned` how many are currently serving a request (held by a lease). A
+   * `count` above `limit` with a matching `pinned` means the cap is being held
+   * past its bound because every candidate core is busy — transient and safe.
    */
-  resident?: { count: number; limit: number };
+  resident?: { count: number; limit: number; pinned: number };
 }
 
 // ============================
