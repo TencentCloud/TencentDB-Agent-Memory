@@ -95,6 +95,19 @@ export interface CoreRegistryOptions {
    * Ignored in single-tenant mode (there is only ever one core).
    */
   maxResidentCores?: number;
+  /**
+   * Idle time-to-live (ms) for resident cores (multi-tenant). A periodic sweep
+   * evicts any *unpinned* core whose last request was longer ago than this, so a
+   * long-tail of accounts that went quiet are reclaimed during idle periods
+   * instead of lingering until an LRU push. Complements {@link maxResidentCores}
+   * (count bound): TTL is a time bound.
+   *
+   * - `> 0` — evict cores idle longer than this.
+   * - `0` / `undefined` — disabled (no time-based reclamation; the default).
+   *
+   * Ignored in single-tenant mode.
+   */
+  coreIdleTtlMs?: number;
 }
 
 interface CoreEntry {
@@ -165,6 +178,10 @@ export class CoreRegistry {
   private readonly extractionLimiter: AsyncSemaphore;
   /** Max resident cores (0 = unlimited). Resolved once from options. */
   private readonly maxResidentCores: number;
+  /** Idle TTL (ms) for resident cores; 0 = disabled. Resolved once from options. */
+  private readonly idleTtlMs: number;
+  /** Background idle-sweep timer (multi-tenant + idleTtlMs > 0 only). */
+  private idleTimer?: ReturnType<typeof setInterval>;
   /**
    * In-flight teardowns keyed by account, so a re-request (or wipe) for an
    * evicted account waits for its old core to finish closing — releasing the
@@ -176,6 +193,53 @@ export class CoreRegistry {
     this.opts = opts;
     this.extractionLimiter = new AsyncSemaphore(this.resolveExtractionCap());
     this.maxResidentCores = this.resolveMaxResidentCores();
+    this.idleTtlMs = this.resolveIdleTtl();
+    this.startIdleSweep();
+  }
+
+  /** Resolve the idle TTL. Multi-tenant + explicit positive value; else 0 (off). */
+  private resolveIdleTtl(): number {
+    if (!this.opts.multiTenant) return 0;
+    const explicit = this.opts.coreIdleTtlMs;
+    return explicit !== undefined && Number.isFinite(explicit) && explicit > 0
+      ? Math.floor(explicit)
+      : 0;
+  }
+
+  /**
+   * Start the background idle sweep when an idle TTL is configured. The interval
+   * checks at least every `ttl` (capped at 60s so long TTLs still reclaim within
+   * a minute of going idle, floored so tiny test TTLs sweep promptly). `unref()`
+   * so the timer never keeps the process alive on its own.
+   */
+  private startIdleSweep(): void {
+    if (this.idleTtlMs <= 0) return;
+    const sweepMs = Math.max(50, Math.min(this.idleTtlMs, 60_000));
+    this.idleTimer = setInterval(() => this.sweepIdleCores(), sweepMs);
+    this.idleTimer.unref?.();
+  }
+
+  /**
+   * Evict every *unpinned* resident core idle longer than {@link idleTtlMs}.
+   * Pinned cores (in-flight requests) are spared — they'll be reclaimed on a
+   * later sweep once idle. Returns the number evicted (for tests/metrics). Safe
+   * to call directly; the sweep timer just invokes it on a schedule.
+   */
+  sweepIdleCores(): number {
+    if (this.idleTtlMs <= 0) return 0;
+    const cutoff = Date.now() - this.idleTtlMs;
+    let evicted = 0;
+    for (const [key, entry] of [...this.cores]) {
+      if (entry.pins > 0) continue; // never evict a live core
+      if (entry.lastUsedMs > cutoff) continue; // still within TTL
+      this.cores.delete(key);
+      void this.beginTeardown(key, entry);
+      evicted++;
+      this.opts.logger.debug?.(
+        `[tdai-gateway] [registry] Idle-evicted ${key} (idle>${this.idleTtlMs}ms, active=${this.cores.size})`,
+      );
+    }
+    return evicted;
   }
 
   /**
@@ -398,6 +462,10 @@ export class CoreRegistry {
 
   /** Destroy every loaded core. Call on Gateway shutdown. */
   async destroyAll(): Promise<void> {
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = undefined;
+    }
     const entries = [...this.cores.values()];
     this.cores.clear();
     // Include teardowns already in flight from LRU eviction so shutdown waits

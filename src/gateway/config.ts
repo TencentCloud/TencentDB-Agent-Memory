@@ -107,6 +107,20 @@ export interface GatewayConfig {
      * yaml: `data.maxResidentCores`
      */
     maxResidentCores?: number;
+    /**
+     * Idle time-to-live (ms) for resident per-account cores (multi-tenant). A
+     * periodic sweep evicts any idle (unpinned) core whose last request was
+     * longer ago than this, reclaiming long-tail accounts during quiet periods
+     * instead of waiting for an LRU push. Complements `maxResidentCores` (a count
+     * bound) with a time bound.
+     *
+     * - `> 0` — evict cores idle longer than this.
+     * - `0` / unset — disabled (default). Ignored in single-tenant mode.
+     *
+     * env: `TDAI_CORE_IDLE_TTL_MS`
+     * yaml: `data.coreIdleTtlMs`
+     */
+    coreIdleTtlMs?: number;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -174,6 +188,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     envInt("TDAI_MAX_CONCURRENT_EXTRACTIONS") ?? num(dataConfig, "maxConcurrentExtractions");
   const maxResidentCores =
     envInt("TDAI_MAX_RESIDENT_CORES") ?? num(dataConfig, "maxResidentCores");
+  const coreIdleTtlMs =
+    envInt("TDAI_CORE_IDLE_TTL_MS") ?? num(dataConfig, "coreIdleTtlMs");
 
   // LLM config
   const llmConfig = obj(fileConfig, "llm");
@@ -194,7 +210,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir, multiTenant, maxConcurrentExtractions, maxResidentCores },
+    data: { baseDir, multiTenant, maxConcurrentExtractions, maxResidentCores, coreIdleTtlMs },
     llm,
     memory,
   };

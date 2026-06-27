@@ -269,6 +269,88 @@ describe("CoreRegistry lease / refcount (LRU eviction safety)", () => {
   });
 });
 
+describe("CoreRegistry idle-TTL eviction (multi-tenant)", () => {
+  let baseDir: string;
+  const registries: CoreRegistry[] = [];
+
+  function reg(coreIdleTtlMs?: number, multiTenant = true): CoreRegistry {
+    const r = new CoreRegistry({
+      baseDir,
+      llmConfig,
+      memory,
+      logger: silentLogger,
+      multiTenant,
+      coreIdleTtlMs,
+    });
+    registries.push(r);
+    return r;
+  }
+
+  beforeEach(async () => {
+    baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-ttl-"));
+  });
+
+  afterEach(async () => {
+    await Promise.all(registries.splice(0).map((r) => r.destroyAll()));
+    await fs.rm(baseDir, { recursive: true, force: true });
+  });
+
+  // NB: a configured TTL also starts the background sweep timer, so tests assert
+  // observable state (peek/size), not exact sweepIdleCores() return counts —
+  // except where the outcome is deterministic regardless of the timer (a pinned
+  // core is always skipped; a disabled registry never sweeps).
+
+  it("is disabled by default and in single-tenant mode (sweep is a no-op, no timer)", async () => {
+    const off = reg(undefined); // ttl resolves to 0 → no timer
+    await off.getCore("ai4all:a");
+    await delay(10);
+    expect(off.sweepIdleCores()).toBe(0);
+    expect(off.size).toBe(1);
+
+    const st = reg(20, false); // single-tenant ignores TTL → no timer
+    await st.getCore("ai4all:a");
+    await delay(40);
+    expect(st.sweepIdleCores()).toBe(0);
+    expect(st.size).toBe(1);
+  });
+
+  it("evicts a core idle past the TTL, spares a recently-used one", async () => {
+    const r = reg(40);
+    await r.getCore("ai4all:idle");
+    await delay(60); // idle core is now past its 40ms TTL
+    await r.getCore("ai4all:fresh"); // fresh: touched just now (within TTL)
+    r.sweepIdleCores(); // synchronous, runs before the next timer tick
+    expect(r.peek("ai4all:idle")).toBeUndefined();
+    expect(r.peek("ai4all:fresh")).toBeDefined();
+  });
+
+  it("never idle-evicts a pinned (in-flight) core; reclaims it after release", async () => {
+    const r = reg(40);
+    const lease = await r.acquire("ai4all:busy");
+    await delay(70); // well past TTL, but a request still holds it
+    // Deterministic: pinned cores are skipped by both manual sweep and the timer.
+    expect(r.sweepIdleCores()).toBe(0);
+    expect(r.peek("ai4all:busy")).toBeDefined();
+
+    lease.release(); // now reclaimable — by a manual sweep or the background timer
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && r.peek("ai4all:busy")) {
+      r.sweepIdleCores();
+      await delay(20);
+    }
+    expect(r.peek("ai4all:busy")).toBeUndefined();
+  });
+
+  it("the background timer reclaims idle cores without a manual sweep", async () => {
+    const r = reg(40);
+    await r.getCore("ai4all:a");
+    // sweepMs = max(50, min(40, 60000)) = 50ms; poll up to ~1s for the timer.
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline && r.size > 0) await delay(25);
+    expect(r.size).toBe(0);
+  });
+});
+
 describe("CoreRegistry wipe guards", () => {
   it("refuses namespace wipe in single-tenant mode", async () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-wipe-st-"));

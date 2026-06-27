@@ -84,6 +84,7 @@ node --env-file=.env --import tsx src/gateway/server.ts
 | API key (auth) | `TDAI_GATEWAY_API_KEY` | `server.apiKey` | unset → **auth off** |
 | CORS allow-list | `TDAI_CORS_ORIGINS` | `server.corsOrigins` | `[]` → no CORS headers |
 | Max resident cores (LRU) | `TDAI_MAX_RESIDENT_CORES` | `data.maxResidentCores` | `0` = unlimited |
+| Idle core TTL (ms) | `TDAI_CORE_IDLE_TTL_MS` | `data.coreIdleTtlMs` | `0` = disabled |
 | Global extraction cap | `TDAI_MAX_CONCURRENT_EXTRACTIONS` | `data.maxConcurrentExtractions` | multi-tenant `4`, single `∞` |
 | LLM (chat/extraction) | `TDAI_LLM_API_KEY` / `_BASE_URL` / `_MODEL` | `llm.*` | OpenAI defaults |
 
@@ -258,7 +259,8 @@ through a UI and shows the `strategy` tag and the live pyramid per account.
 
 | Knob | Effect | Guidance |
 |---|---|---|
-| `maxResidentCores` | warm cores kept in RAM (LRU evicts idle ones) | **Must exceed peak concurrently-active accounts**, or a core can be evicted mid-request. Bounds memory, not liveness. |
+| `maxResidentCores` | warm cores kept in RAM (LRU evicts idle ones) | A *count* bound. In-flight requests are pinned and never evicted, so a too-low value causes a transient over-limit, not a mid-request teardown. Still size it above your peak active-account count. |
+| `coreIdleTtlMs` | reclaim cores idle longer than this | A *time* bound, complementing the count bound. Good for long-tail traffic (many accounts, each briefly active) — frees memory during quiet periods instead of waiting for an LRU push. Pinned cores are spared. |
 | `maxConcurrentExtractions` | global cap on background L1/L2/L3 LLM calls | Raise for more throughput, lower to protect your LLM quota. Watch `/health.extraction.waiting`. |
 | `strategy: hybrid` | vector + BM25 fusion | Falls back to keyword automatically if embedding is unavailable. |
 

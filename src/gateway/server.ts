@@ -137,6 +137,7 @@ export class TdaiGateway {
       excludeAgents: this.config.memory.capture.excludeAgents,
       maxConcurrentExtractions: this.config.data.maxConcurrentExtractions,
       maxResidentCores: this.config.data.maxResidentCores,
+      coreIdleTtlMs: this.config.data.coreIdleTtlMs,
     });
   }
 
