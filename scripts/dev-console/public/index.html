@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TDAI dev-console</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2029; --panel2: #222b36; --line: #2c3744;
+    --fg: #d6dde6; --muted: #8a97a6; --accent: #4ea1ff; --good: #46c98b;
+    --warn: #e0b24a; --bad: #e0584a; --l0:#5b6b7a; --l1:#4ea1ff; --l2:#9b6cff; --l3:#46c98b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  h1 { font-size: 15px; margin: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 0 0 8px; }
+  a { color: var(--accent); }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; }
+  .grow { flex: 1; }
+  .pill { font-size: 11px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1px 8px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; align-items: start; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .panel + .panel { margin-top: 12px; }
+  label { color: var(--muted); display: block; margin: 6px 0 2px; }
+  input, textarea, select { width: 100%; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; font: inherit; }
+  textarea { resize: vertical; min-height: 46px; }
+  button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 5px; padding: 6px 11px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06121f; border-color: var(--accent); font-weight: 600; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > * { margin: 0; }
+  pre { background: #0b0f14; border: 1px solid var(--line); border-radius: 5px;
+    padding: 8px; overflow: auto; max-height: 260px; white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; }
+  .out { margin-top: 8px; }
+  .muted { color: var(--muted); }
+  .tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px;
+    background: var(--panel2); border: 1px solid var(--line); color: var(--muted); }
+  .persona { color: var(--good); }
+  /* pyramid */
+  .bar { display: grid; grid-template-columns: 34px 1fr 48px; gap: 8px; align-items: center; margin: 5px 0; }
+  .bar .name { color: var(--muted); }
+  .bar .track { background: #0b0f14; border-radius: 4px; height: 18px; overflow: hidden; border: 1px solid var(--line); }
+  .bar .fill { height: 100%; }
+  .bar .n { text-align: right; font-variant-numeric: tabular-nums; }
+  .L0 { background: var(--l0); } .L1 { background: var(--l1); }
+  .L2 { background: var(--l2); } .L3 { background: var(--l3); }
+  details { border-top: 1px solid var(--line); padding: 7px 0 0; margin-top: 7px; }
+  summary { cursor: pointer; color: var(--muted); }
+  .atom { border-left: 2px solid var(--l1); padding: 2px 8px; margin: 5px 0; }
+  .scene { border-left: 2px solid var(--l2); padding: 2px 8px; margin: 5px 0; }
+  .turn { padding: 2px 0; } .turn .role { color: var(--accent); }
+  .status { font-size: 11px; } .ok { color: var(--good); } .err { color: var(--bad); }
+  .tabs { display: flex; gap: 6px; margin-bottom: 6px; }
+  .tabs button.active { border-color: var(--accent); color: var(--accent); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TDAI dev-console</h1>
+  <span class="pill" id="modePill">mode …</span>
+  <span class="grow"></span>
+  <label style="margin:0;color:var(--muted)">account</label>
+  <select id="accountSelect" style="width:230px" title="Real accounts found on disk"></select>
+  <button id="accountRefresh" title="Rescan accounts on disk">↻</button>
+  <label style="margin:0;color:var(--muted)">session_key</label>
+  <input id="sessionKey" style="width:200px" value="ai4all:alice" title="Override — type any session_key" />
+  <button class="primary" id="inspectBtn">Inspect ▸</button>
+  <label style="margin:0"><input type="checkbox" id="autoRefresh" style="width:auto" /> auto 3s</label>
+</header>
+
+<main>
+  <!-- LEFT: interactions -->
+  <div>
+    <section class="panel">
+      <h2>① Capture — feed a turn (/capture)</h2>
+      <label>user_content</label>
+      <textarea id="capUser">我最近开始学吉他，每天晚上练半小时。</textarea>
+      <label>assistant_content</label>
+      <textarea id="capAsst">太好了，坚持每天练习是进步的关键。</textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="captureBtn">Send turn ▸</button>
+        <span class="status muted" id="capStatus"></span>
+      </div>
+      <p class="muted" style="margin:8px 0 0">L0 records immediately. L1→L3 grow asynchronously and only when the Gateway has a real LLM — Inspect again after a few seconds.</p>
+    </section>
+
+    <section class="panel">
+      <h2>② Recall — what gets injected (/recall)</h2>
+      <label>query</label>
+      <input id="recallQuery" value="我最近在练什么？" />
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="recallBtn">Recall ▸</button>
+        <span class="status muted" id="recallStatus"></span>
+      </div>
+      <div class="out" id="recallOut"></div>
+    </section>
+
+    <section class="panel">
+      <h2>③ Search</h2>
+      <div class="tabs">
+        <button class="active" data-st="memories">L1 memories</button>
+        <button data-st="conversations">L0 conversations</button>
+      </div>
+      <div class="row">
+        <input id="searchQuery" class="grow" value="吉他" />
+        <input id="searchLimit" type="number" value="5" style="width:64px" />
+        <button class="primary" id="searchBtn">Search ▸</button>
+      </div>
+      <div class="out" id="searchOut"></div>
+    </section>
+
+    <section class="panel">
+      <h2>④ Ops</h2>
+      <div class="row">
+        <button id="healthBtn">/health</button>
+        <button id="sessionEndBtn">/session/end</button>
+        <button class="danger" id="wipeBtn">/namespace/wipe</button>
+      </div>
+      <div class="out" id="opsOut"></div>
+      <details>
+        <summary>/seed — paste seed JSON</summary>
+        <textarea id="seedBody" style="min-height:90px" placeholder='{"data": [{"sessionKey":"ai4all:alice","conversations":[[{"role":"user","content":"..."},{"role":"assistant","content":"..."}]]}]}'></textarea>
+        <div class="row" style="margin-top:6px"><button id="seedBtn">Seed ▸</button></div>
+      </details>
+    </section>
+  </div>
+
+  <!-- RIGHT: pyramid + state -->
+  <div>
+    <section class="panel">
+      <h2>Memory pyramid <span class="muted" id="pyrAccount"></span></h2>
+      <div id="pyramid"><p class="muted">Press Inspect.</p></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+let CONFIG = { multiTenant: true, gatewayUrl: "", baseDir: "", hasApiKey: false };
+let SEARCH_KIND = "memories";
+
+function sk() { return $("sessionKey").value.trim(); }
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  let json = null; try { json = JSON.parse(text); } catch {}
+  return { status: res.status, json, text };
+}
+const gw = (route, body) => api("POST", "/api/gw/" + route, body);
+
+function setStatus(el, ok, msg) {
+  el.className = "status " + (ok ? "ok" : "err");
+  el.textContent = msg;
+}
+
+// ── config bootstrap ──────────────────────────────────────────────
+async function loadConfig() {
+  const r = await api("GET", "/api/config");
+  if (r.json) {
+    CONFIG = r.json;
+    $("modePill").textContent =
+      (CONFIG.multiTenant ? "multi-tenant" : "single-tenant") + (CONFIG.hasApiKey ? " · auth" : "");
+    $("modePill").title = "gateway: " + CONFIG.gatewayUrl + "\nbaseDir: " + CONFIG.baseDir;
+  }
+}
+
+// ── capture ───────────────────────────────────────────────────────
+$("captureBtn").onclick = async () => {
+  setStatus($("capStatus"), true, "…");
+  const r = await gw("capture", { session_key: sk(), user_content: $("capUser").value, assistant_content: $("capAsst").value });
+  if (r.status === 200) setStatus($("capStatus"), true, "l0_recorded=" + r.json.l0_recorded + " · notified=" + r.json.scheduler_notified);
+  else setStatus($("capStatus"), false, (r.json && (r.json.error)) || ("HTTP " + r.status));
+  inspect();
+  loadAccounts();
+};
+
+// ── recall ────────────────────────────────────────────────────────
+$("recallBtn").onclick = async () => {
+  setStatus($("recallStatus"), true, "…");
+  const r = await gw("recall", { session_key: sk(), query: $("recallQuery").value });
+  if (r.status !== 200) { setStatus($("recallStatus"), false, (r.json && r.json.error) || ("HTTP " + r.status)); $("recallOut").innerHTML = ""; return; }
+  setStatus($("recallStatus"), true, "strategy=" + (r.json.strategy ?? "-") + " · memory_count=" + (r.json.memory_count ?? 0));
+  // highlight the <user-persona> block inside context
+  let ctx = esc(r.json.context || "(empty)")
+    .replace(/&lt;user-persona&gt;/g, '<span class="persona">&lt;user-persona&gt;</span>')
+    .replace(/&lt;\/user-persona&gt;/g, '<span class="persona">&lt;/user-persona&gt;</span>');
+  $("recallOut").innerHTML =
+    '<h2 style="margin-top:6px">context (appendSystemContext)</h2><pre>' + ctx + '</pre>' +
+    '<h2 style="margin-top:8px">prepend_context (per-turn L1)</h2><pre>' + esc(r.json.prepend_context || "(empty)") + '</pre>';
+};
+
+// ── search ────────────────────────────────────────────────────────
+document.querySelectorAll('.tabs button[data-st]').forEach((b) => {
+  b.onclick = () => {
+    SEARCH_KIND = b.dataset.st;
+    document.querySelectorAll('.tabs button[data-st]').forEach((x) => x.classList.toggle("active", x === b));
+  };
+});
+$("searchBtn").onclick = async () => {
+  const route = SEARCH_KIND === "memories" ? "search/memories" : "search/conversations";
+  const r = await gw(route, { session_key: sk(), query: $("searchQuery").value, limit: Number($("searchLimit").value) || 5 });
+  if (r.status !== 200) { $("searchOut").innerHTML = '<span class="err">' + esc((r.json && r.json.error) || ("HTTP " + r.status)) + '</span>'; return; }
+  $("searchOut").innerHTML =
+    '<div class="status ok">total=' + r.json.total + ' (' + SEARCH_KIND + ')</div><pre>' + esc(r.json.results || "(no results)") + '</pre>';
+};
+
+// ── ops ───────────────────────────────────────────────────────────
+$("healthBtn").onclick = async () => {
+  const r = await api("GET", "/api/gw/health");
+  $("opsOut").innerHTML = '<pre>' + esc(r.text) + '</pre>';
+};
+$("sessionEndBtn").onclick = async () => {
+  const r = await gw("session/end", { session_key: sk() });
+  $("opsOut").innerHTML = '<div class="status ' + (r.status === 200 ? "ok" : "err") + '">' + esc(r.text) + '</div>';
+};
+$("wipeBtn").onclick = async () => {
+  if (!confirm("Hard-delete ALL memory for " + sk() + "? This rm -rf's its dataDir.")) return;
+  const r = await gw("namespace/wipe", { session_key: sk() });
+  $("opsOut").innerHTML = '<div class="status ' + (r.status === 200 ? "ok" : "err") + '">' + esc(r.text) + '</div>';
+  inspect();
+  loadAccounts();
+};
+$("seedBtn").onclick = async () => {
+  let body; try { body = JSON.parse($("seedBody").value); } catch (e) { $("opsOut").innerHTML = '<span class="err">bad JSON: ' + esc(e.message) + '</span>'; return; }
+  $("opsOut").innerHTML = '<span class="muted">seeding… (may take a while with real LLM)</span>';
+  const r = await gw("seed", body);
+  $("opsOut").innerHTML = '<pre>' + esc(r.text) + '</pre>';
+  inspect();
+  loadAccounts();
+};
+
+// ── pyramid ───────────────────────────────────────────────────────
+function bar(name, n, max, cls) {
+  const pct = max > 0 ? Math.max(n > 0 ? 6 : 0, Math.round((n / max) * 100)) : 0;
+  return '<div class="bar"><span class="name">' + name + '</span>' +
+    '<span class="track"><span class="fill ' + cls + '" style="width:' + pct + '%"></span></span>' +
+    '<span class="n">' + n + '</span></div>';
+}
+async function inspect() {
+  const key = sk();
+  $("pyrAccount").textContent = key ? "· " + key : "";
+  const r = await api("GET", "/api/inspect?session_key=" + encodeURIComponent(key));
+  if (r.status !== 200) { $("pyramid").innerHTML = '<span class="err">' + esc((r.json && r.json.error) || ("HTTP " + r.status)) + '</span>'; return; }
+  const d = r.json;
+  const max = Math.max(1, d.counts.l0, d.counts.l1, d.counts.l2, d.counts.l3);
+  let html = "";
+  if (!d.exists) html += '<p class="muted">No dataDir yet — capture a turn to create it.</p>';
+  html += bar("L0", d.counts.l0, max, "L0") + bar("L1", d.counts.l1, max, "L1") +
+          bar("L2", d.counts.l2, max, "L2") + bar("L3", d.counts.l3, max, "L3");
+  html += '<p class="muted" style="margin:6px 0 0;font-size:11px">dataDir: ' + esc(d.accountDir) + '</p>';
+  if (d.notes && d.notes.length) html += '<p class="muted" style="font-size:11px">' + esc(d.notes.join(" · ")) + '</p>';
+
+  // L3 persona
+  html += '<details open><summary>L3 persona' + (d.persona ? ' · ' + d.persona.chars + ' chars' : ' · (none)') + '</summary>';
+  if (d.persona) html += '<pre>' + esc(d.persona.text) + '</pre>'; else html += '<p class="muted">No persona.md yet (needs LLM synthesis).</p>';
+  html += '</details>';
+
+  // L2 scenes
+  html += '<details><summary>L2 scenes · ' + d.scenes.length + '</summary>';
+  if (d.scenes.length) html += d.scenes.map((s) =>
+    '<div class="scene"><span class="tag">heat ' + s.heat + '</span> <b>' + esc(s.filename) + '</b><br><span class="muted">' + esc(s.summary) + '</span></div>').join("");
+  else html += '<p class="muted">No scenes yet.</p>';
+  html += '</details>';
+
+  // L1 atoms
+  html += '<details><summary>L1 atoms · ' + d.counts.l1 + (d.l1ByType.length ? ' · ' + d.l1ByType.map((t) => (t.type || "·") + ":" + t.count).join(" ") : "") + '</summary>';
+  if (d.l1Recent.length) html += d.l1Recent.map((a) =>
+    '<div class="atom"><span class="tag">' + esc(a.type || "·") + '</span> <span class="tag">p' + a.priority + '</span> ' + esc(a.content) +
+    (a.scene_name ? ' <span class="muted">[' + esc(a.scene_name) + ']</span>' : '') + '</div>').join("");
+  else html += '<p class="muted">No atoms yet (needs LLM extraction).</p>';
+  html += '</details>';
+
+  // L0 turns
+  html += '<details><summary>L0 turns · ' + d.counts.l0 + '</summary>';
+  if (d.l0Recent.length) html += d.l0Recent.map((t) =>
+    '<div class="turn"><span class="role">' + esc(t.role) + '</span>: ' + esc(t.content) + '</div>').join("");
+  else html += '<p class="muted">No conversation turns yet.</p>';
+  html += '</details>';
+
+  $("pyramid").innerHTML = html;
+}
+
+// ── account picker (real on-disk accounts) ────────────────────────
+async function loadAccounts() {
+  const sel = $("accountSelect");
+  const r = await api("GET", "/api/accounts");
+  const accounts = (r.json && r.json.accounts) || [];
+  const current = sk();
+  sel.innerHTML = "";
+  if (!accounts.length) {
+    sel.innerHTML = '<option value="">(no accounts on disk)</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  // Group options by namespace (psydt, ai4all, …) for a tidy list.
+  const byNs = {};
+  for (const a of accounts) (byNs[a.namespace || "(none)"] ||= []).push(a);
+  const head = document.createElement("option");
+  head.value = ""; head.textContent = "— pick an account —";
+  sel.appendChild(head);
+  for (const ns of Object.keys(byNs).sort()) {
+    const grp = document.createElement("optgroup");
+    grp.label = ns;
+    for (const a of byNs[ns]) {
+      const o = document.createElement("option");
+      o.value = a.sessionKey;
+      o.textContent = a.display + "  (L0:" + a.counts.l0 + " L1:" + a.counts.l1 + " L2:" + a.counts.l2 + " L3:" + a.counts.l3 + ")";
+      grp.appendChild(o);
+    }
+    sel.appendChild(grp);
+  }
+  // Keep the current key selected if it is one of the on-disk accounts.
+  if ([...sel.options].some((o) => o.value === current)) sel.value = current;
+}
+$("accountSelect").onchange = (e) => {
+  if (!e.target.value) return;
+  $("sessionKey").value = e.target.value;
+  inspect();
+  loadAccounts();
+};
+$("accountRefresh").onclick = loadAccounts;
+
+// ── wiring ────────────────────────────────────────────────────────
+$("inspectBtn").onclick = () => { inspect(); };
+let autoTimer = null;
+$("autoRefresh").onchange = (e) => {
+  if (e.target.checked) autoTimer = setInterval(inspect, 3000);
+  else clearInterval(autoTimer);
+};
+
+loadConfig().then(loadAccounts).then(inspect);
+</script>
+</body>
+</html>
