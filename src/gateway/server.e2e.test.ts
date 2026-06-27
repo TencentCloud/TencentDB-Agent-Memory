@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { TdaiGateway } from "./server.js";
 import type { GatewayConfig } from "./config.js";
+import { parseConfig } from "../config.js";
 
 /**
  * HTTP-level end-to-end tests for the Gateway + CoreRegistry multi-tenant
@@ -14,9 +15,19 @@ import type { GatewayConfig } from "./config.js";
  * extraction off + provider "none" (keyword/FTS path).
  */
 
+// Pin the memory config explicitly so these tests are hermetic: without it,
+// loadGatewayConfig() picks up the repo-root tdai-gateway.yaml from CWD, which
+// enables DashScope embedding — so a machine with DASHSCOPE_API_KEY set would
+// silently exercise real embedding/network instead of the keyword/FTS path
+// these assertions assume. extraction off → no background LLM timers.
 const baseOverrides = (baseDir: string, multiTenant: boolean): Partial<GatewayConfig> => ({
   server: { port: 0, host: "127.0.0.1", apiKey: undefined, corsOrigins: [] },
   data: { baseDir, multiTenant },
+  memory: parseConfig({
+    extraction: { enabled: false },
+    embedding: { provider: "none" },
+    recall: { strategy: "keyword" },
+  }),
 });
 
 async function post(url: string, body: unknown): Promise<{ status: number; json: any }> {
