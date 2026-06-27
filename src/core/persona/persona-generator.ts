@@ -5,6 +5,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
@@ -182,7 +183,7 @@ export class PersonaGenerator {
     // 11. Append fresh scene navigation and write final content
     const nav = generateSceneNavigation(index);
     const finalContent = nav ? `${personaText}\n\n${nav}\n` : personaText;
-    await fs.writeFile(personaPath, finalContent, "utf-8");
+    await atomicWriteFile(personaPath, finalContent);
 
     const elapsedMs = Date.now() - startMs;
     this.logger?.info(`${TAG} Persona written (${finalContent.length} chars) in ${elapsedMs}ms`);

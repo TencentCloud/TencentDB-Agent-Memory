@@ -18,6 +18,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
@@ -471,7 +472,7 @@ export class SceneExtractor {
     const updated = nav ? `${stripped}\n\n${nav}\n` : `${stripped}\n`;
 
     // persona.md is at dataDir root, no subdir needed
-    await fs.writeFile(personaPath, updated, "utf-8");
+    await atomicWriteFile(personaPath, updated);
   }
 }
 
