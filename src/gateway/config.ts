@@ -202,14 +202,37 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches
   // (frequently used by e2e tests) don't accidentally drop sibling fields
   // such as `corsOrigins` introduced after they were written.
-  if (!overrides) return base;
-  return {
-    ...base,
-    ...overrides,
-    server: { ...base.server, ...(overrides.server ?? {}) },
-    data: { ...base.data, ...(overrides.data ?? {}) },
-    llm: { ...base.llm, ...(overrides.llm ?? {}) },
-  };
+  const effective: GatewayConfig = overrides
+    ? {
+        ...base,
+        ...overrides,
+        server: { ...base.server, ...(overrides.server ?? {}) },
+        data: { ...base.data, ...(overrides.data ?? {}) },
+        llm: { ...base.llm, ...(overrides.llm ?? {}) },
+      }
+    : base;
+
+  // Fail fast on the one config combo that silently breaks tenant isolation.
+  //
+  // Multi-tenant isolation in this fork is *structural*: each account gets its
+  // own dataDir + its own SQLite file (distinct L0/L1 tables, persona.md, …).
+  // The TCVDB backend ignores dataDir and routes EVERY core to one shared
+  // `${database}_l1_memories` / `_l0_conversations` / `_profiles` collection
+  // set (see core/store/factory.ts + tcvdb.ts), while the structural route does
+  // not push `session_key` into L1/L0 search — so `/recall` and
+  // `/search/memories` would return other accounts' memories. Refuse at load
+  // time rather than leak across tenants. (Single-tenant + TCVDB is fine: one
+  // shared core, one database, no cross-account routing.)
+  if (effective.data.multiTenant && effective.memory.storeBackend === "tcvdb") {
+    throw new Error(
+      "Multi-tenant mode is incompatible with storeBackend=tcvdb: every per-account " +
+      "core shares one TCVDB database/collection set, so L1/L0 recall and search would " +
+      "leak across accounts (structural isolation only holds for the per-dataDir SQLite " +
+      "backend). Use storeBackend=sqlite for multi-tenant, or run single-tenant " +
+      "(TDAI_MULTI_TENANT=false) with TCVDB.",
+    );
+  }
+  return effective;
 }
 
 // ============================
