@@ -274,6 +274,29 @@ query actually succeeded — so test deliberately:
    recall works. If paraphrases only ever return `fts`/`none`, embedding isn't
    contributing — check the `memory.embedding.*` yaml block and the DashScope key.
 
+### One-click smoke test
+
+`scripts/smoke-recall.mjs` automates exactly the steps above and **asserts** the
+result — run it against a Gateway started with your real `.env` (DashScope key,
+`TDAI_LLM_*`) as the first thing you do after deploy:
+
+```bash
+node scripts/smoke-recall.mjs
+# against a non-default address / with auth:
+TDAI_GATEWAY_URL=http://127.0.0.1:8420 \
+TDAI_GATEWAY_API_KEY=<key> node scripts/smoke-recall.mjs --timeout 120
+```
+
+It captures a distinctive fact for a throwaway account, polls a no-keyword
+paraphrase until L1 forms, and passes **only** when `strategy` is `hybrid` or
+`embedding`. Exit codes: `0` PASS, `1` FAIL (vectors not contributing — the
+message distinguishes "L1 never formed" from "formed but embedding silent"), `2`
+setup error (gateway unreachable / bad config). It fails fast (~1s) if
+`/health` reports `embedding.configured:false`, and cleans up via
+`/namespace/wipe` in multi-tenant mode (`--keep` to retain the probe data). No
+build, no deps — needs only Node ≥ 18. Override the probe text for non-Chinese
+deployments via `SMOKE_FACT_USER` / `SMOKE_KEYWORD` / `SMOKE_PARAPHRASE`.
+
 The bundled **dev-console** (`scripts/dev-console`, `:8421`) drives all of this
 through a UI and shows the `strategy` tag and the live pyramid per account.
 
@@ -332,5 +355,5 @@ set stays warm; pre-warm with a cheap `/recall` if first-turn latency matters.
 - [ ] Start the Gateway; confirm `GET /health` → `multi_tenant:true`.
 - [ ] Wire `turn_service`: `/recall` before the LLM, async `/capture` after.
 - [ ] Pick a `session_key` scheme (`{namespace}:{account_id}`).
-- [ ] Verify vector recall with a paraphrase search (§6).
+- [ ] Verify vector recall: run `node scripts/smoke-recall.mjs` → `✅ PASS` (§6).
 - [ ] Wire `/namespace/wipe` into account deletion.
