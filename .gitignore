@@ -16,6 +16,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Throwaway dev/analysis scripts (not part of the product)
+scripts/tmp_*.py
+
 # Migration build output
 scripts/export-tencent-vdb/dist/
 scripts/migrate-sqlite-to-tcvdb/dist/

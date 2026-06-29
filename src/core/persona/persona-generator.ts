@@ -5,6 +5,8 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
+import { fileWriteMutex } from "../../utils/keyed-mutex.js";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
@@ -56,16 +58,29 @@ export class PersonaGenerator {
 
   /**
    * Execute local persona generation without advancing checkpoint.
+   *
+   * The entire read → LLM-write → read-back → final-write critical section runs
+   * under a per-file mutex (keyed by persona.md's absolute path) shared with the
+   * L2 scene-nav writer, so the two cannot lost-update each other. The lock is
+   * held for the full ~180s LLM run by design — see {@link fileWriteMutex}.
    */
   async generateLocalPersona(triggerReason?: string): Promise<boolean> {
+    const personaPath = path.join(this.dataDir, "persona.md");
+    return fileWriteMutex.run(personaPath, () =>
+      this.runGenerationLocked(triggerReason, personaPath),
+    );
+  }
+
+  private async runGenerationLocked(
+    triggerReason: string | undefined,
+    personaPath: string,
+  ): Promise<boolean> {
     const startMs = Date.now();
     this.logger?.debug?.(`${TAG} Starting generation: reason="${triggerReason ?? "none"}"`);
 
     const cpManager = new CheckpointManager(this.dataDir);
     const cp = await cpManager.read();
     this.logger?.debug?.(`${TAG} Checkpoint: total_processed=${cp.total_processed}, last_persona_at=${cp.last_persona_at}`);
-
-    const personaPath = path.join(this.dataDir, "persona.md");
 
     // 1. Read existing persona (strip navigation)
     let existingPersona: string | undefined;
@@ -180,9 +195,19 @@ export class PersonaGenerator {
     }
 
     // 11. Append fresh scene navigation and write final content
+    //
+    // Lost-update safety: persona.md is written by two stages on DIFFERENT
+    // SerialQueues — this L3 generator and the L2 scene-extractor's
+    // updateSceneNavigation. atomicWriteFile() alone guards a TORN READ but NOT
+    // a lost update, so both writers' full read-modify-write now runs under the
+    // shared per-path fileWriteMutex (acquired in generateLocalPersona above,
+    // spanning the ~180s LLM run). That makes this regen and an interleaving L2
+    // nav write mutually exclusive — neither can clobber the other.
+    // (profile-sync is a third writer but only on the tcvdb path, and
+    // tcvdb+multiTenant is rejected at config load.)
     const nav = generateSceneNavigation(index);
     const finalContent = nav ? `${personaText}\n\n${nav}\n` : personaText;
-    await fs.writeFile(personaPath, finalContent, "utf-8");
+    await atomicWriteFile(personaPath, finalContent);
 
     const elapsedMs = Date.now() - startMs;
     this.logger?.info(`${TAG} Persona written (${finalContent.length} chars) in ${elapsedMs}ms`);

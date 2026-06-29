@@ -32,13 +32,22 @@ export interface PersonaPromptResult {
 
 const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution Protocol
 
-**Output language contract**:
-- Detect the dominant language from the changed scene content.
-- \`persona.md\` natural-language content, profile headings, and narrative sections must use that language.
-- For English scene content, output English persona headings and English body text.
-- For non-Chinese scene content, do not emit Chinese persona headings.
-- If the language is ambiguous, default to English.
-- Keep Markdown syntax, file name \`persona.md\`, tool names, and structural markers in English.
+**Output language contract (STRICT — read first)**:
+- Detect the dominant natural language of the changed scene content below.
+- EVERY piece of natural-language text in \`persona.md\` — the Archetype sentence,
+  all chapter/section headings, body paragraphs, bullet points, and trait notes —
+  MUST be written in that detected language.
+- If the scenes are Chinese, the persona MUST be fully Chinese: Chinese headings
+  AND Chinese body. If the scenes are English, write it in English. Mirror the
+  user's language; never switch to a different one.
+- The output template further below is written in English ONLY to convey its
+  structure. TRANSLATE its headings (Archetype, Basic Information, the Chapter
+  titles, etc.) into the detected language — do NOT copy the English words
+  verbatim when the scenes are not English.
+- If the language is genuinely ambiguous, follow the language already used in the
+  existing \`persona.md\`; if there is none, default to the scene language.
+- Keep ONLY the following in English: Markdown structural syntax, the file name
+  \`persona.md\`, and tool names (write/edit). Everything a human reads is localized.
 
 请你结合已有的 persona.md 和新增/变化的 block 信息深度分析，然后使用文件工具将结果写入 \`persona.md\` 文件。
 
@@ -91,7 +100,9 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 
 ## 📝 输出模板 (The Persona Template)
 
-请参考以下格式，使用 **write** 工具写入最终内容。可以做自主调整（信息不足时可以减少或新增 chapter）（**必须保持 Markdown 格式**）：
+请参考以下格式，使用 **write** 工具写入最终内容。可以做自主调整（信息不足时可以减少或新增 chapter）（**必须保持 Markdown 格式**）。
+
+⚠️ **下面模板中的英文标题（Archetype / Basic Information / Chapter 标题等）仅用于示意结构。请按对话主语言翻译这些标题后再写入——中文对话就用中文标题与中文正文，不要照抄英文。**
 
 \`\`\`\`markdown
 # User Narrative Profile
@@ -147,6 +158,29 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 // User Prompt builder (dynamic data)
 // ============================
 
+/**
+ * Whether the text is predominantly Chinese (more CJK chars than Latin letters).
+ * Used to inject concrete Chinese headings — a weak / no-thinking model copies
+ * the English template headings verbatim despite the language contract, so for
+ * Chinese scenes we hand it the exact headings to use, data-adjacent.
+ */
+function isChineseDominant(text: string): boolean {
+  const cjk = (text.match(/[一-鿿]/g) ?? []).length;
+  const latin = (text.match(/[A-Za-z]/g) ?? []).length;
+  return cjk > latin;
+}
+
+/** Mandatory Chinese heading set, injected when scenes are Chinese-dominant. */
+const ZH_HEADING_DIRECTIVE = `**【强制使用以下中文标题 — 禁止照抄模板里的英文标题】**
+\`persona.md\` 的所有标题与正文必须为中文，结构标题严格使用：
+- 一级标题：\`# 用户叙事档案\`
+- 概要块标签：\`> **原型**:\` / \`> **基本信息**\` / \`> **长期偏好**\`
+- 章节：\`## 📖 第一章：背景与当前状态\` / \`## 🎨 第二章：生活纹理\` / \`## 🤖 第三章：交互与认知协议\` / \`## 🧩 第四章：深层洞察与演化\`
+- 三级子标题：\`### 3.1 如何沟通\` / \`### 3.2 如何思考\`
+（只有 Markdown 语法、文件名 \`persona.md\`、工具名保持英文。）
+
+`;
+
 export function buildPersonaPrompt(params: PersonaPromptParams): PersonaPromptResult {
   const {
     mode,
@@ -176,9 +210,11 @@ export function buildPersonaPrompt(params: PersonaPromptParams): PersonaPromptRe
       `面对变化场景，自主判断处理方式：强化（佐证已有洞察）/ 补充（新维度）/ 修正（矛盾）/ 重构（结构调整）/ 不改（无有用新增内容）。\n`
     : "";
 
-  const userPrompt = `**Output language**: \`persona.md\` headings and body text must use the dominant language of the changed scene content below. For English scene content, use English persona headings.
+  const headingDirective = isChineseDominant(changedScenesContent) ? ZH_HEADING_DIRECTIVE : "";
 
-**⏰ 更新时间**: ${currentTime}
+  const userPrompt = `**Output language**: Write the ENTIRE \`persona.md\` (headings AND body) in the dominant language of the changed scene content below. Chinese scenes → Chinese headings and Chinese body; do not translate them into English.
+
+${headingDirective}**⏰ 更新时间**: ${currentTime}
 **模式**: ${modeLabel}
 ${triggerSection}
 ## 📊 统计
