@@ -214,8 +214,14 @@ $("searchBtn").onclick = async () => {
   const route = SEARCH_KIND === "memories" ? "search/memories" : "search/conversations";
   const r = await gw(route, { session_key: sk(), query: $("searchQuery").value, limit: Number($("searchLimit").value) || 5 });
   if (r.status !== 200) { $("searchOut").innerHTML = '<span class="err">' + esc((r.json && r.json.error) || ("HTTP " + r.status)) + '</span>'; return; }
+  // `strategy` is only returned by /search/memories — show it when present so you
+  // can tell vector recall apart from keyword: hybrid=vector+BM25, embedding=vector
+  // only, fts=keyword only, none=nothing retrieved.
+  const strat = r.json.strategy
+    ? ' · <span class="tag" title="hybrid = vector + BM25 · embedding = vector only · fts = keyword only · none = no hits">strategy=' + esc(r.json.strategy) + '</span>'
+    : '';
   $("searchOut").innerHTML =
-    '<div class="status ok">total=' + r.json.total + ' (' + SEARCH_KIND + ')</div><pre>' + esc(r.json.results || "(no results)") + '</pre>';
+    '<div class="status ok">total=' + r.json.total + ' (' + SEARCH_KIND + ')' + strat + '</div><pre>' + esc(r.json.results || "(no results)") + '</pre>';
 };
 
 // ── ops ───────────────────────────────────────────────────────────

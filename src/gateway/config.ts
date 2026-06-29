@@ -183,7 +183,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
-  const multiTenant = envBool("TDAI_MULTI_TENANT") ?? bool(dataConfig, "multiTenant") ?? false;
+  const multiTenant = envBool("TDAI_MULTI_TENANT") ?? bool(dataConfig, "multiTenant") ?? true;
   const maxConcurrentExtractions =
     envInt("TDAI_MAX_CONCURRENT_EXTRACTIONS") ?? num(dataConfig, "maxConcurrentExtractions");
   const maxResidentCores =
