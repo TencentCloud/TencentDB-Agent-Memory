@@ -101,8 +101,9 @@ describe("sanitizeFts5Input", () => {
     expect(sanitizeFts5Input("  hello world  ")).toBe("hello world");
   });
 
-  it("A23: CJK punctuation preserved (not in FTS5 special char list)", () => {
-    expect(sanitizeFts5Input("你好，世界！")).toBe("你好，世界！");
+  it("A23: CJK punctuation — NFKC normalises fullwidth ,! to ASCII (documented)", () => {
+    // NFKC: U+FF0C → U+002C, U+FF01 → U+0021 — fullwidth→ASCII is correct
+    expect(sanitizeFts5Input("你好，世界！")).toBe("你好,世界!");
   });
 
   it("A24: digits preserved", () => {
@@ -115,6 +116,69 @@ describe("sanitizeFts5Input", () => {
 
   it("A26: Unicode curly quotes (U+201C / U+201D) preserved — not ASCII quote", () => {
     expect(sanitizeFts5Input("“hello” world")).toBe("“hello” world");
+  });
+
+  // ── NFKC normalisation ──────────────────────────
+
+  it("A27: full-width AND (U+FF21 U+FF2E U+FF24) normalised and stripped", () => {
+    // ＡＮＤ → NFKC → AND → stripped
+    expect(sanitizeFts5Input("hello ＡＮＤ world")).toBe("hello world");
+  });
+
+  it("A28: full-width OR normalised and stripped", () => {
+    expect(sanitizeFts5Input("tea ＯＲ coffee")).toBe("tea coffee");
+  });
+
+  it("A29: full-width NOT normalised and stripped", () => {
+    expect(sanitizeFts5Input("ＮＯＴ hello")).toBe("hello");
+  });
+
+  it("A30: full-width special chars normalised — ＂ (full-width quote) → \" → stripped", () => {
+    // U+FF02 (full-width quotation mark) → NFKC → " → stripped
+    expect(sanitizeFts5Input("＂hello＂ world")).toBe("hello world");
+  });
+
+  it("A31: full-width parentheses normalised and stripped", () => {
+    // U+FF08 U+FF09 → NFKC → ( ) → stripped
+    expect(sanitizeFts5Input("（hello world）")).toBe("hello world");
+  });
+
+  // ── Column-filter stripping ──────────────────────
+
+  it("A32: content: prefix stripped", () => {
+    expect(sanitizeFts5Input("content:hello world")).toBe("hello world");
+  });
+
+  it("A33: -content: (negated column filter) stripped; content after : survives", () => {
+    expect(sanitizeFts5Input("-content:secret hello")).toBe("secret hello");
+  });
+
+  it("A34: message: prefix stripped; content after : survives", () => {
+    expect(sanitizeFts5Input("message:greeting hello")).toBe("greeting hello");
+  });
+
+  it("A35: session: / actor: / topic: prefixes stripped; values survive", () => {
+    expect(sanitizeFts5Input("session:abc actor:xyz topic:q hello")).toBe(
+      "abc xyz q hello",
+    );
+  });
+
+  it("A36: content: stripped whether or not space before colon", () => {
+    // \s* in the regex matches optional whitespace before the colon
+    expect(sanitizeFts5Input("content:hello")).toBe("hello");
+    expect(sanitizeFts5Input("content :hello")).toBe("hello");
+  });
+
+  it("A37: file: / host: / user: / role: / tag: prefixes stripped", () => {
+    expect(sanitizeFts5Input("file:x host:y user:z role:a tag:b hello")).toBe(
+      "x y z a b hello",
+    );
+  });
+
+  it("A38: column filter inside longer text", () => {
+    expect(sanitizeFts5Input("search -content:secret AND hello world")).toBe(
+      "search secret hello world",
+    );
   });
 });
 
@@ -421,8 +485,7 @@ describe("buildFtsQuery — security", () => {
   });
 
   it("E9: CORE SAFETY ASSERTION — no bare FTS5 operators in output except the hardcoded OR join", () => {
-    // For any input, the output must never contain unquoted AND/OR/NOT/NEAR.
-    // The only "OR" in output is the hardcoded ` OR ` between quoted tokens.
+    // ... (same as before)
     const inputs = [
       "hello AND world",
       "NOT test",
@@ -434,11 +497,41 @@ describe("buildFtsQuery — security", () => {
     for (const input of inputs) {
       const result = buildFtsQuery(input);
       if (result !== null) {
-        // Strip the safe OR-join strings to check for any residual operators
         const withoutJoins = result.replace(/" OR "/g, " | ");
         expect(withoutJoins).not.toMatch(/\b(AND|OR|NOT|NEAR)\b/i);
       }
     }
+  });
+
+  // ── NFKC bypass attempts ────────────────────────
+
+  it("E10: full-width operator injection — ＡＮＤ normalised and neutralised", () => {
+    const result = buildFtsQuery("hello ＡＮＤ world");
+    // Full-width AND → NFKC → AND → stripped
+    expect(result).not.toBeNull();
+    expect(result!).not.toMatch(/\bAND\b/i);
+    expect(result!).toContain("hello");
+    expect(result!).toContain("world");
+  });
+
+  it("E11: full-width quote injection — ＂ neutralised", () => {
+    const result = buildFtsQuery('＂ OR ＂1＂="1');
+    // Full-width quotes → NFKC → " → stripped; OR → stripped
+    if (result !== null) {
+      const withoutJoins = result.replace(/" OR "/g, " | ");
+      expect(withoutJoins).not.toMatch(/\b(AND|OR|NOT|NEAR)\b/i);
+    }
+  });
+
+  it("E12: column-filter injection — content: prefix stripped, real words survive", () => {
+    const result = buildFtsQuery("-content:secret search");
+    expect(result).not.toBeNull();
+    // -content: → column filter stripped; "secret" + "search" both survive
+    // as literal phrase terms (the column filter syntax is neutralised)
+    const tokens = result!.split(" OR ").map((t) => t.replaceAll('"', ""));
+    expect(tokens).not.toContain("-content");
+    expect(tokens).toContain("secret");
+    expect(tokens).toContain("search");
   });
 });
 

@@ -194,24 +194,48 @@ const FTS5_RESERVED = /\b(AND|OR|NOT|NEAR)\b/gi;
 const FTS5_SPECIAL = /[*()"^{}]/g;
 
 /**
+ * FTS5 column-filter patterns that allow an attacker to restrict (or
+ * exclude) search to specific FTS5 columns via `content:keyword` or
+ * `-content:keyword`.  The `:` is the column-name / value separator
+ * in FTS5 MATCH expressions.
+ *
+ * Covers the known column names in `l1_fts` / `l0_fts` plus common
+ * FTS5 built-in column aliases.  The optional leading `-` negates
+ * the column filter (exclusion).
+ */
+// Leading `(?:^|\s)` instead of `\b` so that `-content:` (where `-` is
+// not a word character and therefore has no `\b` before it) is also caught.
+const FTS5_COL_FILTER =
+  /(?:^|\s)-?(?:content|message|session|actor|topic|role|tag|user|host|file)\s*:/gi;
+
+/**
  * Sanitize raw user input before it is tokenized for an FTS5 MATCH query.
  *
- * The sanitization is **defence-in-depth**: each token is already
- * double-quoted by `buildFtsQuery()` so that it becomes a literal phrase
- * term, but stripping FTS5 operators/syntax from the raw string ensures
- * that no edge case in segmentation or quoting allows user input to alter
- * query semantics.
+ * Defence-in-depth layers (applied in order):
+ *   1. **NFKC normalisation** — full-width Unicode variants (e.g. `ＡＮＤ`
+ *      U+FF21 U+FF2E U+FF24) are folded to ASCII so subsequent regexes
+ *      can detect them.
+ *   2. **Column-filter stripping** — `content:`, `-message:`, etc. are
+ *      removed so an attacker cannot restrict search to (or exclude) a
+ *      specific FTS5 column.
+ *   3. **Reserved-word stripping** — `AND` / `OR` / `NOT` / `NEAR` removed
+ *      as whole words (case-insensitive, `\b` boundary).
+ *   4. **Special-character stripping** — `*`, `(`, `)`, `"`, `^`, `{`, `}`
+ *      are removed.
  *
- * The function does NOT strip `+` / `-` because those only have FTS5
- * meaning at the start of a token, and tokens are always double-quoted.
+ * The function does NOT strip bare `+` / `-` because those only have
+ * FTS5 meaning at the start of a token, and tokens are always
+ * double-quoted by `buildFtsQuery()`.
  *
  * @internal exported for unit testing
  */
 export function sanitizeFts5Input(raw: string): string {
   return raw
-    .replace(FTS5_RESERVED, " ")   // strip boolean/proximity operators
-    .replace(FTS5_SPECIAL, " ")    // strip special syntax characters
-    .replace(/\s+/g, " ")          // collapse consecutive whitespace
+    .normalize("NFKC")                // full-width → ASCII
+    .replace(FTS5_COL_FILTER, " ")    // column-filter prefixes
+    .replace(FTS5_RESERVED, " ")      // boolean/proximity operators
+    .replace(FTS5_SPECIAL, " ")       // special syntax characters
+    .replace(/\s+/g, " ")             // collapse consecutive whitespace
     .trim();
 }
 
@@ -272,7 +296,13 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+
+  // Token-level defence-in-depth: jieba / regex should never produce a
+  // bare FTS5 operator from cleaned input, but if it does, filter it here.
+  const safe = tokens.filter((t) => !/^(?:AND|OR|NOT|NEAR)$/i.test(t));
+  if (safe.length === 0) return null;
+
+  const quoted = safe.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
 }
 

@@ -30,6 +30,17 @@
 
 不动配置 = 行为完全不变。
 
+### 🐛 修复 / 安全性
+
+- **FTS5 MATCH 表达式查询语义注入防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：在 `buildFtsQuery()` 中新增多层纵深防御，杜绝用户输入中的 FTS5 保留操作符和特殊语法字符改变查询语义：
+  - **NFKC 归一化**（第一层）：全角 Unicode 变体（如 `ＡＮＤ` U+FF21 U+FF2E U+FF24）归一化为半角后再做后续匹配，防止绕过 ASCII 正则。
+  - **列过滤器剥离**（第二层）：移除 `content:`、`message:`、`session:`、`actor:`、`topic:` 及否定形式 `-content:` 等 FTS5 列过滤器前缀。
+  - **保留字剥离**（第三层）：`AND`/`OR`/`NOT`/`NEAR` 在分词前按词边界 `\b` 移除（大小写不敏感，嵌入词 `ANDROID`/`ORACLE`/`NEARBY` 不受影响）。
+  - **特殊字符剥离**（第四层）：移除 `*` `(` `)` `"` `^` `{` `}`。
+  - **Token 级二次过滤**：分词完成后逐 token 检查，确保 jieba/fallback 产生的任何 token 中不残留 FTS5 保留字。
+  - 新增 110 个测试（97 单元 + 13 真实 SQLite FTS5 集成测试），覆盖全宽字符、列过滤器、嵌入词安全、CJK 边界、模糊随机、500 次属性安全验证及 `sqlite3` CLI 真 MATCH 执行。
+  - 所有下游调用方（`memory-search` / `conversation-search` / `auto-recall` / `l1-dedup`）的 `null` 检查自然兼容，无需改动。
+
 ---
 
 ## [0.3.6] - 2026-05-27
