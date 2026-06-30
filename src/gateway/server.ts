@@ -39,13 +39,37 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
-import type { Logger } from "../core/types.js";
+import type { Logger, RecallResult } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+
+/**
+ * Convert core recall output to the Gateway HTTP shape.
+ *
+ * OpenClaw can consume `prependContext` and `appendSystemContext` separately,
+ * but Gateway clients such as Hermes and the MCP adapter historically consumed
+ * a single `context` string. Keep that field backward-compatible while making
+ * the split fields available to clients that can place them more precisely.
+ */
+export function buildRecallResponse(result: RecallResult): RecallResponse {
+  const prependContext = result.prependContext ?? "";
+  const appendSystemContext = result.appendSystemContext ?? "";
+  const context = [prependContext, appendSystemContext]
+    .filter((part) => part.trim().length > 0)
+    .join("\n\n");
+
+  return {
+    context,
+    prepend_context: prependContext,
+    append_system_context: appendSystemContext,
+    strategy: result.recallStrategy,
+    memory_count: result.recalledL1Memories?.length ?? 0,
+  };
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -380,13 +404,9 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    const response = buildRecallResponse(result);
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${response.context.length} chars`);
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
     sendJson(res, 200, response);
   }
 

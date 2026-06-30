@@ -19,6 +19,7 @@ __pycache__/
 # Migration build output
 scripts/export-tencent-vdb/dist/
 scripts/migrate-sqlite-to-tcvdb/dist/
+scripts/mcp-adapter/dist/
 scripts/read-local-memory/dist/
 
 # Root-level build output (not used at runtime, not published)
