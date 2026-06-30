@@ -79,7 +79,15 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "cacheOptimization": {
+            "type": "object",
+            "description": "Prompt 缓存优化设置（优化 OpenAI-compatible provider 的前缀缓存命中率）",
+            "properties": {
+              "stableWrapper": { "type": "boolean", "default": true, "description": "稳定外壳：无召回时输出占位符，保持前缀结构稳定，提升 prefix-matching 缓存命中率（默认开启）" },
+              "splitSystemContext": { "type": "boolean", "default": true, "description": "分离系统上下文：将稳定的 persona/scene 与动态的 tools guide 分离，放置到利于缓存的位置（默认开启）" }
+            }
+          }
         }
       },
       "embedding": {

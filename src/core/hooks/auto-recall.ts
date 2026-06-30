@@ -67,6 +67,8 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Effective search strategy used */
   recallStrategy?: string;
+  /** Whether stableWrapper was used (placeholder output when no memories found) */
+  stableWrapperUsed?: boolean;
 }
 
 export async function performAutoRecall(params: {
@@ -202,10 +204,18 @@ async function performAutoRecallInner(params: {
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Stable Wrapper optimization: ensures consistent prefix structure across turns,
+  // improving prefix-matching cache hit rates for OpenAI-compatible providers.
+  const stableWrapperEnabled = cfg.recall.cacheOptimization?.stableWrapper ?? true;
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  } else if (stableWrapperEnabled) {
+    // Stable wrapper: even when no memories are recalled, output a placeholder
+    // to maintain consistent prefix structure for prompt cache optimization.
+    prependContext = `<relevant-memories>\n（本次对话未召回相关记忆）\n</relevant-memories>`;
+    logger?.debug?.(`${TAG} [stableWrapper] No memories recalled, outputting placeholder for cache stability`);
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -217,6 +227,7 @@ async function performAutoRecallInner(params: {
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
+  const stableWrapperUsed = !!(memoryLines.length === 0 && stableWrapperEnabled);
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
     `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
@@ -224,7 +235,8 @@ async function performAutoRecallInner(params: {
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})` +
+    (stableWrapperUsed ? `, stableWrapper=${stableWrapperUsed}` : ""),
   );
 
   if (!appendSystemContext && !prependContext) {
@@ -237,6 +249,7 @@ async function performAutoRecallInner(params: {
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
+    stableWrapperUsed,
   };
 }
 
