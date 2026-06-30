@@ -511,14 +511,44 @@ export class TdaiCore {
     // Capture scheduler locally so TypeScript narrows inside the closure
     // even after ``this.scheduler`` is re-assigned by handleSessionEnd.
     const scheduler = this.scheduler;
+    const vectorStore = this.vectorStore;
+    const logger = this.logger;
+    const dataDir = this.dataDir;
     this.schedulerStartPromise = (async () => {
       try {
-        const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        const checkpoint = new CheckpointManager(dataDir, logger);
+
+        // Phase 1: Recalculate checkpoint to fix any counter drift
+        // This fixes counters AND clamps stale cursors before scheduler starts
+        try {
+          const storeCounts = vectorStore
+            ? {
+              l0ConversationsCount: await vectorStore.countL0().catch(() => undefined),
+              totalMemoriesExtracted: await vectorStore.countL1().catch(() => undefined),
+            }
+            : undefined;
+
+          const result = await checkpoint.recalculate({ storeCounts });
+          logger.debug?.(
+            `${TAG} Checkpoint recalculated: l0=${result.l0_conversations_count}, ` +
+            `l1=${result.total_memories_extracted}, ` +
+            `runner_cursors=${result.runner_cursors_corrected}, ` +
+            `pipeline_cursors=${result.pipeline_cursors_corrected}`,
+          );
+        } catch (recalcErr) {
+          // Non-fatal: proceed with stale checkpoint rather than failing startup
+          logger.warn?.(
+            `${TAG} Checkpoint recalculation failed (proceeding with stale data): ` +
+            `${recalcErr instanceof Error ? recalcErr.message : String(recalcErr)}`,
+          );
+        }
+
+        // Phase 2: Start scheduler with recalculated pipeline states
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
-        this.logger.debug?.(`${TAG} Scheduler started`);
+        logger.debug?.(`${TAG} Scheduler started`);
       } catch (err) {
-        this.logger.error(`${TAG} Failed to restore checkpoint: ${err instanceof Error ? err.message : String(err)}`);
+        logger.error(`${TAG} Failed to restore checkpoint: ${err instanceof Error ? err.message : String(err)}`);
         scheduler.start({});
       }
     })();
