@@ -181,11 +181,11 @@ function sanitizeFtsTokens(rawTokens: string[]): string[] {
   const tokens: string[] = [];
 
   for (const rawToken of rawTokens) {
-    const parts = rawToken.match(FTS5_SAFE_TOKEN_RE) ?? [];
+    const parts = rawToken.normalize("NFKC").match(FTS5_SAFE_TOKEN_RE) ?? [];
     for (const part of parts) {
       const token = part.trim();
       if (!token) continue;
-      if (FTS5_RESERVED_OPERATORS.has(token)) continue;
+      if (FTS5_RESERVED_OPERATORS.has(token.toUpperCase())) continue;
       if (ZH_STOP_WORDS.has(token)) continue;
       tokens.push(token);
     }
