@@ -44,6 +44,7 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import { stripInjectedRecallFromMessage } from "./src/utils/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -612,42 +613,26 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
+  // Strip injected recall context from user messages before they are persisted to
   // the session JSONL.  The current-turn LLM already saw the full prompt
   // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // polluting historical transcripts or destabilizing prefix-matched prompt caches.
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write hook ` +
+    `(recall.showInjected=${cfg.recall.showInjected ? "true" : "false"})`,
+  );
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
-    if (msg.role !== "user") return;
-
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
-    }
-
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
-    }
+    const stripped = stripInjectedRecallFromMessage(
+      event.message as { role?: string; content?: unknown },
+      { showInjected: cfg.recall.showInjected },
+    );
+    if (!stripped) return;
+    api.logger.debug?.(`${TAG} [before_message_write] Stripped injected recall context: removed ${stripped.strippedChars} chars`);
+    return { message: stripped.message as typeof event.message };
   });
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
