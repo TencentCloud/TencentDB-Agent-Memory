@@ -17,36 +17,52 @@ export function resolveGatewayApiKey() {
   ).trim();
 }
 
-export async function gatewayPost(path, body, opts = {}) {
-  const baseUrl = opts.baseUrl || resolveGatewayBaseUrl() || DEFAULT_BASE_URL;
-  const apiKey = opts.apiKey ?? resolveGatewayApiKey();
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+}
 
-  const res = await fetch(`${baseUrl}${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+function gatewayUrl(path, opts = {}) {
+  const baseUrl = normalizeBaseUrl(opts.baseUrl || resolveGatewayBaseUrl());
+  return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+async function parseGatewayResponse(res, path) {
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      if (!res.ok) {
+        throw new Error(`Gateway ${path} failed: ${res.status} ${text}`);
+      }
+      throw err;
+    }
+  }
   if (!res.ok) {
     throw new Error(data.error || `Gateway ${path} failed: ${res.status}`);
   }
   return data;
 }
 
+export async function gatewayPost(path, body, opts = {}) {
+  const apiKey = opts.apiKey ?? resolveGatewayApiKey();
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const res = await fetch(gatewayUrl(path, opts), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  return parseGatewayResponse(res, path);
+}
+
 export async function gatewayGet(path, opts = {}) {
-  const baseUrl = opts.baseUrl || resolveGatewayBaseUrl() || DEFAULT_BASE_URL;
   const apiKey = opts.apiKey ?? resolveGatewayApiKey();
   const headers = {};
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const res = await fetch(`${baseUrl}${path}`, { headers });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) {
-    throw new Error(data.error || `Gateway ${path} failed: ${res.status}`);
-  }
-  return data;
+  const res = await fetch(gatewayUrl(path, opts), { headers });
+  return parseGatewayResponse(res, path);
 }
