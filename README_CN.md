@@ -409,6 +409,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
+| `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.cacheOptimization.stableWrapper` | `true` | 无召回时输出占位符，保持前缀结构稳定，提升 prefix-matching 缓存命中率 |
+| `recall.cacheOptimization.splitSystemContext` | `true` | 将稳定的 persona/scene 与动态内容分离，放置到利于缓存的位置 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
