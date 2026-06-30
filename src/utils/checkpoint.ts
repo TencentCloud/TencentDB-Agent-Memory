@@ -304,6 +304,21 @@ export interface RecalibrationResult {
   memories_since_last_persona: number;
 }
 
+/**
+ * Result of a recalculate() operation (auto-scan mode).
+ * Includes cursor correction statistics.
+ */
+export interface RecalculateResult {
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+  total_processed: number;
+  memories_since_last_persona: number;
+  /** Number of runner session cursors that were corrected */
+  runner_cursors_corrected: number;
+  /** Number of pipeline session cursors that were corrected */
+  pipeline_cursors_corrected: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -697,6 +712,251 @@ export class CheckpointManager {
       total_processed: cp.total_processed,
       memories_since_last_persona: cp.memories_since_last_persona,
     };
+  }
+
+  /**
+   * Recalculate checkpoint from actual JSONL data (auto-scan mode).
+   *
+   * This is the preferred method for fixing counter drift because it:
+   * 1. Automatically scans conversations/YYYY-MM-DD.jsonl → counts L0
+   * 2. Automatically scans records/YYYY-MM-DD.jsonl → counts L1
+   * 3. Clamps stale last_l1_cursor to newest retained L0 recordedAt
+   * 4. Clamps stale last_extraction_updated_time to newest retained L1 updatedAt
+   * 5. Resets session cursors to 0/"" when session data no longer exists
+   *
+   * @param options.storeCounts - Optional VectorStore counts (preferred if available)
+   *                              When provided, these override JSONL scan counts.
+   * @returns The recalculated values and cursor correction stats
+   */
+  async recalculate(options?: {
+    storeCounts?: {
+      l0ConversationsCount?: number;
+      totalMemoriesExtracted?: number;
+    };
+  }): Promise<RecalculateResult> {
+    const dataDir = path.dirname(path.dirname(this.filePath));
+
+    // Phase 1: Scan JSONL shards for counts and cursors
+    const scanResult = await this.scanJsonlShards(dataDir);
+
+    // Phase 2: Determine final counts (store > JSONL fallback)
+    const l0Count = options?.storeCounts?.l0ConversationsCount ?? scanResult.l0Count;
+    const l1Count = options?.storeCounts?.totalMemoriesExtracted ?? scanResult.l1Count;
+
+    // Phase 3: Mutate checkpoint with recalculated values
+    const cp = await this.mutate((checkpoint) => {
+      // Recalculate memories_since_last_persona
+      const memoriesSinceLastPersona = Math.max(0, l1Count - checkpoint.last_persona_at);
+
+      checkpoint.l0_conversations_count = Math.max(0, l0Count);
+      checkpoint.total_memories_extracted = Math.max(0, l1Count);
+      checkpoint.total_processed = Math.max(0, scanResult.totalProcessed);
+      checkpoint.memories_since_last_persona = memoriesSinceLastPersona;
+
+      // Phase 4: Clamp per-session runner cursors
+      let runnerCursorsCorrected = 0;
+      if (checkpoint.runner_states) {
+        const sessionsWithData = new Set<string>([
+          ...scanResult.l0Sessions,
+          ...scanResult.l1Sessions,
+        ]);
+
+        for (const [sessionKey, state] of Object.entries(checkpoint.runner_states)) {
+          let changed = false;
+
+          // Clamp last_l1_cursor to newest retained L0 recordedAt
+          if (scanResult.newestL0RecordedAt > 0) {
+            if (state.last_l1_cursor > scanResult.newestL0RecordedAt) {
+              state.last_l1_cursor = scanResult.newestL0RecordedAt;
+              changed = true;
+            }
+          }
+
+          // Clamp last_captured_timestamp
+          if (scanResult.newestL0RecordedAt > 0) {
+            if (state.last_captured_timestamp > scanResult.newestL0RecordedAt) {
+              state.last_captured_timestamp = scanResult.newestL0RecordedAt;
+              changed = true;
+            }
+          }
+
+          // Reset cursors for sessions with no retained data
+          if (!sessionsWithData.has(sessionKey)) {
+            if (state.last_l1_cursor !== 0) {
+              state.last_l1_cursor = 0;
+              changed = true;
+            }
+            if (state.last_captured_timestamp !== 0) {
+              state.last_captured_timestamp = 0;
+              changed = true;
+            }
+          }
+
+          if (changed) runnerCursorsCorrected++;
+        }
+      }
+
+      // Phase 5: Clamp per-session pipeline cursors
+      let pipelineCursorsCorrected = 0;
+      if (checkpoint.pipeline_states) {
+        const sessionsWithL1Data = new Set<string>(scanResult.l1Sessions);
+
+        for (const [sessionKey, state] of Object.entries(checkpoint.pipeline_states)) {
+          let changed = false;
+
+          // Clamp last_extraction_updated_time to newest retained L1 updatedAt
+          if (scanResult.newestL1UpdatedAt && scanResult.newestL1UpdatedAt > 0) {
+            const currentCursor = state.last_extraction_updated_time
+              ? new Date(state.last_extraction_updated_time).getTime()
+              : 0;
+            if (currentCursor > scanResult.newestL1UpdatedAt) {
+              state.last_extraction_updated_time = new Date(scanResult.newestL1UpdatedAt).toISOString();
+              changed = true;
+            }
+          }
+
+          // Reset cursor for sessions with no retained L1 data
+          if (!sessionsWithL1Data.has(sessionKey)) {
+            if (state.last_extraction_updated_time !== "") {
+              state.last_extraction_updated_time = "";
+              changed = true;
+            }
+          }
+
+          if (changed) pipelineCursorsCorrected++;
+        }
+      }
+
+      // Store correction counts in temp properties for return
+      (checkpoint as Record<string, unknown>).__runnerCursorsCorrected = runnerCursorsCorrected;
+      (checkpoint as Record<string, unknown>).__pipelineCursorsCorrected = pipelineCursorsCorrected;
+    });
+
+    const runnerCursorsCorrected = (cp as Record<string, unknown>).__runnerCursorsCorrected as number;
+    const pipelineCursorsCorrected = (cp as Record<string, unknown>).__pipelineCursorsCorrected as number;
+
+    this.logger.info(
+      `[checkpoint] recalculate: l0=${cp.l0_conversations_count}, l1=${cp.total_memories_extracted}, ` +
+      `processed=${cp.total_processed}, runner_cursors=${runnerCursorsCorrected}, ` +
+      `pipeline_cursors=${pipelineCursorsCorrected}`,
+    );
+
+    return {
+      l0_conversations_count: cp.l0_conversations_count,
+      total_memories_extracted: cp.total_memories_extracted,
+      total_processed: cp.total_processed,
+      memories_since_last_persona: cp.memories_since_last_persona,
+      runner_cursors_corrected: runnerCursorsCorrected,
+      pipeline_cursors_corrected: pipelineCursorsCorrected,
+    };
+  }
+
+  /**
+   * Scan JSONL shards to count records and find cursor positions.
+   */
+  private async scanJsonlShards(dataDir: string): Promise<{
+    l0Count: number;
+    l1Count: number;
+    totalProcessed: number;
+    newestL0RecordedAt: number;
+    newestL1UpdatedAt: number;
+    l0Sessions: Set<string>;
+    l1Sessions: Set<string>;
+  }> {
+    const L0_DIR = "conversations";
+    const L1_DIR = "records";
+
+    let l0Count = 0;
+    let l1Count = 0;
+    let totalProcessed = 0;
+    let newestL0RecordedAt = 0;
+    let newestL1UpdatedAt = 0;
+    const l0Sessions = new Set<string>();
+    const l1Sessions = new Set<string>();
+
+    // Scan L0 conversations
+    await this.scanJsonlDir(
+      path.join(dataDir, L0_DIR),
+      {
+        onRecord: (record) => {
+          l0Count++;
+          totalProcessed++;
+          if (record.session_id) l0Sessions.add(record.session_id);
+          if (record.recorded_at) {
+            const ts = new Date(record.recorded_at).getTime();
+            if (ts > newestL0RecordedAt) newestL0RecordedAt = ts;
+          }
+        },
+      },
+    );
+
+    // Scan L1 records
+    await this.scanJsonlDir(
+      path.join(dataDir, L1_DIR),
+      {
+        onRecord: (record) => {
+          l1Count++;
+          if (record.session_id) l1Sessions.add(record.session_id);
+          if (record.updated_at) {
+            const ts = new Date(record.updated_at).getTime();
+            if (ts > newestL1UpdatedAt) newestL1UpdatedAt = ts;
+          }
+        },
+      },
+    );
+
+    return {
+      l0Count,
+      l1Count,
+      totalProcessed,
+      newestL0RecordedAt,
+      newestL1UpdatedAt,
+      l0Sessions,
+      l1Sessions,
+    };
+  }
+
+  /**
+   * Scan a directory of JSONL shard files and process each record.
+   */
+  private async scanJsonlDir(
+    dirPath: string,
+    handlers: {
+      onRecord: (record: Record<string, unknown>) => void;
+    },
+  ): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      // Directory doesn't exist - nothing to scan
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+
+      // Only scan date-sharded files (YYYY-MM-DD.*)
+      if (!/^\d{4}-\d{2}-\d{2}\.(jsonl?|json)$/.test(entry.name)) continue;
+
+      const filePath = path.join(dirPath, entry.name);
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const lines = content.split("\n").filter((line) => line.trim());
+
+        for (const line of lines) {
+          try {
+            const record = JSON.parse(line);
+            handlers.onRecord(record);
+          } catch {
+            // Skip malformed JSON lines
+          }
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+    }
   }
 
   // ============================

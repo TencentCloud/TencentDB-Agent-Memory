@@ -802,4 +802,186 @@ describe("CheckpointManager", () => {
       expect(cp.l0_conversations_count).toBe(65); // 100 - 10 - 20 - 5
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // RECALCULATE() AUTO-SCAN TESTS
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  describe("recalculate() auto-scan mode", () => {
+    async function createJsonlFile(dir: string, filename: string, records: Record<string, unknown>[]): Promise<void> {
+      const filePath = path.join(dir, filename);
+      const lines = records.map((r) => JSON.stringify(r)).join("\n");
+      await fs.promises.mkdir(dir, { recursive: true });
+      await fs.promises.writeFile(filePath, lines, "utf-8");
+    }
+
+    it("scans L0 JSONL shards and counts records", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // Create L0 JSONL shards
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-28T10:00:00.000Z", content: "test1" },
+        { session_id: "session-a", recorded_at: "2026-06-28T11:00:00.000Z", content: "test2" },
+        { session_id: "session-b", recorded_at: "2026-06-28T12:00:00.000Z", content: "test3" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-29.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-29T10:00:00.000Z", content: "test4" },
+      ]);
+
+      // Create L1 JSONL shards
+      await createJsonlFile(path.join(dataDir, "records"), "2026-06-28.jsonl", [
+        { session_id: "session-a", updated_at: "2026-06-28T12:00:00.000Z", content: "memory1" },
+      ]);
+
+      const result = await manager.recalculate();
+
+      expect(result.l0_conversations_count).toBe(4);
+      expect(result.total_memories_extracted).toBe(1);
+      expect(result.total_processed).toBe(4);
+    });
+
+    it("finds newest L0 recorded_at for cursor correction", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-28T10:00:00.000Z" },
+        { session_id: "session-a", recorded_at: "2026-06-28T14:00:00.000Z" }, // newest
+      ]);
+
+      const result = await manager.recalculate();
+      expect(result.l0_conversations_count).toBe(2);
+    });
+
+    it("corrects stale runner cursors after recalculate", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // Create actual data
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-28T10:00:00.000Z" },
+      ]);
+
+      // Set stale checkpoint with cursor ahead of actual data
+      const cp0 = await manager.read();
+      cp0.runner_states = {
+        "session-a": {
+          last_captured_timestamp: new Date("2026-06-29T00:00:00.000Z").getTime(), // stale
+          last_l1_cursor: new Date("2026-06-29T00:00:00.000Z").getTime(), // stale
+          last_scene_name: "old-scene",
+        },
+      };
+      await manager.write(cp0);
+
+      const result = await manager.recalculate();
+
+      expect(result.runner_cursors_corrected).toBe(1);
+      const cp = await manager.read();
+      expect(cp.runner_states["session-a"].last_captured_timestamp)
+        .toBeLessThanOrEqual(new Date("2026-06-28T23:59:59.999Z").getTime());
+    });
+
+    it("corrects stale pipeline cursors after recalculate", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // Create actual L1 data
+      await createJsonlFile(path.join(dataDir, "records"), "2026-06-28.jsonl", [
+        { session_id: "session-a", updated_at: "2026-06-28T12:00:00.000Z" },
+      ]);
+
+      // Set stale checkpoint with pipeline cursor ahead of actual data
+      const cp0 = await manager.read();
+      cp0.pipeline_states = {
+        "session-a": {
+          conversation_count: 1,
+          last_extraction_time: "2026-06-28T12:00:00.000Z",
+          last_extraction_updated_time: "2026-06-29T00:00:00.000Z", // stale
+          last_active_time: Date.now(),
+          l2_pending_l1_count: 0,
+          warmup_threshold: 0,
+          l2_last_extraction_time: "",
+        },
+      };
+      await manager.write(cp0);
+
+      const result = await manager.recalculate();
+
+      expect(result.pipeline_cursors_corrected).toBe(1);
+      const cp = await manager.read();
+      expect(cp.pipeline_states["session-a"].last_extraction_updated_time)
+        .toBe("2026-06-28T12:00:00.000Z");
+    });
+
+    it("resets cursors for sessions with no retained data", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // Create data only for session-a
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-28T10:00:00.000Z" },
+      ]);
+
+      // Set checkpoint with state for both sessions
+      const cp0 = await manager.read();
+      cp0.runner_states = {
+        "session-a": {
+          last_captured_timestamp: new Date("2026-06-28T10:00:00.000Z").getTime(),
+          last_l1_cursor: new Date("2026-06-28T10:00:00.000Z").getTime(),
+          last_scene_name: "scene-a",
+        },
+        "session-b": { // deleted session - should be reset
+          last_captured_timestamp: new Date("2026-06-28T12:00:00.000Z").getTime(),
+          last_l1_cursor: new Date("2026-06-28T12:00:00.000Z").getTime(),
+          last_scene_name: "scene-b",
+        },
+      };
+      await manager.write(cp0);
+
+      const result = await manager.recalculate();
+
+      // session-b should be reset
+      expect(result.runner_cursors_corrected).toBe(1);
+      const cp = await manager.read();
+      expect(cp.runner_states["session-b"].last_captured_timestamp).toBe(0);
+      expect(cp.runner_states["session-b"].last_l1_cursor).toBe(0);
+      // session-a should remain unchanged
+      expect(cp.runner_states["session-a"].last_captured_timestamp)
+        .toBe(new Date("2026-06-28T10:00:00.000Z").getTime());
+    });
+
+    it("uses store counts when provided (override JSONL)", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // Create JSONL with 2 L0 records
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { session_id: "session-a", recorded_at: "2026-06-28T10:00:00.000Z" },
+        { session_id: "session-a", recorded_at: "2026-06-28T11:00:00.000Z" },
+      ]);
+
+      // But VectorStore says 5 (simulating more accurate count)
+      const result = await manager.recalculate({
+        storeCounts: {
+          l0ConversationsCount: 5,
+          totalMemoriesExtracted: 3,
+        },
+      });
+
+      expect(result.l0_conversations_count).toBe(5); // from store
+      expect(result.total_memories_extracted).toBe(3); // from store
+    });
+
+    it("handles missing directories gracefully", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      // No conversations/ or records/ directories - should not throw
+      const result = await manager.recalculate();
+
+      expect(result.l0_conversations_count).toBe(0);
+      expect(result.total_memories_extracted).toBe(0);
+    });
+  });
 });
