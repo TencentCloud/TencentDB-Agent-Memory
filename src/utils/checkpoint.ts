@@ -144,6 +144,16 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/**
+ * Result of a recalibration operation.
+ */
+export interface RecalibrationResult {
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+  total_processed: number;
+  memories_since_last_persona: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -485,4 +495,57 @@ export class CheckpointManager {
     });
   }
 
+  // ============================
+  // Recalibration (fix counter drift after cleanup)
+  // ============================
+
+  /**
+   * Recalibrate counters by recounting from actual data.
+   *
+   * After cleanup operations (deleting test pipeline states, running
+   * memory-cleaner, or manual JSONL pruning), checkpoint counters drift
+   * from actual data because all increment methods lack decrement counterparts.
+   *
+   * This method allows callers to reset counters to their actual values
+   * by providing the true counts from the data layer.
+   *
+   * @param params.actualL0Count    - Actual L0 conversation count from storage
+   * @param params.actualL1Count    - Actual L1 memories count from storage
+   * @param params.actualTotalProcessed - Actual total processed from storage
+   * @returns The recalibrated values written to checkpoint
+   */
+  async recalibrate(params: {
+    actualL0Count: number;
+    actualL1Count: number;
+    actualTotalProcessed: number;
+  }): Promise<RecalibrationResult> {
+    const { actualL0Count, actualL1Count, actualTotalProcessed } = params;
+
+    const cp = await this.mutate((checkpoint) => {
+      // Recalculate memories_since_last_persona based on actual L1 count
+      // and last persona generation point
+      const memoriesSinceLastPersona = Math.max(
+        0,
+        actualL1Count - checkpoint.last_persona_at,
+      );
+
+      checkpoint.l0_conversations_count = Math.max(0, actualL0Count);
+      checkpoint.total_memories_extracted = Math.max(0, actualL1Count);
+      checkpoint.total_processed = Math.max(0, actualTotalProcessed);
+      checkpoint.memories_since_last_persona = memoriesSinceLastPersona;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: l0=${cp.l0_conversations_count}, ` +
+      `l1=${cp.total_memories_extracted}, processed=${cp.total_processed}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+
+    return {
+      l0_conversations_count: cp.l0_conversations_count,
+      total_memories_extracted: cp.total_memories_extracted,
+      total_processed: cp.total_processed,
+      memories_since_last_persona: cp.memories_since_last_persona,
+    };
+  }
 }
