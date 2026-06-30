@@ -175,6 +175,14 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Strip FTS5 boolean operators from user input before tokenization.
+ * FTS5 operators are case-sensitive (uppercase only, per FTS5 docs §3.7).
+ */
+function sanitizeFts5Input(raw: string): string {
+  return raw.replace(/\b(AND|OR|NOT|NEAR)\b/g, " ");
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -197,13 +205,14 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const input = sanitizeFts5Input(raw);
 
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(input, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +227,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      input
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
