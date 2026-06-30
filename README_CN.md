@@ -497,6 +497,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| 跨平台适配工具包 | [`GatewayMemoryClient`](./docs/cross-platform-adapters.md) 帮助 Codex、Claude Code、Dify、LangGraph 和自定义 Agent 通过 Gateway API 接入 |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -510,6 +511,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
+| [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | 面向 Codex、Claude Code、Dify、LangGraph 和自定义 Agent 的 Gateway 适配指南 |
 
 ---
 ## 社区与贡献
