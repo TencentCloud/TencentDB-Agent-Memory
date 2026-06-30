@@ -190,6 +190,13 @@ const ZH_STOP_WORDS = new Set([
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
  *
+ * **Security**: FTS5 special characters (`"`, `'`, `(`, `)`, `*`) are
+ * stripped from each token before quotation.  These characters retain
+ * special meaning inside double-quoted strings (notably `*` for prefix
+ * matching) and could alter query semantics or cause syntax errors.
+ * The remaining FTS5 operators (`AND`, `OR`, `NOT`, `NEAR`, `+`, `-`)
+ * are inert inside quotes and require no escaping.
+ *
  * Example (with jieba):
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
  * Example (fallback):
@@ -224,8 +231,15 @@ export function buildFtsQuery(raw: string): string | null {
         .filter(Boolean) ?? [];
   }
 
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  // Sanitize: strip FTS5 special chars that retain meaning inside double-quoted strings
+  //   *  — prefix wildcard: "hello*" matches "helloworld" (unexpected recall expansion)
+  //   "  — string terminator (balanced quotes already caught above; strip for safety)
+  //   ' ( ) — grouping / column-ref syntax; not meaningful in user search intent
+  const sanitized = tokens
+    .map((t) => t.replace(/["'()*]/g, ""))
+    .filter(Boolean);
+  if (sanitized.length === 0) return null;
+  const quoted = sanitized.map((t) => `"${t}"`);
   return quoted.join(" OR ");
 }
 
