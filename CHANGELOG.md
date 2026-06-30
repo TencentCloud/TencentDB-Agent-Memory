@@ -30,6 +30,11 @@
 
 不动配置 = 行为完全不变。
 
+### 🐛 修复
+
+#### 安全 / 输入净化
+- **FTS5 操作符注入防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：`buildFtsQuery()` 在分词前剥离用户输入中的 FTS5 特殊操作符（`AND` / `OR` / `NOT` / `NEAR`，大小写不敏感）和单引号 / 星号，避免用户输入改变查询语义或触发 FTS5 语法错误。原有的"每个 token 用双引号包裹"兜底仍然保留。`ANDROID` / `SCANNER` 等包含操作符子串的普通词不受影响（正则使用 `\b` 词边界）。新增 `src/core/store/sqlite.test.ts` 覆盖 5 类边界场景，全部通过。
+
 ---
 
 ## [0.3.6] - 2026-05-27
