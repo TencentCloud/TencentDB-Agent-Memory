@@ -164,6 +164,59 @@ function getJieba(): JiebaInstance | null {
 }
 
 /**
+ * FTS5 special-character sanitizer for user query input.
+ *
+ * Defense-in-depth against FTS5 injection attacks:
+ * 1. Remove FTS5 boolean operators (AND/OR/NOT/NEAR) — prevents expression injection
+ * 2. Remove syntax-breaking characters (parentheses, quotes, wildcards, angle brackets)
+ * 3. Lexical whitelist: only allow Unicode letters, numbers, Chinese/CJK characters
+ * 4. Normalize whitespace
+ *
+ * This runs BEFORE buildFtsQuery so that malicious patterns cannot reach the FTS5 engine.
+ *
+ * @param raw - Raw user input string
+ * @returns Sanitized string safe for FTS5 tokenization
+ *
+ * @example
+ * sanitizeFtsInput("TypeScript AND Python") → "TypeScript Python"
+ * sanitizeFtsInput('"admin" OR "1=1"') → "admin OR 1 1"
+ * sanitizeFtsInput("用户 AND 编程") → "用户 编程"
+ */
+export function sanitizeFtsInput(raw: string): string {
+  if (!raw) return "";
+
+  let cleaned = raw;
+
+  // Phase 1: Remove FTS5 boolean operators (case-insensitive)
+  cleaned = cleaned.replace(/\b(AND|OR|NOT|NEAR)\b/gi, " ");
+
+  // Phase 2: Remove syntax-breaking characters
+  // - Quotes: " ' ` (for phrase injection)
+  // - Parentheses: ( ) { } [ ] (for grouping injection)
+  // - Wildcards: * (prefix search injection)
+  // - Angle brackets: < > (for column filters and range queries)
+  // - Colon: : (for column:term syntax that could alter query behavior)
+  // - Backtick: ` (alternative quoting mechanism)
+  // - SQL/HTTP comment markers: -- (prevent SQL-like injection patterns)
+  cleaned = cleaned.replace(/[(){}[\]"'`*:<>]/g, " ");
+  cleaned = cleaned.replace(/--/g, " ");
+
+  // Phase 3: Lexical whitelist — remove any characters not in the allowed set
+  // Allowed: Unicode letters (\p{L}), Unicode numbers (\p{N}), Chinese CJK (\u4e00-\u9fff),
+  //          Japanese hiragana/katakana (\u3040-\u30ff), Korean Hangul (\uac00-\ud7af),
+  //          underscore, hyphen, whitespace
+  cleaned = cleaned.replace(
+    /[^\p{L}\p{N}_\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af-]/gu,
+    " ",
+  );
+
+  // Phase 4: Normalize whitespace (collapse multiple spaces/tabs/newlines to single space)
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+  return cleaned;
+}
+
+/**
  * Common Chinese stop-words that add noise to FTS5 queries.
  * Kept small on purpose — only high-frequency function words.
  */
@@ -196,6 +249,9 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // Phase 1: Sanitize input to prevent FTS5 injection attacks
+  const sanitized = sanitizeFtsInput(raw);
+
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +259,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +274,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
