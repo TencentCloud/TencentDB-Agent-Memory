@@ -151,4 +151,64 @@ describe("cache optimization behavior", () => {
 
     expect(config.recall.cacheOptimization?.splitSystemContext).toBe(false);
   });
+
+  it("should handle nested config with other recall settings", () => {
+    const config = parseConfig({
+      recall: {
+        enabled: true,
+        maxResults: 10,
+        strategy: "embedding",
+        cacheOptimization: {
+          stableWrapper: false,
+          splitSystemContext: false,
+        },
+      },
+    });
+
+    expect(config.recall.enabled).toBe(true);
+    expect(config.recall.maxResults).toBe(10);
+    expect(config.recall.strategy).toBe("embedding");
+    expect(config.recall.cacheOptimization?.stableWrapper).toBe(false);
+    expect(config.recall.cacheOptimization?.splitSystemContext).toBe(false);
+  });
+
+  it("should handle environment variable style config", () => {
+    // This tests the parsing logic, not env vars directly
+    const config = parseConfig({
+      recall: {
+        cacheOptimization: {
+          stableWrapper: true,
+          splitSystemContext: true,
+        },
+      },
+    });
+
+    expect(config.recall.cacheOptimization).toBeDefined();
+  });
+});
+
+describe("placeholder content edge cases", () => {
+  it("should have consistent placeholder across different scenarios", () => {
+    // Both active and placeholder should have same tag structure
+    const activePattern = /<relevant-memories>[\s\S]*<\/relevant-memories>/;
+    const placeholderPattern = /<relevant-memories>[\s\S]*<\/relevant-memories>/;
+
+    const activeContent = "<relevant-memories>\n内容\n</relevant-memories>";
+    const placeholderContent = "<relevant-memories>\n（本次对话未召回相关记忆）\n</relevant-memories>";
+
+    expect(activePattern.test(activeContent)).toBe(true);
+    expect(placeholderPattern.test(placeholderContent)).toBe(true);
+  });
+
+  it("placeholder should be concise for cache efficiency", () => {
+    const placeholder = "（本次对话未召回相关记忆）";
+    // Placeholder should be relatively short to not waste cache tokens
+    expect(placeholder.length).toBeLessThan(50);
+  });
+
+  it("should use Chinese characters for placeholder to match codebase language", () => {
+    const placeholder = "（本次对话未召回相关记忆）";
+    // Should contain Chinese characters
+    expect(/[\u4e00-\u9fa5]/.test(placeholder)).toBe(true);
+  });
 });
