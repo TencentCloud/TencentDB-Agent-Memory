@@ -120,7 +120,8 @@ async function performAutoRecallInner(params: {
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
-  if (!userText || userText.length === 0) {
+  const userTextEmpty = !userText || userText.length === 0;
+  if (userTextEmpty) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
@@ -211,6 +212,7 @@ async function performAutoRecallInner(params: {
   if (memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    logger?.debug?.(`${TAG} [cacheOpt] Recalled ${memoryLines.length} memories, ${prependContext.length} chars`);
   } else if (stableWrapperEnabled) {
     // Stable wrapper: even when no memories are recalled, output a placeholder
     // to maintain consistent prefix structure for prompt cache optimization.
@@ -227,6 +229,8 @@ async function performAutoRecallInner(params: {
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
+  // stableWrapper is used when no memories were recalled and stableWrapper is enabled.
+  // This applies whether userText was empty (search skipped) or search found no results.
   const stableWrapperUsed = !!(memoryLines.length === 0 && stableWrapperEnabled);
   const totalMs = performance.now() - tRecallStart;
 
