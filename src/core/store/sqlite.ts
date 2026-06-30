@@ -33,6 +33,7 @@ import type {
   L0SearchResult,
   L0FtsResult,
 } from "./types.js";
+import { buildFts5LiteralOrQuery } from "./fts5-query.js";
 import type { Logger } from "../types.js";
 
 // ============================
@@ -197,36 +198,11 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
-
-  let tokens: string[];
-  if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
-  } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
-  }
-
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" OR ");
+  // Feed both tokenization paths through the same literal-query encoder.
+  // With jieba, punctuation may be attached to a candidate; without jieba,
+  // the raw input is split by the encoder's Unicode allow-list.
+  const candidates = jieba ? jieba.cutForSearch(raw, true) : [raw];
+  return buildFts5LiteralOrQuery(candidates, { stopWords: ZH_STOP_WORDS });
 }
 
 /**
