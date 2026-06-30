@@ -59,6 +59,8 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
+  /** Stable content placed BEFORE CACHE_BOUNDARY for prompt caching (persona in split_system mode) */
+  prependSystemAddition?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
   /** L1 memories that were recalled (with scores), for metric reporting */
@@ -185,37 +187,84 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  // With cacheOptimization="none" (legacy):
+  //   appendSystemContext (system prompt end): persona + scene nav + tools guide
+  //   prependContext (user prompt prefix): L1 memories in <relevant-memories>
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  // With cacheOptimization="stable_wrapper":
+  //   appendSystemContext: same as "none"
+  //   prependContext: L1 memories wrapped in stable <memory-context> tags
+  //   Even when no memories are recalled, a <memory-context state="empty">
+  //   placeholder is injected so the prefix remains stable.
+  //
+  // With cacheOptimization="split_system":
+  //   prependSystemAddition (BEFORE CACHE_BOUNDARY, cached): persona
+  //   appendSystemContext (after CACHE_BOUNDARY): scene nav + tools guide
+  //   prependContext: L1 memories wrapped in stable <memory-context> tags
+  const cacheOpt = cfg.recall.cacheOptimization ?? "none";
+  const useStableWrapper = cacheOpt === "stable_wrapper" || cacheOpt === "split_system";
+  const useSplitSystem = cacheOpt === "split_system";
+
   const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+  let prependSystemAddition: string | undefined;
+
+  if (useSplitSystem) {
+    // Split mode: persona goes BEFORE CACHE_BOUNDARY (prependSystemAddition)
+    // Scene nav + tools guide stay in appendSystemContext (after boundary)
+    if (personaContent) {
+      prependSystemAddition = `<user-persona>\n${personaContent}\n</user-persona>`;
+    }
+    if (sceneNavigation) {
+      stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    }
+  } else {
+    // Legacy / stable_wrapper: all stable content in appendSystemContext
+    if (personaContent) {
+      stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    }
+    if (sceneNavigation) {
+      stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    }
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  if (useStableWrapper) {
+    // Stable wrapper mode: wrap memories in <memory-context> tags for cache stability.
+    // The outer tags ("active" / "empty") provide a stable prefix that providers
+    // with prefix-matching caches can hit even when inner content changes.
+    if (memoryLines.length > 0) {
+      prependContext =
+        `<memory-context state="active">\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</memory-context>`;
+    } else {
+      // Empty placeholder: keeps the prefix stable even when no memories are recalled.
+      // Without this, a turn with no recall would have a different prefix structure
+      // (missing the <memory-context> block entirely), busting the cache.
+      prependContext = `<memory-context state="empty"></memory-context>`;
+    }
+  } else {
+    // Legacy mode: use <relevant-memories> (no stable wrapper, no empty placeholder)
+    if (memoryLines.length > 0) {
+      prependContext =
+        `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    }
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
+  if (stableParts.length > 0 || prependContext || prependSystemAddition) {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+
+  logger?.debug?.(
+    `${TAG} Cache optimization: strategy=${cacheOpt}, ` +
+    `prependContext=${prependContext ? `${prependContext.length}chars` : "none"}, ` +
+    `appendSystemContext=${appendSystemContext ? `${appendSystemContext.length}chars` : "none"}, ` +
+    `prependSystemAddition=${prependSystemAddition ? `${prependSystemAddition.length}chars` : "none"}`,
+  );
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,13 +276,14 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!appendSystemContext && !prependContext && !prependSystemAddition) {
     return undefined;
   }
 
   return {
     prependContext,
     appendSystemContext,
+    prependSystemAddition,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,

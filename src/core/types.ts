@@ -201,6 +201,18 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
+  /**
+   * Stable content that should be placed BEFORE the CACHE_BOUNDARY marker
+   * in the system prompt so it participates in prompt caching.
+   *
+   * Contains persona content when `recall.cacheOptimization` is "stable_wrapper"
+   * or "split_system". When omitted, all stable content goes into
+   * `appendSystemContext` (legacy behavior, placed after CACHE_BOUNDARY).
+   *
+   * OpenClaw hosts that support `prependSystemPromptAdditionAfterCacheBoundary`
+   * should use this field for persona placement.
+   */
+  prependSystemAddition?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */

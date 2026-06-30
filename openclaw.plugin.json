@@ -77,6 +77,8 @@
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否在会话历史中保留 auto-recall 注入的记忆上下文，便于用户查看召回内容。开启后会增加上下文膨胀，但用户可检查每轮使用了哪些记忆" },
+          "cacheOptimization": { "type": "string", "enum": ["none", "stable_wrapper", "split_system"], "default": "none", "description": "Prompt 缓存优化策略（针对 DeepSeek/MiMo 等前缀匹配缓存提供商）：\"none\" 不优化；\"stable_wrapper\" 用稳定的 <memory-context> 外壳包裹动态记忆，保持前缀一致；\"split_system\" 进一步将 persona 分离到 CACHE_BOUNDARY 之前参与缓存" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
           "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
