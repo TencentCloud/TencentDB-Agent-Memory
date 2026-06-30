@@ -406,6 +406,9 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
+| `recall.timeoutMs` | `5000` | Recall timeout in ms; skip injection if exceeded |
+| `recall.cacheOptimization.stableWrapper` | `true` | Output placeholder when no memories recalled, improving prefix-matching cache hit rate |
+| `recall.cacheOptimization.splitSystemContext` | `true` | Separate stable persona/scene from dynamic content for better cache placement |
 | `pipeline.everyNConversations` | `5` | Trigger an L1 memory extraction every N turns |
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |

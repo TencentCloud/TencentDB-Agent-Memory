@@ -8,6 +8,11 @@
 
 ### ✨ 新功能
 
+- **Prompt 缓存命中率优化** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：新增 `recall.cacheOptimization` 配置组，优化 OpenAI-compatible provider（DeepSeek、MiMo 等）的 prefix-matching 缓存命中率。
+  - `cacheOptimization.stableWrapper`（默认 `true`）：无召回时输出占位符 `<relevant-memories>（本次对话未召回相关记忆）</relevant-memories>`，保持对话前缀结构稳定，避免前缀变化导致缓存失效。
+  - `cacheOptimization.splitSystemContext`（默认 `true`）：将稳定的 persona/scene 内容与动态的 tools guide 分离，放置到有利于缓存的位置。
+  - 相关记忆自动从对话历史中剥离（通过 `before_message_write` hook），防止历史膨胀。
+  - 新增 `RecallResult.stableWrapperUsed` 字段用于指标追踪。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
@@ -19,6 +24,14 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+
+### 🐛 修复 / 安全性
+
+- **FTS5 MATCH 表达式查询语义注入** ([#160](https://github.com/TencentDB/TencentDB-Agent-Memory/issues/160))：在 `src/core/store/sqlite.ts` 的 `buildFtsQuery()` 中引入纵深防御：
+  - 预分词层 `sanitizeFtsInput()`：先对原始文本做 NFKC 归一化（捕获全角 Unicode 变体 `ＡＮＤ` 等），再词边界剥离 FTS5 保留运算符 `AND` / `OR` / `NOT` / `NEAR`（大小写不敏感，保证 `ANDROID` / `ORACLE` / `NEARBY` / `SCANNER` 安全），最后剥离 FTS5 语法字符 `'`、`"`、`*`、`(`、`)` 与列过滤前缀 `content:` / `message:` / `session:` / `actor:` / `topic:` 等（含否定前缀 `-`）。
+  - 分词层层（jieba 或 regex 回退）后再过一遍 `sanitizeFtsToken()`：基于 `[\p{L}\p{N}_]` Unicode 白名单与保留操作符二次检查，jieba 注入的 `OR` 等也无法滑过；token 输出为 FTS5 phrase 形式并对内嵌 `"` 做标准 `""` 转义。
+  - 空查询返回 `null`，所有下游 `searchL1Fts()` / `searchL0Fts()` 路径只需检查 `null` 即可安全跳过 MATCH。
+  - 新增 44 个测试（30 个单元测试 + 14 个真实 `node:sqlite` FTS5 fixture 集成测试覆盖 true MATCH 执行、recall 对比与 200 次 fuzz）；普通关键词查询的召回集保持不变或变好。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 

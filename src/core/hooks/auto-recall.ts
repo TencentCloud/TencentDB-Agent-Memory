@@ -67,6 +67,8 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Effective search strategy used */
   recallStrategy?: string;
+  /** Whether stableWrapper was used (placeholder output when no memories found) */
+  stableWrapperUsed?: boolean;
 }
 
 export async function performAutoRecall(params: {
@@ -118,7 +120,8 @@ async function performAutoRecallInner(params: {
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
-  if (!userText || userText.length === 0) {
+  const userTextEmpty = !userText || userText.length === 0;
+  if (userTextEmpty) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
@@ -202,10 +205,19 @@ async function performAutoRecallInner(params: {
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Stable Wrapper optimization: ensures consistent prefix structure across turns,
+  // improving prefix-matching cache hit rates for OpenAI-compatible providers.
+  const stableWrapperEnabled = cfg.recall.cacheOptimization?.stableWrapper ?? true;
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    logger?.debug?.(`${TAG} [cacheOpt] Recalled ${memoryLines.length} memories, ${prependContext.length} chars`);
+  } else if (stableWrapperEnabled) {
+    // Stable wrapper: even when no memories are recalled, output a placeholder
+    // to maintain consistent prefix structure for prompt cache optimization.
+    prependContext = `<relevant-memories>\n（本次对话未召回相关记忆）\n</relevant-memories>`;
+    logger?.debug?.(`${TAG} [stableWrapper] No memories recalled, outputting placeholder for cache stability`);
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -217,15 +229,31 @@ async function performAutoRecallInner(params: {
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
+  // stableWrapper is used when no memories were recalled and stableWrapper is enabled.
+  // This applies whether userText was empty (search skipped) or search found no results.
+  const stableWrapperUsed = !!(memoryLines.length === 0 && stableWrapperEnabled);
   const totalMs = performance.now() - tRecallStart;
+
+  // Cache optimization metrics for observability
+  const cacheMetrics = {
+    stableWrapperUsed,
+    prependContextChars: prependContext?.length ?? 0,
+    appendContextChars: appendSystemContext?.length ?? 0,
+    personaLoaded: !!personaContent,
+    sceneLoaded: !!sceneNavigation,
+    memoryHits: memoryLines.length,
+  };
+
   logger?.info(
     `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
     `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})` +
+    (stableWrapperUsed ? `, stableWrapper=${stableWrapperUsed}` : ""),
   );
+  logger?.debug?.(`${TAG} [cacheOpt] Metrics: ${JSON.stringify(cacheMetrics)}`);
 
   if (!appendSystemContext && !prependContext) {
     return undefined;
@@ -237,6 +265,7 @@ async function performAutoRecallInner(params: {
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
+    stableWrapperUsed,
   };
 }
 

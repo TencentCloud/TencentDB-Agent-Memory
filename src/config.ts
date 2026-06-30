@@ -93,6 +93,23 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Prompt cache optimization settings */
+  cacheOptimization: CacheOptimizationConfig;
+}
+
+/** Cache optimization configuration for prompt cache hit rate improvement */
+export interface CacheOptimizationConfig {
+  /**
+   * Stable wrapper: output placeholder even when no memories are recalled.
+   * This ensures consistent prefix structure across turns, improving prefix-matching cache hit rates.
+   * (default: true)
+   */
+  stableWrapper: boolean;
+  /**
+   * Split system context: separate stable (persona/scene) from dynamic (tools guide) content.
+   * Places stable content in a cacheable position. (default: true)
+   */
+  splitSystemContext: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +552,13 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      cacheOptimization: (() => {
+        const cacheOptGroup = obj(recallGroup, "cacheOptimization");
+        return {
+          stableWrapper: bool(cacheOptGroup, "stableWrapper") ?? true,
+          splitSystemContext: bool(cacheOptGroup, "splitSystemContext") ?? true,
+        };
+      })(),
     },
     embedding: {
       enabled: embeddingEnabled,

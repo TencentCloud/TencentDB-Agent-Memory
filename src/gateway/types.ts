@@ -39,6 +39,8 @@ export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  /** Whether stableWrapper was used (placeholder output when no memories found) */
+  stable_wrapper_used?: boolean;
 }
 
 // ============================

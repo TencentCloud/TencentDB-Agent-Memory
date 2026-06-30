@@ -1,0 +1,24 @@
+feat(adapter): implement cross-platform adapter SDK
+
+Add unified PlatformAdapter SDK for integrating TDAI memory
+with any Agent platform. New platforms only need to implement
+the PlatformAdapter interface.
+
+Core features:
+- PlatformAdapter interface with 5 core methods
+- BasePlatformAdapter abstract class (80% common functionality)
+- ToolRegistry for tool registration and execution
+- LifecycleManager for install/upgrade/uninstall/health checks
+- EventEmitter for observability
+- ConfigValidator for configuration validation
+- ErrorHandler with retry support
+
+Platform adapters:
+- OpenClawAdapter: Full implementation with SKILL support
+- HermesAdapter: HTTP Gateway-based adapter
+- ClaudeCodeAdapter: CLI-based adapter
+
+Tests:
+- 74 unit tests passing (vitest)
+
+Fixes #235

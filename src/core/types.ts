@@ -207,6 +207,8 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /** Whether stableWrapper was used (placeholder output when no memories found). */
+  stableWrapperUsed?: boolean;
 }
 
 /** Result from a capture (sync_turn) operation. */
