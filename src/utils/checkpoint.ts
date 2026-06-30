@@ -124,6 +124,15 @@ const DEFAULT_PIPELINE_STATE: PipelineSessionState = {
   l2_last_extraction_time: "",
 };
 
+/**
+ * Report returned by `CheckpointManager.recalibrate()` describing the
+ * before/after values of each recalibrated counter plus a `changed` flag.
+ */
+export interface RecalibrationReport {
+  totalMemoriesExtracted: { old: number; new: number; changed: boolean };
+  l0ConversationsCount: { old: number; new: number; changed: boolean };
+}
+
 const DEFAULT_CHECKPOINT: Checkpoint = {
   last_captured_timestamp: 0,
   total_processed: 0,
@@ -259,13 +268,15 @@ export class CheckpointManager {
    * Execute a mutating operation under the per-file lock.
    * `fn` receives the current checkpoint and may modify it in place;
    * the updated checkpoint is atomically written back.
+   * If `fn` returns a value, it is forwarded to the caller (used by
+   * `recalibrate()` to return a recalibration report).
    */
-  private async mutate(fn: (cp: Checkpoint) => void | Promise<void>): Promise<Checkpoint> {
+  private async mutate<R = Checkpoint>(fn: (cp: Checkpoint) => R | Promise<R>): Promise<R> {
     return withFileLock(this.filePath, async () => {
       const cp = await this.readRaw();
-      await fn(cp);
+      const result = await fn(cp);
       await this.writeRaw(cp);
-      return cp;
+      return result;
     });
   }
 
@@ -326,10 +337,12 @@ export class CheckpointManager {
   }
 
   async incrementScenesProcessed(): Promise<void> {
-    const cp = await this.mutate((cp) => {
+    let newValue = 0;
+    await this.mutate((cp) => {
       cp.scenes_processed += 1;
+      newValue = cp.scenes_processed;
     });
-    this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
+    this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${newValue}`);
   }
 
   // ============================
@@ -429,6 +442,64 @@ export class CheckpointManager {
       `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
       `lastScene="${lastSceneName ?? "(unchanged)"}"`,
     );
+  }
+
+  // ============================
+  // Recalibration (drift fix — issue #157)
+  // ============================
+
+  /**
+   * Recalibrate aggregate counters from authoritative storage.
+   *
+   * `total_memories_extracted` and `l0_conversations_count` only ever increment
+   * in this class. After any external cleanup (memory-cleaner, manual JSONL
+   * pruning, deletion of pipeline_states test data) the counters permanently
+   * overstate reality, which corrupts persona-generation thresholds
+   * (`cp.total_processed`, `cp.memories_since_last_persona`) and status
+   * reporting. This method re-reads the source-of-truth counts and overwrites
+   * the in-checkpoint values atomically.
+   *
+   * Pass `undefined` for any counter whose authoritative count is unavailable
+   * (e.g. VectorStore not initialized) — that counter is left untouched.
+   *
+   * @returns A report describing the recalibration (old/new values, drift).
+   */
+  async recalibrate(
+    counts: { l1Memories?: number; l0Conversations?: number },
+  ): Promise<RecalibrationReport> {
+    const l1 = counts.l1Memories;
+    const l0 = counts.l0Conversations;
+    if (l1 !== undefined && (!Number.isFinite(l1) || l1 < 0)) {
+      throw new TypeError(`recalibrate: l1Memories must be a non-negative finite number, got ${l1}`);
+    }
+    if (l0 !== undefined && (!Number.isFinite(l0) || l0 < 0)) {
+      throw new TypeError(`recalibrate: l0Conversations must be a non-negative finite number, got ${l0}`);
+    }
+
+    const report = await this.mutate((cp) => {
+      const oldL1 = cp.total_memories_extracted;
+      const oldL0 = cp.l0_conversations_count;
+      if (l1 !== undefined) cp.total_memories_extracted = Math.floor(l1);
+      if (l0 !== undefined) cp.l0_conversations_count = Math.floor(l0);
+      this.logger.info(
+        `[checkpoint] recalibrate: ` +
+        `total_memories_extracted ${oldL1} → ${cp.total_memories_extracted} (Δ=${cp.total_memories_extracted - oldL1}); ` +
+        `l0_conversations_count ${oldL0} → ${cp.l0_conversations_count} (Δ=${cp.l0_conversations_count - oldL0})`,
+      );
+      return {
+        totalMemoriesExtracted: {
+          old: oldL1,
+          new: cp.total_memories_extracted,
+          changed: l1 !== undefined && oldL1 !== cp.total_memories_extracted,
+        },
+        l0ConversationsCount: {
+          old: oldL0,
+          new: cp.l0_conversations_count,
+          changed: l0 !== undefined && oldL0 !== cp.l0_conversations_count,
+        },
+      };
+    });
+    return report;
   }
 
   // ============================

@@ -23,6 +23,7 @@ import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
+import { CheckpointManager } from "../utils/checkpoint.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -147,6 +148,28 @@ export class TdaiGateway {
 
     // Initialize core
     await this.core.initialize();
+
+    // Recalibrate checkpoint counters (issue #157)
+    // total_memories_extracted / l0_conversations_count only ever increment
+    // inside CheckpointManager, so external cleanup (memory-cleaner, manual
+    // JSONL pruning) leaves them permanently drifted. Recompute from the
+    // authoritative storage before serving traffic. Non-fatal: any failure
+    // here is logged and the gateway still starts — drift will self-heal on
+    // the next startup.
+    try {
+      const cp = new CheckpointManager(this.config.data.baseDir, this.logger);
+      const vectorStore = this.core.getVectorStore();
+      const counts: { l1Memories?: number; l0Conversations?: number } = {};
+      if (vectorStore) {
+        try { counts.l1Memories = await vectorStore.countL1(); } catch { /* non-fatal */ }
+        try { counts.l0Conversations = await vectorStore.countL0(); } catch { /* non-fatal */ }
+      }
+      await cp.recalibrate(counts);
+    } catch (err) {
+      this.logger.warn(
+        `Checkpoint recalibration failed (non-fatal, counters may drift): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
