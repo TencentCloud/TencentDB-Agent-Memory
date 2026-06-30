@@ -1,14 +1,13 @@
 /**
- * Integration tests: real SQLite FTS5 MATCH execution via system sqlite3 CLI.
+ * 集成测试：通过系统 sqlite3 CLI 执行真实 SQLite FTS5 MATCH。
  *
- * Node.js v23's built-in `node:sqlite` does not ship with FTS5 compiled in
- * ("no such module: fts5").  We use the macOS system `sqlite3` (v3.51.0+)
- * instead — it bundles FTS5 and the unicode61 tokenizer.
+ * Node.js v23 内置 `node:sqlite` 不含编译好的 FTS5（"no such module: fts5"），
+ * 使用 macOS 系统 `sqlite3`（v3.51.0+）代替——它内置 FTS5 和 unicode61 分词器。
  *
- * These tests verify that the MATCH expressions produced by `buildFtsQuery()`:
- *   1. Parse without SQLite FTS5 errors
- *   2. Malicious input does NOT alter result semantics
- *   3. Normal keyword recall returns expected documents
+ * 验证 `buildFtsQuery()` 生成的 MATCH 表达式：
+ *   1. 解析无 SQLite FTS5 错误
+ *   2. 恶意输入不改变查询语义
+ *   3. 正常关键词召回返回预期文档
  */
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
