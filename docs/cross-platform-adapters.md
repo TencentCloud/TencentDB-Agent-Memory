@@ -6,7 +6,7 @@ Gateway HTTP API when the platform cannot run the core in-process.
 
 ## Architecture
 
-![Cross-platform adapter architecture](./assets/cross-platform-adapters.svg)
+![Cross-platform adapter architecture](./assets/cross-platform-adapters.png)
 
 ## Core Engine Boundary
 
