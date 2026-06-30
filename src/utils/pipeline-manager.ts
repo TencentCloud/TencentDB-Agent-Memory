@@ -1,67 +1,79 @@
 /**
- * MemoryPipelineManager: 管理 L0→L1→L2→L3 四级记忆提取流水线。
  * MemoryPipelineManager: manages the L0→L1→L2→L3 memory extraction pipeline.
  *
- * ## 分层架构 / Layered architecture
+ * ## Layered architecture
  *
- * - **L0（采集层 / capture）**: `auto-capture.ts` 从每个 `agent_end` 事件中提取
- *   新消息，做脱敏处理后通过 `notifyConversation(sessionKey, messages)` 传入流水线。
- *   消息在本地按会话缓存 —— 此阶段**不会**发起远程调用。
+ * - **L0 (capture)**: `auto-capture.ts` extracts new messages from each
+ *   `agent_end` event, sanitizes them, and passes them to the pipeline via
+ *   `notifyConversation(sessionKey, messages)`. Messages are buffered
+ *   locally per-session — NO remote call happens at this stage.
  *
- * - **L1（批量提取/入库层 / batch extraction）**: 当会话轮次达到 `everyNConversations`
- *   阈值 **或** 会话闲置超过 `l1IdleTimeoutSeconds` 时，L1 Runner 被触发，接收
- *   `{ sessionKey, msg, bg_msg }`，负责将消息入库/提取（例如调用 appendEvent
- *   或执行本地提取逻辑）。`bg_msg` 为背景上下文预留字段，当前始终为空。
+ * - **L1 (batch extraction / ingest)**: When the conversation count reaches
+ *   `everyNConversations` OR the session goes idle for `l1IdleTimeoutSeconds`,
+ *   the L1 Runner is invoked with all buffered messages. The runner receives
+ *   `{ sessionKey, msg, bg_msg }` and is responsible for ingesting/extracting
+ *   them (e.g. calling appendEvent, or running local extraction logic).
+ *   `bg_msg` is reserved for background context; currently always empty.
  *
- * - **L2（场景提取层 / scene extraction）**: 每个会话独立的下行定时器。
- *   每次 L2 完成后，下次触发时间设为 `now + maxInterval`。当 L1 完成（有新的记忆事件）
- *   时，触发时间会被提前（但绝不推迟）到 `max(now + delay, lastL2 + minInterval)`。
- *   定时器触发时，如果会话已冷却（不活跃时间 > `sessionActiveWindowHours`），
- *   定时器会被取消而不是触发 L2 —— 它将由下一次 L1 事件重新激活。
+ * - **L2 (scene extraction)**: Per-session downward-only timer. After each
+ *   L2 completion, the next fire time is set to `now + maxInterval`. When
+ *   L1 completes (new memory event), the fire time is advanced (but never
+ *   postponed) to `max(now + delay, lastL2 + minInterval)`. When the timer
+ *   fires, if the session is cold (inactive > `sessionActiveWindowHours`),
+ *   the timer is cancelled rather than triggering L2 — it will be re-armed
+ *   by the next L1 event.
  *
- * - **L3（人格生成层 / persona generation）**: 全局互斥锁（并发=1）+ pending 标记去重。
- *   在 L2 完成后触发。
+ * - **L3 (persona generation)**: Global mutex (concurrency=1) + pending flag
+ *   dedup. Triggered after L2 completes.
  *
- * ## 定时器语义 / Timer semantics
+ * ## Timer semantics
  *
- * L1 使用**可重置定时器**（经典空闲/防抖模式）：每次对话将倒计时重置为
- * `l1IdleTimeoutSeconds`。定时器触发时，缓冲的消息通过 L1 批量处理。
+ * L1 uses a **resettable timer** (classic idle/debounce): each conversation
+ * resets the countdown to `l1IdleTimeoutSeconds`. When the timer fires,
+ * buffered messages are flushed through L1.
  *
- * L2 使用**只下不定时器（downward-only timer）**: 预定的触发时间只能提前，不能推迟。
- * 这样既保证了 maxInterval 兜底，又保证了 L1 之后的快速响应，同时 minInterval 作为
- * 频率下限防止过度触发。
+ * L2 uses a **downward-only timer**: the scheduled fire time can only be
+ * moved earlier, never later. This ensures both the maxInterval guarantee
+ * and the delay-after-L1 responsiveness, while minInterval acts as a floor.
  *
- * 两种定时器都通过 `ManagedTimer` 实现，消除了重复的 clear→set→fire→clean 样板代码。
+ * Both timer types are implemented via `ManagedTimer` to eliminate
+ * repetitive clear→set→fire→clean boilerplate.
  *
- * ## L1 触发路径
- *   A. **对话阈值触发**（主要路径）：当 `notifyConversation()` 中
- *      `conversation_count >= effectiveThreshold` 时，L1 立即触发并携带所有缓冲消息。
- *      有效阈值受预热模式影响（见下文）。
- *   B. **空闲超时触发**（兜底路径）：当会话闲置超过 `l1IdleTimeoutSeconds` 时，
- *      L1 用已缓冲的消息（低于阈值）触发。
- *   C. **优雅关闭冲刷**：在优雅关闭时，所有待处理的缓冲区通过 L1→L2 冲刷处理。
+ * ## Trigger paths for L1
+ *   A. **Conversation threshold** (primary): when `conversation_count >=
+ *      effectiveThreshold` in `notifyConversation()`, L1 is triggered
+ *      immediately with all buffered messages. The effective threshold
+ *      is influenced by warm-up mode (see below).
+ *   B. **Idle timeout** (catch-up): when a session goes idle for
+ *      `l1IdleTimeoutSeconds`, L1 fires with whatever messages have
+ *      been buffered (below threshold).
+ *   C. **Shutdown flush**: on graceful shutdown, all pending buffers
+ *      are flushed through L1 then L2.
  *
- * ## 预热模式 / Warm-up mode
+ * ## Warm-up mode
  *
- * 当 `enableWarmup` 为 true（默认值）时，新会话使用指数增长的 L1 触发阈值，
- * 而不是直接跳到 `everyNConversations`。增长序列为：1 → 2 → 4 → 8 → ... →
- * everyNConversations。这确保了早期对话能被快速处理（首次对话立即触发 L1），
- * 同时随着会话成熟逐步降低处理频率。
+ * When `enableWarmup` is true (default), new sessions use an exponentially
+ * increasing L1 trigger threshold instead of jumping straight to
+ * `everyNConversations`. The sequence is: 1 → 2 → 4 → 8 → ... →
+ * everyNConversations. This ensures early conversations are processed
+ * quickly (first conversation triggers L1 immediately), while gradually
+ * reducing processing frequency as the session matures.
  *
- * `PipelineSessionState` 中的 `warmup_threshold` 字段跟踪当前阈值。
- * 值为 0 表示预热已完成（已毕业进入稳态）。每次成功执行 L1 后阈值翻倍。
+ * The `warmup_threshold` field in PipelineSessionState tracks the current
+ * threshold. A value of 0 means warm-up is complete (graduated to
+ * steady-state). The threshold doubles after each successful L1 run.
  *
- * ## L2 触发路径
- *   A. **L1后延迟触发**: L1 完成 → 定时器提前到
- *      `max(now + delay, lastL2 + min)` → 触发 → 入队 L2。
- *   B. **最大间隔兜底**: L2 完成 → 定时器设为
- *      `now + maxInterval` → 触发 → 入队 L2（仅活跃会话）。
- *   C. **优雅关闭冲刷**: 所有待处理的 L2 定时器被冲刷。
+ * ## Trigger paths for L2
+ *   A. **Delay-after-L1**: L1 completes → timer advanced to
+ *      `max(now + delay, lastL2 + min)` → fires → enqueue L2.
+ *   B. **MaxInterval guarantee**: L2 completes → timer set to
+ *      `now + maxInterval` → fires → enqueue L2 (if session active).
+ *   C. **Shutdown flush**: all pending L2 timers are flushed.
  *
- * 所有队列使用 SerialQueue（并发=1）保证串行执行。
+ * All queues use SerialQueue (concurrency=1) for serial execution.
  *
- * ## 设计文档 / Design doc
- * 详见 `docs/08-pipeline-refactor-design.md`。
+ * ## Design doc
+ * See `docs/08-pipeline-refactor-design.md` for full architecture.
  */
 
 import type { PipelineSessionState } from "./checkpoint.js";
@@ -72,113 +84,113 @@ import { report } from "../core/report/reporter.js";
 import type { Logger } from "../core/types.js";
 
 // ============================
-// 类型定义 / Types
+// Types
 // ============================
 
-/** 单条已捕获的消息，已准备好进入 L1 处理。 */
+/** A single captured message ready for L1 processing. */
 export interface CapturedMessage {
   role: "user" | "assistant" | "tool";
   content: string;
-  /** ISO 格式时间戳字符串 */
+  /** ISO timestamp string */
   timestamp: string;
 }
 
-/** 流水线配置 —— 所有时间单位为秒。 */
+/** Pipeline configuration — all time values in seconds. */
 export interface PipelineConfig {
   /**
-   * 触发 L1 批量处理的对话轮次阈值。
-   * 当会话的 conversation_count 达到此值时，L1 立即触发并携带所有缓冲消息。
-   * 默认值：5。
+   * Conversation count threshold to trigger L1 batch processing.
+   * When a session's conversation_count reaches this value,
+   * L1 is triggered immediately with all buffered messages.
+   * Default: 5.
    */
   everyNConversations: number;
 
   /**
-   * 是否启用新会话预热模式。
-   * 启用后，L1 触发阈值从 1 开始，每次成功执行 L1 后翻倍
-   * (1 → 2 → 4 → 8 → ... → everyNConversations)，
-   * 使早期会话得到更积极的处理。
-   * 默认值：true。
+   * Enable warm-up mode for new sessions.
+   * When enabled, the L1 trigger threshold starts at 1 and doubles after
+   * each successful L1 run (1 → 2 → 4 → 8 → ... → everyNConversations),
+   * allowing early sessions to be processed more aggressively.
+   * Default: true.
    */
   enableWarmup: boolean;
 
   l1: {
-    /** 触发 L1 的空闲超时时间（秒，默认：60） */
+    /** Idle timeout before triggering L1 (seconds, default: 60) */
     idleTimeoutSeconds: number;
   };
 
   l2: {
     /**
-     * L1 完成后到触发 L2 的延迟时间（秒，默认：90）。
-     * 给远程 L1 留出异步生成记录的时间。
+     * Delay after L1 completes before triggering L2 (seconds, default: 90).
+     * Allows remote L1 to finish generating records asynchronously.
      */
     delayAfterL1Seconds: number;
-    /** 每个会话 L2 提取的最小间隔（秒，默认：900，即15分钟） */
+    /** Minimum interval between L2 extractions per session (seconds, default: 900) */
     minIntervalSeconds: number;
     /**
-     * 每个会话 L2 提取的最大间隔（秒，默认：3600，即1小时）。
-     * 即使没有新的 L1 完成，活跃会话的 L2 也会按此间隔轮询。
+     * Maximum interval between L2 extractions per session (seconds, default: 3600).
+     * Even without new L1 completions, L2 will poll at this interval for active sessions.
      */
     maxIntervalSeconds: number;
     /**
-     * 会话不活跃时间超过此值（小时，默认：24）后停止 L2 轮询。
-     * 避免在废弃会话上浪费资源。
+     * Sessions inactive longer than this (hours, default: 24) stop L2 polling.
+     * Prevents wasting resources on abandoned sessions.
      */
     sessionActiveWindowHours: number;
   };
 }
 
-/** L1 执行器返回的结果。 */
+/** Result returned by the L1 runner. */
 export interface L1RunnerResult {
-  /** 成功处理的消息数量 */
+  /** Number of messages successfully processed */
   processedCount?: number;
 }
 
-/** L1 执行器 —— 批量处理某个会话的缓冲消息。 */
+/** L1 runner — batch-processes buffered messages for a session. */
 export type L1Runner = (params: {
   sessionKey: string;
-  msg: CapturedMessage[];     // 当前对话的消息列表
-  bg_msg: CapturedMessage[];  // 背景上下文消息（当前始终为空）
+  msg: CapturedMessage[];
+  bg_msg: CapturedMessage[];
 }) => Promise<L1RunnerResult | void>;
 
-/** L2 提取执行器返回的结果。 */
+/** Result returned by the L2 extraction runner. */
 export interface L2RunnerResult {
-  /** 处理后批次中最新的 `updated_at` 游标。 */
+  /** The latest `updated_at` cursor from the processed batch. */
   latestCursor?: string;
-  /** 为 true 表示没有新记录，本次提取被跳过。 */
+  /** True if no new records were found and extraction was skipped. */
   skipped?: boolean;
 }
 
-/** L2 提取执行器 —— 处理单个会话的记录。 */
+/** L2 extraction runner — processes a single session's records. */
 export type L2Runner = (sessionKey: string, cursor?: string) => Promise<L2RunnerResult | void>;
 
-/** L3 执行器 —— 基于所有会话的场景数据生成人格画像。 */
+/** L3 runner — generates persona from all sessions' scene data. */
 export type L3Runner = () => Promise<void>;
 
-/** 持久化会话状态到检查点的回调函数。 */
+/** Callback to persist session states to checkpoint. */
 export type PipelineStatePersister = (states: Record<string, PipelineSessionState>) => Promise<void>;
 
 const TAG = "[memory-tdai] [pipeline]";
 
 // ============================
-// 每个会话的定时器状态（仅内存）
-// / Per-session timer state (in memory only)
+// Per-session timer state (in memory only)
 // ============================
 
 interface SessionTimerState {
-  /** L1 空闲定时器（可重置）：对会话活动做防抖处理。 */
+  /** L1 idle timer (resettable): debounces conversation activity. */
   l1Idle: ManagedTimer;
-  /** L2 调度定时器（只下不）：下次 L2 触发时间，只能提前不能推迟。 */
+  /** L2 schedule timer (downward-only): next L2 fire time, only moves earlier. */
   l2Schedule: ManagedTimer;
-  /** 该会话的 L1 任务是否已入队或正在运行。 */
+  /** Whether an L1 task is already queued or running for this session. */
   l1Queued: boolean;
-  /** 该会话的 L2 任务是否已入队或正在运行。 */
+  /** Whether an L2 task is already queued or running for this session. */
   l2Queued: boolean;
-  /** L1 连续失败次数，用于重试上限控制。成功或新对话到达时重置。 */
+  /** Consecutive L1 failure count for retry limiting. Reset on success or new conversation. */
   l1RetryCount: number;
 }
 
 export class MemoryPipelineManager {
-  // ── 配置（内部转换为毫秒）/ Config (converted to ms internally) ──
+  // Config (converted to ms internally)
   private readonly l1IdleTimeoutMs: number;
   private readonly everyNConversations: number;
   private readonly enableWarmup: boolean;
@@ -187,62 +199,55 @@ export class MemoryPipelineManager {
   private readonly l2MaxIntervalMs: number;
   private readonly sessionActiveWindowMs: number;
 
-  /** L1 失败后重试前等待时间（毫秒）。 */
-  private readonly L1_RETRY_DELAY_MS = 30_000; // 30 秒
-  /** 每个会话 L1 最大连续重试次数，超过后放弃。 */
+  /** Delay before retrying a failed L1 (ms). */
+  private readonly L1_RETRY_DELAY_MS = 30_000; // 30 seconds
+  /** Max consecutive L1 retries per session before giving up. */
   private readonly L1_MAX_RETRIES = 5;
 
-  // ── 队列（命名便于诊断）/ Queues (named for diagnostics) ──
+  // Queues (named for diagnostics)
   private readonly l1Queue = new SerialQueue("L1");
   private readonly l2Queue = new SerialQueue("L2");
   private readonly l3Queue = new SerialQueue("L3");
 
-  // ── L3 去重标记 ──
-  /** L3 是否有待处理的新工作 */
+  // L3 dedup flag
   private l3Pending = false;
-  /** L3 是否正在运行中 */
   private l3Running = false;
 
-  // ── 每个会话的状态数据 ──
+  // Per-session state
   private readonly sessionStates = new Map<string, PipelineSessionState>();
   private readonly sessionTimers = new Map<string, SessionTimerState>();
 
-  // 每个会话的消息缓冲区：自上次 L1 运行以来积累的消息
+  // Per-session message buffer: messages accumulated since last L1 run
   private readonly messageBuffers = new Map<string, CapturedMessage[]>();
 
-  // 每个会话 L2 上次运行时间（毫秒时间戳，用于 minInterval 下限计算）
+  // Per-session L2 last run time (epoch ms, for minInterval floor)
   private readonly l2LastRunTime = new Map<string, number>();
 
-  // ── 回调钩子 / Callbacks ──
+  // Callbacks
   private l1Runner: L1Runner | null = null;
   private l2Runner: L2Runner | null = null;
   private l3Runner: L3Runner | null = null;
   private persister: PipelineStatePersister | null = null;
   private logger: Logger | undefined;
 
-  // 统一会话过滤器（内部会话 + excludeAgents）
+  // Unified session filter (internal sessions + excludeAgents)
   private readonly sessionFilter: SessionFilter;
 
-  // ── 生命周期 / Lifecycle ──
-  /** 是否已销毁，销毁后拒绝所有新工作 */
+  // Lifecycle
   private destroyed = false;
 
-  /** 插件实例 ID，用于指标上报（异步初始化后由外部设置）。 */
+  /** Plugin instance ID for metric reporting (set externally after async init). */
   instanceId?: string;
 
-  // ── 会话 GC：定期驱逐内存中的冷却会话 ──
-  /** sessionActiveWindowMs 的倍数，确定 GC 回收资格的过期阈值。 */
+  // Session GC: runs periodically to evict cold sessions from memory
+  /** Multiplier on sessionActiveWindowMs to determine GC eligibility. */
   private readonly SESSION_GC_INACTIVE_MULTIPLIER = 3;
-  /** 每 N 次 notifyConversation 调用运行一次 GC。 */
+  /** Run GC every N calls to notifyConversation. */
   private readonly SESSION_GC_EVERY_N_NOTIFICATIONS = 50;
-  /** GC 调度计数器。 */
+  /** Counter for GC scheduling. */
   private notifyCounter = 0;
 
-  /**
-   * 构造函数：初始化配置、日志、会话过滤器，并将所有时间单位从秒转换为毫秒。
-   */
   constructor(config: PipelineConfig, logger?: Logger, sessionFilter?: SessionFilter) {
-    // 将配置中的秒值全部转换为内部使用的毫秒值
     this.l1IdleTimeoutMs = config.l1.idleTimeoutSeconds * 1000;
     this.everyNConversations = config.everyNConversations;
     this.enableWarmup = config.enableWarmup;
@@ -263,7 +268,7 @@ export class MemoryPipelineManager {
       `sessionActiveWindow=${config.l2.sessionActiveWindowHours}h`,
     );
 
-    // 为队列连接调试日志输出
+    // Wire up queue debug logging
     if (this.logger?.debug) {
       const debugFn = (msg: string) => this.logger?.debug?.(`${TAG} ${msg}`);
       this.l1Queue.setDebugLogger(debugFn);
@@ -273,32 +278,28 @@ export class MemoryPipelineManager {
   }
 
   // ============================
-  // 初始化与启动 / Setup
+  // Setup
   // ============================
 
-  /** 设置 L1 批量执行器（负责将缓冲消息入库/提取） */
   setL1Runner(runner: L1Runner): void {
     this.l1Runner = runner;
   }
 
-  /** 设置 L2 场景提取执行器 */
   setL2Runner(runner: L2Runner): void {
     this.l2Runner = runner;
   }
 
-  /** 设置 L3 人格生成执行器 */
   setL3Runner(runner: L3Runner): void {
     this.l3Runner = runner;
   }
 
-  /** 设置会话状态持久化回调 */
   setPersister(persister: PipelineStatePersister): void {
     this.persister = persister;
   }
 
   /**
-   * 从检查点恢复会话状态并启动流水线。
-   * 有待处理计数的会话将被立即重新入队。
+   * Restore session states from checkpoint and start the pipeline.
+   * Sessions with pending counts will be immediately re-enqueued.
    */
   start(restoredStates?: Record<string, PipelineSessionState>): void {
     if (this.destroyed) return;
@@ -306,13 +307,12 @@ export class MemoryPipelineManager {
     if (restoredStates) {
       let skipped = 0;
       for (const [sessionKey, state] of Object.entries(restoredStates)) {
-        // 跳过内部会话（如管理指令、系统会话等）
         if (this.sessionFilter.shouldSkip(sessionKey)) {
           skipped++;
           continue;
         }
-        // 回填预热阈值：对于在预热功能上线之前的旧检查点数据，
-        // 如果缺少 warmup_threshold 字段，则标记为已毕业（预热完成）
+        // Backfill warmup_threshold for sessions persisted before warm-up feature.
+        // Missing field → treat as graduated (warmup already complete).
         const patched = { ...state };
         if (patched.warmup_threshold == null) {
           patched.warmup_threshold = 0;
@@ -325,24 +325,23 @@ export class MemoryPipelineManager {
       );
     }
 
-    // 恢复：重新入队有待处理工作的会话
+    // Recovery: re-enqueue sessions with pending work
     this.recoverPendingSessions();
 
     this.logger?.info(`${TAG} Pipeline started`);
   }
 
   // ============================
-  // L0→L1：通知阶段（由 auto-capture 在 agent_end 事件时调用）
-  // / L0→L1: Notify (called from auto-capture on agent_end)
+  // L0→L1: Notify (called from auto-capture on agent_end)
   // ============================
 
   /**
-   * 获取会话的有效触发阈值，考虑预热模式。
+   * Get the effective conversation threshold for a session, considering warm-up.
    *
-   * 预热模式下，新会话从阈值=1 开始，每次成功 L1 后翻倍：
-   * 1 → 2 → 4 → 8 → ... → everyNConversations。
-   * 一旦阈值达到 everyNConversations，预热完成（warmup_threshold 设为 0），
-   * 之后使用固定配置值。
+   * When warm-up is enabled, new sessions start with threshold=1 and double
+   * after each successful L1 run: 1 → 2 → 4 → 8 → ... → everyNConversations.
+   * Once the threshold reaches everyNConversations, warm-up is considered complete
+   * (warmup_threshold is set to 0) and the fixed config value is used.
    */
   private getEffectiveThreshold(state: PipelineSessionState): number {
     if (!this.enableWarmup) return this.everyNConversations;
@@ -352,8 +351,9 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * L1 成功后推进预热阈值。将阈值翻倍直到达到 everyNConversations，
-   * 然后标记预热完成（warmup_threshold = 0）。
+   * Advance the warm-up threshold for a session after a successful L1 run.
+   * Doubles the threshold until it reaches everyNConversations, then marks
+   * warm-up as complete (warmup_threshold = 0).
    */
   private advanceWarmupThreshold(state: PipelineSessionState): void {
     if (!this.enableWarmup) return;
@@ -371,13 +371,14 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * 通知流水线：某个会话的一轮对话已结束，将捕获的消息缓冲起来等待 L1 批量处理。
+   * Notify the pipeline that a conversation round has ended for a session,
+   * and buffer the captured messages for L1 batch processing.
    *
-   * 从此处产生两条触发路径：
-   * - **路径 A（阈值触发）**：如果 conversation_count >= 有效阈值（预热或稳态），
-   *   立即触发 L1 并携带所有缓冲消息。
-   * - **路径 B（空闲触发）**：重置 L1 空闲定时器。当用户停止聊天、定时器触发时，
-   *   L1 用当前已缓冲的消息运行。
+   * Two trigger paths start here:
+   * - **Path A (threshold)**: if conversation_count >= effective threshold
+   *   (warm-up or steady-state), trigger L1 immediately with all buffered messages.
+   * - **Path B (idle)**: reset the L1 idle timer. When the timer fires (user
+   *   stops chatting), L1 runs with whatever has been buffered.
    */
   async notifyConversation(sessionKey: string, messages: CapturedMessage[]): Promise<void> {
     if (this.destroyed) return;
@@ -387,11 +388,11 @@ export class MemoryPipelineManager {
     state.conversation_count += 1;
     state.last_active_time = Date.now();
 
-    // 新对话到达时重置 L1 重试计数（环境可能已经恢复）
+    // Reset L1 retry count on new conversation (environment may have recovered)
     const timers = this.getOrCreateTimers(sessionKey);
     timers.l1RetryCount = 0;
 
-    // 将消息追加到缓冲区，等待 L1 批量处理
+    // Buffer messages for L1
     const buffer = this.messageBuffers.get(sessionKey) ?? [];
     buffer.push(...messages);
     this.messageBuffers.set(sessionKey, buffer);
@@ -406,25 +407,24 @@ export class MemoryPipelineManager {
       `buffered_messages=${buffer.length} (+${messages.length} new)`,
     );
 
-    // 持久化当前状态到检查点
     await this.persistStates();
 
-    // 路径 A：对话轮次达到有效阈值 → 立即触发 L1 批量处理
+    // Path A: conversation count reached effective threshold → trigger L1 batch
     if (state.conversation_count >= effectiveThreshold) {
       this.logger?.debug?.(
         `${TAG} [${sessionKey}] Conversation threshold reached (${state.conversation_count}>=${effectiveThreshold}${warmupInfo}), triggering L1`,
       );
       this.enqueueL1(sessionKey);
-      return; // 跳过空闲定时器重置 —— L1 已经被触发
+      return; // skip idle timer reset — L1 is already triggered
     }
 
-    // 路径 B：未达阈值 → 重置 L1 空闲定时器（稍后通过空闲超时兜底处理）
+    // Path B: below threshold → reset L1 idle timer (catch residual later)
     timers.l1Idle.schedule(this.l1IdleTimeoutMs, () => this.onL1IdleTimeout(sessionKey));
     this.logger?.debug?.(
       `${TAG} [${sessionKey}] L1 idle timer reset (${this.l1IdleTimeoutMs / 1000}s)`,
     );
 
-    // 定期 GC：驱逐内存中的冷却会话
+    // Periodic GC: evict cold sessions from memory
     this.notifyCounter += 1;
     if (this.notifyCounter >= this.SESSION_GC_EVERY_N_NOTIFICATIONS) {
       this.notifyCounter = 0;
@@ -433,35 +433,40 @@ export class MemoryPipelineManager {
   }
 
   // ============================
-  // 优雅关闭 / Graceful shutdown
+  // Graceful shutdown
   // ============================
 
   /**
-   * 单会话冲刷 —— 作用域为单个会话的结束处理。
+   * Per-session flush — scoped end-of-session handling.
    *
-   * 与 {@link destroy} 的语义区别：
-   *   - `destroy` 拆除**整个**调度器（用于进程级关闭，如 OpenClaw 的
-   *     `gateway_stop`）。
-   *   - `flushSession` 仅处理 `sessionKey` 指定的那一个会话，其他会话的
-   *     定时器、缓冲区和流水线状态保持不变。这是 Gateway 的
-   *     `POST /session/end` 端点和 Hermes 的 `on_session_end` 回调的
-   *     正确语义 —— 它们在一个对话结束、但进程继续服务其他并发会话时触发。
+   * Semantically different from {@link destroy}:
+   *   - ``destroy`` tears down the *whole* scheduler (meant for process
+   *     shutdown such as OpenClaw's ``gateway_stop``).
+   *   - ``flushSession`` only processes the one session identified by
+   *     ``sessionKey`` and leaves every other session's timers, buffers
+   *     and pipeline state untouched.  This is the correct semantic for
+   *     the Gateway's ``POST /session/end`` endpoint and for Hermes'
+   *     ``on_session_end`` callback, which fire when one conversation
+   *     ends while the process keeps serving other concurrent sessions.
    *
-   * 具体行为：
-   *   1. 取消该会话的 L1 空闲定时器（不再为此会话触发空闲回调）。
-   *   2. 如果该会话的消息缓冲区仍有待处理数据，立即入队一个 L1 运行
-   *      (`triggerReason="flush"`)。
-   *   3. 等待共享的 `l1Queue` 排空，让调用方在返回前能够观测到 L1 完成。
-   *      由于 L1 已经是单消费者的 SerialQueue，等待 `onIdle` 是最经济的
-   *      正确信号。
+   * What it does:
+   *   1. Cancel the session's pending L1 idle timer (no further idle
+   *      fires for this key).
+   *   2. If the session's message buffer still holds work, enqueue an
+   *      immediate L1 run for this session (``triggerReason="flush"``).
+   *   3. Await the shared ``l1Queue`` so the caller observes L1
+   *      completion before returning.  We do not selectively wait
+   *      because L1 is already a single-consumer SerialQueue — waiting
+   *      for ``onIdle`` is the cheapest correct signal.
    *
-   * 故意不做的事情：
-   *   - 不触碰其他会话的定时器 / 缓冲区 / 流水线状态。
-   *   - 不销毁调度器或其任何队列。
-   *   - 不重置 `destroyed` 等全局字段。
+   * What it deliberately does NOT do:
+   *   - Touch other sessions' timers / buffers / pipeline state.
+   *   - Destroy the scheduler or any of its queues.
+   *   - Reset global fields such as ``destroyed``.
    *
-   * 未知的 sessionKey 是无操作：调度器可能已通过 GC 回收了该会话，
-   * 或者该会话从未产生过任何捕获。
+   * Unknown session keys are a no-op: the scheduler may legitimately
+   * have evicted the session earlier via GC, or the session may never
+   * have produced any captures.
    */
   async flushSession(sessionKey: string): Promise<void> {
     if (this.destroyed) return;
@@ -470,12 +475,12 @@ export class MemoryPipelineManager {
     const timers = this.sessionTimers.get(sessionKey);
     const buffer = this.messageBuffers.get(sessionKey);
 
-    // 步骤1：取消空闲定时器，确保返回后不会再触发
+    // Step 1: cancel the idle timer so it won't fire after we return.
     if (timers?.l1Idle.pending) {
       timers.l1Idle.cancel();
     }
 
-    // 步骤2：将缓冲区中待处理的消息通过 L1 冲刷处理
+    // Step 2: flush pending buffered messages through L1 if any.
     if (buffer && buffer.length > 0) {
       this.logger?.debug?.(
         `${TAG} [${sessionKey}] flushSession: enqueuing L1 for ${buffer.length} buffered message(s)`,
@@ -483,27 +488,29 @@ export class MemoryPipelineManager {
       this.enqueueL1(sessionKey, "flush");
     }
 
-    // 步骤3：等待 L1 排空。L1 是单消费者 SerialQueue，
-    // 这是最经济的正确等待信号；不会饿死其他会话，
-    // 因为跨会话的 L1 工作要么已经入队，要么由各自捕获路径并发入队。
+    // Step 3: wait for L1 to drain.  L1 is a single-consumer SerialQueue
+    // so this is the cheapest correct signal; it will not starve other
+    // sessions because any cross-session interleaving L1 work was either
+    // already queued or will be queued concurrently by their own capture
+    // paths.
     await this.l1Queue.onIdle();
 
     this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: complete`);
   }
 
   /**
-   * destroy 的最大等待时间（毫秒）。
-   * 必须短于 gateway_stop hook 的超时（3 秒），
-   * 以便为后续的 VectorStore / EmbeddingService 清理留出余量。
+   * Maximum time (ms) to wait for pipeline flush during destroy.
+   * Must be shorter than the gateway_stop hook timeout (3 s) to leave
+   * headroom for VectorStore / EmbeddingService cleanup that runs after.
    */
   private readonly DESTROY_TIMEOUT_MS = 2_000;
 
   /**
-   * 带超时保护的优雅关闭：
-   * 1. 标记为已销毁，停止接收新工作
-   * 2. 在 DESTROY_TIMEOUT_MS 内尝试冲刷所有待处理的 L1/L2/L3 工作
-   * 3. 如果冲刷超时或失败，持久化当前状态以便下次启动时恢复
-   * 4. 待处理工作永不丢失 —— 下次 start() 时会通过检查点恢复
+   * Graceful shutdown with timeout protection:
+   * 1. Mark destroyed, stop accepting new work
+   * 2. Attempt to flush pending L1/L2/L3 work within DESTROY_TIMEOUT_MS
+   * 3. If flush times out or fails, persist current state for recovery on next startup
+   * 4. Pending work is never lost — it will be recovered via checkpoint on next start()
    */
   async destroy(): Promise<void> {
     if (this.destroyed) return;
@@ -515,7 +522,6 @@ export class MemoryPipelineManager {
 
     try {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      // 竞速：_doFlush 必须在超时前完成
       await Promise.race([
         this._doFlush(),
         new Promise<never>((_, reject) => {
@@ -532,9 +538,9 @@ export class MemoryPipelineManager {
       );
     }
 
-    // 无论冲刷成功、超时还是失败，都要持久化状态。
-    // 这确保待处理工作（缓冲消息、L2 待处理计数）保存到检查点，
-    // 可以在下次 start() 时通过 recoverPendingSessions() 恢复。
+    // Always persist state — whether flush succeeded, timed out, or failed.
+    // This ensures pending work (buffered messages, L2 pending counts) is
+    // saved to checkpoint and can be recovered by recoverPendingSessions().
     try {
       await this.persistStates();
     } catch (err) {
@@ -547,14 +553,14 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * 内部方法：尝试冲刷所有待处理的流水线工作（L1 → L2 → L3）。
-   * 从 destroy() 中抽离出来，以便可以用超时包装。
+   * Internal: attempt to flush all pending pipeline work (L1 → L2 → L3).
+   * Extracted from destroy() so it can be wrapped with a timeout.
    */
   private async _doFlush(): Promise<void> {
-    // 步骤1：冲刷所有 L1 空闲定时器 —— 仅当有缓冲消息时才入队
+    // Step 1: Flush all L1 idle timers — only enqueue if there are buffered messages
     for (const [sessionKey, timers] of this.sessionTimers) {
       if (timers.l1Idle.pending) {
-        timers.l1Idle.cancel(); // 不直接触发空闲回调，而是通过队列处理
+        timers.l1Idle.cancel(); // don't fire the idle callback directly
         const buffer = this.messageBuffers.get(sessionKey);
         if (buffer && buffer.length > 0) {
           this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: enqueuing L1 for ${buffer.length} buffered messages`);
@@ -563,11 +569,11 @@ export class MemoryPipelineManager {
       }
     }
 
-    // 步骤2：等待 L1 队列排空
+    // Step 2: Wait for L1 queue to drain
     this.logger?.debug?.(`${TAG} Waiting for L1 queue to drain (size=${this.l1Queue.size})`);
     await this.l1Queue.onIdle();
 
-    // 步骤3：冲刷所有 L2 调度定时器
+    // Step 3: Flush all L2 schedule timers
     for (const [sessionKey, timers] of this.sessionTimers) {
       if (timers.l2Schedule.pending) {
         this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: triggering L2 schedule timer`);
@@ -575,7 +581,7 @@ export class MemoryPipelineManager {
       }
     }
 
-    // 步骤4：等待所有剩余队列排空
+    // Step 4: Wait for all remaining queues to drain
     this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
     await Promise.all([
       this.l2Queue.onIdle(),
@@ -584,16 +590,13 @@ export class MemoryPipelineManager {
   }
 
   // ============================
-  // 内部：L1 空闲超时处理器
-  // / Internal: L1 idle timeout handler
+  // Internal: L1 idle timeout handler
   // ============================
 
-  /** L1 空闲定时器触发时的回调：检查是否有待处理消息，有则入队 L1 */
   private onL1IdleTimeout(sessionKey: string): void {
     const buffer = this.messageBuffers.get(sessionKey);
     const state = this.sessionStates.get(sessionKey);
 
-    // 既没缓冲消息也没待处理对话轮次，无需处理
     if ((!buffer || buffer.length === 0) && (!state || state.conversation_count === 0)) {
       this.logger?.debug?.(
         `${TAG} [${sessionKey}] L1 idle timeout but no pending messages or conversations`,
@@ -608,29 +611,25 @@ export class MemoryPipelineManager {
   }
 
   // ============================
-  // 内部：L1 队列 / Internal: L1 queue
+  // Internal: L1 queue
   // ============================
 
-  /**
-   * 将 L1 任务入队。
-   * @param triggerReason 触发原因：threshold（阈值）/ idle_timeout（空闲超时）/ flush（冲刷）
-   */
   private enqueueL1(sessionKey: string, triggerReason: "threshold" | "idle_timeout" | "flush" = "threshold"): void {
     const timers = this.getOrCreateTimers(sessionKey);
 
-    // 防止重复入队
+    // Don't double-queue
     if (timers.l1Queued) {
       this.logger?.debug?.(`${TAG} [${sessionKey}] L1 already queued, skipping`);
       return;
     }
 
-    // 如果空闲定时器还在运行，取消它（阈值触发比空闲定时器更早到达）
+    // Cancel idle timer if running (threshold beat it)
     timers.l1Idle.cancel();
 
     timers.l1Queued = true;
     this.logger?.debug?.(`${TAG} [${sessionKey}] Enqueuing L1 (queue=${this.l1Queue.name})`);
 
-    // ── pipeline_l1_trigger 指标上报 ──
+    // ── pipeline_l1_trigger metric ──
     const state = this.sessionStates.get(sessionKey);
     const buffer = this.messageBuffers.get(sessionKey);
     if (this.instanceId && this.logger) {
@@ -654,21 +653,21 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * L1 执行逻辑：取出某会话的所有缓冲消息，传给 L1Runner 做批量处理
-   * （例如 appendEvent 入库，或本地提取逻辑）。
+   * L1 runner: Takes all buffered messages for a session and passes them
+   * to the L1Runner for batch processing (e.g. appendEvent, local extraction).
    *
-   * L1 成功后：
-   * - conversation_count 和消息缓冲区被重置
-   * - L2 定时器被提前（只下不），以便后续进行远程记录生成
+   * After L1 completes successfully:
+   * - conversation_count and message buffer are reset
+   * - L2 timer is advanced (downward-only) to allow remote record generation
    *
-   * L1 失败时：
-   * - conversation_count 和缓冲区保留，等待下次空闲超时或阈值触发时重试
+   * If L1 fails, conversation_count and buffer are preserved for retry
+   * on next idle timeout or threshold trigger.
    */
   private async runL1(sessionKey: string): Promise<void> {
     const state = this.sessionStates.get(sessionKey);
     if (!state) return;
 
-    // 清空消息缓冲区（取走所有权，清空共享引用）
+    // Drain the message buffer (take ownership, clear the shared ref)
     const buffer = this.messageBuffers.get(sessionKey) ?? [];
     this.messageBuffers.set(sessionKey, []);
 
@@ -681,7 +680,6 @@ export class MemoryPipelineManager {
       `${TAG} [${sessionKey}] L1 running: messages=${buffer.length}, conversation_count=${state.conversation_count}`,
     );
 
-    // 未设置 L1 执行器时：直接跳过执行，但状态照常推进
     if (!this.l1Runner) {
       this.logger?.warn(`${TAG} [${sessionKey}] No L1 runner set, skipping`);
       state.l2_pending_l1_count = state.conversation_count;
@@ -693,11 +691,10 @@ export class MemoryPipelineManager {
     }
 
     try {
-      // 调用实际的 L1 执行器（例如 appendEvent 入库）
       await this.l1Runner({
         sessionKey,
         msg: buffer,
-        bg_msg: [], // 预留字段，未来用于背景上下文
+        bg_msg: [], // reserved for future use
       });
 
       this.logger?.debug?.(
@@ -707,14 +704,14 @@ export class MemoryPipelineManager {
       this.logger?.error(
         `${TAG} [${sessionKey}] L1 runner failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
       );
-      // 失败时：将消息放回缓冲区以便重试
+      // On failure: put messages back into the buffer for retry
       const currentBuffer = this.messageBuffers.get(sessionKey) ?? [];
       this.messageBuffers.set(sessionKey, [...buffer, ...currentBuffer]);
       this.logger?.debug?.(
         `${TAG} [${sessionKey}] L1 failure: restored ${buffer.length} messages to buffer (total=${buffer.length + currentBuffer.length})`,
       );
 
-      // 重新激活 L1 空闲定时器，实现自动重试（受最大重试次数限制）
+      // Re-arm L1 idle timer for automatic retry (with max retry limit)
       const timers = this.getOrCreateTimers(sessionKey);
       timers.l1RetryCount += 1;
       if (timers.l1RetryCount <= this.L1_MAX_RETRIES) {
@@ -731,10 +728,10 @@ export class MemoryPipelineManager {
         );
       }
 
-      return; // 不推进状态，不触发 L2
+      return; // don't advance state or trigger L2
     }
 
-    // 成功：重置重试计数并推进状态
+    // Success: reset retry count and advance state
     const timers = this.getOrCreateTimers(sessionKey);
     timers.l1RetryCount = 0;
     state.l2_pending_l1_count = state.conversation_count;
@@ -742,23 +739,22 @@ export class MemoryPipelineManager {
     this.advanceWarmupThreshold(state);
     await this.persistStates();
 
-    // 将 L2 定时器提前（只下不），在延迟后触发，同时遵守 minInterval
+    // Advance the L2 timer (downward-only) to fire after delay, respecting minInterval
     this.advanceL2Timer(sessionKey);
   }
 
   // ============================
-  // 内部：L2 定时器管理（只下不语义 / downward-only）
-  // / Internal: L2 timer management (downward-only)
+  // Internal: L2 timer management (downward-only)
   // ============================
 
   /**
-   * L1 事件（新记忆生成）后将当前会话的 L2 定时器提前。
+   * Advance the per-session L2 timer after an L1 event (new memory generated).
    *
-   * 计算期望触发时间公式：
+   * Computes the desired fire time as:
    *   T_desired = max(now + l2DelayAfterL1, lastL2Time + l2MinInterval)
    *
-   * 仅当 T_desired 早于当前调度时间时才移动定时器（只下不语义）。
-   * 如果没有待处理的定时器，则无条件设置。
+   * The timer is only moved if T_desired is earlier than the current schedule
+   * (downward-only semantics). If no timer is pending, it's set unconditionally.
    */
   private advanceL2Timer(sessionKey: string): void {
     if (this.destroyed) return;
@@ -791,8 +787,8 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * L2 完成后设置最大间隔兜底定时器。
-   * 无条件设置 T = now + l2MaxInterval，替换任何待处理的定时器。
+   * Arm the L2 timer for the maxInterval guarantee after L2 completes.
+   * Sets T = now + l2MaxInterval (unconditional, replaces any pending timer).
    */
   private armL2MaxInterval(sessionKey: string): void {
     if (this.destroyed) return;
@@ -807,16 +803,16 @@ export class MemoryPipelineManager {
   }
 
   /**
-   * 每个会话的 L2 定时器触发时的回调。
+   * Called when a per-session L2 timer fires.
    *
-   * 检查会话活跃度：如果会话已冷却（不活跃 > activeWindow），
-   * 不会重新激活定时器 —— 它将由下一次 L1 事件恢复。
-   * 否则，将 L2 入队。
+   * Checks session activity: if the session is cold (inactive > activeWindow),
+   * the timer is NOT re-armed — it will be revived by the next L1 event.
+   * Otherwise, enqueues L2.
    *
-   * `source` 参数区分触发来源：
-   * - "delay-after-l1"：L1 完成后不久触发 —— 跳过冷却检查，
-   *   因为 L1 完成本身就证明了最近的活跃度。
-   * - "max-interval"：周期性定时器 —— 正常应用冷却检查。
+   * The `source` parameter distinguishes the trigger origin:
+   * - "delay-after-l1": fired shortly after L1 completed — skip cold check
+   *   because L1 completion itself proves recent activity.
+   * - "max-interval": periodic timer — apply cold check normally.
    */
   private onL2TimerFired(sessionKey: string, source: "delay-after-l1" | "max-interval"): void {
     const state = this.sessionStates.get(sessionKey);
@@ -840,20 +836,16 @@ export class MemoryPipelineManager {
   }
 
   // ============================
-  // 内部：L2 队列 / Internal: L2 queue
+  // Internal: L2 queue
   // ============================
 
-  /**
-   * 将 L2 任务入队。
-   * @param trigger 触发原因标识，用于日志诊断
-   */
   private enqueueL2(sessionKey: string, trigger: string): void {
     const timers = this.getOrCreateTimers(sessionKey);
 
-    // 取消任何待处理的 L2 定时器（马上就要运行 L2 了）
+    // Cancel any pending L2 timer (we're about to run L2)
     timers.l2Schedule.cancel();
 
-    // 冲突检测：如果 L2 已入队则跳过并告警
+    // Conflict detection: warn if L2 is already queued
     if (timers.l2Queued) {
       this.logger?.warn(
         `${TAG} [${sessionKey}] L2 enqueue conflict on queue "${this.l2Queue.name}": ` +
@@ -876,9 +868,6 @@ export class MemoryPipelineManager {
     });
   }
 
-  /**
-   * L2 执行逻辑：调用 L2Runner 对单个会话进行场景提取。
-   */
   private async runL2(sessionKey: string): Promise<void> {
     const state = this.sessionStates.get(sessionKey);
     if (!state) return;
@@ -892,7 +881,6 @@ export class MemoryPipelineManager {
       `${TAG} [${sessionKey}] L2 running: l2_pending_l1_count=${state.l2_pending_l1_count}`,
     );
 
-    // 使用上次提取的游标，实现增量提取
     const cursor = state.last_extraction_updated_time || undefined;
 
     let result: L2RunnerResult | void;
@@ -902,18 +890,19 @@ export class MemoryPipelineManager {
       this.logger?.error(
         `${TAG} [${sessionKey}] L2 runner failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
       );
-      // 即使失败也设置 maxInterval 兜底，保证最终会重试
+      // Even on failure, arm maxInterval so we retry eventually
       this.armL2MaxInterval(sessionKey);
       return;
     }
 
-    // L2 完成后：更新状态
+    // After L2: update state
     const now = Date.now();
     state.l2_pending_l1_count = 0;
 
-    // 冷启动优化：如果这是该会话的首次 L2 运行且被跳过（无新记录），
-    // 则不更新 l2LastRunTime。这避免了 minInterval 在首次 L1 提取
-    // 刚产生实际记忆时阻止下一次 L2 触发。
+    // Cold-start optimization: if this is the very first L2 run for this session
+    // and it was skipped (no new records), do NOT update l2LastRunTime.
+    // This prevents l2MinIntervalSeconds from blocking the next L2 trigger
+    // when the first L1 extraction produces actual memories shortly after.
     const isFirstL2 = !this.l2LastRunTime.has(sessionKey);
     const wasSkipped = result?.skipped === true;
 
@@ -931,12 +920,13 @@ export class MemoryPipelineManager {
     state.l2_last_extraction_time = new Date().toISOString();
     this.l2LastRunTime.set(sessionKey, now);
 
-    // 使用执行器返回的记录时间戳推进游标
+    // Advance cursor using the record timestamp returned by the runner
     if (result?.latestCursor) {
       state.last_extraction_updated_time = result.latestCursor;
     } else if (!state.last_extraction_updated_time) {
-      // 冷启动保护：如果执行器返回 void（如提取失败）且游标仍为空，
-      // 将其初始化为当前时间，避免下次 L2 运行做全表扫描。
+      // Cold-start guard: if runner returned void (e.g. extraction failure) and
+      // last_extraction_updated_time is still empty, initialize it to now so
+      // the next L2 run doesn't do a full table scan.
       state.last_extraction_updated_time = new Date().toISOString();
     }
 
@@ -944,27 +934,22 @@ export class MemoryPipelineManager {
 
     this.logger?.debug?.(`${TAG} [${sessionKey}] L2 complete`);
 
-    // 设置 maxInterval 兜底定时器，为下一个周期做准备
+    // Arm the maxInterval timer for the next cycle
     this.armL2MaxInterval(sessionKey);
 
-    // 触发 L3 人格生成
+    // Trigger L3
     this.triggerL3();
   }
 
   // ============================
-  // 内部：L3 队列（全局互斥 + 去重）
-  // / Internal: L3 queue (global, dedup)
+  // Internal: L3 queue (global, dedup)
   // ============================
 
-  /**
-   * 触发 L3 人格生成。
-   * 如果 L3 正在运行，则标记 pending=true，等当前运行结束后自动再次运行。
-   */
   private triggerL3(): void {
     if (this.destroyed) return;
 
     if (this.l3Running) {
-      // L3 正在运行 —— 标记 pending，等当前运行完后再执行
+      // L3 is in progress — mark pending so it runs again after current finishes
       this.l3Pending = true;
       this.logger?.debug?.(`${TAG} L3 already running, marking pending`);
       return;
@@ -974,7 +959,6 @@ export class MemoryPipelineManager {
     this.enqueueL3();
   }
 
-  /** 将 L3 任务入队，设置运行标记 */
   private enqueueL3(): void {
     this.l3Running = true;
     this.l3Pending = false;
@@ -990,7 +974,7 @@ export class MemoryPipelineManager {
     }).finally(() => {
       this.l3Running = false;
 
-      // L3 运行期间如果有新的 L2 完成，则再次运行 L3
+      // If new L2 completions happened while L3 was running, run again
       if (this.l3Pending && !this.destroyed) {
         this.logger?.debug?.(`${TAG} L3 has pending work, re-running`);
         this.enqueueL3();
@@ -998,7 +982,6 @@ export class MemoryPipelineManager {
     });
   }
 
-  /** L3 执行逻辑：调用 L3Runner 基于所有会话的场景数据生成人格画像 */
   private async runL3(): Promise<void> {
     if (!this.l3Runner) {
       this.logger?.warn(`${TAG} No L3 runner set, skipping`);
