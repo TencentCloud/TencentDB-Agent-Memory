@@ -174,6 +174,47 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+// ── FTS5 input sanitization ──
+
+/**
+ * FTS5 reserved words (boolean / proximity operators) that could alter
+ * query semantics.  Stripped as whole words (case-insensitive) so that
+ * e.g. `ANDROID` is NOT affected — `\b` ensures word-boundary match.
+ */
+const FTS5_RESERVED = /\b(AND|OR|NOT|NEAR)\b/gi;
+
+/**
+ * FTS5 special syntax characters.
+ * - `*` — prefix wildcard
+ * - `(`, `)` — grouping / sub-expressions
+ * - `"` — phrase-query delimiter (ASCII only; Unicode quotes are fine)
+ * - `^` — column prefix / initial-token marker
+ * - `{`, `}` — column-filter syntax
+ */
+const FTS5_SPECIAL = /[*()"^{}]/g;
+
+/**
+ * Sanitize raw user input before it is tokenized for an FTS5 MATCH query.
+ *
+ * The sanitization is **defence-in-depth**: each token is already
+ * double-quoted by `buildFtsQuery()` so that it becomes a literal phrase
+ * term, but stripping FTS5 operators/syntax from the raw string ensures
+ * that no edge case in segmentation or quoting allows user input to alter
+ * query semantics.
+ *
+ * The function does NOT strip `+` / `-` because those only have FTS5
+ * meaning at the start of a token, and tokens are always double-quoted.
+ *
+ * @internal exported for unit testing
+ */
+export function sanitizeFts5Input(raw: string): string {
+  return raw
+    .replace(FTS5_RESERVED, " ")   // strip boolean/proximity operators
+    .replace(FTS5_SPECIAL, " ")    // strip special syntax characters
+    .replace(/\s+/g, " ")          // collapse consecutive whitespace
+    .trim();
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -184,9 +225,11 @@ const ZH_STOP_WORDS = new Set([
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
  *
- * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
- * matching *any* token is returned.  BM25 naturally ranks documents that
- * match more tokens higher, so precision is preserved while recall is
+ * FTS5 operators and special characters are stripped from the raw input
+ * before tokenization via {@link sanitizeFts5Input}.  Tokens are then
+ * OR-joined as quoted FTS5 phrase terms so that a document matching
+ * *any* token is returned.  BM25 naturally ranks documents that match
+ * more tokens higher, so precision is preserved while recall is
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
  *
@@ -196,6 +239,10 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // Sanitize FTS5 operators/syntax before tokenization (defence-in-depth).
+  const cleaned = sanitizeFts5Input(raw);
+  if (!cleaned) return null;
+
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +250,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +265,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
