@@ -229,6 +229,17 @@ async function performAutoRecallInner(params: {
 
   const stableWrapperUsed = !!(memoryLines.length === 0 && stableWrapperEnabled);
   const totalMs = performance.now() - tRecallStart;
+
+  // Cache optimization metrics for observability
+  const cacheMetrics = {
+    stableWrapperUsed,
+    prependContextChars: prependContext?.length ?? 0,
+    appendContextChars: appendSystemContext?.length ?? 0,
+    personaLoaded: !!personaContent,
+    sceneLoaded: !!sceneNavigation,
+    memoryHits: memoryLines.length,
+  };
+
   logger?.info(
     `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
     `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
@@ -238,6 +249,7 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})` +
     (stableWrapperUsed ? `, stableWrapper=${stableWrapperUsed}` : ""),
   );
+  logger?.debug?.(`${TAG} [cacheOpt] Metrics: ${JSON.stringify(cacheMetrics)}`);
 
   if (!appendSystemContext && !prependContext) {
     return undefined;
