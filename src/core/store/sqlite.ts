@@ -139,7 +139,7 @@ function requireNodeSqlite(): typeof import("node:sqlite") {
 // FTS5 helpers (adapted from openclaw core hybrid.ts)
 // ============================
 
-// ── Chinese word segmentation (jieba) ──
+// ── 中文分词（jieba） ──
 // Lazy-loaded singleton: initialised on first call to `buildFtsQuery`.
 // If @node-rs/jieba is unavailable, falls back to Unicode-regex splitting.
 
@@ -147,7 +147,7 @@ interface JiebaInstance {
   cutForSearch(text: string, hmm: boolean): string[];
 }
 
-let _jieba: JiebaInstance | null | undefined; // undefined = not yet tried
+let _jieba: JiebaInstance | null | undefined; // undefined = 尚未尝试
 
 function getJieba(): JiebaInstance | null {
   if (_jieba !== undefined) return _jieba;
@@ -174,8 +174,73 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+// ── FTS5 输入清洗 ──
+
 /**
- * Build an FTS5 MATCH query from raw text.
+ * FTS5 reserved words (boolean / proximity operators) that could alter
+ * query semantics.  Stripped as whole words (case-insensitive) so that
+ * e.g. `ANDROID` is NOT affected — `\b` ensures word-boundary match.
+ */
+const FTS5_RESERVED = /\b(AND|OR|NOT|NEAR)\b/gi;
+
+/**
+ * FTS5 特殊语法字符。
+ * - `*` — 前缀通配符
+ * - `(` `)` — 分组/子表达式
+ * - `"` — 短语查询界定符（仅 ASCII；Unicode 引号不受影响）
+ * - `^` — 列名前缀/初始 token 标记
+ * - `{` `}` — 列过滤器语法
+ */
+const FTS5_SPECIAL = /[*()"^{}]/g;
+
+/**
+ * FTS5 column-filter patterns that allow an attacker to restrict (or
+ * exclude) search to specific FTS5 columns via `content:keyword` or
+ * `-content:keyword`.  The `:` is the column-name / value separator
+ * in FTS5 MATCH expressions.
+ *
+ * Covers the known column names in `l1_fts` / `l0_fts` plus common
+ * FTS5 built-in column aliases.  The optional leading `-` negates
+ * the column filter (exclusion).
+ */
+// Leading `(?:^|\s)` instead of `\b` so that `-content:` (where `-` is
+// not a word character and therefore has no `\b` before it) is also caught.
+const FTS5_COL_FILTER =
+  /(?:^|\s)-?(?:content|message|session|actor|topic|role|tag|user|host|file)\s*:/gi;
+
+/**
+ * 在分词生成 FTS5 MATCH 查询之前，清洗原始用户输入。
+ *
+ * 纵深防御层次（按顺序执行）：
+ *   1. **NFKC normalisation** — full-width Unicode variants (e.g. `ＡＮＤ`
+ *      U+FF21 U+FF2E U+FF24) are folded to ASCII so subsequent regexes
+ *      can detect them.
+ *   2. **Column-filter stripping** — `content:`, `-message:`, etc. are
+ *      removed so an attacker cannot restrict search to (or exclude) a
+ *      specific FTS5 column.
+ *   3. **Reserved-word stripping** — `AND` / `OR` / `NOT` / `NEAR` removed
+ *      as whole words (case-insensitive, `\b` boundary).
+ *   4. **Special-character stripping** — `*`, `(`, `)`, `"`, `^`, `{`, `}`
+ *      are removed.
+ *
+ * The function does NOT strip bare `+` / `-` because those only have
+ * FTS5 meaning at the start of a token, and tokens are always
+ * double-quoted by `buildFtsQuery()`.
+ *
+ * @internal 导出供单元测试使用
+ */
+export function sanitizeFts5Input(raw: string): string {
+  return raw
+    .normalize("NFKC")                // full-width → ASCII
+    .replace(FTS5_COL_FILTER, " ")    // 列过滤器前缀
+    .replace(FTS5_RESERVED, " ")      // boolean/proximity operators
+    .replace(FTS5_SPECIAL, " ")       // special syntax characters
+    .replace(/\s+/g, " ")             // 压缩连续空白
+    .trim();
+}
+
+/**
+ * 从原始文本构建 FTS5 MATCH 查询。
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
  * (`cutForSearch`) for accurate Chinese word segmentation, producing
@@ -184,53 +249,65 @@ const ZH_STOP_WORDS = new Set([
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
  *
- * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
- * matching *any* token is returned.  BM25 naturally ranks documents that
- * match more tokens higher, so precision is preserved while recall is
+ * FTS5 operators and special characters are stripped from the raw input
+ * before tokenization via {@link sanitizeFts5Input}.  Tokens are then
+ * OR-joined as quoted FTS5 phrase terms so that a document matching
+ * *any* token is returned.  BM25 naturally ranks documents that match
+ * more tokens higher, so precision is preserved while recall is
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
  *
- * Example (with jieba):
+ * 示例（jieba 路径）：
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
- * Example (fallback):
+ * 示例（fallback 路径）：
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // 分词前剥离 FTS5 操作符/语法（纵深防御）。
+  const cleaned = sanitizeFts5Input(raw);
+  if (!cleaned) return null;
+
   const jieba = getJieba();
 
   let tokens: string[];
   if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
+    // jieba cutForSearch：拆分长词以获得更好召回
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
+        // 移除纯空白/标点 token
         if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
+        // 去除常见中文停用词，减少噪声
         if (ZH_STOP_WORDS.has(t)) return false;
         return true;
       });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
+    // 去重（cutForSearch 可能对子词产生重复）
     tokens = [...new Set(tokens)];
   } else {
-    // Fallback: simple Unicode regex split
+    // 回退方案：简单 Unicode 正则分词
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+
+  // Token-level defence-in-depth: jieba / regex should never produce a
+  // bare FTS5 operator from cleaned input, but if it does, filter it here.
+  const safe = tokens.filter((t) => !/^(?:AND|OR|NOT|NEAR)$/i.test(t));
+  if (safe.length === 0) return null;
+
+  const quoted = safe.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
 }
 
 /**
- * Tokenize text for FTS5 indexing (write-side).
+ * FTS5 索引用分词（写入侧）。
  *
  * Uses jieba `cutForSearch()` (search-engine mode) to segment Chinese text,
  * then joins tokens with spaces. The resulting string is stored in the FTS5
@@ -242,12 +319,12 @@ export function buildFtsQuery(raw: string): string | null {
  * For example, "人工智能" is indexed as "人工 智能 人工智能", so queries for
  * either the full term or sub-words will match.
  *
- * Falls back to the original text if jieba is unavailable.
+ * jieba 不可用时回退到原始文本。
  *
- * Example (with jieba):
+ * 示例（jieba 路径）：
  *   "用户五月去日本旅行" → "用户 五月 去 日本 旅行"
  *   "人工智能的分支"     → "人工 智能 人工智能 的 分支"
- * Example (fallback):
+ * 示例（fallback 路径）：
  *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
  */
 export function tokenizeForFts(raw: string): string {
@@ -296,14 +373,14 @@ export function bm25RankToScore(rank: number): number {
   return 1 / (1 + rank);
 }
 
-/** FTS5 search result for L1 records. */
+/** L1 记录的 FTS5 搜索结果。 */
 export interface FtsSearchResult {
   record_id: string;
   content: string;
   type: string;
   priority: number;
   scene_name: string;
-  /** BM25-derived score (0–1, higher is better) */
+  /** BM25 派生分数（0–1，越高越相关） */
   score: number;
   timestamp_str: string;
   timestamp_start: string;
@@ -313,14 +390,14 @@ export interface FtsSearchResult {
   metadata_json: string;
 }
 
-/** FTS5 search result for L0 records. */
+/** L0 记录的 FTS5 搜索结果。 */
 export interface L0FtsSearchResult {
   record_id: string;
   session_key: string;
   session_id: string;
   role: string;
   message_text: string;
-  /** BM25-derived score (0–1, higher is better) */
+  /** BM25 派生分数（0–1，越高越相关） */
   score: number;
   recorded_at: string;
   timestamp: number;
