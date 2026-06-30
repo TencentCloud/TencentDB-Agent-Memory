@@ -5,9 +5,11 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
+  dataDir: string;
   retentionDays: number;
   cleanTime: string;
   logger?: Logger;
@@ -178,6 +180,11 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+
+      // ── Post-delete: recalibrate checkpoint counters ──
+      if (removedL0 > 0 || removedL1 > 0) {
+        await this.recalibrateCheckpoint(vectorStore);
+      }
     }
 
     this.opts.logger?.info(
@@ -275,6 +282,37 @@ export class LocalMemoryCleaner {
     }
 
     return stats;
+  }
+
+  private async recalibrateCheckpoint(vectorStore: IMemoryStore): Promise<void> {
+    if (!this.opts.dataDir) {
+      this.opts.logger?.debug?.(`${TAG} Recalibrate skipped: no dataDir`);
+      return;
+    }
+
+    try {
+      const checkpoint = new CheckpointManager(this.opts.dataDir, {
+        info: (msg) => this.opts.logger?.info(`${TAG} ${msg}`),
+        warn: (msg) => this.opts.logger?.warn(`${TAG} ${msg}`),
+      });
+
+      const result = await checkpoint.recalibrate({
+        countL0: () => vectorStore.countL0(),
+        countL1: () => vectorStore.countL1(),
+      });
+
+      if (result.updated) {
+        this.opts.logger?.info(
+          `${TAG} Checkpoint recalibrated after cleanup: l0=${result.l0Count}, l1=${result.l1Count}`,
+        );
+      } else if (result.error) {
+        this.opts.logger?.warn(`${TAG} Recalibrate warning: ${result.error}`);
+      } else {
+        this.opts.logger?.debug?.(`${TAG} Checkpoint counters in sync`);
+      }
+    } catch (err) {
+      this.opts.logger?.warn(`${TAG} Recalibrate failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
