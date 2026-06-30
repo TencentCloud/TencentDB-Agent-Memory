@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Cross-platform adapter architecture</title>
+  <desc id="desc">OpenClaw, Hermes, and MCP clients integrate with the host-neutral TdaiCore memory engine through in-process adapters or the Gateway HTTP boundary.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4b5563"/>
+    </marker>
+    <style>
+      .canvas { fill: #f8fafc; }
+      .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; rx: 10; }
+      .core-panel { fill: #f0f9ff; stroke: #0284c7; stroke-width: 2; rx: 10; }
+      .title { fill: #0f172a; font: 700 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #0f172a; font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { fill: #1f2937; font: 600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #475569; font: 500 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.4; rx: 8; }
+      .box-blue { fill: #e0f2fe; stroke: #0284c7; stroke-width: 1.5; rx: 8; }
+      .box-green { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.5; rx: 8; }
+      .box-amber { fill: #fef3c7; stroke: #d97706; stroke-width: 1.5; rx: 8; }
+      .box-purple { fill: #f3e8ff; stroke: #9333ea; stroke-width: 1.5; rx: 8; }
+      .arrow { fill: none; stroke: #4b5563; stroke-width: 2.2; marker-end: url(#arrow); }
+      .muted-arrow { fill: none; stroke: #64748b; stroke-width: 1.8; marker-end: url(#arrow); stroke-dasharray: 6 5; }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="1200" height="720"/>
+  <text x="60" y="58" class="title">Cross-Platform Adapters for TencentDB Agent Memory</text>
+  <text x="60" y="84" class="small">Host integrations translate platform lifecycle events into TdaiCore calls, directly or through the Gateway HTTP API.</text>
+
+  <rect x="60" y="120" width="300" height="210" class="panel"/>
+  <text x="88" y="154" class="section">OpenClaw Plugin</text>
+  <rect x="92" y="180" width="236" height="46" class="box-green"/>
+  <text x="122" y="209" class="label">OpenClaw hooks/tools</text>
+  <rect x="92" y="254" width="236" height="46" class="box-green"/>
+  <text x="118" y="283" class="label">OpenClawHostAdapter</text>
+  <line x1="210" y1="226" x2="210" y2="252" class="arrow"/>
+  <text x="88" y="318" class="small">In-process: host SDK -> adapter -> core</text>
+
+  <rect x="60" y="390" width="300" height="230" class="panel"/>
+  <text x="88" y="424" class="section">Hermes Integration</text>
+  <rect x="92" y="450" width="236" height="46" class="box-amber"/>
+  <text x="116" y="479" class="label">memory_tencentdb provider</text>
+  <rect x="92" y="524" width="236" height="46" class="box-amber"/>
+  <text x="120" y="553" class="label">Gateway HTTP client</text>
+  <line x1="210" y1="496" x2="210" y2="522" class="arrow"/>
+  <text x="88" y="598" class="small">Out-of-process: provider -> Gateway</text>
+
+  <rect x="450" y="390" width="300" height="230" class="panel"/>
+  <text x="478" y="424" class="section">MCP Clients</text>
+  <rect x="482" y="450" width="236" height="46" class="box-purple"/>
+  <text x="510" y="479" class="label">Claude Code / Codex</text>
+  <rect x="482" y="524" width="236" height="46" class="box-purple"/>
+  <text x="514" y="553" class="label">memory-tencentdb-mcp</text>
+  <line x1="600" y1="496" x2="600" y2="522" class="arrow"/>
+  <text x="478" y="598" class="small">MCP stdio tools -> Gateway API</text>
+
+  <rect x="450" y="120" width="300" height="210" class="panel"/>
+  <text x="478" y="154" class="section">Gateway Boundary</text>
+  <rect x="482" y="180" width="236" height="46" class="box-blue"/>
+  <text x="520" y="209" class="label">TDAI Gateway HTTP</text>
+  <rect x="482" y="254" width="236" height="46" class="box-blue"/>
+  <text x="514" y="283" class="label">StandaloneHostAdapter</text>
+  <line x1="600" y1="226" x2="600" y2="252" class="arrow"/>
+  <text x="478" y="318" class="small">HTTP endpoints expose recall/capture/search</text>
+
+  <rect x="840" y="120" width="300" height="500" class="core-panel"/>
+  <text x="874" y="154" class="section">Host-Neutral Memory Core</text>
+  <rect x="888" y="190" width="204" height="52" class="box-blue"/>
+  <text x="952" y="212" class="label">TdaiCore</text>
+  <text x="924" y="232" class="small">recall / capture / search</text>
+  <rect x="888" y="295" width="204" height="52" class="box"/>
+  <text x="924" y="317" class="label">SQLite / TCVDB</text>
+  <text x="937" y="337" class="small">L0 and L1 storage</text>
+  <rect x="888" y="400" width="204" height="52" class="box"/>
+  <text x="918" y="422" class="label">Memory pipeline</text>
+  <text x="930" y="442" class="small">L0 -> L1 -> L2 -> L3</text>
+  <rect x="888" y="505" width="204" height="52" class="box"/>
+  <text x="936" y="527" class="label">LLM runners</text>
+  <text x="916" y="547" class="small">host or standalone calls</text>
+  <line x1="990" y1="242" x2="990" y2="293" class="muted-arrow"/>
+  <line x1="990" y1="347" x2="990" y2="398" class="muted-arrow"/>
+  <line x1="990" y1="452" x2="990" y2="503" class="muted-arrow"/>
+
+  <path d="M 328 277 C 500 277, 680 216, 886 216" class="arrow"/>
+  <text x="520" y="245" class="small">direct TdaiCore calls</text>
+
+  <path d="M 328 547 C 380 547, 430 210, 480 204" class="arrow"/>
+  <text x="360" y="374" class="small">HTTP recall/capture/search</text>
+
+  <path d="M 600 524 L 600 303" class="arrow"/>
+  <text x="614" y="414" class="small">Gateway URL</text>
+
+  <path d="M 718 277 C 765 277, 805 216, 886 216" class="arrow"/>
+  <text x="740" y="246" class="small">StandaloneHostAdapter</text>
+
+  <rect x="60" y="660" width="1080" height="1" fill="#cbd5e1"/>
+  <text x="60" y="690" class="small">Adapter rule: keep platform-specific lifecycle handling outside the host-neutral TdaiCore boundary.</text>
+</svg>

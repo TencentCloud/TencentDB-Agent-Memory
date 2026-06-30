@@ -6,36 +6,7 @@ Gateway HTTP API when the platform cannot run the core in-process.
 
 ## Architecture
 
-```mermaid
-flowchart TD
-  subgraph Core["Host-neutral memory core"]
-    TdaiCore["TdaiCore"]
-    Store["SQLite / TCVDB store"]
-    Pipeline["L0 -> L1 -> L2 -> L3 pipeline"]
-  end
-
-  subgraph OpenClaw["OpenClaw plugin"]
-    OpenClawSDK["OpenClaw Plugin SDK"]
-    OpenClawAdapter["OpenClawHostAdapter"]
-  end
-
-  subgraph Hermes["Hermes integration"]
-    HermesProvider["memory_tencentdb Provider"]
-    Gateway["TDAI Gateway HTTP server"]
-    StandaloneAdapter["StandaloneHostAdapter"]
-  end
-
-  subgraph MCP["MCP clients"]
-    McpClient["Claude Code / Codex / MCP-capable agent"]
-    McpAdapter["memory-tencentdb-mcp stdio adapter"]
-  end
-
-  OpenClawSDK --> OpenClawAdapter --> TdaiCore
-  HermesProvider --> Gateway --> StandaloneAdapter --> TdaiCore
-  McpClient --> McpAdapter --> Gateway
-  TdaiCore --> Store
-  TdaiCore --> Pipeline
-```
+![Cross-platform adapter architecture](./assets/cross-platform-adapters.svg)
 
 ## Core Engine Boundary
 
