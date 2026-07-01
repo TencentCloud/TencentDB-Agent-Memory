@@ -403,6 +403,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
+| `recall.injectionMode` | `"prepend"` | Dynamic L1 recall placement: `prepend` keeps legacy behavior; `append` returns OpenClaw `appendContext` so supported hosts place memories after the user prompt, which better preserves prefix-matching prompt cache stability. This is an opt-in mitigation for dynamic L1 placement; keep `prepend` on hosts that do not consume `before_prompt_build.appendContext`. |
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
