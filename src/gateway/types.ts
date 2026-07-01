@@ -1,5 +1,5 @@
-/**
- * TDAI Gateway — Request/Response types for the HTTP API.
+﻿/**
+ * TDAI Gateway 鈥?Request/Response types for the HTTP API.
  */
 
 // ============================
@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Combined context for non-OpenClaw clients. Includes dynamic recalled memories plus stable system context. */
   context: string;
+  /** Dynamic per-turn memories that OpenClaw would prepend to the user prompt. */
+  prepend_context?: string;
+  /** Stable persona/scene/tool guidance that OpenClaw would append to the system prompt. */
+  system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
@@ -119,7 +124,7 @@ export interface SessionEndResponse {
  */
 export interface SeedRequest {
   /**
-   * Seed input data — either Format A object or Format B array.
+   * Seed input data 鈥?either Format A object or Format B array.
    * This is the same structure accepted by `openclaw memory-tdai seed --input`.
    */
   data: unknown;

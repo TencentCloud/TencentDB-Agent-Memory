@@ -1,16 +1,16 @@
-/**
- * TDAI Gateway — HTTP server for the Hermes sidecar.
+﻿/**
+ * TDAI Gateway 鈥?HTTP server for the Hermes sidecar.
  *
  * Exposes TDAI Core capabilities as HTTP endpoints:
- *   GET  /health              — Health check
- *   POST /recall              — Memory recall (prefetch)
- *   POST /capture             — Conversation capture (sync_turn)
- *   POST /search/memories     — L1 memory search
- *   POST /search/conversations — L0 conversation search
- *   POST /session/end         — Session end + flush
- *   POST /seed               — Batch seed historical conversations (L0 → L1)
+ *   GET  /health              鈥?Health check
+ *   POST /recall              鈥?Memory recall (prefetch)
+ *   POST /capture             鈥?Conversation capture (sync_turn)
+ *   POST /search/memories     鈥?L1 memory search
+ *   POST /search/conversations 鈥?L0 conversation search
+ *   POST /session/end         鈥?Session end + flush
+ *   POST /seed               鈥?Batch seed historical conversations (L0 鈫?L1)
  *
- * Built with Node.js native `http` module — no Express/Fastify dependency.
+ * Built with Node.js native `http` module 鈥?no Express/Fastify dependency.
  * Designed to run as a managed sidecar alongside Hermes.
  */
 
@@ -48,7 +48,7 @@ const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
 
 // ============================
-// Console logger (for standalone gateway — no OpenClaw logger available)
+// Console logger (for standalone gateway 鈥?no OpenClaw logger available)
 // ============================
 
 function createConsoleLogger(): Logger {
@@ -172,7 +172,7 @@ export class TdaiGateway {
    *      (this is the documented default, but operators must know it before
    *      they expose the port).
    *   2. Loudly warn when the gateway is bound to anything other than the
-   *      loopback interface without an API key — that exact combination is
+   *      loopback interface without an API key 鈥?that exact combination is
    *      what the security audit flagged as a real exposure.
    *   3. Never log the key itself.
    */
@@ -188,7 +188,7 @@ export class TdaiGateway {
 
     if (!authOn) {
       this.logger.warn(
-        "TDAI_GATEWAY_API_KEY is NOT set — all routes except GET /health are " +
+        "TDAI_GATEWAY_API_KEY is NOT set 鈥?all routes except GET /health are " +
         "open to anyone who can reach this port. This is the legacy default. " +
         "Set TDAI_GATEWAY_API_KEY (or server.apiKey in tdai-gateway.yaml) and " +
         "pass `Authorization: Bearer <key>` from clients before exposing the " +
@@ -205,7 +205,7 @@ export class TdaiGateway {
     }
     if (corsOrigins.includes("*")) {
       this.logger.warn(
-        "CORS allow-list contains '*' — every browser origin can call this " +
+        "CORS allow-list contains '*' 鈥?every browser origin can call this " +
         "gateway. Restrict server.corsOrigins to a concrete allow-list for any " +
         "non-local deployment."
       );
@@ -237,7 +237,7 @@ export class TdaiGateway {
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
 
-    // Apply CORS headers based on configured allow-list (empty → no headers).
+    // Apply CORS headers based on configured allow-list (empty 鈫?no headers).
     this.applyCorsHeaders(req, res);
 
     if (method === "OPTIONS") {
@@ -247,7 +247,7 @@ export class TdaiGateway {
     }
 
     try {
-      // GET /health is always reachable without auth — operators and
+      // GET /health is always reachable without auth 鈥?operators and
       // orchestrators (k8s liveness, docker health-check) rely on it being
       // an unconditionally cheap probe.
       if (method === "GET" && pathname === "/health") {
@@ -255,7 +255,7 @@ export class TdaiGateway {
       }
 
       // All other routes go through the optional auth gate. When apiKey is
-      // unset the gate is a no-op (preserves legacy open behaviour) — the
+      // unset the gate is a no-op (preserves legacy open behaviour) 鈥?the
       // startup WARN in `logSecurityPosture` covers that case.
       if (!this.checkAuth(req, res)) return;
 
@@ -291,7 +291,7 @@ export class TdaiGateway {
    * shared secret using a constant-time comparison.
    *
    * When `server.apiKey` is unset (`undefined`), this returns `true` without
-   * inspecting the request — this is the documented default and matches the
+   * inspecting the request 鈥?this is the documented default and matches the
    * pre-existing open behaviour. Operators are reminded of this at startup
    * via `logSecurityPosture`.
    *
@@ -300,7 +300,7 @@ export class TdaiGateway {
    */
   private checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
     const expected = this.config.server.apiKey;
-    if (!expected) return true; // auth disabled — default behaviour
+    if (!expected) return true; // auth disabled 鈥?default behaviour
 
     const header = req.headers["authorization"];
     if (typeof header !== "string" || !header.startsWith("Bearer ")) {
@@ -325,10 +325,10 @@ export class TdaiGateway {
    */
   private applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
     const allow = this.config.server.corsOrigins ?? [];
-    if (allow.length === 0) return; // strict default — no headers
+    if (allow.length === 0) return; // strict default 鈥?no headers
 
     if (allow.includes("*")) {
-      // Wildcard — preserves the legacy permissive behaviour for callers that
+      // Wildcard 鈥?preserves the legacy permissive behaviour for callers that
       // opt in explicitly via config. Note: with wildcard we deliberately do
       // not echo back the request Origin and do not send `Vary: Origin`,
       // mirroring how the gateway behaved before this change.
@@ -340,7 +340,7 @@ export class TdaiGateway {
 
     const requestOrigin = req.headers["origin"];
     if (typeof requestOrigin !== "string" || !allow.includes(requestOrigin)) {
-      // Origin not in allow-list — emit no CORS headers; browser will block.
+      // Origin not in allow-list 鈥?emit no CORS headers; browser will block.
       // Always set Vary so caches don't poison responses across origins.
       res.setHeader("Vary", "Origin");
       return;
@@ -380,10 +380,16 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    const contextParts = [result.prependContext, result.appendSystemContext]
+      .filter((part): part is string => typeof part === "string" && part.length > 0);
+    const context = contextParts.join("\n\n");
+
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${context.length} chars`);
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context,
+      prepend_context: result.prependContext,
+      system_context: result.appendSystemContext,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
@@ -546,7 +552,7 @@ export class TdaiGateway {
       }
     }
 
-    // Execute seed pipeline (blocking — this may take minutes for large inputs)
+    // Execute seed pipeline (blocking 鈥?this may take minutes for large inputs)
     const summary = await executeSeed(input, {
       outputDir,
       openclawConfig: {},
