@@ -1,5 +1,6 @@
 export {
   CANONICAL_MEMORY_TOOLS,
+  MCP_SERVER_INSTRUCTIONS,
   getCanonicalTool,
   getMcpToolDefinitions,
   getOpenClawSearchToolDefinitions,
@@ -62,4 +63,5 @@ export type {
   MemoryAdapterOperations,
   OpenClawToolSpec,
   TdaiPlatformAdapter,
+  ToolAnnotations,
 } from "./types.js";

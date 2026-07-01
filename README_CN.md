@@ -510,6 +510,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | 跨平台适配架构与 MCP 集成说明 |
 | [`examples/adapter-sdk/`](./examples/adapter-sdk/) | 新平台接入 Adapter SDK 的示例 |
+| [`examples/codex/`](./examples/codex/) | Codex MCP 与 hook 接入示例 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 

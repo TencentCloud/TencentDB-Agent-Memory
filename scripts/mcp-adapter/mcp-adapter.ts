@@ -14,6 +14,7 @@ import {
   asRecord,
   GatewayMemoryOperations,
   getMcpToolDefinitions,
+  MCP_SERVER_INSTRUCTIONS,
   requireString,
   TdaiAdapterRuntime,
   TdaiGatewayClient,
@@ -102,6 +103,7 @@ export class McpServer {
           protocolVersion: resolveProtocolVersion(request.params),
           capabilities: { tools: {} },
           serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+          instructions: MCP_SERVER_INSTRUCTIONS,
         };
       case "notifications/initialized":
         return undefined;

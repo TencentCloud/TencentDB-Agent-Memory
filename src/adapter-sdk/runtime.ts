@@ -232,9 +232,9 @@ export class TdaiAdapterRuntime<TEvent = unknown, TContext = unknown> {
           return toAdapterToolResult(await this.operations.capture({
             userText,
             assistantText,
-                messages: Array.isArray(args.messages)
-                  ? args.messages
-                  : [],
+            messages: Array.isArray(args.messages)
+              ? args.messages
+              : [],
             sessionKey,
             sessionId: optionalString(args, "session_id"),
             startedAt: Date.now(),

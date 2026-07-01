@@ -26,6 +26,15 @@ const emptyObjectSchema: JsonSchemaObject = {
   additionalProperties: false,
 };
 
+export const MCP_SERVER_INSTRUCTIONS =
+  "Use TencentDB Agent Memory to recall and preserve durable user/project context. " +
+  "Call memory_tencentdb_recall before tasks that may benefit from prior context. " +
+  "Use memory_tencentdb_memory_search for structured long-term memories and " +
+  "memory_tencentdb_conversation_search for exact prior dialogue. Search tools share " +
+  "a combined limit of 3 calls per turn. Call memory_tencentdb_capture after a useful " +
+  "completed turn, and memory_tencentdb_session_end when a session is ending. Never " +
+  "store secrets, credentials, tokens, or private keys.";
+
 export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
   {
     id: "health",
@@ -33,6 +42,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
     label: "Memory Gateway Health",
     description: "Check whether the memory-tencentdb Gateway is reachable.",
     inputSchema: emptyObjectSchema,
+    annotations: {
+      title: "Memory Gateway Health",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   {
     id: "recall",
@@ -48,6 +64,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
       },
       required: ["query"],
       additionalProperties: false,
+    },
+    annotations: {
+      title: "Memory Recall",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
     },
   },
   {
@@ -67,6 +90,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
       },
       required: ["user_content", "assistant_content"],
       additionalProperties: false,
+    },
+    annotations: {
+      title: "Memory Capture",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
     },
   },
   {
@@ -99,6 +129,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
       required: ["query"],
       additionalProperties: false,
     },
+    annotations: {
+      title: "Memory Search",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   },
   {
     id: "conversation_search",
@@ -125,6 +162,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
       required: ["query"],
       additionalProperties: false,
     },
+    annotations: {
+      title: "Conversation Search",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   },
   {
     id: "session_end",
@@ -139,6 +183,13 @@ export const CANONICAL_MEMORY_TOOLS: readonly CanonicalToolSpec[] = [
       },
       additionalProperties: false,
     },
+    annotations: {
+      title: "Memory Session End",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   },
 ] as const;
 
@@ -151,8 +202,10 @@ export function getCanonicalTool(id: CanonicalToolSpec["id"]): CanonicalToolSpec
 export function getMcpToolDefinitions(): McpToolSpec[] {
   return CANONICAL_MEMORY_TOOLS.map((tool) => ({
     name: tool.gatewayName,
+    title: tool.label,
     description: tool.description,
     inputSchema: tool.inputSchema,
+    annotations: tool.annotations,
   }));
 }
 

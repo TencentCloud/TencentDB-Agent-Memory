@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "./dist",
+    "rootDir": "../..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "codex-hooks-adapter.ts",
+    "../../src/adapter-sdk/gateway-client.ts",
+    "../../src/adapter-sdk/index.ts",
+    "../../src/adapter-sdk/params.ts",
+    "../../src/adapter-sdk/results.ts",
+    "../../src/adapter-sdk/runtime.ts",
+    "../../src/adapter-sdk/tools.ts",
+    "../../src/adapter-sdk/types.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

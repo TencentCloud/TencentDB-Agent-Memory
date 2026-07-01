@@ -135,17 +135,38 @@ OpenClaw keeps its established in-host search tool names:
 
 ## Existing Consumers
 
-The SDK is already used by two existing TypeScript adapter surfaces:
+The SDK is already used by TypeScript adapter surfaces:
 
 | Consumer | Reused SDK surface |
 | --- | --- |
-| MCP stdio adapter | Gateway client, tool definitions, tool call dispatcher, MCP result formatting |
+| MCP stdio adapter | Gateway client, MCP server instructions, tool definitions, tool annotations, tool call dispatcher, MCP result formatting |
+| Codex hooks adapter | `TdaiPlatformAdapter` lifecycle mapping, Gateway operations, recall/capture runtime |
 | OpenClaw plugin | Canonical search tool definitions, search limit normalization, OpenClaw result formatting |
 
 Hermes remains a Python provider and continues to call the Gateway. Its Gateway
 contract stays compatible with the TypeScript SDK because the shared tool and
 HTTP shapes match the existing `/recall`, `/capture`, `/search/*`, and
 `/session/end` routes.
+
+## Codex Integration
+
+Codex uses the shared SDK through two package entries:
+
+| Entry | Codex surface | SDK path |
+| --- | --- | --- |
+| `memory-tencentdb-mcp` | MCP stdio server | `GatewayMemoryOperations` + canonical MCP tools |
+| `memory-tencentdb-codex-hook` | `UserPromptSubmit` and `Stop` hooks | `TdaiPlatformAdapter` + `TdaiAdapterRuntime.handleRecall()` / `handleCapture()` |
+
+The MCP entry exposes the complete memory tool surface to Codex. The hook entry
+adds automatic lifecycle behavior:
+
+1. `UserPromptSubmit` maps Codex `session_id` to a memory `session_key`, calls
+   recall, and returns Codex `additionalContext`.
+2. `Stop` uses the stored prompt plus Codex `last_assistant_message` to capture
+   the completed turn.
+
+See [`examples/codex/`](../examples/codex/) for a complete `config.toml`
+example.
 
 ## Validation
 
@@ -155,10 +176,22 @@ Run the SDK and adapter contract tests:
 npx vitest run src/adapter-sdk/adapter-sdk.test.ts __tests__/mcp-adapter.test.ts
 ```
 
+Run the Codex hook adapter tests:
+
+```bash
+npx vitest run __tests__/codex-hooks-adapter.test.ts
+```
+
 Run the MCP adapter build:
 
 ```bash
 npm run build:mcp-adapter
+```
+
+Run the Codex hook adapter build:
+
+```bash
+npm run build:codex-hooks-adapter
 ```
 
 For full repository verification:

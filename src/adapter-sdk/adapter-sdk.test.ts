@@ -7,6 +7,7 @@ import {
   GatewayMemoryOperations,
   getMcpToolDefinitions,
   getOpenClawSearchToolDefinitions,
+  MCP_SERVER_INSTRUCTIONS,
   TdaiAdapterRuntime,
   toMcpResult,
 } from "./index.js";
@@ -33,6 +34,16 @@ describe("adapter SDK tool contract", () => {
     ]);
     expect(tools.find((tool) => tool.name === "memory_tencentdb_capture")?.inputSchema.required)
       .toEqual(["user_content", "assistant_content"]);
+    expect(tools.find((tool) => tool.name === "memory_tencentdb_memory_search")?.annotations)
+      .toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    expect(tools.find((tool) => tool.name === "memory_tencentdb_capture")?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: false });
+  });
+
+  it("provides MCP server instructions for clients such as Codex", () => {
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("memory_tencentdb_recall");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("memory_tencentdb_capture");
+    expect(MCP_SERVER_INSTRUCTIONS).toContain("Never store secrets");
   });
 
   it("generates OpenClaw search tools from the same canonical specs", () => {

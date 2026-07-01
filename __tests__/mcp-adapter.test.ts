@@ -22,6 +22,7 @@ describe("MCP adapter", () => {
       capabilities: { tools: {} },
       serverInfo: { name: "memory-tencentdb-mcp" },
     });
+    expect((result as { instructions?: string }).instructions).toContain("memory_tencentdb_recall");
   });
 
   it("lists the memory read/write tools exposed to MCP clients", async () => {
@@ -47,5 +48,19 @@ describe("MCP adapter", () => {
       "memory_tencentdb_conversation_search",
       "memory_tencentdb_session_end",
     ]);
+    expect(result).toMatchObject({
+      tools: expect.arrayContaining([
+        expect.objectContaining({
+          name: "memory_tencentdb_memory_search",
+          title: "Memory Search",
+          annotations: expect.objectContaining({ readOnlyHint: true }),
+        }),
+        expect.objectContaining({
+          name: "memory_tencentdb_capture",
+          title: "Memory Capture",
+          annotations: expect.objectContaining({ readOnlyHint: false }),
+        }),
+      ]),
+    });
   });
 });

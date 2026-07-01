@@ -151,6 +151,7 @@ export interface CanonicalToolSpec {
   label: string;
   description: string;
   inputSchema: JsonSchemaObject;
+  annotations?: ToolAnnotations;
 }
 
 export interface OpenClawToolSpec {
@@ -162,6 +163,16 @@ export interface OpenClawToolSpec {
 
 export interface McpToolSpec {
   name: string;
+  title?: string;
   description: string;
   inputSchema: JsonSchemaObject;
+  annotations?: ToolAnnotations;
+}
+
+export interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
 }

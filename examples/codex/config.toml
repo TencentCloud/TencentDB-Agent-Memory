@@ -1,0 +1,37 @@
+# Example Codex configuration for TencentDB Agent Memory.
+#
+# Copy the relevant sections into ~/.codex/config.toml, or into a trusted
+# project-scoped .codex/config.toml. Start the memory-tencentdb Gateway before
+# starting Codex, or use your own supervisor to keep it running.
+
+[mcp_servers.memory-tencentdb]
+command = "memory-tencentdb-mcp"
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+default_tools_approval_mode = "auto"
+
+[mcp_servers.memory-tencentdb.env]
+MEMORY_TENCENTDB_GATEWAY_URL = "http://127.0.0.1:8420"
+MEMORY_TENCENTDB_MCP_SESSION_KEY = "codex-main"
+
+# Optional: keep write-like memory tools behind explicit approval while letting
+# recall/search run automatically.
+[mcp_servers.memory-tencentdb.tools.memory_tencentdb_capture]
+approval_mode = "prompt"
+
+[mcp_servers.memory-tencentdb.tools.memory_tencentdb_session_end]
+approval_mode = "prompt"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "memory-tencentdb-codex-hook"
+timeout = 15
+statusMessage = "Recalling TencentDB Agent Memory"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "memory-tencentdb-codex-hook"
+timeout = 15
+statusMessage = "Capturing TencentDB Agent Memory"
