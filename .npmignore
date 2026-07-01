@@ -20,3 +20,5 @@ workspace/
 # 运行时产物
 node_modules/
 *.tgz
+# Keep adapter documentation shipped with npm package
+!docs/codex-adapter.md
