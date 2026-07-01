@@ -17,9 +17,8 @@ This example uses both:
 
 The MCP server is the package-provided integration surface. The hook adapter is
 an optional reference implementation that lives entirely under this example. It
-uses the shared Adapter SDK and the Gateway HTTP boundary, but it is not a
-package `bin` entry and can be removed or replaced without changing the core
-engine, MCP adapter, Hermes provider, or SDK contract.
+uses the shared Adapter SDK and the Gateway HTTP boundary to demonstrate
+automatic recall/capture for Codex lifecycle events.
 
 ## Prerequisites
 

@@ -159,8 +159,8 @@ an optional hook reference implementation under `examples/codex/`:
 | `examples/codex/hooks-adapter/` | `UserPromptSubmit` and `Stop` hooks | `TdaiPlatformAdapter` + `TdaiAdapterRuntime.handleRecall()` / `handleCapture()` |
 
 The MCP entry exposes the complete memory tool surface to Codex. The hook
-example adds automatic lifecycle behavior without becoming a package `bin`
-entry:
+example shows how the SDK can map Codex lifecycle events to automatic memory
+recall and capture:
 
 1. `UserPromptSubmit` maps Codex `session_id` to a memory `session_key`, calls
    recall, and returns Codex `additionalContext`.

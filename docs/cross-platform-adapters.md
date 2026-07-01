@@ -35,8 +35,7 @@ mapping interface. A complete TypeScript onboarding example is available under
 
 The MCP stdio server is the new package-provided adapter in this PR. The Codex
 hook implementation is kept as an optional example under `examples/codex/` to
-show how another lifecycle-based host can reuse the Adapter SDK without adding
-another core package entrypoint.
+show how another lifecycle-based host can reuse the Adapter SDK.
 
 | Adapter | Runtime shape | Data flow | When to use |
 | --- | --- | --- | --- |
