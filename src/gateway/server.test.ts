@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRecallResponse } from "./server.js";
+import { buildCaptureTurn, buildRecallResponse } from "./server.js";
 
 describe("Gateway recall response", () => {
   it("combines dynamic L1 context and stable system context for single-context clients", () => {
@@ -18,5 +18,38 @@ describe("Gateway recall response", () => {
     expect(response.append_system_context).toContain("memory-tools-guide");
     expect(response.strategy).toBe("keyword");
     expect(response.memory_count).toBe(1);
+  });
+});
+
+describe("Gateway capture request normalization", () => {
+  it("adds monotonic timestamps when HTTP clients omit raw messages", () => {
+    const turn = buildCaptureTurn({
+      user_content: "remember the Hermes issue marker",
+      assistant_content: "acknowledged",
+      session_key: "session-1",
+    }, 1_000);
+
+    expect(turn.startedAt).toBe(1_000);
+    expect(turn.messages).toEqual([
+      { role: "user", content: "remember the Hermes issue marker", timestamp: 1_001 },
+      { role: "assistant", content: "acknowledged", timestamp: 1_002 },
+    ]);
+  });
+
+  it("keeps client-provided messages unchanged", () => {
+    const messages = [
+      { role: "user", content: "original", timestamp: 2_000 },
+      { role: "assistant", content: "reply", timestamp: 2_100 },
+    ];
+
+    const turn = buildCaptureTurn({
+      user_content: "fallback user",
+      assistant_content: "fallback assistant",
+      session_key: "session-1",
+      messages,
+    }, 1_000);
+
+    expect(turn.startedAt).toBe(1_000);
+    expect(turn.messages).toBe(messages);
   });
 });

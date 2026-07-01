@@ -32,6 +32,24 @@ the Gateway and implement a thin client adapter.
 | Hermes Provider | Python provider + Node.js sidecar | Hermes lifecycle/tools -> Provider HTTP client -> Gateway -> `StandaloneHostAdapter` -> `TdaiCore` | Host cannot run the TypeScript core in-process or prefers process isolation |
 | MCP stdio adapter | MCP tool server + Gateway | MCP client tool call -> `memory-tencentdb-mcp` -> Gateway -> `TdaiCore` | Claude Code, Codex, or any MCP-capable client that can launch a stdio server |
 
+## Adapter Differences
+
+| Concern | OpenClaw | Hermes | MCP |
+| --- | --- | --- | --- |
+| Integration boundary | In-process plugin API | Gateway HTTP API | Gateway HTTP API |
+| Lifecycle source | Host hooks: `before_prompt_build`, `agent_end`, `gateway_stop` | Provider callbacks: `prefetch()`, `sync_turn()`, `on_session_end()` | JSON-RPC tool calls over stdio |
+| Tool surface | Host-registered `tdai_*` tools | Hermes provider tool schemas | MCP `memory_tencentdb_*` tools |
+| Process model | One OpenClaw plugin process | Python provider plus managed Node.js Gateway sidecar | MCP server process plus Gateway |
+| LLM execution | OpenClaw runner by default; optional standalone override | Gateway standalone OpenAI-compatible runner | Gateway standalone OpenAI-compatible runner |
+| Session scoping | OpenClaw `ctx.sessionKey` | Provider `session_id` mapped to Gateway `session_key` | `session_key` argument or `MEMORY_TENCENTDB_MCP_SESSION_KEY` |
+| Failure behavior | Hook failures degrade to no recall/capture for that turn | Provider returns empty recall/tool errors while Gateway starts or recovers | Tool call returns structured MCP error when Gateway is unavailable |
+
+For Gateway-based adapters, clients may provide only `user_content`,
+`assistant_content`, and `session_key` to `/capture`. The Gateway normalizes
+that lightweight shape into a two-message turn with stable timestamps before it
+calls `TdaiCore`. Clients that already have full host messages can still pass
+`messages` explicitly; those are preserved unchanged.
+
 ## MCP Adapter
 
 The MCP adapter is a new cross-platform integration layer. It exposes the
@@ -101,6 +119,22 @@ npm run memory-tencentdb-mcp
   }
 }
 ```
+
+## Functional Validation
+
+The adapter paths were validated with isolated local state directories and a
+real OpenAI-compatible LLM endpoint from the local Codex configuration. Secrets
+were read only from local runtime configuration and were not written to the
+repository.
+
+| Path | Validation scope | Result |
+| --- | --- | --- |
+| OpenClaw | Installed the local checkout into an isolated OpenClaw profile with `openclaw plugins install --link`, verified `memory-tencentdb` loaded, registered the real `index.ts`, drove `before_prompt_build` and `agent_end`, then verified `tdai_conversation_search`, `tdai_memory_search`, recall injection, and local persistence. | Passed |
+| Hermes | Installed Hermes into an isolated `/tmp` environment, loaded the `memory_tencentdb` provider through Hermes discovery, started a real Gateway sidecar on an isolated port, ran `sync_turn`, `memory_tencentdb_conversation_search`, `on_session_end`, `memory_tencentdb_memory_search`, `prefetch`, and checked local persistence. | Passed |
+| MCP | Started a real local Gateway with an isolated `TDAI_DATA_DIR`, started `bin/memory-tencentdb-mcp.mjs`, sent JSON-RPC calls over stdio, and verified initialize, tool listing, health, capture, L0 search, L1 search after extraction, recall, session flush, and persistence. | Passed |
+
+All Gateway-side functional runs used Node.js 22. Node.js 20 is not sufficient
+for this package because the project declares `node >=22.16.0`.
 
 ## Adapter Implementation Checklist
 

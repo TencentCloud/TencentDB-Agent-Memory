@@ -71,6 +71,26 @@ export function buildRecallResponse(result: RecallResult): RecallResponse {
   };
 }
 
+export function buildCaptureTurn(body: CaptureRequest, now = Date.now()): {
+  messages: unknown[];
+  startedAt: number;
+} {
+  if (Array.isArray(body.messages)) {
+    return { messages: body.messages, startedAt: now };
+  }
+
+  const userTimestamp = now + 1;
+  const assistantTimestamp = now + 2;
+
+  return {
+    messages: [
+      { role: "user", content: body.user_content, timestamp: userTimestamp },
+      { role: "assistant", content: body.assistant_content, timestamp: assistantTimestamp },
+    ],
+    startedAt: now,
+  };
+}
+
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
 // ============================
@@ -419,15 +439,14 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
+    const turn = buildCaptureTurn(body, startMs);
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
+      messages: turn.messages,
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: turn.startedAt,
     });
     const elapsed = Date.now() - startMs;
 
