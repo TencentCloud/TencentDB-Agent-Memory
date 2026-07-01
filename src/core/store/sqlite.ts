@@ -174,6 +174,18 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_OPERATOR_RE = /\b(?:AND|OR|NOT|NEAR)\b/giu;
+const FTS5_SPECIAL_SYNTAX_RE = /["'()[\]{}^*:]/gu;
+const FTS5_OPERATOR_TOKENS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+function stripFtsSyntax(raw: string): string {
+  return raw.replace(FTS5_OPERATOR_RE, " ").replace(FTS5_SPECIAL_SYNTAX_RE, " ");
+}
+
+function isFtsOperatorToken(token: string): boolean {
+  return FTS5_OPERATOR_TOKENS.has(token.toUpperCase());
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -183,6 +195,11 @@ const ZH_STOP_WORDS = new Set([
  *
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
+ *
+ * Security model: this is a whitelist-based MATCH expression builder. User
+ * text is reduced to word/number tokens, FTS5 syntax is stripped, and the only
+ * operator we emit is this function's fixed `OR`. Callers execute the result
+ * through prepared `MATCH ?` statements, so user text never becomes SQL text.
  *
  * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
  * matching *any* token is returned.  BM25 naturally ranks documents that
@@ -196,6 +213,7 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  const cleaned = stripFtsSyntax(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,12 +221,14 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
         // Remove pure whitespace / punctuation tokens
         if (!/[\p{L}\p{N}]/u.test(t)) return false;
+        // Remove FTS5 reserved operators before building a MATCH expression
+        if (isFtsOperatorToken(t)) return false;
         // Remove common Chinese stop-words to reduce noise
         if (ZH_STOP_WORDS.has(t)) return false;
         return true;
@@ -218,10 +238,10 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        .filter((t) => t && !isFtsOperatorToken(t)) ?? [];
   }
 
   if (tokens.length === 0) return null;
