@@ -71,16 +71,28 @@ export function buildRecallResponse(result: RecallResult): RecallResponse {
   };
 }
 
+const syntheticCaptureTimestampsBySession = new Map<string, number>();
+
 export function buildCaptureTurn(body: CaptureRequest, now = Date.now()): {
   messages: unknown[];
   startedAt: number;
 } {
   if (Array.isArray(body.messages)) {
+    const maxTimestamp = maxMessageTimestamp(body.messages);
+    if (maxTimestamp != null) {
+      const lastTimestamp = syntheticCaptureTimestampsBySession.get(body.session_key) ?? 0;
+      if (maxTimestamp > lastTimestamp) {
+        syntheticCaptureTimestampsBySession.set(body.session_key, maxTimestamp);
+      }
+    }
     return { messages: body.messages, startedAt: now };
   }
 
-  const userTimestamp = now + 1;
-  const assistantTimestamp = now + 2;
+  const lastTimestamp = syntheticCaptureTimestampsBySession.get(body.session_key) ?? 0;
+  const baseTimestamp = Math.max(now, lastTimestamp);
+  const userTimestamp = baseTimestamp + 1;
+  const assistantTimestamp = baseTimestamp + 2;
+  syntheticCaptureTimestampsBySession.set(body.session_key, assistantTimestamp);
 
   return {
     messages: [
@@ -89,6 +101,17 @@ export function buildCaptureTurn(body: CaptureRequest, now = Date.now()): {
     ],
     startedAt: now,
   };
+}
+
+function maxMessageTimestamp(messages: unknown[]): number | undefined {
+  let maxTimestamp: number | undefined;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const timestamp = (message as Record<string, unknown>).timestamp;
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) continue;
+    maxTimestamp = maxTimestamp == null ? timestamp : Math.max(maxTimestamp, timestamp);
+  }
+  return maxTimestamp;
 }
 
 // ============================
