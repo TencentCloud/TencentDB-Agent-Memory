@@ -485,4 +485,51 @@ export class CheckpointManager {
     });
   }
 
+  // ============================
+  // Counter recalibration (drift fix after cleanup — Issue #157)
+  // ============================
+
+  /**
+   * Recalibrate cumulative counters to match actual store counts.
+   *
+   * After cleanup operations (memory-cleaner deletes expired JSONL files
+   * and vector-store records), the checkpoint counters l0_conversations_count
+   * and total_memories_extracted can drift permanently above reality.
+   * Callers query the authoritative counts from the store and pass them here.
+   *
+   * Only writes when values actually differ; logs each change via this.logger.
+   * Uses the existing mutate() file lock for concurrent-access safety.
+   *
+   * @param actualL0Count - Authoritative L0 conversation count from the store.
+   * @param actualL1Count - Authoritative L1 memory count from the store.
+   * @returns Flags indicating which counters were updated.
+   */
+  async recalibrate(
+    actualL0Count: number,
+    actualL1Count: number,
+  ): Promise<{ l0Changed: boolean; l1Changed: boolean }> {
+    const result = { l0Changed: false, l1Changed: false };
+
+    await this.mutate((cp) => {
+      if (actualL0Count !== cp.l0_conversations_count) {
+        this.logger.info(
+          `[checkpoint] recalibrate l0_conversations_count: ` +
+          `${cp.l0_conversations_count} → ${actualL0Count}`,
+        );
+        cp.l0_conversations_count = actualL0Count;
+        result.l0Changed = true;
+      }
+      if (actualL1Count !== cp.total_memories_extracted) {
+        this.logger.info(
+          `[checkpoint] recalibrate total_memories_extracted: ` +
+          `${cp.total_memories_extracted} → ${actualL1Count}`,
+        );
+        cp.total_memories_extracted = actualL1Count;
+        result.l1Changed = true;
+      }
+    });
+
+    return result;
+  }
+
 }
