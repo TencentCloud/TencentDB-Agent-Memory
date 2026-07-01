@@ -1,0 +1,16 @@
+{
+  "name": "memory-tencentdb",
+  "transport": "stdio",
+  "command": [
+    "node",
+    "./bin/memory-tencentdb-mcp.mjs"
+  ],
+  "env": {
+    "MEMORY_TENCENTDB_GATEWAY_URL": "http://127.0.0.1:8420",
+    "MEMORY_TENCENTDB_GATEWAY_API_KEY": "${MEMORY_TENCENTDB_GATEWAY_API_KEY}"
+  },
+  "tools": [
+    "memory_tencentdb_memory_search",
+    "memory_tencentdb_conversation_search"
+  ]
+}
