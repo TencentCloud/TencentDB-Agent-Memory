@@ -9,10 +9,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
-const entryScript = path.resolve(thisDir, "../scripts/mcp-adapter/dist/mcp-adapter.js");
+const entryCandidates = [
+  path.resolve(thisDir, "../scripts/mcp-adapter/dist/scripts/mcp-adapter/mcp-adapter.js"),
+  path.resolve(thisDir, "../scripts/mcp-adapter/dist/mcp-adapter.js"),
+];
+const entryScript = entryCandidates.find((candidate) => fs.existsSync(candidate));
 
-if (!fs.existsSync(entryScript)) {
-  console.error("Precompiled MCP adapter not found: " + entryScript);
+if (!entryScript) {
+  console.error("Precompiled MCP adapter not found. Checked:");
+  for (const candidate of entryCandidates) {
+    console.error("  - " + candidate);
+  }
   console.error("Please run: npm run build:mcp-adapter");
   process.exit(1);
 }

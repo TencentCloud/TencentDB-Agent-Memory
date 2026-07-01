@@ -4,7 +4,7 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "outDir": "./dist",
-    "rootDir": ".",
+    "rootDir": "../..",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,6 +14,15 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["mcp-adapter.ts"],
+  "include": [
+    "mcp-adapter.ts",
+    "../../src/adapter-sdk/gateway-client.ts",
+    "../../src/adapter-sdk/index.ts",
+    "../../src/adapter-sdk/params.ts",
+    "../../src/adapter-sdk/results.ts",
+    "../../src/adapter-sdk/runtime.ts",
+    "../../src/adapter-sdk/tools.ts",
+    "../../src/adapter-sdk/types.ts"
+  ],
   "exclude": ["dist", "node_modules"]
 }

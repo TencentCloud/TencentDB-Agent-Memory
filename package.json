@@ -27,7 +27,7 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
-    "build:mcp-adapter": "tsc --project scripts/mcp-adapter/tsconfig.json",
+    "build:mcp-adapter": "rm -rf scripts/mcp-adapter/dist && tsc --project scripts/mcp-adapter/tsconfig.json",
     "memory-tencentdb-mcp": "node ./bin/memory-tencentdb-mcp.mjs",
     "test": "vitest run",
     "test:watch": "vitest",

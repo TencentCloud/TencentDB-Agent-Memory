@@ -35,6 +35,12 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+import {
+  coerceSearchLimit,
+  getCanonicalTool,
+  toOpenClawResult,
+  truncateForLog,
+} from "./src/adapter-sdk/index.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -349,46 +355,23 @@ export default function register(api: OpenClawPluginApi) {
   // tdai_memory_search — Agent-callable L1 memory search tool
   // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
   if (cfg.recall.enabled || cfg.capture.enabled) {
-  api.registerTool(
+    const memorySearchTool = getCanonicalTool("memory_search");
+    api.registerTool(
     {
-      name: "tdai_memory_search",
-      label: "Memory Search",
-      description:
-        "Search through the user's long-term memories. Use this when you need to recall specific information about the user's preferences, past events, instructions, or context from previous conversations. Returns relevant memory records ranked by relevance. " +
-        "Limit: tdai_memory_search and tdai_conversation_search share a combined limit of 3 calls per turn. Stop searching after 3 total attempts.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query describing what you want to recall about the user",
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of results to return (default: 5, max: 20)",
-          },
-          type: {
-            type: "string",
-            enum: ["persona", "episodic", "instruction"],
-            description: "Optional filter by memory type: persona (identity/preferences), episodic (events/activities), instruction (user rules/commands)",
-          },
-          scene: {
-            type: "string",
-            description: "Optional filter by scene name",
-          },
-        },
-        required: ["query"],
-      },
+      name: memorySearchTool.openclawName!,
+      label: memorySearchTool.label,
+      description: memorySearchTool.description,
+      parameters: memorySearchTool.inputSchema,
       async execute(_toolCallId: string, params: Record<string, unknown>) {
         const startMs = Date.now();
         const query = String(params.query ?? "");
-        const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
+        const limit = coerceSearchLimit(params.limit);
         const typeFilter = typeof params.type === "string" ? params.type : undefined;
         const sceneFilter = typeof params.scene === "string" ? params.scene : undefined;
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_memory_search called: ` +
-          `query="${query.length > 80 ? query.slice(0, 80) + "…" : query}", ` +
+          `query="${truncateForLog(query)}", ` +
           `limit=${limit}, type=${typeFilter ?? "(all)"}, scene=${sceneFilter ?? "(all)"}`,
         );
 
@@ -409,10 +392,10 @@ export default function register(api: OpenClawPluginApi) {
             durationMs: elapsedMs,
             success: true,
           });
-          return {
-            content: [{ type: "text" as const, text: result.text }],
+          return toOpenClawResult({
+            text: result.text,
             details: { count: result.total, strategy: result.strategy },
-          };
+          });
         } catch (err) {
           const elapsedMs = Date.now() - startMs;
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -424,55 +407,35 @@ export default function register(api: OpenClawPluginApi) {
             success: false,
             error: errMsg,
           });
-          return {
-            content: [{ type: "text" as const, text: `Memory search failed: ${errMsg}` }],
+          return toOpenClawResult({
+            text: `Memory search failed: ${errMsg}`,
             details: { error: errMsg },
-          };
+            isError: true,
+          });
         }
       },
     },
     { name: "tdai_memory_search" },
-  );
+    );
 
   // tdai_conversation_search — Agent-callable L0 conversation search tool
   // TODO: implement hard per-turn call limit via before_tool_call hook + execute early-return (方案 D)
-  api.registerTool(
+    const conversationSearchTool = getCanonicalTool("conversation_search");
+    api.registerTool(
     {
-      name: "tdai_conversation_search",
-      label: "Conversation Search",
-      description:
-        "Search through past conversation history (raw dialogue records). " +
-        "Use this when tdai_memory_search (structured memories) doesn't have the information you need, " +
-        "or when you want to find specific past conversations, dialogue context, or exact words " +
-        "the user said before. Returns relevant individual messages ranked by relevance. " +
-        "Limit: tdai_memory_search and tdai_conversation_search share a combined limit of 3 calls per turn. Stop searching after 3 total attempts.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "Search query describing what conversation content you want to find",
-          },
-          limit: {
-            type: "number",
-            description: "Maximum number of messages to return (default: 5, max: 20)",
-          },
-          session_key: {
-            type: "string",
-            description: "Optional: filter results to a specific session",
-          },
-        },
-        required: ["query"],
-      },
+      name: conversationSearchTool.openclawName!,
+      label: conversationSearchTool.label,
+      description: conversationSearchTool.description,
+      parameters: conversationSearchTool.inputSchema,
       async execute(_toolCallId: string, params: Record<string, unknown>) {
         const startMs = Date.now();
         const query = String(params.query ?? "");
-        const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
+        const limit = coerceSearchLimit(params.limit);
         const sessionKeyFilter = typeof params.session_key === "string" ? params.session_key : undefined;
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_conversation_search called: ` +
-          `query="${query.length > 80 ? query.slice(0, 80) + "…" : query}", ` +
+          `query="${truncateForLog(query)}", ` +
           `limit=${limit}, session_key=${sessionKeyFilter ?? "(all)"}`,
         );
 
@@ -491,10 +454,10 @@ export default function register(api: OpenClawPluginApi) {
             durationMs: elapsedMs,
             success: true,
           });
-          return {
-            content: [{ type: "text" as const, text: result.text }],
+          return toOpenClawResult({
+            text: result.text,
             details: { count: result.total },
-          };
+          });
         } catch (err) {
           const elapsedMs = Date.now() - startMs;
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -506,15 +469,16 @@ export default function register(api: OpenClawPluginApi) {
             success: false,
             error: errMsg,
           });
-          return {
-            content: [{ type: "text" as const, text: `Conversation search failed: ${errMsg}` }],
+          return toOpenClawResult({
+            text: `Conversation search failed: ${errMsg}`,
             details: { error: errMsg },
-          };
+            isError: true,
+          });
         }
       },
     },
     { name: "tdai_conversation_search" },
-  );
+    );
   } else {
     api.logger.debug?.(`${TAG} Memory tools (tdai_memory_search, tdai_conversation_search) not registered — memory features disabled`);
   }

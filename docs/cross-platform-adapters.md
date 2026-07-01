@@ -24,6 +24,12 @@ Hosts that can provide a `HostAdapter` and `LLMRunnerFactory` can call
 `TdaiCore` directly. Hosts that cannot link this package in-process should use
 the Gateway and implement a thin client adapter.
 
+For new platform integrations, use the Adapter SDK described in
+[`docs/adapter-sdk.md`](./adapter-sdk.md). The SDK keeps tool definitions,
+Gateway calls, parameter normalization, and result formatting in one shared
+place so a platform adapter only implements the `TdaiPlatformAdapter` event
+mapping interface.
+
 ## Existing Adapter Patterns
 
 | Adapter | Runtime shape | Data flow | When to use |
@@ -140,11 +146,12 @@ for this package because the project declares `node >=22.16.0`.
 
 When adding another platform adapter:
 
-1. Decide whether the platform should call `TdaiCore` in-process or talk to
-   the Gateway over HTTP.
-2. Map platform lifecycle events to `recall`, `capture`, `search`, and
-   `session_end`.
-3. Preserve `session_key` consistently so L0/L1 records stay scoped to the
+1. Implement `TdaiPlatformAdapter` with `getSession`, `getRecallInput`, and
+   `getCaptureInput` for the host's lifecycle events.
+2. Choose `CoreMemoryOperations` for in-process TypeScript hosts, or
+   `GatewayMemoryOperations` for HTTP/Gateway-based hosts.
+3. Reuse SDK tool definitions instead of writing platform-local schemas.
+4. Preserve `session_key` consistently so L0/L1 records stay scoped to the
    right conversation.
-4. Keep authentication at the Gateway boundary when using HTTP.
-5. Document startup, configuration, and failure behavior for operators.
+5. Keep authentication at the Gateway boundary when using HTTP.
+6. Document startup, configuration, and failure behavior for operators.
