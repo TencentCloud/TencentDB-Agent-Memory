@@ -2,7 +2,7 @@
   "name": "@tencentdb-agent-memory/memory-tencentdb",
   "version": "0.3.6",
   "description": "Four-layer local memory system plugin for OpenClaw — auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0→L1→L2→L3 pipeline)",
-  "type": "module",
+  "type": "module", 
   "main": "./dist/index.mjs",
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
