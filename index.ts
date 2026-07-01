@@ -305,6 +305,9 @@ export default function register(api: OpenClawPluginApi) {
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
+        onAfterCleanup: async () => {
+          await core.recalibrateCheckpoint("memory-cleaner");
+        },
       });
       sharedMemoryCleaner.start();
       api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);
@@ -312,6 +315,9 @@ export default function register(api: OpenClawPluginApi) {
       api.logger.debug?.(`${TAG} Memory cleaner already started in this process, reusing existing instance`);
     }
     memoryCleaner = sharedMemoryCleaner;
+    memoryCleaner.setAfterCleanup(async () => {
+      await core.recalibrateCheckpoint("memory-cleaner");
+    });
   } else {
     api.logger.debug?.(`${TAG} Memory cleaner disabled (retentionDays not configured)`);
   }
