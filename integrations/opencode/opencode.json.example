@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "deepseek/deepseek-v4-flash",
+  "mcp": {
+    "memory-tencentdb": {
+      "type": "local",
+      "command": [
+        "memory-tencentdb-mcp"
+      ],
+      "enabled": true,
+      "environment": {
+        "MEMORY_TENCENTDB_GATEWAY_URL": "http://127.0.0.1:8420"
+      }
+    }
+  }
+}

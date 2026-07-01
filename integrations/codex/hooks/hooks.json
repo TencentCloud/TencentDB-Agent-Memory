@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MEMORY_TENCENTDB_HOOK_PLATFORM=codex MEMORY_TENCENTDB_HOOK_EVENT=UserPromptSubmit memory-tencentdb-hook",
+            "statusMessage": "Recalling memory-tencentdb context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "MEMORY_TENCENTDB_HOOK_PLATFORM=codex MEMORY_TENCENTDB_HOOK_EVENT=Stop memory-tencentdb-hook",
+            "timeout": 30,
+            "statusMessage": "Flushing memory-tencentdb session"
+          }
+        ]
+      }
+    ]
+  }
+}
