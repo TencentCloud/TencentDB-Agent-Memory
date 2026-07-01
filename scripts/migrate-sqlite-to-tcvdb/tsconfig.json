@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "target": "es2023",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "declaration": false,
     "strict": true,
     "esModuleInterop": true,
