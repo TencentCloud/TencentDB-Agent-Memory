@@ -50,7 +50,7 @@ USER_HOME=$(eval echo ~$USERNAME)
 NPM_PACKAGE="@tencentdb-agent-memory/memory-tencentdb@latest"
 
 # Hermes 路径
-HERMES_HOME="$USER_HOME/.hermes"
+HERMES_HOME="${HERMES_HOME:-$USER_HOME/.hermes}"
 # HERMES_AGENT_DIR（fix: issue #18）
 # 用户通过环境变量传什么就用什么；未设置时 fallback 到传统路径。
 # 如果目录不存在，后续前置检查会统一报错。
@@ -209,16 +209,48 @@ echo "[memory-tencentdb] Gateway dependencies installed"
 
 echo "[memory-tencentdb] Step 2.5: Linking plugin into hermes plugins directory..."
 
-HERMES_PLUGIN_DIR="$HERMES_AGENT_DIR/plugins/memory/memory_tencentdb"
 PLUGIN_SRC_DIR="$TDAI_INSTALL_DIR/hermes-plugin/memory/memory_tencentdb"
+HERMES_CHECKOUT_PLUGIN_DIR="$HERMES_AGENT_DIR/plugins/memory/memory_tencentdb"
+HERMES_USER_PLUGIN_DIR="$HERMES_HOME/plugins/memory_tencentdb"
 
-# 移除旧链接/目录
-rm -rf "$HERMES_PLUGIN_DIR"
+MISSING_SRC=0
+for f in __init__.py plugin.yaml client.py supervisor.py; do
+    if [ ! -f "$PLUGIN_SRC_DIR/$f" ]; then
+        echo "[ERROR] Missing hermes plugin source file: $PLUGIN_SRC_DIR/$f" >&2
+        MISSING_SRC=1
+    fi
+done
+if [ "$MISSING_SRC" -ne 0 ]; then
+    exit 1
+fi
 
-# 创建 symlink 使 hermes 能发现插件
-ln -sf "$PLUGIN_SRC_DIR" "$HERMES_PLUGIN_DIR"
+link_hermes_plugin() {
+    local target="$1"
+    local source="$2"
+    local label="$3"
 
-echo "[memory-tencentdb] Plugin linked: $HERMES_PLUGIN_DIR -> $PLUGIN_SRC_DIR"
+    mkdir -p "$(dirname "$target")"
+
+    if [ -e "$target" ] && [ ! -L "$target" ]; then
+        echo "[ERROR] $label plugin target exists and is not a symlink: $target" >&2
+        echo "[ERROR] Refusing to overwrite it. Move it aside and re-run the installer." >&2
+        exit 1
+    fi
+
+    ln -sfn "$source" "$target"
+
+    if [ ! -f "$target/plugin.yaml" ] || [ ! -f "$target/__init__.py" ]; then
+        echo "[ERROR] $label plugin link verification failed: $target" >&2
+        exit 1
+    fi
+
+    echo "[memory-tencentdb] $label plugin linked: $target -> $(readlink "$target")"
+}
+
+# Keep the checkout-tree link for bundled Hermes installs, and also create the
+# durable user-scope provider link so Hermes updates do not detach memory.
+link_hermes_plugin "$HERMES_CHECKOUT_PLUGIN_DIR" "$PLUGIN_SRC_DIR" "Hermes checkout"
+link_hermes_plugin "$HERMES_USER_PLUGIN_DIR" "$PLUGIN_SRC_DIR" "Hermes user"
 
 # ---------- Step 3: 提示用户手动开启 memory_tencentdb（不自动修改 config） ----------
 
@@ -325,6 +357,29 @@ echo "  Env file:       $ENVFILE"
 echo ""
 echo "  Installed files in tdai dir:"
 ls -la "$TDAI_INSTALL_DIR"/ 2>/dev/null | head -20 || echo "  (none)"
+echo ""
+
+print_plugin_link_summary() {
+    local target="$1"
+    local expected="$2"
+    local label="$3"
+
+    if [ ! -L "$target" ]; then
+        echo "  [WARN] $label plugin link missing: $target"
+        return
+    fi
+
+    local actual
+    actual="$(readlink "$target")"
+    if [ "$actual" = "$expected" ]; then
+        echo "  [OK] $label plugin link: $target -> $actual"
+    else
+        echo "  [WARN] $label plugin link points to unexpected target: $actual (expected: $expected)"
+    fi
+}
+
+print_plugin_link_summary "$HERMES_CHECKOUT_PLUGIN_DIR" "$PLUGIN_SRC_DIR" "Hermes checkout"
+print_plugin_link_summary "$HERMES_USER_PLUGIN_DIR" "$PLUGIN_SRC_DIR" "Hermes user"
 echo ""
 
 # 验证 hermes 插件文件存在（在解压目录中）
