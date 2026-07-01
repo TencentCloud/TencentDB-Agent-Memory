@@ -21,9 +21,6 @@ Core capabilities:
   - sync_profile(data) → PrefProfile ↔ L3 alignment
   - mcp_health()       → Gateway connectivity check
 
-ZTHL is under double-blind review at a top computer science conference;
-preprint pending approval on arXiv.
-
 Environment variables:
   TDAI_ENDPOINT       — Gateway URL (default: http://127.0.0.1:8420)
   TDAI_API_KEY        — API key for authentication (optional for local)
