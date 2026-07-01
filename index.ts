@@ -45,6 +45,7 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 import { stripInjectedRecallFromMessage } from "./src/utils/recall-injection.js";
+import { mapRecallResultToOpenClawPromptBuild } from "./src/adapters/openclaw/prompt-build.js";
 
 const TAG = "[memory-tdai]";
 
@@ -586,16 +587,17 @@ export default function register(api: OpenClawPluginApi) {
         }
 
         if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
+          const stableLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `stableSystemContext=${stableLen} chars -> prependSystemContext, ` +
+            `prependContext=${prependLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return mapRecallResultToOpenClawPromptBuild(result);
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);

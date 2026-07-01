@@ -57,7 +57,7 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
+  /** Stable recall context for the system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
@@ -185,10 +185,11 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
+  // appendSystemContext (stable, cacheable system prompt content):
   //   persona, scene navigation, memory tools guide
   //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  //   providers with prompt caching can cache this region. The OpenClaw adapter
+  //   maps this to prependSystemContext so it lands before OPENCLAW_CACHE_BOUNDARY.
   //
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
