@@ -584,6 +584,8 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
+        // OpenClaw consumes appendContext from the returned hook result; this
+        // plugin only logs its size here for recall observability.
         if (result?.appendSystemContext || result?.prependContext || result?.appendContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
