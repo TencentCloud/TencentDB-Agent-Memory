@@ -1,0 +1,60 @@
+{
+  "name": "memory-tencentdb-gateway-workflow",
+  "description": "HTTP Request workflow skeleton for Dify apps that call memory-tencentdb before and after the LLM step.",
+  "environment": {
+    "MEMORY_TENCENTDB_GATEWAY_URL": "http://127.0.0.1:8420",
+    "MEMORY_TENCENTDB_GATEWAY_API_KEY": ""
+  },
+  "sessionMapping": {
+    "session_key": "{{ conversation_id }}",
+    "session_id": "{{ conversation_id }}",
+    "user_id": "{{ user }}"
+  },
+  "steps": [
+    {
+      "id": "pre_recall",
+      "type": "http_request",
+      "method": "POST",
+      "url": "{{ MEMORY_TENCENTDB_GATEWAY_URL }}/recall",
+      "headers": {
+        "Authorization": "Bearer {{ MEMORY_TENCENTDB_GATEWAY_API_KEY }}",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "query": "{{ sys.query }}",
+        "session_key": "{{ conversation_id }}",
+        "user_id": "{{ user }}"
+      },
+      "output": {
+        "memory_context": "$.context"
+      }
+    },
+    {
+      "id": "llm",
+      "type": "llm",
+      "prompt": "{{ pre_recall.memory_context }}\n\n{{ sys.query }}"
+    },
+    {
+      "id": "post_capture",
+      "type": "http_request",
+      "method": "POST",
+      "url": "{{ MEMORY_TENCENTDB_GATEWAY_URL }}/capture",
+      "headers": {
+        "Authorization": "Bearer {{ MEMORY_TENCENTDB_GATEWAY_API_KEY }}",
+        "Content-Type": "application/json"
+      },
+      "body": {
+        "user_content": "{{ sys.query }}",
+        "assistant_content": "{{ llm.text }}",
+        "session_key": "{{ conversation_id }}",
+        "session_id": "{{ conversation_id }}",
+        "user_id": "{{ user }}",
+        "messages": [
+          { "role": "user", "content": "{{ sys.query }}" },
+          { "role": "assistant", "content": "{{ llm.text }}" }
+        ]
+      }
+    }
+  ]
+}
+

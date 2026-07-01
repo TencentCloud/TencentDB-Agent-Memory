@@ -1,0 +1,239 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "TencentDB Agent Memory Gateway",
+    "version": "0.3.6",
+    "description": "Dify Custom Tool schema for calling memory-tencentdb Gateway endpoints."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8420",
+      "description": "Local memory-tencentdb Gateway"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/recall": {
+      "post": {
+        "operationId": "memoryTencentdbRecall",
+        "summary": "Recall memory context before the LLM step",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Memory context recalled from L1 and configured lower layers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/capture": {
+      "post": {
+        "operationId": "memoryTencentdbCapture",
+        "summary": "Capture one completed user and assistant turn",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Turn capture result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/memories": {
+      "post": {
+        "operationId": "memoryTencentdbSearchMemories",
+        "summary": "Search structured long-term memories",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Structured memory search result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/conversations": {
+      "post": {
+        "operationId": "memoryTencentdbSearchConversations",
+        "summary": "Search raw conversation history",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Conversation search result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session/end": {
+      "post": {
+        "operationId": "memoryTencentdbEndSession",
+        "summary": "Flush delayed memory work for a Dify conversation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionEndRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session flush result."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "RecallRequest": {
+        "type": "object",
+        "required": ["query", "session_key"],
+        "properties": {
+          "query": { "type": "string" },
+          "session_key": { "type": "string" },
+          "user_id": { "type": "string" }
+        }
+      },
+      "RecallResponse": {
+        "type": "object",
+        "properties": {
+          "context": { "type": "string" },
+          "strategy": { "type": "string" },
+          "memory_count": { "type": "number" }
+        }
+      },
+      "CaptureRequest": {
+        "type": "object",
+        "required": ["user_content", "assistant_content", "session_key"],
+        "properties": {
+          "user_content": { "type": "string" },
+          "assistant_content": { "type": "string" },
+          "session_key": { "type": "string" },
+          "session_id": { "type": "string" },
+          "user_id": { "type": "string" },
+          "messages": {
+            "type": "array",
+            "items": { "type": "object" }
+          }
+        }
+      },
+      "CaptureResponse": {
+        "type": "object",
+        "properties": {
+          "l0_recorded": { "type": "number" },
+          "scheduler_notified": { "type": "boolean" }
+        }
+      },
+      "MemorySearchRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "number", "minimum": 1, "maximum": 20 },
+          "type": { "type": "string" },
+          "scene": { "type": "string" }
+        }
+      },
+      "ConversationSearchRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "limit": { "type": "number", "minimum": 1, "maximum": 20 },
+          "session_key": { "type": "string" }
+        }
+      },
+      "SearchResponse": {
+        "type": "object",
+        "properties": {
+          "results": { "type": "string" },
+          "total": { "type": "number" },
+          "strategy": { "type": "string" }
+        }
+      },
+      "SessionEndRequest": {
+        "type": "object",
+        "required": ["session_key"],
+        "properties": {
+          "session_key": { "type": "string" },
+          "user_id": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+
