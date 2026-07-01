@@ -145,6 +145,10 @@ export interface CheckpointLogger {
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
+const COUNTER_JSONL_DIRS = {
+  l0: "conversations",
+  l1: "records",
+} as const;
 
 // ============================
 // Per-file async lock
@@ -179,10 +183,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -396,6 +402,37 @@ export class CheckpointManager {
     });
   }
 
+  /**
+   * Recount persisted L0/L1 JSONL records and align aggregate counters.
+   *
+   * These counters are maintained incrementally during normal capture/extraction,
+   * but cleanup jobs or manual JSONL pruning can remove records outside that path.
+   * Recalibration makes the checkpoint reflect the current persisted data again.
+   */
+  async recalibrate(): Promise<Checkpoint> {
+    const actualL0 = await countJsonlRecords(path.join(this.dataDir, COUNTER_JSONL_DIRS.l0));
+    const actualL1 = await countJsonlRecords(path.join(this.dataDir, COUNTER_JSONL_DIRS.l1));
+    let previousL0 = 0;
+    let previousL1 = 0;
+
+    const cp = await this.mutate((cp) => {
+      previousL0 = cp.l0_conversations_count;
+      previousL1 = cp.total_memories_extracted;
+      cp.l0_conversations_count = actualL0;
+      cp.total_memories_extracted = actualL1;
+    });
+
+    if (previousL0 !== actualL0 || previousL1 !== actualL1) {
+      this.logger.info(
+        `[checkpoint] recalibrated counters: ` +
+        `l0_conversations_count ${previousL0}->${actualL0}, ` +
+        `total_memories_extracted ${previousL1}->${actualL1}`,
+      );
+    }
+
+    return cp;
+  }
+
   // ============================
   // L1-specific methods
   // ============================
@@ -479,10 +516,32 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }
 
+}
+
+async function countJsonlRecords(dirPath: string): Promise<number> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const filePath = path.join(dirPath, entry.name);
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+    total += raw.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+  }
+  return total;
 }
