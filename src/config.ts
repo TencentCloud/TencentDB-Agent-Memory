@@ -93,6 +93,42 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Inject L1 memories as prependContext (user message prefix, default: true).
+   *
+   * When true (default), each turn's recalled L1 memories are prepended
+   * to the user message as `<relevant-memories>` context.  This gives the
+   * agent continuous awareness of past memories, but the dynamic content
+   * changes every turn, which can reduce prompt-cache hit rates for
+   * OpenAI-compatible providers that rely on prefix matching.
+   *
+   * When false, only the stable appendSystemContext (persona, scene nav,
+   * tools guide) is injected into the system prompt.  The agent must use
+   * tdai_memory_search / tdai_conversation_search tools to actively
+   * retrieve memories — maximizing cache hit rates at the cost of
+   * proactive memory awareness.
+   *
+   * Recommended for: high-throughput production deployments where
+   * prompt-cache economics outweigh per-turn memory visibility.
+   */
+  prependContextEnabled: boolean;
+  /**
+   * Preserve injected `<relevant-memories>` context in persisted conversation
+   * history (default: false).
+   *
+   * When false (default), the `<relevant-memories>` block is stripped from
+   * user messages before they are written to the session JSONL.  The current
+   * LLM turn already saw the full prompt, but keeping recall artifacts out
+   * of the historical transcript prevents context bloat over long sessions
+   * and keeps prompt-cache prefixes stable across turns.
+   *
+   * When true, injected memory context is preserved in the written history
+   * for transparency — useful during development when you want to audit
+   * exactly what was injected each turn.
+   *
+   * Has no effect when prependContextEnabled is false (no content to show).
+   */
+  showInjected: boolean;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +571,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      prependContextEnabled: bool(recallGroup, "prependContextEnabled") ?? true,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
     },
     embedding: {
       enabled: embeddingEnabled,
