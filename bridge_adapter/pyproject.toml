@@ -5,8 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bridge_adapter"
 version = "1.0.0"
-description = "Bridge (ZTHL) platform adapter for TencentDB Agent Memory v2 API.
-Python TdaiAdapter SDK. TypeScript counterpart: MemoryAdapter at src/core/types.ts (npm)."
+description = "Bridge (ZTHL) platform adapter for TencentDB Agent Memory v2 API. Python TdaiAdapter SDK. TypeScript counterpart: MemoryAdapter at src/core/types.ts (npm)."
 
 [project.urls]
 Repository = "https://github.com/TencentCloud/TencentDB-Agent-Memory"
