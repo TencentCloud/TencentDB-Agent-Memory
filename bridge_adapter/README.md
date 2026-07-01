@@ -103,7 +103,7 @@ export TDAI_SERVICE_ID="repo-bridge-core"
 
 | Document | Location | Content |
 |:---|:---|:---|
-| Architecture & data flow | `docs/TDAI-ARCHITECTURE.md` (Bridge repo) | Cold/hot layer design, coordination strategy, GitNexus boundary |
+| SDK architecture | `docs/tdai-adapter-architecture.md` (TDAI repo) | Full architecture, component breakdown, design decisions, cross-language SDK |
 | Platform comparison | `docs/platform-adapter-comparison.md` (TDAI repo) | 4-platform matrix, data flows, design decisions |
 
 ## Cross-Language SDK
