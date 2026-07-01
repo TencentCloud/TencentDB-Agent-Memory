@@ -8,8 +8,7 @@
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
     "read-local-memory": "./bin/read-local-memory.mjs",
-    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs",
-    "memory-tencentdb-codex-hook": "./bin/memory-tencentdb-codex-hook.mjs"
+    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs"
   },
   "exports": {
     ".": {
@@ -25,7 +24,7 @@
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
     "build:plugin": "rm -rf dist && tsdown",
-    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:mcp-adapter && npm run build:codex-hooks-adapter",
+    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:mcp-adapter",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",
     "migrate-sqlite-to-tcvdb": "node ./bin/migrate-sqlite-to-tcvdb.mjs",
@@ -35,8 +34,6 @@
     "read-local-memory": "node ./bin/read-local-memory.mjs",
     "build:mcp-adapter": "rm -rf scripts/mcp-adapter/dist && tsc --project scripts/mcp-adapter/tsconfig.json",
     "memory-tencentdb-mcp": "node ./bin/memory-tencentdb-mcp.mjs",
-    "build:codex-hooks-adapter": "rm -rf scripts/codex-hooks-adapter/dist && tsc --project scripts/codex-hooks-adapter/tsconfig.json",
-    "memory-tencentdb-codex-hook": "node ./bin/memory-tencentdb-codex-hook.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -50,7 +47,6 @@
     "scripts/export-tencent-vdb/dist/",
     "scripts/read-local-memory/dist/",
     "scripts/mcp-adapter/dist/",
-    "scripts/codex-hooks-adapter/dist/",
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/README.memory-tencentdb-ctl.md",

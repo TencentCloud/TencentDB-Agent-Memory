@@ -25,13 +25,13 @@ approval_mode = "prompt"
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = "memory-tencentdb-codex-hook"
+command = "node /absolute/path/to/TencentDB-Agent-Memory/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs"
 timeout = 15
 statusMessage = "Recalling TencentDB Agent Memory"
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = "memory-tencentdb-codex-hook"
+command = "node /absolute/path/to/TencentDB-Agent-Memory/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs"
 timeout = 15
 statusMessage = "Capturing TencentDB Agent Memory"

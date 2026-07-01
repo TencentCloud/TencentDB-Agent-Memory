@@ -140,7 +140,7 @@ The SDK is already used by TypeScript adapter surfaces:
 | Consumer | Reused SDK surface |
 | --- | --- |
 | MCP stdio adapter | Gateway client, MCP server instructions, tool definitions, tool annotations, tool call dispatcher, MCP result formatting |
-| Codex hooks adapter | `TdaiPlatformAdapter` lifecycle mapping, Gateway operations, recall/capture runtime |
+| Codex hooks example | `TdaiPlatformAdapter` lifecycle mapping, Gateway operations, recall/capture runtime |
 | OpenClaw plugin | Canonical search tool definitions, search limit normalization, OpenClaw result formatting |
 
 Hermes remains a Python provider and continues to call the Gateway. Its Gateway
@@ -148,17 +148,19 @@ contract stays compatible with the TypeScript SDK because the shared tool and
 HTTP shapes match the existing `/recall`, `/capture`, `/search/*`, and
 `/session/end` routes.
 
-## Codex Integration
+## Codex Example Integration
 
-Codex uses the shared SDK through two package entries:
+Codex can use TencentDB Agent Memory through the package-provided MCP entry and
+an optional hook reference implementation under `examples/codex/`:
 
 | Entry | Codex surface | SDK path |
 | --- | --- | --- |
 | `memory-tencentdb-mcp` | MCP stdio server | `GatewayMemoryOperations` + canonical MCP tools |
-| `memory-tencentdb-codex-hook` | `UserPromptSubmit` and `Stop` hooks | `TdaiPlatformAdapter` + `TdaiAdapterRuntime.handleRecall()` / `handleCapture()` |
+| `examples/codex/hooks-adapter/` | `UserPromptSubmit` and `Stop` hooks | `TdaiPlatformAdapter` + `TdaiAdapterRuntime.handleRecall()` / `handleCapture()` |
 
-The MCP entry exposes the complete memory tool surface to Codex. The hook entry
-adds automatic lifecycle behavior:
+The MCP entry exposes the complete memory tool surface to Codex. The hook
+example adds automatic lifecycle behavior without becoming a package `bin`
+entry:
 
 1. `UserPromptSubmit` maps Codex `session_id` to a memory `session_key`, calls
    recall, and returns Codex `additionalContext`.
@@ -188,10 +190,10 @@ Run the MCP adapter build:
 npm run build:mcp-adapter
 ```
 
-Run the Codex hook adapter build:
+Type-check and build the optional Codex hook example:
 
 ```bash
-npm run build:codex-hooks-adapter
+npx tsc -p examples/codex/hooks-adapter/tsconfig.json
 ```
 
 For full repository verification:

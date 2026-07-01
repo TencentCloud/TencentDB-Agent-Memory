@@ -19,7 +19,7 @@ __pycache__/
 # Migration build output
 scripts/export-tencent-vdb/dist/
 scripts/migrate-sqlite-to-tcvdb/dist/
-scripts/codex-hooks-adapter/dist/
+examples/codex/hooks-adapter/dist/
 scripts/mcp-adapter/dist/
 scripts/read-local-memory/dist/
 

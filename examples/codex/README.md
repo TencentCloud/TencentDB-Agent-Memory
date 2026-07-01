@@ -8,14 +8,18 @@ Codex has two documented extension points that map to memory features:
 - MCP servers expose model-callable tools.
 - Hooks run at lifecycle points such as `UserPromptSubmit` and `Stop`.
 
-This package uses both:
+This example uses both:
 
-| Codex surface | Package entry | Memory capability |
+| Codex surface | Entry | Memory capability |
 | --- | --- | --- |
 | MCP stdio server | `memory-tencentdb-mcp` | health, recall, capture, L1 memory search, L0 conversation search, session flush |
-| Codex hooks | `memory-tencentdb-codex-hook` | automatic recall before a prompt and automatic capture after a completed turn |
+| Codex hooks | `node /absolute/path/to/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs` | automatic recall before a prompt and automatic capture after a completed turn |
 
-Both entries use the shared Adapter SDK and the Gateway HTTP boundary.
+The MCP server is the package-provided integration surface. The hook adapter is
+an optional reference implementation that lives entirely under this example. It
+uses the shared Adapter SDK and the Gateway HTTP boundary, but it is not a
+package `bin` entry and can be removed or replaced without changing the core
+engine, MCP adapter, Hermes provider, or SDK contract.
 
 ## Prerequisites
 
@@ -29,6 +33,13 @@ TDAI_GATEWAY_PORT=8420 npx tsx src/gateway/server.ts
 The Gateway needs its normal LLM configuration, for example `TDAI_LLM_BASE_URL`,
 `TDAI_LLM_API_KEY`, and `TDAI_LLM_MODEL`, or an equivalent
 `tdai-gateway.yaml` / `tdai-gateway.json`.
+
+Build the optional Codex hook reference adapter if you want automatic
+recall/capture in addition to MCP tools:
+
+```bash
+npx tsc -p examples/codex/hooks-adapter/tsconfig.json
+```
 
 ## Configure Codex
 
@@ -55,14 +66,14 @@ The hook section adds automatic lifecycle mapping:
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command = "memory-tencentdb-codex-hook"
+command = "node /absolute/path/to/TencentDB-Agent-Memory/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs"
 timeout = 15
 statusMessage = "Recalling TencentDB Agent Memory"
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command = "memory-tencentdb-codex-hook"
+command = "node /absolute/path/to/TencentDB-Agent-Memory/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs"
 timeout = 15
 statusMessage = "Capturing TencentDB Agent Memory"
 ```
@@ -95,13 +106,13 @@ want Codex to perform an additional manual capture during the same turn.
 ## Supported Flow
 
 1. `UserPromptSubmit` receives Codex's current prompt.
-2. `memory-tencentdb-codex-hook` maps Codex `session_id` to a stable memory
+2. The hook example maps Codex `session_id` to a stable memory
    `session_key`, calls Gateway `/recall` through the Adapter SDK, and returns
    recalled memory as Codex `additionalContext`.
 3. Codex can call MCP tools during the turn for explicit search, capture,
    health, or session flush.
 4. `Stop` receives Codex's `last_assistant_message`.
-5. `memory-tencentdb-codex-hook` combines the stored user prompt with the final
+5. The hook example combines the stored user prompt with the final
    assistant message and calls Gateway `/capture` through the Adapter SDK.
 
 The hook adapter does not parse Codex transcript files; Codex documents

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Thin launcher for the precompiled Codex hook adapter.
-// Build: npm run build:codex-hooks-adapter
-// Use:   memory-tencentdb-codex-hook
+// Example launcher for the optional Codex hook adapter.
+// Build: npx tsc -p examples/codex/hooks-adapter/tsconfig.json
+// Use:   node /absolute/path/to/examples/codex/hooks-adapter/memory-tencentdb-codex-hook.mjs
 
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -9,18 +9,18 @@ import { fileURLToPath } from "node:url";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const candidates = [
-  path.resolve(thisDir, "../scripts/codex-hooks-adapter/dist/scripts/codex-hooks-adapter/codex-hooks-adapter.js"),
-  path.resolve(thisDir, "../scripts/codex-hooks-adapter/dist/codex-hooks-adapter.js"),
+  path.resolve(thisDir, "dist/examples/codex/hooks-adapter/codex-hooks-adapter.js"),
+  path.resolve(thisDir, "dist/codex-hooks-adapter.js"),
 ];
 
 const entry = candidates.find((candidate) => existsSync(candidate));
 
 if (!entry) {
-  console.error("Precompiled Codex hook adapter not found. Checked:");
+  console.error("Precompiled Codex hook example not found. Checked:");
   for (const candidate of candidates) {
     console.error(`  - ${candidate}`);
   }
-  console.error("Please run: npm run build:codex-hooks-adapter");
+  console.error("Please run: npx tsc -p examples/codex/hooks-adapter/tsconfig.json");
   process.exit(1);
 }
 

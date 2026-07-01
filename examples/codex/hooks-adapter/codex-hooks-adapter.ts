@@ -17,12 +17,12 @@ import {
   optionalString,
   TdaiAdapterRuntime,
   TdaiGatewayClient,
-} from "../../src/adapter-sdk/index.js";
+} from "../../../src/adapter-sdk/index.js";
 import type {
   AdapterEventEnvelope,
   AdapterRecallResult,
   TdaiPlatformAdapter,
-} from "../../src/adapter-sdk/index.js";
+} from "../../../src/adapter-sdk/index.js";
 
 const DEFAULT_GATEWAY_HOST = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT = 8420;

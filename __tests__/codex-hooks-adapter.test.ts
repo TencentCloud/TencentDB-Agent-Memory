@@ -10,7 +10,7 @@ import {
   handleStop,
   handleUserPromptSubmit,
   readStoredTurn,
-} from "../scripts/codex-hooks-adapter/codex-hooks-adapter.js";
+} from "../examples/codex/hooks-adapter/codex-hooks-adapter.js";
 import { TdaiAdapterRuntime } from "../src/adapter-sdk/index.js";
 import type {
   AdapterCaptureResult,
@@ -21,7 +21,7 @@ import type {
   MemoryAdapterOperations,
 } from "../src/adapter-sdk/index.js";
 
-describe("Codex hooks adapter", () => {
+describe("Codex hook example", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
