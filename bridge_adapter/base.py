@@ -14,6 +14,7 @@ SDK 提供:
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -214,6 +215,7 @@ class TdaiAdapter(ABC):
         self._middleware: List[TdaiMiddleware] = []
         self._metrics = TdaiMetricsMiddleware()
         self._middleware.append(self._metrics)
+        self._recall_cache: Dict[str, Dict[str, str]] = {}  # session cache for #120
 
     def add_middleware(self, mw: TdaiMiddleware) -> None:
         """添加自定义中间件."""
@@ -280,8 +282,19 @@ class TdaiAdapter(ABC):
     def recall(self, query: str, limit: int = _DEFAULT_LIMIT) -> Dict[str, Any]:
         q = _sanitize_query(query)
         l = _sanitize_limit(limit)
+        # Session-level recall cache: same query within a session returns cached result
+        # Prevents context bloat that kills prefix-matching prompt cache (#120)
+        cache_key = hashlib.sha256(q.encode()).hexdigest()
+        if cache_key in self._recall_cache:
+            logger.debug(f"recall cache hit for query={q[:50]}...")
+            return dict(self._recall_cache[cache_key])  # shallow copy
         try:
-            return self._call_with_guards("recall", lambda: self._recall_impl(q, l))
+            result = self._call_with_guards("recall", lambda: self._recall_impl(q, l))
+            self._recall_cache[cache_key] = {
+                "prepend_context": result.get("prepend_context", ""),
+                "append_system_context": result.get("append_system_context", ""),
+            }
+            return result
         except Exception as e:
             logger.warning(f"recall failed: {e}")
             return {"prepend_context": "", "append_system_context": ""}
