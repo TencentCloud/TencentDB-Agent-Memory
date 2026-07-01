@@ -6,19 +6,20 @@ import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
 
+export interface CleanupStats {
+  scannedFiles: number;
+  changedFiles: number;
+  skippedNonShardFiles: number;
+  deleteFailedFiles: number;
+}
+
 export interface MemoryCleanerOptions {
   baseDir: string;
   retentionDays: number;
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
-}
-
-interface CleanupStats {
-  scannedFiles: number;
-  changedFiles: number;
-  skippedNonShardFiles: number;
-  deleteFailedFiles: number;
+  onAfterCleanup?: (stats: CleanupStats) => void | Promise<void>;
 }
 
 const TAG = "[memory-tdai][cleaner]";
@@ -33,14 +34,20 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private afterCleanup?: (stats: CleanupStats) => void | Promise<void>;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.afterCleanup = opts.onAfterCleanup;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setAfterCleanup(callback: ((stats: CleanupStats) => void | Promise<void>) | undefined): void {
+    this.afterCleanup = callback;
   }
 
   start(): void {
@@ -184,6 +191,15 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+    if (total.changedFiles > 0 && this.afterCleanup) {
+      try {
+        await this.afterCleanup(total);
+      } catch (err) {
+        this.opts.logger?.warn(
+          `${TAG} post-cleanup checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   private scheduleNext(): void {
