@@ -39,13 +39,80 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
-import type { Logger } from "../core/types.js";
+import type { Logger, RecallResult } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+
+/**
+ * Convert core recall output to the Gateway HTTP shape.
+ *
+ * OpenClaw can consume `prependContext` and `appendSystemContext` separately,
+ * but Gateway clients such as Hermes and the MCP adapter historically consumed
+ * a single `context` string. Keep that field backward-compatible while making
+ * the split fields available to clients that can place them more precisely.
+ */
+export function buildRecallResponse(result: RecallResult): RecallResponse {
+  const prependContext = result.prependContext ?? "";
+  const appendSystemContext = result.appendSystemContext ?? "";
+  const context = [prependContext, appendSystemContext]
+    .filter((part) => part.trim().length > 0)
+    .join("\n\n");
+
+  return {
+    context,
+    prepend_context: prependContext,
+    append_system_context: appendSystemContext,
+    strategy: result.recallStrategy,
+    memory_count: result.recalledL1Memories?.length ?? 0,
+  };
+}
+
+const syntheticCaptureTimestampsBySession = new Map<string, number>();
+
+export function buildCaptureTurn(body: CaptureRequest, now = Date.now()): {
+  messages: unknown[];
+  startedAt: number;
+} {
+  if (Array.isArray(body.messages)) {
+    const maxTimestamp = maxMessageTimestamp(body.messages);
+    if (maxTimestamp != null) {
+      const lastTimestamp = syntheticCaptureTimestampsBySession.get(body.session_key) ?? 0;
+      if (maxTimestamp > lastTimestamp) {
+        syntheticCaptureTimestampsBySession.set(body.session_key, maxTimestamp);
+      }
+    }
+    return { messages: body.messages, startedAt: now };
+  }
+
+  const lastTimestamp = syntheticCaptureTimestampsBySession.get(body.session_key) ?? 0;
+  const baseTimestamp = Math.max(now, lastTimestamp);
+  const userTimestamp = baseTimestamp + 1;
+  const assistantTimestamp = baseTimestamp + 2;
+  syntheticCaptureTimestampsBySession.set(body.session_key, assistantTimestamp);
+
+  return {
+    messages: [
+      { role: "user", content: body.user_content, timestamp: userTimestamp },
+      { role: "assistant", content: body.assistant_content, timestamp: assistantTimestamp },
+    ],
+    startedAt: now,
+  };
+}
+
+function maxMessageTimestamp(messages: unknown[]): number | undefined {
+  let maxTimestamp: number | undefined;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const timestamp = (message as Record<string, unknown>).timestamp;
+    if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) continue;
+    maxTimestamp = maxTimestamp == null ? timestamp : Math.max(maxTimestamp, timestamp);
+  }
+  return maxTimestamp;
+}
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
@@ -380,13 +447,9 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    const response = buildRecallResponse(result);
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${response.context.length} chars`);
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
     sendJson(res, 200, response);
   }
 
@@ -399,15 +462,14 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
+    const turn = buildCaptureTurn(body, startMs);
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
+      messages: turn.messages,
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: turn.startedAt,
     });
     const elapsed = Date.now() - startMs;
 

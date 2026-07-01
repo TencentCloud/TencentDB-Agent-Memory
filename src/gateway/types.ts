@@ -36,7 +36,18 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /**
+   * Backward-compatible combined recall context for clients that only support
+   * a single text block.
+   *
+   * Includes both dynamic L1 memories (`prepend_context`) and stable system
+   * context (`append_system_context`) when present.
+   */
   context: string;
+  /** Dynamic L1 memory context intended to be prepended to the user turn. */
+  prepend_context?: string;
+  /** Stable context intended to be appended to the system prompt. */
+  append_system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
