@@ -10,6 +10,9 @@
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
 
+import type { StorageAdapter } from "./storage/adapter.js";
+import type { RecallError } from "./hooks/recall-errors.js";
+
 // ============================
 // Logger (unified across all layers)
 // ============================
@@ -84,7 +87,7 @@ export interface LLMRunParams {
    * (read/write/edit) operate via StorageAdapter instead of local filesystem.
    * `storagePrefix` defines the sandbox key prefix (e.g. "scene_blocks/").
    */
-  storage?: import("./storage/adapter.js").StorageAdapter;
+  storage?: StorageAdapter;
   /** Key prefix for storage-backed tools (sandbox boundary). Default: "" */
   storagePrefix?: string;
   /** Plugin instance ID for metric reporting (optional). */
@@ -269,7 +272,7 @@ export interface RecallResult {
    * storage error / etc), this is populated with a RecallError; success leaves it undefined.
    * Gateway handlers should surface this in the response envelope (e.g. v2 envelope.code).
    */
-  error?: import("./hooks/recall-errors.js").RecallError;
+  error?: RecallError;
   /** Partial success: some steps succeeded, others failed. */
   partial?: boolean;
 }
