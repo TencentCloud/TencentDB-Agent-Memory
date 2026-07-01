@@ -1,18 +1,19 @@
-# 平台适配对比：Codex 和 Claude Code / Platform Adapter Comparison: Codex and Claude Code
+# 平台适配对比：Codex、Claude Code 和 OpenCode / Platform Adapter Comparison: Codex, Claude Code, and OpenCode
 
 ## 为什么选择这条路线 / Why This Route
 
 本实现遵循 issue #235 中“先适配两个或以上平台，并对比平台差异”的路线。
 This implementation follows the issue #235 route of adapting two or more platforms first and documenting their differences.
 
-它暂不引入新的公共 Adapter SDK，而是先提供两个真实平台适配。
-It does not introduce a new public Adapter SDK yet. Instead, it adds two concrete platform adapters first.
+它暂不引入新的公共 Adapter SDK，而是先提供三个真实平台适配。
+It does not introduce a new public Adapter SDK yet. Instead, it adds three concrete platform adapters first.
 
 - Codex
 - Claude Code
+- OpenCode
 
-两个适配都复用现有 Gateway 和 `TdaiCore` 能力边界。
-Both adapters reuse the existing Gateway and `TdaiCore` capability boundary.
+三个适配都复用现有 Gateway 和 `TdaiCore` 能力边界。
+All three adapters reuse the existing Gateway and `TdaiCore` capability boundary.
 
 ## 核心能力边界 / Core Capability Boundary
 
@@ -32,11 +33,15 @@ flowchart LR
   Codex --> CodexMCP["Codex MCP"]
   Claude["Claude Code"] --> ClaudeHooks["Claude Code hooks"]
   Claude --> ClaudeMCP["Claude Code MCP"]
+  OpenCode --> OpenCodePlugin["OpenCode plugin"]
+  OpenCode --> OpenCodeMCP["OpenCode MCP"]
 
   CodexHooks --> HookBridge["src/integrations/shared/hook-bridge.ts"]
   ClaudeHooks --> HookBridge
+  OpenCodePlugin --> Gateway
   CodexMCP --> MCPBridge["src/integrations/shared/mcp-server.ts"]
   ClaudeMCP --> MCPBridge
+  OpenCodeMCP --> MCPBridge
 
   HookBridge --> Gateway["memory-tencentdb Gateway"]
   MCPBridge --> Gateway
@@ -65,6 +70,8 @@ Platform-specific files.
 - `integrations/codex/.codex-plugin/plugin.json`
 - `integrations/claude-code/.mcp.json`
 - `integrations/claude-code/.claude/settings.json`
+- `integrations/opencode/opencode.json.example`
+- `integrations/opencode/plugin.js`
 
 ## Codex 适配器 / Codex Adapter
 
@@ -124,20 +131,50 @@ Limitations.
 - 如果项目已有 hooks，需要合并 settings。
   If a project already has hooks, settings must be merged carefully.
 
-## Codex 与 Claude Code 差异 / Codex vs Claude Code Differences
+## OpenCode 适配器 / OpenCode Adapter
 
-| 维度 / Dimension | Codex | Claude Code |
-| --- | --- | --- |
-| MCP config | `config.toml` / `codex mcp add` | `.mcp.json` |
-| Hook config | `hooks.json` 或 plugin-bundled hooks / `hooks.json` or plugin-bundled hooks | `.claude/settings.json` |
-| Packaging | optional Codex plugin | project settings directory |
-| Stable path | MCP search tools | MCP search tools |
-| 自动 recall / Automatic recall | `UserPromptSubmit.prompt` | `UserPromptSubmit.prompt` |
-| 自动 capture / Automatic capture | cached prompt + `Stop.last_assistant_message` | cached prompt + `Stop.last_assistant_message` |
-| Session key source | session/thread/conversation field, else cwd | session id, else cwd |
+OpenCode 适配使用 `opencode.json` MCP 配置和 OpenCode plugin。
+The OpenCode adapter uses `opencode.json` MCP configuration plus an OpenCode plugin.
 
-共同结论：MCP 是稳定的显式搜索路径，hooks 在 payload 足够完整时提供自动 recall/capture。
-Common lesson: MCP is the stable explicit search path, while hooks provide automatic recall/capture when payloads are complete enough.
+- `opencode.json.example` 注册 memory MCP server。
+  `opencode.json.example` registers the memory MCP server.
+- `plugin.js` 在 `chat.message` 中调用 `/recall` 并注入 synthetic memory text part。
+  `plugin.js` calls `/recall` from `chat.message` and injects a synthetic memory text part.
+- `message.updated`、`message.part.updated` 和 `session.idle` 用于还原 assistant 输出并调用 `/capture` 或 `/session/end`。
+  `message.updated`, `message.part.updated`, and `session.idle` reconstruct assistant output and call `/capture` or `/session/end`.
+- 示例配置固定 `deepseek/deepseek-v4-flash`，用于 issue #235 的 OpenCode proof lane。
+  The example pins `deepseek/deepseek-v4-flash` for the issue #235 OpenCode proof lane.
+
+优势。
+Strengths.
+
+- OpenCode 同时支持 MCP tools 和 plugin hooks，适合验证同一条 `Gateway + MCP + lifecycle` 路线。
+  OpenCode supports both MCP tools and plugin hooks, making it a good fit for the same `Gateway + MCP + lifecycle` route.
+- plugin 运行在 OpenCode 进程内，不需要平台私有补丁。
+  The plugin runs inside OpenCode and does not require private platform patches.
+
+限制。
+Limitations.
+
+- OpenCode 的 plugin 事件名与 Codex / Claude Code 不同，需要单独的事件映射层。
+  OpenCode plugin event names differ from Codex / Claude Code, so it needs a separate event mapping layer.
+- capture 依赖 OpenCode 暴露 completed assistant message 或 text part update。
+  Capture depends on OpenCode exposing a completed assistant message or text part updates.
+
+## Codex、Claude Code 与 OpenCode 差异 / Codex vs Claude Code vs OpenCode Differences
+
+| 维度 / Dimension | Codex | Claude Code | OpenCode |
+| --- | --- | --- | --- |
+| MCP config | `config.toml` / `codex mcp add` | `.mcp.json` | `opencode.json` |
+| Hook/plugin config | `hooks.json` 或 plugin-bundled hooks / `hooks.json` or plugin-bundled hooks | `.claude/settings.json` | `.opencode/plugins/memory-tencentdb.js` |
+| Packaging | optional Codex plugin | project settings directory | OpenCode plugin file or package |
+| Stable path | MCP search tools | MCP search tools | MCP search tools |
+| 自动 recall / Automatic recall | `UserPromptSubmit.prompt` | `UserPromptSubmit.prompt` | `chat.message` text parts |
+| 自动 capture / Automatic capture | cached prompt + `Stop.last_assistant_message` | cached prompt + `Stop.last_assistant_message` | cached prompt + assistant `message.part.updated` / completed message |
+| Session key source | session/thread/conversation field, else cwd | session id, else cwd | workspace root + OpenCode session id |
+
+共同结论：MCP 是稳定的显式搜索路径，hooks/plugins 在 payload 足够完整时提供自动 recall/capture。
+Common lesson: MCP is the stable explicit search path, while hooks/plugins provide automatic recall/capture when payloads are complete enough.
 
 ## 与现有平台对比 / Comparison With Existing Platforms
 
@@ -147,6 +184,7 @@ Common lesson: MCP is the stable explicit search path, while hooks provide autom
 | Hermes | Python Provider + Gateway | Provider lifecycle recall/capture | 适合 non-Node host 的 sidecar 模式 / sidecar pattern for non-Node hosts |
 | Codex | MCP + command hooks | stable search, best-effort automatic recall/capture | 官方扩展面，不依赖私有 API / official extension surfaces, no private APIs |
 | Claude Code | MCP + command hooks | stable search, best-effort automatic recall/capture | 与 Codex 类似但配置文件不同 / similar to Codex with different config files |
+| OpenCode | MCP + plugin hooks | stable search, best-effort automatic recall/capture | 证明同一策略可扩展到第三个 agent 平台 / proves the same strategy can extend to a third agent platform |
 
 ## 为什么暂不做 SDK / Why No SDK Yet
 
@@ -159,20 +197,22 @@ The current route keeps lower-level, more verifiable boundaries.
 - shared Gateway contract
 - shared MCP bridge
 - shared hook bridge
-- platform-specific config examples
+- platform-specific config and plugin examples
 - package bins for runnable adapters
 
-当 OpenClaw、Hermes、Codex、Claude Code 的行为都被验证后，再从已证明的共同模式里提取 SDK。
-After OpenClaw, Hermes, Codex, and Claude Code behavior is proven, an SDK can be extracted from validated common patterns.
+当 OpenClaw、Hermes、Codex、Claude Code 和 OpenCode 的行为都被验证后，再从已证明的共同模式里提取 SDK。
+After OpenClaw, Hermes, Codex, Claude Code, and OpenCode behavior is proven, an SDK can be extracted from validated common patterns.
 
 ## 后续规划 / Future Plan
 
-### Phase 1: 验证两个 adapter / Validate Two Adapters
+### Phase 1: 验证三个 adapter / Validate Three Adapters
 
 - 运行 Codex MCP+hooks 并验证 search tools 和 hook capture。
   Run Codex MCP+hooks and verify search tools plus hook capture.
 - 运行 Claude Code MCP+hooks 并验证 search tools 和 hook capture。
   Run Claude Code MCP+hooks and verify search tools plus hook capture.
+- 运行 OpenCode MCP+plugin 并验证 search tools 和 plugin capture。
+  Run OpenCode MCP+plugin and verify search tools plus plugin capture.
 - 保存真实 hook payload examples。
   Capture real hook payload examples.
 
@@ -202,12 +242,16 @@ A future SDK should be based on these validated requirements.
   Codex adapter documents MCP and hook setup.
 - Claude Code adapter 文档说明 MCP 和 hook setup。
   Claude Code adapter documents MCP and hook setup.
-- 两者复用现有 Gateway。
-  Both adapters reuse the existing Gateway.
+- OpenCode adapter 文档说明 MCP 和 plugin setup。
+  OpenCode adapter documents MCP and plugin setup.
+- 三者复用现有 Gateway。
+  All three adapters reuse the existing Gateway.
 - package 暴露 runnable gateway、MCP 和 hook bins。
   Package exposes runnable gateway, MCP, and hook bins.
 - hook bridge 可以将 cached prompt 与 `last_assistant_message` 配对 capture。
   Hook bridge can pair cached prompt with `last_assistant_message` for capture.
+- OpenCode plugin 可以将 `chat.message` 与 completed assistant message 配对 capture。
+  OpenCode plugin can pair `chat.message` with completed assistant messages for capture.
 - 不引入新的 public SDK export。
   No new public SDK export is introduced.
 - 平台差异和限制已文档化。
