@@ -376,6 +376,10 @@ export default function register(api: OpenClawPluginApi) {
             type: "string",
             description: "Optional filter by scene name",
           },
+          session_key: {
+            type: "string",
+            description: "Optional filter by session key. Use the current session key to keep results scoped to this conversation.",
+          },
         },
         required: ["query"],
       },
@@ -385,15 +389,23 @@ export default function register(api: OpenClawPluginApi) {
         const limit = Math.min(Math.max(Number(params.limit) || 5, 1), 20);
         const typeFilter = typeof params.type === "string" ? params.type : undefined;
         const sceneFilter = typeof params.scene === "string" ? params.scene : undefined;
+        const sessionKeyFilter = typeof params.session_key === "string" ? params.session_key : undefined;
 
         api.logger.debug?.(
           `${TAG} [tool] tdai_memory_search called: ` +
           `query="${query.length > 80 ? query.slice(0, 80) + "…" : query}", ` +
-          `limit=${limit}, type=${typeFilter ?? "(all)"}, scene=${sceneFilter ?? "(all)"}`,
+          `limit=${limit}, type=${typeFilter ?? "(all)"}, scene=${sceneFilter ?? "(all)"}, ` +
+          `session_key=${sessionKeyFilter ?? "(all)"}`,
         );
 
         try {
-          const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
+          const result = await core.searchMemories({
+            query,
+            limit,
+            type: typeFilter,
+            scene: sceneFilter,
+            sessionKey: sessionKeyFilter,
+          });
 
           const elapsedMs = Date.now() - startMs;
           api.logger.debug?.(
@@ -403,7 +415,7 @@ export default function register(api: OpenClawPluginApi) {
           );
           report("tool_call", {
             tool: "tdai_memory_search",
-            query, limit, typeFilter, sceneFilter,
+            query, limit, typeFilter, sceneFilter, sessionKeyFilter,
             resultCount: result.total,
             strategy: result.strategy,
             durationMs: elapsedMs,
@@ -419,7 +431,7 @@ export default function register(api: OpenClawPluginApi) {
           api.logger.error(`${TAG} [tool] tdai_memory_search failed (${elapsedMs}ms): ${errMsg}`);
           report("tool_call", {
             tool: "tdai_memory_search",
-            query, limit, typeFilter, sceneFilter,
+            query, limit, typeFilter, sceneFilter, sessionKeyFilter,
             durationMs: elapsedMs,
             success: false,
             error: errMsg,
