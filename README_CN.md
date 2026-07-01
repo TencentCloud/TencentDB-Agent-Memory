@@ -13,7 +13,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/kDtHb5RW2)
 
-[效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始)
+[效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始) · [平台适配](#3-平台适配)
 
 <div align="center">
 
@@ -353,6 +353,20 @@ curl http://127.0.0.1:8420/health
 
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
+
+---
+
+### 3. 平台适配
+
+除 OpenClaw 与 Hermes 外，Gateway 也可以复用于其他 Agent 平台。本仓库提供了三个完整适配示例：
+
+| 平台 | 适配目录 | 接入面 |
+| --- | --- | --- |
+| Dify | [`integrations/dify`](./integrations/dify/README.md) | Custom Tool OpenAPI schema、HTTP Request workflow、MCP 说明 |
+| LangGraph | [`integrations/langgraph`](./integrations/langgraph/README.md) | TypeScript graph primitives 与 memory search tool |
+| OpenCode | [`integrations/opencode`](./integrations/opencode/README.md) | MCP 配置、custom tools、best-effort plugin helper |
+
+能力对比和 Gateway endpoint 映射见 [`docs/platform-adapter-comparison.md`](./docs/platform-adapter-comparison.md)。
 
 ---
 

@@ -11,7 +11,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/kDtHb5RW2)
 
-[Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start)
+[Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start) · [Platform Adapters](#3-platform-adapters)
 
 <div align="center">
 
@@ -348,6 +348,21 @@ curl http://127.0.0.1:8420/health
 
 > For the complete provider reference (environment variables, troubleshooting, LLM tool schemas, supervisor behavior), see [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md). Please read it before adjusting the supervisor / circuit-breaker defaults.
 
+
+---
+
+### 3. Platform Adapters
+
+The Gateway can also be reused by agent platforms that are not OpenClaw or
+Hermes. Full adapter examples are included for:
+
+| Platform | Adapter path | Integration surface |
+| --- | --- | --- |
+| Dify | [`integrations/dify`](./integrations/dify/README.md) | Custom Tool OpenAPI schema, HTTP Request workflow, MCP notes |
+| LangGraph | [`integrations/langgraph`](./integrations/langgraph/README.md) | TypeScript graph primitives and memory search tool |
+| OpenCode | [`integrations/opencode`](./integrations/opencode/README.md) | MCP config, custom tools, best-effort plugin helper |
+
+See [`docs/platform-adapter-comparison.md`](./docs/platform-adapter-comparison.md) for the capability comparison and Gateway endpoint mapping.
 
 ---
 
