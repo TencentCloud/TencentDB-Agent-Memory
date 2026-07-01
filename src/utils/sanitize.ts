@@ -135,17 +135,20 @@ export function shouldCaptureL0(text: string): boolean {
 export function shouldExtractL1(text: string): boolean {
   // First apply the same structural filters as L0
   if (!shouldCaptureL0(text)) return false;
+  const trimmed = text.trim();
 
   // ── Length filters ──
-  // const isCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(text);
-  // if (isCJK && text.length < 2) return false;
-  // if (!isCJK && text.length < 2) return false;
-  // if (text.length > 5000) return false;
+  const cjkChars = trimmed.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)?.length ?? 0;
+  const asciiWordChars = trimmed.match(/[A-Za-z0-9]/g)?.length ?? 0;
+  if (cjkChars > 0 && cjkChars < 4) return false;
+  if (cjkChars === 0 && asciiWordChars > 0 && asciiWordChars < 4) return false;
+  if (trimmed.length > 5000) return false;
 
   // ── Content-quality filters ──
+  if (isConversationalFiller(trimmed)) return false;
   // Match strings composed entirely of non-word, non-space, non-CJK characters (1–5 chars).
-  if (/^[^\w\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,5}$/.test(text)) return false;
-  if (/^[?？]+$/.test(text)) return false;
+  if (/^[^\w\s\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]{1,5}$/.test(trimmed)) return false;
+  if (/^[?？]+$/.test(trimmed)) return false;
 
   // ── Security filters ──
   // Reject prompt-injection payloads — prevent malicious content from being
@@ -153,6 +156,11 @@ export function shouldExtractL1(text: string): boolean {
   if (looksLikePromptInjection(text)) return false;
 
   return true;
+}
+
+function isConversationalFiller(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[.!?。！？～~\s]+/g, "");
+  return /^(ok|okay|hi|hello|hey|thanks|thankyou|thx|好的|好|嗯|嗯嗯|哦|噢|行|可以|谢谢|收到|明白)$/.test(normalized);
 }
 
 /**
