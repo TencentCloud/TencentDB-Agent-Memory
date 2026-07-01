@@ -52,7 +52,14 @@ export class CoreMemoryOperations implements MemoryAdapterOperations {
   }
 
   async capture(turn: AdapterCompletedTurn): Promise<AdapterCaptureResult> {
-    return this.core.handleTurnCommitted(turn);
+    const messages = turn.messages.length > 0
+      ? turn.messages
+      : [
+        { role: "user", content: turn.userText, timestamp: Date.now() + 1 },
+        { role: "assistant", content: turn.assistantText, timestamp: Date.now() + 2 },
+      ];
+
+    return this.core.handleTurnCommitted({ ...turn, messages });
   }
 
   async searchMemories(params: AdapterMemorySearchParams): Promise<{ text: string; total: number; strategy: string }> {
@@ -186,10 +193,7 @@ export class TdaiAdapterRuntime<TEvent = unknown, TContext = unknown> {
     const captureInput = this.adapter.getCaptureInput(envelope);
     if (!session || !captureInput?.userContent) return undefined;
 
-    const messages = captureInput.messages ?? [
-      { role: "user", content: captureInput.userContent, timestamp: Date.now() + 1 },
-      { role: "assistant", content: captureInput.assistantContent ?? "", timestamp: Date.now() + 2 },
-    ];
+    const messages = captureInput.messages ?? [];
 
     try {
       return await this.operations.capture({

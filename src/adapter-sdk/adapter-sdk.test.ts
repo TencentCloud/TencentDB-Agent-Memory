@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   coerceSearchLimit,
+  CoreMemoryOperations,
   GatewayMemoryOperations,
   getMcpToolDefinitions,
   getOpenClawSearchToolDefinitions,
@@ -164,6 +165,43 @@ describe("TdaiAdapterRuntime", () => {
 });
 
 describe("GatewayMemoryOperations", () => {
+  it("lets CoreMemoryOperations synthesize a minimal turn when platforms omit raw messages", async () => {
+    const core = {
+      handleBeforeRecall: vi.fn(),
+      handleTurnCommitted: vi.fn(async (turn: AdapterCompletedTurn) => ({
+        l0RecordedCount: turn.messages.length,
+        schedulerNotified: true,
+        l0VectorsWritten: 0,
+        filteredMessages: [],
+      })),
+      searchMemories: vi.fn(),
+      searchConversations: vi.fn(),
+      handleSessionEnd: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const runtime = new TdaiAdapterRuntime({
+      adapter: {
+        platform: "core-platform",
+        getSession: () => ({ sessionKey: "core-session" }),
+        getCaptureInput: () => ({
+          userContent: "remember core fallback",
+          assistantContent: "stored",
+        }),
+      },
+      operations: new CoreMemoryOperations({ core }),
+    });
+
+    await expect(runtime.handleCapture({ event: {}, context: {} })).resolves.toMatchObject({
+      l0RecordedCount: 2,
+    });
+    expect(core.handleTurnCommitted).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [
+        expect.objectContaining({ role: "user", content: "remember core fallback" }),
+        expect.objectContaining({ role: "assistant", content: "stored" }),
+      ],
+    }));
+  });
+
   it("maps SDK capture turns to the Gateway /capture request shape", async () => {
     const client = {
       captureTurn: vi.fn(async () => ({

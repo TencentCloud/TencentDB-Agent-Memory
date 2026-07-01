@@ -27,11 +27,11 @@ The example adapter maps a hypothetical host's lifecycle payloads to the single
 
 ## Type-Check
 
-Build the package first so the public `./adapter-sdk` export and declaration file
-exist under `dist/`:
+The example imports the public `./adapter-sdk` subpath. In a source checkout,
+`tsconfig.json` maps that subpath to the local SDK source so the example can be
+checked before packaging:
 
 ```bash
-npm run build
 npx tsc -p examples/adapter-sdk/tsconfig.json
 ```
 
