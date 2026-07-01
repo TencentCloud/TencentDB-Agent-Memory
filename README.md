@@ -506,6 +506,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | Cross-platform adapter architecture and MCP integration |
+| [`examples/adapter-sdk/`](./examples/adapter-sdk/) | Adapter SDK onboarding example for new platforms |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 

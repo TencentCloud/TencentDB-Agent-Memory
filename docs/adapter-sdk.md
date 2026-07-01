@@ -21,6 +21,9 @@ The SDK lives under `src/adapter-sdk/` and provides:
 This keeps the platform boundary narrow. New platforms provide session and event
 mapping; the SDK handles the memory operations.
 
+For a complete type-checkable onboarding example, see
+[`examples/adapter-sdk/platform-adapter.ts`](../examples/adapter-sdk/platform-adapter.ts).
+
 ## Single Interface for a New Platform
 
 ```ts
@@ -163,4 +166,11 @@ For full repository verification:
 ```bash
 npm test
 npm run build
+```
+
+Type-check the standalone SDK onboarding example:
+
+```bash
+npm run build
+npx tsc -p examples/adapter-sdk/tsconfig.json
 ```

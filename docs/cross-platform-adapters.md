@@ -28,7 +28,8 @@ For new platform integrations, use the Adapter SDK described in
 [`docs/adapter-sdk.md`](./adapter-sdk.md). The SDK keeps tool definitions,
 Gateway calls, parameter normalization, and result formatting in one shared
 place so a platform adapter only implements the `TdaiPlatformAdapter` event
-mapping interface.
+mapping interface. A complete TypeScript onboarding example is available under
+[`examples/adapter-sdk/`](../examples/adapter-sdk/).
 
 ## Existing Adapter Patterns
 
