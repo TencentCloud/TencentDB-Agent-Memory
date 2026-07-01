@@ -302,6 +302,34 @@ export function compressNonCurrentToolUseBlocks(
   invalidateTokenCache(msg);
 }
 
+/**
+ * Remove deleted tool_use blocks from a mixed assistant message.
+ *
+ * The message object is mutated in place, so invalidate the per-message token
+ * cache whenever a block is actually removed.
+ */
+export function stripDeletedToolUseBlocks(
+  msg: any,
+  deletedIds: Set<string>,
+): number {
+  const content = getMessageContent(msg);
+  if (!Array.isArray(content)) return 0;
+
+  let removed = 0;
+  for (let j = content.length - 1; j >= 0; j--) {
+    const block = content[j] as any;
+    if (!isToolUseBlock(block) || !block.id) continue;
+    const blockIdNorm = normalizeToolCallIdForLookup(block.id);
+    if (deletedIds.has(block.id) || deletedIds.has(blockIdNorm)) {
+      content.splice(j, 1);
+      removed++;
+    }
+  }
+
+  if (removed > 0) invalidateTokenCache(msg);
+  return removed;
+}
+
 /** Get the set of node_ids belonging to the current active task */
 export async function getCurrentTaskNodeIds(
   stateManager: OffloadStateManager,

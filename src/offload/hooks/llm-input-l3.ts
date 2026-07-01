@@ -23,6 +23,7 @@ import {
   replaceWithSummary,
   replaceAssistantToolUseWithSummary,
   compressNonCurrentToolUseBlocks,
+  stripDeletedToolUseBlocks,
   getCurrentTaskNodeIds,
 } from "../l3-helpers.js";
 import type { OffloadStateManager } from "../state-manager.js";
@@ -1367,18 +1368,7 @@ async function fastPathReApply(messages: any[], stateManager: OffloadStateManage
     // FIX: For mixed assistant messages (text + tool_use), strip deleted tool_use
     // blocks to prevent orphaned tool_use without matching tool_result (Anthropic 400).
     if (hasDeleted && isAssistantMessageWithToolUse(msg) && !isOnlyToolUseAssistant(msg)) {
-      const content = msg.type === "message" ? msg.message?.content : msg.content;
-      if (Array.isArray(content)) {
-        for (let j = content.length - 1; j >= 0; j--) {
-          const block = content[j] as any;
-          if ((block.type === "tool_use" || block.type === "toolCall") && block.id) {
-            const blockIdNorm = normalizeToolCallIdForLookup(block.id);
-            if (stateManager.deletedOffloadIds.has(block.id) || stateManager.deletedOffloadIds.has(blockIdNorm)) {
-              content.splice(j, 1);
-            }
-          }
-        }
-      }
+      stripDeletedToolUseBlocks(msg, stateManager.deletedOffloadIds);
     }
     if (msg._offloaded) continue;
     if (tid && hasConfirmed && (stateManager.confirmedOffloadIds.has(tid) || (tidNorm && stateManager.confirmedOffloadIds.has(tidNorm)))) {
