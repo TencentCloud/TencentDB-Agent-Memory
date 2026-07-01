@@ -44,6 +44,10 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  shapeOpenClawRecallResult,
+  stripInjectedRecallFromMessage,
+} from "./src/adapters/openclaw/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -584,17 +588,21 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
+        const hookResult = shapeOpenClawRecallResult(result, cfg.recall.injectionMode);
+
+        if (hookResult?.appendSystemContext || hookResult?.prependContext || hookResult?.appendContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          const appendContextLen = hookResult.appendContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars, ` +
+            `appendContext=${appendContextLen} chars, injectionMode=${cfg.recall.injectionMode}`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -624,30 +632,20 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
+    const stripped = stripInjectedRecallFromMessage(msg, cfg.recall.showInjected);
+    if (!stripped) {
+      if (cfg.recall.showInjected && msg.role === "user") {
+        api.logger.debug?.(`${TAG} [before_message_write] Preserving injected recall because recall.showInjected=true`);
+      }
+      return;
     }
 
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
+    if (stripped.contentType === "string") {
+      api.logger.debug?.(`${TAG} [before_message_write] Stripped injected recall: removed ${stripped.strippedChars} chars`);
+    } else {
+      api.logger.debug?.(`${TAG} [before_message_write] Stripped injected recall from parts: removed ${stripped.strippedChars} chars`);
     }
+    return { message: stripped.message as typeof event.message };
   });
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
