@@ -82,7 +82,7 @@ describe("performAutoRecall injection placement", () => {
     });
 
     expect(result?.prependContext).toContain("<relevant-memories>");
-    expect((result as { appendContext?: string } | undefined)?.appendContext).toBeUndefined();
+    expect(result?.appendContext).toBeUndefined();
   });
 
   it("can append dynamic L1 memories after the user prompt to preserve prefix cache stability", async () => {
@@ -97,8 +97,8 @@ describe("performAutoRecall injection placement", () => {
     });
 
     expect(result?.prependContext).toBeUndefined();
-    expect((result as { appendContext?: string } | undefined)?.appendContext).toContain("<relevant-memories>");
-    expect((result as { appendContext?: string } | undefined)?.appendContext).toContain("stable prompt prefixes");
+    expect(result?.appendContext).toContain("<relevant-memories>");
+    expect(result?.appendContext).toContain("stable prompt prefixes");
     expect(result?.appendSystemContext).toContain("<memory-tools-guide>");
   });
 });
