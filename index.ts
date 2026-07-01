@@ -584,12 +584,14 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
+        if (result?.appendSystemContext || result?.prependContext || result?.prependSystemAddition) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          const prependSysLen = result.prependSystemAddition?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars, ` +
+            `prependSystemAddition=${prependSysLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
@@ -612,24 +614,38 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // Strip injected recall context (<relevant-memories> or <memory-context>)
+  // from user messages before they are persisted to the session JSONL.
+  // The current-turn LLM already saw the full prompt (effectivePrompt lives
+  // in memory), but we don't want recall artifacts polluting the historical
+  // transcript for future replays.
+  //
+  // When recall.showInjected=true, skip stripping so users can inspect what
+  // memory was used each turn (at the cost of context bloat).
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write hook ` +
+    `(recall.showInjected=${cfg.recall.showInjected ? "true" : "false"}, ` +
+    `cacheOptimization=${cfg.recall.cacheOptimization})`,
+  );
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
+    // When showInjected=true, preserve injected recall context for transparency
+    if (cfg.recall.showInjected) {
+      api.logger.debug?.(`${TAG} [before_message_write] recall.showInjected=true, preserving injected recall context`);
+      return;
+    }
+
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    // Strip both legacy <relevant-memories> and new <memory-context> tags
+    const RECALL_STRIP_RE = /<(?:relevant-memories|memory-context\s+state="(?:active|empty)")>[\s\S]*?<\/(?:relevant-memories|memory-context)>\s*/g;
 
     if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
+      if (!msg.content.includes("<relevant-memories>") && !msg.content.includes("<memory-context")) return;
+      const cleaned = msg.content.replace(RECALL_STRIP_RE, "").trim();
       if (cleaned === msg.content) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
       return { message: { ...event.message, content: cleaned } as typeof event.message };
@@ -639,9 +655,10 @@ export default function register(api: OpenClawPluginApi) {
       let totalStripped = 0;
       const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
         if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
+        const text = part.text as string;
+        if (!text.includes("<relevant-memories>") && !text.includes("<memory-context")) return part;
+        const cleaned = text.replace(RECALL_STRIP_RE, "").trim();
+        totalStripped += text.length - cleaned.length;
         return { ...part, text: cleaned };
       });
       if (totalStripped === 0) return;

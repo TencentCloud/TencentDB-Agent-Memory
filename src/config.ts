@@ -87,6 +87,30 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /**
+   * Preserve injected recall context in persisted user messages for transparency (default: false).
+   * When true, the <relevant-memories>/<memory-context> block is NOT stripped from
+   * conversation history. This increases context bloat but allows users to see
+   * what memories were injected each turn.
+   */
+  showInjected: boolean;
+  /**
+   * Cache optimization strategy for prompt caching with prefix-matching providers.
+   *
+   * - "none" (default): no optimization — prependContext changes every turn,
+   *   appendSystemContext placed after CACHE_BOUNDARY. May cause cache misses
+   *   with OpenAI-compatible providers (DeepSeek, MiMo, etc.)
+   * - "stable_wrapper": wrap prependContext in stable XML tags
+   *   (`<memory-context state="active|empty">`) so the outer prefix remains
+   *   consistent across turns. When no memories are recalled, an empty
+   *   `<memory-context state="empty"></memory-context>` placeholder is
+   *   injected to keep the prefix stable.
+   * - "split_system": additionally split appendSystemContext into two parts:
+   *   persona goes into `prependSystemAddition` (should be placed BEFORE
+   *   CACHE_BOUNDARY for caching), while scene navigation + tools guide
+   *   remain in `appendSystemContext` (after boundary).
+   */
+  cacheOptimization: "none" | "stable_wrapper" | "split_system";
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -532,6 +556,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      cacheOptimization: validateCacheOptimization(str(recallGroup, "cacheOptimization")) ?? "none",
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -644,6 +670,49 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
     : undefined;
+}
+
+const VALID_CACHE_OPTIMIZATIONS: RecallConfig["cacheOptimization"][] = ["none", "stable_wrapper", "split_system"];
+
+/**
+ * Validate cache optimization strategy against whitelist.
+ * Returns the strategy if valid, undefined otherwise (caller falls back to default "none").
+ * When an invalid value is detected, the caller should log a warning.
+ */
+function validateCacheOptimization(value: string | undefined): RecallConfig["cacheOptimization"] | undefined {
+  if (!value) return undefined;
+  if (VALID_CACHE_OPTIMIZATIONS.includes(value as RecallConfig["cacheOptimization"])) {
+    return value as RecallConfig["cacheOptimization"];
+  }
+  // Invalid value — return undefined so caller falls back to "none"
+  // Caller should detect this and log a warning about the invalid config
+  return undefined;
+}
+
+/**
+ * Detect configuration conflicts between recall options.
+ *
+ * Returns an array of warning messages for problematic combinations.
+ * These warnings are informational — they do NOT block configuration parsing.
+ */
+export function detectConfigWarnings(cfg: Partial<MemoryTdaiConfig>): string[] {
+  const warnings: string[] = [];
+
+  // Warning 1: showInjected=true with stable_wrapper/split_system causes
+  // <memory-context> tags to persist in conversation history, polluting
+  // subsequent recall queries. This combination is functional but reduces
+  // the effectiveness of the cache optimization.
+  const showInjected = cfg.recall?.showInjected ?? false;
+  const cacheOpt = cfg.recall?.cacheOptimization ?? "none";
+  if (showInjected && (cacheOpt === "stable_wrapper" || cacheOpt === "split_system")) {
+    warnings.push(
+      `recall.showInjected=true combined with recall.cacheOptimization="${cacheOpt}" causes <memory-context> tags to persist in conversation history. ` +
+      `This reduces cache optimization effectiveness and may pollute recall queries. ` +
+      `Consider setting showInjected=false for optimal cache behavior.`
+    );
+  }
+
+  return warnings;
 }
 
 /**

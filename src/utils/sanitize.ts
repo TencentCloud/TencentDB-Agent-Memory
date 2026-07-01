@@ -14,6 +14,7 @@ export function sanitizeText(text: string): string {
 
   // Remove injected memory context tags (prevent feedback loops)
   cleaned = cleaned.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/g, "");
+  cleaned = cleaned.replace(/<memory-context\s+state="(?:active|empty)">[\s\S]*?<\/memory-context>/g, "");
   cleaned = cleaned.replace(/<user-persona>[\s\S]*?<\/user-persona>/g, "");
   cleaned = cleaned.replace(/<relevant-scenes>[\s\S]*?<\/relevant-scenes>/g, "");
   cleaned = cleaned.replace(/<scene-navigation>[\s\S]*?<\/scene-navigation>/g, "");
@@ -196,7 +197,7 @@ const PROMPT_INJECTION_PATTERNS: RegExp[] = [
   /what (?:are|is) your (?:system|hidden|original|initial) (?:prompt|instructions|rules)/i,
 
   // ── XML/tag injection (our context boundaries) ──
-  /<\s*(system|assistant|developer|tool|function|relevant-memories)\b/i,
+  /<\s*(system|assistant|developer|tool|function|relevant-memories|memory-context)\b/i,
 
   // ── Tool/command invocation tricks ──
   /\b(run|execute|call|invoke)\b.{0,40}\b(tool|command|function|shell)\b/i,
@@ -286,9 +287,11 @@ export function pickRecentUnique(texts: string[], max: number): string[] {
  * the XML section.
  */
 export function escapeXmlTags(text: string): string {
-  // Escape closing tags that match our injection section boundaries
+  // Escape opening/closing tags that match our injection section boundaries.
+  // Opening tags may include attributes (e.g. <memory-context state="active">),
+  // so the regex matches optional whitespace and attribute content after the tag name.
   return text.replace(
-    /<\/?(?:user-persona|relevant-memories|scene-navigation|relevant-scenes|memory-tools-guide|system|assistant)>/gi,
+    /<\/?(?:user-persona|relevant-memories|scene-navigation|relevant-scenes|memory-tools-guide|memory-context|system|assistant)\b[^>]*>/gi,
     (match) => match.replace(/</g, "&lt;").replace(/>/g, "&gt;"),
   );
 }
