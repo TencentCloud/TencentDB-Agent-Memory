@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: ["*"]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
