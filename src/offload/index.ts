@@ -52,6 +52,7 @@ import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { getContextWindowForModelRef, parseOffloadModelRef } from "./model-ref.js";
 import { resolveApiKeyFromAuthProfile } from "./auth-profile-key.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
@@ -363,9 +364,9 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     }
 
     if (resolvedModelRef) {
-      const modelParts = resolvedModelRef.split("/", 2);
-      const providerKey = modelParts[0];
-      const modelId = modelParts[1] ?? resolvedModelRef;
+      const modelRef = parseOffloadModelRef(resolvedModelRef);
+      const providerKey = modelRef?.providerKey ?? resolvedModelRef;
+      const modelId = modelRef?.modelId ?? resolvedModelRef;
       const models = (api.config as any)?.models;
       const providerCfg = models?.providers?.[providerKey];
       const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
@@ -852,14 +853,8 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const models = config?.models;
       // 1. If we know the model, find its exact contextWindow from providers
       if (defaultModel && models) {
-        const [providerKey, modelId] = defaultModel.split("/", 2);
-        const provider = models.providers?.[providerKey];
-        if (provider?.models) {
-          const modelList = Array.isArray(provider.models) ? provider.models : [];
-          for (const m of modelList) {
-            if (m.id === modelId && typeof m.contextWindow === "number") return m.contextWindow;
-          }
-        }
+        const contextWindow = getContextWindowForModelRef(models, defaultModel);
+        if (contextWindow) return contextWindow;
       }
       // 2. Fallback: top-level models.contextWindow
       if (models?.contextWindow && typeof models.contextWindow === "number") return models.contextWindow;
