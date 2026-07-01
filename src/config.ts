@@ -677,12 +677,42 @@ const VALID_CACHE_OPTIMIZATIONS: RecallConfig["cacheOptimization"][] = ["none", 
 /**
  * Validate cache optimization strategy against whitelist.
  * Returns the strategy if valid, undefined otherwise (caller falls back to default "none").
+ * When an invalid value is detected, the caller should log a warning.
  */
 function validateCacheOptimization(value: string | undefined): RecallConfig["cacheOptimization"] | undefined {
   if (!value) return undefined;
-  return VALID_CACHE_OPTIMIZATIONS.includes(value as RecallConfig["cacheOptimization"])
-    ? (value as RecallConfig["cacheOptimization"])
-    : undefined;
+  if (VALID_CACHE_OPTIMIZATIONS.includes(value as RecallConfig["cacheOptimization"])) {
+    return value as RecallConfig["cacheOptimization"];
+  }
+  // Invalid value — return undefined so caller falls back to "none"
+  // Caller should detect this and log a warning about the invalid config
+  return undefined;
+}
+
+/**
+ * Detect configuration conflicts between recall options.
+ *
+ * Returns an array of warning messages for problematic combinations.
+ * These warnings are informational — they do NOT block configuration parsing.
+ */
+export function detectConfigWarnings(cfg: Partial<MemoryTdaiConfig>): string[] {
+  const warnings: string[] = [];
+
+  // Warning 1: showInjected=true with stable_wrapper/split_system causes
+  // <memory-context> tags to persist in conversation history, polluting
+  // subsequent recall queries. This combination is functional but reduces
+  // the effectiveness of the cache optimization.
+  const showInjected = cfg.recall?.showInjected ?? false;
+  const cacheOpt = cfg.recall?.cacheOptimization ?? "none";
+  if (showInjected && (cacheOpt === "stable_wrapper" || cacheOpt === "split_system")) {
+    warnings.push(
+      `recall.showInjected=true combined with recall.cacheOptimization="${cacheOpt}" causes <memory-context> tags to persist in conversation history. ` +
+      `This reduces cache optimization effectiveness and may pollute recall queries. ` +
+      `Consider setting showInjected=false for optimal cache behavior.`
+    );
+  }
+
+  return warnings;
 }
 
 /**

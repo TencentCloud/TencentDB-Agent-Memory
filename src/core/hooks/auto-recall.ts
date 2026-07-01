@@ -71,6 +71,24 @@ export interface RecallResult {
   recallStrategy?: string;
 }
 
+/**
+ * Check if an error is a "file not found" type (ENOENT or similar).
+ *
+ * Used to differentiate expected "no file" conditions from real filesystem
+ * errors (EACCES, EIO, etc.) so the latter can be logged at warn level
+ * instead of being silently swallowed.
+ */
+function isEnoentOrNotFound(err: unknown): boolean {
+  if (err instanceof Error) {
+    // Node.js fs errors have a `code` property
+    const nodeErr = err as Error & { code?: string };
+    if (nodeErr.code === "ENOENT") return true;
+    // Some storage backends may throw with "not found" in the message
+    if (nodeErr.message?.toLowerCase().includes("not found")) return true;
+  }
+  return false;
+}
+
 export async function performAutoRecall(params: {
   userText: string;
   actorId: string;
@@ -82,7 +100,9 @@ export async function performAutoRecall(params: {
   embeddingService?: EmbeddingService;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
-  const timeoutMs = cfg.recall.timeoutMs ?? 5000;
+  // Use `||` instead of `??` so that timeoutMs=0 (instant timeout — almost certainly
+  // unintended) falls back to the default 5000ms rather than causing an immediate timeout.
+  const timeoutMs = cfg.recall.timeoutMs || 5000;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -152,8 +172,14 @@ async function performAutoRecallInner(params: {
     personaContent = stripSceneNavigation(raw).trim();
     if (!personaContent) personaContent = undefined;
     logger?.debug?.(`${TAG} Persona loaded: ${personaContent ? `${personaContent.length} chars` : "empty"}`);
-  } catch {
-    logger?.debug?.(`${TAG} No persona file found (expected for new users)`);
+  } catch (err) {
+    if (isEnoentOrNotFound(err)) {
+      logger?.debug?.(`${TAG} No persona file found (expected for new users)`);
+    } else {
+      // Non-ENOENT errors (EACCES, EIO, etc.) should be logged at warn level
+      // so they don't silently mask real filesystem issues
+      logger?.warn?.(`${TAG} Failed to read persona file: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   const tPersonaEnd = performance.now();
 
@@ -166,8 +192,12 @@ async function performAutoRecallInner(params: {
       sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir);
       logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes`);
     }
-  } catch {
-    logger?.debug?.(`${TAG} No scene index found`);
+  } catch (err) {
+    if (isEnoentOrNotFound(err)) {
+      logger?.debug?.(`${TAG} No scene index found`);
+    } else {
+      logger?.warn?.(`${TAG} Failed to read scene index: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   const tSceneEnd = performance.now();
 
