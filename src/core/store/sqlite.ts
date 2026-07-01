@@ -200,33 +200,36 @@ export function buildFtsQuery(raw: string): string | null {
 
   let tokens: string[];
   if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
+    // jieba cutForSearch splits long words further for better recall.
     tokens = jieba
       .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
+      .flatMap(sanitizeFtsWords);
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    tokens = sanitizeFtsWords(raw);
   }
 
   if (tokens.length === 0) return null;
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
+}
+
+const FTS_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+const FTS_RESERVED_WORDS = new Set(["OR", "AND", "NEAR", "NOT"]);
+
+function sanitizeFtsWords(rawToken: string): string[] {
+  const parts = rawToken.normalize("NFKC").match(FTS_TOKEN_RE) ?? [];
+
+  return parts
+    .map((t) => t.trim())
+    .filter((t) => {
+      if (t.length === 0) return false;
+      if (FTS_RESERVED_WORDS.has(t.toUpperCase())) return false;
+      if (ZH_STOP_WORDS.has(t)) return false;
+      return true;
+    });
 }
 
 /**
