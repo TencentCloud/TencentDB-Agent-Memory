@@ -10,14 +10,11 @@ function collectExternalDependencies(): string[] {
   ];
 }
 
-export default defineConfig({
-  entry: ["./index.ts"],
+const baseConfig = {
   outDir: "./dist",
   format: "esm",
   platform: "node",
-  clean: true,
   fixedExtension: true,
-  dts: false,
   sourcemap: false,
   deps: {
     neverBundle: (id) => {
@@ -32,4 +29,19 @@ export default defineConfig({
       return false;
     },
   },
-});
+} as const;
+
+export default defineConfig([
+  {
+    ...baseConfig,
+    entry: { index: "./index.ts" },
+    clean: false,
+    dts: false,
+  },
+  {
+    ...baseConfig,
+    entry: { "adapter-sdk": "./src/adapter-sdk/index.ts" },
+    clean: false,
+    dts: true,
+  },
+]);

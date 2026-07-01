@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -42,6 +44,20 @@ describe("adapter SDK tool contract", () => {
     ]);
     expect(tools[0].parameters.properties.query).toMatchObject({ type: "string" });
     expect(tools[1].parameters.properties.session_key).toMatchObject({ type: "string" });
+  });
+});
+
+describe("adapter SDK package export", () => {
+  it("exposes a stable npm subpath with runtime and type entries", () => {
+    const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8")) as {
+      exports?: Record<string, unknown>;
+    };
+
+    expect(packageJson.exports?.["./adapter-sdk"]).toEqual({
+      types: "./dist/adapter-sdk.d.mts",
+      import: "./dist/adapter-sdk.mjs",
+      default: "./dist/adapter-sdk.mjs",
+    });
   });
 });
 

@@ -14,11 +14,16 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapter-sdk": {
+      "types": "./dist/adapter-sdk.d.mts",
+      "import": "./dist/adapter-sdk.mjs",
+      "default": "./dist/adapter-sdk.mjs"
     }
   },
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
-    "build:plugin": "tsdown",
+    "build:plugin": "rm -rf dist && tsdown",
     "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:mcp-adapter",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",

@@ -28,7 +28,7 @@ import {
   TdaiAdapterRuntime,
   CoreMemoryOperations,
   type TdaiPlatformAdapter,
-} from "../src/adapter-sdk/index.js";
+} from "@tencentdb-agent-memory/memory-tencentdb/adapter-sdk";
 import { TdaiCore } from "../src/core/tdai-core.js";
 
 interface MyEvent {
@@ -87,7 +87,7 @@ import {
   GatewayMemoryOperations,
   TdaiAdapterRuntime,
   TdaiGatewayClient,
-} from "../src/adapter-sdk/index.js";
+} from "@tencentdb-agent-memory/memory-tencentdb/adapter-sdk";
 
 const client = new TdaiGatewayClient({
   baseUrl: "http://127.0.0.1:8420",
