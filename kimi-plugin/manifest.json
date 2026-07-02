@@ -1,0 +1,16 @@
+{
+  "name": "memory-tencentdb",
+  "version": "0.1.0",
+  "description": "TencentDB Agent Memory MCP server for Kimi Code CLI.",
+  "author": "TencentDB Agent Memory Team",
+  "type": "mcp",
+  "mcp": {
+    "command": "node",
+    "args": [
+      "${pluginDir}/../dist/src/adapters/kimicode/mcp-server.mjs"
+    ],
+    "env": {
+      "TDAI_GATEWAY_URL": "http://127.0.0.1:8420"
+    }
+  }
+}
