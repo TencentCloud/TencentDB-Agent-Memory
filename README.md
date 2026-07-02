@@ -505,6 +505,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
+| [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | OpenClaw, Hermes, and Codex adapter architecture and integration guide |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 
@@ -526,7 +527,7 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - [x] Long-term personalized memory (L0 → L3)
 - [x] Short-term context compression (Context Offload + Mermaid canvas)
 - [x] Local SQLite backend and Tencent Cloud Vector Database (TCVDB) backend
-- [x] OpenClaw plugin and Hermes Gateway integration
+- [x] OpenClaw plugin, Hermes Gateway integration, and Codex Gateway adapter
 - [ ] Portable memory: cross-Agent / cross-framework / cross-device import, export, and live migration
 - [ ] Automatic Skill generation
 - [ ] Visual debugging and memory observability dashboard
