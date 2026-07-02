@@ -7,7 +7,9 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs",
+    "memory-tencentdb-codex": "./bin/memory-tencentdb-codex.mjs"
   },
   "exports": {
     ".": {
