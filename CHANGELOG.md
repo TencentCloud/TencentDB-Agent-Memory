@@ -19,6 +19,10 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+- **跨平台适配器系统** ([#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235))：新增 6 个平台适配器（Claude Code、Codex CLI、Dify、MCP、REST、Standalone）及共享基础设施（Gateway HTTP 客户端、retry 指数退避、circuit breaker）。
+  - 包含 Python SDK（`hermes-plugin/memory/memory_tencentdb/`）支持 Hermes 平台集成。
+  - 353 个测试覆盖单元/集成/E2E/contract/security/chaos 六个类别。
+  - 新增 CLI 入口点：`bin/memory-tencentdb-mcp.mjs`（MCP stdio server）、`bin/memory-tencentdb-codex.mjs`（Codex CLI）。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
