@@ -5,6 +5,7 @@
  *   GET  /health              — Health check
  *   POST /recall              — Memory recall (prefetch)
  *   POST /capture             — Conversation capture (sync_turn)
+ *   POST /capture/batch       — Batch capture into the live memory directory
  *   POST /search/memories     — L1 memory search
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
@@ -29,6 +30,9 @@ import type {
   RecallResponse,
   CaptureRequest,
   CaptureResponse,
+  CaptureBatchRequest,
+  CaptureBatchResponse,
+  CaptureBatchResultItem,
   MemorySearchRequest,
   MemorySearchResponse,
   ConversationSearchRequest,
@@ -40,9 +44,15 @@ import type {
   GatewayErrorResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
-import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
+import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import {
+  buildCaptureTurn,
+  CaptureBatchValidationError,
+  normalizeCaptureBatchRequest,
+  normalizeCapturePayload,
+} from "./capture-batch.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -198,7 +208,7 @@ export class TdaiGateway {
     if (!loopback && !authOn) {
       this.logger.warn(
         `Gateway is bound to ${host} (non-loopback) WITHOUT an API key. ` +
-        "Every /capture, /search/conversations, /recall, /seed call from the " +
+        "Every /capture, /capture/batch, /search/conversations, /recall, /seed call from the " +
         "network is currently unauthenticated. Bind to 127.0.0.1, or set " +
         "TDAI_GATEWAY_API_KEY, before continuing."
       );
@@ -264,6 +274,8 @@ export class TdaiGateway {
           return await this.handleRecall(req, res);
         case "POST /capture":
           return await this.handleCapture(req, res);
+        case "POST /capture/batch":
+          return await this.handleCaptureBatch(req, res);
         case "POST /search/memories":
           return await this.handleSearchMemories(req, res);
         case "POST /search/conversations":
@@ -393,31 +405,98 @@ export class TdaiGateway {
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<CaptureRequest>(req);
 
-    if (!body.user_content || !body.assistant_content || !body.session_key) {
-      sendError(res, 400, "Missing required fields: user_content, assistant_content, session_key");
-      return;
+    let capture: CaptureRequest;
+    try {
+      capture = normalizeCapturePayload(body);
+    } catch (err) {
+      if (err instanceof CaptureBatchValidationError) {
+        sendError(res, 400, err.message);
+        return;
+      }
+      throw err;
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
-      userText: body.user_content,
-      assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
-      sessionKey: body.session_key,
-      sessionId: body.session_id,
-    });
+    const response = await this.runCapture(capture);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+    this.logger.info(`Capture completed in ${elapsed}ms: l0=${response.l0_recorded}`);
 
-    const response: CaptureResponse = {
+    sendJson(res, 200, response);
+  }
+
+  private async handleCaptureBatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<CaptureBatchRequest>(req);
+
+    let normalized;
+    try {
+      normalized = normalizeCaptureBatchRequest(body);
+    } catch (err) {
+      if (err instanceof CaptureBatchValidationError) {
+        sendError(res, 400, err.message);
+        return;
+      }
+      throw err;
+    }
+
+    const startMs = Date.now();
+    const results: CaptureBatchResultItem[] = [];
+
+    for (const item of normalized.captures) {
+      try {
+        const captureResult = await this.runCapture(item.capture, { startedAt: item.startedAt });
+        results.push({
+          index: item.index,
+          session_key: item.capture.session_key,
+          session_id: item.capture.session_id,
+          source_session_index: item.sourceSessionIndex,
+          source_round_index: item.sourceRoundIndex,
+          l0_recorded: captureResult.l0_recorded,
+          scheduler_notified: captureResult.scheduler_notified,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({
+          index: item.index,
+          session_key: item.capture.session_key,
+          session_id: item.capture.session_id,
+          source_session_index: item.sourceSessionIndex,
+          source_round_index: item.sourceRoundIndex,
+          error: message,
+        });
+        this.logger.warn(`Capture batch item ${item.index} failed: ${message}`);
+        if (!normalized.continueOnError) break;
+      }
+    }
+
+    const failed = results.filter((item) => item.error).length;
+    const response: CaptureBatchResponse = {
+      total: normalized.captures.length,
+      succeeded: results.length - failed,
+      failed,
+      source: normalized.source,
+      duration_ms: Date.now() - startMs,
+      results,
+    };
+
+    this.logger.info(
+      `Capture batch completed: total=${response.total}, source=${response.source}, ` +
+      `succeeded=${response.succeeded}, failed=${response.failed}, duration=${response.duration_ms}ms`,
+    );
+
+    sendJson(res, failed === 0 ? 200 : normalized.continueOnError ? 207 : 500, response);
+  }
+
+  private async runCapture(
+    body: CaptureRequest,
+    opts?: { startedAt?: number },
+  ): Promise<CaptureResponse> {
+    const result = await this.core.handleTurnCommitted(buildCaptureTurn(body, opts));
+
+    return {
       l0_recorded: result.l0RecordedCount,
       scheduler_notified: result.schedulerNotified,
     };
-    sendJson(res, 200, response);
   }
 
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

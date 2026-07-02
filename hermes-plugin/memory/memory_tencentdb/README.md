@@ -16,7 +16,7 @@ Hermes Agent (Python)
   └─ MemoryManager
        └─ MemoryTencentdbProvider        (this directory)
             ├─ GatewaySupervisor          — starts / health-checks the sidecar
-            └─ MemoryTencentdbSdkClient   — POST /recall, /capture, /search/*, /session/end
+            └─ MemoryTencentdbSdkClient   — POST /recall, /capture, /capture/batch, /search/*, /session/end
                     │
                     ▼  HTTP (127.0.0.1:8420 by default)
             memory-tencentdb Gateway (Node.js)
@@ -34,6 +34,7 @@ Hermes lifecycle → Gateway mapping:
 |-----------------------------|------------------|------------------------------------------------------------|
 | `prefetch(query)`           | `POST /recall`   | Synchronous. Returns `<memory-context>` text for injection |
 | `sync_turn(user, assistant)`| `POST /capture`  | Fire-and-forget on a background daemon thread (max 4 in-flight) |
+| `capture_batch(...)`        | `POST /capture/batch` | Batch import into the live Gateway memory directory |
 | `shutdown()` / `on_session_end` | `POST /session/end` | Flush pending pipeline work                             |
 | `get_tool_schemas()`        | —                | Advertises two LLM tools (see below)                       |
 
