@@ -351,6 +351,40 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+## Batch Capture Into The Live Store
+
+Use `POST /capture/batch` when you want to import historical conversations into
+the same live memory directory used by normal `/capture` traffic. This keeps the
+imported data searchable together with ongoing Gateway captures.
+
+The endpoint accepts either multiple existing `/capture` payloads:
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"captures":[{"session_key":"import-1","user_content":"Hello","assistant_content":"Hi"}]}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+or the same seed-style `sessions/conversations` input shape used by `POST /seed`:
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"data":{"sessions":[{"sessionKey":"import-1","conversations":[[{"role":"user","content":"Hello"},{"role":"assistant","content":"Hi"}]]}]}}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+`POST /capture/batch` runs through the live `TdaiCore` capture path and disables
+the live cold-start timestamp floor for imported history. `POST /seed` is still
+available for isolated seed runs that write to a separate timestamped output
+directory.
+
+For safety, one request can import at most 100 rounds/items. Set
+`continue_on_error: true` to receive per-item failures while continuing the rest
+of the batch.
+
+
+---
+
 
 ## 🔒 Gateway Security (optional)
 

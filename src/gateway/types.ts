@@ -60,6 +60,47 @@ export interface CaptureResponse {
 }
 
 // ============================
+// /capture/batch
+// ============================
+
+export interface CaptureBatchRequest {
+  /** Multiple existing /capture payloads to import through the live pipeline. */
+  captures?: unknown[];
+  /** Compatibility alias for callers that prefer a generic array name. */
+  items?: unknown[];
+  /** Seed-style input: Format A `{ sessions: [...] }` or Format B `[...]`. */
+  data?: unknown;
+  /** Fallback session key for seed-style input. */
+  session_key?: string;
+  /** Require each seed round to have both user and assistant messages. */
+  strict_round_role?: boolean;
+  /** Auto-fill missing seed timestamps (default: true). */
+  auto_fill_timestamps?: boolean;
+  /** Continue processing remaining items if one capture fails at runtime. */
+  continue_on_error?: boolean;
+}
+
+export interface CaptureBatchResultItem {
+  index: number;
+  session_key?: string;
+  session_id?: string;
+  source_session_index?: number;
+  source_round_index?: number;
+  l0_recorded?: number;
+  scheduler_notified?: boolean;
+  error?: string;
+}
+
+export interface CaptureBatchResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  source: "captures" | "seed";
+  duration_ms: number;
+  results: CaptureBatchResultItem[];
+}
+
+// ============================
 // /search/memories
 // ============================
 
