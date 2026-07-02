@@ -44,3 +44,10 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# Local verification/runtime artifacts
+.deerflow-runtime/
+.real-tdai-data/
+.real-tdai-pipeline-data*/
+tmp-npm-cache/
+tmp/issue120-e2e-results/

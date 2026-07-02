@@ -13,6 +13,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
+import { applyRecallBudget, applySessionRecallDedupe, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -24,9 +25,6 @@ import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
-const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
-const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
-const RECALL_LINE_SEPARATOR = "\n";
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -109,7 +107,7 @@ async function performAutoRecallInner(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, sessionKey } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -125,6 +123,7 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+    memoryLines = applySessionRecallDedupe(memoryLines, sessionKey, cfg.recall, logger);
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
@@ -374,7 +373,7 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
+    if (vectorStore?.getCapabilities().nativeHybridSearch && vectorStore.searchL1Hybrid) {
       const tNative = performance.now();
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
@@ -703,89 +702,6 @@ function formatMemoryLine(m: FormatableMemory): string {
   // If all three are empty → no time info appended (graceful)
 
   return line;
-}
-
-function applyRecallBudget(
-  lines: string[],
-  recall: MemoryTdaiConfig["recall"],
-  logger?: Logger,
-): string[] {
-  const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
-  const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
-
-  if (!maxCharsPerMemory && !maxTotalRecallChars) {
-    return lines;
-  }
-
-  const budgeted: string[] = [];
-  let usedChars = 0;
-  let truncatedCount = 0;
-  let droppedCount = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const perMemoryBounded = maxCharsPerMemory
-      ? truncateRecallLine(line, maxCharsPerMemory)
-      : line;
-    let wasTruncated = perMemoryBounded !== line;
-
-    if (!maxTotalRecallChars) {
-      budgeted.push(perMemoryBounded);
-      if (wasTruncated) truncatedCount++;
-      continue;
-    }
-
-    const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
-    const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
-    if (remainingChars <= 0) {
-      droppedCount += lines.length - i;
-      break;
-    }
-
-    if (perMemoryBounded.length > remainingChars) {
-      const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
-      if (canFit) {
-        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
-        budgeted.push(totalBounded);
-        usedChars += separatorChars + totalBounded.length;
-        wasTruncated ||= totalBounded !== perMemoryBounded;
-        if (wasTruncated) truncatedCount++;
-      }
-      droppedCount += lines.length - i - (canFit ? 1 : 0);
-      break;
-    }
-
-    budgeted.push(perMemoryBounded);
-    usedChars += separatorChars + perMemoryBounded.length;
-    if (wasTruncated) truncatedCount++;
-  }
-
-  if (truncatedCount > 0 || droppedCount > 0) {
-    logger?.debug?.(
-      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
-      `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
-      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
-    );
-  }
-
-  return budgeted;
-}
-
-function normalizeBudgetLimit(value: number | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
-  return Math.floor(value);
-}
-
-function truncateRecallLine(line: string, maxChars: number): string {
-  // Count and slice by code point, not UTF-16 code unit, so a cut never lands
-  // between the halves of a surrogate pair (which would corrupt a non-BMP
-  // character to U+FFFD when the line is UTF-8 encoded for the request).
-  const cps = Array.from(line);
-  if (cps.length <= maxChars) return line;
-  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) {
-    return cps.slice(0, maxChars).join("");
-  }
-  return `${cps.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).join("").trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
 }
 
 /**
