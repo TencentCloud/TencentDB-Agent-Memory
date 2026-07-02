@@ -78,7 +78,10 @@ export function registerCodexMemoryTools(
   target.registerTool(
     "tdai_recall",
     {
-      description: "Recall relevant memory context for the current session.",
+      title: "TDAI Recall",
+      description:
+        "Recall memory context from TencentDB Agent Memory for the current Codex task. " +
+        "Use before coding when prior preferences, repository conventions, or earlier sessions may matter.",
       inputSchema: recallInputSchema,
     },
     async (args) => {
@@ -91,7 +94,10 @@ export function registerCodexMemoryTools(
   target.registerTool(
     "tdai_capture",
     {
-      description: "Capture a user/assistant exchange into memory.",
+      title: "TDAI Capture",
+      description:
+        "Capture a completed user/assistant turn into TencentDB Agent Memory. " +
+        "This is explicit capture; Codex MCP does not automatically capture every turn.",
       inputSchema: captureInputSchema,
     },
     async (args) => {
@@ -104,7 +110,9 @@ export function registerCodexMemoryTools(
   target.registerTool(
     "tdai_memory_search",
     {
-      description: "Search across stored memories.",
+      title: "TDAI Memory Search",
+      description:
+        "Search structured L1 long-term memories. Use for user preferences, instructions, and episodic memory.",
       inputSchema: memorySearchInputSchema,
     },
     async (args) => {
@@ -120,7 +128,9 @@ export function registerCodexMemoryTools(
   target.registerTool(
     "tdai_conversation_search",
     {
-      description: "Search across stored conversations.",
+      title: "TDAI Conversation Search",
+      description:
+        "Search raw L0 conversation history. Use when exact previous commands, tool outputs, or wording are needed.",
       inputSchema: conversationSearchInputSchema,
     },
     async (args) => {
@@ -138,7 +148,9 @@ export function registerCodexMemoryTools(
   target.registerTool(
     "tdai_session_end",
     {
-      description: "Signal the end of a session.",
+      title: "TDAI Session End",
+      description:
+        "Flush pending memory pipeline work for a session key after a Codex task or session ends.",
       inputSchema: sessionEndInputSchema,
     },
     async (args) => {
@@ -151,21 +163,25 @@ export function registerCodexMemoryTools(
 
 /** Create an MCP server backed by the given memory client. */
 export function createCodexMcpServer(client: CodexMemoryClient): McpServer {
-  const server = new McpServer({
-    name: "memory-tencentdb-codex",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    {
+      name: "memory-tencentdb-codex",
+      version: "0.1.0",
+    },
+    {
+      instructions:
+        "TencentDB Agent Memory for Codex. Use tdai_recall or search tools when prior user preferences, " +
+        "repository conventions, or previous sessions may help. Use tdai_capture only for explicit memory writes. " +
+        "This MCP server provides tools; it does not automatically intercept Codex prompts or completed turns.",
+    },
+  );
   registerCodexMemoryTools(server, client);
   return server;
 }
 
 /** Read environment variables, build the client, and start the stdio MCP server. */
 export async function runCodexMcpServer(): Promise<void> {
-  const baseUrl = process.env.TDAI_GATEWAY_URL;
-  if (!baseUrl) {
-    throw new Error("TDAI_GATEWAY_URL is required");
-  }
-
+  const baseUrl = process.env.TDAI_GATEWAY_URL ?? "http://127.0.0.1:8420";
   const apiKey = process.env.TDAI_GATEWAY_API_KEY;
   const timeoutMs = process.env.TDAI_GATEWAY_TIMEOUT_MS
     ? Number(process.env.TDAI_GATEWAY_TIMEOUT_MS)
