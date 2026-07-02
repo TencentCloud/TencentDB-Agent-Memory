@@ -348,6 +348,11 @@ curl http://127.0.0.1:8420/health
 
 > For the complete provider reference (environment variables, troubleshooting, LLM tool schemas, supervisor behavior), see [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md). Please read it before adjusting the supervisor / circuit-breaker defaults.
 
+> Short-term context compression for Hermes is packaged separately as a
+> `ContextEngine` plugin. See
+> [`hermes-plugin/context_engine/tencentdb_offload/README.md`](./hermes-plugin/context_engine/tencentdb_offload/README.md)
+> when wiring TencentDB offload into Hermes's context engine slot.
+
 
 ---
 

@@ -1,0 +1,8 @@
+name: tencentdb-offload
+display_name: TencentDB Offload ContextEngine
+version: 0.1.0
+description: "Hermes ContextEngine adapter for TencentDB short-term offload via HTTP, with local fallback when the Gateway is unavailable."
+hooks:
+  - context_engine
+aliases:
+  - memory-tencentdb-offload
