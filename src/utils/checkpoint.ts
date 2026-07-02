@@ -144,6 +144,33 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/**
+ * Options for CheckpointManager.recalibrate().
+ *
+ * At least one of `l0Count` / `l1Count` should be provided.  When both are
+ * omitted the call is a no-op (returns `{ l0Changed: false, l1Changed: false }`).
+ *
+ * Callers should prefer authoritative store counts (`countL0()` / `countL1()`)
+ * and only fall back to JSONL-file counts when the store is degraded or
+ * unavailable.
+ */
+export interface RecalibrateOptions {
+  /** Authoritative L0 conversation count (e.g. from vectorStore.countL0()) */
+  l0Count?: number;
+  /** Authoritative L1 memory count (e.g. from vectorStore.countL1()) */
+  l1Count?: number;
+  /**
+   * Optional: clamp stale per-session L1 cursors to this timestamp.
+   *
+   * After cleanup deletes old L0 records, per-session `last_l1_cursor`
+   * values may point to records that no longer exist, causing the L1
+   * runner to re-attempt extraction of deleted data.  When provided,
+   * every session whose `last_l1_cursor` is *before* this timestamp
+   * has its cursor advanced to `earliestValidL0Timestamp`.
+   */
+  earliestValidL0Timestamp?: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -490,46 +517,136 @@ export class CheckpointManager {
   // ============================
 
   /**
-   * Recalibrate cumulative counters to match actual store counts.
+   * Recalibrate cumulative counters (and optionally per-session cursors)
+   * to match ground truth.
    *
    * After cleanup operations (memory-cleaner deletes expired JSONL files
    * and vector-store records), the checkpoint counters l0_conversations_count
    * and total_memories_extracted can drift permanently above reality.
-   * Callers query the authoritative counts from the store and pass them here.
+   *
+   * When the vector store is unavailable, callers can fall back to counting
+   * JSONL files on disk via {@link countJsonlFiles} and pass the results here.
    *
    * Only writes when values actually differ; logs each change via this.logger.
    * Uses the existing mutate() file lock for concurrent-access safety.
    *
-   * @param actualL0Count - Authoritative L0 conversation count from the store.
-   * @param actualL1Count - Authoritative L1 memory count from the store.
-   * @returns Flags indicating which counters were updated.
+   * @returns Flags indicating which counters were updated, plus cursor
+   *          rollback details when `earliestValidL0Timestamp` is provided.
    */
   async recalibrate(
-    actualL0Count: number,
-    actualL1Count: number,
-  ): Promise<{ l0Changed: boolean; l1Changed: boolean }> {
-    const result = { l0Changed: false, l1Changed: false };
+    opts: RecalibrateOptions = {},
+  ): Promise<{ l0Changed: boolean; l1Changed: boolean; cursorsRolledBack: number }> {
+    const result = { l0Changed: false, l1Changed: false, cursorsRolledBack: 0 };
+
+    const { l0Count, l1Count, earliestValidL0Timestamp } = opts;
+
+    // Fast-path: nothing to do
+    if (l0Count === undefined && l1Count === undefined && earliestValidL0Timestamp === undefined) {
+      return result;
+    }
 
     await this.mutate((cp) => {
-      if (actualL0Count !== cp.l0_conversations_count) {
+      if (l0Count !== undefined && l0Count !== cp.l0_conversations_count) {
         this.logger.info(
           `[checkpoint] recalibrate l0_conversations_count: ` +
-          `${cp.l0_conversations_count} → ${actualL0Count}`,
+          `${cp.l0_conversations_count} → ${l0Count}`,
         );
-        cp.l0_conversations_count = actualL0Count;
+        cp.l0_conversations_count = l0Count;
         result.l0Changed = true;
       }
-      if (actualL1Count !== cp.total_memories_extracted) {
+      if (l1Count !== undefined && l1Count !== cp.total_memories_extracted) {
         this.logger.info(
           `[checkpoint] recalibrate total_memories_extracted: ` +
-          `${cp.total_memories_extracted} → ${actualL1Count}`,
+          `${cp.total_memories_extracted} → ${l1Count}`,
         );
-        cp.total_memories_extracted = actualL1Count;
+        cp.total_memories_extracted = l1Count;
         result.l1Changed = true;
+      }
+
+      // Cursor rollback: clamp stale per-session L1 cursors to
+      // earliestValidL0Timestamp.  This prevents the L1 runner from
+      // re-processing L0 records that have been deleted by cleanup.
+      if (earliestValidL0Timestamp !== undefined && cp.runner_states) {
+        for (const state of Object.values(cp.runner_states)) {
+          if (state.last_l1_cursor > 0 && state.last_l1_cursor < earliestValidL0Timestamp) {
+            this.logger.info(
+              `[checkpoint] recalibrate cursor rollback: ` +
+              `last_l1_cursor ${state.last_l1_cursor} → ${earliestValidL0Timestamp}`,
+            );
+            state.last_l1_cursor = earliestValidL0Timestamp;
+            result.cursorsRolledBack += 1;
+          }
+        }
       }
     });
 
     return result;
   }
 
+}
+
+// ============================
+// JSONL recounting helpers (standalone, not on CheckpointManager)
+// ============================
+
+/**
+ * Count the number of L0 conversation records in a data directory
+ * by scanning date-sharded JSONL files under `conversations/`.
+ *
+ * This is a fallback when the vector store (`countL0()`) is unavailable.
+ * It counts individual JSONL *lines* (not files), as each line represents
+ * one conversation turn.
+ *
+ * Errors (unreadable files, missing directories) are caught and logged;
+ * the function returns whatever it was able to count.
+ */
+export async function countJsonlL0Records(
+  dataDir: string,
+  logger?: CheckpointLogger,
+): Promise<number> {
+  const dir = path.join(dataDir, "conversations");
+  return _countJsonlLines(dir, logger);
+}
+
+/**
+ * Count the number of L1 memory records in a data directory
+ * by scanning date-sharded JSONL files under `records/`.
+ *
+ * This is a fallback when the vector store (`countL1()`) is unavailable.
+ * Each JSONL line represents one extracted memory record.
+ *
+ * Errors are caught and logged; the function returns whatever it was able to count.
+ */
+export async function countJsonlL1Records(
+  dataDir: string,
+  logger?: CheckpointLogger,
+): Promise<number> {
+  const dir = path.join(dataDir, "records");
+  return _countJsonlLines(dir, logger);
+}
+
+async function _countJsonlLines(
+  dirPath: string,
+  logger?: CheckpointLogger,
+): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+      try {
+        const content = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+        // Count non-empty lines
+        const lines = content.split("\n").filter((l) => l.trim().length > 0);
+        total += lines.length;
+      } catch {
+        logger?.warn?.(`[checkpoint] countJsonl: unable to read ${entry.name}, skipping`);
+      }
+    }
+  } catch {
+    // Directory does not exist or is not readable — return 0
+    logger?.info?.(`[checkpoint] countJsonl: directory not readable: ${dirPath}, returning 0`);
+  }
+  return total;
 }

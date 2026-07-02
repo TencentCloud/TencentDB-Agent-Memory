@@ -308,14 +308,32 @@ export default function register(api: OpenClawPluginApi) {
         logger: api.logger,
         onAfterCleanup: async () => {
           // After cleaner deletes expired data, recalibrate checkpoint counters
-          // to match the actual remaining data in the vector store.
+          // to match the actual remaining data.  Prefer vector-store counts;
+          // fall back to JSONL-file counting when the store is degraded.
           const vs = core.getVectorStore();
-          if (!vs || vs.isDegraded()) return;
+          const checkpoint = new CheckpointManager(pluginDataDir, api.logger);
           try {
-            const actualL0 = await vs.countL0();
-            const actualL1 = await vs.countL1();
-            const checkpoint = new CheckpointManager(pluginDataDir, api.logger);
-            await checkpoint.recalibrate(actualL0, actualL1);
+            let l0Count: number | undefined;
+            let l1Count: number | undefined;
+            if (vs && !vs.isDegraded()) {
+              [l0Count, l1Count] = await Promise.all([
+                vs.countL0(),
+                vs.countL1(),
+              ]);
+            } else {
+              // JSONL recounting fallback — store unavailable or degraded
+              const { countJsonlL0Records, countJsonlL1Records } =
+                await import("./src/utils/checkpoint.js");
+              [l0Count, l1Count] = await Promise.all([
+                countJsonlL0Records(pluginDataDir, api.logger),
+                countJsonlL1Records(pluginDataDir, api.logger),
+              ]);
+              api.logger.info(
+                `${TAG} post-cleanup recalibration via JSONL fallback: ` +
+                `L0=${l0Count}, L1=${l1Count}`,
+              );
+            }
+            await checkpoint.recalibrate({ l0Count, l1Count });
           } catch (err) {
             api.logger.warn(
               `${TAG} post-cleanup recalibration failed (non-fatal): ` +

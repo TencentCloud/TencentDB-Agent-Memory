@@ -525,7 +525,7 @@ export class TdaiCore {
               this.vectorStore.countL0(),
               this.vectorStore.countL1(),
             ]);
-            await checkpoint.recalibrate(actualL0, actualL1);
+            await checkpoint.recalibrate({ l0Count: actualL0, l1Count: actualL1 });
           } catch (err) {
             this.logger.warn(
               `${TAG} recalibrate skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
