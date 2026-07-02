@@ -13,6 +13,10 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapters": {
+      "import": "./dist/src/adapters/index.mjs",
+      "default": "./dist/src/adapters/index.mjs"
     }
   },
   "scripts": {
@@ -41,6 +45,7 @@
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/README.memory-tencentdb-ctl.md",
+    "docs/",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
