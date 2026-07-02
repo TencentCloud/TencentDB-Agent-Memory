@@ -176,11 +176,30 @@ E2E 结论：
 - `ABC_reminder` 是当前更好的落地形态：不持久化 raw recall，重复项压缩为短提醒，在两家 provider 上都保持任务通过，并降低总输入和 miss tokens。
 - 后续评估应把“同一任务通过”作为硬门槛，再比较 total tokens、miss tokens 和 cache hit ratio。
 
-## 缓存命中率变化
+## 最终缓存指标口径
 
-这里单独把缓存指标拉出来看。`showInjected` 风险基线的命中率不能直接当成好结果：旧 `<relevant-memories>` 被写入历史后，后续轮次会反复携带同一批大块文本，provider 更容易把这些旧文本算成 cache hit；但总输入和上下文窗口占用同时变大。
+最终判断以 E2E 通过为硬门槛，再比较总 tokens、miss tokens 和 cache hit ratio。`showInjected` 风险基线的命中率不能直接当成好结果：旧 `<relevant-memories>` 被写入历史后，后续轮次会反复携带同一批大块文本，provider 更容易把这些旧文本算成 cache hit；但总输入和上下文窗口占用同时变大。
 
-各方案实现后的缓存命中率：
+最终采用的候选是 `ABC_reminder`，不是旧的 `ABC_skip`。
+
+| 场景 | DeepSeek v4-flash E2E cache hit ratio | GPT-5.5 E2E cache hit ratio |
+| --- | ---: | ---: |
+| showInjected 风险基线 | 86.44% | 27.44% |
+| ABC_skip | 96.89%（任务失败） | 0% |
+| ABC_reminder | 92.87% | 36.93% |
+
+最终 E2E 对照：
+
+| Provider | 采用方案 | 同一任务通过 | token 变化 | miss tokens 变化 | cache hit ratio 变化 |
+| --- | --- | --- | ---: | ---: | ---: |
+| DeepSeek v4-flash | ABC_reminder | 是 | -27.16% | -61.69% | +6.43 pp |
+| GPT-5.5 Responses | ABC_reminder | 是 | -25.68% | -35.39% | +9.49 pp |
+
+旧的 10 轮 A/B/C benchmark 仍有参考价值，但它没有验证同一任务输出质量；下面只作为阶段性缓存/输入规模对照，不再作为最终方案选择依据。
+
+## 阶段性 10 轮 benchmark 缓存指标
+
+各方案实现后的阶段性缓存命中率：
 
 | 场景 | DeepSeek cache hit ratio | GPT-5.5 cache hit ratio |
 | --- | ---: | ---: |
@@ -230,11 +249,12 @@ GPT-5.5 Responses API 相对 A：
 
 GPT-5.5 这组里，A 已经把 miss tokens 从 332,318 降到 138,065；B/C 继续提升命中率并减少 miss。A+B+C 的 cache hit ratio 达到 37.02%，比风险基线高 14.98 个百分点，比 A 高 25.53 个百分点，同时 miss tokens 最低。
 
-缓存指标结论：
+阶段性 benchmark 结论：
 
 - A 解决历史膨胀，不保证单独提升 cache hit ratio；如果旧 recall 进入历史，命中率可能虚高。
 - B/C 直接减少动态 recall 和重复 recall，能明显降低 miss tokens。
-- A+B+C 是缓存指标最稳的组合：DeepSeek miss tokens 降到 19,281，GPT-5.5 miss tokens 降到 61,850；GPT-5.5 的 cache hit ratio 也提升到最高。
+- 旧 A+B+C/ABC_skip 在 10 轮 usage benchmark 中缓存指标较好，但没有证明同一任务输出质量。
+- E2E 复测后，最终选择 `ABC_reminder`：它牺牲少量 token，换来两家 provider 都通过同一任务，同时降低 miss tokens。
 - 评估效果时不能只看 cache hit ratio，还要同时看总 input/prompt tokens 和 miss tokens。
 
 ## 结论
