@@ -354,6 +354,81 @@ curl http://127.0.0.1:8420/health
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
 
+### 3. Kimi Code CLI
+
+TencentDB Agent Memory 也通过模型上下文协议（MCP）接入了 [Kimi Code CLI](https://www.kimi.com/)。Kimi 适配器是一个轻量的 stdio MCP 服务器，只负责把工具调用转发给 TDAI Gateway，Kimi Code 进程内部不运行 TdaiCore。
+
+#### 3.1 先启动 TDAI Gateway
+
+Kimi MCP 服务器默认需要 Gateway 运行在 `http://127.0.0.1:8420`。启动方式与 Hermes 独立 Gateway 相同：
+
+```bash
+# 在本仓库根目录
+npm install
+npx tsx src/gateway/server.ts
+```
+
+确认 Gateway 可访问：
+
+```bash
+curl http://127.0.0.1:8420/health
+```
+
+#### 3.2 在 Kimi Code CLI 中添加 MCP 服务器
+
+构建本包（`npm run build`）后，在 Kimi Code CLI 的 MCP 配置中注册打包好的服务器：
+
+```jsonc
+// Kimi Code CLI MCP 设置
+{
+  "mcpServers": {
+    "memory-tencentdb": {
+      "command": "node",
+      "args": ["/path/to/package/bin/kimicode-memory-mcp.mjs"],
+      "env": {
+        "TDAI_GATEWAY_URL": "http://127.0.0.1:8420"
+      }
+    }
+  }
+}
+```
+
+如果 Gateway 开启了 `TDAI_GATEWAY_API_KEY` 鉴权，同时设置：
+
+```jsonc
+{
+  "mcpServers": {
+    "memory-tencentdb": {
+      "command": "node",
+      "args": ["/path/to/package/bin/kimicode-memory-mcp.mjs"],
+      "env": {
+        "TDAI_GATEWAY_URL": "http://127.0.0.1:8420",
+        "TDAI_GATEWAY_API_KEY": "your-gateway-api-key"
+      }
+    }
+  }
+}
+```
+
+#### 3.3 暴露给 Kimi Code CLI 的工具
+
+MCP 服务器注册了 5 个记忆工具：
+
+| 工具 | 用途 |
+| :--- | :--- |
+| `tdai_recall` | 为当前会话召回相关记忆上下文。 |
+| `tdai_capture` | 将用户/助手对话写入记忆。 |
+| `tdai_memory_search` | 在已存储记忆中检索。 |
+| `tdai_conversation_search` | 在已存储会话中检索。 |
+| `tdai_session_end` | 标记会话结束。 |
+
+开发调试时也可以直接从源码运行：
+
+```bash
+npm run kimicode:mcp
+```
+
+
 ---
 
 ## 🔒 Gateway 安全配置（可选）
@@ -497,6 +572,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| Kimi Code CLI MCP 适配 | stdio MCP 服务器，通过 HTTP 将工具调用转发给 Gateway |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -529,7 +605,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 长期个性化记忆（L0 → L3）
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
-- [x] OpenClaw 插件与 Hermes Gateway 适配
+- [x] OpenClaw 插件、Hermes Gateway 与 Kimi Code CLI MCP 适配
 - [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
 - [ ] Skill自动生成
 - [ ] 可视化调试与记忆观测面板
