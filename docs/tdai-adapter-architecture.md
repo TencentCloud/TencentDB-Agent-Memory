@@ -146,6 +146,7 @@ MCP Client (TypeScript, @modelcontextprotocol/sdk)
 | **Five-layer defense gates** | Defense-in-depth for desktop/loopback mode. Gates 2-3 are architectural constraints on stdio (process-per-read resets state); production deployments should front with agentgateway (Linux Foundation AAIF) for session-persistent enforcement |
 | **TS client only, no duplicate server** | TypeScript side is a thin `StdioClientTransport` wrapper (~20 lines). Server logic lives in Python once |
 | **Gates are always active** | No bypass path even if agentgateway is present. Local gates serve as safety net if agentgateway fails |
+| **Graceful fallback chain** | Independent `bridge.mcp_health` module provides health-only fallback (`tdai_health`, 4 gates) if the full server is unavailable. Both share `MCP_BRIDGE_API_KEY` and `BridgeAdapter.mcp_health()` backend |
 
 ### Test Coverage
 

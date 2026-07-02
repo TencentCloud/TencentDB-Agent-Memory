@@ -79,6 +79,10 @@ The MCP transport is a **complementary access path** 鈥?not a replacement 鈥?f
 It enables MCP-native agent hosts to call the same TdaiAdapter SDK through the stdio protocol,
 with five integrated defense gates active regardless of deployment mode.
 
+A lightweight health-only fallback (`bridge.mcp_health`, 1 tool, 4 gates) exists for cases
+where the full MCP server is unavailable 鈥?both share `MCP_BRIDGE_API_KEY` and the same
+`BridgeAdapter.mcp_health()` backend, forming a graceful degradation chain.
+
 ## Bridge-Specific Design Decisions
 
 ### 1. Why a custom `TdaiAdapter` ABC instead of `MemoryProvider`?
