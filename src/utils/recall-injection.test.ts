@@ -147,3 +147,59 @@ describe("hasRecallInjection", () => {
     expect(hasRecallInjection(input)).toBe(false);
   });
 });
+
+// ======================================================
+// Markdown format stripping tests (UNIQUE differentiator)
+// ======================================================
+
+describe("stripRecallFromUserMessage — markdown wrapping", () => {
+  const preamble = "以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：";
+  const recallBlock = `<relevant-memories>\n${preamble}\n\n- [instruction] Test memory content\n</relevant-memories>`;
+
+  it("strips recall block wrapped in fenced code block (```xml)", () => {
+    const input = `\`\`\`xml\n${recallBlock}\n\`\`\`\n\nHello, how are you?`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toBe("Hello, how are you?");
+  });
+
+  it("strips recall block wrapped in fenced code block without language tag", () => {
+    const input = `\`\`\`\n${recallBlock}\n\`\`\`\n\nWhat is TypeScript?`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toBe("What is TypeScript?");
+  });
+
+  it("strips recall block wrapped in inline code (single backtick)", () => {
+    const input = `Here is a recall: \`${recallBlock}\` — anyway, my question is: deploy steps?`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toBe("Here is a recall:  — anyway, my question is: deploy steps?");
+  });
+
+  it("strips recall block wrapped in markdown bold (**...**)", () => {
+    const input = `**<relevant-memories>\n${preamble}\n\n- [instruction] Bold wrapped\n</relevant-memories>**\n\nReal question here`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toBe("Real question here");
+  });
+
+  it("preserves user-authored code block when recall is in plain XML outside", () => {
+    const userCode = "```\nconsole.log('hello')\n```";
+    const input = `${userCode}\n\n${recallBlock}\n\nMy query`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toContain("console.log('hello')");
+    expect(result).toContain("My query");
+    expect(result).not.toContain("<relevant-memories>");
+  });
+
+  it("strips when entire message is recall in code fence", () => {
+    const input = `\`\`\`xml\n${recallBlock}\n\`\`\``;
+    const result = stripRecallFromUserMessage(input);
+    expect(typeof result === "string" ? result.trim() : result).toBe("");
+  });
+
+  it("preserves user code containing <relevant-memories> string (no preamble)", () => {
+    // User writes code that happens to include the XML tag — should not be stripped
+    const input = '```python\nprint("<relevant-memories>")\n```\n\nHello';
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toContain("<relevant-memories>");
+    expect(result).toContain("Hello");
+  });
+});
