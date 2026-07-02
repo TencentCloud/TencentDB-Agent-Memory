@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { rerankRecallLines } from "../recall/rerank.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -125,6 +126,7 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+    memoryLines = await rerankRecallLines({ query: userText, lines: memoryLines, cfg, logger });
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
