@@ -1,0 +1,3 @@
+# bridge/mcp - MCP stdio server for TDAI
+mcp>=1.0.0
+httpx>=0.27.0
