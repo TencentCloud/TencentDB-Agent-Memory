@@ -515,6 +515,24 @@ export class TdaiCore {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
         const cp = await checkpoint.read();
+
+        // Recalibrate drift-prone counters from authoritative store data
+        // (cleanup operations may have deleted data but checkpoint was never updated — Issue #157)
+        await this.storeReady?.catch(() => {});
+        if (this.vectorStore && !this.vectorStore.isDegraded()) {
+          try {
+            const [actualL0, actualL1] = await Promise.all([
+              this.vectorStore.countL0(),
+              this.vectorStore.countL1(),
+            ]);
+            await checkpoint.recalibrate({ l0Count: actualL0, l1Count: actualL1 });
+          } catch (err) {
+            this.logger.warn(
+              `${TAG} recalibrate skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);
       } catch (err) {
