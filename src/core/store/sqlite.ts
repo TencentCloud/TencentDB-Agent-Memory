@@ -221,7 +221,7 @@ export function buildFtsQuery(raw: string): string | null {
     tokens = [...new Set(tokens)];
   } else {
     // Fallback: simple Unicode regex split
-    tokens = sanitizeFtsTokens(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
+    tokens = sanitizeFtsTokens([raw]);
   }
 
   if (tokens.length === 0) return null;
