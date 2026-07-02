@@ -5,6 +5,7 @@
  *   GET  /health              — Health check
  *   POST /recall              — Memory recall (prefetch)
  *   POST /capture             — Conversation capture (sync_turn)
+ *   POST /capture/batch       — Batch capture into the live memory directory
  *   POST /search/memories     — L1 memory search
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
@@ -29,6 +30,9 @@ import type {
   RecallResponse,
   CaptureRequest,
   CaptureResponse,
+  CaptureBatchRequest,
+  CaptureBatchResponse,
+  CaptureBatchResultItem,
   MemorySearchRequest,
   MemorySearchResponse,
   ConversationSearchRequest,
@@ -39,6 +43,11 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import {
+  CaptureBatchValidationError,
+  normalizeCaptureBatchRequest,
+  normalizeCapturePayload,
+} from "./capture-batch.js";
 import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
@@ -264,6 +273,8 @@ export class TdaiGateway {
           return await this.handleRecall(req, res);
         case "POST /capture":
           return await this.handleCapture(req, res);
+        case "POST /capture/batch":
+          return await this.handleCaptureBatch(req, res);
         case "POST /search/memories":
           return await this.handleSearchMemories(req, res);
         case "POST /search/conversations":
@@ -393,12 +404,80 @@ export class TdaiGateway {
   private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<CaptureRequest>(req);
 
-    if (!body.user_content || !body.assistant_content || !body.session_key) {
-      sendError(res, 400, "Missing required fields: user_content, assistant_content, session_key");
-      return;
+    let capture: CaptureRequest;
+    try {
+      capture = normalizeCapturePayload(body);
+    } catch (err) {
+      if (err instanceof CaptureBatchValidationError) {
+        sendError(res, 400, err.message);
+        return;
+      }
+      throw err;
     }
 
     const startMs = Date.now();
+    const response = await this.runCapture(capture);
+    const elapsed = Date.now() - startMs;
+
+    this.logger.info(`Capture completed in ${elapsed}ms: l0=${response.l0_recorded}`);
+
+    sendJson(res, 200, response);
+  }
+
+  private async handleCaptureBatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<CaptureBatchRequest>(req);
+
+    let captures: CaptureRequest[];
+    let continueOnError: boolean;
+    try {
+      const normalized = normalizeCaptureBatchRequest(body);
+      captures = normalized.captures;
+      continueOnError = normalized.continueOnError;
+    } catch (err) {
+      if (err instanceof CaptureBatchValidationError) {
+        sendError(res, 400, err.message);
+        return;
+      }
+      throw err;
+    }
+
+    const startMs = Date.now();
+    const results: CaptureBatchResultItem[] = [];
+
+    for (let index = 0; index < captures.length; index++) {
+      try {
+        const item = await this.runCapture(captures[index]);
+        results.push({
+          index,
+          l0_recorded: item.l0_recorded,
+          scheduler_notified: item.scheduler_notified,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ index, error: message });
+        this.logger.warn(`Capture batch item ${index} failed: ${message}`);
+        if (!continueOnError) break;
+      }
+    }
+
+    const failed = results.filter((item) => item.error).length;
+    const response: CaptureBatchResponse = {
+      total: captures.length,
+      succeeded: results.length - failed,
+      failed,
+      duration_ms: Date.now() - startMs,
+      results,
+    };
+
+    this.logger.info(
+      `Capture batch completed: total=${response.total}, ` +
+      `succeeded=${response.succeeded}, failed=${response.failed}, duration=${response.duration_ms}ms`,
+    );
+
+    sendJson(res, failed === 0 ? 200 : continueOnError ? 207 : 500, response);
+  }
+
+  private async runCapture(body: CaptureRequest): Promise<CaptureResponse> {
     const result = await this.core.handleTurnCommitted({
       userText: body.user_content,
       assistantText: body.assistant_content,
@@ -409,15 +488,11 @@ export class TdaiGateway {
       sessionKey: body.session_key,
       sessionId: body.session_id,
     });
-    const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
-
-    const response: CaptureResponse = {
+    return {
       l0_recorded: result.l0RecordedCount,
       scheduler_notified: result.schedulerNotified,
     };
-    sendJson(res, 200, response);
   }
 
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

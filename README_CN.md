@@ -356,6 +356,21 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+### 通过 Gateway 批量 capture
+
+如果要导入历史对话，并且希望数据进入普通 `/capture` 使用的同一个实时记忆目录，可以使用 `POST /capture/batch`。数组中的每一项都沿用现有 `/capture` 请求体格式：
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"captures":[{"session_key":"import-1","user_content":"你好","assistant_content":"你好"}]}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+`POST /seed` 仍然保留，用于写入独立时间戳 seed 输出目录的隔离导入。
+
+
+---
+
 ## 🔒 Gateway 安全配置（可选）
 
 Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**
