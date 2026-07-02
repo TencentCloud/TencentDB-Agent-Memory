@@ -10,13 +10,15 @@ import {
 const SERVER_NAME = "memory-tencentdb";
 const SERVER_VERSION = "0.3.6";
 const SUPPORTED_PROTOCOL_VERSIONS = new Set([
+  "2025-11-25",
   "2025-06-18",
   "2025-03-26",
   "2024-11-05",
 ]);
-const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
+const DEFAULT_PROTOCOL_VERSION = "2025-11-25";
 
-type JsonRpcId = string | number | null;
+type JsonRpcId = string | number;
+type JsonRpcResponseId = JsonRpcId | null;
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -102,6 +104,8 @@ const TOOLS = [
 ] as const;
 
 export class TdaiMcpServer {
+  private lifecycle: "uninitialized" | "initializing" | "ready" = "uninitialized";
+
   constructor(private readonly gateway: GatewayOperations) {}
 
   async handle(request: unknown): Promise<Record<string, unknown> | undefined> {
@@ -109,15 +113,30 @@ export class TdaiMcpServer {
     if (!parsed.ok) return errorResponse(null, -32600, parsed.message);
     const rpc = parsed.value;
 
-    // Notifications deliberately have no response.
-    if (rpc.id === undefined) return undefined;
+    if (rpc.id === undefined) {
+      if (rpc.method === "notifications/initialized" && this.lifecycle === "initializing") {
+        this.lifecycle = "ready";
+      }
+      // JSON-RPC notifications deliberately have no response, including
+      // malformed or out-of-order lifecycle notifications.
+      return undefined;
+    }
 
     try {
+      if (rpc.method === "ping") return successResponse(rpc.id, {});
+      if (rpc.method === "initialize") {
+        if (this.lifecycle !== "uninitialized") {
+          return errorResponse(rpc.id, -32600, "Server is already initialized");
+        }
+        const result = initializeResult(rpc.params);
+        this.lifecycle = "initializing";
+        return successResponse(rpc.id, result);
+      }
+      if (this.lifecycle !== "ready") {
+        return errorResponse(rpc.id, -32002, "Server is not initialized");
+      }
+
       switch (rpc.method) {
-        case "initialize":
-          return successResponse(rpc.id, initializeResult(rpc.params));
-        case "ping":
-          return successResponse(rpc.id, {});
         case "tools/list":
           return successResponse(rpc.id, { tools: TOOLS });
         case "tools/call":
@@ -148,12 +167,14 @@ export class TdaiMcpServer {
       let result: unknown;
       switch (name) {
         case "tdai_recall":
+          assertAllowedKeys(args, ["query", "session_key"]);
           result = await this.gateway.recall({
             query: requireString(args.query, "query"),
             session_key: requireString(args.session_key, "session_key"),
           });
           break;
         case "tdai_capture":
+          assertAllowedKeys(args, ["user_content", "assistant_content", "session_key", "session_id"]);
           result = await this.gateway.capture({
             user_content: requireString(args.user_content, "user_content"),
             assistant_content: requireString(args.assistant_content, "assistant_content"),
@@ -162,6 +183,7 @@ export class TdaiMcpServer {
           });
           break;
         case "tdai_memory_search":
+          assertAllowedKeys(args, ["query", "limit", "type", "scene"]);
           result = await this.gateway.searchMemories({
             query: requireString(args.query, "query"),
             ...optionalLimit(args.limit),
@@ -170,6 +192,7 @@ export class TdaiMcpServer {
           });
           break;
         case "tdai_conversation_search":
+          assertAllowedKeys(args, ["query", "limit", "session_key"]);
           result = await this.gateway.searchConversations({
             query: requireString(args.query, "query"),
             ...optionalLimit(args.limit),
@@ -177,6 +200,7 @@ export class TdaiMcpServer {
           });
           break;
         case "tdai_session_end":
+          assertAllowedKeys(args, ["session_key"]);
           result = await this.gateway.endSession({
             session_key: requireString(args.session_key, "session_key"),
           });
@@ -229,18 +253,22 @@ export function createMcpServerFromEnvironment(
 }
 
 function initializeResult(params: unknown): Record<string, unknown> {
-  const value = params && typeof params === "object" && !Array.isArray(params)
-    ? params as Record<string, unknown>
-    : {};
-  const requested = typeof value.protocolVersion === "string"
-    ? value.protocolVersion
-    : DEFAULT_PROTOCOL_VERSION;
+  const value = requireRecord(params, "initialize params");
+  const requested = requireString(value.protocolVersion, "protocolVersion");
+  requireRecord(value.capabilities, "capabilities");
+  const clientInfo = requireRecord(value.clientInfo, "clientInfo");
+  requireString(clientInfo.name, "clientInfo.name");
+  requireString(clientInfo.version, "clientInfo.version");
   return {
     protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.has(requested)
       ? requested
       : DEFAULT_PROTOCOL_VERSION,
     capabilities: { tools: { listChanged: false } },
-    serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+    serverInfo: {
+      name: SERVER_NAME,
+      title: "TencentDB Agent Memory",
+      version: SERVER_VERSION,
+    },
     instructions:
       "Use tdai_recall before work that benefits from prior context. Use search tools for deeper lookup. Capture a completed turn only when durable memory is appropriate.",
   };
@@ -258,10 +286,12 @@ function parseRequest(value: unknown):
   }
   if (
     request.id !== undefined &&
-    request.id !== null &&
     typeof request.id !== "string" &&
     typeof request.id !== "number"
   ) {
+    return { ok: false, message: "Invalid Request" };
+  }
+  if (typeof request.id === "number" && !Number.isSafeInteger(request.id)) {
     return { ok: false, message: "Invalid Request" };
   }
   return { ok: true, value: request as unknown as JsonRpcRequest };
@@ -272,7 +302,7 @@ function successResponse(id: JsonRpcId, result: unknown): Record<string, unknown
 }
 
 function errorResponse(
-  id: JsonRpcId,
+  id: JsonRpcResponseId,
   code: number,
   message: string,
 ): Record<string, unknown> {
@@ -280,9 +310,10 @@ function errorResponse(
 }
 
 function toolResult(value: unknown, isError: boolean): Record<string, unknown> {
+  const structuredContent = asRecord(value) ?? { value };
   return {
     content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
-    structuredContent: value,
+    structuredContent,
     ...(isError ? { isError: true } : {}),
   };
 }
@@ -317,6 +348,23 @@ function optionalLimit(value: unknown): { limit?: number } {
     throw new InvalidParamsError("limit must be an integer between 1 and 50");
   }
   return { limit: value as number };
+}
+
+function assertAllowedKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed);
+  const unexpected = Object.keys(value).filter((key) => !allowedSet.has(key));
+  if (unexpected.length > 0) {
+    throw new InvalidParamsError(`Unexpected argument(s): ${unexpected.join(", ")}`);
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {

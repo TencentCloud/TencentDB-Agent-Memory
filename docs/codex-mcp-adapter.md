@@ -33,9 +33,20 @@ startup_timeout_sec = 10
 tool_timeout_sec = 30
 ```
 
+These fields follow the official Codex
+[`mcp_servers.<id>` configuration reference](https://developers.openai.com/codex/config-reference#configtoml):
+`command` launches a STDIO server, `env` forwards its environment, and the two
+timeout fields bound startup and tool execution.
+
 The command also accepts `TDAI_GATEWAY_TIMEOUT_MS`; its default is 10000.
 STDOUT is reserved for MCP JSON-RPC frames, while fatal startup errors are
 written to STDERR.
+
+The server implements the current published MCP revision (`2025-11-25`) and
+negotiates the older `2025-06-18`, `2025-03-26`, and `2024-11-05` revisions.
+It enforces the MCP initialization handshake before exposing tools and rejects
+invalid/null JSON-RPC request IDs. This keeps the adapter compatible with
+current Codex clients while preserving older MCP clients through negotiation.
 
 ## Tools
 
@@ -51,3 +62,27 @@ written to STDERR.
 per-turn L1 data, while `append_system_context` is stable persona, scene, and
 tool guidance. A host should not flatten those fields into the same prompt
 position.
+
+## Adapter boundary
+
+The MCP process is intentionally a thin transport adapter rather than a second
+memory implementation:
+
+| Concern | OpenClaw plugin | Hermes integration | Codex MCP adapter |
+|---|---|---|---|
+| Host protocol | Plugin hooks | Hermes lifecycle | MCP over STDIO |
+| Memory API | `TdaiCore` in process | Gateway/client integration | Authenticated Gateway HTTP |
+| Storage and ranking | Shared TDAI implementation | Shared TDAI implementation | Shared TDAI implementation |
+| Session isolation | OpenClaw session key | Hermes session key | Explicit `session_key` argument |
+
+This boundary keeps ranking, capture semantics, and storage migrations in one
+place. The adapter validates MCP inputs, preserves dynamic versus stable recall
+contexts, and converts Gateway failures into tool errors; it does not fork
+memory behavior for Codex.
+
+For production use, bind the Gateway to localhost unless remote access is
+required, configure `TDAI_GATEWAY_API_KEY`, and pass secrets through the MCP
+environment rather than command-line arguments. STDOUT must remain reserved for
+JSON-RPC frames. Gateway URLs containing inline credentials, query strings, or
+fragments are rejected so configuration cannot silently change request routing
+or expose credentials in URL diagnostics.

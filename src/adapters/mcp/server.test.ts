@@ -18,18 +18,28 @@ function gateway() {
   };
 }
 
+async function initialize(server: TdaiMcpServer, protocolVersion = "2025-11-25") {
+  const response = await server.handle({
+    jsonrpc: "2.0",
+    id: "initialize",
+    method: "initialize",
+    params: {
+      protocolVersion,
+      capabilities: {},
+      clientInfo: { name: "vitest", version: "1.0.0" },
+    },
+  });
+  await server.handle({ jsonrpc: "2.0", method: "notifications/initialized" });
+  return response;
+}
+
 describe("TdaiMcpServer", () => {
   it("negotiates initialize and advertises tool capabilities", async () => {
     const server = new TdaiMcpServer(gateway());
-    const response = await server.handle({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2025-03-26" },
-    });
+    const response = await initialize(server, "2025-03-26");
     expect(response).toMatchObject({
       jsonrpc: "2.0",
-      id: 1,
+      id: "initialize",
       result: {
         protocolVersion: "2025-03-26",
         capabilities: { tools: { listChanged: false } },
@@ -40,17 +50,13 @@ describe("TdaiMcpServer", () => {
 
   it("falls back to the current protocol for unsupported client versions", async () => {
     const server = new TdaiMcpServer(gateway());
-    const response = await server.handle({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "1900-01-01" },
-    });
-    expect(response?.result).toMatchObject({ protocolVersion: "2025-06-18" });
+    const response = await initialize(server, "1900-01-01");
+    expect(response?.result).toMatchObject({ protocolVersion: "2025-11-25" });
   });
 
   it("publishes five tools with closed JSON schemas", async () => {
     const server = new TdaiMcpServer(gateway());
+    await initialize(server);
     const response = await server.handle({ jsonrpc: "2.0", id: "tools", method: "tools/list" });
     const tools = (response?.result as { tools: Array<{ inputSchema: { additionalProperties: boolean } }> }).tools;
     expect(tools).toHaveLength(5);
@@ -60,6 +66,7 @@ describe("TdaiMcpServer", () => {
   it("validates and dispatches recall calls", async () => {
     const mock = gateway();
     const server = new TdaiMcpServer(mock);
+    await initialize(server);
     const response = await server.handle({
       jsonrpc: "2.0",
       id: 2,
@@ -78,6 +85,7 @@ describe("TdaiMcpServer", () => {
   it("returns JSON-RPC invalid params errors before calling the gateway", async () => {
     const mock = gateway();
     const server = new TdaiMcpServer(mock);
+    await initialize(server);
     const response = await server.handle({
       jsonrpc: "2.0",
       id: 3,
@@ -86,6 +94,15 @@ describe("TdaiMcpServer", () => {
     });
     expect(response).toMatchObject({ error: { code: -32602 } });
     expect(mock.searchMemories).not.toHaveBeenCalled();
+
+    const extraArgument = await server.handle({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "tdai_recall", arguments: { query: "q", session_key: "s", hidden: true } },
+    });
+    expect(extraArgument).toMatchObject({ error: { code: -32602 } });
+    expect(mock.recall).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -116,6 +133,7 @@ describe("TdaiMcpServer", () => {
   ])("dispatches %s with validated arguments", async (name, args, method, expected) => {
     const mock = gateway();
     const server = new TdaiMcpServer(mock);
+    await initialize(server);
     const response = await server.handle({
       jsonrpc: "2.0",
       id: name,
@@ -130,6 +148,7 @@ describe("TdaiMcpServer", () => {
     const mock = gateway();
     mock.capture.mockRejectedValue(new GatewayRequestError("gateway unavailable"));
     const server = new TdaiMcpServer(mock);
+    await initialize(server);
     const response = await server.handle({
       jsonrpc: "2.0",
       id: 4,
@@ -146,15 +165,36 @@ describe("TdaiMcpServer", () => {
     expect(response?.result).toMatchObject({ isError: true });
   });
 
-  it("does not respond to notifications", async () => {
+  it("does not respond to notifications and enters the operation phase", async () => {
     const server = new TdaiMcpServer(gateway());
-    await expect(server.handle({ jsonrpc: "2.0", method: "notifications/initialized" }))
+    const response = await initialize(server);
+    expect(response?.result).toMatchObject({ protocolVersion: "2025-11-25" });
+    await expect(server.handle({ jsonrpc: "2.0", method: "notifications/unknown" }))
       .resolves.toBeUndefined();
+    await expect(server.handle({ jsonrpc: "2.0", id: "tools", method: "tools/list" }))
+      .resolves.toMatchObject({ result: { tools: expect.any(Array) } });
+  });
+
+  it("enforces initialization and rejects null request IDs", async () => {
+    const server = new TdaiMcpServer(gateway());
+    await expect(server.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" }))
+      .resolves.toMatchObject({ error: { code: -32002 } });
+    await expect(server.handle({ jsonrpc: "2.0", id: null, method: "ping" }))
+      .resolves.toMatchObject({ error: { code: -32600 } });
+    await expect(server.handle({ jsonrpc: "2.0", id: 1.5, method: "ping" }))
+      .resolves.toMatchObject({ error: { code: -32600 } });
+    await expect(server.handle({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "initialize",
+      params: { protocolVersion: "2025-11-25" },
+    })).resolves.toMatchObject({ error: { code: -32602 } });
   });
 
   it("returns protocol errors for invalid requests, methods, and tools", async () => {
     const server = new TdaiMcpServer(gateway());
     await expect(server.handle(null)).resolves.toMatchObject({ error: { code: -32600 } });
+    await initialize(server);
     await expect(server.handle({ jsonrpc: "2.0", id: 1, method: "missing" }))
       .resolves.toMatchObject({ error: { code: -32601 } });
     await expect(server.handle({
@@ -180,6 +220,7 @@ describe("TdaiMcpServer", () => {
       TDAI_GATEWAY_API_KEY: "key",
       TDAI_GATEWAY_TIMEOUT_MS: "2500",
     }, { fetchImpl });
+    await initialize(server);
     await server.handle({
       jsonrpc: "2.0",
       id: 8,

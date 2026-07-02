@@ -1,8 +1,53 @@
+import { createServer } from "node:http";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { GatewayRequestError, TdaiGatewayClient } from "./gateway-client.js";
 
 describe("TdaiGatewayClient", () => {
+  it("honors the HTTP route, authorization, and JSON contract end to end", async () => {
+    const requests: Array<{ url?: string; authorization?: string; body: unknown }> = [];
+    const server = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        requests.push({
+          url: request.url,
+          authorization: request.headers.authorization,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown,
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ total: 1, results: [{ content: "matched" }] }));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP server address");
+      const client = new TdaiGatewayClient({
+        baseUrl: `http://127.0.0.1:${address.port}/v1/`,
+        apiKey: "integration-secret",
+      });
+
+      await expect(client.searchMemories({ query: "project", limit: 2 })).resolves.toMatchObject({
+        total: 1,
+      });
+      expect(requests).toEqual([{
+        url: "/v1/search/memories",
+        authorization: "Bearer integration-secret",
+        body: { query: "project", limit: 2 },
+      }]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      });
+    }
+  });
+
   it("sends authenticated JSON requests to the configured base path", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ total: 1, results: "match", strategy: "hybrid" }), {
@@ -52,6 +97,15 @@ describe("TdaiGatewayClient", () => {
     );
   });
 
+  it("rejects ambiguous or credential-bearing gateway URLs", () => {
+    expect(() => new TdaiGatewayClient({ baseUrl: "https://user:secret@memory.test" })).toThrow(
+      "must not contain credentials",
+    );
+    expect(() => new TdaiGatewayClient({ baseUrl: "https://memory.test/api?tenant=a" })).toThrow(
+      "must not contain a query or fragment",
+    );
+  });
+
   it("rejects malformed gateway URLs", () => {
     expect(() => new TdaiGatewayClient({ baseUrl: "not a URL" })).toThrow(
       "Invalid TDAI Gateway URL",
@@ -65,6 +119,18 @@ describe("TdaiGatewayClient", () => {
     });
     await expect(client.endSession({ session_key: "s" })).rejects.toThrow(
       "Gateway returned invalid JSON",
+    );
+  });
+
+  it("rejects JSON responses that violate the Gateway object contract", async () => {
+    const client = new TdaiGatewayClient({
+      baseUrl: "http://127.0.0.1:8787",
+      fetchImpl: vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify(["unexpected"]), { status: 200 }),
+      ),
+    });
+    await expect(client.recall({ query: "q", session_key: "s" })).rejects.toThrow(
+      "non-object JSON response",
     );
   });
 

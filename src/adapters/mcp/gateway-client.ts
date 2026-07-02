@@ -89,6 +89,12 @@ export class TdaiGatewayClient {
           typeof error?.code === "string" ? error.code : undefined,
         );
       }
+      if (!asRecord(payload)) {
+        throw new GatewayRequestError(
+          `Gateway returned a non-object JSON response with HTTP ${response.status}`,
+          response.status,
+        );
+      }
       return payload as T;
     } catch (error) {
       if (error instanceof GatewayRequestError) throw error;
@@ -113,6 +119,12 @@ function normalizeBaseUrl(value: string): URL {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("TDAI Gateway URL must use http or https");
+  }
+  if (url.username || url.password) {
+    throw new Error("TDAI Gateway URL must not contain credentials");
+  }
+  if (url.search || url.hash) {
+    throw new Error("TDAI Gateway URL must not contain a query or fragment");
   }
   if (!url.pathname.endsWith("/")) url.pathname += "/";
   return url;
