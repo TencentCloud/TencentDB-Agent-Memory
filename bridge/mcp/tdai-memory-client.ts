@@ -33,17 +33,14 @@ export class TdaiMcpClient {
   constructor(private config: TdaiMcpConfig = {}) {}
 
   initialize(): void {
-    const spawnOptions: Record<string, unknown> = {};
+    const env: Record<string, string | undefined> = { ...process.env };
     if (this.config.apiKey) {
-      spawnOptions["env"] = {
-        ...process.env,
-        MCP_BRIDGE_API_KEY: this.config.apiKey,
-      };
+      env.MCP_BRIDGE_API_KEY = this.config.apiKey;
     }
     this.transport = new StdioClientTransport({
       command: this.config.python ?? "python",
       args: ["-m", this.config.serverModule ?? "bridge.mcp.server"],
-      ...spawnOptions,
+      env,
     });
   }
 
