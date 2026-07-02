@@ -351,6 +351,24 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+### Batch capture through the Gateway
+
+For historical imports that should land in the same live memory directory as
+regular `/capture` calls, use `POST /capture/batch`. Each item uses the existing
+`/capture` payload shape:
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"captures":[{"session_key":"import-1","user_content":"Hello","assistant_content":"Hi"}]}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+`POST /seed` remains available for isolated seed runs that write to a separate
+timestamped seed output directory.
+
+
+---
+
 
 ## 🔒 Gateway Security (optional)
 

@@ -60,6 +60,34 @@ export interface CaptureResponse {
 }
 
 // ============================
+// /capture/batch
+// ============================
+
+export interface CaptureBatchRequest {
+  /** Multiple existing /capture payloads to import through the live pipeline. */
+  captures?: unknown[];
+  /** Backward-compatible alias for callers that prefer a generic array name. */
+  items?: unknown[];
+  /** Continue processing remaining items if one capture fails at runtime. */
+  continue_on_error?: boolean;
+}
+
+export interface CaptureBatchResultItem {
+  index: number;
+  l0_recorded?: number;
+  scheduler_notified?: boolean;
+  error?: string;
+}
+
+export interface CaptureBatchResponse {
+  total: number;
+  succeeded: number;
+  failed: number;
+  duration_ms: number;
+  results: CaptureBatchResultItem[];
+}
+
+// ============================
 // /search/memories
 // ============================
 
