@@ -19,7 +19,15 @@ export interface RecallBudgetConfig {
 
 export interface RecallDedupeConfig {
   dedupeInjected: boolean;
+  dedupeMode?: "off" | "skip" | "reminder";
   dedupeInjectedTtlTurns: number;
+  maxReminderChars?: number;
+}
+
+export interface RecallDedupeResult {
+  fullLines: string[];
+  reminderLines: string[];
+  skippedCount: number;
 }
 
 interface SessionDigestState {
@@ -101,14 +109,29 @@ export function applySessionRecallDedupe(
   recall: RecallDedupeConfig,
   logger?: LoggerLike,
 ): string[] {
-  if (!recall.dedupeInjected || lines.length === 0) return lines;
+  return applySessionRecallDedupeDetailed(lines, sessionKey, recall, logger).fullLines;
+}
+
+export function applySessionRecallDedupeDetailed(
+  lines: string[],
+  sessionKey: string,
+  recall: RecallDedupeConfig,
+  logger?: LoggerLike,
+): RecallDedupeResult {
+  const mode = resolveDedupeMode(recall);
+  if (mode === "off" || lines.length === 0) {
+    return { fullLines: lines, reminderLines: [], skippedCount: 0 };
+  }
 
   const ttlTurns = normalizePositiveInteger(recall.dedupeInjectedTtlTurns);
   const state = getSessionDigestState(sessionKey);
   state.turn += 1;
 
   const kept: string[] = [];
+  const reminders: string[] = [];
   let skipped = 0;
+  let reminderChars = 0;
+  const maxReminderChars = normalizePositiveInteger(recall.maxReminderChars);
 
   for (const line of lines) {
     const digest = digestRecallLine(line);
@@ -118,6 +141,14 @@ export function applySessionRecallDedupe(
 
     if (isDuplicate) {
       skipped++;
+      if (mode === "reminder") {
+        const reminder = toRecallReminderLine(line);
+        const separatorChars = reminders.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
+        if (!maxReminderChars || reminderChars + separatorChars + reminder.length <= maxReminderChars) {
+          reminders.push(reminder);
+          reminderChars += separatorChars + reminder.length;
+        }
+      }
       continue;
     }
 
@@ -131,11 +162,12 @@ export function applySessionRecallDedupe(
   if (skipped > 0) {
     logger?.debug?.(
       `${TAG} Session recall dedupe applied: session=${sessionKey}, input=${lines.length}, ` +
-      `output=${kept.length}, skipped=${skipped}, ttlTurns=${recall.dedupeInjectedTtlTurns}`,
+      `output=${kept.length}, reminders=${reminders.length}, skipped=${skipped}, ` +
+      `mode=${mode}, ttlTurns=${recall.dedupeInjectedTtlTurns}`,
     );
   }
 
-  return kept;
+  return { fullLines: kept, reminderLines: reminders, skippedCount: skipped - reminders.length };
 }
 
 export function resetSessionRecallDedupeForTest(): void {
@@ -149,6 +181,26 @@ export function digestRecallLine(line: string): string {
     .trim()
     .toLowerCase();
   return createHash("sha256").update(normalized).digest("hex");
+}
+
+function resolveDedupeMode(recall: RecallDedupeConfig): "off" | "skip" | "reminder" {
+  if (recall.dedupeMode) return recall.dedupeMode;
+  return recall.dedupeInjected ? "skip" : "off";
+}
+
+function toRecallReminderLine(line: string): string {
+  const normalized = line
+    .replace(/\s*\(活动时间:[^)]+\)\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const maxChars = 180;
+  return truncatePlainText(normalized, maxChars);
+}
+
+function truncatePlainText(line: string, maxChars: number): string {
+  const cps = Array.from(line);
+  if (cps.length <= maxChars) return line;
+  return `${cps.slice(0, Math.max(1, maxChars - 1)).join("").trimEnd()}…`;
 }
 
 function getSessionDigestState(sessionKey: string): SessionDigestState {
