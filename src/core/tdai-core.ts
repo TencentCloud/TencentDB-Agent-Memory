@@ -415,6 +415,14 @@ export class TdaiCore {
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    try {
+      await new CheckpointManager(this.dataDir, this.logger).recalibrate();
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint recalibration failed; counters may be stale: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private wirePipelineRunners(): void {
