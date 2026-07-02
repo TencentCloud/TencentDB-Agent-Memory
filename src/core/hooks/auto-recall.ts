@@ -47,6 +47,72 @@ const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 - 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
 </memory-tools-guide>`
 
+// ============================
+// Session-level injection dedup cache
+// ============================
+// Prevents re-injecting the same L1 memory content across turns within the
+// same session, reducing prependContext variability and stabilizing
+// prompt-cache prefixes for OpenAI-compatible providers.
+//
+// Keyed by sessionKey. Each entry maps content hashes of previously injected
+// memory lines to a creation timestamp for TTL-based eviction.
+const injectedContentCache = new Map<string, { contentHashes: Set<string>; ts: number }>();
+const INJECTED_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const INJECTED_CACHE_HARD_CAP = 10_000;
+
+/**
+ * Get or create the injected-content registry for a session.
+ * Expired entries are treated as missing so stale state doesn't linger.
+ *
+ * Lazy eviction: instead of sweeping the full cache on every recall, we
+ * only scan-and-evict when the cache approaches the hard cap.  TTL-expired
+ * entries are harmless (re-created on next access) and are cleaned up
+ * once the cap is reached.
+ */
+function getOrCreateInjectedCache(sessionKey: string): Set<string> {
+  const now = Date.now();
+  let entry = injectedContentCache.get(sessionKey);
+  if (!entry || now - entry.ts > INJECTED_CACHE_TTL_MS) {
+    entry = { contentHashes: new Set(), ts: now };
+    injectedContentCache.set(sessionKey, entry);
+  }
+
+  // Lazy sweep — only scan entries when the cache is near the hard cap.
+  if (injectedContentCache.size >= INJECTED_CACHE_HARD_CAP) {
+    const staleCutoff = now - INJECTED_CACHE_TTL_MS;
+    for (const [key, e] of injectedContentCache) {
+      if (e.ts < staleCutoff) {
+        injectedContentCache.delete(key);
+      }
+    }
+    // Still over cap after removing stale entries?  Clear entirely as
+    // a last resort (the per-entry TTL check above prevents data loss).
+    if (injectedContentCache.size >= INJECTED_CACHE_HARD_CAP) {
+      injectedContentCache.clear();
+    }
+  }
+
+  return entry.contentHashes;
+}
+
+/**
+ * Filter memory lines against the session cache, keeping only lines that
+ * haven't been injected before.  Returns the subset of new lines.
+ */
+function dedupMemoryLines(
+  lines: string[],
+  cache: Set<string>,
+): string[] {
+  const newLines: string[] = [];
+  for (const line of lines) {
+    if (!cache.has(line)) {
+      newLines.push(line);
+      cache.add(line);
+    }
+  }
+  return newLines;
+}
+
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
   content: string;
@@ -125,6 +191,37 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+
+    // ── Session-level injection dedup ──
+    // When prependContext is enabled, filter out memory content that has
+    // already been injected in this session.  This reduces per-turn content
+    // variability and stabilizes the prompt-cache prefix for OpenAI-compatible
+    // providers (DeepSeek, MiMo, etc.).
+    //
+    // When prependContext is disabled, clear memory lines entirely so that
+    // only the stable appendSystemContext (persona, scene nav, tools guide)
+    // is injected — maximizing cache hit rates at the cost of proactive
+    // memory visibility (agent must use tdai_memory_search instead).
+    if (params.sessionKey && cfg.recall.prependContextEnabled) {
+      const cache = getOrCreateInjectedCache(params.sessionKey);
+      const originalCount = memoryLines.length;
+      memoryLines = dedupMemoryLines(memoryLines, cache);
+      if (memoryLines.length < originalCount) {
+        logger?.debug?.(
+          `${TAG} Session dedup: filtered ${originalCount - memoryLines.length} already-injected lines, ` +
+          `${memoryLines.length} new`,
+        );
+      }
+    } else if (params.sessionKey && !cfg.recall.prependContextEnabled) {
+      if (memoryLines.length > 0) {
+        logger?.debug?.(
+          `${TAG} prependContext disabled: suppressed ${memoryLines.length} memory lines ` +
+          `(agent must use tdai_memory_search)`,
+        );
+      }
+      memoryLines = [];
+    }
+
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
