@@ -146,7 +146,7 @@ trace / metrics：
 
 这条边界的含义是：recall 是本轮 evidence，不是新的 conversation history。
 
-### B. session 级 recall digest 去重
+### B. session 级 recall digest 去重与 reminder
 
 为每个 session 维护轻量 digest：
 
@@ -166,12 +166,32 @@ sessionRecallDigest = {
 规则：
 
 1. 优先按稳定 `memory_id` 去重，没有 id 时使用 normalized content hash。
-2. 同一 memory 在 TTL 内已经注入过，默认跳过正文。
-3. 当前问题明确要求证据、内容版本变化、分数变高、用户追问同一事实时，可以再次注入，但应压缩正文。
-4. 多来源事实不能只保留一条来源；正文可以合并，trace 保留 `sourceIds`。
-5. digest 只在 session 内生效，不替代长期 memory 层的 dedup/update，也不写入 prompt 前缀。
+2. 同一 memory 在 TTL 内已经注入过，不再重复注入大块正文。
+3. 重复项默认不应完全消失；更稳的做法是输出短 reminder，保留关键事实和实体名。
+4. 当前问题明确要求证据、内容版本变化、分数变高、用户追问同一事实时，可以再次注入，但应压缩正文。
+5. 多来源事实不能只保留一条来源；正文可以合并，trace 保留 `sourceIds`。
+6. digest 只在 session 内生效，不替代长期 memory 层的 dedup/update，也不写入 prompt 前缀。
 
-B 的目标是减少重复上下文，不是隐藏证据。
+配置形态：
+
+| 配置 | 含义 |
+| --- | --- |
+| `recall.dedupeMode=off` | 不做 session 级去重。 |
+| `recall.dedupeMode=skip` | 重复项直接跳过，token 最省，但可能丢关键事实。 |
+| `recall.dedupeMode=reminder` | 重复项转为短提醒，推荐作为缓存友好的默认候选继续验证。 |
+| `recall.maxReminderChars` | 限制 reminder 总字符数，避免短提醒重新膨胀。 |
+
+`reminder` 示例：
+
+```xml
+<memory-reminders>
+以下记忆本 session 已注入过，保留为短提醒以避免重复大块上下文：
+
+- [fact] Feature flags are stored in the config_flags table.
+</memory-reminders>
+```
+
+B 的目标是减少重复上下文，不是隐藏证据。真实 E2E 里 `skip` 曾导致 DeepSeek 输出空 content 或丢失 `config_flags table` 细节，因此 `reminder` 比“直接跳过”更符合质量和缓存的折中目标。
 
 ### C. 动态 recall 硬预算
 
@@ -229,7 +249,7 @@ clean conversation / tool observation / final decision
 2. A：默认不持久化 raw recall。
 3. B：A + session digest dedupe。
 4. C：A + recall 硬预算。
-5. A+B+C：合并形态。
+5. A+B+C：合并形态，其中应分别比较 `ABC_skip` 和 `ABC_reminder`。
 
 主要看：
 
@@ -239,5 +259,6 @@ clean conversation / tool observation / final decision
 - cache miss tokens。
 - 每轮增长速度。
 - recall 实际注入规模。
+- 同一任务最终输出是否语义一致，避免只优化 token 指标。
 
 实现后的测量结果见 [Issue-120-实现后验证与结论.md](./Issue-120-实现后验证与结论.md)。

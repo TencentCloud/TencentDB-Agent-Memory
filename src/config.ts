@@ -91,8 +91,12 @@ export interface RecallConfig {
   showInjected: boolean;
   /** Skip L1 memories already injected in the same session. */
   dedupeInjected: boolean;
+  /** Duplicate L1 recall handling mode. "skip" preserves legacy dedupeInjected behavior. */
+  dedupeMode: "off" | "skip" | "reminder";
   /** Turns before an injected-memory digest can be injected again. 0 means never within process lifetime. */
   dedupeInjectedTtlTurns: number;
+  /** Max total characters for duplicate recall reminders when dedupeMode="reminder". 0 disables the cap. */
+  maxReminderChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -540,7 +544,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       showInjected: bool(recallGroup, "showInjected") ?? false,
       dedupeInjected: bool(recallGroup, "dedupeInjected") ?? false,
+      dedupeMode: validateDedupeMode(str(recallGroup, "dedupeMode"))
+        ?? ((bool(recallGroup, "dedupeInjected") ?? false) ? "skip" : "off"),
       dedupeInjectedTtlTurns: num(recallGroup, "dedupeInjectedTtlTurns") ?? 0,
+      maxReminderChars: num(recallGroup, "maxReminderChars") ?? 600,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -643,6 +650,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_DEDUPE_MODES: RecallConfig["dedupeMode"][] = ["off", "skip", "reminder"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -652,6 +660,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateDedupeMode(value: string | undefined): RecallConfig["dedupeMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_DEDUPE_MODES.includes(value as RecallConfig["dedupeMode"])
+    ? (value as RecallConfig["dedupeMode"])
     : undefined;
 }
 

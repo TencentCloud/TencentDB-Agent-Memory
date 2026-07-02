@@ -9,16 +9,16 @@
 本次验证覆盖三个方向：
 
 - A：默认不持久化 raw `<relevant-memories>`，当前轮可见，历史保存干净用户消息。
-- B：session 级 recall digest 去重，跳过同一 session 内已经注入过的重复 L1 memory。
+- B：session 级 recall digest 去重；`skip` 直接跳过重复 L1 memory，`reminder` 将重复项压缩为短提醒。
 - C：动态 recall 硬预算，限制单条和总 recall 字符数。
 
 ## 本地验证
 
 实现后补了下面几类测试：
 
-- `src/config.test.ts`：覆盖 `showInjected`、`dedupeInjected`、`dedupeInjectedTtlTurns`、recall budget 配置解析。
+- `src/config.test.ts`：覆盖 `showInjected`、`dedupeInjected`、`dedupeMode`、`dedupeInjectedTtlTurns`、`maxReminderChars`、recall budget 配置解析。
 - `src/utils/recall-injection.test.ts`：覆盖 `<relevant-memories>` 在字符串和 message parts 中的清理。
-- `src/utils/recall-context.test.ts`：覆盖 recall budget、session digest 去重、TTL 和 digest normalize。
+- `src/utils/recall-context.test.ts`：覆盖 recall budget、session digest 去重、reminder、TTL 和 digest normalize。
 
 本地命令：
 
@@ -29,7 +29,7 @@ npm.cmd run build:plugin
 
 结果：
 
-- `npx.cmd vitest run`：7 个 test files / 79 个 tests 通过。
+- `npx.cmd vitest run`：7 个 test files / 82 个 tests 通过。
 - `npm.cmd run build:plugin`：通过。
 
 ## 真实 API 验证方法
@@ -137,6 +137,45 @@ npm.cmd run build:plugin
 - C 把总 input tokens 降到 99,980，首轮输入从 A 的 15,432 降到 9,836。
 - A+B+C 合并后总 input tokens 最低，miss tokens 最低，cache hit ratio 最高。第 10 轮 input tokens 是风险基线的 14.28%。
 
+## E2E 对照：skip vs reminder
+
+10 轮 usage benchmark 只能证明 token 和 cache 变化，不能证明同一任务结果是否一致。补充了一组 2 轮 E2E 任务：
+
+- 任务：根据同一批召回事实输出 release brief JSON。
+- 评分：最终 JSON 必须覆盖 product、release_target、owner、database、feature_flag_storage、compliance、primary_risk、mitigation、smoke_test、ready。
+- 场景：`showInjected_risk`、`ABC_skip`、`ABC_reminder`。
+- 脚本：`tmp/issue120-e2e-cache-compare.mjs`。
+
+### DeepSeek v4-flash
+
+报告：`tmp/issue120-e2e-results/issue120-e2e-1782990384303.json`
+
+| 场景 | 同一任务通过 | prompt tokens | cache hit tokens | cache miss tokens | cache hit ratio | 相对风险基线 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| showInjected 风险基线 | 是 | 6,812 | 5,888 | 924 | 86.44% | - |
+| ABC_skip | 否 | 4,756 | 4,608 | 148 | 96.89% | token -30.18%，miss -83.98%，但最终输出为空 |
+| ABC_reminder | 是 | 4,962 | 4,608 | 354 | 92.87% | token -27.16%，miss -61.69%，hit ratio +6.43 pp |
+
+结论：`skip` 的指标更漂亮，但任务失败，不能作为最终方案。`reminder` 保留了关键事实，结果通过，同时仍显著降低总 prompt tokens 和 miss tokens。
+
+### GPT-5.5 Responses API
+
+报告：`tmp/issue120-e2e-results/issue120-e2e-1782990445723.json`
+
+| 场景 | 同一任务通过 | input tokens | cached tokens | miss tokens | cache hit ratio | 相对风险基线 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| showInjected 风险基线 | 是 | 6,530 | 1,792 | 4,738 | 27.44% | - |
+| ABC_skip | 是 | 4,635 | 0 | 4,635 | 0% | token -29.02%，miss -2.17%，hit ratio -27.44 pp |
+| ABC_reminder | 是 | 4,853 | 1,792 | 3,061 | 36.93% | token -25.68%，miss -35.39%，hit ratio +9.49 pp |
+
+结论：GPT-5.5 上 `reminder` 比 `skip` 更稳，虽然 input tokens 略多，但 miss tokens 明显更低，cache hit ratio 也更好。
+
+E2E 结论：
+
+- 只做 `skip` 会把缓存指标和质量拉向不同方向，尤其会放大“看起来省 token，但事实缺失或空输出”的风险。
+- `ABC_reminder` 是当前更好的落地形态：不持久化 raw recall，重复项压缩为短提醒，在两家 provider 上都保持任务通过，并降低总输入和 miss tokens。
+- 后续评估应把“同一任务通过”作为硬门槛，再比较 total tokens、miss tokens 和 cache hit ratio。
+
 ## 缓存命中率变化
 
 这里单独把缓存指标拉出来看。`showInjected` 风险基线的命中率不能直接当成好结果：旧 `<relevant-memories>` 被写入历史后，后续轮次会反复携带同一批大块文本，provider 更容易把这些旧文本算成 cache hit；但总输入和上下文窗口占用同时变大。
@@ -203,13 +242,13 @@ GPT-5.5 这组里，A 已经把 miss tokens 从 332,318 降到 138,065；B/C 继
 | 方向 | 结果 | 说明 |
 | --- | --- | --- |
 | A：默认不持久化 raw recall | 有效 | 两家 provider 第 10 轮输入都从约 7 万 tokens 降到约 1.6 万 tokens。A 解决的是历史线性膨胀。 |
-| B：session 级注入去重 | 有效 | 重复稳定 memory 被跳过后，总输入和 miss tokens 明显下降。B 适合长 session 里反复召回同一批事实的场景。 |
+| B：session 级注入去重 | 需要 reminder 模式 | `skip` 虽能降低输入，但 E2E 中可能丢事实或空输出；`reminder` 在保留关键事实的同时降低 miss tokens。 |
 | C：动态 recall 硬预算 | 有效 | 首轮和每轮动态 recall 的输入规模下降。C 解决的是单轮 recall 块过大的问题。 |
-| A+B+C 合并 | 有效 | 两家 provider 都得到最低或接近最低的总输入、最低 miss tokens 和最小历史增长。 |
+| A+B+C 合并 | `ABC_reminder` 有效 | 两家 provider 的 E2E 都通过，并降低总输入和 miss tokens；`ABC_skip` 只作为对照，不建议作为最终默认。 |
 
 落地判断：
 
 - A 应作为默认行为。
 - `showInjected=true` 只保留为调试开关，并明确提示上下文膨胀风险。
-- B/C 保持可配置；默认值可以保守，但文档需要给出长 session 下的建议配置。
+- B/C 保持可配置；`dedupeMode=reminder` 是当前更好的默认候选，`skip` 只适合极端 token 压缩或低风险事实。
 - 指标上应继续记录 injected count、recall chars/tokens、dedupe hit、budget cut、cache hit/miss，后续用真实会话数据调默认值。

@@ -64,11 +64,16 @@ function buildRecallBlock(lines) {
   return `<relevant-memories>\nThe following recalled memories are relevant to the current task:\n\n${lines.join("\n")}\n</relevant-memories>`;
 }
 
+function buildReminderBlock(lines) {
+  return `<memory-reminders>\nThese memories were already injected earlier in this session; keep the exact facts available without repeating the full context:\n\n${lines.join("\n")}\n</memory-reminders>`;
+}
+
 function buildScenarioTurns(scenario) {
   const selectedTurns = CONFIG.turnCount <= 2 ? [TURNS[0], TURNS[TURNS.length - 1]] : TURNS;
   const recallLines = makeRecallLines();
   const fullRecall = buildRecallBlock(recallLines);
   const budgetedRecall = buildRecallBlock(recallLines.slice(0, 9));
+  const reminderRecall = buildReminderBlock(recallLines.slice(0, 9).map((line) => line.replace(/\s+/g, " ").trim()));
   const turns = [];
 
   for (let i = 0; i < selectedTurns.length; i++) {
@@ -82,7 +87,11 @@ function buildScenarioTurns(scenario) {
       continue;
     }
 
-    const injectRecall = i === 0 ? budgetedRecall : "";
+    const injectRecall = i === 0
+      ? budgetedRecall
+      : scenario === "ABC_reminder"
+        ? reminderRecall
+        : "";
     turns.push({
       requestUser: injectRecall ? `${injectRecall}\n\n${userText}` : userText,
       persistedUser: userText,
@@ -391,6 +400,7 @@ function compareScenarioResults(provider, baseline, optimized) {
 
   return {
     provider,
+    scenario: optimized?.scenario ?? "optimized",
     same_task_pass: sameTaskPass,
     baseline_grade: baseline?.grade?.score ?? null,
     optimized_grade: optimized?.grade?.score ?? null,
@@ -428,27 +438,51 @@ async function runProvider(provider, onProgress = async () => {}) {
       }),
     };
     baseline.grade = gradeFinal(baseline.final_output);
-    const optimized = {
-      scenario: "ABC_combined",
+    const optimizedSkip = {
+      scenario: "ABC_skip",
       total: provider === "deepseek"
         ? { prompt_tokens: 50, cache_hit_tokens: 35, cache_miss_tokens: 15, output_tokens: 10, cache_hit_ratio: 0.7 }
         : { input_tokens: 50, cached_tokens: 20, miss_tokens: 30, output_tokens: 10, cache_hit_ratio: 0.4 },
       final_output: baseline.final_output,
     };
-    optimized.grade = gradeFinal(optimized.final_output);
-    return { provider, baseline, optimized, comparison: compareScenarioResults(provider, baseline, optimized) };
+    optimizedSkip.grade = gradeFinal(optimizedSkip.final_output);
+    const optimizedReminder = {
+      ...optimizedSkip,
+      scenario: "ABC_reminder",
+    };
+    return {
+      provider,
+      baseline,
+      optimized: optimizedSkip,
+      optimized_skip: optimizedSkip,
+      optimized_reminder: optimizedReminder,
+      comparison: compareScenarioResults(provider, baseline, optimizedSkip),
+      comparisons: [
+        compareScenarioResults(provider, baseline, optimizedSkip),
+        compareScenarioResults(provider, baseline, optimizedReminder),
+      ],
+    };
   }
 
   const runner = provider === "deepseek" ? runDeepSeekScenario : runResponsesScenario;
-  const result = { provider, baseline: null, optimized: null, comparison: null };
+  const result = { provider, baseline: null, optimized_skip: null, optimized_reminder: null, comparisons: [] };
   const baseline = await runner("show_injected_risk");
   result.baseline = baseline;
   await onProgress(result);
-  const optimized = await runner("ABC_combined");
-  result.optimized = optimized;
-  result.comparison = baseline.skipped || optimized.skipped || baseline.error || optimized.error
+  const optimizedSkip = await runner("ABC_combined");
+  result.optimized_skip = optimizedSkip;
+  result.optimized = optimizedSkip;
+  result.comparison = baseline.skipped || optimizedSkip.skipped || baseline.error || optimizedSkip.error
       ? null
-      : compareScenarioResults(provider, baseline, optimized);
+      : compareScenarioResults(provider, baseline, optimizedSkip);
+  result.comparisons = result.comparison ? [result.comparison] : [];
+  await onProgress(result);
+  const optimizedReminder = await runner("ABC_reminder");
+  result.optimized_reminder = optimizedReminder;
+  const reminderComparison = baseline.skipped || optimizedReminder.skipped || baseline.error || optimizedReminder.error
+    ? null
+    : compareScenarioResults(provider, baseline, optimizedReminder);
+  if (reminderComparison) result.comparisons.push(reminderComparison);
   await onProgress(result);
   return result;
 }
@@ -459,15 +493,25 @@ async function main() {
     for (const result of raw.results ?? []) {
       if (result.baseline?.final_output) result.baseline.grade = gradeFinal(result.baseline.final_output);
       if (result.optimized?.final_output) result.optimized.grade = gradeFinal(result.optimized.final_output);
+      if (result.optimized_skip?.final_output) result.optimized_skip.grade = gradeFinal(result.optimized_skip.final_output);
+      if (result.optimized_reminder?.final_output) result.optimized_reminder.grade = gradeFinal(result.optimized_reminder.final_output);
       if (result.baseline?.grade && result.optimized?.grade && !result.baseline.error && !result.optimized.error) {
         result.comparison = compareScenarioResults(result.provider, result.baseline, result.optimized);
       }
+      const comparisons = [];
+      if (result.baseline?.grade && result.optimized_skip?.grade && !result.baseline.error && !result.optimized_skip.error) {
+        comparisons.push(compareScenarioResults(result.provider, result.baseline, result.optimized_skip));
+      }
+      if (result.baseline?.grade && result.optimized_reminder?.grade && !result.baseline.error && !result.optimized_reminder.error) {
+        comparisons.push(compareScenarioResults(result.provider, result.baseline, result.optimized_reminder));
+      }
+      if (comparisons.length > 0) result.comparisons = comparisons;
     }
     const outPath = REGRADE_PATH.replace(/\.json$/i, ".regraded.json");
     await fs.writeFile(outPath, `${JSON.stringify(raw, null, 2)}\n`, "utf8");
     console.log(JSON.stringify({
       report: outPath,
-      comparisons: (raw.results ?? []).map((r) => r.comparison),
+      comparisons: (raw.results ?? []).flatMap((r) => r.comparisons?.length ? r.comparisons : [r.comparison]),
     }, null, 2));
     return;
   }
@@ -507,7 +551,9 @@ async function main() {
   console.log(JSON.stringify({
     report: jsonPath,
     dry_run: CONFIG.dryRun,
-    comparisons: results.map((r) => r.comparison ?? { provider: r.provider, skipped: r.baseline?.skipped || r.optimized?.skipped, error: r.baseline?.error || r.optimized?.error }),
+    comparisons: results.flatMap((r) => r.comparisons?.length
+      ? r.comparisons
+      : [r.comparison ?? { provider: r.provider, skipped: r.baseline?.skipped || r.optimized?.skipped, error: r.baseline?.error || r.optimized?.error }]),
   }, null, 2));
 }
 

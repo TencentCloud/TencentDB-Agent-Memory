@@ -13,7 +13,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
-import { applyRecallBudget, applySessionRecallDedupe, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
+import { applyRecallBudget, applySessionRecallDedupeDetailed, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -113,6 +113,7 @@ async function performAutoRecallInner(params: {
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
+  let reminderLines: string[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
@@ -123,7 +124,9 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
-    memoryLines = applySessionRecallDedupe(memoryLines, sessionKey, cfg.recall, logger);
+    const dedupeResult = applySessionRecallDedupeDetailed(memoryLines, sessionKey, cfg.recall, logger);
+    memoryLines = dedupeResult.fullLines;
+    reminderLines = dedupeResult.reminderLines;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
@@ -202,9 +205,19 @@ async function performAutoRecallInner(params: {
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
+  const dynamicParts: string[] = [];
   if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    dynamicParts.push(
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`,
+    );
+  }
+  if (reminderLines.length > 0) {
+    dynamicParts.push(
+      `<memory-reminders>\n以下记忆本 session 已注入过，保留为短提醒以避免重复大块上下文：\n\n${reminderLines.join(RECALL_LINE_SEPARATOR)}\n</memory-reminders>`,
+    );
+  }
+  if (dynamicParts.length > 0) {
+    prependContext = dynamicParts.join("\n\n");
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
