@@ -28,6 +28,7 @@ node_modules/
 benchmark-runs/
 .codebuddy
 .ai_assets
+docs/
 
 # Dev-only scripts & lockfile (not shipped in MR)
 install-plugin.sh
