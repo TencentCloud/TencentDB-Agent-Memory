@@ -14,6 +14,11 @@
   - **L0 JSONL 分片日**和 **cleaner 清理边界**跟随配置时区（默认仍为系统时区）。
   - 存储层（SQLite / TCVDB）时间戳始终为 UTC instant，**无需数据迁移**。
   - 统一收敛原有 4 处分散的时间格式化 helper 到 `src/utils/time.ts`，减少代码重复。
+- **关闭推理模型 thinking（`disableThinking`）**：新增 `llm.disableThinking` 与 `offload.disableThinking` 两项配置（均默认 `false`，不改变现有行为），支持多种推理引擎/模型提供商的关闭方式。
+  - 可选策略：`"vllm"` (vLLM/SGLang, `chat_template_kwargs.enable_thinking=false`)、`"deepseek"` (DeepSeek API, 顶层 `enable_thinking=false`)、`"dashscope"` (阿里云 DashScope/Qwen, 顶层 `enable_thinking=false`)、`"openai"` (OpenAI o系列, `reasoning_effort="low"`)、`"anthropic"` (Anthropic Claude, `thinking.type="disabled"`)、`"kimi"` (Kimi/Moonshot, `thinking.type="disabled"`)、`"gemini"` (Google Gemini, `thinking_config.thinking_budget=0`)。
+  - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
+  - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
+  - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 

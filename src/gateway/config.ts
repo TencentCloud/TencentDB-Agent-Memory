@@ -14,6 +14,7 @@ import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
+import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
 
 // ============================
@@ -132,6 +133,9 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    disableThinking: normalizeDisableThinking(
+      envBoolOrStr("TDAI_LLM_DISABLE_THINKING") ?? boolOrStr(llmConfig, "disableThinking")
+    ),
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)
@@ -231,6 +235,28 @@ function envInt(key: string): number | undefined {
   if (!v) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * Read an env var that may be a boolean ("true"/"false"/"1"/"0")
+ * or a plain string (strategy name like "deepseek", "anthropic").
+ * Returns the lowercase string for strategy names.
+ */
+function envBoolOrStr(key: string): boolean | string | undefined {
+  const raw = env(key);
+  if (raw === undefined) return undefined;
+  const v = raw.toLowerCase();
+  if (v === "true" || v === "1") return true;
+  if (v === "false" || v === "0") return false;
+  return v; // lowercase strategy name
+}
+
+/** Read a field that may be boolean or string from a config object. */
+function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+  const v = src[key];
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
 }
 
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {

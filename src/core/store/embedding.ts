@@ -365,8 +365,11 @@ export class LocalEmbeddingService implements EmbeddingService {
 /** Max texts per batch (OpenAI limit is 2048, we use a safe value) */
 const MAX_BATCH_SIZE = 256;
 
-/** Max retries for API calls */
-const MAX_RETRIES = 0;
+/**
+ * Max retries for embedding API calls (transient errors: network, 429, DNS).
+ * Total attempts = MAX_RETRIES + 1. Exponential backoff: 500ms × attempt.
+ */
+const MAX_RETRIES = 3;
 /** Default timeout per API call in milliseconds */
 const DEFAULT_API_TIMEOUT_MS = 10_000;
 
