@@ -409,6 +409,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
+| `recall.injectionMode` | `"prepend"` | 动态 L1 召回注入位置：`prepend` 保持兼容；`append` 使用宿主 `appendContext`，减少用户 prompt 前缀变化 |
+| `recall.showInjected` | `false` | 是否把生成的 `<relevant-memories>` 保存进历史用于调试；默认写入前剥离，避免多轮 replay 膨胀 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
