@@ -10,6 +10,10 @@
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
 
+/** @internal — inline type decls avoid tsc ESM .js resolution in migrate-sqlite-to-tcvdb build. */
+interface _StorageAdapter { readonly type: string }
+interface _RecallError { code: number; category: "config" | "dependency" | "storage" | "internal"; message: string }
+
 // ============================
 // Logger (unified across all layers)
 // ============================
@@ -79,8 +83,22 @@ export interface LLMRunParams {
    * When omitted, a clean empty workspace is used.
    */
   workspaceDir?: string;
+  /**
+   * Storage adapter for service mode (COS). When provided, LLM file tools
+   * (read/write/edit) operate via StorageAdapter instead of local filesystem.
+   * `storagePrefix` defines the sandbox key prefix (e.g. "scene_blocks/").
+   */
+  storage?: _StorageAdapter;
+  /** Key prefix for storage-backed tools (sandbox boundary). Default: "" */
+  storagePrefix?: string;
   /** Plugin instance ID for metric reporting (optional). */
   instanceId?: string;
+  /**
+   * H-11 Step 2: external abort signal (in addition to the internal timeout).
+   * When this aborts (e.g. pipeline-worker lost its lock), the LLM call
+   * tears down immediately to save tokens and avoid late writes.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -166,6 +184,49 @@ export interface HostAdapter {
 }
 
 // ============================
+// MemoryAdapter — Host-neutral memory operations interface
+// ============================
+
+/**
+ * MemoryAdapter defines the memory primitive contract that each platform
+ * adapter must implement. This is the Python `TdaiAdapter` ABC equivalent
+ * in TypeScript (see `bridge_adapter/base.py` in this repo).
+ *
+ * Unlike `HostAdapter` (which abstracts the runtime environment),
+ * `MemoryAdapter` abstracts the memory API — recall, capture, search.
+ *
+ * Platforms:
+ * - Python:  `TdaiAdapter` ABC in `bridge_adapter/base.py`
+ * - TypeScript: `MemoryAdapter` interface in this file
+ * - MCP:     `memory_tencentdb_*` tools (see `src/integrations/shared/`)
+ */
+export interface MemoryAdapter {
+  /** Platform name identifier (e.g. "bridge", "hermes_v2"). */
+  readonly name: string;
+
+  /** Initialize with Gateway config. Returns false on failure. */
+  initialize(config?: Record<string, unknown>): boolean;
+
+  /** Check if the adapter and Gateway are reachable. */
+  isAvailable(): boolean;
+
+  /** Recall relevant memories for prompt injection. */
+  recall(query: string, limit?: number): { prependContext: string; appendSystemContext: string };
+
+  /** Write a conversation turn to L0 storage. */
+  capture(userContent: string, assistantContent: string, sessionId?: string): boolean;
+
+  /** Search L1 atomic memories. */
+  searchMemory(query: string, limit?: number): Array<Record<string, unknown>>;
+
+  /** Search L0 conversation history. */
+  searchConversation(query: string, limit?: number): Array<Record<string, unknown>>;
+
+  /** Release resources. */
+  shutdown(): void;
+}
+
+// ============================
 // CompletedTurn — represents a finished conversation turn
 // ============================
 
@@ -207,6 +268,14 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /**
+   * H-15: structured failure signal. When recall fails (config error / dependency timeout /
+   * storage error / etc), this is populated with a RecallError; success leaves it undefined.
+   * Gateway handlers should surface this in the response envelope (e.g. v2 envelope.code).
+   */
+  error?: _RecallError;
+  /** Partial success: some steps succeeded, others failed. */
+  partial?: boolean;
 }
 
 /** Result from a capture (sync_turn) operation. */

@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: ["*"]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
@@ -49,6 +51,9 @@ jobs:
         with:
           path: node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: Install dependencies on cache miss
+        run: test -x node_modules/.bin/tsdown || npm install --ignore-scripts
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
@@ -132,3 +137,58 @@ jobs:
           else
             echo "✅ Size OK"
           fi
+
+  # ── 7. TypeScript adapter tests ─────────────────────────────
+  test-ts:
+    name: Test TS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: npm install
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts
+
+      - name: Run MemoryAdapter tests
+        run: npx vitest run src/core/memory-adapter.test.ts --reporter=verbose
+
+  # ── 8. Python bridge_adapter smoke test ─────────────────────
+  test-py:
+    name: Test Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install bridge_adapter
+        run: pip install ./bridge_adapter
+
+      - name: Import smoke test
+        run: |
+          python -c "
+          from bridge_adapter import BridgeAdapter, TdaiAdapterRegistry
+          from bridge_adapter.base import TdaiAdapter
+          from bridge_adapter.integrity import verify_manifest
+          print(f'Import OK — bridge_adapter registered adapters: {TdaiAdapterRegistry.list()}')
+          violations = verify_manifest()
+          if violations:
+            print(f'SHA256 integrity: {len(violations)} violation(s)')
+            for v in violations:
+              print(f'  ✗ {v}')
+            exit(1)
+          else:
+            print('SHA256 integrity: OK')
+          "
