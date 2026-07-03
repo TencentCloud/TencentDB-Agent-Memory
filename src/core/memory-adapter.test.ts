@@ -150,7 +150,7 @@ describe("MemoryAdapter — parameter bounds", () => {
 
   it("T2f: search with special characters does not crash", () => {
     const adapter = new TestMemoryAdapter();
-    const sql = ["'; DROP TABLE memories; --", "<script>alert(1)</script>", "---"];
+    const sql = ["'; DROP TABLE memories; --", "<script>alert(1)</script>", "日本語"];
     for (const q of sql) {
       expect(Array.isArray(adapter.searchMemory(q))).toBe(true);
       expect(Array.isArray(adapter.searchConversation(q))).toBe(true);

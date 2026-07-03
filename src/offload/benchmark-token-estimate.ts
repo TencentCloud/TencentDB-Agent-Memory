@@ -37,14 +37,14 @@ testTexts.push({ name: "json_messages", text: JSON.stringify([
   { role: "user", content: "Run ls -la" },
   { role: "toolResult", toolCallId: "call_123", content: "total 48\ndrwxr-xr-x  5 user user 4096 May 18 10:00 .\n-rw-r--r--  1 user user 1234 May 18 09:30 package.json\n" },
 ]).repeat(50) });
-testTexts.push({ name: "mixed_code_zh", text: "// --------\nfunction hello(name: string): string {\n  return `-- ${name}!`;\n}\n".repeat(1000) });
+testTexts.push({ name: "mixed_code_zh", text: "// 这是一个测试函数\nfunction hello(name: string): string {\n  return `你好 ${name}!`;\n}\n".repeat(1000) });
 
 console.log("\n══════════════════════════════════════════════════════════════════");
 console.log("  fastEstimateTokens vs tiktoken cl100k_base");
 console.log("══════════════════════════════════════════════════════════════════\n");
 
 const header = [
-  "--".padEnd(18), "chars".padStart(8), "tiktoken".padStart(9),
+  "文本".padEnd(18), "chars".padStart(8), "tiktoken".padStart(9),
   "estimate".padStart(9), "error".padStart(7), "tk_ms".padStart(7), "est_ms".padStart(7), "speedup".padStart(8),
 ];
 console.log(header.join(" │ "));
@@ -84,6 +84,6 @@ console.log([
   `${(totalTkMs / totalEstMs).toFixed(0)}x`.padStart(8),
 ].join(" │ "));
 
-console.log(`\n  --: ---- ${totalErr}%`);
-console.log(`  --: tiktoken ${totalTkMs.toFixed(0)}ms vs estimate ${totalEstMs.toFixed(0)}ms (${(totalTkMs / totalEstMs).toFixed(0)}x faster)`);
+console.log(`\n  精度: 平均误差 ${totalErr}%`);
+console.log(`  速度: tiktoken ${totalTkMs.toFixed(0)}ms vs estimate ${totalEstMs.toFixed(0)}ms (${(totalTkMs / totalEstMs).toFixed(0)}x faster)`);
 console.log();

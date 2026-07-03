@@ -1,5 +1,5 @@
 /**
- * Heuristic token estimate (--/1.7 + ---/4) when tiktoken is disabled or fails.
+ * Heuristic token estimate (中文/1.7 + 非中文/4) when tiktoken is disabled or fails.
  */
 
 function countCjkChars(text: string): number {

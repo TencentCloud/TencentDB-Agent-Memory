@@ -187,7 +187,7 @@ export interface PluginConfig {
   mmdMaxTokenRatio?: number;
   /**
    * L3 token counting: `tiktoken` uses js-tiktoken (exact BPE for chosen encoding);
-   * `heuristic` uses --/1.7 + --/4. Default: tiktoken.
+   * `heuristic` uses 中文/1.7 + 其余/4. Default: tiktoken.
    */
   l3TokenCountMode?: "tiktoken" | "heuristic";
   /**

@@ -153,13 +153,13 @@ export class SceneExtractor {
     let sceneCountWarning: string | undefined;
     const sceneCount = index.length;
     if (sceneCount >= this.maxScenes) {
-      sceneCountWarning = `------- **${sceneCount} -**，------ ${this.maxScenes} ---！\n**------ MERGE --**，----- 2-4 ------ 1 -，--------。\n------：--------------。`;
+      sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，已达到或超过 ${this.maxScenes} 个上限！\n**你必须先执行 MERGE 操作**，将最相似的 2-4 个场景合并为 1 个，然后再处理新记忆。\n参考合并对象：热度最低或主题高度重叠的场景。`;
       this.logger?.warn(`${TAG} extract() scene count at limit: ${sceneCount}/${this.maxScenes}`);
     } else if (sceneCount === this.maxScenes - 1) {
-      sceneCountWarning = `------- **${sceneCount} -**，------ 1 -！\n----**-- UPDATE ----，-- CREATE ---**。`;
+      sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，距离上限只差 1 个！\n本次处理**只能 UPDATE 现有场景，不能 CREATE 新场景**。`;
       this.logger?.warn(`${TAG} extract() scene count near limit (CREATE blocked): ${sceneCount}/${this.maxScenes}`);
     } else if (sceneCount >= this.maxScenes - 3) {
-      sceneCountWarning = `------- **${sceneCount} -**，------ UPDATE --- MERGE ----。`;
+      sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，建议优先考虑 UPDATE 或主动 MERGE 相似场景。`;
       this.logger?.debug?.(`${TAG} extract() scene count approaching limit: ${sceneCount}/${this.maxScenes}`);
     }
 
@@ -191,7 +191,7 @@ export class SceneExtractor {
 
     const { systemPrompt, userPrompt } = buildSceneExtractionPrompt({
       memoriesJson,
-      sceneSummaries: sceneSummaries || "(-----)",
+      sceneSummaries: sceneSummaries || "(无已有场景)",
       currentTimestamp,
       sceneCountWarning,
       existingSceneFiles,
@@ -406,7 +406,7 @@ export class SceneExtractor {
    * Build human-readable scene summaries for the prompt,
    * and collect the list of existing scene filenames (relative).
    *
-   * Includes a capacity counter at the top (e.g. "------：5 / 15")
+   * Includes a capacity counter at the top (e.g. "当前场景总数：5 / 15")
    * so the LLM can immediately see how close it is to the limit.
    */
   private buildSceneSummaries(
@@ -418,13 +418,13 @@ export class SceneExtractor {
     const filenames: string[] = [];
 
     // Inject capacity counter at the top — LLM sees this first
-    lines.push(`**------：${index.length} / ${this.maxScenes}**`);
+    lines.push(`**当前场景总数：${index.length} / ${this.maxScenes}**`);
     lines.push("");
 
     for (const entry of index) {
       filenames.push(entry.filename);
       lines.push(`### ${entry.filename}`);
-      lines.push(`**--**: ${entry.heat} | **--**: ${entry.updated}`);
+      lines.push(`**热度**: ${entry.heat} | **更新**: ${entry.updated}`);
       lines.push(`**summary**: ${entry.summary}`);
       lines.push("");
     }

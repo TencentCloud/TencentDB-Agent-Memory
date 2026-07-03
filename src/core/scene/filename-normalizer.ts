@@ -34,11 +34,11 @@ import path from "node:path";
  *
  * Examples:
  *   "Daily Rhythm in Shanghai.md"  → "Daily-Rhythm-in-Shanghai.md"
- *   "---- ----.md"          → "---------.md"
+ *   "日常生活 健康管理.md"          → "日常生活-健康管理.md"
  *   "Coffee (Yirgacheffe).md"      → "Coffee-Yirgacheffe.md"
  *   "  spaced  .md"                → "spaced.md"
  *   ".MD"                          → "scene.md"
- *   "----.md"                   → "----.md" (no-op)
+ *   "已经规范.md"                   → "已经规范.md" (no-op)
  */
 export function normalizeSceneFilename(name: string): string {
   if (!name) return "scene.md";
