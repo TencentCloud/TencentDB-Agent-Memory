@@ -221,8 +221,7 @@ jobs:
             -path './bridge_adapter/*.py' -o \
             -path './bridge_adapter/*.ts' -o \
             -path './docs/*.py' -o \
-            -path './docs/*.ts' -o \
-            -path './.github/workflows/*.yml' \
+            -path './docs/*.ts' \
           \) | tr '\n' '\0')
           if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
           echo "OK: $fails files with non-ASCII (0 = clean)"
