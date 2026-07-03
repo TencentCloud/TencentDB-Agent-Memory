@@ -1,17 +1,17 @@
 """
-MCP stdio server -?wraps TdaiAdapter as MCP tools.
+MCP stdio server - wraps TdaiAdapter as MCP tools.
 
 Built-in gates (API key + rate limit + circuit breaker + audit) provide
 defense-in-depth for desktop/loopback mode. In production these gates
-are supplemented by agentgateway (Linux Foundation) -?if agentgateway
+are supplemented by agentgateway (Linux Foundation) - if agentgateway
 fails, the local gates remain active as a safety net.
 
 Architecture:
-  Production: MCP Client -?agentgateway (auth/rate-limit/OTEL/OPA)
-                              -?                         bridge/mcp/server.py (self-gated fallback)
-                              -?                         TdaiAdapter -?Gateway
+  Production: MCP Client -> agentgateway (auth/rate-limit/OTEL/OPA)
+                               +-- bridge/mcp/server.py (self-gated fallback)
+                               +-- TdaiAdapter -> Gateway
 
-  Desktop:    MCP Client -€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-?bridge/mcp/server.py (gates active)
+  Desktop:    MCP Client ----------------------> bridge/mcp/server.py (gates active)
 
 Usage:
     # Desktop (no auth required for loopback)
@@ -25,7 +25,6 @@ Environment:
     MCP_BRIDGE_API_KEY    API key for tools/call. Empty = loopback allowed.
                           When set, client must pass key in params._meta.api_key.
 """
-
 from __future__ import annotations
 
 import hmac

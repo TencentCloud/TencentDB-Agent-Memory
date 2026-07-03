@@ -1,47 +1,21 @@
 """
-MCP Health Check -?Bridge's MCP-compatible health endpoint with gate protection.
+MCP Health Check - Bridge MCP-compatible health endpoint with gate protection.
 
-Provides a stdio-based MCP health check that Bridge's monitor can call
-to verify TDAI Gateway connectivity. Includes:
+Architecture:
+  Production: MCP Client -> agentgateway (auth/rate-limit/OTEL/OPA)
+                               +-- bridge/mcp_health.py (self-gated fallback)
+                               +-- TdaiAdapter.mcp_health() -> Gateway
 
-  - API Key gate (MCP_BRIDGE_API_KEY env var, default: empty = closed)
-  - Rate limiting (max 10 calls per 60s window, configurable)
-  - Circuit breaker (5 consecutive failures -?60s cooldown)
-  - Input validation (MCP JSON-RPC schema enforcement)
-  - Audit logging (all calls logged with timestamp + caller IP)
+  Desktop:    MCP Client ----------------------> bridge/mcp_health.py (gates active)
 
 Usage:
-    # Set API key (required for production)
-    set MCP_BRIDGE_API_KEY=your-secret-key
-
-    # Direct call (no auth required for local health check)
+    # Desktop (no auth required for loopback)
     python -m bridge.mcp_health
 
-    # MCP stdio (with auth header in params)
-    echo '{"jsonrpc":"2.0","id":1,"method":"tools/call",
-           "params":{"name":"tdai_health","arguments":{}}}' | python -m bridge.mcp_health
+    # Production (API key required)
+    set MCP_BRIDGE_API_KEY=your-key
+    python -m bridge.mcp_health
 """
-
-from __future__ import annotations
-
-import hashlib
-import hmac
-import json
-import logging
-import os
-import sys
-import time
-from typing import Any, Dict, List, Optional, Tuple
-
-logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
-logger = logging.getLogger("mcp_health")
-
-# ------------------------------------------------------------------
-# Gate: API Key configuration
-# ------------------------------------------------------------------
-
-# MCP_BRIDGE_API_KEY -?-ㄧ-----┖---?= -----------?# ----ゅ€------よ-------------
-MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY") or os.environ.get("TDAI_API_KEY", "")
 MCP_API_KEY_ALLOW_EMPTY = True  # ----ユ----------?
 # Gate: Rate limiting
 _RATE_LIMIT_WINDOW = 60  # seconds
