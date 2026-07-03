@@ -17,3 +17,20 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Claude Code adapter
+export { CCHostAdapter } from "./claude-code/index.js";
+export type { CCHostAdapterOptions } from "./claude-code/index.js";
+
+// CodeBuddy adapter
+export { CodeBuddyHostAdapter } from "./codebuddy/index.js";
+export type { CodeBuddyHostAdapterOptions } from "./codebuddy/index.js";
+
+// Shared types
+export type {
+  PlatformAdapterOptions,
+  PlatformTool,
+  PlatformToolParam,
+  PlatformLifecycle,
+} from "./shared/index.js";
+export { TDAI_TOOLS } from "./shared/index.js";
