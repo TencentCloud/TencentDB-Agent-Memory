@@ -102,7 +102,7 @@ Demonstrates that `TdaiAdapter` can wrap existing SDKs.
 | Language | Interface | Install | File | Tests |
 |:---|:---|:---|:---|:---:|
 | **Python** | `TdaiAdapter` (ABC) | `pip install bridge_adapter` | `bridge_adapter/base.py` | 37 red-team + 20 provider |
-| **TypeScript** | `MemoryAdapter` (interface) | `npm install @tencentdb-agent-memory/memory-tencentdb` | `src/core/types.ts` | 19 red-team |
+| **TypeScript** | `MemoryAdapter` (interface) + `BaseMemoryAdapter` (base class) + `TdaiHttpClient` | `npm install @tencentdb-agent-memory/memory-tencentdb` | `src/core/types.ts` + `src/core/base-memory-adapter.ts` + `src/core/tdai-http-client.ts` | 19 red-team |
 | **MCP (Python server + TS client)** | MCP stdio protocol | `pip install bridge_adapter` + `npm install @modelcontextprotocol/sdk` | `bridge/mcp/server.py` + `bridge/mcp/tdai-memory-client.ts` | 59 + 2 architecture warnings |
 
 Python and TypeScript define the same contract: `recall` / `capture` / `searchMemory` / `searchConversation`
@@ -172,7 +172,9 @@ See `bridge/mcp/REDTEAM_FINDINGS.md` for full red-team assessment.
 | `bridge_adapter/README.md` | Quick start, architecture, config reference |
 | `bridge_adapter/integrity.py` | SHA256 integrity tool |
 | `bridge_adapter/SHA256SUMS` | Checksum manifest |
-| `src/core/types.ts` | MemoryAdapter TypeScript interface |
+| `src/core/types.ts` | MemoryAdapter TypeScript interface + HostAdapter/LLMRunner types |
+| `src/core/base-memory-adapter.ts` | BaseMemoryAdapter abstract class (retry + middleware + recall cache + graceful degradation) |
+| `src/core/tdai-http-client.ts` | TdaiHttpClient (fetch-based, 8 Gateway endpoints, 7 typed errors) |
 | `src/core/memory-adapter.test.ts` | 19 TS red-team tests |
 | `bridge/mcp/server.py` | MCP stdio server (JSON-RPC 2.0, 5 tools, 4 gates) |
 | `bridge/mcp/tdai-memory-client.ts` | MCP TypeScript client (~20 lines, StdioClientTransport) |

@@ -30,7 +30,8 @@ platforms.
 | **Profile sync** | L3 persona pipeline | read_core only | N/A | **`sync_profile()` 鈫?PrefProfile 鈫?L3** | **Inherited via adapter** |
 | **MCP health** | N/A | N/A | Built-in | **`mcp_health()` endpoint** | **`tdai_health` tool (G0-G4 active)** |
 | **Defense gates** | Platform native | Platform native | None | **Retry + CB + middleware** | **5-layer: Schema/Key/Rate/CB/Audit** |
-| **SDK extras** | 鈥?| 鈥?| 鈥?| **Structured errors + retry + middleware + config loader + registry** | **Inherited via TdaiAdapter** |
+| **SDK extras** | 鈥?| 鈥?| 鈥?| **Structured errors + retry + middleware + config loader + registry + BufferedAdapter** | **Inherited via TdaiAdapter** |
+| **TS SDK extras** | 鈥?| 鈥?| 鈥?| **MemoryAdapter interface only** | **BaseMemoryAdapter + TdaiHttpClient (retry+middleware+cache+7 error types)** |
 | **Test coverage** | Plugin tests | 78 tests (shared) | 11 focused tests | **353 integration + 20 provider + 28 red team = 401** | **14 protocol + 13 redteam + 22 offensive + 12 ghost = 59 + 2 鈿狅笍** |
 
 ## Data Flow Comparison
