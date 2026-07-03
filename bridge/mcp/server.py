@@ -341,7 +341,7 @@ def main():
         print(json.dumps({"available": avail}))
         return
 
-    # -€-€ Parse -€-€
+    # -------- Parse --------
     try:
         msg = json.loads(request_raw)
     except json.JSONDecodeError:
@@ -351,14 +351,14 @@ def main():
     req_id = msg.get("id") if isinstance(msg, dict) else None
     method = msg.get("method", "") if isinstance(msg, dict) else ""
 
-    # -€-€ Gate 0: Input validation -€-€
+    # -------- Gate 0: Input validation --------
     valid, err = _validate_mcp_request(msg)
     if not valid:
         _audit_log("REJECTED", method, "", err)
         print(_err(-32600, err, req_id))
         return
 
-    # -€-€ Initialize (bypass gates) -€-€
+    # -------- Initialize (bypass gates) --------
     if method == "initialize":
         _audit_log("ALLOWED", method, "", "")
         print(_ok({
@@ -368,13 +368,13 @@ def main():
         }, req_id))
         return
 
-    # -€-€ tools/list (bypass gates) -€-€
+    # -------- tools/list (bypass gates) --------
     if method == "tools/list":
         _audit_log("ALLOWED", method, "", "")
         print(_ok({"tools": _TOOL_DEFS}, req_id))
         return
 
-    # -€-€ tools/call (gates apply) -€-€
+    # -------- tools/call (gates apply) --------
     if method == "tools/call":
         params = msg.get("params", {})
         if not isinstance(params, dict):
@@ -418,7 +418,7 @@ def main():
         print(result)
         return
 
-    # -€-€ Unknown method -€-€
+    # -------- Unknown method --------
     _audit_log("UNKNOWN_METHOD", method, "")
     print(_err(-32601, f"Method not found: {method}", req_id))
 

@@ -1,5 +1,5 @@
 """
-Red-team tests — adversarial inputs, stress, and injection.
+Red-team tests --- adversarial inputs, stress, and injection.
 
 These tests run without a real TDAI Gateway to verify the MCP server
 handles malicious and malformed inputs safely.
@@ -45,7 +45,7 @@ def _raw_rpc(request_str: str) -> dict:
     return json.loads(proc.stdout)
 
 
-# ── Injection / malformed ────────────────────────────────
+# ------ Injection / malformed ------------------------------------------------------------------------------------------------
 
 
 def test_extremely_long_query():
@@ -55,7 +55,7 @@ def test_extremely_long_query():
         "name": "tdai_recall",
         "arguments": {"query": long_query},
     })
-    # Should not crash — may error gracefully or return empty
+    # Should not crash --- may error gracefully or return empty
     assert resp is not None
 
 
@@ -80,7 +80,7 @@ def test_missing_tool_name():
     resp = _rpc("tools/call", {
         "arguments": {},
     })
-    # No 'name' in params — should error
+    # No 'name' in params --- should error
     assert "error" in resp or "result" in resp
 
 
@@ -118,12 +118,12 @@ def test_unicode_injection():
     """Unicode special characters should not break JSON."""
     resp = _rpc("tools/call", {
         "name": "tdai_recall",
-        "arguments": {"query": "--- español العربية\n\t\u0000"},
+        "arguments": {"query": "--- espa--ol --------------\n\t\u0000"},
     })
     assert resp is not None
 
 
-# ── Stress ────────────────────────────────────────────────
+# ------ Stress ------------------------------------------------------------------------------------------------------------------------------------------------
 
 
 def test_rapid_consecutive_calls():
@@ -144,7 +144,7 @@ def test_interleaved_methods():
         assert resp is not None
 
 
-# ── Parameter boundary ───────────────────────────────────
+# ------ Parameter boundary ---------------------------------------------------------------------------------------------------------
 
 
 def test_negative_limit():

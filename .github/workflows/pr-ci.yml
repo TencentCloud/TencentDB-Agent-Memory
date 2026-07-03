@@ -12,7 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1. Install dependencies ────────────────────────────────
+  # ------ 1. Install dependencies ------------------------------------------------------------------------------------------------
   install:
     name: Install
     runs-on: ubuntu-latest
@@ -34,7 +34,7 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
 
-  # ── 2. Pack validation ─────────────────────────────────────
+  # ------ 2. Pack validation ---------------------------------------------------------------------------------------------------------------
   pack:
     name: Pack
     needs: install
@@ -68,7 +68,7 @@ jobs:
           path: "*.tgz"
           retention-days: 7
 
-  # ── 5. Plugin manifest validation ──────────────────────────
+  # ------ 5. Plugin manifest validation ------------------------------------------------------------------------------
   manifest:
     name: Manifest
     runs-on: ubuntu-latest
@@ -77,25 +77,25 @@ jobs:
 
       - name: Validate openclaw.plugin.json
         run: |
-          echo "── Checking openclaw.plugin.json exists ──"
-          test -f openclaw.plugin.json || { echo "❌ openclaw.plugin.json not found"; exit 1; }
+          echo "------ Checking openclaw.plugin.json exists ------"
+          test -f openclaw.plugin.json || { echo "--- openclaw.plugin.json not found"; exit 1; }
 
-          echo "── Checking valid JSON ──"
-          node -e "JSON.parse(require('fs').readFileSync('openclaw.plugin.json','utf8'))" || { echo "❌ Invalid JSON"; exit 1; }
+          echo "------ Checking valid JSON ------"
+          node -e "JSON.parse(require('fs').readFileSync('openclaw.plugin.json','utf8'))" || { echo "--- Invalid JSON"; exit 1; }
 
-          echo "── Checking required fields ──"
+          echo "------ Checking required fields ------"
           node -e "
             const m = JSON.parse(require('fs').readFileSync('openclaw.plugin.json','utf8'));
             const errors = [];
             if (!m.id || typeof m.id !== 'string') errors.push('missing or invalid \"id\"');
             if (m.configSchema && typeof m.configSchema !== 'object') errors.push('\"configSchema\" must be an object');
-            if (errors.length) { console.error('❌ Manifest errors:', errors.join(', ')); process.exit(1); }
-            console.log('✅ id:', m.id);
+            if (errors.length) { console.error('--- Manifest errors:', errors.join(', ')); process.exit(1); }
+            console.log('--- id:', m.id);
             if (m.name) console.log('   name:', m.name);
             if (m.configSchema) console.log('   configSchema: present (' + Object.keys(m.configSchema.properties || {}).length + ' top-level props)');
           "
 
-          echo "── Checking package.json openclaw metadata ──"
+          echo "------ Checking package.json openclaw metadata ------"
           node -e "
             const pkg = JSON.parse(require('fs').readFileSync('package.json','utf8'));
             const oc = pkg.openclaw || {};
@@ -103,13 +103,13 @@ jobs:
             if (!oc.extensions || !oc.extensions.length) errors.push('missing openclaw.extensions');
             if (!oc.compat?.pluginApi) errors.push('missing openclaw.compat.pluginApi');
             if (!oc.build?.openclawVersion) errors.push('missing openclaw.build.openclawVersion');
-            if (errors.length) { console.error('❌ Package metadata errors:', errors.join(', ')); process.exit(1); }
-            console.log('✅ openclaw metadata OK');
+            if (errors.length) { console.error('--- Package metadata errors:', errors.join(', ')); process.exit(1); }
+            console.log('--- openclaw metadata OK');
             console.log('   pluginApi:', oc.compat.pluginApi);
             console.log('   openclawVersion:', oc.build.openclawVersion);
           "
 
-  # ── 6. Package size guard ──────────────────────────────────
+  # ------ 6. Package size guard ------------------------------------------------------------------------------------------------------
   size:
     name: Size Guard
     needs: pack
@@ -127,18 +127,18 @@ jobs:
           SIZE_KB=$((SIZE / 1024))
           MAX_KB=2048
 
-          echo "📦 Package: $TGZ"
+          echo "---- Package: $TGZ"
           echo "   Size: ${SIZE_KB} KB (limit: ${MAX_KB} KB)"
 
           if [ "$SIZE_KB" -gt "$MAX_KB" ]; then
-            echo "❌ Package exceeds ${MAX_KB} KB size limit!"
+            echo "--- Package exceeds ${MAX_KB} KB size limit!"
             echo "   Consider checking if large files were accidentally included."
             exit 1
           else
-            echo "✅ Size OK"
+            echo "--- Size OK"
           fi
 
-  # ── 7. TypeScript adapter tests ─────────────────────────────
+  # ------ 7. TypeScript adapter tests ---------------------------------------------------------------------------------------
   test-ts:
     name: Test TS
     runs-on: ubuntu-latest
@@ -165,7 +165,7 @@ jobs:
       - name: Run TdaiHttpClient unit tests
         run: npx vitest run src/core/tdai-http-client.test.ts --reporter=verbose
 
-  # ── 8. Python bridge_adapter smoke test ─────────────────────
+  # ------ 8. Python bridge_adapter smoke test ---------------------------------------------------------------
   test-py:
     name: Test Python
     runs-on: ubuntu-latest
@@ -185,18 +185,18 @@ jobs:
           from bridge_adapter import BridgeAdapter, TdaiAdapterRegistry
           from bridge_adapter.base import TdaiAdapter
           from bridge_adapter.integrity import verify_manifest
-          print(f'Import OK — bridge_adapter registered adapters: {TdaiAdapterRegistry.list()}')
+          print(f'Import OK --- bridge_adapter registered adapters: {TdaiAdapterRegistry.list()}')
           violations = verify_manifest()
           if violations:
             print(f'SHA256 integrity: {len(violations)} violation(s)')
             for v in violations:
-              print(f'  ✗ {v}')
+              print(f'  --- {v}')
             exit(1)
           else:
             print('SHA256 integrity: OK')
           "
 
-  # ── 9. Mojibake detection ──────────────────────────────────
+  # ------ 9. Mojibake detection ------------------------------------------------------------------------------------------------------
   mojibake-check:
     name: Mojibake Check
     runs-on: ubuntu-latest
@@ -205,7 +205,7 @@ jobs:
 
       - name: Detect garbled Unicode in source files
         run: |
-          echo "── Scanning for mojibake (corrupted CJK) in .py and .ts files ──"
+          echo "------ Scanning for mojibake (corrupted CJK) in .py and .ts files ------"
           violations=0; fails=0
           while IFS= read -r -d '' f; do
             # Use grep to find printable CJK characters (UTF-8 3-byte sequences in CJK range)

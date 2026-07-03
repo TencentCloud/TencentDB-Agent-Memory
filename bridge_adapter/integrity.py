@@ -128,7 +128,7 @@ def main() -> int:
 
         print(f"Integrity FAILURE: {len(violations)} violation(s):")
         for v in violations:
-            print(f"  ️ {v}")
+            print(f"  --- {v}")
         return 1
 
     return 0

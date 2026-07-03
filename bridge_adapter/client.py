@@ -1,11 +1,11 @@
 """
-TdaiHttpClient — httpx-based HTTP client for the TDAI Gateway.
+TdaiHttpClient --- httpx-based HTTP client for the TDAI Gateway.
 
 Provides sync wrappers for all v2 REST API endpoints consumed by
 the BridgeAdapter. Reads configuration from environment variables with
 defaults for local standalone Gateway.
 
-This is NOT a Gateway — it is an HTTP client that makes requests TO
+This is NOT a Gateway --- it is an HTTP client that makes requests TO
 the TDAI Gateway (an external process from the TDAI project).
 """
 

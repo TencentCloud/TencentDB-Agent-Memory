@@ -224,14 +224,14 @@ def main():
     method = msg.get("method", "")
     params = msg.get("params", {})
 
-    # -€-€ Gate 0: Input validation -€-€
+    # -------- Gate 0: Input validation --------
     valid, err = _validate_mcp_request(msg)
     if not valid:
         _audit_log("REJECTED", msg, f"invalid-request: {err}")
         print(_mcp_error(-32600, err, req_id))
         return
 
-    # -€-€ Gate 1: API Key -€-€
+    # -------- Gate 1: API Key --------
     auth_ok, auth_err = _check_api_key(msg)
     if not auth_ok:
         _audit_log("AUTH_FAILED", msg, auth_err)
@@ -239,21 +239,21 @@ def main():
         print(_mcp_error(-32001, auth_err, req_id))
         return
 
-    # -€-€ Gate 2: Rate limit -€-€
+    # -------- Gate 2: Rate limit --------
     rl_ok, rl_err = _check_rate_limit()
     if not rl_ok:
         _audit_log("RATE_LIMITED", msg, rl_err)
         print(_mcp_error(-32029, rl_err, req_id))
         return
 
-    # -€-€ Gate 3: Circuit breaker -€-€
+    # -------- Gate 3: Circuit breaker --------
     cb_ok, cb_err = _check_circuit_breaker()
     if not cb_ok:
         _audit_log("CIRCUIT_OPEN", msg, cb_err)
         print(_mcp_error(-32050, cb_err, req_id))
         return
 
-    # -€-€ Route -€-€
+    # -------- Route --------
     if method == "tools/list":
         result = _discover_tools(req_id)
         _audit_log("ALLOWED", msg, "tools/list")

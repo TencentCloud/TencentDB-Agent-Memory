@@ -1,8 +1,8 @@
 """
-HermesV2Adapter — Hermes v2 Provider - TdaiAdapter ----.
+HermesV2Adapter --- Hermes v2 Provider - TdaiAdapter ----.
 
-------- SDK -----------。
-Hermes v2 --- MemoryProvider --, --------- TdaiAdapter --。
+------- SDK --------------
+Hermes v2 --- MemoryProvider --, --------- TdaiAdapter -----
 """
 
 from __future__ import annotations

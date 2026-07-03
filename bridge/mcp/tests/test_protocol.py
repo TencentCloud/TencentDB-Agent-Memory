@@ -1,5 +1,5 @@
 """
-Protocol compliance tests — verify JSON-RPC 2.0 MCP protocol behavior.
+Protocol compliance tests --- verify JSON-RPC 2.0 MCP protocol behavior.
 
 These tests run without a real TDAI Gateway by testing the protocol layer
 directly (tools/list, initialize, error handling).
@@ -47,7 +47,7 @@ def _raw_rpc(request_str: str) -> dict:
     return json.loads(proc.stdout)
 
 
-# ── Initialize ──────────────────────────────────────────
+# ------ Initialize ------------------------------------------------------------------------------------------------------------------------------
 
 
 def test_initialize():
@@ -58,7 +58,7 @@ def test_initialize():
     assert result.get("serverInfo", {}).get("name") == "bridge-mcp"
 
 
-# ── tools/list ──────────────────────────────────────────
+# ------ tools/list ------------------------------------------------------------------------------------------------------------------------------
 
 
 def test_tools_list_returns_all_tools():
@@ -104,7 +104,7 @@ def test_capture_tool_has_required_fields():
     assert "assistant_content" in required
 
 
-# ── tools/call (no Gateway = graceful degradation) ──────
+# ------ tools/call (no Gateway = graceful degradation) ------------------
 
 
 def test_health_no_gateway():
@@ -126,7 +126,7 @@ def test_recall_no_gateway():
     })
     # Without bridge_adapter, may return error or gracefully degrade
     if "error" in resp:
-        # Clean error — no crash, no internal path leakage
+        # Clean error --- no crash, no internal path leakage
         assert isinstance(resp["error"].get("message"), str)
         assert resp["error"]["code"] == -32603
     else:
@@ -149,7 +149,7 @@ def test_missing_method():
     assert "error" in resp
 
 
-# ── Error handling ──────────────────────────────────────
+# ------ Error handling ------------------------------------------------------------------------------------------------------------------
 
 
 def test_malformed_json():
@@ -179,7 +179,7 @@ def test_empty_input():
     assert "available" in result
 
 
-# ── Initialize → tools/list sequence ────────────────────
+# ------ Initialize --- tools/list sequence ------------------------------------------------------------
 
 
 def test_initialize_then_list():

@@ -1,10 +1,10 @@
 """
-bridge_adapter — Bridge (ZTHL) platform adapter for TencentDB Agent Memory v2 API.
+bridge_adapter --- Bridge (ZTHL) platform adapter for TencentDB Agent Memory v2 API.
 
 Bridge is a zero-trust agent runtime for supply-chain security auditing,
 part of the **Zero-Trust Heuristic Learning (ZTHL)** research system.
 
-ZTHL addresses governance in Heuristic Learning — autonomous coding agents
+ZTHL addresses governance in Heuristic Learning --- autonomous coding agents
 that modify their own source code. The framework uses a Dual-Loop Governance
 Protocol with structured review (F1-F7), three runtime gates (guard-edit,
 advance, monitor), and self-referential validation.
@@ -15,16 +15,16 @@ function_tool + AgentHooks. This adapter communicates with the TDAI Gateway
 via HTTP (httpx), providing recall/capture/search primitives.
 
 Core capabilities:
-  - recall(query)      → L1 atomic search + L3 core → prepend_context
-  - capture(turn)      → L0 conversation write
-  - search(query)      → explicit MCP-compatible tool endpoints
-  - sync_profile(data) → PrefProfile ↔ L3 alignment
-  - mcp_health()       → Gateway connectivity check
+  - recall(query)      --- L1 atomic search + L3 core --- prepend_context
+  - capture(turn)      --- L0 conversation write
+  - search(query)      --- explicit MCP-compatible tool endpoints
+  - sync_profile(data) --- PrefProfile --- L3 alignment
+  - mcp_health()       --- Gateway connectivity check
 
 Environment variables:
-  TDAI_ENDPOINT       — Gateway URL (default: http://127.0.0.1:8420)
-  TDAI_API_KEY        — API key for authentication (optional for local)
-  TDAI_SERVICE_ID     — Service/Space ID (default: mem-rkgqhd5z)
+  TDAI_ENDPOINT       --- Gateway URL (default: http://127.0.0.1:8420)
+  TDAI_API_KEY        --- API key for authentication (optional for local)
+  TDAI_SERVICE_ID     --- Service/Space ID (default: mem-rkgqhd5z)
 """
 
 from __future__ import annotations
@@ -53,12 +53,12 @@ class BridgeAdapter(TdaiAdapter):
     so new platforms can discover and reuse the same contract.
 
     Three memory primitives:
-      - recall: L1 atomic + L3 core → prepend_context for prompt injection
+      - recall: L1 atomic + L3 core --- prepend_context for prompt injection
       - capture: L0 conversation write (user-assistant turn)
       - search: explicit memory/conversation search (MCP-compatible)
 
-    Circuit breaker: 5 consecutive failures → 60s cooldown.
-    Graceful degradation: Gateway unreachable → safe empty defaults.
+    Circuit breaker: 5 consecutive failures --- 60s cooldown.
+    Graceful degradation: Gateway unreachable --- safe empty defaults.
     """
 
     NAME = "bridge_adapter"
@@ -80,7 +80,7 @@ class BridgeAdapter(TdaiAdapter):
     def is_available(self) -> bool:
         return self._available
 
-    # ── Lifecycle ──────────────────────────────────────────────
+    # ------ Lifecycle ------------------------------------------------------------------------------------------------------------------------------------------
 
     def initialize(
         self,
@@ -123,7 +123,7 @@ class BridgeAdapter(TdaiAdapter):
         self._available = False
         logger.info("BridgeAdapter shut down")
 
-    # ── Recall ─────────────────────────────────────────────────
+    # ------ Recall ---------------------------------------------------------------------------------------------------------------------------------------------------
 
     def _recall_impl(self, query: str, limit: int = 5) -> Dict[str, Any]:
         """Recall relevant memories for prompt injection.
@@ -166,7 +166,7 @@ class BridgeAdapter(TdaiAdapter):
                     memory_lines.append(f"- [{mtype}] {content}")
                 prepend = (
                     "<relevant-memories>\n"
-                    "--------------，-----：\n\n"
+                    "-------------------------\n\n"
                     + "\n".join(memory_lines)
                     + "\n</relevant-memories>"
                 )
@@ -184,7 +184,7 @@ class BridgeAdapter(TdaiAdapter):
 
         return self._safe_call("recall", _do) or {"prepend_context": "", "append_system_context": ""}
 
-    # ── Capture ────────────────────────────────────────────────
+    # ------ Capture ------------------------------------------------------------------------------------------------------------------------------------------------
 
     def _capture_impl(self, user_content: str, assistant_content: str, session_id: str = "") -> bool:
         """Write a conversation turn to L0.
@@ -209,7 +209,7 @@ class BridgeAdapter(TdaiAdapter):
 
         return self._safe_call("capture", _do) or False
 
-    # ── Search (MCP-compatible) ────────────────────────────────
+    # ------ Search (MCP-compatible) ------------------------------------------------------------------------------------------------
 
     def _search_memory_impl(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search L1 atomic memories."""
@@ -249,7 +249,7 @@ class BridgeAdapter(TdaiAdapter):
     def search_conversation(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         return self._search_conversation_impl(query, limit)
 
-    # ── MCP Health ─────────────────────────────────────────────
+    # ------ MCP Health ---------------------------------------------------------------------------------------------------------------------------------------
 
     def mcp_health(self) -> Dict[str, Any]:
         """Gateway connectivity status for MCP health check."""
@@ -265,7 +265,7 @@ class BridgeAdapter(TdaiAdapter):
         except Exception as e:
             return {"available": False, "reason": str(e)}
 
-    # ── Profile sync ───────────────────────────────────────────
+    # ------ Profile sync ---------------------------------------------------------------------------------------------------------------------------------
 
     def sync_profile(self, profile_data: Dict[str, Any]) -> bool:
         """Sync Bridge's PrefProfile to TDAI L3 core."""
@@ -278,7 +278,7 @@ class BridgeAdapter(TdaiAdapter):
 
         return self._safe_call("sync_profile", _do) or False
 
-    # ── Circuit breaker ────────────────────────────────────────
+    # ------ Circuit breaker ------------------------------------------------------------------------------------------------------------------------
 
     def _safe_call(self, label: str, fn):
         """Execute fn with circuit breaker protection."""
