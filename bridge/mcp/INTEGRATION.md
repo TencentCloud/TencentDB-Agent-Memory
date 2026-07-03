@@ -64,6 +64,74 @@ session-persistent enforcement.
 | G3 Circuit breaker | 鈿狅笍 | Resets per stdio process (architectural constraint) |
 | G4 Audit log | 鉁?| No tool parameter can suppress |
 
+## Configuration
+
+### Single Set of Env Vars for All Three Entry Points
+
+The Python SDK, TypeScript SDK, and MCP server share a unified configuration namespace.
+Set these once; all three entry points consume them:
+
+| Variable | Default | Required | Purpose |
+|:---------|:--------|:--------:|:--------|
+| `TDAI_ENDPOINT` | `http://127.0.0.1:8420` | No | Gateway URL |
+| `TDAI_API_KEY` | `""` (loopback) | No* | API authentication |
+| `TDAI_SERVICE_ID` | `mem-rkgqhd5z` | No | Multi-tenant isolation |
+| `TDAI_TIMEOUT` | `30` | No | Request timeout (seconds) |
+| `TDAI_RETRY_ATTEMPTS` | `3` | No | Retry count |
+
+\* Required when connecting to a remote Gateway (not localhost).
+
+### Dual-Path Configuration
+
+Each entry point supports two configuration paths:
+
+**Path A 鈥?Environment variables (recommended)**:
+```bash
+export TDAI_ENDPOINT=http://127.0.0.1:8420
+export TDAI_API_KEY=sk-your-key
+export TDAI_SERVICE_ID=my-project
+python -m bridge.mcp.server
+```
+
+**Path B 鈥?Explicit parameters (programmatic)**:
+```python
+from bridge_adapter import TdaiAdapterRegistry
+adapter = TdaiAdapterRegistry.create("bridge", endpoint="http://...", api_key="sk-...")
+```
+
+```typescript
+import { TdaiHttpClient } from "./tdai-http-client";
+const client = new TdaiHttpClient({ endpoint: "http://...", apiKey: "sk-..." });
+```
+
+### Local Mode vs Multi-Tenant Mode
+
+| | Local Mode | Multi-Tenant Mode |
+|:---|:---|:---|
+| Setup | Zero config | `TDAI_SERVICE_ID=<project>` per project |
+| API Key | Empty (loopback) | Required |
+| Storage | Single SQLite DB | Isolated DB per service_id |
+| Use Case | Single project development | Multiple projects / teams |
+
+Example 鈥?three projects sharing one Gateway with isolated storage:
+```bash
+# Terminal 1 鈥?Project A
+TDAI_SERVICE_ID=spz-gatekeeper python -m bridge.mcp.server
+
+# Terminal 2 鈥?Project B
+TDAI_SERVICE_ID=bridge-core python -m bridge.mcp.server
+
+# Terminal 3 鈥?Project C
+TDAI_SERVICE_ID=zthl-research python -m bridge.mcp.server
+```
+
+### API Key Resolution Order
+
+The MCP server resolves the API key in this order:
+1. `MCP_BRIDGE_API_KEY` env var (MCP-specific override)
+2. `TDAI_API_KEY` env var (shared SDK key)
+3. Empty string 鈫?loopback mode (no auth required)
+
 ## Graceful Fallback Chain
 
 The MCP transport provides two independent Python process entries, forming a

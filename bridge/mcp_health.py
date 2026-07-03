@@ -41,7 +41,7 @@ logger = logging.getLogger("mcp_health")
 # 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
 
 # MCP_BRIDGE_API_KEY 鈥?闂ㄧ瀵嗛挜锛岀┖瀛楃涓?= 鍏抽棴锛堜粎鏈湴鍙敤锛?# 璁句负姝ゅ€兼椂璺宠繃璁よ瘉锛堜粎闄愭湰鍦板紑鍙戯級
-MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY", "")
+MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY") or os.environ.get("TDAI_API_KEY", "")
 MCP_API_KEY_ALLOW_EMPTY = True  # 绌哄瘑閽ユ椂鍏佽鏈湴鏃犺璇佽闂?
 # Gate: Rate limiting
 _RATE_LIMIT_WINDOW = 60  # seconds
