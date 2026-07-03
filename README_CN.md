@@ -507,6 +507,11 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [`docs/adapters/ARCHITECTURE.md`](./docs/adapters/ARCHITECTURE.md) | 核心引擎与各平台适配层架构，含数据流图 |
+| [`docs/adapters/COMPARISON.md`](./docs/adapters/COMPARISON.md) | OpenClaw / Hermes / MCP / Dify 适配方式对比与选型指南 |
+| [`docs/adapters/ADDING-A-PLATFORM.md`](./docs/adapters/ADDING-A-PLATFORM.md) | 用统一适配 SDK 约 30 行接入一个新平台 |
+| [`src/adapters/mcp/README.md`](./src/adapters/mcp/README.md) | MCP 服务器 — Claude Code / Codex / Cursor / Cline 配置 |
+| [`src/adapters/dify/README.md`](./src/adapters/dify/README.md) | Dify 自定义工具（OpenAPI）接入 |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
