@@ -196,20 +196,18 @@ jobs:
             print('SHA256 integrity: OK')
           "
 
-  # ── 9. Mojibake detection ──────────────────────────────────
-  mojibake-check:
-    name: Mojibake Check
+  # ── 9. Encoding Defense (Layer 5: non-ASCII scan + Layer 1: BOM check) ──
+  encoding-defense:
+    name: Encoding Defense (L1+L5)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Detect garbled Unicode in source files
+      - name: L5 - Detect garbled Unicode in .py/.ts files
         run: |
-          echo "── Scanning for mojibake (corrupted CJK) in .py and .ts files ──"
+          echo "── Layer 5: non-ASCII scan in .py and .ts files ──"
           violations=0; fails=0
           while IFS= read -r -d '' f; do
-            # Use grep to find printable CJK characters (UTF-8 3-byte sequences in CJK range)
-            # CJK Unified Ideographs = E4 B8 80 .. E9 BF BF
             if grep -Pl '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | grep -q .; then
               chars=$(grep -oP '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | sort -u | head -5 | tr '\n' ' ')
               fails=$((fails + 1))
@@ -223,5 +221,21 @@ jobs:
             -path './docs/*.py' -o \
             -path './docs/*.ts' \
           \) | tr '\n' '\0')
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
+          echo "OK: $fails files with non-ASCII (0 = clean)"
+
+      - name: L1 - Verify UTF-8 BOM on .ps1 files
+        run: |
+          echo "── Layer 1: UTF-8 BOM check on .ps1 files ──"
+          fails=0
+          while IFS= read -r -d '' f; do
+            header=$(od -A n -t x1 -N 3 "$f" | tr -d ' \n')
+            if [ "$header" != "efbbbf" ]; then
+              echo "  MISSING BOM: $f (header=$header)"
+              fails=$((fails + 1))
+            fi
+          done < <(find . -name '*.ps1' -not -path './node_modules/*' -not -path './.git/*' -not -path './assets/*' | tr '\n' '\0')
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails .ps1 files without BOM"; exit 1; fi
+          echo "OK: all .ps1 files have UTF-8 BOM"
           if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
           echo "OK: $fails files with non-ASCII (0 = clean)"
