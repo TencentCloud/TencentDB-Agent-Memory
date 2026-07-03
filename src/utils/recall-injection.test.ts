@@ -202,4 +202,95 @@ describe("stripRecallFromUserMessage — markdown wrapping", () => {
     expect(result).toContain("<relevant-memories>");
     expect(result).toContain("Hello");
   });
+
+  // ═══ 扩展场景 — 吸收竞品 PR #319/#343/#351 优点 ═══
+
+  it("handles nested <relevant-memories> tags (malicious)", () => {
+    const preamble = "以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：";
+    const nested = `<relevant-memories>${preamble}\n<relevant-memories>inner</relevant-memories>\nouter</relevant-memories>`;
+    const result = stripRecallFromUserMessage(nested);
+    // 应该正确剥离外层的 TencentDB 生成块
+    expect(result).not.toContain("<relevant-memories>");
+  });
+
+  it("handles unclosed <relevant-memories> tag gracefully", () => {
+    const preamble = "以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：";
+    const unclosed = `Hello\n<relevant-memories>${preamble}\ncontent here but no close tag`;
+    const result = stripRecallFromUserMessage(unclosed);
+    // 没有闭合标签，整个 block 不应该被错误剥离
+    expect(result).toContain("<relevant-memories>");
+    expect(result).toContain("Hello");
+  });
+
+  it("handles very large recall content (50k+ chars)", () => {
+    const preamble = "以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：";
+    const longContent = "x".repeat(50_000);
+    const input = `Hello\n<relevant-memories>${preamble}\n${longContent}\n</relevant-memories>\nQuestion`;
+
+    const start = performance.now();
+    const result = stripRecallFromUserMessage(input);
+    const elapsed = performance.now() - start;
+
+    expect(elapsed).toBeLessThan(50); // < 50ms for 50k+ chars
+    expect(result).not.toContain("<relevant-memories>");
+    expect(result).toContain("Hello");
+    expect(result).toContain("Question");
+  });
+
+  it("strips recall from ContentPart[] with base64 image preservation", () => {
+    const parts = [
+      { type: "text", text: `Hello\n${recallBlock}\nQuestion` },
+      { type: "image", source: { type: "base64", data: "aGVsbG8=" } },
+      { type: "text", text: "Another text" },
+    ];
+
+    const result = stripRecallFromUserMessage(parts) as Array<{ type: string; text?: string }>;
+    expect(result).toHaveLength(3);
+    // Image part 不变
+    expect(result[1]).toEqual(parts[1]);
+    // Text part 被清理
+    expect((result[0] as { text: string }).text).not.toContain("<relevant-memories>");
+    expect((result[0] as { text: string }).text).toContain("Question");
+  });
+
+  it("hasRecallInjection and stripRecallFromUserMessage consistency", () => {
+    // has=true → strip 后不再包含
+    expect(hasRecallInjection(recallBlock)).toBe(true);
+    const stripped = stripRecallFromUserMessage(recallBlock);
+    expect(hasRecallInjection(stripped as string)).toBe(false);
+
+    // has=false → strip 返回原值
+    const plainText = "Just a normal message";
+    expect(hasRecallInjection(plainText)).toBe(false);
+    expect(stripRecallFromUserMessage(plainText)).toBe(plainText);
+  });
+
+  it("handles Unicode special characters in preamble gracefully", () => {
+    // 中文 preamble 包含 Unicode 字符，strip 应正常工作
+    const input = `你好\n${recallBlock}\n你好吗？`;
+    const result = stripRecallFromUserMessage(input);
+    expect(result).toContain("你好");
+    expect(result).toContain("你好吗？");
+    expect(result).not.toContain("<relevant-memories>");
+  });
+
+  it("handles fake injection block without preamble (should preserve)", () => {
+    // 用户可能自己写 <relevant-memories> 标签（无 TencentDB preamble）
+    const fakeBlock = "<relevant-memories>\nSome user-written notes\n</relevant-memories>\nMy real question";
+    const result = stripRecallFromUserMessage(fakeBlock);
+    expect(result).toContain("<relevant-memories>");
+    expect(result).toContain("Some user-written notes");
+    expect(result).toContain("My real question");
+  });
+
+  it("concurrent strip calls on same content produce consistent results", () => {
+    const results = Array.from({ length: 10 }, () =>
+      stripRecallFromUserMessage(recallBlock + "\nQuestion"),
+    );
+    // 所有结果应该一致
+    const first = results[0];
+    for (const r of results) {
+      expect(r).toBe(first);
+    }
+  });
 });

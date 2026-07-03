@@ -211,4 +211,103 @@ describe("CacheDiagnosticsTracker", () => {
     const diag = tracker.recordTurn({ systemPrompt: "S", toolSchemas: [], userPrefix: "" });
     expect(diag).toBeUndefined();
   });
+
+  // ═══ 扩展场景 — 吸收竞品 PR #343 gugu23456789 ═══
+
+  it("continuous 5-turn hit rate report", () => {
+    const tracker = new CacheDiagnosticsTracker();
+    const stable = { systemPrompt: "System", toolSchemas: [{ name: "tool1" }], userPrefix: "" };
+
+    // 5 turns all stable → 4/4 = 100%
+    for (let i = 0; i < 5; i++) {
+      tracker.recordTurn(stable);
+    }
+    expect(tracker.getHitRate()).toBe(1.0);
+  });
+
+  it("cross-language prefix stability", () => {
+    const cnSystem = "你是一个智能助手";
+    const enSystem = "You are an intelligent assistant";
+    const jpSystem = "あなたは知的アシスタントです";
+
+    const hashCn = structuralHash(cnSystem);
+    const hashEn = structuralHash(enSystem);
+    const hashJp = structuralHash(jpSystem);
+
+    // Different languages produce different hashes
+    expect(hashCn).not.toBe(hashEn);
+    expect(hashEn).not.toBe(hashJp);
+    // Same language produces same hash
+    expect(structuralHash(cnSystem)).toBe(hashCn);
+  });
+
+  it("100+ tool schemas still produce stable hash", () => {
+    const tools = Array.from({ length: 100 }, (_, i) => ({
+      name: `tool_${i}`,
+      description: `Tool number ${i}`,
+      parameters: { type: "object", properties: { arg: { type: "string" } } },
+    }));
+
+    const shape1 = capturePrefixShape({ systemPrompt: "S", toolSchemas: tools, userPrefix: "" });
+    const shape2 = capturePrefixShape({ systemPrompt: "S", toolSchemas: tools, userPrefix: "" });
+
+    expect(shape1.toolHash).toBe(shape2.toolHash);
+  });
+
+  it("empty system prompt produces valid shape", () => {
+    const shape = capturePrefixShape({ systemPrompt: "", toolSchemas: undefined, userPrefix: "" });
+    expect(shape.systemHash).toBeTruthy();
+    expect(shape.toolHash).toBeTruthy();
+    expect(shape.capturedAt).toBeGreaterThan(0);
+  });
+
+  it("very long system prompt (50k+ chars) still fast", () => {
+    const longPrompt = "x".repeat(50_000);
+    const start = performance.now();
+    const shape = capturePrefixShape({ systemPrompt: longPrompt, toolSchemas: [], userPrefix: "" });
+    const elapsed = performance.now() - start;
+    expect(elapsed).toBeLessThan(20); // < 20ms for 50k chars
+    expect(shape.systemHash).toBeTruthy();
+  });
+
+  it("compareShape detects multiple sections changing simultaneously", () => {
+    const prev = capturePrefixShape({ systemPrompt: "A", toolSchemas: ["t1"], userPrefix: "X" });
+    const curr = capturePrefixShape({ systemPrompt: "B", toolSchemas: ["t2"], userPrefix: "Y" });
+
+    const diag = comparePrefixShape(prev, curr);
+    expect(diag.prefixStable).toBe(false);
+    expect(diag.changedSections).toContain("systemPrompt");
+    expect(diag.changedSections).toContain("toolSchemas");
+    expect(diag.changedSections).toContain("userPrefix");
+    expect(diag.changedSections).toHaveLength(3);
+  });
+
+  it("multi-session independent tracking", () => {
+    const tracker1 = new CacheDiagnosticsTracker();
+    const tracker2 = new CacheDiagnosticsTracker();
+    const stable = { systemPrompt: "S", toolSchemas: [], userPrefix: "" };
+
+    tracker1.recordTurn(stable);
+    tracker1.recordTurn(stable); // HIT
+    tracker2.recordTurn(stable); // first turn (no diagnosis)
+
+    expect(tracker1.getHitRate()).toBe(1.0);
+    expect(tracker2.getHitRate()).toBe(0.0);
+  });
+
+  it("1000 turns without memory leak", () => {
+    const tracker = new CacheDiagnosticsTracker();
+    const stable = { systemPrompt: "System", toolSchemas: [], userPrefix: "" };
+    const initialHeap = process.memoryUsage().heapUsed;
+
+    for (let i = 0; i < 1000; i++) {
+      tracker.recordTurn(stable);
+    }
+
+    const finalHeap = process.memoryUsage().heapUsed;
+    const growth = finalHeap - initialHeap;
+    // 1000 轮后内存增长应 < 5MB
+    expect(growth).toBeLessThan(5 * 1024 * 1024);
+    expect(tracker.getHitRate()).toBeCloseTo(1.0, 1);
+  });
 });

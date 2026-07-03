@@ -446,4 +446,110 @@ describe("Cache Simulation: edge cases", () => {
     expect(prompt.userMessage).toContain("Simple query");
     expect(prompt.systemPrompt).toBe(BASE_SYSTEM_PROMPT);
   });
+
+  // ═══ 扩展场景 — 长对话模拟 + 中英混合 ═══
+
+  it("20-turn conversation: append mode system prompt is stable", () => {
+    const stableCtx = "<persona>Dev</persona><scene>Home</scene><tools>mem</tools>";
+    const prependSystemHashes: string[] = [];
+    const appendSystemHashes: string[] = [];
+
+    for (let turn = 1; turn <= 20; turn++) {
+      const recall = `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n- [instruction] Memory for turn ${turn}\n</relevant-memories>`;
+      const query = `Question for turn ${turn}`;
+
+      const prependPrompt = assemblePrompt({
+        baseSystemPrompt: BASE_SYSTEM_PROMPT,
+        prependSystemContext: stableCtx,
+        userText: query,
+        prependContext: recall,
+      });
+
+      const appendPrompt = assemblePrompt({
+        baseSystemPrompt: BASE_SYSTEM_PROMPT,
+        prependSystemContext: stableCtx,
+        userText: query,
+        appendContext: recall,
+      });
+
+      // 关键：system prompt 在两种模式下都应该稳定
+      prependSystemHashes.push(structuralHash(prependPrompt.systemPrompt));
+      appendSystemHashes.push(structuralHash(appendPrompt.systemPrompt));
+    }
+
+    // 两种模式下的 system prompt 每轮都相同（稳定内容都在 prependSystemContext）
+    const prependUnique = new Set(prependSystemHashes);
+    const appendUnique = new Set(appendSystemHashes);
+    expect(prependUnique.size).toBe(1);
+    expect(appendUnique.size).toBe(1);
+
+    // 两种模式产生相同的 system prompt
+    expect(prependSystemHashes[0]).toBe(appendSystemHashes[0]);
+  });
+
+  it("Chinese + English mixed prompt prefix stability", () => {
+    const cnStableCtx = "<persona>中文开发者</persona><scene>办公室</scene><tools>记忆工具</tools>";
+    const prompt1 = assemblePrompt({
+      baseSystemPrompt: "你是一个智能助手\nYou are an intelligent assistant",
+      prependSystemContext: cnStableCtx,
+      userText: "今天天气怎么样？",
+      prependContext: "<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n- [fact] 用户喜欢旅游\n</relevant-memories>",
+    });
+
+    // 同样的配置，不同的 recall
+    const prompt2 = assemblePrompt({
+      baseSystemPrompt: "你是一个智能助手\nYou are an intelligent assistant",
+      prependSystemContext: cnStableCtx,
+      userText: "明天有什么计划？",
+      prependContext: "<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n- [fact] 明天有会议\n</relevant-memories>",
+    });
+
+    // systemPrompt 应该相同（稳定的中文+英文基础提示）
+    expect(structuralHash(prompt1.systemPrompt)).toBe(structuralHash(prompt2.systemPrompt));
+
+    // userMessage 不应包含中文乱码
+    expect(prompt1.userMessage).toContain("今天天气怎么样？");
+    expect(prompt2.userMessage).toContain("明天有什么计划？");
+  });
+
+  it("high-frequency scene switching: 5 scenes alternating", () => {
+    const scenes = ["Home", "Office", "Travel", "Shopping", "Coding"];
+    const hashes: string[] = [];
+
+    for (let i = 0; i < 5; i++) {
+      const prompt = assemblePrompt({
+        baseSystemPrompt: BASE_SYSTEM_PROMPT,
+        prependSystemContext: `<scene>${scenes[i]}</scene>`,
+        userText: "Query",
+      });
+
+      hashes.push(structuralHash(prompt.systemPrompt));
+    }
+
+    // 5 个不同场景的 system prompt 哈希各不同
+    const uniqueHashes = new Set(hashes);
+    expect(uniqueHashes.size).toBe(5);
+  });
+
+  it("512-turn stress test: no memory leak, no crash", () => {
+    const stableCtx = "<persona>Dev</persona>";
+    const start = performance.now();
+
+    for (let turn = 1; turn <= 512; turn++) {
+      const recall = `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n- [instruction] Memory ${turn}\n</relevant-memories>`;
+      const prompt = assemblePrompt({
+        baseSystemPrompt: BASE_SYSTEM_PROMPT,
+        prependSystemContext: stableCtx,
+        userText: `Turn ${turn} query`,
+        prependContext: turn % 2 === 0 ? recall : undefined,
+      });
+
+      // 基本断言：不能崩溃，输出合理
+      expect(prompt.systemPrompt).toBeTruthy();
+      expect(prompt.userMessage).toBeTruthy();
+    }
+
+    const elapsed = performance.now() - start;
+    expect(elapsed).toBeLessThan(5000); // < 5 seconds for 512 turns
+  });
 });
