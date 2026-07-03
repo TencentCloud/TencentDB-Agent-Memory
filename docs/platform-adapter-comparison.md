@@ -6,7 +6,7 @@ This document compares the six platform adapter approaches for TencentDB Agent M
 analyzing their architectural patterns, integration surfaces, and trade-offs.
 
 **Note:** The Bridge adapter is developed as part of the **Zero-Trust Heuristic
-Learning (ZTHL)** system 鈥?a zero-trust agent runtime for supply-chain security
+Learning (ZTHL)** system - a zero-trust agent runtime for supply-chain security
 auditing. ZTHL is currently under double-blind review at a top computer science
 conference, with a preprint version pending approval on arXiv and related
 platforms.
@@ -28,34 +28,38 @@ Six approaches spanning the TDAI adapter ecosystem:
 | **Defense gates** | Platform native | Platform native | None | None | **Retry + CB + middleware** | **5-layer: Schema/Key/Rate/CB/Audit** |
 | **SDK abstraction** | Interface only | Provider base class | Shared infrastructure only | Interface + implementations | **ABC + 3 implementations + registry + middleware** | **Inherited via adapter** |
 | **TS SDK** | Native | N/A | Shared gateway-client + hook-bridge + mcp-server | Shared gateway client + Dify OpenAPI generator | **MemoryAdapter interface** | **BaseMemoryAdapter + TdaiHttpClient** |
-| **Test coverage** | Plugin tests | 78 tests | 4 test files | 353 tests (chaos/contract/e2e/security/unit) | **353 integration + 20 provider + 28 red team = 401** | **14 protocol + 13 redteam + 22 offensive + 12 ghost = 59 + 2 鈿狅笍** |
+| **Test coverage** | Plugin tests | 78 tests | 4 test files | 353 tests (chaos/contract/e2e/security/unit) | **353 integration + 20 provider + 28 red team = 401** | **14 protocol + 13 redteam + 22 offensive + 12 ghost = 59 + 2?** |
 
 ## Data Flow Comparison
 
 ### OpenClaw Plugin (existing)
 ```
-Agent 鈫?OpenClaw PluginApi 鈫?OpenClawHostAdapter 鈫?TdaiCore (in-process)
-                                                      鈫?                                              SQLite (local FS)
+Agent -> OpenClaw PluginApi -> OpenClawHostAdapter -> TdaiCore (in-process)
+                                                        v
+                                                SQLite (local FS)
 ```
 
 ### Hermes v2 Provider (existing)
 ```
-Agent 鈫?Hermes Agent 鈫?MemoryTencentdbV2Provider 鈫?Gateway (HTTP)
-                                                      鈫?                                              TdaiCore 鈫?SQLite
+Agent -> Hermes Agent -> MemoryTencentdbV2Provider -> Gateway (HTTP)
+                                                        v
+                                                TdaiCore -> SQLite
 ```
 
 ### Codex/Claude Code/OpenCode (PR #323, NianJiuZst)
 ```
-Agent 鈫?MCP stdio 鈫?mcp-server.ts 鈫?gateway-client.ts 鈫?Gateway (HTTP)
-                                                          鈫?                                                   TdaiCore 鈫?SQLite
+Agent -> MCP stdio -> mcp-server.ts -> gateway-client.ts -> Gateway (HTTP)
+                                                            v
+                                                     TdaiCore -> SQLite
 ```
 Emphasis on platform-specific lifecycle hooks and shared TypeScript infrastructure.
 Approach: "prove the patterns first, extract SDK later."
 
 ### coder-mtj 6-Platform (PR #359)
 ```
-Agent 鈫?per-platform adapter 鈫?gateway-client.ts 鈫?Gateway (HTTP)
-                                                      鈫?                                              TdaiCore 鈫?SQLite
+Agent -> per-platform adapter -> gateway-client.ts -> Gateway (HTTP)
+                                                        v
+                                                TdaiCore -> SQLite
 ```
 Emphasis on maximum platform coverage (6), runtime resilience (3-state CB, retry),
 and comprehensive test categories (chaos, contract, e2e, security, unit).
@@ -63,42 +67,53 @@ and comprehensive test categories (chaos, contract, e2e, security, unit).
 ### Bridge Provider (this PR)
 
 ```
-Bridge engine.py 鈫?BridgeAdapter 鈫?TdaiAdapter SDK (guard stack)
-  鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?  鈹?recall(query, limit):                                        鈹?  鈹?1. _sanitize_query()          length/type validation         鈹?  鈹?2. _sanitize_limit()          boundary clamping              鈹?  鈹?3. middleware.before_call()   auth/logging/metrics           鈹?  鈹?4. _with_retry()              exponential backoff (3 tries)  鈹?  鈹?5. _recall_impl()             BridgeAdapter implementation   鈹?  鈹?6. middleware.after_call()    record latency/counts          鈹?  鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                     鈹?TdaiHttpClient (httpx)
-                     鈻?              TDAI Gateway (port 8420) 鈫?TdaiCore 鈫?SQLite
+Bridge engine.py -> BridgeAdapter -> TdaiAdapter SDK (guard stack)
+  +--------------------------------------------------------------+
+  | recall(query, limit):                                        |
+  | 1. _sanitize_query()          length/type validation         |
+  | 2. _sanitize_limit()          boundary clamping              |
+  | 3. middleware.before_call()   auth/logging/metrics           |
+  | 4. _with_retry()              exponential backoff (3 tries)  |
+  | 5. _recall_impl()             BridgeAdapter implementation   |
+  | 6. middleware.after_call()    record latency/counts          |
+  +--------------------------------------------------------------+
+                     | TdaiHttpClient (httpx)
+                     v
+              TDAI Gateway (port 8420) -> TdaiCore -> SQLite
 ```
 
 ### Bridge MCP Transport (optional, this PR)
 
 ```
 MCP Host (Claude Desktop / Codex / CodeBuddy / Trae / Cursor)
-     鈹?@modelcontextprotocol/sdk 鈫?StdioClientTransport
-     鈻?  bridge/mcp/server.py  (JSON-RPC 2.0, no MCP framework)
-  鈹溾攢鈹€ G0: JSON-RPC schema validation
-  鈹溾攢鈹€ G1: API Key (HMAC)
-  鈹溾攢鈹€ G2: Rate limit (sliding window, 60/60s)
-  鈹溾攢鈹€ G3: Circuit breaker (10 fail 鈫?60s cooldown)
-  鈹斺攢鈹€ G4: Audit log
-      鈹斺攢鈹€ Tool handlers 鈫?BridgeAdapter 鈫?TdaiAdapter SDK 鈫?Gateway
+     | @modelcontextprotocol/sdk -> StdioClientTransport
+     v
+  bridge/mcp/server.py  (JSON-RPC 2.0, no MCP framework)
+  +-- G0: JSON-RPC schema validation
+  +-- G1: API Key (HMAC)
+  +-- G2: Rate limit (sliding window, 60/60s)
+  +-- G3: Circuit breaker (10 fail -> 60s cooldown)
+  +-- G4: Audit log
+      +-- Tool handlers -> BridgeAdapter -> TdaiAdapter SDK -> Gateway
 ```
 
-The MCP transport is a **complementary access path** 鈥?not a replacement 鈥?for the Bridge adapter.
+The MCP transport is a **complementary access path** - not a replacement - for the Bridge adapter.
 It enables MCP-native agent hosts to call the same TdaiAdapter SDK through the stdio protocol,
 with five integrated defense gates active regardless of deployment mode.
 
 A lightweight health-only fallback (`bridge.mcp_health`, 1 tool, 4 gates) exists for cases
-where the full MCP server is unavailable 鈥?both share `MCP_BRIDGE_API_KEY` and the same
+where the full MCP server is unavailable - both share `MCP_BRIDGE_API_KEY` and the same
 `BridgeAdapter.mcp_health()` backend, forming a graceful degradation chain.
 
 ## Bridge-Specific Design Decisions
 
 ### 1. Why a custom `TdaiAdapter` ABC instead of `MemoryProvider`?
 
-Bridge is **not** a Hermes agent 鈥?it uses its own runtime (engine.py + AgentHooks).
+Bridge is **not** a Hermes agent - it uses its own runtime (engine.py + AgentHooks).
 The Hermes `MemoryProvider` base class is tightly coupled to the Hermes agent
 lifecycle (`prefetch`/`sync_turn`/`commit`). Bridge cannot inherit from it.
 
-Instead, this PR introduces `TdaiAdapter` 鈥?a platform-neutral abstract base
+Instead, this PR introduces `TdaiAdapter` - a platform-neutral abstract base
 class that any agent runtime can implement. It follows the same operational
 patterns (recall/capture/search) but without Hermes-specific lifecycle coupling.
 
@@ -123,12 +138,12 @@ end. The provider supports both paths with the same `TdaiHttpClient`.
 ### 4. How does this relate to Bridge's native memory?
 
 Bridge has its own memory layer (checkpoint/frozen/anchor/decision).
-TDAI is a **complementary** persistence layer 鈥?not a replacement.
+TDAI is a **complementary** persistence layer - not a replacement.
 
 - Bridge's native layer handles: session state, immutable prefixes, decision anchoring
 - TDAI handles: long-term cross-session recall, L3 user profiles, full-text search
 
-### 5. PrefProfile 鈫?L3 alignment
+### 5. PrefProfile -> L3 alignment
 
 Bridge builds a `PrefProfile` from human preference logs (language preference,
 audit depth, safety sensitivity). The `sync_profile()` method aligns this
@@ -140,9 +155,9 @@ Each PR takes a distinct approach to the same problem (cross-platform TDAI acces
 
 | PR | Strategy | Strength |
 |:---|---|:---|
-| #323 (NianJiuZst) | **Platform lifecycle first** 鈥?integrate deeply with 3 specific platforms via shared infrastructure | Deep platform integration, proven hook/MCP patterns |
-| #359 (coder-mtj) | **Platform breadth first** 鈥?cover 6 platforms with comprehensive test infrastructure | Maximum coverage, runtime resilience, test variety |
-| **#339 (this PR)** | **Abstraction first** 鈥?define a formal ABC/interface, then provide concrete implementations + optional MCP transport + defense gates | Cross-language SDK, defense-in-depth, pluggable architecture |
+| #323 (NianJiuZst) | **Platform lifecycle first** - integrate deeply with 3 specific platforms via shared infrastructure | Deep platform integration, proven hook/MCP patterns |
+| #359 (coder-mtj) | **Platform breadth first** - cover 6 platforms with comprehensive test infrastructure | Maximum coverage, runtime resilience, test variety |
+| **#339 (this PR)** | **Abstraction first** - define a formal ABC/interface, then provide concrete implementations + optional MCP transport + defense gates | Cross-language SDK, defense-in-depth, pluggable architecture |
 
 These are complementary strategies. All three can learn from each other:
 - Platform lifecycle patterns from #323
@@ -163,10 +178,10 @@ These are complementary strategies. All three can learn from each other:
 This PR delivers a complete SDK tier for #235:
 
 ```
-TdaiAdapter (ABC)          鈫?new platform implements this interface
-   鈹溾攢鈹€ BridgeAdapter          鈫?Bridge (ZTHL) implementation
-   鈹溾攢鈹€ HermesV2Adapter        鈫?Hermes v2 wrapper (proves cross-platform)
-   鈹斺攢鈹€ (any future platform)  鈫?6 methods to implement
+TdaiAdapter (ABC)          -> new platform implements this interface
+   +-- BridgeAdapter          -> Bridge (ZTHL) implementation
+   +-- HermesV2Adapter        -> Hermes v2 wrapper (proves cross-platform)
+   +-- (any future platform)  -> 6 methods to implement
 ```
 
 New platform adoption checklist:
