@@ -136,6 +136,43 @@ OpenAI/Codex billing. After restarting Codex, the 5 TDAI tools (`tdai_health`, `
 }
 ```
 
+### CodeBuddy CLI / IDE
+
+[CodeBuddy](https://www.codebuddy.ai) supports MCP via `~/.codebuddy/.mcp.json` or the `codebuddy mcp add` command:
+
+```bash
+codebuddy mcp add --scope user tdai_memory -- python -m bridge.mcp.server
+```
+
+Or add to `~/.codebuddy/.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "tdai_memory": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "bridge.mcp.server"]
+    }
+  }
+}
+```
+
+### Trae IDE
+
+In Trae IDE Settings 鈫?MCP Servers 鈫?Add:
+
+```json
+{
+  "mcpServers": {
+    "tdai_memory": {
+      "command": "python",
+      "args": ["-m", "bridge.mcp.server"]
+    }
+  }
+}
+```
+
 ### Any MCP Client
 
 The server speaks standard MCP stdio protocol (JSON-RPC 2.0). Any MCP-compatible client
