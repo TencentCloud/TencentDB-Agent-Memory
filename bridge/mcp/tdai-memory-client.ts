@@ -1,5 +1,5 @@
 /**
- * TdaiMcpClient - TypeScript MemoryAdapter via MCP stdio transport.
+ * TdaiMcpClient — TypeScript MemoryAdapter via MCP stdio transport.
  *
  * Implements the `MemoryAdapter` interface by calling the Python
  * bridge/mcp/server.py through MCP stdio protocol.

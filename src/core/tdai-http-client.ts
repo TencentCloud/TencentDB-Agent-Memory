@@ -143,7 +143,7 @@ export class TdaiHttpClient {
     }
   }
 
-  // ---- Public API ----
+  // -€-€ Public API -€-€
 
   /** GET /health -?Gateway health check. */
   async health(): Promise<{ status: string; uptime: number; stores: Record<string, string> }> {
