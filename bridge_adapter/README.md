@@ -1,4 +1,4 @@
-# Bridge Adapter 鈥?TDAI Memory SDK
+# Bridge Adapter ?TDAI Memory SDK
 
 Bridge platform adapter for [TencentDB-Agent-Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) v2 Gateway API.
 
@@ -31,7 +31,7 @@ adapter.sync_profile({"preferred_languages": ["Python"]})
 ## Architecture
 
 ```
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                    Your Platform                        鈹?鈹? engine.py / agent hooks 鈫?TdaiAdapter SDK               鈹?鈹?                    鈹?                                    鈹?鈹?                    鈻?                                    鈹?鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?鈹? 鈹?TdaiAdapter (ABC) 鈥?base.py                        鈹? 鈹?鈹? 鈹? 鈹溾攢 recall(query, limit)  sanitize 鈫?retry 鈫?impl 鈹? 鈹?鈹? 鈹? 鈹溾攢 capture(user, asst)   sanitize 鈫?retry 鈫?impl 鈹? 鈹?鈹? 鈹? 鈹溾攢 search_memory(query)  sanitize 鈫?retry 鈫?impl 鈹? 鈹?鈹? 鈹? 鈹溾攢 search_conversation() sanitize 鈫?retry 鈫?impl 鈹? 鈹?鈹? 鈹? 鈹斺攢 middleware hooks      metrics / auth / logging 鈹? 鈹?鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹? 鈹?鈹?                      鈹?TdaiHttpClient (httpx)            鈹?鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                        鈻?              TDAI Gateway (port 8420) 鈫?TdaiCore 鈫?SQLite
+ ? ? Your Platform ? ? engine.py / agent hooks ?TdaiAdapter SDK ? ? ? ? ? ? ? ? ? ? ? ?TdaiAdapter (ABC) ?base.py ? ? ? ? recall(query, limit) sanitize ?retry ?impl ? ? ? ? capture(user, asst) sanitize ?retry ?impl ? ? ? ? search_memory(query) sanitize ?retry ?impl ? ? ? ? search_conversation() sanitize ?retry ?impl ? ? ? ? middleware hooks metrics / auth / logging ? ? ? ? ? ? ?TdaiHttpClient (httpx) ? ? ? TDAI Gateway (port 8420) ?TdaiCore ?SQLite
 ```
 
 ## Environment Variables
@@ -40,7 +40,7 @@ adapter.sync_profile({"preferred_languages": ["Python"]})
 |:---|:---|:---|
 | `TDAI_ENDPOINT` | `http://127.0.0.1:8420` | Gateway URL (local or cloud) |
 | `TDAI_API_KEY` | `""` | API key (required for cloud, optional for local) |
-| `TDAI_SERVICE_ID` | `mem-rkgqhd5z` | Tenant isolation 鈥?different value per project |
+| `TDAI_SERVICE_ID` | `mem-rkgqhd5z` | Tenant isolation ?different value per project |
 | `TDAI_TIMEOUT` | `30.0` | HTTP request timeout (seconds) |
 | `TDAI_RETRY_ATTEMPTS` | `3` | Max retry attempts for transient failures |
 | `TDAI_BUFFER_DIR` | system temp dir | BufferedAdapter local JSONL storage path |
@@ -79,7 +79,7 @@ export TDAI_SERVICE_ID="repo-bridge-core"
 | `base.py` | `TdaiAdapter` ABC, `BufferedAdapter` mixin, structured errors, retry, middleware, `TdaiConfig`, `TdaiAdapterRegistry` | ~380 |
 | `__init__.py` | `BridgeAdapter` (Bridge platform implementation) | ~300 |
 | `client.py` | `TdaiHttpClient` (httpx wrapper, 7 Gateway endpoints) | ~120 |
-| `hermes_v2_adapter.py` | `HermesV2Adapter` 鈥?cross-platform reference implementation | ~130 |
+| `hermes_v2_adapter.py` | `HermesV2Adapter` ?cross-platform reference implementation | ~130 |
 | `plugin.yaml` | TDAI plugin metadata | ~12 |
 | `pyproject.toml` | Package build config (pip install -e ready) | ~13 |
 
@@ -105,14 +105,14 @@ Both define the same contract: `recall`/`capture`/`searchMemory`/`searchConversa
 
 | Adapter | Platform | Backend | Lines |
 |:---|:---|:---|---:|
-| **BridgeAdapter** | Bridge (ZTHL) | httpx 鈫?TDAI Gateway | ~130 |
-| **CodexAdapter** | OpenAI Codex | MCP stdio 鈫?`codex mcp call` | ~174 |
+| **BridgeAdapter** | Bridge (ZTHL) | httpx ?TDAI Gateway | ~130 |
+| **CodexAdapter** | OpenAI Codex | MCP stdio ?`codex mcp call` | ~174 |
 | **HermesV2Adapter** | Hermes Agent | Hermes Python SDK | ~100 |
 
 ### CodexAdapter
 
 [Codex](https://github.com/openai/codex) has a built-in `memories` extension. `CodexAdapter` wraps it
-via MCP stdio, mapping `recall`/`search_memory` 鈫?`memories__search`, `capture` 鈫?`memories__add_ad_hoc_note`, `search_conversation` 鈫?`memories__list`.
+via MCP stdio, mapping `recall`/`search_memory` ?`memories__search`, `capture` ?`memories__add_ad_hoc_note`, `search_conversation` ?`memories__list`.
 
 Requires Codex CLI v0.137.0+ on PATH.
 
@@ -130,19 +130,19 @@ adapter.capture("user message", "assistant response")
 from bridge_adapter import TdaiAdapter, TdaiAdapterRegistry
 
 class MyPlatformAdapter(TdaiAdapter):
-    """6 methods to implement."""
-    @property
-    def name(self): return "my-platform"
-    def initialize(self, **kwargs): ...
-    def is_available(self): return True
-    def _recall_impl(self, query, limit): return {}
-    def _capture_impl(self, user, assistant, session): return True
-    def _search_memory_impl(self, query, limit): return []
-    def _search_conversation_impl(self, query, limit): return []
-    def shutdown(self): ...
+ """6 methods to implement."""
+ @property
+ def name(self): return "my-platform"
+ def initialize(self, **kwargs): ...
+ def is_available(self): return True
+ def _recall_impl(self, query, limit): return {}
+ def _capture_impl(self, user, assistant, session): return True
+ def _search_memory_impl(self, query, limit): return []
+ def _search_conversation_impl(self, query, limit): return []
+ def shutdown(self): ...
 
 TdaiAdapterRegistry.register("my-platform", MyPlatformAdapter)
-# TdaiAdapterRegistry.health_all()  鈥?aggregate health check
+# TdaiAdapterRegistry.health_all() ?aggregate health check
 ```
 
 For buffered mode (capture locally, flush in batch):
@@ -151,6 +151,6 @@ For buffered mode (capture locally, flush in batch):
 from bridge_adapter import BufferedAdapter
 
 class MyBufferedAdapter(BufferedAdapter):
-    """Inherits auto-buffering + atexit flush."""
-    ...
+ """Inherits auto-buffering + atexit flush."""
+ ...
 ```

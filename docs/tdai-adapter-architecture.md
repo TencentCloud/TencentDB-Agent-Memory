@@ -1,4 +1,4 @@
-# TdaiAdapter SDK 鈥?Architecture
+# TdaiAdapter SDK ?Architecture
 
 > **Note**: This is a clean SDK-focused copy of the full architecture document.
 > The original (with Bridge-internal details) is at `bridge/docs/TDAI-ARCHITECTURE.md` in the Bridge repository.
@@ -10,50 +10,50 @@ It provides a unified interface (`TdaiAdapter` ABC) that any agent runtime can i
 to connect to TDAI Gateway for recall, capture, and search operations.
 
 ```
-鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?鈹?                    Any Platform                             鈹?鈹? engine.py / agent hooks 鈫?BridgeAdapter / CustomAdapter    鈹?鈹?                    鈹?                                       鈹?鈹?                    鈻?                                       鈹?鈹? 鈹屸攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹愨攤
-鈹? 鈹?TdaiAdapter SDK (bridge_adapter.base)                   鈹傗攤
-鈹? 鈹? recall(query, limit)                                   鈹傗攤
-鈹? 鈹?  鈹溾攢 _sanitize_query()      100K truncation + type     鈹傗攤
-鈹? 鈹?  鈹溾攢 _sanitize_limit()       [1, 1000] clamping        鈹傗攤
-鈹? 鈹?  鈹溾攢 middleware.before()     metrics / auth / logging  鈹傗攤
-鈹? 鈹?  鈹溾攢 _with_retry()           3 attempts, exp backoff   鈹傗攤
-鈹? 鈹?  鈹?  鈹斺攢 _recall_impl()      platform implementation  鈹傗攤
-鈹? 鈹?  鈹溾攢 middleware.after()      record latency + counts  鈹傗攤
-鈹? 鈹?  鈹斺攢 graceful degradation    exception 鈫?safe empty   鈹傗攤
-鈹? 鈹?                                                       鈹傗攤
-鈹? 鈹? BufferedAdapter: optional mixin, local JSONL buffer  鈹傗攤
-鈹? 鈹? TdaiAdapterRegistry: name-based lookup + health_all() 鈹傗攤
-鈹? 鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹樷攤
-鈹斺攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹尖攢鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹?                        鈹?TdaiHttpClient (httpx, sync)
-                        鈻?                 TDAI Gateway (port 8420) 鈫?TdaiCore 鈫?SQLite
+ ? ? Any Platform ? ? engine.py / agent hooks ?BridgeAdapter / CustomAdapter ? ? ? ? ? ? ? ? 
+ ? ?TdaiAdapter SDK (bridge_adapter.base) 
+ ? ? recall(query, limit) 
+ ? ? _sanitize_query() 100K truncation + type 
+ ? ? _sanitize_limit() [1, 1000] clamping 
+ ? ? middleware.before() metrics / auth / logging 
+ ? ? _with_retry() 3 attempts, exp backoff 
+ ? ? ? _recall_impl() platform implementation 
+ ? ? middleware.after() record latency + counts 
+ ? ? graceful degradation exception ?safe empty 
+ ? ? 
+ ? ? BufferedAdapter: optional mixin, local JSONL buffer 
+ ? ? TdaiAdapterRegistry: name-based lookup + health_all() 
+ ? 
+ ? ?TdaiHttpClient (httpx, sync)
+ ? TDAI Gateway (port 8420) ?TdaiCore ?SQLite
 ```
 
 ## SDK Components
 
-### 1. `TdaiAdapter` (ABC) 鈥?`bridge_adapter/base.py`
+### 1. `TdaiAdapter` (ABC) ?`bridge_adapter/base.py`
 
 Abstract base class. Subclasses implement 4 internal methods:
 
 | Public API | Internal method | Description |
 |:---|:---|:---|
-| `recall(query, limit)` | `_recall_impl(query, limit)` | Cross-session memory 鈫?prepend_context |
+| `recall(query, limit)` | `_recall_impl(query, limit)` | Cross-session memory ?prepend_context |
 | `capture(user, assistant, session_id)` | `_capture_impl(...)` | Write conversation turn to L0 |
 | `search_memory(query, limit)` | `_search_memory_impl(...)` | Search L1 atomic memories |
 | `search_conversation(query, limit)` | `_search_conversation_impl(...)` | Search L0 conversation history |
 
 Each public method shares the same guard stack:
-1. **Sanitize** 鈥?type check, length truncation (100K chars), limit clamping [1, 1000]
-2. **Middleware.before()** 鈥?metrics, auth, logging hooks
-3. **Retry loop** 鈥?exponential backoff (3 attempts, base 0.5s, jitter 10%)
-4. **Implementation** 鈥?subclass-specific logic
-5. **Middleware.after()** 鈥?record latency, call count
-6. **Graceful degradation** 鈥?on exception, return safe empty defaults
+1. **Sanitize** ?type check, length truncation (100K chars), limit clamping [1, 1000]
+2. **Middleware.before()** ?metrics, auth, logging hooks
+3. **Retry loop** ?exponential backoff (3 attempts, base 0.5s, jitter 10%)
+4. **Implementation** ?subclass-specific logic
+5. **Middleware.after()** ?record latency, call count
+6. **Graceful degradation** ?on exception, return safe empty defaults
 
-### 2. `BridgeAdapter` 鈥?`bridge_adapter/__init__.py`
+### 2. `BridgeAdapter` ?`bridge_adapter/__init__.py`
 
 Reference implementation using httpx. Connects to TDAI Gateway REST API.
 
-### 3. `TdaiHttpClient` 鈥?`bridge_adapter/client.py`
+### 3. `TdaiHttpClient` ?`bridge_adapter/client.py`
 
 Thin httpx wrapper for 7 Gateway endpoints:
 - `GET /health`
@@ -64,16 +64,16 @@ Thin httpx wrapper for 7 Gateway endpoints:
 - `POST /v2/core/read`
 - `POST /v2/core/update`
 
-### 4. `BufferedAdapter` 鈥?`bridge_adapter/base.py`
+### 4. `BufferedAdapter` ?`bridge_adapter/base.py`
 
 Optional mixin that replaces per-call `capture()` with local JSONL buffering.
 Flushes to Gateway at buffer_size threshold or on `shutdown()` (with atexit guarantee).
 
-### 5. `TdaiAdapterRegistry` 鈥?`bridge_adapter/base.py`
+### 5. `TdaiAdapterRegistry` ?`bridge_adapter/base.py`
 
 Name-based adapter class registry. Supports `register()`, `get()`, `list()`, `create()`, and `health_all()` (aggregate health check across all registered adapters).
 
-### 6. `HermesV2Adapter` 鈥?`bridge_adapter/hermes_v2_adapter.py`
+### 6. `HermesV2Adapter` ?`bridge_adapter/hermes_v2_adapter.py`
 
 Cross-platform reference implementation using the official Hermes Python SDK.
 Demonstrates that `TdaiAdapter` can wrap existing SDKs.
@@ -85,17 +85,17 @@ Demonstrates that `TdaiAdapter` can wrap existing SDKs.
 | **TdaiAdapter ABC** instead of Hermes MemoryProvider | Hermes MemoryProvider is tightly coupled to Hermes lifecycle (`prefetch`/`sync_turn`). TdaiAdapter is platform-neutral |
 | **httpx sync client** | Sync is simpler to integrate across diverse runtimes. Async wrappers can be added at the platform level |
 | **Sanitize + retry + middleware** in base class | Every platform gets parameter safety and resilience for free. No opt-in needed |
-| **Structured errors** | `TdaiConnectionError` / `TdaiAuthError` / `TdaiTimeoutError` / `TdaiRateLimitError` / `TdaiValidationError` 鈥?callers catch specific failures |
+| **Structured errors** | `TdaiConnectionError` / `TdaiAuthError` / `TdaiTimeoutError` / `TdaiRateLimitError` / `TdaiValidationError` ?callers catch specific failures |
 | **Exponential backoff** (3 attempts, 0.5s base) | Transient failures auto-retry. Auth and validation errors propagate immediately |
-| **Middleware hooks** | `before_call` / `after_call` / `on_error` 鈥?for metrics, auth, logging. Built-in `TdaiMetricsMiddleware` |
+| **Middleware hooks** | `before_call` / `after_call` / `on_error` ?for metrics, auth, logging. Built-in `TdaiMetricsMiddleware` |
 | **TdaiConfig.from_env()** | Standard config from `TDAI_*` env vars |
 | **Local + Remote dual path** | Default `http://127.0.0.1:8420` (local Gateway). Set `TDAI_ENDPOINT` to cloud URL for cloud mode |
 | **Multi-tenant isolation** | `x-tdai-service-id` header on every request. Set `TDAI_SERVICE_ID` per project |
-| **API Key resolution (MCP)** | `MCP_BRIDGE_API_KEY` 鈫?`TDAI_API_KEY` 鈫?empty (loopback). Tested by 7 config tests |
+| **API Key resolution (MCP)** | `MCP_BRIDGE_API_KEY` ?`TDAI_API_KEY` ?empty (loopback). Tested by 7 config tests |
 | **BufferedAdapter** | Optional local JSONL buffer. Captures stored locally, flush at buffer_size or session end |
-| **Session-level recall cache** | SHA256(query) 鈫?cached per adapter lifetime. Prevents prompt prefix cache degradation (#120) |
+| **Session-level recall cache** | SHA256(query) ?cached per adapter lifetime. Prevents prompt prefix cache degradation (#120) |
 | **Circuit breaker** (5-fault / 60s) | Prevents cascading failures when Gateway is down |
-| **Graceful degradation** | Gateway unreachable 鈫?operations return safe empty defaults |
+| **Graceful degradation** | Gateway unreachable ?operations return safe empty defaults |
 | **SHA256SUMS integrity** | Release verification. `python -m bridge_adapter.integrity --check` |
 
 ## Configuration: Local vs Multi-Tenant
@@ -111,11 +111,11 @@ All three entry points (Python SDK, TypeScript SDK, MCP server) share the same `
 Three projects isolated on the same Gateway:
 ```bash
 TDAI_SERVICE_ID=spz-gatekeeper python -m bridge.mcp.server
-TDAI_SERVICE_ID=bridge-core    python -m bridge.mcp.server
-TDAI_SERVICE_ID=zthl-research  python -m bridge.mcp.server
+TDAI_SERVICE_ID=bridge-core python -m bridge.mcp.server
+TDAI_SERVICE_ID=zthl-research python -m bridge.mcp.server
 ```
 
-API Key resolution (MCP server): `MCP_BRIDGE_API_KEY` 鈫?`TDAI_API_KEY` 鈫?empty (loopback).
+API Key resolution (MCP server): `MCP_BRIDGE_API_KEY` ?`TDAI_API_KEY` ?empty (loopback).
 Tested by `test_config.py` (7 tests) and `test_dual_path.py` (4 tests).
 
 ## Cross-Language SDK
@@ -130,7 +130,7 @@ Python and TypeScript define the same contract: `recall` / `capture` / `searchMe
 with parameter validation and graceful degradation.
 
 The **MCP transport layer** adds a lightweight stdio bridge for environments that prefer the
-Model Context Protocol 鈥?no server-side MCP framework dependency, minimal surface area.
+Model Context Protocol ?no server-side MCP framework dependency, minimal surface area.
 
 ## MCP Transport Layer
 
@@ -139,14 +139,14 @@ MCP-native agent hosts (Claude Desktop, Codex, etc.).
 
 ```
 MCP Client (TypeScript, @modelcontextprotocol/sdk)
-    鈹?stdio
-    鈻?bridge/mcp/server.py (Python, no MCP framework dependency)
-  鈹溾攢 Gate 0: JSON-RPC 2.0 schema validation
-  鈹溾攢 Gate 1: API Key authentication (HMAC constant-time)
-  鈹溾攢 Gate 2: Sliding window rate limit (60 req/60s)
-  鈹溾攢 Gate 3: Circuit breaker (10 failures 鈫?60s cooldown)
-  鈹溾攢 Gate 4: Audit logging (all calls logged at WARNING)
-  鈹斺攢 Tool dispatcher 鈫?TdaiAdapter 鈫?Gateway
+ ?stdio
+ ?bridge/mcp/server.py (Python, no MCP framework dependency)
+ Gate 0: JSON-RPC 2.0 schema validation
+ Gate 1: API Key authentication (HMAC constant-time)
+ Gate 2: Sliding window rate limit (60 req/60s)
+ Gate 3: Circuit breaker (10 failures ?60s cooldown)
+ Gate 4: Audit logging (all calls logged at WARNING)
+ Tool dispatcher ?TdaiAdapter ?Gateway
 ```
 
 ### Tools Exposed
@@ -163,7 +163,7 @@ MCP Client (TypeScript, @modelcontextprotocol/sdk)
 
 | Decision | Rationale |
 |:---|:---|
-| **No MCP server framework dependency** | Avoids framework lock-in. The server implements JSON-RPC 2.0 over stdio directly 鈥?trivially auditable, zero supply-chain risk |
+| **No MCP server framework dependency** | Avoids framework lock-in. The server implements JSON-RPC 2.0 over stdio directly ?trivially auditable, zero supply-chain risk |
 | **Five-layer defense gates** | Defense-in-depth for desktop/loopback mode. Gates 2-3 are architectural constraints on stdio (process-per-read resets state); production deployments should front with agentgateway (Linux Foundation AAIF) for session-persistent enforcement |
 | **TS client only, no duplicate server** | TypeScript side is a thin `StdioClientTransport` wrapper (~20 lines). Server logic lives in Python once |
 | **Gates are always active** | No bypass path even if agentgateway is present. Local gates serve as safety net if agentgateway fails |
@@ -176,7 +176,7 @@ MCP Client (TypeScript, @modelcontextprotocol/sdk)
 | Protocol compliance | 14 | JSON-RPC 2.0, tool routing, parameter validation |
 | Red-team defense | 13 | Injection, auth bypass, rate limit, circuit breaker attacks |
 | Offensive | 22 | Resource exhaustion, info disclosure |
-| Ghost attacks | 10 + 2 鈿狅笍 | Architecture-level attacks; rate limit & CB reset per stdio process |
+| Ghost attacks | 10 + 2 | Architecture-level attacks; rate limit & CB reset per stdio process |
 
 See `bridge/mcp/REDTEAM_FINDINGS.md` for full red-team assessment.
 
@@ -204,7 +204,7 @@ See `bridge/mcp/REDTEAM_FINDINGS.md` for full red-team assessment.
 | `bridge/mcp/tests/test_protocol.py` | 14 JSON-RPC compliance tests |
 | `bridge/mcp/tests/test_redteam.py` | 13 injection/stress/boundary tests |
 | `bridge/mcp/tests/test_offensive.py` | 22 resource exhaustion / info disclosure tests |
-| `bridge/mcp/tests/test_ghost_attacks.py` | 10 + 2 鈿狅笍 architecture-level attack tests |
+| `bridge/mcp/tests/test_ghost_attacks.py` | 10 + 2 architecture-level attack tests |
 | `docs/platform-adapter-comparison.md` | 4-platform comparison + SDK guide |
 
 ## Environment Variables
@@ -224,15 +224,15 @@ See `bridge/mcp/REDTEAM_FINDINGS.md` for full red-team assessment.
 from bridge_adapter import TdaiAdapter, TdaiAdapterRegistry
 
 class MyPlatformAdapter(TdaiAdapter):
-    @property
-    def name(self): return "my-platform"
-    def initialize(self, **kwargs): ...
-    def is_available(self): return True
-    def _recall_impl(self, query, limit): return {}
-    def _capture_impl(self, user, asst, session): return True
-    def _search_memory_impl(self, query, limit): return []
-    def _search_conversation_impl(self, query, limit): return []
-    def shutdown(self): ...
+ @property
+ def name(self): return "my-platform"
+ def initialize(self, **kwargs): ...
+ def is_available(self): return True
+ def _recall_impl(self, query, limit): return {}
+ def _capture_impl(self, user, asst, session): return True
+ def _search_memory_impl(self, query, limit): return []
+ def _search_conversation_impl(self, query, limit): return []
+ def shutdown(self): ...
 
 TdaiAdapterRegistry.register("my-platform", MyPlatformAdapter)
 ```
@@ -242,6 +242,6 @@ For buffered capture mode:
 from bridge_adapter import BufferedAdapter
 
 class MyBufferedAdapter(BufferedAdapter):
-    """Inherits auto-buffering + atexit flush."""
-    ...
+ """Inherits auto-buffering + atexit flush."""
+ ...
 ```
