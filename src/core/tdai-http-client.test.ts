@@ -6,7 +6,7 @@ const ORIGINAL_FETCH = globalThis.fetch;
 
 function mockFetch(status: number, body: unknown, ok?: boolean) {
   globalThis.fetch = vi.fn().mockResolvedValue({
-    ok: ok ?? status >= 200 && status < 300,
+    ok: ok ?? (status >= 200 && status < 300),
     status,
     text: () => Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
   });
