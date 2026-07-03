@@ -1,8 +1,8 @@
 """
-HermesV2Adapter — Hermes v2 Provider 的 TdaiAdapter 接口实现.
+HermesV2Adapter — Hermes v2 Provider - TdaiAdapter ----.
 
-证明统一适配器 SDK 在不同平台间的可复用性。
-Hermes v2 原本用 MemoryProvider 基类, 本适配器将其包装为 TdaiAdapter 接口。
+------- SDK -----------。
+Hermes v2 --- MemoryProvider --, --------- TdaiAdapter --。
 """
 
 from __future__ import annotations
@@ -25,11 +25,11 @@ except ImportError:
 
 
 class HermesV2Adapter(TdaiAdapter):
-    """Hermes v2 MemoryProvider 包装为 TdaiAdapter.
+    """Hermes v2 MemoryProvider --- TdaiAdapter.
 
-    作为统一 SDK 的第二个实现, 证明:
-      - 不同平台 (Bridge / Hermes) 可共用同一接口
-      - 新平台只需实现 TdaiAdapter 的 6 个方法
+    ---- SDK ------, --:
+      - ---- (Bridge / Hermes) -------
+      - ------- TdaiAdapter - 6 ---
     """
 
     NAME = "hermes_v2"

@@ -24,7 +24,7 @@ import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
-const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
+const RECALL_TRUNCATION_SUFFIX = "…（---；-- tdai_memory_search - tdai_conversation_search ----）";
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
 
@@ -33,18 +33,18 @@ const RECALL_LINE_SEPARATOR = "\n";
  * main agent knows how to actively retrieve deeper information.
  */
 const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
-## 记忆工具调用指南
+## --------
 
-当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
+--------------------，---------------：
 
-- **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件节点、规则等关键信息。
-- **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节；也可用于补充或校验 memory_search 的结果。
-- **read_file**（Scene Navigation 中的路径）：当已定位到相关情境，且需要该场景的完整画像、事件经过或阶段结论时使用。
+- **tdai_memory_search**：-------（L1），---------、------、-------。
+- **tdai_conversation_search**：------（L0），-----------、---、-----；--------- memory_search ---。
+- **read_file**（Scene Navigation ----）：---------，-----------、------------。
 
-### ⚠️ 调用次数限制
-每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
-- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
-- 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
+### ⚠️ ------
+-----，tdai_memory_search - tdai_conversation_search **------ 3 -**。
+- --------，-----------，---------- 3 -。
+- - 3 --------，----------，-------------，------。
 </memory-tools-guide>`
 
 /** A single recalled L1 memory with its search score and type. */
@@ -129,7 +129,7 @@ async function performAutoRecallInner(params: {
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
-      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
+      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(----:.*\))?$/);
       if (match) {
         const tag = match[1];
         const content = match[2].trim();
@@ -205,7 +205,7 @@ async function performAutoRecallInner(params: {
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+      `<relevant-memories>\n--------------，---------，-----：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -281,9 +281,9 @@ async function searchMemoriesWithDetails(
   const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
 
   // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
+  // Format: "- [type|scene] content (----: ...)" or "- [type] content"
   const memories: RecalledMemory[] = result.lines.map((line) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
+    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(----:.*\))?$/);
     if (match) {
       const tag = match[1];
       const content = match[2].trim();
@@ -653,25 +653,25 @@ async function searchHybrid(
  * Format a single memory record into a rich natural-language line for prompt injection.
  *
  * Time semantics:
- *   - timestamp (点时间): when the activity/event happened, e.g. "2025-03-01 mentioned something"
- *   - activity_start_time / activity_end_time (段时间): activity time range, e.g. "trip from 2025-05-01 to 2025-05-10"
+ *   - timestamp (---): when the activity/event happened, e.g. "2025-03-01 mentioned something"
+ *   - activity_start_time / activity_end_time (---): activity time range, e.g. "trip from 2025-05-01 to 2025-05-10"
  *   - All three time fields may be empty/undefined — handled gracefully.
  *
  * Output examples:
- *   - [persona] 用户叫王小明，30岁，是一名软件工程师。
- *   - [episodic|旅行计划] 用户计划五月去日本旅行。(活动时间: 2025-05-01 ~ 2025-05-10)
- *   - [episodic] 用户今天加班到很晚。(活动时间: 2025-03-01)
- *   - [instruction] 用户要求回答时使用中文，保持简洁。
+ *   - [persona] ------，30-，--------。
+ *   - [episodic|----] -----------。(----: 2025-05-01 ~ 2025-05-10)
+ *   - [episodic] ---------。(----: 2025-03-01)
+ *   - [instruction] -----------，----。
  */
 interface FormatableMemory {
   type: string;
   content: string;
   scene_name?: string;
-  /** Activity time range start (段时间 start), may be empty */
+  /** Activity time range start (--- start), may be empty */
   activity_start_time?: string;
-  /** Activity time range end (段时间 end), may be empty */
+  /** Activity time range end (--- end), may be empty */
   activity_end_time?: string;
-  /** Activity point-in-time (点时间: when it happened), may be empty */
+  /** Activity point-in-time (---: when it happened), may be empty */
   timestamp?: string;
 }
 
@@ -688,17 +688,17 @@ function formatMemoryLine(m: FormatableMemory): string {
   const point = formatTimestamp(m.timestamp);
 
   if (start && end) {
-    // 段时间: both start and end
-    line += ` (活动时间: ${start} ~ ${end})`;
+    // ---: both start and end
+    line += ` (----: ${start} ~ ${end})`;
   } else if (start) {
-    // 段时间: only start
-    line += ` (活动时间: ${start}起)`;
+    // ---: only start
+    line += ` (----: ${start}-)`;
   } else if (end) {
-    // 段时间: only end
-    line += ` (活动时间: 至${end})`;
+    // ---: only end
+    line += ` (----: -${end})`;
   } else if (point) {
-    // 点时间: single timestamp
-    line += ` (活动时间: ${point})`;
+    // ---: single timestamp
+    line += ` (----: ${point})`;
   }
   // If all three are empty → no time info appended (graceful)
 

@@ -118,7 +118,7 @@ def test_unicode_injection():
     """Unicode special characters should not break JSON."""
     resp = _rpc("tools/call", {
         "name": "tdai_recall",
-        "arguments": {"query": "日本語 español العربية\n\t\u0000"},
+        "arguments": {"query": "--- español العربية\n\t\u0000"},
     })
     assert resp is not None
 

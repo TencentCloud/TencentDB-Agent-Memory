@@ -390,12 +390,12 @@ async function migrateL1Records(sourceStore: VectorStore, targetStore: Migration
 
     migrated += rows.length;
     cursor = rows[rows.length - 1].record_id;
-    log(`L1: 已迁移 ${migrated} 条...`);
+    log(`L1: --- ${migrated} -...`);
 
     if (rows.length < pageSize) break;
   }
 
-  log(`L1: 迁移完成，共 ${migrated} 条`);
+  log(`L1: ----，- ${migrated} -`);
   return migrated;
 }
 
@@ -425,12 +425,12 @@ async function migrateL0Records(sourceStore: VectorStore, targetStore: Migration
 
     migrated += rows.length;
     cursor = rows[rows.length - 1].record_id;
-    log(`L0: 已迁移 ${migrated} 条...`);
+    log(`L0: --- ${migrated} -...`);
 
     if (rows.length < pageSize) break;
   }
 
-  log(`L0: 迁移完成，共 ${migrated} 条`);
+  log(`L0: ----，- ${migrated} -`);
   return migrated;
 }
 
@@ -440,15 +440,15 @@ async function migrateProfiles(
 ): Promise<number> {
   const profiles = await listLocalProfiles(pluginDataDir);
   if (profiles.length === 0) {
-    log("Profiles: 无本地 profile，跳过");
+    log("Profiles: --- profile，--");
     return 0;
   }
   if (!targetStore.syncProfiles) {
     throw new Error("Target store does not support profile sync");
   }
-  log(`Profiles: 发现 ${profiles.length} 个本地 profile，开始同步...`);
+  log(`Profiles: -- ${profiles.length} --- profile，----...`);
   await targetStore.syncProfiles(profiles);
-  log(`Profiles: 同步完成，共 ${profiles.length} 个`);
+  log(`Profiles: ----，- ${profiles.length} -`);
   return profiles.length;
 }
 
@@ -458,10 +458,10 @@ async function verifyMigratedCounts(
   delayMs: number,
 ): Promise<{ l1Count: number; l0Count: number; profileCount: number }> {
   if (delayMs > 0) {
-    log(`等待 ${Math.round(delayMs / 1000)} 秒让远端数据落盘...`);
+    log(`-- ${Math.round(delayMs / 1000)} --------...`);
     await sleep(delayMs);
   }
-  log("开始校验迁移数量...");
+  log("--------...");
 
   const [l1Count, l0Count, profileCount] = await Promise.all([
     Promise.resolve(targetStore.countL1()),
@@ -469,7 +469,7 @@ async function verifyMigratedCounts(
     targetStore.pullProfiles ? targetStore.pullProfiles().then((records) => records.length) : Promise.resolve(0),
   ]);
 
-  log(`校验结果: L1=${l1Count}/${summary.source.l1Count}, L0=${l0Count}/${summary.source.l0Count}, Profiles=${profileCount}/${summary.source.profileCount}`);
+  log(`----: L1=${l1Count}/${summary.source.l1Count}, L0=${l0Count}/${summary.source.l0Count}, Profiles=${profileCount}/${summary.source.profileCount}`);
 
   if (l1Count !== summary.source.l1Count) {
     throw new Error(`L1 count verification failed: source=${summary.source.l1Count}, target=${l1Count}`);
@@ -483,7 +483,7 @@ async function verifyMigratedCounts(
     );
   }
 
-  log("校验通过");
+  log("----");
   return { l1Count, l0Count, profileCount };
 }
 
@@ -498,46 +498,46 @@ async function writeSummaryJson(
 
 function printUsageAndExit(): never {
   const text = `
-SQLite → 腾讯云向量数据库迁移工具
+SQLite → ------------
 
 Usage:
   migrate-sqlite-to-tcvdb [options]
 
 Required:
-  --plugin-data-dir <path>       插件数据目录路径
-  --openclaw-config-path <path>  openclaw.json 配置文件路径
-  --tcvdb-url <url>              TCVDB 服务地址
-  --tcvdb-username <name>        TCVDB 用户名
-  --tcvdb-database <name>        TCVDB 数据库名
-  --tcvdb-embedding-model <name> Embedding 模型名称
-  --tcvdb-api-key <key>          TCVDB API 密钥（明文，与 --tcvdb-api-key-env 二选一）
-  --tcvdb-api-key-env <var>      包含 API 密钥的环境变量名
+  --plugin-data-dir <path>       --------
+  --openclaw-config-path <path>  openclaw.json ------
+  --tcvdb-url <url>              TCVDB ----
+  --tcvdb-username <name>        TCVDB ---
+  --tcvdb-database <name>        TCVDB ----
+  --tcvdb-embedding-model <name> Embedding ----
+  --tcvdb-api-key <key>          TCVDB API --（--，- --tcvdb-api-key-env ---）
+  --tcvdb-api-key-env <var>      -- API --------
 
 Optional:
-  --sqlite-path <path>           SQLite 数据库路径（默认: <plugin-data-dir>/vectors.db）
-  --plugin-id <id>               写入配置时使用的插件 ID（默认: memory-tencentdb）
-  --layers <l0,l1,l2,l3>         要迁移的层，逗号分隔（默认: l0,l1,l2,l3）
-  --tcvdb-alias <name>           用户自定义别名
-  --tcvdb-timeout-ms <ms>        请求超时（默认: 10000）
-  --tcvdb-ca-pem <path>          CA 证书 PEM 文件路径（HTTPS 连接时使用）
-  --bm25-language <zh|en>        BM25 分词语言（默认: zh）
-  --summary-json-path <path>     将迁移摘要写入此文件
-  --job-id <id>                  迁移任务 ID（用于追踪）
+  --sqlite-path <path>           SQLite -----（--: <plugin-data-dir>/vectors.db）
+  --plugin-id <id>               ---------- ID（--: memory-tencentdb）
+  --layers <l0,l1,l2,l3>         -----，----（--: l0,l1,l2,l3）
+  --tcvdb-alias <name>           -------
+  --tcvdb-timeout-ms <ms>        ----（--: 10000）
+  --tcvdb-ca-pem <path>          CA -- PEM ----（HTTPS -----）
+  --bm25-language <zh|en>        BM25 ----（--: zh）
+  --summary-json-path <path>     ----------
+  --job-id <id>                  ---- ID（----）
 
 Flags:
-  --dry-run                      仅预览，不执行写入
-  --yes                          跳过交互确认
-  --no-apply-config              不自动更新 openclaw.json
-  --no-config-backup             写入配置前不备份
-  --no-rewrite-manifest          不更新 manifest.json
-  --no-fail-if-target-nonempty   目标库非空时不中止
-  --no-verify-counts             迁移后不校验记录数
-  --no-bm25-enabled              禁用 BM25 稀疏向量
+  --dry-run                      ---，-----
+  --yes                          ------
+  --no-apply-config              ----- openclaw.json
+  --no-config-backup             --------
+  --no-rewrite-manifest          --- manifest.json
+  --no-fail-if-target-nonempty   ---------
+  --no-verify-counts             ---------
+  --no-bm25-enabled              -- BM25 ----
 
-  -h, --help                     显示此帮助信息
+  -h, --help                     -------
 
 Examples:
-  # 预检模式
+  # ----
   migrate-sqlite-to-tcvdb \\
     --plugin-data-dir ~/.openclaw/memory-tdai \\
     --openclaw-config-path ~/.openclaw/openclaw.json \\
@@ -547,7 +547,7 @@ Examples:
     --tcvdb-embedding-model bge-large-zh \\
     --dry-run
 
-  # 正式迁移
+  # ----
   migrate-sqlite-to-tcvdb \\
     --plugin-data-dir ~/.openclaw/memory-tdai \\
     --openclaw-config-path ~/.openclaw/openclaw.json \\
@@ -640,17 +640,17 @@ export function resolveMigrationCliOptions(argv: string[]): ResolvedMigrationCli
 export async function collectMigrationPreflight(
   options: ResolvedMigrationCliOptions,
 ): Promise<MigrationPreflightSummary> {
-  // ── 优雅处理"数据目录 / sqlite 不存在"的场景 ──
-  // 如果源数据路径不存在（全新部署、尚未有任何 capture），不报错——
-  // 返回"全零"summary，让调用方判断是否跳过迁移。
+  // ── ----"---- / sqlite ---"--- ──
+  // ----------（----、----- capture），---——
+  // --"--"summary，------------。
   const dirExists = await fs.stat(options.pluginDataDir).then(s => s.isDirectory()).catch(() => false);
   if (!dirExists) {
-    log(`plugin data directory 不存在，无需迁移: ${options.pluginDataDir}`);
+    log(`plugin data directory ---，----: ${options.pluginDataDir}`);
     return buildEmptySummary(options);
   }
   const sqliteExists = await fs.access(options.sqlitePath).then(() => true).catch(() => false);
   if (!sqliteExists) {
-    log(`sqlite database 不存在，无需迁移: ${options.sqlitePath}`);
+    log(`sqlite database ---，----: ${options.sqlitePath}`);
     return buildEmptySummary(options);
   }
   await ensureReadablePath(options.openclawConfigPath, "OpenClaw config file");
@@ -713,19 +713,19 @@ export async function runMigrationCli(
   deps: RunMigrationCliDeps = {},
 ): Promise<MigrationPreflightSummary> {
   const options = resolveMigrationCliOptions(argv);
-  log("开始预检...");
+  log("----...");
   const summary = await collectMigrationPreflight(options);
-  log(`预检完成: 源数据 L1=${summary.source.l1Count}, L0=${summary.source.l0Count}, Profiles=${summary.source.profileCount}`);
-  log(`目标: ${summary.target.url} / ${summary.target.database}`);
+  log(`----: --- L1=${summary.source.l1Count}, L0=${summary.source.l0Count}, Profiles=${summary.source.profileCount}`);
+  log(`--: ${summary.target.url} / ${summary.target.database}`);
 
   const hasSourceData = summary.source.l0Count > 0 || summary.source.l1Count > 0 || summary.source.profileCount > 0;
 
   if (!hasSourceData) {
-    log("源数据为空，跳过数据迁移。");
+    log("-----，------。");
   }
 
   if (options.dryRun) {
-    log("预检模式 (dry-run)，不执行写入");
+    log("---- (dry-run)，-----");
     await writeSummaryJson(options.summaryJsonPath, summary);
     return summary;
   }
@@ -748,7 +748,7 @@ export async function runMigrationCli(
   };
 
   if (hasSourceData) {
-    log("打开 SQLite 源库...");
+    log("-- SQLite --...");
     const sourceStore = new VectorStore(options.sqlitePath, 0);
     const sourceInitResult = sourceStore.init();
     if (sourceStore.isDegraded()) {
@@ -756,7 +756,7 @@ export async function runMigrationCli(
       throw new Error(`Failed to reopen sqlite source store: ${sourceInitResult.reason ?? "unknown error"}`);
     }
 
-    log("初始化目标库...");
+    log("------...");
     const targetStore = createTargetStore(options);
 
     try {
@@ -768,7 +768,7 @@ export async function runMigrationCli(
       await ensureTargetIsEmpty(options, targetStore);
 
       const pageSize = DEFAULT_MIGRATION_PAGE_SIZE;
-      log(`分页大小: ${pageSize} 条/批`);
+      log(`----: ${pageSize} -/-`);
 
       migration.l1Migrated = options.layers.includes("l1") ? await migrateL1Records(sourceStore, targetStore, pageSize) : 0;
       migration.l0Migrated = options.layers.includes("l0") ? await migrateL0Records(sourceStore, targetStore, pageSize) : 0;
@@ -796,7 +796,7 @@ export async function runMigrationCli(
   }
 
   if (options.applyConfig) {
-    log(`写入配置到 ${options.openclawConfigPath} ...`);
+    log(`----- ${options.openclawConfigPath} ...`);
     await writeMigrationPluginConfig({
       configPath: options.openclawConfigPath,
       pluginId: options.pluginId,
@@ -815,11 +815,11 @@ export async function runMigrationCli(
       },
     });
     migration.configWritten = true;
-    log("配置写入完成");
+    log("------");
   }
 
   if (options.rewriteManifest) {
-    log("更新 manifest...");
+    log("-- manifest...");
     const manifestResult = await rewriteMigrationManifest({
       dataDir: options.pluginDataDir,
       tcvdbUrl: options.tcvdb.url,
@@ -828,7 +828,7 @@ export async function runMigrationCli(
     });
     migration.manifestWritten = manifestResult.created || manifestResult.updated;
     migration.manifestBackupPath = manifestResult.backupPath;
-    log(`Manifest ${manifestResult.created ? "创建" : "更新"}完成${manifestResult.backupPath ? `，备份: ${manifestResult.backupPath}` : ""}`);
+    log(`Manifest ${manifestResult.created ? "--" : "--"}--${manifestResult.backupPath ? `，--: ${manifestResult.backupPath}` : ""}`);
   }
 
   summary.migration = {
@@ -844,6 +844,6 @@ export async function runMigrationCli(
   };
 
   await writeSummaryJson(options.summaryJsonPath, summary);
-  log("迁移全部完成!");
+  log("------!");
   return summary;
 }

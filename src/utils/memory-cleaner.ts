@@ -76,8 +76,8 @@ export class LocalMemoryCleaner {
       return;
     }
 
-    // 按"本地自然日"保留策略计算截止时间。
-    // 例如 retentionDays=2，今天是 03-15，则保留 03-14/03-15，删除早于 03-14 00:00:00.000 的记录。
+    // -"-----"----------。
+    // -- retentionDays=2，--- 03-15，--- 03-14/03-15，---- 03-14 00:00:00.000 ---。
     let cutoffMs: number;
     try {
       cutoffMs = computeCutoffMsByLocalDay(nowMs, retentionDays);
@@ -249,7 +249,7 @@ export class LocalMemoryCleaner {
       const filePath = path.join(dirPath, entry.name);
       stats.scannedFiles += 1;
 
-      // 仅支持日期分片文件：YYYY-MM-DD(.jsonl/.json)
+      // ---------：YYYY-MM-DD(.jsonl/.json)
       const shard = extractShardDateFromFileName(entry.name);
       if (!shard) {
         stats.skippedNonShardFiles += 1;
@@ -330,8 +330,8 @@ function formatUtcOffset(offsetMinutes: number): string {
 }
 
 function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number {
-  // 自然日策略，保留"今天 + 往前 retentionDays-1 天"
-  // 删除阈值为 keepStart 当天 00:00:00.000（配置时区）
+  // -----，--"-- + -- retentionDays-1 -"
+  // ----- keepStart -- 00:00:00.000（----）
   const now = new Date(nowMs);
   const todayStartMs = startOfLocalDay(now);
   const cutoffMs = todayStartMs - (retentionDays - 1) * 24 * 60 * 60 * 1000;

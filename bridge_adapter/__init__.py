@@ -166,7 +166,7 @@ class BridgeAdapter(TdaiAdapter):
                     memory_lines.append(f"- [{mtype}] {content}")
                 prepend = (
                     "<relevant-memories>\n"
-                    "以下是当前会话召回的相关记忆，仅作为参考：\n\n"
+                    "--------------，-----：\n\n"
                     + "\n".join(memory_lines)
                     + "\n</relevant-memories>"
                 )

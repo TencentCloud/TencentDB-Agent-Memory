@@ -1,17 +1,17 @@
 /**
  * Input loading, validation, normalization, and timestamp handling for seed-v2.
  *
- * ⚠️ 这份文件是从 `src/core/seed/input.ts` 拷来的精简版（去掉了 v1 CLI 专属的
- * `loadAndValidateInput`，因为它依赖 `SeedCommandOptions` 类型且会做交互式
- * timestamp 确认 —— seed-v2 是 HTTP 工具，不交互）。
+ * ⚠️ ------ `src/core/seed/input.ts` ------（--- v1 CLI ---
+ * `loadAndValidateInput`，----- `SeedCommandOptions` --------
+ * timestamp -- —— seed-v2 - HTTP --，---）。
  *
- * 老 v1 seed (`src/cli/commands/seed.ts` + `/seed` v1 endpoint) 计划废弃后，
- * 本文件成为唯一真理之源。在那之前，如果在 `src/core/seed/input.ts` 改了
- * `validateAndNormalizeRaw` / `fillTimestamps` / `SeedValidationError`，请
- * 同步到这里。
+ * - v1 seed (`src/cli/commands/seed.ts` + `/seed` v1 endpoint) -----，
+ * -----------。----，--- `src/core/seed/input.ts` --
+ * `validateAndNormalizeRaw` / `fillTimestamps` / `SeedValidationError`，-
+ * -----。
  *
- * 6 层校验 (file → top-level → session → round → message → timestamp consistency)
- * 中的 file 层在 seed-v2 自己读 fixture 时做（`loadFixtureFile`），不在本文件里。
+ * 6 --- (file → top-level → session → round → message → timestamp consistency)
+ * -- file -- seed-v2 --- fixture --（`loadFixtureFile`），------。
  */
 
 import crypto from "node:crypto";

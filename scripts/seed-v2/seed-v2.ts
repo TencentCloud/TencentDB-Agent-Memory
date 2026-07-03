@@ -1,36 +1,36 @@
 #!/usr/bin/env npx tsx
 /**
- * seed-v2 — 通过 v2 API 把历史对话灌入 memory-tencentdb gateway。
+ * seed-v2 — -- v2 API ------- memory-tencentdb gateway。
  *
- * 与老 `src/cli/commands/seed.ts`（v1，import 核心 runtime 直跑）相比：
- *   - 纯 HTTP 客户端，不 import 任何 plugin 内部模块
- *   - 通过 `/v2/conversation/add` 写 L0 + 让 gateway 自动调度 L1/L2/L3
- *   - 通过轮询 `/v2/pipeline/status` 的 `busy` 标量做节流
- *   - 既适用于 standalone，也适用于 service 模式（同一份代码）
+ * -- `src/cli/commands/seed.ts`（v1，import -- runtime --）--：
+ *   - - HTTP ---，- import -- plugin ----
+ *   - -- `/v2/conversation/add` - L0 + - gateway ---- L1/L2/L3
+ *   - ---- `/v2/pipeline/status` - `busy` -----
+ *   - ---- standalone，---- service --（-----）
  *
- * 阻塞节奏（对齐老 `seed-runtime.executeSeed`）:
- *   - per-round 写入 conversation/add 后立即继续
- *   - 每 N 轮（--every-n / SEED_EVERY_N）等一次 busy=false（stable polls）
- *   - 每个 session 末尾再等一次
- *   - 全部跑完后做 final drain
+ * ----（--- `seed-runtime.executeSeed`）:
+ *   - per-round -- conversation/add -----
+ *   - - N -（--every-n / SEED_EVERY_N）--- busy=false（stable polls）
+ *   - -- session ------
+ *   - ------ final drain
  *
  * @example
- *   # 用 npm script 入口
+ *   # - npm script --
  *   npm run seed-v2 -- --input ./fixtures/minimal.json
  *
- *   # 或直接 tsx
+ *   # --- tsx
  *   npx tsx scripts/seed-v2/seed-v2.ts --input fixture.json --endpoint http://127.0.0.1:18420
  *
- *   # 关键参数
- *   --input <file>            必选，fixture JSON 路径
- *   --endpoint <url>          gateway 地址（默认 http://127.0.0.1:18420）
- *   --service-id <id>         x-tdai-service-id（默认 default）
- *   --api-key <key>           Bearer key（默认 standalone-e2e）
- *   --every-n <n>             每 N 轮 wait 一次 busy=false（默认 5）
- *   --max-wait-ms <ms>        单次 wait 最长时间（默认 600000=10 分钟）
- *   --no-final-wait           写完最后一批不等 cascade，立即退出
- *   --dry-run                 只打印计划不实际请求
- *   --quiet                   静默模式
+ *   # ----
+ *   --input <file>            --，fixture JSON --
+ *   --endpoint <url>          gateway --（-- http://127.0.0.1:18420）
+ *   --service-id <id>         x-tdai-service-id（-- default）
+ *   --api-key <key>           Bearer key（-- standalone-e2e）
+ *   --every-n <n>             - N - wait -- busy=false（-- 5）
+ *   --max-wait-ms <ms>        -- wait ----（-- 600000=10 --）
+ *   --no-final-wait           -------- cascade，----
+ *   --dry-run                 ----------
+ *   --quiet                   ----
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -538,7 +538,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Pre-flight: status接口 must respond
+  // Pre-flight: status-- must respond
   let preflight: StatusData;
   try {
     preflight = await pollStatus(client);

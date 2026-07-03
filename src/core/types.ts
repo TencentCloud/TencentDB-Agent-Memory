@@ -1,16 +1,16 @@
 /**
- * TDAI Core 鈥?Host-neutral type definitions and abstract interfaces.
+ * TDAI Core -?Host-neutral type definitions and abstract interfaces.
  *
  * These types define the boundary between TDAI Core (memory algorithms)
  * and the host environment (OpenClaw, Hermes, standalone Gateway, etc.).
  *
  * Design principles:
- * 1. TDAI Core depends ONLY on these interfaces 鈥?never on a specific host.
+ * 1. TDAI Core depends ONLY on these interfaces -?never on a specific host.
  * 2. Each host provides its own implementation of HostAdapter + LLMRunnerFactory.
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
 
-/** @internal 鈥?inline type decls avoid tsc ESM .js resolution in migrate-sqlite-to-tcvdb build. */
+/** @internal -?inline type decls avoid tsc ESM .js resolution in migrate-sqlite-to-tcvdb build. */
 interface _StorageAdapter { readonly type: string }
 interface _RecallError { code: number; category: "config" | "dependency" | "storage" | "internal"; message: string }
 
@@ -36,7 +36,7 @@ export interface Logger {
 // ============================
 
 /**
- * Unified runtime context 鈥?provides identity, scoping, and path information.
+ * Unified runtime context -?provides identity, scoping, and path information.
  *
  * In OpenClaw: populated from `pluginConfig`, `sessionKey`, `resolveStateDir()`.
  * In Hermes:   populated from `MemoryProvider.initialize()` kwargs.
@@ -53,7 +53,7 @@ export interface RuntimeContext {
   platform: "openclaw" | "hermes" | "cli" | "gateway" | string;
   /** Agent identity / profile name (optional). */
   agentIdentity?: string;
-  /** Agent execution context 鈥?primary agent, subagent, cron job, or flush task. */
+  /** Agent execution context -?primary agent, subagent, cron job, or flush task. */
   agentContext?: "primary" | "subagent" | "cron" | "flush";
   /** Workspace directory (for tool sandbox, if applicable). */
   workspaceDir: string;
@@ -75,7 +75,7 @@ export interface LLMRunParams {
   taskId: string;
   /** Execution timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
-  /** Max output tokens (optional 鈥?defaults to model catalog value). */
+  /** Max output tokens (optional -?defaults to model catalog value). */
   maxTokens?: number;
   /**
    * Working directory for tool-enabled runs.
@@ -115,8 +115,8 @@ export interface LLMRunner {
    * Execute a prompt and return the LLM's text output.
    *
    * Behavior depends on the factory configuration:
-   * - `enableTools: false` 鈫?pure text output (used by L1 extraction, L1 dedup)
-   * - `enableTools: true`  鈫?LLM may call file tools (used by L2 scene, L3 persona)
+   * - `enableTools: false` -?pure text output (used by L1 extraction, L1 dedup)
+   * - `enableTools: true`  -?LLM may call file tools (used by L2 scene, L3 persona)
    *
    * @returns The LLM's text response. Empty string if the LLM produces no output.
    * @throws On timeout, network errors, or unrecoverable LLM failures.
@@ -157,17 +157,17 @@ export interface LLMRunnerFactory {
 // ============================
 
 /**
- * Host adapter 鈥?translates host-specific events, context, and capabilities
+ * Host adapter -?translates host-specific events, context, and capabilities
  * into TDAI Core's unified interface.
  *
  * Each host environment provides exactly one HostAdapter implementation:
- * - OpenClaw:    `OpenClawHostAdapter` 鈥?wraps `OpenClawPluginApi`
- * - Hermes/GW:   `StandaloneHostAdapter` 鈥?wraps Gateway HTTP request context
+ * - OpenClaw:    `OpenClawHostAdapter` -?wraps `OpenClawPluginApi`
+ * - Hermes/GW:   `StandaloneHostAdapter` -?wraps Gateway HTTP request context
  *
  * HostAdapter answers these questions for TDAI Core:
- * - "Who is the current user/session?" 鈫?`getRuntimeContext()`
- * - "How do I call an LLM?"           鈫?`getLLMRunnerFactory()`
- * - "Where do I log?"                 鈫?`getLogger()`
+ * - "Who is the current user/session?" -?`getRuntimeContext()`
+ * - "How do I call an LLM?"           -?`getLLMRunnerFactory()`
+ * - "Where do I log?"                 -?`getLogger()`
  */
 export interface HostAdapter {
   /** Identifies the host type for conditional behavior (should be rare). */
@@ -184,7 +184,7 @@ export interface HostAdapter {
 }
 
 // ============================
-// MemoryAdapter 鈥?Host-neutral memory operations interface
+// MemoryAdapter -?Host-neutral memory operations interface
 // ============================
 
 /**
@@ -193,7 +193,7 @@ export interface HostAdapter {
  * in TypeScript (see `bridge_adapter/base.py` in this repo).
  *
  * Unlike `HostAdapter` (which abstracts the runtime environment),
- * `MemoryAdapter` abstracts the memory API 鈥?recall, capture, search.
+ * `MemoryAdapter` abstracts the memory API -?recall, capture, search.
  *
  * Platforms:
  * - Python:  `TdaiAdapter` ABC in `bridge_adapter/base.py`
@@ -233,7 +233,7 @@ export interface MemoryAdapter {
 }
 
 // ============================
-// CompletedTurn 鈥?represents a finished conversation turn
+// CompletedTurn -?represents a finished conversation turn
 // ============================
 
 /** A completed conversation turn, ready for capture/storage. */
@@ -264,7 +264,7 @@ export interface CompletedTurn {
 
 /** Result from a recall (prefetch) operation. */
 export interface RecallResult {
-  /** L1 relevant memories 鈥?prepended to user prompt text (dynamic, per-turn). */
+  /** L1 relevant memories -?prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;

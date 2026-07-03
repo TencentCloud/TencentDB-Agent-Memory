@@ -385,7 +385,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       const s = item as Record<string, unknown>;
 
       scenes.push({
-        scene_name: typeof s.scene_name === "string" ? s.scene_name : "未知情境",
+        scene_name: typeof s.scene_name === "string" ? s.scene_name : "----",
         message_ids: Array.isArray(s.message_ids) ? s.message_ids.map(String) : [],
         memories: Array.isArray(s.memories)
           ? (s.memories as Array<Record<string, unknown>>)

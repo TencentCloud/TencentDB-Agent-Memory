@@ -1,12 +1,12 @@
 /**
  * Type definitions for seed-v2 fixture input.
  *
- * ⚠️ 这份文件是从 `src/core/seed/types.ts` 拷来的精简版（去掉了 v1 CLI 专属的
+ * ⚠️ ------ `src/core/seed/types.ts` ------（--- v1 CLI ---
  * `SeedCommandOptions` / `SeedProgress` / `SeedSummary`）。
  *
- * 老 v1 seed (`src/cli/commands/seed.ts` + `/seed` v1 endpoint) 计划废弃后，
- * 本文件成为唯一真理之源。在那之前，如果在 `src/core/seed/types.ts` 改了
- * Raw* / Normalized* / ValidationError，请同步到这里。
+ * - v1 seed (`src/cli/commands/seed.ts` + `/seed` v1 endpoint) -----，
+ * -----------。----，--- `src/core/seed/types.ts` --
+ * Raw* / Normalized* / ValidationError，------。
  */
 
 // ============================

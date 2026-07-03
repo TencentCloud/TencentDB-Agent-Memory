@@ -168,10 +168,10 @@ function getJieba(): JiebaInstance | null {
  * Kept small on purpose — only high-frequency function words.
  */
 const ZH_STOP_WORDS = new Set([
-  "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
-  "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
-  "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那",
-  "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
+  "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
+  "--", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
+  "--", "-", "-", "--", "-", "-", "-", "-", "-", "-",
+  "-", "-", "-", "-", "-", "-", "-",
 ]);
 
 /**
@@ -191,9 +191,9 @@ const ZH_STOP_WORDS = new Set([
  * in FTS-only fallback mode (no embedding available).
  *
  * Example (with jieba):
- *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
+ *   "-------TypeScript" → '"--" OR "--" OR "--" OR "TypeScript"'
  * Example (fallback):
- *   "旅行计划 API" → '"旅行计划" OR "API"'
+ *   "---- API" → '"----" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
@@ -201,7 +201,7 @@ export function buildFtsQuery(raw: string): string | null {
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
+    // e.g. "----" → ["--", "--", "----"]
     tokens = jieba
       .cutForSearch(raw, true)
       .map((t) => t.trim())
@@ -239,16 +239,16 @@ export function buildFtsQuery(raw: string): string | null {
  *
  * Using `cutForSearch` (instead of `cut`) ensures that the index contains
  * the same sub-word tokens that `buildFtsQuery()` produces on the query side.
- * For example, "人工智能" is indexed as "人工 智能 人工智能", so queries for
+ * For example, "----" is indexed as "-- -- ----", so queries for
  * either the full term or sub-words will match.
  *
  * Falls back to the original text if jieba is unavailable.
  *
  * Example (with jieba):
- *   "用户五月去日本旅行" → "用户 五月 去 日本 旅行"
- *   "人工智能的分支"     → "人工 智能 人工智能 的 分支"
+ *   "---------" → "-- -- - -- --"
+ *   "-------"     → "-- -- ---- - --"
  * Example (fallback):
- *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
+ *   "---------" → "---------" (unchanged)
  */
 export function tokenizeForFts(raw: string): string {
   const jieba = getJieba();

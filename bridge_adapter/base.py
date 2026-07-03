@@ -1,14 +1,14 @@
 """
-TdaiAdapter — 统一适配器 SDK 抽象基类.
+TdaiAdapter — ----- SDK ----.
 
-所有 TDAI 平台适配器实现此接口。新平台只需:
-  1. 继承 TdaiAdapter
-  2. 实现 4 个内部方法 (_recall_impl / _capture_impl / _search_memory_impl / _search_conversation_impl)
-  3. 注册到 TdaiAdapterRegistry
+-- TDAI ----------。-----:
+  1. -- TdaiAdapter
+  2. -- 4 ----- (_recall_impl / _capture_impl / _search_memory_impl / _search_conversation_impl)
+  3. --- TdaiAdapterRegistry
 
-SDK 提供:
-  - 参数校验 (长度/类型/边界) + 结构化错误类型 + 指数退避重试
-  - 环境变量配置加载器 + 注册表健康聚合 + 中间件钩子
+SDK --:
+  - ---- (--/--/--) + ------- + ------
+  - --------- + ------- + -----
 """
 
 from __future__ import annotations
@@ -54,25 +54,25 @@ _REGISTRY_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 # ════════════════════════════════════════════
 
 class TdaiError(Exception):
-    """TDAI SDK 基类异常."""
+    """TDAI SDK ----."""
     def __init__(self, message: str, cause: Optional[Exception] = None):
         super().__init__(message)
         self.cause = cause
 
 class TdaiConnectionError(TdaiError):
-    """Gateway 连接失败."""
+    """Gateway ----."""
 
 class TdaiAuthError(TdaiError):
-    """认证失败 (API key 无效/过期)."""
+    """---- (API key --/--)."""
 
 class TdaiTimeoutError(TdaiError):
-    """请求超时."""
+    """----."""
 
 class TdaiRateLimitError(TdaiError):
-    """频率限制."""
+    """----."""
 
 class TdaiValidationError(TdaiError):
-    """参数校验失败."""
+    """------."""
 
 
 # ════════════════════════════════════════════
@@ -81,7 +81,7 @@ class TdaiValidationError(TdaiError):
 
 @dataclass
 class TdaiConfig:
-    """TDAI 适配器配置 — 支持 env var 和显式传入."""
+    """TDAI ----- — -- env var -----."""
     endpoint: str = "http://127.0.0.1:8420"
     api_key: str = ""
     service_id: str = "mem-rkgqhd5z"
@@ -91,7 +91,7 @@ class TdaiConfig:
 
     @classmethod
     def from_env(cls, prefix: str = "TDAI") -> "TdaiConfig":
-        """从环境变量加载配置. 支持 TDAI_* 和 TD_* 两种前缀."""
+        """---------. -- TDAI_* - TD_* ----."""
         pf = prefix.upper()
         return cls(
             endpoint=os.environ.get(f"{pf}_ENDPOINT", "http://127.0.0.1:8420"),
@@ -108,21 +108,21 @@ class TdaiConfig:
 # ════════════════════════════════════════════
 
 def _exponential_backoff(attempt: int, base: float, max_delay: float = _RETRY_MAX_DELAY) -> float:
-    """指数退避 + 抖动."""
+    """---- + --."""
     delay = min(base * (2 ** attempt), max_delay)
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
 
 def _is_retryable(error: Exception) -> bool:
-    """可重试的错误类型."""
+    """--------."""
     return isinstance(error, (TdaiConnectionError, TdaiTimeoutError, TdaiRateLimitError,
                               ConnectionError, TimeoutError, OSError))
 
 
 def _with_retry(fn: Callable, label: str, config: TdaiConfig,
                 is_retryable_fn: Callable[[Exception], bool] = _is_retryable) -> Any:
-    """执行 fn 并应用指数退避重试."""
+    """-- fn ---------."""
     last_error = None
     for attempt in range(config.retry_attempts):
         try:
@@ -163,20 +163,20 @@ def _sanitize_content(content: str, label: str = "content") -> str:
 # ════════════════════════════════════════════
 
 class TdaiMiddleware:
-    """中间件基类. 在 recall/capture/search 前后执行钩子."""
+    """-----. - recall/capture/search ------."""
 
     def before_call(self, method: str, **kwargs) -> None:
-        """调用前执行 (可修改参数或阻断)."""
+        """----- (--------)."""
 
     def after_call(self, method: str, result: Any, duration: float) -> None:
-        """调用后执行 (可记录指标/日志)."""
+        """----- (-----/--)."""
 
     def on_error(self, method: str, error: Exception) -> None:
-        """异常时执行."""
+        """-----."""
 
 
 class TdaiMetricsMiddleware(TdaiMiddleware):
-    """记录调用计数和延迟的内置中间件."""
+    """---------------."""
 
     def __init__(self):
         self._counts: Dict[str, int] = {}
@@ -205,9 +205,9 @@ class TdaiMetricsMiddleware(TdaiMiddleware):
 # ════════════════════════════════════════════
 
 class TdaiAdapter(ABC):
-    """统一适配器接口.
+    """-------.
 
-    子类只需实现 4 个 _impl 方法. 参数校验/重试/中间件由基类处理.
+    ------ 4 - _impl --. ----/--/--------.
     """
 
     def __init__(self):
@@ -218,12 +218,12 @@ class TdaiAdapter(ABC):
         self._recall_cache: Dict[str, Dict[str, str]] = {}  # session cache for #120
 
     def add_middleware(self, mw: TdaiMiddleware) -> None:
-        """添加自定义中间件."""
+        """--------."""
         self._middleware.append(mw)
 
     @property
     def metrics(self) -> Dict[str, Any]:
-        """获取调用指标."""
+        """------."""
         return self._metrics.metrics
 
     @property
@@ -262,7 +262,7 @@ class TdaiAdapter(ABC):
     # ── Public API (with validation + retry + middleware) ──
 
     def _call_with_guards(self, method: str, impl_fn: Callable, *args) -> Any:
-        """执行 impl_fn 并应用校验/中间件/重试."""
+        """-- impl_fn -----/---/--."""
         for mw in self._middleware:
             mw.before_call(method)
         start = time.time()
@@ -341,18 +341,18 @@ class TdaiAdapter(ABC):
 
 
 class BufferedAdapter(TdaiAdapter):
-    """带本地缓冲的适配器 Mixin.
+    """--------- Mixin.
 
-    覆盖 capture() 将对话写入本地 JSONL 文件, 而非实时网络 POST.
-    在以下时机批量 flush 到 TDAI:
-      - 缓冲行数达到 buffer_size
-      - 主动调用 flush()
-      - 进程退出 (atexit 注册)
+    -- capture() ------- JSONL --, ------ POST.
+    ------- flush - TDAI:
+      - ------ buffer_size
+      - ---- flush()
+      - ---- (atexit --)
 
-    用法:
+    --:
         class MyPlatformAdapter(BufferedAdapter):
             def _capture_impl(self, user_content, assistant_content, session_id):
-                # 只在 flush 时被调用 (批量)
+                # -- flush ---- (--)
                 ...
     """
 
@@ -370,7 +370,7 @@ class BufferedAdapter(TdaiAdapter):
         atexit.register(self.flush)
 
     def _load_buffer(self) -> None:
-        """从磁盘恢复未 flush 的缓冲."""
+        """------ flush ---."""
         if not os.path.exists(self._buffer_path):
             return
         try:
@@ -385,7 +385,7 @@ class BufferedAdapter(TdaiAdapter):
             logger.warning(f"Failed to load buffer: {e}")
 
     def _save_buffer(self) -> None:
-        """将缓冲持久化到磁盘 JSONL."""
+        """--------- JSONL."""
         try:
             with open(self._buffer_path, "w", encoding="utf-8") as f:
                 for entry in self._buffer:
@@ -394,9 +394,9 @@ class BufferedAdapter(TdaiAdapter):
             logger.warning(f"Failed to save buffer: {e}")
 
     def capture(self, user_content: str, assistant_content: str, session_id: str = "") -> bool:
-        """缓冲写入本地 JSONL, 不触发网络调用.
+        """------ JSONL, -------.
 
-        当 buffer 满时自动 flush.
+        - buffer ---- flush.
         """
         u = _sanitize_content(user_content, "user_content")
         a = _sanitize_content(assistant_content, "assistant_content")
@@ -407,17 +407,17 @@ class BufferedAdapter(TdaiAdapter):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._buffer.append(turn)
-        self._save_buffer()  # 持久化保底
+        self._save_buffer()  # -----
 
         if len(self._buffer) >= self._buffer_size:
             return self.flush()
         return True
 
     def flush(self) -> bool:
-        """批量发送缓冲到 TDAI Gateway.
+        """------- TDAI Gateway.
 
-        对每条缓冲调 _capture_impl, 成功则清除.
-        失败时保留缓冲, 下次继续尝试.
+        ------ _capture_impl, -----.
+        -------, ------.
         """
         if not self._buffer:
             return True
@@ -444,7 +444,7 @@ class BufferedAdapter(TdaiAdapter):
         return success
 
     def shutdown(self) -> None:
-        """关闭前 flush 缓冲."""
+        """--- flush --."""
         try:
             self.flush()
         except Exception as e:
@@ -453,11 +453,11 @@ class BufferedAdapter(TdaiAdapter):
         super().shutdown()
 
     def buffer_size(self) -> int:
-        """当前缓冲行数."""
+        """------."""
         return len(self._buffer)
 
     def buffer_discard(self) -> None:
-        """丢弃缓冲 (用于测试/紧急清理)."""
+        """---- (----/----)."""
         self._buffer.clear()
         if os.path.exists(self._buffer_path):
             os.remove(self._buffer_path)
@@ -469,9 +469,9 @@ class BufferedAdapter(TdaiAdapter):
 # ════════════════════════════════════════════
 
 class TdaiAdapterRegistry:
-    """适配器注册表.
+    """------.
 
-    不是安全边界 — 真正的边界是 Python import 系统.
+    ------ — ------ Python import --.
     """
 
     _registry: Dict[str, Type[TdaiAdapter]] = {}
@@ -509,7 +509,7 @@ class TdaiAdapterRegistry:
 
     @classmethod
     def health_all(cls) -> Dict[str, Dict[str, Any]]:
-        """查询所有已注册适配器的健康状态."""
+        """---------------."""
         results = {}
         for name, adapter_cls in cls._registry.items():
             try:
