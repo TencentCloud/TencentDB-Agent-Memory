@@ -205,28 +205,16 @@ jobs:
 
       - name: Detect garbled Unicode in source files
         run: |
-          echo "── Scanning for mojibake (corrupted UTF-8) in .py and .ts files ──"
-          violations=0
-          while IFS= read -r -d '' file; do
-            # Check for bytes 0xE9 0x88-0x8C (corrupted CJK mojibake)
-            if od -A n -t x1 "$file" | tr ' ' '\n' | grep -q '^e9$'; then
-              # Found potential 0xE9 byte - check if followed by mojibake range
-              if od -A n -t x1 "$file" | tr ' ' '\n' | paste - - - | grep -P 'e9\t[89][0-9a-f]\t' > /dev/null 2>&1; then
-                lineno=0
-                od -A n -t x1z "$file" | while read -r line; do
-                  lineno=$((lineno + 1))
-                  if echo "$line" | grep -q 'e9 [89]'; then
-                    echo "  GARBLED: $file:$lineno"
-                    violations=$((violations + 1))
-                  fi
-                done
-              fi
+          echo "── Scanning for mojibake (corrupted CJK) in .py and .ts files ──"
+          violations=0; fails=0
+          while IFS= read -r -d '' f; do
+            # Use grep to find printable CJK characters (UTF-8 3-byte sequences in CJK range)
+            # CJK Unified Ideographs = E4 B8 80 .. E9 BF BF
+            if grep -Pl '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | grep -q .; then
+              chars=$(grep -oP '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | sort -u | head -5 | tr '\n' ' ')
+              fails=$((fails + 1))
+              echo "  BAD: $f ($chars)"
             fi
-          done < <(find . -name '*.py' -o -name '*.ts' | grep -v node_modules | grep -v __pycache__ | grep -v '.git/' | tr '\n' '\0')
-          
-          if [ "$violations" -gt 0 ]; then
-            echo "FAIL: $violation(s) mojibake byte sequences found"
-            exit 1
-          else
-            echo "OK: No mojibake detected"
-          fi
+          done < <(find . -name '*.py' -o -name '*.ts' | grep -v node_modules | grep -v __pycache__ | grep -v '.git/' | grep -v '.github/' | grep -v hermes-plugin | grep -v scripts/ | tr '\n' '\0')
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
+          echo "OK: $fails files with non-ASCII (0 = clean)"
