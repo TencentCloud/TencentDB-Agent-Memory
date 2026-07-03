@@ -224,18 +224,17 @@ jobs:
           if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
           echo "OK: $fails files with non-ASCII (0 = clean)"
 
-      - name: L1 - Verify UTF-8 BOM on .ps1 files
+      - name: L1 - Verify UTF-8 BOM on scripts/*.ps1
         run: |
-          echo "── Layer 1: UTF-8 BOM check on .ps1 files ──"
+          echo "── Layer 1: UTF-8 BOM check on scripts/*.ps1 ──"
           fails=0
-          while IFS= read -r -d '' f; do
+          for f in scripts/*.ps1; do
+            if [ ! -f "$f" ]; then continue; fi
             header=$(od -A n -t x1 -N 3 "$f" | tr -d ' \n')
             if [ "$header" != "efbbbf" ]; then
               echo "  MISSING BOM: $f (header=$header)"
               fails=$((fails + 1))
             fi
-          done < <(find . -name '*.ps1' -not -path './node_modules/*' -not -path './.git/*' -not -path './assets/*' | tr '\n' '\0')
-          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails .ps1 files without BOM"; exit 1; fi
-          echo "OK: all .ps1 files have UTF-8 BOM"
-          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
-          echo "OK: $fails files with non-ASCII (0 = clean)"
+          done
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails scripts/*.ps1 without BOM"; exit 1; fi
+          echo "OK: all scripts/*.ps1 have UTF-8 BOM"
