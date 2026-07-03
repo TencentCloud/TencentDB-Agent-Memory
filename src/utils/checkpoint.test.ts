@@ -7,6 +7,7 @@ import {
   countJsonlL0Records,
   countJsonlL1Records,
   type Checkpoint,
+  type RecalibrationResult,
 } from "./checkpoint.js";
 
 describe("CheckpointManager.recalibrate", () => {
@@ -267,6 +268,148 @@ describe("CheckpointManager.recalibrate", () => {
     expect(result.l0Changed).toBe(false);
     expect(result.l1Changed).toBe(false);
     expect(logMessages.length).toBe(logBefore);
+  });
+
+  // ═══ 4-counter matrix: total_processed + memories_since_last_persona ═══
+
+  it("updates total_processed when it differs from actual JSONL count", async () => {
+    await seedCheckpoint({
+      ...(await manager.read()),
+      total_processed: 1000,
+      l0_conversations_count: 5,
+      total_memories_extracted: 3,
+    });
+
+    const result = await manager.recalibrate({ totalProcessedCount: 500 });
+
+    expect(result.totalProcessedChanged).toBe(true);
+    expect(result.l0Changed).toBe(false);
+    expect(result.l1Changed).toBe(false);
+
+    const onDisk = await readCheckpointOnDisk();
+    expect(onDisk.total_processed).toBe(500);
+    // Other counters untouched
+    expect(onDisk.l0_conversations_count).toBe(5);
+    expect(onDisk.total_memories_extracted).toBe(3);
+  });
+
+  it("caps memories_since_last_persona when L1 records were deleted", async () => {
+    await seedCheckpoint({
+      ...(await manager.read()),
+      total_memories_extracted: 50,
+      memories_since_last_persona: 200, // drifted above reality
+    });
+
+    const result = await manager.recalibrate({ memoriesSincePersonaCount: 50 });
+
+    expect(result.memoriesSincePersonaChanged).toBe(true);
+    expect(result.l0Changed).toBe(false);
+    expect(result.l1Changed).toBe(false);
+
+    const onDisk = await readCheckpointOnDisk();
+    expect(onDisk.memories_since_last_persona).toBe(50);
+    expect(onDisk.total_memories_extracted).toBe(50); // unchanged
+  });
+
+  it("updates all 4 counters atomically in a single call", async () => {
+    await seedCheckpoint({
+      ...(await manager.read()),
+      l0_conversations_count: 500,
+      total_memories_extracted: 1000,
+      total_processed: 2000,
+      memories_since_last_persona: 800,
+    });
+
+    const result = await manager.recalibrate({
+      l0Count: 300,
+      l1Count: 700,
+      totalProcessedCount: 1500,
+      memoriesSincePersonaCount: 700,
+    });
+
+    expect(result.l0Changed).toBe(true);
+    expect(result.l1Changed).toBe(true);
+    expect(result.totalProcessedChanged).toBe(true);
+    expect(result.memoriesSincePersonaChanged).toBe(true);
+
+    const onDisk = await readCheckpointOnDisk();
+    expect(onDisk.l0_conversations_count).toBe(300);
+    expect(onDisk.total_memories_extracted).toBe(700);
+    expect(onDisk.total_processed).toBe(1500);
+    expect(onDisk.memories_since_last_persona).toBe(700);
+  });
+
+  it("returns before/after snapshots in result", async () => {
+    await seedCheckpoint({
+      ...(await manager.read()),
+      l0_conversations_count: 500,
+      total_memories_extracted: 1000,
+      total_processed: 2000,
+      memories_since_last_persona: 800,
+    });
+
+    const result = await manager.recalibrate({
+      l0Count: 300,
+      l1Count: 700,
+      totalProcessedCount: 1500,
+      memoriesSincePersonaCount: 700,
+    });
+
+    expect(result.before.l0Count).toBe(500);
+    expect(result.before.l1Count).toBe(1000);
+    expect(result.before.totalProcessed).toBe(2000);
+    expect(result.before.memoriesSincePersona).toBe(800);
+    expect(result.after.l0Count).toBe(300);
+    expect(result.after.l1Count).toBe(700);
+    expect(result.after.totalProcessed).toBe(1500);
+    expect(result.after.memoriesSincePersona).toBe(700);
+  });
+
+  it("before/after snapshots match when nothing changed", async () => {
+    await seedCheckpoint({
+      ...(await manager.read()),
+      l0_conversations_count: 100,
+      total_memories_extracted: 50,
+      total_processed: 200,
+      memories_since_last_persona: 30,
+    });
+
+    const result = await manager.recalibrate({
+      l0Count: 100,
+      l1Count: 50,
+      totalProcessedCount: 200,
+      memoriesSincePersonaCount: 30,
+    });
+
+    expect(result.l0Changed).toBe(false);
+    expect(result.l1Changed).toBe(false);
+    expect(result.totalProcessedChanged).toBe(false);
+    expect(result.memoriesSincePersonaChanged).toBe(false);
+    // Snapshots should be identical
+    expect(result.before).toEqual(result.after);
+  });
+
+  it("handles very large counter values (safe integer range)", async () => {
+    const big = Number.MAX_SAFE_INTEGER - 1;
+    await seedCheckpoint({
+      ...(await manager.read()),
+      l0_conversations_count: big,
+      total_memories_extracted: big,
+      total_processed: big,
+      memories_since_last_persona: big,
+    });
+
+    const result = await manager.recalibrate({
+      l0Count: 0,
+      l1Count: 0,
+      totalProcessedCount: 0,
+      memoriesSincePersonaCount: 0,
+    });
+
+    expect(result.l0Changed).toBe(true);
+    expect(result.l1Changed).toBe(true);
+    expect(result.totalProcessedChanged).toBe(true);
+    expect(result.memoriesSincePersonaChanged).toBe(true);
   });
 
   // ═══ Cursor rollback ═══

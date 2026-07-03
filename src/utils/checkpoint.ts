@@ -160,6 +160,22 @@ export interface RecalibrateOptions {
   /** Authoritative L1 memory count (e.g. from vectorStore.countL1()) */
   l1Count?: number;
   /**
+   * Authoritative total_processed message count.
+   * Drifts when JSONL files are pruned after cleanup, since
+   * captureAtomically() only increments this counter.
+   * Recalibrating it against actual L0 JSONL line count
+   * prevents overstatement in status reporting.
+   */
+  totalProcessedCount?: number;
+  /**
+   * Authoritative memories_since_last_persona count.
+   * When L1 records are deleted by cleanup, this counter should be
+   * capped to the actual L1 total to prevent spurious persona-trigger
+   * activation. Can be set to `l1Count` to keep it in sync, or to a
+   * lower value if the caller tracks persona-related drift separately.
+   */
+  memoriesSincePersonaCount?: number;
+  /**
    * Optional: clamp stale per-session L1 cursors to this timestamp.
    *
    * After cleanup deletes old L0 records, per-session `last_l1_cursor`
@@ -169,6 +185,34 @@ export interface RecalibrateOptions {
    * has its cursor advanced to `earliestValidL0Timestamp`.
    */
   earliestValidL0Timestamp?: number;
+}
+
+/**
+ * Result returned by CheckpointManager.recalibrate().
+ * Each flag indicates whether the corresponding counter
+ * was actually updated (i.e. the stored value differed
+ * from the authoritative one).
+ */
+export interface RecalibrationResult {
+  l0Changed: boolean;
+  l1Changed: boolean;
+  totalProcessedChanged: boolean;
+  memoriesSincePersonaChanged: boolean;
+  cursorsRolledBack: number;
+  /** Snapshot of counter values BEFORE recalibration (for audit log) */
+  before: {
+    l0Count: number;
+    l1Count: number;
+    totalProcessed: number;
+    memoriesSincePersona: number;
+  };
+  /** Snapshot of counter values AFTER recalibration */
+  after: {
+    l0Count: number;
+    l1Count: number;
+    totalProcessed: number;
+    memoriesSincePersona: number;
+  };
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -535,17 +579,49 @@ export class CheckpointManager {
    */
   async recalibrate(
     opts: RecalibrateOptions = {},
-  ): Promise<{ l0Changed: boolean; l1Changed: boolean; cursorsRolledBack: number }> {
-    const result = { l0Changed: false, l1Changed: false, cursorsRolledBack: 0 };
+  ): Promise<RecalibrationResult> {
+    const { l0Count, l1Count, totalProcessedCount, memoriesSincePersonaCount, earliestValidL0Timestamp } = opts;
 
-    const { l0Count, l1Count, earliestValidL0Timestamp } = opts;
+    // Build result with before/after snapshots
+    const result: RecalibrationResult = {
+      l0Changed: false,
+      l1Changed: false,
+      totalProcessedChanged: false,
+      memoriesSincePersonaChanged: false,
+      cursorsRolledBack: 0,
+      before: { l0Count: 0, l1Count: 0, totalProcessed: 0, memoriesSincePersona: 0 },
+      after: { l0Count: 0, l1Count: 0, totalProcessed: 0, memoriesSincePersona: 0 },
+    };
 
     // Fast-path: nothing to do
-    if (l0Count === undefined && l1Count === undefined && earliestValidL0Timestamp === undefined) {
+    if (
+      l0Count === undefined &&
+      l1Count === undefined &&
+      totalProcessedCount === undefined &&
+      memoriesSincePersonaCount === undefined &&
+      earliestValidL0Timestamp === undefined
+    ) {
+      // Still need to read current values for accurate before/after snapshots
+      const cp = await this.read();
+      result.before = {
+        l0Count: cp.l0_conversations_count,
+        l1Count: cp.total_memories_extracted,
+        totalProcessed: cp.total_processed,
+        memoriesSincePersona: cp.memories_since_last_persona,
+      };
+      result.after = { ...result.before };
       return result;
     }
 
     await this.mutate((cp) => {
+      // Before snapshot
+      result.before = {
+        l0Count: cp.l0_conversations_count,
+        l1Count: cp.total_memories_extracted,
+        totalProcessed: cp.total_processed,
+        memoriesSincePersona: cp.memories_since_last_persona,
+      };
+
       if (l0Count !== undefined && l0Count !== cp.l0_conversations_count) {
         this.logger.info(
           `[checkpoint] recalibrate l0_conversations_count: ` +
@@ -561,6 +637,24 @@ export class CheckpointManager {
         );
         cp.total_memories_extracted = l1Count;
         result.l1Changed = true;
+      }
+      // 新增：total_processed counter 修正（吸收 PR #253 L2ncE 的 4-counter 矩阵设计）
+      if (totalProcessedCount !== undefined && totalProcessedCount !== cp.total_processed) {
+        this.logger.info(
+          `[checkpoint] recalibrate total_processed: ` +
+          `${cp.total_processed} → ${totalProcessedCount}`,
+        );
+        cp.total_processed = totalProcessedCount;
+        result.totalProcessedChanged = true;
+      }
+      // 新增：memories_since_last_persona 上限修正（防止 cleanup 后 persona 误触发）
+      if (memoriesSincePersonaCount !== undefined && memoriesSincePersonaCount !== cp.memories_since_last_persona) {
+        this.logger.info(
+          `[checkpoint] recalibrate memories_since_last_persona: ` +
+          `${cp.memories_since_last_persona} → ${memoriesSincePersonaCount}`,
+        );
+        cp.memories_since_last_persona = memoriesSincePersonaCount;
+        result.memoriesSincePersonaChanged = true;
       }
 
       // Cursor rollback: clamp stale per-session L1 cursors to
@@ -578,6 +672,14 @@ export class CheckpointManager {
           }
         }
       }
+
+      // After snapshot
+      result.after = {
+        l0Count: cp.l0_conversations_count,
+        l1Count: cp.total_memories_extracted,
+        totalProcessed: cp.total_processed,
+        memoriesSincePersona: cp.memories_since_last_persona,
+      };
     });
 
     return result;
