@@ -89,13 +89,34 @@ Demonstrates that `TdaiAdapter` can wrap existing SDKs.
 | **Exponential backoff** (3 attempts, 0.5s base) | Transient failures auto-retry. Auth and validation errors propagate immediately |
 | **Middleware hooks** | `before_call` / `after_call` / `on_error` 鈥?for metrics, auth, logging. Built-in `TdaiMetricsMiddleware` |
 | **TdaiConfig.from_env()** | Standard config from `TDAI_*` env vars |
-| **Local + Cloud dual path** | Default `http://127.0.0.1:8420` (local Gateway). Set `TDAI_ENDPOINT` to cloud URL for cloud mode |
+| **Local + Remote dual path** | Default `http://127.0.0.1:8420` (local Gateway). Set `TDAI_ENDPOINT` to cloud URL for cloud mode |
 | **Multi-tenant isolation** | `x-tdai-service-id` header on every request. Set `TDAI_SERVICE_ID` per project |
+| **API Key resolution (MCP)** | `MCP_BRIDGE_API_KEY` 鈫?`TDAI_API_KEY` 鈫?empty (loopback). Tested by 7 config tests |
 | **BufferedAdapter** | Optional local JSONL buffer. Captures stored locally, flush at buffer_size or session end |
 | **Session-level recall cache** | SHA256(query) 鈫?cached per adapter lifetime. Prevents prompt prefix cache degradation (#120) |
 | **Circuit breaker** (5-fault / 60s) | Prevents cascading failures when Gateway is down |
 | **Graceful degradation** | Gateway unreachable 鈫?operations return safe empty defaults |
 | **SHA256SUMS integrity** | Release verification. `python -m bridge_adapter.integrity --check` |
+
+## Configuration: Local vs Multi-Tenant
+
+All three entry points (Python SDK, TypeScript SDK, MCP server) share the same `TDAI_*` environment variables.
+
+| Model | TDAI_ENDPOINT | TDAI_API_KEY | TDAI_SERVICE_ID | Storage | Use Case |
+|:---|---|:---:|:---:|:---:|:---|
+| **Local mode** | Default `http://127.0.0.1:8420` | Empty (loopback) | `mem-rkgqhd5z` (hardcoded) | Single DB | Local dev |
+| **Multi-tenant** | Default or custom | Optional | Per-project (e.g. `repo-spz`) | **Isolated DB per service_id** | Multiple projects |
+| **Remote/Cloud** | Cloud URL | Required | Required | Isolated DB | Production |
+
+Three projects isolated on the same Gateway:
+```bash
+TDAI_SERVICE_ID=spz-gatekeeper python -m bridge.mcp.server
+TDAI_SERVICE_ID=bridge-core    python -m bridge.mcp.server
+TDAI_SERVICE_ID=zthl-research  python -m bridge.mcp.server
+```
+
+API Key resolution (MCP server): `MCP_BRIDGE_API_KEY` 鈫?`TDAI_API_KEY` 鈫?empty (loopback).
+Tested by `test_config.py` (7 tests) and `test_dual_path.py` (4 tests).
 
 ## Cross-Language SDK
 
