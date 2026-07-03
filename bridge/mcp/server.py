@@ -1,17 +1,17 @@
 """
-MCP stdio server 鈥?wraps TdaiAdapter as MCP tools.
+MCP stdio server -?wraps TdaiAdapter as MCP tools.
 
 Built-in gates (API key + rate limit + circuit breaker + audit) provide
 defense-in-depth for desktop/loopback mode. In production these gates
-are supplemented by agentgateway (Linux Foundation) 鈥?if agentgateway
+are supplemented by agentgateway (Linux Foundation) -?if agentgateway
 fails, the local gates remain active as a safety net.
 
 Architecture:
-  Production: MCP Client 鈫?agentgateway (auth/rate-limit/OTEL/OPA)
-                              鈫?                         bridge/mcp/server.py (self-gated fallback)
-                              鈫?                         TdaiAdapter 鈫?Gateway
+  Production: MCP Client -?agentgateway (auth/rate-limit/OTEL/OPA)
+                              -?                         bridge/mcp/server.py (self-gated fallback)
+                              -?                         TdaiAdapter -?Gateway
 
-  Desktop:    MCP Client 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈫?bridge/mcp/server.py (gates active)
+  Desktop:    MCP Client -€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-€-?bridge/mcp/server.py (gates active)
 
 Usage:
     # Desktop (no auth required for loopback)
@@ -39,9 +39,9 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("bridge.mcp")
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate: API Key
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 _MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY") or os.environ.get("TDAI_API_KEY", "")
 # When True (default for desktop), empty key = no auth required (loopback).
@@ -71,9 +71,9 @@ def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
     return False, "Invalid API key"
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate: Rate limiting
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_CALLS = 60  # max calls per window
@@ -94,9 +94,9 @@ def _check_rate_limit() -> Tuple[bool, str]:
     return True, ""
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate: Circuit breaker
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 _CIRCUIT_THRESHOLD = 10  # consecutive failures before open
 _CIRCUIT_COOLDOWN = 60  # seconds before half-open
@@ -134,9 +134,9 @@ def _record_success():
     _circuit_failures = 0
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate: Audit logging
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 
 def _audit_log(action: str, method: str, tool: str, detail: str = ""):
@@ -144,9 +144,9 @@ def _audit_log(action: str, method: str, tool: str, detail: str = ""):
     logger.warning(f"AUDIT action={action} method={method} tool={tool} detail={detail[:120]}")
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Helpers
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 
 def _err(code: int, msg: str, req_id: Any = None) -> str:
@@ -162,9 +162,9 @@ def _text_content(text: str) -> list:
     return [{"type": "text", "text": text}]
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Tool handlers (lazy-import TdaiAdapter)
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 _ADAPTER: Any = None
 
@@ -309,9 +309,9 @@ _TOOL_DEFS = [
 ]
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # JSON-RPC validation
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 
 def _validate_mcp_request(msg: Dict[str, Any]) -> Tuple[bool, str]:
@@ -326,9 +326,9 @@ def _validate_mcp_request(msg: Dict[str, Any]) -> Tuple[bool, str]:
     return True, ""
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # MCP stdio server with gates
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 
 def main():
@@ -343,7 +343,7 @@ def main():
         print(json.dumps({"available": avail}))
         return
 
-    # 鈹€鈹€ Parse 鈹€鈹€
+    # -€-€ Parse -€-€
     try:
         msg = json.loads(request_raw)
     except json.JSONDecodeError:
@@ -353,14 +353,14 @@ def main():
     req_id = msg.get("id") if isinstance(msg, dict) else None
     method = msg.get("method", "") if isinstance(msg, dict) else ""
 
-    # 鈹€鈹€ Gate 0: Input validation 鈹€鈹€
+    # -€-€ Gate 0: Input validation -€-€
     valid, err = _validate_mcp_request(msg)
     if not valid:
         _audit_log("REJECTED", method, "", err)
         print(_err(-32600, err, req_id))
         return
 
-    # 鈹€鈹€ Initialize (bypass gates) 鈹€鈹€
+    # -€-€ Initialize (bypass gates) -€-€
     if method == "initialize":
         _audit_log("ALLOWED", method, "", "")
         print(_ok({
@@ -370,13 +370,13 @@ def main():
         }, req_id))
         return
 
-    # 鈹€鈹€ tools/list (bypass gates) 鈹€鈹€
+    # -€-€ tools/list (bypass gates) -€-€
     if method == "tools/list":
         _audit_log("ALLOWED", method, "", "")
         print(_ok({"tools": _TOOL_DEFS}, req_id))
         return
 
-    # 鈹€鈹€ tools/call (gates apply) 鈹€鈹€
+    # -€-€ tools/call (gates apply) -€-€
     if method == "tools/call":
         params = msg.get("params", {})
         if not isinstance(params, dict):
@@ -420,7 +420,7 @@ def main():
         print(result)
         return
 
-    # 鈹€鈹€ Unknown method 鈹€鈹€
+    # -€-€ Unknown method -€-€
     _audit_log("UNKNOWN_METHOD", method, "")
     print(_err(-32601, f"Method not found: {method}", req_id))
 

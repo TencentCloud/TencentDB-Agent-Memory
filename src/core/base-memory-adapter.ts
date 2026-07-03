@@ -1,11 +1,11 @@
 /**
- * BaseMemoryAdapter 鈥?abstract base class for MemoryAdapter implementations.
+ * BaseMemoryAdapter -?abstract base class for MemoryAdapter implementations.
  *
  * TypeScript equivalent of bridge_adapter/base.py (TdaiAdapter ABC).
  * Provides:
  *   - Exponential backoff retry (3 attempts, 0.5s base + jitter)
  *   - Parameter sanitization (query length, limit clamping)
- *   - Graceful degradation (exceptions 鈫?safe defaults)
+ *   - Graceful degradation (exceptions -?safe defaults)
  *   - Session-level recall cache (SHA256 keyed, prevents prefix cache degradation)
  *   - Middleware hooks (before/after/onError)
  *   - Built-in metrics middleware
@@ -17,7 +17,7 @@
 import { createHash } from "node:crypto";
 import type { MemoryAdapter } from "./types.js";
 
-// 鈹€鈹€ Constants 鈹€鈹€
+// -€-€ Constants -€-€
 
 const MAX_QUERY_LENGTH = 100_000;
 const MAX_CONTENT_LENGTH = 1_000_000;
@@ -29,7 +29,7 @@ const RETRY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 10_000;
 
-// 鈹€鈹€ Middleware 鈹€鈹€
+// -€-€ Middleware -€-€
 
 export interface Middleware {
   beforeCall?(method: string, ...args: unknown[]): void;
@@ -61,7 +61,7 @@ export class MetricsMiddleware implements Middleware {
   }
 }
 
-// 鈹€鈹€ Sanitization 鈹€鈹€
+// -€-€ Sanitization -€-€
 
 function sanitizeQuery(query: string): string {
   if (typeof query !== "string") throw new TypeError(`query must be string, got ${typeof query}`);
@@ -78,7 +78,7 @@ function sanitizeContent(content: string, label = "content"): string {
   return content.slice(0, MAX_CONTENT_LENGTH);
 }
 
-// 鈹€鈹€ Retry 鈹€鈹€
+// -€-€ Retry -€-€
 
 function exponentialBackoff(attempt: number, baseMs: number, maxMs: number): number {
   const delay = Math.min(baseMs * Math.pow(2, attempt), maxMs);
@@ -114,14 +114,14 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   throw lastError!;
 }
 
-// 鈹€鈹€ Base class 鈹€鈹€
+// -€-€ Base class -€-€
 
 export abstract class BaseMemoryAdapter implements MemoryAdapter {
   abstract readonly name: string;
 
   protected _middleware: Middleware[] = [];
   protected _metrics = new MetricsMiddleware();
-  /** Session-level recall cache: SHA256(query) 鈫?cached result. Prevents prefix cache degradation (#120). */
+  /** Session-level recall cache: SHA256(query) -?cached result. Prevents prefix cache degradation (#120). */
   private _recallCache = new Map<string, { prependContext: string; appendSystemContext: string }>();
 
   constructor() {
@@ -136,13 +136,13 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     return this._metrics.metrics;
   }
 
-  // 鈹€鈹€ Lifecycle 鈹€鈹€
+  // -€-€ Lifecycle -€-€
 
   abstract initialize(config?: Record<string, unknown>): boolean;
   abstract isAvailable(): boolean;
   abstract shutdown(): void;
 
-  // 鈹€鈹€ Internal implementations (subclasses override) 鈹€鈹€
+  // -€-€ Internal implementations (subclasses override) -€-€
 
   protected abstract _recallImpl(query: string, limit: number): Promise<{ prependContext: string; appendSystemContext: string }>;
   protected abstract _captureImpl(userContent: string, assistantContent: string, sessionId: string): Promise<boolean>;
@@ -158,7 +158,7 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     return false;
   }
 
-  // 鈹€鈹€ Guard dispatcher 鈹€鈹€
+  // -€-€ Guard dispatcher -€-€
 
   private async _callWithGuards<T>(method: string, fn: () => Promise<T>): Promise<T> {
     for (const mw of this._middleware) mw.beforeCall?.(method);
@@ -175,7 +175,7 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     }
   }
 
-  // 鈹€鈹€ Public API 鈹€鈹€
+  // -€-€ Public API -€-€
 
   async recall(query: string, limit = DEFAULT_LIMIT): Promise<{ prependContext: string; appendSystemContext: string }> {
     const q = sanitizeQuery(query);

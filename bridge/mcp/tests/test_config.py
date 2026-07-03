@@ -1,4 +1,4 @@
-"""Tests for MCP server configuration 鈥?env-var fallback chain and dual-path setup."""
+"""Tests for MCP server configuration -?env-var fallback chain and dual-path setup."""
 
 import os
 import sys
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# 鈹€鈹€ API Key resolution 鈹€鈹€
+# -€-€ API Key resolution -€-€
 
 def test_mcp_api_key_fallback_to_tdai():
     """When MCP_BRIDGE_API_KEY is not set, TDAI_API_KEY should be used."""
@@ -46,7 +46,7 @@ def test_mcp_api_key_empty_string_explicit():
         assert srv._MCP_API_KEY == "fallback-key"
 
 
-# 鈹€鈹€ Health fallback env-var consistency 鈹€鈹€
+# -€-€ Health fallback env-var consistency -€-€
 
 def test_health_api_key_fallback():
     """bridge.mcp_health should fall back from MCP_BRIDGE_API_KEY to TDAI_API_KEY."""
@@ -68,7 +68,7 @@ def test_health_api_key_explicit():
         assert health.MCP_API_KEY == "health-explicit-key"
 
 
-# 鈹€鈹€ MCP server TDAI_* inheritance 鈹€鈹€
+# -€-€ MCP server TDAI_* inheritance -€-€
 
 def test_mcp_server_tdai_env_inheritance():
     """MCP server resolves API key from TDAI_API_KEY fallback."""

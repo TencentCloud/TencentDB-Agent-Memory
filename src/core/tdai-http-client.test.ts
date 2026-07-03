@@ -1,4 +1,4 @@
-/** Tests for TdaiHttpClient 鈥?uses mock fetch to avoid Gateway dependency. */
+/** Tests for TdaiHttpClient -?uses mock fetch to avoid Gateway dependency. */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TdaiHttpClient, TdaiConnectionError, TdaiAuthError, TdaiRateLimitError, TdaiTimeoutError, TdaiValidationError, TdaiNotFoundError } from "./tdai-http-client.js";
 

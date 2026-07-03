@@ -1,12 +1,12 @@
 """
-MCP Health Check 鈥?Bridge's MCP-compatible health endpoint with gate protection.
+MCP Health Check -?Bridge's MCP-compatible health endpoint with gate protection.
 
 Provides a stdio-based MCP health check that Bridge's monitor can call
 to verify TDAI Gateway connectivity. Includes:
 
   - API Key gate (MCP_BRIDGE_API_KEY env var, default: empty = closed)
   - Rate limiting (max 10 calls per 60s window, configurable)
-  - Circuit breaker (5 consecutive failures 鈫?60s cooldown)
+  - Circuit breaker (5 consecutive failures -?60s cooldown)
   - Input validation (MCP JSON-RPC schema enforcement)
   - Audit logging (all calls logged with timestamp + caller IP)
 
@@ -36,11 +36,11 @@ from typing import Any, Dict, List, Optional, Tuple
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger("mcp_health")
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate: API Key configuration
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
-# MCP_BRIDGE_API_KEY 鈥?闂ㄧ瀵嗛挜锛岀┖瀛楃涓?= 鍏抽棴锛堜粎鏈湴鍙敤锛?# 璁句负姝ゅ€兼椂璺宠繃璁よ瘉锛堜粎闄愭湰鍦板紑鍙戯級
+# MCP_BRIDGE_API_KEY -?闂ㄧ瀵嗛挜锛岀┖瀛楃涓?= 鍏抽棴锛堜粎鏈湴鍙敤锛?# 璁句负姝ゅ€兼椂璺宠繃璁よ瘉锛堜粎闄愭湰鍦板紑鍙戯級
 MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY") or os.environ.get("TDAI_API_KEY", "")
 MCP_API_KEY_ALLOW_EMPTY = True  # 绌哄瘑閽ユ椂鍏佽鏈湴鏃犺璇佽闂?
 # Gate: Rate limiting
@@ -54,18 +54,18 @@ _CIRCUIT_COOLDOWN = 60  # seconds before half-open
 _circuit_failures = 0
 _circuit_open_until = 0.0
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # MCP protocol constants
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 MCP_VERSION = "2025-03-26"
 MCP_SERVER_NAME = "tdai-health-mcp"
 MCP_SERVER_VERSION = "1.0.1"
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # Gate primitives
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
     """Gate 1: API Key authentication.
@@ -100,7 +100,7 @@ def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
 def _check_rate_limit() -> Tuple[bool, str]:
     """Gate 2: Rate limiting.
 
-    Sliding window 鈥?allows up to _RATE_LIMIT_MAX_CALLS per _RATE_LIMIT_WINDOW.
+    Sliding window -?allows up to _RATE_LIMIT_MAX_CALLS per _RATE_LIMIT_WINDOW.
     """
     now = time.time()
     global _rate_limit_bucket
@@ -164,9 +164,9 @@ def _audit_log(action: str, request: Dict[str, Any], result: str):
     )
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # MCP protocol helpers
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 def _mcp_error(code: int, message: str, req_id: Any = None) -> str:
     return json.dumps({
@@ -197,12 +197,12 @@ def _validate_mcp_request(msg: Dict[str, Any]) -> Tuple[bool, str]:
     return True, ""
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # MCP handlers
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 def _discover_tools(req_id: Any = None) -> str:
-    """MCP tools/list 鈥?expose tdai_health tool."""
+    """MCP tools/list -?expose tdai_health tool."""
     return _mcp_result({
         "tools": [
             {
@@ -219,7 +219,7 @@ def _discover_tools(req_id: Any = None) -> str:
 
 
 def _call_health(req_id: Any = None) -> str:
-    """MCP tools/call 鈥?execute tdai_health."""
+    """MCP tools/call -?execute tdai_health."""
     try:
         from bridge_adapter import BridgeAdapter
         provider = BridgeAdapter()
@@ -252,9 +252,9 @@ def _call_health(req_id: Any = None) -> str:
         }, req_id)
 
 
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 # MCP stdio server with gate protection
-# 鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲鈺愨晲
+# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
 
 def main():
     """Run MCP stdio server with gate protection."""
@@ -276,14 +276,14 @@ def main():
     method = msg.get("method", "")
     params = msg.get("params", {})
 
-    # 鈹€鈹€ Gate 0: Input validation 鈹€鈹€
+    # -€-€ Gate 0: Input validation -€-€
     valid, err = _validate_mcp_request(msg)
     if not valid:
         _audit_log("REJECTED", msg, f"invalid-request: {err}")
         print(_mcp_error(-32600, err, req_id))
         return
 
-    # 鈹€鈹€ Gate 1: API Key 鈹€鈹€
+    # -€-€ Gate 1: API Key -€-€
     auth_ok, auth_err = _check_api_key(msg)
     if not auth_ok:
         _audit_log("AUTH_FAILED", msg, auth_err)
@@ -291,21 +291,21 @@ def main():
         print(_mcp_error(-32001, auth_err, req_id))
         return
 
-    # 鈹€鈹€ Gate 2: Rate limit 鈹€鈹€
+    # -€-€ Gate 2: Rate limit -€-€
     rl_ok, rl_err = _check_rate_limit()
     if not rl_ok:
         _audit_log("RATE_LIMITED", msg, rl_err)
         print(_mcp_error(-32029, rl_err, req_id))
         return
 
-    # 鈹€鈹€ Gate 3: Circuit breaker 鈹€鈹€
+    # -€-€ Gate 3: Circuit breaker -€-€
     cb_ok, cb_err = _check_circuit_breaker()
     if not cb_ok:
         _audit_log("CIRCUIT_OPEN", msg, cb_err)
         print(_mcp_error(-32050, cb_err, req_id))
         return
 
-    # 鈹€鈹€ Route 鈹€鈹€
+    # -€-€ Route -€-€
     if method == "tools/list":
         result = _discover_tools(req_id)
         _audit_log("ALLOWED", msg, "tools/list")

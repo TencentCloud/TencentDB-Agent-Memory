@@ -1,5 +1,5 @@
 /**
- * TdaiHttpClient 鈥?HTTP client for TDAI Gateway v2 REST API.
+ * TdaiHttpClient -?HTTP client for TDAI Gateway v2 REST API.
  *
  * TypeScript equivalent of bridge_adapter/client.py.
  * Provides typed wrappers for all Gateway endpoints consumed by adapters.
@@ -143,44 +143,44 @@ export class TdaiHttpClient {
     }
   }
 
-  // 鈹€鈹€ Public API 鈹€鈹€
+  // -€-€ Public API -€-€
 
-  /** GET /health 鈥?Gateway health check. */
+  /** GET /health -?Gateway health check. */
   async health(): Promise<{ status: string; uptime: number; stores: Record<string, string> }> {
     return this._request("/health");
   }
 
-  /** POST /v2/conversation/add 鈥?Store a conversation turn. */
+  /** POST /v2/conversation/add -?Store a conversation turn. */
   async addConversation(sessionId: string, messages: Array<{ role: string; content: string }>): Promise<Record<string, unknown>> {
     return this._request("/v2/conversation/add", { session_id: sessionId, messages });
   }
 
-  /** POST /v2/conversation/query 鈥?Retrieve conversation history. */
+  /** POST /v2/conversation/query -?Retrieve conversation history. */
   async queryConversation(sessionId: string, limit = 10): Promise<Record<string, unknown>> {
     return this._request("/v2/conversation/query", { session_id: sessionId, limit });
   }
 
-  /** POST /v2/conversation/search 鈥?Full-text search in conversations. */
+  /** POST /v2/conversation/search -?Full-text search in conversations. */
   async searchConversation(query: string, limit = 5): Promise<Record<string, unknown>> {
     return this._request("/v2/conversation/search", { query, limit });
   }
 
-  /** POST /v2/atomic/search 鈥?Search L1 atomic memories. */
+  /** POST /v2/atomic/search -?Search L1 atomic memories. */
   async searchAtomic(query: string, limit = 5): Promise<Record<string, unknown>> {
     return this._request("/v2/atomic/search", { query, limit });
   }
 
-  /** POST /v2/scenario/ls 鈥?List L2 scene blocks. */
+  /** POST /v2/scenario/ls -?List L2 scene blocks. */
   async listScenarios(): Promise<Record<string, unknown>> {
     return this._request("/v2/scenario/ls", {});
   }
 
-  /** POST /v2/core/read 鈥?Read L3 persona data. */
+  /** POST /v2/core/read -?Read L3 persona data. */
   async readCore(): Promise<Record<string, unknown>> {
     return this._request("/v2/core/read", {});
   }
 
-  /** POST /v2/core/update 鈥?Update L3 persona data. */
+  /** POST /v2/core/update -?Update L3 persona data. */
   async updateCore(data: Record<string, unknown>): Promise<Record<string, unknown>> {
     return this._request("/v2/core/update", data);
   }

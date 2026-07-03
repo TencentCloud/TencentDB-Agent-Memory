@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
-# 鈹€鈹€ Path A: Local mode (zero config, defaults) 鈹€鈹€
+# -€-€ Path A: Local mode (zero config, defaults) -€-€
 
 def test_local_mode_mcp_server():
     """Local mode MCP server: no API key should allow loopback."""
@@ -24,7 +24,7 @@ def test_local_mode_mcp_server():
         )
 
 
-# 鈹€鈹€ Path B: Multi-tenant mode (explicit TDAI_SERVICE_ID) 鈹€鈹€
+# -€-€ Path B: Multi-tenant mode (explicit TDAI_SERVICE_ID) -€-€
 
 def test_multi_tenant_mcp_server():
     """Multi-tenant MCP server: API key inherited from TDAI_API_KEY."""
@@ -38,7 +38,7 @@ def test_multi_tenant_mcp_server():
         )
 
 
-# 鈹€鈹€ MCP_BRIDGE_API_KEY override 鈹€鈹€
+# -€-€ MCP_BRIDGE_API_KEY override -€-€
 
 def test_mcp_bridge_api_key_override():
     """MCP_BRIDGE_API_KEY overrides TDAI_API_KEY for MCP server."""
@@ -53,7 +53,7 @@ def test_mcp_bridge_api_key_override():
         )
 
 
-# 鈹€鈹€ Dual path startup illustration (info-only) 鈹€鈹€
+# -€-€ Dual path startup illustration (info-only) -€-€
 
 def test_dual_path_demo():
     """Demonstrate both local and multi-tenant startup configs.
