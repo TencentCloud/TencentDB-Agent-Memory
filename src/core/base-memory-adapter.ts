@@ -17,7 +17,7 @@
 import { createHash } from "node:crypto";
 import type { MemoryAdapter } from "./types.js";
 
-// -€-€ Constants -€-€
+// ---- Constants ----
 
 const MAX_QUERY_LENGTH = 100_000;
 const MAX_CONTENT_LENGTH = 1_000_000;
@@ -29,7 +29,7 @@ const RETRY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 10_000;
 
-// -€-€ Middleware -€-€
+// ---- Middleware ----
 
 export interface Middleware {
   beforeCall?(method: string, ...args: unknown[]): void;
@@ -61,7 +61,7 @@ export class MetricsMiddleware implements Middleware {
   }
 }
 
-// -€-€ Sanitization -€-€
+// ---- Sanitization ----
 
 function sanitizeQuery(query: string): string {
   if (typeof query !== "string") throw new TypeError(`query must be string, got ${typeof query}`);
@@ -78,7 +78,7 @@ function sanitizeContent(content: string, label = "content"): string {
   return content.slice(0, MAX_CONTENT_LENGTH);
 }
 
-// -€-€ Retry -€-€
+// ---- Retry ----
 
 function exponentialBackoff(attempt: number, baseMs: number, maxMs: number): number {
   const delay = Math.min(baseMs * Math.pow(2, attempt), maxMs);
@@ -114,7 +114,7 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
   throw lastError!;
 }
 
-// -€-€ Base class -€-€
+// ---- Base class ----
 
 export abstract class BaseMemoryAdapter implements MemoryAdapter {
   abstract readonly name: string;
@@ -136,13 +136,13 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     return this._metrics.metrics;
   }
 
-  // -€-€ Lifecycle -€-€
+  // ---- Lifecycle ----
 
   abstract initialize(config?: Record<string, unknown>): boolean;
   abstract isAvailable(): boolean;
   abstract shutdown(): void;
 
-  // -€-€ Internal implementations (subclasses override) -€-€
+  // ---- Internal implementations (subclasses override) ----
 
   protected abstract _recallImpl(query: string, limit: number): Promise<{ prependContext: string; appendSystemContext: string }>;
   protected abstract _captureImpl(userContent: string, assistantContent: string, sessionId: string): Promise<boolean>;
@@ -158,7 +158,7 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     return false;
   }
 
-  // -€-€ Guard dispatcher -€-€
+  // ---- Guard dispatcher ----
 
   private async _callWithGuards<T>(method: string, fn: () => Promise<T>): Promise<T> {
     for (const mw of this._middleware) mw.beforeCall?.(method);
@@ -175,7 +175,7 @@ export abstract class BaseMemoryAdapter implements MemoryAdapter {
     }
   }
 
-  // -€-€ Public API -€-€
+  // ---- Public API ----
 
   async recall(query: string, limit = DEFAULT_LIMIT): Promise<{ prependContext: string; appendSystemContext: string }> {
     const q = sanitizeQuery(query);

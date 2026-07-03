@@ -36,13 +36,13 @@ from typing import Any, Dict, List, Optional, Tuple
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger("mcp_health")
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # Gate: API Key configuration
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
-# MCP_BRIDGE_API_KEY -?闂ㄧ瀵嗛挜锛岀┖瀛楃涓?= 鍏抽棴锛堜粎鏈湴鍙敤锛?# 璁句负姝ゅ€兼椂璺宠繃璁よ瘉锛堜粎闄愭湰鍦板紑鍙戯級
+# MCP_BRIDGE_API_KEY -?-----------?= -----------?# --------------------------
 MCP_API_KEY = os.environ.get("MCP_BRIDGE_API_KEY") or os.environ.get("TDAI_API_KEY", "")
-MCP_API_KEY_ALLOW_EMPTY = True  # 绌哄瘑閽ユ椂鍏佽鏈湴鏃犺璇佽闂?
+MCP_API_KEY_ALLOW_EMPTY = True  # ---------------?
 # Gate: Rate limiting
 _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_CALLS = 10  # max calls per window
@@ -54,18 +54,18 @@ _CIRCUIT_COOLDOWN = 60  # seconds before half-open
 _circuit_failures = 0
 _circuit_open_until = 0.0
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # MCP protocol constants
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
 MCP_VERSION = "2025-03-26"
 MCP_SERVER_NAME = "tdai-health-mcp"
 MCP_SERVER_VERSION = "1.0.1"
 
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # Gate primitives
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
 def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
     """Gate 1: API Key authentication.
@@ -164,9 +164,9 @@ def _audit_log(action: str, request: Dict[str, Any], result: str):
     )
 
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # MCP protocol helpers
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
 def _mcp_error(code: int, message: str, req_id: Any = None) -> str:
     return json.dumps({
@@ -197,9 +197,9 @@ def _validate_mcp_request(msg: Dict[str, Any]) -> Tuple[bool, str]:
     return True, ""
 
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # MCP handlers
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
 def _discover_tools(req_id: Any = None) -> str:
     """MCP tools/list -?expose tdai_health tool."""
@@ -252,9 +252,9 @@ def _call_health(req_id: Any = None) -> str:
         }, req_id)
 
 
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 # MCP stdio server with gate protection
-# -愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲-愨晲
+# ------------------------------------------------------------------
 
 def main():
     """Run MCP stdio server with gate protection."""
@@ -276,14 +276,14 @@ def main():
     method = msg.get("method", "")
     params = msg.get("params", {})
 
-    # -€-€ Gate 0: Input validation -€-€
+    # ---- Gate 0: Input validation ----
     valid, err = _validate_mcp_request(msg)
     if not valid:
         _audit_log("REJECTED", msg, f"invalid-request: {err}")
         print(_mcp_error(-32600, err, req_id))
         return
 
-    # -€-€ Gate 1: API Key -€-€
+    # ---- Gate 1: API Key ----
     auth_ok, auth_err = _check_api_key(msg)
     if not auth_ok:
         _audit_log("AUTH_FAILED", msg, auth_err)
@@ -291,21 +291,21 @@ def main():
         print(_mcp_error(-32001, auth_err, req_id))
         return
 
-    # -€-€ Gate 2: Rate limit -€-€
+    # ---- Gate 2: Rate limit ----
     rl_ok, rl_err = _check_rate_limit()
     if not rl_ok:
         _audit_log("RATE_LIMITED", msg, rl_err)
         print(_mcp_error(-32029, rl_err, req_id))
         return
 
-    # -€-€ Gate 3: Circuit breaker -€-€
+    # ---- Gate 3: Circuit breaker ----
     cb_ok, cb_err = _check_circuit_breaker()
     if not cb_ok:
         _audit_log("CIRCUIT_OPEN", msg, cb_err)
         print(_mcp_error(-32050, cb_err, req_id))
         return
 
-    # -€-€ Route -€-€
+    # ---- Route ----
     if method == "tools/list":
         result = _discover_tools(req_id)
         _audit_log("ALLOWED", msg, "tools/list")
