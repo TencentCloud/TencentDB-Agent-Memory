@@ -126,6 +126,9 @@ the adapter sends `session_key`.
    only adds `Authorization`; the Gateway must still be configured to enforce it.
 5. Fail fast on missing session identity. Silent fallback keys make unrelated
    conversations contaminate each other.
+   `defaultSessionKey` / `CODEX_SESSION_ID` are only for single-thread Codex
+   integrations; multi-session clients must pass `sessionKey` on each scoped
+   operation.
 6. Prefer the Gateway for new platforms unless the platform runs inside the
    same process and can implement `HostAdapter` directly.
 

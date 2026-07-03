@@ -21,6 +21,11 @@ export interface CodexMemoryAdapterOptions {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  /**
+   * Default session identity for single-thread Codex integrations.
+   * Multi-session callers should pass sessionKey per operation so unrelated
+   * conversations cannot share the same memory scope.
+   */
   defaultSessionKey?: string;
   fetch?: FetchLike;
 }
@@ -135,6 +140,8 @@ export class CodexMemoryAdapter {
   }
 
   private resolveSessionKey(sessionKey?: string): string {
+    // defaultSessionKey is only a single-session convenience; multi-thread
+    // integrations must pass sessionKey explicitly for every scoped operation.
     const resolved = sessionKey?.trim() || this.defaultSessionKey;
     if (!resolved) {
       throw new Error("sessionKey is required for Codex memory operations");
@@ -197,7 +204,34 @@ async function readJsonResponse(response: Response): Promise<unknown> {
 function getGatewayErrorMessage(payload: unknown): string {
   if (payload && typeof payload === "object" && "error" in payload) {
     const error = (payload as { error?: unknown }).error;
-    if (typeof error === "string" && error.length > 0) return error;
+    const message = stringifyGatewayError(error);
+    if (message) return message;
   }
   return "unknown error";
+}
+
+function stringifyGatewayError(error: unknown): string | undefined {
+  if (typeof error === "string") {
+    const trimmed = error.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim().length > 0) {
+      return message.trim();
+    }
+
+    try {
+      const serialized = JSON.stringify(error);
+      return serialized && serialized.length > 0 ? serialized : undefined;
+    } catch {
+      return String(error);
+    }
+  }
+
+  if (error !== undefined && error !== null) {
+    return String(error);
+  }
+  return undefined;
 }
