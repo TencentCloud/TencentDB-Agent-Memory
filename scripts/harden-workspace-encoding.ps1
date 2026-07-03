@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Hardens Windows workspace encoding to prevent mojibake in Git pipelines.
 
