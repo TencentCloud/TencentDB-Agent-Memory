@@ -16,32 +16,6 @@ Usage:
     set MCP_BRIDGE_API_KEY=your-key
     python -m bridge.mcp_health
 """
-MCP_API_KEY_ALLOW_EMPTY = True  # ----ユ----------?
-# Gate: Rate limiting
-_RATE_LIMIT_WINDOW = 60  # seconds
-_RATE_LIMIT_MAX_CALLS = 10  # max calls per window
-_rate_limit_bucket: List[float] = []
-
-# Gate: Circuit breaker
-_CIRCUIT_THRESHOLD = 5  # consecutive failures before open
-_CIRCUIT_COOLDOWN = 60  # seconds before half-open
-_circuit_failures = 0
-_circuit_open_until = 0.0
-
-# ------------------------------------------------------------------
-# MCP protocol constants
-# ------------------------------------------------------------------
-
-MCP_VERSION = "2025-03-26"
-MCP_SERVER_NAME = "tdai-health-mcp"
-MCP_SERVER_VERSION = "1.0.1"
-
-
-# ------------------------------------------------------------------
-# Gate primitives
-# ------------------------------------------------------------------
-
-def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
     """Gate 1: API Key authentication.
 
     Reads key from:

@@ -25,7 +25,6 @@ Environment:
     MCP_BRIDGE_API_KEY    API key for tools/call. Empty = loopback allowed.
                           When set, client must pass key in params._meta.api_key.
 """
-from __future__ import annotations
 
 import hmac
 import json
