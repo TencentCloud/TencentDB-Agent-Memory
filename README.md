@@ -204,12 +204,12 @@ In addition to OpenClaw, this plugin also supports [Hermes](https://github.com/N
 
 | You want to … | Use |
 |---|---|
-| Spin up a memory-enabled Hermes from scratch in one command | 2.A Docker (below) |
+| Spin up a memory-enabled Hermes from scratch in one command | 2.A Docker Compose (below) |
 | Add memory to an existing Hermes install | 2.B Plug into an existing Hermes (next section) |
 
-#### 2.A Docker (greenfield, requires version ≥ 0.3.4)
+#### 2.A Docker Compose (greenfield, requires version ≥ 0.3.4)
 
-The Docker image bundles `hermes-agent` and the `memory_tencentdb` provider together. The Gateway listens on `:8420`:
+The Docker image bundles `hermes-agent` and the `memory_tencentdb` provider together. Docker Compose is the recommended local deployment path because it keeps model settings, Gateway port, restart policy, and persistent storage in one file. The Gateway listens on `:8420` inside the container:
 
 ```bash
 # ============ Configuration Parameters ============
@@ -218,26 +218,30 @@ The Docker image bundles `hermes-agent` and the `memory_tencentdb` provider toge
 # MODEL_NAME       Model name, defaults to DeepSeek-V3.2
 # MODEL_PROVIDER   Provider type: "custom" works for any OpenAI-compatible endpoint
 
-MODEL_API_KEY="your-api-key"
-MODEL_BASE_URL="https://api.lkeap.cloud.tencent.com/v1"
-MODEL_NAME="deepseek-v3.2"
-MODEL_PROVIDER="custom"
-
-# ============ docker run Flags ============
-# -d                          Run container in detached (background) mode
-# --name hermes-memory        Container name, for later docker exec / logs / stop
-# --restart unless-stopped    Auto-restart on crash or host reboot
-# -p 8420:8420                Host port ↔ container port (Hermes Gateway)
-# -e MODEL_*                  Inject the config parameters above as env vars
-# -v hermes_data:/opt/data    Persist memory data to a named volume (survives restart)
-
 # Enter the Docker build directory (already cloned the repo and at the repo root)
 cd docker/opensource
 
-# Build
-docker build -f Dockerfile.hermes -t hermes-memory .
+# Create an env file and fill in MODEL_API_KEY.
+cp .env.example .env
+$EDITOR .env
 
-# Run
+# Build and start Hermes + memory-tencentdb Gateway.
+docker compose up -d --build
+
+# Verify the Gateway
+curl http://localhost:8420/health
+
+# Enter the Hermes interactive shell
+docker compose exec hermes-memory hermes
+```
+
+> The image ships with Tencent Cloud DeepSeek-V3.2 as the default. If you use this model, set only `MODEL_API_KEY` in `.env`.
+
+If you prefer plain Docker, use the same image directly:
+
+```bash
+cd docker/opensource
+docker build -f Dockerfile.hermes -t hermes-memory .
 docker run -d \
   --name hermes-memory \
   --restart unless-stopped \
@@ -249,14 +253,9 @@ docker run -d \
   -v hermes_data:/opt/data \
   hermes-memory
 
-# Verify the Gateway
 curl http://localhost:8420/health
-
-# Enter the Hermes interactive shell
 docker exec -it hermes-memory hermes
 ```
-
-> The image ships with Tencent Cloud DeepSeek-V3.2 as the default. If you use this model, omit `MODEL_BASE_URL` / `MODEL_NAME` / `MODEL_PROVIDER` and pass only `MODEL_API_KEY`.
 
 #### 2.B Attach to Existing Hermes (No Docker)
 
