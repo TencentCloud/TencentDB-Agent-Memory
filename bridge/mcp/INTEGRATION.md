@@ -106,4 +106,39 @@ Production: MCP Client 鈫?agentgateway (persistent state) 鈫?bridge/mcp/server
 Desktop:    MCP Client 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈫?bridge/mcp/server.py (stdio, gates active)
 ```
 
+## MCP Client Configuration Examples
+
+### Codex CLI
+
+[Codex CLI](https://github.com/openai/codex) natively supports MCP servers via `config.toml`.
+Add the following to `~/.codex/config.toml` or `.codex/config.toml` (project-level):
+
+```toml
+[mcp_servers.tdai_memory]
+command = "python"
+args = ["-m", "bridge.mcp.server"]
+```
+
+No subscription required 鈥?the MCP server runs as a local Python process independent of any
+OpenAI/Codex billing. After restarting Codex, the 5 TDAI tools (`tdai_health`, `tdai_recall`,
+`tdai_capture`, `tdai_memory_search`, `tdai_conversation_search`) are available in any session.
+
+### Claude Code
+
+```json
+{
+  "mcpServers": {
+    "tdai_memory": {
+      "command": "python",
+      "args": ["-m", "bridge.mcp.server"]
+    }
+  }
+}
+```
+
+### Any MCP Client
+
+The server speaks standard MCP stdio protocol (JSON-RPC 2.0). Any MCP-compatible client
+(Claude Desktop, Cursor, etc.) can connect using the same pattern.
+
 Integration testing requires agentgateway deployment 鈥?a deployment milestone, not a development one.
