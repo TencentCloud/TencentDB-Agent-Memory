@@ -2,7 +2,7 @@
 
 ## 说明
 
-这份文档记录当前实现里 memory 注入后的 prompt 结构，以及各段内容对 prompt cache 的影响。这里只分析结构，不讨论优化方案和实现后验证。
+本页记录当前实现中 memory 注入后的 prompt 结构，以及各段内容对 prompt cache 的影响。范围只到结构梳理，优化方案和实现后验证放在其他文档里。
 
 相关代码入口：
 
@@ -15,7 +15,7 @@
 - `src/core/hooks/auto-recall.ts:186`：把召回结果拆成稳定区和动态区。
 - `src/core/conversation/l0-recorder.ts:190`：L0 写入时用干净 prompt 覆盖被注入污染的用户消息。
 
-Issue 里提到的 `composeSystemPromptWithHookContext`、`CACHE_BOUNDARY`、`prependSystemPromptAdditionAfterCacheBoundary` 不在本仓库，属于 OpenClaw host 侧逻辑。这里的结构图只画到插件返回 hook result 为止。
+Issue 里提到的 `composeSystemPromptWithHookContext`、`CACHE_BOUNDARY`、`prependSystemPromptAdditionAfterCacheBoundary` 不在本仓库，属于 OpenClaw host 侧逻辑。下面的结构图停在插件返回 hook result 这一层。
 
 ## 注入链路
 
@@ -43,7 +43,7 @@ flowchart TD
 
 ## 当前轮 prompt 结构
 
-插件返回后，当前轮模型大致会看到下面的结构：
+插件返回后，当前轮模型看到的结构大致如下：
 
 ```text
 [OpenClaw / agent config 原始 system prompt]
@@ -90,12 +90,12 @@ flowchart TD
 
 ## 持久化清理
 
-当前实现有两层清理：
+当前实现依赖两处清理：
 
 1. `before_message_write` 在 OpenClaw 写 session JSONL 前移除 `<relevant-memories>...</relevant-memories>`。
 2. `agent_end` 把注入前缓存的干净 prompt 和原始消息数传给 L0 recorder，L0 写入时再用干净 prompt 替换被注入污染的用户消息。
 
-也就是说，当前轮模型可以读到 L1 recall，但这段 recall 默认不会进入后续历史。
+结果是，当前轮模型可以读到 L1 recall，但这段 recall 默认不会进入后续历史。
 
 ## 结构结论
 
@@ -113,4 +113,4 @@ cache 友好的稳定前缀
 动态尾部
 ```
 
-后续改动应保持这个边界：稳定内容尽量靠前，当前轮 recall 靠近用户 prompt，并且不要把 recall 原文写回未来历史。
+后续改动建议守住这个边界：稳定内容尽量靠前，当前轮 recall 靠近用户 prompt，并且不要把 recall 原文写回未来历史。

@@ -2,7 +2,7 @@
 
 ## 说明
 
-这份文档只记录 `showInjected` 风险形态、膨胀趋势和方案设计。实现后的 A/B/C 验证数据单独放在：
+本页记录 `showInjected` 风险形态、膨胀趋势和方案设计。实现后的 A/B/C 验证数据单独放在：
 
 - [Issue-120-实现后验证与结论.md](./Issue-120-实现后验证与结论.md)
 
@@ -10,7 +10,7 @@ Issue 初始分析时，仓库还没有解析 `recall.showInjected`。当时把 
 
 ## 资料依据
 
-定方案前，我补了一轮相关资料，主要核对两件事：provider prompt cache 的匹配条件，以及主流框架和 memory 项目怎么区分检索上下文、短期历史和长期记忆。
+方案定下来之前，先补了一轮相关资料，主要核对两件事：provider prompt cache 的匹配条件，以及主流框架和 memory 项目怎么区分检索上下文、短期历史和长期记忆。
 
 - DeepSeek Context Caching：<https://api-docs.deepseek.com/guides/kv_cache>
   - 上下文缓存默认开启。
@@ -31,7 +31,7 @@ Issue 初始分析时，仓库还没有解析 `recall.showInjected`。当时把 
 - Letta context hierarchy / compaction：<https://docs.letta.com/guides/core-concepts/memory/context-hierarchy>、<https://docs.letta.com/guides/core-concepts/messages/compaction>
   - 区分常驻 memory、archival memory、conversation search 和 compaction。
 
-基于这些资料，这里采用的边界是：检索内容只作为读路径上的 prompt-time context 使用；长期 memory 应该来自抽取和整理后的稳定状态，不直接把原始检索片段回灌进去。
+据此先定下这个边界：检索内容只作为读路径上的 prompt-time context 使用；长期 memory 来自抽取和整理后的稳定状态，不直接把原始检索片段回灌进去。
 
 ## 初始复现实测
 
@@ -56,22 +56,22 @@ Issue 初始分析时，仓库还没有解析 `recall.showInjected`。当时把 
 | 当前轮注入，历史干净 | 10,060 | 10,402 | 342 | 38 | 102,310 | 31.90% |
 | showInjected-style，历史保留注入 | 10,061 | 64,610 | 54,549 | 6,061 | 373,355 | 82.56% |
 
-### GPT-5.5 Responses API
+### Mimo Chat Completions
 
-- API：OpenAI-compatible Responses API
-- base URL：`https://api.ai-pixel.online`
-- endpoint：`/v1/responses`
-- 模型：`gpt-5.5`
-- reasoning effort：`xhigh`
-- `store`：`false`
+- API：Mimo OpenAI-compatible Chat Completions
+- base URL：`https://api.xiaomimimo.com/v1`
+- endpoint：`/chat/completions`
+- 模型：`mimo-v2.5-pro`
+- `enable_thinking`：`false`
 - 测试时间：2026-07-02
-- 每轮输出上限：40 tokens
+- 每轮输出上限：64 tokens
+- 报告：`tmp/issue120-e2e-results/issue120-showinjected-growth-mimo-1783001359804.json`
 
-| 场景 | 第 1 轮 input tokens | 第 10 轮 input tokens | 10 轮增长 | 首轮后平均增长 | 总 input tokens | cache hit ratio |
+| 场景 | 第 1 轮 prompt tokens | 第 10 轮 prompt tokens | 10 轮增长 | 首轮后平均增长 | 总 prompt tokens | cache hit ratio |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| baseline，无注入 | 3,684 | 4,269 | 585 | 65 | 39,765 | 9.66% |
-| 当前轮注入，历史干净 | 9,351 | 9,945 | 594 | 66 | 96,480 | 3.45% |
-| showInjected-style，历史保留注入 | 9,351 | 60,930 | 51,579 | 5,731 | 351,405 | 31.47% |
+| baseline，无注入 | 2,080 | 2,252 | 172 | 19.11 | 21,656 | 97.82% |
+| 当前轮注入，历史干净 | 3,790 | 4,042 | 252 | 28.00 | 38,836 | 99.21% |
+| showInjected-style，历史保留注入 | 3,790 | 19,431 | 15,641 | 1,737.89 | 115,784 | 96.79% |
 
 ## 膨胀原因
 
@@ -98,18 +98,18 @@ showInjected：每轮增长约 H + R
 实测里：
 
 - DeepSeek：`H ~= 38 tokens / turn`，`R ~= 6,023 tokens / turn`。
-- GPT-5.5：`H ~= 65-66 tokens / turn`，`R ~= 5,665 tokens / turn`。
+- Mimo：`H ~= 28 tokens / turn`，`R ~= 1,710-1,738 tokens / turn`。
 
 所以第 10 轮时，showInjected-style 分别达到：
 
 - DeepSeek：64,610 tokens，是历史干净注入的 6.21 倍。
-- GPT-5.5：60,930 input tokens，是历史干净注入的 6.13 倍。
+- Mimo：19,431 prompt tokens，是历史干净注入的 4.81 倍。
 
-DeepSeek 在 showInjected-style 里有较高 cache hit ratio，但这不是健康状态。原因是旧注入块写入历史后变成了可复用前缀，cache hit tokens 上去了；同时总 prompt tokens 也膨胀到 373,355，是历史干净注入的 3.65 倍。上下文窗口、延迟和后续截断压力都会变差。
+DeepSeek 和 Mimo 在 showInjected-style 里都可能有较高 cache hit ratio，但这不是健康状态。原因是旧注入块写入历史后变成了可复用前缀，cache hit tokens 上去了；同时总 prompt tokens 也明显膨胀。DeepSeek 的 showInjected-style 总 prompt tokens 是历史干净注入的 3.65 倍，Mimo 是 2.98 倍。上下文窗口、延迟和后续截断压力都会变差。
 
 ## 方案
 
-这里采用三个方向，后续实现和验证也按这三个方向拆开看：
+方案拆成三个方向，后续实现和验证也按这三个方向拆开看：
 
 - A：默认不持久化 raw `<relevant-memories>`。
 - B：session 级 recall digest 去重。
@@ -144,7 +144,7 @@ trace / metrics：
 - `showInjected=true` 只作为调试开关，并在日志和配置说明里提示膨胀风险。
 - 调试信息放日志、metrics、trace 或 artifact，不写回 chat transcript。
 
-这条边界的含义是：recall 是本轮 evidence，不是新的 conversation history。
+这条边界想表达的是：recall 是本轮 evidence，不是新的 conversation history。
 
 ### B. session 级 recall digest 去重与 reminder
 
@@ -191,7 +191,7 @@ sessionRecallDigest = {
 </memory-reminders>
 ```
 
-B 的目标是减少重复上下文，不是隐藏证据。真实 E2E 里 `skip` 曾导致 DeepSeek 输出空 content 或丢失 `config_flags table` 细节，因此 `reminder` 比“直接跳过”更符合质量和缓存的折中目标。
+B 的目标是减少重复上下文，不是隐藏证据。真实 E2E 里 `skip` 曾导致 DeepSeek 输出空 content 或丢失 `config_flags table` 细节，所以 `reminder` 比“直接跳过”更接近质量和缓存之间的折中。
 
 ### C. 动态 recall 硬预算
 
@@ -211,13 +211,13 @@ B 的目标是减少重复上下文，不是隐藏证据。真实 E2E 里 `skip`
 - `top_k`：默认 3-8 条，禁止无限追加。
 - `min_score`：低相关 memory 不注入。
 - `maxCharsPerMemory`：单条 memory 超长时截断或摘要。
-- `maxTotalRecallChars`：动态 recall 建议不超过总上下文的 5%-15%，并设置硬上限。
+- `maxTotalRecallChars`：动态 recall 默认控制在总上下文的 5%-15% 内，并设置硬上限。
 - `source diversity`：避免 top-k 都来自同一场景或同一事实。
 - 超预算时优先压缩相似事实，保留高置信来源和显式用户约束，不做静默尾部截断。
 
 ## 读写边界
 
-后续实现按下面的边界走：
+实现侧按下面的边界收口：
 
 | 内容 | conversation history | long-term memory | trace / metrics |
 | --- | --- | --- | --- |
@@ -243,7 +243,7 @@ clean conversation / tool observation / final decision
 
 ## 验收口径
 
-验证时至少比较：
+验收时至少保留这些对照：
 
 1. showInjected 风险基线：历史保留 raw recall。
 2. A：默认不持久化 raw recall。
@@ -251,7 +251,7 @@ clean conversation / tool observation / final decision
 4. C：A + recall 硬预算。
 5. A+B+C：合并形态，其中应分别比较 `ABC_skip` 和 `ABC_reminder`。
 
-主要看：
+主要指标：
 
 - 第 1 轮和第 10 轮 input/prompt tokens。
 - 总 input/prompt tokens。

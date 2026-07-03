@@ -14,6 +14,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
 import { applyRecallBudget, applySessionRecallDedupeDetailed, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
+import { dedupeStableSystemPromptAdditions } from "../../utils/system-prompt-dedupe.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -195,12 +196,12 @@ async function performAutoRecallInner(params: {
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
+  const stableParts: Array<{ source: string; text: string }> = [];
   if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    stableParts.push({ source: "persona", text: `<user-persona>\n${personaContent}\n</user-persona>` });
   }
   if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    stableParts.push({ source: "scene-navigation", text: `<scene-navigation>\n${sceneNavigation}\n</scene-navigation>` });
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
@@ -224,10 +225,18 @@ async function performAutoRecallInner(params: {
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
   if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
+    stableParts.push({ source: "memory-tools-guide", text: MEMORY_TOOLS_GUIDE });
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const stableDedupe = dedupeStableSystemPromptAdditions(stableParts);
+  if (stableDedupe.removed.length > 0) {
+    logger?.debug?.(
+      `${TAG} Stable system prompt additions deduped: input=${stableParts.length}, ` +
+      `kept=${stableDedupe.kept.length}, removed=${stableDedupe.removed.length}, ` +
+      `removedChars=${stableDedupe.removedChars}`,
+    );
+  }
+  const appendSystemContext = stableDedupe.text;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(

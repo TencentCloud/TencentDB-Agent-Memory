@@ -36,6 +36,7 @@ import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.j
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 import { stripRelevantMemoriesFromMessage } from "./src/utils/recall-injection.js";
+import { observeSessionSystemPromptShape } from "./src/utils/system-prompt-dedupe.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -588,6 +589,13 @@ export default function register(api: OpenClawPluginApi) {
         if (result?.appendSystemContext || result?.prependContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          if (result.appendSystemContext) {
+            const shape = observeSessionSystemPromptShape(resolvedSessionKey, result.appendSystemContext, api.logger);
+            api.logger.debug?.(
+              `${TAG} [before_prompt_build] Stable system context shape: ` +
+              `status=${shape.status}, turn=${shape.turn}, chars=${shape.chars}, digest=${shape.digest.slice(0, 12)}`,
+            );
+          }
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
             `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
