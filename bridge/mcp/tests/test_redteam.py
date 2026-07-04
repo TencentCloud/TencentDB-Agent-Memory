@@ -203,7 +203,7 @@ def test_rate_limit_self_fallback_recovery():
         ok, _ = srv._check_rate_limit()
         assert not ok, "Rate limit should be exceeded"
 
-        # Simulate internal errors — trigger self-fallback
+        # Simulate internal errors - trigger self-fallback
         srv._RATE_LIMIT_SELF_FAILURES = srv._RATE_LIMIT_SELF_THRESHOLD
         srv._RATE_LIMIT_SELF_OPEN_UNTIL = time.time() + srv._RATE_LIMIT_SELF_DURATION
 
@@ -310,14 +310,14 @@ def test_audit_sampling_does_not_crash():
     try:
         srv._audit_log_queue = []
 
-        # sample_rate = 0.0 — should skip everything
+        # sample_rate = 0.0 - should skip everything
         srv._AUDIT_SAMPLE_RATE = 0.0
         for i in range(20):
             srv._audit_log("ALLOWED", "test", f"tool_{i}")
         # At most 1 random fluke (random() returning exactly 0.0)
         assert len(srv._audit_log_queue) <= 1
 
-        # sample_rate = 1.0 — should keep everything
+        # sample_rate = 1.0 - should keep everything
         srv._AUDIT_SAMPLE_RATE = 1.0
         for i in range(20):
             srv._audit_log("ALLOWED", "test", f"tool_{i}")
