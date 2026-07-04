@@ -30,6 +30,7 @@ import hmac
 import json
 import logging
 import os
+import random
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -77,19 +78,36 @@ _RATE_LIMIT_WINDOW = 60  # seconds
 _RATE_LIMIT_MAX_CALLS = 60  # max calls per window
 _rate_limit_bucket: List[float] = []
 
+_RATE_LIMIT_SELF_FAILURES = 0
+_RATE_LIMIT_SELF_OPEN_UNTIL = 0.0
+_RATE_LIMIT_SELF_THRESHOLD = 3
+_RATE_LIMIT_SELF_DURATION = 30
+
 
 def _check_rate_limit() -> Tuple[bool, str]:
     """Gate 2: Sliding window rate limit."""
-    now = time.time()
-    global _rate_limit_bucket
-    # Prune expired entries
-    _rate_limit_bucket = [t for t in _rate_limit_bucket if now - t < _RATE_LIMIT_WINDOW]
-    if len(_rate_limit_bucket) >= _RATE_LIMIT_MAX_CALLS:
-        oldest = _rate_limit_bucket[0] if _rate_limit_bucket else now
-        retry_after = int(_RATE_LIMIT_WINDOW - (now - oldest))
-        return False, f"Rate limit exceeded. Retry after {retry_after}s"
-    _rate_limit_bucket.append(now)
-    return True, ""
+    global _rate_limit_bucket, _RATE_LIMIT_SELF_FAILURES, _RATE_LIMIT_SELF_OPEN_UNTIL
+
+    # Self-fallback: if rate limiter itself is failing, allow all requests
+    if time.time() < _RATE_LIMIT_SELF_OPEN_UNTIL:
+        return True, ""
+
+    try:
+        now = time.time()
+        # Prune expired entries
+        _rate_limit_bucket = [t for t in _rate_limit_bucket if now - t < _RATE_LIMIT_WINDOW]
+        if len(_rate_limit_bucket) >= _RATE_LIMIT_MAX_CALLS:
+            oldest = _rate_limit_bucket[0] if _rate_limit_bucket else now
+            retry_after = int(_RATE_LIMIT_WINDOW - (now - oldest))
+            return False, f"Rate limit exceeded. Retry after {retry_after}s"
+        _rate_limit_bucket.append(now)
+        _RATE_LIMIT_SELF_FAILURES = 0
+        return True, ""
+    except Exception:
+        _RATE_LIMIT_SELF_FAILURES += 1
+        if _RATE_LIMIT_SELF_FAILURES >= _RATE_LIMIT_SELF_THRESHOLD:
+            _RATE_LIMIT_SELF_OPEN_UNTIL = time.time() + _RATE_LIMIT_SELF_DURATION
+        return True, ""  # fail-open
 
 
 # ------------------------------------------------------------------
@@ -98,6 +116,7 @@ def _check_rate_limit() -> Tuple[bool, str]:
 
 _CIRCUIT_THRESHOLD = 10  # consecutive failures before open
 _CIRCUIT_COOLDOWN = 60  # seconds before half-open
+_CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # 动态冷却时间
 _circuit_failures = 0
 _circuit_open_until = 0.0
 
@@ -116,30 +135,43 @@ def _check_circuit_breaker() -> Tuple[bool, str]:
 
 def _record_failure():
     """Record circuit breaker failure."""
-    global _circuit_failures, _circuit_open_until
+    global _circuit_failures, _circuit_open_until, _CIRCUIT_COOLDOWN_CURRENT
     _circuit_failures += 1
     if _circuit_failures >= _CIRCUIT_THRESHOLD:
-        _circuit_open_until = time.time() + _CIRCUIT_COOLDOWN
+        _circuit_open_until = time.time() + _CIRCUIT_COOLDOWN_CURRENT
+        _CIRCUIT_COOLDOWN_CURRENT = min(_CIRCUIT_COOLDOWN_CURRENT * 2, 300)
         logger.error(
             f"Circuit OPEN after {_circuit_failures} failures "
-            f"(cooldown={_CIRCUIT_COOLDOWN}s)"
+            f"(cooldown={_CIRCUIT_COOLDOWN_CURRENT}s)"
         )
 
 
 def _record_success():
     """Reset circuit breaker on success."""
-    global _circuit_failures
+    global _circuit_failures, _CIRCUIT_COOLDOWN_CURRENT
     _circuit_failures = 0
+    _CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # 重置
 
 
 # ------------------------------------------------------------------
 # Gate: Audit logging
 # ------------------------------------------------------------------
 
+_AUDIT_LOG_MAX_SIZE = 1024
+_AUDIT_SAMPLE_RATE = 0.1  # 10% 采样
+_audit_log_queue: List[str] = []
+
 
 def _audit_log(action: str, method: str, tool: str, detail: str = ""):
     """Audit log entry for all MCP calls."""
-    logger.warning(f"AUDIT action={action} method={method} tool={tool} detail={detail[:120]}")
+    global _audit_log_queue
+    if random.random() > _AUDIT_SAMPLE_RATE:
+        return
+    entry = f"AUDIT action={action} method={method} tool={tool} detail={detail[:120]}"
+    logger.warning(entry)
+    if len(_audit_log_queue) >= _AUDIT_LOG_MAX_SIZE:
+        _audit_log_queue.pop(0)
+    _audit_log_queue.append(entry)
 
 
 # ------------------------------------------------------------------

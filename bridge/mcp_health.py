@@ -16,6 +16,22 @@ Usage:
     set MCP_BRIDGE_API_KEY=your-key
     python -m bridge.mcp_health
 """
+import random
+from typing import List
+
+_RATE_LIMIT_SELF_FAILURES = 0
+_RATE_LIMIT_SELF_OPEN_UNTIL = 0.0
+_RATE_LIMIT_SELF_THRESHOLD = 3
+_RATE_LIMIT_SELF_DURATION = 30
+
+_CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN
+
+_AUDIT_LOG_MAX_SIZE = 1024
+_AUDIT_SAMPLE_RATE = 0.1
+_audit_log_queue: List[str] = []
+
+
+def _check_api_key(request: Dict[str, Any]) -> Tuple[bool, str]:
     """Gate 1: API Key authentication.
 
     Reads key from:
@@ -50,19 +66,31 @@ def _check_rate_limit() -> Tuple[bool, str]:
 
     Sliding window -?allows up to _RATE_LIMIT_MAX_CALLS per _RATE_LIMIT_WINDOW.
     """
-    now = time.time()
-    global _rate_limit_bucket
+    global _rate_limit_bucket, _RATE_LIMIT_SELF_FAILURES, _RATE_LIMIT_SELF_OPEN_UNTIL
 
-    # Prune expired entries
-    _rate_limit_bucket = [t for t in _rate_limit_bucket if now - t < _RATE_LIMIT_WINDOW]
+    # Self-fallback: if rate limiter itself is failing, allow all requests
+    if time.time() < _RATE_LIMIT_SELF_OPEN_UNTIL:
+        return True, ""
 
-    if len(_rate_limit_bucket) >= _RATE_LIMIT_MAX_CALLS:
-        oldest = _rate_limit_bucket[0] if _rate_limit_bucket else now
-        retry_after = int(_RATE_LIMIT_WINDOW - (now - oldest))
-        return False, f"Rate limit exceeded. Retry after {retry_after}s"
+    try:
+        now = time.time()
 
-    _rate_limit_bucket.append(now)
-    return True, ""
+        # Prune expired entries
+        _rate_limit_bucket = [t for t in _rate_limit_bucket if now - t < _RATE_LIMIT_WINDOW]
+
+        if len(_rate_limit_bucket) >= _RATE_LIMIT_MAX_CALLS:
+            oldest = _rate_limit_bucket[0] if _rate_limit_bucket else now
+            retry_after = int(_RATE_LIMIT_WINDOW - (now - oldest))
+            return False, f"Rate limit exceeded. Retry after {retry_after}s"
+
+        _rate_limit_bucket.append(now)
+        _RATE_LIMIT_SELF_FAILURES = 0
+        return True, ""
+    except Exception:
+        _RATE_LIMIT_SELF_FAILURES += 1
+        if _RATE_LIMIT_SELF_FAILURES >= _RATE_LIMIT_SELF_THRESHOLD:
+            _RATE_LIMIT_SELF_OPEN_UNTIL = time.time() + _RATE_LIMIT_SELF_DURATION
+        return True, ""  # fail-open
 
 
 def _check_circuit_breaker() -> Tuple[bool, str]:
@@ -84,32 +112,39 @@ def _check_circuit_breaker() -> Tuple[bool, str]:
 
 def _record_failure():
     """Record a circuit breaker failure."""
-    global _circuit_failures, _circuit_open_until
+    global _circuit_failures, _circuit_open_until, _CIRCUIT_COOLDOWN_CURRENT
     _circuit_failures += 1
     if _circuit_failures >= _CIRCUIT_THRESHOLD:
-        _circuit_open_until = time.time() + _CIRCUIT_COOLDOWN
+        _circuit_open_until = time.time() + _CIRCUIT_COOLDOWN_CURRENT
+        _CIRCUIT_COOLDOWN_CURRENT = min(_CIRCUIT_COOLDOWN_CURRENT * 2, 300)
         logger.error(
             f"Circuit OPEN after {_circuit_failures} failures "
-            f"(cooldown={_CIRCUIT_COOLDOWN}s)"
+            f"(cooldown={_CIRCUIT_COOLDOWN_CURRENT}s)"
         )
 
 
 def _record_success():
     """Reset circuit breaker on success."""
-    global _circuit_failures
+    global _circuit_failures, _CIRCUIT_COOLDOWN_CURRENT
     _circuit_failures = 0
+    _CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # 重置
 
 
 def _audit_log(action: str, request: Dict[str, Any], result: str):
     """Audit log entry for all MCP health calls."""
+    global _audit_log_queue
+    if random.random() > _AUDIT_SAMPLE_RATE:
+        return
     req_id = request.get("id", "?")
     method = request.get("method", "?")
     tool = ""
     if method == "tools/call":
         tool = request.get("params", {}).get("name", "?") if isinstance(request.get("params"), dict) else "?"
-    logger.warning(
-        f"AUDIT action={action} id={req_id} method={method} tool={tool} result={result[:60]}"
-    )
+    entry = f"AUDIT action={action} id={req_id} method={method} tool={tool} result={result[:60]}"
+    logger.warning(entry)
+    if len(_audit_log_queue) >= _AUDIT_LOG_MAX_SIZE:
+        _audit_log_queue.pop(0)
+    _audit_log_queue.append(entry)
 
 
 # ------------------------------------------------------------------
