@@ -51,6 +51,7 @@ export interface CaptureRequest {
   session_key: string;
   session_id?: string;
   user_id?: string;
+  started_at?: number;
   messages?: unknown[];
 }
 

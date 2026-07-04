@@ -2,7 +2,7 @@
 
 ## 范围
 
-这里对比四个平台到 Memory Core 的接入路径。OpenClaw 在进程内直接调用 Core；Hermes 走 MemoryProvider + Gateway；Codex 和 Claude Code 走 plugin + MCP + CLI/hooks + Gateway。
+这里对比五类平台到 Memory Core 的接入路径。OpenClaw 在进程内直接调用 Core；Hermes 走 MemoryProvider + Gateway；Codex 和 Claude Code 客户端走 plugin + MCP + CLI/hooks + Gateway；自己写的 agent 应用可以走 Agent SDK adapter + Gateway。
 
 ## 结构图
 
@@ -17,6 +17,7 @@ flowchart TB
     Hermes["Hermes MemoryProvider"]
     Codex["Codex plugin"]
     Claude["Claude Code plugin"]
+    AgentSDK["Agent SDK adapter"]
     MCP["shared tdai-memory-mcp"]
     CLI["shared tdai-memory-cli"]
   end
@@ -28,6 +29,7 @@ flowchart TB
   Codex -->|"hooks"| CLI
   Claude -->|"MCP tools"| MCP
   Claude -->|"hooks"| CLI
+  AgentSDK -->|"SDK wrapper"| Gateway
   MCP --> Gateway
   CLI --> Gateway
   Gateway --> Core
@@ -47,6 +49,7 @@ flowchart TB
 | Hermes | MemoryProvider | 否 | 是 | Hermes provider tools | `prefetch/sync_turn/on_session_end` | `system_prompt_block()` |
 | Codex | Plugin + MCP + CLI/hooks | 否 | 是 | MCP `tdai_memory_search`, `tdai_conversation_search` | plugin hooks 调 CLI | `~/.codex/AGENTS.md` |
 | Claude Code | Plugin + MCP + CLI/hooks | 否 | 是 | MCP `tdai_memory_search`, `tdai_conversation_search` | plugin hooks 调 CLI | `~/.claude/CLAUDE.md` |
+| Agent SDK apps | TS SDK wrapper + Gateway | 否 | 是 | 应用自定义；可直接调 SDK wrapper search/client | SDK wrapper 内部 recall/capture/end | 无 |
 
 ## 能力覆盖
 
@@ -118,6 +121,7 @@ sequenceDiagram
 | `03-hermes-adapter.md` | Hermes MemoryProvider + Gateway 旁路进程。 |
 | `04-codex-plugin-adapter.md` | Codex plugin + shared MCP/CLI/hooks。 |
 | `05-claude-code-plugin-adapter.md` | Claude Code plugin + shared MCP/CLI/hooks。 |
+| `06-agent-sdk-adapter.md` | Codex SDK / Claude Code Agent SDK 的 TS wrapper。 |
 
 ## 接入形态
 
@@ -126,6 +130,7 @@ sequenceDiagram
 | 进程内 HostAdapter | 深度 prompt 注入、宿主 LLM runner、低一层 HTTP 开销 | 绑定宿主 API，跨平台迁移需要重写事件层 | OpenClaw |
 | Gateway 旁路进程 + provider | 复用 Core，宿主侧只需要 provider 和 HTTP client | 需要管理 Gateway 生命周期 | Hermes |
 | Plugin + MCP + CLI/hooks | 多 agent 平台共享 search 和 lifecycle 适配包 | prompt 注入能力受平台 hooks 限制 | Codex、Claude Code |
+| Agent SDK wrapper + Gateway | 自己写 agent 应用时直接包住 SDK 调用链，自动 recall/capture/stream | 需要应用代码改用 wrapper；不覆盖现成客户端 | Codex SDK、Claude Code Agent SDK |
 
 ## 平台扩展顺序
 
