@@ -245,3 +245,53 @@ jobs:
           done
           if [ "$fails" -gt 0 ]; then echo "FAIL: $fails scripts/*.ps1 without BOM"; exit 1; fi
           echo "OK: all scripts/*.ps1 have UTF-8 BOM"
+
+  # ── 10. File corruption guard ─────────────────────────────
+  file-integrity:
+    name: File Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax and UTF-8 validity
+        run: |
+          FAILS=0
+          while IFS= read -r -d '' f; do
+            # UTF-8 validity
+            if ! python3 -c "open('$f','rb').read().decode('utf-8')" 2>/dev/null; then
+              echo "  INVALID UTF-8: $f"
+              FAILS=$((FAILS + 1))
+              continue
+            fi
+            # Python syntax
+            if [[ "$f" == *.py ]]; then
+              if ! python3 -c "import ast; ast.parse(open('$f', encoding='utf-8').read())" 2>/dev/null; then
+                echo "  SYNTAX ERROR: $f"
+                FAILS=$((FAILS + 1))
+              fi
+            fi
+          done < <(find bridge bridge_adapter scripts src \
+            -name '*.py' -o -name '*.ts' | tr '\n' '\0')
+          if [ "$FAILS" -gt 0 ]; then echo "FAIL: $FAILS files corrupted"; exit 1; fi
+          echo "OK: all files pass UTF-8 + Python syntax"
+
+      - name: Check for truncated files (empty or no trailing newline)
+        run: |
+          FAILS=0
+          while IFS= read -r -d '' f; do
+            SIZE=$(stat -c%s "$f")
+            if [ "$SIZE" -eq 0 ]; then
+              echo "  EMPTY: $f"
+              FAILS=$((FAILS + 1))
+            elif [ "$SIZE" -lt 10 ]; then
+              echo "  SUSPICIOUS (tiny): $f ($SIZE bytes)"
+              FAILS=$((FAILS + 1))
+            fi
+          done < <(find bridge bridge_adapter scripts src \
+            -name '*.py' -o -name '*.ts' | tr '\n' '\0')
+          if [ "$FAILS" -gt 0 ]; then echo "FAIL: $FAILS truncated/tiny files"; exit 1; fi
+          echo "OK: all files non-empty"
