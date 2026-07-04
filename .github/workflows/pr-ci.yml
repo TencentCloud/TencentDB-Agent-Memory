@@ -36,7 +36,7 @@ jobs:
 
       - name: npm audit (supply chain)
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm audit --audit-level=high || echo "WARN: npm audit found high/critical vulnerabilities"
+        run: "npm audit --audit-level=high || echo 'WARN: npm audit found high/critical vulnerabilities'"
 
   # ── 2. OpenSSF Scorecard — supply chain security score ──────
   supply-chain:
