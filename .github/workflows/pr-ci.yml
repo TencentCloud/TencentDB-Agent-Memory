@@ -42,10 +42,6 @@ jobs:
   supply-chain:
     name: Supply Chain
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -54,7 +50,7 @@ jobs:
         with:
           results_file: scorecard-results.sarif
           results_format: sarif
-          publish_results: true
+          publish_results: false
 
       - name: Upload Scorecard SARIF
         uses: actions/upload-artifact@v5
@@ -66,7 +62,6 @@ jobs:
       - name: Scorecard summary
         run: |
           echo "── Supply Chain Scorecard complete ──"
-          echo "Details: https://github.com/${{ github.repository }}/security/scorecard"
           echo "See scorecard-results.sarif for full report"
 
   # ── 3. Pack validation ─────────────────────────────────────
