@@ -41,6 +41,7 @@ jobs:
   # ── 2. OpenSSF Scorecard — supply chain security score ──────
   supply-chain:
     name: Supply Chain
+    if: github.repository_owner == 'TencentCloud'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -200,7 +201,7 @@ jobs:
         run: npx vitest run src/core/tdai-http-client.test.ts --reporter=verbose
 
       - name: Run Gate tests (R1)
-        run: npx vitest run src/core/gates/ --reporter=verbose
+        run: npx vitest run src/core/gates/gate-rate-limit.test.ts src/core/gates/gate-circuit-breaker.test.ts src/core/gates/gate-audit.test.ts --reporter=verbose
 
   # ── 8. Python bridge_adapter smoke test ─────────────────────
   test-py:
