@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { recalibrateCheckpointFromStore } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -178,6 +179,14 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+
+      try {
+        await recalibrateCheckpointFromStore(this.opts.baseDir, vectorStore, this.opts.logger);
+      } catch (err) {
+        this.opts.logger?.warn(
+          `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     this.opts.logger?.info(
