@@ -67,7 +67,7 @@ def test_dual_path_demo():
 # -------- Circuit breaker cooldown escalation --------
 
 def test_cb_cooldown_escalation():
-    """Circuit breaker cooldown doubles after rapid reset→open cycles."""
+    """Circuit breaker cooldown doubles after rapid reset-open cycles."""
     import bridge.mcp.server as srv
     original = srv._CIRCUIT_COOLDOWN
     srv._CIRCUIT_COOLDOWN_CURRENT = original
