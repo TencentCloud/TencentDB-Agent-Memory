@@ -54,6 +54,6 @@ export class AuditGate implements Middleware {
 
   _flushNow(): Promise<void> { return this._flush(); }
   _bufferSize(): number { return this._buffer.length; }
-  _dropCount(): number { return this._dropCount; }
+  _getDropCount(): number { return this._dropCount; }
   dispose(): void { if (this._timer) { clearInterval(this._timer); this._timer = null; } }
 }

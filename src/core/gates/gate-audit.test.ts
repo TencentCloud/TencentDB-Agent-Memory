@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { AuditGate } from "./gate-audit.js";
 import type { AuditEntry } from "./types.js";
 
@@ -41,6 +41,6 @@ describe("AuditGate", () => {
     gate = new AuditGate({ maxBufferSize: 3, intervalMs: 5000, sampleRate: 1.0 });
     for (let i = 0; i < 10; i++) gate.afterCall(`m${i}`, null, 1);
     expect(gate._bufferSize()).toBe(3);
-    expect(gate._dropCount()).toBe(7);
+    expect(gate._getDropCount()).toBe(7);
   });
 });
