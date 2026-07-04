@@ -44,6 +44,9 @@
 
 ### 🐛 修复
 
+#### 搜索 / 召回
+- **FTS5 查询输入安全清洗**：`buildFtsQuery()` 在分词前移除 `AND` / `OR` / `NOT` / `NEAR`、`NEAR/n` 距离语法和 FTS5 控制字符，避免用户搜索文本改变 MATCH 查询语义；查询仍通过 SQLite prepared statement 参数传入，并用字母/数字 token 白名单保留普通搜索词和包含操作符子串的正常单词。
+
 #### 数据安全 / 数据隔离
 - **L2 LLM 提取失败导致 `scene_blocks/` 被清空 / 半写入** ([#88](https://github.com/Tencent/TencentDB-Agent-Memory/issues/88))：Phase 1 已对 `scene_blocks/` 做完整快照，但 LLM 抛错时 `catch` 直接 `return`，沙箱里的部分写入 / 删除不会回滚，后续 recall 因此看不到场景导航，降级为碎片召回。新增 `BackupManager.findLatestBackup` + `restoreLatestDirectory`，在 LLM 失败时自动从最新备份恢复；采用 fail-soft 设计：无备份时不动目标目录，恢复过程自身的错误也不会替换原始 LLM 错误。
 - **Cleaner 安全加固**：`computeCutoffMsByLocalDay` 拒绝无效 cutoff（未来时间 / 距今不足 24h）；SQLite 与 TCVDB 在 `expired/total > 80%` 时阻止删除；`runOnce` 增加最小保留护栏（L0:50 / L1:20）并产出 `cleaner_summary` JSON 审计日志；新增 `__tests__/cleaner/verify-cleaner-safety.ts` E2E 校验。
