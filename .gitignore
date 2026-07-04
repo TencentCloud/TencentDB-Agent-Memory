@@ -29,9 +29,8 @@ benchmark-runs/
 .codebuddy
 .ai_assets
 
-# Dev-only scripts & lockfile (not shipped in MR)
+# Dev-only scripts (not shipped in MR)
 install-plugin.sh
-package-lock.json
 pnpm-lock.yaml
 yarn.lock
 test-offload.sh
@@ -39,8 +38,60 @@ test-offload-mmd.sh
 test-offload-sessions.sh
 
 # npm pack / release tarballs (never commit packaged outputs)
+dist-pack/
 *.tgz
 *.tar.gz
+*.whl
 
-# log files
+# TypeScript build intermediates
+*.tsbuildinfo
+*.js.map
+
+# SDK build output (source is .ts/.py, not compiled output)
+sdk/typescript/dist/
+sdk/python/dist/
+sdk/python/*.egg-info/
+
+# Vitest cache
+.vite/
+
+# Environment (already covered above, explicit for clarity)
+.env.*
+!.env.example
+
+# Eval scripts output
+scripts/eval-report.json
+
+# OS files
+.DS_Store
+
+# Generated binaries
+vectors.db
+
+# Office temp files
+~$*
+
+# Generated docs (HTML/PDF)
+docs/*.html
+docs/*.pdf
+docs/*.png
+docs/*.pptx
+docs/*.mmd
+
+# Log files
 *.log
+scene_blocks/
+gateway.log
+
+# 可观测性私人文档（不上传git）
+docs/开发环境说明.md
+docs/可观测性开发规范.md
+docs/插件埋点列表.md
+
+# DevCloud multipod test runtime artifact (contains real credentials, never commit)
+__tests__/devcloud-multipod/.env.devcloud
+
+# Local-only diagnostic / convention scripts (not shipped)
+__tests__/devcloud-multipod/diag-instance.sh
+scripts/COMMIT_CONVENTION.md
+scripts/pre-commit-check.sh

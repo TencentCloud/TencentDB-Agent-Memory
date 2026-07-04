@@ -28,13 +28,47 @@ jobs:
         id: cache-deps
         with:
           path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json') }}
 
-      - name: npm install
+      - name: npm ci
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
-  # ── 2. Pack validation ─────────────────────────────────────
+      - name: npm audit (supply chain)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm audit --audit-level=high || echo "WARN: npm audit found high/critical vulnerabilities"
+
+  # ── 2. OpenSSF Scorecard — supply chain security score ──────
+  supply-chain:
+    name: Supply Chain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload Scorecard SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-sarif
+          path: scorecard-results.sarif
+          retention-days: 7
+
+      - name: Scorecard summary
+        run: |
+          echo "── Supply Chain Scorecard complete ──"
+          echo "Details: https://github.com/${{ github.repository }}/security/scorecard"
+          echo "See scorecard-results.sarif for full report"
+
+  # ── 3. Pack validation ─────────────────────────────────────
   pack:
     name: Pack
     needs: install
@@ -53,7 +87,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
 
       - name: Install dependencies on cache miss
-        run: test -x node_modules/.bin/tsdown || npm install --ignore-scripts
+        run: test -x node_modules/.bin/tsdown || npm ci --ignore-scripts
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
@@ -153,17 +187,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json') }}
 
-      - name: npm install
+      - name: npm ci
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
       - name: Run MemoryAdapter tests
         run: npx vitest run src/core/memory-adapter.test.ts --reporter=verbose
 
       - name: Run TdaiHttpClient unit tests
         run: npx vitest run src/core/tdai-http-client.test.ts --reporter=verbose
+
+      - name: Run Gate tests (R1)
+        run: npx vitest run src/core/gates/ --reporter=verbose
 
   # ── 8. Python bridge_adapter smoke test ─────────────────────
   test-py:

@@ -25,7 +25,7 @@ Six approaches spanning the TDAI adapter ecosystem:
 | **Audit logging** | N/A | N/A | N/A | N/A | **N/A** | **All calls logged WARNING (G4)** |
 | **Retry** | Platform native | Platform native | None | Exponential backoff + jitter | **Exponential backoff (3 attempts)** | **Inherited via adapter** |
 | **MCP framework dep** | N/A | N/A | @modelcontextprotocol/sdk | @modelcontextprotocol/sdk | **N/A** | **None (pure JSON-RPC 2.0)** |
-| **Defense gates** | Platform native | Platform native | None | None | **Retry + CB + middleware** | **5-layer: Schema/Key/Rate/CB/Audit** |
+| **Defense gates** | Platform native | Platform native | None | None | **Retry + Rate limit + CB + Audit + middleware** (R1) | **5-layer: Schema/Key/Rate/CB/Audit** |
 | **SDK abstraction** | Interface only | Provider base class | Shared infrastructure only | Interface + implementations | **ABC + 3 implementations + registry + middleware** | **Inherited via adapter** |
 | **TS SDK** | Native | N/A | Shared gateway-client + hook-bridge + mcp-server | Shared gateway client + Dify OpenAPI generator | **MemoryAdapter interface** | **BaseMemoryAdapter + TdaiHttpClient** |
 | **Test coverage** | Plugin tests | 78 tests | 4 test files | 353 tests (chaos/contract/e2e/security/unit) | **353 integration + 20 provider + 28 red team = 401** | **14 protocol + 13 redteam + 22 offensive + 12 ghost = 59 + 2?** |
