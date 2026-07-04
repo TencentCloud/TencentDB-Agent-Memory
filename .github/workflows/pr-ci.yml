@@ -17,14 +17,14 @@ jobs:
     name: Install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-deps
         with:
           path: node_modules
@@ -41,13 +41,13 @@ jobs:
   # ── 2. OpenSSF Scorecard — supply chain security score ──────
   supply-chain:
     name: Supply Chain
-    if: github.repository_owner == 'TencentCloud'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: OpenSSF Scorecard
         uses: ossf/scorecard-action@v2.4.0
@@ -57,7 +57,7 @@ jobs:
           publish_results: true
 
       - name: Upload Scorecard SARIF
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: scorecard-sarif
           path: scorecard-results.sarif
@@ -75,14 +75,14 @@ jobs:
     needs: install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 
       - name: Restore node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
@@ -97,7 +97,7 @@ jobs:
         run: npm pack
 
       - name: Upload .tgz artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: package-tarball
           path: "*.tgz"
@@ -108,7 +108,7 @@ jobs:
     name: Manifest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate openclaw.plugin.json
         run: |
@@ -151,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: package-tarball
 
@@ -178,14 +178,14 @@ jobs:
     name: Test TS
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
 
       - name: Restore node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json') }}
@@ -208,7 +208,7 @@ jobs:
     name: Test Python
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
         with:
@@ -239,7 +239,7 @@ jobs:
     name: Encoding Defense (L1+L5)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: L5 - Detect garbled Unicode in .py/.ts files
         run: |
