@@ -279,6 +279,17 @@ jobs:
           if [ "$FAILS" -gt 0 ]; then echo "FAIL: $FAILS files corrupted"; exit 1; fi
           echo "OK: all files pass UTF-8 + Python syntax"
 
+      - name: Check TypeScript compilation
+        run: |
+          if [ -f tsconfig.json ]; then
+            echo "── Running tsc --noEmit ──"
+            npm ci --ignore-scripts 2>/dev/null
+            npx tsc --noEmit 2>&1 || { echo "FAIL: TypeScript compilation errors"; exit 1; }
+            echo "OK: tsc --noEmit clean"
+          else
+            echo "SKIP: no tsconfig.json"
+          fi
+
       - name: Check for truncated files (empty or no trailing newline)
         run: |
           FAILS=0
