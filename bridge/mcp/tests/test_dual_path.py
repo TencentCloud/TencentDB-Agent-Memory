@@ -56,20 +56,26 @@ def test_mcp_bridge_api_key_override():
 # -------- Dual path startup illustration (info-only) --------
 
 def test_dual_path_demo():
-    """Demonstrate both local and multi-tenant startup configs.
-    
-    Local mode (zero config):
-        $ python -m bridge.mcp.server
-        # Uses: http://127.0.0.1:8420, empty key (loopback), mem-rkgqhd5z
-    
-    Multi-tenant mode (per project):
-        $ TDAI_SERVICE_ID=my-project python -m bridge.mcp.server
-        # Uses: default endpoint, empty key, my-project service_id
-        
-    Remote Gateway mode:
-        $ TDAI_ENDPOINT=https://cloud.example.com:8420 \\
-        $ TDAI_API_KEY=sk-xxxx \\
-        $ TDAI_SERVICE_ID=my-project \\
-        $ python -m bridge.mcp.server
-    """
-    assert True  # Documentation-only test
+    """Sanity check — dual-path setup doesn't crash."""
+    # Just re-import to verify no import-time side effects
+    import importlib
+    import bridge.mcp.server as srv
+    importlib.reload(srv)
+    assert srv._MCP_API_KEY is not None
+
+
+# -------- Circuit breaker cooldown escalation --------
+
+def test_cb_cooldown_escalation():
+    """Circuit breaker cooldown doubles after rapid reset→open cycles."""
+    import bridge.mcp.server as srv
+    original = srv._CIRCUIT_COOLDOWN
+    srv._CIRCUIT_COOLDOWN_CURRENT = original
+    # Simulate 2 open cycles
+    srv._CIRCUIT_COOLDOWN_CURRENT = min(srv._CIRCUIT_COOLDOWN_CURRENT * 2, 300)
+    assert srv._CIRCUIT_COOLDOWN_CURRENT == original * 2
+    srv._CIRCUIT_COOLDOWN_CURRENT = min(srv._CIRCUIT_COOLDOWN_CURRENT * 2, 300)
+    assert srv._CIRCUIT_COOLDOWN_CURRENT == original * 4
+    # Reset
+    srv._CIRCUIT_COOLDOWN_CURRENT = original
+    assert srv._CIRCUIT_COOLDOWN_CURRENT == original

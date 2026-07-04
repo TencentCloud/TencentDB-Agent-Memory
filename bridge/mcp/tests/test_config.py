@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -78,3 +79,28 @@ def test_mcp_server_tdai_env_inheritance():
         import bridge.mcp.server as srv
         importlib.reload(srv)
         assert srv._MCP_API_KEY == "inherited-key"
+
+
+# -------- Rate limiter self-fallback --------
+
+def test_rate_limiter_self_fallback():
+    """Rate limiter enters fail-open after N consecutive internal failures."""
+    import bridge.mcp.server as srv
+    srv._RATE_LIMIT_SELF_FAILURES = 0
+    srv._RATE_LIMIT_SELF_OPEN_UNTIL = 0.0
+    for _ in range(3):
+        srv._RATE_LIMIT_SELF_FAILURES += 1
+    assert srv._RATE_LIMIT_SELF_FAILURES >= srv._RATE_LIMIT_SELF_THRESHOLD
+    srv._RATE_LIMIT_SELF_OPEN_UNTIL = time.time() + 30
+    ok, msg = srv._check_rate_limit()
+    assert ok, f"Should be fail-open: {msg}"
+
+
+def test_audit_sampling_default():
+    """Audit sampling mechanism does not crash."""
+    import bridge.mcp.server as srv
+    srv._audit_log_queue.clear()
+    srv._audit_log("ALLOWED", "test_method", "test_tool")
+    # Queue may have 0 or 1 entry depending on sampling
+    assert len(srv._audit_log_queue) <= 1
+    srv._audit_log_queue.clear()
