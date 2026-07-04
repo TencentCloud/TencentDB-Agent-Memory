@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -184,6 +185,14 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+    try {
+      const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+      await checkpoint.recalibrate(this.vectorStore);
+    } catch (err) {
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint recalibration failed after cleanup: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private scheduleNext(): void {
