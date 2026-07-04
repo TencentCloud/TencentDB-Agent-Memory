@@ -127,7 +127,7 @@ def _record_success():
     """Reset circuit breaker on success."""
     global _circuit_failures, _CIRCUIT_COOLDOWN_CURRENT
     _circuit_failures = 0
-    _CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # 重置
+    _CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # reset
 
 
 def _audit_log(action: str, request: Dict[str, Any], result: str):

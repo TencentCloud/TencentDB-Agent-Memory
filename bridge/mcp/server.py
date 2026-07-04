@@ -116,7 +116,7 @@ def _check_rate_limit() -> Tuple[bool, str]:
 
 _CIRCUIT_THRESHOLD = 10  # consecutive failures before open
 _CIRCUIT_COOLDOWN = 60  # seconds before half-open
-_CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # 动态冷却时间
+_CIRCUIT_COOLDOWN_CURRENT = _CIRCUIT_COOLDOWN  # dynamic cooldown
 _circuit_failures = 0
 _circuit_open_until = 0.0
 
@@ -158,7 +158,7 @@ def _record_success():
 # ------------------------------------------------------------------
 
 _AUDIT_LOG_MAX_SIZE = 1024
-_AUDIT_SAMPLE_RATE = 0.1  # 10% 采样
+_AUDIT_SAMPLE_RATE = 0.1  # 10% sample rate
 _audit_log_queue: List[str] = []
 
 
