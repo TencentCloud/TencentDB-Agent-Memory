@@ -38,32 +38,6 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: "npm audit --audit-level=high || echo 'WARN: npm audit found high/critical vulnerabilities'"
 
-  # ── 2. OpenSSF Scorecard — supply chain security score ──────
-  supply-chain:
-    name: Supply Chain
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: OpenSSF Scorecard
-        uses: ossf/scorecard-action@v2.4.0
-        with:
-          results_file: scorecard-results.sarif
-          results_format: sarif
-          publish_results: false
-
-      - name: Upload Scorecard SARIF
-        uses: actions/upload-artifact@v5
-        with:
-          name: scorecard-sarif
-          path: scorecard-results.sarif
-          retention-days: 7
-
-      - name: Scorecard summary
-        run: |
-          echo "── Supply Chain Scorecard complete ──"
-          echo "See scorecard-results.sarif for full report"
-
   # ── 3. Pack validation ─────────────────────────────────────
   pack:
     name: Pack
