@@ -27,6 +27,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
+
+const SHARD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 
 // ============================
 // Types
@@ -145,6 +148,113 @@ export interface CheckpointLogger {
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
+
+export interface RecalibrateSources {
+  dataDir: string;
+  /** When available, L1 count uses the store (source of truth after memory-cleaner). */
+  vectorStore?: Pick<IMemoryStore, "countL1">;
+}
+
+export interface RecalibrateResult {
+  adjusted: boolean;
+  totalMemoriesBefore: number;
+  totalMemoriesAfter: number;
+  l0ConversationsBefore: number;
+  l0ConversationsAfter: number;
+}
+
+/**
+ * Count active L1 records from daily JSONL shards (unique IDs — append-only files
+ * may contain superseded rows from update/merge).
+ */
+export async function countL1RecordsFromJsonl(dataDir: string): Promise<number> {
+  const recordsDir = path.join(dataDir, "records");
+  const ids = new Set<string>();
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(recordsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !SHARD_DATE_PATTERN.test(entry.name)) continue;
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(recordsDir, entry.name), "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as { id?: string };
+        ids.add(typeof parsed.id === "string" && parsed.id ? parsed.id : line);
+      } catch {
+        // Malformed lines are not counted
+      }
+    }
+  }
+
+  return ids.size;
+}
+
+/**
+ * Count L0 capture rounds from JSONL — one increment per agent_end capture batch.
+ * Messages in the same batch share the same (sessionKey, recordedAt) pair.
+ */
+export async function countL0CaptureRoundsFromJsonl(dataDir: string): Promise<number> {
+  const conversationsDir = path.join(dataDir, "conversations");
+  const batches = new Set<string>();
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(conversationsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !SHARD_DATE_PATTERN.test(entry.name)) continue;
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(conversationsDir, entry.name), "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as { sessionKey?: string; recordedAt?: string };
+        const sessionKey = typeof parsed.sessionKey === "string" ? parsed.sessionKey : "";
+        const recordedAt = typeof parsed.recordedAt === "string" ? parsed.recordedAt : "";
+        if (sessionKey && recordedAt) {
+          batches.add(`${sessionKey}\0${recordedAt}`);
+        }
+      } catch {
+        // Malformed lines are not counted
+      }
+    }
+  }
+
+  return batches.size;
+}
+
+async function resolveActualL1Count(sources: RecalibrateSources): Promise<number> {
+  if (sources.vectorStore) {
+    try {
+      return await Promise.resolve(sources.vectorStore.countL1());
+    } catch {
+      // Fall through to JSONL when the store is degraded or unavailable
+    }
+  }
+  return countL1RecordsFromJsonl(sources.dataDir);
+}
 
 // ============================
 // Per-file async lock
@@ -456,6 +566,64 @@ export class CheckpointManager {
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
    * @param fn  Async callback that performs the actual capture (recordConversation, etc.)
    */
+  /**
+   * Reconcile monotonic counters with on-disk / store data.
+   *
+   * Counters only increment during normal operation; cleanup (memory-cleaner,
+   * manual JSONL pruning) never decrements them. Call once at startup so status
+   * reporting and persona thresholds reflect reality.
+   */
+  async recalibrate(sources: RecalibrateSources): Promise<RecalibrateResult> {
+    const [actualExtracted, actualL0Rounds] = await Promise.all([
+      resolveActualL1Count(sources),
+      countL0CaptureRoundsFromJsonl(sources.dataDir),
+    ]);
+
+    let result: RecalibrateResult = {
+      adjusted: false,
+      totalMemoriesBefore: 0,
+      totalMemoriesAfter: actualExtracted,
+      l0ConversationsBefore: 0,
+      l0ConversationsAfter: actualL0Rounds,
+    };
+
+    await this.mutate((cp) => {
+      result = {
+        adjusted:
+          cp.total_memories_extracted !== actualExtracted ||
+          cp.l0_conversations_count !== actualL0Rounds,
+        totalMemoriesBefore: cp.total_memories_extracted,
+        totalMemoriesAfter: actualExtracted,
+        l0ConversationsBefore: cp.l0_conversations_count,
+        l0ConversationsAfter: actualL0Rounds,
+      };
+
+      if (!result.adjusted) return;
+
+      const memoryDrift = cp.total_memories_extracted - actualExtracted;
+      cp.total_memories_extracted = actualExtracted;
+      cp.l0_conversations_count = actualL0Rounds;
+
+      // memories_since_last_persona shares the same increment path as total_memories_extracted
+      if (memoryDrift > 0) {
+        cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - memoryDrift);
+      }
+    });
+
+    if (result.adjusted) {
+      this.logger.warn?.(
+        `[checkpoint] recalibrate: total_memories_extracted ${result.totalMemoriesBefore} → ${result.totalMemoriesAfter}, ` +
+        `l0_conversations_count ${result.l0ConversationsBefore} → ${result.l0ConversationsAfter}`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate: counters match data (memories=${result.totalMemoriesAfter}, l0_rounds=${result.l0ConversationsAfter})`,
+      );
+    }
+
+    return result;
+  }
+
   async captureAtomically(
     sessionKey: string,
     pluginStartTimestamp: number | undefined,
