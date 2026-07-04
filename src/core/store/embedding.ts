@@ -66,6 +66,10 @@ export interface EmbeddingProviderInfo {
 export interface EmbeddingCallOptions {
   /** Override the default timeout for this call (milliseconds). */
   timeoutMs?: number;
+  /** Optional abort signal — when aborted, the in-flight HTTP request is
+   *  cancelled. Used by the recall hot path so a recall timeout actually
+   *  stops the embedding call instead of letting it run to its own timeout. */
+  abortSignal?: AbortSignal;
 }
 
 export interface EmbeddingService {
@@ -449,19 +453,25 @@ async function postEmbeddingRequest(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
   timeoutMs: number;
+  abortSignal?: AbortSignal;
 }): Promise<unknown> {
-  const { fetchUrl, headers, body, timeoutMs } = params;
+  const { fetchUrl, headers, body, timeoutMs, abortSignal } = params;
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      // Combine the per-call timeout signal with the caller's abort signal so
+      // either one cancels the fetch. AbortSignal.any is available on Node 20+.
+      const signals: AbortSignal[] = [controller.signal];
+      if (abortSignal) signals.push(abortSignal);
+      const combined = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
       try {
         const resp = await fetch(fetchUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
-          signal: controller.signal,
+          signal: combined,
         });
         if (!resp.ok) {
           const errBody = await resp.text().catch(() => "(unable to read body)");
@@ -570,13 +580,13 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options);
   }
 
   /**
@@ -591,7 +601,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     return text.slice(0, this.maxInputChars);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+  private async _callApi(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]> {
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
@@ -618,7 +628,8 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       fetchUrl,
       headers,
       body,
-      timeoutMs: timeoutOverride ?? this.timeoutMs,
+      timeoutMs: options?.timeoutMs ?? this.timeoutMs,
+      abortSignal: options?.abortSignal,
     })) as OpenAIEmbeddingResponse;
 
     if (!json.data || !Array.isArray(json.data)) {
@@ -722,16 +733,16 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+  private async _callApi(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]> {
     // ZeroEntropy rejects requests without `input_type`. We default to
     // "query" because the recall hot path is the only caller of embed()
     // that returns a Float32Array; capture-side batches eventually feed
@@ -761,7 +772,8 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
       fetchUrl,
       headers,
       body,
-      timeoutMs: timeoutOverride ?? this.timeoutMs,
+      timeoutMs: options?.timeoutMs ?? this.timeoutMs,
+      abortSignal: options?.abortSignal,
     })) as ZeroEntropyEmbeddingResponse;
 
     if (!json.results || !Array.isArray(json.results)) {

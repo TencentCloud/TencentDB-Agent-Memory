@@ -52,6 +52,17 @@ export interface TcvdbMemoryStoreConfig {
 
 const TAG = "[memory-tdai][tcvdb]";
 
+/**
+ * Escape a string for use as a literal inside a VectorDB filter expression's
+ * double-quoted value. Without this, a session key containing `"` could break
+ * out of the quoted literal and inject arbitrary filter predicates, leaking
+ * records across sessions. Backslash is escaped first so an injected `\"`
+ * sequence can't neutralize the quote escaping.
+ */
+function escapeTcvdbFilterString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 /** Base collection suffixes (prefixed with database name at construction time). */
 const L1_COLLECTION_SUFFIX = "l1_memories";
 const L0_COLLECTION_SUFFIX = "l0_conversations";
@@ -341,7 +352,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }
 
   close(): void {
-    // HTTP client — nothing to close
+    // Close the undici dispatcher's keep-alive connection pool (best-effort,
+    // async) so hot-reload doesn't leak sockets until GC.
+    void this.client.close().catch(() => { /* best-effort */ });
   }
 
   // ── Internal: paginated query helper ────────────────────
@@ -573,8 +586,8 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
       // Build TCVDB filter expression from L1QueryFilter
       const conditions: string[] = [];
-      if (filter?.sessionKey) conditions.push(`session_key = "${filter.sessionKey}"`);
-      if (filter?.sessionId) conditions.push(`session_id = "${filter.sessionId}"`);
+      if (filter?.sessionKey) conditions.push(`session_key = "${escapeTcvdbFilterString(filter.sessionKey)}"`);
+      if (filter?.sessionId) conditions.push(`session_id = "${escapeTcvdbFilterString(filter.sessionId)}"`);
       if (filter?.updatedAfter) {
         const afterMs = isoToEpochMs(filter.updatedAfter);
         if (afterMs > 0) conditions.push(`updated_time_ms > ${afterMs}`);
@@ -873,7 +886,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return [];
 
-      const conditions: string[] = [`session_key = "${sessionKey}"`];
+      const conditions: string[] = [`session_key = "${escapeTcvdbFilterString(sessionKey)}"`];
       if (afterRecordedAtMs && afterRecordedAtMs > 0) {
         conditions.push(`recorded_at_ms > ${afterRecordedAtMs}`);
       }

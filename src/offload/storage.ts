@@ -8,10 +8,11 @@
  *   - L2 aggregation reads all offload-*.jsonl in the agent dir
  *   - All I/O functions require a StorageContext (no global mutable state)
  */
-import { readFile, writeFile, appendFile, mkdir, readdir, unlink } from "node:fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, unlink, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
 import type { OffloadEntry, PluginLogger } from "./types.js";
 
 /** Default root data directory (parent of all agent subdirectories) */
@@ -251,6 +252,38 @@ function safeStringifyEntry(entry: Record<string, unknown>): string {
   return sanitizeJsonLine(JSON.stringify(entry));
 }
 
+// ─── Per-file serialization & atomic writes ─────────────────────────────────
+
+/**
+ * Per-file async mutex. Several offload operations (appendOffloadEntries,
+ * markOffloadStatus) do read-modify-write cycles on the same JSONL file and
+ * are invoked fire-and-forget from hooks. Without serialization, concurrent
+ * read-modify-writes clobber each other's updates and defeat dedup. The lock
+ * chains on the resolved file path so different files stay independent.
+ */
+const _fileLocks = new Map<string, Promise<unknown>>();
+function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = _fileLocks.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn) as Promise<T>;
+  // Keep the chain short: drop the entry once it settles so the Map doesn't grow.
+  const cleanup = () => {
+    if (_fileLocks.get(filePath) === next) _fileLocks.delete(filePath);
+  };
+  next.then(cleanup, cleanup);
+  _fileLocks.set(filePath, next);
+  return next;
+}
+
+/**
+ * Atomic file write (tmp + rename) so a crash mid-write can't leave a truncated
+ * JSONL/state file. Mirrors reclaimer.ts's atomicWriteJson.
+ */
+async function atomicWriteText(filePath: string, content: string): Promise<void> {
+  const tmp = `${filePath}.tmp.${randomBytes(4).toString("hex")}`;
+  await writeFile(tmp, content, "utf-8");
+  await rename(tmp, filePath);
+}
+
 // ─── JSONL Operations (current session) ──────────────────────────────────────
 
 /** Append one or more entries to an offload JSONL with write-time dedup. */
@@ -265,59 +298,64 @@ export async function appendOffloadEntries(
       ? join(ctx.dataDir, `offload-${targetSessionId}.jsonl`)
       : ctx.offloadJsonl;
 
-  let newEntries: OffloadEntry[] = entries;
-  if (existsSync(filePath)) {
-    try {
-      const existingContent = await readFile(filePath, "utf-8");
-      const existingIds = new Set<string>();
-      for (const line of existingContent.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-          if (typeof parsed.tool_call_id === "string") {
-            existingIds.add(parsed.tool_call_id);
-            const norm = (parsed.tool_call_id as string).replace(/_/g, "");
-            if (norm !== parsed.tool_call_id) existingIds.add(norm);
+  // Serialize read-dedup-append per file. Without this, two concurrent calls
+  // can both read the same pre-existing content, both pass the duplicate check,
+  // and both append — producing exactly the duplicates dedup is meant to prevent.
+  await withFileLock(filePath, async () => {
+    let newEntries: OffloadEntry[] = entries;
+    if (existsSync(filePath)) {
+      try {
+        const existingContent = await readFile(filePath, "utf-8");
+        const existingIds = new Set<string>();
+        for (const line of existingContent.split("\n")) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            if (typeof parsed.tool_call_id === "string") {
+              existingIds.add(parsed.tool_call_id);
+              const norm = (parsed.tool_call_id as string).replace(/_/g, "");
+              if (norm !== parsed.tool_call_id) existingIds.add(norm);
+            }
+          } catch {
+            /* skip corrupt lines */
           }
-        } catch {
-          /* skip corrupt lines */
         }
-      }
 
-      if (existingIds.size > 0) {
-        const before = newEntries.length;
-        const duplicates: string[] = [];
-        newEntries = entries.filter((e) => {
-          const id = e.tool_call_id;
-          if (!id) return true;
-          const norm = id.replace(/_/g, "");
-          if (existingIds.has(id) || existingIds.has(norm)) {
-            duplicates.push(id);
-            return false;
+        if (existingIds.size > 0) {
+          const before = newEntries.length;
+          const duplicates: string[] = [];
+          newEntries = entries.filter((e) => {
+            const id = e.tool_call_id;
+            if (!id) return true;
+            const norm = id.replace(/_/g, "");
+            if (existingIds.has(id) || existingIds.has(norm)) {
+              duplicates.push(id);
+              return false;
+            }
+            return true;
+          });
+          if (duplicates.length > 0) {
+            logger?.warn?.(
+              `[context-offload] appendOffloadEntries DEDUP: ${duplicates.length}/${before} entries are duplicates, writing ${newEntries.length}. file=${basename(filePath)} duplicateIds=[${duplicates.join(",")}]`,
+            );
           }
-          return true;
-        });
-        if (duplicates.length > 0) {
-          logger?.warn?.(
-            `[context-offload] appendOffloadEntries DEDUP: ${duplicates.length}/${before} entries are duplicates, writing ${newEntries.length}. file=${basename(filePath)} duplicateIds=[${duplicates.join(",")}]`,
-          );
         }
+      } catch {
+        /* If reading existing file fails, proceed without dedup */
       }
-    } catch {
-      /* If reading existing file fails, proceed without dedup */
     }
-  }
 
-  if (newEntries.length === 0) {
-    logger?.info?.(
-      `[context-offload] appendOffloadEntries: all ${entries.length} entries deduped, nothing to write`,
-    );
-    return;
-  }
+    if (newEntries.length === 0) {
+      logger?.info?.(
+        `[context-offload] appendOffloadEntries: all ${entries.length} entries deduped, nothing to write`,
+      );
+      return;
+    }
 
-  const lines = newEntries.map((e) => safeStringifyEntry(e as unknown as Record<string, unknown>)).join("\n") + "\n";
-  await appendFile(filePath, lines, "utf-8");
+    const lines = newEntries.map((e) => safeStringifyEntry(e as unknown as Record<string, unknown>)).join("\n") + "\n";
+    await appendFile(filePath, lines, "utf-8");
+  });
 }
 
 /** Read all entries from the current session's offload JSONL. */
@@ -347,7 +385,9 @@ export async function readOffloadEntries(
   return entries as unknown as OffloadEntry[];
 }
 
-/** Rewrite the current session's offload JSONL with the given entries (sanitized) */
+/** Rewrite the current session's offload JSONL with the given entries (sanitized).
+ *  Writes atomically (tmp + rename). Callers that need read-modify-write
+ *  consistency must hold the per-file lock (see withFileLock). */
 export async function rewriteOffloadEntries(
   ctx: StorageContext,
   entries: OffloadEntry[],
@@ -355,7 +395,7 @@ export async function rewriteOffloadEntries(
   const content =
     entries.map((e) => safeStringifyEntry(e as unknown as Record<string, unknown>)).join("\n") +
     (entries.length > 0 ? "\n" : "");
-  await writeFile(ctx.offloadJsonl, content, "utf-8");
+  await atomicWriteText(ctx.offloadJsonl, content);
 }
 
 /** Mark offload entries by tool_call_id with an `offloaded` status. */
@@ -364,18 +404,23 @@ export async function markOffloadStatus(
   updates: Map<string, string | boolean>,
 ): Promise<void> {
   if (!existsSync(ctx.offloadJsonl) || updates.size === 0) return;
-  const entries = (await readOffloadEntries(ctx)) as Array<OffloadEntry & { offloaded?: string | boolean }>;
-  let changed = false;
-  for (const entry of entries) {
-    const status = updates.get(entry.tool_call_id);
-    if (status !== undefined && entry.offloaded !== status) {
-      entry.offloaded = status;
-      changed = true;
+  // Serialize the read-modify-write: callers invoke this fire-and-forget from
+  // multiple hooks, and overlapping rewrites would clobber each other's
+  // offloaded/deleted flags on the persisted JSONL.
+  await withFileLock(ctx.offloadJsonl, async () => {
+    const entries = (await readOffloadEntries(ctx)) as Array<OffloadEntry & { offloaded?: string | boolean }>;
+    let changed = false;
+    for (const entry of entries) {
+      const status = updates.get(entry.tool_call_id);
+      if (status !== undefined && entry.offloaded !== status) {
+        entry.offloaded = status;
+        changed = true;
+      }
     }
-  }
-  if (changed) {
-    await rewriteOffloadEntries(ctx, entries);
-  }
+    if (changed) {
+      await rewriteOffloadEntries(ctx, entries);
+    }
+  });
 }
 
 /** Extract confirmed (offloaded) tool_call_ids from entries. */
@@ -654,11 +699,13 @@ export async function readStateFile<T>(
   }
 }
 
-/** Write the state.json file */
+/** Write the state.json file atomically (tmp + rename) so a crash mid-write
+ *  can't leave it truncated — a corrupt state.json would silently reset to
+ *  DEFAULT_STATE and lose activeMmdFile/mmdCounter/lastL2TriggerTime. */
 export async function writeStateFile<T>(
   ctx: StorageContext,
   state: T,
 ): Promise<void> {
   await mkdir(dirname(ctx.stateFile), { recursive: true });
-  await writeFile(ctx.stateFile, JSON.stringify(state, null, 2), "utf-8");
+  await atomicWriteText(ctx.stateFile, JSON.stringify(state, null, 2));
 }

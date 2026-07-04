@@ -16,7 +16,7 @@
 
 import http from "node:http";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash, randomBytes } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -64,19 +64,48 @@ function createConsoleLogger(): Logger {
 // Request body parser
 // ============================
 
+/** Maximum accepted request body size (16 MiB). Guards against OOM from
+ *  unbounded POST bodies — without this, an unauthenticated /capture or /seed
+ *  can buffer an arbitrary payload into memory and crash the process. */
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+/** Thrown when an incoming body exceeds MAX_BODY_BYTES; mapped to HTTP 413. */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("Request body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    let tooLarge = false;
+    req.on("data", (chunk: Buffer) => {
+      if (tooLarge) return;
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true;
+        // Stop reading — drop the connection so the client doesn't keep streaming.
+        req.destroy();
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (tooLarge) return;
       try {
         const body = Buffer.concat(chunks).toString("utf-8");
         resolve(JSON.parse(body) as T);
-      } catch (err) {
+      } catch {
         reject(new Error("Invalid JSON body"));
       }
     });
-    req.on("error", reject);
+    req.on("error", (err) => {
+      if (!tooLarge) reject(err);
+    });
   });
 }
 
@@ -96,15 +125,16 @@ function sendError(res: http.ServerResponse, status: number, message: string): v
 /**
  * Constant-time string equality for secrets.
  *
- * Returns `false` on any length mismatch (without comparing bytes), and uses
- * `crypto.timingSafeEqual` for the equal-length case so that an attacker
- * probing the API key cannot use response timing to learn a prefix match.
+ * Hashes both inputs with SHA-256 before comparing so that timing cannot leak
+ * the length (or any prefix) of the expected key. A plain `length !== length`
+ * early return would let an attacker discover the key length by probing tokens
+ * of different sizes and observing which length takes the `timingSafeEqual`
+ * path. Hashing flattens both sides to a fixed 32-byte digest first.
  */
 function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf-8");
-  const bb = Buffer.from(b, "utf-8");
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
+  const ah = createHash("sha256").update(a, "utf-8").digest();
+  const bh = createHash("sha256").update(b, "utf-8").digest();
+  return timingSafeEqual(ah, bh);
 }
 
 // ============================
@@ -219,8 +249,14 @@ export class TdaiGateway {
     this.logger.info("Shutting down gateway...");
 
     if (this.server) {
+      // Stop accepting new connections, then forcibly close any lingering
+      // keep-alive connections. Without closeAllConnections(), a single idle
+      // keep-alive client would keep server.close()'s callback from ever
+      // firing, hanging shutdown until the container kill-grace (SIGKILL),
+      // skipping core.destroy().
       await new Promise<void>((resolve) => {
         this.server!.close(() => resolve());
+        this.server!.closeAllConnections();
       });
     }
 
@@ -276,9 +312,16 @@ export class TdaiGateway {
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
     } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        sendError(res, 413, err.message);
+        return;
+      }
+      // Log the full detail server-side, but return a generic message to the
+      // client so internal paths, hostnames, and upstream API errors aren't
+      // disclosed over HTTP.
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
-      sendError(res, 500, msg);
+      sendError(res, 500, "Internal error");
     }
   }
 
@@ -510,13 +553,16 @@ export class TdaiGateway {
       `${input.totalRounds} round(s), ${input.totalMessages} message(s)`,
     );
 
-    // Resolve output directory: use gateway's data dir with a timestamped subfolder
+    // Resolve output directory: use gateway's data dir with a timestamped subfolder.
+    // A random suffix guards against two concurrent /seed calls in the same
+    // second colliding on the same directory and interleaving L0/checkpoint files.
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const ts =
       `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
       `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const outputDir = `${this.config.data.baseDir}/seed-${ts}`;
+    const rand = randomBytes(4).toString("hex");
+    const outputDir = `${this.config.data.baseDir}/seed-${ts}-${rand}`;
 
     // Merge config overrides if provided
     // Start with the base memory config + inject llm config from gateway settings
@@ -534,7 +580,16 @@ export class TdaiGateway {
       },
     };
     if (body.config_override) {
+      // Security: never let a caller override the LLM endpoint (baseUrl/apiKey/
+      // model) — an unauthenticated or compromised /seed could otherwise redirect
+      // extraction prompts (which contain the user's historical conversations)
+      // to an attacker-controlled server.
+      const FORBIDDEN_OVERRIDE_KEYS = new Set(["llm"]);
       for (const key of Object.keys(body.config_override)) {
+        if (FORBIDDEN_OVERRIDE_KEYS.has(key)) {
+          this.logger.warn(`Seed request attempted to override forbidden key "${key}" — ignored`);
+          continue;
+        }
         const baseVal = pluginConfig[key];
         const overVal = body.config_override[key];
         if (baseVal && typeof baseVal === "object" && !Array.isArray(baseVal) &&
