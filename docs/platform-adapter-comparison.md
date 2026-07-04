@@ -67,19 +67,24 @@ Agent → MCP stdio → （复用 cc-mcp-server.ts）→ Gateway (HTTP)
 2. **跨平台复用**: 同一个 MCP server 可被 CC、CodeBuddy、Cursor 等共用
 3. **hooks 作为补充**: CC hooks (shell commands) 处理自动 recall/capture，MCP tools 处理按需搜索
 
-### 与 PR #339 的对比
+### 与 PR #339 的关系：互补而非竞争
 
-| 方面 | PR #339 | 本项目 |
+PR #339 与本项目都服务于 Issue #235「让 TDAI 记忆可从任何平台访问」的目标，但切入点不同，二者互补而非替代。感谢 @gugu23456789 在 PR #385 评论区对 PR #339 设计意图的澄清，以下据此修订对比，避免误读为竞争关系。
+
+| 维度 | PR #339（纵向 · 跨语言桥） | 本项目（横向 · IDE 适配） |
 |:---|:---|:---|
-| 抽象层 | 新增 TdaiAdapter ABC（528行） | 复用已有 HostAdapter（0行新增） |
-| SDK | Python + TypeScript 双语言 SDK | 不重复造轮子 |
-| MCP server | bridge/mcp/server.py (431行) | cc-mcp-server.ts (~280行) |
-| 实际平台代码 | 0 行（删掉了 CodexAdapter） | CC + CodeBuddy + Hermes |
-| E2E 验证 | 无 | 待完成 |
-| 总新增代码 | ~5800行 | ~800行 |
+| **目标** | 跨语言：打通 Python 生态 + 提供独立 MCP fallback | 跨 IDE：Claude Code / CodeBuddy 等原生接入 |
+| **为何需要新抽象** | Python 没有 HostAdapter / Hermes Provider，需 `TdaiAdapter` ABC 对齐多语言契约 | TS 侧已有 HostAdapter，直接扩展即可，无需新抽象 |
+| **SDK** | Python `bridge_adapter` + TS `TdaiAdapter`（双语言对齐） | 复用已有 TS HostAdapter，不重复造轮子 |
+| **MCP server** | 独立 stdio server，带 G0-G5 自 gating（格式检查 / HMAC 鉴权 / 限流 / 熔断 / 审计），可脱离 Hermes 作安全网 | cc-mcp-server.ts 薄客户端，鉴权 / 限流 / 熔断交由 Gateway |
+| **新增平台** | 侧重 SDK 与 bridge 基建 | CC + CodeBuddy，并复用 Hermes |
+| **E2E 验证** | — | Hermes 写入 → CC 召回 → CodeBuddy 召回 |
+| **角色定位** | 纵向：Python + TS + MCP 跨语言桥 | 横向：扩展更多 IDE 平台 |
+
+> 两者可并存：PR #339 的独立 MCP server（带自 gating 的安全网）与本项目复用 Gateway 侧能力的薄 MCP 客户端各司其职；本项目在 TS 侧的「薄壳」适配与 PR #339 在跨语言侧的「桥接」抽象并不冲突。
 
 ### 核心理念
 
 **"Don't wrap the engine — extend it."**
 
-不包装 TdaiCore，而是用新的 HostAdapter 实现来扩展它。这是项目作者的设计意图——`src/adapters/` 目录的存在就是为了这个目的。
+本项目在 TypeScript 侧用新的 HostAdapter 实现扩展 TdaiCore——这是 `src/adapters/` 目录的设计意图，也是 OpenClawHostAdapter / StandaloneHostAdapter 已验证的模式。需要说明的是，这并不排斥跨语言场景下的桥接抽象：Python 等没有 HostAdapter 的语言，确实需要类似 PR #339 `TdaiAdapter` ABC 的契约层来对齐多语言 SDK。「不包装引擎」是 TS 侧的取舍，而非对其它语言方案的否定。
