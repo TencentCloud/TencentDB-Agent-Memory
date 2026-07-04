@@ -539,6 +539,34 @@ export default function register(api: OpenClawPluginApi) {
 
       ensureEmbeddingWarmup();
 
+      // ==========================================
+      // Session-level system prompt deduplication
+      // ==========================================
+      if (Array.isArray(event.messages)) {
+        const uniqueSystemPrompts = new Set<string>();
+        const deduplicatedMessages: typeof event.messages = [];
+        
+        for (const msg of event.messages) {
+          if (msg.role === "system" && typeof msg.content === "string") {
+            const content = msg.content.trim();
+            if (uniqueSystemPrompts.has(content)) {
+              continue; // Skip duplicate system prompt
+            }
+            uniqueSystemPrompts.add(content);
+          }
+          deduplicatedMessages.push(msg);
+        }
+        
+        if (deduplicatedMessages.length < event.messages.length) {
+          const removed = event.messages.length - deduplicatedMessages.length;
+          api.logger.info(`${TAG} [before_prompt_build] Deduplicated ${removed} redundant system prompts`);
+          // Mutate in place to guarantee framework picks it up
+          event.messages.length = 0;
+          event.messages.push(...deduplicatedMessages);
+        }
+      }
+      // ==========================================
+
       // Cache original user prompt for agent_end
       const rawPrompt = event.prompt;
       const messages = Array.isArray(event.messages) ? event.messages : undefined;
@@ -626,10 +654,11 @@ export default function register(api: OpenClawPluginApi) {
 
     // UserMessage.content: string | (TextContent | ImageContent)[]
     const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    const OMITTED_TAG = "<memory-omitted reason=\"prevent_context_bloat\" />";
 
     if (typeof msg.content === "string") {
       if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
+      const cleaned = msg.content.replace(STRIP_RE, OMITTED_TAG).trim();
       if (cleaned === msg.content) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
       return { message: { ...event.message, content: cleaned } as typeof event.message };
@@ -640,7 +669,7 @@ export default function register(api: OpenClawPluginApi) {
       const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
         if (part.type !== "text" || typeof part.text !== "string") return part;
         if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
+        const cleaned = (part.text as string).replace(STRIP_RE, OMITTED_TAG).trim();
         totalStripped += (part.text as string).length - cleaned.length;
         return { ...part, text: cleaned };
       });
