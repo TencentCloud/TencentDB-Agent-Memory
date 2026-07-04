@@ -294,6 +294,8 @@ jobs:
         run: |
           FAILS=0
           while IFS= read -r -d '' f; do
+            # Skip empty __init__.py (standard Python package marker)
+            if [[ "$f" == */__init__.py ]]; then continue; fi
             SIZE=$(stat -c%s "$f")
             if [ "$SIZE" -eq 0 ]; then
               echo "  EMPTY: $f"
