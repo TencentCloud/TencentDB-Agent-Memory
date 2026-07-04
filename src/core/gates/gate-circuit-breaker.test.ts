@@ -32,7 +32,7 @@ describe("CircuitBreakerGate", () => {
     expect(() => gate.beforeCall("test")).not.toThrow();
   });
 
-  it("escalates cooldown on rapid reset→open cycles", () => {
+  it("escalates cooldown on rapid reset-open cycles", () => {
     vi.setSystemTime(0);
     gate.onError("test", new Error("e1")); gate.onError("test", new Error("e2")); gate.onError("test", new Error("e3"));
     vi.advanceTimersByTime(61_000);

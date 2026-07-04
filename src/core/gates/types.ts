@@ -1,5 +1,5 @@
 /**
- * Gate types — shared interfaces for G1/G2/G3 middleware gates.
+ * Gate types - shared interfaces for G1/G2/G3 middleware gates.
  */
 export interface RateLimitOptions {
   windowMs: number;

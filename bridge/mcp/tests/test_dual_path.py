@@ -56,7 +56,7 @@ def test_mcp_bridge_api_key_override():
 # -------- Dual path startup illustration (info-only) --------
 
 def test_dual_path_demo():
-    """Sanity check — dual-path setup doesn't crash."""
+    """Sanity check - dual-path setup doesn't crash."""
     # Just re-import to verify no import-time side effects
     import importlib
     import bridge.mcp.server as srv
