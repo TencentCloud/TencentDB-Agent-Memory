@@ -1,0 +1,43 @@
+name: Dify Plugin CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dify-plugin-tests:
+    name: Dify Plugin Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Dify plugin unit tests
+        run: python -m unittest discover -s dify-plugin-tdai-memory/tests
+
+  dify-plugin-manifest:
+    name: Dify Plugin Manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate plugin manifest and package layout
+        run: python -m unittest discover -s dify-plugin-tdai-memory/tests -p test_plugin_manifest.py
