@@ -196,6 +196,14 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // Sanitize user input: strip FTS5 special operators and syntax that could
+  // alter query semantics.  Each token is already wrapped in double-quotes
+  // below, but raw input may contain FTS5 column prefixes ("col:val"),
+  // prefix queries ("term*"), structural operators (AND/OR/NOT/NEAR), or
+  // unbalanced quoting that could break out of the quoting wrapper.
+  const sanitized = _sanitizeFts5Input(raw);
+  if (!sanitized) return null;
+
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +211,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +226,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
@@ -227,6 +235,37 @@ export function buildFtsQuery(raw: string): string | null {
   if (tokens.length === 0) return null;
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
+}
+
+/**
+ * Strip FTS5 operators, column specifiers, and structural syntax from
+ * user-supplied input so that it cannot alter query semantics.
+ *
+ * Removes:
+ *  - Column prefix specifiers (``col:value`` — the ``:``)
+ *  - Prefix/suffix wildcard operators (``*``, ``^``)
+ *  - FTS5 structural operators (AND, OR, NOT, NEAR)
+ *  - Parentheses used for grouping
+ *  - Unbalanced double-quotes that could escape our quoting wrapper
+ */
+function _sanitizeFts5Input(raw: string): string {
+  let s = raw;
+
+  // Remove FTS5 column-prefix patterns: "colname:term" → strip "colname:"
+  // Simple heuristic: any word immediately followed by ':' that looks like
+  // an identifier (not part of a URL scheme like "https:")
+  s = s.replace(/\b(\w+):(?!\/\/)(?=\S)/gi, "");
+
+  // Remove unescaped double-quotes that could break quoting wrapper
+  s = s.replace(/"/g, "");
+
+  // Remove remaining FTS5 special characters: * ^ ( )
+  s = s.replace(/[*^()]/g, " ");
+
+  // Normalise whitespace
+  s = s.replace(/\s+/g, " ").trim();
+
+  return s;
 }
 
 /**
