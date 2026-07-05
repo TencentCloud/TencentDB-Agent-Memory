@@ -30,7 +30,7 @@ jobs:
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        run: npm install --ignore-scripts --legacy-peer-deps
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -105,6 +105,22 @@ jobs:
           "
 
   # ── 6. Package size guard ──────────────────────────────────
+  dify-plugin:
+    name: Dify Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Dify plugin unit tests
+        run: python -m unittest discover -s dify-plugin-tdai-memory/tests
+
+      - name: Validate Dify plugin manifest and package layout
+        run: python -m unittest discover -s dify-plugin-tdai-memory/tests -p test_plugin_manifest.py
+
   size:
     name: Size Guard
     needs: pack
