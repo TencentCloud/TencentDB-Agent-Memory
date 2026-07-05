@@ -135,4 +135,25 @@ describe("CheckpointManager counter recalculation", () => {
     expect(actual.l0_conversations_count).toBe(0);
     expect(actual.total_memories_extracted).toBe(1);
   });
+
+  it("resets counters to zero when storage is cleared but checkpoint remains", async () => {
+    const dataDir = await makeDataDir();
+    const checkpoint = new CheckpointManager(dataDir);
+
+    await checkpoint.write(makeCheckpoint({ l0_conversations_count: 12, total_memories_extracted: 6 }));
+    await writeJsonl(path.join(dataDir, "conversations", "2026-01-01.jsonl"), [
+      { id: "l0-before-reset" },
+    ]);
+    await writeJsonl(path.join(dataDir, "records", "2026-01-01.jsonl"), [
+      { id: "l1-before-reset" },
+    ]);
+    await fs.rm(path.join(dataDir, "conversations"), { recursive: true, force: true });
+    await fs.rm(path.join(dataDir, "records"), { recursive: true, force: true });
+
+    await checkpoint.recalculateCounters();
+
+    const actual = await checkpoint.read();
+    expect(actual.l0_conversations_count).toBe(0);
+    expect(actual.total_memories_extracted).toBe(0);
+  });
 });
