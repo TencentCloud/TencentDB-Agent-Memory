@@ -207,6 +207,10 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /** True when appendSystemContext was served from the session-frozen cache (issue #120). */
+  stableContextCacheHit?: boolean;
+  /** Effective injection mode used for this turn ("ephemeral" | "session-stable"). */
+  injectionModeUsed?: string;
 }
 
 /** Result from a capture (sync_turn) operation. */

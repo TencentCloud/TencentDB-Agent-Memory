@@ -422,6 +422,10 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `pipeline.l1IdleTimeoutSeconds` | `600` | Trigger L1 after the user has been idle for this many seconds |
 | `pipeline.l2MinIntervalSeconds` | `900` | Minimum interval between two L2 passes within the same session |
 | `recall.timeoutMs` | `5000` | Recall timeout; on timeout, skip injection without blocking the conversation |
+| `recall.injectionMode` | `"ephemeral"` | Where recalled memories go: `ephemeral` (per-turn user-message prefix, stripped from history) / `session-stable` (recall once on turn 1, folded into the frozen stable block — friendliest to prefix caches) |
+| `recall.stableContextPolicy` | `"session-frozen"` | Stable block (persona / scene nav / tools guide) freshness: `session-frozen` (byte-frozen per session, protects prompt prefix caches) / `latest` (legacy per-turn recompose) |
+| `recall.stripInjectedFromHistory` | `true` | Strip `<relevant-memories>` from user messages before history persist; `false` restores the legacy frozen-injection behavior |
+| `recall.systemInjection` | `"auto"` | Stable block placement: `auto` (probe the host's cache-stable API `prependSystemPromptAdditionAfterCacheBoundary`, fall back automatically) / `hook-context` (always the legacy hook return) |
 | `extraction.enableDedup` | `true` | L1 vector dedup / conflict detection |
 | `capture.excludeAgents` | `[]` | Glob patterns to exclude specific agents (e.g. `bench-judge-*`) |
 | `capture.l0l1RetentionDays` | `0` | Local retention days for L0 / L1 files; `0` = never clean up |
@@ -457,6 +461,12 @@ For all fields, types, and constraints see [`openclaw.plugin.json`](./openclaw.p
 - `report.*` — metrics reporting
 
 </details>
+
+### Prompt-cache friendliness
+
+Prefix-matching providers (DeepSeek, MiMo — `openai-completions` API) invalidate everything after the first divergent byte of the serialized request. The four `recall.*` knobs above keep the request prefix byte-stable turn-over-turn: the stable persona/scene block is frozen per session and routed to the host's cache-stable placement API when available, and per-turn memory injections never pollute the persisted history. Defaults are safe; the full mechanism, hit-rate data, and upstream OpenClaw recommendations are in [`PROMPT-CACHE-ANALYSIS.md`](./PROMPT-CACHE-ANALYSIS.md).
+
+> **Upgrade note**: with the default `stableContextPolicy: "session-frozen"`, a persona updated mid-session takes effect on the NEXT session (or after ~60 min of idle). Set `"latest"` to restore the old per-turn refresh, and `stripInjectedFromHistory: false` to restore the pre-fix history contents.
 
 ---
 
