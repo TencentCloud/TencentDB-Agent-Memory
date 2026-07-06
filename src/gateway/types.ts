@@ -2,6 +2,9 @@
  * TDAI Gateway — Request/Response types for the HTTP API.
  */
 
+import type { MemorySearchResultItem } from "../core/tools/memory-search.js";
+import type { ConversationSearchResultItem } from "../core/tools/conversation-search.js";
+
 // ============================
 // Common
 // ============================
@@ -39,6 +42,14 @@ export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  /**
+   * Per-turn dynamic context intended to precede the user message
+   * (`RecallResult.prependContext`). Additive field introduced with the
+   * Adapter SDK so HTTP clients receive the same recall surface as
+   * in-process hosts; existing clients (Hermes `client.py` reads only
+   * `context`) ignore it.
+   */
+  prepend_context?: string;
 }
 
 // ============================
@@ -68,12 +79,20 @@ export interface MemorySearchRequest {
   limit?: number;
   type?: string;
   scene?: string;
+  /**
+   * Opt-in: when `true`, the response additionally carries structured
+   * `items` (per-record id/score/timestamps). Defaults to `false` so
+   * existing clients (Hermes `client.py`) keep the legacy text-only shape.
+   */
+  include_items?: boolean;
 }
 
 export interface MemorySearchResponse {
   results: string;
   total: number;
   strategy: string;
+  /** Present only when the request set `include_items: true`. */
+  items?: MemorySearchResultItem[];
 }
 
 // ============================
@@ -84,11 +103,15 @@ export interface ConversationSearchRequest {
   query: string;
   limit?: number;
   session_key?: string;
+  /** Opt-in structured items — see {@link MemorySearchRequest.include_items}. */
+  include_items?: boolean;
 }
 
 export interface ConversationSearchResponse {
   results: string;
   total: number;
+  /** Present only when the request set `include_items: true`. */
+  items?: ConversationSearchResultItem[];
 }
 
 // ============================

@@ -23,6 +23,8 @@ import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
+import { formatSearchResponse } from "../core/tools/memory-search.js";
+import { formatConversationSearchResponse } from "../core/tools/conversation-search.js";
 import type {
   HealthResponse,
   RecallRequest,
@@ -213,6 +215,15 @@ export class TdaiGateway {
   }
 
   /**
+   * Actual bound port once started. Differs from `config.server.port` when
+   * the config requested an ephemeral port (`0`) — e2e tests rely on this.
+   */
+  get boundPort(): number | undefined {
+    const addr = this.server?.address();
+    return addr && typeof addr === "object" ? addr.port : undefined;
+  }
+
+  /**
    * Gracefully stop the Gateway.
    */
   async stop(): Promise<void> {
@@ -386,6 +397,10 @@ export class TdaiGateway {
       context: result.appendSystemContext ?? "",
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
+      // Additive (see RecallResponse doc): keeps the SDK's http transport at
+      // recall parity with the in-process transport. Omitted when empty so
+      // legacy text-only responses stay byte-identical for old clients.
+      ...(result.prependContext ? { prepend_context: result.prependContext } : {}),
     };
     sendJson(res, 200, response);
   }
@@ -428,12 +443,30 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchMemories({
+    const params = {
       query: body.query,
       limit: body.limit,
       type: body.type,
       scene: body.scene,
-    });
+    };
+
+    // Opt-in structured path: adapter-sdk / Dify clients send
+    // `include_items: true` to receive per-record items alongside the
+    // formatted text. Legacy clients (Hermes client.py) never send the
+    // flag and get the unchanged text-only response.
+    if (body.include_items === true) {
+      const structured = await this.core.searchMemoriesStructured(params);
+      const response: MemorySearchResponse = {
+        results: formatSearchResponse(structured),
+        total: structured.total,
+        strategy: structured.strategy,
+        items: structured.results,
+      };
+      sendJson(res, 200, response);
+      return;
+    }
+
+    const result = await this.core.searchMemories(params);
 
     const response: MemorySearchResponse = {
       results: result.text,
@@ -451,11 +484,25 @@ export class TdaiGateway {
       return;
     }
 
-    const result = await this.core.searchConversations({
+    const params = {
       query: body.query,
       limit: body.limit,
       sessionKey: body.session_key,
-    });
+    };
+
+    // Opt-in structured path — see handleSearchMemories for rationale.
+    if (body.include_items === true) {
+      const structured = await this.core.searchConversationsStructured(params);
+      const response: ConversationSearchResponse = {
+        results: formatConversationSearchResponse(structured),
+        total: structured.total,
+        items: structured.results,
+      };
+      sendJson(res, 200, response);
+      return;
+    }
+
+    const result = await this.core.searchConversations(params);
 
     const response: ConversationSearchResponse = {
       results: result.text,

@@ -352,6 +352,27 @@ curl http://127.0.0.1:8420/health
 ---
 
 
+## 🔌 Cross-Platform Adapters
+
+Beyond OpenClaw and Hermes, the memory engine now ships a unified **Adapter SDK**
+([`src/adapter-sdk/`](./src/adapter-sdk/README.md)): one `MemoryClient` interface with two
+interchangeable transports (in-process `TdaiCore` / HTTP Gateway), so a new platform only
+implements one interface. Two adapters are built on it:
+
+- **Claude Code (MCP)** — stdio server exposing `memory_recall` / `memory_capture` /
+  `memory_search` / `conversation_search` / `memory_session_end` tools:
+  `npm run adapter:claude-code` · [setup guide](./src/adapters/claude-code/README.md)
+- **Dify** — External Knowledge Base API (`POST /retrieval`) + Custom Tool endpoints with
+  auto-generated OpenAPI: `npm run adapter:dify` · [setup guide](./src/adapters/dify/README.md)
+
+Docs: [architecture & data flows](./docs/adapters/ARCHITECTURE.md) ·
+[four-platform comparison](./docs/adapters/PLATFORM-COMPARISON.md) ·
+[how to integrate a new platform](./docs/adapters/NEW-PLATFORM-GUIDE.md)
+
+
+---
+
+
 ## 🔒 Gateway Security (optional)
 
 The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**

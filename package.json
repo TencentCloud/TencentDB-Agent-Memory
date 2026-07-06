@@ -29,6 +29,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "gateway": "node --import tsx src/gateway/server.ts",
+    "adapter:claude-code": "node --import tsx src/adapters/claude-code/main.ts",
+    "adapter:dify": "node --import tsx src/adapters/dify/main.ts",
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
   },
   "files": [
