@@ -93,6 +93,38 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Where dynamic recalled memories are injected (default: "ephemeral").
+   * - "ephemeral":      prependContext on the current user message every turn;
+   *                     stripped from persisted history via before_message_write.
+   * - "session-stable": recall once on the session's first turn, fold memories into
+   *                     the frozen stable system block; no per-turn prependContext
+   *                     (zero per-turn prompt variance — best for prefix-matching caches).
+   */
+  injectionMode: "ephemeral" | "session-stable";
+  /**
+   * Stable system block (persona / scene navigation / tools guide) freshness policy
+   * (default: "session-frozen").
+   * - "session-frozen": the first composed block is byte-frozen per sessionKey so the
+   *                     serialized prompt prefix never drifts mid-session.
+   * - "latest":         legacy — recompose every turn (cache-hostile when persona/scene
+   *                     files are rewritten mid-session by the L2/L3 pipelines).
+   */
+  stableContextPolicy: "session-frozen" | "latest";
+  /**
+   * Strip <relevant-memories> from user messages before they are persisted to
+   * history (default: true). Set false to restore the pre-fix behavior where
+   * injected recall content is frozen into conversation history (prompt-cache hostile).
+   */
+  stripInjectedFromHistory: boolean;
+  /**
+   * System-prompt placement path for the stable block (default: "auto").
+   * - "auto":         probe the host for a cache-stable placement API
+   *                   (prependSystemPromptAdditionAfterCacheBoundary); use it when
+   *                   available, otherwise fall back to the hook-context return value.
+   * - "hook-context": always return appendSystemContext from the hook (legacy).
+   */
+  systemInjection: "auto" | "hook-context";
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +567,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      injectionMode: validateInjectionMode(str(recallGroup, "injectionMode")) ?? "ephemeral",
+      stableContextPolicy: validateStableContextPolicy(str(recallGroup, "stableContextPolicy")) ?? "session-frozen",
+      stripInjectedFromHistory: bool(recallGroup, "stripInjectedFromHistory") ?? true,
+      systemInjection: validateSystemInjection(str(recallGroup, "systemInjection")) ?? "auto",
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -643,6 +679,45 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+const VALID_INJECTION_MODES: RecallConfig["injectionMode"][] = ["ephemeral", "session-stable"];
+
+/**
+ * Validate recall injection mode against whitelist.
+ * Returns the mode if valid, undefined otherwise (caller falls back to default).
+ */
+function validateInjectionMode(value: string | undefined): RecallConfig["injectionMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_INJECTION_MODES.includes(value as RecallConfig["injectionMode"])
+    ? (value as RecallConfig["injectionMode"])
+    : undefined;
+}
+
+const VALID_STABLE_CONTEXT_POLICIES: RecallConfig["stableContextPolicy"][] = ["session-frozen", "latest"];
+
+/**
+ * Validate stable context policy against whitelist.
+ * Returns the policy if valid, undefined otherwise (caller falls back to default).
+ */
+function validateStableContextPolicy(value: string | undefined): RecallConfig["stableContextPolicy"] | undefined {
+  if (!value) return undefined;
+  return VALID_STABLE_CONTEXT_POLICIES.includes(value as RecallConfig["stableContextPolicy"])
+    ? (value as RecallConfig["stableContextPolicy"])
+    : undefined;
+}
+
+const VALID_SYSTEM_INJECTIONS: RecallConfig["systemInjection"][] = ["auto", "hook-context"];
+
+/**
+ * Validate system injection path against whitelist.
+ * Returns the value if valid, undefined otherwise (caller falls back to default).
+ */
+function validateSystemInjection(value: string | undefined): RecallConfig["systemInjection"] | undefined {
+  if (!value) return undefined;
+  return VALID_SYSTEM_INJECTIONS.includes(value as RecallConfig["systemInjection"])
+    ? (value as RecallConfig["systemInjection"])
     : undefined;
 }
 
