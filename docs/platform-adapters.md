@@ -60,6 +60,7 @@ const memory = new GatewayMemoryAdapter({
   platform: "my-agent",
   sessionKey: process.env.MY_AGENT_SESSION_ID ?? process.cwd(),
   userId: process.env.USER,
+  sessionEndTimeoutMs: 180_000,
 });
 
 const recall = await memory.recall({ query: "How does this repo prefer tests?" });
@@ -74,6 +75,13 @@ The SDK prefixes session keys with the platform name, so `workspace:/repo`
 becomes `codex:workspace:/repo`, `codebuddy:workspace:/repo`, or
 `claude-code:workspace:/repo`. This keeps memories separated by runtime while
 allowing all platforms to share the same Gateway.
+
+`recall()` returns `context`, which combines dynamic L1 memories with stable
+persona/scene context. The raw Gateway response also exposes
+`prepend_context` for the per-turn L1 memory block and `append_context` for the
+stable persona/scene block. `endSession()` may wait for a real LLM-backed L1
+flush, so the SDK gives that operation a longer timeout by default and lets
+callers override it with `sessionEndTimeoutMs`.
 
 For a reusable platform package, implement one interface:
 
@@ -114,6 +122,7 @@ const memory = createMemoryAdapter({
     apiKey: process.env.MEMORY_TENCENTDB_GATEWAY_API_KEY,
     sessionKey: process.cwd(),
     userId: process.env.USER,
+    sessionEndTimeoutMs: 180_000,
   },
 });
 ```

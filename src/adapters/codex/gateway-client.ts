@@ -41,6 +41,7 @@ export const CodexMemoryPlatformAdapter: MemoryPlatformAdapterDefinition<CodexMe
       baseUrl: config.baseUrl as string | undefined ?? env.MEMORY_TENCENTDB_GATEWAY_URL,
       apiKey: config.apiKey as string | undefined ?? env.MEMORY_TENCENTDB_GATEWAY_API_KEY ?? env.TDAI_GATEWAY_API_KEY,
       timeoutMs: config.timeoutMs as number | undefined,
+      sessionEndTimeoutMs: config.sessionEndTimeoutMs as number | undefined,
       fetchImpl: config.fetchImpl as typeof fetch | undefined,
       sessionKey: config.sessionKey as string | undefined ?? env.CODEX_SESSION_ID ?? env.CODEX_WORKSPACE ?? process.cwd(),
       userId: config.userId as string | undefined ?? env.CODEX_USER_ID,

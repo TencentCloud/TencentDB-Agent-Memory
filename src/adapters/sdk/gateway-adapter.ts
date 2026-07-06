@@ -14,6 +14,7 @@ export interface GatewayMemoryAdapterOptions {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  sessionEndTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   sessionKey: string;
   userId?: string;
@@ -58,6 +59,7 @@ export interface PlatformAdapterDefaults {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  sessionEndTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   sessionKey?: string;
   userId?: string;
@@ -67,6 +69,7 @@ export interface MemoryAdapterProviderConfig {
   baseUrl?: string;
   apiKey?: string;
   timeoutMs?: number;
+  sessionEndTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   sessionKey?: string;
   userId?: string;
@@ -86,6 +89,8 @@ export interface MemoryAdapterConfig<TConfig extends MemoryAdapterProviderConfig
   provider: MemoryAdapterPlatform;
   config?: TConfig;
 }
+
+const DEFAULT_SESSION_END_TIMEOUT_MS = 180_000;
 
 const platformRegistry = new Map<MemoryAdapterPlatform, MemoryPlatformAdapterDefinition>();
 
@@ -110,6 +115,7 @@ export function createGatewayAdapterOptions(
     baseUrl: overrides.baseUrl ?? defaults.baseUrl,
     apiKey: overrides.apiKey ?? defaults.apiKey,
     timeoutMs: overrides.timeoutMs ?? defaults.timeoutMs,
+    sessionEndTimeoutMs: overrides.sessionEndTimeoutMs ?? defaults.sessionEndTimeoutMs,
     fetchImpl: overrides.fetchImpl ?? defaults.fetchImpl,
     sessionKey: overrides.sessionKey ?? defaults.sessionKey ?? process.cwd(),
     userId: overrides.userId ?? defaults.userId,
@@ -151,6 +157,7 @@ export class GatewayMemoryAdapter {
   protected readonly baseUrl: string;
   protected readonly apiKey?: string;
   protected readonly timeoutMs: number;
+  protected readonly sessionEndTimeoutMs: number;
   protected readonly fetchImpl: typeof fetch;
   protected readonly defaultSessionKey: string;
   protected readonly defaultUserId?: string;
@@ -160,6 +167,7 @@ export class GatewayMemoryAdapter {
     this.baseUrl = (opts.baseUrl ?? "http://127.0.0.1:8420").replace(/\/+$/, "");
     this.apiKey = opts.apiKey?.trim() || undefined;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.sessionEndTimeoutMs = opts.sessionEndTimeoutMs ?? Math.max(this.timeoutMs, DEFAULT_SESSION_END_TIMEOUT_MS);
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.defaultSessionKey = opts.sessionKey;
     this.defaultUserId = opts.userId;
@@ -206,10 +214,18 @@ export class GatewayMemoryAdapter {
   }
 
   endSession(sessionKey?: string, userId?: string): Promise<SessionEndResponse> {
-    return this.post<SessionEndResponse>("/session/end", {
-      session_key: this.resolveSessionKey(sessionKey),
-      ...this.userField(userId),
-    });
+    return this.request<SessionEndResponse>(
+      "/session/end",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_key: this.resolveSessionKey(sessionKey),
+          ...this.userField(userId),
+        }),
+      },
+      this.sessionEndTimeoutMs,
+    );
   }
 
   protected resolveSessionKey(sessionKey = this.defaultSessionKey): string {
@@ -233,9 +249,9 @@ export class GatewayMemoryAdapter {
     });
   }
 
-  private async request<T>(pathname: string, init: RequestInit): Promise<T> {
+  private async request<T>(pathname: string, init: RequestInit, timeoutMs = this.timeoutMs): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const headers = {
         ...(init.headers as Record<string, string> | undefined),

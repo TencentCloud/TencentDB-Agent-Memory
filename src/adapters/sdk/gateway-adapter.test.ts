@@ -20,6 +20,7 @@ function mockFetch(responseBody: unknown, status = 200) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -166,6 +167,36 @@ describe("GatewayMemoryAdapter", () => {
     expect(JSON.parse(calls[2].init?.body as string)).toEqual({
       session_key: "claude-code:thread:abc",
     });
+  });
+
+  it("uses a longer timeout for session flushes than ordinary requests", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("This operation was aborted", "AbortError"));
+        });
+        setTimeout(() => {
+          resolve(new Response(JSON.stringify({ flushed: true }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }));
+        }, 25);
+      });
+    }) as typeof fetch);
+    const adapter = new GatewayMemoryAdapter({
+      platform: "codex",
+      sessionKey: "s",
+      timeoutMs: 10,
+      sessionEndTimeoutMs: 50,
+      fetchImpl,
+    });
+
+    const result = adapter.endSession();
+    await vi.advanceTimersByTimeAsync(30);
+
+    await expect(result).resolves.toEqual({ flushed: true });
   });
 
   it("raises Gateway errors with response body details", async () => {

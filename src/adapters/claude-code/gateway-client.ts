@@ -35,6 +35,7 @@ export const ClaudeCodeMemoryPlatformAdapter: MemoryPlatformAdapterDefinition<Cl
       baseUrl: config.baseUrl as string | undefined ?? env.CLAUDE_CODE_MEMORY_GATEWAY_URL ?? env.MEMORY_TENCENTDB_GATEWAY_URL,
       apiKey: config.apiKey as string | undefined ?? env.CLAUDE_CODE_MEMORY_API_KEY ?? env.MEMORY_TENCENTDB_GATEWAY_API_KEY ?? env.TDAI_GATEWAY_API_KEY,
       timeoutMs: config.timeoutMs as number | undefined,
+      sessionEndTimeoutMs: config.sessionEndTimeoutMs as number | undefined,
       fetchImpl: config.fetchImpl as typeof fetch | undefined,
       sessionKey: config.sessionKey as string | undefined ?? env.CLAUDE_CODE_SESSION_ID ?? env.CLAUDE_CODE_WORKSPACE ?? process.cwd(),
       userId: config.userId as string | undefined ?? env.CLAUDE_CODE_USER_ID,
