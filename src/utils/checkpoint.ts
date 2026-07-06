@@ -172,6 +172,17 @@ export interface CheckpointRecalibrationCounts {
   maxL1UpdatedAtBySession?: Record<string, string>;
 }
 
+export interface CheckpointDecrementCounts {
+  /** Known decrease for l0_conversations_count. */
+  l0ConversationsCount?: number;
+  /** Known number of removed L0 messages. */
+  totalProcessed?: number;
+  /** Known number of removed L1 records. */
+  totalMemoriesExtracted?: number;
+  /** Known number of removed memories from the persona threshold window. */
+  memoriesSinceLastPersona?: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 /**
@@ -202,6 +213,20 @@ export async function recalibrateCheckpointFromStore(
     maxL1UpdatedAt: jsonlL1Stats?.maxUpdatedAt,
     maxL1UpdatedAtBySession: jsonlL1Stats?.maxUpdatedAtBySession,
   });
+}
+
+export async function recalibrateCheckpointFromLocalData(
+  dataDir: string,
+  logger?: CheckpointLogger,
+): Promise<void> {
+  await recalibrateCheckpointFromStore(
+    dataDir,
+    {
+      countL0: () => 0,
+      countL1: () => 0,
+    },
+    logger,
+  );
 }
 
 // ============================
@@ -554,6 +579,44 @@ export class CheckpointManager {
   }
 
   /**
+   * Decrement aggregate checkpoint counters when a cleanup path knows exactly
+   * how many rows it removed. Use recalibrate() when removals may have happened
+   * outside the current process or cursor bounds need repair.
+   */
+  async decrementCounters(counts: CheckpointDecrementCounts): Promise<void> {
+    const l0ConversationsCount = normalizeOptionalCount(counts.l0ConversationsCount);
+    const totalProcessed = normalizeOptionalCount(counts.totalProcessed);
+    const totalMemoriesExtracted = normalizeOptionalCount(counts.totalMemoriesExtracted);
+    const memoriesSinceLastPersona = normalizeOptionalCount(counts.memoriesSinceLastPersona);
+
+    const cp = await this.mutate((cp) => {
+      if (l0ConversationsCount !== undefined) {
+        cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count - l0ConversationsCount);
+      }
+      if (totalProcessed !== undefined) {
+        cp.total_processed = Math.max(0, cp.total_processed - totalProcessed);
+      }
+      if (totalMemoriesExtracted !== undefined) {
+        cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted - totalMemoriesExtracted);
+      }
+      if (memoriesSinceLastPersona !== undefined) {
+        cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - memoriesSinceLastPersona);
+      }
+      cp.memories_since_last_persona = Math.min(
+        cp.memories_since_last_persona,
+        cp.total_memories_extracted,
+      );
+    });
+
+    this.logger.info(
+      `[checkpoint] decrementCounters: l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_processed=${cp.total_processed}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  /**
    * Reconcile aggregate checkpoint counters with counts from the actual store.
    *
    * These counters are incremented on capture/extraction, but cleanup paths can
@@ -578,7 +641,9 @@ export class CheckpointManager {
         const cursorMax = maxL0Timestamp ?? 0;
         cp.last_captured_timestamp = Math.min(cp.last_captured_timestamp, cursorMax);
         for (const [sessionKey, state] of Object.entries(cp.runner_states ?? {})) {
-          const sessionMax = counts.maxL0TimestampBySession?.[sessionKey] ?? cursorMax;
+          const sessionMax = counts.hasLocalL0Stats
+            ? counts.maxL0TimestampBySession?.[sessionKey] ?? 0
+            : counts.maxL0TimestampBySession?.[sessionKey] ?? cursorMax;
           state.last_captured_timestamp = Math.min(state.last_captured_timestamp, sessionMax);
           state.last_l1_cursor = Math.min(state.last_l1_cursor, sessionMax);
         }
@@ -592,7 +657,9 @@ export class CheckpointManager {
       }
       if (counts.hasLocalL1Stats || maxL1UpdatedAt) {
         for (const [sessionKey, state] of Object.entries(cp.pipeline_states ?? {})) {
-          const sessionMax = counts.maxL1UpdatedAtBySession?.[sessionKey] ?? maxL1UpdatedAt ?? "";
+          const sessionMax = counts.hasLocalL1Stats
+            ? counts.maxL1UpdatedAtBySession?.[sessionKey] ?? ""
+            : counts.maxL1UpdatedAtBySession?.[sessionKey] ?? maxL1UpdatedAt ?? "";
           if (state.last_extraction_updated_time && state.last_extraction_updated_time > sessionMax) {
             state.last_extraction_updated_time = sessionMax;
           }

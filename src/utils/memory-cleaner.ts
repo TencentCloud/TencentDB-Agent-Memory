@@ -5,7 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
-import { recalibrateCheckpointFromStore } from "./checkpoint.js";
+import { CheckpointManager, recalibrateCheckpointFromLocalData, recalibrateCheckpointFromStore } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -180,11 +180,35 @@ export class LocalMemoryCleaner {
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
 
+      if (removedL0 > 0 || removedL1 > 0) {
+        try {
+          const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+          await checkpoint.decrementCounters({
+            l0ConversationsCount: removedL0,
+            totalProcessed: removedL0,
+            totalMemoriesExtracted: removedL1,
+            memoriesSinceLastPersona: removedL1,
+          });
+        } catch (err) {
+          this.opts.logger?.warn(
+            `${TAG} Checkpoint decrement failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
       try {
         await recalibrateCheckpointFromStore(this.opts.baseDir, vectorStore, this.opts.logger);
       } catch (err) {
         this.opts.logger?.warn(
           `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    } else {
+      try {
+        await recalibrateCheckpointFromLocalData(this.opts.baseDir, this.opts.logger);
+      } catch (err) {
+        this.opts.logger?.warn(
+          `${TAG} Checkpoint local recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }

@@ -18,6 +18,43 @@ afterEach(async () => {
 });
 
 describe("CheckpointManager", () => {
+  it("decrements drift-prone counters when a cleanup path knows removed counts", async () => {
+    const dataDir = await makeTempDir();
+    const checkpoint = new CheckpointManager(dataDir);
+
+    await checkpoint.markL1ExtractionComplete("session-a", 7, 123);
+    await checkpoint.captureAtomically("session-a", undefined, async () => ({
+      maxTimestamp: 456,
+      messageCount: 4,
+    }));
+
+    await checkpoint.decrementCounters({
+      l0ConversationsCount: 1,
+      totalProcessed: 2,
+      totalMemoriesExtracted: 3,
+      memoriesSinceLastPersona: 3,
+    });
+
+    let cp = await checkpoint.read();
+    expect(cp.l0_conversations_count).toBe(0);
+    expect(cp.total_processed).toBe(2);
+    expect(cp.total_memories_extracted).toBe(4);
+    expect(cp.memories_since_last_persona).toBe(4);
+
+    await checkpoint.decrementCounters({
+      l0ConversationsCount: 99,
+      totalProcessed: 99,
+      totalMemoriesExtracted: 99,
+      memoriesSinceLastPersona: 99,
+    });
+
+    cp = await checkpoint.read();
+    expect(cp.l0_conversations_count).toBe(0);
+    expect(cp.total_processed).toBe(0);
+    expect(cp.total_memories_extracted).toBe(0);
+    expect(cp.memories_since_last_persona).toBe(0);
+  });
+
   it("recalibrates drifted aggregate counters from actual store counts", async () => {
     const dataDir = await makeTempDir();
     const checkpoint = new CheckpointManager(dataDir);
@@ -175,6 +212,84 @@ describe("CheckpointManager", () => {
     const cp = await checkpoint.read();
     expect(cp.total_memories_extracted).toBe(2);
     expect(cp.pipeline_states["session-a"]?.last_extraction_updated_time).toBe("2026-07-05T00:00:02.000Z");
+  });
+
+  it("resets cursors for sessions removed by a session reset", async () => {
+    const dataDir = await makeTempDir();
+    const checkpoint = new CheckpointManager(dataDir);
+    const conversationsDir = path.join(dataDir, "conversations");
+    const recordsDir = path.join(dataDir, "records");
+
+    await fs.mkdir(conversationsDir, { recursive: true });
+    await fs.mkdir(recordsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(conversationsDir, "2026-07-05.jsonl"),
+      JSON.stringify({ id: "c-b", sessionKey: "session-b", timestamp: 3000 }) + "\n",
+    );
+    await fs.writeFile(
+      path.join(recordsDir, "2026-07-05.jsonl"),
+      JSON.stringify({ id: "m-b", sessionKey: "session-b", updatedAt: "2026-07-05T00:00:03.000Z" }) + "\n",
+    );
+
+    await checkpoint.write({
+      last_captured_timestamp: 9000,
+      total_processed: 9,
+      last_persona_at: 0,
+      last_persona_time: "",
+      request_persona_update: false,
+      persona_update_reason: "",
+      memories_since_last_persona: 9,
+      scenes_processed: 0,
+      runner_states: {
+        "session-a": {
+          last_captured_timestamp: 9000,
+          last_l1_cursor: 9000,
+          last_scene_name: "",
+        },
+        "session-b": {
+          last_captured_timestamp: 9000,
+          last_l1_cursor: 9000,
+          last_scene_name: "",
+        },
+      },
+      pipeline_states: {
+        "session-a": {
+          conversation_count: 0,
+          last_extraction_time: "",
+          last_extraction_updated_time: "2026-07-05T00:00:09.000Z",
+          last_active_time: 0,
+          l2_pending_l1_count: 0,
+          warmup_threshold: 0,
+          l2_last_extraction_time: "",
+        },
+        "session-b": {
+          conversation_count: 0,
+          last_extraction_time: "",
+          last_extraction_updated_time: "2026-07-05T00:00:09.000Z",
+          last_active_time: 0,
+          l2_pending_l1_count: 0,
+          warmup_threshold: 0,
+          l2_last_extraction_time: "",
+        },
+      },
+      l0_conversations_count: 9,
+      total_memories_extracted: 9,
+    });
+
+    await recalibrateCheckpointFromStore(dataDir, {
+      countL0: () => 99,
+      countL1: () => 99,
+    });
+
+    const cp = await checkpoint.read();
+    expect(cp.total_processed).toBe(1);
+    expect(cp.total_memories_extracted).toBe(1);
+    expect(cp.runner_states["session-a"]?.last_captured_timestamp).toBe(0);
+    expect(cp.runner_states["session-a"]?.last_l1_cursor).toBe(0);
+    expect(cp.runner_states["session-b"]?.last_captured_timestamp).toBe(3000);
+    expect(cp.runner_states["session-b"]?.last_l1_cursor).toBe(3000);
+    expect(cp.pipeline_states["session-a"]?.last_extraction_updated_time).toBe("");
+    expect(cp.pipeline_states["session-b"]?.last_extraction_updated_time).toBe("2026-07-05T00:00:03.000Z");
   });
 
   it("clears cursors when local shards are fully pruned", async () => {
