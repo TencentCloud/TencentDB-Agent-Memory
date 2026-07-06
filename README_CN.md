@@ -356,6 +356,26 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+## 🔌 跨平台适配
+
+在 OpenClaw 与 Hermes 之外，记忆引擎现已提供统一的 **Adapter SDK**
+（[`src/adapter-sdk/`](./src/adapter-sdk/README_CN.md)）：一个 `MemoryClient` 接口、两种可互换
+传输（进程内 `TdaiCore` / HTTP Gateway），新平台只需实现一个接口即可接入。已有两个适配器
+构建于其上：
+
+- **Claude Code（MCP）** — stdio 服务器，暴露 `memory_recall` / `memory_capture` /
+  `memory_search` / `conversation_search` / `memory_session_end` 五个工具：
+  `npm run adapter:claude-code` · [部署指南](./src/adapters/claude-code/README_CN.md)
+- **Dify** — 外部知识库 API（`POST /retrieval`）+ 自定义工具端点（自动生成 OpenAPI）：
+  `npm run adapter:dify` · [部署指南](./src/adapters/dify/README_CN.md)
+
+文档：[架构与数据流](./docs/adapters/ARCHITECTURE_CN.md) ·
+[四平台对比](./docs/adapters/PLATFORM-COMPARISON_CN.md) ·
+[如何接入新平台](./docs/adapters/NEW-PLATFORM-GUIDE_CN.md)
+
+
+---
+
 ## 🔒 Gateway 安全配置（可选）
 
 Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**

@@ -21,6 +21,16 @@ export type {
   ConversationSearchParams,
 } from "./types.js";
 
+// Structured search result types (used by the Adapter SDK and Dify adapter)
+export type {
+  MemorySearchResult,
+  MemorySearchResultItem,
+} from "./tools/memory-search.js";
+export type {
+  ConversationSearchResult,
+  ConversationSearchResultItem,
+} from "./tools/conversation-search.js";
+
 // TdaiCore service facade
 export { TdaiCore } from "./tdai-core.js";
 export type { TdaiCoreOptions } from "./tdai-core.js";

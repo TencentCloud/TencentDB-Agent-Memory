@@ -35,7 +35,9 @@ import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
+import type { MemorySearchResult } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
+import type { ConversationSearchResult } from "./tools/conversation-search.js";
 import {
   initDataDirectories,
   initStores,
@@ -323,6 +325,44 @@ export class TdaiCore {
       text: formatConversationSearchResponse(result),
       total: result.total,
     };
+  }
+
+  /**
+   * Search L1 structured memories and return the raw structured result
+   * (per-record ids/scores/timestamps) instead of the formatted text.
+   *
+   * Same search pipeline as {@link searchMemories} — this variant exists for
+   * adapters that need machine-readable records (e.g. the Dify External
+   * Knowledge API must return per-record `score` values, and the Adapter SDK
+   * exposes `items` alongside the formatted text). Callers that only need
+   * human/LLM-readable output should keep using {@link searchMemories}.
+   */
+  async searchMemoriesStructured(params: MemorySearchParams): Promise<MemorySearchResult> {
+    return executeMemorySearch({
+      query: params.query,
+      limit: params.limit ?? 5,
+      type: params.type,
+      scene: params.scene,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Search L0 raw conversations and return the raw structured result.
+   * Structured counterpart of {@link searchConversations} — see
+   * {@link searchMemoriesStructured} for why this exists.
+   */
+  async searchConversationsStructured(params: ConversationSearchParams): Promise<ConversationSearchResult> {
+    return executeConversationSearch({
+      query: params.query,
+      limit: params.limit ?? 5,
+      sessionKey: params.sessionKey,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+      logger: this.logger,
+    });
   }
 
   /**
