@@ -534,8 +534,10 @@ export async function writeRefMd(
   timestamp: string,
   toolName: string,
   content: string,
+  suffix?: string,
 ): Promise<string> {
-  const filename = `${isoToFilename(timestamp)}.md`;
+  const safeSuffix = suffix ? `-${sanitizePath(suffix).slice(0, 80)}` : "";
+  const filename = `${isoToFilename(timestamp)}${safeSuffix}.md`;
   const filePath = join(ctx.refsDir, filename);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
   const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
@@ -548,7 +550,15 @@ export async function readRefMd(
   ctx: StorageContext,
   refPath: string,
 ): Promise<string | null> {
-  const filePath = join(ctx.dataDir, refPath);
+  return readRefMdFromDataDir(ctx.dataDir, refPath);
+}
+
+/** Read a ref MD file from an agent data directory by relative path */
+export async function readRefMdFromDataDir(
+  dataDir: string,
+  refPath: string,
+): Promise<string | null> {
+  const filePath = join(dataDir, refPath);
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }

@@ -7,6 +7,7 @@
  * This module is the merged equivalent of the standalone context-offload-plugin's index.js,
  * adapted to co-exist with the memory-tencentdb plugin.
  */
+import { join } from "node:path";
 import { OffloadStateManager } from "./state-manager.js";
 import { createAfterToolCallHandler } from "./hooks/after-tool-call.js";
 import { createBeforePromptBuildHandler } from "./hooks/before-prompt-build.js";
@@ -20,6 +21,8 @@ import {
   readOffloadEntries,
   markOffloadStatus,
   DEFAULT_DATA_ROOT,
+  readRefMd,
+  readRefMdFromDataDir,
 } from "./storage.js";
 import { buildTiktokenContextSnapshot, configureTokenTracker, tiktokenCount, jsonReplacer } from "./context-token-tracker.js";
 import { fastEstimateMessages } from "./fast-token-estimate.js";
@@ -95,6 +98,74 @@ let _contextEngineRejected = false;
 let _sharedSessions: SessionRegistry | null = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function isSafeRefPath(refPath: string): boolean {
+  return /^refs\/[^/\\]+\.md$/u.test(refPath) &&
+    !refPath.includes("..") &&
+    !refPath.includes(":") &&
+    !refPath.startsWith("/") &&
+    !refPath.startsWith("\\");
+}
+
+export function sliceRefContent(
+  raw: string,
+  options: { query?: string; startLine?: number; endLine?: number; maxTokens: number },
+): string {
+  if (options.query && options.query.trim()) {
+    const q = options.query.trim().toLowerCase();
+    const rawLower = raw.toLowerCase();
+    const matchIndex = rawLower.indexOf(q);
+    if (matchIndex < 0) return "(empty)";
+
+    const maxTokens = Math.max(80, Math.floor(options.maxTokens));
+    const budgetChars = Math.max(400, maxTokens * 4);
+    let startOffset = Math.max(0, matchIndex - Math.floor(budgetChars / 2));
+    let endOffset = Math.min(raw.length, startOffset + budgetChars);
+    if (endOffset - startOffset < budgetChars) {
+      startOffset = Math.max(0, endOffset - budgetChars);
+    }
+    let excerpt = raw.slice(startOffset, endOffset);
+
+    while (tiktokenCount(excerpt) > maxTokens && excerpt.length > q.length) {
+      const excess = Math.max(100, Math.ceil(excerpt.length * 0.1));
+      const matchInExcerpt = Math.max(0, matchIndex - startOffset);
+      const trimStart = matchInExcerpt > excerpt.length / 2;
+      if (trimStart) {
+        startOffset = Math.min(matchIndex, startOffset + excess);
+      } else {
+        endOffset = Math.max(matchIndex + options.query.trim().length, endOffset - excess);
+      }
+      excerpt = raw.slice(startOffset, endOffset);
+    }
+
+    const prefix = startOffset > 0 ? "[truncated before]\n" : "";
+    const suffix = endOffset < raw.length ? "\n[truncated after]" : "";
+    return `${prefix}${excerpt}${suffix}`;
+  }
+
+  const lines = raw.split(/\r?\n/u).map((line, idx) => ({ lineNo: idx + 1, text: line }));
+  const start = Math.max(1, Math.floor(options.startLine ?? 1));
+  const end = Math.max(start, Math.floor(options.endLine ?? lines.length));
+  const selectedLines = lines.filter((line) => line.lineNo >= start && line.lineNo <= end);
+  const maxTokens = Math.max(80, Math.floor(options.maxTokens));
+  const output: string[] = [];
+  for (const item of selectedLines) {
+    const next = `${item.lineNo}: ${item.text}`;
+    const candidate = [...output, next].join("\n");
+    if (tiktokenCount(candidate) > maxTokens) {
+      output.push(`[truncated: max_tokens=${maxTokens}]`);
+      break;
+    }
+    output.push(next);
+  }
+  return output.join("\n") || "(empty)";
+}
+
+function resolveReadMaxTokens(requested: number | undefined, configuredLimit: number): number {
+  const hardLimit = Math.max(80, Math.floor(configuredLimit));
+  if (requested == null || !Number.isFinite(requested)) return hardLimit;
+  return Math.min(hardLimit, Math.max(80, Math.floor(requested)));
+}
 
 function parseCreateSkillCommand(
   prompt: string,
@@ -298,6 +369,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     mildOffloadRatio: offloadConfig.mildOffloadRatio,
     aggressiveCompressRatio: offloadConfig.aggressiveCompressRatio,
     mmdMaxTokenRatio: offloadConfig.mmdMaxTokenRatio,
+    inlineToolResultMaxTokens: offloadConfig.inlineToolResultMaxTokens,
+    summaryMaxTokens: offloadConfig.summaryMaxTokens,
+    previewMaxChars: offloadConfig.previewMaxChars,
+    readChunkMaxTokens: offloadConfig.readChunkMaxTokens,
+    epochTriggerRatio: offloadConfig.epochTriggerRatio,
+    epochTargetRatio: offloadConfig.epochTargetRatio,
+    epochMinimumTurns: offloadConfig.epochMinimumTurns,
+    epochMinimumIntervalTurns: offloadConfig.epochMinimumIntervalTurns,
   };
 
   // Fix 4: Configure token tracker encoding to match plugin config (default: o200k_base)
@@ -439,6 +518,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const refByToolCallId = new Map<string, string>();
       for (const p of pairs) {
         try {
+          if (p.result_ref) {
+            refByToolCallId.set(p.toolCallId, p.result_ref);
+            continue;
+          }
           const resultStr = typeof p.result === "string"
             ? sanitizeText(p.result)
             : sanitizeText(JSON.stringify(p.result, null, 2));
@@ -886,6 +969,50 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     _lastActiveSessionKey = sessionKey;
     return entry.manager;
   };
+
+  if (typeof api.registerTool === "function") {
+    api.registerTool(
+      {
+        name: "tdai_offload_read",
+        label: "Offload Read",
+        description:
+          "Read full tool results previously replaced by context offload. Use result_ref from an offloaded tool result stub. " +
+          "Only refs/... paths are allowed. Prefer query/start_line/end_line/max_tokens to read the smallest useful chunk.",
+        parameters: {
+          type: "object",
+          properties: {
+            result_ref: { type: "string", description: "Relative ref path, must start with refs/ and end with .md" },
+            query: { type: "string", description: "Optional substring filter. Returns matching lines with line numbers." },
+            start_line: { type: "number", description: "Optional 1-based inclusive start line" },
+            end_line: { type: "number", description: "Optional 1-based inclusive end line" },
+            max_tokens: { type: "number", description: "Optional max token budget for returned content" },
+          },
+          required: ["result_ref"],
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>, ctx?: any) {
+          const refPath = String(params?.result_ref ?? "");
+          if (!isSafeRefPath(refPath)) {
+            return "tdai_offload_read: invalid result_ref. Only refs/*.md relative paths are allowed.";
+          }
+          const mgr = ctx?.sessionKey ? await _resolveSession(ctx.sessionKey, ctx?.sessionId) : _lastActiveMgr;
+          const raw = mgr
+            ? await readRefMd(mgr.ctx, refPath)
+            : await readRefMdFromDataDir(join(dataRoot, "main"), refPath);
+          if (raw == null) return `tdai_offload_read: result_ref not found: ${refPath}`;
+          return sliceRefContent(raw, {
+            query: typeof params?.query === "string" ? params.query : undefined,
+            startLine: typeof params?.start_line === "number" ? params.start_line : undefined,
+            endLine: typeof params?.end_line === "number" ? params.end_line : undefined,
+            maxTokens: resolveReadMaxTokens(
+              typeof params?.max_tokens === "number" ? params.max_tokens : undefined,
+              pCfg.readChunkMaxTokens ?? PLUGIN_DEFAULTS.readChunkMaxTokens,
+            ),
+          });
+        },
+      },
+      { name: "tdai_offload_read" },
+    );
+  }
 
   // L2 Scheduler — uses module-level state (_l2Running, _l2PollHandle, _l2FirstNotifyAt)
   // Clean up any lingering poll timer from previous registerOffload() call

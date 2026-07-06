@@ -35,6 +35,9 @@ export interface ToolPair {
   toolCallId: string;
   params: Record<string, unknown> | string;
   result: unknown;
+  result_ref?: string;
+  content_hash?: string;
+  original_tokens?: number;
   error?: string;
   timestamp: string;
   durationMs?: number;
@@ -185,6 +188,22 @@ export interface PluginConfig {
   emergencyTargetRatio?: number;
   /** Max ratio of total tokens that injected MMDs may occupy. Default: 0.2 */
   mmdMaxTokenRatio?: number;
+  /** Inline tool-result budget before front offload. Default: 1200 */
+  inlineToolResultMaxTokens?: number;
+  /** Summary token budget for front offload stubs. Default: 350 */
+  summaryMaxTokens?: number;
+  /** Preview character budget for deterministic summaries. Default: 1200 */
+  previewMaxChars?: number;
+  /** Max tokens returned by tdai_offload_read. Default: 1600 */
+  readChunkMaxTokens?: number;
+  /** Cache epoch transition trigger ratio. Default: 0.8 */
+  epochTriggerRatio?: number;
+  /** Cache epoch target ratio after compaction. Default: 0.55 */
+  epochTargetRatio?: number;
+  /** Minimum turns before epoch transition. Default: 4 */
+  epochMinimumTurns?: number;
+  /** Minimum compactable continuous interval. Default: 2 */
+  epochMinimumIntervalTurns?: number;
   /**
    * L3 token counting: `tiktoken` uses js-tiktoken (exact BPE for chosen encoding);
    * `heuristic` uses 中文/1.7 + 其余/4. Default: tiktoken.
@@ -243,6 +262,14 @@ export const PLUGIN_DEFAULTS = {
   /** Emergency target: delete until tokens <= contextWindow * 0.6 */
   emergencyTargetRatio: 0.6,
   mmdMaxTokenRatio: 0.2,
+  inlineToolResultMaxTokens: 1200,
+  summaryMaxTokens: 350,
+  previewMaxChars: 1200,
+  readChunkMaxTokens: 1600,
+  epochTriggerRatio: 0.8,
+  epochTargetRatio: 0.55,
+  epochMinimumTurns: 4,
+  epochMinimumIntervalTurns: 2,
   l3TokenCountMode: "tiktoken" as const,
   l3TiktokenEncoding: "cl100k_base" as const,
   defaultSystemOverheadRatio: 0.12,

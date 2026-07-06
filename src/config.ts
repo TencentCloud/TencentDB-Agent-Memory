@@ -81,6 +81,12 @@ export interface PipelineTriggerConfig {
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /** Recall mode. "tool-only" keeps dynamic L1 recall out of the prompt by default. */
+  mode: "auto" | "tool-only";
+  /** Show dynamic injected memories in the prompt when mode="auto" (default: false) */
+  showInjected: boolean;
+  /** Persist dynamic injected memories into conversation history (default: false) */
+  persistInjected: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -93,6 +99,16 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Stable session snapshot token budget (default: 1600) */
+  sessionSnapshotMaxTokens: number;
+  /** Max stable memories to include in the frozen snapshot (default: 8) */
+  stableMemoryMaxItems: number;
+  /** Max scene summary items to include in the frozen snapshot (default: 6) */
+  sceneSummaryMaxItems: number;
+  /** Dynamic recall token budget for mode="auto" (default: 900) */
+  dynamicRecallMaxTokens: number;
+  /** Combined active-search call budget per user turn (default: 3) */
+  maxSearchCallsPerTurn: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -260,6 +276,22 @@ export interface OffloadConfig {
   aggressiveCompressRatio: number;
   /** MMD injection token budget ratio (default: 0.2) */
   mmdMaxTokenRatio: number;
+  /** Inline tool-result budget before front offload replaces the prompt payload (default: 1200) */
+  inlineToolResultMaxTokens: number;
+  /** Summary token budget for offloaded tool result stubs (default: 350) */
+  summaryMaxTokens: number;
+  /** Preview character budget used to build deterministic tool result summaries (default: 1200) */
+  previewMaxChars: number;
+  /** Max tokens returned by tdai_offload_read in one call (default: 1600) */
+  readChunkMaxTokens: number;
+  /** Cache epoch transition trigger ratio of context window (default: 0.8) */
+  epochTriggerRatio: number;
+  /** Cache epoch target ratio after batch compaction (default: 0.55) */
+  epochTargetRatio: number;
+  /** Minimum turns before an epoch can transition (default: 4) */
+  epochMinimumTurns: number;
+  /** Minimum continuous old interval turns to compact (default: 2) */
+  epochMinimumIntervalTurns: number;
   /** Backend service URL. When set, L1/L1.5/L2/L4 LLM calls go through the backend. */
   backendUrl?: string;
   /** Backend API authentication token */
@@ -489,6 +521,14 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mildOffloadRatio: num(offloadGroup, "mildOffloadRatio") ?? 0.5,
     aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
+    inlineToolResultMaxTokens: num(offloadGroup, "inlineToolResultMaxTokens") ?? 1200,
+    summaryMaxTokens: num(offloadGroup, "summaryMaxTokens") ?? 350,
+    previewMaxChars: num(offloadGroup, "previewMaxChars") ?? 1200,
+    readChunkMaxTokens: num(offloadGroup, "readChunkMaxTokens") ?? 1600,
+    epochTriggerRatio: num(offloadGroup, "epochTriggerRatio") ?? 0.8,
+    epochTargetRatio: num(offloadGroup, "epochTargetRatio") ?? 0.55,
+    epochMinimumTurns: num(offloadGroup, "epochMinimumTurns") ?? 4,
+    epochMinimumIntervalTurns: num(offloadGroup, "epochMinimumIntervalTurns") ?? 2,
     backendUrl: optStr(offloadGroup, "backendUrl"),
     backendApiKey: optStr(offloadGroup, "backendApiKey"),
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
@@ -529,12 +569,20 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      mode: validateRecallMode(str(recallGroup, "mode")) ?? "tool-only",
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      persistInjected: bool(recallGroup, "persistInjected") ?? false,
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      sessionSnapshotMaxTokens: num(recallGroup, "sessionSnapshotMaxTokens") ?? 1600,
+      stableMemoryMaxItems: num(recallGroup, "stableMemoryMaxItems") ?? 8,
+      sceneSummaryMaxItems: num(recallGroup, "sceneSummaryMaxItems") ?? 6,
+      dynamicRecallMaxTokens: num(recallGroup, "dynamicRecallMaxTokens") ?? 900,
+      maxSearchCallsPerTurn: num(recallGroup, "maxSearchCallsPerTurn") ?? 3,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -634,6 +682,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_RECALL_MODES: RecallConfig["mode"][] = ["auto", "tool-only"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +692,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateRecallMode(value: string | undefined): RecallConfig["mode"] | undefined {
+  if (!value) return undefined;
+  return VALID_RECALL_MODES.includes(value as RecallConfig["mode"])
+    ? (value as RecallConfig["mode"])
     : undefined;
 }
 

@@ -6,8 +6,13 @@
 
 ## [Unreleased]
 
+### 🐛 修复
+
+- **Prompt cache 命中率回归防护** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：将 `<relevant-memories>` 注入块清理逻辑抽取为 `src/utils/injected-memory.ts`，并在 `before_message_write` 中复用，避免 `showInjected=true` 时动态 L1 召回内容被持久化进历史消息。新增单测覆盖字符串消息、多 part 消息和历史膨胀估算。
+
 ### ✨ 新功能
 
+- **Cache-Aware Context Engine D 方案核心能力** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：新增 `recall.mode="tool-only"` 默认路径、确定性 Session Snapshot、前置工具结果卸载、`tdai_offload_read`、Cache Epoch 纯合约与 Task Snapshot/Delta 纯合约。默认不再每轮自动 prepend 动态 L1 记忆；大工具结果会先写入 `refs/*.md`，prompt 只保留摘要、`result_ref` 和恢复说明。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。

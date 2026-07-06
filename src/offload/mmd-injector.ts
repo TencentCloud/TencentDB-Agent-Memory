@@ -9,12 +9,14 @@
  * The marker property `_mmdContextMessage` is used to locate the message for
  * replacement. L3 compression must skip messages carrying this marker.
  */
-import { readMmd, listMmds } from "./storage.js";
+import { readMmd, listMmds, writeRefMd } from "./storage.js";
 import { PLUGIN_DEFAULTS, type PluginConfig, type PluginLogger } from "./types.js";
 import { createL3TokenCounter } from "./l3-token-counter.js";
 import { traceOffloadDecision } from "./opik-tracer.js";
 import { isToolResultMessage, isAssistantMessageWithToolUse } from "./l3-helpers.js";
 import type { OffloadStateManager } from "./state-manager.js";
+import { buildTaskSnapshot, buildTaskDeltaMessage } from "./task-snapshot.js";
+import { nowChinaISO } from "./time-utils.js";
 
 /** Marker property on the injected message object. */
 export const MMD_MESSAGE_MARKER = "_mmdContextMessage";
@@ -53,9 +55,7 @@ export async function injectMmdIntoMessages(
     `[context-offload] mmd-injector inject: injectionReady=${injReady}, activeMmdFile=${actFile ?? "null"}, msgs=${messages.length}`,
   );
   if (!injReady) {
-    removeMmdMessages(messages);
-    stateManager.lastMmdInjectedTokens = 0;
-    return { mmdTokens: 0 };
+    return { mmdTokens: stateManager.lastMmdInjectedTokens };
   }
 
   const contextWindow =
@@ -70,7 +70,6 @@ export async function injectMmdIntoMessages(
   logger.debug?.(
     `[context-offload] mmd-injector inject: activeMmdText=${activeMmdText ? `${activeMmdText.length} chars` : "null"}, contextWindow=${contextWindow}`,
   );
-  removeMmdMessages(messages);
 
   let totalMmdTokens = 0;
 
@@ -80,8 +79,7 @@ export async function injectMmdIntoMessages(
       content: [{ type: "text", text: activeMmdText }],
       [MMD_MESSAGE_MARKER]: "active",
     };
-    const insertIdx = findActiveMmdInsertionPoint(messages);
-    messages.splice(insertIdx, 0, activeMsg);
+    messages.push(activeMsg);
     totalMmdTokens += countTokens(activeMmdText);
   }
 
@@ -89,7 +87,7 @@ export async function injectMmdIntoMessages(
 
   const activeMmd = stateManager.getActiveMmdFile();
   logger.debug?.(
-    `[context-offload] mmd-injector: injected active MMD into messages (${totalMmdTokens} tokens, file=${activeMmd})`,
+    `[context-offload] mmd-injector: appended active MMD snapshot/delta (${totalMmdTokens} tokens, file=${activeMmd})`,
   );
 
   // Summary after active MMD injection (was full dump, now aggregated)
@@ -109,7 +107,7 @@ export async function injectMmdIntoMessages(
       mmdMaxTokenRatio,
     },
     output: {
-      result: `MMD 注入 messages：${totalMmdTokens} tokens (active only)`,
+      result: `MMD append-only snapshot/delta：${totalMmdTokens} tokens (active only)`,
       mmdTokens: totalMmdTokens,
       hasActive: !!activeMmdText,
       hasHistory: false,
@@ -325,10 +323,9 @@ async function buildActiveMmdBlock(
   try {
     const mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
     if (!mmdContent) return null;
-    stateManager.setInjectedMmdVersion(
-      activeMmdFile,
-      computeFingerprint(mmdContent),
-    );
+    const fingerprint = computeFingerprint(mmdContent);
+    const previousFingerprint = stateManager.getInjectedMmdVersion(activeMmdFile);
+    if (previousFingerprint === fingerprint) return null;
     const metaMatch = mmdContent.match(/^%%\{\s*(.*?)\s*\}%%/);
     let taskGoal = "";
     if (metaMatch) {
@@ -339,28 +336,30 @@ async function buildActiveMmdBlock(
         /* ignore */
       }
     }
-    const nodePattern = /\b(\d+-N\d+|N\d+)\b/g;
-    const nodeIds: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = nodePattern.exec(mmdContent)) !== null) {
-      if (!nodeIds.includes(match[1])) nodeIds.push(match[1]);
-    }
-    return [
-      `<current_task_context>`,
-      `【当前活跃任务的mermaid流程图】这是你最近正在执行的任务的阶段性记录（此条下方的tool use未被汇总，进程可能有延迟，仅供参考）。`,
-      taskGoal ? `**任务目标:** ${taskGoal}` : "",
-      `**任务文件:** ${activeMmdFile}`,
-      nodeIds.length > 0
-        ? `**节点索引:** 可通过 node_id 在 offload.{sessionid}.jsonl 中查找对应的工具调用记录。如需查看某个节点对应的原始工具调用与完整结果，请在 offload.{sessionid}.jsonl 中找到对应条目的 result_ref 并读取该文件。`
-        : "",
-      "```mermaid",
+    const refPath = await writeRefMd(
+      stateManager.ctx,
+      nowChinaISO(),
+      "task-mermaid",
       mmdContent,
-      "```",
-      `标记为 "doing" 的节点是近期焦点（注：可能有延迟，下方的tool use未被统计，仅供参考），"done" 的已完成。请参考此保持方向感，避免重复已完成的工作。`,
-      `</current_task_context>`,
-    ]
-      .filter((line) => line !== "")
-      .join("\n");
+      `${activeMmdFile}-${fingerprint}`,
+    );
+    stateManager.setInjectedMmdVersion(activeMmdFile, fingerprint);
+
+    if (!previousFingerprint) {
+      return buildTaskSnapshot({
+        taskGoal,
+        mmdFile: activeMmdFile,
+        mermaid: mmdContent,
+        resultRef: refPath,
+      }).text;
+    }
+
+    return buildTaskDeltaMessage({
+      taskGoal,
+      mmdFile: activeMmdFile,
+      changedNodeIds: extractNodeIds(mmdContent),
+      resultRef: refPath,
+    }).content[0].text;
   } catch (err) {
     logger.error(
       `[context-offload] mmd-injector: Error building active MMD block: ${err}`,
@@ -371,4 +370,17 @@ async function buildActiveMmdBlock(
 
 function computeFingerprint(content: string): string {
   return `${content.length}:${content.slice(0, 64)}`;
+}
+
+function extractNodeIds(content: string): string[] {
+  const nodePattern = /\b(\d+-N\d+|N\d+|[A-Za-z]\w*)\b/g;
+  const nodeIds: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = nodePattern.exec(content)) !== null) {
+    const id = match[1];
+    if (!["flowchart", "graph", "subgraph", "end", "classDef"].includes(id) && !nodeIds.includes(id)) {
+      nodeIds.push(id);
+    }
+  }
+  return nodeIds.slice(0, 40);
 }
