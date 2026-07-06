@@ -1,0 +1,8 @@
+{
+  "mcp_servers": {
+    "tdai-memory": {
+      "command": "npx",
+      "args": ["tsx", "${PLUGIN_ROOT}/mcp-server.ts"]
+    }
+  }
+}

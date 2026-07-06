@@ -354,6 +354,111 @@ curl http://127.0.0.1:8420/health
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
 
+### 3. Codex
+
+除 OpenClaw 和 Hermes 外，本插件也支持 Codex。Codex 接入通过本仓库内置的 `codex-plugin/memory/memory_tencentdb/` 插件完成，插件基于统一的 `src/adapters/adapter-sdk` 访问 Gateway。
+
+Codex 适配的数据流如下：
+
+```text
+Codex Hooks / MCP
+  -> codex-plugin/memory/memory_tencentdb/adapter.ts
+  -> src/adapters/adapter-sdk
+  -> Gateway HTTP API
+  -> TdaiCore
+```
+
+当前 Codex 插件提供：
+
+- `UserPromptSubmit` hook：对话前调用 `/recall`，把召回记忆注入 Codex 上下文。
+- `Stop` hook：回答后调用 `/capture`，写入本轮用户问题和助手回答。
+- MCP 工具：`tdai_memory_search`、`tdai_conversation_search`，用于主动搜索结构化记忆和原始对话。
+
+#### 3.1 安装 Codex 插件
+
+在仓库根目录执行：
+
+```bat
+npm install
+node scripts\install-codex-plugin.js
+```
+
+安装脚本会：
+
+- 将 `codex-plugin/memory/memory_tencentdb` 软连接到 `%USERPROFILE%\.agents\plugins\tencentdb-memory`。
+- 写入本地 Codex marketplace。
+- 在 `%USERPROFILE%\.codex\config.toml` 中启用 `tdai-memory` MCP。
+- 尝试执行 `codex plugin add tencentdb-memory@local-codex-plugins`。
+
+安装后重启 Codex，并在 Codex 中执行 `/hooks` 或进入 Settings -> Hooks，信任 `UserPromptSubmit` 和 `Stop` 两个 hook。
+
+#### 3.2 配置 Gateway
+
+Codex 插件不会自动启动 Gateway。请先在仓库根目录手动启动：
+
+```bat
+set TDAI_GATEWAY_URL=http://127.0.0.1:8420
+set TDAI_GATEWAY_API_KEY=your-api-key
+node --import tsx src/gateway/server.ts
+```
+
+同时建议把 Gateway 地址和 API Key 写入用户环境变量，供 Codex 进程读取：
+
+```bat
+setx TDAI_GATEWAY_URL "http://127.0.0.1:8420"
+setx TDAI_GATEWAY_API_KEY "your-api-key"
+```
+
+`setx` 只对新进程生效，设置后需要重启 Codex。
+
+
+### 4. Claude Code
+
+Claude Code 接入通过 `claudecode-plugin/memory/memory_tencentdb/` 插件完成，同样复用统一的 `src/adapters/adapter-sdk`。
+
+Claude Code 适配的数据流如下：
+
+```text
+Claude Code Hooks / MCP
+  -> claudecode-plugin/memory/memory_tencentdb/adapter.ts
+  -> src/adapters/adapter-sdk
+  -> Gateway HTTP API
+  -> TdaiCore
+```
+
+当前 Claude Code 插件提供：
+
+- `UserPromptSubmit` hook：对话前调用 `/recall`，把召回记忆注入 Claude Code 上下文。
+- `Stop` hook：回答后调用 `/capture`，写入本轮对话。
+- MCP 工具：`tdai_memory_search`、`tdai_conversation_search`。
+- `transcript_path` 兜底读取：当 Stop 事件缺少用户问题时，可从 Claude Code transcript 中提取最后一轮 user/assistant。
+
+#### 4.1 启动 Gateway
+
+Claude Code 插件不会自动启动 Gateway。请先在仓库根目录手动启动：
+
+```bat
+set TDAI_GATEWAY_URL=http://127.0.0.1:8420
+set TDAI_GATEWAY_API_KEY=your-api-key
+node --import tsx src/gateway/server.ts
+```
+
+并将环境变量写入用户环境，供 Claude Code 进程读取：
+
+```bat
+setx TDAI_GATEWAY_URL "http://127.0.0.1:8420"
+setx TDAI_GATEWAY_API_KEY "your-api-key"
+```
+
+#### 4.2 启动 Claude Code 并加载插件
+
+使用 `--plugin-dir` 启动 Claude Code 并加载插件：
+
+```bat
+claude --plugin-dir D:\xiniuniao\TencentDB-Agent-Memory\claudecode-plugin\memory\memory_tencentdb
+```
+
+
 ---
 
 ## 🔒 Gateway 安全配置（可选）
@@ -497,6 +602,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| Codex / Claude Code 适配 | 基于统一 `adapter-sdk` 接入 Hook 与 MCP |
+| 统一适配器 SDK | 新平台只需实现 `MemoryPlatformAdapter` |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -530,6 +637,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
 - [x] OpenClaw 插件与 Hermes Gateway 适配
+- [x] Codex 与 Claude Code 适配
+- [x] 统一 adapter-sdk，新增平台只需实现 `MemoryPlatformAdapter`
 - [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
 - [ ] Skill自动生成
 - [ ] 可视化调试与记忆观测面板
