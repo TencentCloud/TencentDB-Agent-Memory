@@ -6,12 +6,15 @@ Claude Code style coding-agent integrations.
 
 ## Scope
 
-This document covers the foundation stage only:
+This document covers the foundation stage and the first minimal Gateway-client
+step:
 
 - Identify the host-neutral memory capabilities exposed by `TdaiCore`.
 - Compare the existing OpenClaw and Hermes integration paths.
 - Propose a minimal Codex / Claude Code adapter path without duplicating the
   existing Dify adapter work.
+- Provide a small Gateway-backed client that future Codex / Claude Code
+  wrappers can reuse.
 
 It does not implement a full adapter SDK yet. That should come after one
 concrete coding-agent integration is validated.
@@ -151,6 +154,25 @@ The platform adapter should provide four minimal responsibilities:
 3. Turn capture: call `/capture` after a completed user / assistant turn.
 4. Search tools: expose `search_memories` and `search_conversations` as tool
    calls when the host platform supports tools.
+
+## Minimal Gateway Client
+
+`src/adapters/coding-agent/gateway-client.ts` provides a small reusable
+Gateway client for coding-agent wrappers. It maps host-neutral method names to
+the existing HTTP API:
+
+| Client method | Gateway endpoint |
+| --- | --- |
+| `health()` | `GET /health` |
+| `recall(query, session)` | `POST /recall` |
+| `capture(input)` | `POST /capture` |
+| `searchMemories(input)` | `POST /search/memories` |
+| `searchConversations(input)` | `POST /search/conversations` |
+| `endSession(session)` | `POST /session/end` |
+
+The client intentionally stays below the platform-specific layer. A Codex,
+Claude Code, or CLI-wrapper integration can reuse it while deciding its own
+session-key strategy and prompt-injection mechanics.
 
 ## Adapter Interface Sketch
 
