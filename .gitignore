@@ -43,4 +43,4 @@ test-offload-sessions.sh
 *.tar.gz
 
 # log files
-*.logdocs/
+*.log
