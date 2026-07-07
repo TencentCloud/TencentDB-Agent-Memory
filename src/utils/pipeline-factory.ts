@@ -696,6 +696,9 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
   const stores = await initStores(cfg, pluginDataDir, logger);
   const { vectorStore, embeddingService } = stores;
 
+  // Recalibrate counters against actual store data to fix drift after cleanup
+  await new CheckpointManager(pluginDataDir, logger).recalibrate(vectorStore);
+
   // Create pipeline manager
   const scheduler = createPipelineManager(cfg, logger, sessionFilter);
 
