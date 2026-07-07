@@ -97,6 +97,7 @@
           "conflictRecallTopK": { "type": "number", "default": 5, "description": "冲突检测时召回 Top-K 数" },
           "maxInputChars": { "type": "number", "default": 5000, "description": "Embedding 输入文本最大字符数，超出时截断并打印警告日志（默认 5000，适合大多数模型的 token 上限）" },
           "timeoutMs": { "type": "number", "default": 10000, "description": "单次 embedding API 调用超时（毫秒），超时后会自动重试（最多 3 次）" },
+          "batchSize": { "type": "integer", "minimum": 1, "maximum": 2048, "default": 10, "description": "单次 embedding API 请求的最大文本数。默认 10，兼容 DashScope 上限；确认服务端支持时可调大。" },
           "recallTimeoutMs": { "type": "number", "description": "recall 路径 embedding 超时（毫秒），覆盖 timeoutMs。用户等待中，建议设短一些（如 3000）" },
           "captureTimeoutMs": { "type": "number", "description": "capture 路径 embedding 超时（毫秒），覆盖 timeoutMs。后台运行，可设长一些（如 15000）" }
         }

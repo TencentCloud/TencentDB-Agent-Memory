@@ -124,6 +124,8 @@ export interface EmbeddingConfig {
   maxInputChars: number;
   /** Timeout per embedding API call in milliseconds (default: 10000). */
   timeoutMs: number;
+  /** Maximum texts per remote embedding request (default: 10). */
+  batchSize: number;
   /** Override timeoutMs for recall-path embedding calls (user-facing, should be shorter). Falls back to timeoutMs. */
   recallTimeoutMs?: number;
   /** Override timeoutMs for capture-path embedding calls (background L1 dedup, can be longer). Falls back to timeoutMs. */
@@ -375,6 +377,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   const embeddingProviderRaw = str(embeddingGroup, "provider") ?? "none";
   const embeddingModelRaw = str(embeddingGroup, "model") ?? "";
   const embeddingDimensionsRaw = num(embeddingGroup, "dimensions");
+  const embeddingBatchSizeRaw = num(embeddingGroup, "batchSize");
   const embeddingProxyUrl = str(embeddingGroup, "proxyUrl");
 
   // provider="none" → embedding disabled (default for zero-config users)
@@ -436,6 +439,18 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     } else {
       embeddingProvider = embeddingProviderRaw;
     }
+  }
+
+  const embeddingBatchSize = embeddingBatchSizeRaw ?? 10;
+  if (
+    embeddingProvider !== "none"
+    && (!Number.isInteger(embeddingBatchSize) || embeddingBatchSize < 1 || embeddingBatchSize > 2048)
+  ) {
+    const errorMsg =
+      `Embedding batchSize must be an integer between 1 and 2048; received ${embeddingBatchSize}. `
+      + "Embedding has been disabled.";
+    embeddingConfigError = embeddingConfigError ? `${embeddingConfigError} ${errorMsg}` : errorMsg;
+    embeddingEnabled = false;
   }
 
   // When provider="none", dimensions=0 signals VectorStore to skip vec0 table
@@ -548,6 +563,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,
       timeoutMs: num(embeddingGroup, "timeoutMs") ?? 10_000,
+      batchSize: Number.isInteger(embeddingBatchSize) && embeddingBatchSize >= 1 && embeddingBatchSize <= 2048
+        ? embeddingBatchSize
+        : 10,
       recallTimeoutMs: num(embeddingGroup, "recallTimeoutMs") ?? undefined,
       captureTimeoutMs: num(embeddingGroup, "captureTimeoutMs") ?? undefined,
       modelCacheDir: optStr(embeddingGroup, "modelCacheDir"),

@@ -438,6 +438,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 For all fields, types, and constraints see [`openclaw.plugin.json`](./openclaw.plugin.json)。
 
 - `embedding.*` — remote embedding service (OpenAI-compatible API)
+  - `embedding.batchSize` (default `10`): maximum texts per remote request. The safe default matches the DashScope limit; increase it only when the target provider documents a larger batch limit.
   - `embedding.sendDimensions` (default `true`): whether to include the `dimensions` field in the request body. OpenAI `text-embedding-3-*` models rely on it for Matryoshka truncation, but some self-hosted / OSS models (e.g. **BGE-M3**) do not support custom dimensions and will reject the request with HTTP 400 `does not support matryoshka representation`. Set it to `false` for those backends, e.g.:
     ```json
     {

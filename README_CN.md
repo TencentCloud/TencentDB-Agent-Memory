@@ -441,6 +441,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 完整字段、类型、约束见 [`openclaw.plugin.json`](./openclaw.plugin.json) 。
 
 - `embedding.*` — 远程 embedding 服务（OpenAI 兼容 API）
+  - `embedding.batchSize`（默认 `10`）：单次远程请求的最大文本数。默认值兼容 DashScope 上限；仅在目标 provider 明确支持更大批次时调高。
   - `embedding.sendDimensions`（默认 `true`）：是否在请求体中携带 `dimensions` 字段。OpenAI `text-embedding-3-*` 系列依赖该字段做 Matryoshka 维度截断；但部分自托管 / 开源模型（如 **BGE-M3**）不支持自定义维度，会以 HTTP 400 报 `does not support matryoshka representation` 拒绝请求。此时请显式设为 `false`，例如：
     ```json
     {

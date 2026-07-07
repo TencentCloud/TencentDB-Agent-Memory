@@ -43,6 +43,8 @@ export interface OpenAIEmbeddingConfig {
   maxInputChars?: number;
   /** Timeout per API call in milliseconds (default: 10000). */
   timeoutMs?: number;
+  /** Maximum texts sent in one remote request (default: 10, maximum: 2048). */
+  batchSize?: number;
 }
 
 export interface LocalEmbeddingConfig {
@@ -362,8 +364,20 @@ export class LocalEmbeddingService implements EmbeddingService {
 // OpenAI-compatible implementation
 // ============================
 
-/** Max texts per batch (OpenAI limit is 2048, we use a safe value) */
-const MAX_BATCH_SIZE = 256;
+/** DashScope-compatible endpoints reject more than 10 texts per request. */
+const DEFAULT_REMOTE_BATCH_SIZE = 10;
+/** OpenAI's documented upper bound; prevents accidental unbounded requests. */
+const MAX_REMOTE_BATCH_SIZE = 2048;
+
+function normalizeRemoteBatchSize(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_REMOTE_BATCH_SIZE;
+  if (!Number.isInteger(value) || value < 1 || value > MAX_REMOTE_BATCH_SIZE) {
+    throw new Error(
+      `EmbeddingService: batchSize must be an integer between 1 and ${MAX_REMOTE_BATCH_SIZE}`,
+    );
+  }
+  return value;
+}
 
 /**
  * Max retries for embedding API calls (transient errors: network, 429, DNS).
@@ -507,6 +521,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
   private readonly timeoutMs: number;
+  private readonly batchSize: number;
   private readonly logger?: Logger;
 
   constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
@@ -531,6 +546,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
+    this.batchSize = normalizeRemoteBatchSize(config.batchSize);
     this.logger = logger;
   }
 
@@ -566,10 +582,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       : texts;
 
     // Split into sub-batches if needed
-    if (processedTexts.length > MAX_BATCH_SIZE) {
+    if (processedTexts.length > this.batchSize) {
       const results: Float32Array[] = [];
-      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
-        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+      for (let i = 0; i < processedTexts.length; i += this.batchSize) {
+        const chunk = processedTexts.slice(i, i + this.batchSize);
         const chunkResults = await this._callApi(chunk, options?.timeoutMs);
         results.push(...chunkResults);
       }
@@ -665,6 +681,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
   private readonly sendDimensions: boolean;
   private readonly maxInputChars?: number;
   private readonly timeoutMs: number;
+  private readonly batchSize: number;
   private readonly logger?: Logger;
 
   constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
@@ -687,6 +704,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
     this.sendDimensions = config.sendDimensions ?? true;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
+    this.batchSize = normalizeRemoteBatchSize(config.batchSize);
     this.logger = logger;
   }
 
@@ -718,10 +736,10 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
 
     const processedTexts = truncateEmbeddingInputs(texts, this.maxInputChars, this.logger);
 
-    if (processedTexts.length > MAX_BATCH_SIZE) {
+    if (processedTexts.length > this.batchSize) {
       const results: Float32Array[] = [];
-      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
-        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+      for (let i = 0; i < processedTexts.length; i += this.batchSize) {
+        const chunk = processedTexts.slice(i, i + this.batchSize);
         const chunkResults = await this._callApi(chunk, options?.timeoutMs);
         results.push(...chunkResults);
       }
