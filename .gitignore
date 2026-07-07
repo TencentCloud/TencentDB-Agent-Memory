@@ -44,3 +44,21 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# Gateway local config (may carry secrets via ${VAR} interpolation or plain keys)
+tdai-gateway.yaml
+tdai-gateway.json
+
+# Real-environment test data
+.test-data/
+
+# Local IDE / host configs (user-specific, not for commit)
+.claude/
+.codex/
+.mcp.json
+
+# PR draft (working file, not for commit)
+.PR-DRAFT.md
+.PR-DRAFT_CN.md
+.PR-BODY.md
+.PR-BODY_CN.md

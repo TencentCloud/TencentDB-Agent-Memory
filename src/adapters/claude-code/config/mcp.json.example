@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "memory-tdai": {
+      "command": "node",
+      "args": ["./bin/memory-tdai-mcp.mjs"],
+      "env": {
+        "TDAI_GATEWAY_BASE_URL": "http://127.0.0.1:8420",
+        "TDAI_MCP_API_KEY": "",
+        "TDAI_USER_ID": "default_user"
+      }
+    }
+  }
+}

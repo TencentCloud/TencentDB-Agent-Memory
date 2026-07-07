@@ -1,0 +1,11 @@
+# Dify 适配器运行时依赖
+#
+# 核心模块（dify_memory_tencentdb/event_binding.py）零第三方依赖，
+# 仅用标准库 urllib + json（复用 hermes-plugin 的 client.py）。
+#
+# 仅测试需要：
+pytest>=8.0
+
+# 真实部署为 Dify 插件时按需安装（demo 级不强制）：
+# dify-plugin>=0.8
+# fastapi>=0.110  # 若用 FastAPI 暴露 external_data_tool 端点

@@ -1,0 +1,60 @@
+// =============================================================================
+// Claude Code settings.json — TDAI Memory hooks 模板
+// =============================================================================
+//
+// 使用方法：
+//   1. 复制本文件为 .claude/settings.json（项目级）或 ~/.claude/settings.json（用户级）
+//   2. 确认 TDAI Gateway 已在 http://127.0.0.1:8420 运行
+//   3. 确认项目已装 tsx（npm i -D tsx）或全局可用 npx tsx
+//   4. 按需调整 hooks 路径（相对 Claude Code 工作目录）
+//
+// 钩子与 MCP 工具的关系：
+//   - MCP 工具（tdai_memory_search 等，见 mcp.json.example）：模型主动调用
+//   - hooks（下方）：宿主事件驱动，自动 recall/capture，无需模型决策
+//   两者互补——hooks 形成全自动记忆闭环，MCP 工具供模型按需显式检索。
+//
+// 失败语义：所有钩子都吞掉异常、退出码 0，记忆永不阻塞 Claude Code 对话。
+//
+// =============================================================================
+{
+  "hooks": {
+    // ── UserPromptSubmit：用户提交 prompt → 自动 recall，注入 <relevant-memories> ──
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx src/adapters/claude-code/hooks/recall.ts"
+          }
+        ]
+      }
+    ],
+
+    // ── Stop：助手回复结束 → 自动 capture，把本轮 user/assistant 写入 L0 ──────
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx src/adapters/claude-code/hooks/capture.ts"
+          }
+        ]
+      }
+    ],
+
+    // ── SessionEnd：会话结束 → 通知 Gateway flush 当前会话状态 ─────────────────
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx src/adapters/claude-code/hooks/session-end.ts"
+          }
+        ]
+      }
+    ]
+  }
+}
