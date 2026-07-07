@@ -22,7 +22,7 @@ scripts/migrate-sqlite-to-tcvdb/dist/
 scripts/read-local-memory/dist/
 
 # Root-level build output (not used at runtime, not published)
-/dist/
+dist/
 
 node_modules/
 benchmark-runs/
@@ -41,3 +41,6 @@ test-offload-sessions.sh
 # npm pack / release tarballs (never commit packaged outputs)
 *.tgz
 *.tar.gz
+
+# log files
+*.log

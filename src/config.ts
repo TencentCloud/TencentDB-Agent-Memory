@@ -7,6 +7,9 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
+import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -46,7 +49,7 @@ export interface ExtractionConfig {
 export interface PersonaConfig {
   /** Trigger persona generation every N new memories (default: 50) */
   triggerEveryN: number;
-  /** Max scene blocks (default: 20) */
+  /** Max scene blocks (default: 15) */
   maxScenes: number;
   /** Persona backup count (default: 3) */
   backupCount: number;
@@ -64,7 +67,7 @@ export interface PipelineTriggerConfig {
   enableWarmup: boolean;
   /** L1 idle timeout: trigger L1 after this many seconds of inactivity (default: 600) */
   l1IdleTimeoutSeconds: number;
-  /** L2 delay after L1: wait this many seconds after L1 completes before triggering L2 (default: 90) */
+  /** L2 delay after L1: wait this many seconds after L1 completes before triggering L2 (default: 10) */
   l2DelayAfterL1Seconds: number;
   /** L2 min interval: minimum seconds between L2 runs per session (default: 900 = 15 min) */
   l2MinIntervalSeconds: number;
@@ -80,6 +83,10 @@ export interface RecallConfig {
   enabled: boolean;
   /** Max results to return (default: 5) */
   maxResults: number;
+  /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
+  maxCharsPerMemory: number;
+  /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
+  maxTotalRecallChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -102,6 +109,13 @@ export interface EmbeddingConfig {
   model: string;
   /** Vector dimensions (required for remote provider, must match model). */
   dimensions: number;
+  /**
+   * Whether to send the `dimensions` field in the embeddings request body.
+   * Default true (compatible with OpenAI text-embedding-3-* Matryoshka models).
+   * Set to false for self-hosted / OSS models that reject unknown `dimensions`
+   * (e.g. BGE-M3, which returns HTTP 400 "does not support matryoshka representation").
+   */
+  sendDimensions: boolean;
   /** Top-K candidates to recall during conflict detection (default: 5) */
   conflictRecallTopK: number;
   /** Proxy URL for qclaw provider — when provider="qclaw", requests are forwarded through this local proxy */
@@ -164,7 +178,7 @@ export type StoreBackend = "sqlite" | "tcvdb";
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
-  /** Enable reporting (default: true) */
+  /** Enable reporting (default: false) */
   enabled: boolean;
   /** Reporter type: "local" logs structured JSON via logger (default: "local") */
   type: string;
@@ -192,6 +206,17 @@ export interface StandaloneLLMOverrideConfig {
   maxTokens: number;
   /** Request timeout in milliseconds (default: 120000). */
   timeoutMs: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the LLM endpoint (default: false).
+   * - `false`: no thinking-disabling wrapper (default)
+   * - `"vllm"`: vLLM/SGLang — `chat_template_kwargs: { enable_thinking: false }`
+   * - `"deepseek"`: DeepSeek official API — top-level `enable_thinking: false`
+   * - `"dashscope"`: Alibaba DashScope (Qwen) — top-level `enable_thinking: false`
+   * - `"openai"`: OpenAI o-series — `reasoning_effort: "low"` (cannot fully disable)
+   * - `"anthropic"` / `"kimi"`: Anthropic Claude / Kimi (Moonshot) — `thinking: { type: "disabled" }`
+   * - `"gemini"`: Google Gemini — `thinking_config: { thinking_budget: 0 }`
+   */
+  disableThinking: DisableThinkingStrategy;
 }
 
 /** Context Offload settings — controls multi-layer context compression. */
@@ -202,13 +227,21 @@ export interface OffloadConfig {
    * LLM execution mode for L1/L1.5/L2 tasks.
    * - "local": call LLM directly via AI SDK (uses offload.model or main agent model)
    * - "backend": route through remote backend service (requires backendUrl)
+   * - "collect": data collection only — runs L1/L1.5/L2 asynchronously but disables
+   *   L3 compression and does NOT occupy the contextEngine slot (uses legacy compaction)
    * Default: "local" (auto-detects based on backendUrl presence for backward compat)
    */
-  mode: "local" | "backend";
+  mode: "local" | "backend" | "collect";
   /** LLM model for offload tasks, format: "provider/model-id". Falls back to agents.defaults.model when omitted. */
   model?: string;
   /** LLM temperature (default: 0.2) */
   temperature: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the offload local-mode LLM (default: false).
+   * See `StandaloneLLMOverrideConfig.disableThinking` for the full list of strategies.
+   * Applies only to `mode: "local"`.
+   */
+  disableThinking: DisableThinkingStrategy;
   /** Force-trigger L1 when pending tool pairs >= this threshold (default: 4) */
   forceTriggerThreshold: number;
   /** Custom data directory (absolute path). Default: ~/.openclaw/context-offload */
@@ -256,6 +289,15 @@ export interface OffloadConfig {
 
 /** Fully resolved plugin configuration (v3). */
 export interface MemoryTdaiConfig {
+  /**
+   * Timezone for user/LLM-facing timestamps and local-day boundaries.
+   * - "system" (default): follow process system timezone
+   * - IANA name: "Asia/Shanghai", "Europe/Berlin", "UTC"
+   * - UTC offset string: "+08:00", "-05:30" (ECMA-402 2024)
+   *
+   * Storage instants (SQLite/TCVDB) are always UTC regardless of this setting.
+   */
+  timezone: string;
   capture: CaptureConfig;
   extraction: ExtractionConfig;
   persona: PersonaConfig;
@@ -426,9 +468,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   // --- Offload ---
   const offloadGroup = obj(c, "offload");
 
-  const offloadMode: "local" | "backend" = (() => {
+  const offloadMode: "local" | "backend" | "collect" = (() => {
     const raw = optStr(offloadGroup, "mode");
-    if (raw === "local" || raw === "backend") return raw;
+    if (raw === "local" || raw === "backend" || raw === "collect") return raw;
     return optStr(offloadGroup, "backendUrl") ? "backend" : "local";
   })();
 
@@ -437,6 +479,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mode: offloadMode,
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
+    disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
     dataDir: optStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
@@ -455,6 +498,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   };
 
   return {
+    timezone: str(c, "timezone") ?? "system",
     capture: {
       enabled: bool(captureGroup, "enabled") ?? true,
       excludeAgents: strArray(captureGroup, "excludeAgents") ?? [],
@@ -478,7 +522,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       everyNConversations: num(pipelineGroup, "everyNConversations") ?? 5,
       enableWarmup: bool(pipelineGroup, "enableWarmup") ?? true,
       l1IdleTimeoutSeconds: num(pipelineGroup, "l1IdleTimeoutSeconds") ?? 600,
-      l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 90,
+      l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 10,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,
       sessionActiveWindowHours: num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
@@ -486,6 +530,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
+      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
+      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -497,6 +543,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       apiKey: embeddingApiKey,
       model: str(embeddingGroup, "model") ?? defaultModel,
       dimensions: num(embeddingGroup, "dimensions") ?? defaultDimensions,
+      sendDimensions: bool(embeddingGroup, "sendDimensions") ?? true,
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,
@@ -535,6 +582,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
+        disableThinking: normalizeDisableThinking(boolOrStr(llmGroup, "disableThinking")),
       };
     })(),
     offload,
@@ -569,6 +617,14 @@ function num(src: Record<string, unknown>, key: string): number | undefined {
 function bool(src: Record<string, unknown>, key: string): boolean | undefined {
   const v = src[key];
   return typeof v === "boolean" ? v : undefined;
+}
+
+/** Read a field that may be boolean or string. */
+function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+  const v = src[key];
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
 }
 
 function strArray(src: Record<string, unknown>, key: string): string[] | undefined {

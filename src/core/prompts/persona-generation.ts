@@ -32,6 +32,14 @@ export interface PersonaPromptResult {
 
 const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution Protocol
 
+**Output language contract**:
+- Detect the dominant language from the changed scene content.
+- \`persona.md\` natural-language content, profile headings, and narrative sections must use that language.
+- For English scene content, output English persona headings and English body text.
+- For non-Chinese scene content, do not emit Chinese persona headings.
+- If the language is ambiguous, default to English.
+- Keep Markdown syntax, file name \`persona.md\`, tool names, and structural markers in English.
+
 请你结合已有的 persona.md 和新增/变化的 block 信息深度分析，然后使用文件工具将结果写入 \`persona.md\` 文件。
 
 ## ⛔ 文件操作约束（必须严格遵守）
@@ -88,41 +96,41 @@ const PERSONA_SYSTEM_PROMPT = `# 🧬 Persona Architect - Incremental Evolution 
 \`\`\`\`markdown
 # User Narrative Profile
 
-> **Archetype (核心原型)**: [一句话定义。例如：一位在现实重力下挣扎，但试图通过技术构建理想国的"务实理想主义者"。]
+> **Archetype**: [Define the user's core narrative archetype in one sentence.]
 
-> **基本信息**
-（用户的基本信息，如年龄、性别、职业等，更新时若有冲突则覆盖，不冲突尽量叠加）
+> **Basic Information**
+(Basic user facts such as age, gender, occupation, or location. Overwrite only when a conflict is resolved; otherwise merge compatible facts.)
  -
  -
 
-> **长期偏好**
-（你观察到的用户最稳定且可复用的偏好）
+> **Long-term Preferences**
+(The user's most stable and reusable preferences observed from scene evidence.)
     -
     -
 
-## 📖 Chapter 1: Context & Current State (全景语境)
-*(将基础事实与当前状态融合，写成一段连贯的背景介绍)*
+## 📖 Chapter 1: Context & Current State
+*(Merge basic facts and current state into a coherent background.)*
 
-**[这里写连贯描述，区别较大的时候可以分点阐述]**
+**[Write a coherent description. Use short bullets only when the facts are clearly distinct.]**
 
-## 🎨 Chapter 2: The Texture of Life (生活的肌理)
-*(将兴趣、消费、生活习惯串联起来，展示生活品味)*
+## 🎨 Chapter 2: The Texture of Life
+*(Connect interests, consumption patterns, and daily habits to show the user's lived texture.)*
 
-**[这里写连贯的描述，重点在于"兴趣/偏好"和"品味"的统一性，区别较大的时候可以分点阐述]**
+**[Write a coherent description, focusing on the unity of interests, preferences, and taste. Use short bullets only when needed.]**
 
-## 🤖 Chapter 3: Interaction & Cognitive Protocol (交互与认知协议)
-*(这是 Main Agent 的行动指南。为了实用，这里保持半结构化，但要解释"为什么")*
+## 🤖 Chapter 3: Interaction & Cognitive Protocol
+*(This is the Main Agent's action guide. Keep it semi-structured for utility, but explain why each guidance point matters.)*
 
-### 3.1 沟通策略 (How to Speak)
-### 3.2 决策逻辑 (How to Think)
+### 3.1 How to Speak
+### 3.2 How to Think
 
-## 🧩 Chapter 4: Deep Insights & Evolution (深层洞察与演变)
-*(人类学观察笔记)*
+## 🧩 Chapter 4: Deep Insights & Evolution
+*(Anthropological observation notes.)*
 
-* **矛盾统一性**: [描述用户身上看似冲突但实则合理的特质]。
-* **演变轨迹**: [可加上时间，分为多点，描述用户最近发生的变化]。
-* **涌现特征**: 提炼 3-7 个最核心的特质标签，每个标签单独一行并附上简短注释（10-15字）
-  - \`TagName\` - 简短注释说明
+* **Productive Contradictions**: [Describe traits that seem conflicting but are coherent in context.]
+* **Evolution Trajectory**: [Optionally include dated points describing recent meaningful changes.]
+* **Emergent Traits**: Extract 3-7 core trait tags, one per line, each with a short note.
+  - \`TagName\` - Short note
 \`\`\`\`
 
 ---
@@ -168,7 +176,9 @@ export function buildPersonaPrompt(params: PersonaPromptParams): PersonaPromptRe
       `面对变化场景，自主判断处理方式：强化（佐证已有洞察）/ 补充（新维度）/ 修正（矛盾）/ 重构（结构调整）/ 不改（无有用新增内容）。\n`
     : "";
 
-  const userPrompt = `**⏰ 更新时间**: ${currentTime}
+  const userPrompt = `**Output language**: \`persona.md\` headings and body text must use the dominant language of the changed scene content below. For English scene content, use English persona headings.
+
+**⏰ 更新时间**: ${currentTime}
 **模式**: ${modeLabel}
 ${triggerSection}
 ## 📊 统计

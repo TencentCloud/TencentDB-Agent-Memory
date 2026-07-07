@@ -97,7 +97,7 @@ openclaw plugins update memory-tencentdb
       "everyNConversations": 5,
       "enableWarmup": true,
       "l1IdleTimeoutSeconds": 600,
-      "l2DelayAfterL1Seconds": 90,
+      "l2DelayAfterL1Seconds": 10,
       "l2MinIntervalSeconds": 900,
       "l2MaxIntervalSeconds": 3600,
       "sessionActiveWindowHours": 24
@@ -153,7 +153,7 @@ openclaw gateway restart
 检查项：
 
 - Gateway 日志中出现 `[memory-tdai]` 前缀
-- 数据目录已创建：`~/.openclaw/memory-tdai/`
+- 数据目录已创建：`~/.openclaw/state/memory-tdai/`
 - 至少包含：`conversations/`、`records/`、`scene_blocks/`、`vectors.db`
 
 ### 7) 功能冒烟测试

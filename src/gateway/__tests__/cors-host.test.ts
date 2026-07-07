@@ -28,30 +28,38 @@ async function request(
   });
 }
 
-describe("Gateway CORS is opt-in (TDAI_GATEWAY_CORS_ORIGIN)", () => {
-  let gateway: TdaiGateway;
-  const PORT = 18431;
+describe("Gateway CORS is opt-in (server.corsOrigins)", () => {
+  let gatewayWithoutCors: TdaiGateway;
+  let gatewayWithCors: TdaiGateway;
+  const PORT_NO_CORS = 18431;
+  const PORT_WITH_CORS = 18433;
 
   beforeAll(async () => {
-    gateway = new TdaiGateway({
-      server: { port: PORT, host: "127.0.0.1" },
+    gatewayWithoutCors = new TdaiGateway({
+      server: { port: PORT_NO_CORS, host: "127.0.0.1", corsOrigins: [] },
     } as never);
-    await gateway.start();
+    await gatewayWithoutCors.start();
+
+    gatewayWithCors = new TdaiGateway({
+      server: { port: PORT_WITH_CORS, host: "127.0.0.1", corsOrigins: ["https://example.com"] },
+    } as never);
+    await gatewayWithCors.start();
   });
 
   afterAll(async () => {
-    await gateway.stop();
+    await gatewayWithCors.stop();
+    await gatewayWithoutCors.stop();
   });
 
   it("does NOT emit Access-Control-Allow-Origin by default", async () => {
-    const res = await request(PORT, "/health");
+    const res = await request(PORT_NO_CORS, "/health");
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
     expect(res.headers["access-control-allow-headers"]).toBeUndefined();
     expect(res.headers["access-control-allow-methods"]).toBeUndefined();
   });
 
   it("does NOT respond 204 to OPTIONS preflight when CORS is disabled", async () => {
-    const res = await request(PORT, "/recall", {}, "OPTIONS");
+    const res = await request(PORT_NO_CORS, "/recall", {}, "OPTIONS");
     // With CORS disabled, OPTIONS falls through to normal routing
     // (404 because OPTIONS /recall is not a defined route), NOT a 204
     // preflight ack. This prevents OPTIONS from being a permanent
@@ -59,15 +67,13 @@ describe("Gateway CORS is opt-in (TDAI_GATEWAY_CORS_ORIGIN)", () => {
     expect(res.status).not.toBe(204);
   });
 
-  it("emits Access-Control-Allow-Origin: <value> when TDAI_GATEWAY_CORS_ORIGIN is set", async () => {
-    vi.stubEnv("TDAI_GATEWAY_CORS_ORIGIN", "https://example.com");
-    const res = await request(PORT, "/health");
+  it("emits Access-Control-Allow-Origin for an allowed origin", async () => {
+    const res = await request(PORT_WITH_CORS, "/health", { Origin: "https://example.com" });
     expect(res.headers["access-control-allow-origin"]).toBe("https://example.com");
   });
 
   it("returns 204 for OPTIONS preflight when CORS is enabled", async () => {
-    vi.stubEnv("TDAI_GATEWAY_CORS_ORIGIN", "https://example.com");
-    const res = await request(PORT, "/recall", {}, "OPTIONS");
+    const res = await request(PORT_WITH_CORS, "/recall", { Origin: "https://example.com" }, "OPTIONS");
     expect(res.status).toBe(204);
     expect(res.headers["access-control-allow-origin"]).toBe("https://example.com");
   });

@@ -8,14 +8,11 @@ import path from "node:path";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { stripSceneNavigation } from "../scene/scene-navigation.js";
 
+import type { Logger } from "../types.js";
+
 const TAG = "[memory-tdai] [trigger]";
 
-interface TriggerLogger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+type TriggerLogger = Logger;
 
 export interface TriggerResult {
   should: boolean;

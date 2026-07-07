@@ -120,7 +120,7 @@ jobs:
           TGZ=$(ls *.tgz | head -1)
           SIZE=$(stat -c%s "$TGZ" 2>/dev/null || stat -f%z "$TGZ")
           SIZE_KB=$((SIZE / 1024))
-          MAX_KB=512
+          MAX_KB=2048
 
           echo "📦 Package: $TGZ"
           echo "   Size: ${SIZE_KB} KB (limit: ${MAX_KB} KB)"

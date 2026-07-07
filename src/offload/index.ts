@@ -21,7 +21,8 @@ import {
   markOffloadStatus,
   DEFAULT_DATA_ROOT,
 } from "./storage.js";
-import { buildTiktokenContextSnapshot, configureTokenTracker } from "./context-token-tracker.js";
+import { buildTiktokenContextSnapshot, configureTokenTracker, tiktokenCount, jsonReplacer } from "./context-token-tracker.js";
+import { fastEstimateMessages } from "./fast-token-estimate.js";
 import {
   normalizeToolCallIdForLookup,
   getOffloadEntry,
@@ -51,6 +52,7 @@ import type { OffloadConfig } from "../config.js";
 import type { PluginConfig, PluginLogger } from "./types.js";
 import { BackendClient } from "./backend-client.js";
 import { LocalLlmClient } from "./local-llm/index.js";
+import { resolveApiKeyFromAuthProfile } from "./auth-profile-key.js";
 import type { L1Request, L15Request, L2Request } from "./backend-client.js";
 import { parseMmdMeta } from "./mmd-meta.js";
 import { sanitizeText, writeRefMd } from "./storage.js";
@@ -115,6 +117,16 @@ function simpleHash(str: string): number {
     hash = ((hash << 5) + hash + str.charCodeAt(i)) | 0;
   }
   return hash;
+}
+
+/** Compute a fingerprint for a message (role + first 200 chars of content). */
+function _msgFingerprint(msg: any): number {
+  const role = msg.role ?? msg.message?.role ?? msg.type ?? "";
+  let content = "";
+  const raw = msg.type === "message" ? msg.message?.content : msg.content;
+  if (typeof raw === "string") content = raw.slice(0, 200);
+  else if (Array.isArray(raw)) content = JSON.stringify(raw).slice(0, 200);
+  return simpleHash(`${role}:${content}`);
 }
 
 
@@ -313,10 +325,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
 
   let backendClient: BackendClient | LocalLlmClient | null = null;
 
-  if (offloadConfig.mode === "backend") {
-    // Remote backend mode
+  if (offloadConfig.mode === "backend" || offloadConfig.mode === "collect") {
+    // Remote backend mode (or collect mode with backend)
     if (!offloadConfig.backendUrl) {
-      logger.error("[context-offload] mode=backend but backendUrl not configured. L1/L1.5/L2/L4 disabled.");
+      logger.error(`[context-offload] mode=${offloadConfig.mode} but backendUrl not configured. L1/L1.5/L2/L4 disabled.`);
     } else {
       backendClient = new BackendClient(
         offloadConfig.backendUrl,
@@ -325,7 +337,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         offloadConfig.backendTimeoutMs,
         () => _lastActiveSessionKey,
         () => _resolvedUserId,
-        () => _lastActiveSessionKey,
+        () => { try { return _lastActiveMgr?.getLastSessionKey?.() ?? _lastActiveSessionKey; } catch { return _lastActiveSessionKey; } },
       );
     }
   } else {
@@ -346,7 +358,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         }
       }
       if (resolvedModelRef) {
-        logger.info(`[context-offload] offload.model not set, using main agent model: ${resolvedModelRef}`);
+        logger.debug?.(`[context-offload] offload.model not set, using main agent model: ${resolvedModelRef}`);
       }
     }
 
@@ -357,16 +369,19 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const models = (api.config as any)?.models;
       const providerCfg = models?.providers?.[providerKey];
       const baseUrl = providerCfg?.baseUrl ?? providerCfg?.baseURL;
-      const apiKey = providerCfg?.apiKey;
+      // Key resolution: prefer the plaintext key in models.providers, then fall
+      // back to OpenClaw's auth-profile store (issue #90). The fallback is a
+      // synchronous no-op on hosts that don't expose the auth-profile SDK.
+      const apiKey = providerCfg?.apiKey ?? resolveApiKeyFromAuthProfile(api, providerKey, logger);
 
       if (baseUrl && apiKey) {
         backendClient = new LocalLlmClient(
-          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs },
+          { baseUrl, apiKey, model: modelId, temperature: offloadConfig.temperature, timeoutMs: offloadConfig.backendTimeoutMs, disableThinking: offloadConfig.disableThinking },
           logger,
         );
       } else {
         logger.error(
-          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers. ` +
+          `[context-offload] Local LLM mode failed: provider "${providerKey}" not found or missing baseUrl/apiKey in models.providers (or auth profiles). ` +
           `L1/L1.5/L2 disabled.`,
         );
       }
@@ -378,11 +393,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   // Track last active session key for BackendClient header
   let _lastActiveSessionKey: string | null = null;
 
-  if (backendClient && offloadConfig.mode === "backend") {
+  if (backendClient && (offloadConfig.mode === "backend" || offloadConfig.mode === "collect")) {
     logger.debug?.(`[context-offload] LLM mode: backend (${offloadConfig.backendUrl})`);
   } else if (backendClient) {
     logger.debug?.(`[context-offload] LLM mode: local (${offloadConfig.model ?? "main-agent-model"})`);
-
   } else {
     logger.warn("[context-offload] LLM client not available. L1/L1.5/L2/L4 disabled (L3 compression still active).");
   }
@@ -417,7 +431,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const beforeFilter = takenPairs.length;
       const pairs = takenPairs.filter((p) => !isHeartbeat(p));
       if (beforeFilter > pairs.length) {
-        logger.info(`[context-offload] L1: filtered ${beforeFilter - pairs.length} heartbeat pair(s)`);
+        logger.debug?.(`[context-offload] L1: filtered ${beforeFilter - pairs.length} heartbeat pair(s)`);
       }
       if (pairs.length === 0) return;
 
@@ -441,10 +455,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       for (let i = 0; i < pairs.length; i += L1_BATCH_SIZE) {
         batches.push(pairs.slice(i, i + L1_BATCH_SIZE));
       }
-      logger.info(`[context-offload] L1 (${triggerSource}): ${pairs.length} pairs → ${batches.length} batch(es) of ≤${L1_BATCH_SIZE}`);
+      logger.debug?.(`[context-offload] L1 (${triggerSource}): ${pairs.length} pairs → ${batches.length} batch(es) of ≤${L1_BATCH_SIZE}`);
 
       const recentMessages = _buildL1RecentContext(stateManager);
-      logger.info(`[context-offload] L1 recentMessages (${recentMessages.length} chars):\n${recentMessages}`);
+      logger.debug?.(`[context-offload] L1 recentMessages (${recentMessages.length} chars):\n${recentMessages}`);
 
       for (const chunk of batches) {
         const chunkKey = chunk[0].toolCallId; // track by first toolCallId
@@ -473,7 +487,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             }
             await appendOffloadEntries(stateManager.ctx, resp.entries, undefined, logger);
             stateManager.entryCounter += resp.entries.length;
-            logger.info(`[context-offload] L1 batch OK: ${resp.entries.length} entries from ${chunk.length} pairs (entryCounter=${stateManager.entryCounter})`);
+            logger.debug?.(`[context-offload] L1 batch OK: ${resp.entries.length} entries from ${chunk.length} pairs (entryCounter=${stateManager.entryCounter})`);
           }
         } catch (err) {
           const newFails = prevFails + 1;
@@ -502,7 +516,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             }
             await appendOffloadEntries(stateManager.ctx, fallbackEntries, undefined, logger);
             stateManager.entryCounter += fallbackEntries.length;
-            logger.info(`[context-offload] L1 fallback: wrote ${fallbackEntries.length} degraded entries`);
+            logger.debug?.(`[context-offload] L1 fallback: wrote ${fallbackEntries.length} degraded entries`);
           } else {
             // Under retry limit — re-enqueue this chunk for next flush
             stateManager._l1ChunkFailCounts.set(chunkKey, newFails);
@@ -510,7 +524,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
               stateManager.processedToolCallIds.delete(p.toolCallId);
               stateManager.pendingToolPairs.push(p as any);
             }
-            logger.info(`[context-offload] L1 batch: re-enqueued ${chunk.length} pairs (retry ${newFails}/${MAX_L1_CHUNK_RETRIES})`);
+            logger.debug?.(`[context-offload] L1 batch: re-enqueued ${chunk.length} pairs (retry ${newFails}/${MAX_L1_CHUNK_RETRIES})`);
           }
         }
       }
@@ -573,7 +587,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       }
 
       // Success
-      logger.info(
+      logger.debug?.(
         `[context-offload] L1.5: completed=${judgment.taskCompleted}, continuation=${judgment.isContinuation}, longTask=${judgment.isLongTask}, label=${judgment.newTaskLabel ?? "none"}, contFile=${judgment.continuationMmdFile ?? "none"}`,
       );
 
@@ -611,7 +625,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             const residualByMmd = new Map<string, typeof residualEntries>();
             residualByMmd.set(_flushPrevMmd, residualEntries);
 
-            logger.info(
+            logger.debug?.(
               `[context-offload] L1.5 task-switch flush: ${residualEntries.length} residual null entries (idx<${_flushStartIndex}) for old mmd=${_flushPrevMmd}, triggering forced L2`,
             );
             await runL2WithBackend(stateManager, residualByMmd, "task_switch_flush");
@@ -625,16 +639,16 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const activeMmdFile = stateManager.getActiveMmdFile();
       if (activeMmdFile) {
         stateManager.pushBoundary({ startIndex, result: "long", targetMmd: activeMmdFile });
-        logger.info(`[context-offload] L1.5 boundary: long @${startIndex} → ${activeMmdFile}`);
+        logger.debug?.(`[context-offload] L1.5 boundary: long @${startIndex} → ${activeMmdFile}`);
       } else {
         stateManager.pushBoundary({ startIndex, result: "short", targetMmd: null });
-        logger.info(`[context-offload] L1.5 boundary: short @${startIndex}`);
+        logger.debug?.(`[context-offload] L1.5 boundary: short @${startIndex}`);
       }
 
       await stateManager.save();
       stateManager.setMmdInjectionReady(true);
       stateManager.l15Settled = true;
-      logger.info("[context-offload] L1.5: settled, MMD injection ready");
+      logger.debug?.("[context-offload] L1.5: settled, MMD injection ready");
       return true;
     } catch (err) {
       logger.warn(`[context-offload] L1.5 attempt failed: ${err}`);
@@ -658,7 +672,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
 
     // Record the dividing line: entries after this index belong to this turn
     const startIndex = stateManager.entryCounter;
-    logger.info(`[context-offload] L1.5 boundary startIndex=${startIndex} (pending flushed=${snapshotCount})`);
+    logger.debug?.(`[context-offload] L1.5 boundary startIndex=${startIndex} (pending flushed=${snapshotCount})`);
 
     // First attempt
     if (await attemptL15(stateManager, startIndex)) return;
@@ -667,7 +681,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     const retry = async () => {
       await new Promise((r) => setTimeout(r, L15_RETRY_DELAY_MS));
       if (_l15Disposed || stateManager.l15Settled) return;
-      logger.info("[context-offload] L1.5 retrying... (1/1)");
+      logger.debug?.("[context-offload] L1.5 retrying... (1/1)");
       if (await attemptL15(stateManager, startIndex)) return;
       // Both attempts failed — activate fail-safe
       logger.warn("[context-offload] L1.5 FAILED after 1 retry, activating fail-safe");
@@ -690,7 +704,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         for (let i = 0; i < mmdEntries.length; i += L2_BATCH_SIZE) {
           batches.push(mmdEntries.slice(i, i + L2_BATCH_SIZE));
         }
-        logger.info(`[context-offload] L2 (${triggerSource}): mmd=${mmdFile}, ${mmdEntries.length} entries → ${batches.length} batch(es) of ≤${L2_BATCH_SIZE}`);
+        logger.debug?.(`[context-offload] L2 (${triggerSource}): mmd=${mmdFile}, ${mmdEntries.length} entries → ${batches.length} batch(es) of ≤${L2_BATCH_SIZE}`);
 
         for (let bIdx = 0; bIdx < batches.length; bIdx++) {
           const batch = batches[bIdx];
@@ -745,14 +759,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             // Apply MMD file changes
             if (resp.fileAction === "replace" && resp.replaceBlocks && resp.replaceBlocks.length > 0) {
               const patchOk = await patchMmd(stateManager.ctx, mmdFile, resp.replaceBlocks);
-              logger.info(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: patchMmd: ${patchOk ? "ok" : "FAILED"} (${resp.replaceBlocks.length} blocks)`);
+              logger.debug?.(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: patchMmd: ${patchOk ? "ok" : "FAILED"} (${resp.replaceBlocks.length} blocks)`);
               if (!patchOk && resp.mmdContent) {
                 await writeMmd(stateManager.ctx, mmdFile, resp.mmdContent);
-                logger.info(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: fallback writeMmd: ${resp.mmdContent.length} chars`);
+                logger.debug?.(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: fallback writeMmd: ${resp.mmdContent.length} chars`);
               }
             } else if (resp.mmdContent) {
               await writeMmd(stateManager.ctx, mmdFile, resp.mmdContent);
-              logger.info(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: writeMmd: ${resp.mmdContent.length} chars`);
+              logger.debug?.(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length}: writeMmd: ${resp.mmdContent.length} chars`);
             }
 
             // Backfill node_ids
@@ -768,7 +782,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
               mmdPrefix,
             });
 
-            logger.info(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length} (${triggerSource}): applied, action=${resp.fileAction}, mapping=${Object.keys(resp.nodeMapping ?? {}).length}`);
+            logger.debug?.(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length} (${triggerSource}): applied, action=${resp.fileAction}, mapping=${Object.keys(resp.nodeMapping ?? {}).length}`);
           } catch (err) {
             logger.error(`[context-offload] L2 [${mmdFile}] batch ${bIdx + 1}/${batches.length} failed: ${err}`);
             // Continue with remaining batches — failed entries stay as "wait" for retry
@@ -895,10 +909,18 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const mgr = _lastActiveMgr;
       if (!mgr) return;
       // Gate: L2 must wait for L1.5 to settle (task boundary determined)
+      // Timeout: if L1.5 hasn't settled after 60s (e.g. no Context Engine / assemble not called),
+      // force-settle to unblock L2.
       if (!mgr.l15Settled) {
-        logger.info("[context-offload] L2 poll: waiting for L1.5 to settle, deferring...");
-        scheduleNextTick();
-        return;
+        const l15WaitAge = _l2FirstNotifyAt ? Date.now() - _l2FirstNotifyAt : 0;
+        if (l15WaitAge > 60_000) {
+          mgr.l15Settled = true;
+          logger.warn("[context-offload] L2 poll: L1.5 settle timeout (60s), force-settling to unblock L2");
+        } else {
+          logger.debug?.("[context-offload] L2 poll: waiting for L1.5 to settle, deferring...");
+          scheduleNextTick();
+          return;
+        }
       }
       try {
         const allEntries = await readAllOffloadEntries(mgr.ctx);
@@ -947,7 +969,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       const { shouldTrigger, reason, entriesByMmd } = await checkL2Trigger(mgr, pCfg, logger);
       if (!shouldTrigger) return;
       const totalEntries = Array.from(entriesByMmd.values()).reduce((s, a) => s + a.length, 0);
-      logger.info(`[context-offload] L2 triggered (${triggerSource}): ${reason}, ${totalEntries} entries across ${entriesByMmd.size} mmd(s)`);
+      logger.debug?.(`[context-offload] L2 triggered (${triggerSource}): ${reason}, ${totalEntries} entries across ${entriesByMmd.size} mmd(s)`);
       await runL2WithBackend(mgr, entriesByMmd, triggerSource);
     } catch (err) {
       logger.error(`[context-offload] L2 trigger error: ${err}`);
@@ -1009,23 +1031,23 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     const _atcStart = Date.now();
     const _toolName = event.toolName ?? "unknown";
     const _toolCallId = event.toolCallId ?? "N/A";
-    logger.info(`[context-offload] >>> after_tool_call START: tool=${_toolName} id=${_toolCallId}`);
+    logger.debug?.(`[context-offload] >>> after_tool_call START: tool=${_toolName} id=${_toolCallId}`);
     try {
       const sk = ctx?.sessionKey;
       const _mgr = sk ? await _resolveSession(sk, ctx?.sessionId) : _lastActiveMgr;
       if (!_mgr) {
-        logger.warn(`[context-offload] <<< after_tool_call SKIP: no session manager (${Date.now() - _atcStart}ms)`);
+        logger.debug?.(`[context-offload] <<< after_tool_call SKIP: no session manager (${Date.now() - _atcStart}ms)`);
         return;
       }
       const afterToolCallHandler = createAfterToolCallHandler(_mgr, logger, getContextWindow, pCfg, backendClient as any);
       await afterToolCallHandler(event, ctx);
       const _handlerDone = Date.now();
-      logger.info(`[context-offload] after_tool_call handler done: ${_handlerDone - _atcStart}ms`);
+      logger.debug?.(`[context-offload] after_tool_call handler done: ${_handlerDone - _atcStart}ms`);
 
       const pending = _mgr.getPendingCount();
       const threshold = pCfg.forceTriggerThreshold ?? 4;
       if (shouldForceL1(_mgr, pCfg)) {
-        logger.info(`[context-offload] L1 TRIGGERED: pending=${pending} >= threshold=${threshold}, flushing...`);
+        logger.debug?.(`[context-offload] L1 TRIGGERED: pending=${pending} >= threshold=${threshold}, flushing...`);
         flushL1(_mgr, "force_threshold", true).then(async () => {
           try {
             const allEntries = await readAllOffloadEntries(_mgr.ctx);
@@ -1034,9 +1056,9 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           } catch { /* ignore */ }
         }).catch(() => {});
       } else {
-        logger.info(`[context-offload] L1 pending: ${pending}/${threshold} (not yet)`);
+        logger.debug?.(`[context-offload] L1 pending: ${pending}/${threshold} (not yet)`);
       }
-      logger.info(`[context-offload] <<< after_tool_call END: tool=${_toolName} total=${Date.now() - _atcStart}ms`);
+      logger.debug?.(`[context-offload] <<< after_tool_call END: tool=${_toolName} total=${Date.now() - _atcStart}ms`);
     } catch (err) {
       logger.error(`[context-offload] <<< after_tool_call ERROR: tool=${_toolName} ${err} (${Date.now() - _atcStart}ms)`);
     }
@@ -1049,7 +1071,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     if (!mgr) return;
     const pendingCount = mgr.getPendingCount();
     if (pendingCount > 0) {
-      logger.info(
+      logger.debug?.(
         `[context-offload] llm_output: ${pendingCount} pending tool pairs (will be flushed at next llm_input or after_tool_call batch)`,
       );
     }
@@ -1059,7 +1081,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   _trackedOn("llm_input", async (event: any, _ctx: any) => {
     const _llmInputStart = Date.now();
     if (isInternalMemorySession(_ctx?.sessionKey)) return;
-    logger.info(`[context-offload] >>> llm_input START`);
+    logger.debug?.(`[context-offload] >>> llm_input START`);
     const _sk = _ctx?.sessionKey;
     const _mgr = _sk ? await _resolveSession(_sk, _ctx?.sessionId) : _lastActiveMgr;
     if (!_mgr) return;
@@ -1083,7 +1105,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         _mgr.cachedRecentHistory = _extractRecentHistory(historyMessages, promptText);
       }
 
-      logger.info(`[context-offload] <<< llm_input END: ${Date.now() - _llmInputStart}ms`);
+      logger.debug?.(`[context-offload] <<< llm_input END: ${Date.now() - _llmInputStart}ms`);
     } catch (err) {
       logger.error(`[context-offload] <<< llm_input ERROR: ${err} (${Date.now() - _llmInputStart}ms)`);
     }
@@ -1121,6 +1143,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   //
   // When assemble() IS called (CLI mode), it sets a per-turn flag so this hook
   // skips redundant work.
+  // In "collect" mode: only L1 flush, skip L3 compression and MMD injection.
   _trackedOn("before_prompt_build", async (event: any, ctx: any) => {
     if (isInternalMemorySession(ctx?.sessionKey)) return;
     const sk = ctx?.sessionKey;
@@ -1138,6 +1161,24 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       }).catch(() => {});
     }
 
+    // In collect mode: trigger L1.5 (fire-and-forget) then skip L3 compression
+    if (offloadConfig.mode === "collect") {
+      // L1.5 task judgment — same logic as assemble, fire-and-forget
+      const _prompt = typeof event?.prompt === "string" ? event.prompt : null;
+      if (_prompt && _prompt.length > 0 && backendClient) {
+        const promptHash = simpleHash(_prompt);
+        const lastHash = mgr.lastL15PromptHash;
+        if (promptHash !== lastHash) {
+          mgr.lastL15PromptHash = promptHash;
+          mgr.l15Settled = false;
+          judgeL15(mgr, { prompt: _prompt, messages: event.messages ?? [] }, { sessionKey: ctx?.sessionKey }).catch((err) => {
+            logger.warn(`[context-offload] collect L1.5 judge failed: ${err}`);
+          });
+        }
+      }
+      return;
+    }
+
     // Fast-path re-apply + L3 compression + MMD injection
     const bpbHandler = createBeforePromptBuildHandler(mgr, logger, getContextWindow, pCfg);
     await bpbHandler(event, ctx);
@@ -1146,6 +1187,20 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   // ─── Register Context Engine ───────────────────────────────────────────────
   logger.debug?.(`[context-offload] [DIAG] Hooks registered via api.on: [${_hookNames.join(", ")}] (${_hookNames.length} total)`);
 
+  // In "collect" mode: skip Context Engine entirely, use legacy compaction.
+  // L1/L1.5/L2 still run async but L3 is disabled.
+  if (offloadConfig.mode === "collect") {
+    const _configSlotCE = (api.config as any)?.plugins?.slots?.contextEngine;
+    if (_configSlotCE === "memory-tencentdb") {
+      logger.warn(`[context-offload] Mode "collect" but slots.contextEngine="${_configSlotCE}". Context Engine will NOT be registered in collect mode - consider removing the slot or switching to mode "backend".`);
+    }
+    logger.info(`[context-offload] Mode "collect": L3 disabled, context engine NOT registered (using legacy compaction). L1/L1.5/L2 active.`);
+    // Force L1.5 settled so L2 poll doesn't block forever
+    if (_lastActiveMgr) (_lastActiveMgr as any).l15Settled = true;
+    // Start reclaim scheduler if needed, then skip to end
+    _contextEngineRegistered = true; // prevent future registration attempts
+  } else {
+  // ─── Normal mode: register Context Engine ─────────────────────────────────
   const engineOpts = {
     sessions, logger, pCfg, getContextWindow, dataRoot,
     notifyL2NewNullEntries, clearL2Timeout: clearL2Poll, l4State,
@@ -1161,15 +1216,27 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     _sharedEngine = new OffloadContextEngine(engineOpts);
   } else {
     _sharedEngine.update(engineOpts);
-    logger.info("[context-offload] Context engine singleton updated with latest closures");
+    logger.debug?.("[context-offload] Context engine singleton updated with latest closures");
   }
   const engine = _sharedEngine;
 
   if (!_contextEngineRegistered) {
+    // Pre-check: verify config slots.contextEngine points to this plugin.
+    // If the slot is configured for another engine (e.g. "legacy"), we must NOT
+    // register — even if api.registerContextEngine() would return ok:true,
+    // the framework won't actually call our assemble(), causing L1.5 to never settle.
+    const CE_PLUGIN_ID = "memory-tencentdb";
+    const configSlotCE = (api.config as any)?.plugins?.slots?.contextEngine;
+    if (configSlotCE !== CE_PLUGIN_ID) {
+      logger.warn(`[context-offload] Config plugins.slots.contextEngine="${configSlotCE ?? "(not set)"}" (expected "${CE_PLUGIN_ID}"). Context engine slot not assigned to this plugin - ALL offload functions disabled.`);
+      _contextEngineRejected = true;
+      return;
+    }
+
     // First registration — actually register with the framework
     let ceSlotOccupied = false;
     try {
-      const result = api.registerContextEngine("openclaw-context-offload", () => engine) as any;
+      const result = api.registerContextEngine(CE_PLUGIN_ID, () => engine) as any;
       if (result && result.ok === false) {
         logger.error(`[context-offload] registerContextEngine returned { ok: false, existingOwner: ${result.existingOwner ?? "?"} }. Context engine slot occupied — ALL offload functions disabled!`);
         ceSlotOccupied = true;
@@ -1180,7 +1247,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
     } catch (ceErr) {
       logger.warn(`[context-offload] registerContextEngine factory failed: ${ceErr}, trying direct object`);
       try {
-        const result2 = api.registerContextEngine("openclaw-context-offload", engine) as any;
+        const result2 = api.registerContextEngine(CE_PLUGIN_ID, engine) as any;
         if (result2 && result2.ok === false) {
           logger.error(`[context-offload] registerContextEngine direct returned { ok: false }. Context engine slot occupied — ALL offload functions disabled!`);
           ceSlotOccupied = true;
@@ -1201,6 +1268,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   } else {
     logger.debug?.("[context-offload] Context engine already registered, singleton updated (hot-refresh)");
   }
+  } // end else (non-collect mode)
 
   // ─── Reclaim Scheduler ──────────────────────────────────────────────────────
   // Clean up any lingering reclaim timer from previous registerOffload() call
@@ -1219,7 +1287,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             retentionDays: _retentionDays,
             logMaxSizeMb: _logMaxSizeMb,
           }, logger);
-          logger.info(
+          logger.debug?.(
             `[context-offload] Reclaim done: jsonl=${stats.deletedJsonl}, refs=${stats.deletedRefs}, ` +
             `mmds=${stats.deletedMmds}, logs=${stats.truncatedLogs}, registry=${stats.prunedRegistryEntries}`,
           );
@@ -1285,9 +1353,9 @@ class OffloadContextEngine {
   async bootstrap(params: any) {
     const { sessionId, sessionKey } = params;
     const logger = this._logger;
-    logger.info(`[context-offload] >>> CE.bootstrap CALLED: sessionKey=${sessionKey}, sessionId=${sessionId?.slice(0, 12)}...`);
+    logger.debug?.(`[context-offload] >>> CE.bootstrap CALLED: sessionKey=${sessionKey}, sessionId=${sessionId?.slice(0, 12)}...`);
     if (isInternalMemorySession(sessionKey)) {
-      logger.info(`[context-offload] bootstrap SKIP: internal memory session (${sessionKey})`);
+      logger.debug?.(`[context-offload] bootstrap SKIP: internal memory session (${sessionKey})`);
       return { bootstrapped: false, reason: "internal_memory_session" };
     }
     try {
@@ -1325,7 +1393,7 @@ class OffloadContextEngine {
   async assemble(params: any) {
     const { messages, tokenBudget, prompt } = params;
     const logger = this._logger;
-    logger.info(`[context-offload] >>> CE.assemble CALLED: msgs=${messages?.length ?? 0}, budget=${tokenBudget ?? "N/A"}, prompt=${typeof prompt === "string" ? prompt.length + " chars" : "none"}, sessionKey=${params.sessionKey ?? "?"}`);
+    logger.debug?.(`[context-offload] assemble CALLED: msgs=${messages?.length ?? 0}, budget=${tokenBudget ?? "N/A"}, prompt=${typeof prompt === "string" ? prompt.length + " chars" : "none"}, sessionKey=${params.sessionKey ?? "?"}`);
     // Resolve stateManager: prefer params._offloadManager (set by bootstrap),
     // then fall back to SessionRegistry resolve (framework may pass different params objects).
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
@@ -1335,7 +1403,7 @@ class OffloadContextEngine {
         if (entry) {
           stateManager = entry.manager;
           params._offloadManager = entry.manager; // cache for compact/afterTurn
-          logger.info(`[context-offload] assemble: resolved manager from SessionRegistry for ${params.sessionKey}`);
+          logger.debug?.(`[context-offload] assemble: resolved manager from SessionRegistry for ${params.sessionKey}`);
         }
       } catch (err) {
         logger.warn(`[context-offload] assemble: failed to resolve session ${params.sessionKey}: ${err}`);
@@ -1344,13 +1412,13 @@ class OffloadContextEngine {
     const pCfg = this._pCfg;
 
     if (!stateManager) {
-      logger.info(`[context-offload] assemble SKIP: no stateManager (sessionKey=${params.sessionKey ?? "none"})`);
+      logger.debug?.(`[context-offload] assemble SKIP: no stateManager (sessionKey=${params.sessionKey ?? "none"})`);
       return { messages: messages ? [...messages] : [], estimatedTokens: 0 };
     }
 
     const workMessages = messages ? [...messages] : [];
     const _asmStart = Date.now();
-    logger.info(`[context-offload] >>> assemble START: msgCount=${workMessages.length}, budget=${tokenBudget ?? "N/A"}, pending=${stateManager.getPendingCount()}, confirmed=${stateManager.confirmedOffloadIds?.size ?? 0}, deleted=${stateManager.deletedOffloadIds?.size ?? 0}`);
+    logger.debug?.(`[context-offload] assemble START: msgCount=${workMessages.length}, budget=${tokenBudget ?? "N/A"}, pending=${stateManager.getPendingCount()}, confirmed=${stateManager.confirmedOffloadIds?.size ?? 0}, deleted=${stateManager.deletedOffloadIds?.size ?? 0}`);
 
     // Cache prompt early so _buildL1RecentContext() has it when L1.5 fires
     // (assemble runs before llm_input, which is where cachedUserPrompt was previously set)
@@ -1364,20 +1432,21 @@ class OffloadContextEngine {
     }
 
     try {
+
       // L1.5 task judgment — fire-and-forget (sole trigger point)
       if (!prompt || typeof prompt !== "string" || prompt.length === 0) {
-        logger.info(`[context-offload] assemble L1.5 SKIP: no prompt (prompt=${typeof prompt}, len=${prompt?.length ?? 0})`);
+        logger.debug?.(`[context-offload] assemble L1.5 SKIP: no prompt (prompt=${typeof prompt}, len=${prompt?.length ?? 0})`);
       } else if (!this._backendClient) {
-        logger.info(`[context-offload] assemble L1.5 SKIP: no backendClient`);
+        logger.debug?.(`[context-offload] assemble L1.5 SKIP: no backendClient`);
       } else {
         const promptHash = simpleHash(prompt);
         const lastHash = stateManager.lastL15PromptHash;
         if (promptHash === lastHash) {
-          logger.info(`[context-offload] assemble L1.5 SKIP: same prompt hash (${promptHash}), l15Settled=${stateManager.l15Settled}`);
+          logger.debug?.(`[context-offload] assemble L1.5 SKIP: same prompt hash (${promptHash}), l15Settled=${stateManager.l15Settled}`);
         } else {
           stateManager.lastL15PromptHash = promptHash;
           stateManager.l15Settled = false;
-          logger.info(`[context-offload] assemble L1.5 TRIGGERED: new prompt hash (${promptHash}), l15Settled=false (reset), activeMmd=${stateManager.getActiveMmdFile() ?? "null"}`);
+          logger.debug?.(`[context-offload] assemble L1.5 TRIGGERED: new prompt hash (${promptHash}), l15Settled=false (reset), activeMmd=${stateManager.getActiveMmdFile() ?? "null"}`);
           this._judgeL15(
             stateManager,
             { prompt, messages: workMessages },
@@ -1397,9 +1466,8 @@ class OffloadContextEngine {
       // and assemble traces.
       // Use the same sys tokens basis as L3 compression to ensure consistent comparisons.
       const _rawMsgCountBeforeFP = workMessages.length;
-      const _fpPrecomputed = { systemTokens: 0, userPromptTokens: 0 };
-      const _rawSnap = buildTiktokenContextSnapshot("assemble-raw", workMessages, null, prompt ?? null, _fpPrecomputed);
-      const _rawMsgTokens = _rawSnap.totalTokens; // msgs-only (no sys)
+      // Use fast estimate for raw token count (only used for logging/tracing, not for compression decisions)
+      const _rawMsgTokens = fastEstimateMessages(workMessages);
 
       // Fast-path re-apply
       const hasConfirmed = stateManager.confirmedOffloadIds?.size > 0;
@@ -1409,6 +1477,50 @@ class OffloadContextEngine {
       let _fpReplacedCount = 0;
       let _fpDeletedCount = 0;
       let _fpCompressedCount = 0;
+
+      // ── FP-BOUNDARY-DELETE: fast head-delete based on last aggressive boundary ──
+      // After aggressive deletes N messages from the head, the framework replays
+      // the full history next time (including those already-deleted messages).
+      // We record the boundary message's index + fingerprint after aggressive,
+      // then on next assemble we verify the boundary is still at the same position
+      // with the same content and splice everything before it.
+      const _boundary = stateManager._lastAggressiveBoundary;
+      let _fpBoundaryDeleted = 0;
+      if (_boundary && prompt && prompt.length > 0
+          && workMessages.length > _boundary.originalIndex && _boundary.originalIndex > 0) {
+        const candidateMsg = workMessages[_boundary.originalIndex];
+        if (_msgFingerprint(candidateMsg) === _boundary.fingerprint) {
+          let headDeleteEnd = _boundary.originalIndex;
+          // Forward: if the boundary message itself is a toolResult, extend to consume
+          // all consecutive toolResults (their tool_use is in the delete zone).
+          while (headDeleteEnd < workMessages.length && isToolResultMessage(workMessages[headDeleteEnd])) {
+            headDeleteEnd++;
+          }
+          // Backward: if the last kept message before cut is assistant(tool_use),
+          // its tool_results may be right after the cut — include them in deletion.
+          // (This shouldn't happen since aggressive guarantees clean cuts, but safety.)
+          if (headDeleteEnd > 0 && headDeleteEnd < workMessages.length) {
+            const lastDeleted = workMessages[headDeleteEnd - 1];
+            if (isAssistantMessageWithToolUse(lastDeleted)) {
+              // Extend to include following toolResults that belong to this tool_use
+              while (headDeleteEnd < workMessages.length && isToolResultMessage(workMessages[headDeleteEnd])) {
+                headDeleteEnd++;
+              }
+            }
+          }
+          // Don't delete everything
+          if (headDeleteEnd > 0 && headDeleteEnd < workMessages.length) {
+            workMessages.splice(0, headDeleteEnd);
+            _fpDeletedCount += headDeleteEnd;
+            _fpBoundaryDeleted = headDeleteEnd;
+            logger.debug?.(`[context-offload] assemble FP-BOUNDARY-DELETE: spliced ${headDeleteEnd} old msgs (boundaryIdx=${_boundary.originalIndex}, was=${workMessages.length + headDeleteEnd}, now=${workMessages.length})`);
+          }
+        } else {
+          // Fingerprint mismatch — boundary invalid, clear it
+          logger.debug?.(`[context-offload] assemble FP-BOUNDARY-DELETE: fingerprint mismatch at idx=${_boundary.originalIndex}, skipping (expected=${_boundary.fingerprint}, got=${_msgFingerprint(candidateMsg)})`);
+          stateManager._lastAggressiveBoundary = null;
+        }
+      }
 
       if (hasConfirmed || hasDeleted) {
         offloadEntries = await readOffloadEntries(stateManager.ctx);
@@ -1469,8 +1581,7 @@ class OffloadContextEngine {
 
       // ── Post fast-path summary ──
       const _fpMsgCountAfter = workMessages.length;
-      logger.info(
-        `[context-offload] assemble FAST-PATH: rawMsgTokens≈${_rawMsgTokens} (${_rawMsgCountBeforeFP} msgs) → ` +
+      logger.debug?.(`[context-offload] assemble FAST-PATH: rawMsgTokens≈${_rawMsgTokens} (${_rawMsgCountBeforeFP} msgs) → ` +
         `replaced=${_fpReplacedCount} toolResults, compressed=${_fpCompressedCount} assistants, deleted=${_fpDeletedCount} msgs → ` +
         `${_fpMsgCountAfter} msgs remaining, confirmed=${stateManager.confirmedOffloadIds?.size ?? 0}, deleted=${stateManager.deletedOffloadIds?.size ?? 0}`,
       );
@@ -1497,22 +1608,72 @@ class OffloadContextEngine {
       const _sysFromRatio = Math.floor(effectiveBudget * (pCfg.defaultSystemOverheadRatio ?? PLUGIN_DEFAULTS.defaultSystemOverheadRatio));
       const systemTokensEstimate = _sysFromCache ?? _sysFromOverhead ?? _sysFromRatio;
       const _sysSource = _sysFromCache != null ? "cachedSystemPromptTokens" : _sysFromOverhead != null ? "estimatedSystemOverhead" : "defaultRatio";
-      logger.info(
-        `[context-offload] assemble sys tokens: estimate=${systemTokensEstimate} (source=${_sysSource}, cache=${_sysFromCache ?? "null"}, overhead=${_sysFromOverhead ?? "null"}, ratio=${_sysFromRatio})`,
+      logger.debug?.(`[context-offload] assemble sys tokens: estimate=${systemTokensEstimate} (source=${_sysSource}, cache=${_sysFromCache ?? "null"}, overhead=${_sysFromOverhead ?? "null"}, ratio=${_sysFromRatio})`,
       );
       const precomputed = { systemTokens: systemTokensEstimate, userPromptTokens: 0 };
 
       // _rawTokensBefore uses the same sys basis as L3 compression for consistent comparisons
       const _rawTokensBefore = _rawMsgTokens + systemTokensEstimate;
 
-      const snap = buildTiktokenContextSnapshot("assemble", workMessages, null, prompt ?? null, precomputed);
-      let workingTokens = snap.totalTokens;
-      const utilisation = workingTokens / effectiveBudget;
-      logger.info(
-        `[context-offload] assemble L3 check: total≈${workingTokens} (sys≈${systemTokensEstimate}, msgs≈${snap.messagesTokens}, user≈${snap.userPromptTokens}), ` +
-        `budget=${effectiveBudget} (contextWindow=${contextWindow}, tokenBudget=${tokenBudget ?? "N/A"}), ` +
-        `utilisation=${(utilisation * 100).toFixed(1)}%, mild@${mildThreshold} (${(mildRatio * 100).toFixed(0)}%), aggressive@${aggressiveThreshold} (${(aggressiveRatio * 100).toFixed(0)}%), msgs=${workMessages.length}`,
-      );
+      // ── Fast estimate: skip tiktoken when clearly below threshold ──
+      // Use fast character-based estimation (~5ms) instead of tiktoken (~3-10s).
+      // Only trigger precise tiktoken when estimate is near compression thresholds.
+      const _fastEstStart = Date.now();
+      const fastEst = fastEstimateMessages(workMessages) + systemTokensEstimate + (prompt ? Math.ceil(prompt.length / 4) : 0);
+      const _fastEstMs = Date.now() - _fastEstStart;
+      const FAST_EST_SAFETY_MARGIN = 0.85; // 15% safety margin for estimation error
+
+      let workingTokens: number;
+      let snap: ReturnType<typeof buildTiktokenContextSnapshot> | null = null;
+      let _usedFastPath = false;
+
+      // ── Incremental estimation: if boundary-delete fired and we have cached
+      // aggressive results, estimate tokens incrementally from new messages only.
+      // This avoids tiktoken entirely for the common case of 1-2 new messages.
+      const _boundaryCache = stateManager._lastAggressiveBoundary;
+      const BOUNDARY_NEW_MSG_TOLERANCE = 20; // max new messages before forcing full recount
+      if (_fpBoundaryDeleted > 0 && _boundaryCache
+          && workMessages.length <= _boundaryCache.keptMsgCount + BOUNDARY_NEW_MSG_TOLERANCE
+          && _boundaryCache.remainingTokens < aggressiveThreshold) {
+        // Estimate: last aggressive tokens + new messages token delta
+        const newMsgCount = Math.max(0, workMessages.length - _boundaryCache.keptMsgCount);
+        const newMsgTokens = newMsgCount > 0
+          ? fastEstimateMessages(workMessages.slice(workMessages.length - newMsgCount)) + (prompt ? Math.ceil(prompt.length / 4) : 0)
+          : (prompt ? Math.ceil(prompt.length / 4) : 0);
+        const incrementalEst = _boundaryCache.remainingTokens + newMsgTokens;
+        if (incrementalEst < aggressiveThreshold) {
+          workingTokens = incrementalEst;
+          _usedFastPath = true;
+          logger.debug?.(`[context-offload] assemble BOUNDARY-INCR-SKIP: incremental≈${incrementalEst} (base=${_boundaryCache.remainingTokens}+new=${newMsgTokens}, newMsgs=${newMsgCount}) < aggressive@${aggressiveThreshold}, skipping tiktoken`);
+        } else {
+          // Incremental estimate exceeds threshold — need precise tiktoken
+          snap = buildTiktokenContextSnapshot("assemble", workMessages, null, prompt ?? null, precomputed);
+          workingTokens = snap.totalTokens;
+          logger.debug?.(`[context-offload] assemble L3 check (boundary-incr exceeded): total≈${workingTokens} (incr-est was ${incrementalEst}), msgs=${workMessages.length}, aggressive@${aggressiveThreshold}`);
+        }
+      } else if (fastEst < aggressiveThreshold * FAST_EST_SAFETY_MARGIN) {
+        // Below aggressive threshold — use estimate for mild/skip decisions.
+        // Mild only replaces tool results with summaries (no precise token math needed).
+        // Only aggressive needs precise tiktoken (to compute exact delete count).
+        workingTokens = fastEst;
+        _usedFastPath = true;
+        logger.debug?.(`[context-offload] assemble L3 FAST-SKIP: fastEst≈${fastEst} < ${Math.floor(aggressiveThreshold * FAST_EST_SAFETY_MARGIN)} (${(FAST_EST_SAFETY_MARGIN * 100).toFixed(0)}% aggressive), ` +
+          `budget=${effectiveBudget}, msgs=${workMessages.length}, fastEstMs=${_fastEstMs}ms`,
+        );
+      } else if (!stateManager._lastAggressiveBoundary && prompt && prompt.length > 0) {
+        // No boundary + has prompt + clearly above threshold → skip full tiktoken.
+        // TAIL-ACCUMULATE will do its own precise calculation from the tail.
+        workingTokens = fastEst;
+        logger.debug?.(`[context-offload] assemble L3 TAIL-ACCUM-PENDING: fastEst≈${fastEst} (no boundary, will tail-accumulate), skipping full tiktoken`);
+      } else {
+        // Near/above aggressive threshold — do precise tiktoken
+        snap = buildTiktokenContextSnapshot("assemble", workMessages, null, prompt ?? null, precomputed);
+        workingTokens = snap.totalTokens;
+        logger.debug?.(`[context-offload] assemble L3 check: total≈${workingTokens} (sys≈${systemTokensEstimate}, msgs≈${snap.messagesTokens}, user≈${snap.userPromptTokens}), ` +
+          `budget=${effectiveBudget} (contextWindow=${contextWindow}, tokenBudget=${tokenBudget ?? "N/A"}), ` +
+          `utilisation=${((workingTokens / effectiveBudget) * 100).toFixed(1)}%, mild@${mildThreshold}, aggressive@${aggressiveThreshold}, msgs=${workMessages.length}, fastEst=${fastEst}, fastEstMs=${_fastEstMs}ms`,
+        );
+      }
 
       let _aggDeletedCount = 0;
       let _aggRounds = 0;
@@ -1523,67 +1684,213 @@ class OffloadContextEngine {
       let _aggMmdInjected = 0;
       let _aggMmdTokens = 0;
       if (workingTokens >= aggressiveThreshold) {
-        logger.info(`[context-offload] assemble L3-AGGRESSIVE: tokens≈${workingTokens} >= ${aggressiveThreshold}, starting...`);
-        if (!offloadEntries) { offloadEntries = await readOffloadEntries(stateManager.ctx); offloadMap = new Map(); populateOffloadLookupMap(offloadMap!, offloadEntries); }
-        const countTokens = createL3TokenCounter(pCfg, logger);
-        const aggressiveDeleteRatio = (pCfg as any).aggressiveDeleteRatio ?? PLUGIN_DEFAULTS.aggressiveDeleteRatio;
-        const currentTaskNodeIds = await getCurrentTaskNodeIds(stateManager);
-        const _aggStart = Date.now();
-        // aggressiveThreshold includes systemTokensEstimate, but the internal
-        // function computes remainingTokens WITHOUT system tokens (sysPrompt=null).
-        // Subtract systemTokensEstimate so the comparison is consistent.
-        const aggressiveThresholdForMsgs = Math.max(0, aggressiveThreshold - systemTokensEstimate);
-        const result = await aggressiveCompressUntilBelowThreshold(
-          workMessages, offloadMap!, currentTaskNodeIds, aggressiveDeleteRatio, stateManager, logger, aggressiveThresholdForMsgs, countTokens, null, prompt ?? null,
-        );
-        _aggDeletedCount = result.deletedCount;
-        _aggRounds = result.rounds;
-        _aggDeletedIds = result.allDeletedToolCallIds;
-        workingTokens = result.remainingTokens + systemTokensEstimate;
-        _aggTokensAfter = workingTokens;
-        _aggDurationMs = Date.now() - _aggStart;
-        logger.info(`[context-offload] assemble L3-AGGRESSIVE done: rounds=${result.rounds}, deleted=${result.deletedCount}, remaining≈${workingTokens} (raw=${result.remainingTokens}+sys=${systemTokensEstimate}), deletedIds=${result.allDeletedToolCallIds.length}, stalledByUserMsg=${result.stalledByUserMsg ?? false}, duration=${Date.now() - _aggStart}ms`);
-        if (result.allDeletedToolCallIds.length > 0) {
-          const statusUpdates = new Map<string, string | boolean>();
-          for (const id of result.allDeletedToolCallIds) { statusUpdates.set(id, "deleted"); stateManager.confirmedOffloadIds.add(id); stateManager.deletedOffloadIds.add(id); }
-          markOffloadStatus(stateManager.ctx, statusUpdates).catch(() => {});
-          const mmdInj = await buildHistoryMmdInjection(result.allDeletedToolCallIds, offloadMap!, offloadEntries, stateManager, logger, countTokens, effectiveBudget, pCfg);
-          if (mmdInj.injectedMessages.length > 0) {
-            removeExistingMmdInjections(workMessages);
-            const histInsertIdx = findHistoryMmdInsertionPoint(workMessages);
-            workMessages.splice(histInsertIdx, 0, ...mmdInj.injectedMessages);
-            _aggMmdInjected = mmdInj.injectedMessages.length;
-            _aggMmdTokens = mmdInj.totalMmdTokens;
-            workingTokens += mmdInj.totalMmdTokens;
-            logger.info(`[context-offload] assemble L3-AGGRESSIVE MMD injection: ${mmdInj.injectedMessages.length} msgs, ${mmdInj.totalMmdTokens} tokens, budget=${Math.floor(effectiveBudget * (pCfg.mmdMaxTokenRatio ?? PLUGIN_DEFAULTS.mmdMaxTokenRatio))}, files=[${mmdInj.mmdFiles.join(",")}], workingTokens now=${workingTokens}`);
-
-            // Debug: dump injected MMD message content
-            for (let ii = 0; ii < mmdInj.injectedMessages.length; ii++) {
-              const im = mmdInj.injectedMessages[ii] as any;
-              let ic = "";
-              if (typeof im.content === "string") ic = im.content;
-              else if (Array.isArray(im.content)) ic = im.content.map((c: any) => typeof c === "string" ? c : (c.text ?? "")).join(" ");
-              const lines = ic.split("\n");
-              logger.info(`[context-offload]   MMD-inject[${ii}] role=${im.role}, lines=${lines.length}, preview=${ic.replace(/\n/g, "\\n").slice(0, 200)}${ic.length > 200 ? "..." : ""}`);
+        // ── TAIL-ACCUMULATE: when no boundary cache exists (first run), compute
+        // tokens from tail until reaching 60% of budget, then discard the head.
+        // This avoids the expensive full-tiktoken + multi-round aggressive loop.
+        const TAIL_ACCUM_TARGET_RATIO = 0.60;
+        const tailAccumTarget = Math.floor(effectiveBudget * TAIL_ACCUM_TARGET_RATIO) - systemTokensEstimate;
+        if (!stateManager._lastAggressiveBoundary && workMessages.length > 0 && prompt && prompt.length > 0) {
+          const _tailStart = Date.now();
+          let accum = 0;
+          let keepFrom = 0; // will keep [keepFrom ... end]
+          for (let i = workMessages.length - 1; i >= 0; i--) {
+            const msgTokens = tiktokenCount(JSON.stringify(workMessages[i], jsonReplacer));
+            if (accum + msgTokens > tailAccumTarget) {
+              keepFrom = i + 1;
+              break;
             }
-          } else {
-            logger.info(`[context-offload] assemble L3-AGGRESSIVE MMD injection: no history MMDs to inject`);
+            accum += msgTokens;
           }
-        }
-        // If aggressive stalled due to user message protection, force emergency
-        if (result.stalledByUserMsg && workingTokens >= aggressiveThreshold) {
-          logger.warn(`[context-offload] assemble L3-AGGRESSIVE stalled, forcing emergency fallback`);
-          stateManager._forceEmergencyNext = true;
-        }
+          // Tool-pair safety: extend keepFrom forward to not orphan toolResults
+          while (keepFrom < workMessages.length && isToolResultMessage(workMessages[keepFrom])) {
+            accum += tiktokenCount(JSON.stringify(workMessages[keepFrom], jsonReplacer));
+            keepFrom++;
+          }
+          // Tool-pair safety (backward): if last deleted msg is assistant(tool_use),
+          // its tool_results are in the keep zone — extend deletion to include them
+          if (keepFrom > 0 && keepFrom < workMessages.length) {
+            const lastDeleted = workMessages[keepFrom - 1];
+            if (isAssistantMessageWithToolUse(lastDeleted)) {
+              while (keepFrom < workMessages.length && isToolResultMessage(workMessages[keepFrom])) {
+                accum += tiktokenCount(JSON.stringify(workMessages[keepFrom], jsonReplacer));
+                keepFrom++;
+              }
+            }
+          }
+          // User message protection: don't cut past the last user message
+          // (ensure the most recent user turn is always kept)
+          for (let u = workMessages.length - 1; u >= keepFrom; u--) {
+            const role = workMessages[u].role ?? workMessages[u].message?.role ?? workMessages[u].type;
+            if (role === "user" || role === "human") {
+              // Found last user msg in keep zone — good
+              break;
+            }
+            if (u === keepFrom) {
+              // No user message in keep zone — find the last one and adjust keepFrom
+              for (let u2 = keepFrom - 1; u2 >= 0; u2--) {
+                const r2 = workMessages[u2].role ?? workMessages[u2].message?.role ?? workMessages[u2].type;
+                if (r2 === "user" || r2 === "human") {
+                  keepFrom = u2;
+                  break;
+                }
+              }
+            }
+          }
+          // Minimum keep: always keep at least 10 messages
+          const MIN_KEEP = 10;
+          if (workMessages.length - keepFrom < MIN_KEEP) {
+            keepFrom = Math.max(0, workMessages.length - MIN_KEEP);
+          }
+          // Don't delete everything
+          if (keepFrom > 0 && keepFrom < workMessages.length) {
+            // Collect deleted tool call IDs for offload tracking
+            const tailDeletedIds: string[] = [];
+            for (let d = 0; d < keepFrom; d++) {
+              const msg = workMessages[d];
+              const tid = extractToolCallId(msg) ?? (isOnlyToolUseAssistant(msg) ? extractAllToolUseIds(msg)[0] : null);
+              if (tid) tailDeletedIds.push(tid);
+            }
+            workMessages.splice(0, keepFrom);
+            _aggDeletedCount = keepFrom;
+            _aggDeletedIds = tailDeletedIds;
+            workingTokens = accum + systemTokensEstimate;
+            _aggTokensAfter = workingTokens;
+            _aggDurationMs = Date.now() - _tailStart;
+            logger.info(`[context-offload] assemble TAIL-ACCUMULATE: kept ${workMessages.length} msgs from tail, deleted ${keepFrom} from head, tokens≈${workingTokens}, target=${tailAccumTarget}+sys=${systemTokensEstimate}, duration=${_aggDurationMs}ms`);
+            // Mark deleted IDs
+            if (tailDeletedIds.length > 0) {
+              const statusUpdates = new Map<string, string | boolean>();
+              for (const id of tailDeletedIds) { statusUpdates.set(id, "deleted"); stateManager.confirmedOffloadIds.add(id); stateManager.deletedOffloadIds.add(id); }
+              markOffloadStatus(stateManager.ctx, statusUpdates).catch(() => {});
+            }
+            // Record boundary
+            const boundaryFp = _msgFingerprint(workMessages[0]);
+            let boundaryOrigIdx = -1;
+            for (let bi = 0; bi < messages.length; bi++) {
+              if (_msgFingerprint(messages[bi]) === boundaryFp) {
+                if (bi + 1 < messages.length && workMessages.length > 1) {
+                  if (_msgFingerprint(messages[bi + 1]) === _msgFingerprint(workMessages[1])) {
+                    boundaryOrigIdx = bi; break;
+                  }
+                } else {
+                  boundaryOrigIdx = bi; break;
+                }
+              }
+            }
+            if (boundaryOrigIdx >= 0) {
+              stateManager._lastAggressiveBoundary = {
+                originalIndex: boundaryOrigIdx,
+                fingerprint: boundaryFp,
+                keptMsgCount: workMessages.length,
+                remainingTokens: workingTokens,
+              };
+              logger.info(`[context-offload] assemble TAIL-ACCUMULATE BOUNDARY recorded: idx=${boundaryOrigIdx}, kept=${workMessages.length}, tokens≈${workingTokens}`);
+            }
+          }
+        } else {
+          // Has boundary cache — use standard aggressive path
+          logger.debug?.(`[context-offload] assemble L3-AGGRESSIVE: tokens≈${workingTokens} >= ${aggressiveThreshold}, starting...`);
+          if (!offloadEntries) { offloadEntries = await readOffloadEntries(stateManager.ctx); offloadMap = new Map(); populateOffloadLookupMap(offloadMap!, offloadEntries); }
+          const countTokens = createL3TokenCounter(pCfg, logger);
+          const aggressiveDeleteRatio = (pCfg as any).aggressiveDeleteRatio ?? PLUGIN_DEFAULTS.aggressiveDeleteRatio;
+          const currentTaskNodeIds = await getCurrentTaskNodeIds(stateManager);
+          const _aggStart = Date.now();
+          // aggressiveThreshold includes systemTokensEstimate, but the internal
+          // function computes remainingTokens WITHOUT system tokens (sysPrompt=null).
+          // Subtract systemTokensEstimate so the comparison is consistent.
+          // Target 85% of threshold to leave buffer for subsequent tool loop messages.
+          // Without buffer: tokens hover at 109K (threshold=108.8K) → every tool call re-triggers.
+          const AGGRESSIVE_TARGET_RATIO = 0.85;
+          const aggressiveTargetForMsgs = Math.max(0, Math.floor(aggressiveThreshold * AGGRESSIVE_TARGET_RATIO) - systemTokensEstimate);
+          const result = await aggressiveCompressUntilBelowThreshold(
+            workMessages, offloadMap!, currentTaskNodeIds, aggressiveDeleteRatio, stateManager, logger, aggressiveTargetForMsgs, countTokens, null, prompt ?? null,
+          );
+          _aggDeletedCount = result.deletedCount;
+          _aggRounds = result.rounds;
+          _aggDeletedIds = result.allDeletedToolCallIds;
+          workingTokens = result.remainingTokens + systemTokensEstimate;
+
+          _aggTokensAfter = workingTokens;
+          _aggDurationMs = Date.now() - _aggStart;
+          logger.debug?.(`[context-offload] assemble L3-AGGRESSIVE done: rounds=${result.rounds}, deleted=${result.deletedCount}, remaining≈${workingTokens} (raw=${result.remainingTokens}+sys=${systemTokensEstimate}), deletedIds=${result.allDeletedToolCallIds.length}, stalledByUserMsg=${result.stalledByUserMsg ?? false}, duration=${_aggDurationMs}ms`);
+          if (_aggDurationMs > 10_000) {
+            logger.warn(`[context-offload] assemble L3-AGGRESSIVE SLOW: ${_aggDurationMs}ms (rounds=${result.rounds}, deleted=${result.deletedCount}, remaining≈${workingTokens})`);
+          }
+          // Record boundary for FP-BOUNDARY-DELETE on next replay (only when prompt present)
+          if (result.deletedCount > 0 && workMessages.length > 0 && prompt && prompt.length > 0) {
+            const boundaryFp = _msgFingerprint(workMessages[0]);
+            // Find the boundary message's position in the original framework input
+            let boundaryOrigIdx = -1;
+            for (let bi = 0; bi < messages.length; bi++) {
+              if (_msgFingerprint(messages[bi]) === boundaryFp) {
+                // Verify with next message too to avoid hash collision on duplicate content
+                if (bi + 1 < messages.length && workMessages.length > 1) {
+                  if (_msgFingerprint(messages[bi + 1]) === _msgFingerprint(workMessages[1])) {
+                    boundaryOrigIdx = bi;
+                    break;
+                  }
+                } else {
+                  boundaryOrigIdx = bi;
+                  break;
+                }
+              }
+            }
+            if (boundaryOrigIdx >= 0) {
+              stateManager._lastAggressiveBoundary = {
+                originalIndex: boundaryOrigIdx,
+                fingerprint: boundaryFp,
+                keptMsgCount: workMessages.length,
+                remainingTokens: workingTokens,
+              };
+              logger.debug?.(`[context-offload] assemble BOUNDARY recorded: idx=${boundaryOrigIdx}, fp=${boundaryFp}, kept=${workMessages.length}, tokens≈${workingTokens}`);
+            } else {
+              // Could not locate boundary in original messages — clear stale boundary
+              stateManager._lastAggressiveBoundary = null;
+              logger.debug?.(`[context-offload] assemble BOUNDARY: could not locate in original msgs, cleared`);
+            }
+          }
+          if (result.allDeletedToolCallIds.length > 0) {
+            const statusUpdates = new Map<string, string | boolean>();
+            for (const id of result.allDeletedToolCallIds) { statusUpdates.set(id, "deleted"); stateManager.confirmedOffloadIds.add(id); stateManager.deletedOffloadIds.add(id); }
+            markOffloadStatus(stateManager.ctx, statusUpdates).catch(() => {});
+            const mmdInj = await buildHistoryMmdInjection(result.allDeletedToolCallIds, offloadMap!, offloadEntries, stateManager, logger, countTokens, effectiveBudget, pCfg);
+            if (mmdInj.injectedMessages.length > 0) {
+              removeExistingMmdInjections(workMessages);
+              const histInsertIdx = findHistoryMmdInsertionPoint(workMessages);
+              workMessages.splice(histInsertIdx, 0, ...mmdInj.injectedMessages);
+              _aggMmdInjected = mmdInj.injectedMessages.length;
+              _aggMmdTokens = mmdInj.totalMmdTokens;
+              workingTokens += mmdInj.totalMmdTokens;
+              logger.debug?.(`[context-offload] assemble L3-AGGRESSIVE MMD injection: ${mmdInj.injectedMessages.length} msgs, ${mmdInj.totalMmdTokens} tokens, budget=${Math.floor(effectiveBudget * (pCfg.mmdMaxTokenRatio ?? PLUGIN_DEFAULTS.mmdMaxTokenRatio))}, files=[${mmdInj.mmdFiles.join(",")}], workingTokens now=${workingTokens}`);
+
+              // Debug: dump injected MMD message content
+              for (let ii = 0; ii < mmdInj.injectedMessages.length; ii++) {
+                const im = mmdInj.injectedMessages[ii] as any;
+                let ic = "";
+                if (typeof im.content === "string") ic = im.content;
+                else if (Array.isArray(im.content)) ic = im.content.map((c: any) => typeof c === "string" ? c : (c.text ?? "")).join(" ");
+                const lines = ic.split("\n");
+                logger.debug?.(`[context-offload]   MMD-inject[${ii}] role=${im.role}, lines=${lines.length}, preview=${ic.replace(/\n/g, "\\n").slice(0, 200)}${ic.length > 200 ? "..." : ""}`);
+              }
+            } else {
+              logger.debug?.(`[context-offload] assemble L3-AGGRESSIVE MMD injection: no history MMDs to inject`);
+            }
+          }
+          // If aggressive stalled due to user message protection, force emergency
+          if (result.stalledByUserMsg && workingTokens >= aggressiveThreshold) {
+            logger.warn(`[context-offload] assemble L3-AGGRESSIVE stalled, forcing emergency fallback`);
+            stateManager._forceEmergencyNext = true;
+          }
+        } // end else (standard aggressive path)
       } else {
-        logger.info(`[context-offload] assemble L3-AGGRESSIVE: SKIP (tokens≈${workingTokens} < ${aggressiveThreshold})`);
+        logger.debug?.(`[context-offload] assemble L3-AGGRESSIVE: SKIP (tokens≈${workingTokens} < ${aggressiveThreshold})`);
       }
 
       // Summary after AGGRESSIVE (was full dump, now aggregated)
       if (_aggDeletedCount > 0) {
         const mmdCount = workMessages.filter((m: any) => m._mmdContextMessage || m._mmdInjection).length;
         const offloadedCount = workMessages.filter((m: any) => m._offloaded).length;
-        logger.info(`[context-offload] POST-AGGRESSIVE: ${workMessages.length} msgs remaining, mmd=${mmdCount}, offloaded=${offloadedCount}, deleted=${_aggDeletedCount}`);
+        logger.debug?.(`[context-offload] POST-AGGRESSIVE: ${workMessages.length} msgs remaining, mmd=${mmdCount}, offloaded=${offloadedCount}, deleted=${_aggDeletedCount}`);
       }
 
       let _mildReplacedCount = 0;
@@ -1592,7 +1899,7 @@ class OffloadContextEngine {
       let _mildTokensBefore = workingTokens;
       let _mildReplacedIds: string[] = [];
       if (workingTokens >= mildThreshold) {
-        logger.info(`[context-offload] assemble L3-MILD: tokens≈${workingTokens} >= ${mildThreshold}, starting...`);
+        logger.debug?.(`[context-offload] assemble L3-MILD: tokens≈${workingTokens} >= ${mildThreshold}, starting...`);
         if (!offloadEntries) { offloadEntries = await readOffloadEntries(stateManager.ctx); offloadMap = new Map(); populateOffloadLookupMap(offloadMap!, offloadEntries); }
         const currentTaskNodeIds = await getCurrentTaskNodeIds(stateManager);
         const mildScanRatio = (pCfg as any).mildOffloadScanRatio ?? PLUGIN_DEFAULTS.mildOffloadScanRatio;
@@ -1602,7 +1909,7 @@ class OffloadContextEngine {
         _mildFinalThreshold = cascadeResult.finalThreshold;
         _mildDurationMs = Date.now() - _mildStart;
         _mildReplacedIds = cascadeResult.replacedToolCallIds;
-        logger.info(`[context-offload] assemble L3-MILD done: replaced=${cascadeResult.replacedCount}, finalThreshold=${cascadeResult.finalThreshold}, ids=[${cascadeResult.replacedToolCallIds.slice(0, 5).join(",")}${cascadeResult.replacedToolCallIds.length > 5 ? "..." : ""}], duration=${_mildDurationMs}ms`);
+        logger.debug?.(`[context-offload] assemble L3-MILD done: replaced=${cascadeResult.replacedCount}, finalThreshold=${cascadeResult.finalThreshold}, ids=[${cascadeResult.replacedToolCallIds.slice(0, 5).join(",")}${cascadeResult.replacedToolCallIds.length > 5 ? "..." : ""}], duration=${_mildDurationMs}ms`);
         if (cascadeResult.replacedCount > 0) {
           for (const id of cascadeResult.replacedToolCallIds) stateManager.confirmedOffloadIds.add(id);
           const mildUpdates = new Map<string, string | boolean>();
@@ -1614,10 +1921,10 @@ class OffloadContextEngine {
             const c = typeof m.content === "string" ? m.content : "";
             return c.includes("[Offload summary") || c.includes("⚡ offload");
           }).length;
-          logger.info(`[context-offload] POST-MILD: ${workMessages.length} msgs, replaced=${replacedCount}`);
+          logger.debug?.(`[context-offload] POST-MILD: ${workMessages.length} msgs, replaced=${replacedCount}`);
         }
       } else {
-        logger.info(`[context-offload] assemble L3-MILD: SKIP (tokens≈${workingTokens} < ${mildThreshold})`);
+        logger.debug?.(`[context-offload] assemble L3-MILD: SKIP (tokens≈${workingTokens} < ${mildThreshold})`);
       }
 
       // Emergency — reuse workingTokens instead of redundant full tiktoken snapshot
@@ -1632,20 +1939,53 @@ class OffloadContextEngine {
       if (forceEmergency) stateManager._forceEmergencyNext = false;
       if ((workingTokens >= emergencyThreshold || forceEmergency) && workMessages.length > EMERGENCY_MIN_MESSAGES_TO_KEEP) {
         _emTriggered = true;
+        _usedFastPath = false; // force precise finalSnap after emergency
         logger.warn(`[context-offload] assemble EMERGENCY: tokens≈${workingTokens} >= ${emergencyThreshold} (${(emergencyRatio * 100).toFixed(0)}%), force=${forceEmergency}, target=${emergencyTarget} (${(emergencyTargetRatio * 100).toFixed(0)}%), msgTarget=${emergencyTarget - systemTokensEstimate}`);
         const countTokensEmg = createL3TokenCounter(pCfg, logger);
         const _emStart = Date.now();
         const emResult = emergencyCompress(workMessages, emergencyTarget - systemTokensEstimate, countTokensEmg, null, prompt ?? null, logger);
         _emDeletedCount = emResult.deletedCount;
         workingTokens = emResult.remainingTokens + systemTokensEstimate;
-        logger.warn(`[context-offload] assemble EMERGENCY done: deleted=${emResult.deletedCount} msgs, remaining≈${workingTokens} (raw=${emResult.remainingTokens}+sys=${systemTokensEstimate}), deletedIds=${emResult.deletedToolCallIds.length}, duration=${Date.now() - _emStart}ms`);
+        const _emDurationMs = Date.now() - _emStart;
+        if (_emDurationMs > 10_000) {
+          logger.warn(`[context-offload] assemble EMERGENCY SLOW: ${_emDurationMs}ms (deleted=${emResult.deletedCount}, remaining≈${workingTokens})`);
+        } else {
+          logger.debug?.(`[context-offload] assemble EMERGENCY done: deleted=${emResult.deletedCount} msgs, remaining≈${workingTokens} (raw=${emResult.remainingTokens}+sys=${systemTokensEstimate}), deletedIds=${emResult.deletedToolCallIds.length}, duration=${_emDurationMs}ms`);
+        }
         if (emResult.deletedToolCallIds.length > 0) {
           const emUpdates = new Map<string, string | boolean>();
           for (const id of emResult.deletedToolCallIds) { emUpdates.set(id, "deleted"); stateManager.confirmedOffloadIds.add(id); stateManager.deletedOffloadIds.add(id); }
           markOffloadStatus(stateManager.ctx, emUpdates).catch(() => {});
         }
+        // Re-record boundary after emergency (only when prompt present)
+        if (emResult.deletedCount > 0 && workMessages.length > 0 && prompt && prompt.length > 0) {
+          const boundaryFp = _msgFingerprint(workMessages[0]);
+          let boundaryOrigIdx = -1;
+          for (let bi = 0; bi < messages.length; bi++) {
+            if (_msgFingerprint(messages[bi]) === boundaryFp) {
+              if (bi + 1 < messages.length && workMessages.length > 1) {
+                if (_msgFingerprint(messages[bi + 1]) === _msgFingerprint(workMessages[1])) {
+                  boundaryOrigIdx = bi; break;
+                }
+              } else {
+                boundaryOrigIdx = bi; break;
+              }
+            }
+          }
+          if (boundaryOrigIdx >= 0) {
+            stateManager._lastAggressiveBoundary = {
+              originalIndex: boundaryOrigIdx,
+              fingerprint: boundaryFp,
+              keptMsgCount: workMessages.length,
+              remainingTokens: workingTokens,
+            };
+            logger.debug?.(`[context-offload] assemble EMERGENCY BOUNDARY recorded: idx=${boundaryOrigIdx}, kept=${workMessages.length}, tokens≈${workingTokens}`);
+          } else {
+            stateManager._lastAggressiveBoundary = null;
+          }
+        }
       } else {
-        logger.info(`[context-offload] assemble EMERGENCY: SKIP (tokens≈${workingTokens} < ${emergencyThreshold}, force=${forceEmergency}, msgs=${workMessages.length})`);
+        logger.debug?.(`[context-offload] assemble EMERGENCY: SKIP (tokens≈${workingTokens} < ${emergencyThreshold}, force=${forceEmergency}, msgs=${workMessages.length})`);
       }
 
       // L4 injection
@@ -1655,11 +1995,13 @@ class OffloadContextEngine {
         this._l4State.pendingResult = null;
       }
 
-      const finalSnap = buildTiktokenContextSnapshot("assemble_final", workMessages, null, prompt ?? null, precomputed);
-      const tokensBefore = snap.totalTokens;
+      const finalSnap = _usedFastPath
+        ? { totalTokens: workingTokens, messagesTokens: workingTokens - systemTokensEstimate, systemTokens: systemTokensEstimate, userPromptTokens: 0 }
+        : buildTiktokenContextSnapshot("assemble_final", workMessages, null, prompt ?? null, precomputed);
+      const tokensBefore = snap?.totalTokens ?? fastEst;
       const tokensSaved = tokensBefore - finalSnap.totalTokens;
       const _asmDuration = Date.now() - _asmStart;
-      logger.info(`[context-offload] <<< assemble END (ok): ${messages?.length ?? 0}→${workMessages.length} msgs, rawTokens≈${_rawTokensBefore}, tokensBefore≈${tokensBefore} (FP: -${_rawTokensBefore - tokensBefore}, replaced=${_fpReplacedCount}, compressed=${_fpCompressedCount}, deleted=${_fpDeletedCount}), tokensAfter≈${finalSnap.totalTokens} (sys≈${systemTokensEstimate}), tokensSaved≈${tokensSaved}, totalSaved≈${_rawTokensBefore - finalSnap.totalTokens}, hasL4=${!!systemPromptAddition}, duration=${_asmDuration}ms`);
+      logger.debug?.(`[context-offload] assemble END (ok): ${messages?.length ?? 0}→${workMessages.length} msgs, rawTokens≈${_rawTokensBefore}, tokensBefore≈${tokensBefore} (FP: -${_rawTokensBefore - tokensBefore}, replaced=${_fpReplacedCount}, compressed=${_fpCompressedCount}, deleted=${_fpDeletedCount}), tokensAfter≈${finalSnap.totalTokens} (sys≈${systemTokensEstimate}), tokensSaved≈${tokensSaved}, totalSaved≈${_rawTokensBefore - finalSnap.totalTokens}, hasL4=${!!systemPromptAddition}, duration=${_asmDuration}ms`);
 
       // Async trace — fire-and-forget, must not block assemble return
       try {
@@ -1806,7 +2148,7 @@ class OffloadContextEngine {
   async compact(params: any) {
     const _compactStart = Date.now();
     const logger = this._logger;
-    logger.info(`[context-offload] >>> CE.compact CALLED: sessionKey=${params.sessionKey ?? "?"}`);
+    logger.debug?.(`[context-offload] >>> CE.compact CALLED: sessionKey=${params.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
     if (!stateManager && params.sessionKey) {
       try {
@@ -1815,7 +2157,7 @@ class OffloadContextEngine {
       } catch { /* ignore */ }
     }
     const pCfg = this._pCfg;
-    logger.info(`[context-offload] >>> compact START: params=${JSON.stringify(params ?? {}).slice(0, 500)}`);
+    logger.debug?.(`[context-offload] >>> compact START: params=${JSON.stringify(params ?? {}).slice(0, 500)}`);
     if (!stateManager) {
       logger.warn(`[context-offload] <<< compact SKIP: no session manager (${Date.now() - _compactStart}ms)`);
       return { ok: false, compacted: false, reason: "no_session_manager" };
@@ -1828,9 +2170,9 @@ class OffloadContextEngine {
         const globalRequire = createRequire("/usr/local/lib/node_modules/openclaw/");
         const sdk = globalRequire("openclaw/plugin-sdk");
         delegateFn = sdk.delegateCompactionToRuntime;
-        logger.info(`[context-offload] compact: resolved via createRequire (global path)`);
+        logger.debug?.(`[context-offload] compact: resolved via createRequire (global path)`);
       } catch (e1) {
-        logger.warn(`[context-offload] compact: createRequire failed: ${e1}`);
+        logger.debug?.(`[context-offload] compact: createRequire failed: ${e1}`);
         try {
           const paths = [
             "/usr/local/lib/node_modules/openclaw/dist/plugin-sdk/index.js",
@@ -1840,10 +2182,10 @@ class OffloadContextEngine {
             try {
               const sdk = await import(p);
               delegateFn = sdk.delegateCompactionToRuntime;
-              logger.info(`[context-offload] compact: resolved via absolute path: ${p}`);
+              logger.debug?.(`[context-offload] compact: resolved via absolute path: ${p}`);
               break;
             } catch (ep) {
-              logger.warn(`[context-offload] compact: absolute path failed: ${p} → ${ep}`);
+              logger.debug?.(`[context-offload] compact: absolute path failed: ${p} → ${ep}`);
             }
           }
         } catch { /* ignore */ }
@@ -1851,51 +2193,36 @@ class OffloadContextEngine {
           try {
             const sdk = await import("openclaw/plugin-sdk" as any);
             delegateFn = sdk.delegateCompactionToRuntime;
-            logger.info(`[context-offload] compact: resolved via direct import`);
+            logger.debug?.(`[context-offload] compact: resolved via direct import`);
           } catch { /* ignore */ }
         }
       }
 
       if (typeof delegateFn === "function") {
-        logger.info(`[context-offload] compact: >>> delegateCompactionToRuntime START`);
+        logger.debug?.(`[context-offload] compact: >>> delegateCompactionToRuntime START`);
         const result = await delegateFn(params);
-        logger.info(`[context-offload] <<< compact END (delegated) ${Date.now() - _compactStart}ms — compacted=${result.compacted}`);
+        logger.debug?.(`[context-offload] <<< compact END (delegated) ${Date.now() - _compactStart}ms — compacted=${result.compacted}`);
         return result;
       }
 
       // Fallback: self-execute emergency compression when runtime delegation unavailable
-      logger.warn(`[context-offload] compact: delegateCompactionToRuntime unavailable, self-executing emergency compression`);
+      logger.info(`[context-offload] compact: delegateCompactionToRuntime unavailable, self-executing emergency compression`);
       const messages = params.messages;
       if (!messages || !Array.isArray(messages) || messages.length === 0) {
-        logger.info(`[context-offload] <<< compact END (no_messages) ${Date.now() - _compactStart}ms`);
+        logger.debug?.(`[context-offload] <<< compact END (no_messages) ${Date.now() - _compactStart}ms`);
         return { ok: true, compacted: false, reason: "no_messages" };
       }
 
       const contextWindow = this._getContextWindow();
       const budget = params.tokenBudget ? Math.min(params.tokenBudget, contextWindow) : contextWindow;
-      const aggressiveRatio = pCfg.aggressiveCompressRatio ?? PLUGIN_DEFAULTS.aggressiveCompressRatio;
-      const aggressiveTarget = Math.floor(budget * aggressiveRatio);
       const mildRatio = pCfg.mildOffloadRatio ?? PLUGIN_DEFAULTS.mildOffloadRatio;
       const targetTokens = Math.floor(budget * mildRatio);
-
-      // Include system prompt tokens estimate
-      const _sysFromCache = stateManager.cachedSystemPromptTokens;
-      const _sysFromOverhead = stateManager.getEstimatedSystemOverhead();
-      const _sysFromRatio = Math.floor(budget * (pCfg.defaultSystemOverheadRatio ?? PLUGIN_DEFAULTS.defaultSystemOverheadRatio));
-      const systemTokensEstimate = _sysFromCache ?? _sysFromOverhead ?? _sysFromRatio;
-      const _sysSource = _sysFromCache != null ? "cachedSystemPromptTokens" : _sysFromOverhead != null ? "estimatedSystemOverhead" : "defaultRatio";
-      logger.info(`[context-offload] compact sys tokens: estimate=${systemTokensEstimate} (source=${_sysSource})`);
-      const precomputed = { systemTokens: systemTokensEstimate, userPromptTokens: 0 };
+      const systemTokensEstimate = stateManager.cachedSystemPromptTokens
+        ?? stateManager.getEstimatedSystemOverhead()
+        ?? Math.floor(budget * (pCfg.defaultSystemOverheadRatio ?? PLUGIN_DEFAULTS.defaultSystemOverheadRatio));
 
       const countTokens = createL3TokenCounter(pCfg, logger);
-      const snap = buildTiktokenContextSnapshot("compact", messages, null, null, precomputed);
-
-      if (snap.totalTokens <= aggressiveTarget) {
-        logger.info(`[context-offload] <<< compact END (below_threshold) ${Date.now() - _compactStart}ms — tokens=${snap.totalTokens} (sys≈${systemTokensEstimate}) <= aggressive@${aggressiveTarget}`);
-        return { ok: true, compacted: false, reason: "below_threshold" };
-      }
-
-      logger.warn(`[context-offload] compact: tokens=${snap.totalTokens} (sys≈${systemTokensEstimate}, msgs≈${snap.messagesTokens}) > aggressive@${aggressiveTarget}, running emergency to target=${targetTokens} (msgTarget=${targetTokens - systemTokensEstimate})`);
+      logger.info(`[context-offload] compact: msgs=${messages.length}, target=${targetTokens}, msgTarget=${targetTokens - systemTokensEstimate}`);
       const emergencyResult = emergencyCompress(messages, targetTokens - systemTokensEstimate, countTokens, null, null, logger);
 
       if (emergencyResult.deletedToolCallIds.length > 0) {
@@ -1910,9 +2237,13 @@ class OffloadContextEngine {
         markOffloadStatus(stateManager.ctx, statusUpdates).catch(() => {});
       }
 
-      const afterSnap = buildTiktokenContextSnapshot("compact_after", messages, null, null, precomputed);
-      logger.info(`[context-offload] <<< compact END (self_emergency) ${Date.now() - _compactStart}ms — ${snap.totalTokens}→${afterSnap.totalTokens} tokens, deleted=${emergencyResult.deletedCount} msgs`);
-      return { ok: true, compacted: true, reason: "self_emergency", messages };
+      // Invalidate assemble boundary cache after compact modifies messages
+      if (emergencyResult.deletedCount > 0) {
+        stateManager._lastAggressiveBoundary = null;
+      }
+
+      logger.info(`[context-offload] <<< compact END (self_emergency) ${Date.now() - _compactStart}ms — deleted=${emergencyResult.deletedCount} msgs, remaining≈${emergencyResult.remainingTokens}+sys≈${systemTokensEstimate}`);
+      return { ok: true, compacted: emergencyResult.deletedCount > 0, reason: "self_emergency", messages };
     } catch (err) {
       logger.error(`[context-offload] <<< compact ERROR: ${err} (${Date.now() - _compactStart}ms)`);
       return { ok: false, compacted: false, reason: String(err) };
@@ -1921,7 +2252,7 @@ class OffloadContextEngine {
 
   async afterTurn(_params: any) {
     const logger = this._logger;
-    logger.info(`[context-offload] >>> CE.afterTurn CALLED: sessionKey=${_params?.sessionKey ?? "?"}`);
+    logger.debug?.(`[context-offload] >>> CE.afterTurn CALLED: sessionKey=${_params?.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = _params?._offloadManager;
     if (!stateManager && _params?.sessionKey && !isInternalMemorySession(_params.sessionKey)) {
       try {
@@ -1936,7 +2267,7 @@ class OffloadContextEngine {
       // judgeL15's pre_flush will pick up any pairs that haven't been flushed yet.
       const pendingCount = stateManager.getPendingCount();
       if (pendingCount > 0) {
-        logger.info(`[context-offload] afterTurn: fire-and-forget flushing ${pendingCount} remaining pending pairs`);
+        logger.debug?.(`[context-offload] afterTurn: fire-and-forget flushing ${pendingCount} remaining pending pairs`);
         this._flushL1(stateManager, "afterTurn_flush").then(async () => {
           try {
             const allEntries = await readAllOffloadEntries(stateManager!.ctx);
@@ -1957,7 +2288,7 @@ class OffloadContextEngine {
   }
 
   async dispose() {
-    this._logger.info("[context-offload] dispose: cleaning up");
+    this._logger.debug?.("[context-offload] dispose: cleaning up");
     this._disposeL15();
     this._clearL2Timeout();
     if (_reclaimTimer !== null) { clearTimeout(_reclaimTimer); _reclaimTimer = null; }

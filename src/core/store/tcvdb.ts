@@ -524,10 +524,29 @@ export class TcvdbMemoryStore implements IMemoryStore {
     try {
       await this._ensureInit();
       if (this.degraded) return 0;
+
+      const filter = `updated_time_ms < ${cutoffMs}`;
+      const toDelete = await this.client.count(this.l1Collection, filter);
+      if (toDelete === 0) return 0;
+
+      const total = await this.client.count(this.l1Collection);
+      const ratio = total > 0 ? toDelete / total : 0;
+
+      if (ratio > 0.8) {
+        this.logger?.warn(
+          `${TAG} [L1-deleteExpired] BLOCKED: would delete ${toDelete}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+        );
+        return 0;
+      }
+
       await this.client.deleteDoc(this.l1Collection, {
-        query: { filter: `updated_time_ms < ${cutoffMs}` },
+        query: { filter },
       });
-      return 0; // actual count unknown from delete API
+      this.logger?.info?.(
+        `${TAG} [L1-deleteExpired] Deleted ~${toDelete}/${total} records (cutoff=${cutoffIso})`,
+      );
+      return toDelete;
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-deleteExpired] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
@@ -807,10 +826,29 @@ export class TcvdbMemoryStore implements IMemoryStore {
     try {
       await this._ensureInit();
       if (this.degraded) return 0;
+
+      const filter = `recorded_at_ms < ${cutoffMs}`;
+      const toDelete = await this.client.count(this.l0Collection, filter);
+      if (toDelete === 0) return 0;
+
+      const total = await this.client.count(this.l0Collection);
+      const ratio = total > 0 ? toDelete / total : 0;
+
+      if (ratio > 0.8) {
+        this.logger?.warn(
+          `${TAG} [L0-deleteExpired] BLOCKED: would delete ${toDelete}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+        );
+        return 0;
+      }
+
       await this.client.deleteDoc(this.l0Collection, {
-        query: { filter: `recorded_at_ms < ${cutoffMs}` },
+        query: { filter },
       });
-      return 0;
+      this.logger?.info?.(
+        `${TAG} [L0-deleteExpired] Deleted ~${toDelete}/${total} records (cutoff=${cutoffIso})`,
+      );
+      return toDelete;
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-deleteExpired] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return 0;

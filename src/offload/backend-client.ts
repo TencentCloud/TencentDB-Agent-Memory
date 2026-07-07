@@ -135,13 +135,13 @@ export class BackendClient {
   /** L1 Summarize — synchronous await (used by assemble flush + force trigger) */
   async l1Summarize(req: L1Request): Promise<L1Response> {
     const pairNames = req.toolPairs.map((p) => `${p.toolName}(${p.toolCallId})`).join(", ");
-    this.logger.info(`[context-offload] L1 >>> summarize ${req.toolPairs.length} pairs: [${pairNames}]`);
+    this.logger.debug?.(`[context-offload] L1 >>> summarize ${req.toolPairs.length} pairs: [${pairNames}]`);
     const startMs = Date.now();
     const resp = await this.post<L1Response>("/offload/v1/l1/summarize", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
     const entryCount = resp.entries?.length ?? 0;
     const scores = resp.entries?.map((e) => `${e.tool_call_id}:score=${e.score}`).join(", ") ?? "";
-    this.logger.info(`[context-offload] L1 <<< ${entryCount} entries [${scores}]`);
+    this.logger.debug?.(`[context-offload] L1 <<< ${entryCount} entries [${scores}]`);
     traceOffloadModelIo({
       sessionKey: this.sessionKeyFn(),
       stage: "L1.backend",
@@ -161,13 +161,13 @@ export class BackendClient {
 
   /** L1.5 Task Judgment — synchronous await, uses unified timeout */
   async l15Judge(req: L15Request): Promise<L15Response> {
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L1.5 >>> judge: currentMmd=${req.currentMmd?.filename ?? "null"}, availableMmds=${req.availableMmdMetas.length}, recentMessages=${req.recentMessages.length} chars`,
     );
     const startMs = Date.now();
     const resp = await this.post<L15Response>("/offload/v1/l15/judge", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L1.5 <<< completed=${resp.taskCompleted}, continuation=${resp.isContinuation}, continuationFile=${resp.continuationMmdFile ?? "null"}, newLabel=${resp.newTaskLabel ?? "null"}, longTask=${resp.isLongTask}`,
     );
     traceOffloadModelIo({
@@ -189,7 +189,7 @@ export class BackendClient {
   /** L2 MMD Generation — async background, uses unified timeout */
   async l2Generate(req: L2Request): Promise<L2Response> {
     const entryIds = req.newEntries.map((e) => e.tool_call_id).join(", ");
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L2 >>> generate: task=${req.taskLabel}, prefix=${req.mmdPrefix}, entries=${req.newEntries.length} [${entryIds}], existingMmd=${req.existingMmd ? `${req.mmdCharCount} chars` : "null (new)"}`,
     );
     const startMs = Date.now();
@@ -197,7 +197,7 @@ export class BackendClient {
     const durationMs = Date.now() - startMs;
     const mappingCount = Object.keys(resp.nodeMapping ?? {}).length;
     const mappingStr = Object.entries(resp.nodeMapping ?? {}).map(([k, v]) => `${k}->${v}`).join(", ");
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L2 <<< action=${resp.fileAction}, mmdContent=${resp.mmdContent ? `${resp.mmdContent.length} chars` : "null"}, replaceBlocks=${resp.replaceBlocks?.length ?? 0}, nodeMapping=${mappingCount} [${mappingStr}]`,
     );
     traceOffloadModelIo({
@@ -218,13 +218,13 @@ export class BackendClient {
 
   /** L4 Skill Generation — synchronous await, uses unified timeout */
   async l4Generate(req: L4Request): Promise<L4Response> {
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L4 >>> generate: mmd=${req.mmdFilename}, entries=${req.offloadEntries.length}, skillFocus=${req.skillFocus ?? "null"}`,
     );
     const startMs = Date.now();
     const resp = await this.post<L4Response>("/offload/v1/l4/generate", req, BackendClient.TIMEOUT_MS);
     const durationMs = Date.now() - startMs;
-    this.logger.info(
+    this.logger.debug?.(
       `[context-offload] L4 <<< skill="${resp.skillName}", content=${resp.skillContent?.length ?? 0} chars`,
     );
     traceOffloadModelIo({
@@ -255,7 +255,7 @@ export class BackendClient {
     try {
       const resp = await this.post<StoreStateResponse>("/offload/v1/store", payload, timeoutMs);
       const durationMs = Date.now() - startMs;
-      this.logger.info(
+      this.logger.debug?.(
         `[context-offload] store <<< insertedId=${resp.insertedId ?? "?"} (${durationMs}ms)`,
       );
       return resp;
@@ -273,7 +273,7 @@ export class BackendClient {
     const startMs = Date.now();
 
     const bodyStr = JSON.stringify(body);
-    this.logger.info(`[context-offload] HTTP >>> POST ${url} (${bodyStr.length} bytes, timeout=${timeoutMs}ms)`);
+    this.logger.debug?.(`[context-offload] HTTP >>> POST ${url} (${bodyStr.length} bytes, timeout=${timeoutMs}ms)`);
 
     const reqHeaders: Record<string, string> = {
       "Content-Type": "application/json",
@@ -330,7 +330,7 @@ export class BackendClient {
 
             try {
               const parsed = JSON.parse(data) as T;
-              this.logger.info(
+              this.logger.debug?.(
                 `[context-offload] HTTP <<< ${path}: ${res.statusCode} (${durationMs}ms, ${data.length} bytes)`,
               );
               resolve(parsed);
