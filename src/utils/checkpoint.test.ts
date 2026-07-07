@@ -148,6 +148,8 @@ describe("CheckpointManager", () => {
     const checkpoint = new CheckpointManager(dataDir);
     const conversationsDir = path.join(dataDir, "conversations");
     const recordsDir = path.join(dataDir, "records");
+    const existingL1Cursor = Date.parse("2026-07-05T00:00:09.000Z");
+    const remainingRecordedAt = Date.parse("2026-07-05T00:00:02.000Z");
 
     await fs.mkdir(conversationsDir, { recursive: true });
     await fs.mkdir(recordsDir, { recursive: true });
@@ -160,7 +162,7 @@ describe("CheckpointManager", () => {
     );
     await fs.writeFile(path.join(recordsDir, "2026-07-05.jsonl"), "{\"id\":\"m1\"}\n");
 
-    await checkpoint.markL1ExtractionComplete("session-a", 5, 9000);
+    await checkpoint.markL1ExtractionComplete("session-a", 5, existingL1Cursor);
     await checkpoint.captureAtomically("session-a", undefined, async () => ({
       maxTimestamp: 9000,
       messageCount: 5,
@@ -175,7 +177,57 @@ describe("CheckpointManager", () => {
     expect(cp.total_processed).toBe(2);
     expect(cp.last_captured_timestamp).toBe(2000);
     expect(cp.runner_states["session-a"]?.last_captured_timestamp).toBe(2000);
-    expect(cp.runner_states["session-a"]?.last_l1_cursor).toBe(2000);
+    expect(cp.runner_states["session-a"]?.last_l1_cursor).toBe(remainingRecordedAt);
+  });
+
+  it("uses recordedAt, not message timestamp, when bounding L1 cursors", async () => {
+    const dataDir = await makeTempDir();
+    const checkpoint = new CheckpointManager(dataDir);
+    const conversationsDir = path.join(dataDir, "conversations");
+    const existingL1Cursor = Date.parse("2026-07-05T00:00:09.000Z");
+    const remainingRecordedAt = Date.parse("2026-07-05T00:00:05.000Z");
+
+    await fs.mkdir(conversationsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(conversationsDir, "2026-07-05.jsonl"),
+      JSON.stringify({
+        id: "c1",
+        sessionKey: "session-a",
+        timestamp: 1000,
+        recordedAt: "2026-07-05T00:00:05.000Z",
+      }) + "\n",
+    );
+
+    await checkpoint.write({
+      last_captured_timestamp: 9000,
+      total_processed: 9,
+      last_persona_at: 0,
+      last_persona_time: "",
+      request_persona_update: false,
+      persona_update_reason: "",
+      memories_since_last_persona: 0,
+      scenes_processed: 0,
+      runner_states: {
+        "session-a": {
+          last_captured_timestamp: 9000,
+          last_l1_cursor: existingL1Cursor,
+          last_scene_name: "",
+        },
+      },
+      pipeline_states: {},
+      l0_conversations_count: 9,
+      total_memories_extracted: 0,
+    });
+
+    await recalibrateCheckpointFromStore(dataDir, {
+      countL0: () => 99,
+      countL1: () => 0,
+    });
+
+    const cp = await checkpoint.read();
+    expect(cp.last_captured_timestamp).toBe(1000);
+    expect(cp.runner_states["session-a"]?.last_captured_timestamp).toBe(1000);
+    expect(cp.runner_states["session-a"]?.last_l1_cursor).toBe(remainingRecordedAt);
   });
 
   it("bounds L2 cursors after local memory records roll back", async () => {

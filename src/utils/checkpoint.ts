@@ -162,6 +162,10 @@ export interface CheckpointRecalibrationCounts {
   maxL0Timestamp?: number;
   /** Newest L0 message timestamp currently present per session key. */
   maxL0TimestampBySession?: Record<string, number>;
+  /** Newest L0 recordedAt timestamp currently present. Used by the L1 cursor. */
+  maxL0RecordedAtMs?: number;
+  /** Newest L0 recordedAt timestamp currently present per session key. */
+  maxL0RecordedAtMsBySession?: Record<string, number>;
   /** Actual L1 records currently present in the store. */
   totalMemoriesExtracted?: number;
   /** True when local L1 JSONL shards were read, including empty shards. */
@@ -208,6 +212,8 @@ export async function recalibrateCheckpointFromStore(
     hasLocalL0Stats: jsonlL0Stats !== undefined,
     maxL0Timestamp: jsonlL0Stats?.maxTimestamp,
     maxL0TimestampBySession: jsonlL0Stats?.maxTimestampBySession,
+    maxL0RecordedAtMs: jsonlL0Stats?.maxRecordedAtMs,
+    maxL0RecordedAtMsBySession: jsonlL0Stats?.maxRecordedAtMsBySession,
     totalMemoriesExtracted: jsonlL1Stats?.count ?? storeL1Count,
     hasLocalL1Stats: jsonlL1Stats !== undefined,
     maxL1UpdatedAt: jsonlL1Stats?.maxUpdatedAt,
@@ -265,6 +271,8 @@ interface LocalJsonlStats {
   count: number;
   maxTimestamp?: number;
   maxTimestampBySession: Record<string, number>;
+  maxRecordedAtMs?: number;
+  maxRecordedAtMsBySession: Record<string, number>;
   maxUpdatedAt?: string;
   maxUpdatedAtBySession: Record<string, string>;
 }
@@ -281,9 +289,13 @@ function getStringField(record: Record<string, unknown>, ...keys: string[]): str
   return undefined;
 }
 
-function getTimestampMs(record: Record<string, unknown>): number | undefined {
+function getMessageTimestampMs(record: Record<string, unknown>): number | undefined {
   const timestamp = record.timestamp;
   if (typeof timestamp === "number" && Number.isFinite(timestamp)) return timestamp;
+  return undefined;
+}
+
+function getRecordedAtMs(record: Record<string, unknown>): number | undefined {
   const recordedAt = getStringField(record, "recordedAt", "recorded_at");
   if (!recordedAt) return undefined;
   const ms = Date.parse(recordedAt);
@@ -312,6 +324,7 @@ async function readLocalJsonlStats(dataDir: string, subdir: "conversations" | "r
   const stats: LocalJsonlStats = {
     count: 0,
     maxTimestampBySession: {},
+    maxRecordedAtMsBySession: {},
     maxUpdatedAtBySession: {},
   };
   let sawShard = false;
@@ -332,13 +345,23 @@ async function readLocalJsonlStats(dataDir: string, subdir: "conversations" | "r
         }
         if (!parsed) continue;
         const sessionKey = getStringField(parsed, "sessionKey", "session_key");
-        const timestamp = getTimestampMs(parsed);
+        const timestamp = getMessageTimestampMs(parsed);
         if (timestamp !== undefined) {
           stats.maxTimestamp = Math.max(stats.maxTimestamp ?? 0, timestamp);
           if (sessionKey) {
             stats.maxTimestampBySession[sessionKey] = Math.max(
               stats.maxTimestampBySession[sessionKey] ?? 0,
               timestamp,
+            );
+          }
+        }
+        const recordedAtMs = getRecordedAtMs(parsed);
+        if (recordedAtMs !== undefined) {
+          stats.maxRecordedAtMs = Math.max(stats.maxRecordedAtMs ?? 0, recordedAtMs);
+          if (sessionKey) {
+            stats.maxRecordedAtMsBySession[sessionKey] = Math.max(
+              stats.maxRecordedAtMsBySession[sessionKey] ?? 0,
+              recordedAtMs,
             );
           }
         }
@@ -627,6 +650,7 @@ export class CheckpointManager {
     const l0ConversationsCount = normalizeOptionalCount(counts.l0ConversationsCount);
     const totalProcessed = normalizeOptionalCount(counts.totalProcessed);
     const maxL0Timestamp = normalizeOptionalCount(counts.maxL0Timestamp);
+    const maxL0RecordedAtMs = normalizeOptionalCount(counts.maxL0RecordedAtMs);
     const totalMemoriesExtracted = normalizeOptionalCount(counts.totalMemoriesExtracted);
     const maxL1UpdatedAt = counts.maxL1UpdatedAt;
 
@@ -638,14 +662,18 @@ export class CheckpointManager {
         cp.total_processed = totalProcessed;
       }
       if (counts.hasLocalL0Stats || maxL0Timestamp !== undefined) {
-        const cursorMax = maxL0Timestamp ?? 0;
-        cp.last_captured_timestamp = Math.min(cp.last_captured_timestamp, cursorMax);
+        const captureCursorMax = maxL0Timestamp ?? 0;
+        const l1CursorMax = maxL0RecordedAtMs ?? captureCursorMax;
+        cp.last_captured_timestamp = Math.min(cp.last_captured_timestamp, captureCursorMax);
         for (const [sessionKey, state] of Object.entries(cp.runner_states ?? {})) {
-          const sessionMax = counts.hasLocalL0Stats
+          const captureSessionMax = counts.hasLocalL0Stats
             ? counts.maxL0TimestampBySession?.[sessionKey] ?? 0
-            : counts.maxL0TimestampBySession?.[sessionKey] ?? cursorMax;
-          state.last_captured_timestamp = Math.min(state.last_captured_timestamp, sessionMax);
-          state.last_l1_cursor = Math.min(state.last_l1_cursor, sessionMax);
+            : counts.maxL0TimestampBySession?.[sessionKey] ?? captureCursorMax;
+          const l1SessionMax = counts.hasLocalL0Stats
+            ? counts.maxL0RecordedAtMsBySession?.[sessionKey] ?? captureSessionMax
+            : counts.maxL0RecordedAtMsBySession?.[sessionKey] ?? l1CursorMax;
+          state.last_captured_timestamp = Math.min(state.last_captured_timestamp, captureSessionMax);
+          state.last_l1_cursor = Math.min(state.last_l1_cursor, l1SessionMax);
         }
       }
       if (totalMemoriesExtracted !== undefined) {
