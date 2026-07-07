@@ -70,12 +70,14 @@ export interface ContextSnapshot {
 }
 
 // Internal metadata keys that should NOT be counted as tokens.
-// These are plugin-internal markers that the LLM never sees.
+// These are plugin-internal markers or framework-internal fields that the LLM never sees.
+// Note: "details" is stripped by OpenClaw's normalizeMessagesForLlmBoundary before sending to LLM.
 const INTERNAL_KEYS = new Set([
   "_offloaded",
   "_mmdContextMessage",
   "_mmdInjection",
   "_contextOffloadProcessed",
+  "details",
 ]);
 
 /** JSON replacer that strips internal metadata keys from serialization. */

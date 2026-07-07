@@ -6,6 +6,7 @@
  */
 import { generateText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
 import type { PluginLogger } from "../types.js";
 
 const TAG = "[context-offload] [local-llm]";
@@ -16,6 +17,11 @@ export interface LlmCallerConfig {
   model: string;
   temperature: number;
   timeoutMs: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the LLM endpoint.
+   * See DisableThinkingStrategy for the full list of strategies.
+   */
+  disableThinking?: DisableThinkingStrategy;
 }
 
 export interface CallLlmOpts {
@@ -27,6 +33,8 @@ export interface CallLlmOpts {
   timeoutMs?: number;
   /** Label for logging (e.g. "L1", "L1.5", "L2") */
   label?: string;
+  /** Pre-created fetch wrapper (for caching at the client level). */
+  customFetch?: typeof globalThis.fetch;
 }
 
 /**
@@ -48,10 +56,15 @@ export async function callLlm(
     `systemLen=${opts.systemPrompt.length}, userLen=${opts.userPrompt.length}`,
   );
 
+  const customFetch = opts.customFetch ?? (
+    config.disableThinking ? createNoThinkFetch(config.disableThinking) : undefined
+  );
+
   const provider = createOpenAI({
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
     compatibility: "compatible",
+    ...(customFetch ? { fetch: customFetch } : {}),
   });
 
   try {

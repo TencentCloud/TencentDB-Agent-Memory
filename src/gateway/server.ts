@@ -16,6 +16,7 @@
 
 import http from "node:http";
 import { URL } from "node:url";
+import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -92,6 +93,20 @@ function sendError(res: http.ServerResponse, status: number, message: string): v
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
 }
 
+/**
+ * Constant-time string equality for secrets.
+ *
+ * Returns `false` on any length mismatch (without comparing bytes), and uses
+ * `crypto.timingSafeEqual` for the equal-length case so that an attacker
+ * probing the API key cannot use response timing to learn a prefix match.
+ */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf-8");
+  const bb = Buffer.from(b, "utf-8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 // ============================
 // Gateway Server
 // ============================
@@ -142,10 +157,59 @@ export class TdaiGateway {
       this.server!.listen(port, host, () => {
         this.startTime = Date.now();
         this.logger.info(`Gateway listening on http://${host}:${port}`);
+        this.logSecurityPosture();
         resolve();
       });
       this.server!.on("error", reject);
     });
+  }
+
+  /**
+   * Emit a one-shot security posture summary at startup.
+   *
+   * Goals:
+   *   1. Make the "auth disabled" state highly visible to anyone reading logs
+   *      (this is the documented default, but operators must know it before
+   *      they expose the port).
+   *   2. Loudly warn when the gateway is bound to anything other than the
+   *      loopback interface without an API key — that exact combination is
+   *      what the security audit flagged as a real exposure.
+   *   3. Never log the key itself.
+   */
+  private logSecurityPosture(): void {
+    const { host, apiKey, corsOrigins } = this.config.server;
+    const authOn = !!apiKey;
+    const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+
+    this.logger.info(
+      `Security posture: auth=${authOn ? "ENABLED (Bearer)" : "disabled"} ` +
+      `host=${host} cors=${corsOrigins.length === 0 ? "no-headers" : corsOrigins.includes("*") ? "wildcard(*)" : `allowlist(${corsOrigins.length})`}`
+    );
+
+    if (!authOn) {
+      this.logger.warn(
+        "TDAI_GATEWAY_API_KEY is NOT set — all routes except GET /health are " +
+        "open to anyone who can reach this port. This is the legacy default. " +
+        "Set TDAI_GATEWAY_API_KEY (or server.apiKey in tdai-gateway.yaml) and " +
+        "pass `Authorization: Bearer <key>` from clients before exposing the " +
+        "gateway beyond the loopback interface."
+      );
+    }
+    if (!loopback && !authOn) {
+      this.logger.warn(
+        `Gateway is bound to ${host} (non-loopback) WITHOUT an API key. ` +
+        "Every /capture, /search/conversations, /recall, /seed call from the " +
+        "network is currently unauthenticated. Bind to 127.0.0.1, or set " +
+        "TDAI_GATEWAY_API_KEY, before continuing."
+      );
+    }
+    if (corsOrigins.includes("*")) {
+      this.logger.warn(
+        "CORS allow-list contains '*' — every browser origin can call this " +
+        "gateway. Restrict server.corsOrigins to a concrete allow-list for any " +
+        "non-local deployment."
+      );
+    }
   }
 
   /**
@@ -173,10 +237,8 @@ export class TdaiGateway {
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
 
-    // CORS headers (for development)
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    // Apply CORS headers based on configured allow-list (empty → no headers).
+    this.applyCorsHeaders(req, res);
 
     if (method === "OPTIONS") {
       res.writeHead(204);
@@ -185,9 +247,19 @@ export class TdaiGateway {
     }
 
     try {
+      // GET /health is always reachable without auth — operators and
+      // orchestrators (k8s liveness, docker health-check) rely on it being
+      // an unconditionally cheap probe.
+      if (method === "GET" && pathname === "/health") {
+        return this.handleHealth(res);
+      }
+
+      // All other routes go through the optional auth gate. When apiKey is
+      // unset the gate is a no-op (preserves legacy open behaviour) — the
+      // startup WARN in `logSecurityPosture` covers that case.
+      if (!this.checkAuth(req, res)) return;
+
       switch (`${method} ${pathname}`) {
-        case "GET /health":
-          return this.handleHealth(res);
         case "POST /recall":
           return await this.handleRecall(req, res);
         case "POST /capture":
@@ -208,6 +280,75 @@ export class TdaiGateway {
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
       sendError(res, 500, msg);
     }
+  }
+
+  // ============================
+  // Auth & CORS gates (opt-in, off by default)
+  // ============================
+
+  /**
+   * Verify the `Authorization: Bearer <apiKey>` header against the configured
+   * shared secret using a constant-time comparison.
+   *
+   * When `server.apiKey` is unset (`undefined`), this returns `true` without
+   * inspecting the request — this is the documented default and matches the
+   * pre-existing open behaviour. Operators are reminded of this at startup
+   * via `logSecurityPosture`.
+   *
+   * Returns `false` (and writes 401) when the token is missing, malformed, or
+   * does not match. Callers must short-circuit on `false`.
+   */
+  private checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const expected = this.config.server.apiKey;
+    if (!expected) return true; // auth disabled — default behaviour
+
+    const header = req.headers["authorization"];
+    if (typeof header !== "string" || !header.startsWith("Bearer ")) {
+      sendError(res, 401, "Unauthorized: missing Bearer token");
+      return false;
+    }
+    const provided = header.slice("Bearer ".length).trim();
+    if (!provided || !safeEqual(provided, expected)) {
+      sendError(res, 401, "Unauthorized: invalid token");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Echo `Access-Control-Allow-Origin` (and friends) only for whitelisted
+   * origins. With no list configured we emit no CORS headers at all, which
+   * makes the browser refuse the cross-origin request as desired.
+   *
+   * The single-entry list `["*"]` opts back into permissive CORS (development
+   * use only; the startup log flags this loudly).
+   */
+  private applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const allow = this.config.server.corsOrigins ?? [];
+    if (allow.length === 0) return; // strict default — no headers
+
+    if (allow.includes("*")) {
+      // Wildcard — preserves the legacy permissive behaviour for callers that
+      // opt in explicitly via config. Note: with wildcard we deliberately do
+      // not echo back the request Origin and do not send `Vary: Origin`,
+      // mirroring how the gateway behaved before this change.
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      return;
+    }
+
+    const requestOrigin = req.headers["origin"];
+    if (typeof requestOrigin !== "string" || !allow.includes(requestOrigin)) {
+      // Origin not in allow-list — emit no CORS headers; browser will block.
+      // Always set Vary so caches don't poison responses across origins.
+      res.setHeader("Vary", "Origin");
+      return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Vary", "Origin");
   }
 
   // ============================
@@ -389,6 +530,7 @@ export class TdaiGateway {
         model: this.config.llm.model,
         maxTokens: this.config.llm.maxTokens,
         timeoutMs: this.config.llm.timeoutMs,
+        disableThinking: this.config.llm.disableThinking,
       },
     };
     if (body.config_override) {

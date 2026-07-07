@@ -41,7 +41,7 @@ export async function injectMmdIntoMessages(
   // When waitForL15 is set (assemble path), skip injection entirely if L1.5 hasn't settled yet.
   // This preserves any previously injected MMD messages without removing or replacing them.
   if (options?.waitForL15 && !stateManager.l15Settled) {
-    logger.info(
+    logger.debug?.(
       `[context-offload] mmd-injector inject: SKIPPED — L1.5 not settled yet (waitForL15=true), msgs=${messages.length}`,
     );
     return { mmdTokens: stateManager.lastMmdInjectedTokens };
@@ -49,7 +49,7 @@ export async function injectMmdIntoMessages(
 
   const injReady = stateManager.isMmdInjectionReady();
   const actFile = stateManager.getActiveMmdFile();
-  logger.info(
+  logger.debug?.(
     `[context-offload] mmd-injector inject: injectionReady=${injReady}, activeMmdFile=${actFile ?? "null"}, msgs=${messages.length}`,
   );
   if (!injReady) {
@@ -67,7 +67,7 @@ export async function injectMmdIntoMessages(
   const countTokens = createL3TokenCounter(pluginConfig, logger);
 
   const activeMmdText = await buildActiveMmdText(stateManager, logger);
-  logger.info(
+  logger.debug?.(
     `[context-offload] mmd-injector inject: activeMmdText=${activeMmdText ? `${activeMmdText.length} chars` : "null"}, contextWindow=${contextWindow}`,
   );
   removeMmdMessages(messages);
@@ -88,7 +88,7 @@ export async function injectMmdIntoMessages(
   stateManager.lastMmdInjectedTokens = totalMmdTokens;
 
   const activeMmd = stateManager.getActiveMmdFile();
-  logger.info(
+  logger.debug?.(
     `[context-offload] mmd-injector: injected active MMD into messages (${totalMmdTokens} tokens, file=${activeMmd})`,
   );
 
@@ -96,7 +96,7 @@ export async function injectMmdIntoMessages(
   if (totalMmdTokens > 0) {
     const mmdCount = messages.filter((m: any) => m[MMD_MESSAGE_MARKER] === "active" || m._mmdInjection).length;
     const offloadedCount = messages.filter((m: any) => m._offloaded).length;
-    logger.info(`[context-offload] POST-ACTIVE-MMD-INJECT: ${messages.length} msgs, mmd=${mmdCount}, offloaded=${offloadedCount}`);
+    logger.debug?.(`[context-offload] POST-ACTIVE-MMD-INJECT: ${messages.length} msgs, mmd=${mmdCount}, offloaded=${offloadedCount}`);
   }
 
   traceOffloadDecision({
@@ -133,7 +133,7 @@ export async function maybeUpdateMmdInMessages(
 ): Promise<boolean> {
   const injectionReady = stateManager.isMmdInjectionReady();
   const activeMmdFile = stateManager.getActiveMmdFile();
-  logger.info(
+  logger.debug?.(
     `[context-offload] mmd-injector maybeUpdate: injectionReady=${injectionReady}, activeMmdFile=${activeMmdFile ?? "null"}, msgs=${messages.length}`,
   );
   if (!injectionReady) return false;
@@ -142,11 +142,11 @@ export async function maybeUpdateMmdInMessages(
   let mmdContent: string | null;
   try {
     mmdContent = await readMmd(stateManager.ctx, activeMmdFile);
-    logger.info(
+    logger.debug?.(
       `[context-offload] mmd-injector maybeUpdate: readMmd result=${mmdContent ? `${mmdContent.length} chars` : "null"}`,
     );
   } catch (e) {
-    logger.info(`[context-offload] mmd-injector maybeUpdate: readMmd error=${e}`);
+    logger.debug?.(`[context-offload] mmd-injector maybeUpdate: readMmd error=${e}`);
     return false;
   }
   if (!mmdContent) return false;
@@ -155,7 +155,7 @@ export async function maybeUpdateMmdInMessages(
   const lastFp = stateManager.getInjectedMmdVersion(activeMmdFile);
   if (newFp === lastFp) return false;
 
-  logger.info(
+  logger.debug?.(
     `[context-offload] mmd-injector: MMD updated (${activeMmdFile}), refreshing in-loop`,
   );
   await injectMmdIntoMessages(

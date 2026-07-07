@@ -15,17 +15,11 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { RecallRerankConfig } from "../../config.js";
 import { getRerankCandidateLimit, rerankCandidates } from "../recall/reranker.js";
+import type { Logger } from "../types.js";
 
 // ============================
 // Types
 // ============================
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
 
 export interface MemorySearchResultItem {
   id: string;

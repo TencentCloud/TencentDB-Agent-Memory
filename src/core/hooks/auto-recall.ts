@@ -12,6 +12,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatForLLM } from "../../utils/time.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -21,8 +22,12 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import { getRerankCandidateLimit, rerankTextCandidates } from "../recall/reranker.js";
+import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
+const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
+const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
+const RECALL_LINE_SEPARATOR = "\n";
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -42,13 +47,6 @@ const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 - 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
 - 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
 </memory-tools-guide>`
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
 
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
@@ -128,6 +126,7 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
@@ -207,7 +206,7 @@ async function performAutoRecallInner(params: {
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join("\n")}\n</relevant-memories>`;
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -750,23 +749,111 @@ function formatMemoryLine(m: FormatableMemory): string {
   return line;
 }
 
+function applyRecallBudget(
+  lines: string[],
+  recall: MemoryTdaiConfig["recall"],
+  logger?: Logger,
+): string[] {
+  const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
+  const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
+
+  if (!maxCharsPerMemory && !maxTotalRecallChars) {
+    return lines;
+  }
+
+  const budgeted: string[] = [];
+  let usedChars = 0;
+  let truncatedCount = 0;
+  let droppedCount = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const perMemoryBounded = maxCharsPerMemory
+      ? truncateRecallLine(line, maxCharsPerMemory)
+      : line;
+    let wasTruncated = perMemoryBounded !== line;
+
+    if (!maxTotalRecallChars) {
+      budgeted.push(perMemoryBounded);
+      if (wasTruncated) truncatedCount++;
+      continue;
+    }
+
+    const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
+    const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
+    if (remainingChars <= 0) {
+      droppedCount += lines.length - i;
+      break;
+    }
+
+    if (perMemoryBounded.length > remainingChars) {
+      const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
+      if (canFit) {
+        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
+        budgeted.push(totalBounded);
+        usedChars += separatorChars + totalBounded.length;
+        wasTruncated ||= totalBounded !== perMemoryBounded;
+        if (wasTruncated) truncatedCount++;
+      }
+      droppedCount += lines.length - i - (canFit ? 1 : 0);
+      break;
+    }
+
+    budgeted.push(perMemoryBounded);
+    usedChars += separatorChars + perMemoryBounded.length;
+    if (wasTruncated) truncatedCount++;
+  }
+
+  if (truncatedCount > 0 || droppedCount > 0) {
+    logger?.debug?.(
+      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
+      `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
+      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
+    );
+  }
+
+  return budgeted;
+}
+
+function normalizeBudgetLimit(value: number | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
+}
+
+function truncateRecallLine(line: string, maxChars: number): string {
+  // Count and slice by code point, not UTF-16 code unit, so a cut never lands
+  // between the halves of a surrogate pair (which would corrupt a non-BMP
+  // character to U+FFFD when the line is UTF-8 encoded for the request).
+  const cps = Array.from(line);
+  if (cps.length <= maxChars) return line;
+  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) {
+    return cps.slice(0, maxChars).join("");
+  }
+  return `${cps.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).join("").trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
+}
+
 /**
- * Format an ISO 8601 timestamp to a concise date or datetime string.
+ * Format an ISO 8601 timestamp to a concise, timezone-aware string for display.
+ * Uses the configured timezone (via time module).
  * - If the time part is 00:00:00 → show date only (e.g. "2025-03-01")
- * - Otherwise → show date + time (e.g. "2025-03-01 14:30")
+ * - Otherwise → show full ISO 8601 with offset (e.g. "2025-03-01T14:30:00+08:00")
  * - Returns undefined for empty/invalid inputs.
  */
 function formatTimestamp(ts: string | undefined): string | undefined {
   if (!ts) return undefined;
-  // Try to parse ISO format: "2025-03-01T14:30:00.000Z" or "2025-03-01"
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return undefined;
+
+  // Check if time part is midnight UTC (date-only semantics)
   const match = ts.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::\d{2})?)?/);
-  if (!match) return undefined;
-  const datePart = match[1];
-  const timePart = match[2];
-  if (!timePart || timePart === "00:00") {
-    return datePart;
+  if (match) {
+    const timePart = match[2];
+    if (!timePart || timePart === "00:00") {
+      return match[1]; // date-only, no timezone conversion needed
+    }
   }
-  return `${datePart} ${timePart}`;
+
+  return formatForLLM(ts);
 }
 
 function normalizePositiveInt(value: number | undefined, fallback: number): number {

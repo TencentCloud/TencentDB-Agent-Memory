@@ -126,6 +126,34 @@ def _resolve_gateway_host(default: str = _DEFAULT_GATEWAY_HOST) -> str:
     return host or default
 
 
+def _resolve_gateway_api_key() -> Optional[str]:
+    """Read the optional Gateway Bearer token from the environment.
+
+    Looks at ``MEMORY_TENCENTDB_GATEWAY_API_KEY`` (Hermes-namespaced) first;
+    falls back to ``TDAI_GATEWAY_API_KEY`` so an operator who already wired
+    up the Gateway-side env var does not have to set two names. Returns
+    ``None`` when neither is set, which means "do not attach an
+    Authorization header" — exactly matching the Gateway's own legacy
+    default. Whitespace-only values are treated as unset to guard against
+    shells that quote ``\\n`` into env vars.
+
+    Important: this is purely the **client-side** secret. Whether the
+    Gateway actually enforces a Bearer check is decided on the Gateway
+    side (its own ``TDAI_GATEWAY_API_KEY`` / ``server.apiKey``); the
+    plugin does not propagate this value across to the spawned Gateway.
+    The operator must configure the same secret on both ends if they
+    want auth enforcement.
+    """
+    for var in ("MEMORY_TENCENTDB_GATEWAY_API_KEY", "TDAI_GATEWAY_API_KEY"):
+        raw = os.environ.get(var)
+        if raw is None:
+            continue
+        value = raw.strip()
+        if value:
+            return value
+    return None
+
+
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
 # set MEMORY_TENCENTDB_GATEWAY_CMD. Order matters: in-tree checkout (next to
 # this file) wins over ad-hoc clones in ``$HOME``.
@@ -675,7 +703,12 @@ class MemoryTencentdbProvider(MemoryProvider):
         # registration and an exception would break the whole plugin).
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
-        client = MemoryTencentdbSdkClient(base_url=f"http://{host}:{port}", timeout=2)
+        api_key = _resolve_gateway_api_key()
+        client = MemoryTencentdbSdkClient(
+            base_url=f"http://{host}:{port}",
+            timeout=2,
+            api_key=api_key,
+        )
         try:
             result = client.health(timeout=2)
             return result.get("status") in ("ok", "degraded")
@@ -711,11 +744,18 @@ class MemoryTencentdbProvider(MemoryProvider):
         # it only runs when the env var is not set, so existing deployments
         # are unaffected.
         gateway_cmd = os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or _discover_gateway_cmd()
+        # Optional Bearer token attached to outbound Gateway requests
+        # (off by default). The plugin only handles the client side — if
+        # the operator wants the Gateway to enforce auth, they must
+        # configure ``TDAI_GATEWAY_API_KEY`` / ``server.apiKey`` on the
+        # Gateway side directly so both ends agree on the secret.
+        api_key = _resolve_gateway_api_key()
 
         self._supervisor = GatewaySupervisor(
             host=host,
             port=port,
             gateway_cmd=gateway_cmd,
+            api_key=api_key,
         )
 
         # Mark as initialized immediately so tools are registered
@@ -1044,6 +1084,20 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "description": "Gateway port",
                 "default": "8420",
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_PORT",
+            },
+            {
+                "key": "gateway_api_key",
+                "description": (
+                    "Optional Bearer token attached to outbound Gateway "
+                    "requests. Set this to the same secret you configure on "
+                    "the Gateway side (``TDAI_GATEWAY_API_KEY`` / "
+                    "``server.apiKey``) so the Bearer comparison succeeds. "
+                    "Leave unset to skip the Authorization header entirely "
+                    "(legacy default; matches an open Gateway)."
+                ),
+                "secret": True,
+                "required": False,
+                "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY",
             },
             {
                 "key": "llm_api_key",

@@ -11,15 +11,9 @@
 
 import { BM25Encoder } from "@tencentdb-agent-memory/tcvdb-text";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import type { Logger } from "../types.js";
 
 export type { SparseVector };
-
-interface Logger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
 
 export interface BM25LocalConfig {
   /** Whether BM25 sparse encoding is enabled (default: true) */

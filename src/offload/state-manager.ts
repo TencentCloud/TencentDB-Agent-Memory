@@ -88,6 +88,17 @@ export class OffloadStateManager {
   lastKnownMessageCount = 0;
   /** Consecutive QUICK-SKIP count; reset to 0 on each precise calculation */
   consecutiveQuickSkips = 0;
+  /** Boundary info from last aggressive deletion — enables O(1) head-delete on replay.
+   *  originalIndex: position of the first kept message in the original input array.
+   *  fingerprint: hash of that message for verification.
+   *  keptMsgCount: number of messages kept after aggressive.
+   *  remainingTokens: total tokens (incl sys) after aggressive compression. */
+  _lastAggressiveBoundary: {
+    originalIndex: number;
+    fingerprint: number;
+    keptMsgCount: number;
+    remainingTokens: number;
+  } | null = null;
   /** Cached tool params from before_tool_call hook */
   _pendingParams = new Map<string, Record<string, unknown>>();
   /** Last L1.5 prompt hash — per-session to avoid cross-session re-trigger skip */
@@ -277,6 +288,7 @@ export class OffloadStateManager {
       this.lastKnownMessageCount = 0;
       this.consecutiveQuickSkips = 0;
       this._forceEmergencyNext = false;
+      this._lastAggressiveBoundary = null;
       // Keep cachedSystemPrompt/Tokens across switchSession within the same agent
       if (prevAgent !== parsed.agentName) {
         this.cachedSystemPrompt = null;

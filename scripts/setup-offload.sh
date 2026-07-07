@@ -32,7 +32,7 @@ fail()  { echo -e "${RED}[FAIL]${NC}  $*" >&2; exit 1; }
 # ── 常量 ──
 OPENCLAW_JSON="${HOME}/.openclaw/openclaw.json"
 PLUGIN_ID="memory-tencentdb"
-CONTEXT_ENGINE_ID="openclaw-context-offload"
+CONTEXT_ENGINE_ID="memory-tencentdb"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCH_SCRIPT="${SCRIPT_DIR}/openclaw-after-tool-call-messages.patch.sh"
 

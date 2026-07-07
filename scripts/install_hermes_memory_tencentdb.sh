@@ -51,7 +51,10 @@ NPM_PACKAGE="@tencentdb-agent-memory/memory-tencentdb@latest"
 
 # Hermes 路径
 HERMES_HOME="$USER_HOME/.hermes"
-HERMES_AGENT_DIR="$HERMES_HOME/hermes-agent"
+# HERMES_AGENT_DIR（fix: issue #18）
+# 用户通过环境变量传什么就用什么；未设置时 fallback 到传统路径。
+# 如果目录不存在，后续前置检查会统一报错。
+HERMES_AGENT_DIR="${HERMES_AGENT_DIR:-$HERMES_HOME/hermes-agent}"
 HERMES_CONFIG="$HERMES_HOME/config.yaml"
 
 # memory-tencentdb 统一根目录（所有 tdai 相关数据/代码都收纳在此）
@@ -243,7 +246,23 @@ echo "[memory-tencentdb] Step 4: Setting up Gateway environment..."
 
 # 构建 Gateway 启动命令
 # 使用 sh -c 包裹，先 cd 到插件目录再启动 Gateway（ESM 解析需要）
-GATEWAY_CMD="sh -c 'cd $TDAI_INSTALL_DIR && exec npx tsx src/gateway/server.ts'"
+#
+# 解析 node 绝对路径写入 GATEWAY_CMD（fix: issue #19）
+# 当 Hermes 或独立 Gateway 以 systemd service 运行时，systemd 不会
+# source 任何 user shell rc 文件，nvm/asdf 注入的 PATH 不存在。
+# 用 `command -v node` 在 install 时解析绝对路径，并改用 Node 原生
+# `--import tsx/esm`（Node >= 20.6 stable）替代 `npx tsx`，
+# 让最终命令完全不依赖运行时 PATH。
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ]; then
+    echo "[ERROR] 'node' not found in PATH; cannot generate Gateway start command." >&2
+    echo "[ERROR] If you installed Node via nvm/asdf, source the loader script first:" >&2
+    echo "[ERROR]   source ~/.bashrc   # or 'nvm use <version>'" >&2
+    exit 1
+fi
+echo "[memory-tencentdb] Resolved node: $NODE_BIN"
+
+GATEWAY_CMD="sh -c 'cd $TDAI_INSTALL_DIR && exec \"$NODE_BIN\" --import tsx/esm src/gateway/server.ts'"
 
 # ── 4a: /etc/profile.d（SSH 交互式登录场景） ──
 # 写入 /etc/profile.d 持久化环境变量，供 SSH 手动执行 `hermes` 时使用。
