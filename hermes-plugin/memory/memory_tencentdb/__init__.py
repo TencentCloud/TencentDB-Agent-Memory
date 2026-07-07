@@ -1048,9 +1048,27 @@ class MemoryTencentdbProvider(MemoryProvider):
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
         """Mirror built-in memory writes to memory-tencentdb for indexing."""
-        # TODO: Implement mirroring of Hermes builtin MEMORY.md/USER.md writes
-        # to memory-tencentdb's recall index for conflict suppression and dedup.
-        pass
+        if action.strip().lower() != "add":
+            return
+        if not content.strip():
+            return
+        if not self._ensure_alive_for_request() or not self._client:
+            return
+
+        try:
+            self._client.write_explicit_memory(
+                action=action,
+                target=target,
+                content=content,
+                session_key=self._session_id,
+                session_id=self._session_id,
+                user_id=self._user_id,
+            )
+            self._record_success()
+        except Exception as e:
+            self._record_failure()
+            logger.warning("memory-tencentdb explicit memory sync failed: %s", e)
+            self._try_recover_gateway()
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Trigger session-level flush on the Gateway."""

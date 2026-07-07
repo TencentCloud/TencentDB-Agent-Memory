@@ -28,6 +28,7 @@ import type {
   CompletedTurn,
   MemorySearchParams,
   ConversationSearchParams,
+  ExplicitMemoryWriteParams,
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
@@ -36,6 +37,7 @@ import { performAutoRecall } from "./hooks/auto-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
+import { ingestExplicitMemory } from "./record/explicit-memory.js";
 import {
   initDataDirectories,
   initStores,
@@ -361,6 +363,35 @@ export class TdaiCore {
     await this.storeReady?.catch(() => {});
     if (!this.scheduler) return;
     await this.scheduler.flushSession(sessionKey);
+  }
+
+  /**
+   * Mirror explicit host durable-memory writes directly into L1.
+   */
+  async ingestExplicitMemory(params: ExplicitMemoryWriteParams): Promise<{ stored: boolean; memoryId?: string; type?: string }> {
+    await this.storeReady?.catch(() => {});
+
+    const record = await ingestExplicitMemory({
+      action: params.action,
+      target: params.target,
+      content: params.content,
+      baseDir: this.dataDir,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      logger: this.logger,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+    });
+
+    if (!record) {
+      return { stored: false };
+    }
+
+    return {
+      stored: true,
+      memoryId: record.id,
+      type: record.type,
+    };
   }
 
   // ============================
