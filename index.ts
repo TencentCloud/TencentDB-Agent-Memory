@@ -44,6 +44,10 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  stripRelevantMemoriesFromParts,
+  stripRelevantMemoriesFromText,
+} from "./src/utils/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -624,29 +628,19 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
     if (typeof msg.content === "string") {
       if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
+      const result = stripRelevantMemoriesFromText(msg.content);
+      if (result.removedChars === 0) return;
+      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${result.value.length} chars`);
+      return { message: { ...event.message, content: result.value } as typeof event.message };
     }
 
     if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
+      const result = stripRelevantMemoriesFromParts(msg.content as Array<Record<string, unknown>>);
+      if (result.removedChars === 0) return;
+      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${result.removedChars} chars`);
+      return { message: { ...event.message, content: result.value } as unknown as typeof event.message };
     }
   });
 
