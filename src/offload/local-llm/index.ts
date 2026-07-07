@@ -7,6 +7,7 @@
  * Used when `offload.model` is configured and `offload.backendUrl` is not set.
  */
 import { callLlm, type LlmCallerConfig } from "./llm-caller.js";
+import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
 import { L1_SYSTEM_PROMPT, buildL1UserPrompt, type L1ToolPair } from "./prompts/l1-prompt.js";
 import { L15_SYSTEM_PROMPT, buildL15UserPrompt, type L15CurrentMmd, type L15MmdMeta } from "./prompts/l15-prompt.js";
 import { L2_SYSTEM_PROMPT, buildL2UserPrompt, type L2NewEntry } from "./prompts/l2-prompt.js";
@@ -24,11 +25,13 @@ export interface LocalLlmClientConfig {
   model: string;
   temperature?: number;
   timeoutMs?: number;
+  disableThinking?: DisableThinkingStrategy;
 }
 
 export class LocalLlmClient {
   private config: LlmCallerConfig;
   private logger?: PluginLogger;
+  private readonly customFetch?: typeof globalThis.fetch;
 
   constructor(cfg: LocalLlmClientConfig, logger?: PluginLogger) {
     this.config = {
@@ -37,8 +40,15 @@ export class LocalLlmClient {
       model: cfg.model,
       temperature: cfg.temperature ?? 0.2,
       timeoutMs: cfg.timeoutMs ?? 120_000,
+      disableThinking: cfg.disableThinking ?? false,
     };
     this.logger = logger;
+
+    // Cache the fetch wrapper at construction time — avoids per-call creation.
+    this.customFetch = cfg.disableThinking
+      ? createNoThinkFetch(cfg.disableThinking)
+      : undefined;
+
     logger?.info?.(`${TAG} Initialized: model=${cfg.model}, baseUrl=${cfg.baseUrl}`);
   }
 
@@ -59,6 +69,7 @@ export class LocalLlmClient {
       systemPrompt: L1_SYSTEM_PROMPT,
       userPrompt,
       label: "L1",
+      customFetch: this.customFetch,
     }, this.logger);
 
     const entries = parseL1Response(raw);
@@ -97,6 +108,7 @@ export class LocalLlmClient {
       systemPrompt: L15_SYSTEM_PROMPT,
       userPrompt,
       label: "L1.5",
+      customFetch: this.customFetch,
     }, this.logger);
 
     const result = parseL15Response(raw);
@@ -138,6 +150,7 @@ export class LocalLlmClient {
       userPrompt,
       label: "L2",
       timeoutMs: 120_000, // L2 may take longer due to complex prompts
+      customFetch: this.customFetch,
     }, this.logger);
 
     const result = parseL2Response(raw);

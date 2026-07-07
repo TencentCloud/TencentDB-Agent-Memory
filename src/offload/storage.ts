@@ -162,7 +162,7 @@ export async function listRegisteredSessions(
 // ─── JSONL Defense Layer ─────────────────────────────────────────────────────
 
 const UNSAFE_CHAR_RE =
-  /[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F\u0080-\u009F\uD800-\uDFFF\u200B-\u200F\u2028\u2029\uFEFF]/g;
+  /[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F\u0080-\u009F\uD800-\uDFFF\u200B-\u200F\u2028\u2029\uFEFF]/gu;
 
 /** Layer 0 — Source text sanitize. Strips unsafe characters from arbitrary text. */
 export function sanitizeText(text: string): string {

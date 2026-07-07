@@ -69,16 +69,16 @@ export async function handleTaskTransition(
     const num = await stateManager.nextMmdNumber();
     const paddedNum = String(num).padStart(3, "0");
     const filename = `${paddedNum}-${label}.mmd`;
-    logger.info(`[context-offload] L1.5: Creating new MMD: ${filename} (replacing ${currentMmd ?? "(none)"})`);
+    logger.debug?.(`[context-offload] L1.5: Creating new MMD: ${filename} (replacing ${currentMmd ?? "(none)"})`);
     await cleanupIfEmptyShell(currentMmd);
     stateManager.setActiveMmd(filename, label);
     const initialMmd = `flowchart TD\n    ${paddedNum}-N1["${label}"]\n`;
     await writeMmd(ctx, filename, initialMmd);
-    logger.info(`[context-offload] L1.5: New MMD created and activated: ${filename}`);
+    logger.debug?.(`[context-offload] L1.5: New MMD created and activated: ${filename}`);
   };
 
   const reactivateMmd = async (contFile: string) => {
-    logger.info(`[context-offload] L1.5: Reactivating MMD: ${contFile} (current=${currentMmd ?? "(none)"})`);
+    logger.debug?.(`[context-offload] L1.5: Reactivating MMD: ${contFile} (current=${currentMmd ?? "(none)"})`);
     if (currentMmd && currentMmd !== contFile) {
       await cleanupIfEmptyShell(currentMmd);
     }
@@ -95,7 +95,7 @@ export async function handleTaskTransition(
   };
 
   if (judgment.taskCompleted) {
-    logger.info(`[context-offload] L1.5: Task COMPLETED — continuation=${judgment.isContinuation}, longTask=${judgment.isLongTask}, contFile=${judgment.continuationMmdFile ?? "N/A"}, newLabel=${judgment.newTaskLabel ?? "N/A"}`);
+    logger.debug?.(`[context-offload] L1.5: Task COMPLETED — continuation=${judgment.isContinuation}, longTask=${judgment.isLongTask}, contFile=${judgment.continuationMmdFile ?? "N/A"}, newLabel=${judgment.newTaskLabel ?? "N/A"}`);
     if (judgment.isContinuation && judgment.continuationMmdFile) {
       await reactivateMmd(judgment.continuationMmdFile);
     } else if (judgment.isLongTask && judgment.newTaskLabel) {
@@ -110,11 +110,11 @@ export async function handleTaskTransition(
         stateManager.setActiveMmd(null, null);
       }
     } else {
-      logger.info("[context-offload] L1.5: No MMD needed (casual/short), clearing active MMD");
+      logger.debug?.("[context-offload] L1.5: No MMD needed (casual/short), clearing active MMD");
       stateManager.setActiveMmd(null, null);
     }
   } else {
-    logger.info(`[context-offload] L1.5: Task NOT completed — continuation=${judgment.isContinuation}, longTask=${judgment.isLongTask}, current=${currentMmd ?? "(none)"}`);
+    logger.debug?.(`[context-offload] L1.5: Task NOT completed — continuation=${judgment.isContinuation}, longTask=${judgment.isLongTask}, current=${currentMmd ?? "(none)"}`);
     if (judgment.isContinuation) {
       if (!currentMmd && judgment.continuationMmdFile) {
         await reactivateMmd(judgment.continuationMmdFile);

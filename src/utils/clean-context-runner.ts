@@ -5,7 +5,7 @@
  * Guarantees:
  * 1. Blank conversation history (temporary session file)
  * 2. Independent system prompt (only the task prompt)
- * 3. No tool calls (tools restricted to minimal read-only set to avoid empty tools[] rejection by some providers)
+ * 3. No tool calls when enableTools=false (disableTools:true — no tool definitions sent to API)
  * 4. No contamination from the main agent's context
  */
 
@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { getEnv } from "./env.js";
 import { report } from "../core/report/reporter.js";
+import type { Logger } from "../core/types.js";
 
 /**
  * Resolve a preferred temporary directory for memory-tdai operations.
@@ -49,12 +50,7 @@ function resolveOpenClawTmpDir(): string {
 
 const TAG = "[memory-tdai] [runner]";
 
-interface RunnerLogger {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-}
+type RunnerLogger = Logger;
 
 // Dynamic import type — runEmbeddedPiAgent is an internal API
 // Prefer the public plugin runtime signature so host-injected runtimes stay assignable.
@@ -394,10 +390,11 @@ export class CleanContextRunner {
         },
         tools: {
           ...((this.options.config as Record<string, unknown>)?.tools as Record<string, unknown> | undefined),
-          // When enableTools=false we still keep one lightweight read-only tool
-          // so that the tools array sent to the API is non-empty.
-          // Some providers (e.g. qwencode) reject tools:[] with minItems:1 validation.
-          allow: this.options.enableTools ? ["read", "write", "edit"] : ["read"],
+          // When enableTools=true, restrict to the minimal set needed for
+          // scene extraction (read/write/edit).
+          // When enableTools=false, pass an empty allow list — disableTools:true
+          // will prevent tools from being sent to the API entirely.
+          allow: this.options.enableTools ? ["read", "write", "edit"] : [],
         },
         // Override the full agent system prompt with the caller's extraction-specific
         // system prompt. This replaces OpenClaw's default system prompt (identity,
@@ -455,11 +452,13 @@ export class CleanContextRunner {
         runId,
         provider: this.resolvedProvider,
         model: this.resolvedModel,
-        // Do NOT pass disableTools:true — that produces tools:[] which some
-        // providers (qwencode) reject with "[] is too short - 'tools'".
-        // Instead rely on cleanConfig.tools.allow to restrict the tool set
-        // to a minimal read-only tool (when enableTools=false).
-        disableTools: false,
+        // When enableTools=false, pass disableTools:true so that no tool
+        // definitions are sent to the API. This avoids polluting the LLM
+        // context with tool schemas and prevents the model from attempting
+        // tool calls during pure text extraction tasks.
+        // If a provider (e.g. qwencode) rejects empty tools[], users should
+        // switch to StandaloneLLMRunner via LLM configuration instead.
+        disableTools: !this.options.enableTools,
         extraSystemPrompt: effectiveSystemPrompt,
         streamParams: {
           maxTokens: params.maxTokens,

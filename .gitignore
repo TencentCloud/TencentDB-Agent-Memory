@@ -22,7 +22,7 @@ scripts/migrate-sqlite-to-tcvdb/dist/
 scripts/read-local-memory/dist/
 
 # Root-level build output (not used at runtime, not published)
-/dist/
+dist/
 
 node_modules/
 benchmark-runs/
@@ -50,3 +50,6 @@ CLAUDE.md
 
 # Plugin build output
 claude-code-plugin/dist/
+
+# log files
+*.log

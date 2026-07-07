@@ -262,7 +262,7 @@ export async function backfillNodeIds(
   if (changed) {
     await rewriteAllOffloadEntries(ctx, allEntries);
   }
-  logger.info(`[context-offload] L2 backfill: mapped=${mappedCount}, fallback=${fallbackCount} (to ${effectiveFallback ?? "N/A"}), skipped=${skippedCount}, total=${waitIds.size}`);
+  logger.debug?.(`[context-offload] L2 backfill: mapped=${mappedCount}, fallback=${fallbackCount} (to ${effectiveFallback ?? "N/A"}), skipped=${skippedCount}, total=${waitIds.size}`);
 }
 
 function getMostFrequent(arr: string[]): string | null {

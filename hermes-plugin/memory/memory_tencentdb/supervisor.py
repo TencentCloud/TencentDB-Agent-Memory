@@ -40,11 +40,35 @@ class GatewaySupervisor:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         gateway_cmd: Optional[str] = None,
+        api_key: Optional[str] = None,
     ):
+        """Construct the supervisor.
+
+        Args:
+            host: Gateway bind host.
+            port: Gateway bind port.
+            gateway_cmd: Shell command to spawn the Gateway. Falls back to
+                ``MEMORY_TENCENTDB_GATEWAY_CMD`` env var when None.
+            api_key: Optional Gateway Bearer token used by the **client**
+                (every outbound request adds ``Authorization: Bearer <key>``).
+                The supervisor does NOT propagate this value to the spawned
+                Gateway's environment — turning auth on at the Gateway is the
+                operator's responsibility (set ``TDAI_GATEWAY_API_KEY`` /
+                ``server.apiKey`` on the Gateway side directly, in the same
+                place you'd configure its port and data dir). Both ends must
+                see the same secret; the plugin only handles the client half.
+                ``None`` / empty means "do not attach an Authorization
+                header", which preserves the legacy default.
+        """
         self._host = host
         self._port = port
         self._base_url = f"http://{host}:{port}"
-        self._client = MemoryTencentdbSdkClient(base_url=self._base_url, timeout=5)
+        self._api_key = (api_key or "").strip() or None
+        self._client = MemoryTencentdbSdkClient(
+            base_url=self._base_url,
+            timeout=5,
+            api_key=self._api_key,
+        )
         self._process: Optional[subprocess.Popen] = None
         # File handles for child's stdout/stderr. Kept open for the lifetime of
         # the process so the kernel pipe buffer never fills up (otherwise the
@@ -144,6 +168,12 @@ class GatewaySupervisor:
             env = os.environ.copy()
             env["MEMORY_TENCENTDB_GATEWAY_PORT"] = str(self._port)
             env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
+            # Note: we deliberately do NOT inject TDAI_GATEWAY_API_KEY into
+            # the child's env from here. Whether the Gateway enforces auth is
+            # the operator's call — they configure it on the Gateway side
+            # (env, yaml, docker run, systemd unit) just like any other
+            # Gateway setting. The supervisor's ``api_key`` is purely the
+            # client-side Bearer token used for outbound requests.
 
             # Redirect child stdout/stderr to log files instead of PIPE.
             # Using PIPE without an active reader will deadlock the child once

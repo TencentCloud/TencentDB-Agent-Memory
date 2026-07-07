@@ -36,7 +36,7 @@ describe("Gateway optional Bearer token", () => {
   beforeAll(async () => {
     vi.stubEnv("TDAI_GATEWAY_TOKEN", TOKEN);
     gateway = new TdaiGateway({
-      server: { port: PORT, host: "127.0.0.1" },
+      server: { port: PORT, host: "127.0.0.1", corsOrigins: ["https://example.com"] },
     } as never);
     await gateway.start();
   });
@@ -121,6 +121,7 @@ describe("Gateway optional Bearer token", () => {
           port: PORT,
           path: "/recall",
           method: "OPTIONS",
+          headers: { Origin: "https://example.com" },
         },
         (res) => {
           expect(res.statusCode).toBe(204);
