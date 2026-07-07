@@ -343,40 +343,6 @@ interface SearchResult {
 }
 
 /**
- * Search memories and return both formatted lines and structured details.
- *
- * This is a thin wrapper around `searchMemories` that also captures
- * the recalled memory metadata for metric reporting (agent_turn event).
- * It parses the returned formatted lines to extract type/content info.
- */
-async function searchMemoriesWithDetails(
-  userText: string,
-  pluginDataDir: string,
-  cfg: MemoryTdaiConfig,
-  logger: Logger | undefined,
-  strategy: "keyword" | "embedding" | "hybrid",
-  vectorStore?: IMemoryStore,
-  embeddingService?: EmbeddingService,
-): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
-
-  // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-    if (match) {
-      const tag = match[1];
-      const content = match[2].trim();
-      const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-      return { content, score: 0, type: typePart };
-    }
-    return { content: line, score: 0, type: "unknown" };
-  });
-
-  return { lines: result.lines, memories, timing: result.timing };
-}
-
-/**
  * Search memories using the configured strategy.
  *
  * - "keyword": JSONL keyword-based (Jaccard similarity) — no embedding needed
