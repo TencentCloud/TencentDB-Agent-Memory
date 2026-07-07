@@ -729,10 +729,10 @@ class MemoryTencentdbProvider(MemoryProvider):
             results or no-ops — no data is lost because capture will
             succeed once the Gateway comes up and subsequent turns will
             work normally.
-          * ``get_tool_schemas`` already returns schemas optimistically
-            (gated on ``_initialized``, not ``_gateway_available``),
-            so the tools appear in the LLM surface even before the
-            Gateway is ready.
+          * ``get_tool_schemas`` always returns the static tool contract,
+            so Hermes can route memory tools even if it asks for schemas
+            before ``initialize()`` or while the Gateway is still starting.
+            Runtime availability stays guarded in ``handle_tool_call``.
         """
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", "default")
@@ -758,8 +758,9 @@ class MemoryTencentdbProvider(MemoryProvider):
             api_key=api_key,
         )
 
-        # Mark as initialized immediately so tools are registered
-        # (get_tool_schemas checks _initialized, not _gateway_available).
+        # Mark lifecycle state immediately. Tool registration is independent
+        # from this flag because Hermes may build the routing table before
+        # initialize() runs.
         self._initialized = True
 
         def _background_start():
@@ -984,17 +985,11 @@ class MemoryTencentdbProvider(MemoryProvider):
     # -- Tools ----------------------------------------------------------------
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        # Optimistically return tool schemas if Gateway is configured or running.
-        # This is critical because MemoryManager.add_provider() calls
-        # get_tool_schemas() BEFORE initialize() to build the _tool_to_provider
-        # routing table. If we return [] here, tools won't be routable
-        # even after initialize() succeeds (despite _refresh_tool_registration).
-        if self._gateway_available or self._initialized:
-            return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
-        # Pre-init: check if Gateway is likely to be available
-        if os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or os.environ.get("MEMORY_TENCENTDB_GATEWAY_PORT"):
-            return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
-        return []
+        # Hermes builds its tool-to-provider routing table before initialize().
+        # Tool capability is static; Gateway health is runtime state handled by
+        # handle_tool_call(). Hiding schemas while the sidecar is still starting
+        # makes the tools unroutable for the lifetime of the MemoryManager.
+        return [MEMORY_SEARCH_SCHEMA, CONVERSATION_SEARCH_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
         # Lazy probe — gives tool-call path the same self-heal opportunity

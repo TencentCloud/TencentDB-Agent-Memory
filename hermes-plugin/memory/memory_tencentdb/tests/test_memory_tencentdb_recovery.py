@@ -19,6 +19,7 @@ real Node processes nor open network sockets.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import sys
@@ -180,6 +181,43 @@ def provider_with_fake_supervisor(monkeypatch, fast_watchdog):
         yield provider
     finally:
         provider.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Tool registration
+# ---------------------------------------------------------------------------
+
+
+def test_tool_schemas_are_advertised_before_initialize(monkeypatch):
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_CMD", raising=False)
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_PORT", raising=False)
+    provider = MemoryTencentdbProvider()
+
+    schemas = provider.get_tool_schemas()
+
+    assert [schema["name"] for schema in schemas] == [
+        "memory_tencentdb_memory_search",
+        "memory_tencentdb_conversation_search",
+    ]
+    assert provider._initialized is False
+    assert provider._gateway_available is False
+
+
+def test_advertised_tool_call_is_runtime_guarded_before_gateway_connects(monkeypatch):
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_CMD", raising=False)
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_PORT", raising=False)
+    provider = MemoryTencentdbProvider()
+
+    payload = json.loads(
+        provider.handle_tool_call("memory_tencentdb_memory_search", {"query": "anything"})
+    )
+
+    assert payload == {
+        "error": "memory-tencentdb Gateway is not connected. Memory search is temporarily unavailable.",
+        "hint": "The Gateway may still be starting up. Try again in a moment.",
+    }
+    assert provider._initialized is False
+    assert provider._gateway_available is False
 
 
 # ---------------------------------------------------------------------------

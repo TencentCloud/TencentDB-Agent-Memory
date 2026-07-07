@@ -287,11 +287,10 @@ aliases:
   preference list (in-tree first, then `$HOME`). If you want to pin a
   specific path, set `MEMORY_TENCENTDB_GATEWAY_CMD` explicitly — it always
   wins over discovery.
-- **Search tools silently missing from the LLM**: `get_tool_schemas()`
-  returns `[]` until either the Gateway is reachable or one of
-  `MEMORY_TENCENTDB_GATEWAY_CMD` / `MEMORY_TENCENTDB_GATEWAY_PORT` is set
-  in the environment. Set the env var so the tools are advertised
-  optimistically at registration time.
+- **Gateway unavailable during a tool call**: search tools are always
+  advertised when Hermes registers the provider. If the Gateway is still
+  starting or temporarily unavailable, the tool returns a structured error;
+  check the Gateway health and retry after it recovers.
 - **"circuit breaker tripped"** warnings: five consecutive Gateway errors
   were observed. Calls are paused for 60 s; check Gateway health and logs.
 - **Capture backlog warnings**: Gateway is slow or hung — `sync_turn` is
