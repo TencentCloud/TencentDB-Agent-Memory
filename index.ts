@@ -31,6 +31,7 @@ import {
 } from "./src/utils/clean-context-runner.js";
 import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
+import { CheckpointManager } from "./src/utils/checkpoint.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
@@ -274,6 +275,10 @@ export default function register(api: OpenClawPluginApi) {
   const coreReady = core.initialize().then(() => {
     // Keep cleaner's SQLite handle updated after store init
     memoryCleaner?.setVectorStore(core.getVectorStore());
+
+    // Set checkpoint manager for cleaner to adjust counters after cleanup
+    const checkpointManager = new CheckpointManager(pluginDataDir, api.logger);
+    memoryCleaner?.setCheckpointManager(checkpointManager);
 
     // Pull L2/L3 profiles if remote store supports it
     const vs = core.getVectorStore();
