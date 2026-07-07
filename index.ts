@@ -45,6 +45,15 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export { CodingAgentGatewayClient, CodingAgentGatewayError } from "./src/adapters/coding-agent/index.js";
+export type {
+  CodingAgentConversationSearchRequest,
+  CodingAgentGatewayClientOptions,
+  CodingAgentMemorySearchRequest,
+  CodingAgentRecallRequest,
+  CodingAgentTurn,
+} from "./src/adapters/coding-agent/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**

@@ -6,8 +6,9 @@
  *
  * Directory structure:
  *   adapters/
- *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── openclaw/       — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
+ *   ├── standalone/     — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   └── coding-agent/   — Gateway client for coding-agent hosts (Codex, Claude Code, Cursor)
  */
 
 // OpenClaw adapter
@@ -17,3 +18,13 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Coding-agent Gateway client
+export { CodingAgentGatewayClient, CodingAgentGatewayError } from "./coding-agent/index.js";
+export type {
+  CodingAgentConversationSearchRequest,
+  CodingAgentGatewayClientOptions,
+  CodingAgentMemorySearchRequest,
+  CodingAgentRecallRequest,
+  CodingAgentTurn,
+} from "./coding-agent/index.js";
