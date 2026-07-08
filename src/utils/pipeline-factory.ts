@@ -373,6 +373,14 @@ export function createL1Runner(opts: {
 
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
+        if (!l1Result.success) {
+          throw new Error(
+            `L1 extraction failed for session ${sessionKey}` +
+            (group.sessionId ? ` (sessionId=${group.sessionId})` : "") +
+            (l1Result.failureReason ? `: ${l1Result.failureReason}` : "") +
+            (l1Result.error ? ` - ${l1Result.error}` : ""),
+          );
+        }
         if (l1Result.lastSceneName) {
           lastSceneName = l1Result.lastSceneName;
         }
