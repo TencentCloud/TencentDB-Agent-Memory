@@ -319,6 +319,34 @@ export interface RecalculateResult {
   pipeline_cursors_corrected: number;
 }
 
+interface JsonlScanResult {
+  l0Count: number;
+  l1Count: number;
+  totalProcessed: number;
+  newestL0RecordedAt: number;
+  newestL1UpdatedAt: number;
+  newestL0RecordedAtBySession: Map<string, number>;
+  newestL1UpdatedAtBySession: Map<string, number>;
+  l0Sessions: Set<string>;
+  l1Sessions: Set<string>;
+}
+
+function getStringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+function canTrustL0SessionAbsence(actualL0Count: number, scanResult: JsonlScanResult): boolean {
+  return actualL0Count === scanResult.l0Count;
+}
+
+function canTrustL1SessionAbsence(actualL1Count: number, scanResult: JsonlScanResult): boolean {
+  return actualL1Count === scanResult.l1Count;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -744,6 +772,8 @@ export class CheckpointManager {
     const l1Count = options?.storeCounts?.totalMemoriesExtracted ?? scanResult.l1Count;
 
     // Phase 3: Mutate checkpoint with recalculated values
+    let runnerCursorsCorrected = 0;
+    let pipelineCursorsCorrected = 0;
     const cp = await this.mutate((checkpoint) => {
       // Recalculate memories_since_last_persona
       const memoriesSinceLastPersona = Math.max(0, l1Count - checkpoint.last_persona_at);
@@ -754,34 +784,21 @@ export class CheckpointManager {
       checkpoint.memories_since_last_persona = memoriesSinceLastPersona;
 
       // Phase 4: Clamp per-session runner cursors
-      let runnerCursorsCorrected = 0;
       if (checkpoint.runner_states) {
-        const sessionsWithData = new Set<string>([
-          ...scanResult.l0Sessions,
-          ...scanResult.l1Sessions,
-        ]);
-
         for (const [sessionKey, state] of Object.entries(checkpoint.runner_states)) {
           let changed = false;
+          const newestL0ForSession = scanResult.newestL0RecordedAtBySession.get(sessionKey);
 
-          // Clamp last_l1_cursor to newest retained L0 recordedAt
-          if (scanResult.newestL0RecordedAt > 0) {
-            if (state.last_l1_cursor > scanResult.newestL0RecordedAt) {
-              state.last_l1_cursor = scanResult.newestL0RecordedAt;
+          if (newestL0ForSession !== undefined && newestL0ForSession > 0) {
+            if (state.last_l1_cursor > newestL0ForSession) {
+              state.last_l1_cursor = newestL0ForSession;
               changed = true;
             }
-          }
-
-          // Clamp last_captured_timestamp
-          if (scanResult.newestL0RecordedAt > 0) {
-            if (state.last_captured_timestamp > scanResult.newestL0RecordedAt) {
-              state.last_captured_timestamp = scanResult.newestL0RecordedAt;
+            if (state.last_captured_timestamp > newestL0ForSession) {
+              state.last_captured_timestamp = newestL0ForSession;
               changed = true;
             }
-          }
-
-          // Reset cursors for sessions with no retained data
-          if (!sessionsWithData.has(sessionKey)) {
+          } else if (canTrustL0SessionAbsence(l0Count, scanResult)) {
             if (state.last_l1_cursor !== 0) {
               state.last_l1_cursor = 0;
               changed = true;
@@ -797,26 +814,20 @@ export class CheckpointManager {
       }
 
       // Phase 5: Clamp per-session pipeline cursors
-      let pipelineCursorsCorrected = 0;
       if (checkpoint.pipeline_states) {
-        const sessionsWithL1Data = new Set<string>(scanResult.l1Sessions);
-
         for (const [sessionKey, state] of Object.entries(checkpoint.pipeline_states)) {
           let changed = false;
+          const newestL1ForSession = scanResult.newestL1UpdatedAtBySession.get(sessionKey);
 
-          // Clamp last_extraction_updated_time to newest retained L1 updatedAt
-          if (scanResult.newestL1UpdatedAt && scanResult.newestL1UpdatedAt > 0) {
+          if (newestL1ForSession !== undefined && newestL1ForSession > 0) {
             const currentCursor = state.last_extraction_updated_time
               ? new Date(state.last_extraction_updated_time).getTime()
               : 0;
-            if (currentCursor > scanResult.newestL1UpdatedAt) {
-              state.last_extraction_updated_time = new Date(scanResult.newestL1UpdatedAt).toISOString();
+            if (Number.isFinite(currentCursor) && currentCursor > newestL1ForSession) {
+              state.last_extraction_updated_time = new Date(newestL1ForSession).toISOString();
               changed = true;
             }
-          }
-
-          // Reset cursor for sessions with no retained L1 data
-          if (!sessionsWithL1Data.has(sessionKey)) {
+          } else if (canTrustL1SessionAbsence(l1Count, scanResult)) {
             if (state.last_extraction_updated_time !== "") {
               state.last_extraction_updated_time = "";
               changed = true;
@@ -826,15 +837,7 @@ export class CheckpointManager {
           if (changed) pipelineCursorsCorrected++;
         }
       }
-
-      // Store correction counts in temp properties for return
-      (checkpoint as Record<string, unknown>).__runnerCursorsCorrected = runnerCursorsCorrected;
-      (checkpoint as Record<string, unknown>).__pipelineCursorsCorrected = pipelineCursorsCorrected;
     });
-
-    const runnerCursorsCorrected = (cp as Record<string, unknown>).__runnerCursorsCorrected as number;
-    const pipelineCursorsCorrected = (cp as Record<string, unknown>).__pipelineCursorsCorrected as number;
-
     this.logger.info(
       `[checkpoint] recalculate: l0=${cp.l0_conversations_count}, l1=${cp.total_memories_extracted}, ` +
       `processed=${cp.total_processed}, runner_cursors=${runnerCursorsCorrected}, ` +
@@ -854,15 +857,7 @@ export class CheckpointManager {
   /**
    * Scan JSONL shards to count records and find cursor positions.
    */
-  private async scanJsonlShards(dataDir: string): Promise<{
-    l0Count: number;
-    l1Count: number;
-    totalProcessed: number;
-    newestL0RecordedAt: number;
-    newestL1UpdatedAt: number;
-    l0Sessions: Set<string>;
-    l1Sessions: Set<string>;
-  }> {
+  private async scanJsonlShards(dataDir: string): Promise<JsonlScanResult> {
     const L0_DIR = "conversations";
     const L1_DIR = "records";
 
@@ -871,6 +866,8 @@ export class CheckpointManager {
     let totalProcessed = 0;
     let newestL0RecordedAt = 0;
     let newestL1UpdatedAt = 0;
+    const newestL0RecordedAtBySession = new Map<string, number>();
+    const newestL1UpdatedAtBySession = new Map<string, number>();
     const l0Sessions = new Set<string>();
     const l1Sessions = new Set<string>();
 
@@ -881,10 +878,17 @@ export class CheckpointManager {
         onRecord: (record) => {
           l0Count++;
           totalProcessed++;
-          if (record.session_id) l0Sessions.add(record.session_id);
-          if (record.recorded_at) {
-            const ts = new Date(record.recorded_at).getTime();
+          const sessionKey = getStringField(record, "sessionKey", "session_key", "session_id");
+          if (sessionKey) l0Sessions.add(sessionKey);
+          const recordedAt = getStringField(record, "recordedAt", "recorded_at");
+          if (recordedAt) {
+            const ts = new Date(recordedAt).getTime();
+            if (!Number.isFinite(ts)) return;
             if (ts > newestL0RecordedAt) newestL0RecordedAt = ts;
+            if (sessionKey) {
+              const current = newestL0RecordedAtBySession.get(sessionKey) ?? 0;
+              if (ts > current) newestL0RecordedAtBySession.set(sessionKey, ts);
+            }
           }
         },
       },
@@ -896,10 +900,17 @@ export class CheckpointManager {
       {
         onRecord: (record) => {
           l1Count++;
-          if (record.session_id) l1Sessions.add(record.session_id);
-          if (record.updated_at) {
-            const ts = new Date(record.updated_at).getTime();
+          const sessionKey = getStringField(record, "sessionKey", "session_key", "session_id");
+          if (sessionKey) l1Sessions.add(sessionKey);
+          const updatedAt = getStringField(record, "updatedAt", "updated_at", "updated_time");
+          if (updatedAt) {
+            const ts = new Date(updatedAt).getTime();
+            if (!Number.isFinite(ts)) return;
             if (ts > newestL1UpdatedAt) newestL1UpdatedAt = ts;
+            if (sessionKey) {
+              const current = newestL1UpdatedAtBySession.get(sessionKey) ?? 0;
+              if (ts > current) newestL1UpdatedAtBySession.set(sessionKey, ts);
+            }
           }
         },
       },
@@ -911,11 +922,12 @@ export class CheckpointManager {
       totalProcessed,
       newestL0RecordedAt,
       newestL1UpdatedAt,
+      newestL0RecordedAtBySession,
+      newestL1UpdatedAtBySession,
       l0Sessions,
       l1Sessions,
     };
   }
-
   /**
    * Scan a directory of JSONL shard files and process each record.
    */

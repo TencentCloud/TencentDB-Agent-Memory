@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { CheckpointManager } from "./checkpoint.js";
+import { LocalMemoryCleaner } from "./memory-cleaner.js";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -973,6 +974,157 @@ describe("CheckpointManager", () => {
       expect(result.total_memories_extracted).toBe(3); // from store
     });
 
+    it("does not persist internal correction counters into checkpoint JSON", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { sessionKey: "session-a", recordedAt: "2026-06-28T10:00:00.000Z" },
+      ]);
+
+      const cp0 = await manager.read();
+      cp0.runner_states = {
+        "session-a": {
+          last_captured_timestamp: new Date("2026-06-29T00:00:00.000Z").getTime(),
+          last_l1_cursor: new Date("2026-06-29T00:00:00.000Z").getTime(),
+          last_scene_name: "old-scene",
+        },
+      };
+      await manager.write(cp0);
+
+      await manager.recalculate();
+
+      const checkpointPath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
+      const raw = JSON.parse(await fs.promises.readFile(checkpointPath, "utf-8")) as Record<string, unknown>;
+      expect(raw).not.toHaveProperty("__runnerCursorsCorrected");
+      expect(raw).not.toHaveProperty("__pipelineCursorsCorrected");
+    });
+
+    it("clamps stale runner cursors using each session's own retained L0 watermark", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-28.jsonl", [
+        { sessionKey: "session-a", recordedAt: "2026-06-28T10:00:00.000Z" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-06-30.jsonl", [
+        { sessionKey: "session-b", recordedAt: "2026-06-30T10:00:00.000Z" },
+      ]);
+
+      const cp0 = await manager.read();
+      cp0.runner_states = {
+        "session-a": {
+          last_captured_timestamp: new Date("2026-06-29T00:00:00.000Z").getTime(),
+          last_l1_cursor: new Date("2026-06-29T00:00:00.000Z").getTime(),
+          last_scene_name: "scene-a",
+        },
+        "session-b": {
+          last_captured_timestamp: new Date("2026-06-30T10:00:00.000Z").getTime(),
+          last_l1_cursor: new Date("2026-06-30T10:00:00.000Z").getTime(),
+          last_scene_name: "scene-b",
+        },
+      };
+      await manager.write(cp0);
+
+      const result = await manager.recalculate();
+
+      expect(result.runner_cursors_corrected).toBe(1);
+      const cp = await manager.read();
+      expect(cp.runner_states["session-a"].last_l1_cursor)
+        .toBe(new Date("2026-06-28T10:00:00.000Z").getTime());
+      expect(cp.runner_states["session-a"].last_captured_timestamp)
+        .toBe(new Date("2026-06-28T10:00:00.000Z").getTime());
+      expect(cp.runner_states["session-b"].last_l1_cursor)
+        .toBe(new Date("2026-06-30T10:00:00.000Z").getTime());
+    });
+
+    it("clamps stale pipeline cursors using each session's own retained L1 watermark", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      await createJsonlFile(path.join(dataDir, "records"), "2026-06-28.jsonl", [
+        { session_key: "session-a", updated_time: "2026-06-28T10:00:00.000Z" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "records"), "2026-06-30.jsonl", [
+        { session_key: "session-b", updated_time: "2026-06-30T10:00:00.000Z" },
+      ]);
+
+      const cp0 = await manager.read();
+      cp0.pipeline_states = {
+        "session-a": {
+          conversation_count: 1,
+          last_extraction_time: "2026-06-28T10:00:00.000Z",
+          last_extraction_updated_time: "2026-06-29T00:00:00.000Z",
+          last_active_time: Date.now(),
+          l2_pending_l1_count: 0,
+          warmup_threshold: 0,
+          l2_last_extraction_time: "",
+        },
+        "session-b": {
+          conversation_count: 1,
+          last_extraction_time: "2026-06-30T10:00:00.000Z",
+          last_extraction_updated_time: "2026-06-30T10:00:00.000Z",
+          last_active_time: Date.now(),
+          l2_pending_l1_count: 0,
+          warmup_threshold: 0,
+          l2_last_extraction_time: "",
+        },
+      };
+      await manager.write(cp0);
+
+      const result = await manager.recalculate();
+
+      expect(result.pipeline_cursors_corrected).toBe(1);
+      const cp = await manager.read();
+      expect(cp.pipeline_states["session-a"].last_extraction_updated_time)
+        .toBe("2026-06-28T10:00:00.000Z");
+      expect(cp.pipeline_states["session-b"].last_extraction_updated_time)
+        .toBe("2026-06-30T10:00:00.000Z");
+    });
+
+    it("recalculates checkpoint after LocalMemoryCleaner removes expired JSONL shards", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      await manager.recalibrate({ actualL0Count: 10, actualL1Count: 8, actualTotalProcessed: 10 });
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-07-01.jsonl", [
+        { sessionKey: "session-a", recordedAt: "2026-07-01T10:00:00.000Z" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "conversations"), "2026-07-02.jsonl", [
+        { sessionKey: "session-a", recordedAt: "2026-07-02T10:00:00.000Z" },
+        { sessionKey: "session-b", recordedAt: "2026-07-02T11:00:00.000Z" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "records"), "2026-07-01.jsonl", [
+        { session_key: "session-a", updated_time: "2026-07-01T10:00:00.000Z" },
+      ]);
+      await createJsonlFile(path.join(dataDir, "records"), "2026-07-02.jsonl", [
+        { session_key: "session-b", updated_time: "2026-07-02T11:00:00.000Z" },
+      ]);
+
+      let callbackResult: unknown;
+      const cleaner = new LocalMemoryCleaner({
+        baseDir: dataDir,
+        retentionDays: 2,
+        cleanTime: "03:00",
+        checkpointManager: manager,
+        onRecalculate: (result) => {
+          callbackResult = result;
+        },
+      });
+
+      await cleaner.runOnce(new Date("2026-07-03T12:00:00.000Z").getTime());
+
+      const cp = await manager.read();
+      expect(cp.l0_conversations_count).toBe(2);
+      expect(cp.total_memories_extracted).toBe(1);
+      expect(cp.total_processed).toBe(2);
+      expect(callbackResult).toEqual({
+        l0Count: 2,
+        l1Count: 1,
+        runnerCursorsCorrected: 0,
+        pipelineCursorsCorrected: 0,
+      });
+    });
     it("handles missing directories gracefully", async () => {
       const dataDir = createTempDir();
       const manager = new CheckpointManager(dataDir);
