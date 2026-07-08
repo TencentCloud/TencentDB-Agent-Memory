@@ -44,15 +44,52 @@ describe("ingestExplicitMemory", () => {
     const baseDir = await mkdtemp(path.join(os.tmpdir(), "tdai-explicit-user-"));
     tempDirs.push(baseDir);
 
+    const upsertL1 = vi.fn(async () => true);
+
     const record = await ingestExplicitMemory({
       action: "add",
       target: "user",
       content: "The user prefers concise answers.",
       baseDir,
       sessionKey: "session-key",
+      vectorStore: { upsertL1 } as any,
     });
 
     expect(record?.type).toBe("persona");
     expect(record?.scene_name).toBe("hermes_user_profile");
+  });
+
+  it("rejects explicit memory writes when no search index is available", async () => {
+    const baseDir = await mkdtemp(path.join(os.tmpdir(), "tdai-explicit-no-index-"));
+    tempDirs.push(baseDir);
+
+    const record = await ingestExplicitMemory({
+      action: "add",
+      target: "memory",
+      content: "This marker must not be reported as stored without an index.",
+      baseDir,
+      sessionKey: "session-key",
+    });
+
+    expect(record).toBeNull();
+  });
+
+  it("rejects explicit memory writes when vector indexing fails", async () => {
+    const baseDir = await mkdtemp(path.join(os.tmpdir(), "tdai-explicit-index-fail-"));
+    tempDirs.push(baseDir);
+
+    const upsertL1 = vi.fn(async () => false);
+
+    const record = await ingestExplicitMemory({
+      action: "add",
+      target: "memory",
+      content: "This marker must not be reported as stored after upsert failure.",
+      baseDir,
+      sessionKey: "session-key",
+      vectorStore: { upsertL1 } as any,
+    });
+
+    expect(upsertL1).toHaveBeenCalledOnce();
+    expect(record).toBeNull();
   });
 });

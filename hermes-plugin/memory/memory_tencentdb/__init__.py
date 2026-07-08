@@ -1056,7 +1056,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             return
 
         try:
-            self._client.write_explicit_memory(
+            result = self._client.write_explicit_memory(
                 action=action,
                 target=target,
                 content=content,
@@ -1064,6 +1064,8 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_id=self._session_id,
                 user_id=self._user_id,
             )
+            if result.get("stored") is False:
+                raise RuntimeError("Gateway did not index explicit memory")
             self._record_success()
         except Exception as e:
             self._record_failure()

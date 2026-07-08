@@ -59,5 +59,6 @@ export async function ingestExplicitMemory(params: ExplicitMemoryIngestParams): 
     logger: params.logger,
     vectorStore: params.vectorStore,
     embeddingService: params.embeddingService,
+    requireVectorStoreWrite: true,
   });
 }
