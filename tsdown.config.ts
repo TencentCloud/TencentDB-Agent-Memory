@@ -11,7 +11,7 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: ["./index.ts", "./src/adapters/mcp/server.ts"],
   outDir: "./dist",
   format: "esm",
   platform: "node",

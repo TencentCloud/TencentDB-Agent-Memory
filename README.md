@@ -351,6 +351,27 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+### 3. Claude Code / MCP (any MCP-compatible client)
+
+The MCP server exposes all 5 memory tools over stdio JSON-RPC. One server covers Claude Code, Codex, Cursor, Cline — any MCP-speaking client.
+
+```bash
+npm install -g @tencentdb-agent-memory/memory-tencentdb
+```
+
+Project-level `.mcp.json`:
+
+```json
+{ "mcpServers": { "tdai-memory": { "command": "memory-tencentdb-mcp", "env": { "TDAI_LLM_API_KEY": "sk-..." } } } }
+```
+
+Or user-level: `claude mcp add tdai-memory -- memory-tencentdb-mcp`
+
+> Full config (hooks JSON recipe for auto-recall/capture, env var reference, Codex/Cursor setup, troubleshooting) lives in [`src/adapters/mcp/README.md`](./src/adapters/mcp/README.md). For adding your own agent platform, start with the general architecture map ([docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)), the platform comparison ([docs/PLATFORM-COMPARISON.md](./docs/PLATFORM-COMPARISON.md)), and the adapter SDK ([src/adapters/sdk/README.md](./src/adapters/sdk/README.md)).
+
+
+---
+
 
 ## 🔒 Gateway Security (optional)
 

@@ -17,3 +17,19 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// MCP adapter (Pattern C — in-process TdaiCore wrapped as MCP server)
+export { McpHostAdapter, createStderrLogger } from "./mcp/index.js";
+export type { McpHostAdapterOptions } from "./mcp/index.js";
+
+// PlatformAdapter SDK (拓展档 — new platforms implement ONE interface)
+export type {
+  IPlatformAdapter,
+  IPlatformAdapterContext,
+  PlatformToolDefinition,
+  PlatformLifecycleEvent,
+  PlatformLifecycleHandler,
+  PlatformAdapterBootstrapOptions,
+  ToolRouteTarget,
+} from "./sdk/index.js";
+export { PlatformAdapterRuntime } from "./sdk/index.js";

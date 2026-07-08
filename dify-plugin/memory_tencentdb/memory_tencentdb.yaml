@@ -1,0 +1,32 @@
+"""Dify Plugin Manifest — memory-tencentdb memory provider.
+
+Connects Dify agents to the TencentDB-Agent-Memory engine via the
+standalone Gateway HTTP sidecar (same Gateway used by Hermes).
+"""
+version: 1.0.0
+type: plugin
+author: TencentDB Agent Memory Team
+name: memory_tencentdb
+label:
+  en_US: "TencentDB Agent Memory"
+  zh_Hans: "TencentDB-Agent-Memory 记忆插件"
+description:
+  en_US: "Four-layer memory system (L0→L1→L2→L3) — auto-capture, structure, and recall long-term user knowledge."
+  zh_Hans: "四层记忆系统 — 自动捕获、结构化、召回长期用户知识。支持记忆搜索和对话搜索两个工具。"
+icon: memory.svg
+tags:
+  - memory
+  - knowledge
+  - search
+resource:
+  memory: 128MiB
+  permission:
+    - tool
+    - storage
+    - llm
+    - endpoint
+plugins:
+  endpoints:
+    - provider.py
+  tools:
+    - tools.py
