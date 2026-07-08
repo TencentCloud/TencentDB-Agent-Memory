@@ -174,6 +174,13 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_QUERY_OPERATORS = /\b(?:AND|OR|NOT|NEAR)\b/gi;
+const FTS5_QUERY_OPERATOR_TOKEN = /^(?:AND|OR|NOT|NEAR)$/i;
+
+function sanitizeFtsQueryInput(raw: string): string {
+  return raw.replace(FTS5_QUERY_OPERATORS, " ");
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -196,6 +203,7 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  const sanitized = sanitizeFtsQueryInput(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +211,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -211,6 +219,8 @@ export function buildFtsQuery(raw: string): string | null {
         if (!/[\p{L}\p{N}]/u.test(t)) return false;
         // Remove common Chinese stop-words to reduce noise
         if (ZH_STOP_WORDS.has(t)) return false;
+        // Make sure a tokenizer cannot re-introduce an FTS5 operator token.
+        if (FTS5_QUERY_OPERATOR_TOKEN.test(t)) return false;
         return true;
       });
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
@@ -218,9 +228,10 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
+        .filter((t) => !FTS5_QUERY_OPERATOR_TOKEN.test(t))
         .filter(Boolean) ?? [];
   }
 
