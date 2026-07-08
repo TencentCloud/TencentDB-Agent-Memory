@@ -24,8 +24,14 @@ import { parseArgs } from "node:util"
 
 const require = createRequire(import.meta.url)
 
-function requireNodeSqlite(): typeof import("node:sqlite") {
-  return require("node:sqlite") as typeof import("node:sqlite")
+function requireNodeSqlite(): { DatabaseSync: new (path: string) => DatabaseSync } {
+  // Bun ships its own SQLite built-in (`bun:sqlite`); Node uses `node:sqlite`.
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite")
+    return { DatabaseSync: Database as unknown as new (path: string) => DatabaseSync }
+  }
+  const nodeSqlite = require("node:sqlite") as typeof import("node:sqlite")
+  return nodeSqlite as unknown as { DatabaseSync: new (path: string) => DatabaseSync }
 }
 
 // ─────────────────────────────────────────────
