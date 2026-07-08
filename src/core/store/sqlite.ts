@@ -195,104 +195,67 @@ const ZH_STOP_WORDS = new Set([
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
-// FTS5 reserved keywords that survive tokenization as quoted tokens and would
-// otherwise change MATCH semantics (`AND` / `OR` / `NOT` / `NEAR`).
-// `OR` is stripped defensively even though buildFtsQuery() always joins with
-// ` OR ` — any user input that happens to be exactly "OR" must not leak through.
-const FTS5_RESERVED_OPS = new Set(["AND", "OR", "NOT", "NEAR"]);
+const FTS_LITERAL_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 
-// Column-set / table-name prefixes that FTS5 interprets as column filters.
-// Stripping these prevents a user from restricting (or excluding) the search
-// to columns such as `content:` / `message:` / `session:` / `actor:` / `topic:`.
-const FTS5_COL_FILTER_PATTERN =
-  /\b-?(?:content|message|session|actor|topic|role|tag|user|host|file)\s*:/gi;
+function extractFtsLiteralTokens(raw: string): string[] {
+  return raw.normalize("NFKC").match(FTS_LITERAL_TOKEN_RE) ?? [];
+}
+
+function quoteFtsLiteralToken(token: string): string {
+  return '"' + token.replaceAll('"', '""') + '"';
+}
 
 /**
- * Strip FTS5 reserved syntax before tokenization.
+ * Normalize raw user text into a plain literal-token stream for FTS5.
  *
- * Defense-in-depth is layered:
- *   1. NFKC normalization (so full-width `ＡＮＤ` is detected identically to `AND`)
- *   2. Word-boundary stripping of reserved operators `AND` / `OR` / `NOT` / `NEAR`
- *      (case-insensitive).  Word boundaries (`\b`) guarantee that substrings
- *      such as `ANDROID`, `SCANNER`, `ORACLE`, `NEARBY` are preserved.
- *   3. Stripping FTS5 syntax characters: `"` `'` `*` `(` `)`.
- *      This neutralizes phrase-quote injection, single-quote escapes, prefix
- *      wildcards (`alpha*`), and grouped expressions (`(alpha)`).
- *   4. Stripping column-filter abuse (`content:foo`, `-content:foo`).
- *
- * Returns the cleaned text (still raw, NOT tokenized).  Returns `""` for any
- * input that becomes empty after stripping so the caller can short-circuit
- * to `null`.
+ * This helper deliberately does not parse or preserve FTS5 syntax. Operators
+ * such as AND / OR / NOT / NEAR, column filters such as content:foo, grouping,
+ * wildcards, quotes, and NEAR distance syntax are all treated as ordinary
+ * user text. The only characters that survive are Unicode letters, numbers,
+ * and underscores; every other character becomes a token separator.
  *
  * @internal
  */
 export function sanitizeFtsInput(raw: string): string {
   if (!raw) return "";
-  // 1. NFKC normalize so full-width Unicode variants do not bypass the regex.
-  let s = raw.normalize("NFKC");
-  // 2. Word-boundary FTS5 reserved operators (case-insensitive).
-  s = s.replace(/\b(?:AND|OR|NOT|NEAR)\b/gi, " ");
-  // 3. FTS5 syntax characters: quotes, prefix wildcard, grouping parens.
-  s = s.replace(/["'*()]/g, " ");
-  // 4. Column-filter abuse (also strip leading `-` for negative filters).
-  s = s.replace(FTS5_COL_FILTER_PATTERN, " ");
-  return s.trim();
+  return extractFtsLiteralTokens(raw).join(" ");
 }
 
 /**
- * Per-token guard applied AFTER tokenization as a second layer of defense.
+ * Convert a tokenizer token into one or more quoted FTS5 literal terms.
  *
- * - NFKC-normalizes each token.
- * - Keeps only characters that match `[\p{L}\p{N}_]`.  Tokens that lose all
- *   such characters (e.g. `***`, or a `foo:` that strips to empty) are dropped.
- * - Re-checks against `FTS5_RESERVED_OPS` so jieba-produced tokens such as a
- *   bare `OR` cannot slip through.
- * - Returns the token wrapped as an FTS5 phrase string with internal `"` chars
- *   doubled, per FTS5 phrase-escape rules.
+ * The return value is safe to splice into a generated MATCH expression because
+ * every emitted token is wrapped as a phrase literal. If a token still contains
+ * punctuation (for example from a tokenizer stub), it is split into literal
+ * sub-tokens instead of being concatenated into a new word.
  *
- * Returns `null` to drop the token entirely.
+ * Returns `null` to drop tokens that contain no literal text.
  *
  * @internal
  */
 export function sanitizeFtsToken(tok: string): string | null {
   if (!tok) return null;
-  const norm = tok.normalize("NFKC");
-  // Keep only unicode letters / numbers / underscore.
-  const kept: string[] = [];
-  for (const ch of norm) {
-    if (/[\p{L}\p{N}_]/u.test(ch)) kept.push(ch);
-  }
-  const cleaned = kept.join("");
-  if (!cleaned) return null;
-  if (FTS5_RESERVED_OPS.has(cleaned.toUpperCase())) return null;
-  // FTS5 phrase escape: double any embedded double-quote.
-  return '"' + cleaned.replaceAll('"', '""') + '"';
+  const tokens = extractFtsLiteralTokens(tok);
+  if (tokens.length === 0) return null;
+  return tokens.map(quoteFtsLiteralToken).join(" OR ");
 }
 
 /**
  * Build an FTS5 MATCH query from raw text.
  *
- * The implementation is layered:
- *   1. `sanitizeFtsInput()` strips FTS5 reserved operators, syntax characters,
- *      and column-filter prefixes BEFORE tokenization.  This guarantees that
- *      user input cannot carry query syntax into the generated MATCH.
- *   2. Tokenization is unchanged from upstream:
+ * User input is always treated as plain text, never as FTS5 query syntax:
+ *
+ *   1. `sanitizeFtsInput()` normalizes Unicode and turns punctuation / FTS5
+ *      syntax into token separators before tokenization.
+ *   2. Tokenization remains unchanged from upstream:
  *      - `@node-rs/jieba`'s `cutForSearch(text, true)` for Chinese (with
  *        stop-word filter & dedup), or
- *      - Unicode-regex `/[\p{L}\p{N}_]+/gu` fallback.
- *   3. `sanitizeFtsToken()` runs on every emitted token as a second guard,
- *      catching jieba-injected tokens such as `OR` or `foo:bar`.
+ *      - Unicode literal-token fallback.
+ *   3. `sanitizeFtsToken()` runs on every emitted token as a second guard.
  *   4. Tokens are joined with ` OR ` inside FTS5 phrase quotes.
  *
  * The function returns `null` for input that contains no usable tokens so
  * downstream FTS5 prepared statements can skip MATCH safely.
- *
- * Example (with jieba):
- *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
- *   "alpha AND NOT beta"        → '"alpha" OR "beta"'
- *   "alpha\" OR \"beta"         → '"alpha" OR "beta"'
- *   "content:foo"               → '"content" OR "foo"' (col-filter stripped,
- *                                  `content` becomes a search term)
  *
  * @param raw  User-supplied query text.  `null` / `undefined` / `""` returns `null`.
  */
@@ -306,7 +269,7 @@ export function buildFtsQuery(raw: string | null | undefined): string | null {
   let rawTokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
+    // e.g. a long Chinese term yields both sub-words and the full term.
     rawTokens = jieba
       .cutForSearch(cleaned, true)
       .map((t) => t.trim())
@@ -321,24 +284,14 @@ export function buildFtsQuery(raw: string | null | undefined): string | null {
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     rawTokens = [...new Set(rawTokens)];
   } else {
-    // Fallback: simple Unicode regex split
-    rawTokens =
-      cleaned
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    rawTokens = cleaned.match(FTS_LITERAL_TOKEN_RE) ?? [];
   }
 
-  // Defense-in-depth: each token must pass sanitizeFtsToken() independently.
-  // This catches jieba-injected reserved words (e.g. a bare "OR") and any
-  // leftover syntax characters that jieba may have produced.
   const safeTokens: string[] = [];
   for (const t of rawTokens) {
     const safe = sanitizeFtsToken(t);
-    if (safe) safeTokens.push(safe);
+    if (safe) safeTokens.push(...safe.split(" OR "));
   }
-  // Deduplicate again after sanitization in case cleaning collapsed tokens
-  // (e.g. "AND" and "and" both yield null after stripping).
   const dedup = [...new Set(safeTokens)];
   if (dedup.length === 0) return null;
   return dedup.join(" OR ");

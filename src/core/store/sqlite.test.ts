@@ -45,11 +45,13 @@ describe("sanitizeFtsInput (sanitization layer 1)", () => {
     );
   });
 
-  it("strips word-boundary reserved operators (case-insensitive)", () => {
-    expect(sanitizeFtsInput("alpha AND beta")).toBe("alpha   beta");
-    expect(sanitizeFtsInput("alpha Or beta")).toBe("alpha   beta");
-    expect(sanitizeFtsInput("alpha not beta")).toBe("alpha   beta");
-    expect(sanitizeFtsInput("alpha Near beta")).toBe("alpha   beta");
+  it("preserves FTS5 reserved words as literal search text", () => {
+    expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24 beta")).toBe(
+      "alpha AND beta",
+    );
+    expect(sanitizeFtsInput("alpha Or beta")).toBe("alpha Or beta");
+    expect(sanitizeFtsInput("alpha not beta")).toBe("alpha not beta");
+    expect(sanitizeFtsInput("alpha Near beta")).toBe("alpha Near beta");
   });
 
   it("does NOT touch substrings that contain reserved words", () => {
@@ -61,36 +63,39 @@ describe("sanitizeFtsInput (sanitization layer 1)", () => {
   });
 
   it("strips FTS5 syntax chars: \" ' * ( )", () => {
-    // Each `"` and `(` `)` and `*` is converted to a single space;
-    // surrounding whitespace is preserved verbatim.
-    expect(sanitizeFtsInput('alpha "beta" gamma')).toBe("alpha  beta  gamma");
+    // Syntax characters become separators and are collapsed by token extraction.
+    expect(sanitizeFtsInput('alpha "beta" gamma')).toBe("alpha beta gamma");
     expect(sanitizeFtsInput("alpha'beta")).toBe("alpha beta");
     expect(sanitizeFtsInput("alpha*")).toBe("alpha");
-    expect(sanitizeFtsInput("(alpha) (beta)")).toBe("alpha   beta");
+    expect(sanitizeFtsInput("(alpha) (beta)")).toBe("alpha beta");
   });
 
-  it("strips column filter prefixes including negation", () => {
-    expect(sanitizeFtsInput("content:foo")).toBe("foo");
-    expect(sanitizeFtsInput("-content:foo")).toBe("- foo");
-    expect(sanitizeFtsInput("message:hello world")).toBe("hello world");
-    expect(sanitizeFtsInput("-session:abc")).toBe("- abc");
-    expect(sanitizeFtsInput("actor:user1 topic:food")).toBe("user1  food");
-  });
-
-  it("normalizes full-width Unicode variants via NFKC", () => {
-    expect(sanitizeFtsInput("alpha ＡＮＤ beta")).toBe("alpha   beta");
-    expect(sanitizeFtsInput("alpha ＡＮＤROID beta")).toBe("alpha ANDROID beta");
-  });
-
-  it("handles tricky mixed inputs", () => {
-    expect(sanitizeFtsInput('"alpha" OR "beta"')).toBe("alpha     beta");
-    expect(sanitizeFtsInput("(content:foo) OR (message:bar)")).toBe(
-      "foo      bar",
+  it("turns column-filter syntax into literal tokens", () => {
+    expect(sanitizeFtsInput("content:foo")).toBe("content foo");
+    expect(sanitizeFtsInput("-content:foo")).toBe("content foo");
+    expect(sanitizeFtsInput("message:hello world")).toBe("message hello world");
+    expect(sanitizeFtsInput("-session:abc")).toBe("session abc");
+    expect(sanitizeFtsInput("actor:user1 topic:food")).toBe(
+      "actor user1 topic food",
     );
   });
 
-  it("leaves contiguous whitespace untouched when no syntax is present", () => {
-    expect(sanitizeFtsInput("hello    world")).toBe("hello    world");
+  it("normalizes full-width Unicode variants via NFKC", () => {
+    expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24 beta")).toBe("alpha AND beta");
+    expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24ROID beta")).toBe(
+      "alpha ANDROID beta",
+    );
+  });
+
+  it("handles tricky mixed inputs", () => {
+    expect(sanitizeFtsInput('"alpha" OR "beta"')).toBe("alpha OR beta");
+    expect(sanitizeFtsInput("(content:foo) OR (message:bar)")).toBe(
+      "content foo OR message bar",
+    );
+  });
+
+  it("collapses separators into single spaces", () => {
+    expect(sanitizeFtsInput("hello    world")).toBe("hello world");
   });
 });
 
@@ -114,15 +119,15 @@ describe("sanitizeFtsToken (sanitization layer 2 — per-token)", () => {
     expect(sanitizeFtsToken("()")).toBeNull();
   });
 
-  it("drops FTS5 reserved words regardless of case", () => {
-    expect(sanitizeFtsToken("AND")).toBeNull();
-    expect(sanitizeFtsToken("or")).toBeNull();
-    expect(sanitizeFtsToken("Not")).toBeNull();
-    expect(sanitizeFtsToken("near")).toBeNull();
+  it("quotes FTS5 reserved words as ordinary phrase tokens", () => {
+    expect(sanitizeFtsToken("AND")).toBe('"AND"');
+    expect(sanitizeFtsToken("or")).toBe('"or"');
+    expect(sanitizeFtsToken("Not")).toBe('"Not"');
+    expect(sanitizeFtsToken("near")).toBe('"near"');
   });
 
   it("strips embedded punctuation but keeps word fragments", () => {
-    expect(sanitizeFtsToken("foo:bar")).toBe('"foobar"');
+    expect(sanitizeFtsToken("foo:bar")).toBe('"foo" OR "bar"');
     expect(sanitizeFtsToken("C++")).toBe('"C"');
   });
 
@@ -130,8 +135,8 @@ describe("sanitizeFtsToken (sanitization layer 2 — per-token)", () => {
     // Quotes are filtered out by the unicode-letter/number whitelist; only
     // the letters around them survive.  This is intentional — quotes do not
     // survive into the index token stream because they are FTS5 syntax.
-    expect(sanitizeFtsToken('a"b')).toBe('"ab"');
-    expect(sanitizeFtsToken('he said "hi"')).toBe('"hesaidhi"');
+    expect(sanitizeFtsToken('a"b')).toBe('"a" OR "b"');
+    expect(sanitizeFtsToken('he said "hi"')).toBe('"he" OR "said" OR "hi"');
   });
 });
 
@@ -147,18 +152,24 @@ describe("buildFtsQuery (fallback mode)", () => {
     expect(buildFtsQuery("(())")).toBeNull();
   });
 
-  it("returns null for input that is just reserved operators", () => {
-    expect(buildFtsQuery("AND")).toBeNull();
-    expect(buildFtsQuery("AND OR NOT NEAR")).toBeNull();
+  it("searches reserved operators as literal user terms", () => {
+    expect(buildFtsQuery("AND")).toBe('"AND"');
+    expect(buildFtsQuery("AND OR NOT NEAR")).toBe(
+      '"AND" OR "OR" OR "NOT" OR "NEAR"',
+    );
   });
 
-  it("strips reserved operators and produces OR-of-terms", () => {
-    expect(buildFtsQuery("alpha AND NOT beta")).toBe('"alpha" OR "beta"');
-    expect(buildFtsQuery("alpha Or beta")).toBe('"alpha" OR "beta"');
+  it("quotes reserved operators instead of letting them control MATCH", () => {
+    expect(buildFtsQuery("alpha AND NOT beta")).toBe(
+      '"alpha" OR "AND" OR "NOT" OR "beta"',
+    );
+    expect(buildFtsQuery("alpha Or beta")).toBe('"alpha" OR "Or" OR "beta"');
   });
 
   it("escapes phrase-quote injection", () => {
-    expect(buildFtsQuery('alpha" OR "beta')).toBe('"alpha" OR "beta"');
+    expect(buildFtsQuery('alpha" OR "beta')).toBe(
+      '"alpha" OR "OR" OR "beta"',
+    );
   });
 
   it("neutralizes the prefix-wildcard abuse path", () => {
@@ -166,7 +177,9 @@ describe("buildFtsQuery (fallback mode)", () => {
   });
 
   it("neutralizes parenthesized group expressions", () => {
-    expect(buildFtsQuery("(alpha) OR (beta)")).toBe('"alpha" OR "beta"');
+    expect(buildFtsQuery("(alpha) OR (beta)")).toBe(
+      '"alpha" OR "OR" OR "beta"',
+    );
   });
 
   it("neutralizes column-filter syntax", () => {
@@ -175,12 +188,16 @@ describe("buildFtsQuery (fallback mode)", () => {
     // sanitizeFtsToken filters `content` back out ONLY when it is a
     // stand-alone token.  In this query `content:` is collapsed to a space
     // by `sanitizeFtsInput` so we only ever see `foo` and `bar`.
-    expect(buildFtsQuery("content:foo bar")).toBe('"foo" OR "bar"');
-    expect(buildFtsQuery("-content:foo")).toBe('"foo"');
+    expect(buildFtsQuery("content:foo bar")).toBe(
+      '"content" OR "foo" OR "bar"',
+    );
+    expect(buildFtsQuery("-content:foo")).toBe('"content" OR "foo"');
   });
 
   it("handles NFKC full-width operator variants", () => {
-    expect(buildFtsQuery("alpha ＡＮＤ beta")).toBe('"alpha" OR "beta"');
+    expect(buildFtsQuery("alpha \uFF21\uFF2E\uFF24 beta")).toBe(
+      '"alpha" OR "AND" OR "beta"',
+    );
   });
 
   it("does NOT over-strip benign substrings (word-boundary safe)", () => {
@@ -199,16 +216,25 @@ describe("buildFtsQuery (fallback mode)", () => {
     expect(buildFtsQuery("alpha alpha alpha")).toBe('"alpha"');
   });
 
-  it("drops reserved words even when surrounded by other tokens", () => {
+  it("preserves reserved words even when surrounded by other tokens", () => {
     expect(buildFtsQuery("foo AND bar AND baz")).toBe(
-      '"foo" OR "bar" OR "baz"',
+      '"foo" OR "AND" OR "bar" OR "baz"',
     );
   });
 
-  it("strips a long chain of mixed operators / syntax / junk", () => {
-    // All of these neutralize to OR-of-letter-tokens:
+  it("literalizes a long chain of mixed operators / syntax / junk", () => {
+    // All user text becomes quoted literal tokens; no FTS5 operator survives.
     expect(buildFtsQuery('alpha AND NOT "beta" OR (gamma) NEAR hello')).toBe(
-      '"alpha" OR "beta" OR "gamma" OR "hello"',
+      [
+        '"alpha"',
+        '"AND"',
+        '"NOT"',
+        '"beta"',
+        '"OR"',
+        '"gamma"',
+        '"NEAR"',
+        '"hello"',
+      ].join(" OR "),
     );
   });
 });

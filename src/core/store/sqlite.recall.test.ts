@@ -143,7 +143,9 @@ describe("buildFtsQuery — real FTS5 execution", () => {
   });
 
   it("returns null for input that becomes empty after sanitization", () => {
-    expect(buildFtsQuery("AND OR NOT NEAR")).toBeNull();
+    expect(buildFtsQuery("AND OR NOT NEAR")).toBe(
+      '"AND" OR "OR" OR "NOT" OR "NEAR"',
+    );
     expect(buildFtsQuery("***(((")).toBeNull();
   });
 
