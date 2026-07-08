@@ -592,3 +592,82 @@ describe("Benchmark 6: Configuration Switching — No Regression", () => {
     expect(emptyContent.replace(stripRe, "").trim()).toBe("User question");
   });
 });
+
+// ────────────────────────────────────────────────────────
+// Benchmark 7: Mid-Session Migration — Mixed-Format Stripping Safety
+// ────────────────────────────────────────────────────────
+
+describe("Benchmark 7: Mid-Session Migration — Mixed-Format History", () => {
+  const STRIP_RE = /<(?:relevant-memories|memory-context\s+state="(?:active|empty)")>[\s\S]*?<\/(?:relevant-memories|memory-context)>\s*/g;
+
+  it("stripping regex handles mixed-format history across 3 mode transitions", () => {
+    // Real scenario: user upgrades from none → stable_wrapper → split_system.
+    // JSONL history contains messages from ALL 3 eras with different tag formats.
+    const mixedHistory = [
+      // Turns 1-2: "none" mode era — <relevant-memories> format
+      `<relevant-memories>\n以下是当前对话召回的相关记忆...\n- [episodic] Old memory from none era\n</relevant-memories>\n你好，帮我看一下数据`,
+      `<relevant-memories>\n- [instruction] Another none-era memory\n</relevant-memories>\n继续讨论技术方案`,
+      // Turns 3-4: "stable_wrapper" mode era — <memory-context state="active"> format
+      `<memory-context state="active">\n以下是当前对话召回的相关记忆...\n- [episodic] Stable wrapper era memory\n</memory-context>\n新的技术问题`,
+      `<memory-context state="empty"></memory-context>\n随便聊两句`,
+      // Turns 5-6: "split_system" mode era — same <memory-context> wrapper in user,
+      // but persona has moved to prependSystemAddition in system prompt
+      `<memory-context state="active">\n以下是当前对话召回的相关记忆...\n- [instruction] Split system era memory\n</memory-context>\n关于缓存策略的问题`,
+      `<memory-context state="empty"></memory-context>\n好的明白了`,
+    ];
+
+    // Strip ALL recall artifacts from mixed-format history
+    const cleaned = mixedHistory.map(m => m.replace(STRIP_RE, "").trim());
+
+    // Verify: ZERO residual recall tags in ANY message
+    const hasAnyTag = cleaned.some(c =>
+      c.includes("<relevant-memories>") ||
+      c.includes("<memory-context") ||
+      c.includes("</memory-context>")
+    );
+    expect(hasAnyTag).toBe(false);
+
+    // Verify: all messages retain meaningful content (no empty messages)
+    const emptyMessages = cleaned.filter(c => c.length === 0);
+    expect(emptyMessages.length).toBe(0);
+
+    // Verify: cleaned messages contain only the user's actual conversation text
+    expect(cleaned[0]).toContain("你好");
+    expect(cleaned[1]).toContain("继续讨论");
+    expect(cleaned[2]).toContain("新的技术问题");
+    expect(cleaned[3]).toContain("随便聊");
+    expect(cleaned[4]).toContain("缓存策略");
+    expect(cleaned[5]).toContain("好的明白了");
+  });
+
+  it("progressive upgrade preserves cache benefit at each step", () => {
+    // Simulate upgrade path: none → stable_wrapper → split_system
+    // At each step, verify cache stability IMPROVES, never regresses.
+
+    const memories = ["- [episodic] Test memory"];
+
+    // Step 1: none mode — baseline
+    const nonePrefix = buildLegacyUserPrefix(memories)!;
+    const noneEmpty = buildLegacyUserPrefix([]) ?? "";
+    const noneCommon = commonPrefixLength(nonePrefix, noneEmpty);
+    expect(noneCommon).toBe(0); // Baseline: 0 common prefix
+
+    // Step 2: stable_wrapper — improvement
+    const stableActive = buildStableUserPrefix(memories);
+    const stableEmpty = buildStableUserPrefix([]);
+    const stableCommon = commonPrefixLength(stableActive, stableEmpty);
+    expect(stableCommon).toBeGreaterThan(noneCommon); // Improvement: +23 chars common prefix
+    expect(stableCommon).toBe(23); // '<memory-context state="'
+
+    // Step 3: split_system — further improvement
+    // User prefix is same as stable_wrapper, but system prefix gains persona
+    const splitSystem = buildSplitSystemPrefix();
+    const splitBefore = splitSystem.before.length;
+    const legacyBefore = SYSTEM_BASE.length;
+    const splitGain = splitBefore - legacyBefore;
+    expect(splitGain).toBeGreaterThan(0); // Persona adds cacheable chars to system prefix
+
+    // Net: each upgrade step adds cache stability, never removes it.
+    // This proves progressive migration is safe — no regression at any step.
+  });
+});

@@ -14,6 +14,13 @@ import { describe, expect, it } from "vitest";
 // Shared: simulate the prefix structure our optimization produces
 // ────────────────────────────────────────────────────────
 
+function commonPrefixLen(a: string, b: string): number {
+  const minLen = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < minLen && a[i] === b[i]) i++;
+  return i;
+}
+
 function buildSystemPrefix(persona: string | null, sceneNav: string | null, splitSystem: boolean): {
   prependSystemAddition: string | undefined;
   appendSystemContext: string | undefined;
@@ -285,19 +292,83 @@ describe("Dimension 3: Tool Truncation Jitter — Prefix Resilience", () => {
     // (prepended to user prompt), NOT interleaved with tool output
   });
 
-  it("step-aligned (bucketing) is noted as future enhancement", () => {
-    // Current optimization: stable wrapper provides prefix-level resilience
-    // Future enhancement: padding/bucketing tool truncation to fixed steps
-    // (e.g., always truncate to 500, 1000, 1500 — not 500, 510, 523)
+  it("prepend layout: wrapper portion of common prefix is immune to tool truncation", () => {
+    // PR #410 proposes interleaved layout (memory block AFTER tool output).
+    // Our prepend layout places <memory-context> BEFORE tool output in the
+    // user prompt, so tool truncation cannot shift the memory wrapper position.
     //
-    // This is NOT implemented in this PR but documented as a follow-up item.
-    // Our stable wrapper mitigates the worst case: memory-related prefix jitter.
-    // Tool truncation bucketing would address a second-order concern.
+    // Key metric: the wrapper portion (chars 0..wrapper.length) of the prefix
+    // is ALWAYS identical between turns, regardless of tool output variation.
 
-    // Verify the stable wrapper IS the primary mitigation
-    const prefixWithWrapper = `<memory-context state="active">...content...</memory-context>`;
-    expect(prefixWithWrapper.length).toBeGreaterThan(0);
-    expect(prefixWithWrapper.startsWith("<memory-context")).toBe(true);
+    const toolOutputs = [
+      "tool_result: " + "x".repeat(500),
+      "tool_result: " + "x".repeat(510),
+      "tool_result: " + "x".repeat(523),
+    ];
+    const wrapper = `<memory-context state="active">\nmemory content\n</memory-context>`;
+    const userMsg = "What is the latest status?";
+
+    // Our layout: prependContext (wrapper) → tool output → user message
+    const ourPrompts = toolOutputs.map(t => `${wrapper}\n${t}\n${userMsg}`);
+
+    // The wrapper portion (first wrapper.length chars) is identical across ALL turns
+    const wrapperPortion = ourPrompts.map(p => p.substring(0, wrapper.length));
+    expect(wrapperPortion[0]).toBe(wrapper);
+    expect(wrapperPortion[1]).toBe(wrapper);
+    expect(wrapperPortion[2]).toBe(wrapper);
+    // Wrapper portion NEVER changes — 0 delta regardless of tool truncation
+
+    // Interleaved layout (PR #410 style): tool → memory → user
+    const interleaved = toolOutputs.map(t => `${t}\n${wrapper}\n${userMsg}`);
+    // In interleaved layout, the wrapper starts at DIFFERENT positions:
+    // turn 1: wrapper at position 511, turn 2: at 521, turn 3: at 534
+    const interWrapperStart = interleaved.map(p => p.indexOf("<memory-context"));
+    // Wrapper position shifts by tool output length difference
+    expect(interWrapperStart[0]).not.toBe(interWrapperStart[1]);
+    expect(interWrapperStart[1]).not.toBe(interWrapperStart[2]);
+    // This means the prefix-matching provider sees a SHIFTED prefix → cache miss
+
+    // Our layout: wrapper always at position 0 → prefix-matching hits on wrapper
+    const ourWrapperStart = ourPrompts.map(p => p.indexOf("<memory-context"));
+    expect(ourWrapperStart[0]).toBe(0);
+    expect(ourWrapperStart[1]).toBe(0);
+    expect(ourWrapperStart[2]).toBe(0);
+  });
+
+  it("prepend vs interleaved: wrapper position stability under tool truncation", () => {
+    // Measure how much the wrapper START POSITION changes between turns.
+    // Prepend layout: wrapper position = 0 (constant). Delta = 0.
+    // Interleaved layout: wrapper position = tool_output.length + 1 (variable). Delta > 0.
+
+    const toolLengths = [500, 510, 523, 500, 510]; // Simulated truncation pattern
+    const wrapper = `<memory-context state="active">\nmemory content\n</memory-context>`;
+    const userMsg = "question";
+
+    // Our prepend layout: wrapper always at position 0
+    const prependPrompts = toolLengths.map(l =>
+      `${wrapper}\ntool_result: ${"x".repeat(l)}\n${userMsg}`
+    );
+    const prependWrapperPos = prependPrompts.map(p => p.indexOf("<memory-context"));
+    const prependPosDeltas = prependWrapperPos.slice(1).map((pos, i) =>
+      Math.abs(pos - prependWrapperPos[i])
+    );
+    // All deltas = 0: wrapper position NEVER shifts
+    expect(prependPosDeltas.every(d => d === 0)).toBe(true);
+
+    // Interleaved layout: wrapper position = tool output length + 1
+    const interPrompts = toolLengths.map(l =>
+      `tool_result: ${"x".repeat(l)}\n${wrapper}\n${userMsg}`
+    );
+    const interWrapperPos = interPrompts.map(p => p.indexOf("<memory-context"));
+    const interPosDeltas = interWrapperPos.slice(1).map((pos, i) =>
+      Math.abs(pos - interWrapperPos[i])
+    );
+    // Interleaved deltas = tool length differences (10, 13, 23, 10)
+    const nonzeroDeltas = interPosDeltas.filter(d => d !== 0).length;
+    expect(nonzeroDeltas).toBeGreaterThan(0);
+
+    // Conclusion: prepend layout has 0 wrapper position delta under truncation,
+    // interleaved layout has nonzero delta proportional to truncation variance.
   });
 });
 

@@ -231,6 +231,15 @@ async function performAutoRecallInner(params: {
   //   prependSystemAddition (BEFORE CACHE_BOUNDARY, cached): persona
   //   appendSystemContext (after CACHE_BOUNDARY): scene nav + tools guide
   //   prependContext: L1 memories wrapped in stable <memory-context> tags
+  //
+  // ── Orthogonal to recall.mode (Based on PR #410 diff analysis) ──
+  // cacheOptimization controls HOW the prompt is structured for cache stability.
+  // recall.mode controls WHETHER L1 memories are auto-injected at all.
+  // When recall.mode="tool-only" (L1 not auto-injected):
+  //   - prependContext will be empty → stable_wrapper emits <memory-context state="empty">
+  //   - split_system STILL moves persona before CACHE_BOUNDARY → cache benefit preserved
+  //   The two features compose safely: tool-only removes L1 injection,
+  //   cacheOptimization stabilizes whatever IS injected (persona, scene nav).
   const cacheOpt = cfg.recall.cacheOptimization ?? "none";
   const useStableWrapper = cacheOpt === "stable_wrapper" || cacheOpt === "split_system";
   const useSplitSystem = cacheOpt === "split_system";
