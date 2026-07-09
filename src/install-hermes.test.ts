@@ -51,6 +51,17 @@ exit 0
       );
       writeExecutable(join(fakeBin, "npx"), "#!/usr/bin/env bash\nexit 0\n");
       writeExecutable(
+        join(fakeBin, "sed"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "-i" ]]; then
+  echo "sed -i is not portable in this installer test" >&2
+  exit 64
+fi
+exec /usr/bin/sed "$@"
+`,
+      );
+      writeExecutable(
         join(fakeBin, "sudo"),
         `#!/usr/bin/env bash
 set -euo pipefail

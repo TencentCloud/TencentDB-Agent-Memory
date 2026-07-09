@@ -323,12 +323,14 @@ _append_or_update_env() {
     local key="$1"
     local value="$2"
     local file="$3"
+    local tmp
     if [ ! -f "$file" ]; then
         touch "$file"
     fi
     # 移除已有的同名变量行（含注释掉的和带引号的），再追加
-    sed -i "/^${key}=/d" "$file"
-    sed -i "/^# *${key}=/d" "$file"
+    tmp="$(mktemp "${file}.XXXXXX")"
+    grep -Ev "^${key}=|^# *${key}=" "$file" > "$tmp" || true
+    mv "$tmp" "$file"
     # python-dotenv 要求含空格/引号/特殊字符的值用双引号包裹
     echo "${key}=\"${value}\"" >> "$file"
 }
