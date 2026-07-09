@@ -1,7 +1,7 @@
 /**
- * Utilities for keeping memory-injected prompts friendly to provider prefix
- * caches. Dynamic L1 recall belongs in the current user turn, but historical
- * copies of that recall block should collapse to a stable marker.
+ * Utilities for compacting injected L1 recall blocks that leaked into session
+ * history. Dynamic recall belongs in the current turn; historical copies
+ * collapse to a stable marker.
  */
 
 export const MEMORY_OMITTED_MARKER = '<memory-omitted reason="prevent_context_bloat" />';
@@ -34,7 +34,6 @@ export interface PromptCachePreparation<T extends PromptCacheMessage> {
     textPartsChanged: number;
     removedChars: number;
   };
-  dedupedSystemMessages: number;
 }
 
 export function compactRelevantMemoriesText(
@@ -123,63 +122,10 @@ export function prepareMessagesForPromptCache<T extends PromptCacheMessage>(
     return result.message;
   });
 
-  const dedupedMessages = dedupeSystemMessages(compactedMessages);
-
   return {
-    messages: dedupedMessages.messages,
+    messages: compactedMessages,
     compacted: { messagesChanged, textPartsChanged, removedChars },
-    dedupedSystemMessages: dedupedMessages.removed,
   };
-}
-
-function dedupeSystemMessages<T extends PromptCacheMessage>(
-  messages: readonly T[],
-): { messages: T[]; removed: number } {
-  const seen = new Set<string>();
-  const deduped: T[] = [];
-  let removed = 0;
-
-  for (const message of messages) {
-    if (message.role !== "system") {
-      deduped.push(message);
-      continue;
-    }
-
-    const fingerprint = systemMessageFingerprint(message.content);
-    if (!fingerprint) {
-      deduped.push(message);
-      continue;
-    }
-
-    if (seen.has(fingerprint)) {
-      removed += 1;
-      continue;
-    }
-
-    seen.add(fingerprint);
-    deduped.push(message);
-  }
-
-  return { messages: deduped, removed };
-}
-
-function systemMessageFingerprint(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed ? trimmed : undefined;
-  }
-
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const text = content
-    .filter(isTextPart)
-    .map((part) => part.text.trim())
-    .filter(Boolean)
-    .join("\n");
-
-  return text || undefined;
 }
 
 function isTextPart(part: unknown): part is { type: "text"; text: string; [key: string]: unknown } {

@@ -7,7 +7,7 @@ import {
   prepareMessagesForPromptCache,
 } from "./memory-injection-cache.js";
 
-describe("memory injection prompt-cache preparation", () => {
+describe("memory injection history compaction", () => {
   it("compacts relevant memory blocks in string content", () => {
     const result = compactRelevantMemoriesText(
       `<relevant-memories>\n- [episodic] noisy recalled fact\n</relevant-memories>\nPlease continue the task.`,
@@ -42,7 +42,7 @@ describe("memory injection prompt-cache preparation", () => {
     expect(parts[1]).toBe(imagePart);
   });
 
-  it("dedupes repeated system messages while compacting historical memory", () => {
+  it("compacts historical memory without changing unrelated messages", () => {
     const messages = [
       { role: "system", content: "stable system instructions" },
       {
@@ -57,12 +57,12 @@ describe("memory injection prompt-cache preparation", () => {
     const prepared = prepareMessagesForPromptCache(messages);
 
     expect(prepared.compacted.messagesChanged).toBe(1);
-    expect(prepared.dedupedSystemMessages).toBe(1);
-    expect(prepared.messages).toHaveLength(4);
+    expect(prepared.messages).toHaveLength(5);
     expect(prepared.messages.map((message) => message.content)).toEqual([
       "stable system instructions",
       `${MEMORY_OMITTED_MARKER}\nWhat changed?`,
       "A short answer.",
+      "stable system instructions",
       "different system instructions",
     ]);
   });

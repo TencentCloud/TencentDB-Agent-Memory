@@ -554,14 +554,13 @@ export default function register(api: OpenClawPluginApi) {
       }
       if (messages) {
         const prepared = prepareMessagesForPromptCache(messages);
-        if (prepared.compacted.messagesChanged > 0 || prepared.dedupedSystemMessages > 0) {
+        if (prepared.compacted.messagesChanged > 0) {
           (event as { messages?: unknown }).messages = prepared.messages;
           api.logger.debug?.(
-            `${TAG} [before_prompt_build] Prompt-cache prep: ` +
+            `${TAG} [before_prompt_build] Compacted injected memory history: ` +
             `compactedMessages=${prepared.compacted.messagesChanged}, ` +
             `textParts=${prepared.compacted.textPartsChanged}, ` +
-            `removedChars=${prepared.compacted.removedChars}, ` +
-            `dedupedSystemMessages=${prepared.dedupedSystemMessages}`,
+            `removedChars=${prepared.compacted.removedChars}`,
           );
         }
       }
@@ -633,7 +632,7 @@ export default function register(api: OpenClawPluginApi) {
   // Compact <relevant-memories> before user messages are persisted to the
   // session JSONL. The current-turn LLM already saw the full prompt
   // (effectivePrompt lives in memory), but future turns should only replay a
-  // stable marker so provider prefix caches are not busted by stale recall.
+  // stable marker instead of stale recall details.
   api.logger.debug?.(`${TAG} Registering before_message_write hook (compact <relevant-memories>)`);
   api.on("before_message_write", (event) => {
     const msg = event.message as PromptCacheMessage;
