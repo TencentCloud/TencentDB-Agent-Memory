@@ -422,6 +422,9 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `pipeline.l1IdleTimeoutSeconds` | `600` | Trigger L1 after the user has been idle for this many seconds |
 | `pipeline.l2MinIntervalSeconds` | `900` | Minimum interval between two L2 passes within the same session |
 | `recall.timeoutMs` | `5000` | Recall timeout; on timeout, skip injection without blocking the conversation |
+| `recall.promptShapeDiagnostics` | `false` | Opt-in prefix-cache diagnostics; logs segment lengths/hashes and persisted injected-memory counts without logging memory text |
+| `recall.showInjected` | `false` | Preserve injected `<relevant-memories>` blocks in persisted history; keep `false` to avoid history bloat |
+| `recall.dynamicContextPlacement` | `"append"` | Dynamic L1 recall placement: `append` keeps the prompt prefix more stable for OpenAI-compatible prefix caches; `prepend` restores legacy behavior |
 | `extraction.enableDedup` | `true` | L1 vector dedup / conflict detection |
 | `capture.excludeAgents` | `[]` | Glob patterns to exclude specific agents (e.g. `bench-judge-*`) |
 | `capture.l0l1RetentionDays` | `0` | Local retention days for L0 / L1 files; `0` = never clean up |

@@ -199,6 +199,8 @@ export interface CompletedTurn {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
+  /** L1 relevant memories appended after user prompt text (cache-safe dynamic placement). */
+  appendContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */

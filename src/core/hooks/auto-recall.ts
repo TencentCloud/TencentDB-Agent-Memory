@@ -57,6 +57,8 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
+  /** L1 relevant memories appended after user prompt text (cache-safe dynamic placement). */
+  appendContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
 
@@ -190,9 +192,11 @@ async function performAutoRecallInner(params: {
   //   These change infrequently; when content is identical across turns,
   //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  // Dynamic L1 memories:
+  //   Different every turn, so they stay out of the system prompt.
+  //   Placement (prepend vs append) is handled by the host adapter;
+  //   the core always populates prependContext and the adapter moves it
+  //   to appendContext when the host supports late-context injection.
   const stableParts: string[] = [];
   if (personaContent) {
     stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
@@ -201,7 +205,7 @@ async function performAutoRecallInner(params: {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
 
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Dynamic part: L1 relevant memories (changes every turn).
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =

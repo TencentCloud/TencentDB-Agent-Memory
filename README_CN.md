@@ -425,6 +425,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `pipeline.l1IdleTimeoutSeconds` | `600` | 用户停止对话多久后触发 L1 |
 | `pipeline.l2MinIntervalSeconds` | `900` | 同 session 两次 L2 之间的最小间隔 |
 | `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.promptShapeDiagnostics` | `false` | 可选的前缀缓存诊断；只记录片段长度、哈希和历史中已注入记忆块数量，不记录记忆原文 |
+| `recall.showInjected` | `false` | 是否将 `<relevant-memories>` 保留到持久化对话历史中；默认 `false` 以避免历史膨胀 |
+| `recall.dynamicContextPlacement` | `"append"` | 动态 L1 记忆注入位置：`append` 将记忆放在当前用户提示后以提高 OpenAI-compatible 前缀缓存稳定性；`prepend` 恢复旧行为 |
 | `extraction.enableDedup` | `true` | L1 向量去重 / 冲突检测 |
 | `capture.excludeAgents` | `[]` | Glob 模式排除特定 Agent（如 `bench-judge-*`） |
 | `capture.l0l1RetentionDays` | `0` | L0/L1 本地文件保留天数，`0` = 永不清理 |

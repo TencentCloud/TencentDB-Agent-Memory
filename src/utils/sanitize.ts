@@ -3,6 +3,98 @@
  * Removes injected tags, gateway metadata, media noise, etc.
  */
 
+// Trailing \s* is intentional: it removes whitespace after </relevant-memories>
+// so that sanitized output does not accumulate blank lines. The old inline regex
+// in sanitizeText did not strip trailing whitespace; this module-level regex
+// supersedes it with the improved behavior.
+const RELEVANT_MEMORIES_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+
+// Fallback for truncated/malformed injection where the closing </relevant-memories>
+// is missing (e.g., from streaming or partial content). The main regex won't match
+// these, so we additionally strip any orphaned opening tag through end-of-string.
+const ORPHANED_RELEVANT_MEMORIES_RE = /<relevant-memories>[\s\S]*$/g;
+
+export interface StripRelevantMemoriesResult {
+  text: string;
+  removedChars: number;
+  changed: boolean;
+}
+
+export interface StripRelevantMemoriesContentResult {
+  content: unknown;
+  removedChars: number;
+  changed: boolean;
+}
+
+/**
+ * Remove current-turn injected L1 recall blocks without touching ordinary user
+ * text. Used by both persistence cleanup and memory-pipeline sanitization.
+ */
+export function stripRelevantMemoriesFromText(
+  text: string,
+  options: { trim?: boolean } = {},
+): StripRelevantMemoriesResult {
+  if (!text.includes("<relevant-memories>")) {
+    return { text, removedChars: 0, changed: false };
+  }
+
+  // Remove complete blocks; then clean up orphaned opening tags only when
+  // the block regex missed something (truncated/malformed injection).
+  const stripped = text.replace(RELEVANT_MEMORIES_RE, "");
+  const tagCleaned = stripped.includes("<relevant-memories>")
+    ? stripped.replace(ORPHANED_RELEVANT_MEMORIES_RE, "")
+    : stripped;
+  const tagRemovedChars = text.length - tagCleaned.length;
+  const cleaned = options.trim ? tagCleaned.trim() : tagCleaned;
+  return {
+    text: cleaned,
+    removedChars: tagRemovedChars,
+    changed: cleaned !== text,
+  };
+}
+
+/**
+ * Remove injected recall blocks from OpenClaw user-message content while
+ * preserving non-text parts such as images.
+ */
+export function stripRelevantMemoriesFromMessageContent(
+  content: unknown,
+  options: { trim?: boolean } = {},
+): StripRelevantMemoriesContentResult {
+  if (typeof content === "string") {
+    const cleaned = stripRelevantMemoriesFromText(content, options);
+    return {
+      content: cleaned.text,
+      removedChars: cleaned.removedChars,
+      changed: cleaned.changed,
+    };
+  }
+
+  if (!Array.isArray(content)) {
+    return { content, removedChars: 0, changed: false };
+  }
+
+  let removedChars = 0;
+  let changed = false;
+  const cleanedParts = (content as Array<unknown>).map((part) => {
+    if (!part || typeof part !== "object") return part;
+    const record = part as Record<string, unknown>;
+    if (record.type !== "text" || typeof record.text !== "string") return part;
+
+    const cleaned = stripRelevantMemoriesFromText(record.text, options);
+    if (!cleaned.changed) return part;
+    removedChars += cleaned.removedChars;
+    changed = true;
+    return { ...record, text: cleaned.text };
+  });
+
+  return {
+    content: changed ? cleanedParts : content,
+    removedChars,
+    changed,
+  };
+}
+
 /**
  * Clean text for the memory pipeline: remove injected tags, metadata,
  * timestamps, media markers and base64 image data.
@@ -13,7 +105,7 @@ export function sanitizeText(text: string): string {
   let cleaned = text;
 
   // Remove injected memory context tags (prevent feedback loops)
-  cleaned = cleaned.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/g, "");
+  cleaned = stripRelevantMemoriesFromText(cleaned).text;
   cleaned = cleaned.replace(/<user-persona>[\s\S]*?<\/user-persona>/g, "");
   cleaned = cleaned.replace(/<relevant-scenes>[\s\S]*?<\/relevant-scenes>/g, "");
   cleaned = cleaned.replace(/<scene-navigation>[\s\S]*?<\/scene-navigation>/g, "");
