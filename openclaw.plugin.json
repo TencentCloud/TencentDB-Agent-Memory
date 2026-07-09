@@ -74,12 +74,17 @@
         "description": "记忆召回设置",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用自动召回" },
+          "mode": { "type": "string", "enum": ["auto", "tool-only"], "default": "auto", "description": "召回模式：auto 保持自动 L1 召回；tool-only 停止每轮自动搜索，由 Agent 按需调用记忆工具" },
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "sessionSnapshotMaxTokens": { "type": "number", "default": 1600, "description": "稳定 session snapshot 的 token 预算" },
+          "sceneSummaryMaxItems": { "type": "number", "default": 6, "description": "稳定快照中最多纳入的场景摘要条数" },
+          "dynamicRecallMaxTokens": { "type": "number", "default": 900, "description": "auto 模式下动态召回片段预算" },
+          "maxSearchCallsPerTurn": { "type": "number", "default": 3, "description": "tdai_memory_search 与 tdai_conversation_search 每轮合计调用预算" }
         }
       },
       "embedding": {
