@@ -534,8 +534,10 @@ export async function writeRefMd(
   timestamp: string,
   toolName: string,
   content: string,
+  suffix?: string,
 ): Promise<string> {
-  const filename = `${isoToFilename(timestamp)}.md`;
+  const safeSuffix = suffix ? `-${sanitizePath(suffix).slice(0, 80)}` : "";
+  const filename = `${isoToFilename(timestamp)}${safeSuffix}.md`;
   const filePath = join(ctx.refsDir, filename);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
   const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
