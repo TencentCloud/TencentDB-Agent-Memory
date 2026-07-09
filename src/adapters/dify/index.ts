@@ -1,25 +1,40 @@
-import {
-  TdaiGatewayClient,
-  createGatewaySessionKey,
-  type TdaiGatewayClientOptions,
-} from "../gateway-client.js";
-import type { CaptureResponse, RecallResponse } from "../../gateway/types.js";
+import type { CaptureRequest, CaptureResponse, RecallRequest, RecallResponse } from "../../gateway/types.js";
 
-export interface GatewayMemoryClient {
-  recall(body: { query: string; session_key: string; user_id?: string }): Promise<RecallResponse>;
-  capture(body: {
-    user_content: string;
-    assistant_content: string;
-    session_key: string;
-    session_id?: string;
-    user_id?: string;
-    messages?: unknown[];
-  }): Promise<CaptureResponse>;
+export interface DifyGatewayHttpRequestInit {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface DifyGatewayHttpResponse {
+  ok: boolean;
+  status: number;
+  statusText?: string;
+  text(): Promise<string>;
+}
+
+export type DifyGatewayHttpFetch = (
+  url: string,
+  init?: DifyGatewayHttpRequestInit,
+) => Promise<DifyGatewayHttpResponse>;
+
+export interface DifyGatewayHttpOptions {
+  /** Gateway base URL, for example `http://127.0.0.1:8420`. */
+  baseUrl: string;
+  /** Optional Bearer token matching `TDAI_GATEWAY_API_KEY`. */
+  apiKey?: string;
+  /** Custom fetch implementation for Dify-side runtimes or tests. */
+  fetch?: DifyGatewayHttpFetch;
+}
+
+export interface DifyGatewayMemoryPort {
+  recall(body: RecallRequest): Promise<RecallResponse>;
+  capture(body: CaptureRequest): Promise<CaptureResponse>;
 }
 
 export interface DifyWorkflowMemoryAdapterOptions {
-  gateway?: TdaiGatewayClientOptions;
-  client?: GatewayMemoryClient;
+  gateway?: DifyGatewayHttpOptions;
+  client?: DifyGatewayMemoryPort;
   platform?: string;
   defaultUserId?: string;
 }
@@ -49,7 +64,7 @@ export interface DifyCaptureResult extends CaptureResponse {
 }
 
 export class DifyWorkflowMemoryAdapter {
-  private readonly client: GatewayMemoryClient;
+  private readonly client: DifyGatewayMemoryPort;
   private readonly platform: string;
   private readonly defaultUserId: string;
 
@@ -57,7 +72,7 @@ export class DifyWorkflowMemoryAdapter {
     if (!opts.client && !opts.gateway) {
       throw new Error("DifyWorkflowMemoryAdapter requires either `client` or `gateway` options");
     }
-    this.client = opts.client ?? new TdaiGatewayClient(opts.gateway!);
+    this.client = opts.client ?? createDifyGatewayHttpPort(opts.gateway!);
     this.platform = opts.platform ?? "dify";
     this.defaultUserId = opts.defaultUserId ?? "default_user";
   }
@@ -131,7 +146,7 @@ export class DifyWorkflowMemoryAdapter {
       userId,
       conversationId,
       sessionId,
-      sessionKey: createGatewaySessionKey({
+      sessionKey: buildDifySessionKey({
         platform: this.platform,
         userId,
         conversationId,
@@ -155,4 +170,92 @@ function readString(input: DifyWorkflowInput, ...keys: string[]): string | undef
     if (typeof nested === "string" && nested.trim()) return nested;
   }
   return undefined;
+}
+
+function createDifyGatewayHttpPort(opts: DifyGatewayHttpOptions): DifyGatewayMemoryPort {
+  const baseUrl = normalizeGatewayBaseUrl(opts.baseUrl);
+  const fetchFn = opts.fetch ?? getGlobalFetch();
+  return {
+    recall(body) {
+      return requestJson<RecallResponse>(fetchFn, baseUrl, opts.apiKey, "/recall", body);
+    },
+    capture(body) {
+      return requestJson<CaptureResponse>(fetchFn, baseUrl, opts.apiKey, "/capture", body);
+    },
+  };
+}
+
+async function requestJson<T>(
+  fetchFn: DifyGatewayHttpFetch,
+  baseUrl: string,
+  apiKey: string | undefined,
+  pathname: string,
+  body: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetchFn(`${baseUrl}${pathname}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  const parsed = parseJsonOrText(text);
+
+  if (!response.ok) {
+    const message = typeof parsed === "object" && parsed !== null && "error" in parsed
+      ? String((parsed as { error?: unknown }).error)
+      : `Dify Gateway request failed with HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return parsed as T;
+}
+
+function buildDifySessionKey(parts: {
+  platform: string;
+  userId: string;
+  conversationId: string;
+  sessionId?: string;
+}): string {
+  const platform = sanitizeSessionKeyPart(parts.platform || "dify");
+  const user = sanitizeSessionKeyPart(parts.userId || "default_user");
+  const conversation = sanitizeSessionKeyPart(parts.conversationId || "default_conversation");
+  const session = parts.sessionId ? `:${sanitizeSessionKeyPart(parts.sessionId)}` : "";
+  return `${platform}:${user}:${conversation}${session}`;
+}
+
+function normalizeGatewayBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) throw new Error("Dify Gateway baseUrl is required");
+  return trimmed.replace(/\/+$/, "");
+}
+
+function sanitizeSessionKeyPart(value: string): string {
+  const sanitized = value
+    .trim()
+    .replace(/[^A-Za-z0-9_.:-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return sanitized || "unknown";
+}
+
+function parseJsonOrText(text: string): unknown {
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function getGlobalFetch(): DifyGatewayHttpFetch {
+  const fetchFn = globalThis.fetch;
+  if (typeof fetchFn !== "function") {
+    throw new Error("No fetch implementation available; pass `gateway.fetch` to DifyWorkflowMemoryAdapter");
+  }
+  return (url, init) => fetchFn(url, init as RequestInit) as Promise<DifyGatewayHttpResponse>;
 }

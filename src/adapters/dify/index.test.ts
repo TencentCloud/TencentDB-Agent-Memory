@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { DifyWorkflowMemoryAdapter, type GatewayMemoryClient } from "./index.js";
+import {
+  DifyWorkflowMemoryAdapter,
+  type DifyGatewayHttpFetch,
+  type DifyGatewayHttpRequestInit,
+  type DifyGatewayMemoryPort,
+} from "./index.js";
 
-function makeClient(calls: unknown[]): GatewayMemoryClient {
+interface RecordedCall {
+  url: string;
+  init?: DifyGatewayHttpRequestInit;
+}
+
+function makeClient(calls: unknown[]): DifyGatewayMemoryPort {
   return {
     async recall(body) {
       calls.push({ method: "recall", body });
@@ -85,6 +95,87 @@ describe("DifyWorkflowMemoryAdapter", () => {
 
     await expect(adapter.capture({ query: "only user text" })).rejects.toThrow(
       "Dify capture requires `assistant_content` or `answer`",
+    );
+  });
+
+  it("posts recall to the Gateway when Dify uses HTTP-only integration", async () => {
+    const calls: RecordedCall[] = [];
+    const fetchFn: DifyGatewayHttpFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ context: "from gateway", memory_count: 1 }),
+      };
+    };
+    const adapter = new DifyWorkflowMemoryAdapter({
+      gateway: {
+        baseUrl: "http://127.0.0.1:8420/",
+        apiKey: "token",
+        fetch: fetchFn,
+      },
+    });
+
+    await expect(adapter.recall({
+      query: "latest project memory",
+      conversation_id: "conv",
+      user_id: "u",
+    })).resolves.toMatchObject({
+      memory_context: "from gateway",
+      session_key: "dify:u:conv",
+    });
+    expect(calls).toEqual([
+      {
+        url: "http://127.0.0.1:8420/recall",
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer token",
+          },
+          body: JSON.stringify({
+            query: "latest project memory",
+            session_key: "dify:u:conv",
+            user_id: "u",
+          }),
+        },
+      },
+    ]);
+  });
+
+  it("keeps the HTTP helper scoped to Dify recall and capture routes", async () => {
+    const calls: RecordedCall[] = [];
+    const fetchFn: DifyGatewayHttpFetch = async (url, init) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ l0_recorded: 1, scheduler_notified: true }),
+      };
+    };
+    const adapter = new DifyWorkflowMemoryAdapter({
+      gateway: { baseUrl: "http://gateway.local", fetch: fetchFn },
+    });
+
+    await adapter.capture({
+      query: "remember",
+      answer: "done",
+      conversation_id: "conv",
+      user: "user",
+    });
+
+    expect(calls.map((call) => call.url)).toEqual(["http://gateway.local/capture"]);
+    expect(JSON.parse(calls[0].init?.body ?? "{}")).toMatchObject({
+      user_content: "remember",
+      assistant_content: "done",
+      session_key: "dify:user:conv",
+      user_id: "user",
+    });
+  });
+
+  it("requires either an injected Dify port or Dify Gateway HTTP options", () => {
+    expect(() => new DifyWorkflowMemoryAdapter({})).toThrow(
+      "DifyWorkflowMemoryAdapter requires either `client` or `gateway` options",
     );
   });
 });

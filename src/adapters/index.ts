@@ -18,22 +18,16 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
 
-// Gateway client SDK for cross-platform integrations
-export { TdaiGatewayClient, GatewayClientError, createGatewaySessionKey } from "./gateway-client.js";
-export type {
-  GatewayFetch,
-  GatewayFetchResponse,
-  GatewayRequestInit,
-  GatewaySessionKeyParts,
-  TdaiGatewayClientOptions,
-} from "./gateway-client.js";
-
 // Dify Workflow adapter
 export { DifyWorkflowMemoryAdapter, createDifyWorkflowMemoryAdapter } from "./dify/index.js";
 export type {
   DifyCaptureResult,
+  DifyGatewayHttpFetch,
+  DifyGatewayHttpOptions,
+  DifyGatewayHttpRequestInit,
+  DifyGatewayHttpResponse,
+  DifyGatewayMemoryPort,
   DifyRecallResult,
   DifyWorkflowInput,
   DifyWorkflowMemoryAdapterOptions,
-  GatewayMemoryClient,
 } from "./dify/index.js";
