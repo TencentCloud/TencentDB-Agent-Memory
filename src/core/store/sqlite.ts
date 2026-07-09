@@ -205,6 +205,10 @@ function quoteFtsLiteralToken(token: string): string {
   return '"' + token.replaceAll('"', '""') + '"';
 }
 
+function toQuotedFtsLiteralTerms(raw: string): string[] {
+  return extractFtsLiteralTokens(raw).map(quoteFtsLiteralToken);
+}
+
 /**
  * Normalize raw user text into a plain literal-token stream for FTS5.
  *
@@ -235,9 +239,9 @@ export function sanitizeFtsInput(raw: string): string {
  */
 export function sanitizeFtsToken(tok: string): string | null {
   if (!tok) return null;
-  const tokens = extractFtsLiteralTokens(tok);
-  if (tokens.length === 0) return null;
-  return tokens.map(quoteFtsLiteralToken).join(" OR ");
+  const terms = toQuotedFtsLiteralTerms(tok);
+  if (terms.length === 0) return null;
+  return terms.join(" OR ");
 }
 
 /**
@@ -289,8 +293,7 @@ export function buildFtsQuery(raw: string | null | undefined): string | null {
 
   const safeTokens: string[] = [];
   for (const t of rawTokens) {
-    const safe = sanitizeFtsToken(t);
-    if (safe) safeTokens.push(...safe.split(" OR "));
+    safeTokens.push(...toQuotedFtsLiteralTerms(t));
   }
   const dedup = [...new Set(safeTokens)];
   if (dedup.length === 0) return null;

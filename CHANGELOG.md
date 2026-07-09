@@ -22,12 +22,12 @@
 
 ### 🐛 修复 / 安全性
 
-- **FTS5 MATCH 表达式查询语义注入** ([#160](https://github.com/TencentDB/TencentDB-Agent-Memory/issues/160))：在 `src/core/store/sqlite.ts` 的 `buildFtsQuery()` 中引入纵深防御：
-  - 预分词层 `sanitizeFtsInput()`：先对原始文本做 NFKC 归一化（捕获全角 Unicode 变体 `ＡＮＤ` 等），再词边界剥离 FTS5 保留运算符 `AND` / `OR` / `NOT` / `NEAR`（大小写不敏感，保证 `ANDROID` / `ORACLE` / `NEARBY` / `SCANNER` 安全），最后剥离 FTS5 语法字符 `'`、`"`、`*`、`(`、`)` 与列过滤前缀 `content:` / `message:` / `session:` / `actor:` / `topic:` 等（含否定前缀 `-`）。
-  - 分词层层（jieba 或 regex 回退）后再过一遍 `sanitizeFtsToken()`：基于 `[\p{L}\p{N}_]` Unicode 白名单与保留操作符二次检查，jieba 注入的 `OR` 等也无法滑过；token 输出为 FTS5 phrase 形式并对内嵌 `"` 做标准 `""` 转义。
-  - 空查询返回 `null`，所有下游 `searchL1Fts()` / `searchL0Fts()` 路径只需检查 `null` 即可安全跳过 MATCH。
-  - Best-solution refinement: `buildFtsQuery()` now treats every user fragment as plain literal text; FTS5 operators (`AND` / `OR` / `NOT` / `NEAR`), column filters (`content:foo`), quotes, wildcards, and groups are token separators only and can no longer alter MATCH semantics or reduce recall by dropping user words.
-  - 新增 44 个测试（30 个单元测试 + 14 个真实 `node:sqlite` FTS5 fixture 集成测试覆盖 true MATCH 执行、recall 对比与 200 次 fuzz）；普通关键词查询的召回集保持不变或变好。
+- **FTS5 MATCH 表达式查询语义注入** ([#160](https://github.com/TencentDB/TencentDB-Agent-Memory/issues/160))：将 `buildFtsQuery()` 收敛为字面量 token 构造器，用户输入永远不能贡献 FTS5 查询结构：
+  - `sanitizeFtsInput()` 先对原始文本做 NFKC 归一化，再只提取 Unicode 字母、数字和下划线；FTS5 operators、列过滤、引号、通配符、括号和 `NEAR/5` 这类语法片段都会变成普通 token 分隔。
+  - jieba 分词或 regex 回退后，`sanitizeFtsToken()` 会再次对每个 tokenizer 输出做字面量提取，防止 tokenizer stub/native binding 返回带标点或查询片段的 token。
+  - 所有输出 token 都由代码包成 FTS5 phrase literal，再用代码生成的 `OR` 连接；下游 `searchL1Fts()` / `searchL0Fts()` 继续通过 `MATCH ?` 参数绑定执行。
+  - 与 #178 的窄修不同，本修复不会删除用户实际输入的 `AND` / `OR` / `NOT` / `NEAR` 等词，而是把它们转成 `"AND"` 等可搜索字面量，避免安全修复误伤召回。
+  - 新增 46 个测试（31 个单元测试 + 15 个真实 `node:sqlite` FTS5 fixture 集成测试覆盖 tokenizer 二次净化、true MATCH 执行、reserved-word 字面量召回、recall 对比与 200 次 fuzz）。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 

@@ -55,6 +55,7 @@ const FIXTURE: IndexedDoc[] = [
   { record_id: "r23", content: "Sanity check fixture record 23" },
   { record_id: "r24", content: "Sanity check fixture record 24" },
   { record_id: "r25", content: "Sanity check fixture record 25" },
+  { record_id: "r26", content: "Boolean operator words AND OR NOT NEAR" },
 ];
 
 /** Build the OLD pre-sanitization MATCH expression for comparison only. */
@@ -142,7 +143,7 @@ describe("buildFtsQuery — real FTS5 execution", () => {
     expect(() => queryIds(match!)).not.toThrow();
   });
 
-  it("returns null for input that becomes empty after sanitization", () => {
+  it("keeps operator words but returns null for pure syntax", () => {
     expect(buildFtsQuery("AND OR NOT NEAR")).toBe(
       '"AND" OR "OR" OR "NOT" OR "NEAR"',
     );
@@ -154,6 +155,12 @@ describe("buildFtsQuery — real FTS5 execution", () => {
     expect(match).not.toBeNull();
     // Should be a safe OR-of-terms query; must execute without throwing.
     expect(() => queryIds(match!)).not.toThrow();
+  });
+
+  it("keeps reserved words searchable as literal document text", () => {
+    const match = buildFtsQuery("AND OR NOT NEAR");
+    expect(match).toBe('"AND" OR "OR" OR "NOT" OR "NEAR"');
+    expect(queryIds(match!)).toContain("r26");
   });
 });
 

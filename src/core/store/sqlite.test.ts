@@ -12,12 +12,11 @@
  *      word-boundary safe substrings (ANDROID, ORACLE, NEARBY, SCANNER).
  *   3. Recall — exercised in `sqlite.recall.test.ts` with a real FTS5 table.
  *   4. Whitelist / parameterization — `sanitizeFtsToken()` is the per-token
- *      unicode-letter whitelist; downstream `searchL1Fts()` uses prepared
- *      statements with `MATCH ?` placeholder (verified in the recall suite).
+ *      unicode-letter whitelist; the recall suite executes generated MATCH
+ *      expressions through the same prepared `MATCH ?` shape as production.
  *
- * Golden outputs here were produced by inspecting `scripts/temp-probe.mjs` so
- * any change to `sanitizeFtsInput()` that affects whitespace counts will
- * surface as a failing test (and force a deliberate update of the fixture).
+ * Expected outputs here specify the public MATCH expression that callers rely
+ * on: user text may become literal search terms, but never query syntax.
  */
 
 import { describe, expect, it, beforeEach } from "vitest";
@@ -81,7 +80,9 @@ describe("sanitizeFtsInput (sanitization layer 1)", () => {
   });
 
   it("normalizes full-width Unicode variants via NFKC", () => {
-    expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24 beta")).toBe("alpha AND beta");
+    expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24 beta")).toBe(
+      "alpha AND beta",
+    );
     expect(sanitizeFtsInput("alpha \uFF21\uFF2E\uFF24ROID beta")).toBe(
       "alpha ANDROID beta",
     );
@@ -234,6 +235,38 @@ describe("buildFtsQuery (fallback mode)", () => {
         '"gamma"',
         '"NEAR"',
         '"hello"',
+      ].join(" OR "),
+    );
+  });
+
+  it("re-sanitizes tokenizer output before building MATCH", () => {
+    _setJiebaForTest({
+      cutForSearch(text: string): string[] {
+        expect(text).toBe("用户 AND TypeScript alpha OR beta foo bar");
+        return [
+          "用户",
+          "AND",
+          "TypeScript",
+          'alpha" OR "beta',
+          "foo:bar",
+          "***",
+          "用户",
+        ];
+      },
+    });
+
+    expect(
+      buildFtsQuery('用户 ＡＮＤ TypeScript alpha" OR "beta foo:bar'),
+    ).toBe(
+      [
+        '"用户"',
+        '"AND"',
+        '"TypeScript"',
+        '"alpha"',
+        '"OR"',
+        '"beta"',
+        '"foo"',
+        '"bar"',
       ].join(" OR "),
     );
   });
