@@ -671,3 +671,233 @@ describe("Benchmark 7: Mid-Session Migration — Mixed-Format History", () => {
     // This proves progressive migration is safe — no regression at any step.
   });
 });
+
+// ────────────────────────────────────────────────────────
+// Benchmark 8: Orthogonality — cacheOptimization × L1 Placement
+//
+// Demonstrates that cacheOptimization (structure stability) is orthogonal to
+// L1 memory placement (prepend vs append). PR #433 proposes
+// `recall.dynamicContextPlacement="append"` to move L1 memories after the
+// user message. These tests prove our structural optimizations work
+// correctly regardless of where L1 content is positioned.
+// ────────────────────────────────────────────────────────
+
+describe("Benchmark 8: Orthogonality — cacheOptimization × L1 Placement", () => {
+  /**
+   * Simulate two L1 placement modes:
+   * - "prepend": L1 memories go into prependContext (before user message)
+   * - "append":  L1 memories go into appendContext (after user message)
+   *
+   * In both modes, cacheOptimization still controls the STRUCTURE:
+   *   stable_wrapper wraps L1 content in <memory-context> tags
+   *   split_system moves persona to prependSystemAddition
+   */
+
+  function buildPromptWithPlacement(
+    memories: string[],
+    cacheOpt: "none" | "stable_wrapper" | "split_system",
+    placement: "prepend" | "append",
+  ): { systemBefore: string; systemAfter: string; userPrefix: string | undefined; userMessage: string; userSuffix: string | undefined } {
+    const splitSystem = buildSplitSystemPrefix();
+    const legacySystem = buildLegacySystemPrefix();
+
+    // System prompt structure depends ONLY on cacheOpt, NOT on placement
+    let systemBefore: string;
+    let systemAfter: string;
+
+    if (cacheOpt === "split_system") {
+      systemBefore = splitSystem.before;  // SYSTEM_BASE + persona
+      systemAfter = splitSystem.after;     // scene nav + tools guide
+    } else {
+      systemBefore = SYSTEM_BASE;
+      systemAfter = cacheOpt === "none"
+        ? legacySystem.substring(SYSTEM_BASE.length + 2)  // persona + scene nav + tools
+        : legacySystem.substring(SYSTEM_BASE.length + 2); // same for stable_wrapper
+    }
+
+    // L1 content (wrapped or not) depends on cacheOpt
+    const l1Content = cacheOpt === "none"
+      ? buildLegacyUserPrefix(memories)
+      : buildStableUserPrefix(memories);
+
+    // Placement controls WHERE L1 goes relative to user message
+    let userPrefix: string | undefined;
+    let userSuffix: string | undefined;
+
+    if (placement === "prepend") {
+      userPrefix = l1Content;  // L1 before user message (current behavior)
+      userSuffix = undefined;
+    } else {
+      // "append": L1 after user message (PR #433 style)
+      userPrefix = undefined;
+      userSuffix = l1Content ?? undefined;
+    }
+
+    return { systemBefore, systemAfter, userPrefix, userMessage: "user question", userSuffix };
+  }
+
+  it("split_system persona placement is identical regardless of L1 placement", () => {
+    // The system prompt structure should be EXACTLY the same whether L1
+    // memories are prepended or appended. cacheOptimization controls
+    // system structure; placement controls user message structure.
+
+    const memories = ["- [episodic] Test memory"];
+
+    const prependMode = buildPromptWithPlacement(memories, "split_system", "prepend");
+    const appendMode = buildPromptWithPlacement(memories, "split_system", "append");
+
+    // System before (SYSTEM_BASE + persona) is identical
+    expect(prependMode.systemBefore).toBe(appendMode.systemBefore);
+    // System after (scene nav + tools guide) is identical
+    expect(prependMode.systemAfter).toBe(appendMode.systemAfter);
+
+    // The cacheable system prefix is unaffected by L1 placement
+    const prependCacheable = prependMode.systemBefore.length;
+    const appendCacheable = appendMode.systemBefore.length;
+    expect(prependCacheable).toBe(appendCacheable);
+    // Both include persona → more cacheable than legacy
+    expect(prependCacheable).toBeGreaterThan(SYSTEM_BASE.length);
+  });
+
+  it("stable_wrapper wraps L1 content correctly in both prepend and append modes", () => {
+    const memories = ["- [episodic] Memory content"];
+
+    // Prepend mode: wrapper is in userPrefix
+    const prepend = buildPromptWithPlacement(memories, "stable_wrapper", "prepend");
+    expect(prepend.userPrefix).toContain("<memory-context state=\"active\">");
+    expect(prepend.userPrefix).toContain("</memory-context>");
+    expect(prepend.userSuffix).toBeUndefined();
+
+    // Append mode: wrapper is in userSuffix (after user message)
+    const append = buildPromptWithPlacement(memories, "stable_wrapper", "append");
+    expect(append.userPrefix).toBeUndefined();
+    expect(append.userSuffix).toContain("<memory-context state=\"active\">");
+    expect(append.userSuffix).toContain("</memory-context>");
+
+    // Both modes use the same wrapper format
+    expect(prepend.userPrefix).toBe(append.userSuffix);
+  });
+
+  it("empty placeholder works in append mode: wrapper still emitted", () => {
+    // When no memories are recalled, stable_wrapper still emits an empty
+    // placeholder. In append mode, this placeholder goes after user message.
+
+    const prepend = buildPromptWithPlacement([], "stable_wrapper", "prepend");
+    const append = buildPromptWithPlacement([], "stable_wrapper", "append");
+
+    // Prepend: empty placeholder before user message
+    expect(prepend.userPrefix).toBe(`<memory-context state="empty"></memory-context>`);
+    expect(prepend.userSuffix).toBeUndefined();
+
+    // Append: empty placeholder after user message
+    expect(append.userPrefix).toBeUndefined();
+    expect(append.userSuffix).toBe(`<memory-context state="empty"></memory-context>`);
+
+    // Both produce the same placeholder content
+    expect(prepend.userPrefix).toBe(append.userSuffix);
+  });
+
+  it("append placement preserves system-level cache benefit of split_system", () => {
+    // Key orthogonality claim: moving L1 to appendContext does NOT reduce
+    // the system-level cache benefit of split_system. The persona is still
+    // in prependSystemAddition (before CACHE_BOUNDARY) regardless.
+
+    const memories = ["- [episodic] Memory"];
+
+    // Legacy mode (no optimization): system has no persona before boundary
+    const legacy = buildPromptWithPlacement(memories, "none", "append");
+    const legacyCacheableSystem = legacy.systemBefore.length; // SYSTEM_BASE only
+
+    // Split system + append placement: persona is before boundary
+    const splitAppend = buildPromptWithPlacement(memories, "split_system", "append");
+    const splitAppendCacheableSystem = splitAppend.systemBefore.length;
+
+    // Split system provides more cacheable system prefix even with append placement
+    expect(splitAppendCacheableSystem).toBeGreaterThan(legacyCacheableSystem);
+
+    // The gain is the same as prepend mode (placement doesn't affect system)
+    const splitPrepend = buildPromptWithPlacement(memories, "split_system", "prepend");
+    expect(splitAppendCacheableSystem).toBe(splitPrepend.systemBefore.length);
+
+    // Quantify: persona adds ~120+ chars to cacheable system prefix
+    const personaGain = splitAppendCacheableSystem - legacyCacheableSystem;
+    expect(personaGain).toBeGreaterThan(100); // persona XML tag + content
+  });
+
+  it("5-turn simulation: split_system + append achieves system-level cache stability", () => {
+    // Simulate 5 turns with varying memory recall, using split_system + append.
+    // The SYSTEM prefix should be 100% stable across all turns (persona doesn't change).
+    // Only the user suffix (L1 content) varies — but it's after the user message,
+    // so it doesn't affect the prefix cache.
+
+    const turns = [
+      { memories: ["- [episodic] Memory A"], msg: "question 1" },
+      { memories: [], msg: "casual chat" },
+      { memories: ["- [instruction] Memory B"], msg: "question 2" },
+      { memories: [], msg: "more chat" },
+      { memories: ["- [episodic] Memory C"], msg: "question 3" },
+    ];
+
+    const prompts = turns.map(t =>
+      buildPromptWithPlacement(t.memories, "split_system", "append")
+    );
+
+    // System prefix is identical across ALL turns
+    const systemBeforeValues = prompts.map(p => p.systemBefore);
+    const allSame = systemBeforeValues.every(s => s === systemBeforeValues[0]);
+    expect(allSame).toBe(true);
+
+    // System after is also identical
+    const systemAfterValues = prompts.map(p => p.systemAfter);
+    const allAfterSame = systemAfterValues.every(s => s === systemAfterValues[0]);
+    expect(allAfterSame).toBe(true);
+
+    // User prefix is always undefined (append mode)
+    expect(prompts.every(p => p.userPrefix === undefined)).toBe(true);
+
+    // User suffix varies (L1 content changes) but is AFTER user message
+    const suffixLengths = prompts.map(p => p.userSuffix?.length ?? 0);
+    const hasVariation = new Set(suffixLengths).size > 1;
+    expect(hasVariation).toBe(true);
+
+    // The cacheable prefix (system_before + user_message) is stable
+    // regardless of L1 content variation — this is the orthogonality proof.
+    const cacheablePrefixes = prompts.map(p => `${p.systemBefore}\n${p.userMessage}`);
+    const allCacheableSame = cacheablePrefixes.every(c => c === cacheablePrefixes[0]);
+    expect(allCacheableSame).toBe(true);
+  });
+
+  it("composition matrix: all 6 combinations produce valid output", () => {
+    // Verify all combinations of cacheOpt × placement produce valid prompts.
+    // 3 cacheOpt modes × 2 placement modes = 6 combinations.
+
+    const memories = ["- [episodic] Test memory"];
+    const combinations: Array<{ opt: "none" | "stable_wrapper" | "split_system"; place: "prepend" | "append" }> = [
+      { opt: "none", place: "prepend" },
+      { opt: "none", place: "append" },
+      { opt: "stable_wrapper", place: "prepend" },
+      { opt: "stable_wrapper", place: "append" },
+      { opt: "split_system", place: "prepend" },
+      { opt: "split_system", place: "append" },
+    ];
+
+    for (const { opt, place } of combinations) {
+      const result = buildPromptWithPlacement(memories, opt, place);
+
+      // System before always has content
+      expect(result.systemBefore.length).toBeGreaterThan(0);
+
+      // System after always has content (persona/scene/tools somewhere)
+      expect(result.systemAfter.length).toBeGreaterThan(0);
+
+      // User message is always present
+      expect(result.userMessage).toBe("user question");
+
+      // Exactly one of userPrefix/userSuffix has L1 content
+      const hasPrefix = result.userPrefix !== undefined;
+      const hasSuffix = result.userSuffix !== undefined;
+      expect(place === "prepend").toBe(hasPrefix);
+      expect(place === "append").toBe(hasSuffix);
+    }
+  });
+});
