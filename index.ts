@@ -48,6 +48,7 @@ import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 export {
   GatewayMemoryClient,
   GatewayMemoryClientError,
+  GatewayMemoryClientParseError,
   createGatewayPlatformAdapter,
 } from "./src/adapters/gateway-client/index.js";
 export type {

@@ -79,6 +79,20 @@ export class GatewayMemoryClientError extends Error {
   }
 }
 
+export class GatewayMemoryClientParseError extends Error {
+  readonly status: number;
+  readonly path: string;
+  readonly responseBody: string;
+
+  constructor(path: string, status: number, responseBody: string) {
+    super(`Gateway response was not valid JSON: ${path} returned ${status}`);
+    this.name = "GatewayMemoryClientParseError";
+    this.path = path;
+    this.status = status;
+    this.responseBody = responseBody;
+  }
+}
+
 export class GatewayMemoryClient {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
@@ -136,7 +150,11 @@ export class GatewayMemoryClient {
       if (!response.ok) {
         throw new GatewayMemoryClientError(path, response.status, text);
       }
-      return (text ? JSON.parse(text) : {}) as T;
+      try {
+        return (text ? JSON.parse(text) : {}) as T;
+      } catch {
+        throw new GatewayMemoryClientParseError(path, response.status, text);
+      }
     } finally {
       clearTimeout(timer);
     }

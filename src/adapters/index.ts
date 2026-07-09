@@ -23,6 +23,7 @@ export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRu
 export {
   GatewayMemoryClient,
   GatewayMemoryClientError,
+  GatewayMemoryClientParseError,
   createGatewayPlatformAdapter,
 } from "./gateway-client/index.js";
 export type {

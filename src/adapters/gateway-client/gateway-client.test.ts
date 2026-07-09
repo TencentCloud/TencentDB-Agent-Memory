@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GatewayMemoryClient,
   GatewayMemoryClientError,
+  GatewayMemoryClientParseError,
   createGatewayPlatformAdapter,
 } from "./index.js";
 
@@ -57,6 +58,20 @@ describe("GatewayMemoryClient", () => {
       path: "/search/memories",
       responseBody: "bad query",
     } satisfies Partial<GatewayMemoryClientError>);
+  });
+
+  it("surfaces malformed success responses with request context", async () => {
+    const client = new GatewayMemoryClient({
+      baseUrl: "http://127.0.0.1:8420",
+      fetchImpl: async () => new Response("not-json", { status: 200 }),
+    });
+
+    await expect(client.health()).rejects.toMatchObject({
+      name: "GatewayMemoryClientParseError",
+      status: 200,
+      path: "/health",
+      responseBody: "not-json",
+    } satisfies Partial<GatewayMemoryClientParseError>);
   });
 });
 
