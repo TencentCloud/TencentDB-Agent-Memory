@@ -7,7 +7,8 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-codex": "./bin/memory-tencentdb-codex.mjs"
   },
   "exports": {
     ".": {
@@ -18,7 +19,7 @@
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
     "build:plugin": "tsdown",
-    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
+    "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory && npm run build:codex-adapter",
     "prepack": "npm run build",
     "build:migrate-sqlite-to-vdb": "tsc -p scripts/migrate-sqlite-to-tcvdb/tsconfig.json --noEmitOnError false",
     "migrate-sqlite-to-tcvdb": "node ./bin/migrate-sqlite-to-tcvdb.mjs",
@@ -29,7 +30,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
+    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true",
+    "build:codex-adapter": "tsc --project scripts/codex-adapter/tsconfig.json",
+    "test:codex-adapter": "npm run build:codex-adapter && tsx scripts/codex-adapter/tests/integration.ts"
   },
   "files": [
     "dist/",
@@ -51,7 +54,9 @@
     "LICENSE",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
-    "!src/**/__tests__/"
+    "!src/**/__tests__/",
+    "scripts/codex-adapter/dist/",
+    "docs/codex-adapter.md"
   ],
   "keywords": [
     "openclaw",
