@@ -176,9 +176,26 @@ const ZH_STOP_WORDS = new Set([
 
 const FTS5_QUERY_OPERATORS = /\b(?:AND|OR|NOT|NEAR)\b/gi;
 const FTS5_QUERY_OPERATOR_TOKEN = /^(?:AND|OR|NOT|NEAR)$/i;
+const FTS5_QUERY_LEXICAL_TOKEN = /[\p{L}\p{N}_]+/gu;
 
 function sanitizeFtsQueryInput(raw: string): string {
   return raw.replace(FTS5_QUERY_OPERATORS, " ");
+}
+
+function normalizeFtsQueryTokens(values: string[]): string[] {
+  const tokens: string[] = [];
+  for (const value of values) {
+    const lexicalTokens = value.match(FTS5_QUERY_LEXICAL_TOKEN) ?? [];
+    for (const token of lexicalTokens) {
+      if (!token) continue;
+      // Remove common Chinese stop-words to reduce noise
+      if (ZH_STOP_WORDS.has(token)) continue;
+      // Make sure user input or tokenizer output cannot re-introduce FTS5 syntax.
+      if (FTS5_QUERY_OPERATOR_TOKEN.test(token)) continue;
+      tokens.push(token);
+    }
+  }
+  return tokens;
 }
 
 /**
@@ -190,6 +207,10 @@ function sanitizeFtsQueryInput(raw: string): string {
  *
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
+ *
+ * Both raw input and tokenizer output are normalized to lexical tokens before
+ * constructing the MATCH expression, so FTS5 query syntax (column filters,
+ * prefix markers, phrase quotes, grouping) cannot leak through user text.
  *
  * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
  * matching *any* token is returned.  BM25 naturally ranks documents that
@@ -213,30 +234,17 @@ export function buildFtsQuery(raw: string): string | null {
     tokens = jieba
       .cutForSearch(sanitized, true)
       .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        // Make sure a tokenizer cannot re-introduce an FTS5 operator token.
-        if (FTS5_QUERY_OPERATOR_TOKEN.test(t)) return false;
-        return true;
-      });
+      .filter(Boolean);
+    tokens = normalizeFtsQueryTokens(tokens);
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
-      sanitized
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter((t) => !FTS5_QUERY_OPERATOR_TOKEN.test(t))
-        .filter(Boolean) ?? [];
+    tokens = normalizeFtsQueryTokens([sanitized]);
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map((t) => `"${t}"`);
   return quoted.join(" OR ");
 }
 

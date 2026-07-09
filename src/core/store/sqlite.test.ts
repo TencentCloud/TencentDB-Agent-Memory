@@ -60,4 +60,36 @@ describe("buildFtsQuery", () => {
 
     expect(buildFtsQuery("alpha beta gamma")).toBe('"alpha" OR "beta" OR "gamma"');
   });
+
+  it("normalizes FTS5 syntax characters from raw input into lexical tokens", () => {
+    _setJiebaForTest(null);
+
+    expect(
+      buildFtsQuery('title:secret {title body}:memo foo* "quoted phrase" NEAR(alpha beta, 5)'),
+    ).toBe(
+      '"title" OR "secret" OR "title" OR "body" OR "memo" OR "foo" OR "quoted" OR "phrase" OR "alpha" OR "beta" OR "5"',
+    );
+  });
+
+  it("normalizes FTS5 syntax characters returned by a tokenizer", () => {
+    _setJiebaForTest({
+      cutForSearch(): string[] {
+        return [
+          "title:secret",
+          "{title body}:memo",
+          "foo*",
+          "\"quoted phrase\"",
+          "NEAR(alpha beta, 5)",
+          "OR",
+        ];
+      },
+    });
+
+    const query = buildFtsQuery("ignored raw text");
+
+    expect(query).toBe(
+      '"title" OR "secret" OR "body" OR "memo" OR "foo" OR "quoted" OR "phrase" OR "alpha" OR "beta" OR "5"',
+    );
+    expect(query).not.toMatch(/[:*(){}]/);
+  });
 });
