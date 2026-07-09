@@ -28,7 +28,7 @@ Codex supports STDIO MCP servers through `config.toml`. Add the following to
 ```toml
 [mcp_servers.tencentdb_memory]
 command = "memory-tencentdb-mcp"
-env = { TDAI_GATEWAY_URL = "http://127.0.0.1:8787", TDAI_GATEWAY_API_KEY = "replace-me" }
+env = { TDAI_GATEWAY_URL = "http://127.0.0.1:8420", TDAI_GATEWAY_API_KEY = "replace-me" }
 startup_timeout_sec = 10
 tool_timeout_sec = 30
 ```

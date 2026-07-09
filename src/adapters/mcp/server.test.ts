@@ -230,6 +230,22 @@ describe("TdaiMcpServer", () => {
     expect(String(fetchImpl.mock.calls[0][0])).toBe("http://memory.test:9000/base/search/memories");
   });
 
+  it("uses the project Gateway default port when no URL is configured", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ results: "ok", total: 1, strategy: "hybrid" }), { status: 200 }),
+    );
+    const server = createMcpServerFromEnvironment({}, { fetchImpl });
+    await initialize(server);
+    await server.handle({
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: "tdai_memory_search", arguments: { query: "q" } },
+    });
+
+    expect(String(fetchImpl.mock.calls[0][0])).toBe("http://127.0.0.1:8420/search/memories");
+  });
+
   it("rejects invalid environment timeout configuration", () => {
     expect(() => createMcpServerFromEnvironment({ TDAI_GATEWAY_TIMEOUT_MS: "zero" })).toThrow(
       "must be a positive integer",

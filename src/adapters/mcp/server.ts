@@ -244,7 +244,7 @@ export function createMcpServerFromEnvironment(
   options: { fetchImpl?: typeof fetch } = {},
 ): TdaiMcpServer {
   const gatewayOptions: GatewayClientOptions = {
-    baseUrl: env.TDAI_GATEWAY_URL?.trim() || "http://127.0.0.1:8787",
+    baseUrl: env.TDAI_GATEWAY_URL?.trim() || "http://127.0.0.1:8420",
     apiKey: env.TDAI_GATEWAY_API_KEY,
     timeoutMs: parsePositiveInteger(env.TDAI_GATEWAY_TIMEOUT_MS),
     fetchImpl: options.fetchImpl,
