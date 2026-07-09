@@ -35,6 +35,11 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+import {
+  compactRelevantMemoriesInMessage,
+  prepareMessagesForPromptCache,
+  type PromptCacheMessage,
+} from "./src/utils/memory-injection-cache.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -541,11 +546,24 @@ export default function register(api: OpenClawPluginApi) {
 
       // Cache original user prompt for agent_end
       const rawPrompt = event.prompt;
-      const messages = Array.isArray(event.messages) ? event.messages : undefined;
+      const messages = Array.isArray(event.messages) ? (event.messages as PromptCacheMessage[]) : undefined;
       if (sessionKey && rawPrompt) {
         const messageCount = messages?.length ?? 0;
         pendingOriginalPrompts.set(sessionKey, { text: rawPrompt, ts: Date.now(), messageCount });
         api.logger.debug?.(`${TAG} [before_prompt_build] Cached original prompt (${rawPrompt.length} chars, msgCount=${messageCount})`);
+      }
+      if (messages) {
+        const prepared = prepareMessagesForPromptCache(messages);
+        if (prepared.compacted.messagesChanged > 0 || prepared.dedupedSystemMessages > 0) {
+          (event as { messages?: unknown }).messages = prepared.messages;
+          api.logger.debug?.(
+            `${TAG} [before_prompt_build] Prompt-cache prep: ` +
+            `compactedMessages=${prepared.compacted.messagesChanged}, ` +
+            `textParts=${prepared.compacted.textPartsChanged}, ` +
+            `removedChars=${prepared.compacted.removedChars}, ` +
+            `dedupedSystemMessages=${prepared.dedupedSystemMessages}`,
+          );
+        }
       }
       sweepStaleCaches();
 
@@ -612,41 +630,25 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // Compact <relevant-memories> before user messages are persisted to the
+  // session JSONL. The current-turn LLM already saw the full prompt
+  // (effectivePrompt lives in memory), but future turns should only replay a
+  // stable marker so provider prefix caches are not busted by stale recall.
+  api.logger.debug?.(`${TAG} Registering before_message_write hook (compact <relevant-memories>)`);
   api.on("before_message_write", (event) => {
-    const msg = event.message as { role?: string; content?: unknown };
+    const msg = event.message as PromptCacheMessage;
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
-    }
-
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
+    const compacted = compactRelevantMemoriesInMessage(msg);
+    if (compacted.changed) {
+      api.logger.debug?.(
+        `${TAG} [before_message_write] Compacted memory injection: ` +
+        `removedChars=${compacted.removedChars}, textParts=${compacted.textPartsChanged}`,
+      );
+      return { message: compacted.message as typeof event.message };
     }
   });
 
