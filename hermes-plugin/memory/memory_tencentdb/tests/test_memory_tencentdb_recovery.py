@@ -20,6 +20,7 @@ real Node processes nor open network sockets.
 from __future__ import annotations
 
 import json
+import importlib
 import os
 import pathlib
 import sys
@@ -38,19 +39,28 @@ import pytest
 # the layout used by ``test_gateway_shutdown_leak.py`` next door.
 _THIS_FILE = pathlib.Path(__file__).resolve()
 _HERE = _THIS_FILE.parent
-# When checked into the plugin repo: parents[4] = repo root,
-# hermes-plugin/ holds the importable ``plugins`` package.
-# When checked into hermes-agent: the tests/ tree already sits under a
-# repo root that exposes ``plugins`` directly, so the extra insertion is
-# harmless (sys.path lookups stop at the first match).
+_PROVIDER_MODULE = "plugins.memory.memory_tencentdb"
+
+# When checked into this plugin repo, ``hermes-plugin/`` exposes the
+# importable ``memory.memory_tencentdb`` package. When checked into
+# hermes-agent, the repo root exposes ``plugins.memory.memory_tencentdb``.
 for candidate in (
     _HERE.parents[3] if len(_HERE.parents) >= 4 else None,    # plugin repo: hermes-plugin/
     _HERE.parents[4] if len(_HERE.parents) >= 5 else None,    # hermes-agent root
     _HERE.parents[2] if len(_HERE.parents) >= 3 else None,    # fallback
 ):
-    if candidate is not None and (candidate / "plugins").is_dir():
+    if candidate is None:
+        continue
+    if (candidate / "plugins").is_dir():
         if str(candidate) not in sys.path:
             sys.path.insert(0, str(candidate))
+        _PROVIDER_MODULE = "plugins.memory.memory_tencentdb"
+        break
+    if (candidate / "memory" / "memory_tencentdb").is_dir():
+        if str(candidate) not in sys.path:
+            sys.path.insert(0, str(candidate))
+        _PROVIDER_MODULE = "memory.memory_tencentdb"
+        break
 
 # Optional: hermes-agent provides ``agent.memory_provider``. Tests can set
 # HERMES_AGENT_ROOT to point at a sibling checkout if needed.
@@ -64,8 +74,9 @@ if _hermes_root and _hermes_root not in sys.path:
     sys.path.insert(0, _hermes_root)
 
 try:
-    from plugins.memory.memory_tencentdb import MemoryTencentdbProvider
-    from plugins.memory.memory_tencentdb import supervisor as supervisor_module
+    provider_module = importlib.import_module(_PROVIDER_MODULE)
+    MemoryTencentdbProvider = provider_module.MemoryTencentdbProvider
+    supervisor_module = importlib.import_module(f"{_PROVIDER_MODULE}.supervisor")
 except ImportError as e:  # pragma: no cover — env-dependent
     pytest.skip(
         f"memory_tencentdb provider not importable ({e}); set HERMES_AGENT_ROOT "
@@ -136,7 +147,7 @@ def fast_watchdog(monkeypatch):
     Tests can then trigger a state change and assert the watchdog reacts
     within a tight bound, keeping the suite fast.
     """
-    import plugins.memory.memory_tencentdb as mod
+    mod = importlib.import_module(_PROVIDER_MODULE)
 
     monkeypatch.setattr(mod, "_WATCHDOG_INTERVAL_SECS", 0.05)
     monkeypatch.setattr(mod, "_WATCHDOG_SHUTDOWN_TIMEOUT_SECS", 0.5)
@@ -155,7 +166,7 @@ def provider_with_fake_supervisor(monkeypatch, fast_watchdog):
     The FakeSupervisor is exposed on the provider as ``_fake`` for tests
     to manipulate.
     """
-    import plugins.memory.memory_tencentdb as mod
+    mod = importlib.import_module(_PROVIDER_MODULE)
 
     fake = FakeSupervisor()
 
