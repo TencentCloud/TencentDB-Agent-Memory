@@ -233,12 +233,33 @@ describe("CheckpointManager", () => {
       expect(result.total_processed).toBe(1000);
     });
 
-    it("recalculates memories_since_last_persona correctly", async () => {
+    it("adjusts memories_since_last_persona by removed memories, not last_persona_at", async () => {
       const dataDir = createTempDir();
       const manager = new CheckpointManager(dataDir);
 
-      // Set up: 100 memories extracted, persona was at 60
       const cp0 = await manager.read();
+      cp0.total_memories_extracted = 10;
+      cp0.memories_since_last_persona = 4;
+      cp0.last_persona_at = 100;
+      await manager.write(cp0);
+
+      const result = await manager.recalibrate({
+        actualL0Count: 3,
+        actualL1Count: 8,
+        actualTotalProcessed: 98,
+      });
+
+      expect(result.total_memories_extracted).toBe(8);
+      expect(result.memories_since_last_persona).toBe(2);
+    });
+
+    it("preserves memories_since_last_persona when no memories were removed", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      const cp0 = await manager.read();
+      cp0.total_memories_extracted = 100;
+      cp0.memories_since_last_persona = 40;
       cp0.last_persona_at = 60;
       await manager.write(cp0);
 
@@ -248,26 +269,25 @@ describe("CheckpointManager", () => {
         actualTotalProcessed: 500,
       });
 
-      // memories_since = 100 - 60 = 40
       expect(result.memories_since_last_persona).toBe(40);
     });
 
-    it("clamps negative memories_since_last_persona to 0", async () => {
+    it("clamps memories_since_last_persona to 0 when removed memories exceed it", async () => {
       const dataDir = createTempDir();
       const manager = new CheckpointManager(dataDir);
 
-      // Set up: 50 memories extracted, persona was at 100 (more than current)
       const cp0 = await manager.read();
+      cp0.total_memories_extracted = 50;
+      cp0.memories_since_last_persona = 8;
       cp0.last_persona_at = 100;
       await manager.write(cp0);
 
       const result = await manager.recalibrate({
         actualL0Count: 5,
-        actualL1Count: 50,
+        actualL1Count: 30,
         actualTotalProcessed: 200,
       });
 
-      // memories_since = 50 - 100 = -50, clamped to 0
       expect(result.memories_since_last_persona).toBe(0);
     });
 
@@ -630,8 +650,9 @@ describe("CheckpointManager", () => {
         const dataDir = createTempDir();
         const manager = new CheckpointManager(dataDir);
 
-        // Set up: 100 memories, persona at 60
+        // Set up: 100 memories, 40 of them since the last persona run.
         const cp0 = await manager.read();
+        cp0.total_memories_extracted = 100;
         cp0.last_persona_at = 60;
         cp0.memories_since_last_persona = 40;
         await manager.write(cp0);
@@ -643,16 +664,17 @@ describe("CheckpointManager", () => {
           actualTotalProcessed: 300,
         });
 
-        // memories_since = 60 - 60 = 0 (persona just ran for this data)
+        // 40 memories were removed, so the trigger counter is safely reduced to 0.
         expect(result.memories_since_last_persona).toBe(0);
       });
 
-      it("handles persona point exceeding current L1 count", async () => {
+      it("handles last persona processed cursor exceeding current L1 count", async () => {
         const dataDir = createTempDir();
         const manager = new CheckpointManager(dataDir);
 
-        // Set up: 50 memories, persona at 80 (more than current)
+        // Set up: a persona cursor from total_processed, which can exceed L1 memory count.
         const cp0 = await manager.read();
+        cp0.total_memories_extracted = 50;
         cp0.last_persona_at = 80;
         cp0.memories_since_last_persona = 0;
         await manager.write(cp0);
@@ -664,7 +686,6 @@ describe("CheckpointManager", () => {
           actualTotalProcessed: 150,
         });
 
-        // memories_since = max(0, 30 - 80) = 0
         expect(result.memories_since_last_persona).toBe(0);
       });
     });
@@ -840,6 +861,29 @@ describe("CheckpointManager", () => {
       expect(result.l0_conversations_count).toBe(4);
       expect(result.total_memories_extracted).toBe(1);
       expect(result.total_processed).toBe(4);
+    });
+
+    it("adjusts memories_since_last_persona safely during auto-scan", async () => {
+      const dataDir = createTempDir();
+      const manager = new CheckpointManager(dataDir);
+
+      const cp0 = await manager.read();
+      cp0.total_memories_extracted = 5;
+      cp0.memories_since_last_persona = 3;
+      cp0.last_persona_at = 100;
+      await manager.write(cp0);
+
+      await createJsonlFile(path.join(dataDir, "records"), "2026-06-28.jsonl", [
+        { sessionKey: "session-a", updatedAt: "2026-06-28T10:00:00.000Z", content: "memory1" },
+        { sessionKey: "session-a", updatedAt: "2026-06-28T11:00:00.000Z", content: "memory2" },
+        { sessionKey: "session-a", updatedAt: "2026-06-28T12:00:00.000Z", content: "memory3" },
+        { sessionKey: "session-a", updatedAt: "2026-06-28T13:00:00.000Z", content: "memory4" },
+      ]);
+
+      const result = await manager.recalculate();
+
+      expect(result.total_memories_extracted).toBe(4);
+      expect(result.memories_since_last_persona).toBe(2);
     });
 
     it("finds newest L0 recorded_at for cursor correction", async () => {

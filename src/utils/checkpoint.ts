@@ -234,6 +234,7 @@ export interface Checkpoint {
   last_captured_timestamp: number;
   /** Total messages processed across all time */
   total_processed: number;
+  /** total_processed value at the last persona generation; not an L1 memory count. */
   last_persona_at: number;
   last_persona_time: string;
   request_persona_update: boolean;
@@ -345,6 +346,15 @@ function canTrustL0SessionAbsence(actualL0Count: number, scanResult: JsonlScanRe
 
 function canTrustL1SessionAbsence(actualL1Count: number, scanResult: JsonlScanResult): boolean {
   return actualL1Count === scanResult.l1Count;
+}
+
+function adjustMemoriesSinceLastPersona(
+  currentSinceLastPersona: number,
+  previousL1Count: number,
+  nextL1Count: number,
+): number {
+  const removedMemories = Math.max(0, previousL1Count - nextL1Count);
+  return Math.max(0, currentSinceLastPersona - removedMemories);
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -715,15 +725,15 @@ export class CheckpointManager {
     const { actualL0Count, actualL1Count, actualTotalProcessed } = params;
 
     const cp = await this.mutate((checkpoint) => {
-      // Recalculate memories_since_last_persona based on actual L1 count
-      // and last persona generation point
-      const memoriesSinceLastPersona = Math.max(
-        0,
-        actualL1Count - checkpoint.last_persona_at,
+      const nextL1Count = Math.max(0, actualL1Count);
+      const memoriesSinceLastPersona = adjustMemoriesSinceLastPersona(
+        checkpoint.memories_since_last_persona,
+        checkpoint.total_memories_extracted,
+        nextL1Count,
       );
 
       checkpoint.l0_conversations_count = Math.max(0, actualL0Count);
-      checkpoint.total_memories_extracted = Math.max(0, actualL1Count);
+      checkpoint.total_memories_extracted = nextL1Count;
       checkpoint.total_processed = Math.max(0, actualTotalProcessed);
       checkpoint.memories_since_last_persona = memoriesSinceLastPersona;
     });
@@ -775,11 +785,15 @@ export class CheckpointManager {
     let runnerCursorsCorrected = 0;
     let pipelineCursorsCorrected = 0;
     const cp = await this.mutate((checkpoint) => {
-      // Recalculate memories_since_last_persona
-      const memoriesSinceLastPersona = Math.max(0, l1Count - checkpoint.last_persona_at);
+      const nextL1Count = Math.max(0, l1Count);
+      const memoriesSinceLastPersona = adjustMemoriesSinceLastPersona(
+        checkpoint.memories_since_last_persona,
+        checkpoint.total_memories_extracted,
+        nextL1Count,
+      );
 
       checkpoint.l0_conversations_count = Math.max(0, l0Count);
-      checkpoint.total_memories_extracted = Math.max(0, l1Count);
+      checkpoint.total_memories_extracted = nextL1Count;
       checkpoint.total_processed = Math.max(0, scanResult.totalProcessed);
       checkpoint.memories_since_last_persona = memoriesSinceLastPersona;
 
