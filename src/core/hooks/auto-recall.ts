@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { buildCacheOptimizedContext } from "../../adapters/openclaw/cache-optimization.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -32,20 +33,8 @@ const RECALL_LINE_SEPARATOR = "\n";
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
  */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
-## 记忆工具调用指南
-
-当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
-
-- **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件节点、规则等关键信息。
-- **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节；也可用于补充或校验 memory_search 的结果。
-- **read_file**（Scene Navigation 中的路径）：当已定位到相关情境，且需要该场景的完整画像、事件经过或阶段结论时使用。
-
-### ⚠️ 调用次数限制
-每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
-- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
-- 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
-</memory-tools-guide>`
+// NOTE: MEMORY_TOOLS_GUIDE now lives in src/adapters/openclaw/cache-optimization.ts
+// as part of the shared, pure buildCacheOptimizedContext() helper.
 
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
@@ -216,94 +205,17 @@ async function performAutoRecallInner(params: {
   }
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
-  //
-  // With cacheOptimization="none" (legacy):
-  //   appendSystemContext (system prompt end): persona + scene nav + tools guide
-  //   prependContext (user prompt prefix): L1 memories in <relevant-memories>
-  //
-  // With cacheOptimization="stable_wrapper":
-  //   appendSystemContext: same as "none"
-  //   prependContext: L1 memories wrapped in stable <memory-context> tags
-  //   Even when no memories are recalled, a <memory-context state="empty">
-  //   placeholder is injected so the prefix remains stable.
-  //
-  // With cacheOptimization="split_system":
-  //   prependSystemAddition (BEFORE CACHE_BOUNDARY, cached): persona
-  //   appendSystemContext (after CACHE_BOUNDARY): scene nav + tools guide
-  //   prependContext: L1 memories wrapped in stable <memory-context> tags
-  //
-  // ── Orthogonal to recall.mode (Based on PR #410 diff analysis) ──
-  // cacheOptimization controls HOW the prompt is structured for cache stability.
-  // recall.mode controls WHETHER L1 memories are auto-injected at all.
-  // When recall.mode="tool-only" (L1 not auto-injected):
-  //   - prependContext will be empty → stable_wrapper emits <memory-context state="empty">
-  //   - split_system STILL moves persona before CACHE_BOUNDARY → cache benefit preserved
-  //   The two features compose safely: tool-only removes L1 injection,
-  //   cacheOptimization stabilizes whatever IS injected (persona, scene nav).
-  const cacheOpt = cfg.recall.cacheOptimization ?? "none";
-  const useStableWrapper = cacheOpt === "stable_wrapper" || cacheOpt === "split_system";
-  const useSplitSystem = cacheOpt === "split_system";
-
-  const stableParts: string[] = [];
-  let prependSystemAddition: string | undefined;
-
-  if (useSplitSystem) {
-    // Split mode: persona goes BEFORE CACHE_BOUNDARY (prependSystemAddition)
-    // Scene nav + tools guide stay in appendSystemContext (after boundary)
-    if (personaContent) {
-      prependSystemAddition = `<user-persona>\n${personaContent}\n</user-persona>`;
-    }
-    if (sceneNavigation) {
-      stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-    }
-  } else {
-    // Legacy / stable_wrapper: all stable content in appendSystemContext
-    if (personaContent) {
-      stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-    }
-    if (sceneNavigation) {
-      stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-    }
-  }
-
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
-  if (useStableWrapper) {
-    // Stable wrapper mode: wrap memories in <memory-context> tags for cache stability.
-    // The outer tags ("active" / "empty") provide a stable prefix that providers
-    // with prefix-matching caches can hit even when inner content changes.
-    if (memoryLines.length > 0) {
-      prependContext =
-        `<memory-context state="active">\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</memory-context>`;
-    } else {
-      // Empty placeholder: keeps the prefix stable even when no memories are recalled.
-      // Without this, a turn with no recall would have a different prefix structure
-      // (missing the <memory-context> block entirely), busting the cache.
-      prependContext = `<memory-context state="empty"></memory-context>`;
-    }
-  } else {
-    // Legacy mode: use <relevant-memories> (no stable wrapper, no empty placeholder)
-    if (memoryLines.length > 0) {
-      prependContext =
-        `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
-    }
-  }
-
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext || prependSystemAddition) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
-
-  logger?.debug?.(
-    `${TAG} Cache optimization: strategy=${cacheOpt}, ` +
-    `prependContext=${prependContext ? `${prependContext.length}chars` : "none"}, ` +
-    `appendSystemContext=${appendSystemContext ? `${appendSystemContext.length}chars` : "none"}, ` +
-    `prependSystemAddition=${prependSystemAddition ? `${prependSystemAddition.length}chars` : "none"}`,
-  );
+  // The shaping logic is extracted into the OpenClaw cache-optimization adapter
+  // (a pure, independently-tested helper) so the strategy matrix lives in one
+  // place and follows the adapter-layer convention used for recall injection.
+  const { prependSystemAddition, appendSystemContext, prependContext } = buildCacheOptimizedContext({
+    cacheOptimization: cfg.recall.cacheOptimization ?? "none",
+    personaContent,
+    sceneNavigation,
+    memoryLines,
+    separator: RECALL_LINE_SEPARATOR,
+    dedup: cfg.recall.dedupInjected ?? false,
+  });
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(

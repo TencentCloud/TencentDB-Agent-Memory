@@ -111,6 +111,12 @@ export interface RecallConfig {
    *   remain in `appendSystemContext` (after boundary).
    */
   cacheOptimization: "none" | "stable_wrapper" | "split_system";
+  /**
+   * Deduplicate identical L1 memory lines before shaping the cache-optimized
+   * context (default: false). Defensive against double-injection from the
+   * keyword + embedding paths; a no-op when memories are already unique.
+   */
+  dedupInjected: boolean;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -558,6 +564,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       showInjected: bool(recallGroup, "showInjected") ?? false,
       cacheOptimization: validateCacheOptimization(str(recallGroup, "cacheOptimization")) ?? "none",
+      dedupInjected: bool(recallGroup, "dedupInjected") ?? false,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,

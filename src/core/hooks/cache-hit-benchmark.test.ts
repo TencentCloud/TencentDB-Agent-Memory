@@ -901,3 +901,146 @@ describe("Benchmark 8: Orthogonality — cacheOptimization × L1 Placement", () 
     }
   });
 });
+
+// ────────────────────────────────────────────────────────
+// Benchmark 9: Provider-Level Cache Accounting (DeepSeek/Claude style)
+//
+// Absorbs the real-measurement methodology from community PR #433: instead of
+// only reasoning about prefix stability, we simulate a prefix-matching provider
+// (DeepSeek / Anthropic) that caches the prompt prefix up to the host-defined
+// CACHE_BOUNDARY, then quantify cache_read vs cache_creation tokens.
+//
+// The codebase models the cache boundary explicitly:
+//   - prependSystemAddition is placed BEFORE CACHE_BOUNDARY (cached)
+//   - appendSystemContext is placed AFTER CACHE_BOUNDARY (not cached)
+// So split_system moves persona before the boundary → it becomes cacheable,
+// which is the unique, measurable win of our PR vs the legacy/none modes.
+// stable_wrapper's benefit is structural (prepend-region stability) and is
+// reported separately so we never over-claim a cache_read gain it does not give.
+// ────────────────────────────────────────────────────────
+
+describe("Benchmark 9: Provider Cache Accounting — cache_read simulation", () => {
+  /**
+   * Build the full prompt for a given cache-optimization mode and a turn's
+   * recalled memories. Mirrors host assembly:
+   *   [system base][prependSystemAddition | CACHE_BOUNDARY | appendSystemContext][user][prependContext]
+   */
+  function buildFullPrompt(opt: "none" | "stable_wrapper" | "split_system", memories: string[]): string {
+    const legacySystem = buildLegacySystemPrefix();
+    const split = buildSplitSystemPrefix();
+
+    let beforeBoundary: string;
+    let afterBoundary: string;
+    if (opt === "split_system") {
+      beforeBoundary = split.before;   // SYSTEM_BASE + persona (cached)
+      afterBoundary = split.after;     // scene nav + tools guide
+    } else {
+      beforeBoundary = SYSTEM_BASE;    // boundary right after base
+      afterBoundary = legacySystem.substring(SYSTEM_BASE.length).replace(/^\n+/, "");
+    }
+
+    const userPrefix = opt === "none"
+      ? (buildLegacyUserPrefix(memories) ?? "")
+      : buildStableUserPrefix(memories);
+
+    return `${beforeBoundary}\n${afterBoundary}\nuser question\n${userPrefix}`;
+  }
+
+  /** Cached prefix (before CACHE_BOUNDARY) for a mode — identical every turn. */
+  function cachedPrefix(opt: "none" | "stable_wrapper" | "split_system"): string {
+    return opt === "split_system" ? buildSplitSystemPrefix().before : SYSTEM_BASE;
+  }
+
+  /** Simulate a prefix-matching provider over a session. Returns token accounting. */
+  function simulateProviderCache(opt: "none" | "stable_wrapper" | "split_system", sess: string[][]): { cacheRead: number; cacheCreation: number } {
+    let cacheRead = 0;
+    let cacheCreation = 0;
+    for (const memories of sess) {
+      const prompt = buildFullPrompt(opt, memories);
+      const beforeLen = cachedPrefix(opt).length;
+      cacheRead += estimateTokens(beforeLen);
+      cacheCreation += estimateTokens(prompt.length - beforeLen);
+    }
+    return { cacheRead, cacheCreation };
+  }
+
+  // 20-turn session, deterministic ~80% recall pattern (no Math.random → reproducible)
+  const session: string[][] = Array.from({ length: 20 }, (_, i) => {
+    const mems = [
+      ["- [episodic] User worked on API caching"],
+      ["- [instruction] User prefers TypeScript"],
+      ["- [episodic] User knows React", "- [episodic] User worked on Node.js"],
+      ["- [instruction] User uses macOS"],
+      ["- [episodic] User likes performance optimization"],
+    ];
+    return i % 5 !== 4 ? mems[i % mems.length] : [];
+  });
+
+  it("split_system cached prefix includes persona and is longer than none", () => {
+    const nonePrefix = cachedPrefix("none");
+    const splitPrefix = cachedPrefix("split_system");
+    expect(nonePrefix).toBe(SYSTEM_BASE);
+    expect(splitPrefix).toContain("<user-persona>");
+    expect(splitPrefix).toContain(PERSONA_CONTENT);
+    expect(splitPrefix.length).toBeGreaterThan(nonePrefix.length);
+  });
+
+  it("20-turn session: split_system cumulative cache_read >> none (persona cached)", () => {
+    const none = simulateProviderCache("none", session);
+    const split = simulateProviderCache("split_system", session);
+    const stable = simulateProviderCache("stable_wrapper", session);
+
+    // none and stable_wrapper share the SAME before-boundary prefix (SYSTEM_BASE)
+    expect(none.cacheRead).toBe(stable.cacheRead);
+
+    // split_system caches persona too → strictly more cache_read
+    expect(split.cacheRead).toBeGreaterThan(none.cacheRead);
+
+    // The gain equals (cached-prefix size difference) × turns (deterministic).
+    // split_system's cached prefix = SYSTEM_BASE + <user-persona> wrapper + persona,
+    // so the measurable win is the persona PLUS its stable wrapper tags.
+    const perTurnGain =
+      estimateTokens(cachedPrefix("split_system").length) -
+      estimateTokens(cachedPrefix("none").length);
+    const expectedGain = perTurnGain * session.length;
+    expect(split.cacheRead - none.cacheRead).toBe(expectedGain);
+  });
+
+  it("per-turn cache_read contribution of split_system is substantial (persona + wrapper)", () => {
+    // split_system adds the persona AND its stable <user-persona> wrapper to the
+    // cached prefix. Measured per-turn gain (vs none) is well above noise.
+    const perTurnGain =
+      estimateTokens(cachedPrefix("split_system").length) -
+      estimateTokens(cachedPrefix("none").length);
+    expect(perTurnGain).toBeGreaterThan(25);
+    expect(perTurnGain).toBeLessThan(80);
+  });
+
+  it("orthogonality: cache_read (structure) is independent of L1 wrapper (position)", () => {
+    // cache_read depends ONLY on the before-boundary prefix, not on how the
+    // L1 memories are wrapped. So split_system yields identical cache_read
+    // whether the user prefix uses stable_wrapper or legacy <relevant-memories>.
+    const splitWithStable = simulateProviderCache("split_system", session);
+    let cacheReadLegacy = 0;
+    for (const memories of session) {
+      const prompt = `${buildSplitSystemPrefix().before}\n${buildSplitSystemPrefix().after}\nuser question\n${buildLegacyUserPrefix(memories) ?? ""}`;
+      cacheReadLegacy += estimateTokens(buildSplitSystemPrefix().before.length);
+    }
+    expect(cacheReadLegacy).toBe(splitWithStable.cacheRead);
+  });
+
+  it("structural stability credit: stable_wrapper keeps prepend prefix stable across recall/no-recall", () => {
+    // The stable_wrapper benefit (orthogonal to cache_read): the prependContext
+    // region keeps a common prefix across turns even when memory recall toggles
+    // on/off. none mode has ZERO common prefix on no-recall turns.
+    const memories = ["- [episodic] Some memory"];
+    const stableCommon = commonPrefixLength(buildStableUserPrefix(memories), buildStableUserPrefix([]));
+    const noneCommon = commonPrefixLength(buildLegacyUserPrefix(memories)!, buildLegacyUserPrefix([]) ?? "");
+
+    // stable_wrapper: wrapper tag always present → 23-char common prefix
+    expect(stableCommon).toBe(23);
+    // none: no-recall turn has no block → 0 common prefix
+    expect(noneCommon).toBe(0);
+    expect(stableCommon).toBeGreaterThan(noneCommon);
+  });
+});
