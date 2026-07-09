@@ -541,15 +541,15 @@ export function createL2Runner(opts: {
           `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
           `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
           `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
-          `Repairing...`,
+          `Recalibrating counters from local storage...`,
         );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-          memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
-        });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
+        const recalibrated = await checkpoint.recalibrate(vectorStore);
+        await checkpoint.ensureScenesProcessedAtLeast(preScenesProcessed);
+        logger.info(
+          `${TAG} [L2] Checkpoint counters recalibrated: ` +
+          `total_processed=${recalibrated.total_processed}, ` +
+          `memories_since=${recalibrated.memories_since_last_persona}`,
+        );
       }
 
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {
@@ -695,6 +695,13 @@ export async function createPipeline(opts: PipelineFactoryOptions): Promise<Pipe
   // Initialize stores (once-async: reuses cached result if already initialized)
   const stores = await initStores(cfg, pluginDataDir, logger);
   const { vectorStore, embeddingService } = stores;
+
+  try {
+    const checkpoint = new CheckpointManager(pluginDataDir, logger);
+    await checkpoint.recalibrate(vectorStore);
+  } catch (err) {
+    logger.warn(`${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Create pipeline manager
   const scheduler = createPipelineManager(cfg, logger, sessionFilter);

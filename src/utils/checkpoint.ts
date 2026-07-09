@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -144,6 +145,13 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+export interface CheckpointRecalibrationResult {
+  total_processed: number;
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+  memories_since_last_persona: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -180,9 +188,11 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 
 export class CheckpointManager {
   private filePath: string;
+  private dataDir: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -293,6 +303,164 @@ export class CheckpointManager {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
   }
 
+  /**
+   * Recalculate derived counters from persisted L0/L1 data.
+   *
+   * This repairs checkpoint drift after memory cleanup or manual pruning.
+   * When a store is available, its current row counts are authoritative;
+   * otherwise JSONL shards are used as the local fallback.
+   */
+  async recalibrate(vectorStore?: IMemoryStore): Promise<CheckpointRecalibrationResult> {
+    const result = await this.mutate(async (cp) => {
+      const l0Stats = await this.countL0Stats(vectorStore);
+      const l1Stats = await this.countL1Stats(cp.last_persona_time, vectorStore);
+
+      cp.total_processed = l0Stats.totalProcessed;
+      cp.l0_conversations_count = l0Stats.recordCount;
+      cp.total_memories_extracted = l1Stats.totalRecords;
+      cp.memories_since_last_persona = l1Stats.recordsSinceLastPersona;
+    });
+
+    const summary: CheckpointRecalibrationResult = {
+      total_processed: result.total_processed,
+      l0_conversations_count: result.l0_conversations_count,
+      total_memories_extracted: result.total_memories_extracted,
+      memories_since_last_persona: result.memories_since_last_persona,
+    };
+
+    this.logger.info(
+      `[checkpoint] recalibrate: ` +
+      `total_processed=${summary.total_processed}, ` +
+      `l0_conversations_count=${summary.l0_conversations_count}, ` +
+      `total_memories_extracted=${summary.total_memories_extracted}, ` +
+      `memories_since_last_persona=${summary.memories_since_last_persona}`,
+    );
+
+    return summary;
+  }
+
+  async recalibrateCounters(vectorStore?: IMemoryStore): Promise<CheckpointRecalibrationResult> {
+    return this.recalibrate(vectorStore);
+  }
+
+  private async countL0Stats(vectorStore?: IMemoryStore): Promise<{ totalProcessed: number; recordCount: number }> {
+    if (vectorStore && !vectorStore.isDegraded()) {
+      try {
+        const count = await vectorStore.countL0();
+        return { totalProcessed: count, recordCount: count };
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: countL0 failed, falling back to JSONL: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const conversationsDir = path.join(this.dataDir, "conversations");
+    let recordCount = 0;
+
+    await this.scanJsonlLines(conversationsDir, (parsed) => {
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        typeof (parsed as Record<string, unknown>).role === "string" &&
+        typeof (parsed as Record<string, unknown>).content === "string"
+      ) {
+        recordCount += 1;
+      }
+    });
+
+    return { totalProcessed: recordCount, recordCount };
+  }
+
+  private async countL1Stats(
+    lastPersonaTime: string,
+    vectorStore?: IMemoryStore,
+  ): Promise<{
+    totalRecords: number;
+    recordsSinceLastPersona: number;
+  }> {
+    const lastPersonaMs = lastPersonaTime ? Date.parse(lastPersonaTime) : Number.NaN;
+    const hasPersonaCursor = Number.isFinite(lastPersonaMs);
+
+    if (vectorStore && !vectorStore.isDegraded()) {
+      try {
+        const totalRecords = await vectorStore.countL1();
+        const recordsSinceLastPersona = hasPersonaCursor
+          ? (await vectorStore.queryL1Records({ updatedAfter: lastPersonaTime })).length
+          : totalRecords;
+        return { totalRecords, recordsSinceLastPersona };
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: countL1 failed, falling back to JSONL: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const recordsDir = path.join(this.dataDir, "records");
+    let totalRecords = 0;
+    let recordsSinceLastPersona = 0;
+
+    await this.scanJsonlLines(recordsDir, (parsed) => {
+      if (!parsed || typeof parsed !== "object") return;
+      const record = parsed as Record<string, unknown>;
+      if (typeof record.content !== "string" || typeof record.id !== "string") return;
+
+      totalRecords += 1;
+
+      if (!hasPersonaCursor) {
+        recordsSinceLastPersona += 1;
+        return;
+      }
+
+      const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : "";
+      const createdAt = typeof record.createdAt === "string" ? record.createdAt : "";
+      const recordMs = Date.parse(updatedAt || createdAt);
+      if (Number.isFinite(recordMs) && recordMs > lastPersonaMs) {
+        recordsSinceLastPersona += 1;
+      }
+    });
+
+    return { totalRecords, recordsSinceLastPersona };
+  }
+
+  private async scanJsonlLines(
+    dir: string,
+    visit: (parsed: unknown) => void,
+  ): Promise<void> {
+    const dateFilePattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const files = entries
+      .filter((entry) => entry.isFile() && dateFilePattern.test(entry.name))
+      .map((entry) => entry.name)
+      .sort();
+
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      let raw: string;
+      try {
+        raw = await fs.readFile(filePath, "utf-8");
+      } catch {
+        this.logger.warn?.(`[checkpoint] recalibrate: failed to read ${filePath}`);
+        continue;
+      }
+
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          visit(JSON.parse(line));
+        } catch {
+          this.logger.warn?.(`[checkpoint] recalibrate: skipped malformed JSONL line in ${filePath}`);
+        }
+      }
+    }
+  }
+
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
@@ -330,6 +498,12 @@ export class CheckpointManager {
       cp.scenes_processed += 1;
     });
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
+  }
+
+  async ensureScenesProcessedAtLeast(minScenesProcessed: number): Promise<void> {
+    await this.mutate((cp) => {
+      cp.scenes_processed = Math.max(cp.scenes_processed, minScenesProcessed);
+    });
   }
 
   // ============================

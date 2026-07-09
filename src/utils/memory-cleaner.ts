@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
+import { CheckpointManager } from "./checkpoint.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
 
@@ -178,6 +179,15 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    }
+
+    try {
+      const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+      await checkpoint.recalibrate(this.vectorStore);
+    } catch (err) {
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint recalibration failed after cleanup: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     this.opts.logger?.info(
