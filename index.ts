@@ -50,12 +50,26 @@ export {
   GatewayMemoryClientError,
   createGatewayPlatformAdapter,
 } from "./src/adapters/gateway-client/index.js";
+export {
+  createClaudeCodeContextFromHookInput,
+  createClaudeCodeGatewayAdapter,
+  createClaudeCodeSessionKey,
+} from "./src/adapters/claude-code/index.js";
 export type {
   GatewayMemoryClientOptions,
   GatewayPlatformAdapter,
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./src/adapters/gateway-client/index.js";
+export type {
+  ClaudeCodeCompletedTurn,
+  ClaudeCodeGatewayAdapter,
+  ClaudeCodeGatewayAdapterOptions,
+  ClaudeCodeGatewayContext,
+  ClaudeCodeHookContextOptions,
+  ClaudeCodeHookInput,
+  ClaudeCodeSessionKeyInput,
+} from "./src/adapters/claude-code/index.js";
 
 const TAG = "[memory-tdai]";
 

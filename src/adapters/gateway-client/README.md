@@ -105,6 +105,8 @@ Use repository root plus conversation id as `sessionKey`. Inject `recall.context
 as a system or developer-context block if the platform supports one; otherwise
 prepend it to the user prompt and keep the block clearly delimited.
 
+For a concrete Claude Code hook helper, see `src/adapters/claude-code/README.md`.
+
 ### Dify / LangGraph style runtimes
 
 Place `prefetch()` in the graph node that prepares model input, and place

@@ -6,9 +6,10 @@
  *
  * Directory structure:
  *   adapters/
- *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
- *   └── gateway-client/ — Generic HTTP client for new platform adapters
+ *   ├── openclaw/       — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
+ *   ├── standalone/     — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── gateway-client/ — Generic HTTP client for new platform adapters
+ *   └── claude-code/    — Claude Code hook helper built on gateway-client
  */
 
 // OpenClaw adapter
@@ -31,3 +32,19 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./gateway-client/index.js";
+
+// Claude Code Gateway hook adapter
+export {
+  createClaudeCodeContextFromHookInput,
+  createClaudeCodeGatewayAdapter,
+  createClaudeCodeSessionKey,
+} from "./claude-code/index.js";
+export type {
+  ClaudeCodeCompletedTurn,
+  ClaudeCodeGatewayAdapter,
+  ClaudeCodeGatewayAdapterOptions,
+  ClaudeCodeGatewayContext,
+  ClaudeCodeHookContextOptions,
+  ClaudeCodeHookInput,
+  ClaudeCodeSessionKeyInput,
+} from "./claude-code/index.js";
