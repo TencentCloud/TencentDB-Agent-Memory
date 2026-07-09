@@ -29,6 +29,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "check:encoding": "node scripts/check-text-encoding.mjs",
+    "test:encoding": "node --test scripts/check-text-encoding.test.mjs",
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
   },
   "files": [
