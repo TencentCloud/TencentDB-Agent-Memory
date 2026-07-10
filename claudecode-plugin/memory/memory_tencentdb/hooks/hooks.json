@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --import tsx ${CLAUDE_PLUGIN_ROOT}/hooks/memory.ts",
+            "timeout": 10,
+            "statusMessage": "Checking memory Gateway..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --import tsx ${CLAUDE_PLUGIN_ROOT}/hooks/memory.ts",
+            "timeout": 15,
+            "statusMessage": "Recalling memory context..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --import tsx ${CLAUDE_PLUGIN_ROOT}/hooks/memory.ts",
+            "timeout": 30,
+            "statusMessage": "Capturing conversation turn..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --import tsx ${CLAUDE_PLUGIN_ROOT}/hooks/memory.ts",
+            "timeout": 10,
+            "statusMessage": "Flushing memory session..."
+          }
+        ]
+      }
+    ]
+  }
+}
