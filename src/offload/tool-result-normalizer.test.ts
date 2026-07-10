@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeToolResultForPrompt, stableSerialize } from "./tool-result-normalizer.js";
+import { applyFrontOffloadResult } from "./hooks/after-tool-call.js";
 
 describe("normalizeToolResultForPrompt", () => {
   it("keeps small tool results inline", async () => {
@@ -41,5 +42,20 @@ describe("normalizeToolResultForPrompt", () => {
       tool_call_id: "tc-large",
     });
     expect(JSON.stringify(result.promptResult)).toContain(result.contentHash);
+  });
+});
+
+describe("applyFrontOffloadResult", () => {
+  it("keeps the raw event result when prompt-facing history has no matching tool result", () => {
+    const rawResult = "X".repeat(4_000);
+    const event = {
+      result: rawResult,
+      messages: [{ role: "toolResult", toolCallId: "different-call", content: rawResult }],
+    };
+    const promptResult = { _tdai_offloaded: true, result_ref: "refs/tool-result.md" };
+
+    expect(applyFrontOffloadResult(event, "call-1", promptResult)).toBe(false);
+    expect(event.result).toBe(rawResult);
+    expect(event.messages[0].content).toBe(rawResult);
   });
 });

@@ -202,12 +202,18 @@ export function createAfterToolCallHandler(
           contentHash: normalized.contentHash,
           originalTokens: normalized.originalTokens,
         };
-        event.result = promptResult;
-        replacePromptFacingToolResult(event.messages, toolCallId, promptResult);
-        logger.debug?.(
-          `[context-offload] front-offload: ${event.toolName} (${toolCallId}) ` +
-          `tokens=${normalized.originalTokens}, ref=${normalized.resultRef}`,
-        );
+        if (applyFrontOffloadResult(event, toolCallId, promptResult)) {
+          logger.debug?.(
+            `[context-offload] front-offload: ${event.toolName} (${toolCallId}) ` +
+            `tokens=${normalized.originalTokens}, ref=${normalized.resultRef}`,
+          );
+        } else {
+          frontOffload = {};
+          logger.warn?.(
+            `[context-offload] front-offload skipped for ${event.toolName} (${toolCallId}): ` +
+            "prompt-facing tool result was not found; retaining the original result for normal L3 handling.",
+          );
+        }
       }
     } catch (err) {
       logger.warn?.(`[context-offload] front-offload failed for ${event.toolName} (${toolCallId}): ${String(err)}`);
@@ -635,6 +641,12 @@ function normalizedHashPrefix(content: string): string {
     hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0;
   }
   return Math.abs(hash).toString(16);
+}
+
+export function applyFrontOffloadResult(event: any, toolCallId: string, promptResult: unknown): boolean {
+  if (!replacePromptFacingToolResult(event?.messages, toolCallId, promptResult)) return false;
+  event.result = promptResult;
+  return true;
 }
 
 function replacePromptFacingToolResult(messages: any, toolCallId: string, promptResult: unknown): boolean {

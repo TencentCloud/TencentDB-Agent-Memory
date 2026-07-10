@@ -159,7 +159,7 @@ export function sliceRefContent(
   return output.join("\n") || "(empty)";
 }
 
-function resolveReadMaxTokens(requested: number | undefined, configuredLimit: number): number {
+export function resolveReadMaxTokens(requested: number | undefined, configuredLimit: number): number {
   const hardLimit = Math.max(80, Math.floor(configuredLimit));
   if (requested == null || !Number.isFinite(requested)) return hardLimit;
   return Math.min(hardLimit, Math.max(80, Math.floor(requested)));
@@ -988,7 +988,10 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           if (!isSafeRefPath(refPath)) {
             return "tdai_offload_read: invalid result_ref. Only refs/*.md relative paths are allowed.";
           }
-          const mgr = ctx?.sessionKey ? await _resolveSession(ctx.sessionKey, ctx?.sessionId) : _lastActiveMgr;
+          if (typeof ctx?.sessionKey !== "string" || !ctx.sessionKey) {
+            return "tdai_offload_read: an explicit sessionKey is required.";
+          }
+          const mgr = await _resolveSession(ctx.sessionKey, ctx?.sessionId);
           if (!mgr) return "tdai_offload_read: no active session is available.";
           const raw = await readRefMd(mgr.ctx, refPath);
           if (raw == null) return `tdai_offload_read: result_ref not found: ${refPath}`;
