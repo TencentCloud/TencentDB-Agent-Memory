@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${TDAI_MEMORY_ROOT}/node_modules/.bin/tsx\" \"${TDAI_MEMORY_ROOT}/codex-plugin/memory/memory_tencentdb/hooks/recall.ts\"",
+            "commandWindows": "cmd.exe /d /s /c \"\"%TDAI_MEMORY_ROOT%\\node_modules\\.bin\\tsx.cmd\" \"%TDAI_MEMORY_ROOT%\\codex-plugin\\memory\\memory_tencentdb\\hooks\\recall.ts\"\"",
+            "timeout": 15,
+            "statusMessage": "Recalling memory context..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${TDAI_MEMORY_ROOT}/node_modules/.bin/tsx\" \"${TDAI_MEMORY_ROOT}/codex-plugin/memory/memory_tencentdb/hooks/capture.ts\"",
+            "commandWindows": "cmd.exe /d /s /c \"\"%TDAI_MEMORY_ROOT%\\node_modules\\.bin\\tsx.cmd\" \"%TDAI_MEMORY_ROOT%\\codex-plugin\\memory\\memory_tencentdb\\hooks\\capture.ts\"\"",
+            "timeout": 30,
+            "statusMessage": "Capturing conversation turn..."
+          }
+        ]
+      }
+    ]
+  }
+}
