@@ -161,6 +161,101 @@ migrate_legacy_dir() {
 migrate_legacy_dir "$LEGACY_INSTALL_DIR" "$TDAI_INSTALL_DIR" "install"
 migrate_legacy_dir "$LEGACY_DATA_DIR"    "$TDAI_DATA_DIR"    "data"
 
+# ---------- 幂等性检查 ----------
+#
+# 特性：
+# - 版本检测：对比已安装版本，一致则跳过
+# - Skip-if-current：已有完整安装 → 打印摘要退出
+# - Dirty install 检测：目录存在但 node_modules 缺失 → 提示 --repair
+# - 锁文件：防止并发安装
+# - 回滚：npm install 失败恢复备份
+# - --force：跳过版本检测强制执行
+
+FORCE_INSTALL="${FORCE_INSTALL:-false}"
+REPAIR_INSTALL="${REPAIR_INSTALL:-false}"
+
+# 参数解析（支持 --force、--repair）
+for arg in "$@"; do
+    case "$arg" in
+        --force|-f) FORCE_INSTALL=true ;;
+        --repair|-r) REPAIR_INSTALL=true ;;
+    esac
+done
+
+# —— 锁文件（防止并发安装） ——
+LOCK_FILE="$MEMORY_TENCENTDB_ROOT/.install-lock"
+if [ -f "$LOCK_FILE" ]; then
+    # 检测过期锁（>2小时）
+    lock_age_sec=$(($(date +%s) - $(stat -c %Y "$LOCK_FILE" 2>/dev/null || stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)))
+    if [ "$lock_age_sec" -gt 7200 ]; then
+        echo "[memory-tencentdb] Stale lock file detected (>2h), removing..."
+        rm -f "$LOCK_FILE"
+    else
+        echo "[ERROR] Another installation appears to be running (lock: $LOCK_FILE)." >&2
+        echo "[ERROR] If you are sure no installation is running, delete the lock file and retry:" >&2
+        echo "[ERROR]   rm -f $LOCK_FILE" >&2
+        exit 1
+    fi
+fi
+touch "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
+# —— 版本检测 + Skip-if-current ——
+if [ "$FORCE_INSTALL" != "true" ] && [ -d "$TDAI_INSTALL_DIR" ]; then
+    PKG_JSON="$TDAI_INSTALL_DIR/package.json"
+    NODE_MODULES="$TDAI_INSTALL_DIR/node_modules"
+
+    # 检查是否为破损安装（目录存在但 node_modules 缺失）
+    if [ ! -d "$NODE_MODULES" ]; then
+        if [ "$REPAIR_INSTALL" = "true" ]; then
+            echo "[memory-tencentdb] Detected broken install (missing node_modules), repairing..."
+        else
+            echo "[memory-tencentdb] WARN: Install directory exists but node_modules is missing." >&2
+            echo "[memory-tencentdb] WARN: This may indicate a failed previous installation." >&2
+            echo "[memory-tencentdb] WARN: Re-run with --repair to fix, or --force to reinstall." >&2
+            exit 1
+        fi
+    elif [ -f "$PKG_JSON" ]; then
+        installed_ver=""
+        if command -v jq >/dev/null 2>&1; then
+            installed_ver=$(jq -r .version "$PKG_JSON" 2>/dev/null)
+        else
+            installed_ver=$(python3 -c "import json; print(json.load(open('$PKG_JSON')).get('version',''))" 2>/dev/null || echo "")
+        fi
+        if [ -n "$installed_ver" ] && [ "$REPAIR_INSTALL" != "true" ]; then
+            echo "[memory-tencentdb] Already installed: v$installed_ver @ $TDAI_INSTALL_DIR"
+            echo "[memory-tencentdb] Skipping installation (use --force to reinstall, --repair to fix)"
+            echo ""
+            echo "=== 当前配置摘要 ==="
+            echo "  Root dir:       $MEMORY_TENCENTDB_ROOT"
+            echo "  tdai source:    $TDAI_INSTALL_DIR"
+            echo "  tdai data dir:  $TDAI_DATA_DIR"
+            echo "  Hermes config:  $HERMES_CONFIG"
+            exit 0
+        fi
+    fi
+fi
+
+# —— 备份已有安装（用于回滚） ——
+ROLLBACK_BACKUP=""
+if [ -d "$TDAI_INSTALL_DIR" ]; then
+    ROLLBACK_BACKUP="${TDAI_INSTALL_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "[memory-tencentdb] Backing up current installation to $ROLLBACK_BACKUP"
+    mv "$TDAI_INSTALL_DIR" "$ROLLBACK_BACKUP"
+fi
+
+# rollback_on_failure: 安装失败时恢复备份
+rollback_on_failure() {
+    if [ -n "$ROLLBACK_BACKUP" ] && [ -d "$ROLLBACK_BACKUP" ]; then
+        echo "[memory-tencentdb] Rolling back to previous installation..."
+        rm -rf "$TDAI_INSTALL_DIR" 2>/dev/null || true
+        mv "$ROLLBACK_BACKUP" "$TDAI_INSTALL_DIR"
+        echo "[memory-tencentdb] Rollback complete."
+    fi
+    rm -f "$LOCK_FILE"
+}
+trap 'rollback_on_failure' ERR
+
 # ---------- Step 1: 通过 npm 下载包并提取到 $TDAI_INSTALL_DIR ----------
 
 echo "[memory-tencentdb] Step 1: Downloading $NPM_PACKAGE via npm..."
@@ -310,6 +405,14 @@ echo "[memory-tencentdb] Gateway env vars also written to $HERMES_ENV (for syste
 # ---------- 清理 ----------
 
 rm -rf "$TEMP_DOWNLOAD"
+
+# 清理备份（安装成功，旧备份不再需要）
+if [ -n "$ROLLBACK_BACKUP" ] && [ -d "$ROLLBACK_BACKUP" ]; then
+    rm -rf "$ROLLBACK_BACKUP"
+    echo "[memory-tencentdb] Previous installation backup cleaned up."
+fi
+# 移除回滚 trap（安装已成功）
+trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ---------- 验证安装 ----------
 

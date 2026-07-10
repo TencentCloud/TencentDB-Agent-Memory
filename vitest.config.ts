@@ -14,13 +14,32 @@ export default defineConfig({
     unstubGlobals: true,
     coverage: {
       provider: "v8",
-      reporter: ["text", "html", "lcov"],
-      include: ["src/**/*.ts", "index.ts"],
+      reporter: ["text", "html", "lcov", "json-summary"],
+      include: [
+        "src/**/*.ts",
+        "index.ts",
+        "bin/**/*.mjs",
+        "hermes-plugin/**/*.py",
+      ],
       exclude: [
         "src/**/*.test.ts",
         "dist/**",
         "node_modules/**",
+        "**/*.d.ts",
       ],
+      thresholds: {
+        statements: 80,
+        branches: 75,
+        functions: 80,
+        lines: 80,
+        // shared infrastructure modules are held to a higher bar
+        "src/adapters/shared/**/*.ts": {
+          statements: 90,
+          branches: 85,
+          functions: 90,
+          lines: 90,
+        },
+      },
     },
   },
 });
