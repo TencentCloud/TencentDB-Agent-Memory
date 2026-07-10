@@ -193,6 +193,7 @@ export function createAfterToolCallHandler(
           event.toolName,
           content,
           `${toolCallId}-${normalizedHashPrefix(content)}`,
+          stateManager.getLastSessionKey() ?? undefined,
         ),
       });
       if (normalized.offloaded) {

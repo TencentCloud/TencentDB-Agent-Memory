@@ -20,7 +20,7 @@ import {
   readOffloadEntries,
   markOffloadStatus,
   DEFAULT_DATA_ROOT,
-  readRefMd,
+  readOwnedRefMd,
 } from "./storage.js";
 import { buildTiktokenContextSnapshot, configureTokenTracker, tiktokenCount, jsonReplacer } from "./context-token-tracker.js";
 import { fastEstimateMessages } from "./fast-token-estimate.js";
@@ -520,7 +520,14 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
             ? sanitizeText(p.result)
             : sanitizeText(JSON.stringify(p.result, null, 2));
           const content = `**Tool:** ${p.toolName}\n**Call ID:** ${p.toolCallId}\n\n**Result:**\n\`\`\`\n${resultStr}\n\`\`\``;
-          const refPath = await writeRefMd(stateManager.ctx, p.timestamp, p.toolName, content);
+          const refPath = await writeRefMd(
+            stateManager.ctx,
+            p.timestamp,
+            p.toolName,
+            content,
+            undefined,
+            stateManager.getLastSessionKey() ?? undefined,
+          );
           refByToolCallId.set(p.toolCallId, refPath);
         } catch (err) {
           logger.error(`[context-offload] L1.1 ref write error (${p.toolCallId}): ${err}`);
@@ -993,7 +1000,7 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
           }
           const mgr = await _resolveSession(ctx.sessionKey, ctx?.sessionId);
           if (!mgr) return "tdai_offload_read: no active session is available.";
-          const raw = await readRefMd(mgr.ctx, refPath);
+          const raw = await readOwnedRefMd(mgr.ctx, refPath, ctx.sessionKey);
           if (raw == null) return `tdai_offload_read: result_ref not found: ${refPath}`;
           return sliceRefContent(raw, {
             query: typeof params?.query === "string" ? params.query : undefined,

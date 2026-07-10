@@ -58,10 +58,21 @@ describe("tdai_offload_read", () => {
       const sessionKey = "agent:main:session-1";
       const ctx = createStorageContext(dataRoot, "main", "session-1");
       await ensureDirs(ctx);
-      const ref = await writeRefMd(ctx, "2026-07-10T00:00:00.000Z", "exec", "owned session content", "call-1");
+      const ref = await writeRefMd(
+        ctx,
+        "2026-07-10T00:00:00.000Z",
+        "exec",
+        "owned session content",
+        "call-1",
+        sessionKey,
+      );
 
       await expect(readTool.execute("call-2", { result_ref: ref }, { sessionKey }))
         .resolves.toContain("owned session content");
+
+      await expect(
+        readTool.execute("call-3", { result_ref: ref }, { sessionKey: "agent:main:session-2" }),
+      ).resolves.toBe(`tdai_offload_read: result_ref not found: ${ref}`);
     } finally {
       await rm(dataRoot, { recursive: true, force: true });
     }
