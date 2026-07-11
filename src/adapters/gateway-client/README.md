@@ -66,6 +66,8 @@ import {
 const client = new GatewayMemoryClient({
   baseUrl: process.env.MEMORY_TENCENTDB_GATEWAY_URL ?? "http://127.0.0.1:8420",
   apiKey: process.env.MEMORY_TENCENTDB_GATEWAY_API_KEY,
+  timeoutMs: 10_000,
+  sessionEndTimeoutMs: 180_000,
 });
 
 const memory = createGatewayPlatformAdapter({
@@ -85,6 +87,11 @@ await memory.captureTurn({
   assistantText: assistantResponse,
 });
 ```
+
+Ordinary Gateway requests default to a 10-second timeout. `endSession()` uses a
+separate timeout because `POST /session/end` waits for pending L1 extraction to
+flush before returning. Configure `sessionEndTimeoutMs` when the deployment's
+LLM pipeline needs a different deadline.
 
 ## Platform Checklist
 
