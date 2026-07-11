@@ -115,8 +115,6 @@ export class OffloadStateManager {
   entryCounter = 0;
   /** Settled boundaries (ascending by startIndex). */
   l15Boundaries: L15Boundary[] = [];
-  /** Serializes nextMmdNumber() across concurrent callers (see method). */
-  private _nextMmdNumberLock: Promise<number> | null = null;
 
   // ─── StorageContext accessor ─────────────────────────────────────────────
 
@@ -198,33 +196,24 @@ export class OffloadStateManager {
   }
 
   async nextMmdNumber(): Promise<number> {
-    // Serialize the read-max-then-increment: MMD files live in a per-agent dir
-    // shared across sessions, so two concurrent L1.5 transitions (different
-    // sessions, same agent) could both observe the same max and both return the
-    // same number, producing colliding `${num}-${label}.mmd` files.
-    const prev = this._nextMmdNumberLock ?? Promise.resolve(0);
-    const next = prev.then(async () => {
-      try {
-        const existingFiles = await listMmds(this.ctx);
-        let maxOnDisk = 0;
-        for (const f of existingFiles) {
-          const m = f.match(/^(\d+)-/);
-          if (m) {
-            const num = parseInt(m[1], 10);
-            if (num > maxOnDisk) maxOnDisk = num;
-          }
+    try {
+      const existingFiles = await listMmds(this.ctx);
+      let maxOnDisk = 0;
+      for (const f of existingFiles) {
+        const m = f.match(/^(\d+)-/);
+        if (m) {
+          const num = parseInt(m[1], 10);
+          if (num > maxOnDisk) maxOnDisk = num;
         }
-        if (maxOnDisk >= this.state.mmdCounter) {
-          this.state.mmdCounter = maxOnDisk;
-        }
-      } catch {
-        /* If listing fails, fall through with in-memory counter */
       }
-      this.state.mmdCounter += 1;
-      return this.state.mmdCounter;
-    });
-    this._nextMmdNumberLock = next.catch(() => 0);
-    return next;
+      if (maxOnDisk >= this.state.mmdCounter) {
+        this.state.mmdCounter = maxOnDisk;
+      }
+    } catch {
+      /* If listing fails, fall through with in-memory counter */
+    }
+    this.state.mmdCounter += 1;
+    return this.state.mmdCounter;
   }
 
   getMmdCounter(): number {
@@ -266,21 +255,8 @@ export class OffloadStateManager {
       const loadedState = await readStateFile(this._ctx, DEFAULT_STATE);
       this.state = { ...DEFAULT_STATE, ...loadedState };
     }
-    await this.rebuildOffloadState(prevAgent !== parsed.agentName);
-    this.state.lastSessionKey = sessionKey;
-    await this.save();
-    return true;
-  }
-
-  /**
-   * Rebuild in-memory offload-derived state (confirmed/deleted/processed id
-   * sets, entryCounter, runtime caches) from the current session's offload
-   * JSONL. Called by switchSession and by the non-standard-sessionKey fallback
-   * path so previously offloaded tool results are re-applied and deduped.
-   */
-  async rebuildOffloadState(resetCachedPrompts: boolean): Promise<void> {
     try {
-      const entries = await readOffloadEntries(this.ctx);
+      const entries = await readOffloadEntries(this._ctx);
       this.confirmedOffloadIds = extractConfirmedIdsFromEntries(
         entries as Array<OffloadEntry & { offloaded?: unknown }>,
       );
@@ -313,7 +289,8 @@ export class OffloadStateManager {
       this.consecutiveQuickSkips = 0;
       this._forceEmergencyNext = false;
       this._lastAggressiveBoundary = null;
-      if (resetCachedPrompts) {
+      // Keep cachedSystemPrompt/Tokens across switchSession within the same agent
+      if (prevAgent !== parsed.agentName) {
         this.cachedSystemPrompt = null;
         this.cachedSystemPromptTokens = null;
         this.cachedUserPromptTokens = null;
@@ -332,6 +309,9 @@ export class OffloadStateManager {
       this.processedToolCallIds = new Set();
       this.pendingToolPairs = [];
     }
+    this.state.lastSessionKey = sessionKey;
+    await this.save();
+    return true;
   }
 
   getLastOffloadedToolCallId(): string | null {

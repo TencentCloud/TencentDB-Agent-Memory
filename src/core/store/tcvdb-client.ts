@@ -112,21 +112,6 @@ export class TcvdbClient {
     }
   }
 
-  /**
-   * Close the underlying HTTP dispatcher's keep-alive connection pool.
-   * No-op when no custom dispatcher was created (plain HTTP). Idempotent.
-   * Prevents socket leaks across hot-reloads.
-   */
-  async close(): Promise<void> {
-    if (this.dispatcher) {
-      try {
-        await this.dispatcher.close();
-      } catch {
-        /* best-effort */
-      }
-    }
-  }
-
   // ── Generic request ─────────────────────────────────────
 
   /**

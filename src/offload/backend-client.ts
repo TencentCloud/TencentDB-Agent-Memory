@@ -13,18 +13,6 @@ import { traceOffloadModelIo } from "./opik-tracer.js";
 import * as https from "node:https";
 import * as http from "node:http";
 
-/**
- * Whether TLS certificate verification may be skipped for backend HTTPS calls.
- *
- * Defaults to SECURE (verification on). The previous code unconditionally set
- * `rejectUnauthorized: false`, which let any on-path attacker MITM the
- * connection and harvest the bearer token + conversation data. Operators who
- * genuinely need to talk to a backend with a self-signed cert must opt in
- * explicitly via `TDAI_BACKEND_INSECURE_TLS=1`.
- */
-const ALLOW_INSECURE_TLS = process.env.TDAI_BACKEND_INSECURE_TLS === "1";
-let insecureTlsWarned = false;
-
 // ─── Request / Response Types ────────────────────────────────────────────────
 
 export interface L1Request {
@@ -308,14 +296,6 @@ export class BackendClient {
     const parsed = new URL(url);
     const isHttps = parsed.protocol === "https:";
     const transport = isHttps ? https : http;
-    const useInsecureTls = isHttps && ALLOW_INSECURE_TLS;
-    if (useInsecureTls && !insecureTlsWarned) {
-      insecureTlsWarned = true;
-      this.logger.warn(
-        "[context-offload] TLS certificate verification DISABLED for backend HTTPS calls " +
-        "(TDAI_BACKEND_INSECURE_TLS=1). This is insecure — only use for self-signed certs on a trusted network.",
-      );
-    }
 
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -329,7 +309,7 @@ export class BackendClient {
           path: parsed.pathname + parsed.search,
           method: "POST",
           headers: reqHeaders,
-          ...(useInsecureTls ? { rejectUnauthorized: false } : {}),
+          ...(isHttps ? { rejectUnauthorized: false } : {}),
         },
         (res) => {
           let data = "";

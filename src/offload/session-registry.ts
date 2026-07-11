@@ -71,11 +71,6 @@ export class SessionRegistry {
       const fallbackName = sessionKey.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").slice(0, 64) || "unknown";
       const fallbackSessionId = realSessionId || `fallback-${Date.now()}`;
       await mgr.init(this._dataRoot, fallbackName, fallbackSessionId);
-      // Rebuild offload-derived id sets from the (possibly existing) offload
-      // JSONL so previously offloaded tool results are re-applied and deduped.
-      // switchSession() bails on non-standard keys, so without this the manager
-      // would run with empty confirmed/deleted/processed sets.
-      await mgr.rebuildOffloadState(true);
     }
 
     entry = { sessionKey, manager: mgr, lastAccessMs: Date.now() };
@@ -130,20 +125,11 @@ export class SessionRegistry {
     let oldestKey: string | null = null;
     let oldestMs = Infinity;
     for (const [key, entry] of this._sessions) {
-      // Never evict a session with un-flushed pending tool pairs — they are
-      // runtime state not yet persisted to offload JSONL, so eviction would
-      // lose them. They'll be eligible once the L1 pipeline drains them.
-      if (entry.manager.hasPending()) continue;
       if (entry.lastAccessMs < oldestMs) {
         oldestMs = entry.lastAccessMs;
         oldestKey = key;
       }
     }
-    if (oldestKey) {
-      // Persist in-memory state (mmdCounter etc.) before dropping the entry.
-      const entry = this._sessions.get(oldestKey);
-      if (entry) void entry.manager.save().catch(() => {});
-      this._sessions.delete(oldestKey);
-    }
+    if (oldestKey) this._sessions.delete(oldestKey);
   }
 }
