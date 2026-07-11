@@ -29,6 +29,8 @@ export interface GatewayMemoryClientOptions {
   apiKey?: string;
   /** Per-request timeout in milliseconds. Defaults to 10 seconds. */
   timeoutMs?: number;
+  /** Timeout for session-end flushes. Defaults to at least 180 seconds. */
+  sessionEndTimeoutMs?: number;
   /** Test hook or platform-specific fetch implementation. */
   fetchImpl?: typeof fetch;
 }
@@ -83,12 +85,14 @@ export class GatewayMemoryClient {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly timeoutMs: number;
+  private readonly sessionEndTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: GatewayMemoryClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
     this.apiKey = opts.apiKey;
     this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.sessionEndTimeoutMs = opts.sessionEndTimeoutMs ?? Math.max(this.timeoutMs, 180_000);
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
@@ -113,12 +117,22 @@ export class GatewayMemoryClient {
   }
 
   endSession(body: SessionEndRequest): Promise<SessionEndResponse> {
-    return this.request<SessionEndResponse>("POST", "/session/end", body);
+    return this.request<SessionEndResponse>(
+      "POST",
+      "/session/end",
+      body,
+      this.sessionEndTimeoutMs,
+    );
   }
 
-  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    timeoutMs = this.timeoutMs,
+  ): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const headers: Record<string, string> = {};

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GatewayMemoryClient,
   GatewayMemoryClientError,
@@ -11,6 +11,27 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+function delayedJsonResponse(delayMs: number, body: unknown): {
+  fetchImpl: typeof fetch;
+  getSignal: () => AbortSignal | undefined;
+} {
+  let signal: AbortSignal | undefined;
+  return {
+    fetchImpl: ((_url, init) => {
+      signal = init?.signal ?? undefined;
+      return new Promise<Response>((resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+        setTimeout(() => resolve(jsonResponse(body)), delayMs);
+      });
+    }) as typeof fetch,
+    getSignal: () => signal,
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("GatewayMemoryClient", () => {
   it("sends authenticated recall requests to the gateway", async () => {
@@ -57,6 +78,47 @@ describe("GatewayMemoryClient", () => {
       path: "/search/memories",
       responseBody: "bad query",
     } satisfies Partial<GatewayMemoryClientError>);
+  });
+
+  it("allows session flushes to outlive the ordinary request timeout", async () => {
+    vi.useFakeTimers();
+    const delayed = delayedJsonResponse(25, { flushed: true });
+    const client = new GatewayMemoryClient({
+      baseUrl: "http://127.0.0.1:8420",
+      timeoutMs: 10,
+      sessionEndTimeoutMs: 50,
+      fetchImpl: delayed.fetchImpl,
+    });
+
+    const result = client.endSession({ session_key: "session-a" }).then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error) => ({ status: "rejected" as const, error }),
+    );
+    await vi.advanceTimersByTimeAsync(30);
+
+    await expect(result).resolves.toEqual({
+      status: "resolved",
+      value: { flushed: true },
+    });
+  });
+
+  it("honors an explicit shorter session-end timeout", async () => {
+    vi.useFakeTimers();
+    const delayed = delayedJsonResponse(25, { flushed: true });
+    const client = new GatewayMemoryClient({
+      baseUrl: "http://127.0.0.1:8420",
+      timeoutMs: 50,
+      sessionEndTimeoutMs: 10,
+      fetchImpl: delayed.fetchImpl,
+    });
+
+    const result = client.endSession({ session_key: "session-a" }).catch((error) => error);
+    await vi.advanceTimersByTimeAsync(11);
+    const abortedAtSessionDeadline = delayed.getSignal()?.aborted;
+    await vi.advanceTimersByTimeAsync(40);
+
+    expect(abortedAtSessionDeadline).toBe(true);
+    await expect(result).resolves.toMatchObject({ name: "AbortError" });
   });
 });
 
