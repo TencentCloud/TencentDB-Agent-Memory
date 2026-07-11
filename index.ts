@@ -56,6 +56,15 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./src/adapters/gateway-client/index.js";
+export { createTdaiLangChainMiddleware } from "./src/adapters/langchain/index.js";
+export type {
+  LangChainAgentState,
+  LangChainCreateMiddleware,
+  LangChainMemoryMiddlewareDefinition,
+  LangChainMemoryMiddlewareOptions,
+  LangChainMessageLike,
+  LangChainRuntimeLike,
+} from "./src/adapters/langchain/index.js";
 
 const TAG = "[memory-tdai]";
 

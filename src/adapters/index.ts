@@ -31,3 +31,14 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./gateway-client/index.js";
+
+// LangChain / LangGraph middleware adapter
+export { createTdaiLangChainMiddleware } from "./langchain/index.js";
+export type {
+  LangChainAgentState,
+  LangChainCreateMiddleware,
+  LangChainMemoryMiddlewareDefinition,
+  LangChainMemoryMiddlewareOptions,
+  LangChainMessageLike,
+  LangChainRuntimeLike,
+} from "./langchain/index.js";
