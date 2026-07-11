@@ -2046,6 +2046,15 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
+   * Backend-neutral keyword search on L1 records.
+   * Converts raw user text to SQLite FTS5 MATCH syntax at the storage boundary.
+   */
+  searchL1Keyword(queryText: string, limit = 20): FtsSearchResult[] {
+    const ftsQuery = buildFtsQuery(queryText);
+    return ftsQuery ? this.searchL1Fts(ftsQuery, limit) : [];
+  }
+
+  /**
    * FTS5 keyword search on L1 records.
    * Returns top-`limit` results sorted by BM25 relevance (highest first).
    *
@@ -2092,6 +2101,15 @@ export class VectorStore implements IMemoryStore {
       );
       return [];
     }
+  }
+
+  /**
+   * Backend-neutral keyword search on L0 conversation messages.
+   * Converts raw user text to SQLite FTS5 MATCH syntax at the storage boundary.
+   */
+  searchL0Keyword(queryText: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
+    const ftsQuery = buildFtsQuery(queryText);
+    return ftsQuery ? this.searchL0Fts(ftsQuery, limit) : [];
   }
 
   /**

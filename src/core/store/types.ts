@@ -267,6 +267,9 @@ export interface IMemoryStore {
   // ── L1 Search ────────────────────────────────────────────
 
   searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L1SearchResult[]>;
+  /** Search L1 with raw user text; the backend owns its query syntax. */
+  searchL1Keyword(queryText: string, limit?: number): MaybePromise<L1FtsResult[]>;
+  /** Low-level backend FTS search retained for compatibility. */
   searchL1Fts(ftsQuery: string, limit?: number): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
@@ -293,6 +296,9 @@ export interface IMemoryStore {
   // ── L0 Search ────────────────────────────────────────────
 
   searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L0SearchResult[]>;
+  /** Search L0 with raw user text; the backend owns its query syntax. */
+  searchL0Keyword(queryText: string, limit?: number): MaybePromise<L0FtsResult[]>;
+  /** Low-level backend FTS search retained for compatibility. */
   searchL0Fts(ftsQuery: string, limit?: number): MaybePromise<L0FtsResult[]>;
 
   pullProfiles?(): Promise<ProfileRecord[]>;
