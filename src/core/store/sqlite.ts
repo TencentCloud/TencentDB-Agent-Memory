@@ -174,6 +174,19 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+// FTS5 query syntax must be removed before tokenization so neither jieba nor
+// the regex fallback can turn user-controlled syntax into a MATCH expression.
+const FTS5_BOOLEAN_OPERATORS = /\b(?:AND|OR|NOT|NEAR)\b/gi;
+const FTS5_SPECIAL_CHARACTERS = /["'()*:^{}+\-]/g;
+
+/**
+ * Remove FTS5 operators and structural characters from user-provided text.
+ * Replacing them with spaces preserves token boundaries and normal keywords.
+ */
+export function sanitizeFts5Input(raw: string): string {
+  return raw.replace(FTS5_BOOLEAN_OPERATORS, " ").replace(FTS5_SPECIAL_CHARACTERS, " ");
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -197,13 +210,14 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const sanitized = sanitizeFts5Input(raw);
 
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +232,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
