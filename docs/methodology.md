@@ -13,13 +13,11 @@
 
 | 新增平台 | 接入方式 | 代码量 |
 |:---|:---|:---|
-| Claude Code | MCP stdio server + HostAdapter | 425行 server + 85行 adapter |
-| CodeBuddy (腾讯 AI IDE) | MCP stdio server + HostAdapter | 85行 adapter |
+| Claude Code | MCP stdio server + HostAdapter | 390行 server + 21行 thin preset |
+| CodeBuddy (腾讯 AI IDE) | MCP stdio server + HostAdapter | 21行 thin preset |
 | 任意 MCP 平台 (Cursor, Trae等) | 复用同一 MCP server | 0行 |
 
 **新增基础设施**：
-- `src/adapters/shared/` — 统一的平台适配器接口和工具定义，新平台接入有标准可循
-- `docs/INTEGRATION.md` — 三步接入指南
 - `docs/methodology.md` — 方法文档
 
 ## 二、快速开始
@@ -38,28 +36,12 @@ Gateway 启动后在 `http://127.0.0.1:8420` 监听。
 
 ### 2. 配置 Claude Code
 
-编辑 `~/.claude/settings.json`，添加：
-
-```json
-{
-  "mcpServers": {
-    "tdai-memory": {
-      "command": "npx",
-      "args": ["tsx", "G:/claude code_workspace/tdai-platform-adapters/src/adapters/claude-code/cc-mcp-server.ts"],
-      "env": {
-        "TDAI_GATEWAY_URL": "http://127.0.0.1:8420"
-      }
-    }
-  }
-}
-```
-
-重启 Claude Code，即可使用 4 个记忆工具。
+编辑 `~/.claude.json`，在 `projects` 下添加 MCP server 配置。
 
 ### 3. 配置 CodeBuddy
 
 ```bash
-codebuddy mcp add --scope user tdai_memory -- npx tsx "G:/claude code_workspace/tdai-platform-adapters/src/adapters/claude-code/cc-mcp-server.ts"
+codebuddy mcp add --scope user tdai_memory -- npx tsx <path-to-cc-mcp-server>
 ```
 
 ### 4. 使用
@@ -107,4 +89,4 @@ CodeBuddy 搜索 → 召回同一份内容
 
 如果你的 Agent 平台支持 MCP，直接复用 `cc-mcp-server.ts`（零代码）。
 
-如果不支持 MCP，参考 `src/adapters/claude-code/host-adapter.ts`，实现 `HostAdapter` 接口（~85行），然后将平台事件映射到 `TdaiCore` 方法。
+如果不支持 MCP，参考 `src/adapters/claude-code/host-adapter.ts`，继承 `StandaloneHostAdapter` 并预设 `platform` 值（~21行 thin preset），然后将平台事件映射到 `TdaiCore` 方法。

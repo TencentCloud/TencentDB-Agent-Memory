@@ -21,9 +21,9 @@
 │  ┌─────────────────┐  ┌──────────────────────────────────────────┐   │
 │  │OpenClawHostAdapter│  │        Gateway (HTTP Server)             │   │
 │  │  (进程内, ~117行) │  │  ┌─────────────────────────────────┐   │   │
-│  │                   │  │  │  StandaloneHostAdapter (~97行)   │   │   │
-│  │  getRuntimeContext│  │  │  + CCHostAdapter (~85行)        │   │   │
-│  │  getLogger()      │  │  │  + CodeBuddyHostAdapter (~85行) │   │   │
+│  │  StandaloneHostAdapter (~97行)   │   │   │
+│  │  │  + CCHostAdapter (21行 preset) │   │   │
+│  │  │  + CodeBuddyHostAdapter (21行) │   │   │
 │  │  getLLMRunner()   │  │  └─────────────────────────────────┘   │   │
 │  └────────┬──────────┘  │                    │                    │   │
 │           │             │  POST /recall      POST /capture        │   │
@@ -87,17 +87,16 @@ Claude Code 会话
 
 ### 3. 为什么不重复 PR #339 的 SDK？
 
-PR #339 在 Gateway HTTP API 上又包了一层 TdaiAdapter ABC + BridgeAdapter + HermesV2Adapter + MCP server。这是"包装器套包装器"的反模式。本项目的做法是直接扩展 HostAdapter，让 `TdaiCore` 是唯一的"引擎"。
+PR #339 在 Gateway HTTP API 上又包了一层 TdaiAdapter ABC + BridgeAdapter + HermesV2Adapter + MCP server。这是"包装器套包装器"的反模式。本项目的做法是继承 StandaloneHostAdapter，让 `TdaiCore` 是唯一的"引擎"。与 PR #316（Gateway client）/ #372（MCP bridge）互补而非重复。
 
 ## 新平台接入指南
 
-只需 3 步:
+只需 2 步:
 
-1. 实现 `HostAdapter` (~85行)
-2. 注册平台工具 (复用 `TDAI_TOOLS`)
-3. 映射平台生命周期事件 → TdaiCore 方法
+1. 继承 `StandaloneHostAdapter`，预设 `platform` 值 (~21行 thin preset)
+2. 映射平台生命周期事件 → TdaiCore 方法
 
 参考实现:
-- `src/adapters/claude-code/host-adapter.ts` (85行)
-- `src/adapters/codebuddy/host-adapter.ts` (85行)
-- `src/adapters/openclaw/host-adapter.ts` (117行，已有)
+- `src/adapters/claude-code/host-adapter.ts` (21行 thin preset)
+- `src/adapters/codebuddy/host-adapter.ts` (21行 thin preset)
+- `src/adapters/standalone/host-adapter.ts` (97行，base implementation)

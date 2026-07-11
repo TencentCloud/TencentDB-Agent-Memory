@@ -16,9 +16,9 @@
 │                  HostAdapter (抽象接口)                        │
 │        getRuntimeContext() | getLogger() | getLLMRunner()    │
 ├──────────────┬──────────────┬───────────────┬───────────────┤
-│ OpenClaw     │ Hermes       │ Claude Code   │ CodeBuddy     │
-│ HostAdapter  │ Provider     │ HostAdapter   │ HostAdapter   │
-│ (已有,117行)  │ (增强,150行)  │ (新增,85行)    │ (新增,85行)    │
+│ OpenClaw     │ Hermes       │ Claude Code        │ CodeBuddy        │
+│ HostAdapter  │ Provider     │ Standalone preset  │ Standalone preset│
+│ (已有,117行)  │ (增强,150行)  │ (新增,21行 thin)    │ (新增,21行 thin)  │
 └──────────────┴──────────────┴───────────────┴───────────────┘
 ```
 
@@ -57,7 +57,7 @@
 | 自动 recall | ✅ before_prompt_build | ✅ prefetch | ✅ MCP tool | ✅ MCP tool |
 | 自动 capture | ✅ agent_end | ✅ sync_turn | ✅ MCP tool | ✅ MCP tool |
 | Session 管理 | ✅ 内置 | ✅ 内置 | ✅ manual | ✅ manual |
-| 适配器行数 | 117 | ~150 (改进) | ~85 | ~85 |
+| 适配器行数 | 117 | ~150 (改进) | ~21 (thin preset) | ~21 (thin preset) |
 
 ## 与其他 PR 的对比
 
@@ -67,7 +67,7 @@
 | 抽象层 | 共享基础设施 | TdaiAdapter ABC | 独立适配器 | **HostAdapter** |
 | 平台数 | 3 | 1 (Bridge) | 6 | **3** |
 | MCP | 有 (框架依赖) | 有 (纯 JSON-RPC) | 有 | **有 (纯 JSON-RPC)** |
-| 新增代码 | ~2000行 | ~5800行 | ~3000行 | **~800行** |
+| 新增代码 | ~2000行 | ~5800行 | ~3000行 | **~500行** |
 | 设计理念 | 先验证再抽象 | 先抽象再实现 | 广度覆盖 | **复用已验证模式** |
 
 ## 快速开始
@@ -82,7 +82,7 @@ pnpm exec tsx src/gateway/server.ts
 
 ### 2. 配置 Claude Code
 
-将 `claude-settings.example.json` 的内容合并到 `~/.claude/settings.json`。
+使用 `claude mcp add` 命令注册 MCP server。
 
 ### 3. 使用
 
@@ -93,16 +93,14 @@ pnpm exec tsx src/gateway/server.ts
 ## 文件结构
 
 ```
-tdai-platform-adapters/
-├── src/adapters/
-│   ├── claude-code/
-│   │   ├── cc-mcp-server.ts          # CC MCP server
-│   │   ├── host-adapter.ts           # CCHostAdapter
-│   │   ├── index.ts                  # barrel export
-│   │   └── claude-settings.example.json  # CC 配置示例
-│   └── codebuddy/
-│       ├── host-adapter.ts           # CodeBuddyHostAdapter
-│       └── index.ts                  # barrel export
-└── docs/
-    └── platform-adapter-comparison.md  # 平台对比文档
+src/adapters/
+├── claude-code/
+│   ├── host-adapter.ts           # CCHostAdapter (21行 thin preset)
+│   └── index.ts                  # barrel export
+├── codebuddy/
+│   ├── host-adapter.ts           # CodeBuddyHostAdapter (21行 thin preset)
+│   └── index.ts                  # barrel export
+├── openclaw/                     # (已有)
+├── standalone/                   # (已有, base implementation)
+└── index.ts                      # barrel re-export
 ```

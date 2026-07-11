@@ -10,7 +10,7 @@
 |:---|---|---|---|---|---|
 | **语言** | TypeScript | Python | **TypeScript** | **TypeScript** | TypeScript |
 | **接入方式** | 进程内 API | HTTP Gateway | **MCP stdio** | **MCP stdio** | HTTP + MCP |
-| **基类/接口** | HostAdapter | MemoryProvider | **HostAdapter** | **HostAdapter** | MemoryPlatformAdapter |
+| **基类/接口** | HostAdapter | MemoryProvider | **StandaloneHostAdapter** | **StandaloneHostAdapter** | MemoryPlatformAdapter |
 | **工具数** | 2 | 2 | **4** | **4** | varies |
 | **自动 recall** | ✅ hook | ✅ prefetch | **✅ MCP tool** | **✅ MCP tool** | ✅ |
 | **自动 capture** | ✅ hook | ✅ sync_turn | **✅ MCP tool** | **✅ MCP tool** | ✅ |
@@ -18,7 +18,7 @@
 | **熔断器** | N/A | 5/60s | **Gateway 自带** | **Gateway 自带** | 3-state |
 | **限流** | N/A | N/A | **Gateway 自带** | **Gateway 自带** | N/A |
 | **重试** | 平台原生 | 平台原生 | **Gateway 自带** | **Gateway 自带** | 指数退避 |
-| **适配器行数** | ~117 | ~1130 | **~85** | **~85** | varies |
+| **适配器行数** | ~117 | ~1130 | **~21 (thin preset)** | **~21 (thin preset)** | varies |
 | **测试** | 集成测试 | 78 tests | **待添加** | **待添加** | 353 tests |
 | **设计理念** | 薄壳模式 | Provider 模式 | **薄壳模式** | **薄壳模式** | 广度模式 |
 
@@ -57,8 +57,8 @@ Agent → MCP stdio → （复用 cc-mcp-server.ts）→ Gateway (HTTP)
 ### 为什么复用 HostAdapter 而非新建抽象层？
 
 1. **已被生产验证**: OpenClawHostAdapter (117行) 和 StandaloneHostAdapter (97行) 已在生产环境运行
-2. **极简主义**: 每个新平台只需 ~85行 TypeScript 即可接入
-3. **零新增抽象**: 不引入 TdaiAdapter ABC、TdaiClient、TdaiRegistry 等非必要层次
+2. **极简主义**: 每个新平台只需 ~21行 TypeScript thin preset 即可接入
+3. **零新增抽象**: CC/CodeBuddy 直接继承 StandaloneHostAdapter，只预设 platform 值
 4. **TdaiCore 是真正的"统一引擎"**: 所有平台共用同一个 `TdaiCore`，无需包装
 
 ### 为什么 CC 使用 MCP 而非 hooks？

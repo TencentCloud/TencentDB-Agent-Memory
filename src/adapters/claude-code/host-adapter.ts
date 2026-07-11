@@ -1,59 +1,20 @@
 /**
- * CCHostAdapter — Claude Code 平台适配器.
+ * CCHostAdapter — Claude Code platform preset for StandaloneHostAdapter.
  *
- * 将 Claude Code 运行时上下文翻译为 TdaiCore 的 HostAdapter 接口。
- * 遵循与 OpenClawHostAdapter (117行) / StandaloneHostAdapter (97行) 相同的"薄壳"模式。
+ * Claude Code connects via MCP stdio → Gateway HTTP. The Gateway uses
+ * StandaloneHostAdapter with `platform: "claude-code"` to tag memories
+ * originating from Claude Code sessions.
  *
- * Usage:
- *   const adapter = new CCHostAdapter({ dataDir, logger, platform: "claude-code" });
- *   const core = new TdaiCore({ hostAdapter: adapter, config });
+ * This is a thin preset — all actual adapter logic lives in StandaloneHostAdapter.
  */
 
-import { StandaloneLLMRunnerFactory } from "../standalone/llm-runner.js";
-import type { StandaloneLLMConfig } from "../standalone/llm-runner.js";
-import type {
-  HostAdapter,
-  RuntimeContext,
-  Logger,
-  LLMRunnerFactory,
-} from "../../core/types.js";
+import { StandaloneHostAdapter } from "../standalone/host-adapter.js";
+import type { StandaloneHostAdapterOptions } from "../standalone/host-adapter.js";
 
-export interface CCHostAdapterOptions {
-  dataDir: string;
-  logger: Logger;
-  llmConfig?: StandaloneLLMConfig;
-  defaultUserId?: string;
-  platform?: string;
-}
+export interface CCHostAdapterOptions extends Omit<StandaloneHostAdapterOptions, "platform"> {}
 
-export class CCHostAdapter implements HostAdapter {
-  readonly hostType = "standalone" as const;
-  private dataDir: string;
-  private logger: Logger;
-  private runnerFactory: StandaloneLLMRunnerFactory;
-  private defaultUserId: string;
-  private platform: string;
-
+export class CCHostAdapter extends StandaloneHostAdapter {
   constructor(opts: CCHostAdapterOptions) {
-    this.dataDir = opts.dataDir;
-    this.logger = opts.logger;
-    this.defaultUserId = opts.defaultUserId ?? "default_user";
-    this.platform = opts.platform ?? "claude-code";
-    this.runnerFactory = new StandaloneLLMRunnerFactory({
-      config: opts.llmConfig ?? {} as StandaloneLLMConfig,
-      logger: opts.logger,
-    });
+    super({ ...opts, platform: "claude-code" });
   }
-
-  getRuntimeContext(): RuntimeContext {
-    return { userId: this.defaultUserId, sessionId: "", sessionKey: "", platform: this.platform, workspaceDir: process.cwd(), dataDir: this.dataDir };
-  }
-
-  buildRuntimeContextForSession(sessionKey: string, sessionId?: string): RuntimeContext {
-    return { userId: this.defaultUserId, sessionId: sessionId ?? "", sessionKey, platform: this.platform, workspaceDir: process.cwd(), dataDir: this.dataDir };
-  }
-
-  getLogger(): Logger { return this.logger; }
-  getLLMRunnerFactory(): LLMRunnerFactory { return this.runnerFactory; }
-  getDataDir(): string { return this.dataDir; }
 }
