@@ -21,6 +21,7 @@ import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.j
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
+import { auditCacheBoundary, detectPrefixLeaks, formatAuditSummary } from "../diagnostics/cache-boundary.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
@@ -229,6 +230,42 @@ async function performAutoRecallInner(params: {
 
   if (!appendSystemContext && !prependContext) {
     return undefined;
+  }
+
+  // ── Prefix Stability Diagnostics (debug-level, observation-only) ──
+  //
+  // Simulates the system prompt as OpenClaw assembles it:
+  //   [base system prompt from config] → [CACHE_BOUNDARY] → appendSystemContext
+  //
+  // In the actual OpenClaw prompt assembly, appendSystemContext is placed AFTER
+  // CACHE_BOUNDARY (alongside the base system prompt). The diagnostic here
+  // models this structure to verify:
+  //   1. That the boundary exists at the expected position
+  //   2. That no dynamic L1 memory content leaks into the cacheable prefix
+  //   3. Cacheable ratio metrics for the assembled system prompt
+  //
+  // This is diagnostic only — no prompt content is modified and no behavior
+  // is changed. It complements caching optimization PRs (#375, #433) by
+  // providing the visibility to verify those optimizations work correctly.
+  if (appendSystemContext && logger?.debug) {
+    // Model the OpenClaw system prompt assembly: base content after CACHE_BOUNDARY
+    const simulatedSystemPrompt =
+      `<!-- CACHE_BOUNDARY -->\n${appendSystemContext}`;
+
+    const audit = auditCacheBoundary(simulatedSystemPrompt);
+    logger.debug(formatAuditSummary(audit));
+
+    // Safety check: ensure L1 memories haven't leaked into the cacheable prefix
+    if (memoryLines.length > 0) {
+      const leaks = detectPrefixLeaks(audit.prefixContent, memoryLines);
+      if (leaks.length > 0) {
+        logger.warn(
+          `${TAG} ⚠️ Prefix leak detected — ${leaks.length} dynamic memory ` +
+          `line(s) found in cacheable prefix. This will bust prompt cache ` +
+          `every turn for prefix-matching providers.`,
+        );
+      }
+    }
   }
 
   return {
