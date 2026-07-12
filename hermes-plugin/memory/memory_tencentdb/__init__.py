@@ -60,6 +60,9 @@ _RECOVER_COOLDOWN_SECS = 15
 # so a hung Gateway can't cause unbounded thread growth.
 _MAX_INFLIGHT_SYNCS = 4
 _SYNC_JOIN_TIMEOUT_SECS = 5.0
+# Total time on_session_end waits for captures already in flight. If the
+# budget expires, a daemon finishes the ordered flush after those captures.
+_SESSION_END_JOIN_TIMEOUT_SECS = 5.0
 # _SHUTDOWN_JOIN_TIMEOUT_SECS bounds how long shutdown will wait on *each*
 # still-alive sync thread. Kept per-thread rather than global because one
 # stuck thread shouldn't starve the rest.
@@ -932,7 +935,9 @@ class MemoryTencentdbProvider(MemoryProvider):
             # Reap again in case the join above freed slots, then register.
             self._active_syncs = [t for t in self._active_syncs if t.is_alive()]
             self._active_syncs.append(thread)
-        thread.start()
+            # Start before releasing the lock so on_session_end cannot observe
+            # a registered-but-not-yet-alive thread and flush ahead of it.
+            thread.start()
 
     def shutdown(self) -> None:
         """Clean shutdown — flush and release resources."""
@@ -1053,15 +1058,59 @@ class MemoryTencentdbProvider(MemoryProvider):
         pass
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        """Trigger session-level flush on the Gateway."""
-        if self._client and self._gateway_available:
+        """Flush only after captures already submitted for this session."""
+        client = self._client
+        if not client or not self._gateway_available:
+            return
+
+        session_id = self._session_id
+        user_id = self._user_id
+        with self._sync_lock:
+            self._active_syncs = [t for t in self._active_syncs if t.is_alive()]
+            pending = list(self._active_syncs)
+
+        deadline = time.monotonic() + _SESSION_END_JOIN_TIMEOUT_SECS
+        for thread in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
+
+        still_running = [t for t in pending if t.is_alive()]
+        with self._sync_lock:
+            self._active_syncs = [t for t in self._active_syncs if t.is_alive()]
+
+        def _flush() -> None:
             try:
-                self._client.end_session(
-                    session_key=self._session_id,
-                    user_id=self._user_id,
+                client.end_session(
+                    session_key=session_id,
+                    user_id=user_id,
                 )
             except Exception as e:
                 logger.debug("memory-tencentdb on_session_end failed: %s", e)
+
+        if not still_running:
+            _flush()
+            return
+
+        logger.warning(
+            "memory-tencentdb session end: %d capture thread(s) still running "
+            "after %.1fs; deferring Gateway flush until they finish.",
+            len(still_running), _SESSION_END_JOIN_TIMEOUT_SECS,
+        )
+
+        def _flush_when_captured() -> None:
+            for thread in still_running:
+                thread.join()
+            with self._sync_lock:
+                self._active_syncs = [t for t in self._active_syncs if t.is_alive()]
+            _flush()
+
+        threading.Thread(
+            target=_flush_when_captured,
+            daemon=True,
+            name="memory-tencentdb-session-flush",
+        ).start()
 
     # -- Config ---------------------------------------------------------------
 
