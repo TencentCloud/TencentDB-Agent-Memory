@@ -21,6 +21,7 @@ export interface CodingAgentTurn {
   sessionId?: string;
   userId?: string;
   messages?: unknown[];
+  startedAt?: number;
 }
 
 export interface CodingAgentRecallRequest {
@@ -91,6 +92,7 @@ export class CodingAgentGatewayClient {
       ...(turn.sessionId ? { session_id: turn.sessionId } : {}),
       ...(turn.userId ? { user_id: turn.userId } : {}),
       ...(turn.messages ? { messages: turn.messages } : {}),
+      ...(turn.startedAt !== undefined ? { started_at: turn.startedAt } : {}),
     });
   }
 
@@ -144,4 +146,3 @@ export class CodingAgentGatewayClient {
     }
   }
 }
-

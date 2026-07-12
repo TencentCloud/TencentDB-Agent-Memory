@@ -36,8 +36,13 @@ const recall = await memory.recall({
   userId,
 });
 
-const promptWithMemory = recall.context
-  ? `${recall.context}\n\n${userPrompt}`
+const recalledContext = [
+  recall.prepend_context,
+  recall.append_system_context ?? recall.context,
+].filter(Boolean).join("\n\n");
+
+const promptWithMemory = recalledContext
+  ? `${recalledContext}\n\n${userPrompt}`
   : userPrompt;
 
 await memory.capture({
@@ -46,6 +51,9 @@ await memory.capture({
   sessionKey,
   sessionId: threadId,
   userId,
+  // Preserve host timestamps when available so retries are checkpoint-idempotent.
+  messages: hostMessages,
+  startedAt: turnStartedAt,
 });
 ```
 
@@ -74,8 +82,8 @@ inside one project. Good candidates:
 
 - `health()` returns `status: "ok"` or `status: "degraded"`.
 - A `capture()` call records at least one L0 turn.
-- A later `recall()` call with the same `sessionKey` returns non-empty context
-  after the pipeline has processed the turn.
+- A later `recall()` call returns dynamic L1 content in `prepend_context` and
+  stable persona/scene content in `append_system_context` after the pipeline
+  has processed the turn. `context` remains the legacy stable-context field.
 - If `TDAI_GATEWAY_API_KEY` is enabled on the Gateway, the adapter passes the
   same key as a Bearer token.
-

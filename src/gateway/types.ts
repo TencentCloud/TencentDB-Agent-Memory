@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Legacy stable-context field kept for backward compatibility. */
   context: string;
+  /** Dynamic L1 context associated with the current user turn. */
+  prepend_context?: string;
+  /** Stable persona, scene, and tool guidance context. */
+  append_system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
@@ -52,6 +57,7 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
+  started_at?: number;
 }
 
 export interface CaptureResponse {

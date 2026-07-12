@@ -53,6 +53,14 @@ export type {
   CodingAgentRecallRequest,
   CodingAgentTurn,
 } from "./src/adapters/coding-agent/index.js";
+export { buildSessionKey, extractLatestTurn, handleClaudeCodeHook } from "./src/adapters/claude-code/index.js";
+export type {
+  ClaudeCodeHookClient,
+  ClaudeCodeHookInput,
+  ClaudeCodeHookOptions,
+  ClaudeCodeHookResult,
+  TranscriptTurn,
+} from "./src/adapters/claude-code/index.js";
 
 const TAG = "[memory-tdai]";
 

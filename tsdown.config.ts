@@ -11,7 +11,10 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "memory-tencentdb-claude-hook": "./src/adapters/claude-code/hook.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",

@@ -54,6 +54,7 @@ describe("CodingAgentGatewayClient", () => {
       sessionKey: "workspace:/tmp/project",
       sessionId: "thread-42",
       messages: [{ role: "user", content: "fix the failing test" }],
+      startedAt: 1_720_000_000_000,
     });
 
     expect(calls[0].input).toBe("http://127.0.0.1:8420/capture");
@@ -63,6 +64,7 @@ describe("CodingAgentGatewayClient", () => {
       session_key: "workspace:/tmp/project",
       session_id: "thread-42",
       messages: [{ role: "user", content: "fix the failing test" }],
+      started_at: 1_720_000_000_000,
     });
   });
 
@@ -93,5 +95,61 @@ describe("CodingAgentGatewayClient", () => {
       responseBody: "unauthorized",
     } satisfies Partial<CodingAgentGatewayError>);
   });
-});
 
+  it("maps search and session lifecycle requests to Gateway fields", async () => {
+    const { fetchImpl, calls } = mockFetch({ results: "ok", total: 1 });
+    const client = new CodingAgentGatewayClient({ fetch: fetchImpl });
+
+    await client.searchMemories({
+      query: "package manager",
+      limit: 3,
+      type: "preference",
+      scene: "workspace",
+    });
+    await client.searchConversations({
+      query: "pnpm",
+      limit: 2,
+      sessionKey: "repo:thread-1",
+    });
+    await client.endSession("repo:thread-1", "alice");
+
+    expect(calls.map((call) => call.input)).toEqual([
+      "http://127.0.0.1:8420/search/memories",
+      "http://127.0.0.1:8420/search/conversations",
+      "http://127.0.0.1:8420/session/end",
+    ]);
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({
+      query: "package manager",
+      limit: 3,
+      type: "preference",
+      scene: "workspace",
+    });
+    expect(JSON.parse(calls[1].init?.body as string)).toEqual({
+      query: "pnpm",
+      limit: 2,
+      session_key: "repo:thread-1",
+    });
+    expect(JSON.parse(calls[2].init?.body as string)).toEqual({
+      session_key: "repo:thread-1",
+      user_id: "alice",
+    });
+  });
+
+  it("aborts requests after the configured timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn((_input: string | URL | Request, init?: RequestInit) => (
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        })
+      )) as unknown as typeof globalThis.fetch;
+      const client = new CodingAgentGatewayClient({ timeoutMs: 25, fetch: fetchImpl });
+
+      const assertion = expect(client.health()).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(25);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -166,8 +166,7 @@ class GatewaySupervisor:
 
         try:
             env = os.environ.copy()
-            env["MEMORY_TENCENTDB_GATEWAY_PORT"] = str(self._port)
-            env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
+            self._bridge_gateway_env(env)
             # Note: we deliberately do NOT inject TDAI_GATEWAY_API_KEY into
             # the child's env from here. Whether the Gateway enforces auth is
             # the operator's call — they configure it on the Gateway side
@@ -217,6 +216,36 @@ class GatewaySupervisor:
 
         # Wait for health check
         return self._wait_for_health()
+
+    def _bridge_gateway_env(self, env: dict) -> None:
+        """Prepare endpoint and LLM variables for the Node Gateway child."""
+        port = str(self._port)
+        env["MEMORY_TENCENTDB_GATEWAY_HOST"] = self._host
+        env["MEMORY_TENCENTDB_GATEWAY_PORT"] = port
+        env["TDAI_GATEWAY_HOST"] = self._host
+        env["TDAI_GATEWAY_PORT"] = port
+        self._bridge_hermes_llm_env(env)
+
+    @staticmethod
+    def _bridge_hermes_llm_env(env: dict) -> None:
+        """Bridge Hermes-facing LLM env names to Gateway-facing names.
+
+        Hermes provider configuration exposes ``MEMORY_TENCENTDB_LLM_*`` keys,
+        while the Node Gateway reads ``TDAI_LLM_*``.  When the supervisor owns
+        the Gateway child process, copy the Hermes names into their Gateway
+        counterparts unless the operator already set an explicit ``TDAI_*``
+        value. This keeps existing Hermes configs runnable without hiding an
+        intentional Gateway-side override.
+        """
+        for hermes_key, gateway_key in (
+            ("MEMORY_TENCENTDB_LLM_API_KEY", "TDAI_LLM_API_KEY"),
+            ("MEMORY_TENCENTDB_LLM_BASE_URL", "TDAI_LLM_BASE_URL"),
+            ("MEMORY_TENCENTDB_LLM_MODEL", "TDAI_LLM_MODEL"),
+        ):
+            hermes_value = (env.get(hermes_key) or "").strip()
+            gateway_value = (env.get(gateway_key) or "").strip()
+            if hermes_value and not gateway_value:
+                env[gateway_key] = hermes_value
 
     def _resolve_log_dir(self) -> str:
         """Pick a directory to store Gateway stdout/stderr logs.

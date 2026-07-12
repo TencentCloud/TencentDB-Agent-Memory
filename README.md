@@ -504,6 +504,10 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/coding-agent-adapter-quickstart.md`](./docs/coding-agent-adapter-quickstart.md) | Generic Gateway client and coding-agent lifecycle mapping |
+| [`docs/claude-code-adapter-setup.md`](./docs/claude-code-adapter-setup.md) | Install and configure the Claude Code hook adapter |
+| [`docs/hermes-adapter-setup.md`](./docs/hermes-adapter-setup.md) | Hermes Provider and Gateway setup |
+| [`docs/platform-adapter-comparison.md`](./docs/platform-adapter-comparison.md) | Cross-platform adapter architecture and trade-offs |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |

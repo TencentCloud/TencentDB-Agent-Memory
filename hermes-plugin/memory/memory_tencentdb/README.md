@@ -148,6 +148,24 @@ export MEMORY_TENCENTDB_LLM_BASE_URL="https://api.openai.com/v1"   # optional
 export MEMORY_TENCENTDB_LLM_MODEL="gpt-4o"                         # optional
 ```
 
+When this provider starts the Gateway subprocess, the supervisor bridges
+these Hermes-facing names to the Gateway-facing `TDAI_LLM_*` names unless
+the operator already set explicit `TDAI_LLM_*` values. This keeps existing
+Hermes config schemas working while matching the Node Gateway's actual config
+reader (`src/gateway/config.ts`). It also sets `TDAI_GATEWAY_HOST` and
+`TDAI_GATEWAY_PORT` from the provider's resolved endpoint so the child Gateway
+and the Hermes client cannot silently use different ports.
+
+For DeepSeek, use the OpenAI-compatible endpoint, not the Anthropic-compatible
+Claude Code endpoint:
+
+```bash
+export MEMORY_TENCENTDB_LLM_API_KEY="$ANTHROPIC_AUTH_TOKEN"
+export MEMORY_TENCENTDB_LLM_BASE_URL="https://api.deepseek.com/v1"
+export MEMORY_TENCENTDB_LLM_MODEL="deepseek-v4-pro"
+export TDAI_LLM_DISABLE_THINKING="deepseek"
+```
+
 ### 3. Start the Gateway
 
 You have three options; pick whichever fits your deployment.
@@ -237,10 +255,12 @@ eliminates a silent no-op.
 | `MEMORY_TENCENTDB_LLM_BASE_URL`   | `https://api.openai.com/v1`  | OpenAI-compatible API base URL      |
 | `MEMORY_TENCENTDB_LLM_MODEL`      | `gpt-4o`                     | Model name                          |
 
-> ⚠️ Only `MEMORY_TENCENTDB_*` env vars are honored by this provider for the
-> Gateway location and LLM credentials. Data-directory resolution is
-> deliberately delegated to the Gateway via `TDAI_DATA_DIR` (see above) so
-> the provider and the Gateway can never disagree about where L0~L3 live.
+> ⚠️ `MEMORY_TENCENTDB_*` env vars are honored by this provider for Gateway
+> location and provider-facing LLM credentials. The spawned Node Gateway reads
+> `TDAI_LLM_*`; the supervisor bridges the LLM aliases for subprocess mode.
+> Data-directory resolution is deliberately delegated to the Gateway via
+> `TDAI_DATA_DIR` (see above) so the provider and the Gateway can never
+> disagree about where L0~L3 live.
 
 ## LLM Tools
 
