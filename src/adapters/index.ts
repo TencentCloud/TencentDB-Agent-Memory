@@ -31,3 +31,14 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./gateway-client/index.js";
+
+// Mastra processor adapter
+export {
+  createMastraMemoryProcessor,
+  flushMastraSession,
+} from "./mastra/index.js";
+export type {
+  FlushMastraSessionOptions,
+  MastraMemoryAdapterError,
+  MastraMemoryProcessorOptions,
+} from "./mastra/index.js";
