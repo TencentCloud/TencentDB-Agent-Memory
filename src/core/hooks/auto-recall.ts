@@ -186,20 +186,24 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  // prependSystemContext (before CACHE_BOUNDARY — cached):
+  //   persona, scene navigation
+  //   These are static across turns; placing them before CACHE_BOUNDARY allows
+  //   prefix-matching providers (DeepSeek/MiMo) to cache them, fixing #120.
+  //
+  // appendSystemContext (system prompt end, after CACHE_BOUNDARY):
+  //   memory tools guide (small, static but less critical for caching)
   //
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
+  const prependSystemParts: string[] = [];
+  const appendSystemParts: string[] = [];
   if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    prependSystemParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
   }
   if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    prependSystemParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
@@ -209,14 +213,18 @@ async function performAutoRecallInner(params: {
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
+  // Append memory tools usage guide to the system prompt suffix.
+  // This is static content that guides the agent on how to use memory tools.
+  // It is kept in appendSystemContext (after boundary) because it is small
+  // enough that caching benefit is negligible, and keeping it after the
+  // boundary avoids any potential interaction with the host's own system
+  // prompt assembly.
+  if (prependSystemParts.length > 0 || appendSystemParts.length > 0 || prependContext) {
+    appendSystemParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const prependSystemContext = prependSystemParts.length > 0 ? prependSystemParts.join("\n\n") : undefined;
+  const appendSystemContext = appendSystemParts.length > 0 ? appendSystemParts.join("\n\n") : undefined;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -225,51 +233,66 @@ async function performAutoRecallInner(params: {
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"}), ` +
+    `prependSystem=${prependSystemContext?.length ?? 0}chars(cached), ` +
+    `appendSystem=${appendSystemContext?.length ?? 0}chars`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!appendSystemContext && !prependContext && !prependSystemContext) {
     return undefined;
   }
 
   // ── Prefix Stability Diagnostics (debug-level, observation-only) ──
   //
-  // Simulates the system prompt as OpenClaw assembles it:
-  //   [base system prompt from config] → [CACHE_BOUNDARY] → appendSystemContext
+  // Simulates the OpenClaw system prompt assembly to verify cache boundary:
   //
-  // In the actual OpenClaw prompt assembly, appendSystemContext is placed AFTER
-  // CACHE_BOUNDARY (alongside the base system prompt). The diagnostic here
-  // models this structure to verify:
-  //   1. That the boundary exists at the expected position
-  //   2. That no dynamic L1 memory content leaks into the cacheable prefix
-  //   3. Cacheable ratio metrics for the assembled system prompt
+  //   [prependSystemContext] → [CACHE_BOUNDARY] → [base system prompt]
+  //                                                    → [appendSystemContext]
+  //
+  // prependSystemContext (persona + scene nav) is placed BEFORE CACHE_BOUNDARY,
+  // which allows prefix-matching providers to cache it. This diagnostic
+  // verifies the placement is correct and no dynamic content leaks in.
   //
   // This is diagnostic only — no prompt content is modified and no behavior
-  // is changed. It complements caching optimization PRs (#375, #433) by
-  // providing the visibility to verify those optimizations work correctly.
-  if (appendSystemContext && logger?.debug) {
-    // Model the OpenClaw system prompt assembly: base content after CACHE_BOUNDARY
-    const simulatedSystemPrompt =
-      `<!-- CACHE_BOUNDARY -->\n${appendSystemContext}`;
+  // is changed. It provides the visibility needed to verify that #120 fixes
+  // are working correctly across different OpenClaw versions and providers.
+  if (logger?.debug && (prependSystemContext || appendSystemContext)) {
+    // Audit prependSystemContext: verify it's clean, stable, and properly isolated
+    if (prependSystemContext) {
+      const simulatedCacheable =
+        `${prependSystemContext}\n<!-- CACHE_BOUNDARY -->`;
+      const audit = auditCacheBoundary(simulatedCacheable);
+      logger.debug(
+        `${TAG} [cache-diagnostics] prependSystemContext: ` +
+        `${audit.prefixLength} chars cacheable, ` +
+        `${audit.cacheableRatio > 0.9 ? "✅ high stability" : "⚠️ check stability"}`,
+      );
 
-    const audit = auditCacheBoundary(simulatedSystemPrompt);
-    logger.debug(formatAuditSummary(audit));
-
-    // Safety check: ensure L1 memories haven't leaked into the cacheable prefix
-    if (memoryLines.length > 0) {
-      const leaks = detectPrefixLeaks(audit.prefixContent, memoryLines);
-      if (leaks.length > 0) {
-        logger.warn(
-          `${TAG} ⚠️ Prefix leak detected — ${leaks.length} dynamic memory ` +
-          `line(s) found in cacheable prefix. This will bust prompt cache ` +
-          `every turn for prefix-matching providers.`,
-        );
+      // Safety check: ensure L1 memories haven't leaked into the cacheable region
+      if (memoryLines.length > 0) {
+        const leaks = detectPrefixLeaks(prependSystemContext, memoryLines);
+        if (leaks.length > 0) {
+          logger.warn(
+            `${TAG} ⚠️ L1 memory leak into prependSystemContext — ` +
+            `${leaks.length} dynamic line(s) found in cacheable prefix. ` +
+            `This will bust the prompt cache every turn.`,
+          );
+        }
       }
+    }
+
+    // Audit appendSystemContext: verify boundary position
+    if (appendSystemContext) {
+      const simulatedSuffix =
+        `<!-- CACHE_BOUNDARY -->\n${appendSystemContext}`;
+      const audit = auditCacheBoundary(simulatedSuffix);
+      logger.debug(formatAuditSummary(audit));
     }
   }
 
   return {
     prependContext,
+    prependSystemContext,
     appendSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,

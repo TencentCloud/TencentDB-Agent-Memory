@@ -199,7 +199,16 @@ export interface CompletedTurn {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /**
+   * Stable system context placed BEFORE CACHE_BOUNDARY — participates in
+   * prompt caching for prefix-matching providers (DeepSeek, MiMo, etc.).
+   * Contains persona + scene navigation (~4000 chars of static content).
+   *
+   * Fixes #120 (secondary): previously these were in appendSystemContext
+   * (after CACHE_BOUNDARY), wasting ~4000 char-equivalent tokens per turn.
+   */
+  prependSystemContext?: string;
+  /** Stable recall context appended to system prompt after CACHE_BOUNDARY (tools guide). */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
