@@ -43,6 +43,13 @@ import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import {
+  CaptureIdempotencyCapacityError,
+  CaptureIdempotencyConflictError,
+  CaptureIdempotencyStore,
+  fingerprintCaptureRequest,
+  isValidCaptureIdempotencyKey,
+} from "./capture-idempotency.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -89,8 +96,8 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(json);
 }
 
-function sendError(res: http.ServerResponse, status: number, message: string): void {
-  sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
+function sendError(res: http.ServerResponse, status: number, message: string, code?: string): void {
+  sendJson(res, status, { error: message, ...(code ? { code } : {}) } satisfies GatewayErrorResponse);
 }
 
 /**
@@ -117,6 +124,7 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  private readonly captureIdempotency = new CaptureIdempotencyStore<CaptureResponse>();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -398,26 +406,63 @@ export class TdaiGateway {
       return;
     }
 
-    const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
-      userText: body.user_content,
-      assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
-      sessionKey: body.session_key,
-      sessionId: body.session_id,
-    });
-    const elapsed = Date.now() - startMs;
+    const idempotencyKey = body.idempotency_key;
+    if (idempotencyKey !== undefined && !isValidCaptureIdempotencyKey(idempotencyKey)) {
+      sendError(res, 400, "idempotency_key must be a non-empty, control-free string of at most 128 UTF-8 bytes");
+      return;
+    }
 
-    this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+    const capture = async (): Promise<CaptureResponse> => {
+      const startMs = Date.now();
+      const result = await this.core.handleTurnCommitted({
+        userText: body.user_content,
+        assistantText: body.assistant_content,
+        messages: body.messages ?? [
+          { role: "user", content: body.user_content },
+          { role: "assistant", content: body.assistant_content },
+        ],
+        sessionKey: body.session_key,
+        sessionId: body.session_id,
+      });
+      const elapsed = Date.now() - startMs;
 
-    const response: CaptureResponse = {
-      l0_recorded: result.l0RecordedCount,
-      scheduler_notified: result.schedulerNotified,
+      this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+      return {
+        l0_recorded: result.l0RecordedCount,
+        scheduler_notified: result.schedulerNotified,
+      };
     };
-    sendJson(res, 200, response);
+
+    if (!idempotencyKey) {
+      sendJson(res, 200, await capture());
+      return;
+    }
+
+    try {
+      const result = await this.captureIdempotency.run({
+        sessionKey: body.session_key,
+        idempotencyKey,
+        fingerprint: fingerprintCaptureRequest(body),
+        execute: capture,
+      });
+      if (result.replayed) {
+        this.logger.info(`Capture replayed: session=${body.session_key}`);
+      }
+      sendJson(res, 200, {
+        ...result.value,
+        idempotency_replayed: result.replayed,
+      } satisfies CaptureResponse);
+    } catch (err) {
+      if (err instanceof CaptureIdempotencyConflictError) {
+        sendError(res, 409, err.message, "IDEMPOTENCY_KEY_REUSED");
+        return;
+      }
+      if (err instanceof CaptureIdempotencyCapacityError) {
+        sendError(res, 503, err.message, "IDEMPOTENCY_CAPACITY_EXHAUSTED");
+        return;
+      }
+      throw err;
+    }
   }
 
   private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

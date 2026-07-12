@@ -52,11 +52,15 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
+  /** Stable client-generated key for retry-safe capture within a session. */
+  idempotency_key?: string;
 }
 
 export interface CaptureResponse {
   l0_recorded: number;
   scheduler_notified: boolean;
+  /** Present when idempotency_key was supplied; true for a replayed request. */
+  idempotency_replayed?: boolean;
 }
 
 // ============================

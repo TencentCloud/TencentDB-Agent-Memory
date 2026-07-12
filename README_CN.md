@@ -392,6 +392,18 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 若 `MEMORY_TENCENTDB_GATEWAY_API_KEY` 没设置，插件还会回退读取 `TDAI_GATEWAY_API_KEY`，方便两个进程共享同一个 env 文件、只设一个变量名的场景。Gateway 永远不会读 `MEMORY_TENCENTDB_GATEWAY_API_KEY`，那是插件侧专用名字。
 
+### 可安全重试的 capture
+
+客户端在超时后重试 `POST /capture` 时，可以在 JSON 请求体中携带稳定的 `idempotency_key`（最多 128 个 UTF-8 字节）。同一会话内，相同键和相同载荷的并发或已完成重试会复用第一次执行结果，并返回 `idempotency_replayed: true`；相同键对应不同载荷时返回 HTTP `409`。
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"session_key":"chat-42","user_content":"你好","assistant_content":"你好！","idempotency_key":"turn-018f"}' \
+     http://127.0.0.1:8420/capture
+```
+
+重放表只在当前 Gateway 进程内生效，最多保留 1,024 项，已完成结果最多保留 10 分钟。不传 `idempotency_key` 时完全保持原有 capture 行为。
+
 ---
 
 ## 🔧 可调参数

@@ -388,6 +388,18 @@ Important: the plugin only handles the **client half**. Whether the Gateway actu
 
 If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_GATEWAY_API_KEY` as a fallback — handy when both processes share an env file and the operator only wants to set one variable name. The Gateway never reads `MEMORY_TENCENTDB_GATEWAY_API_KEY`; that name is plugin-side only.
 
+### Retry-safe capture
+
+Clients that retry `POST /capture` after a timeout can include a stable `idempotency_key` (up to 128 UTF-8 bytes) in the JSON body. Within the same session, concurrent or completed retries with the same key and payload reuse the original result and return `idempotency_replayed: true`. Reusing a key with a different payload returns HTTP `409`.
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"session_key":"chat-42","user_content":"Hello","assistant_content":"Hi","idempotency_key":"turn-018f"}' \
+     http://127.0.0.1:8420/capture
+```
+
+The replay table is process-local, bounded to 1,024 entries, and retains completed results for up to 10 minutes. Omitting `idempotency_key` preserves the existing capture behavior.
+
 ---
 
 
