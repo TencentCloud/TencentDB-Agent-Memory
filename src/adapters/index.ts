@@ -17,13 +17,3 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
-
-// Coding-agent Gateway client
-export { CodingAgentGatewayClient, GatewayClientError } from "./coding-agent/index.js";
-export type {
-  CodingAgentCaptureInput,
-  CodingAgentConversationSearchInput,
-  CodingAgentGatewayClientOptions,
-  CodingAgentMemorySearchInput,
-  CodingAgentMemorySession,
-} from "./coding-agent/index.js";

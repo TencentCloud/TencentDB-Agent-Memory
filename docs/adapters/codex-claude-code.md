@@ -1,232 +1,124 @@
-# Codex and Claude Code Adapter Architecture
+# Codex and Claude Code Integration Guide
 
-This document contributes to issue #235 by mapping the existing
-TencentDB-Agent-Memory adapter layers and outlining a path for Codex and
-Claude Code style coding-agent integrations.
+This guide describes the platform-specific decisions needed to connect a
+Codex- or Claude Code-style coding agent to TencentDB Agent Memory. It does
+not define another Gateway client or adapter SDK. Reusable HTTP and lifecycle
+behaviour belongs to the shared Gateway-client boundary introduced by
+[PR #316](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/316).
 
-## Scope
+## What a Coding-Agent Integration Must Decide
 
-This document covers the foundation stage and the first minimal Gateway-client
-step:
+The shared Gateway boundary covers memory operations. A coding-agent wrapper
+still needs to decide the host-specific details below:
 
-- Identify the host-neutral memory capabilities exposed by `TdaiCore`.
-- Compare the existing OpenClaw and Hermes integration paths.
-- Propose a minimal Codex / Claude Code adapter path without duplicating the
-  existing Dify adapter work.
-- Provide a small Gateway-backed client that future Codex / Claude Code
-  wrappers can reuse.
+1. How to identify a stable coding task session.
+2. Where recalled memory enters the next model prompt.
+3. Which completed turns are safe and useful to capture.
+4. When the task session has ended.
 
-It does not implement a full adapter SDK yet. That should come after one
-concrete coding-agent integration is validated.
+```mermaid
+flowchart LR
+  A["Coding-agent task"] --> B["Platform wrapper"]
+  B --> C["Shared Gateway client (#316)"]
+  C --> D["TencentDB Agent Memory Gateway"]
+  D --> E["TdaiCore"]
+```
 
-## Core Memory Boundary
+## Stable Session Identity
 
-`src/core/tdai-core.ts` is the host-neutral facade. It depends on
-`HostAdapter` and `LLMRunnerFactory` abstractions from `src/core/types.ts`
-instead of depending directly on OpenClaw, Hermes, Codex, or Claude Code.
+Memory must not be shared accidentally across unrelated repositories or task
+threads. The wrapper should derive a stable `sessionKey` from values that
+survive process restarts:
 
-The main capabilities are:
+```text
+<platform>:<normalized-workspace-root>:<conversation-or-task-id>
+```
 
-| Capability | `TdaiCore` method | Existing host mapping |
+Examples:
+
+```text
+codex:E:/work/payment-service:thread-42
+claude-code:/home/alice/api:session-8f1d
+```
+
+- Use the repository or workspace root, not the current process directory.
+- Use the platform conversation or task id when it is available.
+- Do not use a random process id as the only identifier.
+- Include an authenticated user id when the host can provide one and multiple
+  users may share a Gateway.
+
+## Lifecycle Mapping
+
+The integration follows the same memory lifecycle as existing hosts, but the
+wrapper decides where those events occur in a coding-agent runtime.
+
+| Coding-agent event | Shared Gateway operation | Wrapper responsibility |
 | --- | --- | --- |
-| Recall memory before a model turn | `handleBeforeRecall(userText, sessionKey)` | OpenClaw `before_prompt_build`; Hermes `prefetch()` via Gateway `/recall` |
-| Capture a completed turn | `handleTurnCommitted(turn)` | OpenClaw `agent_end`; Hermes `sync_turn()` via Gateway `/capture` |
-| Search structured memories | `searchMemories(params)` | OpenClaw `tdai_memory_search`; Hermes `memory_tencentdb_memory_search` via Gateway `/search/memories` |
-| Search raw conversations | `searchConversations(params)` | OpenClaw `tdai_conversation_search`; Hermes `memory_tencentdb_conversation_search` via Gateway `/search/conversations` |
-| Flush one session | `handleSessionEnd(sessionKey)` | Hermes `on_session_end` via Gateway `/session/end` |
+| Before building the model prompt | `prefetch(query)` / recall | Resolve the session, obtain recalled context, and inject it in a clearly delimited context block. |
+| After a final assistant response | `captureTurn(turn)` / capture | Persist the user request and committed assistant response for the same session. |
+| User requests memory history | memory or conversation search | Forward the user query and keep the session filter when searching conversations. |
+| Task, thread, or workspace run ends | `endSession()` | Flush session-scoped work once; do not call it after every tool invocation. |
 
-The adapter goal for any new platform is to translate platform lifecycle
-events and tool calls into these five operations.
+## Prompt Injection
 
-## Existing OpenClaw Path
+Recall should happen before the next prompt is assembled. Keep recalled content
+separate from the current user instruction so a model can distinguish memory
+from the task at hand.
 
-OpenClaw runs the plugin in-process. The root `index.ts` file acts as a thin
-host shell:
+```text
+[Relevant project memory]
+<recalled context>
+[/Relevant project memory]
 
-1. Parse plugin config.
-2. Create `OpenClawHostAdapter`.
-3. Create `TdaiCore`.
-4. Register OpenClaw tools and lifecycle hooks.
-5. Delegate memory work to `TdaiCore`.
-
-```mermaid
-flowchart TD
-  A["OpenClaw plugin runtime"] --> B["index.ts"]
-  B --> C["OpenClawHostAdapter"]
-  C --> D["TdaiCore"]
-  D --> E["L0 conversation store"]
-  D --> F["L1 structured memories"]
-  D --> G["L2 scene blocks"]
-  D --> H["L3 persona"]
+<current user request>
 ```
 
-OpenClaw hook flow:
+The wrapper should keep the current request authoritative. Recalled memory is
+supporting context, not an instruction that overrides the user or platform
+policy.
 
-```mermaid
-sequenceDiagram
-  participant OC as OpenClaw
-  participant Shell as index.ts
-  participant Core as TdaiCore
-  participant Store as Memory stores
+## Capture Boundary
 
-  OC->>Shell: before_prompt_build(prompt, ctx)
-  Shell->>Core: handleBeforeRecall(prompt, sessionKey)
-  Core->>Store: recall L1/L3 context
-  Store-->>Core: recall result
-  Core-->>Shell: prepend / append context
-  Shell-->>OC: inject memory context
+Capture only a completed user/assistant turn. In particular, a coding-agent
+wrapper should avoid sending secrets, credentials, private keys, or raw tool
+output that the user did not intend to retain. A wrapper may redact or skip a
+turn before calling capture when its host environment can classify sensitive
+content.
 
-  OC->>Shell: agent_end(messages, ctx)
-  Shell->>Core: handleTurnCommitted(turn)
-  Core->>Store: record L0 and schedule L1/L2/L3
-```
+## Minimal Wrapper Pseudocode
 
-OpenClaw search tools:
-
-- `tdai_memory_search` delegates to `core.searchMemories()`.
-- `tdai_conversation_search` delegates to `core.searchConversations()`.
-
-## Existing Hermes Path
-
-Hermes uses an out-of-process Gateway. The Python provider in
-`hermes-plugin/memory/memory_tencentdb/` supervises or connects to the Node.js
-Gateway and calls it over HTTP.
-
-```mermaid
-flowchart TD
-  A["Hermes Agent"] --> B["MemoryTencentdbProvider"]
-  B --> C["MemoryTencentdbSdkClient"]
-  C --> D["Node Gateway"]
-  D --> E["StandaloneHostAdapter"]
-  E --> F["TdaiCore"]
-  F --> G["L0/L1/L2/L3 memory pipeline"]
-```
-
-Gateway endpoints map to core capabilities:
-
-| Gateway endpoint | Client method | Core method |
-| --- | --- | --- |
-| `GET /health` | `health()` | Store readiness check |
-| `POST /recall` | `recall()` | `handleBeforeRecall()` |
-| `POST /capture` | `capture()` | `handleTurnCommitted()` |
-| `POST /search/memories` | `search_memories()` | `searchMemories()` |
-| `POST /search/conversations` | `search_conversations()` | `searchConversations()` |
-| `POST /session/end` | `end_session()` | `handleSessionEnd()` |
-
-Hermes lifecycle mapping:
-
-- `prefetch(query)` calls Gateway `/recall`.
-- `sync_turn(user, assistant)` calls Gateway `/capture` in a bounded
-  background thread.
-- `get_tool_schemas()` exposes search tools to the LLM.
-- `handle_tool_call()` routes search tool calls to Gateway search endpoints.
-- `on_session_end()` calls Gateway `/session/end`.
-
-## Codex / Claude Code Integration Direction
-
-Codex and Claude Code style coding agents are closer to Hermes than to
-OpenClaw when there is no stable in-process plugin API. A practical first
-integration should therefore use the existing Gateway path and add a thin
-platform adapter around it.
-
-Recommended first version:
-
-```mermaid
-flowchart TD
-  A["Codex / Claude Code task session"] --> B["Platform adapter"]
-  B --> C["Gateway client"]
-  C --> D["POST /recall"]
-  C --> E["POST /capture"]
-  C --> F["POST /search/memories"]
-  C --> G["POST /search/conversations"]
-  D --> H["TdaiCore"]
-  E --> H
-  F --> H
-  G --> H
-```
-
-The platform adapter should provide four minimal responsibilities:
-
-1. Session identity: derive a stable `session_key` from the coding task,
-   workspace, or conversation thread.
-2. Recall injection: call `/recall` before sending a prompt to the model and
-   inject returned memory context into the prompt or system context.
-3. Turn capture: call `/capture` after a completed user / assistant turn.
-4. Search tools: expose `search_memories` and `search_conversations` as tool
-   calls when the host platform supports tools.
-
-## Minimal Gateway Client
-
-`src/adapters/coding-agent/gateway-client.ts` provides a small reusable
-Gateway client for coding-agent wrappers. It maps host-neutral method names to
-the existing HTTP API:
-
-| Client method | Gateway endpoint |
-| --- | --- |
-| `health()` | `GET /health` |
-| `recall(query, session)` | `POST /recall` |
-| `capture(input)` | `POST /capture` |
-| `searchMemories(input)` | `POST /search/memories` |
-| `searchConversations(input)` | `POST /search/conversations` |
-| `endSession(session)` | `POST /session/end` |
-
-The client intentionally stays below the platform-specific layer. A Codex,
-Claude Code, or CLI-wrapper integration can reuse it while deciding its own
-session-key strategy and prompt-injection mechanics.
-
-## Adapter Interface Sketch
-
-A future SDK can start with a small interface instead of platform-specific
-copy-paste:
+The following intentionally uses the shared adapter boundary rather than a
+new HTTP client implementation:
 
 ```ts
-export interface MemoryAdapterSession {
-  sessionKey: string;
-  userId?: string;
-  platform: "codex" | "claude-code" | "openclaw" | "hermes" | string;
-}
+const memory = createGatewayPlatformAdapter({
+  client: sharedGatewayClient,
+  platform: "codex",
+  resolveContext: () => ({
+    sessionKey: buildSessionKey(workspaceRoot, conversationId),
+    userId,
+  }),
+});
 
-export interface MemoryAdapter {
-  recall(query: string, session: MemoryAdapterSession): Promise<string>;
-  capture(input: {
-    userContent: string;
-    assistantContent: string;
-    session: MemoryAdapterSession;
-  }): Promise<void>;
-  searchMemories(query: string, session: MemoryAdapterSession, limit?: number): Promise<string>;
-  searchConversations(query: string, session: MemoryAdapterSession, limit?: number): Promise<string>;
-  endSession?(session: MemoryAdapterSession): Promise<void>;
-}
+const recalled = await memory.prefetch(userPrompt);
+const prompt = addMemoryBlock(recalled.context, userPrompt);
+
+const answer = await runCodingAgent(prompt);
+await memory.captureTurn({ userText: userPrompt, assistantText: answer });
+
+await memory.endSession();
 ```
 
-The SDK should wrap Gateway concerns that every platform would otherwise
-reimplement:
+`createGatewayPlatformAdapter` and the shared Gateway client are provided by
+the #316 boundary. This guide only specifies how a coding-agent host should
+provide the workspace, conversation identity, prompt hook, and session-end
+event.
 
-- Base URL and optional Bearer token.
-- Request timeout and retry policy.
-- Consistent request / response types.
-- Error degradation policy when the Gateway is unavailable.
-- Optional privacy filters before capture.
+## Host Checklist
 
-## Open Questions
-
-- Codex and Claude Code plugin surfaces differ. If a platform does not expose
-  lifecycle hooks, the first integration may need to be a CLI wrapper or MCP
-  bridge rather than an in-process plugin.
-- The adapter must avoid capturing secrets, API keys, private repository
-  content, or tool outputs that should not become long-term memory.
-- If multiple coding agents share one Gateway, the `session_key` and `user_id`
-  strategy must prevent memory cross-contamination.
-- A future SDK should be introduced only after at least one concrete
-  Codex/Claude Code path is validated against the Gateway.
-
-## Suggested Next Step
-
-Use this architecture as the basis for one minimal coding-agent adapter:
-
-1. Start the existing Gateway.
-2. Implement a small Gateway client for Codex or Claude Code.
-3. Validate `capture -> search_conversations -> recall` on one local task
-   session.
-4. Extract common request logic into an adapter SDK only after the concrete
-   path works.
+- [ ] `sessionKey` includes a stable workspace and task/thread identity.
+- [ ] Recall occurs before model prompt construction.
+- [ ] Recalled memory is visibly delimited from the new user request.
+- [ ] Capture happens only after a committed assistant response.
+- [ ] Sensitive values are redacted or skipped before capture.
+- [ ] Session end is triggered once when the coding task closes.
