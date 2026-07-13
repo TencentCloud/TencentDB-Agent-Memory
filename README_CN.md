@@ -356,6 +356,33 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+## 批量 Capture 到实时记忆目录
+
+如果要导入历史对话，并且希望数据进入普通 `/capture` 使用的同一个实时记忆目录，可以使用 `POST /capture/batch`。这样导入的数据会和后续 Gateway capture 数据一起检索和召回。
+
+接口可以接收多个现有 `/capture` 请求体：
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"captures":[{"session_key":"import-1","user_content":"你好","assistant_content":"你好"}]}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+也可以接收和 `POST /seed` 相同的 `sessions/conversations` 输入格式：
+
+```bash
+curl -H "Content-Type: application/json" \
+     -d '{"data":{"sessions":[{"sessionKey":"import-1","conversations":[[{"role":"user","content":"你好"},{"role":"assistant","content":"你好"}]]}]}}' \
+     http://127.0.0.1:8420/capture/batch
+```
+
+`POST /capture/batch` 复用实时 `TdaiCore` capture 路径，并会为历史导入关闭实时 capture 的冷启动时间戳下限，避免旧时间戳被误过滤。`POST /seed` 仍然保留，用于写入独立时间戳目录的隔离导入。
+
+出于安全考虑，单次请求最多导入 100 个 round/item。需要单项失败后继续处理剩余数据时，可以设置 `continue_on_error: true`。
+
+
+---
+
 ## 🔒 Gateway 安全配置（可选）
 
 Hermes Gateway 监听 `:8420`，对外提供 capture / search / recall 的 HTTP 接口。新增两个开关，可以把它从“开放的本地 sidecar”切换为“需要鉴权的网络服务”。**两个开关默认都关闭，已有部署的行为不变。**

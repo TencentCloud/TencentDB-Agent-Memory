@@ -10,7 +10,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,45 @@ class MemoryTencentdbSdkClient:
         if user_id:
             body["user_id"] = user_id
         return self._post("/capture", body)
+
+    def capture_batch(
+        self,
+        captures: Optional[List[Dict[str, Any]]] = None,
+        data: Any = None,
+        session_key: str = "",
+        strict_round_role: bool = False,
+        auto_fill_timestamps: bool = True,
+        continue_on_error: bool = False,
+        timeout: int = 300,
+    ) -> Dict[str, Any]:
+        """Batch import conversations into the live Gateway memory store.
+
+        Args:
+            captures: List of existing ``/capture`` payload dictionaries.
+            data: Seed-style input — Format A ``{"sessions": [...]}`` or Format B ``[...]``.
+            session_key: Fallback session key for seed-style input.
+            strict_round_role: Require each seed round to have both user and assistant.
+            auto_fill_timestamps: Auto-fill missing seed timestamps (default True).
+            continue_on_error: Continue processing if one item fails at runtime.
+            timeout: Request timeout in seconds (batch import can be slow, default 300s).
+
+        Returns:
+            Summary dict with total, succeeded, failed, source, and per-item results.
+        """
+        body: Dict[str, Any] = {}
+        if captures is not None:
+            body["captures"] = captures
+        if data is not None:
+            body["data"] = data
+        if session_key:
+            body["session_key"] = session_key
+        if strict_round_role:
+            body["strict_round_role"] = True
+        if not auto_fill_timestamps:
+            body["auto_fill_timestamps"] = False
+        if continue_on_error:
+            body["continue_on_error"] = True
+        return self._post("/capture/batch", body, timeout=timeout)
 
     def search_memories(self, query: str, limit: int = 5, type_filter: str = "", scene: str = "") -> Dict[str, Any]:
         """Search L1 structured memories."""
