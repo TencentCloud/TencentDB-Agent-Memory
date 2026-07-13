@@ -31,3 +31,18 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./gateway-client/index.js";
+
+// OpenCode plugin adapter
+export {
+  buildOpenCodeSessionKey,
+  createOpenCodeMemoryPlugin,
+  extractOpenCodePrompt,
+} from "./opencode/index.js";
+export type {
+  OpenCodeMemoryPlugin,
+  OpenCodeMemoryPluginOptions,
+  OpenCodeMessage,
+  OpenCodePluginContext,
+  OpenCodePluginHooks,
+  OpenCodeTextPart,
+} from "./opencode/index.js";

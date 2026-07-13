@@ -56,6 +56,19 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./src/adapters/gateway-client/index.js";
+export {
+  buildOpenCodeSessionKey,
+  createOpenCodeMemoryPlugin,
+  extractOpenCodePrompt,
+} from "./src/adapters/opencode/index.js";
+export type {
+  OpenCodeMemoryPlugin,
+  OpenCodeMemoryPluginOptions,
+  OpenCodeMessage,
+  OpenCodePluginContext,
+  OpenCodePluginHooks,
+  OpenCodeTextPart,
+} from "./src/adapters/opencode/index.js";
 
 const TAG = "[memory-tdai]";
 

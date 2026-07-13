@@ -512,6 +512,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 | [`src/adapters/gateway-client/README.md`](./src/adapters/gateway-client/README.md) | 面向 Codex、Claude Code、Dify、LangGraph 和自定义 Agent 的 Gateway 适配指南 |
+| [`src/adapters/opencode/README.md`](./src/adapters/opencode/README.md) | OpenCode 插件安装与生命周期映射 |
 
 ---
 ## 社区与贡献
