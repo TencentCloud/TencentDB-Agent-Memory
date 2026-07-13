@@ -159,7 +159,8 @@ export class TdaiCore {
           this.wirePipelineRunners();
         });
     }
-
+    const cp = new CheckpointManager(this.dataDir, this.logger);
+    await cp.recalibrate();
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
 
