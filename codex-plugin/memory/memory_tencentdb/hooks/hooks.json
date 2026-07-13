@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx ${PLUGIN_ROOT}/hooks/recall.ts",
+            "commandWindows": "cmd.exe /c npx tsx %PLUGIN_ROOT%\\hooks\\recall.ts",
+            "timeout": 10,
+            "statusMessage": "Recalling memory context…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx ${PLUGIN_ROOT}/hooks/capture.ts",
+            "commandWindows": "cmd.exe /c npx tsx %PLUGIN_ROOT%\\hooks\\capture.ts",
+            "timeout": 30,
+            "statusMessage": "Capturing conversation turn…"
+          }
+        ]
+      }
+    ]
+  }
+}

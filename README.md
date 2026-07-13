@@ -349,6 +349,111 @@ curl http://127.0.0.1:8420/health
 > For the complete provider reference (environment variables, troubleshooting, LLM tool schemas, supervisor behavior), see [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md). Please read it before adjusting the supervisor / circuit-breaker defaults.
 
 
+### 3. Codex
+
+In addition to OpenClaw and Hermes, this plugin also supports Codex. The Codex integration lives in `codex-plugin/memory/memory_tencentdb/` and uses the shared `src/adapters/adapter-sdk` to talk to the Gateway.
+
+Codex data flow:
+
+```text
+Codex Hooks / MCP
+  -> codex-plugin/memory/memory_tencentdb/adapter.ts
+  -> src/adapters/adapter-sdk
+  -> Gateway HTTP API
+  -> TdaiCore
+```
+
+The Codex plugin provides:
+
+- `UserPromptSubmit` hook: calls `/recall` before each turn and injects recalled memory into Codex context.
+- `Stop` hook: calls `/capture` after each assistant response and stores the completed turn.
+- MCP tools: `tdai_memory_search` and `tdai_conversation_search` for explicit structured-memory and raw-conversation search.
+
+#### 3.1 Install the Codex plugin
+
+From the repository root:
+
+```bat
+npm install
+node scripts\install-codex-plugin.js
+```
+
+The installer will:
+
+- link `codex-plugin/memory/memory_tencentdb` to `%USERPROFILE%\.agents\plugins\tencentdb-memory`;
+- write the local Codex marketplace;
+- enable the `tdai-memory` MCP server in `%USERPROFILE%\.codex\config.toml`;
+- try to run `codex plugin add tencentdb-memory@local-codex-plugins`.
+
+After installation, restart Codex and trust the `UserPromptSubmit` and `Stop` hooks with `/hooks` or Settings -> Hooks.
+
+#### 3.2 Configure the Gateway
+
+The Codex plugin does not auto-start the Gateway. Start it manually from the repository root:
+
+```bat
+set TDAI_GATEWAY_URL=http://127.0.0.1:8420
+set TDAI_GATEWAY_API_KEY=your-api-key
+node --import tsx src/gateway/server.ts
+```
+
+Also write the Gateway URL and API key to the user environment so the Codex process can read them:
+
+```bat
+setx TDAI_GATEWAY_URL "http://127.0.0.1:8420"
+setx TDAI_GATEWAY_API_KEY "your-api-key"
+```
+
+`setx` only affects newly started processes, so restart Codex afterwards.
+
+
+### 4. Claude Code
+
+Claude Code integration lives in `claudecode-plugin/memory/memory_tencentdb/` and also reuses the shared `src/adapters/adapter-sdk`.
+
+Claude Code data flow:
+
+```text
+Claude Code Hooks / MCP
+  -> claudecode-plugin/memory/memory_tencentdb/adapter.ts
+  -> src/adapters/adapter-sdk
+  -> Gateway HTTP API
+  -> TdaiCore
+```
+
+The Claude Code plugin provides:
+
+- `UserPromptSubmit` hook: calls `/recall` before each turn and injects recalled memory into Claude Code context.
+- `Stop` hook: calls `/capture` after each assistant response and stores the completed turn.
+- MCP tools: `tdai_memory_search` and `tdai_conversation_search`.
+- `transcript_path` fallback: when the Stop event lacks the user prompt, the adapter can read the latest user/assistant turn from Claude Code's JSONL transcript.
+
+#### 4.1 Start the Gateway
+
+The Claude Code plugin does not auto-start the Gateway. Start it manually from the repository root:
+
+```bat
+set TDAI_GATEWAY_URL=http://127.0.0.1:8420
+set TDAI_GATEWAY_API_KEY=your-api-key
+node --import tsx src/gateway/server.ts
+```
+
+Write the environment variables to the user environment so the Claude Code process can read them:
+
+```bat
+setx TDAI_GATEWAY_URL "http://127.0.0.1:8420"
+setx TDAI_GATEWAY_API_KEY "your-api-key"
+```
+
+#### 4.2 Start Claude Code with the plugin
+
+Use `--plugin-dir` to start Claude Code with the plugin loaded:
+
+```bat
+claude --plugin-dir D:\xiniuniao\TencentDB-Agent-Memory\claudecode-plugin\memory\memory_tencentdb
+```
+
+
 ---
 
 
@@ -494,6 +599,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Codex / Claude Code adapters | Hook and MCP integration via the shared `adapter-sdk` |
+| Unified adapter SDK | New platforms only need to implement `MemoryPlatformAdapter` |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -527,6 +634,8 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - [x] Short-term context compression (Context Offload + Mermaid canvas)
 - [x] Local SQLite backend and Tencent Cloud Vector Database (TCVDB) backend
 - [x] OpenClaw plugin and Hermes Gateway integration
+- [x] Codex and Claude Code adapters
+- [x] Unified adapter SDK; new platforms only need to implement `MemoryPlatformAdapter`
 - [ ] Portable memory: cross-Agent / cross-framework / cross-device import, export, and live migration
 - [ ] Automatic Skill generation
 - [ ] Visual debugging and memory observability dashboard

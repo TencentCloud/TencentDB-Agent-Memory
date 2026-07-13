@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tdai-memory": {
+      "command": "node",
+      "args": ["--import", "tsx", "${CLAUDE_PLUGIN_ROOT}/mcp-server.ts"]
+    }
+  }
+}

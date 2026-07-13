@@ -1,0 +1,11 @@
+{
+  "name": "tencentdb-memory",
+  "version": "1.0.0",
+  "description": "TencentDB Agent Memory — four-layer memory system (L0 conversation / L1 extraction / L2 scene / L3 persona) via Gateway sidecar",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

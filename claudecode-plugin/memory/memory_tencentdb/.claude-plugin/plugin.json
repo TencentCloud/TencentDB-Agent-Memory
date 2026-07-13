@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "tencentdb-memory",
+  "version": "1.0.0",
+  "description": "TencentDB Agent Memory four-layer memory system via Gateway sidecar",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  }
+}
