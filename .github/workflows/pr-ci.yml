@@ -10,6 +10,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  encoding:
+    name: Encoding Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test encoding detector
+        run: npm run test:encoding
+
+      - name: Reject invalid UTF-8 and mojibake
+        run: npm run check:encoding
+
   # ── 1. Install dependencies ────────────────────────────────
   install:
     name: Install
