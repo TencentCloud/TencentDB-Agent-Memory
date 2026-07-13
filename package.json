@@ -7,12 +7,37 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-mcp": "./dist/src/adapters/mcp/cli.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./sdk": {
+      "import": "./dist/sdk/index.mjs",
+      "default": "./dist/sdk/index.mjs"
+    },
+    "./sdk/*": {
+      "import": "./dist/sdk/*.mjs",
+      "default": "./dist/sdk/*.mjs"
+    },
+    "./adapters/claude-code": {
+      "import": "./dist/adapters/claude-code/index.mjs",
+      "default": "./dist/adapters/claude-code/index.mjs"
+    },
+    "./adapters/claude-code/*": {
+      "import": "./dist/adapters/claude-code/*.mjs",
+      "default": "./dist/adapters/claude-code/*.mjs"
+    },
+    "./adapters/mcp": {
+      "import": "./dist/adapters/mcp/index.mjs",
+      "default": "./dist/adapters/mcp/index.mjs"
+    },
+    "./adapters/mcp/*": {
+      "import": "./dist/adapters/mcp/*.mjs",
+      "default": "./dist/adapters/mcp/*.mjs"
     }
   },
   "scripts": {
@@ -29,6 +54,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
   },
   "files": [
