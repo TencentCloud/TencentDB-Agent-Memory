@@ -7,12 +7,17 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "kimicode-memory-mcp": "./bin/kimicode-memory-mcp.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapters/kimicode": {
+      "import": "./dist/src/adapters/kimicode/mcp-server.mjs",
+      "default": "./dist/src/adapters/kimicode/mcp-server.mjs"
     }
   },
   "scripts": {
@@ -26,6 +31,7 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
+    "kimicode:mcp": "node --import tsx src/adapters/kimicode/mcp-server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -45,6 +51,7 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "kimi-plugin/",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
@@ -56,6 +63,8 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "kimi-code",
+    "mcp",
     "memory",
     "ai-memory",
     "long-term-memory",
@@ -74,6 +83,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@node-rs/jieba": "^2.0.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
     "ai": "^6.0.164",

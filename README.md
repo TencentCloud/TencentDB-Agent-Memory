@@ -494,6 +494,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Kimi Code CLI MCP adapter | Stdio MCP server that forwards tool calls to the Gateway over HTTP |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -526,7 +527,7 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - [x] Long-term personalized memory (L0 → L3)
 - [x] Short-term context compression (Context Offload + Mermaid canvas)
 - [x] Local SQLite backend and Tencent Cloud Vector Database (TCVDB) backend
-- [x] OpenClaw plugin and Hermes Gateway integration
+- [x] OpenClaw plugin, Hermes Gateway, and Kimi Code CLI MCP integration
 - [ ] Portable memory: cross-Agent / cross-framework / cross-device import, export, and live migration
 - [ ] Automatic Skill generation
 - [ ] Visual debugging and memory observability dashboard
