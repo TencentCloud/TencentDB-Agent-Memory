@@ -39,6 +39,7 @@ import type {
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import { buildGatewayRecallResponse } from "./recall-response.js";
 import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
@@ -380,13 +381,12 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: stable=${result.appendSystemContext?.length ?? 0} chars, ` +
+      `dynamic=${result.prependContext?.length ?? 0} chars`,
+    );
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
+    const response: RecallResponse = buildGatewayRecallResponse(result);
     sendJson(res, 200, response);
   }
 
@@ -408,6 +408,7 @@ export class TdaiGateway {
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: body.started_at,
     });
     const elapsed = Date.now() - startMs;
 

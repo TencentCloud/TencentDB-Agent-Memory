@@ -45,6 +45,23 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export { CodingAgentGatewayClient, CodingAgentGatewayError } from "./src/adapters/coding-agent/index.js";
+export type {
+  CodingAgentConversationSearchRequest,
+  CodingAgentGatewayClientOptions,
+  CodingAgentMemorySearchRequest,
+  CodingAgentRecallRequest,
+  CodingAgentTurn,
+} from "./src/adapters/coding-agent/index.js";
+export { buildSessionKey, extractLatestTurn, handleClaudeCodeHook } from "./src/adapters/claude-code/index.js";
+export type {
+  ClaudeCodeHookClient,
+  ClaudeCodeHookInput,
+  ClaudeCodeHookOptions,
+  ClaudeCodeHookResult,
+  TranscriptTurn,
+} from "./src/adapters/claude-code/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**

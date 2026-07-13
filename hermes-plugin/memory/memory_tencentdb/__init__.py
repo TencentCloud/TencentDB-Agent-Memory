@@ -844,7 +844,15 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_key=effective_session,
                 user_id=self._user_id,
             )
-            context = result.get("context", "")
+            dynamic_context = result.get("prepend_context", "")
+            stable_context = result.get("append_system_context") or result.get("context", "")
+            context_parts = []
+            for value in (dynamic_context, stable_context):
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value not in context_parts:
+                        context_parts.append(value)
+            context = "\n\n".join(context_parts)
             self._record_success()
             if context:
                 return f"## memory-tencentdb Memory\n{context}"

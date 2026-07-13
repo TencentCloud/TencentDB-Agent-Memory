@@ -223,6 +223,56 @@ def test_reap_dead_process_drops_handle():
     assert sup._process is None
 
 
+def test_supervisor_bridges_hermes_llm_env_to_gateway_env():
+    env = {
+        "MEMORY_TENCENTDB_LLM_API_KEY": " sk-hermes ",
+        "MEMORY_TENCENTDB_LLM_BASE_URL": " https://example.test/v1 ",
+        "MEMORY_TENCENTDB_LLM_MODEL": " hermes-model ",
+    }
+
+    supervisor_module.GatewaySupervisor._bridge_hermes_llm_env(env)
+
+    assert env["TDAI_LLM_API_KEY"] == "sk-hermes"
+    assert env["TDAI_LLM_BASE_URL"] == "https://example.test/v1"
+    assert env["TDAI_LLM_MODEL"] == "hermes-model"
+
+
+def test_supervisor_aligns_child_gateway_endpoint_env():
+    supervisor = supervisor_module.GatewaySupervisor(
+        host="127.0.0.2",
+        port=18420,
+        gateway_cmd="fake-cmd",
+    )
+    env = {
+        "TDAI_GATEWAY_HOST": "stale-host",
+        "TDAI_GATEWAY_PORT": "9999",
+    }
+
+    supervisor._bridge_gateway_env(env)
+
+    assert env["MEMORY_TENCENTDB_GATEWAY_HOST"] == "127.0.0.2"
+    assert env["MEMORY_TENCENTDB_GATEWAY_PORT"] == "18420"
+    assert env["TDAI_GATEWAY_HOST"] == "127.0.0.2"
+    assert env["TDAI_GATEWAY_PORT"] == "18420"
+
+
+def test_supervisor_does_not_clobber_explicit_gateway_llm_env():
+    env = {
+        "MEMORY_TENCENTDB_LLM_API_KEY": "sk-hermes",
+        "MEMORY_TENCENTDB_LLM_BASE_URL": "https://hermes.example/v1",
+        "MEMORY_TENCENTDB_LLM_MODEL": "hermes-model",
+        "TDAI_LLM_API_KEY": "sk-tdai",
+        "TDAI_LLM_BASE_URL": "https://tdai.example/v1",
+        "TDAI_LLM_MODEL": "tdai-model",
+    }
+
+    supervisor_module.GatewaySupervisor._bridge_hermes_llm_env(env)
+
+    assert env["TDAI_LLM_API_KEY"] == "sk-tdai"
+    assert env["TDAI_LLM_BASE_URL"] == "https://tdai.example/v1"
+    assert env["TDAI_LLM_MODEL"] == "tdai-model"
+
+
 def test_reap_dead_process_keeps_alive_handle():
     sup = supervisor_module.GatewaySupervisor(gateway_cmd="")
     alive = _FakePopen(returncode=None)
@@ -355,6 +405,24 @@ def test_prefetch_recovers_when_stuck_false_and_breaker_closed(
     )
     assert provider._gateway_available
     assert fake.ensure_running_calls >= 1
+
+
+def test_prefetch_combines_dynamic_and_stable_gateway_context(
+    provider_with_fake_supervisor,
+):
+    provider = provider_with_fake_supervisor
+    fake = provider._fake
+    provider._stop_watchdog()
+    fake.client.recall.return_value = {
+        "context": "stable persona",
+        "prepend_context": "dynamic L1",
+        "append_system_context": "stable persona",
+    }
+
+    result = provider.prefetch(query="what did we decide?")
+
+    assert "dynamic L1\n\nstable persona" in result
+    assert result.count("stable persona") == 1
 
 
 def test_prefetch_respects_open_breaker(provider_with_fake_supervisor):
