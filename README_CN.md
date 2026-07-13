@@ -353,6 +353,10 @@ curl http://127.0.0.1:8420/health
 
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
+> Hermes 短期上下文压缩单独作为 `ContextEngine` 插件提供。把 TencentDB
+> offload 接入 Hermes context engine slot 时，请参考
+> [`hermes-plugin/context_engine/tencentdb_offload/README.md`](./hermes-plugin/context_engine/tencentdb_offload/README.md)。
+
 
 ---
 
