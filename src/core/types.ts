@@ -1,14 +1,18 @@
 /**
- * TDAI Core — Host-neutral type definitions and abstract interfaces.
+ * TDAI Core 鈥?Host-neutral type definitions and abstract interfaces.
  *
  * These types define the boundary between TDAI Core (memory algorithms)
  * and the host environment (OpenClaw, Hermes, standalone Gateway, etc.).
  *
  * Design principles:
- * 1. TDAI Core depends ONLY on these interfaces — never on a specific host.
+ * 1. TDAI Core depends ONLY on these interfaces 鈥?never on a specific host.
  * 2. Each host provides its own implementation of HostAdapter + LLMRunnerFactory.
  * 3. RuntimeContext is the single source of truth for session/user identity.
  */
+
+/** @internal 鈥?inline type decls avoid tsc ESM .js resolution in migrate-sqlite-to-tcvdb build. */
+interface _StorageAdapter { readonly type: string }
+interface _RecallError { code: number; category: "config" | "dependency" | "storage" | "internal"; message: string }
 
 // ============================
 // Logger (unified across all layers)
@@ -32,7 +36,7 @@ export interface Logger {
 // ============================
 
 /**
- * Unified runtime context — provides identity, scoping, and path information.
+ * Unified runtime context 鈥?provides identity, scoping, and path information.
  *
  * In OpenClaw: populated from `pluginConfig`, `sessionKey`, `resolveStateDir()`.
  * In Hermes:   populated from `MemoryProvider.initialize()` kwargs.
@@ -49,7 +53,7 @@ export interface RuntimeContext {
   platform: "openclaw" | "hermes" | "cli" | "gateway" | string;
   /** Agent identity / profile name (optional). */
   agentIdentity?: string;
-  /** Agent execution context — primary agent, subagent, cron job, or flush task. */
+  /** Agent execution context 鈥?primary agent, subagent, cron job, or flush task. */
   agentContext?: "primary" | "subagent" | "cron" | "flush";
   /** Workspace directory (for tool sandbox, if applicable). */
   workspaceDir: string;
@@ -71,7 +75,7 @@ export interface LLMRunParams {
   taskId: string;
   /** Execution timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
-  /** Max output tokens (optional — defaults to model catalog value). */
+  /** Max output tokens (optional 鈥?defaults to model catalog value). */
   maxTokens?: number;
   /**
    * Working directory for tool-enabled runs.
@@ -79,8 +83,22 @@ export interface LLMRunParams {
    * When omitted, a clean empty workspace is used.
    */
   workspaceDir?: string;
+  /**
+   * Storage adapter for service mode (COS). When provided, LLM file tools
+   * (read/write/edit) operate via StorageAdapter instead of local filesystem.
+   * `storagePrefix` defines the sandbox key prefix (e.g. "scene_blocks/").
+   */
+  storage?: _StorageAdapter;
+  /** Key prefix for storage-backed tools (sandbox boundary). Default: "" */
+  storagePrefix?: string;
   /** Plugin instance ID for metric reporting (optional). */
   instanceId?: string;
+  /**
+   * H-11 Step 2: external abort signal (in addition to the internal timeout).
+   * When this aborts (e.g. pipeline-worker lost its lock), the LLM call
+   * tears down immediately to save tokens and avoid late writes.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -97,8 +115,8 @@ export interface LLMRunner {
    * Execute a prompt and return the LLM's text output.
    *
    * Behavior depends on the factory configuration:
-   * - `enableTools: false` → pure text output (used by L1 extraction, L1 dedup)
-   * - `enableTools: true`  → LLM may call file tools (used by L2 scene, L3 persona)
+   * - `enableTools: false` 鈫?pure text output (used by L1 extraction, L1 dedup)
+   * - `enableTools: true`  鈫?LLM may call file tools (used by L2 scene, L3 persona)
    *
    * @returns The LLM's text response. Empty string if the LLM produces no output.
    * @throws On timeout, network errors, or unrecoverable LLM failures.
@@ -139,17 +157,17 @@ export interface LLMRunnerFactory {
 // ============================
 
 /**
- * Host adapter — translates host-specific events, context, and capabilities
+ * Host adapter 鈥?translates host-specific events, context, and capabilities
  * into TDAI Core's unified interface.
  *
  * Each host environment provides exactly one HostAdapter implementation:
- * - OpenClaw:    `OpenClawHostAdapter` — wraps `OpenClawPluginApi`
- * - Hermes/GW:   `StandaloneHostAdapter` — wraps Gateway HTTP request context
+ * - OpenClaw:    `OpenClawHostAdapter` 鈥?wraps `OpenClawPluginApi`
+ * - Hermes/GW:   `StandaloneHostAdapter` 鈥?wraps Gateway HTTP request context
  *
  * HostAdapter answers these questions for TDAI Core:
- * - "Who is the current user/session?" → `getRuntimeContext()`
- * - "How do I call an LLM?"           → `getLLMRunnerFactory()`
- * - "Where do I log?"                 → `getLogger()`
+ * - "Who is the current user/session?" 鈫?`getRuntimeContext()`
+ * - "How do I call an LLM?"           鈫?`getLLMRunnerFactory()`
+ * - "Where do I log?"                 鈫?`getLogger()`
  */
 export interface HostAdapter {
   /** Identifies the host type for conditional behavior (should be rare). */
@@ -166,7 +184,56 @@ export interface HostAdapter {
 }
 
 // ============================
-// CompletedTurn — represents a finished conversation turn
+// MemoryAdapter 鈥?Host-neutral memory operations interface
+// ============================
+
+/**
+ * MemoryAdapter defines the memory primitive contract that each platform
+ * adapter must implement. This is the Python `TdaiAdapter` ABC equivalent
+ * in TypeScript (see `bridge_adapter/base.py` in this repo).
+ *
+ * Unlike `HostAdapter` (which abstracts the runtime environment),
+ * `MemoryAdapter` abstracts the memory API 鈥?recall, capture, search.
+ *
+ * Platforms:
+ * - Python:  `TdaiAdapter` ABC in `bridge_adapter/base.py`
+ * - TypeScript: `MemoryAdapter` interface in this file
+ * - MCP:     `memory_tencentdb_*` tools (see `src/integrations/shared/`)
+ */
+export interface MemoryAdapter {
+  /** Platform name identifier (e.g. "bridge", "hermes_v2"). */
+  readonly name: string;
+
+  /** Initialize with Gateway config. Returns false on failure. */
+  initialize(config?: Record<string, unknown>): boolean;
+
+  /** Check if the adapter and Gateway are reachable. */
+  isAvailable(): boolean;
+
+  /** Recall relevant memories for prompt injection. */
+  recall(query: string, limit?: number): { prependContext: string; appendSystemContext: string };
+
+  /** Write a conversation turn to L0 storage. */
+  capture(userContent: string, assistantContent: string, sessionId?: string): boolean;
+
+  /** Search L1 atomic memories. */
+  searchMemory(query: string, limit?: number): Array<Record<string, unknown>>;
+
+  /** Search L0 conversation history. */
+  searchConversation(query: string, limit?: number): Array<Record<string, unknown>>;
+
+  /** Release resources. */
+  shutdown(): void;
+
+  /** Optional: Check Gateway connectivity and status. */
+  mcpHealth?(): Promise<{ available: boolean }>;
+
+  /** Optional: Sync user profile data to L3 persona. */
+  syncProfile?(profileData: Record<string, unknown>): Promise<boolean>;
+}
+
+// ============================
+// CompletedTurn 鈥?represents a finished conversation turn
 // ============================
 
 /** A completed conversation turn, ready for capture/storage. */
@@ -197,7 +264,7 @@ export interface CompletedTurn {
 
 /** Result from a recall (prefetch) operation. */
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
+  /** L1 relevant memories 鈥?prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
@@ -207,6 +274,14 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /**
+   * H-15: structured failure signal. When recall fails (config error / dependency timeout /
+   * storage error / etc), this is populated with a RecallError; success leaves it undefined.
+   * Gateway handlers should surface this in the response envelope (e.g. v2 envelope.code).
+   */
+  error?: _RecallError;
+  /** Partial success: some steps succeeded, others failed. */
+  partial?: boolean;
 }
 
 /** Result from a capture (sync_turn) operation. */

@@ -1,0 +1,11 @@
+name: bridge_adapter
+display_name: bridge platform adapter
+version: 1.0.0
+description: "Bridge (ZTHL) platform adapter --- connects Bridge zero-trust agent runtime to TDAI Memory Gateway via Python httpx. Supports L0/L1/L2/L3 memory operations with circuit-breaker fault isolation. Includes TdaiAdapter ABC for future platform SDK integration."
+hooks:
+  - on_session_end
+aliases:
+  - bridge-adapter
+  - tdai-bridge
+  - memory-bridge
+  - bridge_provider

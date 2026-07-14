@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: ["*"]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
@@ -15,40 +17,47 @@ jobs:
     name: Install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Cache node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-deps
         with:
           path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json') }}
 
-      - name: npm install
+      - name: npm ci
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
 
-  # ── 2. Pack validation ─────────────────────────────────────
+      - name: npm audit (supply chain)
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: "npm audit --audit-level=high || echo 'WARN: npm audit found high/critical vulnerabilities'"
+
+  # ── 3. Pack validation ─────────────────────────────────────
   pack:
     name: Pack
     needs: install
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          node-version: "24"
 
       - name: Restore node_modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: Install dependencies on cache miss
+        run: test -x node_modules/.bin/tsdown || npm ci --ignore-scripts
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
@@ -57,7 +66,7 @@ jobs:
         run: npm pack
 
       - name: Upload .tgz artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: package-tarball
           path: "*.tgz"
@@ -68,7 +77,7 @@ jobs:
     name: Manifest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Validate openclaw.plugin.json
         run: |
@@ -111,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: package-tarball
 
@@ -132,3 +141,170 @@ jobs:
           else
             echo "✅ Size OK"
           fi
+
+  # ── 7. TypeScript adapter tests ─────────────────────────────
+  test-ts:
+    name: Test TS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Restore node_modules
+        uses: actions/cache@v5
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json') }}
+
+      - name: npm ci
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Run MemoryAdapter tests
+        run: npx vitest run src/core/memory-adapter.test.ts --reporter=verbose
+
+      - name: Run TdaiHttpClient unit tests
+        run: npx vitest run src/core/tdai-http-client.test.ts --reporter=verbose
+
+      - name: Run Gate tests (R1)
+        run: npx vitest run src/core/gates/gate-rate-limit.test.ts src/core/gates/gate-circuit-breaker.test.ts src/core/gates/gate-audit.test.ts --reporter=verbose
+
+  # ── 8. Python bridge_adapter smoke test ─────────────────────
+  test-py:
+    name: Test Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install bridge_adapter
+        run: pip install ./bridge_adapter
+
+      - name: Import smoke test
+        run: |
+          python -c "
+          from bridge_adapter import BridgeAdapter, TdaiAdapterRegistry
+          from bridge_adapter.base import TdaiAdapter
+          from bridge_adapter.integrity import verify_manifest
+          print(f'Import OK — bridge_adapter registered adapters: {TdaiAdapterRegistry.list()}')
+          violations = verify_manifest()
+          if violations:
+            print(f'SHA256 integrity: {len(violations)} violation(s)')
+            for v in violations:
+              print(f'  ✗ {v}')
+            exit(1)
+          else:
+            print('SHA256 integrity: OK')
+          "
+
+  # ── 9. Encoding Defense (Layer 5: non-ASCII scan + Layer 1: BOM check) ──
+  encoding-defense:
+    name: Encoding Defense (L1+L5)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: L5 - Detect garbled Unicode in .py/.ts files
+        run: |
+          echo "── Layer 5: non-ASCII scan in .py and .ts files ──"
+          violations=0; fails=0
+          while IFS= read -r -d '' f; do
+            if grep -Pl '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | grep -q .; then
+              chars=$(grep -oP '[^\x00-\x7F\x0A\x0D\x09]' "$f" 2>/dev/null | sort -u | head -5 | tr '\n' ' ')
+              fails=$((fails + 1))
+              echo "  BAD: $f ($chars)"
+            fi
+          done < <(find . \( \
+            -path './bridge/*.py' -o \
+            -path './bridge/*.ts' -o \
+            -path './bridge_adapter/*.py' -o \
+            -path './bridge_adapter/*.ts' -o \
+            -path './docs/*.py' -o \
+            -path './docs/*.ts' \
+          \) | tr '\n' '\0')
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails files with non-ASCII chars"; exit 1; fi
+          echo "OK: $fails files with non-ASCII (0 = clean)"
+
+      - name: L1 - Verify UTF-8 BOM on scripts/*.ps1
+        run: |
+          echo "── Layer 1: UTF-8 BOM check on scripts/*.ps1 ──"
+          fails=0
+          for f in scripts/*.ps1; do
+            if [ ! -f "$f" ]; then continue; fi
+            header=$(od -A n -t x1 -N 3 "$f" | tr -d ' \n')
+            if [ "$header" != "efbbbf" ]; then
+              echo "  MISSING BOM: $f (header=$header)"
+              fails=$((fails + 1))
+            fi
+          done
+          if [ "$fails" -gt 0 ]; then echo "FAIL: $fails scripts/*.ps1 without BOM"; exit 1; fi
+          echo "OK: all scripts/*.ps1 have UTF-8 BOM"
+
+  # ── 10. File corruption guard ─────────────────────────────
+  file-integrity:
+    name: File Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check Python syntax and UTF-8 validity
+        run: |
+          FAILS=0
+          while IFS= read -r -d '' f; do
+            # UTF-8 validity
+            if ! python3 -c "open('$f','rb').read().decode('utf-8')" 2>/dev/null; then
+              echo "  INVALID UTF-8: $f"
+              FAILS=$((FAILS + 1))
+              continue
+            fi
+            # Python syntax
+            if [[ "$f" == *.py ]]; then
+              if ! python3 -c "import ast; ast.parse(open('$f', encoding='utf-8').read())" 2>/dev/null; then
+                echo "  SYNTAX ERROR: $f"
+                FAILS=$((FAILS + 1))
+              fi
+            fi
+          done < <(find bridge bridge_adapter scripts src \
+            -name '*.py' -o -name '*.ts' | tr '\n' '\0')
+          if [ "$FAILS" -gt 0 ]; then echo "FAIL: $FAILS files corrupted"; exit 1; fi
+          echo "OK: all files pass UTF-8 + Python syntax"
+
+      - name: Check TypeScript compilation
+        run: |
+          if [ -f tsconfig.json ]; then
+            echo "── Running tsc --noEmit ──"
+            npm ci --ignore-scripts 2>/dev/null
+            npx tsc --noEmit 2>&1 || { echo "FAIL: TypeScript compilation errors"; exit 1; }
+            echo "OK: tsc --noEmit clean"
+          else
+            echo "SKIP: no tsconfig.json"
+          fi
+
+      - name: Check for truncated files (empty or no trailing newline)
+        run: |
+          FAILS=0
+          while IFS= read -r -d '' f; do
+            # Skip empty __init__.py (standard Python package marker)
+            if [[ "$f" == */__init__.py ]]; then continue; fi
+            SIZE=$(stat -c%s "$f")
+            if [ "$SIZE" -eq 0 ]; then
+              echo "  EMPTY: $f"
+              FAILS=$((FAILS + 1))
+            elif [ "$SIZE" -lt 10 ]; then
+              echo "  SUSPICIOUS (tiny): $f ($SIZE bytes)"
+              FAILS=$((FAILS + 1))
+            fi
+          done < <(find bridge bridge_adapter scripts src \
+            -name '*.py' -o -name '*.ts' | tr '\n' '\0')
+          if [ "$FAILS" -gt 0 ]; then echo "FAIL: $FAILS truncated/tiny files"; exit 1; fi
+          echo "OK: all files non-empty"
