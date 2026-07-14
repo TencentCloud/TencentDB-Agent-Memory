@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Combined context for non-OpenClaw clients. Includes dynamic recalled memories plus stable system context. */
   context: string;
+  /** Dynamic per-turn memories that OpenClaw would prepend to the user prompt. */
+  prepend_context?: string;
+  /** Stable persona/scene/tool guidance that OpenClaw would append to the system prompt. */
+  system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
