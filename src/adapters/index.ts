@@ -6,8 +6,9 @@
  *
  * Directory structure:
  *   adapters/
- *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── openclaw/       — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
+ *   ├── standalone/     — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   └── gateway-client/ — Generic HTTP client for new platform adapters
  */
 
 // OpenClaw adapter
@@ -17,3 +18,20 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Gateway client adapter
+export {
+  GatewayMemoryClient,
+  GatewayMemoryClientError,
+  createGatewayPlatformAdapter,
+} from "./gateway-client/index.js";
+export type {
+  GatewayMemoryClientOptions,
+  GatewayPlatformAdapter,
+  GatewayPlatformAdapterOptions,
+  GatewayPlatformContext,
+} from "./gateway-client/index.js";
+
+// Codex adapter (VS Code / Codex CLI)
+export { CodexAdapter } from "./codex/index.js";
+export type { CodexAdapterOptions } from "./codex/index.js";

@@ -11,7 +11,12 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: [
+    "./index.ts",
+    "./src/sdk/index.ts",
+    "./src/adapters/claude-code/index.ts",
+    "./src/adapters/mcp/cli.ts",
+  ],
   outDir: "./dist",
   format: "esm",
   platform: "node",
