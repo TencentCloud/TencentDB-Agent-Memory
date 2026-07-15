@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { estimatePromptCacheImpact, formatPercent, type PromptCacheImpact } from "./prompt-cache-metrics.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -59,6 +60,12 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
+  /** Hide injected context from visible history when the host supports it. */
+  showInjected?: boolean;
+  /** Reason for the showInjected decision, used for metrics and PR diagnostics. */
+  showInjectedReason?: "memory_auto_degrade";
+  /** Local deterministic cache-impact estimate for logging and metric reporting. */
+  promptCacheImpact?: PromptCacheImpact;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
   /** L1 memories that were recalled (with scores), for metric reporting */
@@ -73,6 +80,7 @@ export async function performAutoRecall(params: {
   userText: string;
   actorId: string;
   sessionKey: string;
+  estimatedTurns?: number;
   cfg: MemoryTdaiConfig;
   pluginDataDir: string;
   logger?: Logger;
@@ -103,13 +111,14 @@ async function performAutoRecallInner(params: {
   userText: string;
   actorId: string;
   sessionKey: string;
+  estimatedTurns?: number;
   cfg: MemoryTdaiConfig;
   pluginDataDir: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, estimatedTurns, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -216,6 +225,13 @@ async function performAutoRecallInner(params: {
   }
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const showInjected = prependContext ? false : undefined;
+  const showInjectedReason = prependContext ? "memory_auto_degrade" : undefined;
+  const promptCacheImpact = estimatePromptCacheImpact({
+    stableContextChars: appendSystemContext?.length ?? 0,
+    dynamicContextChars: prependContext?.length ?? 0,
+    turns: estimatedTurns ?? 8,
+  });
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,6 +243,17 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
+  if (appendSystemContext || prependContext) {
+    logger?.info(
+      `${TAG} Cache partition: stable=${promptCacheImpact.estimatedStableTokens}tok, ` +
+      `dynamic=${promptCacheImpact.estimatedDynamicTokens}tok, ` +
+      `showInjected=${showInjected === false ? `false/${showInjectedReason}` : "default"}, ` +
+      `estimatedHitRate ${formatPercent(promptCacheImpact.legacyEstimatedHitRate)} -> ` +
+      `${formatPercent(promptCacheImpact.optimizedEstimatedHitRate)} ` +
+      `(delta=${formatPercent(promptCacheImpact.estimatedHitRateDelta)})`,
+    );
+  }
+
   if (!appendSystemContext && !prependContext) {
     return undefined;
   }
@@ -234,6 +261,9 @@ async function performAutoRecallInner(params: {
   return {
     prependContext,
     appendSystemContext,
+    showInjected,
+    showInjectedReason,
+    promptCacheImpact,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
