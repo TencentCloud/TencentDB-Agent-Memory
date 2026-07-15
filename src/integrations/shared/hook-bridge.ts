@@ -9,6 +9,7 @@ import { gatewayPost } from "./gateway-client.js";
 const platform = process.env.MEMORY_TENCENTDB_HOOK_PLATFORM || "generic";
 const eventName = process.env.MEMORY_TENCENTDB_HOOK_EVENT || "";
 const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CAPTURE_CLAIM_STALE_MS = 60_000;
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
 const LOCK_RETRY_MS = 25;
@@ -45,32 +46,7 @@ function envFlag(name, defaultValue = false) {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
-function parseTimestamp(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const asNumber = Number(value);
-    if (Number.isFinite(asNumber)) return asNumber;
-    const asDate = new Date(value).getTime();
-    if (Number.isFinite(asDate)) return asDate;
-  }
-  return undefined;
-}
-
-function timestampFrom(candidate, fallbackTimestamp) {
-  if (!candidate || typeof candidate !== "object") return fallbackTimestamp;
-  return parseTimestamp(
-    candidate.timestamp ??
-    candidate.created_at ??
-    candidate.createdAt ??
-    candidate.updated_at ??
-    candidate.updatedAt ??
-    candidate.message?.timestamp ??
-    candidate.message?.created_at ??
-    candidate.message?.createdAt,
-  ) ?? fallbackTimestamp;
-}
-
-function normalizeMessage(candidate, fallbackTimestamp) {
+function normalizeMessage(candidate) {
   if (!candidate || typeof candidate !== "object") return undefined;
   const role =
     candidate.role ||
@@ -87,35 +63,7 @@ function normalizeMessage(candidate, fallbackTimestamp) {
     candidate.message;
   const content = contentToText(rawContent).trim();
   if (!content) return undefined;
-  const timestamp = timestampFrom(candidate, fallbackTimestamp);
-  return timestamp != null ? { role, content, timestamp } : { role, content };
-}
-
-function normalizeMessages(messages, fallbackStart = Date.now()) {
-  if (!Array.isArray(messages)) return [];
-  const normalized = [];
-  for (let i = 0; i < messages.length; i += 1) {
-    const msg = normalizeMessage(messages[i], fallbackStart + i);
-    if (msg) normalized.push(msg);
-  }
-  return normalized;
-}
-
-function buildTurnMessages(userText, assistantText, start = Date.now()) {
-  return [
-    { role: "user", content: userText, timestamp: start },
-    { role: "assistant", content: assistantText, timestamp: start + 1 },
-  ];
-}
-
-function captureStartedAt(messages, explicitStartedAt) {
-  const explicit = parseTimestamp(explicitStartedAt);
-  if (explicit != null) return explicit;
-  const timestamps = messages
-    .map((msg) => parseTimestamp(msg?.timestamp))
-    .filter((value) => value != null);
-  if (timestamps.length === 0) return undefined;
-  return Math.max(0, Math.min(...timestamps) - 1);
+  return { role, content };
 }
 
 async function readTranscriptMessages(transcriptPath) {
@@ -131,13 +79,12 @@ async function readTranscriptMessages(transcriptPath) {
       } catch {
         continue;
       }
-      const lineTimestamp = timestampFrom(entry, Date.now() + messages.length);
-      const direct = normalizeMessage(entry, lineTimestamp);
+      const direct = normalizeMessage(entry);
       if (direct) {
         messages.push(direct);
         continue;
       }
-      const nested = normalizeMessage(entry.message, lineTimestamp);
+      const nested = normalizeMessage(entry.message);
       if (nested) messages.push(nested);
     }
     return messages;
@@ -165,12 +112,12 @@ function sleep(ms) {
 async function acquireCacheLock() {
   const file = getCachePath();
   const lockFile = `${file}.lock`;
-  await mkdir(dirname(lockFile), { recursive: true });
+  await mkdir(dirname(lockFile), { recursive: true, mode: 0o700 });
   const started = Date.now();
 
   while (true) {
     try {
-      const handle = await open(lockFile, "wx");
+      const handle = await open(lockFile, "wx", 0o600);
       await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt: Date.now() }), "utf-8");
       return async () => {
         await handle.close().catch(() => {});
@@ -208,6 +155,14 @@ function cacheKey({ sessionKey, sessionId, turnId }) {
   return [platform, sessionKey || "", sessionId || "", turnId || ""].join("\u001f");
 }
 
+function pruneCache(cache, now = Date.now()) {
+  for (const [key, value] of Object.entries(cache)) {
+    if (!value || typeof value !== "object" || now - Number(value.updatedAt || 0) > CACHE_MAX_AGE_MS) {
+      delete cache[key];
+    }
+  }
+}
+
 async function loadCache() {
   try {
     return JSON.parse(await readFile(getCachePath(), "utf-8"));
@@ -218,9 +173,9 @@ async function loadCache() {
 
 async function saveCache(cache) {
   const file = getCachePath();
-  await mkdir(dirname(file), { recursive: true });
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, JSON.stringify(cache), "utf-8");
+  await writeFile(tmp, JSON.stringify(cache), { encoding: "utf-8", mode: 0o600 });
   await rename(tmp, file);
 }
 
@@ -229,18 +184,12 @@ async function rememberPrompt(event) {
   await withCacheLock(async () => {
     const now = Date.now();
     const cache = await loadCache();
-    for (const [key, value] of Object.entries(cache)) {
-      if (!value || typeof value !== "object" || now - Number(value.updatedAt || 0) > CACHE_MAX_AGE_MS) {
-        delete cache[key];
-      }
-    }
+    pruneCache(cache, now);
     cache[cacheKey(event)] = {
       prompt: event.prompt,
       sessionKey: event.sessionKey,
       sessionId: event.sessionId,
       turnId: event.turnId,
-      messages: event.messages,
-      startedAt: event.startedAt,
       updatedAt: now,
     };
     await saveCache(cache);
@@ -250,12 +199,56 @@ async function rememberPrompt(event) {
 async function recallPrompt(event) {
   const cache = await loadCache();
   const exact = cache[cacheKey(event)];
-  if (exact?.prompt) return exact;
+  if (exact?.prompt && Date.now() - Number(exact.updatedAt || 0) <= CACHE_MAX_AGE_MS) return exact;
 
   const candidates = Object.values(cache)
-    .filter((entry) => entry?.sessionKey === event.sessionKey)
+    .filter((entry) => (
+      entry?.prompt &&
+      entry?.sessionKey === event.sessionKey &&
+      Date.now() - Number(entry.updatedAt || 0) <= CACHE_MAX_AGE_MS
+    ))
     .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
   return candidates[0];
+}
+
+function captureClaimKey(event, userText, assistantText, nonce) {
+  const identity = event.turnId || nonce || shortHash(`${userText}\u001f${assistantText}`);
+  return `capture:${shortHash([platform, event.sessionKey, event.sessionId, identity].join("\u001f"))}`;
+}
+
+async function claimCapture(event, userText, assistantText, nonce) {
+  const key = captureClaimKey(event, userText, assistantText, nonce);
+  return withCacheLock(async () => {
+    const cache = await loadCache();
+    pruneCache(cache);
+    const existing = cache[key];
+    const pendingIsStale =
+      existing?.kind === "capture_claim" &&
+      existing?.status === "pending" &&
+      Date.now() - Number(existing.updatedAt || 0) > CAPTURE_CLAIM_STALE_MS;
+    if (existing && !pendingIsStale) return { claimed: false, key };
+    cache[key] = {
+      kind: "capture_claim",
+      status: "pending",
+      updatedAt: Date.now(),
+    };
+    await saveCache(cache);
+    return { claimed: true, key };
+  });
+}
+
+async function finishCaptureClaim(key, succeeded) {
+  await withCacheLock(async () => {
+    const cache = await loadCache();
+    const claim = cache[key];
+    if (claim?.kind !== "capture_claim") return;
+    if (succeeded) {
+      cache[key] = { ...claim, status: "complete", updatedAt: Date.now() };
+    } else {
+      delete cache[key];
+    }
+    await saveCache(cache);
+  });
 }
 
 function writeAdditionalContext(eventNameForOutput, context) {
@@ -266,6 +259,72 @@ function writeAdditionalContext(eventNameForOutput, context) {
       additionalContext: context,
     },
   }));
+}
+
+function appendContextBlock(context, block) {
+  const current = String(context || "").trim();
+  const addition = String(block || "").trim();
+  if (!addition || current.includes(addition)) return current;
+  return current ? `${current}\n\n${addition}` : addition;
+}
+
+async function searchConversationFallback(event) {
+  const limit = 3;
+  const scoped = await gatewayPost("/search/conversations", {
+    query: event.prompt,
+    limit,
+    session_key: event.sessionKey,
+  });
+  if (Number(scoped?.total || 0) > 0 || !envFlag("MEMORY_TENCENTDB_GLOBAL_L0_FALLBACK")) {
+    return { result: scoped, scope: "session" };
+  }
+  const global = await gatewayPost("/search/conversations", {
+    query: event.prompt,
+    limit,
+  });
+  return { result: global, scope: "global" };
+}
+
+async function recallContext(event, userId) {
+  const recallRequest = gatewayPost("/recall", {
+    query: event.prompt,
+    session_key: event.sessionKey,
+    user_id: userId,
+  });
+  const l0Request = envFlag("MEMORY_TENCENTDB_DISABLE_L0_RECALL")
+    ? undefined
+    : searchConversationFallback(event);
+  const [recall, l0] = await Promise.allSettled([
+    recallRequest,
+    l0Request ?? Promise.resolve(undefined),
+  ]);
+
+  let context = recall.status === "fulfilled" && typeof recall.value?.context === "string"
+    ? recall.value.context
+    : "";
+  let l0Scope;
+  if (l0.status === "fulfilled" && l0.value) {
+    const results = typeof l0.value.result?.results === "string"
+      ? l0.value.result.results.trim()
+      : "";
+    if (Number(l0.value.result?.total || 0) > 0 && results) {
+      l0Scope = l0.value.scope;
+      context = appendContextBlock(
+        context,
+        `Relevant prior conversation memory from memory-tencentdb (${l0Scope}-scoped):\n\n${results}`,
+      );
+    }
+  }
+
+  if (recall.status === "rejected" && (l0.status === "rejected" || !context)) {
+    throw recall.reason;
+  }
+  return {
+    context,
+    l0Scope,
+    recallError: recall.status === "rejected" ? recall.reason : undefined,
+    l0Error: l0.status === "rejected" ? l0.reason : undefined,
+  };
 }
 
 function cwdSessionKey(cwd) {
@@ -341,13 +400,6 @@ function normalizeHookPayload(payload) {
     "turnId",
   ]);
   const turnId = firstString(payload, ["turn_id", "turnId", "tool_use_id", "toolUseId"]);
-  const startedAt = parseTimestamp(
-    payload?.started_at ??
-    payload?.startedAt ??
-    payload?.created_at ??
-    payload?.createdAt ??
-    payload?.timestamp,
-  );
   const transcriptPath = firstString(payload, [
     "transcript_path",
     "transcriptPath",
@@ -373,26 +425,24 @@ function normalizeHookPayload(payload) {
     "output",
     "final_response",
   ]);
-  const messages = Array.isArray(payload?.messages) ? payload.messages : undefined;
-
   if (lowerEvent.includes("userpromptsubmit") || lowerEvent.includes("prompt")) {
-    return { type: "before_prompt", prompt, sessionKey, sessionId, turnId, startedAt, transcriptPath, messages };
+    return { type: "before_prompt", prompt, sessionKey, sessionId, turnId, transcriptPath };
   }
 
   if (lowerEvent.includes("stop") || lowerEvent.includes("session_end")) {
     if (userText && assistantText) {
-      return { type: "turn_committed", userText, assistantText, sessionKey, sessionId, turnId, startedAt, transcriptPath, messages };
+      return { type: "turn_committed", userText, assistantText, sessionKey, sessionId, turnId, transcriptPath };
     }
-    return { type: "session_end", sessionKey, sessionId, turnId, startedAt, transcriptPath, assistantText, messages };
+    return { type: "session_end", sessionKey, sessionId, turnId, transcriptPath, assistantText };
   }
 
   if (userText && assistantText) {
-    return { type: "turn_committed", userText, assistantText, sessionKey, sessionId, turnId, startedAt, transcriptPath, messages };
+    return { type: "turn_committed", userText, assistantText, sessionKey, sessionId, turnId, transcriptPath };
   }
   if (prompt) {
-    return { type: "before_prompt", prompt, sessionKey, sessionId, turnId, startedAt, transcriptPath, messages };
+    return { type: "before_prompt", prompt, sessionKey, sessionId, turnId, transcriptPath };
   }
-  return { type: "session_end", sessionKey, sessionId, turnId, startedAt, transcriptPath, messages };
+  return { type: "session_end", sessionKey, sessionId, turnId, transcriptPath };
 }
 
 async function readStdin() {
@@ -403,6 +453,39 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf-8");
 }
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function captureTurn(event, userText, assistantText, userId, nonce) {
+  const claim = await claimCapture(event, userText, assistantText, nonce);
+  if (!claim.claimed) {
+    await writeAudit(event, "capture_skipped_duplicate");
+    return;
+  }
+
+  try {
+    const capturedAt = Date.now();
+    await gatewayPost("/capture", {
+      user_content: userText,
+      assistant_content: assistantText,
+      session_key: event.sessionKey,
+      session_id: event.sessionId,
+      user_id: userId,
+      messages: [
+        { role: "user", content: userText, timestamp: capturedAt },
+        { role: "assistant", content: assistantText, timestamp: capturedAt },
+      ],
+      started_at: capturedAt - 1,
+    });
+    await finishCaptureClaim(claim.key, true);
+    await writeAudit(event, "capture");
+  } catch (error) {
+    await finishCaptureClaim(claim.key, false);
+    throw error;
+  }
+}
+
 async function main() {
   const input = await readStdin();
   const payload = input.trim() ? JSON.parse(input) : {};
@@ -410,36 +493,25 @@ async function main() {
   const userId = process.env.MEMORY_TENCENTDB_USER_ID || undefined;
 
   if (event.type === "before_prompt" && event.prompt) {
-    await rememberPrompt(event);
-    const result = await gatewayPost("/recall", {
-      query: event.prompt,
-      session_key: event.sessionKey,
-      user_id: userId,
-      include_l0: !envFlag("MEMORY_TENCENTDB_DISABLE_L0_RECALL"),
-      global_l0_fallback: envFlag("MEMORY_TENCENTDB_GLOBAL_L0_FALLBACK"),
-    });
+    try {
+      await rememberPrompt(event);
+    } catch (error) {
+      await writeAudit(event, "prompt_cache_error", { error: errorMessage(error) });
+    }
+    const result = await recallContext(event, userId);
     await writeAudit(event, "recall", {
       context_chars: typeof result.context === "string" ? result.context.length : 0,
+      l0_scope: result.l0Scope,
+      recall_error: result.recallError ? errorMessage(result.recallError) : undefined,
+      l0_error: result.l0Error ? errorMessage(result.l0Error) : undefined,
     });
     writeAdditionalContext("UserPromptSubmit", result.context);
     return;
   }
 
   if (event.type === "turn_committed" && event.userText && event.assistantText) {
-    const messages = normalizeMessages(event.messages);
-    const captureMessages = messages.length
-      ? messages
-      : buildTurnMessages(event.userText, event.assistantText, parseTimestamp(event.startedAt) ?? Date.now());
-    await gatewayPost("/capture", {
-      user_content: event.userText,
-      assistant_content: event.assistantText,
-      session_key: event.sessionKey,
-      session_id: event.sessionId,
-      user_id: userId,
-      messages: captureMessages,
-      started_at: captureStartedAt(captureMessages, event.startedAt),
-    });
-    await writeAudit(event, "capture", { messages: captureMessages.length });
+    const cached = await recallPrompt(event);
+    await captureTurn(event, event.userText, event.assistantText, userId, cached?.updatedAt);
     return;
   }
 
@@ -453,22 +525,7 @@ async function main() {
       event.assistantText ||
       latestByRole(transcriptMessages, "assistant");
     if (userText && assistantText) {
-      const cachedMessages = normalizeMessages(cached?.messages, parseTimestamp(cached?.startedAt) ?? Number(cached?.updatedAt || Date.now()));
-      const captureMessages = transcriptMessages.length
-        ? transcriptMessages
-        : cachedMessages.length
-          ? cachedMessages
-          : buildTurnMessages(userText, assistantText, parseTimestamp(cached?.updatedAt) ?? Date.now());
-      await gatewayPost("/capture", {
-        user_content: userText,
-        assistant_content: assistantText,
-        session_key: event.sessionKey,
-        session_id: event.sessionId,
-        user_id: userId,
-        messages: captureMessages,
-        started_at: captureStartedAt(captureMessages, event.startedAt ?? cached?.startedAt),
-      });
-      await writeAudit(event, "capture", { messages: captureMessages.length });
+      await captureTurn(event, userText, assistantText, userId, cached?.updatedAt);
       return;
     }
   }

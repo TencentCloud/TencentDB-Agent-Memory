@@ -26,11 +26,7 @@ The adapter connects Claude Code MCP and hook extension points to the existing m
 
 1. Start the memory Gateway.
 
-```bash
-memory-tencentdb-gateway
-```
-
-When developing from this repository, running the source server also works.
+Use the existing Gateway startup method documented in the repository README. From a source checkout:
 
 ```bash
 pnpm exec tsx src/gateway/server.ts
@@ -48,15 +44,17 @@ pnpm link --global
 
 Copy `.mcp.json` into the Claude Code project root, or merge its `mcpServers.memory-tencentdb` entry into an existing MCP config.
 
-4. Configure hooks.
+4. Configure hooks at one scope only.
 
-Copy `.claude/settings.json` into the Claude Code project root, or merge the `hooks` section into an existing settings file.
+Copy `.claude/settings.json` into the Claude Code project root, or merge the `hooks` section into an existing settings file. Do not register the same hooks again in user settings; duplicate registration can inject recalled context twice.
 
 5. Configure the Gateway location if needed.
 
 ```bash
 export MEMORY_TENCENTDB_GATEWAY_URL="http://127.0.0.1:8420"
 export MEMORY_TENCENTDB_HOOK_PLATFORM="claude-code"
+# Optional; defaults to 10000.
+export MEMORY_TENCENTDB_GATEWAY_TIMEOUT_MS="10000"
 ```
 
 ## Notes
@@ -68,3 +66,7 @@ Complete turn capture depends on the platform exposing enough information across
 The shared hook bridge stores the prompt from `UserPromptSubmit` and later pairs it with the final assistant message or transcript data. If the final assistant message is unavailable, it flushes the session instead of writing a partial turn.
 
 By default, recall includes L0 conversation fallback only within the current session key. Cross-session L0 fallback can be enabled explicitly with `MEMORY_TENCENTDB_GLOBAL_L0_FALLBACK=1`.
+
+The hook cache is private local state under the OS temporary directory. Set `MEMORY_TENCENTDB_HOOK_CACHE_DIR` only when a persistent custom location is required. Capture claims make repeated `Stop` delivery idempotent for the same turn.
+
+Gateway failures are reported to stderr (and to `MEMORY_TENCENTDB_HOOK_AUDIT_LOG` when configured) but never fail the Claude Code turn.

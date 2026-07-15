@@ -1,54 +1,62 @@
 #!/usr/bin/env node
 
 import { gatewayPost } from "./gateway-client.js";
+import packageJson from "../../../package.json" with { type: "json" };
 
 const tools = [
   {
     name: "memory_tencentdb_memory_search",
     description: "Search structured long-term memories from memory-tencentdb.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string" },
-        limit: { type: "number" },
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
         type: { type: "string", enum: ["persona", "episodic", "instruction"] },
         scene: { type: "string" },
       },
       required: ["query"],
+      additionalProperties: false,
     },
   },
   {
     name: "memory_tencentdb_conversation_search",
     description: "Search raw conversation history from memory-tencentdb.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string" },
-        limit: { type: "number" },
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
         session_key: { type: "string" },
       },
       required: ["query"],
+      additionalProperties: false,
     },
   },
 ];
 
 function clampLimit(raw) {
   const n = Number(raw) || 5;
-  return Math.min(Math.max(n, 1), 20);
+  return Math.min(Math.max(Math.floor(n), 1), 20);
 }
 
 async function callTool(name, args = {}) {
-  const query = String(args.query || "");
+  const query = typeof args.query === "string" ? args.query.trim() : "";
   if (!query) {
     return { isError: true, content: [{ type: "text", text: "Missing required parameter: query" }] };
   }
 
   if (name === "memory_tencentdb_memory_search") {
+    const memoryType = ["persona", "episodic", "instruction"].includes(args.type)
+      ? args.type
+      : undefined;
     const result = await gatewayPost("/search/memories", {
       query,
       limit: clampLimit(args.limit),
-      type: typeof args.type === "string" ? args.type : undefined,
-      scene: typeof args.scene === "string" ? args.scene : undefined,
+      type: memoryType,
+      scene: typeof args.scene === "string" && args.scene.trim() ? args.scene.trim() : undefined,
     });
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   }
@@ -73,11 +81,14 @@ async function handleRequest(req) {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "memory-tencentdb", version: "0.1.0" },
+        serverInfo: { name: "memory-tencentdb", version: packageJson.version },
       },
     };
   }
   if (req.method === "notifications/initialized") return undefined;
+  if (req.method === "ping") {
+    return { jsonrpc: "2.0", id: req.id, result: {} };
+  }
   if (req.method === "tools/list") {
     return { jsonrpc: "2.0", id: req.id, result: { tools } };
   }
@@ -86,8 +97,23 @@ async function handleRequest(req) {
     const args = req.params?.arguments && typeof req.params.arguments === "object"
       ? req.params.arguments
       : {};
-    return { jsonrpc: "2.0", id: req.id, result: await callTool(name, args) };
+    try {
+      return { jsonrpc: "2.0", id: req.id, result: await callTool(name, args) };
+    } catch (error) {
+      return {
+        jsonrpc: "2.0",
+        id: req.id,
+        result: {
+          isError: true,
+          content: [{
+            type: "text",
+            text: error instanceof Error ? error.message : String(error),
+          }],
+        },
+      };
+    }
   }
+  if (req.id == null) return undefined;
   return {
     jsonrpc: "2.0",
     id: req.id,
@@ -170,8 +196,12 @@ process.stdin.on("data", (chunk) => {
       try {
         request = JSON.parse(line);
       } catch (err) {
-        console.error(`[memory-tencentdb-mcp] invalid JSON line: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
+        writeLine({
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: "Parse error" },
+        });
+        continue;
       }
       handleRequest(request)
         .then((res) => {

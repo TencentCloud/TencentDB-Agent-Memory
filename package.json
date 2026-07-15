@@ -5,7 +5,6 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
-    "memory-tencentdb-gateway": "./bin/memory-tencentdb-gateway.mjs",
     "memory-tencentdb-hook": "./bin/memory-tencentdb-hook.mjs",
     "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs",
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",

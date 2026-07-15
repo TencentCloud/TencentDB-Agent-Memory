@@ -270,14 +270,15 @@ function getUtcOffset(d: Date): string {
     hour12: false,
   }).formatToParts(d);
 
-  const toUtcMs = (parts: Intl.DateTimeFormatPart[]) => {
+  const toMinutes = (parts: Intl.DateTimeFormatPart[]) => {
     const get = (type: string) => parseInt(parts.find((p) => p.type === type)!.value, 10);
     const y = get("year"), mo = get("month"), day = get("day");
     const h = get("hour"), mi = get("minute");
-    return Date.UTC(y, mo - 1, day, h, mi);
+    // Convert to a comparable minute-of-epoch (approximate, good enough for offset calc)
+    return ((y * 12 + mo) * 31 + day) * 24 * 60 + h * 60 + mi;
   };
 
-  const diffMinutes = Math.round((toUtcMs(localParts) - toUtcMs(utcParts)) / 60_000);
+  const diffMinutes = toMinutes(localParts) - toMinutes(utcParts);
   const sign = diffMinutes >= 0 ? "+" : "-";
   const abs = Math.abs(diffMinutes);
   const hh = String(Math.floor(abs / 60)).padStart(2, "0");

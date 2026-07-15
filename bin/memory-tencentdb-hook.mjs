@@ -14,8 +14,15 @@ const child = spawn(process.execPath, [...bridgeArgs, ...process.argv.slice(2)],
   stdio: "inherit",
 });
 
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => child.kill(signal));
+}
+
 child.on("error", (err) => {
   console.error(`[memory-tencentdb-hook] ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });
-child.on("exit", (code) => process.exit(code ?? 1));
+child.on("exit", (code, signal) => {
+  if (signal) process.kill(process.pid, signal);
+  else process.exit(code ?? 1);
+});

@@ -63,18 +63,12 @@ function createConsoleLogger(): Logger {
 function parseEpochMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
-    const asNumber = Number(value);
-    if (Number.isFinite(asNumber)) return asNumber;
-    const asDate = new Date(value).getTime();
-    if (Number.isFinite(asDate)) return asDate;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
-}
-
-function appendContextBlock(context: string, block: string): string {
-  const trimmed = block.trim();
-  if (!trimmed || context.includes(trimmed)) return context;
-  return context.trim() ? `${context.trim()}\n\n${trimmed}` : trimmed;
 }
 
 // ============================
@@ -395,43 +389,14 @@ export class TdaiGateway {
 
     const startMs = Date.now();
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
-    let context = [result.prependContext, result.appendSystemContext]
-      .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
-      .join("\n\n");
-    let strategy = result.recallStrategy;
-    let memoryCount = result.recalledL1Memories?.length ?? 0;
-
-    if (body.include_l0 === true) {
-      const scoped = await this.core.searchConversations({
-        query: body.query,
-        limit: body.limit ?? 3,
-        sessionKey: body.session_key,
-      });
-      const fallback = scoped.total > 0 || body.global_l0_fallback !== true
-        ? scoped
-        : await this.core.searchConversations({
-            query: body.query,
-            limit: body.limit ?? 3,
-          });
-
-      if (fallback.total > 0 && fallback.text.trim()) {
-        const scope = scoped.total > 0 ? "session" : "global";
-        const l0Context =
-          `Relevant prior conversation memory from memory-tencentdb (${scope}-scoped):\n\n` +
-          fallback.text;
-        context = appendContextBlock(context, l0Context);
-        strategy = strategy ? `${strategy}+l0_conversation_fallback_${scope}` : `l0_conversation_fallback_${scope}`;
-        memoryCount += fallback.total;
-      }
-    }
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${context.length} chars`);
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
 
     const response: RecallResponse = {
-      context,
-      strategy,
-      memory_count: memoryCount,
+      context: result.appendSystemContext ?? "",
+      strategy: result.recallStrategy,
+      memory_count: result.recalledL1Memories?.length ?? 0,
     };
     sendJson(res, 200, response);
   }
@@ -647,10 +612,7 @@ async function main(): Promise<void> {
 }
 
 // Auto-start when run directly
-const isMain =
-  process.argv[1]?.endsWith("server.ts") ||
-  process.argv[1]?.endsWith("server.js") ||
-  process.argv[1]?.endsWith("server.mjs");
+const isMain = process.argv[1]?.endsWith("server.ts") || process.argv[1]?.endsWith("server.js");
 if (isMain) {
   main().catch((err) => {
     console.error("Gateway startup failed:", err);

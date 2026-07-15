@@ -44,8 +44,3 @@ test-offload-sessions.sh
 
 # log files
 *.log
-
-# Local adapter wiring used for manual Codex/Claude Code verification.
-/.codex/
-/.claude/
-/.mcp.json

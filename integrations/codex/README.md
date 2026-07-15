@@ -28,11 +28,7 @@ The adapter does not introduce a public SDK layer. It maps Codex MCP and hook ex
 
 1. Start the memory Gateway.
 
-```bash
-memory-tencentdb-gateway
-```
-
-When developing from this repository, running the source server also works.
+Use the existing Gateway startup method documented in the repository README. From a source checkout:
 
 ```bash
 pnpm exec tsx src/gateway/server.ts
@@ -50,15 +46,17 @@ pnpm link --global
 
 Copy `config.toml.example` into a trusted project `.codex/config.toml`, or merge its `mcp_servers.memory-tencentdb` entry into `~/.codex/config.toml`.
 
-4. Add hooks.
+4. Add hooks at one scope only.
 
-Copy `hooks/hooks.json` into the trusted Codex hook layer, or package this directory as a Codex plugin.
+Copy `hooks/hooks.json` into the trusted project hook layer, or package this directory as a Codex plugin. Do not also register the same hooks in the user config; duplicate registration can inject the recalled context twice.
 
 5. Configure the Gateway location if needed.
 
 ```bash
 export MEMORY_TENCENTDB_GATEWAY_URL="http://127.0.0.1:8420"
 export MEMORY_TENCENTDB_HOOK_PLATFORM="codex"
+# Optional; defaults to 10000.
+export MEMORY_TENCENTDB_GATEWAY_TIMEOUT_MS="10000"
 ```
 
 ## Notes
@@ -70,3 +68,7 @@ The shared hook bridge stores the prompt from `UserPromptSubmit` and later pairs
 `Stop` hooks must emit JSON or no stdout on success. The shared hook bridge emits structured JSON only during recall and remains silent for successful capture or flush operations.
 
 By default, recall includes L0 conversation fallback only within the current session key. Cross-session L0 fallback can be enabled explicitly with `MEMORY_TENCENTDB_GLOBAL_L0_FALLBACK=1`.
+
+The hook cache is private local state under the OS temporary directory. Set `MEMORY_TENCENTDB_HOOK_CACHE_DIR` only when a persistent custom location is required. Capture claims make repeated `Stop` delivery idempotent for the same turn.
+
+Gateway failures are reported to stderr (and to `MEMORY_TENCENTDB_HOOK_AUDIT_LOG` when configured) but never fail the Codex turn.

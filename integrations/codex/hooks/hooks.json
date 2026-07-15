@@ -6,6 +6,7 @@
           {
             "type": "command",
             "command": "MEMORY_TENCENTDB_HOOK_PLATFORM=codex MEMORY_TENCENTDB_HOOK_EVENT=UserPromptSubmit memory-tencentdb-hook",
+            "timeout": 15,
             "statusMessage": "Recalling memory-tencentdb context"
           }
         ]

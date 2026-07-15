@@ -106,6 +106,36 @@ async function requestLine(child: ChildProcessWithoutNullStreams, request: unkno
 }
 
 describe("memory-tencentdb MCP server", () => {
+  it("negotiates initialization and responds to ping", async () => {
+    const child = spawnMcp();
+
+    const initialized = await requestLine(child, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      },
+    });
+    expect(initialized).toMatchObject({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "memory-tencentdb", version: "0.3.6" },
+      },
+    });
+
+    await expect(requestLine(child, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "ping",
+    })).resolves.toEqual({ jsonrpc: "2.0", id: 2, result: {} });
+  });
+
   it("lists the structured and raw memory search tools", async () => {
     const child = spawnMcp();
 
@@ -125,6 +155,17 @@ describe("memory-tencentdb MCP server", () => {
         ],
       },
     });
+    for (const tool of (response as any).result.tools) {
+      expect(tool.annotations).toMatchObject({ readOnlyHint: true, idempotentHint: true });
+      expect(tool.inputSchema).toMatchObject({
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string", minLength: 1 },
+          limit: { type: "integer", minimum: 1, maximum: 20 },
+        },
+      });
+    }
   });
 
   it("forwards memory search calls to the Gateway with clamped limits and auth", async () => {
@@ -197,5 +238,51 @@ describe("memory-tencentdb MCP server", () => {
       },
     });
     expect(gateway.calls).toHaveLength(0);
+  });
+
+  it("returns Gateway failures as MCP tool errors instead of protocol errors", async () => {
+    const gateway = await startGateway((_req, _body, res) => {
+      res.statusCode = 503;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "temporarily unavailable" }));
+    });
+    const child = spawnMcp({ MEMORY_TENCENTDB_GATEWAY_URL: gateway.url });
+
+    const response = await requestLine(child, {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "memory_tencentdb_memory_search",
+        arguments: { query: "adapter proof" },
+      },
+    });
+
+    expect(response).toMatchObject({
+      jsonrpc: "2.0",
+      id: 4,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: expect.stringContaining("temporarily unavailable") }],
+      },
+    });
+    expect((response as any).error).toBeUndefined();
+  });
+
+  it("reports malformed JSON and continues serving later requests", async () => {
+    const child = spawnMcp();
+    const parseError = readJsonLine(child);
+    child.stdin.write("{not-json}\n");
+
+    await expect(parseError).resolves.toEqual({
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+    await expect(requestLine(child, {
+      jsonrpc: "2.0",
+      id: 5,
+      method: "ping",
+    })).resolves.toEqual({ jsonrpc: "2.0", id: 5, result: {} });
   });
 });

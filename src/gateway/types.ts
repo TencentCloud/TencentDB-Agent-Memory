@@ -33,12 +33,6 @@ export interface RecallRequest {
   query: string;
   session_key: string;
   user_id?: string;
-  /** Optional L0 fallback limit when conversation fallback is enabled. */
-  limit?: number;
-  /** Include raw L0 conversation fallback scoped to this session_key. Defaults to false. */
-  include_l0?: boolean;
-  /** Allow L0 fallback to search across sessions when the scoped lookup misses. Defaults to false. */
-  global_l0_fallback?: boolean;
 }
 
 export interface RecallResponse {
@@ -58,7 +52,7 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
-  /** Optional epoch ms or ISO timestamp for the start of this captured turn. */
+  /** Epoch milliseconds or ISO timestamp immediately before this turn's first message. */
   started_at?: number | string;
 }
 

@@ -65,8 +65,12 @@ describe("OpenCode memory plugin helpers", () => {
 
 describe("OpenCode memory plugin", () => {
   it("recalls memory on chat.message and injects a synthetic memory part", async () => {
-    const gateway = await startGateway((_req, _body, res) => {
+    const gateway = await startGateway((req, _body, res) => {
       res.setHeader("Content-Type", "application/json");
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
+        return;
+      }
       res.end(JSON.stringify({ context: "OpenCode should remember issue 235 evidence." }));
     });
     const plugin = await createMemoryTencentDBPlugin(
@@ -90,8 +94,15 @@ describe("OpenCode memory plugin", () => {
         body: {
           query: "What did the adapter prove?",
           session_key: expect.stringMatching(/^opencode:cwd:opencode-demo:[a-f0-9]{12}:session-a$/),
-          include_l0: true,
-          global_l0_fallback: false,
+        },
+      },
+      {
+        method: "POST",
+        url: "/search/conversations",
+        body: {
+          query: "What did the adapter prove?",
+          limit: 3,
+          session_key: expect.stringMatching(/^opencode:cwd:opencode-demo:[a-f0-9]{12}:session-a$/),
         },
       },
     ]);
@@ -111,6 +122,10 @@ describe("OpenCode memory plugin", () => {
         res.end(JSON.stringify({ context: "memory context" }));
         return;
       }
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
+        return;
+      }
       res.end(JSON.stringify({ ok: true }));
     });
     const plugin = await createMemoryTencentDBPlugin(
@@ -127,8 +142,16 @@ describe("OpenCode memory plugin", () => {
     } as any);
     await plugin.event?.({
       event: {
-        type: "message.updated",
-        properties: { info: { id: "assistant-b", role: "assistant", sessionID: "session-b" } },
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-b",
+            type: "text",
+            sessionID: "session-b",
+            messageID: "assistant-b",
+            text: "The OpenCode plugin path is",
+          },
+        },
       },
     } as any);
     await plugin.event?.({
@@ -159,8 +182,12 @@ describe("OpenCode memory plugin", () => {
       },
     } as any);
 
-    expect(gateway.calls.map((call) => call.url)).toEqual(["/recall", "/capture"]);
-    expect(gateway.calls[1].body).toMatchObject({
+    expect(gateway.calls.map((call) => call.url)).toEqual([
+      "/recall",
+      "/search/conversations",
+      "/capture",
+    ]);
+    expect(gateway.calls[2].body).toMatchObject({
       user_content: "Remember the OpenCode plugin path.",
       assistant_content: "The OpenCode plugin path is integrations/opencode/plugin.js.",
       session_key: expect.stringMatching(/^opencode:cwd:opencode-demo:[a-f0-9]{12}:session-b$/),
@@ -175,6 +202,10 @@ describe("OpenCode memory plugin", () => {
       ],
       started_at: expect.any(Number),
     });
+    expect(gateway.calls[2].body.assistant_content)
+      .not.toContain("The OpenCode plugin path is\nThe OpenCode plugin path is");
+    expect(gateway.calls[2].body.started_at)
+      .toBeLessThan(gateway.calls[2].body.messages[0].timestamp);
   });
 
   it("flushes a session when assistant text is not available", async () => {
@@ -182,6 +213,10 @@ describe("OpenCode memory plugin", () => {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/recall") {
         res.end(JSON.stringify({ context: "" }));
+        return;
+      }
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
         return;
       }
       res.end(JSON.stringify({ flushed: true }));
@@ -205,9 +240,179 @@ describe("OpenCode memory plugin", () => {
       },
     } as any);
 
-    expect(gateway.calls.map((call) => call.url)).toEqual(["/recall", "/session/end"]);
-    expect(gateway.calls[1].body).toEqual({
+    expect(gateway.calls.map((call) => call.url)).toEqual([
+      "/recall",
+      "/search/conversations",
+      "/session/end",
+    ]);
+    expect(gateway.calls[2].body).toEqual({
       session_key: expect.stringMatching(/^opencode:cwd:opencode-demo:[a-f0-9]{12}:session-c$/),
     });
+  });
+
+  it("waits for idle when completion arrives before the final text part", async () => {
+    const gateway = await startGateway((req, _body, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/recall") {
+        res.end(JSON.stringify({ context: "" }));
+        return;
+      }
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
+        return;
+      }
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const plugin = await createMemoryTencentDBPlugin(
+      { directory: "/tmp/opencode-demo" },
+      { gatewayUrl: gateway.url },
+    );
+    await plugin["chat.message"]?.({ sessionID: "session-late", messageID: "user-late" }, {
+      message: { id: "user-late" },
+      parts: [{ type: "text", text: "Wait for the final part." }],
+    } as any);
+    await plugin.event?.({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "assistant-late",
+            role: "assistant",
+            sessionID: "session-late",
+            time: { completed: Date.now() },
+          },
+        },
+      },
+    } as any);
+    expect(gateway.calls.map((call) => call.url)).toEqual(["/recall", "/search/conversations"]);
+
+    await plugin.event?.({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-late",
+            type: "text",
+            sessionID: "session-late",
+            messageID: "assistant-late",
+            text: "Final text arrived.",
+          },
+        },
+      },
+    } as any);
+    await plugin.event?.({
+      event: { type: "session.idle", properties: { sessionID: "session-late" } },
+    } as any);
+
+    expect(gateway.calls.filter((call) => call.url === "/capture")).toHaveLength(1);
+    expect(gateway.calls.some((call) => call.url === "/session/end")).toBe(false);
+  });
+
+  it("flushes an errored session without capturing partial assistant output", async () => {
+    const gateway = await startGateway((req, _body, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/recall") {
+        res.end(JSON.stringify({ context: "" }));
+        return;
+      }
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
+        return;
+      }
+      res.end(JSON.stringify({ flushed: true }));
+    });
+    const plugin = await createMemoryTencentDBPlugin(
+      { directory: "/tmp/opencode-demo" },
+      { gatewayUrl: gateway.url },
+    );
+    await plugin["chat.message"]?.({ sessionID: "session-error", messageID: "user-error" }, {
+      message: { id: "user-error" },
+      parts: [{ type: "text", text: "This response may fail." }],
+    } as any);
+    await plugin.event?.({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "partial",
+            type: "text",
+            sessionID: "session-error",
+            messageID: "assistant-error",
+            text: "Partial response",
+          },
+        },
+      },
+    } as any);
+    await plugin.event?.({
+      event: { type: "session.error", properties: { sessionID: "session-error" } },
+    } as any);
+
+    expect(gateway.calls.map((call) => call.url)).toEqual([
+      "/recall",
+      "/search/conversations",
+      "/session/end",
+    ]);
+    expect(gateway.calls.some((call) => call.url === "/capture")).toBe(false);
+  });
+
+  it("retains turn state and retries after a transient capture failure", async () => {
+    let captureAttempts = 0;
+    const gateway = await startGateway((req, _body, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/recall") {
+        res.end(JSON.stringify({ context: "" }));
+        return;
+      }
+      if (req.url === "/search/conversations") {
+        res.end(JSON.stringify({ results: "", total: 0 }));
+        return;
+      }
+      if (req.url === "/capture" && captureAttempts++ === 0) {
+        res.statusCode = 503;
+        res.end(JSON.stringify({ error: "try again" }));
+        return;
+      }
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const plugin = await createMemoryTencentDBPlugin(
+      { directory: "/tmp/opencode-demo" },
+      { gatewayUrl: gateway.url },
+    );
+    await plugin["chat.message"]?.({ sessionID: "session-retry", messageID: "user-retry" }, {
+      message: { id: "user-retry" },
+      parts: [{ type: "text", text: "Retry this capture." }],
+    } as any);
+    await plugin.event?.({
+      event: {
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "part-retry",
+            type: "text",
+            sessionID: "session-retry",
+            messageID: "assistant-retry",
+            text: "Retried successfully.",
+          },
+        },
+      },
+    } as any);
+    await plugin.event?.({
+      event: {
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "assistant-retry",
+            role: "assistant",
+            sessionID: "session-retry",
+            time: { completed: Date.now() },
+          },
+        },
+      },
+    } as any);
+    await plugin.event?.({
+      event: { type: "session.idle", properties: { sessionID: "session-retry" } },
+    } as any);
+
+    expect(gateway.calls.filter((call) => call.url === "/capture")).toHaveLength(2);
   });
 });

@@ -13,8 +13,6 @@ function collectExternalDependencies(): string[] {
 export default defineConfig({
   entry: {
     index: "./index.ts",
-    "gateway/server": "./src/gateway/server.ts",
-    "integrations/shared/gateway-client": "./src/integrations/shared/gateway-client.ts",
     "integrations/shared/hook-bridge": "./src/integrations/shared/hook-bridge.ts",
     "integrations/shared/mcp-server": "./src/integrations/shared/mcp-server.ts",
   },
