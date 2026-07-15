@@ -56,6 +56,21 @@ export type {
   GatewayPlatformAdapterOptions,
   GatewayPlatformContext,
 } from "./src/adapters/gateway-client/index.js";
+export {
+  createLangGraphMemoryAdapter,
+  normalizeLangGraphMessages,
+  resolveLangGraphPlatformContext,
+  selectLangGraphCompletedTurn,
+  selectLangGraphRecallQuery,
+} from "./src/adapters/langgraph/index.js";
+export type {
+  LangGraphCompletedTurn,
+  LangGraphMemoryAdapter,
+  LangGraphMemoryAdapterOptions,
+  LangGraphMessageLike,
+  LangGraphRuntimeLike,
+  LangGraphStateLike,
+} from "./src/adapters/langgraph/index.js";
 
 const TAG = "[memory-tdai]";
 
