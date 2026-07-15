@@ -473,17 +473,19 @@ export class MemoryPipelineManager {
     if (this.sessionFilter.shouldSkip(sessionKey)) return;
 
     const timers = this.sessionTimers.get(sessionKey);
-    const buffer = this.messageBuffers.get(sessionKey);
+    const { bufferedCount, pendingConversationCount } = this.getPendingL1Work(sessionKey);
 
     // Step 1: cancel the idle timer so it won't fire after we return.
     if (timers?.l1Idle.pending) {
       timers.l1Idle.cancel();
     }
 
-    // Step 2: flush pending buffered messages through L1 if any.
-    if (buffer && buffer.length > 0) {
+    // Step 2: flush pending L1 work. In DB-backed capture paths the in-memory
+    // buffer is intentionally empty because L1 reads from persisted L0.
+    if (bufferedCount > 0 || pendingConversationCount > 0) {
       this.logger?.debug?.(
-        `${TAG} [${sessionKey}] flushSession: enqueuing L1 for ${buffer.length} buffered message(s)`,
+        `${TAG} [${sessionKey}] flushSession: enqueuing L1 ` +
+        `(buffered=${bufferedCount}, conversations=${pendingConversationCount})`,
       );
       this.enqueueL1(sessionKey, "flush");
     }
@@ -561,11 +563,14 @@ export class MemoryPipelineManager {
     for (const [sessionKey, timers] of this.sessionTimers) {
       if (timers.l1Idle.pending) {
         timers.l1Idle.cancel(); // don't fire the idle callback directly
-        const buffer = this.messageBuffers.get(sessionKey);
-        if (buffer && buffer.length > 0) {
-          this.logger?.debug?.(`${TAG} [${sessionKey}] Flush: enqueuing L1 for ${buffer.length} buffered messages`);
-          this.enqueueL1(sessionKey, "flush");
-        }
+      }
+      const { bufferedCount, pendingConversationCount } = this.getPendingL1Work(sessionKey);
+      if (bufferedCount > 0 || pendingConversationCount > 0) {
+        this.logger?.debug?.(
+          `${TAG} [${sessionKey}] Flush: enqueuing L1 ` +
+          `(buffered=${bufferedCount}, conversations=${pendingConversationCount})`,
+        );
+        this.enqueueL1(sessionKey, "flush");
       }
     }
 
@@ -1002,6 +1007,13 @@ export class MemoryPipelineManager {
   // ============================
   // Internal: state management
   // ============================
+
+  private getPendingL1Work(sessionKey: string): { bufferedCount: number; pendingConversationCount: number } {
+    return {
+      bufferedCount: this.messageBuffers.get(sessionKey)?.length ?? 0,
+      pendingConversationCount: this.sessionStates.get(sessionKey)?.conversation_count ?? 0,
+    };
+  }
 
   private getOrCreateState(sessionKey: string): PipelineSessionState {
     let state = this.sessionStates.get(sessionKey);
