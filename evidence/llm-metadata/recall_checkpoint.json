@@ -1,0 +1,44 @@
+{
+  "last_captured_timestamp": 1783306649005,
+  "total_processed": 4,
+  "last_persona_at": 4,
+  "last_persona_time": "2026-07-06T03:00:57.144Z",
+  "request_persona_update": false,
+  "persona_update_reason": "",
+  "memories_since_last_persona": 0,
+  "scenes_processed": 1,
+  "runner_states": {
+    "llm-test-5": {
+      "last_captured_timestamp": 1783305849423,
+      "last_l1_cursor": 1783305849466,
+      "last_scene_name": "我（AI）在和用户讨论 Rust 语言相关问题"
+    },
+    "llm-test-6": {
+      "last_captured_timestamp": 1783306649005,
+      "last_l1_cursor": 1783306649014,
+      "last_scene_name": "我（AI）在和咨询Go语言学习及开发配置相关问题的用户交流"
+    }
+  },
+  "pipeline_states": {
+    "llm-test-5": {
+      "conversation_count": 0,
+      "last_extraction_time": "",
+      "last_extraction_updated_time": "",
+      "last_active_time": 1783305849707,
+      "l2_pending_l1_count": 0,
+      "warmup_threshold": 2,
+      "l2_last_extraction_time": ""
+    },
+    "llm-test-6": {
+      "conversation_count": 0,
+      "last_extraction_time": "2026-07-06T09:59:27.934Z",
+      "last_extraction_updated_time": "2026-07-06T02:59:05.864Z",
+      "last_active_time": 1783306649143,
+      "l2_pending_l1_count": 0,
+      "warmup_threshold": 2,
+      "l2_last_extraction_time": "2026-07-06T09:59:27.934Z"
+    }
+  },
+  "l0_conversations_count": 2,
+  "total_memories_extracted": 1
+}

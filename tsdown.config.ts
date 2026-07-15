@@ -11,7 +11,11 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: [
+    "./index.ts",
+    // Claude Code MCP server 入口（Pattern B-MCP）；独立产物，便于 bin launcher 加载
+    "./src/adapters/claude-code/mcp-server.ts",
+  ],
   outDir: "./dist",
   format: "esm",
   platform: "node",
