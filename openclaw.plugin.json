@@ -96,7 +96,7 @@
           "sendDimensions": { "type": "boolean", "default": true, "description": "是否在请求体中携带 dimensions 字段。默认 true（兼容 OpenAI text-embedding-3-* 的 Matryoshka 截断）。当目标服务为 BGE-M3 等不支持自定义维度的固定维度模型时，请设为 false，否则会被服务端以 HTTP 400 拒绝（'does not support matryoshka representation'）。" },
           "conflictRecallTopK": { "type": "number", "default": 5, "description": "冲突检测时召回 Top-K 数" },
           "maxInputChars": { "type": "number", "default": 5000, "description": "Embedding 输入文本最大字符数，超出时截断并打印警告日志（默认 5000，适合大多数模型的 token 上限）" },
-          "timeoutMs": { "type": "number", "default": 10000, "description": "单次 embedding API 调用超时（毫秒），超时后该次请求中止且不重试" },
+          "timeoutMs": { "type": "number", "default": 10000, "description": "单次 embedding API 调用超时（毫秒），超时后会自动重试（最多 3 次）" },
           "recallTimeoutMs": { "type": "number", "description": "recall 路径 embedding 超时（毫秒），覆盖 timeoutMs。用户等待中，建议设短一些（如 3000）" },
           "captureTimeoutMs": { "type": "number", "description": "capture 路径 embedding 超时（毫秒），覆盖 timeoutMs。后台运行，可设长一些（如 15000）" }
         }
@@ -140,7 +140,8 @@
           "apiKey": { "type": "string", "description": "API Key" },
           "model": { "type": "string", "default": "gpt-4o", "description": "模型名称（如 gpt-4o, deepseek-v3, claude-sonnet-4-6）" },
           "maxTokens": { "type": "number", "default": 4096, "description": "最大输出 token 数" },
-          "timeoutMs": { "type": "number", "default": 120000, "description": "请求超时（毫秒）" }
+          "timeoutMs": { "type": "number", "default": 120000, "description": "请求超时（毫秒）" },
+          "disableThinking": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["vllm", "deepseek", "dashscope", "openai", "anthropic", "kimi", "gemini"] }], "default": false, "description": "禁用推理模型思考过程。可选策略: \"vllm\" (vLLM/SGLang), \"deepseek\" (DeepSeek API), \"dashscope\" (阿里云 DashScope/Qwen), \"openai\" (OpenAI o系列), \"anthropic\" (Anthropic Claude), \"kimi\" (Kimi/Moonshot), \"gemini\" (Google Gemini)。" }
         }
       },
       "offload": {
@@ -150,6 +151,7 @@
           "enabled": { "type": "boolean", "default": false, "description": "是否启用 Context Offload（默认关闭，不影响 Memory 功能）" },
           "model": { "type": "string", "description": "Offload 使用的 LLM 模型（格式: provider/model），未填写时使用 openclaw 默认模型" },
           "temperature": { "type": "number", "default": 0.2, "description": "LLM 温度参数" },
+          "disableThinking": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["vllm", "deepseek", "dashscope", "openai", "anthropic", "kimi", "gemini"] }], "default": false, "description": "禁用推理模型思考过程（仅 local 模式）。可选策略: \"vllm\"/\"deepseek\"/\"dashscope\"/\"openai\"/\"anthropic\"/\"kimi\"/\"gemini\"。" },
           "forceTriggerThreshold": { "type": "number", "default": 4, "description": "累积多少个 tool pair 后强制触发 L1" },
           "dataDir": { "type": "string", "description": "自定义数据目录（绝对路径），默认 ~/.openclaw/context-offload" },
           "defaultContextWindow": { "type": "number", "default": 200000, "description": "默认上下文窗口大小" },

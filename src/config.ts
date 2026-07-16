@@ -7,6 +7,9 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
+import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -203,6 +206,17 @@ export interface StandaloneLLMOverrideConfig {
   maxTokens: number;
   /** Request timeout in milliseconds (default: 120000). */
   timeoutMs: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the LLM endpoint (default: false).
+   * - `false`: no thinking-disabling wrapper (default)
+   * - `"vllm"`: vLLM/SGLang — `chat_template_kwargs: { enable_thinking: false }`
+   * - `"deepseek"`: DeepSeek official API — top-level `enable_thinking: false`
+   * - `"dashscope"`: Alibaba DashScope (Qwen) — top-level `enable_thinking: false`
+   * - `"openai"`: OpenAI o-series — `reasoning_effort: "low"` (cannot fully disable)
+   * - `"anthropic"` / `"kimi"`: Anthropic Claude / Kimi (Moonshot) — `thinking: { type: "disabled" }`
+   * - `"gemini"`: Google Gemini — `thinking_config: { thinking_budget: 0 }`
+   */
+  disableThinking: DisableThinkingStrategy;
 }
 
 /** Context Offload settings — controls multi-layer context compression. */
@@ -222,6 +236,12 @@ export interface OffloadConfig {
   model?: string;
   /** LLM temperature (default: 0.2) */
   temperature: number;
+  /**
+   * Controls how thinking/reasoning is disabled for the offload local-mode LLM (default: false).
+   * See `StandaloneLLMOverrideConfig.disableThinking` for the full list of strategies.
+   * Applies only to `mode: "local"`.
+   */
+  disableThinking: DisableThinkingStrategy;
   /** Force-trigger L1 when pending tool pairs >= this threshold (default: 4) */
   forceTriggerThreshold: number;
   /** Custom data directory (absolute path). Default: ~/.openclaw/context-offload */
@@ -459,6 +479,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mode: offloadMode,
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
+    disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
     dataDir: optStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
@@ -561,6 +582,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
+        disableThinking: normalizeDisableThinking(boolOrStr(llmGroup, "disableThinking")),
       };
     })(),
     offload,
@@ -595,6 +617,14 @@ function num(src: Record<string, unknown>, key: string): number | undefined {
 function bool(src: Record<string, unknown>, key: string): boolean | undefined {
   const v = src[key];
   return typeof v === "boolean" ? v : undefined;
+}
+
+/** Read a field that may be boolean or string. */
+function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+  const v = src[key];
+  if (typeof v === "boolean") return v;
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return undefined;
 }
 
 function strArray(src: Record<string, unknown>, key: string): string[] | undefined {

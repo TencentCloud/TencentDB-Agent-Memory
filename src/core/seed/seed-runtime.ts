@@ -87,6 +87,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
         model: cfg.llm.model,
         maxTokens: cfg.llm.maxTokens,
         timeoutMs: cfg.llm.timeoutMs,
+        disableThinking: cfg.llm.disableThinking,
       },
       logger,
     });

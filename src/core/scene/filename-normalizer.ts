@@ -30,7 +30,7 @@ import path from "node:path";
  *   - Falls back to `"scene"` if the stem becomes empty.
  *
  * Allowed character set after normalization (informally):
- *   ASCII alphanumerics, CJK ideographs, hyphen, underscore, dot.
+ *   Unicode letters/numbers, hyphen, underscore, dot.
  *
  * Examples:
  *   "Daily Rhythm in Shanghai.md"  → "Daily-Rhythm-in-Shanghai.md"
@@ -55,7 +55,7 @@ export function normalizeSceneFilename(name: string): string {
     // Replace whitespace runs (incl. NBSP, full-width space) with `-`
     .replace(/[\s\u00A0\u3000]+/g, "-")
     // Drop quotes, brackets, and punctuation known to break shells/markdown.
-    // Keep alphanumerics, CJK ideographs, `-`, `_`, `.`.
+    // Keep Unicode letters/numbers and the safe separators `-`, `_`, `.`.
     .replace(/[()[\]{}<>'"`,;:!?*|/\\=&%$#@^~+]/g, "")
     // Collapse consecutive separators.
     .replace(/-{2,}/g, "-")
