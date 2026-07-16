@@ -432,6 +432,57 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Recalibration (counter drift fix, issue #157)
+  // ============================
+
+  /**
+   * Recalibrate the monotonic global counters from the actual store contents.
+   *
+   * `total_memories_extracted` and `l0_conversations_count` are increment-only:
+   * memory cleanup (retention cleaner, manual pruning) deletes records from the
+   * store but never decrements these counters, so they permanently overstate
+   * reality. This method resets them to the ground-truth counts supplied by
+   * the caller — typically `store.countL1()` / `store.countL0()` sampled once
+   * at startup.
+   *
+   * `memories_since_last_persona` is corrected conservatively: reduced by the
+   * downward drift of `total_memories_extracted` and clamped to
+   * `[0, actual L1 total]`, so the persona threshold cannot fire prematurely
+   * on phantom (already-deleted) memories. When the store holds MORE than the
+   * checkpoint (e.g. checkpoint restored from an old backup), the persona
+   * counter is left unchanged — firing late is safer than firing early.
+   *
+   * The caller MUST NOT invoke this when the store is unavailable or degraded:
+   * `countL1()`/`countL0()` would return 0 and wrongly zero the counters.
+   *
+   * The update runs inside the per-file lock and is written atomically,
+   * like every other mutation.
+   */
+  async recalibrate(actual: {
+    totalMemoriesExtracted: number;
+    l0ConversationsCount: number;
+  }): Promise<void> {
+    const actualL1 = Math.max(0, Math.floor(actual.totalMemoriesExtracted));
+    const actualL0 = Math.max(0, Math.floor(actual.l0ConversationsCount));
+    const cp = await this.mutate((cp) => {
+      const l1Drift = Math.max(0, cp.total_memories_extracted - actualL1);
+      cp.total_memories_extracted = actualL1;
+      cp.l0_conversations_count = actualL0;
+      if (l1Drift > 0 || cp.memories_since_last_persona > actualL1) {
+        cp.memories_since_last_persona = Math.max(
+          0,
+          Math.min(cp.memories_since_last_persona - l1Drift, actualL1),
+        );
+      }
+    });
+    this.logger.info(
+      `[checkpoint] recalibrate: total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  // ============================
   // Atomic capture (race-condition fix)
   // ============================
 

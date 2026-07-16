@@ -410,9 +410,52 @@ export class TdaiCore {
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
+      await this.recalibrateCheckpointCounters();
     } catch (err) {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Recalibrate the increment-only checkpoint counters
+   * (`total_memories_extracted`, `l0_conversations_count`) against the real
+   * store contents — they never fall after memory cleanup, permanently
+   * overstating reality (issue #157). Runs once at startup, right after the
+   * store becomes available.
+   *
+   * Skipped entirely when the store is unavailable or degraded: `countL1()` /
+   * `countL0()` would return 0 and wrongly zero the counters.
+   */
+  private async recalibrateCheckpointCounters(): Promise<void> {
+    const store = this.vectorStore;
+    if (!store || store.isDegraded()) return;
+    try {
+      const [totalMemoriesExtracted, l0ConversationsCount] = await Promise.all([
+        store.countL1(),
+        store.countL0(),
+      ]);
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      const current = await checkpoint.read();
+      if (
+        totalMemoriesExtracted === 0 &&
+        l0ConversationsCount === 0 &&
+        (current.total_memories_extracted > 0 || current.l0_conversations_count > 0)
+      ) {
+        this.logger.warn(
+          `${TAG} Checkpoint recalibration skipped: store counts are both zero while checkpoint is non-empty. ` +
+          `This avoids clearing counters on transient count failures.`,
+        );
+        return;
+      }
+      await checkpoint.recalibrate({
+        totalMemoriesExtracted,
+        l0ConversationsCount,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
