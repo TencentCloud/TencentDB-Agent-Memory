@@ -162,6 +162,21 @@ A credentialed run of commit `8f693ce` against an OpenAI-compatible MiMo endpoin
 
 The optimized warm aggregate was 2,048 cache-hit tokens and 1,234 cache-miss tokens, or 62.40%. The provider did not expose hit/miss details for any legacy sample, so the runner correctly emitted `hitRateDelta: null`; this report does not reinterpret a missing field as a zero-token hit. The controlled run nevertheless demonstrates that the optimized layout produced a repeatable 1,024-token reusable prefix where the legacy layout produced no reportable cache reuse under the same endpoint, model, request count, and delay.
 
+### Observed DeepSeek official A/B
+
+A credentialed run of the same benchmark protocol against the official DeepSeek API on 2026-07-17T18:47:11Z used `deepseek-v4-pro`, three turns per variant, and the same three-second inter-request delay.
+
+| Layout | Sample | Prompt tokens | Cache hit | Cache miss | Hit rate |
+|---|---:|---:|---:|---:|---:|
+| Legacy | cold | 1,630 | 0 | 1,630 | 0% |
+| Legacy | warm 1 | 1,630 | 0 | 1,630 | 0% |
+| Legacy | warm 2 | 1,630 | 0 | 1,630 | 0% |
+| Optimized | cold | 1,632 | 0 | 1,632 | 0% |
+| Optimized | warm 1 | 1,632 | 0 | 1,632 | 0% |
+| Optimized | warm 2 | 1,632 | 1,408 | 224 | 86.27% |
+
+After excluding the cold requests, the legacy aggregate was 0 cache-hit and 3,260 cache-miss tokens (0%). The optimized aggregate was 1,408 cache-hit and 1,856 cache-miss tokens (43.14%), an observed improvement of 43.14 percentage points. In this run DeepSeek did not report a hit on the first warm request but reused a larger 1,408-token prefix on the second; the MiMo-compatible endpoint reported a 1,024-token hit on both warm requests. This is a controlled comparison of the observed endpoints, not a claim about provider-wide cache latency or production traffic.
+
 ## References
 
 - [DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache/)
