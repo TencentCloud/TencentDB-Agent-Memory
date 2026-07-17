@@ -147,6 +147,21 @@ npm run benchmark:prompt-cache
 
 Use the corresponding MiMo OpenAI-compatible base URL and model for the second provider. If an endpoint does not return cache token details, the runner reports the sample as unavailable instead of deriving a hit rate from billing assumptions.
 
+### Observed MiMo-compatible A/B
+
+A credentialed run of commit `8f693ce` against an OpenAI-compatible MiMo endpoint on 2026-07-17T18:40:17Z used `mimo-v2.5`, three turns per variant, and a three-second inter-request delay. The first request in each variant was treated as cold and excluded from warm aggregation.
+
+| Layout | Sample | Prompt tokens | Cache hit | Cache miss | Hit rate |
+|---|---:|---:|---:|---:|---:|
+| Legacy | cold | 1,640 | unavailable | unavailable | unavailable |
+| Legacy | warm 1 | 1,640 | unavailable | unavailable | unavailable |
+| Legacy | warm 2 | 1,640 | unavailable | unavailable | unavailable |
+| Optimized | cold | 1,641 | unavailable | unavailable | unavailable |
+| Optimized | warm 1 | 1,641 | 1,024 | 617 | 62.40% |
+| Optimized | warm 2 | 1,641 | 1,024 | 617 | 62.40% |
+
+The optimized warm aggregate was 2,048 cache-hit tokens and 1,234 cache-miss tokens, or 62.40%. The provider did not expose hit/miss details for any legacy sample, so the runner correctly emitted `hitRateDelta: null`; this report does not reinterpret a missing field as a zero-token hit. The controlled run nevertheless demonstrates that the optimized layout produced a repeatable 1,024-token reusable prefix where the legacy layout produced no reportable cache reuse under the same endpoint, model, request count, and delay.
+
 ## References
 
 - [DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache/)
