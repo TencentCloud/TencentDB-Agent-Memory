@@ -1,65 +1,77 @@
-# Prompt-cache layout for memory recall
+# Prompt-cache behavior of memory recall
 
-This note documents the TencentDB-specific scope of [Issue #120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120).
-The issue reporter later confirmed that the observed webchat collapse was caused by an OpenClaw regression, not by this plugin. The layout below therefore addresses the remaining, independently reproducible optimization: stable memory context should be part of the reusable system-prompt prefix.
+This note documents the complete TencentDB-specific scope of [Issue #120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120).
+The reporter later confirmed that the observed 29% webchat collapse came from an OpenClaw regression rather than this plugin. The changes below therefore target independently reproducible prompt-shape and history-growth problems without claiming to fix that host regression.
 
 ## Context structure
 
-OpenClaw composes hook-provided system context in this order:
+OpenClaw composes hook-provided context in this order:
 
 ```text
 prependSystemContext + baseSystemPrompt + appendSystemContext
+prependContext + currentUserPrompt + appendContext
 ```
 
-`prependSystemContext` is present in the project's declared minimum supported OpenClaw release (`v2026.3.13-1`), so this placement change does not require a host-version bump.
-
-The base prompt itself contains a cache boundary followed by volatile runtime context. Before this change, stable memory context was appended after that volatile tail:
+Before this change, stable memory context was placed after the host's volatile system-prompt tail, while dynamic recall could only be prepended to the user prompt:
 
 ```text
 System prompt (before)
-├─ OpenClaw stable system sections                 reusable
+├─ OpenClaw stable sections                         reusable
 ├─ CACHE_BOUNDARY
-├─ volatile runtime/session sections               changes between turns
+├─ volatile runtime/session sections                changes between turns
 └─ appendSystemContext
-   ├─ user persona                                 stable, but behind volatility
-   ├─ scene navigation                             semi-stable, but behind volatility
-   └─ memory tools guide                           static, but behind volatility
+   ├─ user persona                                  stable, behind volatility
+   ├─ scene navigation                              semi-stable, behind volatility
+   └─ memory tools guide                            static, behind volatility
 
-User prompt
-├─ prependContext: <relevant-memories>             dynamic per query
-└─ original user text                              dynamic per turn
+Current user prompt
+├─ prependContext: <relevant-memories>              dynamic per query
+└─ original user text                               dynamic per turn
 
 Persisted history
-└─ original user text                              injected block is stripped
+└─ behavior was implicit: injected blocks were always removed
 ```
-
-A prefix-matching provider stops reusing tokens at the first changed token. Stable content placed after the volatile runtime section is consequently outside the common prefix.
 
 After this change:
 
 ```text
-System prompt (after)
+System prompt (all modes)
 ├─ prependSystemContext
-│  ├─ user persona                                 stable and reusable
-│  ├─ scene navigation                             semi-stable and reusable until L2 changes
-│  └─ memory tools guide                           static and reusable
-├─ OpenClaw stable system sections                 reusable
+│  ├─ user persona                                  stable and reusable
+│  ├─ scene navigation                              reusable until L2 changes
+│  └─ memory tools guide                            static and reusable
+├─ OpenClaw stable sections                         reusable
 ├─ CACHE_BOUNDARY
-└─ volatile runtime/session sections               changes between turns
+└─ volatile runtime/session sections                changes between turns
 
-User prompt
-├─ prependContext: <relevant-memories>             dynamic per query
-└─ original user text                              dynamic per turn
+Current user prompt (recall.injectionMode="prepend", default)
+├─ prependContext: <relevant-memories>              dynamic per query
+└─ original user text
 
-Persisted history
-└─ original user text                              injected block is stripped
+Current user prompt (recall.injectionMode="append", opt-in)
+├─ original user text
+└─ appendContext: <relevant-memories>               dynamic per query
+
+Persisted history (recall.showInjected=false, default)
+└─ original user text                               injected block is stripped
 ```
 
-The Gateway/Hermes response still joins the stable system-context fields, so moving the OpenClaw placement does not remove persona or scene content from other hosts.
+`appendContext` became part of the OpenClaw prompt-hook contract in v2026.4.27. The plugin checks `api.runtime.version` and falls back to `prepend` when append support is old or cannot be established. Stable system-context fields are left intact by this shaping step. The Gateway/Hermes response joins both stable system-context fields, so persona and scene content remain available outside OpenClaw.
+
+## Runtime controls
+
+| Setting | Default | Effect |
+|---|---|---|
+| `recall.injectionMode="prepend"` | yes | Backward-compatible placement before the current user text |
+| `recall.injectionMode="append"` | no | Places dynamic L1 recall after the current user text on OpenClaw v2026.4.27+ |
+| `recall.showInjected=false` | yes | Removes `<relevant-memories>` before the user message is persisted |
+| `recall.showInjected=true` | no | Preserves injected markup for debugging; this intentionally increases future request size |
+
+The append mode is opt-in because changing the order of model-visible text can affect instruction interpretation. History cleanup remains the default in both modes.
 
 ## `showInjected` growth model
 
-If a dynamic recall block of `R` tokens is persisted on every turn, the final request carries approximately `R × (N - 1)` stale recall tokens after `N` turns. The aggregate replay across the session grows quadratically:
+If a dynamic recall block of `R` tokens is persisted on every turn, the final request carries approximately `R × (N - 1)` stale recall tokens after `N` turns. Aggregate replay across the session grows quadratically:
 
 ```text
 aggregate replay = R × N × (N - 1) / 2
@@ -72,37 +84,63 @@ For the issue's reported 500–1,700 tokens per recall and a 100-turn session:
 | Extra recall in the final request | 49,500 | 168,300 |
 | Aggregate recall replay | 2,475,000 | 8,415,000 |
 
-Current `main` removes `<relevant-memories>` before message persistence. The canonical runtime mitigation in PR #375 retains that safe default and makes history visibility an explicit option. This change does not duplicate that injection-mode work.
+The default `showInjected=false` makes persisted growth from recall zero. The multipart cleanup path edits only text parts and preserves images or other structured content. `showInjected=true` is retained as an explicit debugging option rather than an accidental behavior.
 
-## Options considered
+## Session-level deduplication
 
-1. **Move stable memory context to the cacheable prefix — implemented here.** It has no per-session state, preserves prompt content, and directly fixes a deterministic placement problem.
-2. **Append dynamic L1 recall after the user query — PR #375.** This can improve automatic prefix reuse but is host-specific and should remain an explicit compatibility mode.
-3. **Session-level recall deduplication — not selected.** It needs invalidation rules for topic changes, memory updates, restarts, and parallel turns; stale recall can cost more correctness than it saves tokens.
-4. **Hide recall behind a pointer — not selected.** This reduces tokens but changes model-visible information and recall quality.
+Suppressing a stable system block merely because it was returned on a previous turn is not safe: hook output is request-scoped, and omitting it removes persona/scene guidance from the next model request. Likewise, skipping a repeated L1 memory while `showInjected=false` would make that memory invisible to the current turn.
 
-## Measurement
+The safe equivalent of session deduplication is therefore:
 
-`auto-recall.test.ts` builds two turns with:
+1. keep stable content byte-identical and before volatile host content so the provider can reuse its prefix;
+2. keep dynamic L1 recall request-scoped;
+3. remove dynamic recall before persistence so it is not replayed by history;
+4. invalidate the reusable prefix naturally when persona or scene content actually changes.
 
-- the same persona/tools block of more than 4,000 characters;
-- different recalled L1 memories;
-- different volatile OpenClaw runtime tails.
+This avoids per-session invalidation state for topic changes, memory writes, restarts, and parallel turns while preserving model-visible information.
 
-It measures the longest common system-prompt prefix before and after placement. Moving the stable block from `appendSystemContext` to `prependSystemContext` increases reusable prefix span by exactly the stable block length plus its separator, while dynamic L1 recall remains outside the system prompt.
+## Provider comparison and live measurement
 
-This is a deterministic prefix-reuse measurement, not a fabricated provider hit-rate claim. A controlled provider A/B should use the same model, tool schemas, session seed, and prompt sequence, then aggregate provider usage as:
+DeepSeek enables disk context caching automatically. Its current documentation describes complete persisted prefix units and exposes `prompt_cache_hit_tokens` plus `prompt_cache_miss_tokens`. A matching earlier request can be reused, but caching remains best-effort.
+
+MiMo also bills matching request prefixes as Prompt Cache hits and distinguishes hit and miss prices. Its OpenAI-compatible API may expose cache detail differently by endpoint/model; the published chat example currently shows `prompt_tokens_details: null`. The plugin therefore does not invent MiMo hit counts when the host supplies none.
+
+On OpenClaw versions exposing `llm_output` usage, enabling `report.enabled` emits a `prompt_cache_usage` metric for each model call with:
 
 ```text
-hit rate = cache-hit input tokens / (cache-hit input tokens + cache-miss input tokens)
+provider, model
+uncachedInputTokens
+cacheReadTokens
+cacheWriteTokens
+cacheMissTokens = uncachedInputTokens + cacheWriteTokens
+promptTokens = cacheMissTokens + cacheReadTokens
+cacheHitRate = cacheReadTokens / promptTokens
 ```
 
-Exclude the cold first turn, run multiple repetitions, and report tool-call counts because different tool paths change the prompt independently of memory injection.
+OpenClaw normalizes provider-specific responses into `input`, `cacheRead`, and `cacheWrite`; the plugin emits a sample only when at least one numeric field exists. This makes DeepSeek/MiMo comparisons observable without parsing provider-specific response JSON in the memory plugin.
 
-DeepSeek documents automatic prefix caching and exposes `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`. MiMo should be evaluated from its returned usage fields rather than assuming identical persistence or accounting behavior.
+## Verification strategy
+
+The automated tests cover three independent claims:
+
+1. **Stable prefix placement:** two turns use the same persona/tools block of more than 4,000 characters and different volatile host tails. Moving the block to `prependSystemContext` increases the deterministic common-prefix span by exactly the stable block length plus its separator.
+2. **Dynamic injection and history:** append mode moves only L1 recall, old/unknown hosts fall back to prepend, and five persisted turns with cleanup contain no injected markup.
+3. **Provider accounting:** DeepSeek and MiMo-shaped normalized usage fixtures verify hit/miss/write arithmetic and reject missing or malformed usage rather than reporting fabricated rates.
+
+Deterministic prefix length proves placement, not a production cache-hit percentage. A controlled provider A/B should use the same model, channel, tool schemas, session seed, and prompt sequence:
+
+```text
+Variant A: recall.injectionMode="prepend", recall.showInjected=false
+Variant B: recall.injectionMode="append",  recall.showInjected=false
+```
+
+Exclude the cold first request, repeat each variant several times, aggregate `prompt_cache_usage` by provider/model, and report tool-call counts because different tool paths alter the prefix independently. Run the comparison on OpenClaw v2026.4.27 or newer so both variants are actually distinct.
 
 ## References
 
-- [DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache)
+- [DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache/)
+- [Xiaomi MiMo API pricing and prefix-cache billing](https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go)
+- [Xiaomi MiMo OpenAI-compatible Chat API](https://mimo.mi.com/docs/en-US/api/chat/openai-api)
+- [OpenClaw plugin prompt and model hooks](https://docs.openclaw.ai/plugins/hooks)
 - [OpenClaw system-prompt composition](https://github.com/openclaw/openclaw/blob/main/src/agents/pi-embedded-runner/run/attempt.thread-helpers.ts)
 - [OpenClaw cache boundary placement](https://github.com/openclaw/openclaw/blob/main/src/agents/system-prompt.ts)

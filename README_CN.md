@@ -436,6 +436,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `timezone` | `"system"` | 时区：`"system"`（跟随系统）/ IANA 名（`Asia/Shanghai`）/ offset 串（`+08:00`） |
 | `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
+| `recall.injectionMode` | `"prepend"` | 动态 L1 注入位置：`prepend` 保持兼容行为；`append` 在 OpenClaw v2026.4.27+ 中使用 `appendContext`，让原始用户输入保持在前 |
+| `recall.showInjected` | `false` | 是否将 `<relevant-memories>` 保留到持久化历史；建议保持 `false`，避免旧召回反复回放和多轮历史膨胀 |
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |

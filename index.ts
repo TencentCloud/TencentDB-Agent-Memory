@@ -34,6 +34,10 @@ import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
+import {
+  normalizePromptCacheUsage,
+  supportsPromptCacheUsageHook,
+} from "./src/core/report/prompt-cache-usage.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
 // Core abstractions (host-neutral)
@@ -44,6 +48,11 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  resolveRecallInjectionMode,
+  shapeOpenClawRecallResult,
+  stripInjectedRecallFromMessage,
+} from "./src/adapters/openclaw/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -179,7 +188,7 @@ export default function register(api: OpenClawPluginApi) {
     api.logger.debug?.(
       `${TAG} Config parsed: ` +
       `capture=${cfg.capture.enabled}, ` +
-      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}), ` +
+      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}, injectionMode=${cfg.recall.injectionMode}, showInjected=${cfg.recall.showInjected}), ` +
       `extraction=${cfg.extraction.enabled}(dedup=${cfg.extraction.enableDedup}, maxMem=${cfg.extraction.maxMemoriesPerSession}), ` +
       `pipeline=(everyN=${cfg.pipeline.everyNConversations}, warmup=${cfg.pipeline.enableWarmup}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, l2DelayAfterL1=${cfg.pipeline.l2DelayAfterL1Seconds}s, l2Min=${cfg.pipeline.l2MinIntervalSeconds}s, l2Max=${cfg.pipeline.l2MaxIntervalSeconds}s, activeWindow=${cfg.pipeline.sessionActiveWindowHours}h), ` +
       `persona(triggerEvery=${cfg.persona.triggerEveryN}, backupCount=${cfg.persona.backupCount}, sceneBackupCount=${cfg.persona.sceneBackupCount}), ` +
@@ -189,6 +198,18 @@ export default function register(api: OpenClawPluginApi) {
   } catch (err) {
     api.logger.error(`${TAG} Config parsing failed: ${err instanceof Error ? err.message : String(err)}`);
     throw err;
+  }
+
+  const recallInjection = resolveRecallInjectionMode(
+    cfg.recall.injectionMode,
+    (api.runtime as any)?.version,
+  );
+  if (recallInjection.fallbackReason) {
+    api.logger.warn(
+      `${TAG} recall.injectionMode=${cfg.recall.injectionMode} requested, but ` +
+      `host version ${JSON.stringify((api.runtime as any)?.version)} cannot be confirmed to support ` +
+      `appendContext (${recallInjection.fallbackReason}); falling back to prepend`,
+    );
   }
 
   // Initialize unified time module (must happen before any timestamp formatting)
@@ -584,19 +605,29 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.prependSystemContext || result?.appendSystemContext || result?.prependContext) {
-          const prependSystemLen = result.prependSystemContext?.length ?? 0;
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        const hookResult = shapeOpenClawRecallResult(result, recallInjection.effective);
+
+        if (
+          hookResult?.prependSystemContext ||
+          hookResult?.appendSystemContext ||
+          hookResult?.prependContext ||
+          hookResult?.appendContext
+        ) {
+          const prependSystemLen = hookResult.prependSystemContext?.length ?? 0;
+          const appendSystemLen = hookResult.appendSystemContext?.length ?? 0;
+          const prependLen = hookResult.prependContext?.length ?? 0;
+          const appendLen = hookResult.appendContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
             `prependSystemContext=${prependSystemLen} chars, ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendSystemLen} chars, ` +
+            `prependContext=${prependLen} chars, appendContext=${appendLen} chars, ` +
+            `injectionMode=${recallInjection.effective}`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -614,11 +645,13 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // By default, strip <relevant-memories> before persistence. The current
+  // model call has already seen the hook mutation, while later turns should
+  // not replay stale recall unless the operator explicitly enables it.
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write recall cleanup ` +
+    `(showInjected=${cfg.recall.showInjected})`,
+  );
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
@@ -626,31 +659,47 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
+    const stripped = stripInjectedRecallFromMessage(msg, cfg.recall.showInjected);
+    if (!stripped) {
+      if (cfg.recall.showInjected && typeof msg.content === "string" && msg.content.includes("<relevant-memories>")) {
+        api.logger.debug?.(`${TAG} [before_message_write] Preserving injected recall because recall.showInjected=true`);
+      }
+      return;
     }
 
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
-    }
+    api.logger.debug?.(
+      `${TAG} [before_message_write] Stripped injected recall from ${stripped.contentType}: ` +
+      `removed ${stripped.removedChars} chars`,
+    );
+    return { message: stripped.message as typeof event.message };
   });
+
+  // Provider-normalized prompt-cache accounting is exposed by newer
+  // OpenClaw hosts through llm_output. Keep this behind report.enabled and a
+  // version gate so the plugin remains loadable on its older supported line.
+  if (cfg.report.enabled) {
+    const rawHostVersion = (api.runtime as any)?.version;
+    if (supportsPromptCacheUsageHook(rawHostVersion)) {
+      const typedApi = api as unknown as { on: (
+        name: string,
+        handler: (event: Record<string, unknown>, ctx: Record<string, unknown>) => void,
+      ) => void };
+      typedApi.on("llm_output", (event, ctx) => {
+        const usage = normalizePromptCacheUsage(event);
+        if (!usage || !instanceId) return;
+        report("prompt_cache_usage", {
+          sessionKey: typeof ctx.sessionKey === "string" ? ctx.sessionKey : null,
+          runId: typeof event.runId === "string" ? event.runId : null,
+          ...usage,
+        });
+      });
+      api.logger.debug?.(`${TAG} Registered llm_output prompt-cache usage metrics`);
+    } else {
+      api.logger.debug?.(
+        `${TAG} Prompt-cache usage metrics unavailable on host version ${JSON.stringify(rawHostVersion)}`,
+      );
+    }
+  }
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
   if (cfg.capture.enabled) {

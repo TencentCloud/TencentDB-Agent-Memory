@@ -22,7 +22,7 @@
 
 ### 🐛 修复
 
-- **稳定记忆上下文位于缓存边界之后** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：将 persona、scene navigation 与 memory tools guide 从 `appendSystemContext` 移至 `prependSystemContext`，使其位于 OpenClaw 系统提示的动态尾部和缓存边界之前；动态 L1 记忆继续保留在当前轮用户上下文，Gateway/Hermes 返回内容保持兼容。
+- **记忆注入影响提示词前缀缓存** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：将 persona、scene navigation 与 memory tools guide 移至 `prependSystemContext`；新增兼容回退的 `recall.injectionMode`（动态 L1 可选择 `appendContext`）和默认安全的 `recall.showInjected=false` 历史清理；增加 DeepSeek/MiMo 统一缓存 usage 指标、多轮膨胀回归测试及完整上下文结构文档，Gateway/Hermes 返回内容保持兼容。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
