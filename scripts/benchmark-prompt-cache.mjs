@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { pathToFileURL } from "node:url";
+
 /**
  * Controlled prompt-cache A/B runner for OpenAI-compatible providers.
  *
@@ -19,14 +21,20 @@ const model = process.env.PROMPT_CACHE_BENCH_MODEL?.trim();
 const turns = Math.max(3, Number.parseInt(process.env.PROMPT_CACHE_BENCH_TURNS ?? "3", 10) || 3);
 const delayMs = Math.max(0, Number.parseInt(process.env.PROMPT_CACHE_BENCH_DELAY_MS ?? "3000", 10) || 0);
 
-if (!baseUrl || !apiKey || !model) {
-  console.error(
-    "Set PROMPT_CACHE_BENCH_BASE_URL, PROMPT_CACHE_BENCH_API_KEY, and " +
-    "PROMPT_CACHE_BENCH_MODEL before running this benchmark.",
-  );
-  process.exitCode = 2;
-} else {
-  await main();
+const invokedDirectly = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (invokedDirectly) {
+  if (!baseUrl || !apiKey || !model) {
+    console.error(
+      "Set PROMPT_CACHE_BENCH_BASE_URL, PROMPT_CACHE_BENCH_API_KEY, and " +
+      "PROMPT_CACHE_BENCH_MODEL before running this benchmark.",
+    );
+    process.exitCode = 2;
+  } else {
+    await main();
+  }
 }
 
 function sleep(ms) {
@@ -37,7 +45,7 @@ function readNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function normalizeUsage(usage) {
+export function normalizeUsage(usage) {
   if (!usage || typeof usage !== "object") return { available: false };
 
   const promptTokens = readNumber(usage.prompt_tokens);
@@ -69,7 +77,7 @@ function normalizeUsage(usage) {
   };
 }
 
-function buildRequest(variant, turn, experimentId) {
+export function buildRequest(variant, turn, experimentId, modelId = model) {
   const stableMemory = [
     "<user-persona>",
     "The user expects cache-stable implementation guidance. ".repeat(160),
@@ -88,7 +96,7 @@ function buildRequest(variant, turn, experimentId) {
 
   const optimized = variant === "optimized";
   return {
-    model,
+    model: modelId,
     messages: [
       {
         role: "system",
@@ -128,7 +136,7 @@ async function callProvider(body) {
   return normalizeUsage(payload?.usage);
 }
 
-function aggregate(samples) {
+export function aggregate(samples) {
   const measured = samples.slice(1).filter((sample) => sample.available);
   if (measured.length === 0) {
     return {
