@@ -136,6 +136,17 @@ Variant B: recall.injectionMode="append",  recall.showInjected=false
 
 Exclude the cold first request, repeat each variant several times, aggregate `prompt_cache_usage` by provider/model, and report tool-call counts because different tool paths alter the prefix independently. Run the comparison on OpenClaw v2026.4.27 or newer so both variants are actually distinct.
 
+For a direct provider A/B without modifying an OpenClaw installation, the repository includes a controlled runner. It sends three or more requests per variant, changes the volatile host tail and recalled L1 block each turn, excludes the cold first request, and prints only usage statistics (never the API key or response text):
+
+```bash
+PROMPT_CACHE_BENCH_BASE_URL="https://api.deepseek.com/v1" \
+PROMPT_CACHE_BENCH_API_KEY="..." \
+PROMPT_CACHE_BENCH_MODEL="deepseek-chat" \
+npm run benchmark:prompt-cache
+```
+
+Use the corresponding MiMo OpenAI-compatible base URL and model for the second provider. If an endpoint does not return cache token details, the runner reports the sample as unavailable instead of deriving a hit rate from billing assumptions.
+
 ## References
 
 - [DeepSeek Context Caching](https://api-docs.deepseek.com/guides/kv_cache/)
