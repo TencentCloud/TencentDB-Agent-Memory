@@ -436,6 +436,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `timezone` | `"system"` | 时区：`"system"`（跟随系统）/ IANA 名（`Asia/Shanghai`）/ offset 串（`+08:00`） |
 | `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
+| `recall.injectionMode` | `"prepend"` | 动态 L1 召回注入位置：`prepend` 保持兼容行为；`append` 将召回内容放在用户输入后，降低对前缀缓存的影响 |
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
@@ -445,6 +446,25 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `offload.enabled` | `false` | 是否启用短期记忆压缩 |
 
 </details>
+
+### 动态 L1 召回注入位置
+
+兼容 OpenClaw 的宿主可以把每轮 L1 召回放在当前用户输入之后，让提示词开头对前缀缓存更加稳定：
+
+```json
+{
+  "recall": {
+    "injectionMode": "append"
+  }
+}
+```
+
+为保持向后兼容，默认值仍为 `prepend`：
+
+```text
+prepend: <relevant-memories> + 用户问题
+append:  用户问题 + <relevant-memories>
+```
 
 <details>
 <summary><b>🟡 Level 2 · 进阶调优</b>（长任务 / 长 Session 场景）</summary>

@@ -77,10 +77,19 @@ export interface PipelineTriggerConfig {
   sessionActiveWindowHours: number;
 }
 
+export type RecallInjectionMode = "prepend" | "append";
+
 /** Recall settings — controls memory retrieval for context injection. */
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /**
+   * Placement of dynamic L1 recall in the current user prompt.
+   *
+   * prepend: recalled memory before the user prompt, legacy behavior
+   * append: recalled memory after the user prompt, more prefix-cache friendly
+   */
+  injectionMode: RecallInjectionMode;
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -529,6 +538,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      injectionMode: normalizeRecallInjectionMode(str(recallGroup, "injectionMode")),
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
@@ -634,6 +644,12 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+
+function normalizeRecallInjectionMode(
+  value: string | undefined,
+): RecallInjectionMode {
+  return value === "append" ? "append" : "prepend";
+}
 
 /**
  * Validate recall strategy against whitelist.
