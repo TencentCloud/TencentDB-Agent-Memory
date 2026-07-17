@@ -413,6 +413,9 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |
 | `offload.enabled` | `false` | Whether to enable short-term compression |
 
+See [Prompt-cache mitigation and verification](docs/prompt-cache-mitigation.md)
+for the context layout, multi-turn growth model, and provider A/B protocol.
+
 </details>
 
 <details>

@@ -416,6 +416,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
 | `offload.enabled` | `false` | 是否启用短期记忆压缩 |
 
+上下文结构、多轮膨胀模型及 provider A/B 实测方法见
+[Prompt-cache mitigation and verification](docs/prompt-cache-mitigation.md)。
+
 </details>
 
 <details>
