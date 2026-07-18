@@ -1,0 +1,42 @@
+enabled: true
+
+gateway:
+  url: "http://127.0.0.1:8420"
+  api_key: null
+  api_key_env: "TDAI_GATEWAY_API_KEY"
+  timeout_seconds: 8.0
+  session_end_timeout_seconds: 120.0
+  fail_open: true
+
+session:
+  user_id: "openhands"
+
+recall:
+  enabled: true
+  include_gateway_recall: true
+  include_l1_search: true
+  l1_search_limit: 5
+  max_context_chars: 6000
+  strip_tool_guide_if_no_tool_bundle: true
+
+capture:
+  enabled: true
+  include_messages: true
+  max_assistant_summary_chars: 5000
+
+tools:
+  enabled: true
+  gateway_url: null
+  api_key_env: "TDAI_GATEWAY_API_KEY"
+  memory_search_limit: 5
+  conversation_search_limit: 5
+
+lifecycle:
+  enabled: true
+  capture_on_stop: true
+  capture_on_session_end: true
+  flush_on_session_end: true
+  conversations_dir: null
+  state_dir: "~/.tdai/openhands-hook-state"
+  session_key_prefix: "openhands/tui"
+  max_capture_events: 500
