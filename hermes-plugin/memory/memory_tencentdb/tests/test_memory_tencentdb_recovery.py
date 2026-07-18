@@ -63,7 +63,10 @@ if _hermes_root and _hermes_root not in sys.path:
     sys.path.insert(0, _hermes_root)
 
 try:
-    from plugins.memory.memory_tencentdb import MemoryTencentdbProvider
+    from plugins.memory.memory_tencentdb import (
+        MemoryTencentdbProvider,
+        _compose_recall_context,
+    )
     from plugins.memory.memory_tencentdb import supervisor as supervisor_module
 except ImportError as e:  # pragma: no cover — env-dependent
     pytest.skip(
@@ -325,6 +328,61 @@ def test_watchdog_stops_on_shutdown(provider_with_fake_supervisor):
 # ---------------------------------------------------------------------------
 # Lazy probe: request path self-heals when stuck-False
 # ---------------------------------------------------------------------------
+
+
+def test_compose_recall_context_prefers_structured_fields():
+    result = _compose_recall_context(
+        {
+            "context": "legacy",
+            "stable_context": "stable",
+            "dynamic_context": "dynamic",
+        }
+    )
+
+    assert result == "stable\n\ndynamic"
+
+
+def test_compose_recall_context_falls_back_to_legacy_context():
+    assert _compose_recall_context({"context": "legacy"}) == "legacy"
+
+
+def test_prefetch_consumes_structured_gateway_context(
+    provider_with_fake_supervisor,
+):
+    provider = provider_with_fake_supervisor
+    provider._fake.client.recall.return_value = {
+        "context": "legacy",
+        "stable_context": "stable",
+        "dynamic_context": "dynamic",
+        "injection_mode": "append",
+    }
+
+    result = provider.prefetch(query="hello")
+
+    assert "stable" in result
+    assert "dynamic" in result
+    assert "legacy" not in result
+
+
+def test_prefetch_warns_once_when_prepend_falls_back_to_hermes_append(
+    provider_with_fake_supervisor,
+    caplog,
+):
+    provider = provider_with_fake_supervisor
+    provider._fake.client.recall.return_value = {
+        "dynamic_context": "dynamic",
+        "injection_mode": "prepend",
+    }
+
+    provider.prefetch(query="first")
+    provider.prefetch(query="second")
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "native append placement" in record.getMessage()
+    ]
+    assert len(messages) == 1
 
 
 def test_prefetch_recovers_when_stuck_false_and_breaker_closed(

@@ -163,7 +163,7 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
+  // stableContext (host-placed, stable, cacheable):
   //   persona, scene navigation, memory tools guide
   //   These change infrequently; when content is identical across turns,
   //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
@@ -193,7 +193,7 @@ async function performAutoRecallInner(params: {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const stableContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -205,13 +205,13 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !dynamicContext) {
+  if (!stableContext && !dynamicContext) {
     return undefined;
   }
 
   return {
     dynamicContext,
-    appendSystemContext,
+    stableContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,

@@ -2,7 +2,8 @@ import type { RecallInjectionMode } from "../../config.js";
 import type { RecallResult } from "../../core/types.js";
 
 export interface OpenClawRecallHookResult
-  extends Omit<RecallResult, "dynamicContext"> {
+  extends Omit<RecallResult, "stableContext" | "dynamicContext"> {
+  appendSystemContext?: string;
   prependContext?: string;
   appendContext?: string;
 }
@@ -19,7 +20,10 @@ export function shapeOpenClawRecallResult(
 ): OpenClawRecallHookResult | undefined {
   if (!result) return undefined;
 
-  const { dynamicContext, ...rest } = result;
+  const { stableContext, dynamicContext, ...metadata } = result;
+  const rest = stableContext
+    ? { ...metadata, appendSystemContext: stableContext }
+    : metadata;
 
   if (!dynamicContext) {
     return rest;

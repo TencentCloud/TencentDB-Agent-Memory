@@ -205,8 +205,8 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** Dynamic L1 recall content for the current turn. Placement is host-defined. */
   dynamicContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
-  appendSystemContext?: string;
+  /** Stable recall content (persona, scene nav, tools guide). Placement is host-defined. */
+  stableContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: RecalledMemory[];
   /** L3 Persona content (for metrics). */

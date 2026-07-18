@@ -7,7 +7,7 @@ describe("shapeOpenClawRecallResult", () => {
     expect(
       shapeOpenClawRecallResult(
         {
-          appendSystemContext: "stable",
+          stableContext: "stable",
           dynamicContext: "dynamic",
         },
         "prepend",
@@ -22,7 +22,7 @@ describe("shapeOpenClawRecallResult", () => {
     expect(
       shapeOpenClawRecallResult(
         {
-          appendSystemContext: "stable",
+          stableContext: "stable",
           dynamicContext: "dynamic",
         },
         "append",
@@ -47,7 +47,7 @@ describe("shapeOpenClawRecallResult", () => {
     expect(
       shapeOpenClawRecallResult(
         {
-          appendSystemContext: "stable",
+          stableContext: "stable",
           dynamicContext: "",
         },
         "append",

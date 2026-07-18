@@ -435,7 +435,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
-| `recall.injectionMode` | `"prepend"` | Dynamic L1 recall placement: `prepend` keeps compatible behavior; `append` places recall after the user input to reduce its impact on prefix caching |
+| `recall.injectionMode` | `"prepend"` | Preferred dynamic L1 recall placement: `prepend` keeps compatible behavior; `append` places recall after the user input when the host supports it |
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
@@ -448,8 +448,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 
 ### Dynamic L1 recall placement
 
-OpenClaw-compatible hosts can place per-turn L1 recall after the current user
-input, keeping the beginning of the prompt more stable for prefix caching:
+Set the preferred placement for per-turn L1 recall:
 
 ```json
 {
@@ -465,6 +464,18 @@ The default remains `prepend` for backward compatibility:
 prepend: <relevant-memories> + user question
 append:  user question + <relevant-memories>
 ```
+
+Host behavior:
+
+- **OpenClaw** supports both modes directly through `prependContext` and
+  `appendContext`.
+- **Gateway clients** receive separate `stable_context` and `dynamic_context`
+  fields plus `injection_mode`, so each framework can apply its native hook.
+  The legacy `context` field remains available and combines both parts.
+- **Hermes** exposes only `MemoryProvider.prefetch()`, whose returned context is
+  appended to the current user turn. It therefore always uses native append
+  placement; requesting `prepend` produces a one-time fallback warning instead
+  of dropping dynamic L1 recall.
 
 <details>
 <summary><b>🟡 Level 2 · Advanced tuning</b> (long task / long session)</summary>
