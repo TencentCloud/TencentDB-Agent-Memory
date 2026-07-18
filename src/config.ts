@@ -9,6 +9,7 @@
 
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+import path from "node:path";
 
 // ============================
 // Type definitions
@@ -481,7 +482,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     temperature: num(offloadGroup, "temperature") ?? 0.2,
     disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
-    dataDir: optStr(offloadGroup, "dataDir"),
+    dataDir: normalizeOffloadDataDir(optStr(offloadGroup, "dataDir")),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
     maxPairsPerBatch: num(offloadGroup, "maxPairsPerBatch") ?? 20,
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
@@ -607,6 +608,12 @@ function str(src: Record<string, unknown>, key: string): string | undefined {
 function optStr(src: Record<string, unknown>, key: string): string | undefined {
   const v = src[key];
   return typeof v === "string" ? v : undefined;
+}
+
+function normalizeOffloadDataDir(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return path.isAbsolute(trimmed) ? trimmed : undefined;
 }
 
 function num(src: Record<string, unknown>, key: string): number | undefined {
