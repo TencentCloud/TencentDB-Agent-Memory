@@ -385,6 +385,19 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Codex（MCP）
+
+Codex 可以通过内置的本地 stdio MCP 服务使用 TencentDB Agent Memory。构建项目后，将
+`dist/codex-mcp.mjs` 注册到 Codex，即可使用召回、搜索、采集和会话刷新五个工具：
+
+```bash
+npm install && npm run build
+codex mcp add tencentdb-memory -- node /absolute/path/to/TencentDB-Agent-Memory/dist/codex-mcp.mjs
+```
+
+基础 L0 采集和原始对话搜索不需要 LLM Key；L1→L3 提取继续复用已有的 `TDAI_LLM_*`
+配置。项目级配置、写工具审批和读写验证流程见 [Codex 适配指南](./docs/codex-adapter.md)。
+
 
 ## 🔒 Gateway 安全配置（可选）
 
@@ -537,6 +550,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [`docs/codex-adapter.md`](./docs/codex-adapter.md) | Codex MCP 安装、工具、配置与读写验证 |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |

@@ -383,6 +383,21 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Codex (MCP)
+
+Codex can use TencentDB Agent Memory through the bundled local stdio MCP server. After building the
+package, register `dist/codex-mcp.mjs` in Codex and expose the five recall, search, capture, and flush
+tools:
+
+```bash
+npm install && npm run build
+codex mcp add tencentdb-memory -- node /absolute/path/to/TencentDB-Agent-Memory/dist/codex-mcp.mjs
+```
+
+Basic L0 capture and conversation search work without an LLM key. L1→L3 extraction uses the existing
+`TDAI_LLM_*` configuration. See the [Codex adapter guide](./docs/codex-adapter.md) for project-scoped
+configuration, tool approval settings, and a read/write verification flow.
+
 
 ## 🔒 Gateway Security (optional)
 
@@ -536,6 +551,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/codex-adapter.md`](./docs/codex-adapter.md) | Codex MCP setup, tools, configuration, and read/write verification |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
