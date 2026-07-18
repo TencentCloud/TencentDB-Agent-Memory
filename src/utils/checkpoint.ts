@@ -147,6 +147,47 @@ export interface CheckpointLogger {
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
+// Counter delta / recalculate types
+// ============================
+
+/**
+ * Delta applied to global counters via {@link CheckpointManager.decrementCounters}.
+ * Only the five global monotonic counters can be decremented; omitted fields are
+ * left untouched.
+ *
+ * Counters covered:
+ * - `total_processed` — total L0 messages processed (maps to `countL0()`)
+ * - `l0_conversations_count` — total L0 conversation captures (no authoritative source)
+ * - `total_memories_extracted` — total L1 memories extracted (maps to `countL1()`)
+ * - `memories_since_last_persona` — L1 memories since last persona generation (delta, no source)
+ * - `scenes_processed` — total scene block extractions (maps to `scene_blocks/*.md` file count)
+ */
+export interface CounterDelta {
+  total_processed?: number;
+  l0_conversations_count?: number;
+  total_memories_extracted?: number;
+  memories_since_last_persona?: number;
+  scenes_processed?: number;
+}
+
+/**
+ * Authoritative counter values applied via {@link CheckpointManager.recalculateCounters}.
+ * Same shape as {@link CounterDelta} but semantically a "set to this absolute value"
+ * operation rather than a delta. All provided values must be `>= 0` (negative values
+ * throw `RangeError`).
+ */
+export type CounterActuals = CounterDelta;
+
+/** List of counter keys for iteration. */
+const COUNTER_KEYS: ReadonlyArray<keyof CounterDelta> = [
+  "total_processed",
+  "l0_conversations_count",
+  "total_memories_extracted",
+  "memories_since_last_persona",
+  "scenes_processed",
+];
+
+// ============================
 // Per-file async lock
 // ============================
 // Keyed by resolved file path. Multiple CheckpointManager instances pointing
@@ -330,6 +371,170 @@ export class CheckpointManager {
       cp.scenes_processed += 1;
     });
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
+  }
+
+  // ============================
+  // Counter drift repair (issue #157)
+  // ============================
+  //
+  // Counters historically only incremented. After cleanup operations
+  // (memory-cleaner, manual JSONL pruning, session reset, pipeline-state
+  // deletion) the counters permanently overestimated actual data, causing
+  // downstream drift (persona trigger, L2 corruption check, backup naming).
+  //
+  // - decrementCounters: subtract a known delta (manual cleanup where the
+  //   exact number of removed records is known). Floors at 0 + warns on
+  //   over-decrement so caller bugs surface.
+  // - recalculateCounters: set absolute authoritative values (used by
+  //   memory-cleaner which queries the vector store for ground-truth counts).
+  //   Throws on negative input (programming error). Warns when a value
+  //   decreases (drift detection signal).
+  //
+  // Concurrency: both are serialized via the per-file lock. recalculate is a
+  // "best-effort snapshot reconciliation" — the caller reads authoritative
+  // counts outside the lock, so there is an inherent TOCTOU window between
+  // the count read and the locked set. For memory-cleaner (daily, quiet time)
+  // this is acceptable; callers needing exact accuracy should quiesce the
+  // pipeline first.
+
+  /**
+   * Decrement global counters by the given delta after a cleanup operation.
+   *
+   * Each field is floored at 0 — over-decrementing (delta exceeds current
+   * value) is treated as best-effort and surfaces a `warn` log per clamped
+   * field so caller miscalculations are visible. Fields not present in
+   * `delta` are left unchanged.
+   *
+   * @example
+   * // After manually deleting 3 L1 records from the store:
+   * await cm.decrementCounters({
+   *   total_memories_extracted: 3,
+   *   memories_since_last_persona: 3,
+   * });
+   */
+  async decrementCounters(delta: CounterDelta): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      for (const key of COUNTER_KEYS) {
+        const amount = delta[key];
+        if (amount == null) continue;
+        const current = cp[key] as number;
+        const next = current - amount;
+        if (next < 0) {
+          this.logger.warn?.(
+            `[checkpoint] decrementCounters: ${key} delta=${amount} exceeds current=${current}, clamped to 0`,
+          );
+          (cp[key] as number) = 0;
+        } else {
+          (cp[key] as number) = next;
+        }
+      }
+    });
+    const changed = COUNTER_KEYS
+      .filter((k) => delta[k] != null)
+      .map((k) => `${k}=${cp[k]}`)
+      .join(", ");
+    this.logger.info(`[checkpoint] decrementCounters: ${changed}`);
+  }
+
+  /**
+   * Recalculate (reconcile) global counters to authoritative values.
+   *
+   * Used by memory-cleaner after cleanup: it queries the vector store for
+   * ground-truth counts and passes them here to replace the (possibly
+   * drifted) checkpoint values. Only fields present in `actuals` are
+   * overwritten; others are left unchanged.
+   *
+   * Negative values are rejected with `RangeError` (authoritative counts
+   * cannot be negative — this is a programming error). When a value
+   * decreases relative to the current checkpoint, a `warn` log is emitted
+   * as a drift-detection signal.
+   *
+   * @example
+   * // After memory-cleaner deletes expired records:
+   * const [l0, l1] = await Promise.all([store.countL0(), store.countL1()]);
+   * const scenes = await countSceneFiles(dataDir);
+   * await cm.recalculateCounters({
+   *   total_processed: l0,
+   *   total_memories_extracted: l1,
+   *   scenes_processed: scenes,
+   * });
+   */
+  async recalculateCounters(actuals: CounterActuals): Promise<void> {
+    // Validate inputs up front (before acquiring the lock).
+    for (const key of COUNTER_KEYS) {
+      const v = actuals[key];
+      if (v != null && v < 0) {
+        throw new RangeError(
+          `[checkpoint] recalculateCounters: ${key} must be >= 0, got ${v}`,
+        );
+      }
+    }
+
+    const cp = await this.mutate((cp) => {
+      for (const key of COUNTER_KEYS) {
+        const newVal = actuals[key];
+        if (newVal == null) continue;
+        const oldVal = cp[key] as number;
+        if (newVal < oldVal) {
+          this.logger.warn?.(
+            `[checkpoint] recalculateCounters: ${key} drift detected: ${oldVal} → ${newVal}`,
+          );
+        }
+        (cp[key] as number) = newVal;
+      }
+    });
+    const changed = COUNTER_KEYS
+      .filter((k) => actuals[k] != null)
+      .map((k) => `${k}=${cp[k]}`)
+      .join(", ");
+    this.logger.info(`[checkpoint] recalculateCounters: ${changed}`);
+  }
+
+  /**
+   * Remove a session's pipeline-managed state entry.
+   *
+   * Drift path: when a session's pipeline state is deleted (e.g. test
+   * sessions, reset operations) the entry should be removed from
+   * `pipeline_states` so the PipelineManager no longer tracks it.
+   *
+   * This writes ONLY to `pipeline_states` — `runner_states` for the same
+   * session is untouched (see {@link removeRunnerState} for the symmetric
+   * runner-state removal).
+   *
+   * No-op if the session key does not exist.
+   */
+  async removePipelineState(sessionKey: string): Promise<void> {
+    await this.mutate((cp) => {
+      if (cp.pipeline_states && sessionKey in cp.pipeline_states) {
+        delete cp.pipeline_states[sessionKey];
+      }
+    });
+    this.logger.info(`[checkpoint] removePipelineState: session=${sessionKey}`);
+  }
+
+  /**
+   * Remove a session's runner-managed state entry (L0 capture cursor,
+   * L1 cursor, scene name).
+   *
+   * ⚠️ **Warning**: clearing `last_captured_timestamp` resets the per-session
+   * L0 capture cursor to 0. The next `captureAtomically` call will re-pull
+   * ALL historical messages for this session from the beginning. Callers
+   * MUST ensure the store has already been cleaned for this session
+   * (otherwise duplicate upserts will occur).
+   *
+   * This writes ONLY to `runner_states` — `pipeline_states` for the same
+   * session is untouched (see {@link removePipelineState} for the symmetric
+   * pipeline-state removal).
+   *
+   * No-op if the session key does not exist.
+   */
+  async removeRunnerState(sessionKey: string): Promise<void> {
+    await this.mutate((cp) => {
+      if (cp.runner_states && sessionKey in cp.runner_states) {
+        delete cp.runner_states[sessionKey];
+      }
+    });
+    this.logger.info(`[checkpoint] removeRunnerState: session=${sessionKey}`);
   }
 
   // ============================
