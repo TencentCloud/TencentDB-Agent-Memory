@@ -54,6 +54,18 @@ function makeStore(params: {
   } as unknown as IMemoryStore;
 }
 
+function makeThrowingStore(): IMemoryStore {
+  return {
+    isDegraded: () => false,
+    countL0: () => {
+      throw new Error("l0 count unavailable");
+    },
+    countL1: () => {
+      throw new Error("l1 count unavailable");
+    },
+  } as unknown as IMemoryStore;
+}
+
 describe("CheckpointManager counter recalculation", () => {
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -77,6 +89,103 @@ describe("CheckpointManager counter recalculation", () => {
     const actual = await checkpoint.read();
     expect(actual.l0_conversations_count).toBe(2);
     expect(actual.total_memories_extracted).toBe(1);
+  });
+
+  it("falls back to JSONL counts when vector store count calls fail", async () => {
+    const dataDir = await makeDataDir();
+    const warnings: string[] = [];
+    const checkpoint = new CheckpointManager(dataDir, {
+      info() {},
+      warn(message) {
+        warnings.push(message);
+      },
+    });
+    await checkpoint.write(makeCheckpoint());
+
+    await writeJsonl(path.join(dataDir, "conversations", "2026-01-01.jsonl"), [
+      { id: "l0-1" },
+      { id: "l0-2" },
+      { id: "l0-3" },
+    ]);
+    await writeJsonl(path.join(dataDir, "records", "2026-01-01.jsonl"), [
+      { id: "l1-1" },
+      { id: "l1-2" },
+    ]);
+
+    await checkpoint.recalculateCounters(makeThrowingStore());
+
+    const actual = await checkpoint.read();
+    expect(actual.l0_conversations_count).toBe(3);
+    expect(actual.total_memories_extracted).toBe(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("falling back to JSONL");
+  });
+
+  it("preserves unrelated checkpoint state while recalculating storage-derived counters", async () => {
+    const dataDir = await makeDataDir();
+    const checkpoint = new CheckpointManager(dataDir);
+    await checkpoint.write(makeCheckpoint({
+      last_captured_timestamp: 123,
+      total_processed: 45,
+      last_persona_at: 40,
+      last_persona_time: "2026-01-01T00:00:00.000Z",
+      request_persona_update: true,
+      persona_update_reason: "threshold",
+      memories_since_last_persona: 6,
+      scenes_processed: 2,
+      runner_states: {
+        sessionA: {
+          last_captured_timestamp: 111,
+          last_l1_cursor: 222,
+          last_scene_name: "work",
+        },
+      },
+      pipeline_states: {
+        sessionA: {
+          conversation_count: 3,
+          last_extraction_time: "2026-01-01T01:00:00.000Z",
+          last_extraction_updated_time: "2026-01-01T01:00:01.000Z",
+          last_active_time: 456,
+          l2_pending_l1_count: 1,
+          warmup_threshold: 4,
+          l2_last_extraction_time: "2026-01-01T02:00:00.000Z",
+        },
+      },
+    }));
+
+    await checkpoint.recalculateCounters(makeStore({ l0: 7, l1: 3 }));
+
+    const actual = await checkpoint.read();
+    expect(actual).toMatchObject({
+      last_captured_timestamp: 123,
+      total_processed: 45,
+      last_persona_at: 40,
+      last_persona_time: "2026-01-01T00:00:00.000Z",
+      request_persona_update: true,
+      persona_update_reason: "threshold",
+      memories_since_last_persona: 6,
+      scenes_processed: 2,
+      l0_conversations_count: 7,
+      total_memories_extracted: 3,
+      runner_states: {
+        sessionA: {
+          last_captured_timestamp: 111,
+          last_l1_cursor: 222,
+          last_scene_name: "work",
+        },
+      },
+      pipeline_states: {
+        sessionA: {
+          conversation_count: 3,
+          last_extraction_time: "2026-01-01T01:00:00.000Z",
+          last_extraction_updated_time: "2026-01-01T01:00:01.000Z",
+          last_active_time: 456,
+          l2_pending_l1_count: 1,
+          warmup_threshold: 4,
+          l2_last_extraction_time: "2026-01-01T02:00:00.000Z",
+        },
+      },
+    });
   });
 
   it("prefers vector store counts over JSONL counts", async () => {
