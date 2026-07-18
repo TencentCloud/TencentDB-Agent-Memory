@@ -306,6 +306,23 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Claude Code
+
+构建 npm 包、启动现有 TDAI Gateway，然后加载内置 Claude Code 插件：
+
+```bash
+npm install
+npm run build:plugin
+# 终端 1
+npx tsx src/gateway/server.ts
+# 终端 2
+claude --plugin-dir ./claude-code-plugin
+```
+
+插件会在 `UserPromptSubmit` 自动召回记忆，在 `Stop` 捕获完整回合，并在
+`SessionEnd` 刷新会话。Gateway 配置、鉴权、Windows 命令、失败重试和验证步骤
+见 [`Claude Code 适配指南`](./docs/claude-code-adapter.md)。
+
 **5. 配置 Gateway 环境变量**
 
 编辑 `~/.hermes/.env`，添加：
@@ -527,6 +544,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| Claude Code 插件 | 通过原生生命周期 Hook 自动召回、捕获并刷新会话 |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -540,6 +558,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
+| [`docs/claude-code-adapter.md`](./docs/claude-code-adapter.md) | Claude Code 插件安装、生命周期映射与故障排查 |
 
 ---
 ## 社区与贡献
