@@ -5,6 +5,8 @@
   "type": "module",
   "main": "./dist/index.mjs",
   "bin": {
+    "memory-tencentdb-hook": "./bin/memory-tencentdb-hook.mjs",
+    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs",
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
     "read-local-memory": "./bin/read-local-memory.mjs"
@@ -43,6 +45,8 @@
     "scripts/setup-hermes-memory-tencentdb.bat",
     "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
+    "integrations/",
+    "docs/platform-adapter-comparison.md",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
