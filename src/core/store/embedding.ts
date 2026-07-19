@@ -362,8 +362,8 @@ export class LocalEmbeddingService implements EmbeddingService {
 // OpenAI-compatible implementation
 // ============================
 
-/** Max texts per batch (OpenAI limit is 2048, we use a safe value) */
-const MAX_BATCH_SIZE = 256;
+/** Max texts per remote embedding batch; Dashscope rejects batches larger than 10. */
+const MAX_BATCH_SIZE = 10;
 
 /**
  * Max retries for embedding API calls (transient errors: network, 429, DNS).
