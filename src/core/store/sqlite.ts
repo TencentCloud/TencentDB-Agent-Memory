@@ -174,6 +174,41 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+function normalizeFtsText(raw: string): string {
+  return raw.normalize("NFKC");
+}
+
+function stripFtsSyntax(raw: string): string {
+  return raw
+    .replace(/\bNEAR\s*\(([^)]*)\)/gi, (_match, inner: string) => inner.replace(/,\s*\d+\s*$/, " "))
+    .replace(/\bNEAR\s*\/\s*\d+\b/gi, " ")
+    .replace(/(^|[\s(])-?[\p{L}_][\p{L}\p{N}_]*\s*:/gu, "$1");
+}
+
+function sanitizeFtsTokens(rawTokens: string[]): string[] {
+  const safeTokens: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawToken of rawTokens) {
+    const parts = stripFtsSyntax(normalizeFtsText(rawToken)).match(FTS5_TOKEN_RE) ?? [];
+    for (const part of parts) {
+      const token = part.trim();
+      if (!token) continue;
+      if (!/[\p{L}\p{N}]/u.test(token)) continue;
+      if (ZH_STOP_WORDS.has(token)) continue;
+      if (FTS5_RESERVED_OPERATORS.has(token.toUpperCase())) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      safeTokens.push(token);
+    }
+  }
+
+  return safeTokens;
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -197,31 +232,16 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const normalizedRaw = stripFtsSyntax(normalizeFtsText(raw));
 
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
+    tokens = sanitizeFtsTokens(jieba.cutForSearch(normalizedRaw, true));
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    tokens = sanitizeFtsTokens(normalizedRaw.match(FTS5_TOKEN_RE) ?? []);
   }
 
   if (tokens.length === 0) return null;
