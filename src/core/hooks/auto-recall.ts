@@ -27,6 +27,7 @@ const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
+const AUTO_RECALL_CONTEXT_TAG = "memory-tdai-auto-recall";
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -179,43 +180,14 @@ async function performAutoRecallInner(params: {
       `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms, ` +
       `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms — no context to inject`,
     );
-    logger?.debug?.(`${TAG} No memories/persona/scenes to inject`);
-    return undefined;
+    logger?.debug?.(`${TAG} No memories/persona/scenes; injecting only stable memory tools guidance`);
   }
 
-  // Split recall context into stable and dynamic parts to optimize prompt caching.
-  //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
-  //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
-
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
-  }
-
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const { prependContext, appendSystemContext } = composeRecallPromptContext({
+    memoryLines,
+    personaContent,
+    sceneNavigation,
+  });
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -237,6 +209,46 @@ async function performAutoRecallInner(params: {
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
+  };
+}
+
+/**
+ * Keep system additions independent from per-turn recall hits.
+ *
+ * The tools guide is always part of the stable system addition so a
+ * recall-only hit or miss cannot add or remove system text.
+ */
+export function composeRecallPromptContext(params: {
+  memoryLines: string[];
+  personaContent?: string;
+  sceneNavigation?: string;
+}): Pick<RecallResult, "prependContext" | "appendSystemContext"> {
+  const stableParts: string[] = [];
+  if (params.personaContent) {
+    stableParts.push(`<user-persona>\n${params.personaContent}\n</user-persona>`);
+  }
+  if (params.sceneNavigation) {
+    stableParts.push(`<scene-navigation>\n${params.sceneNavigation}\n</scene-navigation>`);
+  }
+  // This must be present on both recall hits and misses. Otherwise a
+  // recall-only hit changes the system prefix before the cache boundary.
+  stableParts.push(MEMORY_TOOLS_GUIDE);
+
+  let prependContext: string | undefined;
+  if (params.memoryLines.length > 0) {
+    prependContext =
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${params.memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  }
+
+  if (prependContext) {
+    // Keep dynamic recall self-contained so persistence can remove it as one
+    // unit without touching the user's original prompt.
+    prependContext = `<${AUTO_RECALL_CONTEXT_TAG}>\n${prependContext}\n</${AUTO_RECALL_CONTEXT_TAG}>`;
+  }
+
+  return {
+    prependContext,
+    appendSystemContext: stableParts.length > 0 ? stableParts.join("\n\n") : undefined,
   };
 }
 
