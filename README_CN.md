@@ -439,6 +439,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
+| `recall.showInjected` | `false` | 是否把 `<relevant-memories>` 注入块写入持久化历史；非调试场景保持 `false`，避免历史膨胀 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
@@ -455,6 +456,10 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `pipeline.l1IdleTimeoutSeconds` | `600` | 用户停止对话多久后触发 L1 |
 | `pipeline.l2MinIntervalSeconds` | `900` | 同 session 两次 L2 之间的最小间隔 |
 | `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.dedupeInjected` | `false` | 是否跳过同一 session 内已经注入过的 L1 记忆 |
+| `recall.dedupeMode` | `off` | 重复 L1 记忆处理方式：`off`、`skip` 或 `reminder`；`reminder` 会保留短提醒以降低事实丢失风险 |
+| `recall.dedupeInjectedTtlTurns` | `0` | 注入 digest 去重 TTL（按 recall turn 计）；`0` 表示当前进程内不重复注入 |
+| `recall.maxReminderChars` | `600` | `dedupeMode=reminder` 时重复记忆短提醒的总字符预算 |
 | `extraction.enableDedup` | `true` | L1 向量去重 / 冲突检测 |
 | `capture.excludeAgents` | `[]` | Glob 模式排除特定 Agent（如 `bench-judge-*`） |
 | `capture.l0l1RetentionDays` | `0` | L0/L1 本地文件保留天数，`0` = 永不清理 |

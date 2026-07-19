@@ -438,6 +438,7 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
+| `recall.showInjected` | `false` | Persist injected `<relevant-memories>` into chat history; keep `false` outside debugging to avoid history growth |
 | `pipeline.everyNConversations` | `5` | Trigger an L1 memory extraction every N turns |
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |
@@ -454,6 +455,10 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `pipeline.l1IdleTimeoutSeconds` | `600` | Trigger L1 after the user has been idle for this many seconds |
 | `pipeline.l2MinIntervalSeconds` | `900` | Minimum interval between two L2 passes within the same session |
 | `recall.timeoutMs` | `5000` | Recall timeout; on timeout, skip injection without blocking the conversation |
+| `recall.dedupeInjected` | `false` | Skip L1 memories already injected in the same session |
+| `recall.dedupeMode` | `off` | Duplicate L1 recall handling: `off`, `skip`, or `reminder`; `reminder` keeps a compact repeated-fact hint |
+| `recall.dedupeInjectedTtlTurns` | `0` | Recall digest TTL in turns; `0` means no duplicate reinjection within the current process |
+| `recall.maxReminderChars` | `600` | Total character budget for `dedupeMode=reminder` compact repeated-fact hints |
 | `extraction.enableDedup` | `true` | L1 vector dedup / conflict detection |
 | `capture.excludeAgents` | `[]` | Glob patterns to exclude specific agents (e.g. `bench-judge-*`) |
 | `capture.l0l1RetentionDays` | `0` | Local retention days for L0 / L1 files; `0` = never clean up |

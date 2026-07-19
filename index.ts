@@ -35,6 +35,8 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+import { stripRelevantMemoriesFromMessage } from "./src/utils/recall-injection.js";
+import { observeSessionSystemPromptShape } from "./src/utils/system-prompt-dedupe.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -587,6 +589,13 @@ export default function register(api: OpenClawPluginApi) {
         if (result?.appendSystemContext || result?.prependContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          if (result.appendSystemContext) {
+            const shape = observeSessionSystemPromptShape(resolvedSessionKey, result.appendSystemContext, api.logger);
+            api.logger.debug?.(
+              `${TAG} [before_prompt_build] Stable system context shape: ` +
+              `status=${shape.status}, turn=${shape.turn}, chars=${shape.chars}, digest=${shape.digest.slice(0, 12)}`,
+            );
+          }
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
             `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
@@ -616,38 +625,21 @@ export default function register(api: OpenClawPluginApi) {
   // the session JSONL.  The current-turn LLM already saw the full prompt
   // (effectivePrompt lives in memory), but we don't want recall artifacts
   // polluting the historical transcript for future replays.
+  if (cfg.recall.showInjected) {
+    api.logger.warn(`${TAG} recall.showInjected=true: preserving <relevant-memories> in persisted user messages; this may grow history and reduce prompt-cache efficiency`);
+  }
   api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
-    if (msg.role !== "user") return;
+    if (cfg.recall.showInjected) return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
-    }
-
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
-    }
+    const stripped = stripRelevantMemoriesFromMessage(event.message as typeof event.message & { role?: string; content?: unknown });
+    if (!stripped) return;
+    api.logger.debug?.(`${TAG} [before_message_write] Stripped <relevant-memories>: removed ${stripped.removedChars} chars`);
+    return { message: stripped.message as typeof event.message };
   });
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
@@ -701,13 +693,13 @@ export default function register(api: OpenClawPluginApi) {
         }
 
         const captureResult = await core.handleTurnCommitted({
-          userText: originalUserText ?? "",
+          userText: cfg.recall.showInjected ? "" : originalUserText ?? "",
           assistantText: "",
           messages,
           sessionKey: resolvedSessionKey,
           sessionId: sessionId || undefined,
           startedAt: pluginStartTimestamp,
-          originalUserMessageCount: cachedPrompt?.messageCount,
+          originalUserMessageCount: cfg.recall.showInjected ? undefined : cachedPrompt?.messageCount,
         });
         const captureMs = Date.now() - startMs;
         api.logger.info(

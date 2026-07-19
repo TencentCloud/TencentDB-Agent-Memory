@@ -13,6 +13,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
+import { applyRecallBudget, applySessionRecallDedupeDetailed, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
+import { dedupeStableSystemPromptAdditions } from "../../utils/system-prompt-dedupe.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -24,9 +26,6 @@ import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
-const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
-const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
-const RECALL_LINE_SEPARATOR = "\n";
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -109,12 +108,13 @@ async function performAutoRecallInner(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, sessionKey } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
+  let reminderLines: string[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
@@ -125,6 +125,9 @@ async function performAutoRecallInner(params: {
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
+    const dedupeResult = applySessionRecallDedupeDetailed(memoryLines, sessionKey, cfg.recall, logger);
+    memoryLines = dedupeResult.fullLines;
+    reminderLines = dedupeResult.reminderLines;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
@@ -193,29 +196,47 @@ async function performAutoRecallInner(params: {
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
+  const stableParts: Array<{ source: string; text: string }> = [];
   if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    stableParts.push({ source: "persona", text: `<user-persona>\n${personaContent}\n</user-persona>` });
   }
   if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    stableParts.push({ source: "scene-navigation", text: `<scene-navigation>\n${sceneNavigation}\n</scene-navigation>` });
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
+  const dynamicParts: string[] = [];
   if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    dynamicParts.push(
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`,
+    );
+  }
+  if (reminderLines.length > 0) {
+    dynamicParts.push(
+      `<memory-reminders>\n以下记忆本 session 已注入过，保留为短提醒以避免重复大块上下文：\n\n${reminderLines.join(RECALL_LINE_SEPARATOR)}\n</memory-reminders>`,
+    );
+  }
+  if (dynamicParts.length > 0) {
+    prependContext = dynamicParts.join("\n\n");
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
   if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
+    stableParts.push({ source: "memory-tools-guide", text: MEMORY_TOOLS_GUIDE });
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const stableDedupe = dedupeStableSystemPromptAdditions(stableParts);
+  if (stableDedupe.removed.length > 0) {
+    logger?.debug?.(
+      `${TAG} Stable system prompt additions deduped: input=${stableParts.length}, ` +
+      `kept=${stableDedupe.kept.length}, removed=${stableDedupe.removed.length}, ` +
+      `removedChars=${stableDedupe.removedChars}`,
+    );
+  }
+  const appendSystemContext = stableDedupe.text;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -374,7 +395,7 @@ async function searchMemories(
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
     // server-side dense + sparse + RRF in a single API call), short-circuit
     // to avoid a redundant second HTTP request and a wasted local embed().
-    if (vectorStore?.getCapabilities().nativeHybridSearch) {
+    if (vectorStore?.getCapabilities().nativeHybridSearch && vectorStore.searchL1Hybrid) {
       const tNative = performance.now();
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
@@ -703,89 +724,6 @@ function formatMemoryLine(m: FormatableMemory): string {
   // If all three are empty → no time info appended (graceful)
 
   return line;
-}
-
-function applyRecallBudget(
-  lines: string[],
-  recall: MemoryTdaiConfig["recall"],
-  logger?: Logger,
-): string[] {
-  const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
-  const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
-
-  if (!maxCharsPerMemory && !maxTotalRecallChars) {
-    return lines;
-  }
-
-  const budgeted: string[] = [];
-  let usedChars = 0;
-  let truncatedCount = 0;
-  let droppedCount = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const perMemoryBounded = maxCharsPerMemory
-      ? truncateRecallLine(line, maxCharsPerMemory)
-      : line;
-    let wasTruncated = perMemoryBounded !== line;
-
-    if (!maxTotalRecallChars) {
-      budgeted.push(perMemoryBounded);
-      if (wasTruncated) truncatedCount++;
-      continue;
-    }
-
-    const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
-    const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
-    if (remainingChars <= 0) {
-      droppedCount += lines.length - i;
-      break;
-    }
-
-    if (perMemoryBounded.length > remainingChars) {
-      const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
-      if (canFit) {
-        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
-        budgeted.push(totalBounded);
-        usedChars += separatorChars + totalBounded.length;
-        wasTruncated ||= totalBounded !== perMemoryBounded;
-        if (wasTruncated) truncatedCount++;
-      }
-      droppedCount += lines.length - i - (canFit ? 1 : 0);
-      break;
-    }
-
-    budgeted.push(perMemoryBounded);
-    usedChars += separatorChars + perMemoryBounded.length;
-    if (wasTruncated) truncatedCount++;
-  }
-
-  if (truncatedCount > 0 || droppedCount > 0) {
-    logger?.debug?.(
-      `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
-      `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
-      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
-    );
-  }
-
-  return budgeted;
-}
-
-function normalizeBudgetLimit(value: number | undefined): number | undefined {
-  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
-  return Math.floor(value);
-}
-
-function truncateRecallLine(line: string, maxChars: number): string {
-  // Count and slice by code point, not UTF-16 code unit, so a cut never lands
-  // between the halves of a surrogate pair (which would corrupt a non-BMP
-  // character to U+FFFD when the line is UTF-8 encoded for the request).
-  const cps = Array.from(line);
-  if (cps.length <= maxChars) return line;
-  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) {
-    return cps.slice(0, maxChars).join("");
-  }
-  return `${cps.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).join("").trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
 }
 
 /**

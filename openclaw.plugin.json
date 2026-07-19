@@ -77,6 +77,11 @@
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否把 <relevant-memories> 注入块保留到持久化对话历史。默认 false 表示仅当前轮可见；true 仅建议用于调试，会导致历史膨胀并降低缓存稳定性" },
+          "dedupeInjected": { "type": "boolean", "default": false, "description": "是否按 session 对已经注入过的 L1 记忆做 digest 去重，减少同一 session 内重复注入" },
+          "dedupeMode": { "type": "string", "enum": ["off", "skip", "reminder"], "default": "off", "description": "重复 L1 记忆处理方式：off 不去重；skip 跳过重复项；reminder 将重复项压缩成短提醒，减少事实丢失风险" },
+          "dedupeInjectedTtlTurns": { "type": "number", "default": 0, "description": "session 注入去重 TTL（按 recall turn 计）。0 表示本进程生命周期内同一 digest 不再重复注入；大于 0 表示超过该轮数后允许再次注入" },
+          "maxReminderChars": { "type": "number", "default": 600, "description": "dedupeMode=reminder 时重复记忆短提醒的总字符预算；0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
           "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
