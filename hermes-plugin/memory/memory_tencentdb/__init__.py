@@ -763,6 +763,21 @@ class MemoryTencentdbProvider(MemoryProvider):
         # Gateway side directly so both ends agree on the secret.
         api_key = _resolve_gateway_api_key()
 
+        # Log auth status at startup for operator awareness.
+        if api_key:
+            try:
+                from .client import _resolve_key_age_days, _KEY_ROTATION_WARN_DAYS
+                key_age_days, rotated_on = _resolve_key_age_days()
+                if key_age_days is not None and key_age_days > _KEY_ROTATION_WARN_DAYS:
+                    logger.warning(
+                        "memory-tencentdb Gateway API key was rotated %d days ago "
+                        "(threshold: %d days). Set MEMORY_TENCENTDB_GATEWAY_API_KEY_LAST_ROTATED "
+                        "to silence this warning.",
+                        key_age_days, _KEY_ROTATION_WARN_DAYS,
+                    )
+            except Exception:
+                pass
+
         self._supervisor = GatewaySupervisor(
             host=host,
             port=port,
@@ -1114,6 +1129,18 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "secret": True,
                 "required": False,
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY",
+            },
+            {
+                "key": "gateway_api_key_last_rotated",
+                "description": (
+                    "ISO date (YYYY-MM-DD) when the Gateway API key was "
+                    "last rotated. When set, the plugin warns at startup "
+                    "if the key is older than 90 days. Optional — omit "
+                    "to skip rotation age checks."
+                ),
+                "secret": False,
+                "required": False,
+                "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY_LAST_ROTATED",
             },
             {
                 "key": "llm_api_key",
