@@ -537,6 +537,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [`docs/cross-platform-adapters-cn.md`](./docs/cross-platform-adapters-cn.md) | 跨平台适配架构、数据流与 Claude Code Hook 示例 |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
