@@ -455,6 +455,10 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `pipeline.l1IdleTimeoutSeconds` | `600` | 用户停止对话多久后触发 L1 |
 | `pipeline.l2MinIntervalSeconds` | `900` | 同 session 两次 L2 之间的最小间隔 |
 | `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.injectionMode` | `"ephemeral"` | 召回记忆注入方式：`ephemeral`（每轮注入用户消息前缀并从历史剥离）/ `session-stable`（首轮召回并折叠进冻结稳定块，前缀缓存最友好） |
+| `recall.stableContextPolicy` | `"session-frozen"` | 稳定块（persona / 场景导航 / 工具指南）刷新策略：`session-frozen`（会话内字节级冻结，保护 prompt 前缀缓存）/ `latest`（旧行为，每轮重组） |
+| `recall.stripInjectedFromHistory` | `true` | 历史持久化前剥离 `<relevant-memories>` 注入内容；`false` 恢复旧的冻结注入行为 |
+| `recall.systemInjection` | `"auto"` | 稳定块放置路径：`auto`（探测宿主缓存稳定 API `prependSystemPromptAdditionAfterCacheBoundary`，不可用自动回退）/ `hook-context`（固定走旧 hook 返回值） |
 | `extraction.enableDedup` | `true` | L1 向量去重 / 冲突检测 |
 | `capture.excludeAgents` | `[]` | Glob 模式排除特定 Agent（如 `bench-judge-*`） |
 | `capture.l0l1RetentionDays` | `0` | L0/L1 本地文件保留天数，`0` = 永不清理 |
@@ -490,6 +494,12 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - `report.*` — 指标上报
 
 </details>
+
+### 提示词缓存友好性
+
+前缀匹配型提供商（DeepSeek、MiMo — `openai-completions` API）在序列化请求的第一个分歧字节之后全部缓存失效。上面 4 个 `recall.*` 配置项保证请求前缀逐轮字节级稳定：persona/场景稳定块按会话冻结、并在宿主支持时经缓存稳定 API 放置；每轮记忆注入不再污染持久化历史。默认值即安全值；完整机制、命中率数据与上游 OpenClaw 建议见 [`PROMPT-CACHE-ANALYSIS.md`](./PROMPT-CACHE-ANALYSIS.md)。
+
+> **升级注意**：默认 `stableContextPolicy: "session-frozen"` 下，会话中途更新的 persona 将从**下一个会话**（或空闲约 60 分钟后）开始生效。需要旧的每轮刷新行为可设为 `"latest"`；`stripInjectedFromHistory: false` 可恢复修复前的历史内容。
 
 ---
 

@@ -32,7 +32,7 @@ const RECALL_LINE_SEPARATOR = "\n";
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
  */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
+export const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 ## 记忆工具调用指南
 
 当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
@@ -69,6 +69,42 @@ export interface RecallResult {
   recallStrategy?: string;
 }
 
+/** Per-call behavior switches for performAutoRecall. */
+export interface AutoRecallOptions {
+  /**
+   * Skip the L1 memory search entirely (persona/scene/tools guide still load).
+   * Used by injectionMode="session-stable" from turn 2 on, where per-turn
+   * dynamic memories are intentionally not injected (issue #120).
+   */
+  skipMemorySearch?: boolean;
+}
+
+/**
+ * Compose the stable system block (persona + scene navigation + memory tools
+ * guide) exactly as the legacy inline code did — extracted so TdaiCore and
+ * tests can reproduce/verify the byte-identical join (issue #120).
+ *
+ * @param hasAnyContext mirrors the legacy `stableParts.length > 0 || prependContext`
+ *   guard: the tools guide is appended whenever any recall context exists.
+ */
+export function composeStableParts(
+  personaContent: string | undefined,
+  sceneNavigation: string | undefined,
+  hasAnyContext: boolean,
+): string | undefined {
+  const stableParts: string[] = [];
+  if (personaContent) {
+    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+  }
+  if (sceneNavigation) {
+    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+  }
+  if (stableParts.length > 0 || hasAnyContext) {
+    stableParts.push(MEMORY_TOOLS_GUIDE);
+  }
+  return stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+}
+
 export async function performAutoRecall(params: {
   userText: string;
   actorId: string;
@@ -78,6 +114,7 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  options?: AutoRecallOptions;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
@@ -108,17 +145,21 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  options?: AutoRecallOptions;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, options } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
+  // or the caller explicitly opted out (session-stable mode, turn ≥ 2).
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
-  if (!userText || userText.length === 0) {
+  if (options?.skipMemorySearch) {
+    logger?.debug?.(`${TAG} Memory search skipped by caller (session-stable mode; persona/scene still injected)`);
+  } else if (!userText || userText.length === 0) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
@@ -193,13 +234,6 @@ async function performAutoRecallInner(params: {
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
@@ -208,14 +242,11 @@ async function performAutoRecallInner(params: {
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  // Stable part: persona + scene navigation + memory tools usage guide.
+  // The guide is static content appended whenever any recall context exists,
+  // so the agent knows how to actively retrieve deeper context.
+  // composeStableParts reproduces the legacy inline join byte-for-byte.
+  const appendSystemContext = composeStableParts(personaContent, sceneNavigation, !!prependContext);
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(

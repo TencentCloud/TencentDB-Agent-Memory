@@ -33,6 +33,7 @@ import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
+import { StableRecallContextCache } from "./hooks/stable-context.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
@@ -122,6 +123,17 @@ export class TdaiCore {
    */
   private readonly bgTasks = new Set<Promise<void>>();
 
+  /**
+   * Session-frozen stable recall block cache (issue #120).
+   *
+   * Guarantees the persona / scene-navigation / tools-guide system block is
+   * byte-identical across every turn of a session, even when the L2/L3
+   * pipelines rewrite persona.md mid-session or a recall times out — the
+   * per-session dedup/freeze that keeps prefix-matching prompt caches
+   * (DeepSeek / MiMo) warm.
+   */
+  private readonly stableContext: StableRecallContextCache;
+
   constructor(opts: TdaiCoreOptions) {
     this.hostAdapter = opts.hostAdapter;
     this.cfg = opts.config;
@@ -130,6 +142,20 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.stableContext = new StableRecallContextCache({ logger: this.logger });
+
+    // Keep the mode matrix small: session-stable REQUIRES frozen-block
+    // semantics (its whole point is zero per-turn variance), so "latest"
+    // is coerced with a warning instead of producing a hybrid nobody wants.
+    if (
+      this.cfg.recall.injectionMode === "session-stable" &&
+      this.cfg.recall.stableContextPolicy === "latest"
+    ) {
+      this.logger.warn(
+        `${TAG} recall.injectionMode="session-stable" requires stableContextPolicy="session-frozen"; ` +
+        `ignoring "latest" and using session-frozen semantics for the stable block`,
+      );
+    }
   }
 
   // ============================
@@ -229,6 +255,7 @@ export class TdaiCore {
       this.embeddingService = undefined;
     }
 
+    this.stableContext.clear();
     resetStores(this.dataDir);
     this.logger.debug?.(`${TAG} TDAI Core destroyed`);
   }
@@ -240,9 +267,30 @@ export class TdaiCore {
   /**
    * Handle recall (memory retrieval) before an LLM turn.
    * Maps to: OpenClaw `before_prompt_build` / Hermes `prefetch()`.
+   *
+   * Prompt-cache behavior (issue #120):
+   * - stableContextPolicy="session-frozen" (default): the stable system block
+   *   (persona/scene/tools guide) is byte-frozen on the session's first
+   *   composition; later turns return the SAME bytes even if persona.md was
+   *   rewritten mid-session or recall timed out (no persona flicker).
+   * - injectionMode="session-stable": turn-1 recalled memories are folded into
+   *   the frozen block and per-turn prependContext is suppressed from then on,
+   *   so the serialized request only ever grows at the tail.
+   * - injectionMode="ephemeral" (default): memories go to prependContext each
+   *   turn (host renders them ephemerally; index.ts strips them from history).
    */
   async handleBeforeRecall(userText: string, sessionKey: string): Promise<RecallResult> {
     await this.storeReady?.catch(() => {});
+
+    const { injectionMode, stableContextPolicy } = this.cfg.recall;
+    const sessionStable = injectionMode === "session-stable";
+    // session-stable implies frozen-block semantics (coercion warned at construction).
+    const frozen = sessionStable || stableContextPolicy === "session-frozen";
+    const hasFrozenBlock = this.stableContext.has(sessionKey);
+
+    // In session-stable mode the block is already frozen from turn 2 on, so
+    // the (possibly slow) L1 memory search would be thrown away — skip it.
+    const skipMemorySearch = sessionStable && hasFrozenBlock;
 
     const result = await performAutoRecall({
       userText,
@@ -253,9 +301,56 @@ export class TdaiCore {
       logger: this.logger,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      options: { skipMemorySearch },
     });
 
-    return result ?? {};
+    let prependContext = result?.prependContext;
+    let appendSystemContext = result?.appendSystemContext;
+    let stableContextCacheHit = false;
+
+    if (sessionStable) {
+      // Re-check the freeze AFTER the recall await (not the pre-await
+      // `hasFrozenBlock` snapshot): under the Gateway, concurrent /recall
+      // calls for the same session can all observe "no freeze" above, and
+      // the first one to complete freezes while the rest are still awaiting.
+      // Freezing again here would return different bytes AND silently
+      // repoint the session to them — the first completed freeze must win.
+      // `has()` + `freeze()` below run synchronously, so no interleaving.
+      if (!this.stableContext.has(sessionKey)) {
+        // Turn 1: fold the dynamic memories into the stable block and freeze
+        // the merged bytes for the rest of the session. An empty recall
+        // freezes an empty sentinel — deliberately no retry on later turns,
+        // because a mid-session (re)appearance of the block is exactly the
+        // prefix variance this mode exists to eliminate.
+        const merged =
+          [appendSystemContext, prependContext].filter(Boolean).join("\n\n") || undefined;
+        this.stableContext.freeze(sessionKey, merged ?? "");
+        appendSystemContext = merged;
+      } else {
+        appendSystemContext =
+          this.stableContext.resolve(sessionKey, undefined).content || undefined;
+        stableContextCacheHit = true;
+      }
+      // Never inject per-turn user-prefix content in this mode.
+      prependContext = undefined;
+    } else if (frozen) {
+      // Ephemeral memories stay per-turn, but the stable block is deduped to
+      // one canonical byte sequence per session (drift + timeout immunity).
+      const resolved = this.stableContext.resolve(sessionKey, appendSystemContext);
+      appendSystemContext = resolved.content;
+      stableContextCacheHit = resolved.cacheHit;
+    }
+    // stableContextPolicy="latest" (+ ephemeral): legacy passthrough, no freeze.
+
+    this.stableContext.sweep();
+
+    return {
+      ...(result ?? {}),
+      prependContext,
+      appendSystemContext,
+      stableContextCacheHit,
+      injectionModeUsed: injectionMode,
+    };
   }
 
   /**
