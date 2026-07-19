@@ -1,0 +1,1 @@
+# 在hermes输入“特殊数字是114514”后通过tdai实现在claude code和codebuddy中的记忆传输功能
