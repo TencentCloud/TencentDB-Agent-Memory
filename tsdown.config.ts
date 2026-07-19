@@ -10,17 +10,15 @@ function collectExternalDependencies(): string[] {
   ];
 }
 
-export default defineConfig({
-  entry: ["./index.ts"],
-  outDir: "./dist",
-  format: "esm",
-  platform: "node",
+const sharedConfig = {
+  format: "esm" as const,
+  platform: "node" as const,
   clean: true,
   fixedExtension: true,
   dts: false,
   sourcemap: false,
   deps: {
-    neverBundle: (id) => {
+    neverBundle: (id: string) => {
       // openclaw SDK — always external
       if (id === "openclaw" || id.startsWith("openclaw/")) return true;
       // node: builtins
@@ -32,4 +30,17 @@ export default defineConfig({
       return false;
     },
   },
-});
+};
+
+export default defineConfig([
+  {
+    ...sharedConfig,
+    entry: ["./index.ts"],
+    outDir: "./dist",
+  },
+  {
+    ...sharedConfig,
+    entry: { "memory-hook": "./src/adapters/claude-code/hook.ts" },
+    outDir: "./claude-code-plugin/scripts",
+  },
+]);

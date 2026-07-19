@@ -7,7 +7,8 @@
  * Directory structure:
  *   adapters/
  *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   └── claude-code/   — Claude Code lifecycle hooks over the HTTP Gateway
  */
 
 // OpenClaw adapter
@@ -17,3 +18,6 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Claude Code lifecycle adapter
+export * from "./claude-code/index.js";

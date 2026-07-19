@@ -8,6 +8,7 @@
 
 ### ✨ 新功能
 
+- **Claude Code 原生 Hook 适配**（[#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235)）：新增可发布的 Claude Code 插件，在 `UserPromptSubmit` 自动召回 L1/L2/L3 上下文，在 `Stop` 使用 `last_assistant_message` 捕获完整回合，在 `SessionEnd` 刷新会话。适配器使用持久化可重试队列、稳定消息时间戳、原子状态写入和 fail-open 错误策略；Gateway 默认仅允许回环地址，并支持现有 `TDAI_GATEWAY_API_KEY` Bearer 鉴权。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
