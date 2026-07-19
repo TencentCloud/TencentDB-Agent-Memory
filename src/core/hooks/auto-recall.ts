@@ -57,6 +57,8 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
+  /** L1 relevant memories — appended to user prompt text (dynamic, per-turn) */
+  appendContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
 
@@ -190,9 +192,10 @@ async function performAutoRecallInner(params: {
   //   These change infrequently; when content is identical across turns,
   //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  // prependContext / appendContext (user prompt — dynamic, per-turn):
+  //   L1 relevant memories — different every turn, moved out of system prompt.
+  //   appendContext is cache-friendlier for prefix-matching providers because
+  //   the original user text stays at the front of the prompt.
   const stableParts: string[] = [];
   if (personaContent) {
     stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
@@ -201,17 +204,23 @@ async function performAutoRecallInner(params: {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
 
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Dynamic part: L1 relevant memories (changes every turn) → user prompt context.
   let prependContext: string | undefined;
+  let appendContext: string | undefined;
   if (memoryLines.length > 0) {
-    prependContext =
+    const relevantMemoriesContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    if (cfg.recall.injectionMode === "append") {
+      appendContext = relevantMemoriesContext;
+    } else {
+      prependContext = relevantMemoriesContext;
+    }
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
+  if (stableParts.length > 0 || prependContext || appendContext) {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
@@ -227,12 +236,13 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!appendSystemContext && !prependContext && !appendContext) {
     return undefined;
   }
 
   return {
     prependContext,
+    appendContext,
     appendSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
