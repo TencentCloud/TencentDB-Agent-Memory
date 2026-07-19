@@ -225,8 +225,42 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens
+    .map((t) => sanitizeFtsToken(t))
+    .filter((t) => t.length > 0)
+    .map((t) => `"${t}"`);
+  if (quoted.length === 0) return null;
   return quoted.join(" OR ");
+}
+
+/** FTS5 reserved operator keywords that are interpreted as operators even inside double-quoted phrases. */
+const FTS5_RESERVED_KEYWORDS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+/**
+ * Sanitize a single token for safe use in an FTS5 MATCH expression.
+ *
+ * Uses a **whitelist** approach: only Unicode letters, digits, and
+ * underscores are kept.  Everything else — including FTS5 structural
+ * characters (`" ' ( ) *`) and reserved operator keywords (`AND` /
+ * `OR` / `NOT` / `NEAR`) — is stripped out.
+ *
+ * This is strictly safer than a blacklist because it does not rely on
+ * knowing every possible special character or keyword; any future FTS5
+ * syntax additions are automatically neutralized.
+ *
+ * @param token  A single token produced by jieba or the fallback regex.
+ * @returns      The sanitized token, or an empty string if nothing valid remains.
+ */
+function sanitizeFtsToken(token: string): string {
+  // Whitelist: keep only Unicode letters (\p{L}), digits (\p{N}), and underscore.
+  // This inherently removes all FTS5 structural characters: " ' ( ) *
+  const sanitized = token.replace(/[^\p{L}\p{N}_]+/gu, "");
+
+  // FTS5 reserved keywords are interpreted as operators even inside double-quoted phrases.
+  // If the entire token (case-insensitive) is a reserved keyword, discard it entirely.
+  if (FTS5_RESERVED_KEYWORDS.has(sanitized.toUpperCase())) return "";
+
+  return sanitized;
 }
 
 /**
