@@ -546,8 +546,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 We welcome every kind of contribution — bug reports, feature ideas, doc fixes, benchmark reproductions, ecosystem integrations, or a Pull Request. Agent memory is far from a solved problem, and we'd love to figure it out together.
 
-- 🐞 **Found a bug or have a question?** Open an issue at [GitHub Issues](https://github.com/Tencent/TencentDB-Agent-Memory/issues) — we respond within 24 hours.
-- 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions).
+- 🐞 **Found a bug or have a question?** Open an issue at [GitHub Issues](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues) — we respond within 24 hours.
+- 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/TencentCloud/TencentDB-Agent-Memory/discussions).
 - 🛠️ **Want to contribute code?** Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
 - 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/kDtHb5RW2) and talk to the early developers directly.
 
