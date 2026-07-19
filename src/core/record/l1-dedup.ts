@@ -178,7 +178,7 @@ async function runLlmJudgment(
     }
 
     const decisions = parseBatchResult(result, memories, logger);
-    return decisions;
+    return capMergedPriorities(decisions, matches, logger);
   } catch (err) {
     logger?.warn?.(
       `${TAG} Batch conflict detection failed, defaulting all to store: ${err instanceof Error ? err.message : String(err)}`,
@@ -384,6 +384,53 @@ function parseBatchResult(
     logger?.warn?.(`${TAG} Failed to parse conflict detection result: ${err instanceof Error ? err.message : String(err)}`);
     return fallbackStoreAll(memories);
   }
+}
+
+/**
+ * Deterministic guardrail: merge/update can combine evidence, but must not
+ * amplify priority beyond the strongest source memory involved.
+ */
+function capMergedPriorities(
+  decisions: DedupDecision[],
+  matches: CandidateMatch[],
+  logger?: Logger,
+): DedupDecision[] {
+  const matchByRecordId = new Map(matches.map((m) => [m.newMemory.record_id, m]));
+
+  return decisions.map((decision) => {
+    if (
+      (decision.action !== "merge" && decision.action !== "update") ||
+      typeof decision.merged_priority !== "number"
+    ) {
+      return decision;
+    }
+
+    const match = matchByRecordId.get(decision.record_id);
+    if (!match) return decision;
+
+    const targetIds = new Set(decision.target_ids);
+    const sourcePriorities = [
+      match.newMemory.priority,
+      ...match.candidates
+        .filter((candidate) => targetIds.has(candidate.id))
+        .map((candidate) => candidate.priority),
+    ].filter((priority) => Number.isFinite(priority));
+
+    const maxSourcePriority = Math.max(...sourcePriorities);
+    if (!Number.isFinite(maxSourcePriority) || decision.merged_priority <= maxSourcePriority) {
+      return decision;
+    }
+
+    logger?.debug?.(
+      `${TAG} Capping merged priority for ${decision.record_id}: ` +
+      `${decision.merged_priority} → ${maxSourcePriority}`,
+    );
+
+    return {
+      ...decision,
+      merged_priority: maxSourcePriority,
+    };
+  });
 }
 
 /**
