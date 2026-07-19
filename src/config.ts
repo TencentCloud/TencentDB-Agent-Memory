@@ -78,6 +78,8 @@ export interface PipelineTriggerConfig {
 }
 
 /** Recall settings — controls memory retrieval for context injection. */
+export type DynamicContextPlacement = "prepend" | "append";
+
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
@@ -93,6 +95,22 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Enable opt-in prompt-shape diagnostics for prefix-cache analysis.
+   * Logs segment lengths/hashes and persisted <relevant-memories> counts, never raw memory text.
+   */
+  promptShapeDiagnostics: boolean;
+  /**
+   * Whether to preserve injected <relevant-memories> blocks in persisted conversation history.
+   * Default false keeps history clean; set true to retain blocks for debugging/traceability.
+   */
+  showInjected: boolean;
+  /**
+   * Where to inject dynamic L1 recall relative to the current user prompt.
+   * "append" keeps the user prompt prefix stable for OpenAI-compatible prefix caches.
+   * "prepend" preserves the legacy prompt-prefix behavior.
+   */
+  dynamicContextPlacement: DynamicContextPlacement;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +553,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      promptShapeDiagnostics: bool(recallGroup, "promptShapeDiagnostics") ?? false,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      dynamicContextPlacement: validateDynamicContextPlacement(str(recallGroup, "dynamicContextPlacement")) ?? "append",
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -634,6 +655,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_DYNAMIC_CONTEXT_PLACEMENTS: DynamicContextPlacement[] = ["prepend", "append"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +665,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateDynamicContextPlacement(value: string | undefined): DynamicContextPlacement | undefined {
+  if (!value) return undefined;
+  return VALID_DYNAMIC_CONTEXT_PLACEMENTS.includes(value as DynamicContextPlacement)
+    ? (value as DynamicContextPlacement)
     : undefined;
 }
 
