@@ -183,6 +183,30 @@ def provider_with_fake_supervisor(monkeypatch, fast_watchdog):
 
 
 # ---------------------------------------------------------------------------
+# Tool schema registration
+# ---------------------------------------------------------------------------
+
+
+def test_tool_schemas_are_advertised_before_initialize_without_gateway_env(monkeypatch):
+    """Hermes may ask for schemas before initialize() builds the Gateway.
+
+    Zero-config auto-discovery happens later during initialize(), so schema
+    registration must not depend on Gateway env vars or runtime availability.
+    """
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_CMD", raising=False)
+    monkeypatch.delenv("MEMORY_TENCENTDB_GATEWAY_PORT", raising=False)
+
+    provider = MemoryTencentdbProvider()
+
+    assert provider._initialized is False
+    assert provider._gateway_available is False
+    assert [schema["name"] for schema in provider.get_tool_schemas()] == [
+        "memory_tencentdb_memory_search",
+        "memory_tencentdb_conversation_search",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Supervisor.is_process_alive
 # ---------------------------------------------------------------------------
 
