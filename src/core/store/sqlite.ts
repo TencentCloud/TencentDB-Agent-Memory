@@ -175,6 +175,30 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Strip FTS5 special operators and syntax from raw search input before
+ * tokenization (defense-in-depth for issue #160).
+ *
+ * The double-quoting in `buildFtsQuery()` already neutralizes most
+ * injection vectors — FTS5 operators like `AND`/`OR`/`NOT`/`NEAR` end up
+ * wrapped as literal string terms, which is harmless but means a user
+ * can still alter query semantics (e.g. by typing `NOT foo` to exclude
+ * results). Stripping them here ensures the resulting query is always a
+ * plain OR-of-terms, matching the documented behavior.
+ *
+ * Also strips FTS5 syntax characters (`"` `'` `(` `)` `*` `:` `^` `-`)
+ * so they cannot leak through the jieba tokenizer (the regex fallback
+ * already drops most of them, but jieba may preserve them in edge cases).
+ *
+ * Uses `\b` word boundaries so common words containing operator substrings
+ * (e.g. ANDROID, SCANNER, ORDER, NOTION) are NOT affected.
+ */
+function sanitizeFtsRaw(raw: string): string {
+  return raw
+    .replace(/["'()*:\^-]/g, " ")                // strip FTS5 syntax characters
+    .replace(/\b(?:AND|OR|NOT|NEAR)\b/gi, " ");  // strip FTS5 boolean/positional operators
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -196,6 +220,10 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // Issue #160: strip FTS5 operators / special chars from raw input before
+  // tokenization. Defense-in-depth on top of the per-token double-quoting
+  // already applied below.
+  const cleaned = sanitizeFtsRaw(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +231,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,14 +246,24 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  // FTS5 operator keywords that must never appear as standalone query terms.
+  // Both sanitizeFtsRaw (input-level) and this token-level filter apply so
+  // that even if an operator leaks through jieba, it is caught here.
+  const FTS5_OPERATORS = new Set(["and", "or", "not", "near"]);
+  // Quote each token: strip embedded double-quotes first, filter empty
+  // results and FTS5 operator tokens, then wrap with FTS5 quotes.
+  const quoted = tokens
+    .map((t) => t.replaceAll('"', ""))
+    .filter((t) => t.length > 0 && !FTS5_OPERATORS.has(t.toLowerCase()))
+    .map((t) => `"${t}"`);
+  if (quoted.length === 0) return null;
   return quoted.join(" OR ");
 }
 
