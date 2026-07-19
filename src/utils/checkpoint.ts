@@ -432,6 +432,51 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Recalibration (authoritative re-sync of derived counters)
+  // ============================
+
+  /**
+   * Re-synchronize the four derived counters against authoritative source-of-
+   * truth counts (e.g. re-counted L0/L1 files at startup). Only these four
+   * fields are overwritten; persona/scene/cursor/per-session state is left
+   * untouched. Returns the pre-call values in `was` so the caller can log the
+   * before→after delta.
+   */
+  async recalibrate(actual: {
+    totalMemoriesExtracted: number;
+    l0ConversationsCount: number;
+    totalProcessed: number;
+    memoriesSinceLastPersona: number;
+  }): Promise<{
+    was: {
+      total_memories_extracted: number;
+      l0_conversations_count: number;
+      total_processed: number;
+      memories_since_last_persona: number;
+    };
+  }> {
+    let was!: {
+      total_memories_extracted: number;
+      l0_conversations_count: number;
+      total_processed: number;
+      memories_since_last_persona: number;
+    };
+    await this.mutate((cp) => {
+      was = {
+        total_memories_extracted: cp.total_memories_extracted,
+        l0_conversations_count: cp.l0_conversations_count,
+        total_processed: cp.total_processed,
+        memories_since_last_persona: cp.memories_since_last_persona,
+      };
+      cp.total_memories_extracted = actual.totalMemoriesExtracted;
+      cp.l0_conversations_count = actual.l0ConversationsCount;
+      cp.total_processed = actual.totalProcessed;
+      cp.memories_since_last_persona = actual.memoriesSinceLastPersona;
+    });
+    return { was };
+  }
+
+  // ============================
   // Atomic capture (race-condition fix)
   // ============================
 
