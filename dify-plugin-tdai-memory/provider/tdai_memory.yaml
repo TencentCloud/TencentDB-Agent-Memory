@@ -1,0 +1,56 @@
+identity:
+  author: tencentdb-agent-memory
+  name: tdai_memory
+  label:
+    en_US: TencentDB Agent Memory
+    zh_Hans: 腾讯云数据库 Agent Memory
+  description:
+    en_US: Local long-term memory tools backed by TencentDB Agent Memory Gateway.
+    zh_Hans: 基于 TencentDB Agent Memory Gateway 的本地长期记忆工具。
+  icon: icon.svg
+  tags:
+    - utilities
+credentials_for_provider:
+  gateway_url:
+    type: text-input
+    required: true
+    label:
+      en_US: Gateway URL
+      zh_Hans: Gateway 地址
+    placeholder:
+      en_US: http://127.0.0.1:8420
+      zh_Hans: http://127.0.0.1:8420
+    help:
+      en_US: Start the TDAI Gateway before using these tools.
+      zh_Hans: 使用这些工具前请先启动 TDAI Gateway。
+  gateway_api_key:
+    type: secret-input
+    required: false
+    label:
+      en_US: Gateway API Key
+      zh_Hans: Gateway API Key
+    placeholder:
+      en_US: Optional Bearer token
+      zh_Hans: 可选 Bearer Token
+    help:
+      en_US: Must match TDAI_GATEWAY_API_KEY when Gateway auth is enabled.
+      zh_Hans: Gateway 开启鉴权时必须与 TDAI_GATEWAY_API_KEY 一致。
+  gateway_timeout_seconds:
+    type: text-input
+    required: false
+    label:
+      en_US: Timeout Seconds
+      zh_Hans: 超时秒数
+    placeholder:
+      en_US: "10"
+      zh_Hans: "10"
+extra:
+  python:
+    source: provider/tdai_memory.py
+tools:
+  - tools/tdai_health.yaml
+  - tools/tdai_recall.yaml
+  - tools/tdai_capture.yaml
+  - tools/tdai_memory_search.yaml
+  - tools/tdai_conversation_search.yaml
+  - tools/tdai_session_end.yaml
