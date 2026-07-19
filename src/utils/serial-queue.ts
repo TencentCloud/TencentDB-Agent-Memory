@@ -105,8 +105,8 @@ export class SerialQueue {
 
     this.debugFn?.(`[queue:${this.name}] dequeued, starting execution (remaining=${this.queue.length})`);
 
-    entry
-      .task()
+    Promise.resolve()
+      .then(() => entry.task())
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
