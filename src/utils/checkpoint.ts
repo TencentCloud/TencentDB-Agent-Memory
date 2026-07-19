@@ -146,6 +146,43 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+export interface CheckpointCounterSnapshot {
+  total_processed: number;
+  memories_since_last_persona: number;
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+}
+
+export interface CheckpointRecalibrationCounts {
+  total_processed?: number;
+  memories_since_last_persona?: number;
+  l0_conversations_count?: number;
+  total_memories_extracted?: number;
+}
+
+export interface CheckpointRecalibrationResult {
+  changed: boolean;
+  before: CheckpointCounterSnapshot;
+  after: CheckpointCounterSnapshot;
+}
+
+function snapshotCounters(cp: Checkpoint): CheckpointCounterSnapshot {
+  return {
+    total_processed: cp.total_processed,
+    memories_since_last_persona: cp.memories_since_last_persona,
+    l0_conversations_count: cp.l0_conversations_count,
+    total_memories_extracted: cp.total_memories_extracted,
+  };
+}
+
+function validateRecalibrationCount(name: keyof CheckpointRecalibrationCounts, value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new RangeError(`checkpoint recalibration count "${name}" must be a non-negative integer`);
+  }
+  return value;
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -330,6 +367,59 @@ export class CheckpointManager {
       cp.scenes_processed += 1;
     });
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
+  }
+
+  /**
+   * Re-synchronize aggregate counters with authoritative storage counts.
+   *
+   * Only derived global counters are touched. Per-session runner cursors,
+   * pipeline state, persona timestamps, and scene counters are intentionally
+   * preserved so recalibration cannot cause incremental L0/L1 processing to
+   * rewind or skip work.
+   */
+  async recalibrate(actual: CheckpointRecalibrationCounts): Promise<CheckpointRecalibrationResult> {
+    const next = {
+      total_processed: validateRecalibrationCount("total_processed", actual.total_processed),
+      memories_since_last_persona: validateRecalibrationCount(
+        "memories_since_last_persona",
+        actual.memories_since_last_persona,
+      ),
+      l0_conversations_count: validateRecalibrationCount(
+        "l0_conversations_count",
+        actual.l0_conversations_count,
+      ),
+      total_memories_extracted: validateRecalibrationCount(
+        "total_memories_extracted",
+        actual.total_memories_extracted,
+      ),
+    };
+
+    let before!: CheckpointCounterSnapshot;
+    let after!: CheckpointCounterSnapshot;
+
+    await this.mutate((cp) => {
+      before = snapshotCounters(cp);
+      if (next.total_processed !== undefined) {
+        cp.total_processed = next.total_processed;
+      }
+      if (next.memories_since_last_persona !== undefined) {
+        cp.memories_since_last_persona = next.memories_since_last_persona;
+      }
+      if (next.l0_conversations_count !== undefined) {
+        cp.l0_conversations_count = next.l0_conversations_count;
+      }
+      if (next.total_memories_extracted !== undefined) {
+        cp.total_memories_extracted = next.total_memories_extracted;
+      }
+      after = snapshotCounters(cp);
+    });
+
+    const changed = Object.keys(before).some((key) => {
+      const field = key as keyof CheckpointCounterSnapshot;
+      return before[field] !== after[field];
+    });
+
+    return { changed, before, after };
   }
 
   // ============================

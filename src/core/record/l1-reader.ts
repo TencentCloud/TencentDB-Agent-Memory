@@ -203,9 +203,87 @@ export async function readAllMemoryRecords(
   }
 }
 
+/**
+ * Count parseable L1 JSONL rows for checkpoint recalibration.
+ *
+ * L1 writes are append-only at the file layer. Recalibrating from the
+ * surviving JSONL rows keeps `total_memories_extracted` aligned after
+ * memory-cleaner deletes old shards or an operator manually prunes records.
+ */
+export async function countL1JsonlLines(
+  baseDir: string,
+  logger?: Logger,
+): Promise<number> {
+  return countL1JsonlLinesInternal(baseDir, undefined, logger);
+}
+
+/**
+ * Count surviving L1 JSONL rows newer than the last persona timestamp.
+ *
+ * The comparison is strict (`updatedAt > sinceIso`), matching the L1 store
+ * query filters and avoiding double-counting the record at the persona
+ * boundary.
+ */
+export async function countL1JsonlLinesSince(
+  baseDir: string,
+  sinceIso: string,
+  logger?: Logger,
+): Promise<number> {
+  if (!sinceIso) {
+    return countL1JsonlLines(baseDir, logger);
+  }
+  return countL1JsonlLinesInternal(baseDir, sinceIso, logger);
+}
+
 // ============================
 // Helpers
 // ============================
+
+async function countL1JsonlLinesInternal(
+  baseDir: string,
+  sinceIso: string | undefined,
+  logger?: Logger,
+): Promise<number> {
+  const recordsDir = path.join(baseDir, "records");
+  const dateFilePattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(recordsDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !dateFilePattern.test(entry.name)) continue;
+    const filePath = path.join(recordsDir, entry.name);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      logger?.warn?.(`${TAG} Failed to read L1 file for stats: ${filePath}`);
+      continue;
+    }
+
+    const lines = raw.split("\n").filter((line) => line.trim());
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const parsed = JSON.parse(lines[i]) as Partial<MemoryRecord>;
+        if (sinceIso) {
+          const updatedAt = typeof parsed.updatedAt === "string" ? parsed.updatedAt : "";
+          if (updatedAt <= sinceIso) continue;
+        }
+        count++;
+      } catch {
+        logger?.warn?.(`${TAG} Skipping malformed JSONL line while counting ${filePath}:${i + 1}`);
+      }
+    }
+  }
+
+  return count;
+}
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_");
