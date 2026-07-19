@@ -1,0 +1,40 @@
+{
+  "name": "tdai-memory",
+  "version": "0.1.0",
+  "description": "TencentDB Agent Memory integration for Codex.",
+  "author": {
+    "name": "TencentDB Agent Memory"
+  },
+  "homepage": "https://github.com/TencentDB/TencentDB-Agent-Memory",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "tencentdb",
+    "agent-memory",
+    "codex"
+  ],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "TencentDB Agent Memory",
+    "shortDescription": "Search and capture layered long-term memory from Codex.",
+    "longDescription": "TencentDB Agent Memory connects Codex to a four-layer memory system through MCP lookup tools, hook-oriented lifecycle commands, and static workspace guidance for memory usage.",
+    "developerName": "TencentDB Agent Memory",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP",
+      "Skills",
+      "Memory"
+    ],
+    "websiteURL": "https://github.com/TencentDB/TencentDB-Agent-Memory",
+    "defaultPrompt": [
+      "Search my long-term memory for this project",
+      "Use memory before answering this question",
+      "Capture this turn into TencentDB memory"
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

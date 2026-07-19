@@ -1,0 +1,1083 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TDAI Memory 源码走查图</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --soft: #eef2f6;
+      --text: #18212f;
+      --muted: #667085;
+      --line: #d5dce7;
+      --blue: #2563eb;
+      --green: #0f8a6a;
+      --amber: #b76b00;
+      --red: #ba2a1d;
+      --violet: #6d4aff;
+      --canvas: #142033;
+      --grid: #243852;
+      --node: #1d2b42;
+      --node-border: #60708a;
+      --shadow: 0 16px 40px rgba(20, 32, 51, 0.12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body.theme-dark {
+      --bg: #0b1220;
+      --surface: #111827;
+      --soft: #1b2637;
+      --text: #e6edf7;
+      --muted: #a3afc2;
+      --line: #2b3a50;
+      --canvas: #07111f;
+      --grid: #1b2a40;
+      --node: #101c2e;
+      --node-border: #465a75;
+      --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .topbar {
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 16px 24px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: center;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .actions {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+    .modebar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 11px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--blue); }
+    button.active {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: white;
+    }
+    .layout {
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 20px 24px 34px;
+      display: grid;
+      grid-template-columns: minmax(760px, 1fr) 410px;
+      gap: 18px;
+      align-items: start;
+    }
+    .layout.collapsed { grid-template-columns: minmax(760px, 1fr) 54px; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .network {
+      min-height: calc(100vh - 130px);
+      display: grid;
+      grid-template-rows: auto minmax(560px, 1fr) auto;
+      overflow: hidden;
+    }
+    .network-head {
+      padding: 16px 18px 10px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: start;
+    }
+    .network-head h2,
+    .inspector h2 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .summary {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .legend {
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .legend span {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: var(--soft);
+    }
+    .dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+    .dot.entry { background: var(--blue); }
+    .dot.core { background: var(--violet); }
+    .dot.logic { background: var(--green); }
+    .dot.state { background: var(--amber); }
+    .dot.failure { background: var(--red); }
+    .graph {
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+      background:
+        radial-gradient(circle at 22px 22px, rgba(119, 143, 178, 0.26) 1px, transparent 1.6px),
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+        var(--canvas);
+      background-size: 44px 44px, 44px 44px, 44px 44px, auto;
+      min-height: 610px;
+    }
+    .graph.dragging { cursor: grabbing; }
+    .stage {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1280px;
+      height: 860px;
+      transform-origin: 0 0;
+    }
+    svg.edges {
+      position: absolute;
+      inset: 0;
+      width: 1280px;
+      height: 860px;
+      pointer-events: none;
+      overflow: visible;
+    }
+    .edge {
+      fill: none;
+      stroke: rgba(196, 214, 238, 0.62);
+      stroke-width: 2;
+    }
+    .edge.state { stroke: rgba(245, 158, 11, 0.78); }
+    .edge.failure { stroke: rgba(248, 113, 113, 0.86); stroke-dasharray: 6 5; }
+    .edge.async { stroke: rgba(52, 211, 153, 0.78); stroke-dasharray: 8 5; }
+    .edge-label {
+      fill: #d9e6f7;
+      font-size: 12px;
+      paint-order: stroke;
+      stroke: rgba(20, 32, 51, 0.8);
+      stroke-width: 4px;
+    }
+    .node {
+      position: absolute;
+      width: 178px;
+      min-height: 92px;
+      border: 1px solid var(--node-border);
+      border-radius: 8px;
+      background: var(--node);
+      color: #e7effb;
+      padding: 12px;
+      cursor: pointer;
+      user-select: none;
+      box-shadow: 0 16px 34px rgba(0, 0, 0, 0.18);
+    }
+    .node.selected {
+      outline: 2px solid #93c5fd;
+      box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.2), 0 16px 34px rgba(0, 0, 0, 0.2);
+    }
+    .node .kind {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #b8c7dc;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .node .label {
+      margin-top: 8px;
+      font-weight: 700;
+      line-height: 1.25;
+      font-size: 14px;
+    }
+    .node .fn {
+      margin-top: 6px;
+      color: #9fb0c7;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .footer {
+      border-top: 1px solid var(--line);
+      padding: 13px 16px;
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: var(--soft);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+    .inspector {
+      position: sticky;
+      top: 94px;
+      max-height: calc(100vh - 116px);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .inspector.collapsed .body,
+    .inspector.collapsed .head-main { display: none; }
+    .inspector .head {
+      border-bottom: 1px solid var(--line);
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .body {
+      overflow: auto;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .kv {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .kv h3 {
+      margin: 0;
+      padding: 8px 10px;
+      background: var(--soft);
+      font-size: 13px;
+    }
+    .kv pre,
+    .kv div.content {
+      margin: 0;
+      padding: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .kv ul {
+      margin: 0;
+      padding: 9px 10px 9px 26px;
+      font-size: 13px;
+    }
+    .filelink {
+      display: inline-block;
+      color: var(--blue);
+      text-decoration: none;
+      word-break: break-word;
+    }
+    .floating {
+      position: absolute;
+      z-index: 20;
+      width: 360px;
+      max-height: 430px;
+      overflow: hidden;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.26);
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    .floating.hidden { display: none; }
+    .floating-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      cursor: move;
+      background: var(--soft);
+    }
+    .floating-body { overflow: auto; padding: 12px; display: grid; gap: 10px; }
+    @media (max-width: 1080px) {
+      .topbar, .layout { padding-left: 14px; padding-right: 14px; }
+      .layout, .layout.collapsed { grid-template-columns: 1fr; }
+      .inspector { position: relative; top: auto; max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div>
+        <h1>TDAI Memory 源码走查图</h1>
+        <div class="subtitle">从 Codex hook 捕获一轮对话，到 Gateway/Core 写 L0 并触发 L1/L2/L3，再通过 MCP 搜索召回。</div>
+      </div>
+      <div class="actions">
+        <button id="themeBtn" type="button">切换主题</button>
+        <div class="modebar" id="modebar"></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout" id="layout">
+    <section class="panel network">
+      <div class="network-head">
+        <div>
+          <h2 id="boardTitle">全局链路图</h2>
+          <div class="summary" id="boardSummary">选择一个视图开始。</div>
+        </div>
+        <div class="legend">
+          <span><i class="dot entry"></i>入口</span>
+          <span><i class="dot core"></i>核心</span>
+          <span><i class="dot logic"></i>逻辑</span>
+          <span><i class="dot state"></i>状态</span>
+          <span><i class="dot failure"></i>失败</span>
+        </div>
+      </div>
+      <div class="graph" id="graph">
+        <div class="stage" id="stage">
+          <svg class="edges" id="edges" viewBox="0 0 1280 860" aria-label="TDAI memory debug graph"></svg>
+          <div id="nodes"></div>
+        </div>
+        <div class="floating hidden" id="floating"></div>
+      </div>
+      <div class="footer">
+        <div class="pills">
+          <span class="pill">sessionKey <code>codex-rhino-bird-session</code></span>
+          <span class="pill">userId <code>小明</code></span>
+          <span class="pill">gateway <code>http://127.0.0.1:8420</code></span>
+        </div>
+        <div class="pills">
+          <span class="pill">prompt <code>Rhino-Bird 架构拆解测试：请记住小明偏好中文结论优先...</code></span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel inspector" id="inspector">
+      <div class="head">
+        <div class="head-main">
+          <h2 id="inspectorTitle">节点详情</h2>
+          <div class="summary" id="inspectorSummary">点击任意节点查看源码、输入输出和失败分支。第二次点击已选节点会打开节点旁详情面板。</div>
+        </div>
+        <button type="button" id="collapseBtn">收起</button>
+      </div>
+      <div class="body" id="inspectorBody"></div>
+    </aside>
+  </main>
+
+  <script>
+    const scenario = {
+      userId: "小明",
+      sessionKey: "codex-rhino-bird-session",
+      sessionId: "codex-rhino-bird-session-id",
+      userPrompt: "Rhino-Bird 架构拆解测试：请记住小明偏好中文结论优先，并要求 Gateway/Core/Hermes/OpenClaw 原始代码不改。",
+      assistantContent: "ACK Rhino-Bird memory architecture scenario.",
+      searchQuery: "小明 中文结论优先 Gateway Core Hermes OpenClaw 不改",
+      gatewayUrl: "http://127.0.0.1:8420"
+    };
+
+    const nodes = [
+      {
+        id: "hook",
+        label: "Hook 事件",
+        kind: "entry",
+        x: 50,
+        y: 100,
+        file: "../../packages/tdai-memory-cli/tdai_memory_cli/hook.py",
+        line: 25,
+        fn: "run_hook",
+        summary: "Codex/Claude hook 从 stdin 读取 JSON，把平台事件归一成 CLI 参数。",
+        input: { command: "sync-turn", stdin: { prompt: scenario.userPrompt, sessionKey: scenario.sessionKey } },
+        output: { cliArgs: ["sync-turn", "--user-content", scenario.userPrompt, "--assistant-content", scenario.assistantContent] },
+        reads: ["stdin hook JSON", "TDAI_HOOK_STRICT"],
+        writes: ["TDAI_HOOK_LOG phase=prepared/completed"],
+        failure: "事件没有完整 user/assistant turn -> 非 strict 模式下跳过并返回 continue。"
+      },
+      {
+        id: "cli",
+        label: "CLI sync-turn",
+        kind: "entry",
+        x: 280,
+        y: 100,
+        file: "../../packages/tdai-memory-cli/tdai_memory_cli/__main__.py",
+        line: 26,
+        fn: "run_cli",
+        summary: "解析 sync-turn 参数，加载 env 配置，触发 Gateway 健康检查和 /capture。",
+        input: { argv: "tdai-memory sync-turn", sessionKey: scenario.sessionKey },
+        output: { path: "/capture", body: { user_content: scenario.userPrompt, assistant_content: scenario.assistantContent } },
+        reads: ["TDAI_GATEWAY_URL", "TDAI_GATEWAY_CONFIG", "TDAI_USER_ID"],
+        writes: ["runtime/heartbeat.json"],
+        failure: "参数缺失或 Gateway 不可达 -> CLI 返回 code=1。"
+      },
+      {
+        id: "supervisor",
+        label: "确认 Gateway",
+        kind: "logic",
+        x: 510,
+        y: 100,
+        file: "../../packages/tdai-memory-cli/tdai_memory_cli/gateway_start.py",
+        line: 13,
+        fn: "ensure_gateway_running",
+        summary: "先调用 /health；不健康且允许 auto-start 时启动 Node Gateway。",
+        input: { gatewayUrl: scenario.gatewayUrl, autoStart: true },
+        output: { status: "已运行或刚启动" },
+        reads: ["GET /health", "TDAI_GATEWAY_AUTO_START", "TDAI_GATEWAY_CWD"],
+        writes: ["runtime/gateway.pid", "logs/gateway.log"],
+        failure: "auto-start=0 且 /health 失败 -> 抛出 RuntimeError。"
+      },
+      {
+        id: "gateway",
+        label: "Gateway 路由",
+        kind: "entry",
+        x: 740,
+        y: 100,
+        file: "../../src/gateway/server.ts",
+        line: 393,
+        fn: "handleCapture",
+        summary: "HTTP route 校验 user_content、assistant_content、session_key 后转成 CompletedTurn。",
+        input: { method: "POST", path: "/capture", session_key: scenario.sessionKey },
+        output: { completedTurn: { messages: ["user", "assistant"], sessionKey: scenario.sessionKey } },
+        reads: ["HTTP body", "optional Bearer auth"],
+        writes: ["Gateway log: Capture completed"],
+        failure: "缺必填字段 -> 400；Core 抛错 -> 500。"
+      },
+      {
+        id: "core",
+        label: "TdaiCore",
+        kind: "core",
+        x: 970,
+        y: 100,
+        file: "../../src/core/tdai-core.ts",
+        line: 265,
+        fn: "handleTurnCommitted",
+        summary: "等待 storeReady，确保 scheduler start，然后调用 auto-capture。",
+        input: { turn: { sessionKey: scenario.sessionKey, sessionId: scenario.sessionId } },
+        output: { captureResult: "AutoCaptureResult" },
+        reads: ["storeReady", "checkpoint pipeline states"],
+        writes: ["bgTasks registry"],
+        failure: "store 初始化失败会降级；scheduler start 失败会空状态启动。"
+      },
+      {
+        id: "capture",
+        label: "自动捕获",
+        kind: "logic",
+        x: 970,
+        y: 270,
+        file: "../../src/core/hooks/auto-capture.ts",
+        line: 78,
+        fn: "performAutoCapture",
+        summary: "原子读取 capture cursor，写 L0 JSONL/index，再通知 pipeline。",
+        input: { messages: [scenario.userPrompt, scenario.assistantContent] },
+        output: { l0RecordedCount: 2, schedulerNotified: true },
+        reads: ["checkpoint capture cursor", "MemoryTdaiConfig"],
+        writes: ["conversations/*.jsonl", "VectorStore L0", "pipeline notify"],
+        failure: "L0 文件写失败仍返回 filtered messages；embedding 失败非阻塞。"
+      },
+      {
+        id: "l0",
+        label: "L0 存储",
+        kind: "state",
+        x: 735,
+        y: 315,
+        file: "../../src/core/conversation/l0-recorder.ts",
+        line: 89,
+        fn: "recordConversation",
+        summary: "把原始 message 过滤、清洗后按每日 JSONL 追加，每行一条 L0 message。",
+        input: { sessionKey: scenario.sessionKey, rawMessages: 2 },
+        output: { jsonlLines: 2, fields: ["sessionKey", "sessionId", "recordedAt", "id", "role", "content", "timestamp"] },
+        reads: ["raw hook messages", "afterTimestamp cursor"],
+        writes: ["<dataDir>/conversations/YYYY-MM-DD.jsonl"],
+        failure: "内容太短、命令噪声或被 sanitize 后为空 -> l0Recorded=0。"
+      },
+      {
+        id: "pipeline",
+        label: "Pipeline 管理器",
+        kind: "core",
+        x: 505,
+        y: 315,
+        file: "../../src/utils/pipeline-manager.ts",
+        line: 383,
+        fn: "notifyConversation",
+        summary: "按 session 累计 conversation_count 和 message buffer，决定 L1/L2/L3 触发。",
+        input: { filteredMessages: 2, sessionKey: scenario.sessionKey },
+        output: { state: "L1 queued by threshold/idle/flush" },
+        reads: ["sessionStates", "messageBuffers"],
+        writes: ["checkpoint pipeline state", "L1 idle timer", "L1 queue"],
+        failure: "sessionFilter 命中会直接跳过；未达到阈值时等待 idle。"
+      },
+      {
+        id: "l1",
+        label: "L1 抽取",
+        kind: "logic",
+        x: 280,
+        y: 315,
+        file: "../../src/utils/pipeline-factory.ts",
+        line: 254,
+        fn: "createL1Runner",
+        summary: "从 VectorStore 或 JSONL 读取 L0，调用 LLM 抽取 structured memory。",
+        input: { sessionKey: scenario.sessionKey, l0Messages: 2 },
+        output: { records: ["instruction: 中文结论优先", "instruction: 原始代码不改"] },
+        reads: ["VectorStore.queryL0GroupedBySessionId", "JSONL fallback", "last_l1_cursor"],
+        writes: ["records/*.jsonl", "VectorStore L1", "checkpoint last_l1_cursor"],
+        failure: "无 LLM runner -> processed=0；LLM 失败 -> runL1 恢复 buffer 并 retry。"
+      },
+      {
+        id: "l2",
+        label: "L2 场景",
+        kind: "logic",
+        x: 280,
+        y: 500,
+        file: "../../src/utils/pipeline-factory.ts",
+        line: 426,
+        fn: "createL2Runner",
+        summary: "读取新增 L1 records，归并成 scene block 并维护 scene navigation。",
+        input: { updatedAfter: "(cursor)", records: "new L1 records" },
+        output: { sceneBlock: "插件架构与工程约束" },
+        reads: ["L1 records", "last_extraction_updated_time"],
+        writes: ["scene_blocks/*.md", "scene index", "checkpoint scenes_processed"],
+        failure: "没有新 records -> skipped；失败后 L2 max interval 会重试。"
+      },
+      {
+        id: "l3",
+        label: "L3 用户画像",
+        kind: "logic",
+        x: 510,
+        y: 500,
+        file: "../../src/utils/pipeline-factory.ts",
+        line: 583,
+        fn: "createL3Runner",
+        summary: "PersonaTrigger 判定需要时，读取 scene/profile 生成稳定用户画像。",
+        input: { reason: "L2 已完成", profileFacts: ["中文", "结论优先", "不改原始代码"] },
+        output: { file: "persona.md" },
+        reads: ["scene_blocks", "checkpoint total_processed"],
+        writes: ["persona.md", "checkpoint persona marker"],
+        failure: "triggerEveryN 未满足 -> skipped；无 LLM runner -> skipped。"
+      },
+      {
+        id: "mcp",
+        label: "MCP tool 调用",
+        kind: "entry",
+        x: 740,
+        y: 500,
+        file: "../../packages/tdai-memory-mcp/tdai_memory_mcp/protocol.py",
+        line: 68,
+        fn: "handle_message",
+        summary: "Agent 调 tools/call 时，MCP 确保 Gateway 运行并转发到 /search/*。",
+        input: { method: "tools/call", name: "tdai_memory_search", query: scenario.searchQuery },
+        output: { content: "找到 N 条匹配记忆..." },
+        reads: ["MCP JSON-RPC stdin", "Gateway health"],
+        writes: [],
+        failure: "Gateway 启动失败 -> JSON-RPC error；tool 内异常 -> isError content。"
+      },
+      {
+        id: "search",
+        label: "搜索记忆",
+        kind: "logic",
+        x: 970,
+        y: 500,
+        file: "../../src/core/tools/memory-search.ts",
+        line: 82,
+        fn: "executeMemorySearch",
+        summary: "对 L1 使用 FTS、embedding 或 hybrid RRF 搜索并格式化结果。",
+        input: { query: scenario.searchQuery, limit: 5, strategy: "hybrid" },
+        output: { text: "找到匹配记忆", strategy: "hybrid|fts|embedding" },
+        reads: ["VectorStore L1 FTS", "EmbeddingService", "VectorStore L1 vector"],
+        writes: [],
+        failure: "无 VectorStore 或无 FTS/Embedding -> empty + diagnostic message。"
+      },
+      {
+        id: "config",
+        label: "配置面",
+        kind: "state",
+        x: 50,
+        y: 500,
+        file: "../../src/gateway/config.ts",
+        line: 84,
+        fn: "loadGatewayConfig",
+        summary: "Gateway 配置从文件和 env 汇总，memory 字段复用 parseConfig。",
+        input: { TDAI_GATEWAY_CONFIG: "~/.codex/tdai-memory/tdai-gateway.yaml" },
+        output: { capture: true, extraction: true, recall: true, strategy: "hybrid" },
+        reads: ["tdai-gateway.yaml", "TDAI_* env"],
+        writes: [],
+        failure: "配置文件格式错误时 fallback env-only；apiKey 不一致会 401。"
+      },
+      {
+        id: "failure",
+        label: "排查分支",
+        kind: "failure",
+        x: 50,
+        y: 690,
+        file: "09-debug-playbook.md",
+        line: 1,
+        fn: "判断树",
+        summary: "记忆不生效时按 entrypoint、config、Gateway、L0、pipeline、L1、search 顺序排查。",
+        input: { symptom: "L0 exists but L1/L2/L3 missing" },
+        output: { nextCheck: "Gateway log 中的 [pipeline] 和 [l1] 条目" },
+        reads: ["hooks.jsonl", "gateway.log", "dataDir"],
+        writes: [],
+        failure: "跳过入口和数据目录确认会误判为 Core bug。"
+      }
+    ];
+
+    const edges = [
+      ["hook", "cli", "CLI args", "main"],
+      ["cli", "supervisor", "ensure", "main"],
+      ["supervisor", "gateway", "/capture", "main"],
+      ["gateway", "core", "CompletedTurn", "main"],
+      ["core", "capture", "capture", "main"],
+      ["capture", "l0", "write L0", "state"],
+      ["capture", "pipeline", "notify", "main"],
+      ["pipeline", "l1", "L1 queue", "async"],
+      ["l1", "l2", "records", "async"],
+      ["l2", "l3", "trigger", "async"],
+      ["mcp", "search", "tools/call", "main"],
+      ["search", "l1", "read L1", "state"],
+      ["config", "supervisor", "env", "state"],
+      ["config", "gateway", "yaml/env", "state"],
+      ["failure", "hook", "entry?", "failure"],
+      ["failure", "l0", "L0?", "failure"],
+      ["failure", "l1", "L1?", "failure"]
+    ].map(([from, to, label, kind]) => ({ from, to, label, kind }));
+
+    const modes = {
+      global: {
+        label: "全局",
+        title: "全局架构：平台适配层到核心引擎",
+        summary: "显示 hook/CLI/Gateway/Core/Pipeline/MCP 的连接关系。",
+        nodes: nodes.map(n => n.id),
+        defaultSelected: "core"
+      },
+      main: {
+        label: "主链路",
+        title: "主链路：一次 Codex turn 如何写入长期记忆",
+        summary: "从 hook 事件到 /capture，再到 L0 和 pipeline。",
+        nodes: ["hook", "cli", "supervisor", "gateway", "core", "capture", "l0", "pipeline"],
+        edgeKinds: ["main", "state", "async"],
+        defaultSelected: "hook"
+      },
+      data: {
+        label: "数据",
+        title: "数据流：结构如何变化",
+        summary: "关注 hook JSON、CLI args、HTTP body、CompletedTurn、L0、L1 records。",
+        nodes: ["hook", "cli", "gateway", "core", "capture", "l0", "l1", "search"],
+        edgeKinds: ["main", "state"],
+        defaultSelected: "hook"
+      },
+      storage: {
+        label: "存储",
+        title: "存储图：L0/L1/L2/L3 和配置落点",
+        summary: "关注持久化和半持久化状态的读写位置。",
+        nodes: ["config", "l0", "l1", "l2", "l3", "search", "mcp"],
+        edgeKinds: ["state", "async", "main"],
+        defaultSelected: "l0"
+      },
+      async: {
+        label: "异步",
+        title: "异步管线：L1/L2/L3 timers 和 queues",
+        summary: "关注 threshold、idle、delay-after-L1、max interval、L3 pending flag。",
+        nodes: ["capture", "pipeline", "l1", "l2", "l3", "failure"],
+        edgeKinds: ["async", "main", "failure"],
+        defaultSelected: "pipeline"
+      },
+      failure: {
+        label: "失败",
+        title: "失败排查：记忆没生效从哪里下手",
+        summary: "从入口、配置、Gateway、L0、pipeline、L1、search 逐层排查。",
+        nodes: ["failure", "hook", "cli", "supervisor", "gateway", "l0", "pipeline", "l1", "search"],
+        edgeKinds: ["failure", "main", "state", "async"],
+        defaultSelected: "failure"
+      }
+    };
+
+    const boardLayouts = {
+      global: Object.fromEntries(nodes.map(n => [n.id, { x: n.x, y: n.y }])),
+      main: {
+        hook: { x: 40, y: 140 },
+        cli: { x: 255, y: 140 },
+        supervisor: { x: 470, y: 140 },
+        gateway: { x: 685, y: 140 },
+        core: { x: 900, y: 140 },
+        capture: { x: 900, y: 330 },
+        l0: { x: 685, y: 330 },
+        pipeline: { x: 470, y: 330 }
+      },
+      data: {
+        hook: { x: 40, y: 120 },
+        cli: { x: 250, y: 120 },
+        gateway: { x: 460, y: 120 },
+        core: { x: 670, y: 120 },
+        capture: { x: 880, y: 120 },
+        l0: { x: 880, y: 320 },
+        l1: { x: 670, y: 320 },
+        search: { x: 460, y: 320 }
+      },
+      storage: {
+        config: { x: 50, y: 150 },
+        l0: { x: 280, y: 150 },
+        l1: { x: 510, y: 150 },
+        l2: { x: 740, y: 150 },
+        l3: { x: 970, y: 150 },
+        mcp: { x: 510, y: 380 },
+        search: { x: 740, y: 380 }
+      },
+      async: {
+        capture: { x: 70, y: 160 },
+        pipeline: { x: 300, y: 160 },
+        l1: { x: 530, y: 160 },
+        l2: { x: 760, y: 160 },
+        l3: { x: 990, y: 160 },
+        failure: { x: 530, y: 390 }
+      },
+      failure: {
+        failure: { x: 50, y: 150 },
+        hook: { x: 280, y: 70 },
+        cli: { x: 510, y: 70 },
+        supervisor: { x: 740, y: 70 },
+        gateway: { x: 970, y: 70 },
+        l0: { x: 280, y: 320 },
+        pipeline: { x: 510, y: 320 },
+        l1: { x: 740, y: 320 },
+        search: { x: 970, y: 320 }
+      }
+    };
+
+    const graph = document.getElementById("graph");
+    const stage = document.getElementById("stage");
+    const edgesSvg = document.getElementById("edges");
+    const nodesRoot = document.getElementById("nodes");
+    const modebar = document.getElementById("modebar");
+    const boardTitle = document.getElementById("boardTitle");
+    const boardSummary = document.getElementById("boardSummary");
+    const inspector = document.getElementById("inspector");
+    const inspectorTitle = document.getElementById("inspectorTitle");
+    const inspectorSummary = document.getElementById("inspectorSummary");
+    const inspectorBody = document.getElementById("inspectorBody");
+    const collapseBtn = document.getElementById("collapseBtn");
+    const layout = document.getElementById("layout");
+    const floating = document.getElementById("floating");
+    const themeBtn = document.getElementById("themeBtn");
+
+    let mode = "global";
+    let selected = modes.global.defaultSelected;
+    let positions = {};
+    let pan = { x: 0, y: 0 };
+    let draggingNode = null;
+    let draggingGraph = null;
+    let moved = false;
+    let floatingNodeId = "";
+    let draggingFloating = null;
+
+    function kindColor(kind) {
+      return {
+        entry: "var(--blue)",
+        core: "var(--violet)",
+        logic: "var(--green)",
+        state: "var(--amber)",
+        failure: "var(--red)"
+      }[kind] || "var(--muted)";
+    }
+
+    function visibleNodeIds() {
+      return modes[mode].nodes;
+    }
+
+    function visibleEdges() {
+      const m = modes[mode];
+      const ids = new Set(m.nodes);
+      const kinds = m.edgeKinds ? new Set(m.edgeKinds) : null;
+      return edges.filter(e => ids.has(e.from) && ids.has(e.to) && (!kinds || kinds.has(e.kind)));
+    }
+
+    function nodeById(id) {
+      return nodes.find(n => n.id === id);
+    }
+
+    function setupModeButtons() {
+      modebar.innerHTML = "";
+      for (const [key, item] of Object.entries(modes)) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = item.label;
+        btn.className = key === mode ? "active" : "";
+        btn.addEventListener("click", () => switchMode(key));
+        modebar.appendChild(btn);
+      }
+    }
+
+    function switchMode(nextMode) {
+      mode = nextMode;
+      selected = modes[mode].defaultSelected;
+      floatingNodeId = "";
+      positions = { ...(boardLayouts[mode] || {}) };
+      pan = { x: 0, y: 0 };
+      setupModeButtons();
+      render();
+    }
+
+    function render() {
+      const m = modes[mode];
+      boardTitle.textContent = m.title;
+      boardSummary.textContent = m.summary;
+      stage.style.transform = `translate(${pan.x}px, ${pan.y}px)`;
+      renderNodes();
+      renderEdges();
+      renderInspector();
+      renderFloating();
+    }
+
+    function renderNodes() {
+      nodesRoot.innerHTML = "";
+      for (const id of visibleNodeIds()) {
+        const n = nodeById(id);
+        const pos = positions[id] || { x: n.x, y: n.y };
+        const el = document.createElement("div");
+        el.className = `node ${selected === id ? "selected" : ""}`;
+        el.style.left = `${pos.x}px`;
+        el.style.top = `${pos.y}px`;
+        el.dataset.id = id;
+        el.innerHTML = `
+          <div class="kind"><span class="dot ${n.kind}"></span>${n.kind}</div>
+          <div class="label">${escapeHtml(n.label)}</div>
+          <div class="fn">${escapeHtml(n.fn)}</div>
+        `;
+        el.addEventListener("pointerdown", onNodePointerDown);
+        el.addEventListener("click", onNodeClick);
+        nodesRoot.appendChild(el);
+      }
+    }
+
+    function renderEdges() {
+      edgesSvg.innerHTML = `
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="rgba(216,228,246,0.82)"></path>
+          </marker>
+        </defs>
+      `;
+      for (const e of visibleEdges()) {
+        const a = centerOf(e.from);
+        const b = centerOf(e.to);
+        const midX = (a.x + b.x) / 2;
+        const dx = Math.abs(b.x - a.x);
+        const c1x = a.x + Math.max(70, dx * 0.35);
+        const c2x = b.x - Math.max(70, dx * 0.35);
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("class", `edge ${e.kind}`);
+        path.setAttribute("d", `M ${a.x} ${a.y} C ${c1x} ${a.y}, ${c2x} ${b.y}, ${b.x} ${b.y}`);
+        path.setAttribute("marker-end", "url(#arrow)");
+        edgesSvg.appendChild(path);
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("class", "edge-label");
+        text.setAttribute("x", midX);
+        text.setAttribute("y", (a.y + b.y) / 2 - 8);
+        text.setAttribute("text-anchor", "middle");
+        text.textContent = e.label;
+        edgesSvg.appendChild(text);
+      }
+    }
+
+    function centerOf(id) {
+      const n = nodeById(id);
+      const pos = positions[id] || { x: n.x, y: n.y };
+      return { x: pos.x + 89, y: pos.y + 46 };
+    }
+
+    function renderInspector() {
+      const n = nodeById(selected) || nodeById(visibleNodeIds()[0]);
+      if (!n) return;
+      inspectorTitle.textContent = n.label;
+      inspectorSummary.textContent = n.summary;
+      inspectorBody.innerHTML = inspectorMarkup(n, false);
+    }
+
+    function renderFloating() {
+      if (!floatingNodeId) {
+        floating.classList.add("hidden");
+        return;
+      }
+      const n = nodeById(floatingNodeId);
+      if (!n) {
+        floating.classList.add("hidden");
+        return;
+      }
+      const pos = positions[n.id] || { x: n.x, y: n.y };
+      floating.classList.remove("hidden");
+      floating.style.left = `${Math.min(pos.x + pan.x + 195, graph.clientWidth - 380)}px`;
+      floating.style.top = `${Math.max(pos.y + pan.y, 18)}px`;
+      floating.innerHTML = `
+        <div class="floating-head">
+          <strong>${escapeHtml(n.label)}</strong>
+          <button type="button" id="closeFloating">关闭</button>
+        </div>
+        <div class="floating-body">${inspectorMarkup(n, true)}</div>
+      `;
+      floating.querySelector("#closeFloating").addEventListener("click", () => {
+        floatingNodeId = "";
+        renderFloating();
+      });
+      floating.querySelector(".floating-head").addEventListener("pointerdown", onFloatingPointerDown);
+    }
+
+    function inspectorMarkup(n, compact) {
+      const fileLink = n.file.endsWith(".md")
+        ? `<a class="filelink" href="${escapeAttr(n.file)}">${escapeHtml(n.file)}:${n.line}</a>`
+        : `<a class="filelink" href="${escapeAttr(n.file)}">${escapeHtml(n.file)}:${n.line}</a>`;
+      return `
+        <div class="kv"><h3>源码</h3><div class="content">${fileLink}<br><code>${escapeHtml(n.fn)}</code></div></div>
+        <div class="kv"><h3>输入</h3><pre>${escapeHtml(JSON.stringify(n.input, null, compact ? 0 : 2))}</pre></div>
+        <div class="kv"><h3>输出</h3><pre>${escapeHtml(JSON.stringify(n.output, null, compact ? 0 : 2))}</pre></div>
+        <div class="kv"><h3>读取</h3><ul>${n.reads.map(x => `<li>${escapeHtml(x)}</li>`).join("")}</ul></div>
+        <div class="kv"><h3>写入</h3><ul>${n.writes.length ? n.writes.map(x => `<li>${escapeHtml(x)}</li>`).join("") : "<li>无</li>"}</ul></div>
+        <div class="kv"><h3>失败分支</h3><div class="content">${escapeHtml(n.failure)}</div></div>
+      `;
+    }
+
+    function onNodePointerDown(event) {
+      const id = event.currentTarget.dataset.id;
+      draggingNode = { id, startX: event.clientX, startY: event.clientY, origin: { ...(positions[id] || { x: nodeById(id).x, y: nodeById(id).y }) } };
+      moved = false;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    function onNodeClick(event) {
+      const id = event.currentTarget.dataset.id;
+      if (moved) return;
+      if (selected === id) {
+        floatingNodeId = id;
+      } else {
+        selected = id;
+        floatingNodeId = "";
+      }
+      render();
+    }
+
+    graph.addEventListener("pointerdown", event => {
+      if (event.target.closest(".node") || event.target.closest(".floating")) return;
+      draggingGraph = { startX: event.clientX, startY: event.clientY, origin: { ...pan } };
+      graph.classList.add("dragging");
+      graph.setPointerCapture(event.pointerId);
+    });
+
+    window.addEventListener("pointermove", event => {
+      if (draggingNode) {
+        const dx = event.clientX - draggingNode.startX;
+        const dy = event.clientY - draggingNode.startY;
+        if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+        positions[draggingNode.id] = {
+          x: draggingNode.origin.x + dx,
+          y: draggingNode.origin.y + dy
+        };
+        renderNodes();
+        renderEdges();
+        return;
+      }
+      if (draggingGraph) {
+        pan = {
+          x: draggingGraph.origin.x + event.clientX - draggingGraph.startX,
+          y: draggingGraph.origin.y + event.clientY - draggingGraph.startY
+        };
+        stage.style.transform = `translate(${pan.x}px, ${pan.y}px)`;
+        return;
+      }
+      if (draggingFloating) {
+        floating.style.left = `${draggingFloating.originLeft + event.clientX - draggingFloating.startX}px`;
+        floating.style.top = `${draggingFloating.originTop + event.clientY - draggingFloating.startY}px`;
+      }
+    });
+
+    window.addEventListener("pointerup", () => {
+      draggingNode = null;
+      draggingGraph = null;
+      draggingFloating = null;
+      graph.classList.remove("dragging");
+      setTimeout(() => { moved = false; }, 0);
+    });
+
+    function onFloatingPointerDown(event) {
+      if (event.target.closest("button")) return;
+      draggingFloating = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originLeft: parseFloat(floating.style.left || "0"),
+        originTop: parseFloat(floating.style.top || "0")
+      };
+      floating.setPointerCapture(event.pointerId);
+    }
+
+    collapseBtn.addEventListener("click", () => {
+      inspector.classList.toggle("collapsed");
+      layout.classList.toggle("collapsed");
+      collapseBtn.textContent = inspector.classList.contains("collapsed") ? "展开" : "收起";
+    });
+
+    themeBtn.addEventListener("click", () => {
+      document.body.classList.toggle("theme-dark");
+      localStorage.setItem("tdai-dissection-theme", document.body.classList.contains("theme-dark") ? "dark" : "light");
+    });
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    if (localStorage.getItem("tdai-dissection-theme") === "dark") {
+      document.body.classList.add("theme-dark");
+    }
+    switchMode("global");
+  </script>
+</body>
+</html>
