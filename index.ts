@@ -45,6 +45,31 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 
+export {
+  GatewayMemoryClient,
+  GatewayMemoryClientError,
+  createGatewayPlatformAdapter,
+} from "./src/adapters/gateway-client/index.js";
+export type {
+  GatewayMemoryClientOptions,
+  GatewayPlatformAdapter,
+  GatewayPlatformAdapterOptions,
+  GatewayPlatformContext,
+} from "./src/adapters/gateway-client/index.js";
+export {
+  buildOpenCodeSessionKey,
+  createOpenCodeMemoryPlugin,
+  extractOpenCodePrompt,
+} from "./src/adapters/opencode/index.js";
+export type {
+  OpenCodeMemoryPlugin,
+  OpenCodeMemoryPluginOptions,
+  OpenCodeMessage,
+  OpenCodePluginContext,
+  OpenCodePluginHooks,
+  OpenCodeTextPart,
+} from "./src/adapters/opencode/index.js";
+
 const TAG = "[memory-tdai]";
 
 /**
