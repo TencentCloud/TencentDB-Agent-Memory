@@ -536,6 +536,11 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/adapters/ARCHITECTURE.md`](./docs/adapters/ARCHITECTURE.md) | Core engine + platform adapters, with data-flow diagrams |
+| [`docs/adapters/COMPARISON.md`](./docs/adapters/COMPARISON.md) | OpenClaw vs. Hermes vs. MCP vs. Dify — trade-offs & decision guide |
+| [`docs/adapters/ADDING-A-PLATFORM.md`](./docs/adapters/ADDING-A-PLATFORM.md) | Add a new platform in ~30 lines with the unified adapter SDK |
+| [`src/adapters/mcp/README.md`](./src/adapters/mcp/README.md) | MCP server — Claude Code / Codex / Cursor / Cline setup |
+| [`src/adapters/dify/README.md`](./src/adapters/dify/README.md) | Dify custom-tool (OpenAPI) integration |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
