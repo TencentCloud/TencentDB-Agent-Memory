@@ -363,9 +363,14 @@ function filtersToDisplayString(conditions: FilterCondition[]): string {
 
 /** 只读打开 SQLite 数据库 */
 function openSqliteReadonly(dbPath: string): DatabaseSync {
+  // Bun: native read-only open (no lazy-open / query_only pragma needed).
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite")
+    return new Database(dbPath, { readonly: true }) as unknown as DatabaseSync
+  }
+  // node:sqlite 没有直接的 readOnly 选项，用 query_only pragma 保证只读
   const { DatabaseSync: DbSync } = requireNodeSqlite()
   const db = new DbSync(dbPath, { open: false })
-  // node:sqlite 没有直接的 readOnly 选项，用 query_only pragma 保证只读
   db.open()
   db.exec("PRAGMA query_only = ON")
   return db

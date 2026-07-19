@@ -11,7 +11,7 @@
  * 3. `l0_conversations` — relational metadata table (session_key, role, message text, timestamps)
  * 4. `l0_vec` — vec0 virtual table for cosine similarity search on individual messages
  *
- * Dependencies: Node.js built-in `node:sqlite` (Node 22+) + `sqlite-vec` (from root workspace).
+ * Dependencies: Built-in SQLite module (`node:sqlite` on Node 22+, `bun:sqlite` on Bun) + `sqlite-vec` (from root workspace).
  *
  * Design:
  * - All operations are synchronous (DatabaseSync API).
@@ -128,11 +128,44 @@ export interface VectorStoreInitResult {
   reason?: string;
 }
 
-// Use createRequire to load the experimental node:sqlite module
+// Use createRequire to load the SQLite built-in module (node:sqlite or bun:sqlite)
 const require = createRequire(import.meta.url);
 
-function requireNodeSqlite(): typeof import("node:sqlite") {
-  return require("node:sqlite") as typeof import("node:sqlite");
+/**
+ * Minimal structural shape of a synchronous SQLite handle that works across both
+ * supported runtimes:
+ *   - Node.js: built-in `node:sqlite` (DatabaseSync)
+ *   - Bun:     built-in `bun:sqlite` (Database)
+ *
+ * Both expose the same exec/prepare/run/all/get/close methods used by this store.
+ * `enableLoadExtension` is Node-only — Bun's Database loads extensions via
+ * `loadExtension()` directly, without an enable step.
+ */
+interface SqliteHandle {
+  exec(sql: string): unknown;
+  prepare(sql: string): {
+    run(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+    get(...params: unknown[]): unknown;
+  };
+  enableLoadExtension?(enabled: boolean): unknown;
+  loadExtension(path: string): unknown;
+  close(): unknown;
+}
+
+/**
+ * Open a SQLite database using whichever built-in module the current runtime
+ * provides. Bun loads the sqlite-vec extension via `db.loadExtension()` directly;
+ * Node requires `{ allowExtension: true }` at construction plus
+ * `db.enableLoadExtension(true)` before loading (see init()).
+ */
+function openSqliteHandle(path: string): SqliteHandle {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite");
+    return new Database(path) as unknown as SqliteHandle;
+  }
+  const { DatabaseSync } = require("node:sqlite");
+  return new DatabaseSync(path, { allowExtension: true }) as unknown as SqliteHandle;
 }
 
 // ============================
@@ -408,9 +441,8 @@ export class VectorStore implements IMemoryStore {
     this.dimensions = dimensions;
     this.logger = logger;
 
-    // Open database with extension support enabled
-    const { DatabaseSync: DbSync } = requireNodeSqlite();
-    this.db = new DbSync(dbPath, { allowExtension: true });
+    // Open database (node:sqlite under Node, bun:sqlite under Bun)
+    this.db = openSqliteHandle(dbPath) as unknown as DatabaseSync;
 
     // Set busy timeout so concurrent processes retry instead of failing with SQLITE_BUSY
     this.db.exec("PRAGMA busy_timeout = 5000");
@@ -452,7 +484,8 @@ export class VectorStore implements IMemoryStore {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sqliteVec = require("sqlite-vec");
-      this.db.enableLoadExtension(true);
+      // Node needs enableLoadExtension(true) before loading; Bun loads directly.
+      this.db.enableLoadExtension?.(true);
       sqliteVec.load(this.db);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
