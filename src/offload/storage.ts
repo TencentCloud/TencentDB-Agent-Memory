@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import type { OffloadEntry, PluginLogger } from "./types.js";
+import { sanitizePathSegment } from "./path-segment.js";
 
 /** Default root data directory (parent of all agent subdirectories) */
 export const DEFAULT_DATA_ROOT = join(homedir(), ".openclaw", "context-offload");
@@ -525,7 +526,10 @@ export async function updateOffloadNodeIds(
 
 /** Convert ISO 8601 timestamp to a safe filename (replace special chars) */
 export function isoToFilename(iso: string): string {
-  return iso.replace(/:/g, "-").replace(/\./g, "-").replace(/\+/g, "p");
+  return sanitizePathSegment(
+    iso.replace(/:/g, "-").replace(/\./g, "-").replace(/\+/g, "p"),
+    "ref",
+  );
 }
 
 /** Write tool result content to a ref MD file, return relative path */
@@ -548,7 +552,8 @@ export async function readRefMd(
   ctx: StorageContext,
   refPath: string,
 ): Promise<string | null> {
-  const filePath = join(ctx.dataDir, refPath);
+  const rawRef = String(refPath ?? "").replace(/^refs[/\\]/, "");
+  const filePath = join(ctx.refsDir, sanitizePathSegment(rawRef, "ref"));
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }
