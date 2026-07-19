@@ -40,6 +40,7 @@ import type {
   GatewayErrorResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
+import type { RecallResult } from "../core/hooks/auto-recall.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
@@ -91,6 +92,17 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 
 function sendError(res: http.ServerResponse, status: number, message: string): void {
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
+}
+
+export function buildRecallResponse(result: RecallResult): RecallResponse {
+  const context = [result.prependContext, result.appendSystemContext].filter(Boolean).join("\n\n");
+  return {
+    context,
+    ...(result.prependContext ? { prepend_context: result.prependContext } : {}),
+    ...(result.appendSystemContext ? { append_context: result.appendSystemContext } : {}),
+    strategy: result.recallStrategy,
+    memory_count: result.recalledL1Memories?.length ?? 0,
+  };
 }
 
 /**
@@ -380,13 +392,9 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    const response = buildRecallResponse(result);
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${response.context.length} chars`);
     sendJson(res, 200, response);
   }
 
