@@ -17,7 +17,6 @@ import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { LLMRunner, Logger } from "../types.js";
 
@@ -265,9 +264,8 @@ async function findCandidatesByFts(
   const matches: CandidateMatch[] = [];
 
   for (const mem of memories) {
-    const ftsQuery = buildFtsQuery(mem.content);
-    if (ftsQuery) {
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, 10);
+    const ftsResults = await vectorStore.searchL1Keyword(mem.content, 10);
+    if (ftsResults.length > 0) {
       // Filter out records from the current batch
       const candidates: MemoryRecord[] = ftsResults
         .filter((r) => !newRecordIds.has(r.record_id))
