@@ -144,20 +144,27 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
-    // Initialize stores (async)
+    // Store initialization must finish before initialize() resolves. Besides
+    // making the lifecycle contract truthful, this lets callers hand the
+    // initialized store to the cleaner without a timing race.
     this.storeReady = this.initStores();
 
-    // Create pipeline manager (sync — does not need store)
+    // Create pipeline manager (sync — runner wiring waits for store init).
     if (this.cfg.extraction.enabled) {
       this.scheduler = createPipelineManager(this.cfg, this.logger, this.sessionFilter);
-      // Wire runners after store is ready (or after store init fails — runners
-      // still work in degraded mode with JSONL fallback and no embedding)
-      this.storeReady
-        .then(() => this.wirePipelineRunners())
-        .catch((err) => {
-          this.logger.error(`${TAG} Store init failed; wiring pipeline runners in degraded mode: ${err instanceof Error ? err.message : String(err)}`);
-          this.wirePipelineRunners();
-        });
+    }
+
+    await this.storeReady;
+    this.wirePipelineRunners();
+
+    try {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      await checkpoint.recalculateFromStorage(this.vectorStore, "core-startup");
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint recalculation failed on startup (non-fatal): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
