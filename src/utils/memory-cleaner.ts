@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -12,6 +13,7 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  checkpoint?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -33,14 +35,20 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpoint?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpoint = opts.checkpoint;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setCheckpoint(checkpoint: CheckpointManager | undefined): void {
+    this.checkpoint = checkpoint;
   }
 
   start(): void {
@@ -163,6 +171,24 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+      }
+
+      if ((removedL1 > 0 || removedL0 > 0) && this.checkpoint) {
+        try {
+          const [actualL0, actualL1] = await Promise.all([
+            vectorStore.countL0(),
+            vectorStore.countL1(),
+          ]);
+          await this.checkpoint.recalibrateCounts({
+            l0ConversationsCount: actualL0,
+            totalMemoriesExtracted: actualL1,
+          });
+        } catch (err) {
+          this.opts.logger?.warn(
+            `${TAG} Checkpoint recalibration failed after cleanup (non-fatal): ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
       // ── Post-delete: audit summary ──

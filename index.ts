@@ -31,6 +31,7 @@ import {
 } from "./src/utils/clean-context-runner.js";
 import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
+import { CheckpointManager } from "./src/utils/checkpoint.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
@@ -305,6 +306,7 @@ export default function register(api: OpenClawPluginApi) {
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
+        checkpoint: new CheckpointManager(pluginDataDir, api.logger),
       });
       sharedMemoryCleaner.start();
       api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);
