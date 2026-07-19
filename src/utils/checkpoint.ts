@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -483,6 +484,45 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Recalibration
+  // ============================
+
+  /**
+   * Recalibrate global counters against actual data held in the store.
+   *
+   * Call once on gateway startup to fix counter drift that accumulates when
+   * memory-cleaner deletes records from JSONL/SQLite but never decrements the
+   * checkpoint counters (`total_memories_extracted`, `l0_conversations_count`).
+   * Returns the corrected values, or undefined when store is unavailable.
+   */
+  async recalibrate(store?: IMemoryStore): Promise<{ total_memories_extracted: number; l0_conversations_count: number } | undefined> {
+    if (!store) return undefined;
+    let actualL1: number, actualL0: number;
+    try {
+      [actualL1, actualL0] = await Promise.all([store.countL1(), store.countL0()]);
+    } catch (err) {
+      this.logger.info(
+        `[checkpoint] recalibrate skipped: ${err instanceof Error ? err.message : err}`,
+      );
+      return undefined;
+    }
+    const cp = await this.mutate((cp) => {
+      const removedL1 = Math.max(0, cp.total_memories_extracted - actualL1);
+      cp.total_memories_extracted = actualL1;
+      cp.l0_conversations_count = actualL0;
+      if (removedL1 > 0) {
+        cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - removedL1);
+      }
+    });
+    this.logger.info(
+      `[checkpoint] recalibrate: total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+    return { total_memories_extracted: cp.total_memories_extracted, l0_conversations_count: cp.l0_conversations_count };
   }
 
 }
