@@ -1378,6 +1378,9 @@ async function fastPathReApply(messages: any[], stateManager: OffloadStateManage
             }
           }
         }
+        // Invalidate token cache after mutation so the next
+        // buildTiktokenContextSnapshot sees the post-strip count.
+        invalidateTokenCache(msg);
       }
     }
     if (msg._offloaded) continue;
