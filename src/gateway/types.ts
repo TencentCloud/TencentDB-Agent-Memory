@@ -2,6 +2,8 @@
  * TDAI Gateway — Request/Response types for the HTTP API.
  */
 
+import type { RecallInjectionMode } from "../config.js";
+
 // ============================
 // Common
 // ============================
@@ -36,7 +38,14 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Backward-compatible combined context for clients that do not understand structured fields. */
   context: string;
+  /** Stable recall content; clients should place it in a cache-friendly host location. */
+  stable_context: string;
+  /** Dynamic L1 recall content for the current turn. */
+  dynamic_context: string;
+  /** Preferred placement for dynamic_context. Hosts may fall back to their native capability. */
+  injection_mode: RecallInjectionMode;
   strategy?: string;
   memory_count?: number;
 }

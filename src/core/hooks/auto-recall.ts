@@ -21,7 +21,7 @@ import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.j
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
-import type { Logger } from "../types.js";
+import type { Logger, RecalledMemory, RecallResult } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -46,28 +46,6 @@ const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 - 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
 - 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
 </memory-tools-guide>`
-
-/** A single recalled L1 memory with its search score and type. */
-export interface RecalledMemory {
-  content: string;
-  score: number;
-  type: string;
-}
-
-export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
-  prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
-  appendSystemContext?: string;
-
-  // ── Metric payload (for pendingRecallCache in index.ts) ──
-  /** L1 memories that were recalled (with scores), for metric reporting */
-  recalledL1Memories?: RecalledMemory[];
-  /** L3 Persona raw content loaded during recall (null if none) */
-  recalledL3Persona?: string | null;
-  /** Effective search strategy used */
-  recallStrategy?: string;
-}
 
 export async function performAutoRecall(params: {
   userText: string;
@@ -185,14 +163,14 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
+  // stableContext (host-placed, stable, cacheable):
   //   persona, scene navigation, memory tools guide
   //   These change infrequently; when content is identical across turns,
   //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  // dynamicContext (host-placed, dynamic, per-turn):
+  //   L1 relevant memories — different every turn. The host adapter decides
+  //   whether this content is placed before or after the current user prompt.
   const stableParts: string[] = [];
   if (personaContent) {
     stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
@@ -201,21 +179,21 @@ async function performAutoRecallInner(params: {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
 
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
+  // Dynamic part: L1 relevant memories (changes every turn).
+  let dynamicContext: string | undefined;
   if (memoryLines.length > 0) {
-    prependContext =
+    dynamicContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
+  if (stableParts.length > 0 || dynamicContext) {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const stableContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,13 +205,13 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!stableContext && !dynamicContext) {
     return undefined;
   }
 
   return {
-    prependContext,
-    appendSystemContext,
+    dynamicContext,
+    stableContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
