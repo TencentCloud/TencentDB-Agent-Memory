@@ -5,6 +5,7 @@
  *   GET  /health              — Health check
  *   POST /recall              — Memory recall (prefetch)
  *   POST /capture             — Conversation capture (sync_turn)
+ *   POST /memories/explicit   — Explicit durable-memory ingest
  *   POST /search/memories     — L1 memory search
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
@@ -29,6 +30,8 @@ import type {
   RecallResponse,
   CaptureRequest,
   CaptureResponse,
+  ExplicitMemoryWriteRequest,
+  ExplicitMemoryWriteResponse,
   MemorySearchRequest,
   MemorySearchResponse,
   ConversationSearchRequest,
@@ -198,7 +201,7 @@ export class TdaiGateway {
     if (!loopback && !authOn) {
       this.logger.warn(
         `Gateway is bound to ${host} (non-loopback) WITHOUT an API key. ` +
-        "Every /capture, /search/conversations, /recall, /seed call from the " +
+        "Every /capture, /memories/explicit, /search/conversations, /recall, /seed call from the " +
         "network is currently unauthenticated. Bind to 127.0.0.1, or set " +
         "TDAI_GATEWAY_API_KEY, before continuing."
       );
@@ -264,6 +267,8 @@ export class TdaiGateway {
           return await this.handleRecall(req, res);
         case "POST /capture":
           return await this.handleCapture(req, res);
+        case "POST /memories/explicit":
+          return await this.handleExplicitMemoryWrite(req, res);
         case "POST /search/memories":
           return await this.handleSearchMemories(req, res);
         case "POST /search/conversations":
@@ -416,6 +421,30 @@ export class TdaiGateway {
     const response: CaptureResponse = {
       l0_recorded: result.l0RecordedCount,
       scheduler_notified: result.schedulerNotified,
+    };
+    sendJson(res, 200, response);
+  }
+
+  private async handleExplicitMemoryWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<ExplicitMemoryWriteRequest>(req);
+
+    if (!body.action || !body.target || !body.content || !body.session_key) {
+      sendError(res, 400, "Missing required fields: action, target, content, session_key");
+      return;
+    }
+
+    const result = await this.core.ingestExplicitMemory({
+      action: body.action,
+      target: body.target,
+      content: body.content,
+      sessionKey: body.session_key,
+      sessionId: body.session_id,
+    });
+
+    const response: ExplicitMemoryWriteResponse = {
+      stored: result.stored,
+      memory_id: result.memoryId,
+      type: result.type,
     };
     sendJson(res, 200, response);
   }
