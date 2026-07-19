@@ -122,7 +122,10 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
 
     // 动态加载 SDK 组件
     const { NodeSDK } = await import("@opentelemetry/sdk-node");
-    const { Resource } = await import("@opentelemetry/resources");
+    // v1.x 导出 `Resource` 类，v2.x 改为 `resourceFromAttributes()` 工厂函数。
+    // v1.0.0 tag 锁定的 `@opentelemetry/resources@^2.7.1` 已经不再导出 `Resource`，
+    // 因此这里必须使用 v2 的 factory API；详见 issue #420。
+    const { resourceFromAttributes } = await import("@opentelemetry/resources");
     const { ATTR_SERVICE_NAME } = await import("@opentelemetry/semantic-conventions");
 
     // 根据协议选择 exporter
@@ -158,7 +161,7 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
 
     // 构建 SDK 配置
     const sdkConfig: any = {
-      resource: new Resource({
+      resource: resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
       }),
       traceExporter,
@@ -182,8 +185,33 @@ async function initOTelSDK(config: OTelConfig): Promise<boolean> {
     );
     return true;
   } catch (err) {
+    // 把 OTel SDK 初始化失败的根因冒出来。
+    // 之前静默降级到 console fallback，让 v1.0.0 tag 的 Resource constructor
+    // 报错在生产中"看不见"，从而掩盖了 #420 这类 release-blocker。
+    // 现在默认用 console.error + stack 输出（fail-closed），让运维立刻发现；
+    // 通过 env `TDAI_OTEL_FAIL_OPEN=true` 可以保留旧的"只 warn 不阻断启动"
+    // 行为（fail-open），适合在 CI / 故障排查中暂时打开。
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`${TAG} Failed to initialize OTel SDK: ${msg}. Trace/Log will use console fallback.`);
+    const stack = err instanceof Error ? err.stack : undefined;
+    const failOpen = process.env.TDAI_OTEL_FAIL_OPEN === "true";
+
+    if (failOpen) {
+      console.warn(
+        `${TAG} Failed to initialize OTel SDK (fail-open): ${msg}. ` +
+        `Trace/Log will use console fallback. See issue #420.`,
+      );
+      if (stack) {
+        console.warn(`${TAG} Stack: ${stack}`);
+      }
+    } else {
+      console.error(
+        `${TAG} Failed to initialize OTel SDK: ${msg}. ` +
+        `Trace/Log will use console fallback. See issue #420.`,
+      );
+      if (stack) {
+        console.error(`${TAG} Stack: ${stack}`);
+      }
+    }
     return false;
   }
 }
