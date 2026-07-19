@@ -1,0 +1,31 @@
+{
+  "version": "0.0.1",
+  "type": "plugin",
+  "author": "TencentDB-Agent-Memory",
+  "name": "tdai-memory",
+  "label": {
+    "en_US": "TDAI Memory",
+    "zh_Hans": "TDAI 记忆"
+  },
+  "description": {
+    "en_US": "TencentDB Agent Memory integration for Dify - provides recall, capture, and search capabilities",
+    "zh_Hans": "TencentDB Agent Memory Dify 集成 - 提供记忆召回、捕获和搜索能力"
+  },
+  "icon": "icon.svg",
+  "category": "tool",
+  "created_at": "2026-07-06",
+  "resource": {
+    "memory": 64,
+    "permission": {
+      "tool": {
+        "enabled": true
+      },
+      "network": {
+        "enabled": true
+      }
+    }
+  },
+  "plugins": {
+    "tools": ["provider.yaml"]
+  }
+}
