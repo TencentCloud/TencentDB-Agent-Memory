@@ -174,6 +174,20 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+function sanitizeFtsTokens(tokens: string[]): string[] {
+  return tokens
+    .flatMap((token) => token.match(/[\p{L}\p{N}_]+/gu) ?? [])
+    .map((token) => token.trim())
+    .filter((token) => {
+      if (!token) return false;
+      if (FTS5_RESERVED_OPERATORS.has(token.toUpperCase())) return false;
+      if (ZH_STOP_WORDS.has(token)) return false;
+      return true;
+    });
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -202,26 +216,12 @@ export function buildFtsQuery(raw: string): string | null {
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
+    tokens = sanitizeFtsTokens(jieba.cutForSearch(raw, true));
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    tokens = sanitizeFtsTokens([raw]);
   }
 
   if (tokens.length === 0) return null;
