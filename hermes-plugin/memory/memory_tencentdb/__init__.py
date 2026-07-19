@@ -45,6 +45,13 @@ logger = logging.getLogger(__name__)
 _BREAKER_THRESHOLD = 5
 _BREAKER_COOLDOWN_SECS = 60
 
+# ``system_prompt_block()`` has no user query, but the Gateway's /recall
+# contract requires a non-empty one. This reserved probe is intentionally
+# unlikely to match L1 records; only the stable ``system_context`` field from
+# the split recall contract is consumed from its response.
+_SYSTEM_CONTEXT_PROBE_QUERY = "[memory-tencentdb system context]"
+_SYSTEM_CONTEXT_TTL_SECS = 60.0
+
 # Gateway resurrect throttle: minimum seconds between two consecutive
 # ensure_running() attempts triggered by in-flight request failures.
 # Chosen smaller than _BREAKER_COOLDOWN_SECS so we can try to revive the
@@ -387,6 +394,8 @@ class MemoryTencentdbProvider(MemoryProvider):
         self._user_id = ""
         self._gateway_available = False
         self._initialized = False  # Track if initialize() has been called
+        self._latest_system_context = ""
+        self._system_context_refreshed_at = 0.0
 
         # Background sync threads.
         # We allow at most _MAX_INFLIGHT_SYNCS in-flight sync threads at any
@@ -748,6 +757,8 @@ class MemoryTencentdbProvider(MemoryProvider):
         """
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", "default")
+        self._latest_system_context = ""
+        self._system_context_refreshed_at = 0.0
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
@@ -828,7 +839,8 @@ class MemoryTencentdbProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         if not self._gateway_available:
             return ""
-        return (
+        system_context = self._refresh_system_context()
+        block = (
             "# memory-tencentdb Memory\n"
             f"Active. User: {self._user_id}.\n"
             "Four-layer memory system (L0→L1→L2→L3) with automatic conversation "
@@ -836,6 +848,45 @@ class MemoryTencentdbProvider(MemoryProvider):
             "Use memory_tencentdb_memory_search to find specific memories, "
             "memory_tencentdb_conversation_search to search raw conversation history."
         )
+        if system_context:
+            block = f"{block}\n\n{system_context}"
+        return block
+
+    def _refresh_system_context(self) -> str:
+        """Refresh stable system context without injecting dynamic L1 recall.
+
+        A successful response, including an explicitly empty context, is
+        cached for a short TTL. Failures leave the timestamp and last-known
+        value untouched so prompt construction remains fail-open.
+        """
+        now = time.monotonic()
+        if (
+            self._system_context_refreshed_at > 0.0
+            and now - self._system_context_refreshed_at < _SYSTEM_CONTEXT_TTL_SECS
+        ):
+            return self._latest_system_context
+        if not self._ensure_alive_for_request() or not self._client:
+            return self._latest_system_context
+
+        try:
+            result = self._client.recall(
+                query=_SYSTEM_CONTEXT_PROBE_QUERY,
+                session_key=self._session_id,
+                user_id=self._user_id,
+            )
+            # Never fall back to ``context`` here: that backward-compatible
+            # field may contain dynamic L1 memories and does not belong in a
+            # stable system prompt.
+            value = result.get("system_context", "")
+            self._latest_system_context = value.strip() if isinstance(value, str) else ""
+            self._system_context_refreshed_at = now
+            self._record_success()
+        except Exception as e:
+            self._record_failure()
+            logger.debug("memory-tencentdb system context refresh failed: %s", e)
+            self._try_recover_gateway()
+
+        return self._latest_system_context
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Synchronous recall — fetch memories in real-time for the current turn."""
@@ -856,7 +907,14 @@ class MemoryTencentdbProvider(MemoryProvider):
                 session_key=effective_session,
                 user_id=self._user_id,
             )
-            context = result.get("context", "")
+            if effective_session == self._session_id and "system_context" in result:
+                system_context = result.get("system_context", "")
+                self._latest_system_context = (
+                    system_context.strip() if isinstance(system_context, str) else ""
+                )
+                self._system_context_refreshed_at = time.monotonic()
+
+            context = result.get("prepend_context") or result.get("context", "")
             self._record_success()
             if context:
                 return f"## memory-tencentdb Memory\n{context}"
