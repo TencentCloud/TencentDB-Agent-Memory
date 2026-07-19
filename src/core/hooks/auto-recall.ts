@@ -16,6 +16,7 @@ import { formatForLLM } from "../../utils/time.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { buildSessionSnapshot } from "../session/session-snapshot.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
@@ -32,7 +33,11 @@ const RECALL_LINE_SEPARATOR = "\n";
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
  */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
+function buildMemoryToolsGuide(maxSearchCallsPerTurn: number): string {
+  const maxCalls = Number.isFinite(maxSearchCallsPerTurn) && maxSearchCallsPerTurn > 0
+    ? Math.floor(maxSearchCallsPerTurn)
+    : 3;
+  return `<memory-tools-guide>
 ## 记忆工具调用指南
 
 当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
@@ -42,10 +47,11 @@ const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
 - **read_file**（Scene Navigation 中的路径）：当已定位到相关情境，且需要该场景的完整画像、事件经过或阶段结论时使用。
 
 ### ⚠️ 调用次数限制
-每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
-- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
-- 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
-</memory-tools-guide>`
+每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 ${maxCalls} 次**。
+- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 ${maxCalls} 次。
+- 若 ${maxCalls} 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
+</memory-tools-guide>`;
+}
 
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
@@ -112,7 +118,8 @@ async function performAutoRecallInner(params: {
   const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
   const tRecallStart = performance.now();
 
-  // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
+  // Search relevant memories (L1 layer) unless the operator explicitly selects
+  // tool-only mode. This preserves the existing automatic recall default.
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
   let effectiveStrategy = "skipped";
@@ -120,12 +127,17 @@ async function performAutoRecallInner(params: {
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
   if (!userText || userText.length === 0) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
+  } else if (cfg.recall.mode !== "auto") {
+    logger?.debug?.(`${TAG} recall.mode=${cfg.recall.mode}, skipping automatic L1 search; use memory tools on demand`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
-    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
+    memoryLines = applyRecallBudget(memoryLines, {
+      ...cfg.recall,
+      maxTotalRecallChars: cfg.recall.maxTotalRecallChars || cfg.recall.dynamicRecallMaxTokens * 4,
+    }, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
@@ -161,27 +173,15 @@ async function performAutoRecallInner(params: {
   try {
     const sceneIndex = await readSceneIndex(pluginDataDir);
     if (sceneIndex.length > 0) {
-      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir);
-      logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes`);
+      const sceneLimit = cfg.recall.sceneSummaryMaxItems > 0 ? cfg.recall.sceneSummaryMaxItems : sceneIndex.length;
+      const boundedSceneIndex = sceneIndex.slice(0, sceneLimit);
+      sceneNavigation = generateSceneNavigation(boundedSceneIndex, pluginDataDir);
+      logger?.debug?.(`${TAG} Scene navigation generated: ${boundedSceneIndex.length}/${sceneIndex.length} scenes`);
     }
   } catch {
     logger?.debug?.(`${TAG} No scene index found`);
   }
   const tSceneEnd = performance.now();
-
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
-    const totalMs = performance.now() - tRecallStart;
-    logger?.info(
-      `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
-      `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
-      `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
-      `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms, ` +
-      `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms — no context to inject`,
-    );
-    logger?.debug?.(`${TAG} No memories/persona/scenes to inject`);
-    return undefined;
-  }
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
@@ -194,16 +194,16 @@ async function performAutoRecallInner(params: {
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
   const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
+  const sessionSnapshot = buildSessionSnapshot({
+    persona: personaContent,
+    sceneNavigation,
+    maxTokens: cfg.recall.sessionSnapshotMaxTokens,
+  });
+  stableParts.push(sessionSnapshot.text);
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
+  if (cfg.recall.mode === "auto" && memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
@@ -211,9 +211,7 @@ async function performAutoRecallInner(params: {
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
+  stableParts.push(buildMemoryToolsGuide(cfg.recall.maxSearchCallsPerTurn));
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
@@ -630,7 +628,10 @@ async function searchHybrid(
 
   // Sort by combined RRF score and take top results
   const sorted = [...mergedMap.entries()]
-    .sort((a, b) => b[1].rrfScore - a[1].rrfScore)
+    .sort((a, b) => {
+      const scoreDiff = b[1].rrfScore - a[1].rrfScore;
+      return scoreDiff !== 0 ? scoreDiff : a[0].localeCompare(b[0]);
+    })
     .slice(0, maxResults);
 
   if (sorted.length > 0) {

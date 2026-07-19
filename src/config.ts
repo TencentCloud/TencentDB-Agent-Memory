@@ -81,6 +81,8 @@ export interface PipelineTriggerConfig {
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /** Recall mode. "tool-only" disables automatic L1 search (default: "auto"). */
+  mode: "auto" | "tool-only";
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -93,6 +95,14 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Stable session snapshot token budget (default: 1600) */
+  sessionSnapshotMaxTokens: number;
+  /** Max scene summary items in the stable snapshot (default: 6) */
+  sceneSummaryMaxItems: number;
+  /** Dynamic recall token budget in auto mode (default: 900) */
+  dynamicRecallMaxTokens: number;
+  /** Combined active-search call budget per user turn (default: 3) */
+  maxSearchCallsPerTurn: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -529,12 +539,17 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      mode: validateRecallMode(str(recallGroup, "mode")) ?? "auto",
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      sessionSnapshotMaxTokens: num(recallGroup, "sessionSnapshotMaxTokens") ?? 1600,
+      sceneSummaryMaxItems: num(recallGroup, "sceneSummaryMaxItems") ?? 6,
+      dynamicRecallMaxTokens: num(recallGroup, "dynamicRecallMaxTokens") ?? 900,
+      maxSearchCallsPerTurn: num(recallGroup, "maxSearchCallsPerTurn") ?? 3,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -634,6 +649,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_RECALL_MODES: RecallConfig["mode"][] = ["auto", "tool-only"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +659,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateRecallMode(value: string | undefined): RecallConfig["mode"] | undefined {
+  if (!value) return undefined;
+  return VALID_RECALL_MODES.includes(value as RecallConfig["mode"])
+    ? (value as RecallConfig["mode"])
     : undefined;
 }
 
