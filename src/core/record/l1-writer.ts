@@ -37,6 +37,18 @@ export interface EpisodicMetadata {
   activity_end_time?: string; // ISO 8601
 }
 
+/** Optional provenance metadata for trust-aware recall. */
+export interface MemoryProvenance {
+  /** Origin of the memory, e.g. "conversation", "seed", "trace", or an adapter name. */
+  source?: string;
+  /** Trust score in the [0, 1] range when the caller can provide one. */
+  credibility_score?: number;
+  /** Caller-defined namespace for grouping or downstream filtering. */
+  namespace?: string;
+}
+
+export type MemoryMetadata = Record<string, unknown> & EpisodicMetadata & MemoryProvenance;
+
 /**
  * A persisted memory record in L1 JSONL files.
  *
@@ -60,7 +72,11 @@ export interface MemoryRecord {
   /** Source message IDs that contributed to this memory */
   source_message_ids: string[];
   /** Type-specific metadata (e.g., activity_start_time for episodic) */
-  metadata: EpisodicMetadata | Record<string, never>;
+  metadata: MemoryMetadata;
+  /** Optional source/provenance fields are duplicated from metadata for direct consumers. */
+  source?: string;
+  credibility_score?: number;
+  namespace?: string;
   /** Timestamp trail: all timestamps related to this memory (for merge history tracking) */
   timestamps: string[];
   /** Creation timestamp (ISO) */
@@ -82,7 +98,10 @@ export interface ExtractedMemory {
   type: MemoryType;
   priority: number;
   source_message_ids: string[];
-  metadata: EpisodicMetadata | Record<string, never>;
+  metadata: MemoryMetadata;
+  source?: string;
+  credibility_score?: number;
+  namespace?: string;
   /** Scene name this memory was extracted in */
   scene_name: string;
 }
@@ -113,6 +132,44 @@ export interface DedupDecision {
 }
 
 const TAG = "[memory-tdai][l1-writer]";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeCredibilityScore(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+export function normalizeMemoryProvenance(memory: {
+  metadata?: Record<string, unknown>;
+  source?: unknown;
+  credibility_score?: unknown;
+  namespace?: unknown;
+}): MemoryProvenance {
+  const meta = memory.metadata ?? {};
+  return {
+    source: normalizeOptionalString(memory.source ?? meta.source),
+    credibility_score: normalizeCredibilityScore(memory.credibility_score ?? meta.credibility_score),
+    namespace: normalizeOptionalString(memory.namespace ?? meta.namespace),
+  };
+}
+
+export function mergeProvenanceIntoMetadata(
+  metadata: Record<string, unknown> | undefined,
+  provenance: MemoryProvenance,
+): MemoryMetadata {
+  const merged: Record<string, unknown> = { ...(metadata ?? {}) };
+  if (provenance.source) merged.source = provenance.source;
+  if (typeof provenance.credibility_score === "number") merged.credibility_score = provenance.credibility_score;
+  if (provenance.namespace) merged.namespace = provenance.namespace;
+  return merged as MemoryMetadata;
+}
 
 // ============================
 // Core functions
@@ -176,6 +233,9 @@ export async function writeMemory(params: {
     finalTimestamps = [now];
   }
 
+  const provenance = normalizeMemoryProvenance(memory);
+  const metadata = mergeProvenanceIntoMetadata(memory.metadata, provenance);
+
   const record: MemoryRecord = {
     id: decision.record_id || generateMemoryId(),
     content: finalContent,
@@ -183,7 +243,8 @@ export async function writeMemory(params: {
     priority: finalPriority,
     scene_name: memory.scene_name,
     source_message_ids: memory.source_message_ids,
-    metadata: memory.metadata,
+    metadata,
+    ...provenance,
     timestamps: finalTimestamps,
     createdAt: now,
     updatedAt: now,
