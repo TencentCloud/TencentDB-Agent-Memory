@@ -11,7 +11,6 @@
  */
 
 import type { IMemoryStore, L0SearchResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 
@@ -140,13 +139,7 @@ export async function executeConversationSearch(params: {
     (async (): Promise<ConversationSearchResultItem[]> => {
       if (!hasFts) return [];
       try {
-        const ftsQuery = buildFtsQuery(query);
-        if (!ftsQuery) {
-          logger?.debug?.(`${TAG} [hybrid-fts] No usable FTS tokens from query`);
-          return [];
-        }
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = await vectorStore.searchL0Fts(ftsQuery, candidateK);
+        const ftsResults = await vectorStore.searchL0Fts(query, candidateK);
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
         return ftsResults.map((r) => ({
           id: r.record_id,

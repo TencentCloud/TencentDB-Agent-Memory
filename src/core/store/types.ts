@@ -267,7 +267,7 @@ export interface IMemoryStore {
   // ── L1 Search ────────────────────────────────────────────
 
   searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number): MaybePromise<L1FtsResult[]>;
+  searchL1Fts(query: string, limit?: number): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;
@@ -293,7 +293,7 @@ export interface IMemoryStore {
   // ── L0 Search ────────────────────────────────────────────
 
   searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L0SearchResult[]>;
-  searchL0Fts(ftsQuery: string, limit?: number): MaybePromise<L0FtsResult[]>;
+  searchL0Fts(query: string, limit?: number): MaybePromise<L0FtsResult[]>;
 
   pullProfiles?(): Promise<ProfileRecord[]>;
   syncProfiles?(records: ProfileSyncRecord[]): Promise<void>;
