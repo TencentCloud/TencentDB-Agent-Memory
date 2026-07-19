@@ -485,4 +485,89 @@ export class CheckpointManager {
     });
   }
 
+  // ============================
+  // Global counter adjustment (for cleanup / migration)
+  // ============================
+
+  /**
+   * Adjust global counters by delta values.
+   * Used when data is deleted (memory-cleaner) or migrated.
+   * All counters are protected from going below zero (floor-at-zero).
+   *
+   * @param deltas - Object containing delta values for each counter.
+   *   Positive values increment, negative values decrement.
+   */
+  async adjustGlobalCounters(deltas: {
+    total_processed?: number;
+    l0_conversations_count?: number;
+    total_memories_extracted?: number;
+    scenes_processed?: number;
+    memories_since_last_persona?: number;
+  }): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      if (deltas.total_processed !== undefined) {
+        cp.total_processed = Math.max(0, cp.total_processed + deltas.total_processed);
+      }
+      if (deltas.l0_conversations_count !== undefined) {
+        cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count + deltas.l0_conversations_count);
+      }
+      if (deltas.total_memories_extracted !== undefined) {
+        cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted + deltas.total_memories_extracted);
+      }
+      if (deltas.scenes_processed !== undefined) {
+        cp.scenes_processed = Math.max(0, cp.scenes_processed + deltas.scenes_processed);
+      }
+      if (deltas.memories_since_last_persona !== undefined) {
+        cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona + deltas.memories_since_last_persona);
+      }
+    });
+
+    this.logger.info(
+      `[checkpoint] adjustGlobalCounters: ` +
+      `total_processed=${cp.total_processed}, ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `scenes_processed=${cp.scenes_processed}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  /**
+   * Recalibrate global counters by replacing them with actual counts.
+   * Used when counters are out of sync with actual data (e.g., after manual cleanup,
+   * data rollback, or migration).
+   *
+   * @param actualCounts - Object containing actual counts from the storage layer.
+   */
+  async recalibrate(actualCounts: {
+    total_processed?: number;
+    l0_conversations_count?: number;
+    total_memories_extracted?: number;
+    scenes_processed?: number;
+  }): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      if (actualCounts.total_processed !== undefined) {
+        cp.total_processed = Math.max(0, actualCounts.total_processed);
+      }
+      if (actualCounts.l0_conversations_count !== undefined) {
+        cp.l0_conversations_count = Math.max(0, actualCounts.l0_conversations_count);
+      }
+      if (actualCounts.total_memories_extracted !== undefined) {
+        cp.total_memories_extracted = Math.max(0, actualCounts.total_memories_extracted);
+      }
+      if (actualCounts.scenes_processed !== undefined) {
+        cp.scenes_processed = Math.max(0, actualCounts.scenes_processed);
+      }
+      cp.memories_since_last_persona = 0;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: ` +
+      `total_processed=${cp.total_processed}, ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `scenes_processed=${cp.scenes_processed}`,
+    );
+  }
+
 }
