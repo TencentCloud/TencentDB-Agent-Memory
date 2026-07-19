@@ -628,7 +628,10 @@ export function createL3Runner(opts: {
       instanceId,
       llmRunner,
     });
-    const genResult = await generator.generateLocalPersona(reason);
+    const sceneUpdatedThrough = new Date().toISOString();
+    const checkpoint = new CheckpointManager(pluginDataDir, logger);
+    const baseline = await checkpoint.read();
+    const genResult = await generator.generateLocalPersona(reason, baseline);
     if (!genResult) {
       logger.info(`${TAG} [L3] Persona generation skipped (no changes)`);
       return;
@@ -638,9 +641,10 @@ export function createL3Runner(opts: {
       await syncLocalProfilesToStore(pluginDataDir, vectorStore, profileBaseline, logger);
     }
 
-    const checkpoint = new CheckpointManager(pluginDataDir, logger);
-    const cp = await checkpoint.read();
-    await checkpoint.markPersonaGenerated(cp.total_processed);
+    await checkpoint.markPersonaGenerated(baseline.total_processed, {
+      memoriesSinceLastPersona: baseline.memories_since_last_persona,
+      sceneUpdatedThrough,
+    });
     logger.info(`${TAG} [L3] Persona generation succeeded`);
   };
 }
