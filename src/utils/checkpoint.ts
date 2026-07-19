@@ -332,6 +332,22 @@ export class CheckpointManager {
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
   }
 
+  async reconcileDataCounters(params: {
+    l0ConversationsCount?: number;
+    totalMemoriesExtracted?: number;
+    reason?: string;
+  }): Promise<void> {
+    const clean = (n: number) => Math.max(0, Math.floor(Number.isFinite(n) ? n : 0));
+    const cp = await this.mutate((cp) => {
+      if (params.l0ConversationsCount !== undefined) cp.l0_conversations_count = clean(params.l0ConversationsCount);
+      if (params.totalMemoriesExtracted !== undefined) cp.total_memories_extracted = clean(params.totalMemoriesExtracted);
+    });
+    this.logger.info(
+      `[checkpoint] reconcileDataCounters: l0_conversations_count=${cp.l0_conversations_count}, total_memories_extracted=${cp.total_memories_extracted}` +
+      `${params.reason ? `, reason=${params.reason}` : ""}`,
+    );
+  }
+
   // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================
