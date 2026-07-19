@@ -5,6 +5,8 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
+import { countCheckpointJsonlFile, type CheckpointDataKind } from "./checkpoint-data.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -19,6 +21,7 @@ interface CleanupStats {
   changedFiles: number;
   skippedNonShardFiles: number;
   deleteFailedFiles: number;
+  removedRecords: number;
 }
 
 const TAG = "[memory-tdai][cleaner]";
@@ -85,28 +88,33 @@ export class LocalMemoryCleaner {
       this.opts.logger?.error(`${TAG} ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    const targetDirs = [
-      path.join(this.opts.baseDir, L0_DIR_NAME),
-      path.join(this.opts.baseDir, L1_DIR_NAME),
-    ];
-
     const total: CleanupStats = {
       scannedFiles: 0,
       changedFiles: 0,
       skippedNonShardFiles: 0,
       deleteFailedFiles: 0,
+      removedRecords: 0,
     };
 
-    for (const dirPath of targetDirs) {
-      const stats = await this.cleanDirectory(dirPath, cutoffMs);
+    const localCleanup = await Promise.all([
+      this.cleanDirectory(path.join(this.opts.baseDir, L0_DIR_NAME), cutoffMs, "l0"),
+      this.cleanDirectory(path.join(this.opts.baseDir, L1_DIR_NAME), cutoffMs, "l1"),
+    ]);
+
+    for (const stats of localCleanup) {
       total.scannedFiles += stats.scannedFiles;
       total.changedFiles += stats.changedFiles;
       total.skippedNonShardFiles += stats.skippedNonShardFiles;
       total.deleteFailedFiles += stats.deleteFailedFiles;
+      total.removedRecords += stats.removedRecords;
     }
 
-    if (this.vectorStore) {
-      const vectorStore = this.vectorStore;
+    let removedL0FromStore = 0;
+    let removedL1FromStore = 0;
+    const useStoreAsSource = !!this.vectorStore && !this.vectorStore.isDegraded();
+
+    if (useStoreAsSource) {
+      const vectorStore = this.vectorStore!;
       const cutoffIso = new Date(cutoffMs).toISOString();
       const startMs = Date.now();
 
@@ -120,8 +128,6 @@ export class LocalMemoryCleaner {
         `${TAG} [Pre-delete] cutoffIso=${cutoffIso}, retentionDays=${retentionDays}, totalL0=${totalL0}, totalL1=${totalL1}`,
       );
 
-      let removedL0 = 0;
-      let removedL1 = 0;
       let skippedL0 = false;
       let skippedL1 = false;
       let failedL0DbCleanup = 0;
@@ -135,7 +141,7 @@ export class LocalMemoryCleaner {
         );
       } else {
         try {
-          removedL0 = await vectorStore.deleteL0Expired(cutoffIso);
+          removedL0FromStore = await vectorStore.deleteL0Expired(cutoffIso);
         } catch (err) {
           failedL0DbCleanup = 1;
           this.opts.logger?.warn(
@@ -152,7 +158,7 @@ export class LocalMemoryCleaner {
         );
       } else {
         try {
-          removedL1 = await vectorStore.deleteL1Expired(cutoffIso);
+          removedL1FromStore = await vectorStore.deleteL1Expired(cutoffIso);
         } catch (err) {
           failedL1DbCleanup = 1;
           this.opts.logger?.warn(
@@ -161,23 +167,39 @@ export class LocalMemoryCleaner {
         }
       }
 
-      if (removedL1 > 0 || removedL0 > 0) {
+      if (removedL1FromStore > 0 || removedL0FromStore > 0) {
         total.changedFiles += 1;
       }
 
       // ── Post-delete: audit summary ──
       const durationMs = Date.now() - startMs;
-      const remainingL0 = totalL0 - removedL0;
-      const remainingL1 = totalL1 - removedL1;
+      const remainingL0 = totalL0 - removedL0FromStore;
+      const remainingL1 = totalL1 - removedL1FromStore;
       const summary = {
         event: "cleaner_summary",
         cutoffIso,
         retentionDays,
-        l0: { total: totalL0, expired: removedL0, remaining: remainingL0, skipped: skippedL0, failed: failedL0DbCleanup > 0 },
-        l1: { total: totalL1, expired: removedL1, remaining: remainingL1, skipped: skippedL1, failed: failedL1DbCleanup > 0 },
+        l0: { total: totalL0, expired: removedL0FromStore, remaining: remainingL0, skipped: skippedL0, failed: failedL0DbCleanup > 0 },
+        l1: { total: totalL1, expired: removedL1FromStore, remaining: remainingL1, skipped: skippedL1, failed: failedL1DbCleanup > 0 },
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    }
+
+    const removedL0 = useStoreAsSource ? removedL0FromStore : localCleanup[0].removedRecords;
+    const removedL1 = useStoreAsSource ? removedL1FromStore : localCleanup[1].removedRecords;
+    if (removedL0 > 0 || removedL1 > 0) {
+      try {
+        await new CheckpointManager(this.opts.baseDir, this.opts.logger).applyCleanupDelta({
+          l0Records: removedL0,
+          l1Records: removedL1,
+        });
+      } catch (err) {
+        this.opts.logger?.warn(
+          `${TAG} Checkpoint cleanup update failed (non-fatal): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     this.opts.logger?.info(
@@ -225,12 +247,17 @@ export class LocalMemoryCleaner {
     }
   }
 
-  private async cleanDirectory(dirPath: string, cutoffMs: number): Promise<CleanupStats> {
+  private async cleanDirectory(
+    dirPath: string,
+    cutoffMs: number,
+    kind: CheckpointDataKind,
+  ): Promise<CleanupStats> {
     const stats: CleanupStats = {
       scannedFiles: 0,
       changedFiles: 0,
       skippedNonShardFiles: 0,
       deleteFailedFiles: 0,
+      removedRecords: 0,
     };
 
     let entries;
@@ -260,8 +287,15 @@ export class LocalMemoryCleaner {
       const dayEndMs = localDayEndMs(shard.year, shard.month, shard.day);
       if (dayEndMs < cutoffMs) {
         try {
+          let removedRecords = 0;
+          try {
+            removedRecords = (await countCheckpointJsonlFile(filePath, kind)).records;
+          } catch {
+            // File deletion is still useful if the shard cannot be read.
+          }
           await fs.unlink(filePath);
           stats.changedFiles += 1;
+          stats.removedRecords += removedRecords;
           this.opts.logger?.info(`${TAG} Removed expired file by name: ${filePath}`);
         } catch (err) {
           stats.deleteFailedFiles += 1;
