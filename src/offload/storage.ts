@@ -534,11 +534,17 @@ export async function writeRefMd(
   timestamp: string,
   toolName: string,
   content: string,
+  suffix?: string,
+  ownerSessionKey?: string,
 ): Promise<string> {
-  const filename = `${isoToFilename(timestamp)}.md`;
+  const safeSuffix = suffix ? `-${sanitizePath(suffix).slice(0, 80)}` : "";
+  const filename = `${isoToFilename(timestamp)}${safeSuffix}.md`;
   const filePath = join(ctx.refsDir, filename);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
-  const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
+  const ownerMarker = ownerSessionKey
+    ? `<!-- tdai-owner-session-key:${encodeURIComponent(ownerSessionKey)} -->\n`
+    : "";
+  const header = `${ownerMarker}# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
   await writeFile(filePath, header + safeContent, "utf-8");
   return `refs/${filename}`;
 }
@@ -551,6 +557,23 @@ export async function readRefMd(
   const filePath = join(ctx.dataDir, refPath);
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
+}
+
+/** Read a ref only when it was written by the requesting session. */
+export async function readOwnedRefMd(
+  ctx: StorageContext,
+  refPath: string,
+  sessionKey: string,
+): Promise<string | null> {
+  const raw = await readRefMd(ctx, refPath);
+  if (raw == null) return null;
+  const match = raw.match(/^<!-- tdai-owner-session-key:([^\r\n]*) -->$/m);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]) === sessionKey ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── MMD (Mermaid) Operations ────────────────────────────────────────────────
