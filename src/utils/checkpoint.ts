@@ -25,8 +25,10 @@
  */
 
 import fs from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { createInterface } from "node:readline/promises";
 
 // ============================
 // Types
@@ -100,7 +102,7 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Total L0 capture batches recorded. Each batch may contain multiple JSONL message records. */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
@@ -145,6 +147,10 @@ export interface CheckpointLogger {
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
+const COUNTER_JSONL_DIRS = {
+  l0: "conversations",
+  l1: "records",
+} as const;
 
 // ============================
 // Per-file async lock
@@ -179,10 +185,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -396,6 +404,52 @@ export class CheckpointManager {
     });
   }
 
+  /**
+   * Recount persisted L0/L1 JSONL data and align aggregate counters.
+   *
+   * These counters are maintained incrementally during normal capture/extraction,
+   * but cleanup jobs or manual JSONL pruning can remove records outside that path.
+   * Recalibration makes the checkpoint reflect the current persisted data again.
+   */
+  async recalibrate(): Promise<Checkpoint> {
+    let previousL0 = 0;
+    let previousL1 = 0;
+    let previousMemoriesSincePersona = 0;
+    let actualL0 = 0;
+    let actualL1 = 0;
+    let actualMemoriesSincePersona = 0;
+
+    const cp = await this.mutate(async (cp) => {
+      actualL0 = await countL0CaptureBatches(path.join(this.dataDir, COUNTER_JSONL_DIRS.l0));
+      actualL1 = await countJsonlRecords(path.join(this.dataDir, COUNTER_JSONL_DIRS.l1));
+      previousL0 = cp.l0_conversations_count;
+      previousL1 = cp.total_memories_extracted;
+      previousMemoriesSincePersona = cp.memories_since_last_persona;
+      // total_processed/last_persona_at are monotonic capture offsets used by
+      // persona backup labels. Recalibration only clamps the L1 threshold counter
+      // so deleted memories cannot keep triggering persona generation.
+      actualMemoriesSincePersona = Math.min(cp.memories_since_last_persona, actualL1);
+      cp.l0_conversations_count = actualL0;
+      cp.total_memories_extracted = actualL1;
+      cp.memories_since_last_persona = actualMemoriesSincePersona;
+    });
+
+    if (
+      previousL0 !== actualL0 ||
+      previousL1 !== actualL1 ||
+      previousMemoriesSincePersona !== actualMemoriesSincePersona
+    ) {
+      this.logger.info(
+        `[checkpoint] recalibrated counters: ` +
+        `l0_conversations_count ${previousL0}->${actualL0}, ` +
+        `total_memories_extracted ${previousL1}->${actualL1}, ` +
+        `memories_since_last_persona ${previousMemoriesSincePersona}->${actualMemoriesSincePersona}`,
+      );
+    }
+
+    return cp;
+  }
+
   // ============================
   // L1-specific methods
   // ============================
@@ -479,10 +533,72 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
         cp.l0_conversations_count += 1;
       }
     });
   }
 
+}
+
+async function countJsonlRecords(dirPath: string): Promise<number> {
+  let count = 0;
+  await readJsonlRecords(dirPath, () => {
+    count += 1;
+  });
+  return count;
+}
+
+async function countL0CaptureBatches(dirPath: string): Promise<number> {
+  const batches = new Set<string>();
+  await readJsonlRecords(dirPath, (record, location) => {
+    const sessionKey = typeof record.sessionKey === "string" ? record.sessionKey : "";
+    const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
+    const recordedAt = typeof record.recordedAt === "string" ? record.recordedAt : "";
+    batches.add(recordedAt ? `${sessionKey}\0${sessionId}\0${recordedAt}` : location);
+  });
+  return batches.size;
+}
+
+async function readJsonlRecords(
+  dirPath: string,
+  onRecord: (record: Record<string, unknown>, location: string) => void,
+): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (err) {
+    if (isNodeErrorWithCode(err, "ENOENT")) return;
+    throw err;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const filePath = path.join(dirPath, entry.name);
+    const rl = createInterface({
+      input: createReadStream(filePath, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
+
+    let lineNumber = 0;
+    for await (const line of rl) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch (err) {
+        throw new Error(
+          `Malformed JSONL in ${filePath}:${lineNumber}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`Invalid JSONL record in ${filePath}:${lineNumber}: expected object`);
+      }
+      onRecord(parsed as Record<string, unknown>, `${filePath}:${lineNumber}`);
+    }
+  }
+}
+
+function isNodeErrorWithCode(err: unknown, code: string): boolean {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: unknown }).code === code;
 }
