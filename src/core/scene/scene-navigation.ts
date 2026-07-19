@@ -6,7 +6,7 @@
  */
 
 import path from "node:path";
-import type { SceneIndexEntry } from "./scene-index.js";
+import { compareSceneIndexEntries, type SceneIndexEntry } from "./scene-index.js";
 
 const NAV_HEADER = "---\n## 🗺️ Scene Navigation (Scene Index)";
 
@@ -38,7 +38,7 @@ function heatEmoji(heat: number): string {
 export function generateSceneNavigation(entries: SceneIndexEntry[], dataDir?: string): string {
   if (entries.length === 0) return "";
 
-  const sorted = [...entries].sort((a, b) => b.heat - a.heat);
+  const sorted = [...entries].sort(compareSceneIndexEntries);
 
   const blocks = sorted.map((e) => {
     const scenePath = dataDir
