@@ -536,6 +536,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/DIFY-ADAPTER.md`](./docs/DIFY-ADAPTER.md) | Dify workflow adapter guide |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
