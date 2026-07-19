@@ -91,10 +91,14 @@
     "opik": "^1.0.0"
   },
   "peerDependencies": {
+    "@mastra/core": "^1.50.1",
     "node-llama-cpp": "^3.16.2",
     "openclaw": ">=2026.3.7"
   },
   "peerDependenciesMeta": {
+    "@mastra/core": {
+      "optional": true
+    },
     "openclaw": {
       "optional": true
     },
@@ -119,6 +123,7 @@
     }
   },
   "devDependencies": {
+    "@mastra/core": "^1.50.1",
     "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
