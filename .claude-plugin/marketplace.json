@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "tdai-memory-local",
+  "description": "Local TencentDB Agent Memory plugins for Claude Code.",
+  "owner": {
+    "name": "TencentDB Agent Memory"
+  },
+  "plugins": [
+    {
+      "name": "tdai-memory-claude-code",
+      "description": "Connect Claude Code to TencentDB Agent Memory through MCP lookup tools and agent hooks.",
+      "author": {
+        "name": "TencentDB Agent Memory"
+      },
+      "category": "productivity",
+      "source": "./plugins/tdai-memory-claude-code",
+      "homepage": "https://github.com/TencentDB/TencentDB-Agent-Memory"
+    }
+  ]
+}
