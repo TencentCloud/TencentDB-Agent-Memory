@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -139,12 +140,100 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
   total_memories_extracted: 0,
 };
 
+function normalizeOptionalCount(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
+}
+
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
 }
 
+export interface CheckpointRecalibrationCounts {
+  /** Actual L0 rows currently present in the store. */
+  l0ConversationsCount?: number;
+  /** Actual L0 rows currently present; used by status/persona counters. */
+  totalProcessed?: number;
+  /** True when local L0 JSONL shards were read, including empty shards. */
+  hasLocalL0Stats?: boolean;
+  /** Newest L0 message timestamp currently present. */
+  maxL0Timestamp?: number;
+  /** Newest L0 message timestamp currently present per session key. */
+  maxL0TimestampBySession?: Record<string, number>;
+  /** Newest L0 recordedAt timestamp currently present. Used by the L1 cursor. */
+  maxL0RecordedAtMs?: number;
+  /** Newest L0 recordedAt timestamp currently present per session key. */
+  maxL0RecordedAtMsBySession?: Record<string, number>;
+  /** Actual L1 records currently present in the store. */
+  totalMemoriesExtracted?: number;
+  /** True when local L1 JSONL shards were read, including empty shards. */
+  hasLocalL1Stats?: boolean;
+  /** Newest L1 updatedAt timestamp currently present. */
+  maxL1UpdatedAt?: string;
+  /** Newest L1 updatedAt timestamp currently present per session key. */
+  maxL1UpdatedAtBySession?: Record<string, string>;
+}
+
+export interface CheckpointDecrementCounts {
+  /** Known decrease for l0_conversations_count. */
+  l0ConversationsCount?: number;
+  /** Known number of removed L0 messages. */
+  totalProcessed?: number;
+  /** Known number of removed L1 records. */
+  totalMemoriesExtracted?: number;
+  /** Known number of removed memories from the persona threshold window. */
+  memoriesSinceLastPersona?: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
+
+/**
+ * Reconcile checkpoint counters from actual persisted row counts.
+ * Local JSONL shards are the durable source when present; store counts are
+ * retained as the fallback for remote/degraded deployments without local files.
+ */
+export async function recalibrateCheckpointFromStore(
+  dataDir: string,
+  store: Pick<IMemoryStore, "countL0" | "countL1">,
+  logger?: CheckpointLogger,
+): Promise<void> {
+  const [storeL0Count, storeL1Count, jsonlL0Stats, jsonlL1Stats] = await Promise.all([
+    store.countL0(),
+    store.countL1(),
+    readLocalJsonlStats(dataDir, "conversations"),
+    readLocalJsonlStats(dataDir, "records"),
+  ]);
+  const checkpoint = new CheckpointManager(dataDir, logger);
+  await checkpoint.recalibrate({
+    l0ConversationsCount: jsonlL0Stats?.count ?? storeL0Count,
+    totalProcessed: jsonlL0Stats?.count ?? storeL0Count,
+    hasLocalL0Stats: jsonlL0Stats !== undefined,
+    maxL0Timestamp: jsonlL0Stats?.maxTimestamp,
+    maxL0TimestampBySession: jsonlL0Stats?.maxTimestampBySession,
+    maxL0RecordedAtMs: jsonlL0Stats?.maxRecordedAtMs,
+    maxL0RecordedAtMsBySession: jsonlL0Stats?.maxRecordedAtMsBySession,
+    totalMemoriesExtracted: jsonlL1Stats?.count ?? storeL1Count,
+    hasLocalL1Stats: jsonlL1Stats !== undefined,
+    maxL1UpdatedAt: jsonlL1Stats?.maxUpdatedAt,
+    maxL1UpdatedAtBySession: jsonlL1Stats?.maxUpdatedAtBySession,
+  });
+}
+
+export async function recalibrateCheckpointFromLocalData(
+  dataDir: string,
+  logger?: CheckpointLogger,
+): Promise<void> {
+  await recalibrateCheckpointFromStore(
+    dataDir,
+    {
+      countL0: () => 0,
+      countL1: () => 0,
+    },
+    logger,
+  );
+}
 
 // ============================
 // Per-file async lock
@@ -176,6 +265,122 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
       fileLocks.delete(filePath);
     }
   }
+}
+
+interface LocalJsonlStats {
+  count: number;
+  maxTimestamp?: number;
+  maxTimestampBySession: Record<string, number>;
+  maxRecordedAtMs?: number;
+  maxRecordedAtMsBySession: Record<string, number>;
+  maxUpdatedAt?: string;
+  maxUpdatedAtBySession: Record<string, string>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function getStringField(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+function getMessageTimestampMs(record: Record<string, unknown>): number | undefined {
+  const timestamp = record.timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) return timestamp;
+  return undefined;
+}
+
+function getRecordedAtMs(record: Record<string, unknown>): number | undefined {
+  const recordedAt = getStringField(record, "recordedAt", "recorded_at");
+  if (!recordedAt) return undefined;
+  const ms = Date.parse(recordedAt);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function getUpdatedAt(record: Record<string, unknown>): string | undefined {
+  return getStringField(record, "updatedAt", "updated_at", "updated_time");
+}
+
+function maxIso(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return b > a ? b : a;
+}
+
+async function readLocalJsonlStats(dataDir: string, subdir: "conversations" | "records"): Promise<LocalJsonlStats | undefined> {
+  const dir = path.join(dataDir, subdir);
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+
+  const stats: LocalJsonlStats = {
+    count: 0,
+    maxTimestampBySession: {},
+    maxRecordedAtMsBySession: {},
+    maxUpdatedAtBySession: {},
+  };
+  let sawShard = false;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    sawShard = true;
+    try {
+      const raw = await fs.readFile(path.join(dir, entry.name), "utf-8");
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        stats.count += 1;
+        let parsed: Record<string, unknown> | undefined;
+        try {
+          parsed = asRecord(JSON.parse(trimmed));
+        } catch {
+          continue;
+        }
+        if (!parsed) continue;
+        const sessionKey = getStringField(parsed, "sessionKey", "session_key");
+        const timestamp = getMessageTimestampMs(parsed);
+        if (timestamp !== undefined) {
+          stats.maxTimestamp = Math.max(stats.maxTimestamp ?? 0, timestamp);
+          if (sessionKey) {
+            stats.maxTimestampBySession[sessionKey] = Math.max(
+              stats.maxTimestampBySession[sessionKey] ?? 0,
+              timestamp,
+            );
+          }
+        }
+        const recordedAtMs = getRecordedAtMs(parsed);
+        if (recordedAtMs !== undefined) {
+          stats.maxRecordedAtMs = Math.max(stats.maxRecordedAtMs ?? 0, recordedAtMs);
+          if (sessionKey) {
+            stats.maxRecordedAtMsBySession[sessionKey] = Math.max(
+              stats.maxRecordedAtMsBySession[sessionKey] ?? 0,
+              recordedAtMs,
+            );
+          }
+        }
+        const updatedAt = getUpdatedAt(parsed);
+        if (updatedAt) {
+          stats.maxUpdatedAt = maxIso(stats.maxUpdatedAt, updatedAt);
+          if (sessionKey) {
+            stats.maxUpdatedAtBySession[sessionKey] = maxIso(
+              stats.maxUpdatedAtBySession[sessionKey],
+              updatedAt,
+            )!;
+          }
+        }
+      }
+    } catch {
+      // Recalibration is best-effort; unreadable shards should not block startup.
+    }
+  }
+  return sawShard ? stats : undefined;
 }
 
 export class CheckpointManager {
@@ -394,6 +599,108 @@ export class CheckpointManager {
         };
       }
     });
+  }
+
+  /**
+   * Decrement aggregate checkpoint counters when a cleanup path knows exactly
+   * how many rows it removed. Use recalibrate() when removals may have happened
+   * outside the current process or cursor bounds need repair.
+   */
+  async decrementCounters(counts: CheckpointDecrementCounts): Promise<void> {
+    const l0ConversationsCount = normalizeOptionalCount(counts.l0ConversationsCount);
+    const totalProcessed = normalizeOptionalCount(counts.totalProcessed);
+    const totalMemoriesExtracted = normalizeOptionalCount(counts.totalMemoriesExtracted);
+    const memoriesSinceLastPersona = normalizeOptionalCount(counts.memoriesSinceLastPersona);
+
+    const cp = await this.mutate((cp) => {
+      if (l0ConversationsCount !== undefined) {
+        cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count - l0ConversationsCount);
+      }
+      if (totalProcessed !== undefined) {
+        cp.total_processed = Math.max(0, cp.total_processed - totalProcessed);
+      }
+      if (totalMemoriesExtracted !== undefined) {
+        cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted - totalMemoriesExtracted);
+      }
+      if (memoriesSinceLastPersona !== undefined) {
+        cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - memoriesSinceLastPersona);
+      }
+      cp.memories_since_last_persona = Math.min(
+        cp.memories_since_last_persona,
+        cp.total_memories_extracted,
+      );
+    });
+
+    this.logger.info(
+      `[checkpoint] decrementCounters: l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_processed=${cp.total_processed}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  /**
+   * Reconcile aggregate checkpoint counters with counts from the actual store.
+   *
+   * These counters are incremented on capture/extraction, but cleanup paths can
+   * remove rows from JSONL/SQLite later. Recalibration keeps status reporting
+   * and persona thresholds from drifting upward forever.
+   */
+  async recalibrate(counts: CheckpointRecalibrationCounts): Promise<void> {
+    const l0ConversationsCount = normalizeOptionalCount(counts.l0ConversationsCount);
+    const totalProcessed = normalizeOptionalCount(counts.totalProcessed);
+    const maxL0Timestamp = normalizeOptionalCount(counts.maxL0Timestamp);
+    const maxL0RecordedAtMs = normalizeOptionalCount(counts.maxL0RecordedAtMs);
+    const totalMemoriesExtracted = normalizeOptionalCount(counts.totalMemoriesExtracted);
+    const maxL1UpdatedAt = counts.maxL1UpdatedAt;
+
+    const cp = await this.mutate((cp) => {
+      if (l0ConversationsCount !== undefined) {
+        cp.l0_conversations_count = l0ConversationsCount;
+      }
+      if (totalProcessed !== undefined) {
+        cp.total_processed = totalProcessed;
+      }
+      if (counts.hasLocalL0Stats || maxL0Timestamp !== undefined) {
+        const captureCursorMax = maxL0Timestamp ?? 0;
+        const l1CursorMax = maxL0RecordedAtMs ?? captureCursorMax;
+        cp.last_captured_timestamp = Math.min(cp.last_captured_timestamp, captureCursorMax);
+        for (const [sessionKey, state] of Object.entries(cp.runner_states ?? {})) {
+          const captureSessionMax = counts.hasLocalL0Stats
+            ? counts.maxL0TimestampBySession?.[sessionKey] ?? 0
+            : counts.maxL0TimestampBySession?.[sessionKey] ?? captureCursorMax;
+          const l1SessionMax = counts.hasLocalL0Stats
+            ? counts.maxL0RecordedAtMsBySession?.[sessionKey] ?? captureSessionMax
+            : counts.maxL0RecordedAtMsBySession?.[sessionKey] ?? l1CursorMax;
+          state.last_captured_timestamp = Math.min(state.last_captured_timestamp, captureSessionMax);
+          state.last_l1_cursor = Math.min(state.last_l1_cursor, l1SessionMax);
+        }
+      }
+      if (totalMemoriesExtracted !== undefined) {
+        cp.total_memories_extracted = totalMemoriesExtracted;
+        cp.memories_since_last_persona = Math.min(
+          cp.memories_since_last_persona,
+          totalMemoriesExtracted,
+        );
+      }
+      if (counts.hasLocalL1Stats || maxL1UpdatedAt) {
+        for (const [sessionKey, state] of Object.entries(cp.pipeline_states ?? {})) {
+          const sessionMax = counts.hasLocalL1Stats
+            ? counts.maxL1UpdatedAtBySession?.[sessionKey] ?? ""
+            : counts.maxL1UpdatedAtBySession?.[sessionKey] ?? maxL1UpdatedAt ?? "";
+          if (state.last_extraction_updated_time && state.last_extraction_updated_time > sessionMax) {
+            state.last_extraction_updated_time = sessionMax;
+          }
+        }
+      }
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_processed=${cp.total_processed}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
   }
 
   // ============================
