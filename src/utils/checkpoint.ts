@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -144,6 +145,10 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+export interface RecalibrateOptions {
+  vectorStore?: IMemoryStore;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -154,6 +159,7 @@ const noopLogger: CheckpointLogger = { info() {} };
 // coordinate instance creation.
 
 const fileLocks = new Map<string, Promise<void>>();
+const JSONL_FILE_PATTERN = /\.jsonl$/;
 
 /**
  * Serialize async critical sections per file path.
@@ -178,11 +184,40 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
   }
 }
 
+async function countJsonlNonEmptyLines(dirPath: string, logger: CheckpointLogger): Promise<number> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let total = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !JSONL_FILE_PATTERN.test(entry.name)) continue;
+
+    const filePath = path.join(dirPath, entry.name);
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      total += raw.split(/\r?\n/).filter((line) => line.trim()).length;
+    } catch (err) {
+      logger.warn?.(
+        `[checkpoint] Failed to count JSONL lines in ${filePath}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return total;
+}
+
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -291,6 +326,47 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Reconcile drift-prone aggregate counters with the real backing data.
+   *
+   * L1 count is derived from records/*.jsonl because those files are the local
+   * append-only source for persisted memories. L0 prefers VectorStore when
+   * available, then falls back to conversations/*.jsonl.
+   */
+  async recalibrate(opts: RecalibrateOptions = {}): Promise<void> {
+    const totalMemoriesExtracted = await countJsonlNonEmptyLines(
+      path.join(this.dataDir, "records"),
+      this.logger,
+    );
+    const l0ConversationsCount = await this.resolveL0Count(opts.vectorStore);
+
+    const cp = await this.mutate((cp) => {
+      cp.total_memories_extracted = totalMemoriesExtracted;
+      cp.l0_conversations_count = l0ConversationsCount;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrated counters: ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `l0_conversations_count=${cp.l0_conversations_count}`,
+    );
+  }
+
+  private async resolveL0Count(vectorStore?: IMemoryStore): Promise<number> {
+    if (vectorStore && !vectorStore.isDegraded()) {
+      try {
+        return await vectorStore.countL0();
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Failed to count L0 via VectorStore; falling back to JSONL: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return countJsonlNonEmptyLines(path.join(this.dataDir, "conversations"), this.logger);
   }
 
   // ============================
@@ -479,8 +555,8 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Increment by message rows to match VectorStore/JSONL recalibration.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }
