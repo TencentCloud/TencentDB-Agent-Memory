@@ -284,6 +284,14 @@ export function _setJiebaForTest(instance: JiebaInstance | null): void {
 }
 
 /**
+ * Identifies the tokenizer contract used to write persisted FTS content.
+ * Bump the version whenever either write-side tokenization strategy changes.
+ */
+function getFtsTokenizerFingerprint(): string {
+  return getJieba() ? "jieba-cut-for-search-v1" : "unicode61-raw-v1";
+}
+
+/**
  * Convert a BM25 rank (negative = more relevant) to a 0–1 score.
  * Mirrors the formula in openclaw core `hybrid.ts`.
  */
@@ -488,6 +496,14 @@ export class VectorStore implements IMemoryStore {
     // Tracks which provider/model/dimensions were used to generate vectors.
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS embedding_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+
+    // Tracks the write-side tokenizer used by the persisted FTS index.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS fts_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )
@@ -750,7 +766,22 @@ export class VectorStore implements IMemoryStore {
       // text in `content` and raw text in `content_original` / `message_text_original`.
       // FTS5 virtual tables don't support ALTER TABLE ADD COLUMN, so we must
       // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
-      const needsFtsRebuild = this.migrateFtsTablesIfNeeded();
+      let needsFtsRebuild = this.migrateFtsTablesIfNeeded();
+      const currentTokenizer = getFtsTokenizerFingerprint();
+      const savedTokenizer = this.readFtsTokenizerFingerprint();
+      const hasStoredText =
+        this.tableRowCount("l1_records") > 0 ||
+        this.tableRowCount("l0_conversations") > 0;
+
+      if (!needsFtsRebuild && hasStoredText && savedTokenizer !== currentTokenizer) {
+        const reason = savedTokenizer
+          ? `${savedTokenizer} -> ${currentTokenizer}`
+          : `missing -> ${currentTokenizer}`;
+        this.logger?.info(
+          `${TAG} FTS tokenizer fingerprint changed (${reason}); rebuilding index...`,
+        );
+        needsFtsRebuild = true;
+      }
 
       // L1 FTS5 virtual table (v2 schema)
       this.db.exec(`
@@ -825,8 +856,8 @@ export class VectorStore implements IMemoryStore {
       this.logger?.debug?.(`${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v2 — jieba segmented]`);
 
       // Rebuild FTS index if migrated from v1 or tables were freshly created
-      if (needsFtsRebuild) {
-        this.rebuildFtsIndex();
+      if (!needsFtsRebuild || this.rebuildFtsIndex()) {
+        this.writeFtsTokenizerFingerprint(currentTokenizer);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -918,6 +949,23 @@ export class VectorStore implements IMemoryStore {
     this.db.prepare(
       "INSERT INTO embedding_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
     ).run("embedding_provider_info", JSON.stringify(meta));
+  }
+
+  private readFtsTokenizerFingerprint(): string | null {
+    try {
+      const row = this.db
+        .prepare("SELECT value FROM fts_meta WHERE key = ?")
+        .get("tokenizer_fingerprint") as { value: string } | undefined;
+      return row?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeFtsTokenizerFingerprint(fingerprint: string): void {
+    this.db.prepare(
+      "INSERT INTO fts_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    ).run("tokenizer_fingerprint", fingerprint);
   }
 
   /** Allowed table names for row counting (whitelist to prevent SQL injection). */
@@ -2193,12 +2241,15 @@ export class VectorStore implements IMemoryStore {
    *  - Fresh table creation when existing data exists
    *
    * Safe to call multiple times (idempotent — clears FTS tables first).
+   * Returns `true` when the rebuild completes, `false` otherwise.
    */
-  rebuildFtsIndex(): void {
-    if (!this.ftsAvailable) return;
+  rebuildFtsIndex(): boolean {
+    if (!this.ftsAvailable) return false;
 
     try {
-      this.logger?.info(`${TAG} Rebuilding FTS5 index with jieba segmentation…`);
+      this.logger?.info(
+        `${TAG} Rebuilding FTS5 index with tokenizer=${getFtsTokenizerFingerprint()}...`,
+      );
 
       // ── Rebuild L1 FTS ──
       // Clear existing FTS data
@@ -2292,10 +2343,12 @@ export class VectorStore implements IMemoryStore {
       this.logger?.info(
         `${TAG} FTS5 rebuild complete: L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
       );
+      return true;
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   }
 
