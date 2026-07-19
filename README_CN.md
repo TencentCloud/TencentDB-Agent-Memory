@@ -436,6 +436,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `timezone` | `"system"` | 时区：`"system"`（跟随系统）/ IANA 名（`Asia/Shanghai`）/ offset 串（`+08:00`） |
 | `storeBackend` | `"sqlite"` | 存储后端：`sqlite` |
 | `recall.strategy` | `"hybrid"` | 召回策略：`keyword` / `embedding` / `hybrid`（RRF 融合，推荐） |
+| `recall.injectionMode` | `"prepend"` | 动态 L1 召回注入位置：`prepend` 保持旧行为；`append` 在兼容 OpenClaw 中使用 `appendContext`，减少对用户消息前缀缓存的影响 |
+| `recall.showInjected` | `false` | 是否把注入的 `<relevant-memories>` 保留到持久化历史；建议保持 `false`，避免重复回放动态召回内容导致历史膨胀 |
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
@@ -443,6 +445,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
 | `offload.enabled` | `false` | 是否启用短期记忆压缩 |
+
+上下文结构、多轮膨胀模型及 provider A/B 实测方法见
+[Prompt-cache mitigation and verification](docs/prompt-cache-mitigation.md)。
 
 </details>
 
