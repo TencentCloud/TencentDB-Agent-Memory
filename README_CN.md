@@ -538,6 +538,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 文档 | 内容 |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
+| [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | OpenClaw、Hermes、Codex 适配架构与接入指南 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
@@ -559,7 +560,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 长期个性化记忆（L0 → L3）
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
-- [x] OpenClaw 插件与 Hermes Gateway 适配
+- [x] OpenClaw 插件、Hermes Gateway 适配与 Codex Gateway 适配
 - [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
 - [ ] Skill自动生成
 - [ ] 可视化调试与记忆观测面板
