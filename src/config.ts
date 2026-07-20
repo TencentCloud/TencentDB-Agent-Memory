@@ -173,8 +173,36 @@ export interface TcvdbConfig {
   caPemPath?: string;
 }
 
+/** PostgreSQL memory store configuration. */
+export interface PostgresConfig {
+  /** PostgreSQL host (default: 127.0.0.1) */
+  host: string;
+  /** PostgreSQL port (default: 5432) */
+  port: number;
+  /** Database name (default: postgres) */
+  database: string;
+  /** Database user (default: postgres) */
+  user: string;
+  /** Database password (optional; omit for trust/peer auth) */
+  password?: string;
+  /** Schema for memory tables (default: agent_memory) */
+  schema: string;
+  /** Enable TLS/SSL for PostgreSQL connection */
+  ssl: boolean;
+  /** Max connections in node-postgres pool */
+  poolMax: number;
+  /** Statement timeout in milliseconds */
+  statementTimeoutMs: number;
+  /** Text search configuration for pg_textsearch BM25 indexes */
+  textConfig: string;
+  /** Vector index strategy for pgvector/vectorscale */
+  vectorIndex: "none" | "hnsw" | "ivfflat" | "diskann";
+  /** Try vectorscale StreamingDiskANN index when vectorIndex="diskann" */
+  useVectorScale: boolean;
+}
+
 /** Storage backend type. */
-export type StoreBackend = "sqlite" | "tcvdb";
+export type StoreBackend = "sqlite" | "tcvdb" | "postgres";
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
@@ -304,10 +332,12 @@ export interface MemoryTdaiConfig {
   pipeline: PipelineTriggerConfig;
   recall: RecallConfig;
   embedding: EmbeddingConfig;
-  /** Storage backend: "sqlite" (default) or "tcvdb" */
+  /** Storage backend: "sqlite" (default), "tcvdb", or "postgres" */
   storeBackend: StoreBackend;
   /** Tencent Cloud VectorDB configuration (required when storeBackend = "tcvdb") */
   tcvdb: TcvdbConfig;
+  /** PostgreSQL memory store configuration (used when storeBackend = "postgres") */
+  postgres: PostgresConfig;
   /** BM25 sparse vector encoding (local @tencentdb-agent-memory/tcvdb-text) */
   bm25: BM25Config;
   /** Local JSONL cleanup settings */
@@ -454,10 +484,13 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend = validateStoreBackend(storeBackendRaw);
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
+
+  // --- PostgreSQL config ---
+  const postgresGroup = obj(c, "postgres");
 
   const memoryCleanup: MemoryCleanupConfig = {
     retentionDays,
@@ -564,6 +597,20 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       timeout: num(tcvdbGroup, "timeout") ?? 10000,
       caPemPath: str(tcvdbGroup, "caPemPath") || undefined,
     },
+    postgres: {
+      host: str(postgresGroup, "host") ?? "127.0.0.1",
+      port: num(postgresGroup, "port") ?? 5432,
+      database: str(postgresGroup, "database") ?? "postgres",
+      user: str(postgresGroup, "user") ?? "postgres",
+      password: optStr(postgresGroup, "password"),
+      schema: str(postgresGroup, "schema") ?? "agent_memory",
+      ssl: bool(postgresGroup, "ssl") ?? false,
+      poolMax: num(postgresGroup, "poolMax") ?? 5,
+      statementTimeoutMs: num(postgresGroup, "statementTimeoutMs") ?? 10000,
+      textConfig: normalizeTextConfig(str(postgresGroup, "textConfig")),
+      vectorIndex: validateVectorIndex(str(postgresGroup, "vectorIndex")) ?? "hnsw",
+      useVectorScale: bool(postgresGroup, "useVectorScale") ?? true,
+    },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
       language: (str(bm25Group, "language") === "en" ? "en" : "zh") as "zh" | "en",
@@ -634,6 +681,8 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_STORE_BACKENDS: StoreBackend[] = ["sqlite", "tcvdb", "postgres"];
+const VALID_VECTOR_INDEXES: PostgresConfig["vectorIndex"][] = ["none", "hnsw", "ivfflat", "diskann"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -644,6 +693,34 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
     : undefined;
+}
+
+function validateStoreBackend(value: string | undefined): StoreBackend {
+  return VALID_STORE_BACKENDS.includes(value as StoreBackend)
+    ? (value as StoreBackend)
+    : "sqlite";
+}
+
+function validateVectorIndex(value: string | undefined): PostgresConfig["vectorIndex"] | undefined {
+  if (!value) return undefined;
+  return VALID_VECTOR_INDEXES.includes(value as PostgresConfig["vectorIndex"])
+    ? (value as PostgresConfig["vectorIndex"])
+    : undefined;
+}
+
+/**
+ * Normalize the pg_textsearch text search configuration.
+ *
+ * Defaults to "simple" (no extra extension required). The friendly alias
+ * "jieba" (case-insensitive) maps to "public.jiebacfg" for Chinese word
+ * segmentation via the pg_jieba extension. Any other value is passed through
+ * verbatim so users can reference custom/installed configurations directly.
+ */
+function normalizeTextConfig(value: string | undefined): string {
+  const v = value?.trim();
+  if (!v) return "simple";
+  if (v.toLowerCase() === "jieba") return "public.jiebacfg";
+  return v;
 }
 
 /**

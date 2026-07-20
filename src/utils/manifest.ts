@@ -20,7 +20,7 @@ import path from "node:path";
 // ============================
 
 export interface ManifestStoreInfo {
-  type: "sqlite" | "tcvdb";
+  type: "sqlite" | "tcvdb" | "postgres";
   sqlite?: {
     /** Relative path to the SQLite DB file (relative to dataDir). */
     path: string;
@@ -30,6 +30,12 @@ export interface ManifestStoreInfo {
     database: string;
     /** User-friendly alias (optional). */
     alias?: string;
+  };
+  postgres?: {
+    host: string;
+    port: number;
+    database: string;
+    schema: string;
   };
 }
 
@@ -101,11 +107,15 @@ export function writeManifest(dataDir: string, manifest: Manifest): void {
 // ============================
 
 export interface StoreConfigSnapshot {
-  type: "sqlite" | "tcvdb";
+  type: "sqlite" | "tcvdb" | "postgres";
   sqlitePath?: string;
   tcvdbUrl?: string;
   tcvdbDatabase?: string;
   tcvdbAlias?: string;
+  postgresHost?: string;
+  postgresPort?: number;
+  postgresDatabase?: string;
+  postgresSchema?: string;
 }
 
 /**
@@ -115,11 +125,18 @@ export function buildStoreInfo(snapshot: StoreConfigSnapshot): ManifestStoreInfo
   const info: ManifestStoreInfo = { type: snapshot.type };
   if (snapshot.type === "sqlite") {
     info.sqlite = { path: snapshot.sqlitePath ?? "vectors.db" };
-  } else {
+  } else if (snapshot.type === "tcvdb") {
     info.tcvdb = {
       url: snapshot.tcvdbUrl!,
       database: snapshot.tcvdbDatabase!,
       alias: snapshot.tcvdbAlias || undefined,
+    };
+  } else {
+    info.postgres = {
+      host: snapshot.postgresHost ?? "127.0.0.1",
+      port: snapshot.postgresPort ?? 5432,
+      database: snapshot.postgresDatabase ?? "postgres",
+      schema: snapshot.postgresSchema ?? "agent_memory",
     };
   }
   return info;
@@ -152,6 +169,21 @@ export function diffStoreBinding(
     }
     if (persisted.tcvdb?.database !== current.tcvdb?.database) {
       diffs.push(`tcvdb database changed: ${persisted.tcvdb?.database} → ${current.tcvdb?.database}`);
+    }
+  }
+
+  if (persisted.type === "postgres" && current.type === "postgres") {
+    if (persisted.postgres?.host !== current.postgres?.host) {
+      diffs.push(`postgres host changed: ${persisted.postgres?.host} → ${current.postgres?.host}`);
+    }
+    if (persisted.postgres?.port !== current.postgres?.port) {
+      diffs.push(`postgres port changed: ${persisted.postgres?.port} → ${current.postgres?.port}`);
+    }
+    if (persisted.postgres?.database !== current.postgres?.database) {
+      diffs.push(`postgres database changed: ${persisted.postgres?.database} → ${current.postgres?.database}`);
+    }
+    if (persisted.postgres?.schema !== current.postgres?.schema) {
+      diffs.push(`postgres schema changed: ${persisted.postgres?.schema} → ${current.postgres?.schema}`);
     }
   }
 
