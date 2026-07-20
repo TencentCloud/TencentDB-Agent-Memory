@@ -47,6 +47,7 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "adk-plugin/",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
