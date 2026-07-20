@@ -175,7 +175,43 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * FTS5 boolean operators that could alter MATCH semantics if injected verbatim
+ * (issue #160). Per FTS5 §3.7 these are case-sensitive keywords, but we compare
+ * via `toUpperCase()` and strip all case variants — this both kills operator
+ * noise (a bare `AND` token would otherwise match documents literally
+ * containing the word "AND") and aligns with the upstream narrow fix (#178)
+ * instead of debating case sensitivity.
+ */
+const FTS5_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+/**
+ * Unicode whitelist: keeps only letters / digits / underscore. Any FTS5 syntax
+ * character (`* " ' ( ) : ^ { } -`) becomes a token separator and is dropped —
+ * so a single regex covers both operator injection and structural syntax
+ * injection (column filters, prefix globs, phrase grouping, …).
+ */
+const FTS_TOKEN_PARTS_RE = /[\p{L}\p{N}_]+/gu;
+
+/**
+ * Reduce one tokenizer-emitted token to literal whitelist sub-parts.
+ *
+ * The whitelist match drops any residual FTS5 syntax characters a tokenizer may
+ * emit (e.g. `NEAR(beta` → `["NEAR", "beta"]`, `C++` → `["C"]`), guaranteeing
+ * every emitted token is a clean phrase literal that needs no `""` escaping.
+ */
+function toFtsLiteralParts(token: string): string[] {
+  return token.match(FTS_TOKEN_PARTS_RE) ?? [];
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
+ *
+ * **Sanitization (issue #160, defense-in-depth):** raw input is NFKC-normalised
+ * first (defeats full-width operator variants like `ＡＮＤ`), every token is
+ * reduced to Unicode whitelist parts (drops all FTS5 syntax chars), and FTS5
+ * operators (`AND`/`OR`/`NOT`/`NEAR`) are stripped at the token level — so user
+ * input can never alter MATCH semantics. Tokens carry no quotes after
+ * whitelisting, so they are safe to emit as FTS5 phrase literals.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
  * (`cutForSearch`) for accurate Chinese word segmentation, producing
@@ -196,37 +232,37 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // ponytail: NFKC first (ＡＮＤ→AND) so the ASCII Set below catches full-width
+  // variants; then segment; then token-level operator strip + dedup. Input is
+  // normalised once, so tokenizer output is already NFKC — no per-token repeat.
+  const input = raw.normalize("NFKC");
   const jieba = getJieba();
 
-  let tokens: string[];
-  if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
-  } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+  const rawTokens = jieba
+    ? jieba.cutForSearch(input, true).map((t) => t.trim())
+    : input.match(FTS_TOKEN_PARTS_RE) ?? [];
+
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  for (const rt of rawTokens) {
+    // Re-sanitise each token: tokenizer output may carry residual syntax chars
+    // (jieba) — the whitelist match guarantees clean literal parts in both paths.
+    for (const part of toFtsLiteralParts(rt)) {
+      if (FTS5_OPERATORS.has(part.toUpperCase())) continue; // strip FTS5 operators (all cases)
+      if (!/[\p{L}\p{N}]/u.test(part)) continue;            // drop symbol-only parts
+      // Chinese stop-words only filtered on the jieba path (fallback stays as-is
+      // pre-#160); keeps this change focused on operator/syntax injection.
+      if (jieba && ZH_STOP_WORDS.has(part)) continue;
+      if (seen.has(part)) continue;                          // dedup
+      seen.add(part);
+      tokens.push(part);
+    }
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" OR ");
+  // Tokens are whitelist-extracted → contain no quotes → safe to phrase-quote
+  // without FTS5 "" escaping.
+  return tokens.map((t) => `"${t}"`).join(" OR ");
 }
 
 /**
