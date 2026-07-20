@@ -286,6 +286,13 @@ export interface IMemoryStore {
   // ── L0 Read ──────────────────────────────────────────────
 
   countL0(): MaybePromise<number>;
+  /**
+   * Count distinct L0 capture rounds (session_key × recorded_at) rather than
+   * per-message rows. Used by checkpoint recalibration to match the per-capture
+   * increment semantics of `l0_conversations_count`. Backends without DISTINCT
+   * support may fall back to `countL0()` (less accurate, per-message).
+   */
+  countL0CaptureRounds(): MaybePromise<number>;
   queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
   queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
   getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;

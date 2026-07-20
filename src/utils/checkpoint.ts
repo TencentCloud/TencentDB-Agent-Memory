@@ -100,12 +100,49 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /**
+   * L0 capture-round count (incremented once per capture in `captureAtomically`,
+   * not per message). Display-purpose only — `recalibrate()` resyncs it from the
+   * store via `countL0CaptureRounds()` (distinct session_key × recorded_at) after
+   * cleanup, since the per-capture increment has no decrement path of its own.
+   */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
   /** Total L1 memories extracted across all time */
   total_memories_extracted: number;
+}
+
+/**
+ * Source of truth counts injected into `recalibrate()`.
+ * Decoupled from `IMemoryStore` so the method is unit-testable with stubs
+ * and stays backend-agnostic (SQLite vs TCVDB).
+ */
+export interface RecalibrateSources {
+  /** Actual L0 capture-round count (distinct session_key × recorded_at). */
+  countL0CaptureRounds: () => number | Promise<number>;
+  /** Actual L1 memory record count. */
+  countL1: () => number | Promise<number>;
+}
+
+/** Snapshot of the three recalibratable aggregate counters. */
+export interface RecalibrateCounters {
+  l0: number;
+  l1: number;
+  mslp: number;
+}
+
+/** Result of a recalibrate pass — supports idempotency, dry-run and observability. */
+export interface RecalibrateReport {
+  /** False when nothing changed (caller may skip downstream work / disk write). */
+  adjusted: boolean;
+  dryRun: boolean;
+  /** Origin of this recalibrate call ("startup" | "cleanup" | …), for metrics. */
+  trigger?: string;
+  before: RecalibrateCounters;
+  after: RecalibrateCounters;
+  /** before - after per counter (reportable as drift metric). */
+  drift: RecalibrateCounters;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -432,6 +469,107 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Recalibrate (counter drift repair)
+  // ============================
+
+  /**
+   * Recalibrate drifted aggregate counters against actual store counts.
+   *
+   * Cleanup (memory-cleaner) and manual pruning delete L0/L1 data without
+   * touching the checkpoint, so `l0_conversations_count`, `total_memories_extracted`,
+   * and `memories_since_last_persona` permanently overstate reality. This method
+   * clamps them back to truth.
+   *
+   * Safety boundary: only these three counters are touched. `total_processed` and
+   * `scenes_processed` are intentionally left alone — they sit inside the L2
+   * self-heal gate in pipeline-factory.ts (Math.max on regression), so changing
+   * them here would be silently undone.
+   *
+   * mslp is shrunk by the number of removed L1 records (`max(0, mslp - removedL1)`),
+   * never grown — growth belongs to the normal markL1ExtractionComplete path.
+   *
+   * @param src   Injected actual counts (store is source of truth; stubbable for tests).
+   * @param opts  dryRun = compute report without persisting; trigger = metric label.
+   * @returns     before/after/drift snapshot; `adjusted` is false when nothing changed.
+   */
+  async recalibrate(
+    src: RecalibrateSources,
+    opts?: { dryRun?: boolean; trigger?: string },
+  ): Promise<RecalibrateReport> {
+    const dryRun = opts?.dryRun ?? false;
+
+    // Hold the lock across count + read + conditional write. Taking the counts
+    // INSIDE the lock is required: otherwise markL1ExtractionComplete (which also
+    // takes the lock) can land between the unlocked count and the locked read,
+    // and its new increment gets wiped by writeRaw. before/after then share one
+    // consistent snapshot, and dry-run / no-op safely skip writeRaw.
+    return withFileLock(this.filePath, async () => {
+      const actualL0 = await src.countL0CaptureRounds();
+      const actualL1 = await src.countL1();
+
+      const c = await this.readRaw();
+      const before: RecalibrateCounters = {
+        l0: c.l0_conversations_count,
+        l1: c.total_memories_extracted,
+        mslp: c.memories_since_last_persona,
+      };
+      const noop = (reason: string): RecalibrateReport => {
+        this.logger.info(`[checkpoint] recalibrate skipped: ${reason}`);
+        return { adjusted: false, dryRun, trigger: opts?.trigger, before, after: before, drift: { l0: 0, l1: 0, mslp: 0 } };
+      };
+
+      // Safety 1: a non-finite source (degraded store reporting NaN/-1) must
+      // never overwrite real counters.
+      const healthy = Number.isFinite(actualL0) && actualL0 >= 0 && Number.isFinite(actualL1) && actualL1 >= 0;
+      if (!healthy) return noop(`unhealthy source (l0=${actualL0}, l1=${actualL1})`);
+
+      // Safety 2: countL0/countL1 swallow runtime errors (SQLITE_BUSY, network
+      // blip) and return 0 WITHOUT setting degraded. A 0 where the counter is
+      // nonzero almost always means a transient store failure, not a real wipe —
+      // refuse to zero out real counters. (cleaner keeps a min-retain floor, so a
+      // legitimate "deleted everything" path doesn't produce this signal.)
+      const zeroWipe = (actualL0 === 0 && before.l0 > 0) || (actualL1 === 0 && before.l1 > 0);
+      if (zeroWipe) {
+        return noop(`source returned 0 against nonzero counter (l0 ${before.l0}→${actualL0}, l1 ${before.l1}→${actualL1})`);
+      }
+
+      // Safety 3: readRaw returns DEFAULT_CHECKPOINT on parse failure. If the file
+      // exists on disk but read back as all-zero, it's corrupt — don't overwrite
+      // it with default (would clobber runner_states/pipeline_states). First-run
+      // (file absent → all-zero is legitimate) falls through.
+      if (before.l0 === 0 && before.l1 === 0 && before.mslp === 0) {
+        let fileExists = false;
+        try { await fs.access(this.filePath); fileExists = true; } catch { /* absent */ }
+        if (fileExists) return noop("checkpoint file unreadable (corrupt)");
+      }
+
+      const removedL1 = Math.max(0, c.total_memories_extracted - actualL1);
+      // l0 only shrinks: TCVDB's countL0CaptureRounds falls back to per-message
+      // countL0() which can exceed the true batch count — never inflate it.
+      c.l0_conversations_count = Math.min(actualL0, c.l0_conversations_count);
+      c.total_memories_extracted = actualL1;
+      if (removedL1 > 0) {
+        c.memories_since_last_persona = Math.max(0, c.memories_since_last_persona - removedL1);
+      }
+      const after: RecalibrateCounters = {
+        l0: c.l0_conversations_count,
+        l1: c.total_memories_extracted,
+        mslp: c.memories_since_last_persona,
+      };
+      const drift: RecalibrateCounters = {
+        l0: before.l0 - after.l0,
+        l1: before.l1 - after.l1,
+        mslp: before.mslp - after.mslp,
+      };
+      const adjusted = drift.l0 !== 0 || drift.l1 !== 0 || drift.mslp !== 0;
+      if (!dryRun && adjusted) {
+        await this.writeRaw(c);
+      }
+      return { adjusted, dryRun, trigger: opts?.trigger, before, after, drift };
+    });
+  }
+
+  // ============================
   // Atomic capture (race-condition fix)
   // ============================
 
@@ -485,4 +623,59 @@ export class CheckpointManager {
     });
   }
 
+}
+
+// ============================
+// Wiring helper (startup + post-cleanup)
+// ============================
+
+/**
+ * Recalibrate checkpoint counters from a live store, with a degraded guard and
+ * a drift callback for metrics.
+ *
+ * This is the shared wiring point for startup (TdaiCore.initialize) and
+ * post-cleanup (memory-cleaner) — it keeps the trigger / log / metric convention
+ * in one place so the two callers stay consistent.
+ *
+ * Pure: does NOT import the reporter. Callers pass an `onDrift` callback that
+ * forwards to the metric system, keeping checkpoint.ts free of core/report deps.
+ *
+ * @returns the recalibrate report, or `null` if the store is degraded (no-op).
+ */
+export async function recalibrateCheckpointFromStore(opts: {
+  dataDir: string;
+  store: {
+    isDegraded(): boolean;
+    countL0CaptureRounds(): number | Promise<number>;
+    countL1(): number | Promise<number>;
+  };
+  trigger: string;
+  logger?: CheckpointLogger;
+  onDrift?: (report: RecalibrateReport) => void;
+}): Promise<RecalibrateReport | null> {
+  const { dataDir, store, trigger, logger, onDrift } = opts;
+  if (store.isDegraded()) return null;
+  const checkpoint = new CheckpointManager(dataDir, logger);
+  try {
+    const result = await checkpoint.recalibrate(
+      {
+        countL0CaptureRounds: () => store.countL0CaptureRounds(),
+        countL1: () => store.countL1(),
+      },
+      { trigger },
+    );
+    if (result.adjusted) {
+      logger?.info?.(
+        `[checkpoint] recalibrate:${trigger} l0 ${result.before.l0}→${result.after.l0}, ` +
+        `l1 ${result.before.l1}→${result.after.l1}, mslp ${result.before.mslp}→${result.after.mslp}`,
+      );
+      onDrift?.(result);
+    }
+    return result;
+  } catch (err) {
+    logger?.info?.(
+      `[checkpoint] recalibrate:${trigger} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
 }
