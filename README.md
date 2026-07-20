@@ -11,7 +11,7 @@
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/kDtHb5RW2)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
 [Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start)
 
@@ -358,6 +358,36 @@ curl http://127.0.0.1:8420/health
 
 ---
 
+### 3. Hermes (Windows native)
+
+For a Windows-native Hermes install, run the bundled batch script from the
+repository root in Command Prompt or PowerShell:
+
+```powershell
+$env:TDAI_LLM_API_KEY="your-api-key"
+$env:TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+$env:TDAI_LLM_MODEL="gpt-4o"
+.\scripts\setup-hermes-memory-tencentdb.bat
+```
+
+The script checks `node`, `npm`, Python, and Hermes, requires Node.js
+`>=22.16.0`, runs `npm install --omit=dev` when Gateway dependencies are
+missing, creates `%USERPROFILE%\.memory-tencentdb\memory-tdai`, copies the
+provider to `%USERPROFILE%\.hermes\plugins\memory_tencentdb`, writes Gateway
+environment variables to `%USERPROFILE%\.hermes\.env`, and starts the Gateway
+before polling:
+
+```powershell
+curl.exe http://127.0.0.1:8420/health
+```
+
+If `%USERPROFILE%\.hermes\config.yaml` already exists, make sure it contains:
+
+```yaml
+memory:
+  provider: memory_tencentdb
+```
+
 
 ## 🔒 Gateway Security (optional)
 
@@ -524,7 +554,7 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - 🐞 **Found a bug or have a question?** Open an issue at [GitHub Issues](https://github.com/Tencent/TencentDB-Agent-Memory/issues) — we respond within 24 hours.
 - 💡 **Have an idea to share?** Start a thread in [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions).
 - 🛠️ **Want to contribute code?** Please read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
-- 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/kDtHb5RW2) and talk to the early developers directly.
+- 💬 **Want to chat with us?** Join our [Discord community](https://discord.gg/dJQM6mKMF) and talk to the early developers directly.
 
 ---
 
