@@ -199,6 +199,11 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 > 💡 The patch only needs to be applied once per OpenClaw installation. After upgrading OpenClaw, re-run the script to re-apply.
 
+### Codex
+
+Codex connects through the shared stdio MCP adapter. Native `UserPromptSubmit` and `Stop` hooks reuse the same MCP tool implementation for automatic recall and capture; only the MCP adapter accesses the existing Gateway.
+
+See [the Codex integration guide](docs/codex.md) for MCP, Hook, environment variable, and failure-handling configuration.
 
 ### 2. Hermes
 

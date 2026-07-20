@@ -203,6 +203,11 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 > 💡 patch 每次 OpenClaw 安装只需执行一次。升级 OpenClaw 后建议重新执行以确保钩子生效。
 
+### Codex
+
+Codex 通过共享的 stdio MCP adapter 接入。原生 `UserPromptSubmit` 和 `Stop` Hook 复用同一套 MCP tool implementation 完成自动召回和捕获，只有 MCP adapter 会访问现有 Gateway。
+
+MCP、Hook、环境变量和故障降级配置请查看 [Codex 接入指南](docs/codex_CN.md)。
 
 ### 2. Hermes
 

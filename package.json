@@ -42,6 +42,8 @@
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
+    "docs/",
+    "integrations/",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
@@ -74,6 +76,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@node-rs/jieba": "^2.0.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
     "ai": "^6.0.164",
@@ -117,7 +120,7 @@
     }
   },
   "devDependencies": {
-    "@types/node": "^25.5.2",
+    "@types/node": "^25.9.5",
     "@vitest/coverage-v8": "^4.1.2",
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
