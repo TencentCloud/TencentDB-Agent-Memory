@@ -44,6 +44,9 @@ When integrated with OpenClaw, it cuts token usage by up to **61.38%**, improves
 
 > These results are measured over continuous long-horizon sessions, not isolated turns. For example, SWE-bench runs 50 consecutive tasks per session to simulate the context-accumulation pressure of real-world long-horizon agents.
 
+For benchmark reproductions or new evaluation integrations, see the
+[Reproducible Memory Evaluation Guide](./docs/reproducible-memory-evaluation.md).
+
 ---
 
 ## Overview
@@ -536,6 +539,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/reproducible-memory-evaluation.md`](./docs/reproducible-memory-evaluation.md) | Benchmark run metadata, layer checks, and result template |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
