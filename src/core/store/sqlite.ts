@@ -195,15 +195,87 @@ const ZH_STOP_WORDS = new Set([
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
-export function buildFtsQuery(raw: string): string | null {
+const FTS_LITERAL_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+function extractFtsLiteralTokens(raw: string): string[] {
+  return raw.normalize("NFKC").match(FTS_LITERAL_TOKEN_RE) ?? [];
+}
+
+function quoteFtsLiteralToken(token: string): string {
+  return '"' + token.replaceAll('"', '""') + '"';
+}
+
+function toQuotedFtsLiteralTerms(raw: string): string[] {
+  return extractFtsLiteralTokens(raw).map(quoteFtsLiteralToken);
+}
+
+/**
+ * Normalize raw user text into a plain literal-token stream for FTS5.
+ *
+ * This helper deliberately does not parse or preserve FTS5 syntax. Operators
+ * such as AND / OR / NOT / NEAR, column filters such as content:foo, grouping,
+ * wildcards, quotes, and NEAR distance syntax are all treated as ordinary
+ * user text. The only characters that survive are Unicode letters, numbers,
+ * and underscores; every other character becomes a token separator.
+ *
+ * @internal
+ */
+export function sanitizeFtsInput(raw: string): string {
+  if (!raw) return "";
+  return extractFtsLiteralTokens(raw).join(" ");
+}
+
+/**
+ * Convert a tokenizer token into one or more quoted FTS5 literal terms.
+ *
+ * The return value is safe to splice into a generated MATCH expression because
+ * every emitted token is wrapped as a phrase literal. If a token still contains
+ * punctuation (for example from a tokenizer stub), it is split into literal
+ * sub-tokens instead of being concatenated into a new word.
+ *
+ * Returns `null` to drop tokens that contain no literal text.
+ *
+ * @internal
+ */
+export function sanitizeFtsToken(tok: string): string | null {
+  if (!tok) return null;
+  const terms = toQuotedFtsLiteralTerms(tok);
+  if (terms.length === 0) return null;
+  return terms.join(" OR ");
+}
+
+/**
+ * Build an FTS5 MATCH query from raw text.
+ *
+ * User input is always treated as plain text, never as FTS5 query syntax:
+ *
+ *   1. `sanitizeFtsInput()` normalizes Unicode and turns punctuation / FTS5
+ *      syntax into token separators before tokenization.
+ *   2. Tokenization remains unchanged from upstream:
+ *      - `@node-rs/jieba`'s `cutForSearch(text, true)` for Chinese (with
+ *        stop-word filter & dedup), or
+ *      - Unicode literal-token fallback.
+ *   3. `sanitizeFtsToken()` runs on every emitted token as a second guard.
+ *   4. Tokens are joined with ` OR ` inside FTS5 phrase quotes.
+ *
+ * The function returns `null` for input that contains no usable tokens so
+ * downstream FTS5 prepared statements can skip MATCH safely.
+ *
+ * @param raw  User-supplied query text.  `null` / `undefined` / `""` returns `null`.
+ */
+export function buildFtsQuery(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const cleaned = sanitizeFtsInput(raw);
+  if (!cleaned) return null;
+
   const jieba = getJieba();
 
-  let tokens: string[];
+  let rawTokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
+    // e.g. a long Chinese term yields both sub-words and the full term.
+    rawTokens = jieba
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -214,19 +286,18 @@ export function buildFtsQuery(raw: string): string | null {
         return true;
       });
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
+    rawTokens = [...new Set(rawTokens)];
   } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    rawTokens = cleaned.match(FTS_LITERAL_TOKEN_RE) ?? [];
   }
 
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" OR ");
+  const safeTokens: string[] = [];
+  for (const t of rawTokens) {
+    safeTokens.push(...toQuotedFtsLiteralTerms(t));
+  }
+  const dedup = [...new Set(safeTokens)];
+  if (dedup.length === 0) return null;
+  return dedup.join(" OR ");
 }
 
 /**
