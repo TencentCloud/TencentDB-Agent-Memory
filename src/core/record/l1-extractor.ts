@@ -43,6 +43,11 @@ interface SceneSegment {
   }>;
 }
 
+interface ParsedExtractionResult {
+  scenes: SceneSegment[];
+  parseFailed: boolean;
+}
+
 export interface L1ExtractionResult {
   /** Whether extraction succeeded */
   success: boolean;
@@ -316,41 +321,55 @@ async function callLlmExtraction(params: {
     `${TAG} [l1-debug] ENTRY taskId=l1-extraction, newMsgs=${newMessages.length}, bgMsgs=${backgroundMessages.length}, userPromptLen=${userPrompt.length}, sysPromptLen=${EXTRACT_MEMORIES_SYSTEM_PROMPT.length}, model=${model ?? "(default)"}, previousSceneName=${previousSceneName ? JSON.stringify(previousSceneName) : "(none)"}, runnerKind=${llmRunner ? "llmRunner" : "CleanContextRunner"}`,
   );
 
-  let result: string;
+  let runner: CleanContextRunner | undefined;
+  const runAttempt = async (attempt: "initial" | "retry"): Promise<string> => {
+    const taskId = attempt === "initial" ? "l1-extraction" : "l1-extraction-retry";
+    const systemPrompt = attempt === "initial"
+      ? EXTRACT_MEMORIES_SYSTEM_PROMPT
+      : `${EXTRACT_MEMORIES_SYSTEM_PROMPT}\n\nPrevious output was not valid JSON. Return only the required JSON array, with no markdown or explanation.`;
 
-  if (llmRunner) {
-    // Use the host-neutral LLMRunner interface
-    result = await llmRunner.run({
-      prompt: userPrompt,
-      systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
-      taskId: "l1-extraction",
-      timeoutMs: 180_000,
-    });
-  } else {
+    if (llmRunner) {
+      // Use the host-neutral LLMRunner interface
+      return llmRunner.run({
+        prompt: userPrompt,
+        systemPrompt,
+        taskId,
+        timeoutMs: 180_000,
+      });
+    }
+
     // Fallback: create CleanContextRunner (OpenClaw path)
-    const runner = new CleanContextRunner({
+    runner ??= new CleanContextRunner({
       config,
       modelRef: model,
       enableTools: false,
       logger,
     });
 
-    result = await runner.run({
+    return runner.run({
       prompt: userPrompt,
-      systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
-      taskId: "l1-extraction",
+      systemPrompt,
+      taskId,
       timeoutMs: 180_000,
     });
+  };
+
+  const result = await runAttempt("initial");
+  const parsed = parseExtractionResult(result, logger);
+  if (!parsed.parseFailed) {
+    return parsed.scenes;
   }
 
-  return parseExtractionResult(result, logger);
+  logger?.warn?.(`${TAG} Retrying L1 extraction once after unparsable model output`);
+  const retryResult = await runAttempt("retry");
+  return parseExtractionResult(retryResult, logger).scenes;
 }
 
 /**
  * Parse the LLM's JSON response into SceneSegment array.
  * Expected format: [{scene_name, message_ids, memories: [...]}]
  */
-function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
+function parseExtractionResult(raw: string, logger?: Logger): ParsedExtractionResult {
   try {
     // Strip markdown code block wrappers if present
     let cleaned = raw.trim();
@@ -367,7 +386,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       logger?.warn?.(
         `${TAG} [l1-debug] NO_JSON taskId=l1-extraction, rawLen=${raw.length}, cleanedLen=${cleaned.length}, rawFull=${JSON.stringify(rawPreview)}${raw.length > 2048 ? `…(+${raw.length - 2048})` : ""}`,
       );
-      return [];
+      return { scenes: [], parseFailed: true };
     }
 
     // Sanitize control characters inside JSON string literals that LLM may produce
@@ -376,7 +395,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
 
     if (!Array.isArray(parsed)) {
       logger?.warn?.(`${TAG} Extraction response is not an array`);
-      return [];
+      return { scenes: [], parseFailed: true };
     }
 
     const scenes: SceneSegment[] = [];
@@ -401,10 +420,10 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
       });
     }
 
-    return scenes;
+    return { scenes, parseFailed: false };
   } catch (err) {
     logger?.warn?.(`${TAG} Failed to parse extraction result: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
+    return { scenes: [], parseFailed: true };
   }
 }
 
