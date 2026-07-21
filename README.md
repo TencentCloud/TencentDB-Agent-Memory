@@ -106,6 +106,59 @@ graph LR
     style Agent fill:#fffbeb,stroke:#f59e0b,stroke-width:2px,color:#92400e
 ```
 
+#### How Tool Logs Become Mermaid Symbols
+
+The short-term offload path is intentionally white-box. A verbose tool result is
+not replaced by an opaque summary; it is split into three linked artifacts:
+
+1. **Raw evidence in `refs/`.** The full tool output is written to a Markdown
+   file so no detail is lost.
+2. **A JSONL index row.** `offload-<sessionId>.jsonl` records the tool call,
+   a compact summary, the `result_ref`, and the original `tool_call_id`.
+3. **A Mermaid node.** L2 groups related JSONL rows into a task canvas and
+   backfills each row with the generated `node_id`.
+
+For example, a raw tool result like this:
+
+```text
+tool_call_id: call_check_1
+tool: npm test -- src/core/store/sqlite.fts.test.ts
+result:
+  FAIL src/core/store/sqlite.fts.test.ts
+  SQLite FTS5 syntax error near "OR"
+  query: alpha OR beta*
+```
+
+is persisted as full evidence under `refs/` and indexed as one JSONL row:
+
+```json
+{
+  "timestamp": "2026-07-01T01:20:00.000Z",
+  "node_id": "003-N2",
+  "tool_call": "npm test -- src/core/store/sqlite.fts.test.ts",
+  "summary": "FTS5 test failed because the generated MATCH query treated OR and * as operators.",
+  "result_ref": "refs/2026-07-01T01-20-00-000Z-call_check_1.md",
+  "tool_call_id": "call_check_1",
+  "score": 8
+}
+```
+
+L2 then keeps only the task-level structure in the active canvas:
+
+```mermaid
+flowchart TD
+    003-N1["Reproduce FTS5 query failure"]
+    003-N2["Sanitize reserved FTS5 operators"]
+    003-N3["Verify normal keyword recall still works"]
+    003-N1 --> 003-N2 --> 003-N3
+```
+
+The conversion rule is simple: Mermaid carries **state and topology**, JSONL
+carries the **node-to-evidence index**, and `refs/*.md` carries the **raw
+payload**. When an Agent needs details behind `003-N2`, it looks up the row with
+`node_id = "003-N2"` in `offload-<sessionId>.jsonl`, reads `result_ref`, and
+opens the corresponding file in `refs/`.
+
 ---
 
 ## Quick Start

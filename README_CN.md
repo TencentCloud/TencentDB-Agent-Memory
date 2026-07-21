@@ -110,6 +110,52 @@ graph LR
     style MMD fill:#eff6ff,stroke:#3b82f6,stroke-width:2px
     style Agent fill:#fffbeb,stroke:#f59e0b,stroke-width:2px
 ```
+
+#### 工具日志如何转换成 Mermaid 符号
+
+短期卸载链路是白盒的。系统不会把冗长工具结果替换成不可追溯的摘要，而是拆成三类互相链接的产物：
+
+1. **`refs/` 中的原始证据**：完整工具输出写入 Markdown 文件，保证细节不丢失。
+2. **JSONL 索引行**：`offload-<sessionId>.jsonl` 记录工具调用、压缩摘要、`result_ref` 和原始 `tool_call_id`。
+3. **Mermaid 节点**：L2 将相关 JSONL 行组织成任务画布，并把生成的 `node_id` 回填到对应 JSONL 行。
+
+例如，一段原始工具结果：
+
+```text
+tool_call_id: call_check_1
+tool: npm test -- src/core/store/sqlite.fts.test.ts
+result:
+  FAIL src/core/store/sqlite.fts.test.ts
+  SQLite FTS5 syntax error near "OR"
+  query: alpha OR beta*
+```
+
+会先作为完整证据保存到 `refs/`，再被索引成一条 JSONL：
+
+```json
+{
+  "timestamp": "2026-07-01T01:20:00.000Z",
+  "node_id": "003-N2",
+  "tool_call": "npm test -- src/core/store/sqlite.fts.test.ts",
+  "summary": "FTS5 测试失败，因为生成的 MATCH 查询把 OR 和 * 当成了操作符。",
+  "result_ref": "refs/2026-07-01T01-20-00-000Z-call_check_1.md",
+  "tool_call_id": "call_check_1",
+  "score": 8
+}
+```
+
+L2 在活跃任务画布中只保留任务级结构：
+
+```mermaid
+flowchart TD
+    003-N1["复现 FTS5 查询失败"]
+    003-N2["清理 FTS5 保留操作符"]
+    003-N3["验证普通关键词召回仍然可用"]
+    003-N1 --> 003-N2 --> 003-N3
+```
+
+转换规则可以概括为：Mermaid 保存**状态和拓扑关系**，JSONL 保存**节点到证据的索引**，`refs/*.md` 保存**原始载荷**。当 Agent 需要核对 `003-N2` 背后的细节时，只需在 `offload-<sessionId>.jsonl` 中查找 `node_id = "003-N2"` 的行，读取其中的 `result_ref`，再打开对应的 `refs/` 文件。
+
 ---
 
 ## 快速开始
