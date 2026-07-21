@@ -1,6 +1,7 @@
 {
   "id": "memory-tencentdb",
   "name": "Memory (TencentDB)",
+  "kind": "memory",
   "description": "Four-layer memory system — auto-captures, structures, and profiles conversational knowledge",
   "commandAliases": ["memory-tdai"],
   "activation": {
