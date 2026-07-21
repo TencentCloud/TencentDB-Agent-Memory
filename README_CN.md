@@ -292,12 +292,15 @@ npm install tsx
 **3. 链接到 Hermes 插件目录**：
 
 ```bash
-rm -rf ~/.hermes/hermes-agent/plugins/memory/memory_tencentdb
-ln -sf ~/.memory-tencentdb/tdai-memory-openclaw-plugin/hermes-plugin/memory/memory_tencentdb \
-       ~/.hermes/hermes-agent/plugins/memory/memory_tencentdb
+PLUGIN_SRC=~/.memory-tencentdb/tdai-memory-openclaw-plugin/hermes-plugin/memory/memory_tencentdb
+
+mkdir -p ~/.hermes/hermes-agent/plugins/memory ~/.hermes/plugins
+ln -sfn "$PLUGIN_SRC" ~/.hermes/hermes-agent/plugins/memory/memory_tencentdb
+ln -sfn "$PLUGIN_SRC" ~/.hermes/plugins/memory_tencentdb
 ```
 
 > 此处目录名必须是 **`memory_tencentdb`**（下划线）—— Hermes 用它作为 provider key。`memory-tencentdb`（连字符）只是配置层面的别名，**不**能作为目录名。
+> 安装脚本会创建两个链接：checkout-tree 链接兼容内置 Hermes 安装，`~/.hermes/plugins/` 下的 user-scope 链接可在 Hermes checkout 更新后继续保留。
 
 **4. 在 `~/.hermes/config.yaml` 中声明 provider**：
 
