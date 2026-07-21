@@ -144,6 +144,32 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/**
+ * Callbacks for recounting actual L0/L1 data.
+ * These are provided by the caller (e.g., IMemoryStore) since CheckpointManager
+ * should not be tightly coupled to storage implementation details.
+ */
+export interface RecalibrateCounters {
+  /** Count actual L0 conversation records (e.g., SQLite count). */
+  countL0: () => Promise<number>;
+  /** Count actual L1 memory records (e.g., SQLite or JSONL count). */
+  countL1: () => Promise<number>;
+}
+
+/**
+ * Result of a recalibrate operation.
+ */
+export interface RecalibrateResult {
+  /** Actual L0 count after recalibration. */
+  l0Count: number;
+  /** Actual L1 count after recalibration. */
+  l1Count: number;
+  /** Whether the checkpoint values were updated. */
+  updated: boolean;
+  /** Error message if recounting failed, undefined on success. */
+  error?: string;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -482,6 +508,71 @@ export class CheckpointManager {
         // Increment L0 conversation count (was a separate mutate() call before)
         cp.l0_conversations_count += 1;
       }
+    });
+  }
+
+  // ============================
+  // Recalibration (counter drift fix)
+  // ============================
+
+  /**
+   * Recalibrate L0/L1 counters by recounting from actual data storage.
+   *
+   * This fixes counter drift that occurs when:
+   * - LocalMemoryCleaner removes expired L0/L1 records without updating checkpoint
+   * - Manual file deletions bypass the checkpoint
+   * - Database inconsistencies (e.g., after corruption recovery)
+   *
+   * Call this:
+   * - On gateway/plugin startup (before first capture)
+   * - After running memory cleanup (to sync with actual storage)
+   *
+   * @param counters - Callbacks to count actual L0/L1 records from storage
+   * @returns RecalibrateResult with actual counts and whether values were updated
+   */
+  async recalibrate(counters: RecalibrateCounters): Promise<RecalibrateResult> {
+    return withFileLock(this.filePath, async () => {
+      let actualL0 = 0;
+      let actualL1 = 0;
+
+      try {
+        [actualL0, actualL1] = await Promise.all([
+          counters.countL0(),
+          counters.countL1(),
+        ]);
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        this.logger.warn?.(`[checkpoint] recalibrate failed: ${errorMsg}`);
+        return {
+          l0Count: 0,
+          l1Count: 0,
+          updated: false,
+          error: errorMsg,
+        };
+      }
+
+      const cp = await this.readRaw();
+      const wasL0Drifted = cp.l0_conversations_count !== actualL0;
+      const wasL1Drifted = cp.total_memories_extracted !== actualL1;
+
+      if (wasL0Drifted || wasL1Drifted) {
+        cp.l0_conversations_count = actualL0;
+        cp.total_memories_extracted = actualL1;
+        await this.writeRaw(cp);
+
+        this.logger.info(
+          `[checkpoint] recalibrated: l0=${cp.l0_conversations_count} (was ${wasL0Drifted ? "drifted" : "ok"}), ` +
+          `l1=${cp.total_memories_extracted} (was ${wasL1Drifted ? "drifted" : "ok"})`,
+        );
+      } else {
+        this.logger.info(`[checkpoint] recalibrate: counters in sync (l0=${actualL0}, l1=${actualL1})`);
+      }
+
+      return {
+        l0Count: actualL0,
+        l1Count: actualL1,
+        updated: wasL0Drifted || wasL1Drifted,
+      };
     });
   }
 
