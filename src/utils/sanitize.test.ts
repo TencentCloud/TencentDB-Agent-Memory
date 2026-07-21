@@ -19,4 +19,22 @@ describe("prompt injection filtering", () => {
   it("allows normal user content through L1 extraction", () => {
     expect(shouldExtractL1("Please remember that I prefer concise TypeScript examples.")).toBe(true);
   });
+
+  it("keeps L0 archival permissive while filtering trivial L1 extraction input", () => {
+    expect(shouldCaptureL0("OK")).toBe(true);
+    expect(shouldCaptureL0("好的")).toBe(true);
+    expect(shouldExtractL1("OK")).toBe(false);
+    expect(shouldExtractL1("hi")).toBe(false);
+    expect(shouldExtractL1("好的")).toBe(false);
+  });
+
+  it("keeps short but meaningful identity and preference statements for L1", () => {
+    expect(shouldExtractL1("I am Bob")).toBe(true);
+    expect(shouldExtractL1("我叫小王")).toBe(true);
+    expect(shouldExtractL1("记住我喜欢茶")).toBe(true);
+  });
+
+  it("rejects oversized L1 extraction input", () => {
+    expect(shouldExtractL1("a".repeat(5001))).toBe(false);
+  });
 });
