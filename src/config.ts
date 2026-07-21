@@ -93,6 +93,22 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Optional remote reranker applied after initial recall and before budget trimming. */
+  rerank: RemoteRerankConfig;
+}
+
+/** Remote rerank configuration for recall candidates. */
+export interface RemoteRerankConfig {
+  /** Enable remote reranking (default: false). */
+  enabled: boolean;
+  /** OpenAI-compatible rerank base URL. The plugin calls `${baseUrl}/rerank`. */
+  baseUrl: string;
+  /** API key for the rerank service. */
+  apiKey: string;
+  /** Rerank model name. */
+  model: string;
+  /** Request timeout in milliseconds (default: 1000). */
+  timeoutMs: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +551,16 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      rerank: (() => {
+        const rerankGroup = obj(recallGroup, "rerank");
+        return {
+          enabled: bool(rerankGroup, "enabled") ?? false,
+          baseUrl: str(rerankGroup, "baseUrl") ?? "",
+          apiKey: str(rerankGroup, "apiKey") ?? "",
+          model: str(rerankGroup, "model") ?? "",
+          timeoutMs: num(rerankGroup, "timeoutMs") ?? 1000,
+        };
+      })(),
     },
     embedding: {
       enabled: embeddingEnabled,

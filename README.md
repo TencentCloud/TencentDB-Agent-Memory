@@ -454,6 +454,10 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `pipeline.l1IdleTimeoutSeconds` | `600` | Trigger L1 after the user has been idle for this many seconds |
 | `pipeline.l2MinIntervalSeconds` | `900` | Minimum interval between two L2 passes within the same session |
 | `recall.timeoutMs` | `5000` | Recall timeout; on timeout, skip injection without blocking the conversation |
+| `recall.rerank.enabled` | `false` | Optional remote rerank for recalled L1 candidates before recall budget trimming |
+| `recall.rerank.baseUrl` | `""` | OpenAI-compatible rerank base URL; the plugin calls `${baseUrl}/rerank` |
+| `recall.rerank.model` | `""` | Remote rerank model name |
+| `recall.rerank.timeoutMs` | `1000` | Remote rerank timeout; failures keep the original recall order |
 | `extraction.enableDedup` | `true` | L1 vector dedup / conflict detection |
 | `capture.excludeAgents` | `[]` | Glob patterns to exclude specific agents (e.g. `bench-judge-*`) |
 | `capture.l0l1RetentionDays` | `0` | Local retention days for L0 / L1 files; `0` = never clean up |
