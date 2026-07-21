@@ -25,6 +25,7 @@ export interface MemorySearchResultItem {
   type: string;
   priority: number;
   scene_name: string;
+  session_key: string;
   score: number;
   created_at: string;
   updated_at: string;
@@ -75,6 +76,22 @@ function rrfMergeL1(...lists: MemorySearchResultItem[][]): MemorySearchResultIte
     .map(({ item, rrfScore }) => ({ ...item, score: rrfScore }));
 }
 
+function filterBySessionKey(
+  results: MemorySearchResultItem[],
+  sessionKey: string | undefined,
+  logger: Logger | undefined,
+  stage: string,
+): MemorySearchResultItem[] {
+  if (!sessionKey) return results;
+  const filtered = results.filter((r) => r.session_key === sessionKey);
+  if (filtered.length !== results.length) {
+    logger?.debug?.(
+      `${TAG} [${stage}] session filter kept ${filtered.length}/${results.length} for session=${sessionKey}`,
+    );
+  }
+  return filtered;
+}
+
 // ============================
 // Search implementation
 // ============================
@@ -84,6 +101,7 @@ export async function executeMemorySearch(params: {
   limit: number;
   type?: string;
   scene?: string;
+  sessionKey?: string;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   logger?: Logger;
@@ -93,6 +111,7 @@ export async function executeMemorySearch(params: {
     limit,
     type: typeFilter,
     scene: sceneFilter,
+    sessionKey,
     vectorStore,
     embeddingService,
     logger,
@@ -101,6 +120,7 @@ export async function executeMemorySearch(params: {
   logger?.debug?.(
     `${TAG} CALLED: query="${query.slice(0, 100)}", limit=${limit}, ` +
     `typeFilter=${typeFilter ?? "(none)"}, sceneFilter=${sceneFilter ?? "(none)"}, ` +
+    `sessionKey=${sessionKey ?? "(all)"}, ` +
     `vectorStore=${vectorStore ? "available" : "UNAVAILABLE"}, ` +
     `embeddingService=${embeddingService ? "available" : "UNAVAILABLE"}`,
   );
@@ -133,7 +153,7 @@ export async function executeMemorySearch(params: {
   }
 
   // ── Over-retrieve for later filtering and RRF merging ──
-  const candidateK = limit * 3;
+  const candidateK = sessionKey ? limit * 5 : limit * 3;
 
   // ── Run available search strategies in parallel ──
   const [ftsItems, vecItems] = await Promise.all([
@@ -155,6 +175,7 @@ export async function executeMemorySearch(params: {
           type: r.type,
           priority: r.priority,
           scene_name: r.scene_name,
+          session_key: r.session_key,
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
@@ -184,6 +205,7 @@ export async function executeMemorySearch(params: {
           type: r.type,
           priority: r.priority,
           scene_name: r.scene_name,
+          session_key: r.session_key,
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
@@ -224,6 +246,8 @@ export async function executeMemorySearch(params: {
     // Single-source: use whichever list has results (already sorted by score)
     results = ftsOk ? ftsItems : vecItems;
   }
+
+  results = filterBySessionKey(results, sessionKey, logger, "post-merge");
 
   // ── Apply secondary filters (type, scene) ──
   const preFilterCount = results.length;
