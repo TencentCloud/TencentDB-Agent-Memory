@@ -352,6 +352,26 @@ curl http://127.0.0.1:8420/health
 # 应返回 {"status":"ok"} 或 {"status":"degraded"}
 ```
 
+**8. 排查异常 recall 数据**
+
+如果 `/recall` 返回了其他用户的 persona、scene 路径或记忆数据，而你自己的
+dataDir 是空的，先确认 `8420` 端口实际命中了哪个 Gateway 进程。在共享机器、
+WSL、Docker、SSH 隧道或端口转发环境中，`127.0.0.1:8420` 可能仍然指向旧进程
+或其他用户的 sidecar。
+
+```bash
+sudo lsof -iTCP:8420 -sTCP:LISTEN -nP
+PID=$(sudo lsof -tiTCP:8420 -sTCP:LISTEN | head -1)
+sudo readlink /proc/$PID/cwd
+sudo tr '\0' '\n' < /proc/$PID/environ | grep -E '^(HOME|USER|TDAI_DATA_DIR)='
+sudo lsof -p $PID | grep memory-tencentdb
+```
+
+如果 `cwd`、`HOME`、`USER` 或 `TDAI_DATA_DIR` 指向其他用户或其他 checkout，
+请先停止那个 Gateway，或把你自己的实例换到不同端口。常见原因包括：旧进程在
+restart 后仍存活、多人共用同一个宿主机端口、Docker 的 `8420` 端口只能被一个
+容器发布、SSH/nginx/kubectl 转发到了错误进程。
+
 > Provider 的完整参考（环境变量、故障排查、LLM 工具 schema、supervisor 行为）见 [`hermes-plugin/memory/memory_tencentdb/README.md`](./hermes-plugin/memory/memory_tencentdb/README.md)，调整 supervisor / circuit-breaker 默认值之前请先读它。
 
 ---
