@@ -514,6 +514,7 @@ export class TdaiCore {
     this.schedulerStartPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        await this.recalculateCheckpoint(checkpoint);
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);
@@ -531,5 +532,23 @@ export class TdaiCore {
     });
 
     return this.schedulerStartPromise;
+  }
+
+  private async recalculateCheckpoint(checkpoint: CheckpointManager): Promise<void> {
+    try {
+      let l0ConversationsCount: number | undefined;
+      let totalMemoriesExtracted: number | undefined;
+
+      if (this.vectorStore && !this.vectorStore.isDegraded()) {
+        try { l0ConversationsCount = await this.vectorStore.countL0(); } catch { /* fall back to JSONL */ }
+        try { totalMemoriesExtracted = await this.vectorStore.countL1(); } catch { /* fall back to JSONL */ }
+      }
+
+      await checkpoint.recalculate({ l0ConversationsCount, totalMemoriesExtracted });
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint recalculation failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
