@@ -105,6 +105,7 @@ export class TdaiCore {
    */
   private schedulerStartPromise?: Promise<void>;
   private storeReady?: Promise<void>;
+  private checkpointCalibrationPromise?: Promise<void>;
 
   /**
    * In-flight fire-and-forget background tasks started by
@@ -144,21 +145,17 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
-    // Initialize stores (async)
+    // Resolve the store before wiring runners or calibrating counters.
     this.storeReady = this.initStores();
+    await this.storeReady;
 
-    // Create pipeline manager (sync — does not need store)
+    // Create and wire the pipeline after the store outcome is known.
     if (this.cfg.extraction.enabled) {
       this.scheduler = createPipelineManager(this.cfg, this.logger, this.sessionFilter);
-      // Wire runners after store is ready (or after store init fails — runners
-      // still work in degraded mode with JSONL fallback and no embedding)
-      this.storeReady
-        .then(() => this.wirePipelineRunners())
-        .catch((err) => {
-          this.logger.error(`${TAG} Store init failed; wiring pipeline runners in degraded mode: ${err instanceof Error ? err.message : String(err)}`);
-          this.wirePipelineRunners();
-        });
+      this.wirePipelineRunners();
     }
+
+    await this.ensureCheckpointCalibrated();
 
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
@@ -500,6 +497,21 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Pipeline runners wired`);
   }
 
+  private ensureCheckpointCalibrated(): Promise<void> {
+    if (this.checkpointCalibrationPromise) return this.checkpointCalibrationPromise;
+    this.checkpointCalibrationPromise = (async () => {
+      try {
+        const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        await checkpoint.recalibrateFromStorage(this.vectorStore, "core-startup");
+      } catch (err) {
+        this.logger.warn(
+          `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    })();
+    return this.checkpointCalibrationPromise;
+  }
+
   private ensureSchedulerStarted(): Promise<void> {
     // Fast path: already started (or starting) — every concurrent caller
     // awaits the same in-flight promise.  The promise is kept around as a
@@ -513,6 +525,8 @@ export class TdaiCore {
     const scheduler = this.scheduler;
     this.schedulerStartPromise = (async () => {
       try {
+        await this.storeReady?.catch(() => {});
+        await this.ensureCheckpointCalibrated();
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));

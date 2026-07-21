@@ -27,6 +27,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
+import { countCheckpointJsonlData } from "./checkpoint-data.js";
 
 // ============================
 // Types
@@ -100,12 +102,25 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Current number of persisted L0 message records. */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Current number of valid persisted L1 memories. */
   total_memories_extracted: number;
+}
+
+export interface CleanupDelta {
+  removedL0: number;
+  removedL1: number;
+  reason: string;
+}
+
+export interface RecalibrationResult {
+  source: "store" | "jsonl";
+  l0: number;
+  l1: number;
+  memoriesSincePersona: number;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -145,6 +160,11 @@ export interface CheckpointLogger {
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
+
+function toNonNegativeInteger(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
+}
 
 // ============================
 // Per-file async lock
@@ -396,6 +416,115 @@ export class CheckpointManager {
     });
   }
 
+  async ensureScenesProcessedAtLeast(minimum: number): Promise<void> {
+    const normalized = toNonNegativeInteger(minimum);
+    await this.mutate((cp) => {
+      cp.scenes_processed = Math.max(toNonNegativeInteger(cp.scenes_processed), normalized);
+    });
+  }
+
+  /**
+   * Replace derived counters with the current persisted-data counts.
+   * Store data is authoritative when the store is healthy; JSONL is used only
+   * when no healthy store exists or a store read explicitly fails.
+   */
+  async recalibrateFromStorage(
+    store?: IMemoryStore,
+    reason = "startup",
+  ): Promise<RecalibrationResult> {
+    const snapshot = await this.read();
+    let source: RecalibrationResult["source"] = "jsonl";
+    let actualL0: number;
+    let actualL1: number;
+    let actualL1SincePersona: number;
+
+    if (store && !store.isDegraded()) {
+      try {
+        if (store.readCheckpointCountsStrict) {
+          const counts = await store.readCheckpointCountsStrict(
+            snapshot.last_persona_time || undefined,
+          );
+          actualL0 = counts.l0;
+          actualL1 = counts.l1;
+          actualL1SincePersona = counts.l1Since;
+        } else {
+          [actualL0, actualL1] = await Promise.all([store.countL0(), store.countL1()]);
+          actualL1SincePersona = snapshot.last_persona_time
+            ? (await store.queryL1Records({ updatedAfter: snapshot.last_persona_time })).length
+            : actualL1;
+        }
+        source = "store";
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Store recalibration failed; falling back to JSONL: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        const counts = await countCheckpointJsonlData(
+          path.dirname(path.dirname(this.filePath)),
+          this.logger,
+          snapshot.last_persona_time || undefined,
+        );
+        actualL0 = counts.l0;
+        actualL1 = counts.l1;
+        actualL1SincePersona = counts.l1Since;
+      }
+    } else {
+      const counts = await countCheckpointJsonlData(
+        path.dirname(path.dirname(this.filePath)),
+        this.logger,
+        snapshot.last_persona_time || undefined,
+      );
+      actualL0 = counts.l0;
+      actualL1 = counts.l1;
+      actualL1SincePersona = counts.l1Since;
+    }
+
+    actualL0 = toNonNegativeInteger(actualL0);
+    actualL1 = toNonNegativeInteger(actualL1);
+    actualL1SincePersona = Math.min(actualL1, toNonNegativeInteger(actualL1SincePersona));
+
+    let beforeL0 = 0;
+    let beforeL1 = 0;
+    await this.mutate((cp) => {
+      beforeL0 = cp.l0_conversations_count;
+      beforeL1 = cp.total_memories_extracted;
+      cp.total_processed = actualL0;
+      cp.l0_conversations_count = actualL0;
+      cp.total_memories_extracted = actualL1;
+      cp.memories_since_last_persona = actualL1SincePersona;
+    });
+    this.logger.info(
+      `[checkpoint] recalibrated source=${source} beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
+      `afterL0=${actualL0} afterL1=${actualL1} memoriesSincePersona=${actualL1SincePersona} reason=${reason}`,
+    );
+    return { source, l0: actualL0, l1: actualL1, memoriesSincePersona: actualL1SincePersona };
+  }
+
+  /** Atomically subtract records that a completed cleanup actually removed. */
+  async applyCleanupDelta(delta: CleanupDelta): Promise<void> {
+    const removedL0 = toNonNegativeInteger(delta.removedL0);
+    const removedL1 = toNonNegativeInteger(delta.removedL1);
+    if (removedL0 === 0 && removedL1 === 0) return;
+
+    let beforeL0 = 0;
+    let beforeL1 = 0;
+    const cp = await this.mutate((current) => {
+      beforeL0 = current.l0_conversations_count;
+      beforeL1 = current.total_memories_extracted;
+      current.total_processed = Math.max(0, current.total_processed - removedL0);
+      current.l0_conversations_count = Math.max(0, current.l0_conversations_count - removedL0);
+      current.total_memories_extracted = Math.max(0, current.total_memories_extracted - removedL1);
+      current.memories_since_last_persona = Math.min(
+        current.memories_since_last_persona,
+        current.total_memories_extracted,
+      );
+    });
+    this.logger.info(
+      `[checkpoint] cleanup beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
+      `removedL0=${removedL0} removedL1=${removedL1} ` +
+      `afterL0=${cp.l0_conversations_count} afterL1=${cp.total_memories_extracted} reason=${delta.reason}`,
+    );
+  }
+
   // ============================
   // L1-specific methods
   // ============================
@@ -479,8 +608,7 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }

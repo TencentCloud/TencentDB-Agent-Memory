@@ -170,6 +170,13 @@ export interface StoreInitResult {
   reason?: string;
 }
 
+/** Strict storage snapshot used to reconcile derived checkpoint counters. */
+export interface CheckpointStoreCounts {
+  l0: number;
+  l1: number;
+  l1Since: number;
+}
+
 // ============================
 // Capability Flags
 // ============================
@@ -250,6 +257,14 @@ export interface IMemoryStore {
   isDegraded(): boolean;
   getCapabilities(): StoreCapabilities;
   close(): void;
+
+  /**
+   * Read all checkpoint-derived counts without fault-tolerant empty fallbacks.
+   * Implementations MUST throw when the underlying storage read fails, so a
+   * caller can distinguish a legitimate empty store from an unavailable one.
+   * Optional for backward compatibility with external/custom stores.
+   */
+  readCheckpointCountsStrict?(updatedAfter?: string): MaybePromise<CheckpointStoreCounts>;
 
   // ── L1 Write ─────────────────────────────────────────────
 

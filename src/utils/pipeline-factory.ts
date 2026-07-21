@@ -525,31 +525,17 @@ export function createL2Runner(opts: {
     const preCheckpoint = new CheckpointManager(pluginDataDir, logger);
     const preState = await preCheckpoint.read();
     const preScenesProcessed = preState.scenes_processed;
-    const preMemoriesSince = preState.memories_since_last_persona;
-    const preTotalProcessed = preState.total_processed;
 
     const extractResult = await extractor.extract(memories);
     if (extractResult.success && extractResult.memoriesProcessed > 0) {
       const checkpoint = new CheckpointManager(pluginDataDir, logger);
       const postState = await checkpoint.read();
-      if (
-        postState.scenes_processed < preScenesProcessed ||
-        postState.total_processed < preTotalProcessed
-      ) {
+      if (postState.scenes_processed < preScenesProcessed) {
         logger.warn(
-          `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
-          `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
-          `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
-          `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
-          `Repairing...`,
+          `${TAG} [L2] Checkpoint scenes_processed regressed: ` +
+          `${preScenesProcessed} → ${postState.scenes_processed}; repairing monotonic scene counter`,
         );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-          memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
-        });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
+        await checkpoint.ensureScenesProcessedAtLeast(preScenesProcessed);
       }
 
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {

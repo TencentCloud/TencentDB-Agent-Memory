@@ -28,6 +28,7 @@ import type {
   ProfileRecord,
   ProfileSyncRecord,
   StoreLogger,
+  CheckpointStoreCounts,
 } from "./types.js";
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
@@ -564,6 +565,22 @@ export class TcvdbMemoryStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L1-count] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
+  }
+
+  async readCheckpointCountsStrict(updatedAfter?: string): Promise<CheckpointStoreCounts> {
+    await this._ensureInit();
+    if (this.degraded) {
+      throw new Error("TCVDB Store is degraded");
+    }
+    const [l0, l1] = await Promise.all([
+      this.client.count(this.l0Collection),
+      this.client.count(this.l1Collection),
+    ]);
+    const afterMs = updatedAfter ? isoToEpochMs(updatedAfter) : 0;
+    const l1Since = afterMs > 0
+      ? await this.client.count(this.l1Collection, `updated_time_ms > ${afterMs}`)
+      : l1;
+    return { l0, l1, l1Since };
   }
 
   async queryL1Records(filter?: L1QueryFilter): Promise<L1RecordRow[]> {
