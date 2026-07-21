@@ -93,6 +93,15 @@ function sendError(res: http.ServerResponse, status: number, message: string): v
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
 }
 
+function createTimestampedSeedDir(baseDir: string): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ts =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${baseDir}/seed-${ts}`;
+}
+
 /**
  * Constant-time string equality for secrets.
  *
@@ -486,6 +495,12 @@ export class TdaiGateway {
       return;
     }
 
+    const target = body.target ?? "isolated";
+    if (target !== "isolated" && target !== "live") {
+      sendError(res, 400, 'Invalid seed target. Expected "isolated" or "live".');
+      return;
+    }
+
     // Validate and normalize input (reuses seed CLI's validation layers 2-6)
     let input;
     try {
@@ -506,17 +521,13 @@ export class TdaiGateway {
     }
 
     this.logger.info(
-      `Seed request: ${input.sessions.length} session(s), ` +
+      `Seed request: target=${target}, ${input.sessions.length} session(s), ` +
       `${input.totalRounds} round(s), ${input.totalMessages} message(s)`,
     );
 
-    // Resolve output directory: use gateway's data dir with a timestamped subfolder
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const ts =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-` +
-      `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const outputDir = `${this.config.data.baseDir}/seed-${ts}`;
+    const outputDir = target === "live"
+      ? this.config.data.baseDir
+      : createTimestampedSeedDir(this.config.data.baseDir);
 
     // Merge config overrides if provided
     // Start with the base memory config + inject llm config from gateway settings
@@ -552,6 +563,7 @@ export class TdaiGateway {
       openclawConfig: {},
       pluginConfig,
       logger: this.logger as import("../utils/pipeline-factory.js").PipelineLogger,
+      ownsStores: target !== "live",
       onProgress: (progress: SeedProgress) => {
         this.logger.debug?.(
           `Seed progress: [${progress.currentRound}/${progress.totalRounds}] ` +
