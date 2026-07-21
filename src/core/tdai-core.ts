@@ -36,6 +36,7 @@ import { performAutoRecall } from "./hooks/auto-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
+import { executeMemoryWrite, type MemoryWriteParams, type MemoryWriteResult } from "./tools/memory-write.js";
 import {
   initDataDirectories,
   initStores,
@@ -323,6 +324,25 @@ export class TdaiCore {
       text: formatConversationSearchResponse(result),
       total: result.total,
     };
+  }
+
+  /**
+   * Explicitly write a long-term L1 memory.
+   *
+   * This supports agent/tool-initiated writes for contexts that cannot rely on
+   * L0 auto-capture. It stores a new record only; it deliberately does not
+   * update/merge existing records because that would bypass the L1 dedup prompt.
+   */
+  async writeMemory(params: MemoryWriteParams): Promise<MemoryWriteResult> {
+    await this.storeReady?.catch(() => {});
+
+    return executeMemoryWrite({
+      params,
+      dataDir: this.dataDir,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+      logger: this.logger,
+    });
   }
 
   /**
