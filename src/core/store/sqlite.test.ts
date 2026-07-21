@@ -710,3 +710,195 @@ describe("buildFtsQuery 模糊与对抗边界", () => {
     expect(tokens).toContain("end");
   });
 });
+
+// ============================
+// Suite G：sanitizeFts5Input 增强（竞品吸收 v3）
+// ============================
+
+describe("sanitizeFts5Input 增强", () => {
+  it("G1: NEAR/5 — NEAR and / stripped, digit survives", () => {
+    expect(sanitizeFts5Input("hello NEAR/5 world")).toBe("hello 5 world");
+  });
+  it("G2: NEAR/10 — larger distance", () => {
+    expect(sanitizeFts5Input("data NEAR/10 result")).toBe("data 10 result");
+  });
+  it("G3: NEAR(5) — parentheses stripped, digit survives", () => {
+    expect(sanitizeFts5Input("word1 NEAR(5) word2")).toBe("word1 5 word2");
+  });
+  it("G4: NEAR[5] — brackets stripped, digit survives", () => {
+    expect(sanitizeFts5Input("term NEAR[5] other")).toBe("term 5 other");
+  });
+  it("G5: Content: (uppercase C) — case-insensitive strip", () => {
+    expect(sanitizeFts5Input("Content:secret")).toBe("secret");
+  });
+  it("G6: - content: (space before content) handled", () => {
+    expect(sanitizeFts5Input("- content:secret hello")).toBe("secret hello");
+  });
+  it("G7: content :value (space before colon) — strip works", () => {
+    expect(sanitizeFts5Input("content :hello")).toBe("hello");
+  });
+  it("G8: multiple column filters in sequence", () => {
+    expect(sanitizeFts5Input("content:a message:b session:c hello")).toBe("a b c hello");
+  });
+  it("G9: -file:log -host:server — both stripped", () => {
+    expect(sanitizeFts5Input("-file:log -host:server search")).toBe("log server search");
+  });
+  it("G10: forward slash stripped", () => {
+    expect(sanitizeFts5Input("path/to/file")).toBe("path to file");
+  });
+  it("G11: square brackets stripped", () => {
+    expect(sanitizeFts5Input("[hello] world")).toBe("hello world");
+  });
+  it("G12: standalone hyphen stripped", () => {
+    expect(sanitizeFts5Input("hello - world")).toBe("hello world");
+  });
+  it("G13: hyphen-prefixed word — hyphen stripped", () => {
+    expect(sanitizeFts5Input("-exclude include")).toBe("exclude include");
+  });
+  it("G14: sanitizeFts5Input is idempotent", () => {
+    const inputs = ["hello AND world", "content:secret NOT data", '"test" OR (hello)', "NEAR/5 search", "normal text", "ＡＮＤ injection"];
+    for (const input of inputs) { const once = sanitizeFts5Input(input); expect(sanitizeFts5Input(once)).toBe(once); }
+  });
+  it("G15: NEAR at end of input", () => {
+    expect(sanitizeFts5Input("hello world NEAR")).toBe("hello world");
+  });
+  it("G16: AND at start, NEAR at end", () => {
+    expect(sanitizeFts5Input("AND search NEAR")).toBe("search");
+  });
+  it("G17: multiple NEAR variants mixed", () => {
+    expect(sanitizeFts5Input("NEAR/5 a NEAR(3) b NEAR[2] c")).toBe("5 a 3 b 2 c");
+  });
+});
+
+// ============================
+// Suite H：buildFtsQuery 引号转义与 token 安全
+// ============================
+
+describe("buildFtsQuery 引号转义 & token 安全", () => {
+  it("H1: every token properly quoted", () => {
+    for (const c of ["hello world", "ANDROID NOTICE", "测试 搜索"]) {
+      const r = buildFtsQuery(c); expect(r).not.toBeNull(); for (const p of r!.split(" OR ")) { expect(p.startsWith('"')).toBe(true); expect(p.endsWith('"')).toBe(true); }
+    }
+  });
+  it("H2: ANDROID ORACLE NEARBY NOTICE preserved", () => {
+    const tokens = buildFtsQuery("ANDROID ORACLE NEARBY NOTICE")!.split(" OR ").map(t => t.replaceAll('"', ""));
+    expect(tokens).toContain("ANDROID"); expect(tokens).toContain("ORACLE"); expect(tokens).toContain("NEARBY"); expect(tokens).toContain("NOTICE");
+  });
+  it("H3: SCANNER HONORABLE ANDROMEDA preserved", () => {
+    const r = buildFtsQuery("SCANNER HONORABLE ANDROMEDA"); expect(r).not.toBeNull();
+    expect(r!).toContain("SCANNER"); expect(r!).toContain("HONORABLE"); expect(r!).toContain("ANDROMEDA");
+  });
+  it("H4: every output token has letter or digit", () => {
+    for (const input of ["hello world", "cats AND dogs", "用户 OR 编程", "NEAR/5 search"]) {
+      const r = buildFtsQuery(input); if (r) for (const t of r.split(" OR ").map(t => t.slice(1, -1))) expect(t).toMatch(/[\p{L}\p{N}]/u);
+    }
+  });
+  it("H5: tokens never contain FTS5 syntax chars", () => {
+    for (const input of ["test* wildcard", "(group) parens", "{filter} braces", "^prefix", "a/b", "[b]", "-dash"]) {
+      const r = buildFtsQuery(input); if (r) for (const t of r.split(" OR ").map(t => t.slice(1, -1))) expect(t).not.toMatch(/[*(){}^[\]\/\-]/);
+    }
+  });
+});
+
+// ============================
+// Suite I：高级安全攻击向量（竞品吸收）
+// ============================
+
+describe("buildFtsQuery 高级安全攻击向量", () => {
+  it("I1: SQL injection — DROP TABLE neutralized", () => {
+    const r = buildFtsQuery("hello'; DROP TABLE l1_records; --"); if (r) expect(r!).not.toMatch(/[';]/);
+  });
+  it("I2: SQL injection — UNION SELECT neutralized", () => {
+    const r = buildFtsQuery("x' UNION SELECT * FROM users--"); if (r) expect(r!).not.toMatch(/['*]/);
+  });
+  it("I3: SQL injection — OR 1=1 pattern broken", () => {
+    const r = buildFtsQuery("' OR '1'='1"); if (r) { expect(r!).not.toMatch(/\bOR\b/i); expect(r!).not.toContain("="); }
+  });
+  it("I4: zero-width space (U+200B) no crash", () => {
+    expect(() => sanitizeFts5Input("hello​world")).not.toThrow(); expect(() => buildFtsQuery("hello​world")).not.toThrow();
+  });
+  it("I5: zero-width joiner (U+200C/D) handled", () => {
+    expect(() => sanitizeFts5Input("hello‌‍world")).not.toThrow(); expect(() => buildFtsQuery("hello‌‍world")).not.toThrow();
+  });
+  it("I6: bidirectional markers (U+200E/F) handled", () => {
+    expect(() => sanitizeFts5Input("hello‎world‏test")).not.toThrow(); expect(() => buildFtsQuery("hello‎world‏test")).not.toThrow();
+  });
+  it("I7: soft hyphen (U+00AD) no crash", () => {
+    expect(() => sanitizeFts5Input("hello­world")).not.toThrow(); expect(() => buildFtsQuery("hello­world")).not.toThrow();
+  });
+  it("I8: combined FTS5 + SQL injection neutralized", () => {
+    const r = buildFtsQuery("content:admin' OR '1'='1' -- AND NEAR/5 secret*");
+    if (r) { for (const t of r.split(" OR ").map(t => t.slice(1, -1))) expect(t).not.toMatch(/^(?:AND|OR|NOT|NEAR)$/i); expect(r!).not.toContain("*"); expect(r!).not.toContain("'"); }
+  });
+  it("I9: full-width + SQL + FTS5 combined neutralized", () => {
+    const r = buildFtsQuery("ＡＮＤ content:secret' OR ＮＯＴ NEAR/10 test*");
+    if (r) { for (const t of r.split(" OR ").map(t => t.slice(1, -1))) expect(t).not.toMatch(/^(?:AND|OR|NOT|NEAR)$/i); expect(r!).not.toContain("*"); }
+  });
+  it("I10: triple-encoded attack neutralized", () => {
+    const r = buildFtsQuery('ＡＮＤ " OR content:admin -file:passwd NEAR(3) secret*');
+    if (r) { for (const t of r.split(" OR ").map(t => t.slice(1, -1))) expect(t).not.toMatch(/^(?:AND|OR|NOT|NEAR)$/i); expect(r!).not.toContain("*"); }
+  });
+  it("I11: NEAR/1..NEAR/100 all neutralized", () => {
+    for (let d = 1; d <= 100; d += 10) { const r = buildFtsQuery(`word1 NEAR/${d} word2`); expect(r).not.toBeNull(); expect(r!).not.toMatch(/\bNEAR\b/i); }
+  });
+  it("I12: AND OR NOT NEAR chain — all stripped", () => {
+    expect(buildFtsQuery("AND OR NOT NEAR AND hello")).toBe('"hello"');
+  });
+  it("I13: mixed case chain — all stripped", () => {
+    expect(buildFtsQuery("And Or Not Near hello")).toBe('"hello"');
+  });
+  it("I14: all 10 column names as filters — stripped", () => {
+    const r = buildFtsQuery("content:x message:y session:z actor:a topic:b role:c tag:d user:e host:f file:g hello");
+    expect(r).not.toBeNull(); const tokens = r!.split(" OR ").map(t => t.replaceAll('"', ""));
+    expect(tokens).toContain("x"); expect(tokens).toContain("hello"); expect(tokens).not.toContain("content");
+  });
+  it("I15: exclusive column filters (-prefix) all neutralized", () => {
+    const r = buildFtsQuery("-content:admin -session:root -file:passwd search");
+    const tokens = r!.split(" OR ").map(t => t.replaceAll('"', "")); expect(tokens).toContain("admin"); expect(tokens).toContain("search");
+  });
+});
+
+// ============================
+// Suite J：错误恢复与极端边界
+// ============================
+
+describe("buildFtsQuery 错误恢复与极端边界", () => {
+  it("J1: undefined input throws TypeError", () => {
+    // @ts-expect-error — runtime defense test
+    expect(() => buildFtsQuery(undefined)).toThrow(TypeError);
+  });
+  it("J2: null input throws TypeError", () => {
+    // @ts-expect-error — runtime defense test
+    expect(() => buildFtsQuery(null)).toThrow(TypeError);
+  });
+  it("J3: 4-byte emoji preserved, text survives", () => {
+    const r = buildFtsQuery("search 🚀✨🌍🎉 result"); expect(r).not.toBeNull(); expect(r!).toContain("search"); expect(r!).toContain("result");
+  });
+  it("J4: combining chars NFKC composed", () => {
+    expect(sanitizeFts5Input("café resumé")).toContain("é"); expect(() => buildFtsQuery("café resumé")).not.toThrow();
+  });
+  it("J5: RTL Arabic with operators", () => {
+    const r = buildFtsQuery("مرحبا AND العالم OR سلام"); expect(r).not.toBeNull();
+    for (const t of r!.split(" OR ").map(t => t.slice(1, -1))) expect(t).not.toMatch(/^(?:AND|OR|NOT|NEAR)$/i);
+  });
+  it("J6: CJK compatibility ideographs no crash", () => {
+    expect(() => sanitizeFts5Input("豈兀 hello")).not.toThrow(); expect(() => buildFtsQuery("豈兀 hello")).not.toThrow();
+  });
+  it("J7: diverse Unicode whitespace collapses", () => {
+    expect(sanitizeFts5Input("hello world test data")).toBe("hello world test data");
+  });
+  it("J8: form feed and vertical tab handled", () => {
+    expect(sanitizeFts5Input("helloworldtest")).toBe("hello world test");
+  });
+  it("J9: very large numbers preserved", () => {
+    expect(buildFtsQuery("search 99999999999999 result")).not.toBeNull();
+    expect(buildFtsQuery("search 99999999999999 result")!).toContain("99999999999999");
+  });
+  it("J10: negative number — minus stripped, digits survive", () => {
+    const r = buildFtsQuery("temperature -40 degrees"); expect(r).not.toBeNull();
+    expect(r!).toContain("40"); expect(r!).toContain("temperature"); expect(r!).toContain("degrees");
+  });
+  it("J11: token guard catches lone AND", () => { expect(buildFtsQuery("AND")).toBeNull(); });
+  it("J12: token guard catches lone OR", () => { expect(buildFtsQuery("OR")).toBeNull(); });
+  it("J13: token guard catches whitespace-padded NOT", () => { expect(buildFtsQuery("  NOT  ")).toBeNull(); });
+});

@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### 🔒 安全修复
+
+- **FTS5 查询操作符注入防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160) / [#311](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/311))：`buildFtsQuery()` 新增纵深防御清洗管线 `sanitizeFts5Input()`，防止用户输入中的 FTS5 boolean/proximity 操作符（AND/OR/NOT/NEAR）改变查询语义。
+  - **5 层纵深防御**：NFKC Unicode 归一化 → 列过滤器剥离 → 保留字剥离 → 特殊字符剥离 → Token 级守卫。
+  - **NFKC 归一化**：将全角变体（`ＡＮＤ`、`ＯＲ` 等）折叠为 ASCII，防止绕过。
+  - **列过滤器剥离**：移除 `content:`、`-session:` 等列限定语法。
+  - **NEAR 距离参数处理**：剥离 `NEAR/5`、`NEAR(5)`、`NEAR[5]` 等变体。
+  - **SQL 注入/零宽字符防御**：额外的安全边界测试覆盖 SQL 注入和 Unicode 绕过尝试。
+  - **Token 级守卫**：即使分词器产生裸操作符 token，也会在最后一步过滤。
+  - **正确 FTS5 引号转义**：使用 `""` 双写转义（符合 FTS5 规范）。
+  - **测试覆盖**：单元测试（147）+ 集成测试（14）+ Megatest（752）共 800+ 测试，覆盖 Unicode 穷举、10K 文档 FTS5 压力、1500+ 组合爆炸、多语言召回、10000 轮随机模糊、性能基准。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
@@ -19,6 +31,15 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+- **跨平台适配器系统 Round 2** ([#235](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/235) / [#359](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/359))：传输层抽象、Adapter Factory、OpenCode 适配器、测试深挖。
+  - **Transport Layer**：新增 `MemoryClient` 统一接口（`src/adapters/shared/transports/`），支持 HTTP transport（复用 GatewayClient + retry + circuit-breaker）和 InProcess transport（直接调用 TdaiCore，可注入 fake core 零外部依赖测试）。
+  - **Adapter Factory**：`createMemoryClient()` + `createMemoryClientFromEnv()`，通过 `TDAI_ADAPTER_TRANSPORT` 环境变量切换 transport 类型。
+  - **OpenCode 适配器**：新增第 7 个平台适配器（`src/adapters/opencode/`），workspace 隔离 session key，所有操作 fail-open 降级。
+  - **Fake Gateway**：轻量级 fake HTTP server（`__tests__/adapters/helpers/fake-gateway.ts`），适配器集成测试无需启动真实 Gateway 进程。
+  - **Claude Code E2E 深度测试**：13 个测试覆盖完整生命周期（UserPromptSubmit → Stop → SessionEnd）、故障恢复、熔断器状态转换、并发安全。
+  - **幂等写入测试**：12 个测试覆盖 dedup、超时重试、大数据量（10k+ chars）、Unicode/emoji。
+  - **架构文档**：`docs/transport-architecture.md` 中英双语，含 transport 选择指南和错误模型说明。
+  - **测试**：51 个新增测试（factory 16 + E2E 13 + OpenCode 16 + 幂等 6），全量 171/172 通过。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
@@ -30,16 +51,18 @@
 
 不动配置 = 行为完全不变。
 
-### 🐛 修复 / 安全性
+### 🐛 修复
 
-- **FTS5 MATCH 表达式查询语义注入防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：在 `buildFtsQuery()` 中新增多层纵深防御，杜绝用户输入中的 FTS5 保留操作符和特殊语法字符改变查询语义：
-  - **NFKC 归一化**（第一层）：全角 Unicode 变体（如 `ＡＮＤ` U+FF21 U+FF2E U+FF24）归一化为半角后再做后续匹配，防止绕过 ASCII 正则。
-  - **列过滤器剥离**（第二层）：移除 `content:`、`message:`、`session:`、`actor:`、`topic:` 及否定形式 `-content:` 等 FTS5 列过滤器前缀。
-  - **保留字剥离**（第三层）：`AND`/`OR`/`NOT`/`NEAR` 在分词前按词边界 `\b` 移除（大小写不敏感，嵌入词 `ANDROID`/`ORACLE`/`NEARBY` 不受影响）。
-  - **特殊字符剥离**（第四层）：移除 `*` `(` `)` `"` `^` `{` `}`。
-  - **Token 级二次过滤**：分词完成后逐 token 检查，确保 jieba/fallback 产生的任何 token 中不残留 FTS5 保留字。
-  - 新增 110 个测试（97 单元 + 13 真实 SQLite FTS5 集成测试），覆盖全宽字符、列过滤器、嵌入词安全、CJK 边界、模糊随机、500 次属性安全验证及 `sqlite3` CLI 真 MATCH 执行。
-  - 所有下游调用方（`memory-search` / `conversation-search` / `auto-recall` / `l1-dedup`）的 `null` 检查自然兼容，无需改动。
+- **修复 cleanup 后 Checkpoint 计数器漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：
+  `CheckpointManager.recalibrate()` 增强：
+  - **RecalibrationSource 接口**：新增 `RecalibrationSource` 抽象（`countL0()` / `countL1()`），解耦 checkpoint 与 store 层依赖，支持注入任意数据源（vector store、fake 等）。
+  - **NaN/负数/Infinity 防御性钳制**：所有计数值在写入前经过 `clampCount()` 检查，NaN、负数、非有限值自动归零，防止瞬时异常导致计数器污染。
+  - **Source 追踪**：`RecalibrationResult.source` 字段标明数据来源（`"store"` / `"manual"` / `"jsonl"`），便于审计和调试。
+  - **Cursor rollback**：cleanup 删除旧的 L0 记录后，自动回退过期的 per-session `last_l1_cursor`，防止 L1 runner 重复处理已删除的数据。
+  - **JSONL recounting fallback**：当 vector store 不可用或 degraded 时，新增 `countJsonlL0Records()` / `countJsonlL1Records()` 辅助函数，按 `YYYY-MM-DD.jsonl` 日期分片模式精确扫描磁盘 JSONL 文件计数作为 fallback。`recalibrate({ useJsonlFallback: true })` 显式触发磁盘重算。
+  - 4-counter 矩阵：`l0Count` / `l1Count` / `totalProcessedCount` / `memoriesSincePersonaCount` 原子更新，防止 cleanup 后 persona 阈值误触发。
+  - before/after 快照：`RecalibrationResult` 返回修正前后的计数器值，支持审计日志。
+  - 测试：67 个测试覆盖单元、集成、并发安全、崩溃恢复、Unicode/二进制/大文件/NaN 钳制全路径（`checkpoint.test.ts` + `checkpoint.integration.test.ts` + `checkpoint.concurrent.test.ts` + `checkpoint.crash.test.ts` + `memory-cleaner.test.ts`）。
 
 ---
 

@@ -190,8 +190,11 @@ const FTS5_RESERVED = /\b(AND|OR|NOT|NEAR)\b/gi;
  * - `"` — 短语查询界定符（仅 ASCII；Unicode 引号不受影响）
  * - `^` — 列名前缀/初始 token 标记
  * - `{` `}` — 列过滤器语法
+ * - `/` — NEAR/N 距离分隔符（e.g. `NEAR/5`）
+ * - `[` `]` — 方括号（某些 FTS5 扩展语法）
+ * - `-` — 连字符（兜底剥离残留的裸 `-`，column-filter 的 `-` 由 FTS5_COL_FILTER 单独处理）
  */
-const FTS5_SPECIAL = /[*()"^{}]/g;
+const FTS5_SPECIAL = /[*()"^{}\/[\]\-]/g;
 
 /**
  * FTS5 column-filter patterns that allow an attacker to restrict (or
@@ -302,7 +305,7 @@ export function buildFtsQuery(raw: string): string | null {
   const safe = tokens.filter((t) => !/^(?:AND|OR|NOT|NEAR)$/i.test(t));
   if (safe.length === 0) return null;
 
-  const quoted = safe.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = safe.map((t) => `"${t.replaceAll('"', '""')}"`);
   return quoted.join(" OR ");
 }
 
