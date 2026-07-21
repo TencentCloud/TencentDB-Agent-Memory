@@ -33,6 +33,7 @@ import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
+import { CheckpointManager } from "./src/utils/checkpoint.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
@@ -305,6 +306,41 @@ export default function register(api: OpenClawPluginApi) {
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
+        onAfterCleanup: async () => {
+          // After cleaner deletes expired data, recalibrate checkpoint counters
+          // to match the actual remaining data.  Prefer vector-store counts;
+          // fall back to JSONL-file counting when the store is degraded.
+          const vs = core.getVectorStore();
+          const checkpoint = new CheckpointManager(pluginDataDir, api.logger);
+          try {
+            let l0Count: number | undefined;
+            let l1Count: number | undefined;
+            if (vs && !vs.isDegraded()) {
+              [l0Count, l1Count] = await Promise.all([
+                vs.countL0(),
+                vs.countL1(),
+              ]);
+            } else {
+              // JSONL recounting fallback — store unavailable or degraded
+              const { countJsonlL0Records, countJsonlL1Records } =
+                await import("./src/utils/checkpoint.js");
+              [l0Count, l1Count] = await Promise.all([
+                countJsonlL0Records(pluginDataDir, api.logger),
+                countJsonlL1Records(pluginDataDir, api.logger),
+              ]);
+              api.logger.info(
+                `${TAG} post-cleanup recalibration via JSONL fallback: ` +
+                `L0=${l0Count}, L1=${l1Count}`,
+              );
+            }
+            await checkpoint.recalibrate({ l0Count, l1Count });
+          } catch (err) {
+            api.logger.warn(
+              `${TAG} post-cleanup recalibration failed (non-fatal): ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
       });
       sharedMemoryCleaner.start();
       api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);
