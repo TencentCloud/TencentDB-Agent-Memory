@@ -1,0 +1,13 @@
+{
+  "$comment": "Example .mcp.json entry so Claude Code exposes memory_search / conversation_search. Merge 'mcpServers' into your project .mcp.json, or run: claude mcp add memory-tencentdb -- npx tsx /ABS/PATH/mcp-server.ts",
+  "mcpServers": {
+    "memory-tencentdb": {
+      "command": "npx",
+      "args": ["tsx", "/ABS/PATH/adapter-sdk/bindings/claude-code/mcp-server.ts"],
+      "env": {
+        "MEMORY_TENCENTDB_GATEWAY_HOST": "127.0.0.1",
+        "MEMORY_TENCENTDB_GATEWAY_PORT": "8420"
+      }
+    }
+  }
+}
