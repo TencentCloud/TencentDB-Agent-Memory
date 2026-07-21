@@ -44,6 +44,9 @@
 
 > 超长 Session 评测不是单题清空上下文，而是把多个任务拼接到同一个 Session 中连续执行。例如 SWE-bench 每个 Session 连续执行 50 个任务，用来模拟真实长程 Agent 的上下文累积压力。
 
+Hermes 短期记忆 / Context Engine 支持的阶段性设计见
+[Hermes Context Engine Integration Plan](./docs/hermes-context-engine-plan.md)。
+
 ---
 
 ## 项目简介
