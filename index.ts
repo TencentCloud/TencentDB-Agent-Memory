@@ -33,6 +33,7 @@ import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
+import { CheckpointManager } from "./src/utils/checkpoint.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
@@ -305,6 +306,22 @@ export default function register(api: OpenClawPluginApi) {
         retentionDays: cfg.memoryCleanup.retentionDays,
         cleanTime: cfg.memoryCleanup.cleanTime,
         logger: api.logger,
+        onAfterCleanup: async () => {
+          const vs = core.getVectorStore();
+          const checkpoint = new CheckpointManager(pluginDataDir, api.logger);
+          try {
+            if (vs && !vs.isDegraded()) {
+              await checkpoint.recalibrate({ source: vs });
+            } else {
+              await checkpoint.recalibrate({ useJsonlFallback: true });
+            }
+          } catch (err) {
+            api.logger.warn(
+              `${TAG} post-cleanup recalibration failed (non-fatal): ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        },
       });
       sharedMemoryCleaner.start();
       api.logger.debug?.(`${TAG} Memory cleaner started (singleton)`);
