@@ -47,6 +47,7 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
+import type { ConcurrencyLimiter } from "../utils/async-semaphore.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
@@ -66,6 +67,14 @@ export interface TdaiCoreOptions {
   sessionFilter?: SessionFilter;
   /** Plugin instance ID for metric reporting. */
   instanceId?: string;
+  /**
+   * Optional shared limiter gating this core's L1/L2/L3 extraction runners.
+   *
+   * The multi-tenant CoreRegistry passes ONE limiter to every core so total
+   * concurrent background extraction across all accounts stays bounded
+   * (design §8.4 #5). Omit it for the unbounded single-core default.
+   */
+  extractionLimiter?: ConcurrencyLimiter;
 }
 
 // ============================
@@ -80,6 +89,7 @@ export class TdaiCore {
   private runnerFactory: LLMRunnerFactory;
   private sessionFilter: SessionFilter;
   private instanceId?: string;
+  private extractionLimiter?: ConcurrencyLimiter;
 
   // Lazy-initialized resources
   private vectorStore?: IMemoryStore;
@@ -130,6 +140,7 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.extractionLimiter = opts.extractionLimiter;
   }
 
   // ============================
@@ -149,7 +160,7 @@ export class TdaiCore {
 
     // Create pipeline manager (sync — does not need store)
     if (this.cfg.extraction.enabled) {
-      this.scheduler = createPipelineManager(this.cfg, this.logger, this.sessionFilter);
+      this.scheduler = createPipelineManager(this.cfg, this.logger, this.sessionFilter, this.extractionLimiter);
       // Wire runners after store is ready (or after store init fails — runners
       // still work in degraded mode with JSONL fallback and no embedding)
       this.storeReady
