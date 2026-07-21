@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "@tencentdb-agent-memory/memory-tencentdb"
+  ],
+  "mcp": {
+    "memory_tencentdb": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "--package",
+        "@tencentdb-agent-memory/memory-tencentdb",
+        "memory-tencentdb-mcp"
+      ],
+      "enabled": true,
+      "environment": {
+        "TDAI_GATEWAY_URL": "{env:TDAI_GATEWAY_URL}",
+        "TDAI_GATEWAY_API_KEY": "{env:TDAI_GATEWAY_API_KEY}",
+        "TDAI_USER_ID": "{env:TDAI_USER_ID}"
+      }
+    }
+  }
+}

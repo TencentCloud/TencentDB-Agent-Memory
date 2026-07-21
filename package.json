@@ -7,12 +7,21 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-mcp": "./bin/memory-tencentdb-mcp.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./opencode": {
+      "import": "./dist/opencode.mjs",
+      "default": "./dist/opencode.mjs"
+    },
+    "./server": {
+      "import": "./dist/opencode.mjs",
+      "default": "./dist/opencode.mjs"
     }
   },
   "scripts": {

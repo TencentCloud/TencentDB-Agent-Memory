@@ -209,6 +209,20 @@ Codex 通过共享的 stdio MCP adapter 接入。原生 `UserPromptSubmit` 和 `
 
 MCP、Hook、环境变量和故障降级配置请查看 [Codex 接入指南](docs/codex_CN.md)。
 
+### Claude Code
+
+Claude Code 使用原生 `UserPromptSubmit`、`Stop` 和 `SessionEnd` Hook，并通过共享 stdio MCP adapter 自动完成召回、捕获和 session flush。
+
+Hook、MCP、环境变量与故障降级配置请查看 [Claude Code 接入指南](docs/claude-code_CN.md)。
+
+### OpenCode
+
+OpenCode 使用原生 plugin 自动完成 recall、system context 注入、capture 和 session flush，同时复用共享 stdio MCP server 为模型提供按需记忆工具。
+
+npm plugin 加载、MCP、环境变量和故障降级配置请查看 [OpenCode 接入指南](docs/opencode_CN.md)。
+
+三种平台在生命周期、配置入口和故障降级方面的差异请查看 [平台接入对比](docs/platform-comparison_CN.md)。
+
 ### 2. Hermes
 
 除 OpenClaw 外，本插件同样支持 [Hermes](https://github.com/NousResearch/hermes-agent) Agent。根据部署场景选择安装路径：

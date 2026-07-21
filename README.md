@@ -205,6 +205,20 @@ Codex connects through the shared stdio MCP adapter. Native `UserPromptSubmit` a
 
 See [the Codex integration guide](docs/codex.md) for MCP, Hook, environment variable, and failure-handling configuration.
 
+### Claude Code
+
+Claude Code uses native `UserPromptSubmit`, `Stop`, and `SessionEnd` hooks with the shared stdio MCP adapter for automatic recall, capture, and session flushing.
+
+See [the Claude Code integration guide](docs/claude-code.md) for Hook and MCP configuration, environment variables, and failure handling.
+
+### OpenCode
+
+OpenCode uses a native plugin for automatic recall, system-context injection, capture, and session flushing, plus the same shared stdio MCP server for model-initiated memory tools.
+
+See [the OpenCode integration guide](docs/opencode.md) for npm plugin loading, MCP configuration, environment variables, and failure handling.
+
+For lifecycle, configuration, and reliability differences across the three platforms, see [the platform comparison guide](docs/platform-comparison.md).
+
 ### 2. Hermes
 
 In addition to OpenClaw, this plugin also supports [Hermes](https://github.com/NousResearch/hermes-agent) Agent. Choose the installation path based on your deployment scenario:
