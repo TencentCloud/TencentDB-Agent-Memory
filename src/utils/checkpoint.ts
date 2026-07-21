@@ -144,6 +144,27 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/**
+ * Minimal view of the memory store needed for recalibration.
+ * Kept structural (not importing IMemoryStore) so checkpoint.ts stays free of
+ * store-layer dependencies and remains trivially unit-testable with a fake.
+ */
+export interface RecalibrationSource {
+  /** Live count of L0 conversation records (source of truth). */
+  countL0(): number | Promise<number>;
+  /** Live count of L1 memory records (source of truth). */
+  countL1(): number | Promise<number>;
+}
+
+export interface RecalibrateResult {
+  l0: { before: number; after: number };
+  l1: { before: number; after: number };
+  /** "store" when live store counts were used; "jsonl" when the file-line fallback was used. */
+  source: "store" | "jsonl";
+  /** True when either counter actually changed. */
+  changed: boolean;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -483,6 +504,128 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Recalibration (drift correction) — issue #157
+  // ============================
+
+  /**
+   * Reconcile the monotonic counters (`l0_conversations_count`,
+   * `total_memories_extracted`) against reality.
+   *
+   * ## Why this is needed
+   * Both counters are increment-only: `captureAtomically()` bumps
+   * `l0_conversations_count` and `markL1ExtractionComplete()` bumps
+   * `total_memories_extracted`, but nothing ever decrements them. The
+   * memory-cleaner deletes expired L0/L1 records from the store (and their
+   * JSONL shards), so after any cleanup the checkpoint permanently overstates
+   * how much data actually exists. These counters feed L2/L3 persona
+   * thresholds, so drift makes persona generation trigger prematurely or,
+   * once the checkpoint is far ahead of reality, effectively stall.
+   *
+   * ## Source of truth
+   * The live store is authoritative: `countL0()` / `countL1()` are the same
+   * queries the cleaner uses to decide deletions, so recalibrating against them
+   * keeps the checkpoint consistent with the store. When no store is available
+   * (degraded mode), we fall back to counting non-empty lines across the
+   * `conversations/` and `records/` daily JSONL shards under `dataDir`.
+   *
+   * The write happens inside the same per-file lock as every other mutation,
+   * so a concurrent capture/extraction cannot interleave a stale read.
+   *
+   * Idempotent: calling it repeatedly with unchanged data is a no-op
+   * (`changed === false`).
+   *
+   * @param source Optional live-count provider (typically the vector store).
+   *   Omit to force the JSONL fallback.
+   */
+  async recalibrate(source?: RecalibrationSource): Promise<RecalibrateResult> {
+    // Resolve the true counts OUTSIDE the lock (store/FS I/O can be slow and
+    // must not block other checkpoint mutations). The values are re-applied
+    // atomically inside the lock below.
+    let l0True: number;
+    let l1True: number;
+    let usedSource: "store" | "jsonl";
+
+    if (source) {
+      l0True = await source.countL0();
+      l1True = await source.countL1();
+      usedSource = "store";
+    } else {
+      l0True = await this.countJsonlLines("conversations");
+      l1True = await this.countJsonlLines("records");
+      usedSource = "jsonl";
+    }
+
+    // Guard against transient failures returning nonsense (e.g. NaN/negatives).
+    l0True = Number.isFinite(l0True) && l0True >= 0 ? Math.floor(l0True) : 0;
+    l1True = Number.isFinite(l1True) && l1True >= 0 ? Math.floor(l1True) : 0;
+
+    let before = { l0: 0, l1: 0 };
+    await this.mutate((cp) => {
+      before = { l0: cp.l0_conversations_count, l1: cp.total_memories_extracted };
+      cp.l0_conversations_count = l0True;
+      cp.total_memories_extracted = l1True;
+    });
+
+    const result: RecalibrateResult = {
+      l0: { before: before.l0, after: l0True },
+      l1: { before: before.l1, after: l1True },
+      source: usedSource,
+      changed: before.l0 !== l0True || before.l1 !== l1True,
+    };
+
+    if (result.changed) {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): ` +
+        `l0 ${result.l0.before}→${result.l0.after}, ` +
+        `l1 ${result.l1.before}→${result.l1.after}`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): no drift ` +
+        `(l0=${result.l0.after}, l1=${result.l1.after})`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Count non-empty lines across all `YYYY-MM-DD.jsonl` daily shards in a
+   * subdirectory of `dataDir` (the checkpoint lives in `dataDir/.metadata`).
+   * Used as the degraded-mode fallback for {@link recalibrate}. Missing
+   * directories and unreadable files count as zero rather than throwing.
+   */
+  private async countJsonlLines(subDir: string): Promise<number> {
+    const dirPath = path.join(path.dirname(path.dirname(this.filePath)), subDir);
+    const shardPattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+    let entries: string[];
+    try {
+      const dirEntries = await fs.readdir(dirPath, { withFileTypes: true });
+      entries = dirEntries
+        .filter((e) => e.isFile() && shardPattern.test(e.name))
+        .map((e) => e.name);
+    } catch {
+      return 0; // directory doesn't exist yet
+    }
+
+    let total = 0;
+    for (const name of entries) {
+      try {
+        const raw = await fs.readFile(path.join(dirPath, name), "utf-8");
+        for (const line of raw.split("\n")) {
+          if (line.trim()) total += 1;
+        }
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: failed to read ${name}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return total;
   }
 
 }
