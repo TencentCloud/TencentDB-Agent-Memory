@@ -17,3 +17,10 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Trae platform adapter
+export * from "./trae/index.js";
+
+// TdaiBridge (shared by Trae and future adapters)
+export { TdaiBridge } from "./tdai-bridge/tdai-bridge.js";
+export type { BridgeOpts } from "./tdai-bridge/tdai-bridge.js";
