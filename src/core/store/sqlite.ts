@@ -174,6 +174,25 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_OPERATOR_WORDS = /\b(?:AND|OR|NOT|NEAR)(?:\s*\/\s*\d+)?\b/gi;
+const FTS5_CONTROL_CHARS = /["'()*:^{}\[\]-]+/g;
+const FTS5_OPERATOR_TOKENS = new Set(["and", "or", "not", "near"]);
+
+/**
+ * Query-side allow-list sanitizer.
+ *
+ * SQLite's FTS5 `MATCH` query is passed as a prepared-statement parameter in
+ * `searchL1Fts()` / `searchL0Fts()`, but FTS5 still parses the parameter as a
+ * query grammar. Remove grammar operators and control characters before
+ * tokenization, then only keep letter/number tokens below. Normal search words
+ * are still quoted as phrases by `buildFtsQuery()`.
+ */
+function sanitizeFtsQueryInput(raw: string): string {
+  return raw
+    .replace(FTS5_OPERATOR_WORDS, " ")
+    .replace(FTS5_CONTROL_CHARS, " ");
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -197,13 +216,14 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const cleaned = sanitizeFtsQueryInput(raw);
 
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -211,6 +231,8 @@ export function buildFtsQuery(raw: string): string | null {
         if (!/[\p{L}\p{N}]/u.test(t)) return false;
         // Remove common Chinese stop-words to reduce noise
         if (ZH_STOP_WORDS.has(t)) return false;
+        // Defense in depth in case a tokenizer emits FTS5 operators.
+        if (FTS5_OPERATOR_TOKENS.has(t.toLowerCase())) return false;
         return true;
       });
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
@@ -218,14 +240,15 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        .filter((t) => t && !FTS5_OPERATOR_TOKENS.has(t.toLowerCase())) ?? [];
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`).filter((t) => t !== '""');
+  if (quoted.length === 0) return null;
   return quoted.join(" OR ");
 }
 
