@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-tencentdb-llamaindex"
+version = "0.1.0"
+description = "LlamaIndex MemoryBlock adapter for TencentDB Agent Memory"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "TencentDB Agent Memory contributors" }]
+dependencies = [
+  "llama-index-core>=0.14.23,<1",
+  "memory-tencentdb-gateway>=0.1,<1",
+]
+keywords = ["llamaindex", "agent-memory", "tencentdb", "long-term-memory"]
+
+[project.urls]
+Repository = "https://github.com/TencentCloud/TencentDB-Agent-Memory"
+Issues = "https://github.com/TencentCloud/TencentDB-Agent-Memory/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memory_tencentdb_llamaindex*"]

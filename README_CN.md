@@ -208,6 +208,10 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 除 OpenClaw 外，本插件同样支持 [Hermes](https://github.com/NousResearch/hermes-agent) Agent。根据部署场景选择安装路径：
 
+> 使用 CrewAI？可通过原生 [`TencentDBMemory` 适配器](./crewai-plugin/README.md) 将 CrewAI 的召回与持久化生命周期接入同一个 Gateway。
+
+> 使用 LlamaIndex？可通过原生 [`TencentDBMemoryBlock` 适配器](./llamaindex-plugin/README.md) 接入；两种框架的生命周期与安全策略参见[横向对比](./docs/adapters/python-framework-comparison.md)。
+
 | 你的场景 | 走哪条路 |
 |---|---|
 | 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 2.A Docker（下文） |
