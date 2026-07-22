@@ -32,6 +32,7 @@ import type {
   L1FtsResult,
   L0SearchResult,
   L0FtsResult,
+  CheckpointStoreCounts,
 } from "./types.js";
 import type { Logger } from "../types.js";
 
@@ -1349,6 +1350,25 @@ export class VectorStore implements IMemoryStore {
       );
       return 0;
     }
+  }
+
+  /** Strict checkpoint read: empty tables return 0; degraded/query failures throw. */
+  readCheckpointCountsStrict(updatedAfter?: string): CheckpointStoreCounts {
+    if (this.degraded) {
+      throw new Error("SQLite Store is degraded");
+    }
+    const l0 = (this.db
+      .prepare("SELECT COUNT(*) AS cnt FROM l0_conversations")
+      .get() as { cnt: number }).cnt;
+    const l1 = (this.db
+      .prepare("SELECT COUNT(*) AS cnt FROM l1_records")
+      .get() as { cnt: number }).cnt;
+    const l1Since = updatedAfter
+      ? (this.db
+        .prepare("SELECT COUNT(*) AS cnt FROM l1_records WHERE updated_time > ?")
+        .get(updatedAfter) as { cnt: number }).cnt
+      : l1;
+    return { l0, l1, l1Since };
   }
 
   /**
