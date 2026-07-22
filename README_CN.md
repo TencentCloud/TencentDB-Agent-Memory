@@ -542,6 +542,18 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
 ---
+## 社区 ContextEngine 集成
+
+> 由社区构建的 ContextEngine 实现，将 TencentDB Agent Memory 的上下文卸载能力扩展到更多 Agent 框架。
+
+| 项目 | 框架 | 说明 |
+|------|------|------|
+| [tencentdb-offload](https://github.com/ysun0804/tencentdb-offload) | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) | Python ContextEngine 插件，使用 Offload V2 API。功能：L1 工具对 ingest（含对话上下文）、L1.5 边界创建（用于 MMD 画布生成）、四级级联压缩、自适应 body 截断。 |
+
+> 想添加你的集成？提交 [PR](https://github.com/TencentCloud/TencentDB-Agent-Memory/pulls) 或 [Issue](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues)。
+
+---
+
 ## 社区与贡献
 
 我们欢迎一切形式的贡献——Bug 反馈、功能建议、文档勘误、Benchmark 复现、生态集成，或者一个 Pull Request 都可以。Agent 记忆这件事远未有定论，希望和大家一起把它做出来。
