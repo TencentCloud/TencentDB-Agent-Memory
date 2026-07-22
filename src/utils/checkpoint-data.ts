@@ -3,12 +3,26 @@ import path from "node:path";
 
 import type { CheckpointLogger } from "./checkpoint.js";
 
+/**
+ * Best-effort recovery for canonical date-sharded JSONL data.
+ *
+ * The project readers are deliberately permissive, session-oriented, and tolerate
+ * file-read failures, while the L0/L1 writers expose types but no shared runtime
+ * validators. These checks therefore cover the fields required to count current
+ * canonical writer output plus limited known legacy shapes; they are not a promise
+ * of compatibility with every historical or external JSONL format.
+ */
+
 export type CheckpointDataLayer = "l0" | "l1";
 
 export interface JsonlCheckpointCounts {
   l0: number;
   l1: number;
   l1Since: number;
+  directories: {
+    l0: "present" | "missing";
+    l1: "present" | "missing";
+  };
 }
 
 const DATE_SHARD_PATTERN = /^(\d{4})-(\d{2})-(\d{2})\.(?:jsonl|json)$/;
@@ -80,10 +94,12 @@ function warnInvalid(
   lineNumber: number,
   detail: string,
 ): void {
-  logger?.warn?.(`[checkpoint-data] Ignoring ${detail} record in ${filePath}:${lineNumber}`);
+  logger?.warn?.(
+    `[checkpoint-data] Ignoring ${detail} record source=${path.basename(filePath)} line=${lineNumber}`,
+  );
 }
 
-/** Count valid records in one date-sharded JSONL/JSON file. */
+/** Count best-effort recognizable records in one canonical date shard. */
 export async function countCheckpointShard(
   filePath: string,
   layer: CheckpointDataLayer,
@@ -129,12 +145,14 @@ async function countDirectory(
   layer: CheckpointDataLayer,
   logger?: CheckpointLogger,
   updatedAfter?: string,
-): Promise<{ total: number; since: number }> {
+): Promise<{ total: number; since: number; status: "present" | "missing" }> {
   let entries;
   try {
     entries = await fs.readdir(dirPath, { withFileTypes: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { total: 0, since: 0 };
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { total: 0, since: 0, status: "missing" };
+    }
     throw err;
   }
 
@@ -151,10 +169,15 @@ async function countDirectory(
     total += counts.total;
     since += counts.since;
   }
-  return { total, since };
+  return { total, since, status: "present" };
 }
 
-/** Scan only canonical date shards used by the L0/L1 persistence layer. */
+/**
+ * Best-effort recovery for canonical date-sharded JSONL data.
+ *
+ * Missing canonical directories are reported separately from present-but-empty
+ * directories. Directory read failures other than ENOENT are thrown.
+ */
 export async function countCheckpointJsonlData(
   dataDir: string,
   logger?: CheckpointLogger,
@@ -164,5 +187,10 @@ export async function countCheckpointJsonlData(
     countDirectory(path.join(dataDir, "conversations"), "l0", logger),
     countDirectory(path.join(dataDir, "records"), "l1", logger, updatedAfter),
   ]);
-  return { l0: l0.total, l1: l1.total, l1Since: updatedAfter ? l1.since : l1.total };
+  return {
+    l0: l0.total,
+    l1: l1.total,
+    l1Since: updatedAfter ? l1.since : l1.total,
+    directories: { l0: l0.status, l1: l1.status },
+  };
 }

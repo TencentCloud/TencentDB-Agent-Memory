@@ -567,6 +567,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
+  /** Strict checkpoint read: empty collections return 0; degraded/query failures throw. */
   async readCheckpointCountsStrict(updatedAfter?: string): Promise<CheckpointStoreCounts> {
     await this._ensureInit();
     if (this.degraded) {

@@ -146,7 +146,13 @@ export class TdaiCore {
     initDataDirectories(this.dataDir);
 
     // Resolve the store before wiring runners or calibrating counters.
-    this.storeReady = this.initStores();
+    this.storeReady = this.initStores().catch(() => {
+      this.vectorStore = undefined;
+      this.embeddingService = undefined;
+      this.logger.warn(
+        `${TAG} Store init failed; continuing in degraded mode`,
+      );
+    });
     await this.storeReady;
 
     // Create and wire the pipeline after the store outcome is known.
@@ -402,16 +408,10 @@ export class TdaiCore {
   // ============================
 
   private async initStores(): Promise<void> {
-    try {
-      const stores = await initStores(this.cfg, this.dataDir, this.logger);
-      this.vectorStore = stores.vectorStore;
-      this.embeddingService = stores.embeddingService;
-      this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
-    } catch (err) {
-      this.logger.warn(
-        `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    const stores = await initStores(this.cfg, this.dataDir, this.logger);
+    this.vectorStore = stores.vectorStore;
+    this.embeddingService = stores.embeddingService;
+    this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
   }
 
   private wirePipelineRunners(): void {
@@ -497,15 +497,16 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Pipeline runners wired`);
   }
 
+  /** One-shot startup gate; callers share this promise before scheduler restoration. */
   private ensureCheckpointCalibrated(): Promise<void> {
     if (this.checkpointCalibrationPromise) return this.checkpointCalibrationPromise;
     this.checkpointCalibrationPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
         await checkpoint.recalibrateFromStorage(this.vectorStore, "core-startup");
-      } catch (err) {
+      } catch {
         this.logger.warn(
-          `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} Checkpoint recalibration failed (non-fatal) reason=core-startup`,
         );
       }
     })();

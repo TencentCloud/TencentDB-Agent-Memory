@@ -102,7 +102,7 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Current number of persisted L0 message records. */
+  /** Total L0 conversation files recorded */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
@@ -117,10 +117,14 @@ export interface CleanupDelta {
 }
 
 export interface RecalibrationResult {
-  source: "store" | "jsonl";
+  /** Storage snapshot used for reconciled values, or checkpoint when values were retained. */
+  source: "store" | "jsonl" | "checkpoint";
+  /** Preserved means at least one required data source was unavailable. */
+  status: "reconciled" | "preserved";
   l0: number;
   l1: number;
   memoriesSincePersona: number;
+  changed: boolean;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -157,6 +161,7 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+  debug?(msg: string): void;
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -289,6 +294,20 @@ export class CheckpointManager {
     });
   }
 
+  /** Run a mutation under the file lock and persist only when the callback changes data. */
+  private async mutateIfChanged(
+    fn: (cp: Checkpoint) => boolean | Promise<boolean>,
+  ): Promise<{ checkpoint: Checkpoint; changed: boolean }> {
+    return withFileLock(this.filePath, async () => {
+      const checkpoint = await this.readRaw();
+      const changed = await fn(checkpoint);
+      if (changed) {
+        await this.writeRaw(checkpoint);
+      }
+      return { checkpoint, changed };
+    });
+  }
+
   // ============================
   // Public API — read-only
   // ============================
@@ -416,17 +435,23 @@ export class CheckpointManager {
     });
   }
 
-  async ensureScenesProcessedAtLeast(minimum: number): Promise<void> {
-    const normalized = toNonNegativeInteger(minimum);
-    await this.mutate((cp) => {
-      cp.scenes_processed = Math.max(toNonNegativeInteger(cp.scenes_processed), normalized);
-    });
-  }
-
   /**
-   * Replace derived counters with the current persisted-data counts.
-   * Store data is authoritative when the store is healthy; JSONL is used only
-   * when no healthy store exists or a store read explicitly fails.
+   * Reconcile derived counters with the current persisted-data counts during startup.
+   *
+   * This method must run after the Store initialization outcome is known and before
+   * capture, extraction, or cleaner work begins. Counting storage and mutating the
+   * checkpoint are separate phases, so a full recalibration during active writes can
+   * overwrite newer counter updates with an older storage snapshot.
+   *
+   * Runtime cleanup must use {@link applyCleanupDelta} with the actual deletion counts.
+   * Do not use full recalibration as a cleanup or active-runtime synchronization path.
+   *
+   * Built-in SQLite and TCVDB stores use the strict checkpoint-count API, which
+   * distinguishes legitimate empty data from read failure. External/custom stores
+   * without that optional API use legacy count/query methods for best-effort backward
+   * compatibility; those methods may not distinguish a swallowed read failure from a
+   * legitimate 0 / []. JSONL is used when no healthy store exists or an invoked Store
+   * API explicitly throws.
    */
   async recalibrateFromStorage(
     store?: IMemoryStore,
@@ -434,13 +459,15 @@ export class CheckpointManager {
   ): Promise<RecalibrationResult> {
     const snapshot = await this.read();
     let source: RecalibrationResult["source"] = "jsonl";
-    let actualL0: number;
-    let actualL1: number;
-    let actualL1SincePersona: number;
+    let actualL0 = snapshot.l0_conversations_count;
+    let actualL1 = snapshot.total_memories_extracted;
+    let actualL1SincePersona = snapshot.memories_since_last_persona;
+    let jsonlCounts: Awaited<ReturnType<typeof countCheckpointJsonlData>> | undefined;
 
     if (store && !store.isDegraded()) {
       try {
         if (store.readCheckpointCountsStrict) {
+          // Strict path used by built-in stores (and custom stores that opt in).
           const counts = await store.readCheckpointCountsStrict(
             snapshot.last_persona_time || undefined,
           );
@@ -448,34 +475,90 @@ export class CheckpointManager {
           actualL1 = counts.l1;
           actualL1SincePersona = counts.l1Since;
         } else {
+          // Legacy custom-Store compatibility path. These fault-tolerant APIs may
+          // return 0 / [] on read failure, so this path cannot reliably distinguish
+          // an unavailable Store from legitimately empty data.
           [actualL0, actualL1] = await Promise.all([store.countL0(), store.countL1()]);
           actualL1SincePersona = snapshot.last_persona_time
             ? (await store.queryL1Records({ updatedAfter: snapshot.last_persona_time })).length
             : actualL1;
         }
         source = "store";
-      } catch (err) {
+      } catch {
         this.logger.warn?.(
-          `[checkpoint] Store recalibration failed; falling back to JSONL: ${err instanceof Error ? err.message : String(err)}`,
+          `[checkpoint] Store recalibration failed; falling back to JSONL reason=${reason}`,
         );
-        const counts = await countCheckpointJsonlData(
+        jsonlCounts = await countCheckpointJsonlData(
           path.dirname(path.dirname(this.filePath)),
           this.logger,
           snapshot.last_persona_time || undefined,
         );
-        actualL0 = counts.l0;
-        actualL1 = counts.l1;
-        actualL1SincePersona = counts.l1Since;
       }
     } else {
-      const counts = await countCheckpointJsonlData(
+      jsonlCounts = await countCheckpointJsonlData(
         path.dirname(path.dirname(this.filePath)),
         this.logger,
         snapshot.last_persona_time || undefined,
       );
-      actualL0 = counts.l0;
-      actualL1 = counts.l1;
-      actualL1SincePersona = counts.l1Since;
+    }
+
+    if (jsonlCounts) {
+      const l0Missing = jsonlCounts.directories.l0 === "missing";
+      const l1Missing = jsonlCounts.directories.l1 === "missing";
+      if (l0Missing || l1Missing) {
+        const countedL0 = toNonNegativeInteger(jsonlCounts.l0);
+        const countedL1 = toNonNegativeInteger(jsonlCounts.l1);
+        const countedL1Since = Math.min(
+          countedL1,
+          toNonNegativeInteger(jsonlCounts.l1Since),
+        );
+        let beforeL0 = 0;
+        let beforeL1 = 0;
+        const { checkpoint, changed } = await this.mutateIfChanged((cp) => {
+          beforeL0 = cp.l0_conversations_count;
+          beforeL1 = cp.total_memories_extracted;
+          actualL0 = l0Missing ? cp.l0_conversations_count : countedL0;
+          actualL1 = l1Missing ? cp.total_memories_extracted : countedL1;
+          actualL1SincePersona = l1Missing
+            ? cp.memories_since_last_persona
+            : countedL1Since;
+          const countersChanged =
+            cp.l0_conversations_count !== actualL0 ||
+            cp.total_memories_extracted !== actualL1 ||
+            cp.memories_since_last_persona !== actualL1SincePersona;
+          if (!countersChanged) return false;
+          cp.l0_conversations_count = actualL0;
+          cp.total_memories_extracted = actualL1;
+          cp.memories_since_last_persona = actualL1SincePersona;
+          return true;
+        });
+        source = l0Missing && l1Missing ? "checkpoint" : "jsonl";
+        this.logger.warn?.(
+          `[checkpoint] Canonical JSONL directories missing; preserving unavailable counters ` +
+          `source=${source} reason=${reason}`,
+        );
+        const details =
+          `source=${source} beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
+          `afterL0=${checkpoint.l0_conversations_count} ` +
+          `afterL1=${checkpoint.total_memories_extracted} ` +
+          `memoriesSincePersona=${checkpoint.memories_since_last_persona} reason=${reason}`;
+        if (changed) {
+          this.logger.info(`[checkpoint] partially recalibrated ${details}`);
+        } else {
+          this.logger.debug?.(`[checkpoint] recalibration preserved ${details} changed=false`);
+        }
+        return {
+          source,
+          status: "preserved",
+          l0: checkpoint.l0_conversations_count,
+          l1: checkpoint.total_memories_extracted,
+          memoriesSincePersona: checkpoint.memories_since_last_persona,
+          changed,
+        };
+      }
+      actualL0 = jsonlCounts.l0;
+      actualL1 = jsonlCounts.l1;
+      actualL1SincePersona = jsonlCounts.l1Since;
     }
 
     actualL0 = toNonNegativeInteger(actualL0);
@@ -484,39 +567,80 @@ export class CheckpointManager {
 
     let beforeL0 = 0;
     let beforeL1 = 0;
-    await this.mutate((cp) => {
+    const { changed } = await this.mutateIfChanged((cp) => {
       beforeL0 = cp.l0_conversations_count;
       beforeL1 = cp.total_memories_extracted;
-      cp.total_processed = actualL0;
+      const countersChanged =
+        cp.l0_conversations_count !== actualL0 ||
+        cp.total_memories_extracted !== actualL1 ||
+        cp.memories_since_last_persona !== actualL1SincePersona;
+      if (!countersChanged) return false;
       cp.l0_conversations_count = actualL0;
       cp.total_memories_extracted = actualL1;
       cp.memories_since_last_persona = actualL1SincePersona;
+      return true;
     });
-    this.logger.info(
-      `[checkpoint] recalibrated source=${source} beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
-      `afterL0=${actualL0} afterL1=${actualL1} memoriesSincePersona=${actualL1SincePersona} reason=${reason}`,
-    );
-    return { source, l0: actualL0, l1: actualL1, memoriesSincePersona: actualL1SincePersona };
+    const details =
+      `source=${source} beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
+      `afterL0=${actualL0} afterL1=${actualL1} memoriesSincePersona=${actualL1SincePersona} reason=${reason}`;
+    if (changed) {
+      this.logger.info(`[checkpoint] recalibrated ${details}`);
+    } else {
+      this.logger.debug?.(`[checkpoint] recalibration unchanged ${details} changed=false`);
+    }
+    return {
+      source,
+      status: "reconciled",
+      l0: actualL0,
+      l1: actualL1,
+      memoriesSincePersona: actualL1SincePersona,
+      changed,
+    };
   }
 
   /** Atomically subtract records that a completed cleanup actually removed. */
-  async applyCleanupDelta(delta: CleanupDelta): Promise<void> {
+  async applyCleanupDelta(delta: CleanupDelta, store?: IMemoryStore): Promise<void> {
     const removedL0 = toNonNegativeInteger(delta.removedL0);
     const removedL1 = toNonNegativeInteger(delta.removedL1);
     if (removedL0 === 0 && removedL1 === 0) return;
 
     let beforeL0 = 0;
     let beforeL1 = 0;
-    const cp = await this.mutate((current) => {
+    const cp = await this.mutate(async (current) => {
       beforeL0 = current.l0_conversations_count;
       beforeL1 = current.total_memories_extracted;
-      current.total_processed = Math.max(0, current.total_processed - removedL0);
       current.l0_conversations_count = Math.max(0, current.l0_conversations_count - removedL0);
       current.total_memories_extracted = Math.max(0, current.total_memories_extracted - removedL1);
-      current.memories_since_last_persona = Math.min(
-        current.memories_since_last_persona,
-        current.total_memories_extracted,
-      );
+      if (removedL1 > 0) {
+        try {
+          let l1Since: number;
+          if (store && !store.isDegraded()) {
+            if (!store.readCheckpointCountsStrict) {
+              throw new Error("Store does not provide strict checkpoint counts");
+            }
+            const counts = await store.readCheckpointCountsStrict(
+              current.last_persona_time || undefined,
+            );
+            l1Since = counts.l1Since;
+          } else {
+            const counts = await countCheckpointJsonlData(
+              path.dirname(path.dirname(this.filePath)),
+              this.logger,
+              current.last_persona_time || undefined,
+            );
+            l1Since = counts.l1Since;
+          }
+          if (!Number.isFinite(l1Since) || l1Since < 0) {
+            throw new Error(`Invalid l1Since count: ${l1Since}`);
+          }
+          current.memories_since_last_persona = Math.trunc(l1Since);
+        } catch {
+          this.logger.warn?.(
+            `[checkpoint] Cleanup memories_since_last_persona recount failed (non-fatal); ` +
+            `preserving previous value reason=${delta.reason}`,
+          );
+        }
+      }
     });
     this.logger.info(
       `[checkpoint] cleanup beforeL0=${beforeL0} beforeL1=${beforeL1} ` +
@@ -608,7 +732,7 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        cp.l0_conversations_count += result.messageCount;
+        cp.l0_conversations_count += 1;
       }
     });
   }

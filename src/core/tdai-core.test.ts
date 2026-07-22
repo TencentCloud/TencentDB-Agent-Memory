@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { parseConfig } from "../config.js";
-import type { IMemoryStore } from "./store/types.js";
 import type {
   CaptureResult,
   CompletedTurn,
@@ -10,6 +9,7 @@ import type {
 } from "./types.js";
 import type { Checkpoint, PipelineSessionState } from "../utils/checkpoint.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
+import { createMemoryStoreMock, createMockLogger } from "../__tests__/helpers/checkpoint-fixtures.js";
 import type { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 
 const moduleMocks = vi.hoisted(() => ({
@@ -66,20 +66,6 @@ const turn: CompletedTurn = {
   sessionId: "conversation-a",
   startedAt: 123,
 };
-
-function createLogger(): Logger & {
-  info: ReturnType<typeof vi.fn>;
-  warn: ReturnType<typeof vi.fn>;
-  error: ReturnType<typeof vi.fn>;
-  debug: ReturnType<typeof vi.fn>;
-} {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function createHostAdapter(logger: Logger): HostAdapter {
   return {
@@ -165,9 +151,9 @@ afterEach(() => {
 describe("TdaiCore checkpoint startup calibration", () => {
   it("calibrates checkpoint exactly once before scheduler state restoration", async () => {
     const events: string[] = [];
-    const logger = createLogger();
+    const logger = createMockLogger();
     const scheduler = createSchedulerMock(events);
-    const store = { isDegraded: () => false } as unknown as IMemoryStore;
+    const store = createMemoryStoreMock();
     moduleMocks.initStores.mockResolvedValue({
       vectorStore: store,
       embeddingService: undefined,
@@ -195,7 +181,14 @@ describe("TdaiCore checkpoint startup calibration", () => {
         calibrationStarted.resolve();
         await calibrationGate.promise;
         events.push("calibration.end");
-        return { source: "store", l0: 4, l1: 2, memoriesSincePersona: 2 };
+        return {
+          source: "store",
+          status: "reconciled",
+          l0: 4,
+          l1: 2,
+          memoriesSincePersona: 2,
+          changed: true,
+        };
       });
     const read = vi.spyOn(CheckpointManager.prototype, "read").mockImplementation(async () => {
       events.push("checkpoint.read");
@@ -221,9 +214,72 @@ describe("TdaiCore checkpoint startup calibration", () => {
     expect(events.indexOf("checkpoint.read")).toBeLessThan(events.indexOf("scheduler.start"));
   });
 
+  it("continues startup in degraded mode when Store initialization fails", async () => {
+    const events: string[] = [];
+    const logger = createMockLogger();
+    const scheduler = createSchedulerMock(events);
+    moduleMocks.initStores.mockImplementation(async () => {
+      events.push("store.failed");
+      throw new Error("store unavailable");
+    });
+    moduleMocks.createPipelineManager.mockReturnValue(scheduler as unknown as MemoryPipelineManager);
+
+    const restoredStates: Record<string, PipelineSessionState> = {
+      "degraded-session": {
+        conversation_count: 1,
+        last_extraction_time: "",
+        last_extraction_updated_time: "",
+        last_active_time: 30,
+        l2_pending_l1_count: 0,
+        warmup_threshold: 1,
+        l2_last_extraction_time: "",
+      },
+    };
+    const recalibrate = vi
+      .spyOn(CheckpointManager.prototype, "recalibrateFromStorage")
+      .mockImplementation(async () => {
+        events.push("calibration.end");
+        return {
+          source: "jsonl",
+          status: "reconciled",
+          l0: 2,
+          l1: 1,
+          memoriesSincePersona: 1,
+          changed: true,
+        };
+      });
+    const read = vi.spyOn(CheckpointManager.prototype, "read").mockImplementation(async () => {
+      events.push("checkpoint.read");
+      return checkpointWithPipelineStates(restoredStates);
+    });
+    const core = new TdaiCore({
+      hostAdapter: createHostAdapter(logger),
+      config: parseConfig({}),
+    });
+
+    const initialize = core.initialize();
+    const starts = [core.handleTurnCommitted(turn), core.handleTurnCommitted(turn)];
+
+    await expect(Promise.all([initialize, ...starts])).resolves.toHaveLength(3);
+    expect(moduleMocks.createPipelineManager).toHaveBeenCalledTimes(1);
+    expect(scheduler.setL1Runner).toHaveBeenCalledTimes(1);
+    expect(scheduler.setPersister).toHaveBeenCalledTimes(1);
+    expect(scheduler.setL2Runner).toHaveBeenCalledTimes(1);
+    expect(scheduler.setL3Runner).toHaveBeenCalledTimes(1);
+    expect(recalibrate).toHaveBeenCalledTimes(1);
+    expect(recalibrate).toHaveBeenCalledWith(undefined, "core-startup");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(scheduler.start).toHaveBeenCalledTimes(1);
+    expect(scheduler.start).toHaveBeenCalledWith(restoredStates);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("degraded mode"));
+    expect(events.indexOf("store.failed")).toBeLessThan(events.indexOf("calibration.end"));
+    expect(events.indexOf("calibration.end")).toBeLessThan(events.indexOf("checkpoint.read"));
+    expect(events.indexOf("checkpoint.read")).toBeLessThan(events.indexOf("scheduler.start"));
+  });
+
   it("continues scheduler startup when checkpoint recalibration fails", async () => {
     const events: string[] = [];
-    const logger = createLogger();
+    const logger = createMockLogger();
     const scheduler = createSchedulerMock(events);
     moduleMocks.createPipelineManager.mockReturnValue(scheduler as unknown as MemoryPipelineManager);
 
@@ -245,7 +301,14 @@ describe("TdaiCore checkpoint startup calibration", () => {
       .mockImplementation(async () => {
         calibrationStarted.resolve();
         await calibrationGate.promise;
-        return { source: "jsonl", l0: 0, l1: 0, memoriesSincePersona: 0 };
+        return {
+          source: "jsonl",
+          status: "reconciled",
+          l0: 0,
+          l1: 0,
+          memoriesSincePersona: 0,
+          changed: false,
+        };
       });
     vi.spyOn(CheckpointManager.prototype, "read").mockResolvedValue(
       checkpointWithPipelineStates(restoredStates),

@@ -1352,6 +1352,7 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
+  /** Strict checkpoint read: empty tables return 0; degraded/query failures throw. */
   readCheckpointCountsStrict(updatedAfter?: string): CheckpointStoreCounts {
     if (this.degraded) {
       throw new Error("SQLite Store is degraded");

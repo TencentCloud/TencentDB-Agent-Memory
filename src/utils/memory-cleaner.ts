@@ -200,10 +200,11 @@ export class LocalMemoryCleaner {
           removedL0,
           removedL1,
           reason: storeHealthy ? "cleaner-store" : "cleaner-jsonl",
-        });
-      } catch (err) {
+        }, vectorStore);
+      } catch {
         this.opts.logger?.warn(
-          `${TAG} Checkpoint cleanup sync failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} Checkpoint cleanup sync failed (non-fatal) ` +
+          `reason=${storeHealthy ? "cleaner-store" : "cleaner-jsonl"}`,
         );
       }
     }
@@ -299,10 +300,10 @@ export class LocalMemoryCleaner {
         if (countRemovedRecords) {
           try {
             removedRecords = (await countCheckpointShard(filePath, layer, this.opts.logger)).total;
-          } catch (err) {
+          } catch {
             stats.deleteFailedFiles += 1;
             this.opts.logger?.warn(
-              `${TAG} Failed to count expired shard before deletion ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+              `${TAG} Failed to count expired shard before deletion source=${layer}; skipping file`,
             );
             continue;
           }
