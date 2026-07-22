@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
+import { CheckpointManager, type CheckpointRecordCounts } from "./checkpoint.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
@@ -180,10 +181,49 @@ export class LocalMemoryCleaner {
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
     }
 
+    await this.recalculateCheckpointRecordCounts();
+
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+  }
+
+  /**
+   * Keep checkpoint inventory counters aligned with the records that remain
+   * after cleanup.  The vector store is the retrieval source of truth when it
+   * is available; otherwise count the local JSONL fallback records.
+   *
+   * Progress cursors are intentionally not changed here. Retention cleanup
+   * removes already-processed historical data, so moving a cursor backwards
+   * would re-ingest data unnecessarily. A deliberate rollback should use
+   * CheckpointManager.resetSessionProgress() instead.
+   */
+  private async recalculateCheckpointRecordCounts(): Promise<void> {
+    let counts: CheckpointRecordCounts;
+
+    try {
+      if (this.vectorStore) {
+        const [l0Conversations, l1Memories] = await Promise.all([
+          this.vectorStore.countL0(),
+          this.vectorStore.countL1(),
+        ]);
+        counts = { l0Conversations, l1Memories };
+      } else {
+        const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+        await checkpoint.recalculateLocalRecordCounts();
+        return;
+      }
+
+      const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+      await checkpoint.recalculateRecordCounts(counts);
+    } catch (err) {
+      // Cleanup itself has already completed.  Do not turn a non-critical
+      // checkpoint reconciliation failure into a failed retention job.
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint count reconciliation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private scheduleNext(): void {
