@@ -33,7 +33,6 @@ The Gateway listens on `http://127.0.0.1:8420` by default. Export any non-defaul
 ```bash
 export TDAI_GATEWAY_URL="http://127.0.0.1:8420"
 export TDAI_GATEWAY_API_KEY="your-gateway-token"
-export TDAI_USER_ID="your-user-id"
 ```
 
 ## Configure the plugin and MCP server
@@ -45,7 +44,7 @@ Merge [`integrations/opencode/opencode.json.example`](../integrations/opencode/o
 
 The `plugin` entry loads `@tencentdb-agent-memory/memory-tencentdb`. OpenCode resolves the package's `./server` export to the plugin build. The `memory_tencentdb` MCP entry uses `npx --package` to resolve and start the packaged `memory-tencentdb-mcp` command without relying on the current shell's `PATH`. The separate `./opencode` export remains available for direct Node imports, but it is not the value to put in OpenCode's `plugin` array.
 
-OpenCode replaces an unset `{env:VARIABLE}` reference with an empty string. Remove environment entries you do not use, especially `TDAI_GATEWAY_API_KEY` and `TDAI_USER_ID`.
+OpenCode replaces an unset `{env:VARIABLE}` reference with an empty string. Remove environment entries you do not use, especially `TDAI_GATEWAY_API_KEY`.
 
 Check the MCP connection with:
 
@@ -61,8 +60,9 @@ The server exposes `tdai_memory_recall`, `tdai_memory_capture`, `tdai_session_en
 |---|---|---|
 | `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL. |
 | `TDAI_GATEWAY_API_KEY` | unset | Bearer token sent to the Gateway. |
-| `TDAI_USER_ID` | unset | Optional Gateway `user_id`. |
 | `TDAI_OPENCODE_STATE_DIR` | `~/.memory-tencentdb/opencode-adapter` | Recall, injection, error, and capture-deduplication state. |
+
+One Gateway instance currently represents one memory namespace. User-level namespace isolation is not provided by these adapter environment variables.
 
 The state directory uses short-lived files with mode `0600`. Pending state and successful markers expire after 24 hours. Claims left by a stopped process can be recovered after at most 60 seconds.
 

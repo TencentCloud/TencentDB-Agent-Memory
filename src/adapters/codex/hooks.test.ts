@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryTools } from "../mcp/tools.js";
+import { CodexPlatformAdapter } from "./adapter.js";
 import { handleCodexHook } from "./hooks.js";
 
 const tempDirs: string[] = [];
@@ -30,7 +31,14 @@ afterEach(async () => {
 });
 
 describe("handleCodexHook", () => {
-  it("recalls through MCP tools and returns additionalContext", async () => {
+  it("exposes the Codex lifecycle through one platform adapter interface", () => {
+    const adapter = new CodexPlatformAdapter();
+
+    expect(adapter.platform).toBe("codex");
+    expect(typeof adapter.create).toBe("function");
+  });
+
+  it("recalls through Gateway tools and returns additionalContext", async () => {
     const stateDir = await createStateDir();
     const recall = vi.fn().mockResolvedValue({
       context: "User prefers concise answers.",
@@ -62,7 +70,7 @@ describe("handleCodexHook", () => {
     });
   });
 
-  it("captures the cached turn through MCP tools on Stop", async () => {
+  it("captures the cached turn through Gateway tools on Stop", async () => {
     const stateDir = await createStateDir();
     const capture = vi.fn().mockResolvedValue({ l0Recorded: 2, schedulerNotified: true });
     const tools = createTools({ capture });
@@ -102,7 +110,7 @@ describe("handleCodexHook", () => {
     });
   });
 
-  it("fails open when MCP recall or capture tools fail", async () => {
+  it("fails open when Gateway recall or capture tools fail", async () => {
     const stateDir = await createStateDir();
     const tools = createTools({
       recall: vi.fn().mockRejectedValue(new Error("MCP recall failed")),
@@ -134,8 +142,8 @@ describe("handleCodexHook", () => {
 
     expect(recallOutput).toEqual({});
     expect(stopOutput).toEqual({});
-    expect(log).toHaveBeenCalledWith("MCP recall failed open: MCP recall failed");
-    expect(log).toHaveBeenCalledWith("MCP capture failed open: MCP capture failed");
+    expect(log).toHaveBeenCalledWith("Gateway recall failed open: MCP recall failed");
+    expect(log).toHaveBeenCalledWith("Gateway capture failed open: MCP capture failed");
   });
 
   it("does not call session end because Codex exposes no SessionEnd hook", async () => {

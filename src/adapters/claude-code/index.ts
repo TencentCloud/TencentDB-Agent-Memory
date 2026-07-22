@@ -1,3 +1,5 @@
+export { ClaudeCodePlatformAdapter } from "./adapter.js";
+export type { ClaudeCodeHookHandler, ClaudeCodePlatformAdapterOptions } from "./adapter.js";
 export { handleClaudeCodeHook } from "./hooks.js";
 export type {
   ClaudeCodeHookInput,

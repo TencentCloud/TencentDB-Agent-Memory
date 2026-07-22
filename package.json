@@ -22,6 +22,11 @@
     "./server": {
       "import": "./dist/opencode.mjs",
       "default": "./dist/opencode.mjs"
+    },
+    "./adapter-sdk": {
+      "types": "./src/adapters/sdk/index.ts",
+      "import": "./dist/adapter-sdk.mjs",
+      "default": "./dist/adapter-sdk.mjs"
     }
   },
   "scripts": {

@@ -1,3 +1,5 @@
+export { CodexPlatformAdapter } from "./adapter.js";
+export type { CodexHookHandler, CodexPlatformAdapterOptions } from "./adapter.js";
 export { handleCodexHook } from "./hooks.js";
 export type {
   CodexHookInput,

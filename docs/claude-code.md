@@ -1,6 +1,6 @@
 # Use TencentDB Agent Memory with Claude Code
 
-Claude Code uses the shared stdio MCP adapter for memory tools. Its lifecycle hooks call the same `MemoryTools` implementation for automatic recall, capture, and session flushing. Only the MCP adapter calls the existing Gateway.
+Claude Code uses two integrations backed by the same Gateway HTTP client. The stdio MCP server exposes model-facing tools, while lifecycle hooks call `MemoryTools` directly for deterministic automatic recall, capture, and session flushing. Hook traffic does not pass through the stdio MCP server.
 
 | Claude Code event | MCP operation | Behavior |
 |---|---|---|
@@ -61,10 +61,11 @@ The `memory_tencentdb` server exposes `tdai_memory_recall`, `tdai_memory_capture
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL. |
+| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL used by both lifecycle hooks and the MCP adapter. |
 | `TDAI_GATEWAY_API_KEY` | unset | Bearer token sent to the Gateway. |
-| `TDAI_USER_ID` | unset | Optional Gateway `user_id`. |
 | `TDAI_CLAUDE_CODE_STATE_DIR` | `~/.memory-tencentdb/claude-code-adapter` | Pending prompts and capture-deduplication markers shared by Hook processes. |
+
+One Gateway instance currently represents one memory namespace. User-level namespace isolation is not provided by these adapter environment variables.
 
 The state directory contains only pending prompts and short-lived markers. Prompts and successful capture markers expire after 24 hours. A claim left by a killed Hook can be recovered after at most 60 seconds.
 

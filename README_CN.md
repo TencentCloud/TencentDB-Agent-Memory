@@ -205,13 +205,13 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 ### Codex
 
-Codex 通过共享的 stdio MCP adapter 接入。原生 `UserPromptSubmit` 和 `Stop` Hook 复用同一套 MCP tool implementation 完成自动召回和捕获，只有 MCP adapter 会访问现有 Gateway。
+Codex 通过共享 Gateway HTTP client 提供两种接入：stdio MCP adapter 向模型暴露工具；原生 `UserPromptSubmit` 和 `Stop` Hook 则直接复用同一套 `MemoryTools` 实现自动召回和捕获。
 
 MCP、Hook、环境变量和故障降级配置请查看 [Codex 接入指南](docs/codex_CN.md)。
 
 ### Claude Code
 
-Claude Code 使用原生 `UserPromptSubmit`、`Stop` 和 `SessionEnd` Hook，并通过共享 stdio MCP adapter 自动完成召回、捕获和 session flush。
+Claude Code 使用原生 `UserPromptSubmit`、`Stop` 和 `SessionEnd` Hook 自动完成召回、捕获和 session flush。这些 Hook 直接调用共享 Gateway HTTP client；独立的 stdio MCP adapter 向模型暴露工具。
 
 Hook、MCP、环境变量与故障降级配置请查看 [Claude Code 接入指南](docs/claude-code_CN.md)。
 
@@ -222,6 +222,12 @@ OpenCode 使用原生 plugin 自动完成 recall、system context 注入、captu
 npm plugin 加载、MCP、环境变量和故障降级配置请查看 [OpenCode 接入指南](docs/opencode_CN.md)。
 
 三种平台在生命周期、配置入口和故障降级方面的差异请查看 [平台接入对比](docs/platform-comparison_CN.md)。
+
+### 接入其他平台
+
+当平台需要通过原生 Hook 或 Plugin 自动接入时，使用公开的生命周期 Adapter SDK。新平台只需实现一个 `PlatformAdapter` 接口，即可复用 Gateway-backed runtime 提供的 fail-open recall、capture 去重、会话队列和关闭等待。
+
+完整 TypeScript 示例以及 `PlatformAdapter`、`MemoryClient`、`HostAdapter` 与 MCP 的职责区别，请查看 [Adapter SDK 指南](docs/adapter-sdk_CN.md)。
 
 ### 2. Hermes
 

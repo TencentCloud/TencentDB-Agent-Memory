@@ -33,7 +33,6 @@ Gateway 默认监听 `http://127.0.0.1:8420`。如需非默认连接参数，在
 ```bash
 export TDAI_GATEWAY_URL="http://127.0.0.1:8420"
 export TDAI_GATEWAY_API_KEY="your-gateway-token"
-export TDAI_USER_ID="your-user-id"
 ```
 
 ## 配置 plugin 与 MCP server
@@ -45,7 +44,7 @@ export TDAI_USER_ID="your-user-id"
 
 `plugin` 配置加载 `@tencentdb-agent-memory/memory-tencentdb`，OpenCode 会通过该包的 `./server` export 找到 plugin 构建产物。`memory_tencentdb` MCP 配置使用 `npx --package` 解析并启动包内的 `memory-tencentdb-mcp` 命令，不依赖当前 shell 的 `PATH`。`./opencode` export 仍可供 Node 直接 import，但不应写入 OpenCode 的 `plugin` 数组。
 
-OpenCode 会把未设置的 `{env:VARIABLE}` 替换为空字符串。不使用的环境变量可以从配置中删除，尤其是 `TDAI_GATEWAY_API_KEY` 和 `TDAI_USER_ID`。
+OpenCode 会把未设置的 `{env:VARIABLE}` 替换为空字符串。不使用的环境变量可以从配置中删除，尤其是 `TDAI_GATEWAY_API_KEY`。
 
 检查 MCP 连接：
 
@@ -61,8 +60,9 @@ opencode mcp list
 |---|---|---|
 | `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway 地址。 |
 | `TDAI_GATEWAY_API_KEY` | 未设置 | 发给 Gateway 的 Bearer token。 |
-| `TDAI_USER_ID` | 未设置 | 可选 Gateway `user_id`。 |
 | `TDAI_OPENCODE_STATE_DIR` | `~/.memory-tencentdb/opencode-adapter` | recall、注入、错误门控和 capture 去重状态。 |
+
+当前一个 Gateway 实例对应一个记忆命名空间；这些 adapter 环境变量不提供用户级命名空间隔离。
 
 状态目录中的短期文件权限为 `0600`。pending 状态与成功 marker 在 24 小时后过期；进程异常停止遗留的 claim 最多 60 秒后可恢复。
 

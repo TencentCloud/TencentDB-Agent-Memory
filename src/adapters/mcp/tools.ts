@@ -1,36 +1,24 @@
 import { MemoryGatewayClient, type MemoryGatewayOptions } from "./gateway.js";
+import type {
+  CaptureRequest,
+  EndSessionRequest,
+  MemoryClient,
+  RecallRequest,
+  SearchConversationsRequest,
+  SearchMemoriesRequest,
+} from "../sdk/types.js";
 
-export interface RecallInput {
-  query: string;
-  sessionKey: string;
-}
+export interface RecallInput extends RecallRequest {}
 
-export interface CaptureInput {
-  userContent: string;
-  assistantContent: string;
-  sessionKey: string;
-  sessionId?: string;
-  messages?: unknown[];
-}
+export interface CaptureInput extends CaptureRequest {}
 
-export interface EndSessionInput {
-  sessionKey: string;
-}
+export interface EndSessionInput extends EndSessionRequest {}
 
-export interface SearchMemoriesInput {
-  query: string;
-  limit?: number;
-  type?: string;
-  scene?: string;
-}
+export interface SearchMemoriesInput extends SearchMemoriesRequest {}
 
-export interface SearchConversationsInput {
-  query: string;
-  limit?: number;
-  sessionKey?: string;
-}
+export interface SearchConversationsInput extends SearchConversationsRequest {}
 
-export function createMemoryTools(options: MemoryGatewayOptions = {}) {
+export function createMemoryTools(options: MemoryGatewayOptions = {}): MemoryClient {
   const gateway = new MemoryGatewayClient(options);
 
   return {
@@ -95,4 +83,4 @@ export function createMemoryTools(options: MemoryGatewayOptions = {}) {
   };
 }
 
-export type MemoryTools = ReturnType<typeof createMemoryTools>;
+export type MemoryTools = MemoryClient;

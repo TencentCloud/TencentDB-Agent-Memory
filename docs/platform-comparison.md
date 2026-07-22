@@ -2,6 +2,8 @@
 
 TencentDB Agent Memory uses the same Gateway and shared stdio MCP server across Codex, Claude Code, and OpenCode. The integration differs in the platform lifecycle surface: Codex and Claude Code use command hooks, while OpenCode also has a native plugin.
 
+All three lifecycle integrations implement the public `PlatformAdapter` contract. Platform-specific code extracts native events and message shapes, while the shared runtime provides Gateway access, fail-open behavior, operation deduplication, and shutdown coordination. See [Add a platform with the Adapter SDK](adapter-sdk.md) to build another integration.
+
 Use this guide to choose an integration model. For installation commands and platform-specific troubleshooting, use the linked integration guides.
 
 | Area                              | Codex                                           | Claude Code                                                | OpenCode                                               |
@@ -27,11 +29,11 @@ All integrations connect to the same Gateway, which listens on `http://127.0.0.1
 
 Automatic recall and capture are deterministic lifecycle actions. They do not depend on the model deciding to call an MCP tool. The search tools remain available when the model needs more historical detail.
 
-Each adapter accepts `TDAI_GATEWAY_URL`, `TDAI_GATEWAY_API_KEY`, and `TDAI_USER_ID`. Capture uses at-least-once delivery. A stable message ID lets downstream storage deduplicate a retry if the Gateway accepts a capture before the local success marker is written.
+Each adapter accepts `TDAI_GATEWAY_URL` and `TDAI_GATEWAY_API_KEY`. One Gateway instance currently represents one memory namespace; these variables do not provide user-level namespace isolation. Capture uses at-least-once delivery. A stable message ID lets downstream storage deduplicate a retry if the Gateway accepts a capture before the local success marker is written.
 
 ## Choose Codex for a minimal Hook-based setup
 
-Codex uses `UserPromptSubmit` to recall memory and `Stop` to capture the final turn. Both events run the Codex adapter through command hooks, and the adapter communicates with memory services through the shared MCP server.
+Codex uses `UserPromptSubmit` to recall memory and `Stop` to capture the final turn. Both events run the Codex adapter through command hooks, and the adapter calls the shared Gateway HTTP client directly. The separate MCP server remains available for model-initiated tools.
 
 Codex does not expose a `SessionEnd` hook. It therefore cannot automatically call `tdai_session_end` when a session ends. This is the main lifecycle gap compared with Claude Code and OpenCode.
 

@@ -2,6 +2,8 @@
 
 Codex、Claude Code 和 OpenCode 都使用同一个 Gateway 与共享 stdio MCP server 接入 TencentDB Agent Memory。三者的主要差异在于平台提供的生命周期能力：Codex 与 Claude Code 使用 command Hook，OpenCode 还提供原生 plugin。
 
+三个生命周期集成都实现公开的 `PlatformAdapter` 契约。平台代码只负责提取原生事件与消息结构，共享 runtime 负责 Gateway 访问、fail-open、操作去重和关闭协调。接入其他平台请查看[使用 Adapter SDK 接入新平台](adapter-sdk_CN.md)。
+
 本文用于帮助你选择接入方式。具体安装命令和各平台排障步骤请查看对应的接入指南。
 
 | 维度               | Codex                                | Claude Code                               | OpenCode                                          |
@@ -27,11 +29,11 @@ Codex、Claude Code 和 OpenCode 都使用同一个 Gateway 与共享 stdio MCP 
 
 自动 recall 和 capture 是确定性的生命周期动作，不依赖模型是否决定调用 MCP 工具。模型需要更多历史细节时，仍可主动调用 search 工具。
 
-每个 adapter 都支持 `TDAI_GATEWAY_URL`、`TDAI_GATEWAY_API_KEY` 与 `TDAI_USER_ID`。Capture 使用 at-least-once 投递语义：若 Gateway 已接受请求，但本地成功标记尚未写入就退出，后续重试会复用稳定 message ID，供下游存储去重。
+每个 adapter 都支持 `TDAI_GATEWAY_URL` 与 `TDAI_GATEWAY_API_KEY`。当前一个 Gateway 实例对应一个记忆命名空间；这些变量不提供用户级命名空间隔离。Capture 使用 at-least-once 投递语义：若 Gateway 已接受请求，但本地成功标记尚未写入就退出，后续重试会复用稳定 message ID，供下游存储去重。
 
 ## Codex：适合最小化的 Hook 接入
 
-Codex 在 `UserPromptSubmit` 时 recall，在 `Stop` 时 capture 最终 turn。两个事件都通过 command Hook 运行 Codex adapter，adapter 再通过共享 MCP server 与记忆服务通信。
+Codex 在 `UserPromptSubmit` 时 recall，在 `Stop` 时 capture 最终 turn。两个事件都通过 command Hook 运行 Codex adapter，并直接调用共享 Gateway HTTP client；独立 MCP server 仍用于模型主动调用工具。
 
 Codex 没有 `SessionEnd` Hook，因此 session 结束时无法自动调用 `tdai_session_end`。这是它相较 Claude Code 和 OpenCode 的主要生命周期差异。
 

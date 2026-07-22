@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, readFile, readdir, rm, utimes } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexSessionState, codexSessionKey } from "./session.js";
 
@@ -65,10 +65,25 @@ describe("CodexSessionState", () => {
 
     const [claimFile] = (await readdir(stateDir)).filter((file) => file.endsWith(".capture.claim"));
     const expiredAt = new Date(Date.now() - 2_000);
-    await utimes(path.join(stateDir, claimFile), expiredAt, expiredAt);
+    const claimPath = path.join(stateDir, claimFile);
+    await writeFile(claimPath, JSON.stringify({ pid: "invalid", claimedAt: expiredAt.getTime() }));
+    await utimes(claimPath, expiredAt, expiredAt);
 
     const secondProcess = new CodexSessionState(stateDir, { claimTtlMs: 1_000 });
     expect(await secondProcess.beginCapture("session-1", "turn-1")).toBe(true);
+  });
+
+  it("does not reclaim an expired capture claim while its owner process is alive", async () => {
+    const stateDir = await createStateDir();
+    const firstProcess = new CodexSessionState(stateDir, { claimTtlMs: 1_000 });
+    expect(await firstProcess.beginCapture("session-1", "turn-1")).toBe(true);
+
+    const [claimFile] = (await readdir(stateDir)).filter((file) => file.endsWith(".capture.claim"));
+    const expiredAt = new Date(Date.now() - 2_000);
+    await utimes(path.join(stateDir, claimFile), expiredAt, expiredAt);
+
+    const secondProcess = new CodexSessionState(stateDir, { claimTtlMs: 1_000 });
+    expect(await secondProcess.beginCapture("session-1", "turn-1")).toBe(false);
   });
 
   it("removes turn state older than the configured ttl", async () => {

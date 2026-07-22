@@ -69,6 +69,22 @@ describe("OpenCodeSessionState", () => {
     expect(await firstProcess.beginCapture("session-1", "user-1", "assistant-2")).toBe(true);
   });
 
+  it("does not reclaim expired claims while their owner process is alive", async () => {
+    const stateDir = await createStateDir();
+    const firstProcess = new OpenCodeSessionState(stateDir, { claimTtlMs: 1_000 });
+    const secondProcess = new OpenCodeSessionState(stateDir, { claimTtlMs: 1_000 });
+
+    expect(await firstProcess.beginRecall("session-1", "user-1")).toBe(true);
+    expect(await firstProcess.beginCapture("session-1", "user-1", "assistant-1")).toBe(true);
+    const expiredAt = new Date(Date.now() - 2_000);
+    await Promise.all((await readdir(stateDir))
+      .filter((file) => file.endsWith(".claim"))
+      .map((file) => utimes(path.join(stateDir, file), expiredAt, expiredAt)));
+
+    expect(await secondProcess.beginRecall("session-1", "user-1")).toBe(false);
+    expect(await secondProcess.beginCapture("session-1", "user-1", "assistant-1")).toBe(false);
+  });
+
   it("tracks session errors until a new user message clears the gate", async () => {
     const stateDir = await createStateDir();
     const state = new OpenCodeSessionState(stateDir);
@@ -127,6 +143,9 @@ describe("OpenCodeSessionState", () => {
 
     await state.cleanupExpiredState();
 
-    expect(await readdir(stateDir)).toEqual([]);
+    expect((await readdir(stateDir)).sort()).toEqual((await readdir(stateDir))
+      .filter((file) => file.endsWith(".claim"))
+      .sort());
+    expect((await readdir(stateDir)).filter((file) => file.endsWith(".capture.claim"))).toHaveLength(1);
   });
 });

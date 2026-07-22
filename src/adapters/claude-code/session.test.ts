@@ -65,10 +65,25 @@ describe("ClaudeCodeSessionState", () => {
 
     const [claimFile] = (await readdir(stateDir)).filter((file) => file.endsWith(".capture.claim"));
     const expiredAt = new Date(Date.now() - 2_000);
-    await utimes(path.join(stateDir, claimFile), expiredAt, expiredAt);
+    const claimPath = path.join(stateDir, claimFile);
+    await writeFile(claimPath, JSON.stringify({ pid: "invalid", claimedAt: expiredAt.getTime() }));
+    await utimes(claimPath, expiredAt, expiredAt);
 
     const secondProcess = new ClaudeCodeSessionState(stateDir, { claimTtlMs: 1_000 });
     expect(await secondProcess.beginCapture("session-1", "prompt-1")).toBe(true);
+  });
+
+  it("does not reclaim an expired capture claim while its owner process is alive", async () => {
+    const stateDir = await createStateDir();
+    const firstProcess = new ClaudeCodeSessionState(stateDir, { claimTtlMs: 1_000 });
+    expect(await firstProcess.beginCapture("session-1", "prompt-1")).toBe(true);
+
+    const [claimFile] = (await readdir(stateDir)).filter((file) => file.endsWith(".capture.claim"));
+    const expiredAt = new Date(Date.now() - 2_000);
+    await utimes(path.join(stateDir, claimFile), expiredAt, expiredAt);
+
+    const secondProcess = new ClaudeCodeSessionState(stateDir, { claimTtlMs: 1_000 });
+    expect(await secondProcess.beginCapture("session-1", "prompt-1")).toBe(false);
   });
 
   it("removes turn state older than the configured ttl", async () => {

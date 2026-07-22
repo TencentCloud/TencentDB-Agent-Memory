@@ -1,4 +1,7 @@
 import { createMemoryTools, type MemoryTools } from "../mcp/tools.js";
+import { ExternalAdapterOperationStore } from "../sdk/operation-store.js";
+import { createAdapterRuntime } from "../sdk/runtime.js";
+import type { AdapterRuntime, PlatformAdapter } from "../sdk/types.js";
 import { OpenCodeSessionState, opencodeSessionKey } from "./session.js";
 
 interface OpenCodeTextPart {
@@ -96,48 +99,42 @@ export type OpenCodePlugin = (
   options?: OpenCodePluginOptions,
 ) => Promise<OpenCodeHooks>;
 
+export class OpenCodePlatformAdapter implements PlatformAdapter<OpenCodeHooks> {
+  readonly platform = "opencode";
+
+  constructor(
+    private readonly input: OpenCodePluginInput,
+    private readonly options: OpenCodePluginOptions = {},
+  ) {}
+
+  create(runtime: AdapterRuntime): Promise<OpenCodeHooks> {
+    return createOpenCodeHooks(this.input, this.options, runtime);
+  }
+}
+
 export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) => {
-  const state = new OpenCodeSessionState(options.stateDir);
   const tools = options.tools ?? createMemoryTools();
   const log = options.log ?? ((message: string) => process.stderr.write(`[memory-tencentdb][opencode] ${message}\n`));
+  const runtime = createAdapterRuntime({
+    platform: "opencode",
+    client: tools,
+    operationStore: new ExternalAdapterOperationStore(),
+    log: (message) => log(message
+      .replace("[opencode] recall failed open:", "chat message failed open:")
+      .replace(/^\[opencode\] /, "")),
+  });
+  return new OpenCodePlatformAdapter(input, { ...options, tools, log }).create(runtime);
+};
+
+async function createOpenCodeHooks(
+  input: OpenCodePluginInput,
+  options: OpenCodePluginOptions,
+  runtime: AdapterRuntime,
+): Promise<OpenCodeHooks> {
+  const state = new OpenCodeSessionState(options.stateDir);
+  const log = options.log ?? ((message: string) => process.stderr.write(`[memory-tencentdb][opencode] ${message}\n`));
   const disposeTimeoutMs = options.disposeTimeoutMs ?? OPENCODE_PLUGIN_DISPOSE_TIMEOUT_MS;
-  const sessionQueues = new Map<string, Promise<void>>();
   let closing = false;
-
-  const enqueue = (sessionId: string, operation: () => Promise<void>): Promise<void> => {
-    if (closing) return Promise.resolve();
-    const previous = sessionQueues.get(sessionId) ?? Promise.resolve();
-    const next = previous.catch(() => undefined).then(operation);
-    sessionQueues.set(sessionId, next);
-    const cleanup = () => {
-      if (sessionQueues.get(sessionId) === next) sessionQueues.delete(sessionId);
-    };
-    void next.then(cleanup, cleanup);
-    return next;
-  };
-
-  const settleSessionQueues = async (timeoutMs: number): Promise<"settled" | "timeout"> => {
-    const pending = [...sessionQueues.values()];
-    if (pending.length === 0) return "settled";
-    // Fail-open on individual queue rejections so dispose still completes.
-    const allSettled = Promise.all(pending.map((p) => p.catch(() => undefined))).then(() => "settled" as const);
-    if (timeoutMs <= 0) {
-      await allSettled;
-      return "settled";
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        allSettled,
-        new Promise<"timeout">((resolve) => {
-          timer = setTimeout(() => resolve("timeout"), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-  };
 
   const releaseRecallFailOpen = async (sessionId: string, userMessageId: string) => {
     try {
@@ -160,7 +157,8 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
     if (!await state.beginCapture(sessionId, turn.user.info.id, turn.assistant.info.id)) return;
 
     try {
-      await tools.capture({
+      const result = await runtime.capture({
+        operationId: `${turn.user.info.id}\0${turn.assistant.info.id}`,
         userContent: turn.userContent,
         assistantContent: turn.assistantContent,
         sessionKey: opencodeSessionKey(sessionId),
@@ -178,7 +176,8 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
           },
         ],
       });
-      await state.markCaptured(sessionId, turn.user.info.id, turn.assistant.info.id);
+      if (result) await state.markCaptured(sessionId, turn.user.info.id, turn.assistant.info.id);
+      else await state.releaseCapture(sessionId, turn.user.info.id, turn.assistant.info.id);
     } catch (error) {
       await state.releaseCapture(sessionId, turn.user.info.id, turn.assistant.info.id);
       log(`capture failed open: ${errorMessage(error)}`);
@@ -192,14 +191,17 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
       const sessionId = hookInput.sessionID || output.message.sessionID;
       const userMessageId = hookInput.messageID || output.message.id;
       if (!sessionId || !userMessageId) return;
-      await enqueue(sessionId, async () => {
+      await runtime.runExclusive(sessionId, async () => {
         const query = extractVisibleText(output.parts);
         try {
           await state.clearSessionError(sessionId);
           if (!query || !await state.beginRecall(sessionId, userMessageId)) return;
-          const result = await tools.recall({ query, sessionKey: opencodeSessionKey(sessionId) });
-          const context = result.context.trim();
-          await state.saveRecall(sessionId, userMessageId, context);
+          const outcome = await runtime.recallOutcome({ query, sessionKey: opencodeSessionKey(sessionId) });
+          if (!outcome.ok) {
+            await releaseRecallFailOpen(sessionId, userMessageId);
+            return;
+          }
+          await state.saveRecall(sessionId, userMessageId, outcome.result?.context ?? "");
         } catch (error) {
           await releaseRecallFailOpen(sessionId, userMessageId);
           log(`chat message failed open: ${errorMessage(error)}`);
@@ -212,7 +214,7 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
       const user = output.messages.findLast((message) => message.info.role === "user");
       if (!user) return;
       try {
-        await enqueue(user.info.sessionID, () => state.setActiveRecall(user.info.sessionID, user.info.id));
+        await runtime.runExclusive(user.info.sessionID, () => state.setActiveRecall(user.info.sessionID, user.info.id));
       } catch (error) {
         log(`messages transform failed open: ${errorMessage(error)}`);
       }
@@ -222,9 +224,11 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
       if (closing) return;
       if (!hookInput.sessionID) return;
       try {
-        const recall = await state.consumeRecall(hookInput.sessionID);
-        if (!recall?.context.trim()) return;
-        output.system.push(`<relevant-memories>\n${recall.context.trim()}\n</relevant-memories>`);
+        await runtime.runExclusive(hookInput.sessionID, async () => {
+          const recall = await state.consumeRecall(hookInput.sessionID);
+          if (!recall?.context.trim()) return;
+          output.system.push(`<relevant-memories>\n${recall.context.trim()}\n</relevant-memories>`);
+        });
       } catch (error) {
         log(`system transform failed open: ${errorMessage(error)}`);
       }
@@ -238,7 +242,7 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
           log("session error without session id ignored");
           return;
         }
-        await enqueue(sessionId, async () => {
+        await runtime.runExclusive(sessionId, async () => {
           try {
             await state.markSessionError(sessionId);
           } catch (error) {
@@ -250,12 +254,19 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
 
       if (event.type === "session.deleted") {
         if (!sessionId) return;
-        await enqueue(sessionId, async () => {
+        await runtime.runExclusive(sessionId, async () => {
           try {
             if (!await state.beginSessionEnd(sessionId)) return;
-            await tools.endSession({ sessionKey: opencodeSessionKey(sessionId) });
-            await state.markSessionEnded(sessionId);
-            await state.clearSession(sessionId);
+            const result = await runtime.endSession({
+              operationId: sessionId,
+              sessionKey: opencodeSessionKey(sessionId),
+            });
+            if (result) {
+              await state.markSessionEnded(sessionId);
+              await state.clearSession(sessionId);
+            } else {
+              await state.releaseSessionEnd(sessionId);
+            }
           } catch (error) {
             try {
               await state.releaseSessionEnd(sessionId);
@@ -271,7 +282,7 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
       const isIdle = event.type === "session.idle"
         || (event.type === "session.status" && isIdleStatus(event.properties.status));
       if (!isIdle || !sessionId) return;
-      await enqueue(sessionId, async () => {
+      await runtime.runExclusive(sessionId, async () => {
         try {
           await captureIdleSession(sessionId);
         } catch (error) {
@@ -281,22 +292,11 @@ export const createOpenCodePlugin: OpenCodePlugin = async (input, options = {}) 
     },
 
     dispose: async () => {
-      if (closing) {
-        // Concurrent dispose: still wait for whatever is already in flight (with timeout).
-        const result = await settleSessionQueues(disposeTimeoutMs);
-        if (result === "timeout") {
-          log(`dispose timed out after ${disposeTimeoutMs}ms waiting for session queues`);
-        }
-        return;
-      }
       closing = true;
-      const result = await settleSessionQueues(disposeTimeoutMs);
-      if (result === "timeout") {
-        log(`dispose timed out after ${disposeTimeoutMs}ms waiting for session queues`);
-      }
+      await runtime.dispose(disposeTimeoutMs);
     },
   };
-};
+}
 
 export function extractVisibleText(parts: Array<OpenCodeTextPart | Record<string, unknown>>): string {
   return parts

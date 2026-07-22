@@ -16,8 +16,7 @@
       "enabled": true,
       "environment": {
         "TDAI_GATEWAY_URL": "{env:TDAI_GATEWAY_URL}",
-        "TDAI_GATEWAY_API_KEY": "{env:TDAI_GATEWAY_API_KEY}",
-        "TDAI_USER_ID": "{env:TDAI_USER_ID}"
+        "TDAI_GATEWAY_API_KEY": "{env:TDAI_GATEWAY_API_KEY}"
       }
     }
   }

@@ -1,6 +1,6 @@
 # 在 Claude Code 中使用 TencentDB Agent Memory
 
-Claude Code 通过共享 stdio MCP adapter 使用记忆工具。生命周期 Hook 会复用同一套 `MemoryTools` 完成自动召回、捕获和 session flush；只有 MCP adapter 会调用现有 Gateway。
+Claude Code 使用两种接入方式，底层复用同一个 Gateway HTTP client。stdio MCP server 向模型暴露工具；生命周期 Hook 则直接调用 `MemoryTools`，确定性执行自动 recall、capture 和 session flush。Hook 请求不会经过 stdio MCP server。
 
 | Claude Code 事件 | MCP 操作 | 行为 |
 |---|---|---|
@@ -61,10 +61,11 @@ claude mcp add --transport stdio --scope project memory_tencentdb -- \
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway 地址。 |
+| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | 生命周期 Hook 与 MCP adapter 共用的 Gateway 地址。 |
 | `TDAI_GATEWAY_API_KEY` | 未设置 | 发送给 Gateway 的 Bearer token。 |
-| `TDAI_USER_ID` | 未设置 | 可选 Gateway `user_id`。 |
 | `TDAI_CLAUDE_CODE_STATE_DIR` | `~/.memory-tencentdb/claude-code-adapter` | 在不同 Hook 进程间共享 pending prompt 和 capture 去重标记。 |
+
+当前一个 Gateway 实例对应一个记忆命名空间；这些 adapter 环境变量不提供用户级命名空间隔离。
 
 状态目录只保存 pending prompt 和短期标记。Prompt 与成功 capture 标记会在 24 小时后过期；被异常终止的 Hook 遗留的 claim 最多 60 秒后可恢复。
 

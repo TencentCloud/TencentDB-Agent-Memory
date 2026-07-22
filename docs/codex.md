@@ -1,6 +1,6 @@
 # Use TencentDB Agent Memory with Codex
 
-Codex connects through the shared MCP adapter. The MCP adapter is the only layer that calls the existing Gateway.
+Codex uses two integrations backed by the same Gateway HTTP client. The stdio MCP server exposes model-facing tools, while lifecycle hooks call `MemoryTools` directly for deterministic automatic recall and capture. Hook traffic does not pass through the stdio MCP server.
 
 | Codex event | MCP operation | Behavior |
 |---|---|---|
@@ -63,10 +63,11 @@ The adapters read these optional environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL used by the MCP adapter. |
-| `TDAI_GATEWAY_API_KEY` | unset | Bearer token sent by the MCP adapter. |
-| `TDAI_USER_ID` | unset | Optional Gateway `user_id`. |
+| `TDAI_GATEWAY_URL` | `http://127.0.0.1:8420` | Gateway base URL used by both lifecycle hooks and the MCP adapter. |
+| `TDAI_GATEWAY_API_KEY` | unset | Bearer token sent to the Gateway. |
 | `TDAI_CODEX_STATE_DIR` | `~/.memory-tencentdb/codex-adapter` | Prompt and capture-deduplication state shared between Hook processes. |
+
+One Gateway instance currently represents one memory namespace. User-level namespace isolation is not provided by these adapter environment variables.
 
 The adapter stores only pending prompts and short-lived deduplication markers in this directory. Stale prompts and successful capture markers are removed after 24 hours. A capture claim left behind by a timed-out or terminated Hook is recoverable after at most 60 seconds.
 
@@ -74,8 +75,8 @@ The adapter stores only pending prompts and short-lived deduplication markers in
 
 The Codex adapter is fail-open:
 
-- An MCP recall failure returns `{}` and lets Codex process the original prompt without memory context.
-- An MCP capture failure is written to stderr and does not prevent Codex from stopping.
+- A Gateway recall failure returns `{}` and lets Codex process the original prompt without memory context.
+- A Gateway capture failure is written to stderr and does not prevent Codex from stopping.
 - The prompt remains available after a failed capture, so a later repeated `Stop` event can retry it.
 - After capture succeeds, a local marker prevents the same `session_id` and `turn_id` from being captured again.
 - Capture delivery is at-least-once and depends on Codex emitting a later repeated `Stop` event; the adapter does not run a background retry loop.

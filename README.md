@@ -201,13 +201,13 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 ### Codex
 
-Codex connects through the shared stdio MCP adapter. Native `UserPromptSubmit` and `Stop` hooks reuse the same MCP tool implementation for automatic recall and capture; only the MCP adapter accesses the existing Gateway.
+Codex uses a shared Gateway HTTP client in two ways: the stdio MCP adapter exposes model-facing tools, while native `UserPromptSubmit` and `Stop` hooks call the same `MemoryTools` implementation directly for automatic recall and capture.
 
 See [the Codex integration guide](docs/codex.md) for MCP, Hook, environment variable, and failure-handling configuration.
 
 ### Claude Code
 
-Claude Code uses native `UserPromptSubmit`, `Stop`, and `SessionEnd` hooks with the shared stdio MCP adapter for automatic recall, capture, and session flushing.
+Claude Code uses native `UserPromptSubmit`, `Stop`, and `SessionEnd` hooks for automatic recall, capture, and session flushing. These hooks call the shared Gateway HTTP client directly; the separate stdio MCP adapter exposes model-facing tools.
 
 See [the Claude Code integration guide](docs/claude-code.md) for Hook and MCP configuration, environment variables, and failure handling.
 
@@ -218,6 +218,12 @@ OpenCode uses a native plugin for automatic recall, system-context injection, ca
 See [the OpenCode integration guide](docs/opencode.md) for npm plugin loading, MCP configuration, environment variables, and failure handling.
 
 For lifecycle, configuration, and reliability differences across the three platforms, see [the platform comparison guide](docs/platform-comparison.md).
+
+### Add another platform
+
+Use the public lifecycle Adapter SDK when a platform needs automatic integration through native hooks or a plugin. A new platform implements one `PlatformAdapter` interface and reuses the Gateway-backed runtime for fail-open recall, capture deduplication, session queues, and shutdown waiting.
+
+See [the Adapter SDK guide](docs/adapter-sdk.md) for a complete TypeScript example and the difference between `PlatformAdapter`, `MemoryClient`, `HostAdapter`, and MCP.
 
 ### 2. Hermes
 

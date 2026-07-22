@@ -4,7 +4,7 @@ args = [
 	"/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
 	"/absolute/path/to/TencentDB-Agent-Memory/src/adapters/mcp/stdio.ts"
 ]
-env_vars = ["TDAI_GATEWAY_URL", "TDAI_GATEWAY_API_KEY", "TDAI_USER_ID"]
+env_vars = ["TDAI_GATEWAY_URL", "TDAI_GATEWAY_API_KEY"]
 required = false
 startup_timeout_sec = 10
 tool_timeout_sec = 30

@@ -193,8 +193,13 @@ export class OpenCodeSessionState {
         const file = path.join(this.stateDir, entry.name);
         try {
           const metadata = await stat(file);
-          const ttl = entry.name.endsWith(".claim") ? this.claimTtlMs : this.stateTtlMs;
-          if (metadata.mtimeMs < now - ttl) await rm(file, { force: true });
+          if (entry.name.endsWith(".claim")) {
+            if (metadata.mtimeMs < now - this.claimTtlMs && await this.isClaimStale(file)) {
+              await rm(file, { force: true });
+            }
+          } else if (metadata.mtimeMs < now - this.stateTtlMs) {
+            await rm(file, { force: true });
+          }
         } catch (error) {
           if (!isMissingFile(error)) throw error;
         }
@@ -226,9 +231,9 @@ export class OpenCodeSessionState {
   private async isClaimStale(file: string): Promise<boolean> {
     try {
       const metadata = await stat(file);
-      if (metadata.mtimeMs < Date.now() - this.claimTtlMs) return true;
       const claim = JSON.parse(await readFile(file, "utf-8")) as { pid?: unknown };
-      return typeof claim.pid !== "number" || !isProcessRunning(claim.pid);
+      if (typeof claim.pid === "number" && isProcessRunning(claim.pid)) return false;
+      return metadata.mtimeMs < Date.now() - this.claimTtlMs;
     } catch (error) {
       return isMissingFile(error);
     }

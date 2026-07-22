@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryTools } from "../mcp/tools.js";
+import { ClaudeCodePlatformAdapter } from "./adapter.js";
 import { handleClaudeCodeHook } from "./hooks.js";
 
 const tempDirs: string[] = [];
@@ -30,7 +31,14 @@ afterEach(async () => {
 });
 
 describe("handleClaudeCodeHook", () => {
-  it("recalls through MCP tools and returns additionalContext", async () => {
+  it("exposes the Claude Code lifecycle through one platform adapter interface", () => {
+    const adapter = new ClaudeCodePlatformAdapter();
+
+    expect(adapter.platform).toBe("claude-code");
+    expect(typeof adapter.create).toBe("function");
+  });
+
+  it("recalls through Gateway tools and returns additionalContext", async () => {
     const stateDir = await createStateDir();
     const recall = vi.fn().mockResolvedValue({
       context: "User prefers concise answers.",
@@ -62,7 +70,7 @@ describe("handleClaudeCodeHook", () => {
     });
   });
 
-  it("captures the cached turn through MCP tools on Stop", async () => {
+  it("captures the cached turn through Gateway tools on Stop", async () => {
     const stateDir = await createStateDir();
     const capture = vi.fn().mockResolvedValue({ l0Recorded: 2, schedulerNotified: true });
     const tools = createTools({ capture });
@@ -313,7 +321,7 @@ describe("handleClaudeCodeHook", () => {
 
     expect(capture).toHaveBeenCalledTimes(2);
     expect(capture.mock.calls[1][0].messages).toEqual(capture.mock.calls[0][0].messages);
-    expect(log).toHaveBeenCalledWith("MCP capture failed open: temporary failure");
+    expect(log).toHaveBeenCalledWith("Gateway capture failed open: temporary failure");
   });
 
   it("fails open when recall or session end tools fail", async () => {
@@ -346,11 +354,11 @@ describe("handleClaudeCodeHook", () => {
 
     expect(recallOutput).toEqual({});
     expect(sessionEndOutput).toEqual({});
-    expect(log).toHaveBeenCalledWith("MCP recall failed open: MCP recall failed");
-    expect(log).toHaveBeenCalledWith("MCP session end failed open: MCP session end failed");
+    expect(log).toHaveBeenCalledWith("Gateway recall failed open: MCP recall failed");
+    expect(log).toHaveBeenCalledWith("Gateway session end failed open: MCP session end failed");
   });
 
-  it("flushes the session through MCP tools on SessionEnd", async () => {
+  it("flushes the session through Gateway tools on SessionEnd", async () => {
     const stateDir = await createStateDir();
     const endSession = vi.fn().mockResolvedValue({ flushed: true });
     const tools = createTools({ endSession });

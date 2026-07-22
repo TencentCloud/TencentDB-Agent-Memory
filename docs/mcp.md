@@ -12,7 +12,7 @@
 | `tdai_memory_search` | `POST /search/memories` | Read-only |
 | `tdai_conversation_search` | `POST /search/conversations` | Read-only |
 
-The MCP adapter uses `TDAI_GATEWAY_URL`, `TDAI_GATEWAY_API_KEY`, and `TDAI_USER_ID`. Start it with:
+The MCP adapter uses `TDAI_GATEWAY_URL` and `TDAI_GATEWAY_API_KEY`. Start it with:
 
 ```bash
 node node_modules/tsx/dist/cli.mjs src/adapters/mcp/stdio.ts

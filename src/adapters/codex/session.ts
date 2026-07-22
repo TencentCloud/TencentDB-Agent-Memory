@@ -133,8 +133,13 @@ export class CodexSessionState {
       .map(async (entry) => {
         const file = path.join(this.stateDir, entry.name);
         const metadata = await stat(file);
-        const ttl = entry.name.endsWith(".capture.claim") ? this.claimTtlMs : this.stateTtlMs;
-        if (metadata.mtimeMs < now - ttl) await rm(file, { force: true });
+        if (entry.name.endsWith(".capture.claim")) {
+          if (metadata.mtimeMs < now - this.claimTtlMs && await this.isClaimStale(file)) {
+            await rm(file, { force: true });
+          }
+        } else if (metadata.mtimeMs < now - this.stateTtlMs) {
+          await rm(file, { force: true });
+        }
       }));
   }
 
@@ -153,9 +158,9 @@ export class CodexSessionState {
   private async isClaimStale(claimPath: string): Promise<boolean> {
     try {
       const metadata = await stat(claimPath);
-      if (metadata.mtimeMs < Date.now() - this.claimTtlMs) return true;
       const claim = JSON.parse(await readFile(claimPath, "utf-8")) as { pid?: unknown };
-      return typeof claim.pid !== "number" || !isProcessRunning(claim.pid);
+      if (typeof claim.pid === "number" && isProcessRunning(claim.pid)) return false;
+      return metadata.mtimeMs < Date.now() - this.claimTtlMs;
     } catch (error) {
       if (isMissingFile(error)) return true;
       return false;

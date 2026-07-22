@@ -3,7 +3,7 @@ import path from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MemoryTools } from "../mcp/tools.js";
-import { createOpenCodePlugin } from "./plugin.js";
+import { createOpenCodePlugin, OpenCodePlatformAdapter } from "./plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -68,6 +68,16 @@ afterEach(async () => {
 });
 
 describe("createOpenCodePlugin", () => {
+  it("exposes the OpenCode lifecycle through one platform adapter interface", () => {
+    const adapter = new OpenCodePlatformAdapter({
+      client: { session: { messages: vi.fn() } },
+      directory: "/workspace/project",
+    });
+
+    expect(adapter.platform).toBe("opencode");
+    expect(typeof adapter.create).toBe("function");
+  });
+
   it("recalls visible user text and injects it once into the matching session", async () => {
     const stateDir = await createStateDir();
     const recall = vi.fn().mockResolvedValue({
@@ -194,6 +204,45 @@ describe("createOpenCodePlugin", () => {
 
     expect(outputs.flatMap((output) => output.system)).toEqual([
       "<relevant-memories>\nConcurrent context\n</relevant-memories>",
+    ]);
+  });
+
+  it("serializes active recall selection before system injection", async () => {
+    const stateDir = await createStateDir();
+    const plugin = await createOpenCodePlugin(
+      { client: createClient(), directory: "/workspace/project" },
+      {
+        stateDir,
+        tools: createTools({
+          recall: vi.fn().mockResolvedValue({
+            context: "Serialized context",
+            strategy: "hybrid",
+            memoryCount: 1,
+          }),
+        }),
+      },
+    );
+
+    await plugin["chat.message"]?.(
+      { sessionID: "session-1", messageID: "user-1" },
+      {
+        message: { id: "user-1", sessionID: "session-1", role: "user" },
+        parts: [{ type: "text", text: "Question" }],
+      },
+    );
+
+    const messagesTransform = plugin["experimental.chat.messages.transform"]?.({}, {
+      messages: [userMessage("user-1", "Question")],
+    });
+    const output = { system: [] as string[] };
+    const systemTransform = plugin["experimental.chat.system.transform"]?.(
+      { sessionID: "session-1", model: {} },
+      output,
+    );
+    await Promise.all([messagesTransform, systemTransform]);
+
+    expect(output.system).toEqual([
+      "<relevant-memories>\nSerialized context\n</relevant-memories>",
     ]);
   });
 

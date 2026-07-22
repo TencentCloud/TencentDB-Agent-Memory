@@ -66,11 +66,11 @@ describe("createMemoryTools", () => {
     });
   });
 
-  it("adds auth and user identity to Gateway requests", async () => {
+  it("adds auth without implying unsupported user isolation", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ context: "" }), { status: 200 }),
     );
-    const tools = createMemoryTools({ fetch: fetchMock, apiKey: "secret", userId: "user-1" });
+    const tools = createMemoryTools({ fetch: fetchMock, apiKey: "secret" });
 
     await tools.recall({ query: "anything", sessionKey: "codex:session-1" });
 
@@ -81,7 +81,6 @@ describe("createMemoryTools", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
       query: "anything",
       session_key: "codex:session-1",
-      user_id: "user-1",
     });
   });
 

@@ -12,7 +12,7 @@
 | `tdai_memory_search` | `POST /search/memories` | 只读 |
 | `tdai_conversation_search` | `POST /search/conversations` | 只读 |
 
-MCP adapter 使用 `TDAI_GATEWAY_URL`、`TDAI_GATEWAY_API_KEY` 和 `TDAI_USER_ID`。启动命令为：
+MCP adapter 使用 `TDAI_GATEWAY_URL` 和 `TDAI_GATEWAY_API_KEY`。启动命令为：
 
 ```bash
 node node_modules/tsx/dist/cli.mjs src/adapters/mcp/stdio.ts

@@ -15,6 +15,7 @@ export default defineConfig({
     index: "./index.ts",
     mcp: "./src/adapters/mcp/stdio.ts",
     opencode: "./src/adapters/opencode/index.ts",
+    "adapter-sdk": "./src/adapters/sdk/index.ts",
   },
   outDir: "./dist",
   format: "esm",

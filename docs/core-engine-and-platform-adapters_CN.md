@@ -101,6 +101,8 @@ flowchart LR
 
 [`TdaiCore`](../src/core/tdai-core.ts) 是平台无关的统一门面。平台适配层主要调用以下方法：
 
+公开的生命周期 Adapter SDK 位于 Gateway client 之上，与 Core 使用的 `HostAdapter` 不同。`PlatformAdapter` 将原生 Hook 映射为 recall、capture 和 session-end；`HostAdapter` 则在进程内运行 `TdaiCore` 时提供宿主能力。公共契约请查看 [Adapter SDK 指南](adapter-sdk_CN.md)。
+
 | 核心方法 | 作用 | OpenClaw 映射 | Hermes/Gateway 映射 |
 | --- | --- | --- | --- |
 | `initialize()` | 初始化目录、存储和 L0→L3 调度器 | 插件注册时调用 | Gateway 启动时调用 |
