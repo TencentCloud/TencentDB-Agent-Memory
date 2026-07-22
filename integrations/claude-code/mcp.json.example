@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "memory_tencentdb": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/absolute/path/to/TencentDB-Agent-Memory/node_modules/tsx/dist/cli.mjs",
+        "/absolute/path/to/TencentDB-Agent-Memory/src/adapters/mcp/stdio.ts"
+      ]
+    }
+  }
+}
