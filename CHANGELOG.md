@@ -20,6 +20,11 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **Checkpoint 计数器启动校准** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：Gateway 在首次 capture 前使用实时存储的 L0/L1 行数修正只增不减的 `l0_conversations_count` 与 `total_memories_extracted`，使 cleaner 或人工清理后的统计恢复准确。校准与 capture/L1 更新共用 checkpoint 文件锁；strict 计数可区分合法空库与读取故障，故障或无效计数不会覆盖已有统计。
+  - L0 增量改为按实际写入的 `messageCount` 累加，与数据库行数保持同一口径；降级存储不会触发校准，append-only 的 L1 JSONL 也不会被误作实时记录数。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：

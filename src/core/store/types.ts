@@ -232,6 +232,15 @@ export interface ProfileSyncRecord extends ProfileRecord {
  */
 export type MaybePromise<T> = T | Promise<T>;
 
+/** Controls whether count operations preserve their legacy fault-tolerant fallback. */
+export interface CountOptions {
+  /**
+   * Throw when the count cannot be read instead of returning zero.
+   * Use this when zero and an unavailable store must be distinguished.
+   */
+  strict?: boolean;
+}
+
 export interface IMemoryStore {
   // ── Capabilities ───────────────────────────────────────────
 
@@ -260,7 +269,7 @@ export interface IMemoryStore {
 
   // ── L1 Read ──────────────────────────────────────────────
 
-  countL1(): MaybePromise<number>;
+  countL1(options?: CountOptions): MaybePromise<number>;
   queryL1Records(filter?: L1QueryFilter): MaybePromise<L1RecordRow[]>;
   getAllL1Texts(): MaybePromise<Array<{ record_id: string; content: string; updated_time: string }>>;
 
@@ -285,7 +294,7 @@ export interface IMemoryStore {
 
   // ── L0 Read ──────────────────────────────────────────────
 
-  countL0(): MaybePromise<number>;
+  countL0(options?: CountOptions): MaybePromise<number>;
   queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
   queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
   getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;
