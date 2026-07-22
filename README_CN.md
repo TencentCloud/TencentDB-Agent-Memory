@@ -24,7 +24,9 @@
 
 > **最新：** Team Memory Beta 版本正在快速迭代，简单安装就能玩。
 
-<video src="assets/videos/memoryhub_demo.cn.mov" width="100%" controls autoplay loop muted playsinline></video>
+<td>
+   <video src="https://github.com/user-attachments/assets/c671134a-0051-42bf-8d1f-d96c37656e63" width="100%" controls autoplay loop muted playsinline></video>
+</td>
 
 
 # 安装
