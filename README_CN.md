@@ -537,6 +537,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [`docs/trae-adapter.md`](./docs/trae-adapter.md) | Trae 平台适配器安装与配置指南 |
+| [`docs/platform-adapters-comparison.md`](./docs/platform-adapters-comparison.md) | 6 个 Agent 平台对比 (OpenClaw/Hermes/Codex/Claude Code/Dify/Trae) |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
