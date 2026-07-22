@@ -174,6 +174,34 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+// FTS5 operators are case-sensitive. Match only standalone uppercase words so
+// ordinary prose and terms such as "android", "notebook", and "nearby" keep
+// their existing recall behavior.
+const FTS5_OPERATOR_PATTERN =
+  /(?<![\p{L}\p{N}_])(?:AND|OR|NOT|NEAR)(?![\p{L}\p{N}_])/gu;
+
+/** Remove standalone raw FTS5 operators before tokenization. */
+export function sanitizeFts5Input(raw: string): string {
+  return raw.replace(FTS5_OPERATOR_PATTERN, " ");
+}
+
+function sanitizeFts5Token(token: string): string | null {
+  const trimmed = token.trim();
+  if (!trimmed || !/[\p{L}\p{N}]/u.test(trimmed)) return null;
+
+  // Defense in depth: a custom tokenizer must not reintroduce an operator
+  // removed from the raw query.
+  if (FTS5_RESERVED_OPERATORS.has(trimmed)) return null;
+  return trimmed;
+}
+
+function quoteFts5Phrase(token: string): string {
+  // FTS5 quoted strings escape embedded quotes by doubling them.
+  return `"${token.replaceAll('"', '""')}"`;
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -183,6 +211,10 @@ const ZH_STOP_WORDS = new Set([
  *
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
+ *
+ * Standalone uppercase FTS5 operators are removed before tokenization. Every
+ * remaining token is emitted as an escaped quoted phrase, preventing tokenizer
+ * output from crossing the literal boundary and changing MATCH semantics.
  *
  * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
  * matching *any* token is returned.  BM25 naturally ranks documents that
@@ -196,6 +228,7 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  const cleaned = sanitizeFts5Input(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,29 +236,24 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
+      .cutForSearch(cleaned, true)
+      .map(sanitizeFts5Token)
+      .filter((t): t is string => t !== null)
+      // Remove common Chinese stop-words to reduce noise
+      .filter((t) => !ZH_STOP_WORDS.has(t));
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        ?.map(sanitizeFts5Token)
+        .filter((t): t is string => t !== null) ?? [];
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(quoteFts5Phrase);
   return quoted.join(" OR ");
 }
 
