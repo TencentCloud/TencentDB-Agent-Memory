@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **FTS5 查询语义防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：`buildFtsQuery()` 现在会在分词前移除独立的全大写 FTS5 布尔/邻近运算符，并将所有剩余 token 严格转义为短语字面量，防止用户输入或异常 tokenizer 输出改变 `MATCH` 查询语义，同时保留小写自然语言及 `android`、`notebook`、`nearby` 等正常关键词的召回。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
