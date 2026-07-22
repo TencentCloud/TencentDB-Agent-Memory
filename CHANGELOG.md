@@ -19,6 +19,12 @@
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
+- **提示词缓存友好性：`recall.injectionMode` + `recall.showInjected`** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：为召回注入增加显式的缓存控制，默认行为完全向后兼容。
+  - 新增 `recall.injectionMode`（默认 `"prepend"`，旧行为）：`"append"` 模式经宿主 `appendContext` 把动态 L1 召回放到用户消息之后，使用户消息前缀跨轮稳定，利于 DeepSeek / MiMo 等 prefix-matching 缓存（依赖宿主支持 `appendContext` 字段）。
+  - 新增 `recall.showInjected`（默认 `false`，即现有行为）：`before_message_write` 在持久化前剥离 `<relevant-memories>`，防止召回内容冻结进历史导致膨胀；`true` 可 opt-in 保留以供审计（会膨胀历史、不利缓存）。
+  - 新增轻量前缀诊断：每轮 `before_prompt_build` 日志输出稳定块哈希与动态注入位置（`stable=Nchars(hash=…)`、`dynamic=prepend|append/Nchars`），便于运维验证前缀稳定性与 `injectionMode` 效果，不改变注入行为。
+  - 结构：剥离逻辑放宿主无关的 `src/utils/relevant-memories.ts`；注入位置路由放 OpenClaw 适配器 `src/adapters/openclaw/recall-injection.ts`；诊断放 `src/utils/recall-shape-diagnostics.ts`。
+  - 说明：#120 报告的主要命中率退化经更正确认根因在宿主（OpenClaw webchat）侧；本仓库侧仅提供可控的注入位置与历史剥离开关。稳定系统提示块（persona / 场景导航）在源文件不变时本就跨轮字节稳定（`generateSceneNavigation` 为确定性函数，`heat` 仅在 L2 提取时更新），无需额外冻结。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
