@@ -100,12 +100,31 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /**
+   * Best-effort count of retained L0 message records.
+   *
+   * Capture updates this optimistically.  Destructive operations must call
+   * `recalculateRecordCounts()` with counts from the authoritative store so
+   * this value does not drift from the records that are still available.
+   */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /**
+   * Best-effort count of retained L1 memory records.
+   *
+   * L1 extraction updates this optimistically.  Merge/delete/cleanup paths
+   * reconcile it through `recalculateRecordCounts()`.
+   */
   total_memories_extracted: number;
+}
+
+/** Current record inventory obtained from the active storage backend. */
+export interface CheckpointRecordCounts {
+  /** Number of retained L0 conversation message records. */
+  l0Conversations: number;
+  /** Number of retained L1 memory records. */
+  l1Memories: number;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -179,10 +198,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -431,6 +452,73 @@ export class CheckpointManager {
     );
   }
 
+  /**
+   * Reconcile aggregate L0/L1 record counts with an authoritative store.
+   *
+   * The checkpoint does not own the JSONL/SQLite/TCVDB data, so it cannot
+   * safely infer counts after files or rows are deleted elsewhere.  Callers
+   * that perform destructive work must obtain the remaining inventory from
+   * their source of truth and pass it here.  Updating both values in one
+   * locked mutation prevents readers from observing a half-reconciled state.
+   *
+   * This deliberately does not change progress cursors (`last_l1_cursor`,
+   * `last_captured_timestamp`) or persona scheduling counters.  Those carry
+   * different semantics: a data rollback that needs records reprocessed must
+   * explicitly reset the affected session with `resetSessionProgress()`.
+   */
+  async recalculateRecordCounts(counts: CheckpointRecordCounts): Promise<void> {
+    const l0Conversations = validateRecordCount(counts.l0Conversations, "l0Conversations");
+    const l1Memories = validateRecordCount(counts.l1Memories, "l1Memories");
+
+    await this.mutate((cp) => {
+      cp.l0_conversations_count = l0Conversations;
+      cp.total_memories_extracted = l1Memories;
+    });
+    this.logger.info(
+      `[checkpoint] recalculateRecordCounts: ` +
+      `l0_conversations_count=${l0Conversations}, total_memories_extracted=${l1Memories}`,
+    );
+  }
+
+  /**
+   * Recalculate retained-record counts from the local JSONL fallback stores.
+   *
+   * This is intended for manual JSONL edits when no SQLite/TCVDB inventory is
+   * available to query.  A vector-store deployment should instead pass its
+   * database counts to `recalculateRecordCounts()`, because the database is
+   * the active retrieval source of truth in that mode.
+   */
+  async recalculateLocalRecordCounts(): Promise<CheckpointRecordCounts> {
+    const [l0Conversations, l1Memories] = await Promise.all([
+      countLocalJsonRecords(path.join(this.dataDir, "conversations")),
+      countLocalJsonRecords(path.join(this.dataDir, "records")),
+    ]);
+    const counts = { l0Conversations, l1Memories };
+    await this.recalculateRecordCounts(counts);
+    return counts;
+  }
+
+  /**
+   * Forget persisted progress for one session.
+   *
+   * Use after intentionally replacing, rolling back, or manually pruning a
+   * session's L0 data when the next L1 run must inspect that data from the
+   * beginning.  This removes both runner-owned cursors and persisted pipeline
+   * scheduling state; it leaves global aggregate counters untouched because
+   * callers must reconcile those from storage separately.
+   */
+  async resetSessionProgress(sessionKey: string): Promise<void> {
+    if (!sessionKey) {
+      throw new Error("sessionKey must not be empty when resetting checkpoint progress");
+    }
+
+    await this.mutate((cp) => {
+      delete cp.runner_states?.[sessionKey];
+      delete cp.pipeline_states?.[sessionKey];
+    });
+    this.logger.info(`[checkpoint] resetSessionProgress: session=${sessionKey}`);
+  }
+
   // ============================
   // Atomic capture (race-condition fix)
   // ============================
@@ -479,10 +567,54 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Count retained L0 message records, not capture batches. This is
+        // reconciled after destructive operations such as retention cleanup.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }
 
+}
+
+function validateRecordCount(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative safe integer, got ${value}`);
+  }
+  return value;
+}
+
+/** Count valid records visible to the local fallback readers. */
+async function countLocalJsonRecords(dirPath: string): Promise<number> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  for (const entry of entries) {
+    // Keep this in sync with l0-recorder.ts and l1-reader.ts: only dated
+    // JSONL shards participate in fallback retrieval. Counting arbitrary
+    // metadata or backup JSON files would reintroduce counter drift.
+    if (!entry.isFile() || !/^\d{4}-\d{2}-\d{2}\.jsonl$/.test(entry.name)) continue;
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        JSON.parse(line);
+        count += 1;
+      } catch {
+        // The JSONL readers skip malformed lines, so reconciliation does too.
+      }
+    }
+  }
+  return count;
 }

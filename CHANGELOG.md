@@ -20,6 +20,14 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **Checkpoint 记录计数在数据清理后永久漂移**：`memory-cleaner` 现在会在清理完成后，从 SQLite/TCVDB 的剩余记录数（或本地 JSONL fallback 分片）重新统计 L0/L1 存量并原子写回 checkpoint，避免 `l0_conversations_count` 和 `total_memories_extracted` 长期高估。新增 `CheckpointManager.recalculateRecordCounts()`、`recalculateLocalRecordCounts()` 与 `resetSessionProgress()`：手动修剪 JSONL 时可重算存量；有意回滚某个 session、需要重新进入 L1 流程时可清除其时间 cursor 和管线状态。不会回退正常 retention cleanup 的 cursor，避免重复处理已消费的历史数据。
+
+### 🧪 测试 / 内部
+
+- 新增 `src/utils/checkpoint.test.ts` 与 `src/utils/memory-cleaner.test.ts`，覆盖 L0 消息计数、权威存量重算、手动 JSONL 修剪、指定 session 回滚，以及 VectorStore 清理后的 checkpoint 对账。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
