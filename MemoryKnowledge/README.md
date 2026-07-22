@@ -32,7 +32,7 @@ MemoryKnowledge/
 │   │   └── code/           # CodeGraph bridge
 │   ├── store/              # SQLite（Drizzle）+ 构建队列 + llm_binding
 │   ├── source-fetcher/     # Git 拉取
-│   ├── mcp/                # MCP stdio（转发到本机 HTTP API）
+│   ├── mcp/                # MCP stdio + streamable-HTTP（转发到本机 HTTP API）
 │   ├── db/                 # schema / client
 │   └── middleware/
 ├── docs/                   # 设计与 API 细节
@@ -93,6 +93,49 @@ pnpm dev:mcp      # MCP stdio（另开终端；需 HTTP 已起）
 pnpm typecheck
 pnpm test
 pnpm build        # tsdown → dist/
+```
+
+## MCP 接入
+
+Knowledge Service 提供两种 MCP 接入方式，暴露相同的 12 个只读查询工具（Wiki 4 + CodeGraph 8）：
+
+### stdio（本地进程）
+
+```bash
+pnpm dev:mcp
+# Agent 配置 command: node dist/mcp/server.js
+```
+
+### Streamable-HTTP（远程网络接入）
+
+KS 启动后自动在 `/mcp` 挂载标准 MCP streamable-HTTP 端点，远程 Agent 直接用 URL 接入：
+
+```
+https://<host>:<port>/mcp
+```
+
+**启用鉴权（生产环境必填）：**
+
+```dotenv
+KNOWLEDGE_MCP_AUTH_TOKEN=your-secret-token
+```
+
+设置后所有 MCP 请求必须携带 `Authorization: Bearer your-secret-token`。  
+留空（默认）则不鉴权，仅适合本地开发。
+
+**Agent 配置示例（标准 mcpServers 格式）：**
+
+```json
+{
+  "mcpServers": {
+    "agent-memory-knowledge": {
+      "url": "https://agent-memory.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}
 ```
 
 ## 可选：Langfuse

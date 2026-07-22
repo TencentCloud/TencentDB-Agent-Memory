@@ -55,6 +55,12 @@ export interface ServiceConfig {
   publicBaseUrl: string;
   /** TMC callback URL for status notifications (empty = no callback). */
   tmcCallbackUrl: string;
+  /**
+   * Bearer token required on MCP streamable-HTTP requests (/mcp).
+   * Empty string (default) disables auth — suitable for local/dev use only.
+   * Set KNOWLEDGE_MCP_AUTH_TOKEN to enable.
+   */
+  mcpAuthToken: string;
 }
 
 function env(key: string, fallback: string): string {
@@ -81,6 +87,7 @@ export function loadConfig(): ServiceConfig {
     apiPrefix: env("API_PREFIX", "/v3"),
     publicBaseUrl: env("KNOWLEDGE_PUBLIC_BASE_URL", ""),
     tmcCallbackUrl: env("TMC_CALLBACK_URL", ""),
+    mcpAuthToken: env("KNOWLEDGE_MCP_AUTH_TOKEN", ""),
     llm: {
       mode: env("LLM_MODE", "proxy") === "custom" ? "custom" : "proxy",
       protocol: env("LLM_PROTOCOL", "openai") === "anthropic" ? "anthropic" : "openai",
