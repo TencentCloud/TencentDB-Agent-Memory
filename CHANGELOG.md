@@ -25,6 +25,7 @@
 - **checkpoint 计数器只增不减，清理后与真实数据长期漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：`l0_conversations_count` 与 `total_memories_extracted` 此前只在采集/抽取时递增；memory-cleaner 删除过期 L0/L1 后从不回写，导致计数持续高估，并可能让依赖 `memories_since_last_persona` 的画像阈值提前触发。
   - 新增 `CheckpointManager.recalibrate(source?)`：以在线存储（`countL0()` / `countL1()`）为准回填；无存储时回退统计 `conversations/`、`records/` 日分片非空行数。写入走同一把 per-file 锁，幂等，并对 NaN/负数钳制。
   - **画像间隔钳制**：L1 缩水时同步按 delta 下调 `memories_since_last_persona`，并限制其不超过新的 L1 总量，避免清理后误触发 persona。
+  - 新增 `CheckpointManager.resetSession(sessionKey, source?)`：清除单个 session 的 `runner_states` / `pipeline_states` 后立刻 recalibrate，覆盖「删测试 pipeline 状态 / session 重置」漂移路径。
   - **调用时机**：Gateway 启动恢复 pipeline 状态前一次；每轮 cleaner 清理结束后一次；两处均为非致命。
 
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）

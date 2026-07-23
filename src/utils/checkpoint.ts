@@ -620,6 +620,30 @@ export class CheckpointManager {
   }
 
   /**
+   * Drop per-session runner/pipeline state for one session, then recalibrate
+   * global counters against remaining data.
+   *
+   * Use after wiping a session's L0/L1 records (test teardown, `/reset`, or
+   * manual JSONL pruning for a single sessionKey). Without this, deleting
+   * `pipeline_states[session]` leaves global totals inflated — the exact
+   * drift path described in #157.
+   *
+   * @param sessionKey Session to clear from `runner_states` / `pipeline_states`
+   * @param source Optional live store; omit for JSONL fallback
+   */
+  async resetSession(
+    sessionKey: string,
+    source?: RecalibrationSource,
+  ): Promise<RecalibrateResult> {
+    await this.mutate((cp) => {
+      if (cp.runner_states) delete cp.runner_states[sessionKey];
+      if (cp.pipeline_states) delete cp.pipeline_states[sessionKey];
+    });
+    this.logger.info(`[checkpoint] resetSession: cleared state for session=${sessionKey}`);
+    return this.recalibrate(source);
+  }
+
+  /**
    * Count non-empty lines across daily `YYYY-MM-DD.jsonl|.json` shards in a
    * subdirectory of the plugin data dir. Used as the degraded-mode fallback
    * when no live store is available.
