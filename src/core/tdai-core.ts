@@ -410,6 +410,22 @@ export class TdaiCore {
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
+
+      // Auto-reindex when embedding config changed (provider/model/dimensions)
+      if (stores.needsReindex && this.vectorStore && this.embeddingService) {
+        this.logger.info(
+          `${TAG} Reindex triggered: ${stores.reindexReason ?? "config changed"}. Re-embedding all records...`,
+        );
+        const embedFn = (text: string) => this.embeddingService!.embed(text);
+        const reindexResult = await this.vectorStore.reindexAll(embedFn, (done, total, layer) => {
+          if (done % 20 === 0 || done === total) {
+            this.logger.debug?.(`${TAG} Reindex progress: ${layer} ${done}/${total}`);
+          }
+        });
+        this.logger.info(
+          `${TAG} Reindex complete: L1=${reindexResult.l1Count}, L0=${reindexResult.l0Count}`,
+        );
+      }
     } catch (err) {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
