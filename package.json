@@ -13,6 +13,10 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./opencode": {
+      "import": "./opencode.plugin.ts",
+      "default": "./opencode.plugin.ts"
     }
   },
   "scripts": {
@@ -35,6 +39,7 @@
     "dist/",
     "bin/",
     "index.ts",
+    "opencode.plugin.ts",
     "scripts/migrate-sqlite-to-tcvdb/dist/",
     "scripts/export-tencent-vdb/dist/",
     "scripts/read-local-memory/dist/",
@@ -89,10 +94,14 @@
     "opik": "^1.0.0"
   },
   "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.4",
     "node-llama-cpp": "^3.16.2",
     "openclaw": ">=2026.3.7"
   },
   "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
     "openclaw": {
       "optional": true
     },
