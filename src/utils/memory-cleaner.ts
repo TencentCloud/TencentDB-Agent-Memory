@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
+import { CheckpointManager } from "./checkpoint.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
@@ -105,6 +106,16 @@ export class LocalMemoryCleaner {
       total.deleteFailedFiles += stats.deleteFailedFiles;
     }
 
+    const checkpointManager = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+
+    const readFallbackCounts = async (): Promise<{ l0: number; l1: number }> => {
+      const [fallbackL0, fallbackL1] = await Promise.all([
+        countRecordsInDirectory(path.join(this.opts.baseDir, L0_DIR_NAME)),
+        countRecordsInDirectory(path.join(this.opts.baseDir, L1_DIR_NAME)),
+      ]);
+      return { l0: fallbackL0, l1: fallbackL1 };
+    };
+
     if (this.vectorStore) {
       const vectorStore = this.vectorStore;
       const cutoffIso = new Date(cutoffMs).toISOString();
@@ -113,8 +124,16 @@ export class LocalMemoryCleaner {
       // ── Pre-delete: count totals and decide whether to proceed ──
       let totalL0 = 0;
       let totalL1 = 0;
-      try { totalL0 = await vectorStore.countL0(); } catch { /* non-fatal */ }
-      try { totalL1 = await vectorStore.countL1(); } catch { /* non-fatal */ }
+      try {
+        totalL0 = await vectorStore.countL0();
+      } catch {
+        /* non-fatal */
+      }
+      try {
+        totalL1 = await vectorStore.countL1();
+      } catch {
+        /* non-fatal */
+      }
 
       this.opts.logger?.info(
         `${TAG} [Pre-delete] cutoffIso=${cutoffIso}, retentionDays=${retentionDays}, totalL0=${totalL0}, totalL1=${totalL1}`,
@@ -165,19 +184,66 @@ export class LocalMemoryCleaner {
         total.changedFiles += 1;
       }
 
+      // Use store counts as source-of-truth for checkpoint reconciliation.
+      const fallbackCounts = await readFallbackCounts();
+      let reconciledL0 = -1;
+      let reconciledL1 = -1;
+      let usedFallbackL0 = false;
+      let usedFallbackL1 = false;
+
+      try {
+        reconciledL0 = await vectorStore.countL0();
+      } catch {
+        reconciledL0 = fallbackCounts.l0;
+        usedFallbackL0 = true;
+      }
+
+      try {
+        reconciledL1 = await vectorStore.countL1();
+      } catch {
+        reconciledL1 = fallbackCounts.l1;
+        usedFallbackL1 = true;
+      }
+
+      if (reconciledL0 >= 0 && reconciledL1 >= 0) {
+        await checkpointManager.recalibrateTotals({
+          l0ConversationsCount: reconciledL0,
+          totalMemoriesExtracted: reconciledL1,
+        });
+      }
+
+      if (usedFallbackL0 || usedFallbackL1) {
+        this.opts.logger?.warn(
+          `${TAG} [Checkpoint] vectorStore count unavailable; fallback was used for reconciliation: l0=${reconciledL0}, l1=${reconciledL1}`,
+        );
+      }
+
       // ── Post-delete: audit summary ──
       const durationMs = Date.now() - startMs;
-      const remainingL0 = totalL0 - removedL0;
-      const remainingL1 = totalL1 - removedL1;
+      const remainingL0 = Math.max(0, totalL0 - removedL0);
+      const remainingL1 = Math.max(0, totalL1 - removedL1);
       const summary = {
         event: "cleaner_summary",
         cutoffIso,
         retentionDays,
         l0: { total: totalL0, expired: removedL0, remaining: remainingL0, skipped: skippedL0, failed: failedL0DbCleanup > 0 },
         l1: { total: totalL1, expired: removedL1, remaining: remainingL1, skipped: skippedL1, failed: failedL1DbCleanup > 0 },
+        checkpoint: {
+          totalL0: reconciledL0,
+          totalL1: reconciledL1,
+        },
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    } else {
+      const fallbackCounts = await readFallbackCounts();
+      await checkpointManager.recalibrateTotals({
+        l0ConversationsCount: fallbackCounts.l0,
+        totalMemoriesExtracted: fallbackCounts.l1,
+      });
+      this.opts.logger?.warn(
+        `${TAG} [Checkpoint] vectorStore unavailable, reconciled from JSONL: l0=${fallbackCounts.l0}, l1=${fallbackCounts.l1}`,
+      );
     }
 
     this.opts.logger?.info(
@@ -276,6 +342,30 @@ export class LocalMemoryCleaner {
 
     return stats;
   }
+}
+
+async function countRecordsInDirectory(dirPath: string): Promise<number> {
+  let total = 0;
+
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!isJsonLikeFile(entry.name)) continue;
+
+    const filePath = path.join(dirPath, entry.name);
+    const raw = await fs.readFile(filePath, "utf-8");
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    total += trimmed.split("\n").length;
+  }
+
+  return total;
 }
 
 function isJsonLikeFile(name: string): boolean {
