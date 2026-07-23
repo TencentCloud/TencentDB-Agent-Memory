@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
 import path from "node:path";
+import { resolveHomeDir } from "./config-paths.js";
 import { getEnv } from "./env.js";
 
 export interface OpenClawRuntimeStateLike {
@@ -30,6 +30,6 @@ export function resolveOpenClawStateDir(
   return (
     runtimeState?.resolveStateDir?.() ||
     getEnv("OPENCLAW_STATE_DIR")?.trim() ||
-    path.join(homedir(), ".openclaw")
+    path.join(resolveHomeDir(), ".openclaw")
   );
 }
