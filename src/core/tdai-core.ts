@@ -47,7 +47,8 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
-import { CheckpointManager } from "../utils/checkpoint.js";
+import { CheckpointManager, type DriftReport } from "../utils/checkpoint.js";
+import { StatusCache } from "../utils/status-cache.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 
@@ -66,11 +67,28 @@ export interface TdaiCoreOptions {
   sessionFilter?: SessionFilter;
   /** Plugin instance ID for metric reporting. */
   instanceId?: string;
+  /**
+   * How long (ms) to cache the result of `getCheckpointStatus()`.
+   * Prevents repeated file + store I/O on health-check polling loops.
+   * Defaults to 30 000 ms (30 s). Set to 0 to disable caching.
+   */
+  checkpointStatusTtlMs?: number;
 }
 
 // ============================
 // TdaiCore
 // ============================
+
+const DEFAULT_CHECKPOINT_STATUS_TTL_MS = 30_000;
+
+export type CheckpointStatus = {
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+  memories_since_last_persona: number;
+  last_recalibrated_at: string;
+  drift_history: Array<{ at: string; l0_delta: number; l1_delta: number }>;
+  drift: DriftReport;
+};
 
 export class TdaiCore {
   private hostAdapter: HostAdapter;
@@ -121,6 +139,7 @@ export class TdaiCore {
    * of currently-running background tasks.
    */
   private readonly bgTasks = new Set<Promise<void>>();
+  private readonly checkpointStatusCache: StatusCache<CheckpointStatus>;
 
   constructor(opts: TdaiCoreOptions) {
     this.hostAdapter = opts.hostAdapter;
@@ -130,6 +149,9 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.checkpointStatusCache = new StatusCache(
+      opts.checkpointStatusTtlMs ?? DEFAULT_CHECKPOINT_STATUS_TTL_MS,
+    );
   }
 
   // ============================
@@ -356,6 +378,33 @@ export class TdaiCore {
    *                    don't have to pre-check whether the session was
    *                    already evicted or never produced a capture.
    */
+  /**
+   * Return a live snapshot of checkpoint counters and drift status.
+   *
+   * Reads the checkpoint file and, when a vector store is available, compares
+   * stored counters against live DB counts to produce a `DriftReport`. Falls
+   * back to JSONL line counts when no store is connected.
+   *
+   * Intended for health-check endpoints and operational dashboards.
+   */
+  async getCheckpointStatus(): Promise<CheckpointStatus> {
+    return this.checkpointStatusCache.get(async () => {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      const [cp, drift] = await Promise.all([
+        checkpoint.read(),
+        checkpoint.detectDrift(this.vectorStore),
+      ]);
+      return {
+        l0_conversations_count: cp.l0_conversations_count,
+        total_memories_extracted: cp.total_memories_extracted,
+        memories_since_last_persona: cp.memories_since_last_persona,
+        last_recalibrated_at: cp.last_recalibrated_at,
+        drift_history: cp.drift_history,
+        drift,
+      };
+    });
+  }
+
   async handleSessionEnd(sessionKey: string): Promise<void> {
     if (!sessionKey) return;
     await this.storeReady?.catch(() => {});
@@ -519,6 +568,9 @@ export class TdaiCore {
         // Non-fatal: never block scheduler start on recalibration failure.
         try {
           await checkpoint.recalibrate(this.vectorStore);
+          // Recalibrate mutated the checkpoint — stale status cache would
+          // serve pre-recalibrate counters until TTL expires.
+          this.checkpointStatusCache.invalidate();
         } catch (err) {
           this.logger.warn(
             `${TAG} Checkpoint recalibration failed (continuing): ${err instanceof Error ? err.message : String(err)}`,

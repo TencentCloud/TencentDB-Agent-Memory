@@ -13,6 +13,17 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /**
+   * Skip L0 deletion when the total count is at or below this threshold.
+   * Prevents wiping data entirely on low-volume deployments.
+   * Defaults to 50.
+   */
+  minRetainL0?: number;
+  /**
+   * Skip L1 deletion when the total count is at or below this threshold.
+   * Defaults to 20.
+   */
+  minRetainL1?: number;
 }
 
 interface CleanupStats {
@@ -26,17 +37,21 @@ const TAG = "[memory-tdai][cleaner]";
 const L0_DIR_NAME = "conversations";
 const L1_DIR_NAME = "records";
 
-/** Minimum records to retain — skip deletion if total is at or below this threshold. */
-const MIN_RETAIN_L0 = 50;
-const MIN_RETAIN_L1 = 20;
+const DEFAULT_MIN_RETAIN_L0 = 50;
+const DEFAULT_MIN_RETAIN_L1 = 20;
 
 export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
+  private readonly checkpoint: CheckpointManager;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
+    this.checkpoint = new CheckpointManager(opts.baseDir, {
+      info: (msg) => opts.logger?.info(msg),
+      warn: (msg) => opts.logger?.warn?.(msg),
+    });
     this.vectorStore = opts.vectorStore;
   }
 
@@ -128,11 +143,14 @@ export class LocalMemoryCleaner {
       let failedL0DbCleanup = 0;
       let failedL1DbCleanup = 0;
 
+      const minRetainL0 = this.opts.minRetainL0 ?? DEFAULT_MIN_RETAIN_L0;
+      const minRetainL1 = this.opts.minRetainL1 ?? DEFAULT_MIN_RETAIN_L1;
+
       // ── L0 cleanup with minimum-retention guard ──
-      if (totalL0 <= MIN_RETAIN_L0) {
+      if (totalL0 <= minRetainL0) {
         skippedL0 = true;
         this.opts.logger?.info(
-          `${TAG} [L0-delete] SKIPPED: totalL0=${totalL0} <= minRetain=${MIN_RETAIN_L0}`,
+          `${TAG} [L0-delete] SKIPPED: totalL0=${totalL0} <= minRetain=${minRetainL0}`,
         );
       } else {
         try {
@@ -146,10 +164,10 @@ export class LocalMemoryCleaner {
       }
 
       // ── L1 cleanup with minimum-retention guard ──
-      if (totalL1 <= MIN_RETAIN_L1) {
+      if (totalL1 <= minRetainL1) {
         skippedL1 = true;
         this.opts.logger?.info(
-          `${TAG} [L1-delete] SKIPPED: totalL1=${totalL1} <= minRetain=${MIN_RETAIN_L1}`,
+          `${TAG} [L1-delete] SKIPPED: totalL1=${totalL1} <= minRetain=${minRetainL1}`,
         );
       } else {
         try {
@@ -182,17 +200,15 @@ export class LocalMemoryCleaner {
     }
 
     // Reconcile increment-only checkpoint counters after cleanup (#157).
+    // Always runs — pre-existing drift must be corrected even when this cycle
+    // deleted nothing (e.g. min-retain guard skipped DB deletes).
     // Prefer the live store (same source the cleaner just mutated); fall back
     // to JSONL line counts when no store is wired (JSONL-only cleanup).
     // Non-fatal: never fail the cleanup run because of checkpoint drift.
     try {
-      const checkpoint = new CheckpointManager(this.opts.baseDir, {
-        info: (msg) => this.opts.logger?.info(msg),
-        warn: (msg) => this.opts.logger?.warn?.(msg),
-      });
       const result = this.vectorStore
-        ? await checkpoint.recalibrate(this.vectorStore)
-        : await checkpoint.recalibrate();
+        ? await this.checkpoint.recalibrate(this.vectorStore)
+        : await this.checkpoint.recalibrate();
       if (result.changed) {
         this.opts.logger?.info(
           `${TAG} Checkpoint recalibrated after cleanup (source=${result.source}): ` +
