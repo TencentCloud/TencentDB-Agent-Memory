@@ -20,6 +20,15 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **Prompt cache 友好的 auto-recall 注入** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：
+  - 记录 issue 后续更正：最严重的 webchat 缓存回退来自 OpenClaw run 行为，并非 TencentDB 插件本身。
+  - 新增 `recall.injectionMode`（默认 `prepend`）与 `recall.showInjected`（默认 `false`）。
+  - OpenClaw v2026.4.27+ 可选择把动态 L1 召回放到 `appendContext`；旧版或版本未知时安全回退，避免召回内容丢失。
+  - OpenClaw v2026.4.26+ 将稳定 persona / scene / memory-tools 上下文映射到 `prependSystemContext`，使其位于动态 system suffix 之前。
+  - 历史清理只识别插件固定免责声明生成的召回块，不再误删用户自己编写的 `<relevant-memories>` 示例；新增 5 轮 prompt shape 与 100 轮历史增长回归测试。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：

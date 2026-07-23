@@ -21,6 +21,7 @@ import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.j
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
+import { buildGeneratedRecallContext } from "../../utils/recall-injection.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
@@ -202,11 +203,7 @@ async function performAutoRecallInner(params: {
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
-  }
+  const prependContext = buildGeneratedRecallContext(memoryLines);
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
@@ -705,7 +702,7 @@ function formatMemoryLine(m: FormatableMemory): string {
   return line;
 }
 
-function applyRecallBudget(
+export function applyRecallBudget(
   lines: string[],
   recall: MemoryTdaiConfig["recall"],
   logger?: Logger,
