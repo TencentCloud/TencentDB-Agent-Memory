@@ -175,6 +175,21 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Remove FTS5 query syntax while retaining Unicode words, numbers, and
+ * underscores. Boolean operator names remain searchable text; buildFtsQuery()
+ * quotes every resulting token so they cannot act as operators.
+ */
+export function sanitizeFtsQueryInput(raw: string): string {
+  return raw.replace(/[^\p{L}\p{N}_]+/gu, " ").trim();
+}
+
+function extractSafeFtsTokens(raw: string): string[] {
+  const sanitized = sanitizeFtsQueryInput(raw);
+  if (!sanitized) return [];
+  return sanitized.split(/\s+/u).filter((token) => /[\p{L}\p{N}]/u.test(token));
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -196,6 +211,9 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  const sanitizedRaw = sanitizeFtsQueryInput(raw);
+  if (!sanitizedRaw) return null;
+
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,12 +221,9 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
+      .cutForSearch(sanitizedRaw, true)
+      .flatMap(extractSafeFtsTokens)
       .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
         // Remove common Chinese stop-words to reduce noise
         if (ZH_STOP_WORDS.has(t)) return false;
         return true;
@@ -216,16 +231,12 @@ export function buildFtsQuery(raw: string): string | null {
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    // Fallback: split the already-sanitized input on whitespace.
+    tokens = extractSafeFtsTokens(sanitizedRaw);
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', '""')}"`);
   return quoted.join(" OR ");
 }
 
