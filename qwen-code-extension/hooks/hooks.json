@@ -1,0 +1,58 @@
+{
+  "SessionStart": [
+    {
+      "description": "Check TencentDB Agent Memory Gateway availability when a Qwen Code session starts.",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "tdai-qwen-code-session-start",
+          "command": "node --import tsx \"${CLAUDE_PLUGIN_ROOT}/bin/qwen-memory-hook.mjs\"",
+          "timeout": 5000,
+          "statusMessage": "Checking TencentDB Agent Memory"
+        }
+      ]
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "description": "Recall relevant TencentDB Agent Memory context before Qwen Code handles the prompt.",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "tdai-qwen-code-recall",
+          "command": "node --import tsx \"${CLAUDE_PLUGIN_ROOT}/bin/qwen-memory-hook.mjs\"",
+          "timeout": 10000,
+          "statusMessage": "Recalling TencentDB Agent Memory"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "description": "Capture the latest completed Qwen Code turn after the assistant stops.",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "tdai-qwen-code-capture",
+          "command": "node --import tsx \"${CLAUDE_PLUGIN_ROOT}/bin/qwen-memory-hook.mjs\"",
+          "timeout": 10000,
+          "statusMessage": "Capturing TencentDB Agent Memory"
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "description": "Flush the TencentDB Agent Memory session when Qwen Code exits or clears the session.",
+      "hooks": [
+        {
+          "type": "command",
+          "name": "tdai-qwen-code-session-end",
+          "command": "node --import tsx \"${CLAUDE_PLUGIN_ROOT}/bin/qwen-memory-hook.mjs\"",
+          "timeout": 10000,
+          "statusMessage": "Flushing TencentDB Agent Memory"
+        }
+      ]
+    }
+  ]
+}
