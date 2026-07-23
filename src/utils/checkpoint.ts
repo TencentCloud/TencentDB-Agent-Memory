@@ -144,6 +144,11 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+export interface CheckpointCountSnapshot {
+  l0ConversationsCount: number;
+  totalMemoriesExtracted: number;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -318,6 +323,26 @@ export class CheckpointManager {
     });
   }
 
+  /**
+   * Replace global totals with external source of truth after cleanup/rebuild.
+   *
+   * In drift scenarios, the checkpoint JSONL counters can stay above reality after
+   * manual cleanup or cleanup in degraded modes. Use this method to reconcile.
+   */
+  async recalibrateTotals(snapshot: CheckpointCountSnapshot): Promise<void> {
+    const l0 = normalizeCount(snapshot.l0ConversationsCount);
+    const memories = normalizeCount(snapshot.totalMemoriesExtracted);
+
+    const cp = await this.mutate((state) => {
+      state.l0_conversations_count = l0;
+      state.total_memories_extracted = memories;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrateTotals: l0=${cp.l0_conversations_count}, l1=${cp.total_memories_extracted}`,
+    );
+  }
+
   async setPersonaUpdateRequest(reason: string): Promise<void> {
     await this.mutate((cp) => {
       cp.request_persona_update = true;
@@ -485,4 +510,10 @@ export class CheckpointManager {
     });
   }
 
+}
+
+function normalizeCount(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value < 0) return 0;
+  return Math.floor(value);
 }
