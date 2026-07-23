@@ -144,6 +144,29 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/**
+ * Minimal view of the memory store needed for recalibration.
+ * Structural (no IMemoryStore import) so checkpoint.ts stays free of store-layer
+ * deps and unit tests can pass a tiny fake.
+ */
+export interface RecalibrationSource {
+  /** Live count of L0 conversation records (messages in `l0_conversations`). */
+  countL0(): number | Promise<number>;
+  /** Live count of L1 memory records. */
+  countL1(): number | Promise<number>;
+}
+
+export interface RecalibrateResult {
+  l0: { before: number; after: number };
+  l1: { before: number; after: number };
+  /** Persona-interval counter — clamped when L1 shrinks after cleanup. */
+  memories_since_last_persona: { before: number; after: number };
+  /** "store" when live store counts were used; "jsonl" for daily-shard line counts. */
+  source: "store" | "jsonl";
+  /** True when any reconciled field actually changed. */
+  changed: boolean;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -179,10 +202,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -483,6 +508,148 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Recalibration (drift correction) — issue #157
+  // ============================
+
+  /**
+   * Reconcile increment-only counters against reality.
+   *
+   * ## Why
+   * `l0_conversations_count` and `total_memories_extracted` only ever grow
+   * (`captureAtomically` / `markL1ExtractionComplete`). memory-cleaner (and
+   * manual JSONL pruning) delete records without updating the checkpoint, so
+   * counters permanently overstate how much data exists. Inflated values skew
+   * status reporting and L2/L3 persona thresholds (`memories_since_last_persona`).
+   *
+   * ## Source of truth
+   * Prefer the live store (`countL0` / `countL1`) — the same queries the cleaner
+   * uses. When no store is available (degraded mode), fall back to counting
+   * non-empty lines in `conversations/` and `records/` daily JSONL shards.
+   *
+   * ## Persona clamp
+   * When L1 shrinks, `memories_since_last_persona` is reduced by the same delta
+   * (floored at 0) and never allowed to exceed the new L1 total. This stops
+   * cleanup from leaving a stale interval that would prematurely trigger persona
+   * generation — a gap many naive recalibrate patches miss.
+   *
+   * Idempotent and lock-safe (write goes through `mutate`). Count resolution
+   * happens *outside* the lock so slow store/FS I/O does not block other writers.
+   *
+   * @param source Optional live-count provider (typically the vector store).
+   *   Omit to force the JSONL fallback.
+   */
+  async recalibrate(source?: RecalibrationSource): Promise<RecalibrateResult> {
+    let l0True: number;
+    let l1True: number;
+    let usedSource: "store" | "jsonl";
+
+    if (source) {
+      l0True = await source.countL0();
+      l1True = await source.countL1();
+      usedSource = "store";
+    } else {
+      l0True = await this.countJsonlLines("conversations");
+      l1True = await this.countJsonlLines("records");
+      usedSource = "jsonl";
+    }
+
+    // Guard against transient failures returning nonsense (NaN / negatives).
+    l0True = Number.isFinite(l0True) && l0True >= 0 ? Math.floor(l0True) : 0;
+    l1True = Number.isFinite(l1True) && l1True >= 0 ? Math.floor(l1True) : 0;
+
+    let before = {
+      l0: 0,
+      l1: 0,
+      memories_since_last_persona: 0,
+    };
+    let afterPersona = 0;
+
+    await this.mutate((cp) => {
+      before = {
+        l0: cp.l0_conversations_count,
+        l1: cp.total_memories_extracted,
+        memories_since_last_persona: cp.memories_since_last_persona,
+      };
+
+      cp.l0_conversations_count = l0True;
+      cp.total_memories_extracted = l1True;
+
+      // Shrink the persona interval with L1, then clamp to the new ceiling.
+      let persona = cp.memories_since_last_persona;
+      if (l1True < before.l1) {
+        persona = Math.max(0, persona - (before.l1 - l1True));
+      }
+      persona = Math.min(persona, l1True);
+      if (!Number.isFinite(persona) || persona < 0) persona = 0;
+      cp.memories_since_last_persona = Math.floor(persona);
+      afterPersona = cp.memories_since_last_persona;
+    });
+
+    const result: RecalibrateResult = {
+      l0: { before: before.l0, after: l0True },
+      l1: { before: before.l1, after: l1True },
+      memories_since_last_persona: {
+        before: before.memories_since_last_persona,
+        after: afterPersona,
+      },
+      source: usedSource,
+      changed:
+        before.l0 !== l0True
+        || before.l1 !== l1True
+        || before.memories_since_last_persona !== afterPersona,
+    };
+
+    if (result.changed) {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): ` +
+        `l0 ${result.l0.before}→${result.l0.after}, ` +
+        `l1 ${result.l1.before}→${result.l1.after}, ` +
+        `memories_since_last_persona ${result.memories_since_last_persona.before}→${result.memories_since_last_persona.after}`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): no drift ` +
+        `(l0=${result.l0.after}, l1=${result.l1.after}, ` +
+        `memories_since_last_persona=${result.memories_since_last_persona.after})`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Count non-empty lines across daily `YYYY-MM-DD.jsonl|.json` shards in a
+   * subdirectory of the plugin data dir. Used as the degraded-mode fallback
+   * when no live store is available.
+   */
+  private async countJsonlLines(subDir: string): Promise<number> {
+    const dirPath = path.join(this.dataDir, subDir);
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let total = 0;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      // Match memory-cleaner shard naming: YYYY-MM-DD.jsonl | YYYY-MM-DD.json
+      if (!/^\d{4}-\d{2}-\d{2}\.(?:jsonl|json)$/.test(entry.name)) continue;
+
+      let raw: string;
+      try {
+        raw = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+      } catch {
+        continue;
+      }
+      for (const line of raw.split("\n")) {
+        if (line.trim().length > 0) total += 1;
+      }
+    }
+    return total;
   }
 
 }

@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -178,6 +179,32 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    }
+
+    // Reconcile increment-only checkpoint counters after cleanup (#157).
+    // Prefer the live store (same source the cleaner just mutated); fall back
+    // to JSONL line counts when no store is wired (JSONL-only cleanup).
+    // Non-fatal: never fail the cleanup run because of checkpoint drift.
+    try {
+      const checkpoint = new CheckpointManager(this.opts.baseDir, {
+        info: (msg) => this.opts.logger?.info(msg),
+        warn: (msg) => this.opts.logger?.warn?.(msg),
+      });
+      const result = this.vectorStore
+        ? await checkpoint.recalibrate(this.vectorStore)
+        : await checkpoint.recalibrate();
+      if (result.changed) {
+        this.opts.logger?.info(
+          `${TAG} Checkpoint recalibrated after cleanup (source=${result.source}): ` +
+          `l0 ${result.l0.before}→${result.l0.after}, ` +
+          `l1 ${result.l1.before}→${result.l1.after}, ` +
+          `memories_since_last_persona ${result.memories_since_last_persona.before}→${result.memories_since_last_persona.after}`,
+        );
+      }
+    } catch (err) {
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     this.opts.logger?.info(
