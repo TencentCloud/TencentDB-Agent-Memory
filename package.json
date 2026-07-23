@@ -29,7 +29,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "bench:cache": "node scripts/benchmark-prompt-cache.mjs"
   },
   "files": [
     "dist/",
