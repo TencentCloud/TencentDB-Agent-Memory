@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Combined context string (for backward compatibility). */
   context: string;
+  /** L1 dynamic memories wrapped in <relevant-memories> — changes every turn. */
+  prependContext?: string;
+  /** Stable system context (persona + scene navigation + tools guide) — cacheable. */
+  appendSystemContext?: string;
   strategy?: string;
   memory_count?: number;
 }

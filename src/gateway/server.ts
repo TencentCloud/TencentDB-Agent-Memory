@@ -380,10 +380,14 @@ export class TdaiGateway {
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: append=${(result.appendSystemContext?.length ?? 0)} chars, prepend=${(result.prependContext?.length ?? 0)} chars`,
+    );
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context: [result.prependContext, result.appendSystemContext].filter(Boolean).join("\n\n"),
+      prependContext: result.prependContext,
+      appendSystemContext: result.appendSystemContext,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
