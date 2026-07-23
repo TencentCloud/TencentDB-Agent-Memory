@@ -524,7 +524,6 @@ export function createL2Runner(opts: {
 
     const preCheckpoint = new CheckpointManager(pluginDataDir, logger);
     const preState = await preCheckpoint.read();
-    const preScenesProcessed = preState.scenes_processed;
     const preMemoriesSince = preState.memories_since_last_persona;
     const preTotalProcessed = preState.total_processed;
 
@@ -532,24 +531,22 @@ export function createL2Runner(opts: {
     if (extractResult.success && extractResult.memoriesProcessed > 0) {
       const checkpoint = new CheckpointManager(pluginDataDir, logger);
       const postState = await checkpoint.read();
-      if (
-        postState.scenes_processed < preScenesProcessed ||
-        postState.total_processed < preTotalProcessed
-      ) {
+      if (postState.total_processed < preTotalProcessed) {
+        // `total_processed` should only ever increase (captureAtomically increments it).
+        // A rollback here means a concurrent full-write clobbered the counter.
+        // Note: scenes_processed is intentionally excluded — recalibrate() can
+        // legitimately lower it when scene files are deleted.
         logger.warn(
-          `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
-          `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
+          `${TAG} [L2] ⚠️ Checkpoint counter rollback detected! ` +
           `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
           `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
-          `Repairing...`,
+          `Applying atomic floor...`,
         );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-          memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
+        await checkpoint.floorGlobalCounters({
+          total_processed: preTotalProcessed,
+          memories_since_last_persona: preMemoriesSince,
         });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
+        logger.info(`${TAG} [L2] Checkpoint floor applied`);
       }
 
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {

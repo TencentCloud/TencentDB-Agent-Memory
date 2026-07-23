@@ -106,6 +106,17 @@ export interface Checkpoint {
   // ═══ L1 ═══
   /** Total L1 memories extracted across all time */
   total_memories_extracted: number;
+
+  // ═══ Recalibration audit ═══
+  /** ISO timestamp of the last successful recalibrate() call. Empty string when never run. */
+  last_recalibrated_at: string;
+  /**
+   * Rolling history of recalibrate() runs that detected drift (changed=true).
+   * Capped at DRIFT_HISTORY_MAX entries; oldest entry is evicted when full.
+   * Lets operators distinguish "normal post-cleanup drift of ~20" from
+   * "sudden spike of 500 records" without digging through logs.
+   */
+  drift_history: Array<{ at: string; l0_delta: number; l1_delta: number }>;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -137,11 +148,59 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
   pipeline_states: {},
   l0_conversations_count: 0,
   total_memories_extracted: 0,
+  last_recalibrated_at: "",
+  drift_history: [],
 };
 
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+}
+
+/**
+ * Minimal view of the memory store needed for recalibration.
+ * Structural (no IMemoryStore import) so checkpoint.ts stays free of store-layer
+ * deps and unit tests can pass a tiny fake.
+ */
+export interface RecalibrationSource {
+  /** Live count of L0 conversation records (messages in `l0_conversations`). */
+  countL0(): number | Promise<number>;
+  /** Live count of L1 memory records. */
+  countL1(): number | Promise<number>;
+}
+
+export interface RecalibrateResult {
+  l0: { before: number; after: number };
+  l1: { before: number; after: number };
+  /** Persona-interval counter — clamped when L1 shrinks after cleanup. */
+  memories_since_last_persona: { before: number; after: number };
+  /**
+   * Number of scene-block files found on disk. Recalibrated from the
+   * filesystem regardless of `source` — scene files are never stored in
+   * the vector store.
+   *
+   * Note: `total_processed` (message-capture counter) is intentionally NOT
+   * recalibrated — it is a monotonic epoch used as `last_persona_at` and
+   * changing it would corrupt the relative marker semantics.
+   */
+  scenes_processed: { before: number; after: number };
+  /** "store" when live store counts were used; "jsonl" for daily-shard line counts. */
+  source: "store" | "jsonl";
+  /** True when any reconciled field actually changed. */
+  changed: boolean;
+}
+
+/** Maximum number of entries retained in `drift_history`. */
+const DRIFT_HISTORY_MAX = 10;
+
+/** Read-only drift snapshot — does not mutate the checkpoint. */
+export interface DriftReport {
+  l0: { stored: number; actual: number; delta: number };
+  l1: { stored: number; actual: number; delta: number };
+  /** "store" when live store counts were used; "jsonl" for daily-shard line counts. */
+  source: "store" | "jsonl";
+  /** True when any counter overstates actual data by more than `tolerance`. */
+  hasDrift: boolean;
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -179,10 +238,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -322,6 +383,30 @@ export class CheckpointManager {
     await this.mutate((cp) => {
       cp.request_persona_update = true;
       cp.persona_update_reason = reason;
+    });
+  }
+
+  /**
+   * Atomically raise any global counter that has fallen below a known-good
+   * floor value. Used by the L2 runner to guard against race-condition
+   * counter rollback without resorting to a full `checkpoint.write()` that
+   * would clobber concurrent increments.
+   *
+   * Only `total_processed` and `memories_since_last_persona` are covered —
+   * `scenes_processed` is intentionally excluded because `recalibrate()` can
+   * legitimately lower it when scene files are deleted.
+   */
+  async floorGlobalCounters(floors: {
+    total_processed: number;
+    memories_since_last_persona: number;
+  }): Promise<void> {
+    await this.mutate((cp) => {
+      if (cp.total_processed < floors.total_processed) {
+        cp.total_processed = floors.total_processed;
+      }
+      if (cp.memories_since_last_persona < floors.memories_since_last_persona) {
+        cp.memories_since_last_persona = floors.memories_since_last_persona;
+      }
     });
   }
 
@@ -483,6 +568,292 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Drift detection (read-only) — issue #157
+  // ============================
+
+  /**
+   * Compare stored counters against live data without mutating anything.
+   *
+   * Use this for health-checks or periodic monitoring. When drift is detected
+   * (`hasDrift === true`), call `recalibrate()` to correct it.
+   *
+   * @param source Optional live-count provider. Omit to use JSONL fallback.
+   * @param tolerance Maximum allowed overcount before `hasDrift` is set.
+   *   Defaults to 0 (any overcount is reported).
+   */
+  async detectDrift(source?: RecalibrationSource, tolerance = 0): Promise<DriftReport> {
+    let l0Actual: number;
+    let l1Actual: number;
+    let usedSource: "store" | "jsonl";
+
+    if (source) {
+      l0Actual = await source.countL0();
+      l1Actual = await source.countL1();
+      usedSource = "store";
+    } else {
+      l0Actual = await this.countJsonlLines("conversations");
+      l1Actual = await this.countJsonlLines("records");
+      usedSource = "jsonl";
+    }
+
+    l0Actual = Number.isFinite(l0Actual) && l0Actual >= 0 ? Math.floor(l0Actual) : 0;
+    l1Actual = Number.isFinite(l1Actual) && l1Actual >= 0 ? Math.floor(l1Actual) : 0;
+
+    const cp = await this.read();
+    const l0Delta = cp.l0_conversations_count - l0Actual;
+    const l1Delta = cp.total_memories_extracted - l1Actual;
+    const hasDrift = l0Delta > tolerance || l1Delta > tolerance;
+
+    const report: DriftReport = {
+      l0: { stored: cp.l0_conversations_count, actual: l0Actual, delta: l0Delta },
+      l1: { stored: cp.total_memories_extracted, actual: l1Actual, delta: l1Delta },
+      source: usedSource,
+      hasDrift,
+    };
+
+    if (hasDrift) {
+      this.logger.warn?.(
+        `[checkpoint] drift detected (source=${usedSource}): ` +
+        `l0 stored=${report.l0.stored} actual=${report.l0.actual} delta=${l0Delta}, ` +
+        `l1 stored=${report.l1.stored} actual=${report.l1.actual} delta=${l1Delta}`,
+      );
+    }
+
+    return report;
+  }
+
+  // ============================
+  // Recalibration (drift correction) — issue #157
+  // ============================
+
+  /**
+   * Reconcile increment-only counters against reality.
+   *
+   * ## Why
+   * `l0_conversations_count` and `total_memories_extracted` only ever grow
+   * (`captureAtomically` / `markL1ExtractionComplete`). memory-cleaner (and
+   * manual JSONL pruning) delete records without updating the checkpoint, so
+   * counters permanently overstate how much data exists. Inflated values skew
+   * status reporting and L2/L3 persona thresholds (`memories_since_last_persona`).
+   *
+   * ## Source of truth
+   * Prefer the live store (`countL0` / `countL1`) — the same queries the cleaner
+   * uses. When no store is available (degraded mode), fall back to counting
+   * non-empty lines in `conversations/` and `records/` daily JSONL shards.
+   *
+   * ## Persona clamp
+   * When L1 shrinks, `memories_since_last_persona` is reduced by the same delta
+   * (floored at 0) and never allowed to exceed the new L1 total. This stops
+   * cleanup from leaving a stale interval that would prematurely trigger persona
+   * generation — a gap many naive recalibrate patches miss.
+   *
+   * Idempotent and lock-safe (write goes through `mutate`). Count resolution
+   * happens *outside* the lock so slow store/FS I/O does not block other writers.
+   *
+   * @param source Optional live-count provider (typically the vector store).
+   *   Omit to force the JSONL fallback.
+   */
+  async recalibrate(source?: RecalibrationSource): Promise<RecalibrateResult> {
+    let l0True: number;
+    let l1True: number;
+    let usedSource: "store" | "jsonl";
+
+    if (source) {
+      l0True = await source.countL0();
+      l1True = await source.countL1();
+      usedSource = "store";
+    } else {
+      l0True = await this.countJsonlLines("conversations");
+      l1True = await this.countJsonlLines("records");
+      usedSource = "jsonl";
+    }
+
+    // scenes_processed is always counted from the filesystem — scene files are
+    // never stored in the vector store, so there is no store-backed alternative.
+    const scenesTrue = await this.countSceneFiles();
+
+    // Guard against transient failures returning nonsense (NaN / negatives).
+    l0True = Number.isFinite(l0True) && l0True >= 0 ? Math.floor(l0True) : 0;
+    l1True = Number.isFinite(l1True) && l1True >= 0 ? Math.floor(l1True) : 0;
+
+    let before = {
+      l0: 0,
+      l1: 0,
+      memories_since_last_persona: 0,
+      scenes_processed: 0,
+    };
+    let afterPersona = 0;
+    let afterScenes = 0;
+
+    await this.mutate((cp) => {
+      before = {
+        l0: cp.l0_conversations_count,
+        l1: cp.total_memories_extracted,
+        memories_since_last_persona: cp.memories_since_last_persona,
+        scenes_processed: cp.scenes_processed,
+      };
+
+      cp.l0_conversations_count = l0True;
+      cp.total_memories_extracted = l1True;
+      cp.scenes_processed = scenesTrue;
+
+      // Shrink memories_since_last_persona proportionally when L1 shrinks.
+      //
+      // Cleanup always removes the OLDEST records first (time-based retention).
+      // Of the deleted records, only those that post-date the last persona
+      // generation reduce the interval; pre-persona deletions are irrelevant.
+      //
+      // Example: total=50, memories_since=30 (newest 30 are "since persona"),
+      //   cleanup deletes 30 oldest → 20 pre-persona + 10 post-persona deleted
+      //   → memories_since should drop from 30 to 20, not to 0.
+      //
+      // Formula:
+      //   deletedCount        = before.l1 - l1True
+      //   beforePersonaCount  = before.l1 - persona   (records pre-dating last persona)
+      //   deletedBeforePersona= min(deletedCount, max(0, beforePersonaCount))
+      //   deletedSincePersona = deletedCount - deletedBeforePersona
+      //   new persona         = max(0, persona - deletedSincePersona)
+      let persona = cp.memories_since_last_persona;
+      if (l1True < before.l1) {
+        const deletedCount = before.l1 - l1True;
+        const beforePersonaCount = Math.max(0, before.l1 - persona);
+        const deletedBeforePersona = Math.min(deletedCount, beforePersonaCount);
+        const deletedSincePersona = deletedCount - deletedBeforePersona;
+        persona = Math.max(0, persona - deletedSincePersona);
+      }
+      persona = Math.min(persona, l1True);
+      if (!Number.isFinite(persona) || persona < 0) persona = 0;
+      cp.memories_since_last_persona = Math.floor(persona);
+      afterPersona = cp.memories_since_last_persona;
+      afterScenes = cp.scenes_processed;
+
+      const now = new Date().toISOString();
+      cp.last_recalibrated_at = now;
+
+      // Append to drift_history only when something actually changed.
+      const l0Delta = before.l0 - l0True;
+      const l1Delta = before.l1 - l1True;
+      if (l0Delta !== 0 || l1Delta !== 0) {
+        if (!Array.isArray(cp.drift_history)) cp.drift_history = [];
+        cp.drift_history.push({ at: now, l0_delta: l0Delta, l1_delta: l1Delta });
+        if (cp.drift_history.length > DRIFT_HISTORY_MAX) {
+          cp.drift_history.splice(0, cp.drift_history.length - DRIFT_HISTORY_MAX);
+        }
+      }
+    });
+
+    const result: RecalibrateResult = {
+      l0: { before: before.l0, after: l0True },
+      l1: { before: before.l1, after: l1True },
+      memories_since_last_persona: {
+        before: before.memories_since_last_persona,
+        after: afterPersona,
+      },
+      scenes_processed: {
+        before: before.scenes_processed,
+        after: afterScenes,
+      },
+      source: usedSource,
+      changed:
+        before.l0 !== l0True
+        || before.l1 !== l1True
+        || before.memories_since_last_persona !== afterPersona
+        || before.scenes_processed !== afterScenes,
+    };
+
+    if (result.changed) {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): ` +
+        `l0 ${result.l0.before}→${result.l0.after}, ` +
+        `l1 ${result.l1.before}→${result.l1.after}, ` +
+        `memories_since_last_persona ${result.memories_since_last_persona.before}→${result.memories_since_last_persona.after}, ` +
+        `scenes_processed ${result.scenes_processed.before}→${result.scenes_processed.after}`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate (source=${usedSource}): no drift ` +
+        `(l0=${result.l0.after}, l1=${result.l1.after}, ` +
+        `memories_since_last_persona=${result.memories_since_last_persona.after}, ` +
+        `scenes_processed=${result.scenes_processed.after})`,
+      );
+    }
+    return result;
+  }
+
+  /**
+   * Drop per-session runner/pipeline state for one session, then recalibrate
+   * global counters against remaining data.
+   *
+   * Use after wiping a session's L0/L1 records (test teardown, `/reset`, or
+   * manual JSONL pruning for a single sessionKey). Without this, deleting
+   * `pipeline_states[session]` leaves global totals inflated — the exact
+   * drift path described in #157.
+   *
+   * @param sessionKey Session to clear from `runner_states` / `pipeline_states`
+   * @param source Optional live store; omit for JSONL fallback
+   */
+  async resetSession(
+    sessionKey: string,
+    source?: RecalibrationSource,
+  ): Promise<RecalibrateResult> {
+    await this.mutate((cp) => {
+      if (cp.runner_states) delete cp.runner_states[sessionKey];
+      if (cp.pipeline_states) delete cp.pipeline_states[sessionKey];
+    });
+    this.logger.info(`[checkpoint] resetSession: cleared state for session=${sessionKey}`);
+    return this.recalibrate(source);
+  }
+
+  /**
+   * Count non-empty lines across daily `YYYY-MM-DD.jsonl|.json` shards in a
+   * subdirectory of the plugin data dir. Used as the degraded-mode fallback
+   * when no live store is available.
+   */
+  private async countJsonlLines(subDir: string): Promise<number> {
+    const dirPath = path.join(this.dataDir, subDir);
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let total = 0;
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      // Match memory-cleaner shard naming: YYYY-MM-DD.jsonl | YYYY-MM-DD.json
+      if (!/^\d{4}-\d{2}-\d{2}\.(?:jsonl|json)$/.test(entry.name)) continue;
+
+      let raw: string;
+      try {
+        raw = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+      } catch {
+        continue;
+      }
+      for (const line of raw.split("\n")) {
+        if (line.trim().length > 0) total += 1;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Count `.md` files in `scene_blocks/` as the source of truth for
+   * `scenes_processed`. Scene files live only on the filesystem — there is
+   * no store-backed count — so this always reads the directory directly.
+   */
+  private async countSceneFiles(): Promise<number> {
+    const dirPath = path.join(this.dataDir, "scene_blocks");
+    let entries;
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+    return entries.filter((e) => e.isFile() && e.name.endsWith(".md")).length;
   }
 
 }
