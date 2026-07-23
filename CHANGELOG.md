@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### 🐛 修复
+
+- **Prompt 前缀缓存友好注入** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：
+  - OpenClaw 适配层将稳定块（persona / scene / tools guide）映射为 `prependSystemContext`，便于落在宿主 CACHE_BOUNDARY 之前。
+  - 新增 `recall.injectionMode`（`prepend` | `append`，默认 `prepend`）：动态 L1 可改为 `appendContext`。
+  - 新增 `recall.showInjected`（默认 `false`）：显式控制是否保留 `<relevant-memories>` 到会话历史；默认写入前剥离。
+  - 新增 `recall.dualEmitStable`（默认 `false`）：旧宿主忽略 `prependSystemContext` 时可双发稳定块；默认关闭避免双注入。
+  - 稳定块注入保留原始字节（不做破坏性 trim）；`injectionMode=append` 时一次性告警宿主需支持 `appendContext`。
+  - 会话级 `stable_continuity=first|same|changed` 观测日志（不冻结内容）；`prompt_cache_usage` 附带 `stableHash` 便于与命中率对照。
+  - 当 `report.enabled=true` 时，注册 `llm_output` 钩子上报归一化的 `prompt_cache_usage`（DeepSeek / OpenAI-compatible / Anthropic 风格 cache 字段；无 cache 字段则跳过，不编造命中率）。
+  - `before_prompt_build` 增加稳定块 hash + 动态注入位置诊断日志（observation-only）。
+  - 无 OpenClaw 的 layout A/B 脚本：`npm run bench:cache`（见 `scripts/README.benchmark-prompt-cache.md`）。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。

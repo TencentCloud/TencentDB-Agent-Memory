@@ -197,9 +197,13 @@ export interface CompletedTurn {
 
 /** Result from a recall (prefetch) operation. */
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
+  /** L1 relevant memories — dynamic, per-turn (placement via recall.injectionMode). */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /**
+   * Stable recall context (persona, scene nav, tools guide).
+   * Core emits this field; OpenClaw adapter maps it to prependSystemContext by default
+   * for prompt-cache friendliness (issue #120).
+   */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
