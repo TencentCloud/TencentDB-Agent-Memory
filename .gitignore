@@ -47,3 +47,4 @@ test-offload-sessions.sh
 
 # Claude Code adapter local experiment artifacts
 .claude-tdai-experiments/
+.pi-tdai-experiments/
