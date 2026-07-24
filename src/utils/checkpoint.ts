@@ -332,6 +332,41 @@ export class CheckpointManager {
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
   }
 
+  /**
+   * Reconcile aggregate counters with the current storage backend.
+   *
+   * L0/L1 records can be removed outside the normal append path (TTL cleanup,
+   * manual JSONL pruning, SQLite maintenance). The checkpoint counters are
+   * increment-only during capture/extraction, so they otherwise drift upward
+   * forever after deletes.
+   */
+  async recalibrateCounts(actual: {
+    l0ConversationsCount?: number;
+    totalMemoriesExtracted?: number;
+  }): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      if (actual.l0ConversationsCount !== undefined) {
+        cp.l0_conversations_count = Math.max(0, actual.l0ConversationsCount);
+      }
+
+      if (actual.totalMemoriesExtracted !== undefined) {
+        const nextTotal = Math.max(0, actual.totalMemoriesExtracted);
+        const removedMemories = Math.max(0, cp.total_memories_extracted - nextTotal);
+        cp.total_memories_extracted = nextTotal;
+        if (removedMemories > 0) {
+          cp.memories_since_last_persona = Math.max(0, cp.memories_since_last_persona - removedMemories);
+        }
+      }
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrateCounts: ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
   // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================
