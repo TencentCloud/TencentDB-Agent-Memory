@@ -385,6 +385,31 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Claude Code 与 Codex（MCP）
+
+MCP stdio 适配器通过同一个可执行入口，为 Claude Code 和 Codex 提供召回、
+写入、L1/L0 检索、健康检查与会话刷新工具。先启动 Gateway，再注册适配器：
+
+```bash
+# Claude Code
+claude mcp add --scope project --transport stdio \
+  --env TDAI_MCP_GATEWAY_URL=http://127.0.0.1:8420 \
+  --env TDAI_MCP_SESSION_KEY=my-project \
+  tencentdb-memory \
+  -- npx -y --package @tencentdb-agent-memory/memory-tencentdb tdai-memory-mcp
+
+# Codex
+codex mcp add tencentdb-memory \
+  --env TDAI_MCP_GATEWAY_URL=http://127.0.0.1:8420 \
+  --env TDAI_MCP_SESSION_KEY=my-project \
+  -- npx -y --package @tencentdb-agent-memory/memory-tencentdb tdai-memory-mcp
+```
+
+MCP 没有通用的 before-prompt 或 turn-completed 生命周期钩子，因此召回和写入
+由模型主动调用。服务端会在初始化时下发工具使用说明；如需确定性行为，请在
+`CLAUDE.md` 或 `AGENTS.md` 中加入相同规则。架构图、数据流、环境变量和后续
+平台扩展规范见[跨平台适配指南](./docs/cross-platform-adapters.md)。
+
 
 ## 🔒 Gateway 安全配置（可选）
 
@@ -527,6 +552,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| MCP 适配器 | 为 Claude Code 与 Codex 复用召回、写入和检索工具 |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -537,6 +563,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
+| [`docs/cross-platform-adapters.md`](./docs/cross-platform-adapters.md) | 适配器架构、MCP 配置与平台差异 |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
