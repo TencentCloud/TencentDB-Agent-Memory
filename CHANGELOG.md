@@ -4,6 +4,14 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 新功能
+
+- **Offload V2 `result_ref` 恢复接口**：新增 `POST /v2/offload/read-ref`，复用现有鉴权并将 `result_ref` 绑定到当前 session；支持全文、子串和行范围读取，服务端限制返回 token 数，本地与 COS 存储后端均可使用。
+
+---
+
 ## [1.0.1] - 2026-07-13
 
 ### 🐛 修复

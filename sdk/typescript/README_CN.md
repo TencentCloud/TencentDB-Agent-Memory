@@ -76,6 +76,15 @@ const compacted = await client.offloadCompact({
 });
 console.log(compacted.messages, compacted.report);
 
+// 按压缩消息中的 result_ref 恢复归档工具结果
+const ref = await client.offloadReadRef({
+  session_id: "agent_sess_123",
+  result_ref: "offload/agent_sess_123/refs/call_1.md",
+  query: "相关片段",
+  max_tokens: 800,
+});
+console.log(ref.content, ref.truncated);
+
 // Offload v2: 查询任务流程图（MMD）
 const mmd = await client.offloadQueryMmd({ session_id: "agent_sess_123", limit: 1 });
 console.log(mmd.current_mmd, mmd.mmds);
@@ -104,6 +113,7 @@ const raw = await client.readFile("scene_blocks/工作.md");
 | L3 | `writeCore()` | `POST /v2/core/write` |
 | Offload | `offloadIngest()` | `POST /v2/offload/ingest` |
 | Offload | `offloadCompact()` | `POST /v2/offload/compact` |
+| Offload | `offloadReadRef()` | `POST /v2/offload/read-ref` |
 | Offload | `offloadQueryMmd()` | `POST /v2/offload/query-mmd` |
 
 ## 错误处理

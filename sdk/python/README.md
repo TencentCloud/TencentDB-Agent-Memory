@@ -80,6 +80,15 @@ compacted = client.offload_compact(
 )
 print(compacted["messages"], compacted["report"])
 
+# Recover an archived tool result referenced by a compacted message
+ref = client.offload_read_ref(
+    session_id="agent_sess_123",
+    result_ref="offload/agent_sess_123/refs/call_1.md",
+    query="relevant section",
+    max_tokens=800,
+)
+print(ref["content"], ref["truncated"])
+
 # Read memory pipeline artifacts (e.g. persona.md, scene_blocks/*.md)
 raw = client.read_file("scene_blocks/工作.md")
 ```
@@ -122,6 +131,7 @@ asyncio.run(main())
 | L3 | `write_core()` | `POST /v2/core/write` |
 | Offload | `offload_ingest()` | `POST /v2/offload/ingest` |
 | Offload | `offload_compact()` | `POST /v2/offload/compact` |
+| Offload | `offload_read_ref()` | `POST /v2/offload/read-ref` |
 | Offload | `offload_query_mmd()` | `POST /v2/offload/query-mmd` |
 
 ## Error Handling

@@ -10,6 +10,7 @@ import { parseV2Auth, successEnvelope, errorEnvelope, makeRequestId } from "../g
 import { handleIngest } from "./ingest-handler.js";
 import { handleMmdQuery } from "./mmd-handler.js";
 import { handleCompaction } from "./compact/compaction-handler.js";
+import { handleReadRef } from "./read-ref-handler.js";
 import { MmdQuerySchema } from "./schemas.js";
 
 export interface OffloadV2Deps {
@@ -80,6 +81,20 @@ export async function handleOffloadV2Route(
         config,
         logger: deps.logger,
       }, requestId, parseJsonBody, sendJson, successEnvelope, errorEnvelope);
+      return true;
+
+    case "POST /v2/offload/read-ref":
+      await handleReadRef(
+        req,
+        res,
+        auth,
+        storage,
+        requestId,
+        parseJsonBody,
+        sendJson,
+        successEnvelope,
+        errorEnvelope,
+      );
       return true;
 
     default:

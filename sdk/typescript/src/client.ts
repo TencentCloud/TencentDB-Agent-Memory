@@ -1,7 +1,7 @@
 /**
  * TencentDB Agent Memory v2 TypeScript SDK — `MemoryClient`.
  *
- * 14 methods mapping 1:1 to the v2 data-plane API.
+ * 18 methods mapping 1:1 to the v2 data-plane API.
  */
 
 import { HttpTransport, type HttpTransportOptions } from "./http.js";
@@ -29,6 +29,8 @@ import type {
   OffloadCompactRequest,
   OffloadIngestData,
   OffloadIngestRequest,
+  OffloadReadRefData,
+  OffloadReadRefRequest,
   OffloadQueryMmdData,
   OffloadQueryMmdRequest,
   ScenarioFile,
@@ -154,7 +156,7 @@ export class MemoryClient {
     return this.http.post(`${V2}/core/write`, params as unknown as Record<string, unknown>);
   }
 
-  // -- Offload (Compaction + Ingest) ------------------------------------
+  // -- Offload -----------------------------------------------------------
 
   /**
    * Send tool pairs (+ optional context) to offload server for L1 processing.
@@ -170,6 +172,13 @@ export class MemoryClient {
    */
   offloadCompact(params: OffloadCompactRequest): Promise<OffloadCompactData> {
     return this.http.post(`${V2}/offload/compact`, stripUndefined(params as unknown as Record<string, unknown>));
+  }
+
+  /**
+   * Recover an archived tool result referenced by a compacted message.
+   */
+  offloadReadRef(params: OffloadReadRefRequest): Promise<OffloadReadRefData> {
+    return this.http.post(`${V2}/offload/read-ref`, stripUndefined(params as unknown as Record<string, unknown>));
   }
 
   /**

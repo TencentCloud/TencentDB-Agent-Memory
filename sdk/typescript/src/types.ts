@@ -245,6 +245,22 @@ export interface OffloadCompactData {
   report: OffloadCompactReport;
 }
 
+export interface OffloadReadRefRequest {
+  session_id: string;
+  result_ref: string;
+  query?: string;
+  start_line?: number;
+  end_line?: number;
+  max_tokens?: number;
+}
+
+export interface OffloadReadRefData {
+  result_ref: string;
+  content: string;
+  truncated: boolean;
+  match_found?: boolean;
+}
+
 export interface OffloadQueryMmdRequest {
   session_id: string;
   limit?: number;

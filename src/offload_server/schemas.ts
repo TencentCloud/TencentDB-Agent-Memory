@@ -78,3 +78,23 @@ export const MmdQuerySchema = z.object({
   session_id: safeSessionId,
   limit: z.number().int().min(1).optional(),
 });
+
+export const ReadRefRequestSchema = z
+  .object({
+    session_id: safeSessionId,
+    result_ref: z.string().trim().min(1).max(1000),
+    query: z.string().trim().min(1).max(1000).optional(),
+    start_line: z.number().int().min(1).optional(),
+    end_line: z.number().int().min(1).optional(),
+    max_tokens: z.number().int().min(1).max(4096).default(1600),
+  })
+  .refine(
+    (data) => data.start_line === undefined || data.end_line === undefined || data.start_line <= data.end_line,
+    { message: "start_line must not exceed end_line" },
+  )
+  .refine(
+    (data) => data.query === undefined || (data.start_line === undefined && data.end_line === undefined),
+    { message: "query cannot be combined with start_line or end_line" },
+  );
+
+export type ReadRefRequest = z.infer<typeof ReadRefRequestSchema>;

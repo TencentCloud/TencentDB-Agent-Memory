@@ -28,6 +28,8 @@ export type {
   OffloadToolPair, OffloadRecentMessage,
   OffloadIngestRequest, OffloadIngestData,
   OffloadCompactRequest, OffloadCompactData, OffloadCompactReport,
+  OffloadReadRefRequest, OffloadReadRefData,
+  OffloadQueryMmdRequest, OffloadQueryMmdData,
   // Common
   ApiResponseEnvelope,
 } from "./types.js";
