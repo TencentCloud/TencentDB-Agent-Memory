@@ -333,6 +333,44 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Recalculate — reconcile counters with actual data
+  // ============================
+
+  /**
+   * Recalculate checkpoint counters from actual data source counts.
+   *
+   * After cleanup operations (memory-cleaner, manual JSONL pruning, or
+   * pipeline state deletion), the checkpoint counters may drift from the
+   * actual number of records in the store.
+   *
+   * This method overwrites the specified counters under the file lock.
+   * Counters not provided are left unchanged.
+   *
+   * @param actual  Actual counts from the data store. All fields optional.
+   */
+  async recalculate(actual: {
+    l0Conversations?: number;
+    l1Memories?: number;
+    totalProcessed?: number;
+    scenesProcessed?: number;
+  }): Promise<Checkpoint> {
+    return this.mutate((cp) => {
+      if (actual.l0Conversations !== undefined) {
+        cp.l0_conversations_count = actual.l0Conversations;
+      }
+      if (actual.l1Memories !== undefined) {
+        cp.total_memories_extracted = actual.l1Memories;
+      }
+      if (actual.totalProcessed !== undefined) {
+        cp.total_processed = actual.totalProcessed;
+      }
+      if (actual.scenesProcessed !== undefined) {
+        cp.scenes_processed = actual.scenesProcessed;
+      }
+    });
+  }
+
+  // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================
 

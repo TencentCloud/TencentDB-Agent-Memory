@@ -195,7 +195,21 @@ const ZH_STOP_WORDS = new Set([
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
+/**
+ * Strip FTS5 boolean and proximity operators (AND, OR, NOT, NEAR) from raw
+ * user input to prevent query semantic injection.
+ *
+ * Although individual tokens are wrapped in double quotes by `buildFtsQuery`,
+ * which neutralises most operator syntax, explicit sanitisation provides
+ * defense-in-depth for edge cases where unquoted operators could reach the
+ * FTS5 parser.
+ */
+function sanitizeFtsInput(raw: string): string {
+  return raw.replace(/\b(AND|OR|NOT|NEAR)\b/gi, " ");
+}
+
 export function buildFtsQuery(raw: string): string | null {
+  const cleaned = sanitizeFtsInput(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +217,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(cleaned, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +232,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      cleaned
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
