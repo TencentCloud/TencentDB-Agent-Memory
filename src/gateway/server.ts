@@ -601,7 +601,7 @@ export class TdaiGateway {
         }
       }
 
-      // ── Offload V2 routes (async ingest + mmd query) ──
+      // ── Offload V2 routes (ingest, compact, ref recovery, MMD query) ──
       const offloadDeps: OffloadV2Deps = {
         resolveStorage: v2Deps.resolveStorage,
         getStorage: v2Deps.getStorage ?? (() => undefined),

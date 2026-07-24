@@ -184,7 +184,10 @@ export function replaceWithSummary(msg: Message, entry: OffloadEntry): void {
     `Summary: ${entry.summary}`,
   ];
   if (entry.result_ref) {
-    parts.push(`原始工具结果已存档，如需查看完整内容请调用 tdai_read_cos(path="${entry.result_ref}")`);
+    parts.push(
+      `Original tool result archived at result_ref="${entry.result_ref}". ` +
+      "Use the Offload V2 result-ref recovery API to retrieve it when needed.",
+    );
   }
   const summaryContent = parts.join("\n");
 

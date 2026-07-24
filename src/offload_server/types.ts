@@ -24,7 +24,7 @@ export interface OffloadEntry {
   timestamp: string;
   score: number;
   node_id: string | null;
-  /** Full relative path to ref file storing original tool result (e.g. "offload/{sessionId}/refs/call_214.md"), readable via tdai_read_cos */
+  /** Full relative path to an archived tool result, readable through POST /v2/offload/read-ref. */
   result_ref?: string;
 }
 

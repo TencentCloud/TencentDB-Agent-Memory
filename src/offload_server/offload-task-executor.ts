@@ -213,7 +213,7 @@ export class OffloadTaskExecutor {
       const header = `# Tool Result: ${toolName}\n\n**tool_call_id:** ${id}\n**Timestamp:** ${timestamp}\n\n---\n\n`;
       const refPath = `${basePath}/refs/${id}.md`;
       await storage.writeFile(refPath, header + resultStr);
-      // Set result_ref on the matching entry (full relative path for tdai_read_cos)
+      // Set result_ref on the matching entry for bounded recovery through Offload V2.
       const entry = newEntries.find((e) => e.tool_call_id === id);
       if (entry) entry.result_ref = `${basePath}/refs/${id}.md`;
     }

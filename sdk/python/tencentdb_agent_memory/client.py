@@ -255,7 +255,7 @@ class MemoryClient:
         """``POST /core/write``"""
         return self._stub.post(f"{_V2}/core/write", {"content": content})
 
-    # -- Offload (Ingest + Compact + Query-MMD) ----------------------------
+    # -- Offload (Ingest + Compact + Read-Ref + Query-MMD) -----------------
 
     def offload_ingest(
         self,
@@ -333,6 +333,47 @@ class MemoryClient:
                 "total_tokens": total_tokens,
                 "context_window": context_window,
                 "message_tokens": message_tokens,
+            }),
+        )
+
+    def offload_read_ref(
+        self,
+        session_id: str,
+        result_ref: str,
+        *,
+        query: Optional[str] = None,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v2/offload/read-ref`` — read an archived tool result.
+
+        The server verifies that ``result_ref`` belongs to ``session_id`` and
+        bounds the returned content. ``query`` and line-range options are
+        mutually exclusive.
+
+        Parameters
+        ----------
+        session_id : str
+            Session that owns the archived result.
+        result_ref : str
+            Reference returned by Offload V2 compaction.
+        query : str, optional
+            Case-insensitive substring used to select a bounded excerpt.
+        start_line, end_line : int, optional
+            One-based inclusive line range.
+        max_tokens : int, optional
+            Maximum response token budget. The server applies its own hard cap.
+        """
+        return self._stub.post(
+            f"{_V2}/offload/read-ref",
+            _strip_none({
+                "session_id": session_id,
+                "result_ref": result_ref,
+                "query": query,
+                "start_line": start_line,
+                "end_line": end_line,
+                "max_tokens": max_tokens,
             }),
         )
 
@@ -542,7 +583,7 @@ class AsyncMemoryClient:
     async def write_core(self, content: str) -> Dict[str, Any]:
         return await self._stub.post(f"{_V2}/core/write", {"content": content})
 
-    # -- Offload (Ingest + Compact + Query-MMD) ----------------------------
+    # -- Offload (Ingest + Compact + Read-Ref + Query-MMD) -----------------
 
     async def offload_ingest(
         self,
@@ -583,6 +624,29 @@ class AsyncMemoryClient:
                 "total_tokens": total_tokens,
                 "context_window": context_window,
                 "message_tokens": message_tokens,
+            }),
+        )
+
+    async def offload_read_ref(
+        self,
+        session_id: str,
+        result_ref: str,
+        *,
+        query: Optional[str] = None,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """``POST /v2/offload/read-ref``（异步）"""
+        return await self._stub.post(
+            f"{_V2}/offload/read-ref",
+            _strip_none({
+                "session_id": session_id,
+                "result_ref": result_ref,
+                "query": query,
+                "start_line": start_line,
+                "end_line": end_line,
+                "max_tokens": max_tokens,
             }),
         )
 

@@ -80,6 +80,15 @@ compacted = client.offload_compact(
 )
 print(compacted["messages"], compacted["report"])
 
+# 按压缩消息中的 result_ref 恢复归档工具结果
+ref = client.offload_read_ref(
+    session_id="agent_sess_123",
+    result_ref="offload/agent_sess_123/refs/call_1.md",
+    query="相关片段",
+    max_tokens=800,
+)
+print(ref["content"], ref["truncated"])
+
 # 读取记忆 pipeline 产物（如 persona.md、scene_blocks/*.md）
 raw = client.read_file("scene_blocks/工作.md")
 ```
@@ -122,6 +131,7 @@ asyncio.run(main())
 | L3 | `write_core()` | `POST /v2/core/write` |
 | Offload | `offload_ingest()` | `POST /v2/offload/ingest` |
 | Offload | `offload_compact()` | `POST /v2/offload/compact` |
+| Offload | `offload_read_ref()` | `POST /v2/offload/read-ref` |
 | Offload | `offload_query_mmd()` | `POST /v2/offload/query-mmd` |
 
 ## 错误处理

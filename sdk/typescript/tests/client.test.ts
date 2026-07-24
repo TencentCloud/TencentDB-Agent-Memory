@@ -37,6 +37,11 @@ function createMock(): MockTransport {
     "/v2/scenario/rm": {},
     "/v2/core/read": { content: "# core", created_at: "t", updated_at: "t" },
     "/v2/core/write": { updated_at: "t" },
+    "/v2/offload/read-ref": {
+      result_ref: "offload/s1/refs/call-1.md",
+      content: "archived result",
+      truncated: false,
+    },
   };
   return m;
 }
@@ -184,6 +189,32 @@ describe("L3 Core", () => {
     const client = new MemoryClient(mock);
     await client.writeCore({ content: "# new core" });
     expect(mock.calls[0]!.body).toEqual({ content: "# new core" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Offload
+// ---------------------------------------------------------------------------
+
+describe("Offload", () => {
+  it("offloadReadRef sends the reference and strips undefined filters", async () => {
+    const mock = createMock();
+    const client = new MemoryClient(mock);
+    const result = await client.offloadReadRef({
+      session_id: "s1",
+      result_ref: "offload/s1/refs/call-1.md",
+      query: "result",
+      max_tokens: 800,
+    });
+
+    expect(result.content).toBe("archived result");
+    expect(mock.calls[0]!.path).toBe("/v2/offload/read-ref");
+    expect(mock.calls[0]!.body).toEqual({
+      session_id: "s1",
+      result_ref: "offload/s1/refs/call-1.md",
+      query: "result",
+      max_tokens: 800,
+    });
   });
 });
 
