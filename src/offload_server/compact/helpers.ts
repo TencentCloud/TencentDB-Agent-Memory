@@ -185,8 +185,8 @@ export function replaceWithSummary(msg: Message, entry: OffloadEntry): void {
   ];
   if (entry.result_ref) {
     parts.push(
-      `Original tool result archived at result_ref="${entry.result_ref}". ` +
-      "Use the Offload V2 result-ref recovery API to retrieve it when needed.",
+      "原始工具结果已存档，如需查看完整内容请调用 Offload V2 " +
+      `result_ref 恢复接口（POST /v2/offload/read-ref，result_ref="${entry.result_ref}"）`,
     );
   }
   const summaryContent = parts.join("\n");

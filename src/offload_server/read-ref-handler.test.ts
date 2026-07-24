@@ -2,6 +2,7 @@ import type http from "node:http";
 import { getEncoding } from "js-tiktoken";
 import { describe, expect, it, vi } from "vitest";
 import type { StorageAdapter } from "../core/storage/adapter.js";
+import { replaceWithSummary } from "./compact/helpers.js";
 import { handleOffloadV2Route } from "./router.js";
 import {
   handleReadRef,
@@ -103,6 +104,26 @@ describe("sliceRefContent", () => {
       truncated: false,
       match_found: false,
     });
+  });
+});
+
+describe("compaction recovery hint", () => {
+  it("keeps the existing Chinese wording while pointing to the V2 route", () => {
+    const message: any = { role: "tool", content: "raw result" };
+
+    replaceWithSummary(message, {
+      tool_call_id: "call-1",
+      tool_call: "search",
+      summary: "result summary",
+      timestamp: "2026-07-24T00:00:00Z",
+      score: 2,
+      node_id: "node-1",
+      result_ref: "offload/session-1/refs/call-1.md",
+    });
+
+    expect(message.content).toContain("原始工具结果已存档，如需查看完整内容请调用");
+    expect(message.content).toContain("POST /v2/offload/read-ref");
+    expect(message.content).not.toContain("tdai_read_cos");
   });
 });
 

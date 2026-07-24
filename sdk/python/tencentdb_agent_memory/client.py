@@ -346,24 +346,23 @@ class MemoryClient:
         end_line: Optional[int] = None,
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """``POST /v2/offload/read-ref`` — read an archived tool result.
+        """``POST /v2/offload/read-ref`` — 读取已归档的原始工具结果。
 
-        The server verifies that ``result_ref`` belongs to ``session_id`` and
-        bounds the returned content. ``query`` and line-range options are
-        mutually exclusive.
+        服务端会验证 ``result_ref`` 是否属于 ``session_id``，并限制返回内容长度。
+        ``query`` 与行范围参数不能同时使用。
 
         Parameters
         ----------
         session_id : str
-            Session that owns the archived result.
+            归档结果所属的会话 ID。
         result_ref : str
-            Reference returned by Offload V2 compaction.
+            Offload V2 压缩结果中返回的引用。
         query : str, optional
-            Case-insensitive substring used to select a bounded excerpt.
+            用于定位片段的子串，匹配时不区分大小写。
         start_line, end_line : int, optional
-            One-based inclusive line range.
+            从 1 开始且包含首尾的行范围。
         max_tokens : int, optional
-            Maximum response token budget. The server applies its own hard cap.
+            返回内容的最大 token 数，服务端另有硬上限。
         """
         return self._stub.post(
             f"{_V2}/offload/read-ref",
