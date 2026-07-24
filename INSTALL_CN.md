@@ -16,7 +16,7 @@
 
 ```bash
 # 1) 拿脚本
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 
 # 2) 准备 .env（把 LLM 相关字段填成真值）
@@ -67,7 +67,7 @@ $EDITOR .env
 
 - 第一次访问会看到登录页，用 `start-all.sh` 结尾打印的 admin `user_key`
   （即 `deploy/global-images/.admin-key` 文件里那串 `sk-mem-...`）登录
-- admin 登录后能**创建子用户**，但目前**不能直接创建 Team / Agent / Task
+- admin 登录后能**创建 Team 和子用户**，但目前**不能直接创建 Agent / Wiki
   / Skill 等业务资产**（业务侧 API 会做 `owner_user_id === caller` 校验，
   system_admin 目前不在允许列表里；这层增强会在后续版本放开）
 - **正确姿势**：admin 建一把 `normal` 用户 → 复制新用户的 `user_key` →
@@ -90,7 +90,7 @@ curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
-  -d '{"username":"you","external_id":"you"}' | jq
+  -d '{"username":"you"}' | jq
 ```
 
 返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
@@ -193,6 +193,7 @@ curl -s http://localhost:8420/health | jq .services.pipelineWorker
 你可能用 admin key 直接跑 CC 了 —— admin **不能拥有业务资产**（当前限制），
 所以列表为空。正确做法：先按第 1.5 步建一个业务用户，用它的 `default_user_key`
 作为 `ANTHROPIC_AUTH_TOKEN`。同时那个用户名下必须先在面板里建过 Team/Agent。
+
 
 **Q: 面板显示"Panel API 8125 未启动"？**
 `docker ps` 检查 `tdai-memory-hub` 是不是 healthy；不 healthy 看

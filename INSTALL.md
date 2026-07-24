@@ -19,7 +19,7 @@ consume team memory / knowledge / skills through the proxy:
 
 ```bash
 # 1) Fetch the scripts
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 
 # 2) Prepare .env (fill in real LLM values)
@@ -73,11 +73,11 @@ Open **<http://localhost:8125>** in your browser (Panel UI).
 - The first visit asks for a `user_key` — use the admin one printed at the
   end of `start-all.sh` (stored in `deploy/global-images/.admin-key`, a
   `sk-mem-...` string)
-- Once logged in you are `system_admin`, but at this stage admin can
-  **only manage sub-users** — it **cannot directly own business assets
-  (Team / Agent / Task / Skill)** because the business APIs enforce
-  `owner_user_id === caller` and `system_admin` isn't yet in the allow-list
-  (this restriction will be lifted in a future release).
+- Once logged in you are `system_admin`. It can **create Teams and
+  sub-users**, but at this stage **cannot directly create other business
+  assets such as Agent / Wiki / Skill** (the business APIs enforce
+  `owner_user_id === caller`, and `system_admin` isn't yet in the
+  allow-list; this restriction will be lifted in a future release).
 - **Correct pattern**: admin creates a `normal` user → copy that user's
   `user_key` → log out → log back in as the new user → everything from
   here on (Team / Agent / Task) is owned by the new user.
@@ -99,7 +99,7 @@ curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
-  -d '{"username":"you","external_id":"you"}' | jq
+  -d '{"username":"you"}' | jq
 ```
 
 The response body's `data.default_user_key` (`sk-mem-...`) is the login
