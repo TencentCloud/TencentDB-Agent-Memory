@@ -385,6 +385,22 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Cline CLI
+
+Cline CLI 可通过
+[`cline-adapter/tdai-memory`](./cline-adapter/tdai-memory) 中的零依赖插件连接
+Gateway。插件会在每次运行前召回记忆、把记忆注入模型请求，并在成功结束后
+捕获对话；Gateway 不可用时自动降级，不阻断 Cline。
+
+安装为本地插件：
+
+```bash
+cline plugin install ./cline-adapter/tdai-memory --cwd .
+```
+
+配置项、生命周期和限制见
+[Cline 适配器说明](./cline-adapter/tdai-memory/README.md)。
+
 
 ## 🔒 Gateway 安全配置（可选）
 
