@@ -238,6 +238,18 @@ async function _doInitStores(
     embeddingService = undefined;
   }
 
+  // Reconcile data-derived checkpoint counters once on startup. The store is
+  // preferred when healthy; JSONL is used automatically in degraded mode.
+  try {
+    const checkpoint = new CheckpointManager(pluginDataDir, logger);
+    await checkpoint.recalibrate(vectorStore);
+  } catch (err) {
+    logger.warn(
+      `${TAG} Checkpoint recalibration failed (non-fatal): ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   return { vectorStore, embeddingService, needsReindex, reindexReason };
 }
 
