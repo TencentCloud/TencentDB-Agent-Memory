@@ -1063,10 +1063,43 @@ class MemoryTencentdbProvider(MemoryProvider):
     # -- Optional hooks -------------------------------------------------------
 
     def on_memory_write(self, action: str, target: str, content: str) -> None:
-        """Mirror built-in memory writes to memory-tencentdb for indexing."""
-        # TODO: Implement mirroring of Hermes builtin MEMORY.md/USER.md writes
-        # to memory-tencentdb's recall index for conflict suppression and dedup.
-        pass
+        """Mirror built-in memory writes to memory-tencentdb for indexing.
+
+        Hermes fires this hook when its built-in memory layer (the one
+        that writes to ``MEMORY.md`` / ``USER.md``) records a new
+        entry. The intent is to feed that write into the L1 index so
+        the dedup layer can suppress duplicates and the L3 persona
+        builder can see the user's stated preferences. Without this
+        mirror, the two memory systems run in parallel with no
+        cross-pollination — the user pays the L1/L2/L3 compute while
+        the builtin write stays invisible to it.
+
+        Implementation: encode the write as a synthetic turn and call
+        ``/capture``. The L1 extractor sees the content, the dedup
+        layer can match against it, and L3 picks it up on the next
+        persona refresh — all without blocking the caller. The
+        ``(memory_write …)`` prefix lets a future LLM-side filter
+        recognize and skip these synthetic entries during scene
+        extraction if the natural-turn framing becomes a problem.
+        """
+        if not self._client or not self._gateway_available:
+            return
+        try:
+            self._client.capture(
+                user_content=f"(memory_write action={action} target={target}) {content}",
+                assistant_content="(builtin memory write recorded)",
+                session_key=self._session_id,
+                session_id=self._session_id,
+                user_id=self._user_id,
+            )
+        except Exception as e:
+            # Mirror failures must never propagate. The builtin write
+            # already succeeded in Hermes's own store; failing to
+            # mirror it is a soft-loss of cross-system visibility,
+            # not a write failure, and the next sync_turn() in the
+            # same session will eventually re-surface the same
+            # content through normal conversation capture.
+            logger.debug("memory-tencentdb on_memory_write mirror failed: %s", e)
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Trigger session-level flush on the Gateway."""
