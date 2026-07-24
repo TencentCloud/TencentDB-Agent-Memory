@@ -50,12 +50,12 @@ export async function performAutoCapture(params: {
   pluginDataDir: string;
   logger?: Logger;
   scheduler?: MemoryPipelineManager;
-  /** Clean original user prompt from before_prompt_build cache (pre-prependContext). */
+  /** Clean original user prompt captured before prompt hooks. */
   originalUserText?: string;
   /**
    * Number of messages in the session at before_prompt_build time.
    * Used by l0-recorder to locate the exact user message that originalUserText
-   * corresponds to: rawMessages[originalUserMessageCount] is the polluted user message.
+   * corresponds to, including on legacy hosts that expose injected content.
    */
   originalUserMessageCount?: number;
   /** Epoch ms when the plugin was registered (cold-start time).

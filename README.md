@@ -161,6 +161,8 @@ Defaults to a local `SQLite + sqlite-vec` backend.
 
 Once enabled, TencentDB Agent Memory automatically handles conversation capture, memory extraction, scene aggregation, persona generation, and recall before the next turn.
 
+Auto-recall is partitioned for prefix-based prompt caches: stable Persona, Scene Navigation, and tool guidance are placed before OpenClaw's cache boundary, while query-dependent L1 memories occupy one dynamic system-prompt suffix. Recalled memories are not copied into user-message history, so long sessions do not accumulate one injected block per turn.
+
 ### 1.3 Enable short-term compression (optional, requires version ≥ 0.3.4)
 
 ```jsonc

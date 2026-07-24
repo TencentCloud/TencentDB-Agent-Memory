@@ -18,6 +18,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
+import { flattenRecallPromptContext } from "../core/hooks/auto-recall.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
@@ -379,11 +380,14 @@ export class TdaiGateway {
     const startMs = Date.now();
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
+    const context = flattenRecallPromptContext(result);
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${context.length} chars`);
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      // Hermes has no system-prompt cache boundary, so return both partitions
+      // as one context block while preserving stable-before-dynamic order.
+      context,
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
