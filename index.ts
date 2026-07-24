@@ -57,7 +57,7 @@ let pluginStartTimestamp = 0;
 
 /**
  * Cache original user prompts and message counts across hooks.
- * - text: clean user prompt before prependContext injection
+ * - text: clean user prompt before any hook context is applied
  * - ts: cache creation time (for TTL sweep)
  * - messageCount: session message count at before_prompt_build time,
  *   used as fallback slice offset if timestamp cursor is unreliable
@@ -584,12 +584,14 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
+        if (result?.prependSystemContext || result?.appendSystemContext || result?.prependContext) {
+          const prependSystemLen = result.prependSystemContext?.length ?? 0;
           const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+          const legacyPrependLen = result.prependContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `prependSystemContext=${prependSystemLen} chars, ` +
+            `appendSystemContext=${appendLen} chars, prependContext=${legacyPrependLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
@@ -612,11 +614,10 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // Upgrade safeguard: older plugin/host combinations injected L1 recall into
+  // user messages. Keep stripping those blocks if they reach persistence so a
+  // rollback or queued legacy turn cannot restart transcript accumulation.
+  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip legacy <relevant-memories>)`);
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;

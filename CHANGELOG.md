@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### ⚡ 性能
+
+- **Auto-recall prompt cache 分区** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：稳定的 Persona / Scene Navigation / Tools Guide 改用 `prependSystemContext`，进入 OpenClaw `CACHE_BOUNDARY` 之前；随查询变化的 L1 召回改用 `appendSystemContext`，不再通过 `prependContext` 写入用户消息。该结构避免 `showInjected` 路径每轮持久化一份召回块，同时在连续轮次召回结果相同时保持完整请求前缀一致。Gateway / Hermes 会按稳定段、动态段顺序合并，保持原有单字符串协议兼容。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
