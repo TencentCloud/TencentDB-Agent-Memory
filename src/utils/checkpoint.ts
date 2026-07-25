@@ -100,11 +100,11 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Lifetime count of successful L0 capture batches */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Lifetime count of successfully stored L1 memories */
   total_memories_extracted: number;
 }
 
