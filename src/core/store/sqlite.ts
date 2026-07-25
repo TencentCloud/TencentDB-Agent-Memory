@@ -175,6 +175,64 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * FTS5 reserved bareword operators.
+ *
+ * Per https://www.sqlite.org/fts5.html#full_text_query_syntax these are
+ * parsed as query operators when they appear as bare words.  They are pure
+ * ASCII letters, so the whitelist below would otherwise keep them — we drop
+ * them explicitly so they can never influence query semantics (even though
+ * they would be harmless as quoted phrases, dropping them keeps the query
+ * clean and unambiguous).
+ *
+ * Comparison is case-insensitive: FTS5 treats `and`/`AND`/`And` identically.
+ */
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+/**
+ * Sanitize a single raw token into one or more safe FTS5 query tokens.
+ *
+ * This is the **whitelist** defense for FTS5 query injection (issue #160):
+ * user input is never forwarded into the `MATCH` expression as live syntax.
+ * Instead we keep only Unicode letters (`\p{L}`), Unicode numbers (`\p{N}`),
+ * and `_`; every other character — `"`, `'`, `(`, `)`, `*`, `:`, `^`, `-`,
+ * control chars, emoji, punctuation — is treated as a separator and removed.
+ *
+ * A mixed token such as `foo:bar` is therefore split into `foo` and `bar`
+ * (preserving recall) rather than collapsing to `foobar`.  Reserved operators
+ * (`AND`/`OR`/`NOT`/`NEAR`) that survive the whitelist as whole tokens are
+ * dropped.
+ *
+ * Each returned token is subsequently wrapped in double quotes by
+ * `buildFtsQuery()`, so even the (impossible) case of a surviving syntax char
+ * could not escape the phrase — defense in depth.
+ *
+ * @param token  A single raw token (e.g. from jieba or a regex split).
+ * @returns      Array of safe, non-empty query tokens (possibly empty).
+ *
+ * @example
+ * ```ts
+ * sanitizeFtsTokens('foo:bar')   // → ['foo', 'bar']
+ * sanitizeFtsTokens('C++')       // → ['C']
+ * sanitizeFtsTokens('alpha*')    // → ['alpha']
+ * sanitizeFtsTokens('AND')       // → []   (reserved operator dropped)
+ * sanitizeFtsTokens('"hi"')      // → ['hi']
+ * sanitizeFtsTokens('!!!')       // → []   (no word characters)
+ * ```
+ */
+export function sanitizeFtsTokens(token: string): string[] {
+  // Whitelist: keep only Unicode letters, numbers, and underscore. Everything
+  // else — FTS5 syntax chars, punctuation, control chars (incl. NUL), emoji —
+  // acts as a separator, so `match` yields the safe sub-tokens directly.
+  const runs = token.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  const out: string[] = [];
+  for (const run of runs) {
+    if (FTS5_RESERVED_OPERATORS.has(run.toUpperCase())) continue;
+    out.push(run);
+  }
+  return out;
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -184,25 +242,33 @@ const ZH_STOP_WORDS = new Set([
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
  *
- * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
- * matching *any* token is returned.  BM25 naturally ranks documents that
- * match more tokens higher, so precision is preserved while recall is
- * significantly improved — especially for longer queries and when running
- * in FTS-only fallback mode (no embedding available).
+ * **Security**: every token — from either the jieba path or the fallback
+ * path — is passed through {@link sanitizeFtsTokens} before it reaches the
+ * `MATCH` expression.  This strips FTS5 syntax characters and drops reserved
+ * operators (`AND`/`OR`/`NOT`/`NEAR`), so user input can never change query
+ * semantics or trigger FTS5 syntax errors (issue #160).  Each surviving token
+ * is then quoted as an FTS5 phrase and the phrases are OR-joined, so a
+ * document matching *any* token is returned.
+ *
+ * BM25 naturally ranks documents that match more tokens higher, so precision
+ * is preserved while recall is significantly improved — especially for longer
+ * queries and when running in FTS-only fallback mode (no embedding available).
  *
  * Example (with jieba):
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
+ * Example (sanitization):
+ *   "alpha AND NOT beta" → '"alpha" OR "beta"'   (operators dropped)
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
 
-  let tokens: string[];
+  let rawTokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
+    rawTokens = jieba
       .cutForSearch(raw, true)
       .map((t) => t.trim())
       .filter((t) => {
@@ -213,19 +279,29 @@ export function buildFtsQuery(raw: string): string | null {
         if (ZH_STOP_WORDS.has(t)) return false;
         return true;
       });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
   } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+    // Fallback: simple Unicode regex split.  Non-word characters are left
+    // as separators; sanitizeFtsTokens will discard them uniformly below.
+    rawTokens = raw.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  }
+
+  // Sanitize every token through the same whitelist — strips FTS5 syntax
+  // chars, splits mixed tokens (e.g. "foo:bar" → "foo","bar"), and drops
+  // reserved bareword operators.  Deduplicate while preserving order.
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+  for (const rawTok of rawTokens) {
+    for (const safe of sanitizeFtsTokens(rawTok)) {
+      if (seen.has(safe)) continue;
+      seen.add(safe);
+      tokens.push(safe);
+    }
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  // Tokens are whitelisted to [letter|number|_], so quoting is defense in
+  // depth — there is no longer any character that could escape the phrase.
+  const quoted = tokens.map((t) => `"${t}"`);
   return quoted.join(" OR ");
 }
 
