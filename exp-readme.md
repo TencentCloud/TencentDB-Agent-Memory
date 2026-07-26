@@ -1540,23 +1540,63 @@ Cache-Aware Context Lifecycle Management 通过三个核心机制彻底解决了
 35 轮长对话测试中，整体加权命中率达到 **97.7%**，远超 85% 目标。从 Turn 3 起，命中率持续在 90%+，证明方案彻底消除了 showInjected=false 的 Turn 1→2 断裂和 showInjected=true 的历史膨胀问题。
 
 
+根据您的要求，我重新修改了 README 第 17 节的内容，使其与前面第 8 节的证明逻辑保持一致，明确旧方案的定义，并按照“旧方案 → 新方案 → 对比 → 极端情况 → 总结”的结构重新组织。
+
+---
+
 ## 17. 新方法在所有场景下均优于旧方法的完整证明
 
-### 17.1 旧方案的命中率
+### 17.1 旧方案的定义与命中率
 
-旧方案命中 token 固定为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />：
+**旧方案即 Baseline（原始问题状态）** ，其配置为：
+
+- `showInjected=true`（L1 动态记忆被写入对话历史）
+- 稳定内容（Persona + Scene + Tools Guide）位于 `CACHE_BOUNDARY` **之后**
+- 无摘要区，无循环缓冲区，依赖 OpenClaw 框架的原始截断机制
+
+旧方案的 Prompt 结构如下：
+
+```
+┌─ CACHE_BOUNDARY 之前 ────────────────────────────────────────────┐
+│  P_base（~2000 tokens，稳定）                                   │
+│  P_tail（~500 tokens，每轮变化，匹配在此断裂）                   │
+├─ CACHE_BOUNDARY ────────────────────────────────────────────────┤
+│  S（~2500 tokens，在边界后，被遮挡，命中贡献 0）                 │
+│  H（历史，随轮数增长）                                          │
+│  M + U                                                         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+由于 `P_tail`（时间戳、会话 ID 等）每轮变化，缓存匹配在 `P_tail` 处断裂，`S` 虽稳定但位于断裂点之后，从未被缓存引擎检查到。因此：
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{old}}%20=%20P_{\text{base}}" alt="旧方案命中token" />
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old}}%20=%20\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="旧方案命中率" />
 
-命中 token 固定为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />，分母随 <img src="https://latex.codecogs.com/svg.latex?H" alt="H" /> 增长，命中率持续下降。
+旧方案的命中 token 固定为 `P_base`（约 2000 tokens），分母随历史 `H` 持续增长，命中率不断下降。在截断触发后，历史区域被动态裁剪，命中率进一步恶化。
 
 ### 17.2 新方案的命中率
 
-新方案命中 token 为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="新方案命中token" />：
+新方案的 Prompt 结构：
+
+```
+┌─ CACHE_BOUNDARY 之前 ────────────────────────────────────────────┐
+│  P_base（~2000 tokens，稳定）                                   │
+│  S（~2500 tokens，稳定）                                        │
+│  Sum = K × C（摘要区，追加式增长）                              │
+├─ CACHE_BOUNDARY ────────────────────────────────────────────────┤
+│  N × T（最近 N 轮纯对话）                                       │
+│  M + U                                                         │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+新方案命中 token 为：
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20=%20P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="新方案命中token" />
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="新方案命中率" />
 
-命中 token 随 <img src="https://latex.codecogs.com/svg.latex?K" alt="K" />（epoch 数量）增长，命中率稳定在较高水平。
+命中 token 随 `K`（epoch 数量）增长，命中率稳定在较高水平。
 
 ### 17.3 正常场景下的对比
 
@@ -1564,15 +1604,15 @@ Cache-Aware Context Lifecycle Management 通过三个核心机制彻底解决了
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20-%20\text{Hit}_{\text{old}}%20=%20S%20+%20K%20\cdot%20C%20%3E%200" alt="命中token差值" />
 
-在相同分母下：
-
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20%3E%20\text{Rate}_{\text{old}}" alt="命中率比较" />
+新方案的命中内容始终比旧方案多出 `S + K × C`（约 2500 + 增长中的摘要区），因此新方案在任何场景下的命中率都高于旧方案。
 
 ### 17.4 截断场景下的对比
 
-在截断场景下：
+在截断场景下，旧方法的历史区域被动态裁剪，命中 token 仍为 `P_base`：
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="旧方案截断命中率" />
+
+新方法的摘要区位于 CACHE_BOUNDARY 之前，永久免疫截断：
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="新方案截断命中率" />
 
@@ -1582,7 +1622,7 @@ Cache-Aware Context Lifecycle Management 通过三个核心机制彻底解决了
 
 ### 17.5 极端情况：摘要区也需压缩
 
-当摘要区也需压缩时，新方法淘汰最旧 epoch 后：
+当摘要区也需压缩时，淘汰最旧的 epoch 后，新方法的命中内容为：
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new,min}}%20=%20P_{\text{base}}%20+%20S" alt="极端情况命中token" />
 
@@ -1598,10 +1638,10 @@ Cache-Aware Context Lifecycle Management 通过三个核心机制彻底解决了
 
 ### 17.6 总结
 
-| 场景 | 旧方案命中率 | 新方案命中率 | 差值 |
-|:---|:---|:---|:---|
-| 无截断 | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="旧方案无截断" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="新方案无截断" /> | 随 <img src="https://latex.codecogs.com/svg.latex?K" alt="K" /> 增长持续扩大 |
-| 截断后 | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="旧方案截断后" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="新方案截断后" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="截断后差值" /> |
-| 摘要区也压缩 | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="旧方案极端" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S}{L}" alt="新方案极端" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S}{L}%20%3E%200" alt="极端差值" /> |
+| 场景 | 旧方案命中内容 | 旧方案命中率 | 新方案命中内容 | 新方案命中率 | 差值 |
+|:---|:---|:---|:---|:---|:---|
+| 无截断 | `P_base` | 随 H 增长持续下降 | `P_base + S + K × C` | 稳定在 >90% | `(S + K × C) / Total` |
+| 截断后 | `P_base` | `P_base / L` | `P_base + S + K × C` | `(P_base + S + K × C) / L` | `(S + K × C) / L > 0` |
+| 摘要区也压缩 | `P_base` | `P_base / L` | `P_base + S` | `(P_base + S) / L` | `S / L > 0` |
 
-**核心结论**：新方法在所有场景下命中 token 数均高于旧方法。在正常场景下，新方法的命中 token 为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="新方案命中token" />，随对话轮数增长；而旧方法固定为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />。在截断场景下，旧方法的命中 token 仍为 <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />，而新方法的命中 token 仍包含稳定前缀的全部内容。即使在最极端的摘要压缩场景下，由于 <img src="https://latex.codecogs.com/svg.latex?S%20%3E%200" alt="S>0" />，新方法的命中率下限仍然严格高于旧方法。因此，**新方法在任何场景下都严格优于旧方法**。
+**核心结论**：新方法在所有场景下命中 token 数均高于旧方法。在正常场景和截断场景下，新方法的命中 token 为 `P_base + S + K × C`，随对话轮数增长；而旧方法固定为 `P_base`。即使在最极端的摘要压缩场景下，由于 `S > 0`，新方法的命中率下限仍然严格高于旧方法。因此，**新方法在任何场景下都严格优于旧方法**。

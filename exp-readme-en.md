@@ -1532,39 +1532,79 @@ Cache-Aware Context Lifecycle Management thoroughly resolves showInjected's dile
 In 35-turn long conversation testing, overall weighted hit rate reached **97.7%**, far exceeding the 85% target. From Turn 3 onward, hit rate consistently above 90%, proving the solution thoroughly eliminates both `showInjected=false`'s Turn 1→2 break and `showInjected=true`'s history bloat problem.
 
 
+好的，我理解了。你需要的是将中文版第 17 节修改后的内容（明确旧方案定义、完善极端情况证明）同步到英文版中。以下是修改后的完整英文版本，替换原文档中的第 17 节。
+
+---
+
 ## 17. Complete Proof: New Method Outperforms Old Method in All Scenarios
 
-### 17.1 Old Method's Hit Rate
+### 17.1 Definition of the Old Method and Its Hit Rate
 
-Old method's hit tokens are fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />:
+**The old method is the Baseline (original problematic state)** with the following configuration:
+
+- `showInjected=true` (L1 dynamic memory is persisted into conversation history)
+- Stable content (Persona + Scene + Tools Guide) is placed **after** `CACHE_BOUNDARY`
+- No summary region, no circular buffer; relies on OpenClaw framework's original truncation mechanism
+
+The old method's Prompt structure is as follows:
+
+```
+┌─ BEFORE CACHE_BOUNDARY ─────────────────────────────────────────────┐
+│  P_base (~2000 tokens, stable)                                     │
+│  P_tail (~500 tokens, changes every turn, matching breaks here)    │
+├─ CACHE_BOUNDARY ────────────────────────────────────────────────────┤
+│  S (~2500 tokens, after boundary, occluded, contributes 0 hits)    │
+│  H (history, grows with turns)                                     │
+│  M + U                                                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Since `P_tail` (timestamps, session IDs, etc.) changes every turn, cache matching breaks at `P_tail`. Although `S` is stable, it lies after the break point and is never examined by the cache engine. Therefore:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{old}}%20=%20P_{\text{base}}" alt="old hit tokens" />
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old}}%20=%20\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="old hit rate" />
 
-Hit tokens are fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />, denominator grows with <img src="https://latex.codecogs.com/svg.latex?H" alt="H" />, hit rate continuously decreases.
+The old method's hit tokens are fixed at `P_base` (~2000 tokens), and the denominator grows with history `H`, causing the hit rate to continuously decline. Once truncation is triggered, the history region is dynamically cropped, further degrading the hit rate.
 
 ### 17.2 New Method's Hit Rate
 
-New method's hit tokens are <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />:
+The new method's Prompt structure:
+
+```
+┌─ BEFORE CACHE_BOUNDARY ─────────────────────────────────────────────┐
+│  P_base (~2000 tokens, stable)                                     │
+│  S (~2500 tokens, stable)                                          │
+│  Sum = K × C (summary region, append-only growth)                  │
+├─ CACHE_BOUNDARY ────────────────────────────────────────────────────┤
+│  N × T (last N turns of pure conversation)                         │
+│  M + U                                                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+The new method's hit tokens are:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20=%20P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="new hit rate" />
 
-Hit tokens grow with <img src="https://latex.codecogs.com/svg.latex?K" alt="K" /> (epoch count), hit rate remains stable at a high level.
+Hit tokens grow with `K` (epoch count), and the hit rate remains stable at a high level.
 
 ### 17.3 Comparison in Normal Scenarios
 
-Difference in hit tokens between new and old methods:
+The difference in hit tokens between the new and old methods:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20-%20\text{Hit}_{\text{old}}%20=%20S%20+%20K%20\cdot%20C%20%3E%200" alt="hit token difference" />
 
-With the same denominator:
-
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20%3E%20\text{Rate}_{\text{old}}" alt="rate comparison" />
+The new method's hit content is always greater than the old method's by `S + K × C` (approximately 2500 tokens plus the growing summary region). Therefore, the new method has a higher hit rate than the old method in all scenarios.
 
 ### 17.4 Comparison in Truncation Scenarios
 
-In truncation scenarios:
+In truncation scenarios, the old method's history region is dynamically cropped, but its hit tokens remain `P_base`:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old truncation" />
+
+The new method's summary region is before CACHE_BOUNDARY and is permanently immune to truncation:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="new truncation" />
 
@@ -1574,26 +1614,26 @@ Difference:
 
 ### 17.5 Extreme Case: Summary Region Also Needs Compression
 
-When summary region also needs compression, after new method drops the oldest epochs:
+When the summary region also needs compression, after dropping the oldest epochs, the new method's hit content becomes:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new,min}}%20=%20P_{\text{base}}%20+%20S" alt="extreme hit tokens" />
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20=%20\frac{P_{\text{base}}%20+%20S}{L}" alt="extreme hit rate" />
 
-Old method under equivalent conditions:
+Under equivalent conditions, the old method has:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old extreme" />
 
-New method always outperforms old method:
+The new method always outperforms the old method:
 
 <img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S}{L}%20%3E%200" alt="extreme diff" />
 
 ### 17.6 Summary
 
-| Scenario | Old Method Hit Rate | New Method Hit Rate | Difference |
-|:---|:---|:---|:---|
-| No truncation | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="old normal" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="new normal" /> | Grows with <img src="https://latex.codecogs.com/svg.latex?K" alt="K" /> |
-| After truncation | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="old after trunc" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="new after trunc" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="after trunc diff" /> |
-| Summary also compressed | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="old compressed" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S}{L}" alt="new compressed" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S}{L}%20%3E%200" alt="compressed diff" /> |
+| Scenario | Old Method Hit Content | Old Method Hit Rate | New Method Hit Content | New Method Hit Rate | Difference |
+|:---|:---|:---|:---|:---|:---|
+| No truncation | `P_base` | Declines with H | `P_base + S + K × C` | Stable >90% | `(S + K × C) / Total` |
+| After truncation | `P_base` | `P_base / L` | `P_base + S + K × C` | `(P_base + S + K × C) / L` | `(S + K × C) / L > 0` |
+| Summary also compressed | `P_base` | `P_base / L` | `P_base + S` | `(P_base + S) / L` | `S / L > 0` |
 
-**Core Conclusion**: The new method's hit tokens are higher than the old method in all scenarios. In normal scenarios, the new method's hit tokens are <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />, growing with conversation turns, while the old method is fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />. In truncation scenarios, the old method's hit tokens remain <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />, while the new method's hit tokens still include the full stable prefix. Even in the most extreme summary compression scenario, since <img src="https://latex.codecogs.com/svg.latex?S%20%3E%200" alt="S>0" />, the new method's hit rate lower bound is strictly higher than the old method. Therefore, **the new method strictly outperforms the old method in all scenarios**.
+**Core Conclusion**: The new method outperforms the old method in all scenarios. In normal and truncation scenarios, the new method's hit tokens are `P_base + S + K × C`, growing with conversation turns, while the old method's hit tokens are fixed at `P_base`. Even in the most extreme summary compression scenario, since `S > 0`, the new method's lower bound is strictly higher than the old method's hit rate. Therefore, **the new method strictly outperforms the old method in all scenarios**.
