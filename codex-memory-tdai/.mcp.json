@@ -1,0 +1,6 @@
+{
+  "memory-tdai": {
+    "command": "node",
+    "args": ["${PLUGIN_ROOT}/mcp-bridge.js"]
+  }
+}
