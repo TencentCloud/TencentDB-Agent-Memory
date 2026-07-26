@@ -65,7 +65,7 @@ Issue 初始分析时，仓库还没有解析 `recall.showInjected`。当时把 
 - `enable_thinking`：`false`
 - 测试时间：2026-07-02
 - 每轮输出上限：64 tokens
-- 报告：`tmp/issue120-e2e-results/issue120-showinjected-growth-mimo-1783001359804.json`
+- 报告：`docs/issue-120-evidence/mimo-showinjected-growth-10turns.json`
 
 | 场景 | 第 1 轮 prompt tokens | 第 10 轮 prompt tokens | 10 轮增长 | 首轮后平均增长 | 总 prompt tokens | cache hit ratio |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

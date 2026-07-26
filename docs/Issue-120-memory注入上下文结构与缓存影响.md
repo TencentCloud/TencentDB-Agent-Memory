@@ -6,16 +6,17 @@
 
 相关代码入口：
 
-- `index.ts:528`：注册 `before_prompt_build` hook。
-- `index.ts:542`：注入前缓存原始用户 prompt。
-- `index.ts:567`：调用 `core.handleBeforeRecall(...)`。
-- `index.ts:587`：把 `appendSystemContext` / `prependContext` 返回给 OpenClaw。
-- `index.ts:615`：注册 `before_message_write`，持久化前清理 `<relevant-memories>`。
-- `src/core/tdai-core.ts:244`：把 host 侧 recall 请求转到 `performAutoRecall(...)`。
-- `src/core/hooks/auto-recall.ts:186`：把召回结果拆成稳定区和动态区。
-- `src/core/conversation/l0-recorder.ts:190`：L0 写入时用干净 prompt 覆盖被注入污染的用户消息。
+- `index.ts:212`：解析稳定上下文落点（`resolveStableContextPlacement`）。
+- `index.ts:562`：注册 `before_prompt_build` hook。
+- `index.ts:600`：调用 `core.handleBeforeRecall(...)`。
+- `index.ts:624`：`shapeOpenClawSystemContext` 决定稳定块走哪个 host 字段，再返回 hook result。
+- `index.ts:670`：注册 `before_message_write`，持久化前清理注入块。
+- `src/core/tdai-core.ts:247`：把 host 侧 recall 请求转到 `performAutoRecall(...)`。
+- `src/core/hooks/auto-recall.ts:197`：调用 `buildStableSystemContext(...)` 组装稳定区，动态区单独构造。
+- `src/core/hooks/stable-system-context.ts`：稳定区组装（纯函数，无 I/O）。
+- `src/adapters/openclaw/system-context-placement.ts`：稳定区落点与宿主能力门控。
 
-Issue 里提到的 `composeSystemPromptWithHookContext`、`CACHE_BOUNDARY`、`prependSystemPromptAdditionAfterCacheBoundary` 不在本仓库，属于 OpenClaw host 侧逻辑。下面的结构图停在插件返回 hook result 这一层。
+`composeSystemPromptWithHookContext`、`CACHE_BOUNDARY`、`prependSystemPromptAdditionAfterCacheBoundary` 的实现不在本仓库，属于 OpenClaw host 侧。插件能控制的是**把稳定内容交给哪个 hook 字段**：`appendSystemContext` 落在 boundary 之后，`prependSystemContext` 落在 boundary 之前。下面按这条边界区分修复前后。
 
 ## 注入链路
 
@@ -43,37 +44,51 @@ flowchart TD
 
 ## 当前轮 prompt 结构
 
-插件返回后，当前轮模型看到的结构大致如下：
+### 修复前：稳定块落在 cache boundary 之后
 
 ```text
-[OpenClaw / agent config 原始 system prompt]
+[OpenClaw / agent config system prompt]
   - 基础系统指令
-  - 工具策略和 host 侧系统内容
-  - host 侧 cache boundary 处理（如果存在）
-
-[memory-tencentdb appendSystemContext]
-  <user-persona>
-    L3 persona
-  </user-persona>
-
-  <scene-navigation>
-    L2 scene navigation
-  </scene-navigation>
-
-  <memory-tools-guide>
-    tdai_memory_search / tdai_conversation_search / read_file 使用说明
-  </memory-tools-guide>
+  - 工具 schema 和 host 侧策略
+─────────────── CACHE_BOUNDARY ───────────────   ← 可复用前缀到此为止
+[memory-tencentdb appendSystemContext]           ← 稳定内容，却在边界之外
+  <user-persona>        L3 persona
+  <scene-navigation>    L2 scene navigation
+  <memory-tools-guide>  记忆工具使用说明
+                                                    约 4k 字符，逐字不变，
+                                                    但每轮都按新 token 计费
 
 [历史消息]
-  之前的 user / assistant / tool messages
-
 [当前用户消息]
-  <relevant-memories>
-    针对当前用户 prompt 召回的 L1 记忆
-  </relevant-memories>
-
+  <relevant-memories>   本轮召回的 L1 记忆        ← 每轮变化，本就该在动态尾部
   原始用户 prompt
 ```
+
+### 修复后：稳定块进入可复用前缀
+
+```text
+[memory-tencentdb prependSystemContext]          ← 稳定内容前置
+  <user-persona>        L3 persona
+  <scene-navigation>    L2 scene navigation
+  <memory-tools-guide>  记忆工具使用说明
+
+[OpenClaw / agent config system prompt]
+  - 基础系统指令
+  - 工具 schema 和 host 侧策略
+─────────────── CACHE_BOUNDARY ───────────────   ← 可复用前缀扩大到包含稳定块
+
+[历史消息]
+[当前用户消息]
+  <relevant-memories>   本轮召回的 L1 记忆
+  <memory-reminders>    本 session 已注入过的记忆（压缩为短提醒）
+  原始用户 prompt
+```
+
+宿主无法确认支持 `prependSystemContext` 时，稳定块仍通过 `appendSystemContext`
+注入，即退回上面第一张图的位置。**两条路径都会注入稳定内容**：版本门控只影响
+缓存复用，不会让 persona / 场景导航丢失。相关断言见
+`src/adapters/openclaw/system-context-placement.test.ts` 中的
+「carries the stable block exactly once」矩阵用例。
 
 ## 对 prompt cache 的影响
 
@@ -81,9 +96,9 @@ flowchart TD
 | --- | --- | --- | --- |
 | 基础 system prompt | OpenClaw / agent config | 同一 session 内通常稳定 | 适合作为缓存前缀。只要 host 侧位置不变，最容易复用。 |
 | 工具 schema / host 策略 | OpenClaw host | 工具集不变时稳定 | 工具启停会改变前缀。 |
-| L3 persona | `persona.md` | 低频变化 | 适合进入稳定区；persona 更新后会刷新后续缓存。 |
-| L2 scene navigation | scene index | 低频变化 | scene index 不变时可复用；更新后会影响前缀。 |
-| memory tools guide | 常量 | 稳定 | cache 友好。 |
+| L3 persona | `persona.md` | 低频变化 | 修复前在 boundary 之后，每轮重新计费；修复后进入可复用前缀。persona 更新后会刷新后续缓存。 |
+| L2 scene navigation | scene index | 低频变化 | 同上。scene index 不变时可复用；更新后会影响前缀。 |
+| memory tools guide | 常量 | 完全稳定 | 修复前同样被排除在前缀外，是纯浪费；修复后可复用。 |
 | 历史消息 | OpenClaw session state | 每轮增长 | 如果历史只追加、不重写，provider 可以复用共同前缀。截断或重写会降低命中。 |
 | 当前轮 L1 recall | `prependContext` | 每轮变化 | 不适合放进稳定前缀。写入历史会让后续上下文持续膨胀。 |
 | 当前用户 prompt | `event.prompt` | 每轮变化 | 预期中的动态尾部。 |
@@ -114,3 +129,11 @@ cache 友好的稳定前缀
 ```
 
 后续改动建议守住这个边界：稳定内容尽量靠前，当前轮 recall 靠近用户 prompt，并且不要把 recall 原文写回未来历史。
+
+三条边界现在都有对应实现和测试：
+
+| 边界要求 | 实现 | 测试 |
+| --- | --- | --- |
+| 稳定内容进入可复用前缀 | `recall.stableContextPlacement`（默认 `auto`） | `system-context-placement.test.ts` |
+| 稳定内容逐轮字节不变 | `buildStableSystemContext` 纯函数 + 空白规范化 | `stable-system-context.test.ts` |
+| recall 原文不进入未来历史 | `recall.showInjected`（默认 `false`）+ `before_message_write` 清理 | `recall-injection.test.ts` |

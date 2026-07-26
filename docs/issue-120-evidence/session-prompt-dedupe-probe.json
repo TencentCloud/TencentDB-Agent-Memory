@@ -1,0 +1,378 @@
+{
+  "generated_at": "2026-07-03T01:37:55.699Z",
+  "dry_run": false,
+  "task": "Issue #120 session 级稳定系统提示去重探针",
+  "scenarios": {
+    "重复追加": "每轮都多重复一份相同的稳定 memory system addition，用来模拟 session 级稳定系统提示误累积。",
+    "去重追加": "每轮只保留一份稳定 memory system addition，用来模拟 session digest 去重。"
+  },
+  "turns": 5,
+  "results": [
+    {
+      "provider": "deepseek",
+      "duplicate": {
+        "provider": "deepseek",
+        "scenario": "duplicate_append",
+        "scenario_label": "重复追加",
+        "model": "deepseek-v4-pro",
+        "turns": 5,
+        "rows": [
+          {
+            "turn": 1,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 0,
+              "cache_miss_tokens": 4892,
+              "cache_hit_ratio": 0,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 2,
+            "system_chars": 44269,
+            "system_digest": "a399b4ae3d82",
+            "usage": {
+              "prompt_tokens": 8183,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 3319,
+              "cache_hit_ratio": 0.5944,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 3,
+            "system_chars": 61952,
+            "system_digest": "64da209ab780",
+            "usage": {
+              "prompt_tokens": 11474,
+              "cache_hit_tokens": 8064,
+              "cache_miss_tokens": 3410,
+              "cache_hit_ratio": 0.7028,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 4,
+            "system_chars": 79635,
+            "system_digest": "32b327a68503",
+            "usage": {
+              "prompt_tokens": 14765,
+              "cache_hit_tokens": 11392,
+              "cache_miss_tokens": 3373,
+              "cache_hit_ratio": 0.7716,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 5,
+            "system_chars": 97318,
+            "system_digest": "0554bbc919e9",
+            "usage": {
+              "prompt_tokens": 18056,
+              "cache_hit_tokens": 14720,
+              "cache_miss_tokens": 3336,
+              "cache_hit_ratio": 0.8152,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          }
+        ],
+        "total": {
+          "prompt_tokens": 57370,
+          "cache_hit_tokens": 39040,
+          "cache_miss_tokens": 18330,
+          "output_tokens": 160,
+          "reasoning_tokens": 160,
+          "cache_hit_ratio": 0.6805
+        }
+      },
+      "deduped": {
+        "provider": "deepseek",
+        "scenario": "deduped_append",
+        "scenario_label": "去重追加",
+        "model": "deepseek-v4-pro",
+        "turns": 5,
+        "rows": [
+          {
+            "turn": 1,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 28,
+              "cache_hit_ratio": 0.9943,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 2,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 28,
+              "cache_hit_ratio": 0.9943,
+              "output_tokens": 32,
+              "reasoning_tokens": 29
+            }
+          },
+          {
+            "turn": 3,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 28,
+              "cache_hit_ratio": 0.9943,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          },
+          {
+            "turn": 4,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 28,
+              "cache_hit_ratio": 0.9943,
+              "output_tokens": 30,
+              "reasoning_tokens": 26
+            }
+          },
+          {
+            "turn": 5,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 4892,
+              "cache_hit_tokens": 4864,
+              "cache_miss_tokens": 28,
+              "cache_hit_ratio": 0.9943,
+              "output_tokens": 32,
+              "reasoning_tokens": 32
+            }
+          }
+        ],
+        "total": {
+          "prompt_tokens": 24460,
+          "cache_hit_tokens": 24320,
+          "cache_miss_tokens": 140,
+          "output_tokens": 158,
+          "reasoning_tokens": 151,
+          "cache_hit_ratio": 0.9943
+        }
+      },
+      "comparison": {
+        "provider": "deepseek",
+        "baseline": "重复追加",
+        "optimized": "去重追加",
+        "duplicate_prompt_tokens": 57370,
+        "deduped_prompt_tokens": 24460,
+        "prompt_token_delta": -32910,
+        "prompt_token_delta_pct": -57.36,
+        "duplicate_miss_tokens": 18330,
+        "deduped_miss_tokens": 140,
+        "miss_token_delta": -18190,
+        "miss_token_delta_pct": -99.24,
+        "duplicate_hit_ratio": 0.6805,
+        "deduped_hit_ratio": 0.9943,
+        "hit_ratio_delta_pp": 31.38
+      }
+    },
+    {
+      "provider": "mimo",
+      "duplicate": {
+        "provider": "mimo",
+        "scenario": "duplicate_append",
+        "scenario_label": "重复追加",
+        "model": "mimo-v2.5-pro",
+        "turns": 5,
+        "rows": [
+          {
+            "turn": 1,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 0,
+              "cache_miss_tokens": 5451,
+              "cache_hit_ratio": 0,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 2,
+            "system_chars": 44269,
+            "system_digest": "a399b4ae3d82",
+            "usage": {
+              "prompt_tokens": 9053,
+              "cache_hit_tokens": 4096,
+              "cache_miss_tokens": 4957,
+              "cache_hit_ratio": 0.4524,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 3,
+            "system_chars": 61952,
+            "system_digest": "64da209ab780",
+            "usage": {
+              "prompt_tokens": 12655,
+              "cache_hit_tokens": 9024,
+              "cache_miss_tokens": 3631,
+              "cache_hit_ratio": 0.7131,
+              "output_tokens": 19,
+              "reasoning_tokens": 13
+            }
+          },
+          {
+            "turn": 4,
+            "system_chars": 79635,
+            "system_digest": "32b327a68503",
+            "usage": {
+              "prompt_tokens": 16257,
+              "cache_hit_tokens": 12608,
+              "cache_miss_tokens": 3649,
+              "cache_hit_ratio": 0.7755,
+              "output_tokens": 21,
+              "reasoning_tokens": 15
+            }
+          },
+          {
+            "turn": 5,
+            "system_chars": 97318,
+            "system_digest": "0554bbc919e9",
+            "usage": {
+              "prompt_tokens": 19859,
+              "cache_hit_tokens": 16192,
+              "cache_miss_tokens": 3667,
+              "cache_hit_ratio": 0.8153,
+              "output_tokens": 19,
+              "reasoning_tokens": 13
+            }
+          }
+        ],
+        "total": {
+          "prompt_tokens": 63275,
+          "cache_hit_tokens": 41920,
+          "cache_miss_tokens": 21355,
+          "output_tokens": 95,
+          "reasoning_tokens": 65,
+          "cache_hit_ratio": 0.6625
+        }
+      },
+      "deduped": {
+        "provider": "mimo",
+        "scenario": "deduped_append",
+        "scenario_label": "去重追加",
+        "model": "mimo-v2.5-pro",
+        "turns": 5,
+        "rows": [
+          {
+            "turn": 1,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 5440,
+              "cache_miss_tokens": 11,
+              "cache_hit_ratio": 0.998,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 2,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 5440,
+              "cache_miss_tokens": 11,
+              "cache_hit_ratio": 0.998,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 3,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 5440,
+              "cache_miss_tokens": 11,
+              "cache_hit_ratio": 0.998,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 4,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 5440,
+              "cache_miss_tokens": 11,
+              "cache_hit_ratio": 0.998,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          },
+          {
+            "turn": 5,
+            "system_chars": 26586,
+            "system_digest": "3154005592f6",
+            "usage": {
+              "prompt_tokens": 5451,
+              "cache_hit_tokens": 4096,
+              "cache_miss_tokens": 1355,
+              "cache_hit_ratio": 0.7514,
+              "output_tokens": 18,
+              "reasoning_tokens": 12
+            }
+          }
+        ],
+        "total": {
+          "prompt_tokens": 27255,
+          "cache_hit_tokens": 25856,
+          "cache_miss_tokens": 1399,
+          "output_tokens": 90,
+          "reasoning_tokens": 60,
+          "cache_hit_ratio": 0.9487
+        }
+      },
+      "comparison": {
+        "provider": "mimo",
+        "baseline": "重复追加",
+        "optimized": "去重追加",
+        "duplicate_prompt_tokens": 63275,
+        "deduped_prompt_tokens": 27255,
+        "prompt_token_delta": -36020,
+        "prompt_token_delta_pct": -56.93,
+        "duplicate_miss_tokens": 21355,
+        "deduped_miss_tokens": 1399,
+        "miss_token_delta": -19956,
+        "miss_token_delta_pct": -93.45,
+        "duplicate_hit_ratio": 0.6625,
+        "deduped_hit_ratio": 0.9487,
+        "hit_ratio_delta_pp": 28.62
+      }
+    }
+  ]
+}

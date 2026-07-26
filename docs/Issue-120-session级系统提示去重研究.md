@@ -54,7 +54,7 @@ npx.cmd vitest run src/utils/system-prompt-dedupe.test.ts
 Provider 探针：
 
 ```text
-node tmp/session-system-prompt-cache-probe.mjs
+node scripts/prompt-cache/session-prompt-dedupe-probe.mjs
 ```
 
 脚本只读取环境变量：
@@ -84,7 +84,7 @@ node tmp/session-system-prompt-cache-probe.mjs
 报告文件：
 
 ```text
-tmp/issue120-e2e-results/session-system-prompt-cache-probe-1783042675700.json
+docs/issue-120-evidence/session-prompt-dedupe-probe.json
 ```
 
 公共设置：

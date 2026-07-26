@@ -16,9 +16,11 @@
 
 实现后补了下面几类测试：
 
-- `src/config.test.ts`：覆盖 `showInjected`、`dedupeInjected`、`dedupeMode`、`dedupeInjectedTtlTurns`、`maxReminderChars`、recall budget 配置解析。
-- `src/utils/recall-injection.test.ts`：覆盖 `<relevant-memories>` 在字符串和 message parts 中的清理。
-- `src/utils/recall-context.test.ts`：覆盖 recall budget、session digest 去重、reminder、TTL 和 digest normalize。
+- `src/config.test.ts`：覆盖 `showInjected`、`dedupeInjected`、`dedupeMode`、`dedupeInjectedTtlTurns`、`maxReminderChars`、`stableContextPlacement`、recall budget 配置解析。
+- `src/utils/recall-injection.test.ts`：覆盖 `<relevant-memories>` 和 `<memory-reminders>` 在字符串和 message parts 中的清理。
+- `src/utils/recall-context.test.ts`：覆盖 recall budget、session digest 去重、reminder、TTL、digest normalize，以及 prepare/commit 两阶段去重。
+- `src/core/hooks/stable-system-context.test.ts`：覆盖稳定区跨轮字节稳定性——动态 recall 每轮变化时稳定区 digest 不变；persona 修改时恰好变化一次；行尾与尾随空白不影响 digest。
+- `src/adapters/openclaw/system-context-placement.test.ts`：覆盖宿主版本门控与回退，以及「稳定块在每个 placement × host version 组合下恰好被携带一次」的矩阵断言。
 
 本地命令：
 
@@ -29,8 +31,28 @@ npm.cmd run build:plugin
 
 结果：
 
-- `npx.cmd vitest run`：7 个 test files / 82 个 tests 通过。
+- `npx.cmd vitest run`：10 个 test files / 156 个 tests 通过。
 - `npm.cmd run build:plugin`：通过。
+
+## 稳定区落点（issue 次要根因）
+
+Issue 第 4 条根因是稳定 persona 未进入 `CACHE_BOUNDARY` 之前。当前实现新增
+`recall.stableContextPlacement`：
+
+| 取值 | 行为 |
+| --- | --- |
+| `auto`（默认） | 宿主版本可确认支持时用可缓存前缀，否则回退旧的后缀字段 |
+| `systemPrefix` | 强制前缀 |
+| `systemSuffix` | 强制后缀（旧行为） |
+
+关键取舍：**版本门控是性能门控，不是正确性门控**。宿主若不认识前缀字段会直接
+忽略未知 key，因此「只发前缀字段」会让 persona 和场景导航整体消失——那是能力
+静默丢失，比缓存退化更严重。当前实现让稳定文本在任一路径下都恰好注入一次，
+版本判断错误只会损失缓存复用，不会丢内容。
+
+这项收益是结构性的、不依赖 provider：约 4k 字符的稳定内容从「每轮按新 token
+计费」变成「参与前缀复用」。它与下面 A/B/C 的收益正交——A/B/C 减少的是动态
+recall 的体积和重复，这一项改变的是稳定内容的位置。
 
 ## 真实 API 验证方法
 
@@ -105,7 +127,7 @@ npm.cmd run build:plugin
 - 模型：`mimo-v2.5-pro`
 - `enable_thinking`：`false`
 - 指标：`prompt_tokens`、`prompt_tokens_details.cached_tokens`、`prompt_cache_miss_tokens`
-- 10 轮报告：`tmp/issue120-e2e-results/issue120-showinjected-growth-mimo-1783001359804.json`
+- 10 轮报告：`docs/issue-120-evidence/mimo-showinjected-growth-10turns.json`
 
 汇总：
 
@@ -146,14 +168,14 @@ npm.cmd run build:plugin
 - 任务：根据同一批召回事实输出 release brief JSON。
 - 评分：最终 JSON 必须覆盖 product、release_target、owner、database、feature_flag_storage、compliance、primary_risk、mitigation、smoke_test、ready。
 - 场景：`showInjected_risk`、`ABC_skip`、`ABC_reminder`。
-- 脚本：`tmp/issue120-e2e-cache-compare.mjs`。
+- 脚本：`scripts/prompt-cache/e2e-quality-cache-compare.mjs`。
 - Mimo 输出预算：2400 max tokens；低预算下该模型可能把输出额度消耗在 reasoning tokens 上，导致 content 为空。
 
 所以，下面 E2E 表里的 cache hit ratio 只和同一张 E2E 表内的风险基线、`ABC_skip`、`ABC_reminder` 比较；不要和上面的 10 轮 usage benchmark 逐项对齐。
 
 ### DeepSeek v4-flash
 
-报告：`tmp/issue120-e2e-results/issue120-e2e-1782990384303.json`
+报告：`docs/issue-120-evidence/deepseek-e2e-skip-vs-reminder.json`
 
 | 场景 | 同一任务通过 | prompt tokens | cache hit tokens | cache miss tokens | cache hit ratio | 相对风险基线 |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -165,7 +187,7 @@ npm.cmd run build:plugin
 
 ### Mimo
 
-报告：`tmp/issue120-e2e-results/issue120-e2e-1783000020966.json`
+报告：`docs/issue-120-evidence/mimo-e2e-skip-vs-reminder.json`
 
 | 场景 | 同一任务通过 | prompt tokens | cache hit tokens | cache miss tokens | cache hit ratio | 相对风险基线 |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
