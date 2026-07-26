@@ -11,7 +11,7 @@
  *   TDAI_GATEWAY_URL   Gateway base URL (default http://127.0.0.1:8420)
  */
 
-"use strict";
+import http from "node:http";
 
 const GATEWAY = process.env.TDAI_GATEWAY_URL || "http://127.0.0.1:8420";
 
@@ -51,7 +51,7 @@ function httpPost(path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, GATEWAY);
     const data = Buffer.from(JSON.stringify(body));
-    const req = require("http").request(
+    const req = http.request(
       {
         hostname: url.hostname,
         port: url.port,
