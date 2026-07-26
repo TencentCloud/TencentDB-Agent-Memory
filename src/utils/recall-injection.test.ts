@@ -20,6 +20,23 @@ describe("recall injection stripping", () => {
     expect(result.removedChars).toBeGreaterThan(0);
   });
 
+  it("removes memory reminders and mixed recall injection blocks", () => {
+    const input = [
+      "<memory-reminders>",
+      "- [episodic] short reminder",
+      "</memory-reminders>",
+      "<relevant-memories>",
+      "- [semantic] full memory",
+      "</relevant-memories>",
+      "Please continue the task.",
+    ].join("\n");
+
+    const result = stripRelevantMemoriesFromText(input);
+
+    expect(result.text).toBe("Please continue the task.");
+    expect(result.removedChars).toBeGreaterThan(0);
+  });
+
   it("strips only user messages", () => {
     const assistant = {
       role: "assistant",
@@ -42,6 +59,7 @@ describe("recall injection stripping", () => {
       role: "user",
       content: [
         { type: "text", text: "<relevant-memories>\nsecret\n</relevant-memories>\nreal prompt" },
+        { type: "text", text: "<memory-reminders>\nold memory\n</memory-reminders>\nmore text" },
         { type: "image_url", image_url: { url: "https://example.test/image.png" } },
       ],
     };
@@ -50,6 +68,7 @@ describe("recall injection stripping", () => {
 
     expect(result?.message.content).toEqual([
       { type: "text", text: "real prompt" },
+      { type: "text", text: "more text" },
       { type: "image_url", image_url: { url: "https://example.test/image.png" } },
     ]);
   });

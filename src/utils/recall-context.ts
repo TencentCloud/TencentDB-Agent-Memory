@@ -30,12 +30,42 @@ export interface RecallDedupeResult {
   skippedCount: number;
 }
 
+/**
+ * A session-dedupe decision that has not been recorded in session state yet.
+ *
+ * Callers that may subsequently drop or transform recall lines (for example,
+ * when applying a character budget) should use
+ * `prepareSessionRecallDedupeDetailed`, then call
+ * `commitSessionRecallDedupe` with only the full lines that were actually
+ * injected.  The legacy `applySessionRecallDedupe*` helpers still perform
+ * both phases synchronously.
+ */
+export interface RecallDedupePreparation extends RecallDedupeResult {
+  /** Commit this decision. Calling it more than once is safe. */
+  readonly commit: (injectedFullLines?: readonly string[]) => void;
+}
+
 interface SessionDigestState {
   turn: number;
   digests: Map<string, number>;
 }
 
 const sessionRecallDigests = new Map<string, SessionDigestState>();
+const pendingRecallDedupe = new WeakMap<RecallDedupePreparation, PendingRecallDedupe>();
+
+interface PendingRecallCandidate {
+  line: string;
+  digest: string;
+}
+
+interface PendingRecallDedupe {
+  active: boolean;
+  sessionKey: string;
+  recall: RecallDedupeConfig;
+  logger?: LoggerLike;
+  candidates: PendingRecallCandidate[];
+  committed: boolean;
+}
 
 export function applyRecallBudget(
   lines: string[],
@@ -118,28 +148,69 @@ export function applySessionRecallDedupeDetailed(
   recall: RecallDedupeConfig,
   logger?: LoggerLike,
 ): RecallDedupeResult {
+  const preparation = prepareSessionRecallDedupeDetailed(lines, sessionKey, recall, logger);
+  // Preserve the historical synchronous API: all lines selected by the
+  // dedupe decision are considered injected immediately.
+  commitSessionRecallDedupe(preparation);
+  return {
+    fullLines: preparation.fullLines,
+    reminderLines: preparation.reminderLines,
+    skippedCount: preparation.skippedCount,
+  };
+}
+
+/**
+ * Decide which recall lines are new for a session without mutating the
+ * session's digest state.
+ *
+ * The returned preparation can safely be discarded when the surrounding
+ * operation fails or when a later budget/filter removes all of its full
+ * lines.  Only `commitSessionRecallDedupe` records digests.
+ */
+export function prepareSessionRecallDedupeDetailed(
+  lines: string[],
+  sessionKey: string,
+  recall: RecallDedupeConfig,
+  logger?: LoggerLike,
+): RecallDedupePreparation {
   const mode = resolveDedupeMode(recall);
   if (mode === "off" || lines.length === 0) {
-    return { fullLines: lines, reminderLines: [], skippedCount: 0 };
+    return createRecallDedupePreparation(
+      { fullLines: lines, reminderLines: [], skippedCount: 0 },
+      {
+        active: false,
+        sessionKey,
+        recall,
+        logger,
+        candidates: [],
+        committed: false,
+      },
+    );
   }
 
   const ttlTurns = normalizePositiveInteger(recall.dedupeInjectedTtlTurns);
-  const state = getSessionDigestState(sessionKey);
-  state.turn += 1;
+  // Reading an absent state must not create one: a preparation may be
+  // abandoned (e.g. on timeout) and should then have no session side effect.
+  const state = sessionRecallDigests.get(sessionKey);
+  const currentTurn = state?.turn ?? 0;
+  const nextTurn = currentTurn + 1;
+  const knownDigests = state?.digests;
 
   const kept: string[] = [];
   const reminders: string[] = [];
+  const candidates: PendingRecallCandidate[] = [];
+  const preparedDigests = new Set<string>();
   let skipped = 0;
   let reminderChars = 0;
   const maxReminderChars = normalizePositiveInteger(recall.maxReminderChars);
 
   for (const line of lines) {
     const digest = digestRecallLine(line);
-    const lastInjectedTurn = state.digests.get(digest);
+    const lastInjectedTurn = knownDigests?.get(digest);
     const isDuplicate = lastInjectedTurn != null
-      && (!ttlTurns || state.turn - lastInjectedTurn <= ttlTurns);
+      && (!ttlTurns || nextTurn - lastInjectedTurn <= ttlTurns);
 
-    if (isDuplicate) {
+    if (isDuplicate || preparedDigests.has(digest)) {
       skipped++;
       if (mode === "reminder") {
         const reminder = toRecallReminderLine(line);
@@ -153,11 +224,9 @@ export function applySessionRecallDedupeDetailed(
     }
 
     kept.push(line);
-    state.digests.set(digest, state.turn);
+    candidates.push({ line, digest });
+    preparedDigests.add(digest);
   }
-
-  pruneSessionDigestState(state);
-  pruneSessionDigestSessions();
 
   if (skipped > 0) {
     logger?.debug?.(
@@ -167,7 +236,120 @@ export function applySessionRecallDedupeDetailed(
     );
   }
 
-  return { fullLines: kept, reminderLines: reminders, skippedCount: skipped - reminders.length };
+  return createRecallDedupePreparation(
+    { fullLines: kept, reminderLines: reminders, skippedCount: skipped - reminders.length },
+    {
+      active: true,
+      sessionKey,
+      recall,
+      logger,
+      candidates,
+      committed: false,
+    },
+  );
+}
+
+/**
+ * Record only the full recall lines that were actually injected.
+ *
+ * `injectedFullLines` may contain the prepared source lines or their bounded
+ * forms produced by `applyRecallBudget`; bounded lines are matched in source
+ * order so their original digest is committed.  Unknown lines are ignored.
+ * The commit is idempotent, which makes it safe for cleanup/finally paths.
+ */
+export function commitSessionRecallDedupe(
+  preparation: RecallDedupePreparation,
+  injectedFullLines: readonly string[] = preparation.fullLines,
+): void {
+  const pending = pendingRecallDedupe.get(preparation);
+  if (!pending || pending.committed) return;
+  pending.committed = true;
+
+  if (!pending.active) return;
+
+  const state = getSessionDigestState(pending.sessionKey);
+  state.turn += 1;
+
+  const selected = selectCommittedRecallCandidates(pending.candidates, injectedFullLines);
+  for (const candidate of selected) {
+    state.digests.set(candidate.digest, state.turn);
+  }
+
+  pruneSessionDigestState(state);
+  pruneSessionDigestSessions();
+}
+
+function createRecallDedupePreparation(
+  result: RecallDedupeResult,
+  pending: PendingRecallDedupe,
+): RecallDedupePreparation {
+  const preparation = { ...result } as RecallDedupePreparation;
+  Object.defineProperty(preparation, "commit", {
+    configurable: false,
+    enumerable: false,
+    value: (injectedFullLines?: readonly string[]) => {
+      commitSessionRecallDedupe(preparation, injectedFullLines);
+    },
+    writable: false,
+  });
+  pendingRecallDedupe.set(preparation, pending);
+  return preparation;
+}
+
+function selectCommittedRecallCandidates(
+  candidates: readonly PendingRecallCandidate[],
+  injectedFullLines: readonly string[],
+): PendingRecallCandidate[] {
+  if (candidates.length === 0 || injectedFullLines.length === 0) return [];
+
+  const selected: PendingRecallCandidate[] = [];
+  const used = new Set<number>();
+  let sourceCursor = 0;
+
+  for (const injectedLine of injectedFullLines) {
+    // Prefer an exact source-line match. This supports callers that filter a
+    // prepared result (rather than merely applying the character budget).
+    let matchIndex = -1;
+    for (let i = sourceCursor; i < candidates.length; i++) {
+      if (!used.has(i) && candidates[i].line === injectedLine) {
+        matchIndex = i;
+        break;
+      }
+    }
+
+    // applyRecallBudget preserves order and may truncate a source line. When
+    // no exact match exists, accept the next source line only if the injected
+    // text is recognisably a bounded prefix of it. This lets us commit the
+    // original digest without ever marking an unrelated line as injected.
+    if (matchIndex < 0) {
+      for (let i = sourceCursor; i < candidates.length; i++) {
+        if (!used.has(i) && isBoundedRecallVariant(injectedLine, candidates[i].line)) {
+          matchIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (matchIndex < 0) continue;
+    used.add(matchIndex);
+    sourceCursor = matchIndex + 1;
+    selected.push(candidates[matchIndex]);
+  }
+
+  return selected;
+}
+
+function isBoundedRecallVariant(injectedLine: string, sourceLine: string): boolean {
+  if (injectedLine === sourceLine || injectedLine.length >= sourceLine.length) return false;
+  const suffixIndex = injectedLine.indexOf(RECALL_TRUNCATION_SUFFIX);
+  if (suffixIndex >= 0) {
+    const prefix = injectedLine.slice(0, suffixIndex).trimEnd();
+    return prefix.length > 0 && sourceLine.startsWith(prefix);
+  }
+
+  // For very small budgets the truncation suffix itself cannot fit, so
+  // applyRecallBudget emits a plain source prefix.
+  return sourceLine.startsWith(injectedLine);
 }
 
 export function resetSessionRecallDedupeForTest(): void {

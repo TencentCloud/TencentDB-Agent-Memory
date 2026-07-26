@@ -1,13 +1,14 @@
-const RELEVANT_MEMORIES_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+const RECALL_INJECTION_RE =
+  /<(relevant-memories|memory-reminders)>[\s\S]*?<\/\1>\s*/g;
 
 type TextPart = Record<string, unknown> & { type?: unknown; text?: unknown };
 
 export function stripRelevantMemoriesFromText(text: string): { text: string; removedChars: number } {
-  if (!text.includes("<relevant-memories>")) {
+  if (!text.includes("<relevant-memories>") && !text.includes("<memory-reminders>")) {
     return { text, removedChars: 0 };
   }
 
-  const cleaned = text.replace(RELEVANT_MEMORIES_RE, "").trim();
+  const cleaned = text.replace(RECALL_INJECTION_RE, "").trim();
   return { text: cleaned, removedChars: text.length - cleaned.length };
 }
 

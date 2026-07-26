@@ -5,7 +5,9 @@ import {
   applyRecallBudget,
   applySessionRecallDedupe,
   applySessionRecallDedupeDetailed,
+  commitSessionRecallDedupe,
   digestRecallLine,
+  prepareSessionRecallDedupeDetailed,
   resetSessionRecallDedupeForTest,
 } from "./recall-context.js";
 
@@ -109,5 +111,73 @@ describe("session recall dedupe", () => {
 
     expect(second.reminderLines).toEqual([]);
     expect(second.skippedCount).toBe(1);
+  });
+
+  it("does not mark prepared lines as injected until they are committed", () => {
+    const lines = ["- [fact] first", "- [fact] second"];
+    const cfg = { dedupeInjected: true, dedupeMode: "skip" as const, dedupeInjectedTtlTurns: 0 };
+
+    const preparation = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    expect(preparation.fullLines).toEqual(lines);
+
+    // Abandoning a preparation has no effect on the next decision.
+    expect(prepareSessionRecallDedupeDetailed(lines, "session-a", cfg).fullLines).toEqual(lines);
+
+    commitSessionRecallDedupe(preparation, [lines[0]]);
+    const afterPartialCommit = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    expect(afterPartialCommit.fullLines).toEqual([lines[1]]);
+    commitSessionRecallDedupe(afterPartialCommit);
+  });
+
+  it("commits the source digest when a prepared line is truncated by budget", () => {
+    const longLine = `- [fact] ${"x".repeat(120)}`;
+    const otherLine = "- [fact] other";
+    const lines = [longLine, otherLine];
+    const cfg = { dedupeInjected: true, dedupeMode: "skip" as const, dedupeInjectedTtlTurns: 0 };
+
+    const preparation = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    const budgeted = applyRecallBudget(preparation.fullLines, {
+      maxCharsPerMemory: 0,
+      maxTotalRecallChars: 64,
+    });
+    expect(budgeted).toHaveLength(1);
+    expect(budgeted[0]).not.toBe(longLine);
+
+    // The actual prompt receives only the bounded line. The original source
+    // digest must nevertheless be what gets recorded for the next turn.
+    commitSessionRecallDedupe(preparation, budgeted);
+    const next = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    expect(next.fullLines).toEqual([otherLine]);
+  });
+
+  it("treats a commit as idempotent", () => {
+    const lines = ["- [fact] one"];
+    const cfg = { dedupeInjected: true, dedupeMode: "skip" as const, dedupeInjectedTtlTurns: 1 };
+
+    const preparation = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    preparation.commit();
+    preparation.commit();
+
+    expect(applySessionRecallDedupe(lines, "session-a", cfg)).toEqual([]);
+    expect(applySessionRecallDedupe(lines, "session-a", cfg)).toEqual(lines);
+  });
+
+  it("advances the session turn for a successful reminder-only commit", () => {
+    const lines = ["- [fact] remembered"];
+    const cfg = {
+      dedupeInjected: false,
+      dedupeMode: "reminder" as const,
+      dedupeInjectedTtlTurns: 1,
+    };
+
+    const first = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    first.commit();
+    const reminder = prepareSessionRecallDedupeDetailed(lines, "session-a", cfg);
+    expect(reminder.fullLines).toEqual([]);
+    expect(reminder.reminderLines).toEqual(lines);
+    reminder.commit([]);
+
+    // The reminder-only turn advances TTL even though it adds no digest.
+    expect(applySessionRecallDedupe(lines, "session-a", cfg)).toEqual(lines);
   });
 });

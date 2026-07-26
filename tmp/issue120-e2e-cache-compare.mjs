@@ -150,17 +150,6 @@ async function postJson(url, headers, body) {
   return { ok: true, status: response.status, json };
 }
 
-function extractResponsesText(json) {
-  if (typeof json.output_text === "string") return json.output_text;
-  const chunks = [];
-  for (const item of json.output ?? []) {
-    for (const part of item.content ?? []) {
-      if (typeof part.text === "string") chunks.push(part.text);
-    }
-  }
-  return chunks.join("\n").trim();
-}
-
 function extractJsonObject(text) {
   const raw = String(text ?? "").trim();
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -250,17 +239,21 @@ function usageFromDeepSeek(json) {
   };
 }
 
-function usageFromResponses(json) {
+function usageFromChat(json) {
   const usage = json.usage ?? {};
-  const details = usage.input_tokens_details ?? usage.prompt_tokens_details ?? {};
-  const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
-  const cachedTokens = details.cached_tokens ?? usage.cached_tokens ?? 0;
+  const details = usage.prompt_tokens_details ?? usage.input_tokens_details ?? {};
+  const promptTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const hitTokens = usage.prompt_cache_hit_tokens
+    ?? details.cached_tokens
+    ?? usage.cached_tokens
+    ?? 0;
+  const missTokens = usage.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - hitTokens);
   return {
-    input_tokens: inputTokens,
-    cached_tokens: cachedTokens,
-    miss_tokens: Math.max(0, inputTokens - cachedTokens),
-    cache_hit_ratio: inputTokens > 0 ? Number((cachedTokens / inputTokens).toFixed(4)) : 0,
-    output_tokens: usage.output_tokens ?? usage.completion_tokens ?? 0,
+    prompt_tokens: promptTokens,
+    cache_hit_tokens: hitTokens,
+    cache_miss_tokens: missTokens,
+    cache_hit_ratio: promptTokens > 0 ? Number((hitTokens / promptTokens).toFixed(4)) : 0,
+    output_tokens: usage.completion_tokens ?? usage.output_tokens ?? 0,
   };
 }
 
@@ -276,11 +269,6 @@ function finalizeUsage(total) {
   if ("prompt_tokens" in total) {
     total.cache_hit_ratio = total.prompt_tokens > 0
       ? Number(((total.cache_hit_tokens ?? 0) / total.prompt_tokens).toFixed(4))
-      : 0;
-  }
-  if ("input_tokens" in total) {
-    total.cache_hit_ratio = total.input_tokens > 0
-      ? Number(((total.cached_tokens ?? 0) / total.input_tokens).toFixed(4))
       : 0;
   }
   return total;
@@ -334,13 +322,14 @@ async function runDeepSeekScenario(scenario) {
   };
 }
 
-async function runResponsesScenario(scenario) {
-  const key = process.env.PIXEL_API_KEY || process.env.OPENAI_API_KEY;
-  if (!key) return { skipped: "missing PIXEL_API_KEY/OPENAI_API_KEY" };
+async function runChatScenario(provider, scenario, opts) {
+  const { keyEnv, baseUrlEnv, modelEnv, defaultBaseUrl, defaultModel, missingMessage, disableThinking, minMaxTokens } = opts;
+  const key = process.env[keyEnv];
+  if (!key) return { skipped: missingMessage };
 
-  const baseUrl = (process.env.PIXEL_BASE_URL || "https://api.ai-pixel.online").replace(/\/$/, "");
-  const model = process.env.PIXEL_MODEL || "gpt-5.5";
-  const history = [];
+  const baseUrl = (process.env[baseUrlEnv] || defaultBaseUrl).replace(/\/$/, "");
+  const model = process.env[modelEnv] || defaultModel;
+  const messages = [{ role: "system", content: makeStableSystem() }];
   const turns = buildScenarioTurns(scenario);
   const rows = [];
   const total = {};
@@ -348,27 +337,29 @@ async function runResponsesScenario(scenario) {
 
   for (let i = 0; i < turns.length; i++) {
     const turn = turns[i];
-    const input = [...history, { role: "user", content: turn.requestUser }];
-    const result = await postJson(`${baseUrl}/v1/responses`, {
-      authorization: `Bearer ${key}`,
-    }, {
+    const requestMessages = [...messages, { role: "user", content: turn.requestUser }];
+    const body = {
       model,
-      instructions: makeStableSystem(),
-      input,
-      store: false,
-      reasoning: { effort: process.env.PIXEL_REASONING_EFFORT || "xhigh" },
-      max_output_tokens: CONFIG.maxOutputTokens,
-    });
+      messages: requestMessages,
+      temperature: 0,
+      max_tokens: Math.max(CONFIG.maxOutputTokens, minMaxTokens ?? 0),
+    };
+    if (disableThinking) {
+      body.enable_thinking = false;
+    }
+    const result = await postJson(`${baseUrl}/chat/completions`, {
+      authorization: `Bearer ${key}`,
+    }, body);
     if (!result.ok) {
       return { error: result.error, status: result.status, rows, total: finalizeUsage(total) };
     }
 
-    const text = extractResponsesText(result.json);
-    const usage = usageFromResponses(result.json);
+    const text = result.json.choices?.[0]?.message?.content?.trim() ?? "";
+    const usage = usageFromChat(result.json);
     rows.push({ turn: i + 1, recall_chars: turn.recallChars, usage, output_preview: truncateText(text, 300) });
     addUsage(total, usage);
-    history.push({ role: "user", content: turn.persistedUser });
-    history.push({ role: "assistant", content: text });
+    messages.push({ role: "user", content: turn.persistedUser });
+    messages.push({ role: "assistant", content: text });
     finalText = text;
     await sleep(CONFIG.delayMs);
   }
@@ -380,6 +371,7 @@ async function runResponsesScenario(scenario) {
     total: finalizeUsage(total),
     final_output: truncateText(finalText, 4000),
     grade: gradeFinal(finalText),
+    provider,
   };
 }
 
@@ -426,9 +418,10 @@ function compareScenarioResults(provider, baseline, optimized) {
 
 async function runProvider(provider, onProgress = async () => {}) {
   if (CONFIG.dryRun) {
+    const usesPromptCacheFields = provider === "deepseek" || provider === "mimo";
     const baseline = {
       scenario: "show_injected_risk",
-      total: provider === "deepseek"
+      total: usesPromptCacheFields
         ? { prompt_tokens: 100, cache_hit_tokens: 70, cache_miss_tokens: 30, output_tokens: 10, cache_hit_ratio: 0.7 }
         : { input_tokens: 100, cached_tokens: 20, miss_tokens: 80, output_tokens: 10, cache_hit_ratio: 0.2 },
       final_output: JSON.stringify({
@@ -440,7 +433,7 @@ async function runProvider(provider, onProgress = async () => {}) {
     baseline.grade = gradeFinal(baseline.final_output);
     const optimizedSkip = {
       scenario: "ABC_skip",
-      total: provider === "deepseek"
+      total: usesPromptCacheFields
         ? { prompt_tokens: 50, cache_hit_tokens: 35, cache_miss_tokens: 15, output_tokens: 10, cache_hit_ratio: 0.7 }
         : { input_tokens: 50, cached_tokens: 20, miss_tokens: 30, output_tokens: 10, cache_hit_ratio: 0.4 },
       final_output: baseline.final_output,
@@ -464,7 +457,18 @@ async function runProvider(provider, onProgress = async () => {}) {
     };
   }
 
-  const runner = provider === "deepseek" ? runDeepSeekScenario : runResponsesScenario;
+  const runner = provider === "deepseek"
+    ? runDeepSeekScenario
+    : (scenario) => runChatScenario("mimo", scenario, {
+      keyEnv: "MIMO_API_KEY",
+      baseUrlEnv: "MIMO_BASE_URL",
+      modelEnv: "MIMO_MODEL",
+      defaultBaseUrl: "https://api.xiaomimimo.com/v1",
+      defaultModel: "mimo-v2.5-pro",
+      missingMessage: "missing MIMO_API_KEY",
+      disableThinking: true,
+      minMaxTokens: 2400,
+    });
   const result = { provider, baseline: null, optimized_skip: null, optimized_reminder: null, comparisons: [] };
   const baseline = await runner("show_injected_risk");
   result.baseline = baseline;
@@ -516,7 +520,7 @@ async function main() {
     return;
   }
 
-  const selected = CONFIG.providers.includes("all") ? ["deepseek", "pixel_responses"] : CONFIG.providers;
+  const selected = CONFIG.providers.includes("all") ? ["deepseek", "mimo"] : CONFIG.providers;
   await fs.mkdir(CONFIG.outDir, { recursive: true });
 
   const results = [];
@@ -533,8 +537,8 @@ async function main() {
   });
 
   for (const provider of selected) {
-    const normalized = provider === "pixel" || provider === "gpt" ? "pixel_responses" : provider;
-    if (!["deepseek", "pixel_responses"].includes(normalized)) {
+    const normalized = provider;
+    if (!["deepseek", "mimo"].includes(normalized)) {
       results.push({ provider, error: "unknown provider" });
       await fs.writeFile(jsonPath, `${JSON.stringify(makeReport(), null, 2)}\n`, "utf8");
       continue;
