@@ -46,6 +46,11 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  readStableSystemContext,
+  resolveStableContextPlacement,
+  shapeOpenClawSystemContext,
+} from "./src/adapters/openclaw/system-context-placement.js";
 
 const TAG = "[memory-tdai]";
 
@@ -181,7 +186,7 @@ export default function register(api: OpenClawPluginApi) {
     api.logger.debug?.(
       `${TAG} Config parsed: ` +
       `capture=${cfg.capture.enabled}, ` +
-      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}), ` +
+      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}, showInjected=${cfg.recall.showInjected}, stableContextPlacement=${cfg.recall.stableContextPlacement}), ` +
       `extraction=${cfg.extraction.enabled}(dedup=${cfg.extraction.enableDedup}, maxMem=${cfg.extraction.maxMemoriesPerSession}), ` +
       `pipeline=(everyN=${cfg.pipeline.everyNConversations}, warmup=${cfg.pipeline.enableWarmup}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, l2DelayAfterL1=${cfg.pipeline.l2DelayAfterL1Seconds}s, l2Min=${cfg.pipeline.l2MinIntervalSeconds}s, l2Max=${cfg.pipeline.l2MaxIntervalSeconds}s, activeWindow=${cfg.pipeline.sessionActiveWindowHours}h), ` +
       `persona(triggerEvery=${cfg.persona.triggerEveryN}, backupCount=${cfg.persona.backupCount}, sceneBackupCount=${cfg.persona.sceneBackupCount}), ` +
@@ -191,6 +196,32 @@ export default function register(api: OpenClawPluginApi) {
   } catch (err) {
     api.logger.error(`${TAG} Config parsing failed: ${err instanceof Error ? err.message : String(err)}`);
     throw err;
+  }
+
+  // ============================
+  // Stable system context placement (issue #120)
+  // ============================
+  // Persona / scene navigation / tools guide are byte-stable across turns,
+  // so they belong in the provider's reusable prefix rather than after the
+  // host's CACHE_BOUNDARY. Resolve once at registration: the decision
+  // depends only on config and host version, and logging it per turn would
+  // be noise.
+  //
+  // The fallback is lossless — an unconfirmed host still receives the block
+  // through the legacy suffix field — so this gate trades cache reuse only.
+  const stablePlacement = resolveStableContextPlacement(
+    cfg.recall.stableContextPlacement,
+    (api.runtime as { version?: unknown } | undefined)?.version,
+  );
+  if (stablePlacement.fallbackReason) {
+    api.logger.debug?.(
+      `${TAG} stableContextPlacement=${cfg.recall.stableContextPlacement} resolved to ` +
+      `${stablePlacement.effective} (${stablePlacement.fallbackReason}); stable context is still injected`,
+    );
+  } else {
+    api.logger.debug?.(
+      `${TAG} stableContextPlacement=${cfg.recall.stableContextPlacement} resolved to ${stablePlacement.effective}`,
+    );
   }
 
   // Initialize unified time module (must happen before any timestamp formatting)
@@ -586,11 +617,17 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
-          if (result.appendSystemContext) {
-            const shape = observeSessionSystemPromptShape(resolvedSessionKey, result.appendSystemContext, api.logger);
+        // Route the stable block to the field this host understands. The
+        // core hook stays host-neutral and always reports it as
+        // appendSystemContext; only this adapter step knows about the cache
+        // boundary.
+        const hookResult = shapeOpenClawSystemContext(result, stablePlacement.effective);
+        const stable = readStableSystemContext(hookResult);
+
+        if (stable.text || hookResult?.prependContext) {
+          const prependLen = hookResult?.prependContext?.length ?? 0;
+          if (stable.text) {
+            const shape = observeSessionSystemPromptShape(resolvedSessionKey, stable.text, api.logger);
             api.logger.debug?.(
               `${TAG} [before_prompt_build] Stable system context shape: ` +
               `status=${shape.status}, turn=${shape.turn}, chars=${shape.chars}, digest=${shape.digest.slice(0, 12)}`,
@@ -598,12 +635,13 @@ export default function register(api: OpenClawPluginApi) {
           }
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `stableContext=${stable.text?.length ?? 0} chars via ${stable.carriedBy[0] ?? "none"}, ` +
+            `prependContext=${prependLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);

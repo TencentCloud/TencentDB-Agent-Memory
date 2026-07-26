@@ -37,6 +37,27 @@ describe("parseConfig recall options", () => {
     expect(cfg.recall.maxTotalRecallChars).toBe(1200);
   });
 
+  it("defaults stable context placement to auto", () => {
+    expect(parseConfig({}).recall.stableContextPlacement).toBe("auto");
+  });
+
+  it("parses an explicit stable context placement", () => {
+    expect(
+      parseConfig({ recall: { stableContextPlacement: "systemPrefix" } }).recall.stableContextPlacement,
+    ).toBe("systemPrefix");
+    expect(
+      parseConfig({ recall: { stableContextPlacement: "systemSuffix" } }).recall.stableContextPlacement,
+    ).toBe("systemSuffix");
+  });
+
+  it("falls back to auto for an unrecognised stable context placement", () => {
+    // A typo must not silently disable stable-context injection.
+    expect(
+      parseConfig({ recall: { stableContextPlacement: "beforeCacheBoundary" } }).recall
+        .stableContextPlacement,
+    ).toBe("auto");
+  });
+
   it("maps legacy dedupeInjected=true to skip mode when dedupeMode is unset", () => {
     const cfg = parseConfig({ recall: { dedupeInjected: true } });
 

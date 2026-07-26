@@ -14,7 +14,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
 import { applyRecallBudget, applySessionRecallDedupeDetailed, RECALL_LINE_SEPARATOR } from "../../utils/recall-context.js";
-import { dedupeStableSystemPromptAdditions } from "../../utils/system-prompt-dedupe.js";
+import { buildStableSystemContext } from "./stable-system-context.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -26,25 +26,6 @@ import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
-
-/**
- * Memory tools usage guide — injected at the end of memory context so the
- * main agent knows how to actively retrieve deeper information.
- */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
-## 记忆工具调用指南
-
-当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
-
-- **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件节点、规则等关键信息。
-- **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节；也可用于补充或校验 memory_search 的结果。
-- **read_file**（Scene Navigation 中的路径）：当已定位到相关情境，且需要该场景的完整画像、事件经过或阶段结论时使用。
-
-### ⚠️ 调用次数限制
-每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
-- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
-- 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
-</memory-tools-guide>`
 
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
@@ -196,14 +177,6 @@ async function performAutoRecallInner(params: {
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: Array<{ source: string; text: string }> = [];
-  if (personaContent) {
-    stableParts.push({ source: "persona", text: `<user-persona>\n${personaContent}\n</user-persona>` });
-  }
-  if (sceneNavigation) {
-    stableParts.push({ source: "scene-navigation", text: `<scene-navigation>\n${sceneNavigation}\n</scene-navigation>` });
-  }
-
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
   const dynamicParts: string[] = [];
@@ -221,22 +194,18 @@ async function performAutoRecallInner(params: {
     prependContext = dynamicParts.join("\n\n");
   }
 
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push({ source: "memory-tools-guide", text: MEMORY_TOOLS_GUIDE });
-  }
-
-  const stableDedupe = dedupeStableSystemPromptAdditions(stableParts);
-  if (stableDedupe.removed.length > 0) {
+  const stable = buildStableSystemContext({
+    persona: personaContent,
+    sceneNavigation,
+    hasDynamicRecall: Boolean(prependContext),
+  });
+  if (stable.removedSources.length > 0) {
     logger?.debug?.(
-      `${TAG} Stable system prompt additions deduped: input=${stableParts.length}, ` +
-      `kept=${stableDedupe.kept.length}, removed=${stableDedupe.removed.length}, ` +
-      `removedChars=${stableDedupe.removedChars}`,
+      `${TAG} Stable system prompt additions deduped: kept=[${stable.sources.join(",")}], ` +
+      `removed=[${stable.removedSources.join(",")}], removedChars=${stable.removedChars}`,
     );
   }
-  const appendSystemContext = stableDedupe.text;
+  const appendSystemContext = stable.text;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
