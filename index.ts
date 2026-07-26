@@ -44,6 +44,9 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import { StableHistoryManager, buildCompressionPrompt } from "./src/core/history/stable-history-manager.js";
+import { RecentHistory } from "./src/core/history/recent-history.js";
+import { TurnTokenTracker } from "./src/core/history/window-calculator.js";
 
 const TAG = "[memory-tdai]";
 
@@ -87,6 +90,15 @@ const pendingRecallCache = new Map<string, {
  * Entries are cleaned up in agent_end after use; stale entries swept alongside prompt cache.
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
+
+/**
+ * Cache-Aware Context Lifecycle: per-session state for the three-part prompt
+ * architecture.  When history is enabled, each session gets its own append-only
+ * stable-history manager and circular recent-history buffer.
+ */
+const sessionStableHistory = new Map<string, StableHistoryManager>();
+const sessionRecentHistory = new Map<string, RecentHistory>();
+const sessionTokenTracker = new Map<string, TurnTokenTracker>();
 
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
@@ -564,7 +576,19 @@ export default function register(api: OpenClawPluginApi) {
       try {
         await coreReady;
         const recallStartMs = Date.now();
-        const result = await core.handleBeforeRecall(userText, resolvedSessionKey);
+
+        // Resolve Cache-Aware history state for this session (if history enabled)
+        const historyEnabled = cfg.history?.enabled || process.env.MEMORY_TDAI_HISTORY_ENABLED === "1";
+        const stableHistory = historyEnabled ? sessionStableHistory.get(resolvedSessionKey) : undefined;
+        const recentHistory = historyEnabled ? sessionRecentHistory.get(resolvedSessionKey) : undefined;
+
+        const result = await core.handleBeforeRecall(
+          userText,
+          resolvedSessionKey,
+          messages as Array<{ role: string; content: string }> | undefined,
+          stableHistory,
+          recentHistory,
+        );
         const elapsedMs = Date.now() - startMs;
         const recallDurationMs = Date.now() - recallStartMs;
 
@@ -584,12 +608,17 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
+        if (result?.appendSystemContext || result?.prependSystemContext || result?.prependContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
+          const prependSysLen = result.prependSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          const historyLen = (result as Record<string, unknown>).historyContext ? String((result as Record<string, unknown>).historyContext).length : 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `prependSystemContext=${prependSysLen} chars, ` +
+            `appendSystemContext=${appendLen} chars, ` +
+            `prependContext=${prependLen} chars` +
+            (historyLen ? `, historyContext=${historyLen} chars` : ""),
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
@@ -612,11 +641,20 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  // Strip injected content from user messages before they are persisted to
+  // the session JSONL, so conversation history stays clean for prompt caching.
+  //
+  // Two independent stripping policies (both always on):
+  //   1. <conversation-history> — always stripped. This block is rebuilt fresh
+  //      each turn from the clean history; persisting it causes nesting and
+  //      exponential inflation on subsequent turns.
+  //   2. <relevant-memories> — always stripped. With Cache-Aware Context
+  //      Lifecycle Management, L1 memories live at the prompt tail and are
+  //      never written to history. showInjected is deprecated.
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write hook ` +
+    `(strip <relevant-memories>: always, showInjected is deprecated)`,
+  );
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
@@ -624,13 +662,26 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    const HISTORY_RE = /<conversation-history>[\s\S]*?<\/conversation-history>\s*/g;
+    const MEMORY_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
 
     if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
+      let cleaned = msg.content;
+      let didStrip = false;
+
+      // Always strip <conversation-history> — it is rebuilt fresh each turn
+      if (cleaned.includes("<conversation-history>")) {
+        cleaned = cleaned.replace(HISTORY_RE, "").trim();
+        didStrip = true;
+      }
+
+      // Always strip <relevant-memories> — L1 memories live at prompt tail
+      if (cleaned.includes("<relevant-memories>")) {
+        cleaned = cleaned.replace(MEMORY_RE, "").trim();
+        didStrip = true;
+      }
+
+      if (!didStrip || cleaned === msg.content) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
       return { message: { ...event.message, content: cleaned } as typeof event.message };
     }
@@ -639,10 +690,20 @@ export default function register(api: OpenClawPluginApi) {
       let totalStripped = 0;
       const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
         if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
+        let text = part.text as string;
+        let changed = false;
+
+        if (text.includes("<conversation-history>")) {
+          text = text.replace(HISTORY_RE, "").trim();
+          changed = true;
+        }
+        if (text.includes("<relevant-memories>")) {
+          text = text.replace(MEMORY_RE, "").trim();
+          changed = true;
+        }
+
+        if (changed) totalStripped += (part.text as string).length - text.length;
+        return changed ? { ...part, text } : part;
       });
       if (totalStripped === 0) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
@@ -739,6 +800,74 @@ export default function register(api: OpenClawPluginApi) {
             captureDurationMs: captureMs,
             totalDurationMs: Date.now() - startMs,
           });
+        }
+
+        // ── Cache-Aware: update recent history buffer ──
+        const historyEnabled2 = cfg.history?.enabled || process.env.MEMORY_TDAI_HISTORY_ENABLED === "1";
+        if (historyEnabled2) {
+          // Lazily initialize per-session managers
+          if (!sessionStableHistory.has(resolvedSessionKey)) {
+            sessionStableHistory.set(resolvedSessionKey, new StableHistoryManager());
+          }
+          if (!sessionRecentHistory.has(resolvedSessionKey)) {
+            const maxTurns = cfg.history?.maxRecentTurns ?? 8;
+            sessionRecentHistory.set(resolvedSessionKey, new RecentHistory({ maxTurns }));
+          }
+          if (!sessionTokenTracker.has(resolvedSessionKey)) {
+            sessionTokenTracker.set(resolvedSessionKey, new TurnTokenTracker());
+          }
+
+          const shm = sessionStableHistory.get(resolvedSessionKey)!;
+          const rh = sessionRecentHistory.get(resolvedSessionKey)!;
+          const tracker = sessionTokenTracker.get(resolvedSessionKey)!;
+
+          // Extract user message and assistant reply from captured messages
+          const capturedMsgs = captureResult.filteredMessages;
+          for (const msg of capturedMsgs) {
+            if (msg.role === "user" || msg.role === "assistant") {
+              // Strip any injected content from the message before buffering
+              const HISTORY_RE = /<conversation-history>[\s\S]*?<\/conversation-history>\s*/g;
+              const MEMORY_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+              let cleanContent = msg.content
+                .replace(HISTORY_RE, "")
+                .replace(MEMORY_RE, "")
+                .trim();
+              if (cleanContent) {
+                rh.addTurn(msg.role as "user" | "assistant", cleanContent);
+              }
+            }
+          }
+
+          // Update token tracker with estimated turn size
+          const turnChars = capturedMsgs.reduce((sum, m) => sum + m.content.length, 0);
+          tracker.recordTurn(Math.ceil(turnChars / 3));
+
+          // When buffer is full, compress oldest turns into stable history
+          if (rh.isFull()) {
+            const turnsToCompress = rh.getTurns();
+            if (turnsToCompress.length > 0) {
+              const summaryPrompt = buildCompressionPrompt(turnsToCompress);
+              // Append a simple summary as an epoch (LLM-based compression can
+              // be added later by calling the summarization pipeline here)
+              const turnRange = {
+                start: shm.epochCount() * (cfg.history?.maxRecentTurns ?? 8) + 1,
+                end: shm.epochCount() * (cfg.history?.maxRecentTurns ?? 8) + turnsToCompress.length,
+              };
+              shm.appendEpoch(
+                `[Turns ${turnRange.start}-${turnRange.end}]: ${summaryPrompt.slice(0, 200)}`,
+                turnRange,
+              );
+              api.logger?.info(
+                `${TAG} [agent_end] Compression triggered: ${turnsToCompress.length} turns → epoch ${shm.epochCount()}`,
+              );
+            }
+            rh.clear();
+          }
+
+          api.logger?.debug?.(
+            `${TAG} [agent_end] Recent history: ${rh.size()}/${rh.capacity()} turns, ` +
+            `stable epochs: ${shm.epochCount()}`,
+          );
         }
       } catch (err) {
         const elapsedMs = Date.now() - startMs;

@@ -22,6 +22,10 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { buildReversedHistory, type ConversationMessage, type HistoryReversalConfig } from "../history-reversal.js";
+import { StableHistoryManager } from "../history/stable-history-manager.js";
+import { RecentHistory } from "../history/recent-history.js";
+import { calculateOptimalWindow, DEFAULT_RECENT_TURNS } from "../history/window-calculator.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -57,8 +61,20 @@ export interface RecalledMemory {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
+  /**
+   * Stable recall context prepended to system prompt BEFORE CACHE_BOUNDARY
+   * (persona, scene nav, tools guide). Placing stable content before the
+   * cache boundary allows prompt caching providers to reuse it across turns.
+   */
+  prependSystemContext?: string;
+  /** Stable recall context appended to system prompt after CACHE_BOUNDARY (legacy). */
   appendSystemContext?: string;
+  /**
+   * Reversed-history block for long conversations. Most recent messages appear
+   * first (stable prefix), older messages are compressed into summaries at the
+   * tail. Injected as part of prependContext.
+   */
+  historyContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
   /** L1 memories that were recalled (with scores), for metric reporting */
@@ -78,6 +94,19 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  /** Raw conversation messages from the framework (for history reversal). */
+  messages?: ConversationMessage[];
+  /**
+   * Append-only stable history manager (Cache-Aware mode).
+   * When provided together with recentHistory, replaces the legacy
+   * buildReversedHistory() path with the three-part prompt architecture.
+   */
+  stableHistory?: StableHistoryManager;
+  /**
+   * Circular buffer for recent N turns (Cache-Aware mode).
+   * Stores pure conversation with no injected content.
+   */
+  recentHistory?: RecentHistory;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
@@ -108,8 +137,11 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  messages?: ConversationMessage[];
+  stableHistory?: StableHistoryManager;
+  recentHistory?: RecentHistory;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, messages, stableHistory, recentHistory } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -169,7 +201,72 @@ async function performAutoRecallInner(params: {
   }
   const tSceneEnd = performance.now();
 
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
+  // ── Build history block (two modes) ──
+  // Cache-Aware mode (stableHistory + recentHistory provided):
+  //   Stable summaries from append-only manager → prependSystemContext → CACHED
+  //   Recent N turns from circular buffer          → prependContext       → dynamic tail
+  // Legacy mode (messages provided, no managers):
+  //   buildReversedHistory() splits messages into summary + recent blocks
+  const cacheAwareMode = !!(stableHistory && recentHistory);
+  let historySummaryBlock: string | undefined;
+  let historyRecentBlock: string | undefined;
+  const historyEnabled = cfg.history?.enabled || process.env.MEMORY_TDAI_HISTORY_ENABLED === "1";
+
+  if (cacheAwareMode) {
+    // ── Cache-Aware mode: use append-only stable history + circular buffer ──
+    historySummaryBlock = stableHistory!.getContent() || undefined;
+
+    // Apply adaptive window: recalculate N_optimal and resize buffer
+    if (cfg.history.adaptiveWindow) {
+      const stableChars = (personaContent?.length ?? 0) +
+        (sceneNavigation?.length ?? 0) +
+        (historySummaryBlock?.length ?? 0) +
+        MEMORY_TOOLS_GUIDE.length;
+      const tailChars = memoryLines.reduce((sum, l) => sum + l.length, 0);
+      const avgTokensPerTurn = undefined; // populated by index.ts via TurnTokenTracker
+      const { optimalN } = calculateOptimalWindow({
+        stableAreaChars: stableChars,
+        tailChars,
+        avgTokensPerTurn,
+        adaptive: cfg.history?.adaptiveWindow !== false,
+      });
+      if (optimalN !== recentHistory!.capacity()) {
+        recentHistory!.resize(optimalN);
+        logger?.debug?.(`${TAG} Adaptive window: resized recent buffer to ${optimalN} turns`);
+      }
+    }
+
+    historyRecentBlock = recentHistory!.getContent() || undefined;
+
+    if (historySummaryBlock || historyRecentBlock) {
+      logger?.info(
+        `${TAG} Cache-aware history: epochs=${stableHistory!.epochCount()}, ` +
+        `recentTurns=${recentHistory!.size()}/${recentHistory!.capacity()}, ` +
+        `summaryLen=${historySummaryBlock?.length ?? 0}, ` +
+        `recentLen=${historyRecentBlock?.length ?? 0}`,
+      );
+    }
+  } else if (historyEnabled && messages && messages.length > 0) {
+    // ── Legacy mode: build from raw messages ──
+    const historyResult = buildReversedHistory(messages, cfg.history);
+    if (historyResult.summaryBlock) {
+      historySummaryBlock = historyResult.summaryBlock;
+    }
+    if (historyResult.recentBlock) {
+      historyRecentBlock = historyResult.recentBlock;
+    }
+    if (historyResult.summaryBlock || historyResult.recentBlock) {
+      logger?.info(
+        `${TAG} History reversal: totalMsgs=${historyResult.totalMessages}, ` +
+        `compressed=${historyResult.compressedCount}, ` +
+        `didCompress=${historyResult.didCompress}, ` +
+        `summaryLen=${historyResult.summaryBlock.length}, ` +
+        `recentLen=${historyResult.recentBlock.length}`,
+      );
+    }
+  }
+
+  if (memoryLines.length === 0 && !personaContent && !sceneNavigation && !historySummaryBlock && !historyRecentBlock) {
     const totalMs = performance.now() - tRecallStart;
     logger?.info(
       `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
@@ -183,16 +280,14 @@ async function performAutoRecallInner(params: {
     return undefined;
   }
 
-  // Split recall context into stable and dynamic parts to optimize prompt caching.
-  //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
+  // prependSystemContext (system prompt start — stable, before CACHE_BOUNDARY):
+  //   persona, scene navigation, conversation summaries, memory tools guide
   //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  //   providers with prompt caching (DeepSeek) can cache this region.
   //
   // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  //   recent conversation messages, L1 relevant memories — different every turn
+  //   placed at the tail so they don't bust the system prompt cache.
   const stableParts: string[] = [];
   if (personaContent) {
     stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
@@ -200,12 +295,23 @@ async function performAutoRecallInner(params: {
   if (sceneNavigation) {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
+  if (historySummaryBlock) {
+    stableParts.push(historySummaryBlock);
+  }
 
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Dynamic part: recent conversation + L1 relevant memories → prependContext
   let prependContext: string | undefined;
+  const dynamicParts: string[] = [];
+  if (historyRecentBlock) {
+    dynamicParts.push(historyRecentBlock);
+  }
   if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    dynamicParts.push(
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`,
+    );
+  }
+  if (dynamicParts.length > 0) {
+    prependContext = dynamicParts.join("\n\n");
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -215,7 +321,64 @@ async function performAutoRecallInner(params: {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  // Stable content goes into prependSystemContext (before CACHE_BOUNDARY)
+  // to enable prompt caching. Controlled by MEMORY_TDAI_STABLE_SYSTEM_APPEND
+  // env var for ablation experiments — set to "1" to use the legacy
+  // appendSystemContext path (after CACHE_BOUNDARY, no caching).
+  const stableContent = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const useLegacyAppend = process.env.MEMORY_TDAI_STABLE_SYSTEM_APPEND === "1";
+  const prependSystemContext = !useLegacyAppend ? stableContent : undefined;
+  const appendSystemContext = useLegacyAppend ? stableContent : undefined;
+
+  // ── Simulated context window truncation (opt-in, for experiments) ──
+  // When MEMORY_TDAI_SIMULATED_CONTEXT_WINDOW is set, estimate total prompt
+  // tokens and truncate prependContext from the tail if total exceeds budget.
+  // This simulates OpenClaw's compaction without needing a short-context model.
+  const simulatedWindow = resolveSimulatedWindow();
+  if (simulatedWindow > 0 && prependContext) {
+    const CHARS_PER_TOKEN = 3;
+    const stableChars = prependSystemContext?.length ?? 0;
+    const messagesChars = messages?.reduce((sum, m) => sum + (typeof m.content === "string" ? m.content.length : 0), 0) ?? 0;
+    const estimatedTotal = Math.ceil((stableChars + messagesChars + userText.length) / CHARS_PER_TOKEN);
+    const prependTokens = Math.ceil(prependContext.length / CHARS_PER_TOKEN);
+    const totalWithPrepend = estimatedTotal + prependTokens;
+
+    if (totalWithPrepend > simulatedWindow) {
+      const budgetTokens = Math.max(0, simulatedWindow - estimatedTotal);
+      const budgetChars = budgetTokens * CHARS_PER_TOKEN;
+      logger?.warn?.(
+        `${TAG} ⚠ Simulated window exceeded: estimated=${estimatedTotal} + prepend=${prependTokens} = ${totalWithPrepend} > window=${simulatedWindow}. ` +
+        `Truncating prependContext to ${budgetTokens} token budget (${budgetChars} chars).`,
+      );
+
+      if (budgetChars <= 0) {
+        prependContext = undefined;
+        logger?.warn?.(`${TAG} ⚠ No budget remaining for prependContext — dropping entirely.`);
+      } else if (prependContext.length > budgetChars) {
+        const sections = prependContext.split(/\n\n(?=<)/);
+        const kept: string[] = [];
+        let used = 0;
+        for (const section of sections) {
+          if (used + section.length <= budgetChars) {
+            kept.push(section);
+            used += section.length + (kept.length > 1 ? 2 : 0);
+          } else {
+            const remaining = budgetChars - used - (kept.length > 0 ? 2 : 0);
+            if (remaining > 80) {
+              const truncated = Array.from(section).slice(0, remaining - 30).join("") + "…(truncated)…";
+              kept.push(truncated);
+            }
+            break;
+          }
+        }
+        prependContext = kept.length > 0 ? kept.join("\n\n") : undefined;
+        logger?.info?.(
+          `${TAG} Simulated truncation: prependContext ${sections.length}→${kept.length} sections, ` +
+          `${prependContext?.length ?? 0} chars remaining`,
+        );
+      }
+    }
+  }
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -224,16 +387,21 @@ async function performAutoRecallInner(params: {
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"}), ` +
+    `stablePos=${useLegacyAppend ? "append" : "prepend"}`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!stableContent && !prependContext) {
     return undefined;
   }
 
   return {
     prependContext,
+    prependSystemContext,
     appendSystemContext,
+    historyContext: (historySummaryBlock || historyRecentBlock)
+      ? [historySummaryBlock, historyRecentBlock].filter(Boolean).join("\n\n")
+      : undefined,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
@@ -795,6 +963,13 @@ function truncateRecallLine(line: string, maxChars: number): string {
  * - Otherwise → show full ISO 8601 with offset (e.g. "2025-03-01T14:30:00+08:00")
  * - Returns undefined for empty/invalid inputs.
  */
+function resolveSimulatedWindow(): number {
+  const raw = process.env.MEMORY_TDAI_SIMULATED_CONTEXT_WINDOW;
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 function formatTimestamp(ts: string | undefined): string | undefined {
   if (!ts) return undefined;
   const d = new Date(ts);

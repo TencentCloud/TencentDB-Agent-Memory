@@ -124,5 +124,8 @@
     "tsdown": "^0.21.10",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

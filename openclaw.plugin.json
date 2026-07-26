@@ -79,7 +79,19 @@
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
           "scoreThreshold": { "type": "number", "default": 0.3, "description": "最低分数阈值" },
           "strategy": { "type": "string", "enum": ["embedding", "keyword", "hybrid"], "default": "hybrid", "description": "搜索策略：keyword(关键词)、embedding(向量)、hybrid(混合RRF融合，推荐)" },
-          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" }
+          "timeoutMs": { "type": "number", "default": 5000, "description": "召回整体超时（毫秒），超时后跳过记忆注入并打印警告日志" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否在对话历史中保留注入的 <relevant-memories> 内容。关闭时（默认），注入内容在写入历史前被剥离，避免历史膨胀和缓存退化。开启时保留注入内容，方便调试查看。" }
+        }
+      },
+      "history": {
+        "type": "object",
+        "description": "历史反转与渐进式压缩设置 — 长对话中将最近消息前置（稳定缓存前缀），早期消息压缩到尾部",
+        "properties": {
+          "enabled": { "type": "boolean", "default": false, "description": "是否启用历史反转注入（默认关闭，向后兼容）" },
+          "keepRecent": { "type": "number", "default": 15, "description": "保留最近 N 条消息的原文（最新在前）" },
+          "compressAfter": { "type": "number", "default": 30, "description": "总消息数超过此阈值后触发早期消息压缩" },
+          "chunkSize": { "type": "number", "default": 10, "description": "每次压缩的消息块大小（条数）" },
+          "maxSummaryTokens": { "type": "number", "default": 300, "description": "每个压缩摘要块的 token 预算上限" }
         }
       },
       "embedding": {

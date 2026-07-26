@@ -383,6 +383,10 @@ export class MemoryPipelineManager {
   async notifyConversation(sessionKey: string, messages: CapturedMessage[]): Promise<void> {
     if (this.destroyed) return;
     if (this.sessionFilter.shouldSkip(sessionKey)) return;
+    if (process.env.MEMORY_TDAI_DISABLE_PIPELINE === "1") {
+      this.logger?.debug?.(`${TAG} Pipeline disabled via MEMORY_TDAI_DISABLE_PIPELINE — skipping L1/L2/L3`);
+      return;
+    }
 
     const state = this.getOrCreateState(sessionKey);
     state.conversation_count += 1;
