@@ -122,10 +122,8 @@ export interface CheckpointCounters {
   memoriesSinceLastPersona: number;
 }
 
-/** Minimal Store surface required for startup checkpoint reconciliation. */
+/** Minimal Store surface required to recalculate aggregate counters after cleanup. */
 export interface CheckpointCounterStore {
-  /** When true, count methods may return fault-tolerant empty values. */
-  isDegraded?(): boolean;
   countL0(): number | Promise<number>;
   countL1(): number | Promise<number>;
   /** `updatedAfter` must use a strict `updated_time >` comparison. */
@@ -147,19 +145,6 @@ function applyCounters(checkpoint: Checkpoint, actual: CheckpointCounters): void
   checkpoint.total_memories_extracted = actual.totalMemoriesExtracted;
   checkpoint.memories_since_last_persona = actual.memoriesSinceLastPersona;
 }
-
-async function readStoreValue<T>(operation: string, read: () => T | Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (err) {
-    throw new Error(
-      `Checkpoint reconciliation ${operation} failed: ` +
-      `${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
-
-const RECONCILIATION_LOCK_WARN_MS = 1_000;
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
   last_captured_timestamp: 0,
@@ -348,7 +333,7 @@ export class CheckpointManager {
 
   /**
    * @internal Replace aggregate counters with values already validated against
-   * durable data. Production callers should prefer reconcileCountersFromStore.
+   * durable data. Production callers should prefer reconcileCheckpointFromStore.
    * Per-session timestamps and state remain unchanged because those cursors
    * govern incremental processing rather than status.
    */
@@ -361,45 +346,26 @@ export class CheckpointManager {
   }
 
   /**
-   * Recount aggregate values while holding the checkpoint lock. Store reads are
-   * intentionally inside the critical section: an L0/L1 write that starts
-   * after the count must run after the replacement values are written, rather
-   * than being overwritten by an old snapshot.
+   * Recalculate aggregate counters while holding the checkpoint lock, so a
+   * capture that starts during cleanup cannot be overwritten by a stale count.
    */
   async reconcileCountersFromStore(store: CheckpointCounterStore): Promise<void> {
-    if (store.isDegraded?.()) {
-      throw new Error("Checkpoint reconciliation skipped: Store is degraded");
-    }
+    await this.mutate(async (checkpoint) => {
+      const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
+        store.countL0(),
+        store.countL1(),
+      ]);
+      const memoriesSinceLastPersona = checkpoint.last_persona_time
+        ? (await store.queryL1Records({ updatedAfter: checkpoint.last_persona_time })).length
+        : totalMemoriesExtracted;
 
-    await this.mutate(async (cp) => {
-      const startedAt = Date.now();
-      try {
-        const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
-          readStoreValue("countL0()", () => store.countL0()),
-          readStoreValue("countL1()", () => store.countL1()),
-        ]);
-        const memoriesSinceLastPersona = cp.last_persona_time
-          ? (await readStoreValue(
-            `queryL1Records(updatedAfter=${cp.last_persona_time})`,
-            () => store.queryL1Records({ updatedAfter: cp.last_persona_time }),
-          )).length
-          : totalMemoriesExtracted;
-        const actual = {
-          l0Conversations,
-          totalMemoriesExtracted,
-          memoriesSinceLastPersona,
-        };
-
-        assertValidCounters(actual);
-        applyCounters(cp, actual);
-      } finally {
-        const elapsedMs = Date.now() - startedAt;
-        if (elapsedMs >= RECONCILIATION_LOCK_WARN_MS) {
-          this.logger.warn?.(
-            `[checkpoint] Counter reconciliation held the checkpoint lock for ${elapsedMs}ms`,
-          );
-        }
-      }
+      const actual = {
+        l0Conversations,
+        totalMemoriesExtracted,
+        memoriesSinceLastPersona,
+      };
+      assertValidCounters(actual);
+      applyCounters(checkpoint, actual);
     });
   }
 

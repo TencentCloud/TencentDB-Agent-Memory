@@ -203,8 +203,8 @@ export class LocalMemoryCleaner {
       await reconcileCheckpointFromStore(checkpoint, vectorStore);
       this.opts.logger?.debug?.(`${TAG} Reconciled checkpoint aggregate counters after cleanup`);
     } catch (err) {
-      // Cleanup has already completed successfully. A later startup reconciliation
-      // can retry, so checkpoint repair must not turn this into a failed cleanup.
+      // Cleanup has already completed successfully, so checkpoint repair must
+      // not turn this into a failed cleanup.
       this.opts.logger?.warn?.(
         `${TAG} Checkpoint reconciliation after cleanup failed (non-fatal): ` +
         `${err instanceof Error ? err.message : String(err)}`,

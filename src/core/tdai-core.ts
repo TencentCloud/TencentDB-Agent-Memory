@@ -47,10 +47,7 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
-import {
-  CheckpointManager,
-  reconcileCheckpointFromStore,
-} from "../utils/checkpoint.js";
+import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 
@@ -412,30 +409,10 @@ export class TdaiCore {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
-      await this.reconcileCheckpointCounters();
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
     } catch (err) {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  /** Best-effort startup repair for aggregate counters drifted by cleanup. */
-  private async reconcileCheckpointCounters(): Promise<void> {
-    const store = this.vectorStore;
-    if (!store || store.isDegraded()) return;
-
-    try {
-      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
-      await reconcileCheckpointFromStore(checkpoint, store);
-      this.logger.debug?.(`${TAG} Checkpoint aggregate counters reconciled from Store`);
-    } catch (err) {
-      // Store initialization and normal startup must remain available even when
-      // counter repair cannot obtain a reliable snapshot.
-      this.logger.warn(
-        `${TAG} Checkpoint counter reconciliation skipped: ` +
-        `${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
