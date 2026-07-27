@@ -134,6 +134,9 @@ claude --model <PROXY_UPSTREAM_MODEL 里配的上游模型>
 - `--model` 用你在 `.env` 里 `PROXY_UPSTREAM_MODEL` 配的那个上游模型名
   （proxy 会把请求转发到 `PROXY_UPSTREAM_URL`）
 
+> 💡 **也可以用 CodeBuddy 走 Proxy**——配置方式见下方
+> [通过 Proxy 使用 CodeBuddy](#通过-proxy-使用-codebuddy) 章节。
+
 ### 第 4 步：CC 首次会话，选 Team → Agent → Task
 
 **每开一个新的 CC 会话**，proxy 会用 CC 自带的 `AskUserQuestion` 工具
@@ -254,6 +257,50 @@ Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/age
 
 关掉完整流水线（只做透传）：`PROXY_FULL_STACK=0 ./start-proxy.sh`。
 
+## 通过 Proxy 使用 CodeBuddy
+
+[CodeBuddy](https://www.codebuddy.ai/) 是腾讯推出的 AI 编程助手 IDE 插件。通过自定义模型配置，你可以把 CodeBuddy 的对话请求路由到 Proxy，在 IDE 内获得与 Claude Code 相同的记忆能力。
+
+### 配置
+
+在开发机的 `~/.codebuddy/models.json` 文件中写入以下内容（注意替换 API Key）：
+
+```json
+{
+  "models": [
+    {
+      "id": "claude-sonnet-4-20250514",
+      "name": "proxy-memory-agent",
+      "vendor": "claude",
+      "apiKey": "<业务用户的 sk-mem-... user_key>",
+      "maxInputTokens": 200000,
+      "url": "http://127.0.0.1:8096/codebuddy/default",
+      "supportsToolCall": true,
+      "supportsImages": true
+    }
+  ]
+}
+```
+
+- `id`：Proxy 上游 LLM 支持的模型 ID（必须与 Proxy 配置的 `PROXY_UPSTREAM_MODEL`
+  或 upstream 模型列表中的某个模型匹配，如 `claude-sonnet-4-20250514`）
+- `name`：在 CodeBuddy 对话框中显示的名称，可自定义（如 `proxy-memory-agent`）
+- `vendor`：模型供应商标识，仅用于 UI 展示（如 `claude`、`openai`），不影响实际请求
+- `apiKey`：使用**业务用户**的 `user_key`（与 Claude Code 的
+  `ANTHROPIC_AUTH_TOKEN` 相同；不要用 admin key）
+- `url`：Proxy 地址 + `/codebuddy/default` 路径（端口与 Claude Code 一致，
+  默认 `8096`）；`default` 是 memory 实例 ID
+
+配置完成后，在 CodeBuddy 对话框中选择刚才配置的模型名称即可开始对话。
+Session init 流程与 Claude Code 一致（选 Team → Agent → Task）。
+
+### ⚠️ 版本限制
+
+> CodeBuddy **4.10.2、4.10.3、4.10.4** 存在已知 Bug：这些版本不会在请求中
+> 携带 `sessionId`，导致 Proxy 无法完成 Session 初始化。
+>
+> **请使用 CodeBuddy ≥ 4.10.5 或 ≤ 4.10.1。**
+
 ## 停止 / 清理
 
 ```bash
@@ -263,6 +310,6 @@ Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/age
 
 ## 更多
 
-其它安装形态（OpenClaw、Hermes、SDK、源码启动、K8s、平台说明），参见
+其它安装形态（OpenClaw、Hermes、CodeBuddy、SDK、源码启动、K8s、平台说明），参见
 [`deploy/global-images/README.md`](./deploy/global-images/README.md) 与
 [`MemoryCore/README_CN.md`](./MemoryCore/README_CN.md)。

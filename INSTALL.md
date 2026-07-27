@@ -146,6 +146,9 @@ claude --model <whatever PROXY_UPSTREAM_MODEL is set to>
 - `--model` uses the upstream model name you configured in
   `PROXY_UPSTREAM_MODEL` (proxy forwards to `PROXY_UPSTREAM_URL`)
 
+> 💡 **You can also use CodeBuddy with the Proxy** — see the
+> [Using Proxy with CodeBuddy](#using-proxy-with-codebuddy) section below.
+
 ### Step 4: First CC turn — pick Team → Agent → Task
 
 **Every new CC session**, the proxy uses CC's native `AskUserQuestion`
@@ -273,6 +276,51 @@ knowledge blended into the system prompt) → forward to the upstream LLM.
 
 Disable the full pipeline (passthrough only): `PROXY_FULL_STACK=0 ./start-proxy.sh`.
 
+## Using Proxy with CodeBuddy
+
+[CodeBuddy](https://www.codebuddy.ai/) is Tencent's AI coding assistant IDE plugin. By configuring a custom model, you can route CodeBuddy's chat requests through the Proxy to get the same memory capabilities as Claude Code, directly within your IDE.
+
+### Configuration
+
+Create or edit `~/.codebuddy/models.json` on your development machine (replace the API key):
+
+```json
+{
+  "models": [
+    {
+      "id": "claude-sonnet-4-20250514",
+      "name": "proxy-memory-agent",
+      "vendor": "claude",
+      "apiKey": "<business user's sk-mem-... user_key>",
+      "maxInputTokens": 200000,
+      "url": "http://127.0.0.1:8096/codebuddy/default",
+      "supportsToolCall": true,
+      "supportsImages": true
+    }
+  ]
+}
+```
+
+- `id`: a model ID supported by the Proxy's upstream LLM (must match `PROXY_UPSTREAM_MODEL`
+  or one of the models in the upstream configuration, e.g. `claude-sonnet-4-20250514`)
+- `name`: display name shown in the CodeBuddy chat panel (can be customized freely, e.g. `proxy-memory-agent`)
+- `vendor`: model provider label, used only for UI display (e.g. `claude`, `openai`) — does not affect actual requests
+- `apiKey`: the **business user's** `user_key` (same one used as
+  `ANTHROPIC_AUTH_TOKEN` for Claude Code; do not use the admin key)
+- `url`: Proxy address + `/codebuddy/default` path (same port as Claude Code,
+  default `8096`); `default` is the memory instance ID
+
+Once configured, select the model name in CodeBuddy's chat panel and start chatting.
+The session init flow is the same as Claude Code (pick Team → Agent → Task).
+
+### ⚠️ Version Restrictions
+
+> CodeBuddy versions **4.10.2, 4.10.3, and 4.10.4** have a known bug: these
+> versions do not send a `sessionId` in requests, preventing the Proxy from
+> completing session initialization.
+>
+> **Use CodeBuddy ≥ 4.10.5 or ≤ 4.10.1.**
+
 ## Stop / cleanup
 
 ```bash
@@ -282,7 +330,7 @@ Disable the full pipeline (passthrough only): `PROXY_FULL_STACK=0 ./start-proxy.
 
 ## More
 
-Additional installation modes (OpenClaw, Hermes, SDK, running from source,
+Additional installation modes (OpenClaw, Hermes, CodeBuddy, SDK, running from source,
 K8s, platform notes) — see
 [`deploy/global-images/README.md`](./deploy/global-images/README.md) and
 [`MemoryCore/README.md`](./MemoryCore/README.md).

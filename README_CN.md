@@ -43,7 +43,7 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 打开 Panel：[http://localhost:8125](http://localhost:8125)。
 
-完整安装文档（Memory Hub 单独部署 / Proxy + Claude Code 用法 / 停止清理 / 端口
+完整安装文档（Memory Hub 单独部署 / Proxy + Claude Code / CodeBuddy 用法 / 停止清理 / 端口
 说明等）见 [**INSTALL_CN.md**](./INSTALL_CN.md)（English: [INSTALL.md](./INSTALL.md)）。
 
 ### 从旧版本迁移数据
@@ -257,7 +257,7 @@ PersonaMem 检验 Agent 能否在长期交互后正确理解和运用用户信�
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
 - CodeGraph 当前首先支持公开 HTTPS 仓库；私有仓库和 SSH 凭证接入仍在完善。
 - Hub 已支持人工绑定资产；全自动记忆路由仍在迭代。
-- 当前提供 OpenClaw、Hermes 和 SDK 接入；更广泛的跨框架迁移仍在 Roadmap 中。
+- 当前提供 OpenClaw、Hermes、Claude Code、CodeBuddy 和 SDK 接入；更广泛的跨框架迁移仍在 Roadmap 中。
 
 ## 相关文档
 

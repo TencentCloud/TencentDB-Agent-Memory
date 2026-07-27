@@ -42,7 +42,7 @@ $EDITOR .env       # Fill in two sets of LLM parameters (memory group + proxy gr
 
 Open the panel: [http://localhost:8125](http://localhost:8125).
 
-Complete installation documentation (standalone Memory Hub deployment, Proxy + Claude Code usage, stop and cleanup, port reference, etc.) is available in [**INSTALL.md**](./INSTALL.md) (中文: [INSTALL_CN.md](./INSTALL_CN.md)).
+Complete installation documentation (standalone Memory Hub deployment, Proxy + Claude Code / CodeBuddy usage, stop and cleanup, port reference, etc.) is available in [**INSTALL.md**](./INSTALL.md) (中文: [INSTALL_CN.md](./INSTALL_CN.md)).
 
 ### Migrating data from an older version
 
@@ -255,7 +255,7 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 - Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
 - CodeGraph currently prioritizes public HTTPS repositories; support for private repositories and SSH credentials is still being refined.
 - The Hub supports manual asset binding; fully automated memory routing is still under iteration.
-- TencentDB Agent Memory currently supports OpenClaw, Hermes, and SDK integration; broader cross-framework migration is on the roadmap.
+- TencentDB Agent Memory currently supports OpenClaw, Hermes, Claude Code, CodeBuddy, and SDK integration; broader cross-framework migration is on the roadmap.
 
 ## Related Documentation
 
