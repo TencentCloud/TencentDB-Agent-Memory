@@ -12,15 +12,17 @@ memory over REST, and this plugin's hooks call it at lifecycle events.
 hooks/hooks.json            # SessionStart / UserPromptSubmit / Stop hooks
 .mcp.json                   # MCP server (search tools)
 scripts/
-  health.sh                 # SessionStart  -> GET  /health
-  recall.sh                 # UserPromptSubmit -> POST /recall   (inject context)
-  capture.sh                # Stop          -> POST /capture  (fire-and-forget)
+  health.js                 # SessionStart  -> GET  /health
+  recall.js                 # UserPromptSubmit -> POST /recall   (inject context)
+  capture.js                # Stop          -> POST /capture  (fire-and-forget)
 skills/memory-usage/SKILL.md
 mcp-bridge.js               # stdio MCP server -> /search/*
 ```
 
 ## Requirements
 
+- Node.js on PATH (hook scripts and the MCP bridge are zero-dependency
+  Node — no bash/jq/curl needed, works on Windows/macOS/Linux).
 - A running `TdaiGateway` on `http://127.0.0.1:8420`
   (override via `TDAI_GATEWAY_URL`).
 - Codex feature flag in `~/.codex/config.toml`:
