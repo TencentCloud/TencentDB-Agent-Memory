@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "npm run build:plugin && npm run build:scripts",
+    "typecheck": "tsc -p tsconfig.json",
     "build:plugin": "tsdown",
     "build:scripts": "npm run build:migrate-sqlite-to-vdb && npm run build:export-tencent-vdb && npm run build:read-local-memory",
     "prepack": "npm run build",
