@@ -10,7 +10,7 @@
  */
 import { readFile, writeFile, appendFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import type { OffloadEntry, PluginLogger } from "./types.js";
 
@@ -523,9 +523,42 @@ export async function updateOffloadNodeIds(
 
 // ─── MD (Tool Result Refs) Operations ────────────────────────────────────────
 
-/** Convert ISO 8601 timestamp to a safe filename (replace special chars) */
+/**
+ * Convert ISO 8601 timestamp to a safe filename component.
+ *
+ * Security: this is a filename-component sanitizer, not just a display helper.
+ * Any character outside the strict allowlist `[A-Za-z0-9_-]` is replaced with
+ * `-`, so path separators (`/`, `\\`), parent-dir tokens (`..`), NUL bytes,
+ * and other filesystem-metacharacters cannot survive into a filename passed to
+ * `join(ctx.refsDir, ...)`. See writeRefMd for the defence-in-depth containment
+ * check that also enforces the resolved path stays inside `ctx.refsDir`.
+ */
 export function isoToFilename(iso: string): string {
-  return iso.replace(/:/g, "-").replace(/\./g, "-").replace(/\+/g, "p");
+  const replaced = String(iso ?? "")
+    .replace(/:/g, "-")
+    .replace(/\./g, "-")
+    .replace(/\+/g, "p")
+    .replace(/[^A-Za-z0-9_-]/g, "-");
+  // Collapse to a non-empty, bounded token to guarantee a valid filename.
+  const trimmed = replaced.replace(/^-+|-+$/g, "").slice(0, 128);
+  return trimmed.length > 0 ? trimmed : "ref";
+}
+
+/**
+ * Assert that `candidate` resolves inside `root`. Throws on escape attempts.
+ * Prevents path traversal via crafted filename components (CWE-22).
+ */
+function assertWithin(root: string, candidate: string): void {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  if (
+    resolvedCandidate !== resolvedRoot &&
+    !resolvedCandidate.startsWith(resolvedRoot + sep)
+  ) {
+    throw new Error(
+      `[context-offload] path traversal blocked: ${resolvedCandidate} escapes ${resolvedRoot}`,
+    );
+  }
 }
 
 /** Write tool result content to a ref MD file, return relative path */
@@ -537,6 +570,8 @@ export async function writeRefMd(
 ): Promise<string> {
   const filename = `${isoToFilename(timestamp)}.md`;
   const filePath = join(ctx.refsDir, filename);
+  // Defence-in-depth: even if isoToFilename regressed, refuse to write outside refsDir.
+  assertWithin(ctx.refsDir, filePath);
   const safeContent = (content ?? "").replace(UNSAFE_CHAR_RE, "");
   const header = `# Tool Result: ${toolName}\n\n**Timestamp:** ${timestamp}\n\n---\n\n`;
   await writeFile(filePath, header + safeContent, "utf-8");
@@ -549,6 +584,12 @@ export async function readRefMd(
   refPath: string,
 ): Promise<string | null> {
   const filePath = join(ctx.dataDir, refPath);
+  // Containment check: refPath comes from stored state and must stay inside dataDir.
+  try {
+    assertWithin(ctx.dataDir, filePath);
+  } catch {
+    return null;
+  }
   if (!existsSync(filePath)) return null;
   return readFile(filePath, "utf-8");
 }
