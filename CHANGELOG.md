@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 🐛 修复
+
+- **Checkpoint 聚合计数在清理后漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：启动时及 `memory-cleaner` 成功删除 L0/L1 Store 记录后，按 Store 中现存记录重新校准 `l0_conversations_count`、`total_memories_extracted` 与 `memories_since_last_persona`。`total_processed` 保持历史累计语义，不会因清理而回退。校准不会修改任何 session 的 L0/L1 增量游标或 pipeline 状态；Store 不可读取时保留原 checkpoint 并跳过本次修复。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。

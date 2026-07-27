@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
+import {
+  CheckpointManager,
+  reconcileCheckpointFromStore,
+} from "./checkpoint.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
@@ -163,6 +167,7 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+        await this.reconcileCheckpointCounters(vectorStore);
       }
 
       // ── Post-delete: audit summary ──
@@ -184,6 +189,27 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+  }
+
+  /** Keep checkpoint aggregates aligned with Store rows immediately after TTL deletion. */
+  private async reconcileCheckpointCounters(vectorStore: IMemoryStore): Promise<void> {
+    if (vectorStore.isDegraded()) {
+      this.opts.logger?.debug?.(`${TAG} Skip checkpoint reconciliation: Store is degraded`);
+      return;
+    }
+
+    try {
+      const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+      await reconcileCheckpointFromStore(checkpoint, vectorStore);
+      this.opts.logger?.debug?.(`${TAG} Reconciled checkpoint aggregate counters after cleanup`);
+    } catch (err) {
+      // Cleanup has already completed successfully. A later startup reconciliation
+      // can retry, so checkpoint repair must not turn this into a failed cleanup.
+      this.opts.logger?.warn?.(
+        `${TAG} Checkpoint reconciliation after cleanup failed (non-fatal): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private scheduleNext(): void {

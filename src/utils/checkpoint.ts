@@ -100,13 +100,66 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /**
+   * Legacy field name kept for on-disk checkpoint compatibility.
+   * Counts persisted L0 message records (the same unit as Store.countL0()).
+   */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
   /** Total L1 memories extracted across all time */
   total_memories_extracted: number;
 }
+
+/**
+ * Authoritative aggregate values used to repair checkpoint counter drift.
+ * Per-session cursors are intentionally absent: reconciliation must never
+ * rewind incremental L0/L1 processing state.
+ */
+export interface CheckpointCounters {
+  l0Conversations: number;
+  totalMemoriesExtracted: number;
+  memoriesSinceLastPersona: number;
+}
+
+/** Minimal Store surface required for startup checkpoint reconciliation. */
+export interface CheckpointCounterStore {
+  /** When true, count methods may return fault-tolerant empty values. */
+  isDegraded?(): boolean;
+  countL0(): number | Promise<number>;
+  countL1(): number | Promise<number>;
+  /** `updatedAfter` must use a strict `updated_time >` comparison. */
+  queryL1Records(filter?: { updatedAfter?: string }):
+    | Array<{ updated_time: string }>
+    | Promise<Array<{ updated_time: string }>>;
+}
+
+function assertValidCounters(actual: CheckpointCounters): void {
+  for (const [name, value] of Object.entries(actual)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`Checkpoint counter ${name} must be a non-negative safe integer`);
+    }
+  }
+}
+
+function applyCounters(checkpoint: Checkpoint, actual: CheckpointCounters): void {
+  checkpoint.l0_conversations_count = actual.l0Conversations;
+  checkpoint.total_memories_extracted = actual.totalMemoriesExtracted;
+  checkpoint.memories_since_last_persona = actual.memoriesSinceLastPersona;
+}
+
+async function readStoreValue<T>(operation: string, read: () => T | Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    throw new Error(
+      `Checkpoint reconciliation ${operation} failed: ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+const RECONCILIATION_LOCK_WARN_MS = 1_000;
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
   last_captured_timestamp: 0,
@@ -293,6 +346,63 @@ export class CheckpointManager {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
   }
 
+  /**
+   * @internal Replace aggregate counters with values already validated against
+   * durable data. Production callers should prefer reconcileCountersFromStore.
+   * Per-session timestamps and state remain unchanged because those cursors
+   * govern incremental processing rather than status.
+   */
+  async reconcileCounters(actual: CheckpointCounters): Promise<void> {
+    assertValidCounters(actual);
+
+    await this.mutate((cp) => {
+      applyCounters(cp, actual);
+    });
+  }
+
+  /**
+   * Recount aggregate values while holding the checkpoint lock. Store reads are
+   * intentionally inside the critical section: an L0/L1 write that starts
+   * after the count must run after the replacement values are written, rather
+   * than being overwritten by an old snapshot.
+   */
+  async reconcileCountersFromStore(store: CheckpointCounterStore): Promise<void> {
+    if (store.isDegraded?.()) {
+      throw new Error("Checkpoint reconciliation skipped: Store is degraded");
+    }
+
+    await this.mutate(async (cp) => {
+      const startedAt = Date.now();
+      try {
+        const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
+          readStoreValue("countL0()", () => store.countL0()),
+          readStoreValue("countL1()", () => store.countL1()),
+        ]);
+        const memoriesSinceLastPersona = cp.last_persona_time
+          ? (await readStoreValue(
+            `queryL1Records(updatedAfter=${cp.last_persona_time})`,
+            () => store.queryL1Records({ updatedAfter: cp.last_persona_time }),
+          )).length
+          : totalMemoriesExtracted;
+        const actual = {
+          l0Conversations,
+          totalMemoriesExtracted,
+          memoriesSinceLastPersona,
+        };
+
+        assertValidCounters(actual);
+        applyCounters(cp, actual);
+      } finally {
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= RECONCILIATION_LOCK_WARN_MS) {
+          this.logger.warn?.(
+            `[checkpoint] Counter reconciliation held the checkpoint lock for ${elapsedMs}ms`,
+          );
+        }
+      }
+    });
+  }
+
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
@@ -449,8 +559,8 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
-   * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
+   * L0 message count is also incremented inside the lock when messages are
+   * captured, removing the need for a separate counter update.
    *
    * @param sessionKey   Per-session identifier
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
@@ -479,10 +589,22 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Keep this aggregate aligned with persisted L0 message records.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }
 
+}
+
+/**
+ * Rebuild aggregate counters from the durable Store without touching any
+ * per-session cursor. `l0_conversations_count` is normalized to persisted L0
+ * message records so it has the same cross-backend meaning as `countL0()`.
+ */
+export async function reconcileCheckpointFromStore(
+  manager: CheckpointManager,
+  store: CheckpointCounterStore,
+): Promise<void> {
+  await manager.reconcileCountersFromStore(store);
 }
