@@ -13,7 +13,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start)
+[Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start) · [Platform Adapters](#platform-adapters) · [Architecture](./docs/architecture.md)
 
 <div align="center">
 
@@ -132,6 +132,22 @@ graph LR
 
 ---
 
+## Platform Adapters
+
+TencentDB-Agent-Memory supports multiple agent platforms. Each platform has a dedicated adapter that bridges the platform's event model to the core memory engine.
+
+| Platform | Transport | Capture | Setup guide |
+|---|---|---|---|
+| **OpenClaw** | In-process SDK hooks | Automatic (`agent_end` hook) | Below ↓ |
+| **Hermes** | HTTP Gateway (localhost) | Automatic (`sync_turn()` call) | Below ↓ |
+| **Claude Code** | MCP stdio JSON-RPC | Automatic (Stop hook) or explicit tool | [claude-code-adapter.md](./docs/claude-code-adapter.md) |
+| **Cursor** | MCP stdio JSON-RPC | Explicit tool call (`tdai_memory_capture`) | [cursor-adapter.md](./docs/cursor-adapter.md) |
+| **Codex CLI** | MCP stdio JSON-RPC | Explicit tool call (`tdai_memory_capture`) | [codex-adapter.md](./docs/codex-adapter.md) |
+| **Dify / n8n** | HTTP (localhost) | Explicit HTTP request node | [dify-adapter.md](./docs/dify-adapter.md) |
+
+For a full architecture diagram, data flow explanation, per-platform comparison, and a guide to adding new platforms, see **[docs/architecture.md](./docs/architecture.md)**.
+
+---
 
 ### 1. OpenClaw
 ### 1.1 Install the plugin
