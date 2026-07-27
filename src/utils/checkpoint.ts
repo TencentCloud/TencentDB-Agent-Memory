@@ -90,6 +90,14 @@ export interface Checkpoint {
   persona_update_reason: string;
   memories_since_last_persona: number;
   scenes_processed: number;
+  /**
+   * Monotonic revision bumped by every intentional downward calibration
+   * (`decrement*`, `recalculate`, `resetSession`). Concurrent writers that
+   * defensively restore "only-ever-increasing" counters (e.g. the L2 runner's
+   * corruption guard in pipeline-factory.ts) compare this revision to tell a
+   * legitimate calibration apart from an accidental clobber.
+   */
+  stats_revision: number;
 
   // ═══ Per-session split state ═══
   /** Runner-managed per-session state (L0 capture cursor, L1 cursor, scene name).
@@ -137,11 +145,68 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
   pipeline_states: {},
   l0_conversations_count: 0,
   total_memories_extracted: 0,
+  stats_revision: 0,
 };
 
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+}
+
+// ============================
+// Recalculate types
+// ============================
+
+/**
+ * Actual-data snapshot used by `recalculate()`.
+ *
+ * CheckpointManager is deliberately storage-agnostic: the caller builds this
+ * snapshot from the real store (e.g. `countL0()`/`countL1()` plus per-session
+ * MAX(recorded_at)/MAX(updated_at) queries, or a JSONL file scan) and hands it
+ * over. The recalculate logic then reconciles counters and cursors with
+ * ground truth.
+ */
+export interface CheckpointRecalculateSnapshot {
+  /**
+   * Actual number of L0 messages currently in the store.
+   * Same unit as `total_processed` (messages, not conversation batches).
+   */
+  l0MessageCount?: number;
+  /**
+   * Actual number of L1 records currently in the store.
+   * Same unit as `total_memories_extracted`.
+   */
+  l1RecordCount?: number;
+  /**
+   * Per-session actual data watermarks, keyed by sessionKey.
+   *
+   * When `exhaustiveSessions` is true, this map MUST list every session that
+   * still has data: any session present in the checkpoint but absent here is
+   * treated as fully deleted, and its cursors are reset to zero so a later
+   * re-import is processed from scratch instead of being skipped.
+   */
+  sessions?: Record<
+    string,
+    {
+      /** Max L0 `recorded_at` (epoch ms) still present for this session. */
+      l0MaxRecordedAtMs?: number;
+      /** Max L1 `updated_at` (ISO 8601 string) still present for this session. */
+      l1MaxUpdatedAtIso?: string;
+    }
+  >;
+  /** See `sessions`. Cursor resets for absent sessions only happen when true. */
+  exhaustiveSessions?: boolean;
+}
+
+/** A single field adjustment performed by `recalculate()` (for logging/tests). */
+export interface RecalculateAdjustment {
+  field: string;
+  before: number | string;
+  after: number | string;
+}
+
+export interface RecalculateResult {
+  adjustments: RecalculateAdjustment[];
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -483,6 +548,250 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Calibration (decrement / recalculate / reset)
+  // ============================
+  //
+  // Counters and cursors are write-only-increment by design, so any operation
+  // that REMOVES underlying data (memory-cleaner expiry, manual JSONL pruning,
+  // session reset, historical rollback) leaves the checkpoint permanently
+  // overestimated — incremental processing then skips records that should have
+  // been processed. The methods below are the downward write paths.
+  //
+  // Every calibration bumps `stats_revision` so defensive readers can tell an
+  // intentional decrease from accidental corruption.
+
+  private static floorSub(current: number, amount: number): number {
+    if (!Number.isFinite(amount) || amount <= 0) return current;
+    return Math.max(0, current - Math.floor(amount));
+  }
+
+  /**
+   * Decrement `total_processed` by `amount` (message units), floored at 0.
+   * Used by memory-cleaner after deleting expired L0 messages.
+   */
+  async decrementTotalProcessed(amount: number): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      cp.total_processed = CheckpointManager.floorSub(cp.total_processed, amount);
+      cp.stats_revision += 1;
+    });
+    this.logger.info(`[checkpoint] decrementTotalProcessed(${amount}): total_processed=${cp.total_processed}`);
+  }
+
+  /**
+   * Decrement `l0_conversations_count` by `amount` (capture-batch units),
+   * floored at 0. Note: store-level deletions are counted in messages, so
+   * callers usually want `decrementTotalProcessed` or `recalculate` instead.
+   */
+  async decrementL0Conversations(amount: number): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      cp.l0_conversations_count = CheckpointManager.floorSub(cp.l0_conversations_count, amount);
+      cp.stats_revision += 1;
+    });
+    this.logger.info(`[checkpoint] decrementL0Conversations(${amount}): l0_conversations_count=${cp.l0_conversations_count}`);
+  }
+
+  /**
+   * Decrement `total_memories_extracted` by `amount` (L1 record units),
+   * floored at 0. `memories_since_last_persona` is clamped to the new total
+   * (it can never exceed the number of memories actually present).
+   * Used by memory-cleaner after deleting expired L1 records.
+   */
+  async decrementMemoriesExtracted(amount: number): Promise<void> {
+    const cp = await this.mutate((cp) => {
+      cp.total_memories_extracted = CheckpointManager.floorSub(cp.total_memories_extracted, amount);
+      cp.memories_since_last_persona = Math.min(cp.memories_since_last_persona, cp.total_memories_extracted);
+      cp.stats_revision += 1;
+    });
+    this.logger.info(
+      `[checkpoint] decrementMemoriesExtracted(${amount}): total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  /**
+   * Fully reset a session's persisted state (runner + pipeline namespaces).
+   *
+   * Pairs with data-level session deletion: after the session's L0/L1 data is
+   * wiped, its cursors would otherwise stay ahead of the (now empty) data and
+   * every later re-import would be skipped as "already processed".
+   *
+   * Runtime callers should also evict the session from MemoryPipelineManager's
+   * in-memory maps (`evictSession`) so timers/buffers restart cold.
+   *
+   * @returns true if any state entry was actually removed.
+   */
+  async resetSession(sessionKey: string): Promise<boolean> {
+    let removed = false;
+    await this.mutate((cp) => {
+      if (cp.runner_states && sessionKey in cp.runner_states) {
+        delete cp.runner_states[sessionKey];
+        removed = true;
+      }
+      if (cp.pipeline_states && sessionKey in cp.pipeline_states) {
+        delete cp.pipeline_states[sessionKey];
+        removed = true;
+      }
+      if (removed) {
+        cp.stats_revision += 1;
+      }
+    });
+    this.logger.info(`[checkpoint] resetSession session=${sessionKey}: removed=${removed}`);
+    return removed;
+  }
+
+  /**
+   * Reconcile counters and cursors with an actual-data snapshot.
+   *
+   * Counter reconciliation (exact, same-unit assignments):
+   *   - `total_processed`           := l0MessageCount (messages)
+   *   - `total_memories_extracted`  := l1RecordCount (records)
+   *   - `l0_conversations_count`    := min(current, l0MessageCount)  — batches
+   *     can never exceed messages; the exact batch count is not derivable from
+   *     the store, so this is a clamp, not an assignment.
+   *   - `memories_since_last_persona` := min(current, l1RecordCount)
+   *
+   * Cursor reconciliation:
+   *   - `runner_states[s].last_l1_cursor` uses recorded_at semantics — clamped
+   *     to the session's actual max recorded_at when it runs ahead (rollback).
+   *   - `pipeline_states[s].last_extraction_updated_time` is an ISO cursor —
+   *     clamped lexicographically to the session's actual max updated_at.
+   *   - `runner_states[s].last_captured_timestamp` uses the message-timestamp
+   *     clock, NOT recorded_at, so it is never clamped against recorded_at
+   *     data (mixing clocks could re-capture history). It is only reset when
+   *     the session has no data left at all.
+   *   - With `exhaustiveSessions`, sessions absent from the snapshot have all
+   *     cursors reset (full deletion / re-import scenario).
+   *
+   * Bumps `stats_revision` when (and only when) at least one field changed.
+   */
+  async recalculate(snapshot: CheckpointRecalculateSnapshot): Promise<RecalculateResult> {
+    const adjustments: RecalculateAdjustment[] = [];
+
+    const setExact = (field: string, obj: Record<string, number>, key: string, next: number): void => {
+      const prev = obj[key];
+      if (prev !== next) {
+        adjustments.push({ field, before: prev, after: next });
+        obj[key] = next;
+      }
+    };
+    const clampMax = (field: string, obj: Record<string, number>, key: string, max: number): void => {
+      const prev = obj[key];
+      if (prev > max) {
+        adjustments.push({ field, before: prev, after: max });
+        obj[key] = max;
+      }
+    };
+
+    await this.mutate((cp) => {
+      // ── Global counters ──
+      if (typeof snapshot.l0MessageCount === "number" && Number.isFinite(snapshot.l0MessageCount)) {
+        const n = Math.max(0, Math.floor(snapshot.l0MessageCount));
+        setExact("total_processed", cp as unknown as Record<string, number>, "total_processed", n);
+        clampMax("l0_conversations_count", cp as unknown as Record<string, number>, "l0_conversations_count", n);
+      }
+      if (typeof snapshot.l1RecordCount === "number" && Number.isFinite(snapshot.l1RecordCount)) {
+        const n = Math.max(0, Math.floor(snapshot.l1RecordCount));
+        setExact("total_memories_extracted", cp as unknown as Record<string, number>, "total_memories_extracted", n);
+        clampMax("memories_since_last_persona", cp as unknown as Record<string, number>, "memories_since_last_persona", n);
+      }
+
+      // ── Per-session cursors ──
+      if (snapshot.sessions) {
+        const exhaustive = snapshot.exhaustiveSessions === true;
+
+        for (const [sessionKey, rState] of Object.entries(cp.runner_states ?? {})) {
+          const s = snapshot.sessions[sessionKey];
+          if (!s) {
+            if (exhaustive) {
+              // No L0/L1 rows left for this session at all. Reset both
+              // cursors so a later re-import is processed instead of skipped.
+              // Note: captureAtomically treats cursor 0 as cold-start and
+              // falls back to pluginStartTimestamp, bounding re-capture.
+              if (rState.last_captured_timestamp !== 0 || rState.last_l1_cursor !== 0) {
+                adjustments.push({
+                  field: `runner_states.${sessionKey}`,
+                  before: `captured=${rState.last_captured_timestamp},l1=${rState.last_l1_cursor}`,
+                  after: "captured=0,l1=0",
+                });
+                rState.last_captured_timestamp = 0;
+                rState.last_l1_cursor = 0;
+              }
+            }
+            continue;
+          }
+          if (typeof s.l0MaxRecordedAtMs === "number" && Number.isFinite(s.l0MaxRecordedAtMs)) {
+            // L1 cursor shares the recorded_at clock → clamp when ahead of data.
+            if (rState.last_l1_cursor > s.l0MaxRecordedAtMs) {
+              adjustments.push({
+                field: `runner_states.${sessionKey}.last_l1_cursor`,
+                before: rState.last_l1_cursor,
+                after: s.l0MaxRecordedAtMs,
+              });
+              rState.last_l1_cursor = s.l0MaxRecordedAtMs;
+            }
+          } else if (exhaustive && rState.last_l1_cursor !== 0) {
+            // Session exists (has L1 rows) but its L0 rows are all gone:
+            // rewind the L1 cursor so re-imported L0 data is not skipped.
+            // last_captured_timestamp is deliberately NOT touched — its data
+            // source is the host conversation history, not the L0 store.
+            adjustments.push({
+              field: `runner_states.${sessionKey}.last_l1_cursor`,
+              before: rState.last_l1_cursor,
+              after: 0,
+            });
+            rState.last_l1_cursor = 0;
+          }
+        }
+
+        for (const [sessionKey, pState] of Object.entries(cp.pipeline_states ?? {})) {
+          const s = snapshot.sessions[sessionKey];
+          if (!s) {
+            if (exhaustive && pState.last_extraction_updated_time !== "") {
+              adjustments.push({
+                field: `pipeline_states.${sessionKey}.last_extraction_updated_time`,
+                before: pState.last_extraction_updated_time,
+                after: "",
+              });
+              pState.last_extraction_updated_time = "";
+            }
+            continue;
+          }
+          if (typeof s.l1MaxUpdatedAtIso === "string") {
+            // ISO 8601 UTC strings compare correctly lexicographically — the
+            // same semantics the L2 runner already uses (`updatedAt > cursor`).
+            if (pState.last_extraction_updated_time > s.l1MaxUpdatedAtIso) {
+              adjustments.push({
+                field: `pipeline_states.${sessionKey}.last_extraction_updated_time`,
+                before: pState.last_extraction_updated_time,
+                after: s.l1MaxUpdatedAtIso,
+              });
+              pState.last_extraction_updated_time = s.l1MaxUpdatedAtIso;
+            }
+          } else if (exhaustive && pState.last_extraction_updated_time !== "") {
+            // Session has L0 rows but zero L1 records → full rescan next L2.
+            adjustments.push({
+              field: `pipeline_states.${sessionKey}.last_extraction_updated_time`,
+              before: pState.last_extraction_updated_time,
+              after: "",
+            });
+            pState.last_extraction_updated_time = "";
+          }
+        }
+      }
+
+      if (adjustments.length > 0) {
+        cp.stats_revision += 1;
+      }
+    });
+
+    this.logger.info(
+      `[checkpoint] recalculate: ${adjustments.length} adjustment(s)` +
+      (adjustments.length > 0 ? ` — ${adjustments.map((a) => `${a.field}: ${a.before} → ${a.after}`).join("; ")}` : ""),
+    );
+    return { adjustments };
   }
 
 }
