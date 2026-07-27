@@ -7,7 +7,7 @@
  *      (Codex "call tools in MCP" + Whale "see and use the tools").
  *   2. The Whale hooks (recall.py / capture.py / health.py) run and reach the
  *      gateway over HTTP.
- *   3. The Codex hooks (recall.sh / capture.sh / health.sh) run and reach the
+ *   3. The Codex hooks (recall.js / capture.js / health.js) run and reach the
  *      gateway over HTTP.
  *   4. The plugin manifests (mcp.json / .mcp.json / hooks.* / plugin.json /
  *      whale-plugin.toml) are well-formed and point at real files, so the host
@@ -43,9 +43,6 @@ function canExec(cmd: string): boolean {
 }
 
 const PYTHON = canExec("python3") ? "python3" : "python";
-const BASH = "bash";
-const HAS_JQ = canExec("jq");
-const HAS_CURL = canExec("curl");
 
 // ---- Mock gateway (mirrors src/gateway/server.ts contract) ----
 let server: http.Server | null = null;
@@ -269,12 +266,11 @@ describe("Whale hooks (python)", () => {
   });
 });
 
-describe("Codex hooks (bash)", () => {
-  const canRun = HAS_JQ && HAS_CURL;
-  it.skipIf(!canRun)("UserPromptSubmit recall reaches the gateway and returns additionalContext", async () => {
+describe("Codex hooks (node)", () => {
+  it("UserPromptSubmit recall reaches the gateway and returns additionalContext", async () => {
     const r = await runHook(
-      BASH,
-      [resolve(CODEX_DIR, "scripts/recall.sh")],
+      NODE,
+      [resolve(CODEX_DIR, "scripts/recall.js")],
       { prompt: "what did we decide?", session_id: "sess-c1" },
       gatewayUrl,
     );
@@ -285,7 +281,7 @@ describe("Codex hooks (bash)", () => {
     if (!useReal) expect(hits["/recall"]).toBeGreaterThanOrEqual(1);
   });
 
-  it.skipIf(!canRun)("Stop capture runs without error (fire-and-forget)", async () => {
+  it("Stop capture runs without error (fire-and-forget)", async () => {
     const tf = resolve(tmpdir(), `tdai-e2e-${Date.now()}.jsonl`).replace(/\\/g, "/");
     writeFileSync(
       tf,
@@ -295,16 +291,17 @@ describe("Codex hooks (bash)", () => {
       ].join("\n"),
     );
     const r = await runHook(
-      BASH,
-      [resolve(CODEX_DIR, "scripts/capture.sh")],
+      NODE,
+      [resolve(CODEX_DIR, "scripts/capture.js")],
       { session_id: "sess-c1", transcript_path: tf },
       gatewayUrl,
     );
     expect(r.code).toBe(0);
+    if (!useReal) expect(hits["/capture"]).toBeGreaterThanOrEqual(1);
   });
 
-  it.skipIf(!canRun)("SessionStart health runs without error", async () => {
-    const r = await runHook(BASH, [resolve(CODEX_DIR, "scripts/health.sh")], {}, gatewayUrl);
+  it("SessionStart health runs without error", async () => {
+    const r = await runHook(NODE, [resolve(CODEX_DIR, "scripts/health.js")], {}, gatewayUrl);
     expect(r.code).toBe(0);
   });
 });
