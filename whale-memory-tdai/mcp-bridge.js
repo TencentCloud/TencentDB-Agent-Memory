@@ -51,7 +51,7 @@ function httpPost(path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, GATEWAY);
     const data = Buffer.from(JSON.stringify(body));
-    const req = require("http").request(
+    const req = http.request(
       {
         hostname: url.hostname,
         port: url.port,

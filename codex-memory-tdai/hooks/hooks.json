@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/scripts/health.sh",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/health.sh\"",
             "statusMessage": "Memory gateway check"
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/scripts/recall.sh",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/recall.sh\"",
             "timeout": 15,
             "statusMessage": "Recalling memories"
           }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/scripts/capture.sh",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh\"",
             "timeout": 30,
             "statusMessage": "Recording conversation"
           }
