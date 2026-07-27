@@ -35,7 +35,13 @@ mcp-bridge.js               # stdio MCP server -> /search/*
 
 ```
 codex plugin marketplace add <this-repo>
-codex plugin install memory-tdai
+codex plugin add memory-tdai
+```
+
+To remove the plugin, include the marketplace name:
+
+```
+codex plugin remove memory-tdai@tencentdb-local
 ```
 
 Trust the bundled hooks via `/hooks` when prompted. The MCP server exposes
