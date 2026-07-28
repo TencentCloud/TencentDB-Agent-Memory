@@ -2,7 +2,10 @@ import http from "node:http";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayMemoryClient } from "../gateway-client/index.js";
 import packageJson from "../../../package.json" with { type: "json" };
@@ -243,11 +246,6 @@ describe("STDIO process integration", () => {
     const address = gateway.address();
     if (!address || typeof address === "string") throw new Error("No Gateway address");
 
-    const inheritedEnv = Object.fromEntries(
-      Object.entries(process.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    );
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [
@@ -257,7 +255,7 @@ describe("STDIO process integration", () => {
       ],
       cwd: process.cwd(),
       env: {
-        ...inheritedEnv,
+        ...getDefaultEnvironment(),
         TDAI_GATEWAY_URL: `http://127.0.0.1:${address.port}`,
         TDAI_CODEX_SESSION_KEY: "codex:stdio-test",
       },
