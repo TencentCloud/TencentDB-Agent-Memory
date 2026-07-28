@@ -46,4 +46,14 @@ export default defineConfig([
       sourcemap: false,
     },
   },
+  {
+    ...shared,
+    entry: {
+      "memory-tencentdb-claude-hook": "./src/adapters/claude-code/hook.ts",
+    },
+    clean: false,
+    dts: {
+      sourcemap: false,
+    },
+  },
 ]);
