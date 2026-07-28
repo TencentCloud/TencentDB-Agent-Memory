@@ -293,6 +293,8 @@ export class TdaiCore {
       limit: params.limit ?? 5,
       type: params.type,
       scene: params.scene,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
       logger: this.logger,

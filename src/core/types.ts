@@ -231,6 +231,8 @@ export interface MemorySearchParams {
   limit?: number;
   type?: string;
   scene?: string;
+  sessionKey?: string;
+  sessionId?: string;
 }
 
 /** Search parameters for L0 conversation search. */

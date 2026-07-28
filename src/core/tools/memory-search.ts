@@ -28,6 +28,8 @@ export interface MemorySearchResultItem {
   score: number;
   created_at: string;
   updated_at: string;
+  session_key?: string;
+  session_id?: string;
 }
 
 export interface MemorySearchResult {
@@ -84,6 +86,8 @@ export async function executeMemorySearch(params: {
   limit: number;
   type?: string;
   scene?: string;
+  sessionKey?: string;
+  sessionId?: string;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   logger?: Logger;
@@ -93,6 +97,8 @@ export async function executeMemorySearch(params: {
     limit,
     type: typeFilter,
     scene: sceneFilter,
+    sessionKey: sessionKeyFilter,
+    sessionId: sessionIdFilter,
     vectorStore,
     embeddingService,
     logger,
@@ -158,6 +164,8 @@ export async function executeMemorySearch(params: {
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
+          session_key: r.session_key,
+          session_id: r.session_id,
         }));
       } catch (err) {
         logger?.warn?.(
@@ -187,6 +195,8 @@ export async function executeMemorySearch(params: {
           score: r.score,
           created_at: r.timestamp_start,
           updated_at: r.timestamp_end,
+          session_key: r.session_key,
+          session_id: r.session_id,
         }));
       } catch (err) {
         logger?.warn?.(
@@ -225,7 +235,7 @@ export async function executeMemorySearch(params: {
     results = ftsOk ? ftsItems : vecItems;
   }
 
-  // ── Apply secondary filters (type, scene) ──
+  // ── Apply secondary filters (type, scene, session) ──
   const preFilterCount = results.length;
   if (typeFilter) {
     results = results.filter((r) => r.type === typeFilter);
@@ -237,6 +247,14 @@ export async function executeMemorySearch(params: {
       r.scene_name.toLowerCase().includes(normalizedScene),
     );
     logger?.debug?.(`${TAG} After scene filter "${sceneFilter}": ${results.length}/${preFilterCount}`);
+  }
+  if (sessionIdFilter) {
+    results = results.filter((r) => r.session_id === sessionIdFilter);
+    logger?.debug?.(`${TAG} After sessionId filter "${sessionIdFilter}": ${results.length}/${preFilterCount}`);
+  }
+  if (sessionKeyFilter) {
+    results = results.filter((r) => r.session_key === sessionKeyFilter);
+    logger?.debug?.(`${TAG} After sessionKey filter "${sessionKeyFilter}": ${results.length}/${preFilterCount}`);
   }
 
   // ── Trim to requested limit ──
