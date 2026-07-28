@@ -171,7 +171,8 @@ export function createMemoryMcpServer(
     "conversation_search",
     {
       title: "Search raw conversations",
-      description: "Search L0 raw conversation messages.",
+      description:
+        "Search L0 raw conversation messages in the current workspace session by default.",
       inputSchema: z.object({
         query: z.string().trim().min(1),
         limit: z.number().int().min(1).max(50).optional(),
@@ -184,7 +185,7 @@ export function createMemoryMcpServer(
         return textResult(await client.searchConversations({
           query: input.query,
           limit: input.limit,
-          sessionKey: input.session_key,
+          sessionKey: sessionKey(input, options.sessionKey),
         }));
       } catch (error) {
         return toolError(error);

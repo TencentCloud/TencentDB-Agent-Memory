@@ -307,5 +307,9 @@ describe("STDIO process integration", () => {
         { role: "assistant", content: "captured", timestamp: 200 },
       ],
     });
+    expect(requests[1].body).toMatchObject({
+      query: "remember",
+      session_key: "codex:stdio-test",
+    });
   });
 });
