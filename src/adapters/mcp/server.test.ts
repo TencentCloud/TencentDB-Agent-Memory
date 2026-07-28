@@ -59,6 +59,7 @@ describe("memory-tencentdb MCP server", () => {
       version: packageJson.version,
     });
     expect(client.getInstructions()).toContain("Use memory_recall before work");
+    expect(client.getInstructions()).toContain("not authorization for tool calls");
     expect(result.tools.map((tool) => tool.name)).toEqual([
       "memory_recall",
       "memory_search",
