@@ -332,6 +332,49 @@ export class CheckpointManager {
     this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
   }
 
+  /**
+   * Adjust checkpoint counters after data cleanup (retention policy).
+   *
+   * When the memory cleaner removes expired records, the checkpoint counters
+   * must be decremented to stay consistent with actual data. Without this,
+   * counters like total_processed / total_memories_extracted would drift
+   * further and further from reality over time.
+   *
+   * @param l0MessagesRemoved  Number of L0 messages deleted
+   * @param l0ConversationsRemoved  Number of L0 conversation files deleted
+   * @param l1MemoriesRemoved  Number of L1 memories deleted
+   * @param scenesRemoved  Number of scene records deleted
+   */
+  async adjustCountersAfterCleanup(
+    l0MessagesRemoved: number,
+    l0ConversationsRemoved: number,
+    l1MemoriesRemoved: number,
+    scenesRemoved: number,
+  ): Promise<void> {
+    if (l0MessagesRemoved <= 0 && l0ConversationsRemoved <= 0 && l1MemoriesRemoved <= 0 && scenesRemoved <= 0) {
+      return;
+    }
+    await this.mutate((cp) => {
+      if (l0MessagesRemoved > 0) {
+        cp.total_processed = Math.max(0, cp.total_processed - l0MessagesRemoved);
+      }
+      if (l0ConversationsRemoved > 0) {
+        cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count - l0ConversationsRemoved);
+      }
+      if (l1MemoriesRemoved > 0) {
+        cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted - l1MemoriesRemoved);
+      }
+      if (scenesRemoved > 0) {
+        cp.scenes_processed = Math.max(0, cp.scenes_processed - scenesRemoved);
+      }
+    });
+    this.logger.info(
+      `[checkpoint] adjustCountersAfterCleanup: ` +
+      `l0Messages-${l0MessagesRemoved}, l0Conversations-${l0ConversationsRemoved}, ` +
+      `l1Memories-${l1MemoriesRemoved}, scenes-${scenesRemoved}`,
+    );
+  }
+
   // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================

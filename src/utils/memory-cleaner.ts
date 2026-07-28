@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import type { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -12,6 +13,7 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  checkpointManager?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -33,14 +35,28 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpointManager?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpointManager = opts.checkpointManager;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setCheckpointManager(checkpointManager: CheckpointManager | undefined): void {
+    this.checkpointManager = checkpointManager;
+  }
+
+  private async getOrCreateCheckpointManager(): Promise<CheckpointManager | undefined> {
+    if (this.checkpointManager) return this.checkpointManager;
+    if (!this.opts.logger) return undefined;
+    const { CheckpointManager } = await import("./checkpoint.js");
+    this.checkpointManager = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+    return this.checkpointManager;
   }
 
   start(): void {
@@ -163,6 +179,25 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+      }
+
+      // ── Post-delete: reconcile checkpoint counters ──
+      if (removedL0 > 0 || removedL1 > 0) {
+        const cpMgr = await this.getOrCreateCheckpointManager();
+        if (cpMgr) {
+          try {
+            await cpMgr.adjustCountersAfterCleanup(
+              removedL0,
+              total.changedFiles,
+              removedL1,
+              0,
+            );
+          } catch (err) {
+            this.opts.logger?.warn(
+              `${TAG} [checkpoint] Failed to adjust counters after cleanup: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
       }
 
       // ── Post-delete: audit summary ──
