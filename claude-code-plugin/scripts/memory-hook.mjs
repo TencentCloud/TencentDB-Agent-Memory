@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 //#region src/adapters/gateway-client/errors.ts
@@ -48,6 +48,12 @@ var GatewayResponseError = class extends GatewayMemoryClientError {
 		this.reason = reason;
 	}
 };
+/** The Gateway returned a successful HTTP response that was not valid JSON. */
+var GatewayParseError = class extends GatewayResponseError {
+	constructor(url, responseBody, cause) {
+		super(url, responseBody, cause, "malformed JSON");
+	}
+};
 //#endregion
 //#region src/adapters/gateway-client/client.ts
 const DEFAULT_BASE_URL = "http://127.0.0.1:8420";
@@ -55,24 +61,24 @@ const DEFAULT_TIMEOUT_MS = 1e4;
 function isRecord(value) {
 	return !!value && typeof value === "object" && !Array.isArray(value);
 }
-function isFiniteNumber(value) {
-	return typeof value === "number" && Number.isFinite(value);
+function isNonNegativeInteger(value) {
+	return Number.isSafeInteger(value) && value >= 0;
 }
 function isHealthResponse(value) {
 	if (!isRecord(value) || !isRecord(value.stores)) return false;
-	return (value.status === "ok" || value.status === "degraded") && typeof value.version === "string" && isFiniteNumber(value.uptime) && typeof value.stores.vectorStore === "boolean" && typeof value.stores.embeddingService === "boolean";
+	return (value.status === "ok" || value.status === "degraded") && typeof value.version === "string" && isNonNegativeInteger(value.uptime) && typeof value.stores.vectorStore === "boolean" && typeof value.stores.embeddingService === "boolean";
 }
 function isRecallResponse(value) {
-	return isRecord(value) && typeof value.context === "string" && (value.strategy === void 0 || typeof value.strategy === "string") && (value.memory_count === void 0 || isFiniteNumber(value.memory_count));
+	return isRecord(value) && typeof value.context === "string" && (value.prepend_context === void 0 || typeof value.prepend_context === "string") && (value.append_system_context === void 0 || typeof value.append_system_context === "string") && (value.strategy === void 0 || typeof value.strategy === "string") && (value.memory_count === void 0 || isNonNegativeInteger(value.memory_count));
 }
 function isCaptureResponse(value) {
-	return isRecord(value) && isFiniteNumber(value.l0_recorded) && typeof value.scheduler_notified === "boolean";
+	return isRecord(value) && isNonNegativeInteger(value.l0_recorded) && typeof value.scheduler_notified === "boolean";
 }
 function isMemorySearchResponse(value) {
-	return isRecord(value) && typeof value.results === "string" && isFiniteNumber(value.total) && typeof value.strategy === "string";
+	return isRecord(value) && typeof value.results === "string" && isNonNegativeInteger(value.total) && typeof value.strategy === "string";
 }
 function isConversationSearchResponse(value) {
-	return isRecord(value) && typeof value.results === "string" && isFiniteNumber(value.total);
+	return isRecord(value) && typeof value.results === "string" && isNonNegativeInteger(value.total);
 }
 function isSessionEndResponse(value) {
 	return isRecord(value) && typeof value.flushed === "boolean";
@@ -99,6 +105,29 @@ function requireText(value, field) {
 	if (!text) throw new GatewayConfigurationError(`${field} must be a non-empty string`);
 	return text;
 }
+function optionalText(value, field) {
+	return value === void 0 ? void 0 : requireText(value, field);
+}
+function optionalLimit(value) {
+	if (value === void 0) return void 0;
+	if (!Number.isSafeInteger(value) || value < 1 || value > 50) throw new GatewayConfigurationError("limit must be an integer between 1 and 50");
+	return value;
+}
+function normalizeMessages(messages) {
+	if (messages === void 0) return void 0;
+	if (!Array.isArray(messages) || messages.length === 0) throw new GatewayConfigurationError("messages must be a non-empty array when provided");
+	return messages.map((message, index) => {
+		if (!isRecord(message)) throw new GatewayConfigurationError(`messages[${index}] must be an object`);
+		const role = requireText(message.role, `messages[${index}].role`);
+		const content = requireText(message.content, `messages[${index}].content`);
+		if (message.timestamp !== void 0 && (!Number.isSafeInteger(message.timestamp) || message.timestamp <= 0)) throw new GatewayConfigurationError(`messages[${index}].timestamp must be a positive safe integer`);
+		return {
+			...message,
+			role,
+			content
+		};
+	});
+}
 var GatewayMemoryClient = class {
 	baseUrl;
 	apiKey;
@@ -117,47 +146,64 @@ var GatewayMemoryClient = class {
 		return this.request("GET", "/health", void 0, isHealthResponse);
 	}
 	recall(input) {
+		const userId = optionalText(input.userId, "userId");
 		return this.request("POST", "/recall", {
 			query: requireText(input.query, "query"),
 			session_key: requireText(input.sessionKey, "sessionKey"),
-			...input.userId ? { user_id: input.userId } : {}
+			...userId ? { user_id: userId } : {}
 		}, isRecallResponse);
 	}
 	capture(input) {
+		const sessionId = optionalText(input.sessionId, "sessionId");
+		const userId = optionalText(input.userId, "userId");
+		const messages = normalizeMessages(input.messages);
 		return this.request("POST", "/capture", {
 			user_content: requireText(input.userContent, "userContent"),
 			assistant_content: requireText(input.assistantContent, "assistantContent"),
 			session_key: requireText(input.sessionKey, "sessionKey"),
-			...input.sessionId ? { session_id: input.sessionId } : {},
-			...input.userId ? { user_id: input.userId } : {},
-			...input.messages ? { messages: input.messages } : {}
+			...sessionId ? { session_id: sessionId } : {},
+			...userId ? { user_id: userId } : {},
+			...messages ? { messages } : {}
 		}, isCaptureResponse);
 	}
 	searchMemories(input) {
+		const limit = optionalLimit(input.limit);
+		const type = optionalText(input.type, "type");
+		const scene = optionalText(input.scene, "scene");
 		return this.request("POST", "/search/memories", {
 			query: requireText(input.query, "query"),
-			...input.limit !== void 0 ? { limit: input.limit } : {},
-			...input.type ? { type: input.type } : {},
-			...input.scene ? { scene: input.scene } : {}
+			...limit !== void 0 ? { limit } : {},
+			...type ? { type } : {},
+			...scene ? { scene } : {}
 		}, isMemorySearchResponse);
 	}
 	searchConversations(input) {
+		const limit = optionalLimit(input.limit);
+		const sessionKey = optionalText(input.sessionKey, "sessionKey");
 		return this.request("POST", "/search/conversations", {
 			query: requireText(input.query, "query"),
-			...input.limit !== void 0 ? { limit: input.limit } : {},
-			...input.sessionKey ? { session_key: input.sessionKey } : {}
+			...limit !== void 0 ? { limit } : {},
+			...sessionKey ? { session_key: sessionKey } : {}
 		}, isConversationSearchResponse);
 	}
 	endSession(input) {
+		const userId = optionalText(input.userId, "userId");
 		return this.request("POST", "/session/end", {
 			session_key: requireText(input.sessionKey, "sessionKey"),
-			...input.userId ? { user_id: input.userId } : {}
+			...userId ? { user_id: userId } : {}
 		}, isSessionEndResponse);
 	}
 	async request(method, path, body, validate) {
 		const url = `${this.baseUrl}${path}`;
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+		let encodedBody;
+		try {
+			encodedBody = body === void 0 ? void 0 : JSON.stringify(body);
+		} catch (cause) {
+			clearTimeout(timer);
+			throw new GatewayConfigurationError("Gateway request body must be JSON-serializable", { cause });
+		}
 		let response;
 		try {
 			const headers = {};
@@ -166,7 +212,7 @@ var GatewayMemoryClient = class {
 			response = await this.fetchImpl(url, {
 				method,
 				headers,
-				body: body === void 0 ? void 0 : JSON.stringify(body),
+				body: encodedBody,
 				signal: controller.signal
 			});
 		} catch (cause) {
@@ -188,7 +234,7 @@ var GatewayMemoryClient = class {
 		try {
 			parsed = JSON.parse(responseBody);
 		} catch (cause) {
-			throw new GatewayResponseError(url, responseBody, cause, "malformed JSON");
+			throw new GatewayParseError(url, responseBody, cause);
 		}
 		if (!isRecord(parsed)) throw new GatewayResponseError(url, responseBody, void 0, "expected JSON object");
 		if (validate && !validate(parsed)) throw new GatewayResponseError(url, responseBody, void 0, "unexpected schema");
@@ -200,7 +246,8 @@ var GatewayMemoryClient = class {
 const MAX_CONTEXT_CHARS = 8e3;
 const MAX_QUEUED_TURNS = 100;
 const MAX_GLOBAL_STATE_BYTES = 5 * 1024 * 1024;
-const MAX_RETRIES_PER_PROMPT = 5;
+const MAX_RETRIES_PER_PROMPT = 1;
+const PROMPT_RETRY_TIMEOUT_MS = 2e3;
 const SESSION_END_OPERATION_TIMEOUT_MS = 400;
 function digest(value, length = 24) {
 	return createHash("sha256").update(value).digest("hex").slice(0, length);
@@ -214,26 +261,61 @@ function stateDirectory(pluginDataDir) {
 function stateFileForSession(pluginDataDir, sessionId) {
 	return path.join(stateDirectory(pluginDataDir), `${digest(sessionId)}.json`);
 }
-async function loadState(file) {
+function parseState(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const candidate = value;
+	if (!Array.isArray(candidate.queue)) return null;
+	if (candidate.pendingPrompt !== void 0 && (!candidate.pendingPrompt || typeof candidate.pendingPrompt.content !== "string" || !Number.isSafeInteger(candidate.pendingPrompt.timestamp) || candidate.pendingPrompt.timestamp < 0)) return null;
+	for (const turn of candidate.queue) if (!turn || typeof turn !== "object" || typeof turn.id !== "string" || typeof turn.userContent !== "string" || typeof turn.assistantContent !== "string" || !Number.isSafeInteger(turn.userTimestamp) || turn.userTimestamp < 0 || !Number.isSafeInteger(turn.assistantTimestamp) || turn.assistantTimestamp < turn.userTimestamp) return null;
+	return {
+		pendingPrompt: candidate.pendingPrompt,
+		queue: candidate.queue
+	};
+}
+async function quarantineInvalidState(file, logger) {
+	const quarantined = `${file}.corrupt-${Date.now()}-${randomUUID()}`;
 	try {
-		const parsed = JSON.parse(await readFile(file, "utf8"));
-		return {
-			pendingPrompt: parsed.pendingPrompt,
-			queue: Array.isArray(parsed.queue) ? parsed.queue : []
-		};
+		await rename(file, quarantined);
+		logger(`invalid hook state quarantined as ${path.basename(quarantined)}`);
+	} catch (error) {
+		logger(`invalid hook state could not be quarantined: ${error instanceof Error ? error.message : String(error)}`);
+	}
+}
+async function loadState(file, logger) {
+	try {
+		const parsed = parseState(JSON.parse(await readFile(file, "utf8")));
+		if (parsed) return parsed;
+		if (logger) {
+			await quarantineInvalidState(file, logger);
+			return { queue: [] };
+		}
+		throw new Error("invalid Claude hook state schema");
 	} catch (error) {
 		if (error.code === "ENOENT") return { queue: [] };
+		if (error instanceof SyntaxError && logger) {
+			await quarantineInvalidState(file, logger);
+			return { queue: [] };
+		}
 		throw error;
 	}
 }
 async function saveState(file, state) {
-	await mkdir(path.dirname(file), { recursive: true });
-	const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-	await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
-		encoding: "utf8",
-		mode: 384
+	await mkdir(path.dirname(file), {
+		recursive: true,
+		mode: 448
 	});
-	await rename(temporary, file);
+	const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+	let replaced = false;
+	try {
+		await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 384
+		});
+		await rename(temporary, file);
+		replaced = true;
+	} finally {
+		if (!replaced) await unlink(temporary).catch(() => {});
+	}
 }
 async function enforceGlobalStateLimit(directory, currentFile, currentState, logger) {
 	let names;
@@ -322,7 +404,14 @@ async function withTimeout(operation, timeoutMs, label) {
 		if (timer) clearTimeout(timer);
 	}
 }
-function recallOutput(context) {
+function recallText(response) {
+	const dynamic = response.prepend_context?.trim();
+	const stable = (response.append_system_context ?? response.context).trim();
+	if (dynamic && stable && dynamic !== stable) return `[Relevant memories]\n${dynamic}\n\n[Stable memory context]\n${stable}`;
+	return dynamic || stable;
+}
+function recallOutput(response) {
+	const context = recallText(response);
 	if (!context) return {};
 	return {
 		hookSpecificOutput: {
@@ -336,9 +425,13 @@ ${context.slice(0, Math.max(0, MAX_CONTEXT_CHARS - 17 - 18))}
 }
 async function handleClaudeHook(input, options = {}) {
 	const logger = options.logger ?? ((message) => process.stderr.write(`[memory-tencentdb-claude-hook] ${message}\n`));
+	if (!input.session_id?.trim()) {
+		logger("invalid hook input: session_id must be a non-empty string");
+		return {};
+	}
 	const now = options.now ?? Date.now;
 	const file = stateFileForSession(options.pluginDataDir ?? process.env.CLAUDE_PLUGIN_DATA ?? path.join(input.cwd || process.cwd(), ".claude", "plugin-data"), input.session_id);
-	const state = await loadState(file);
+	const state = await loadState(file, logger);
 	const sessionKey = deriveClaudeSessionKey(input.session_id);
 	if (input.hook_event_name === "UserPromptSubmit") {
 		const prompt = input.prompt?.trim();
@@ -350,24 +443,31 @@ async function handleClaudeHook(input, options = {}) {
 		await saveState(file, state);
 		await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
 		let client;
+		let retryClient;
 		try {
 			client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+			retryClient = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv(options.promptRetryTimeoutMs ?? PROMPT_RETRY_TIMEOUT_MS));
 		} catch (error) {
 			logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
 			return {};
 		}
+		const retryState = {
+			pendingPrompt: state.pendingPrompt,
+			queue: [...state.queue]
+		};
 		try {
-			await flushQueue(state, client, sessionKey, options.maxRetriesPerPrompt ?? MAX_RETRIES_PER_PROMPT);
+			await withTimeout(flushQueue(retryState, retryClient, sessionKey, options.maxRetriesPerPrompt ?? MAX_RETRIES_PER_PROMPT), options.promptRetryTimeoutMs ?? PROMPT_RETRY_TIMEOUT_MS, "capture retry");
+			state.queue = retryState.queue;
+			await saveState(file, state);
 		} catch (error) {
 			logger(`capture retry deferred: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		await saveState(file, state);
 		await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
 		try {
-			return recallOutput((await client.recall({
+			return recallOutput(await client.recall({
 				query: prompt,
 				sessionKey
-			})).context);
+			}));
 		} catch (error) {
 			logger(`recall unavailable: ${error instanceof Error ? error.message : String(error)}`);
 			return {};
@@ -388,7 +488,13 @@ async function handleClaudeHook(input, options = {}) {
 		delete state.pendingPrompt;
 		await saveState(file, state);
 		await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
-		const client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+		let client;
+		try {
+			client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+		} catch (error) {
+			logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			return {};
+		}
 		try {
 			await flushQueue(state, client, sessionKey, MAX_RETRIES_PER_PROMPT);
 			await saveState(file, state);
@@ -399,9 +505,20 @@ async function handleClaudeHook(input, options = {}) {
 	}
 	if (input.hook_event_name === "SessionEnd") {
 		const operationTimeout = options.sessionEndOperationTimeoutMs ?? SESSION_END_OPERATION_TIMEOUT_MS;
-		const client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv(operationTimeout));
+		let client;
 		try {
-			await withTimeout(flushQueue(state, client, sessionKey, 1), operationTimeout, "queued capture");
+			client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv(operationTimeout));
+		} catch (error) {
+			logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			return {};
+		}
+		const retryState = {
+			pendingPrompt: state.pendingPrompt,
+			queue: [...state.queue]
+		};
+		try {
+			await withTimeout(flushQueue(retryState, client, sessionKey, 1), operationTimeout, "queued capture");
+			state.queue = retryState.queue;
 			await saveState(file, state);
 		} catch (error) {
 			logger(`queued capture flush skipped: ${error instanceof Error ? error.message : String(error)}`);

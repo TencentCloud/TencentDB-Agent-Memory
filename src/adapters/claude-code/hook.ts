@@ -5,6 +5,7 @@ import {
   readFile,
   readdir,
   rename,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -12,12 +13,14 @@ import { pathToFileURL } from "node:url";
 import {
   GatewayMemoryClient,
   type GatewayMemoryClientOptions,
+  type GatewayRecallResponse,
 } from "../gateway-client/index.js";
 
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_QUEUED_TURNS = 100;
 const MAX_GLOBAL_STATE_BYTES = 5 * 1024 * 1024;
-const MAX_RETRIES_PER_PROMPT = 5;
+const MAX_RETRIES_PER_PROMPT = 1;
+const PROMPT_RETRY_TIMEOUT_MS = 2_000;
 const SESSION_END_OPERATION_TIMEOUT_MS = 400;
 
 export interface ClaudeHookInput {
@@ -54,6 +57,7 @@ export interface ClaudeHookOptions {
   now?: () => number;
   logger?: (message: string) => void;
   maxRetriesPerPrompt?: number;
+  promptRetryTimeoutMs?: number;
   sessionEndOperationTimeoutMs?: number;
 }
 
@@ -76,27 +80,95 @@ export function stateFileForSession(pluginDataDir: string, sessionId: string): s
   return path.join(stateDirectory(pluginDataDir), `${digest(sessionId)}.json`);
 }
 
-async function loadState(file: string): Promise<ClaudeHookState> {
+function parseState(value: unknown): ClaudeHookState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Partial<ClaudeHookState>;
+  if (!Array.isArray(candidate.queue)) return null;
+  if (
+    candidate.pendingPrompt !== undefined
+    && (
+      !candidate.pendingPrompt
+      || typeof candidate.pendingPrompt.content !== "string"
+      || !Number.isSafeInteger(candidate.pendingPrompt.timestamp)
+      || candidate.pendingPrompt.timestamp < 0
+    )
+  ) {
+    return null;
+  }
+  for (const turn of candidate.queue) {
+    if (
+      !turn
+      || typeof turn !== "object"
+      || typeof turn.id !== "string"
+      || typeof turn.userContent !== "string"
+      || typeof turn.assistantContent !== "string"
+      || !Number.isSafeInteger(turn.userTimestamp)
+      || turn.userTimestamp < 0
+      || !Number.isSafeInteger(turn.assistantTimestamp)
+      || turn.assistantTimestamp < turn.userTimestamp
+    ) {
+      return null;
+    }
+  }
+  return {
+    pendingPrompt: candidate.pendingPrompt,
+    queue: candidate.queue,
+  };
+}
+
+async function quarantineInvalidState(
+  file: string,
+  logger: (message: string) => void,
+): Promise<void> {
+  const quarantined = `${file}.corrupt-${Date.now()}-${randomUUID()}`;
   try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as Partial<ClaudeHookState>;
-    return {
-      pendingPrompt: parsed.pendingPrompt,
-      queue: Array.isArray(parsed.queue) ? parsed.queue : [],
-    };
+    await rename(file, quarantined);
+    logger(`invalid hook state quarantined as ${path.basename(quarantined)}`);
+  } catch (error) {
+    logger(
+      `invalid hook state could not be quarantined: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+async function loadState(
+  file: string,
+  logger?: (message: string) => void,
+): Promise<ClaudeHookState> {
+  try {
+    const parsed = parseState(JSON.parse(await readFile(file, "utf8")));
+    if (parsed) return parsed;
+    if (logger) {
+      await quarantineInvalidState(file, logger);
+      return { queue: [] };
+    }
+    throw new Error("invalid Claude hook state schema");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { queue: [] };
+    if (error instanceof SyntaxError && logger) {
+      await quarantineInvalidState(file, logger);
+      return { queue: [] };
+    }
     throw error;
   }
 }
 
 async function saveState(file: string, state: ClaudeHookState): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await rename(temporary, file);
+  let replaced = false;
+  try {
+    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await rename(temporary, file);
+    replaced = true;
+  } finally {
+    if (!replaced) await unlink(temporary).catch(() => {});
+  }
 }
 
 async function enforceGlobalStateLimit(
@@ -230,7 +302,17 @@ async function withTimeout<T>(
   }
 }
 
-function recallOutput(context: string): Record<string, unknown> {
+function recallText(response: GatewayRecallResponse): string {
+  const dynamic = response.prepend_context?.trim();
+  const stable = (response.append_system_context ?? response.context).trim();
+  if (dynamic && stable && dynamic !== stable) {
+    return `[Relevant memories]\n${dynamic}\n\n[Stable memory context]\n${stable}`;
+  }
+  return dynamic || stable;
+}
+
+function recallOutput(response: GatewayRecallResponse): Record<string, unknown> {
+  const context = recallText(response);
   if (!context) return {};
   const prefix = "<memory-context>\n";
   const suffix = "\n</memory-context>";
@@ -254,12 +336,16 @@ export async function handleClaudeHook(
   const logger = options.logger ?? ((message) => process.stderr.write(
     `[memory-tencentdb-claude-hook] ${message}\n`,
   ));
+  if (!input.session_id?.trim()) {
+    logger("invalid hook input: session_id must be a non-empty string");
+    return {};
+  }
   const now = options.now ?? Date.now;
   const pluginDataDir = options.pluginDataDir
     ?? process.env.CLAUDE_PLUGIN_DATA
     ?? path.join(input.cwd || process.cwd(), ".claude", "plugin-data");
   const file = stateFileForSession(pluginDataDir, input.session_id);
-  const state = await loadState(file);
+  const state = await loadState(file, logger);
   const sessionKey = deriveClaudeSessionKey(input.session_id);
 
   if (input.hook_event_name === "UserPromptSubmit") {
@@ -274,29 +360,42 @@ export async function handleClaudeHook(
     await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
 
     let client: GatewayMemoryClient;
+    let retryClient: GatewayMemoryClient;
     try {
       client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+      retryClient = options.client ?? new GatewayMemoryClient(
+        gatewayOptionsFromEnv(options.promptRetryTimeoutMs ?? PROMPT_RETRY_TIMEOUT_MS),
+      );
     } catch (error) {
       logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
       return {};
     }
 
+    const retryState: ClaudeHookState = {
+      pendingPrompt: state.pendingPrompt,
+      queue: [...state.queue],
+    };
     try {
-      await flushQueue(
-        state,
-        client,
-        sessionKey,
-        options.maxRetriesPerPrompt ?? MAX_RETRIES_PER_PROMPT,
+      await withTimeout(
+        flushQueue(
+          retryState,
+          retryClient,
+          sessionKey,
+          options.maxRetriesPerPrompt ?? MAX_RETRIES_PER_PROMPT,
+        ),
+        options.promptRetryTimeoutMs ?? PROMPT_RETRY_TIMEOUT_MS,
+        "capture retry",
       );
+      state.queue = retryState.queue;
+      await saveState(file, state);
     } catch (error) {
       logger(`capture retry deferred: ${error instanceof Error ? error.message : String(error)}`);
     }
-    await saveState(file, state);
     await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
 
     try {
       const recalled = await client.recall({ query: prompt, sessionKey });
-      return recallOutput(recalled.context);
+      return recallOutput(recalled);
     } catch (error) {
       logger(`recall unavailable: ${error instanceof Error ? error.message : String(error)}`);
       return {};
@@ -323,7 +422,13 @@ export async function handleClaudeHook(
     await saveState(file, state);
     await enforceGlobalStateLimit(path.dirname(file), file, state, logger);
 
-    const client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+    let client: GatewayMemoryClient;
+    try {
+      client = options.client ?? new GatewayMemoryClient(gatewayOptionsFromEnv());
+    } catch (error) {
+      logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return {};
+    }
     try {
       await flushQueue(state, client, sessionKey, MAX_RETRIES_PER_PROMPT);
       await saveState(file, state);
@@ -336,14 +441,25 @@ export async function handleClaudeHook(
   if (input.hook_event_name === "SessionEnd") {
     const operationTimeout = options.sessionEndOperationTimeoutMs
       ?? SESSION_END_OPERATION_TIMEOUT_MS;
-    const client = options.client
-      ?? new GatewayMemoryClient(gatewayOptionsFromEnv(operationTimeout));
+    let client: GatewayMemoryClient;
+    try {
+      client = options.client
+        ?? new GatewayMemoryClient(gatewayOptionsFromEnv(operationTimeout));
+    } catch (error) {
+      logger(`Gateway configuration unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return {};
+    }
+    const retryState: ClaudeHookState = {
+      pendingPrompt: state.pendingPrompt,
+      queue: [...state.queue],
+    };
     try {
       await withTimeout(
-        flushQueue(state, client, sessionKey, 1),
+        flushQueue(retryState, client, sessionKey, 1),
         operationTimeout,
         "queued capture",
       );
+      state.queue = retryState.queue;
       await saveState(file, state);
     } catch (error) {
       logger(`queued capture flush skipped: ${error instanceof Error ? error.message : String(error)}`);

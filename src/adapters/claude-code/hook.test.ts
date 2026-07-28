@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map(
     (directory) => rm(directory, { recursive: true, force: true }),
   ));
@@ -74,6 +75,29 @@ describe("Claude Code hook adapter", () => {
       pendingPrompt: { content: "What did we decide?", timestamp: 100 },
       queue: [],
     });
+  });
+
+  it("preserves dynamic L1 and stable L2/L3 recall context", async () => {
+    const directory = await tempDataDir();
+    const client = mockClient();
+    vi.mocked(client.recall).mockResolvedValueOnce({
+      context: "stable context",
+      prepend_context: "dynamic evidence",
+      append_system_context: "stable context",
+      memory_count: 1,
+    });
+
+    const output = await handleClaudeHook({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      prompt: "What should I remember?",
+    }, { pluginDataDir: directory, client });
+    const context = (
+      output.hookSpecificOutput as { additionalContext: string }
+    ).additionalContext;
+    expect(context).toContain("[Relevant memories]\ndynamic evidence");
+    expect(context).toContain("[Stable memory context]\nstable context");
+    expect(context.match(/stable context/g)).toHaveLength(1);
   });
 
   it("captures Stop.last_assistant_message with stable timestamps and clears the queue", async () => {
@@ -146,6 +170,43 @@ describe("Claude Code hook adapter", () => {
     expect(state.pendingPrompt).toEqual({ content: "second", timestamp: 300 });
     expect(client.capture).toHaveBeenCalledTimes(2);
     expect(logs.join("\n")).toContain("queued for retry");
+  });
+
+  it("bounds prompt-time retries without losing the durable queue", async () => {
+    const directory = await tempDataDir();
+    const client = mockClient();
+    vi.mocked(client.capture).mockRejectedValueOnce(new Error("offline"));
+    const logger = vi.fn();
+    const options = {
+      pluginDataDir: directory,
+      client,
+      logger,
+      promptRetryTimeoutMs: 5,
+    };
+
+    await handleClaudeHook({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      prompt: "first",
+    }, options);
+    await handleClaudeHook({
+      hook_event_name: "Stop",
+      session_id: "session-1",
+      last_assistant_message: "answer",
+    }, options);
+    vi.mocked(client.capture).mockReturnValueOnce(new Promise<never>(() => {}));
+
+    const output = await handleClaudeHook({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      prompt: "second",
+    }, options);
+
+    expect(
+      (output.hookSpecificOutput as { additionalContext: string }).additionalContext,
+    ).toContain("remembered context");
+    expect((await readState(directory)).queue).toHaveLength(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("exceeded 5ms"));
   });
 
   it("flushes one queued turn and ends the session on SessionEnd", async () => {
@@ -242,6 +303,57 @@ describe("Claude Code hook adapter", () => {
     expect(output).toEqual({});
     expect((await readState(directory)).pendingPrompt?.content)
       .toBe("do not lose this prompt");
+  });
+
+  it("keeps Stop fail-open when Gateway configuration becomes invalid", async () => {
+    const directory = await tempDataDir();
+    await handleClaudeHook({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      prompt: "persist me",
+    }, {
+      pluginDataDir: directory,
+      client: mockClient(),
+    });
+    vi.stubEnv("TDAI_GATEWAY_URL", "https://memory.example.com");
+    const logger = vi.fn();
+
+    await expect(handleClaudeHook({
+      hook_event_name: "Stop",
+      session_id: "session-1",
+      last_assistant_message: "queued",
+    }, {
+      pluginDataDir: directory,
+      logger,
+    })).resolves.toEqual({});
+
+    expect((await readState(directory)).queue).toHaveLength(1);
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway configuration unavailable"),
+    );
+  });
+
+  it("quarantines corrupt state and continues with a clean atomic state file", async () => {
+    const directory = await tempDataDir();
+    const file = stateFileForSession(directory, "session-1");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{not-json", "utf8");
+    const logger = vi.fn();
+
+    await expect(handleClaudeHook({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "session-1",
+      prompt: "recover",
+    }, {
+      pluginDataDir: directory,
+      client: mockClient(),
+      logger,
+    })).resolves.toMatchObject({ hookSpecificOutput: expect.any(Object) });
+
+    expect((await readState(directory)).pendingPrompt?.content).toBe("recover");
+    const names = await readdir(path.dirname(file));
+    expect(names.some((name) => name.includes(".json.corrupt-"))).toBe(true);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("quarantined"));
   });
 
   it("caps a failed per-session retry queue at 100 turns", async () => {
