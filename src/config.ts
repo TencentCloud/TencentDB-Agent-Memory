@@ -7,8 +7,27 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { resolve, isAbsolute } from "node:path";
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+
+/**
+ * Resolve and validate offload.dataDir.
+ *
+ * Contract: dataDir must be an absolute path.
+ * - Empty / whitespace-only strings → treated as unset (falls back to default)
+ * - Relative paths → resolved against process.cwd() and normalized
+ * - Absolute paths → returned as-is after normalization
+ *
+ * Returns undefined for empty input so caller uses DEFAULT_DATA_ROOT.
+ */
+function resolveOffloadDataDir(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return undefined;
+  if (isAbsolute(trimmed)) return trimmed;
+  return resolve(trimmed);
+}
 
 // ============================
 // Type definitions
@@ -481,7 +500,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     temperature: num(offloadGroup, "temperature") ?? 0.2,
     disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
-    dataDir: optStr(offloadGroup, "dataDir"),
+    dataDir: resolveOffloadDataDir(optStr(offloadGroup, "dataDir")),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
     maxPairsPerBatch: num(offloadGroup, "maxPairsPerBatch") ?? 20,
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,

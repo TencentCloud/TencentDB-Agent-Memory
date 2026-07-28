@@ -7,6 +7,7 @@
  * This module is the merged equivalent of the standalone context-offload-plugin's index.js,
  * adapted to co-exist with the memory-tencentdb plugin.
  */
+import { resolve, isAbsolute } from "node:path";
 import { OffloadStateManager } from "./state-manager.js";
 import { createAfterToolCallHandler } from "./hooks/after-tool-call.js";
 import { createBeforePromptBuildHandler } from "./hooks/before-prompt-build.js";
@@ -306,7 +307,11 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   logger.debug?.(`[context-offload] Token tracker encoding: ${_encoding} (configured from ${pCfg.l3TiktokenEncoding ? "pluginConfig" : "default"})`);
 
   // Session Registry — module-level singleton so engine + hooks always share the same instance
-  const dataRoot = offloadConfig.dataDir ?? DEFAULT_DATA_ROOT;
+  let dataRoot = offloadConfig.dataDir ?? DEFAULT_DATA_ROOT;
+  if (!isAbsolute(dataRoot)) {
+    dataRoot = resolve(dataRoot);
+    logger.warn?.(`[context-offload] dataDir was not absolute, resolved to: ${dataRoot}`);
+  }
   if (!_sharedSessions) {
     _sharedSessions = new SessionRegistry(dataRoot);
   }
