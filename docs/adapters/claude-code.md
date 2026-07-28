@@ -13,14 +13,15 @@ hooks to the existing TDAI Gateway.
 
 Recall context is capped at 8,000 characters. Network failures are fail-open:
 the hook returns success, emits valid JSON on stdout, and writes diagnostics
-only to stderr.
+only to stderr. Dynamic L1 evidence and stable L2/L3 context remain separately
+labeled inside the injected memory block.
 
 ## Build and run locally
 
 ```bash
 npm install
 npm run build
-claude plugin validate ./claude-code-plugin
+claude plugin validate --strict ./claude-code-plugin
 claude --plugin-dir ./claude-code-plugin
 ```
 
@@ -48,14 +49,24 @@ Before network I/O, hook state is written atomically beneath
 of Claude session IDs.
 
 - A failed capture remains in the per-session queue.
-- Up to five queued turns are retried before the next prompt.
+- One queued turn is retried before each prompt, with a two-second internal
+  budget so recall retains most of the hook's ten-second budget.
 - Each session retains at most 100 failed turns.
 - Queued turn data across all sessions is capped at 5 MiB; the oldest failed
   turns are removed first without deleting pending prompts.
 - Original user/assistant timestamps are reused on retry so the Gateway's
   checkpoint logic can suppress duplicate L0 writes.
+- Invalid or truncated state JSON is moved to a hashed `.corrupt-*` file and a
+  clean state is created, so one interrupted write cannot disable future hooks.
 
 `SessionEnd` gives the queued retry and session-end request at most 400 ms
 each, keeping the combined network budget below the hook's one-second timeout.
 It still attempts session-end when the queued retry fails or times out.
 Remaining capture failures stay queued for the next run.
+
+The plugin follows the current
+[Claude Code Hooks reference](https://code.claude.com/docs/en/hooks) and
+[plugin reference](https://code.claude.com/docs/en/plugins-reference):
+plugin paths use exec form with `args`, state lives under
+`${CLAUDE_PLUGIN_DATA}`, `Stop` consumes `last_assistant_message`, and all
+events return valid Hook JSON.

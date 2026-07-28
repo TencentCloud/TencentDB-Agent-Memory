@@ -62,14 +62,27 @@ of a SHA-256 digest of the working directory. The absolute path is not sent to
 the Gateway. Set `TDAI_CODEX_SESSION_KEY` or pass `session_key` to a tool when
 another grouping is required.
 
+`memory_capture` also accepts `user_timestamp_ms` and
+`assistant_timestamp_ms`. Provide both and reuse them when retrying the same
+turn; the Gateway checkpoint can then suppress a duplicate L0 write.
+
 ## Security and remote Gateways
 
 - Loopback is the default and requires no explicit opt-in.
 - Set `TDAI_GATEWAY_API_KEY` when the Gateway uses Bearer authentication.
 - Non-loopback URLs are rejected unless `TDAI_GATEWAY_ALLOW_REMOTE=true`.
 - Gateway URLs containing embedded usernames or passwords are always rejected.
+- Use HTTPS or a trusted tunnel for non-loopback Gateways. Remote opt-in alone
+  does not protect a Bearer token sent over plain HTTP.
 - Keep `default_tools_approval_mode = "writes"` so recall/search stay
   frictionless while capture/flush retain the host's write approval boundary.
+- `user_id` is forwarded for protocol compatibility but does not currently
+  enforce tenant isolation; use distinct Gateway deployments/data directories
+  for trust boundaries.
+
+See the current
+[Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp) for STDIO,
+environment forwarding, allow lists, startup requirements, and approval modes.
 
 ## Local verification
 
@@ -82,3 +95,12 @@ node dist/memory-tencentdb-mcp.mjs
 
 The last command speaks MCP JSON-RPC on stdin/stdout. Normal diagnostics are
 sent only to stderr.
+
+For a copyable installed-package smoke check:
+
+```bash
+npx -y --package @tencentdb-agent-memory/memory-tencentdb memory-tencentdb-mcp
+```
+
+Then use `/mcp` in Codex and call `memory_capture`, followed by
+`conversation_search`, against the same session key.
