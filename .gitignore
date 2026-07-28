@@ -44,3 +44,6 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# PR tracker (tool artifact)
+.pr-tracker/
