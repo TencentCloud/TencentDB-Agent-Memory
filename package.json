@@ -13,6 +13,11 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./gateway-client": {
+      "types": "./dist/gateway-client.d.mts",
+      "import": "./dist/gateway-client.mjs",
+      "default": "./dist/gateway-client.mjs"
     }
   },
   "scripts": {

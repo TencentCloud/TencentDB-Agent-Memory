@@ -408,6 +408,11 @@ export class TdaiGateway {
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      // Gateway callers submit one completed incremental turn, not the host's
+      // entire conversation history. Disable the in-process plugin cold-start
+      // floor so stable timestamps from queued/retried platform events are not
+      // discarded merely because they predate this HTTP request.
+      startedAt: 0,
     });
     const elapsed = Date.now() - startMs;
 
