@@ -23,7 +23,7 @@ jobs:
           node-version: "22.16.0"
 
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm install --ignore-scripts --legacy-peer-deps --omit=optional --no-audit --no-fund
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -38,7 +38,7 @@ jobs:
           node-version: "22.16.0"
 
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm install --ignore-scripts --legacy-peer-deps --omit=optional --no-audit --no-fund
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
