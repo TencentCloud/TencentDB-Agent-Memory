@@ -5,6 +5,7 @@ import {
   GatewayConfigurationError,
   GatewayHttpError,
   GatewayParseError,
+  GatewayRedirectError,
   GatewayResponseError,
   GatewayTimeoutError,
   GatewayTransportError,
@@ -33,6 +34,7 @@ async function startServer(
   handler: (req: http.IncomingMessage, body: string) => {
     status?: number;
     contentType?: string;
+    headers?: http.OutgoingHttpHeaders;
     body: string;
   },
 ): Promise<{ baseUrl: string; seen: SeenRequest[] }> {
@@ -54,6 +56,7 @@ async function startServer(
       const result = handler(req, raw);
       res.writeHead(result.status ?? 200, {
         "Content-Type": result.contentType ?? "application/json",
+        ...result.headers,
       });
       res.end(result.body);
     });
@@ -173,6 +176,33 @@ describe("GatewayMemoryClient", () => {
       allowRemote: true,
       fetch: vi.fn() as unknown as typeof fetch,
     })).not.toThrow();
+  });
+
+  it("rejects redirects without contacting the target or forwarding credentials", async () => {
+    const target = await startServer(() => ({
+      body: JSON.stringify({
+        status: "ok",
+        version: "target",
+        uptime: 1,
+        stores: { vectorStore: true, embeddingService: false },
+      }),
+    }));
+    const source = await startServer(() => ({
+      status: 307,
+      headers: { Location: `${target.baseUrl}/health` },
+      body: "",
+    }));
+
+    const error = await new GatewayMemoryClient({
+      baseUrl: source.baseUrl,
+      apiKey: "must-not-leak",
+    }).health().catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(GatewayRedirectError);
+    expect(error.status).toBe(307);
+    expect(error.location).toBe(`${target.baseUrl}/health`);
+    expect(source.seen[0].authorization).toBe("Bearer must-not-leak");
+    expect(target.seen).toHaveLength(0);
   });
 
   it("surfaces non-2xx responses with status and body", async () => {

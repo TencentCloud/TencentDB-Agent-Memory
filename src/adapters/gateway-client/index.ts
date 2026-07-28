@@ -5,6 +5,7 @@ export {
   GatewayConfigurationError,
   GatewayTransportError,
   GatewayTimeoutError,
+  GatewayRedirectError,
   GatewayHttpError,
   GatewayParseError,
   GatewayResponseError,

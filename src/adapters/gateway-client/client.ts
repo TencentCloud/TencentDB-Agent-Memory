@@ -2,6 +2,7 @@ import {
   GatewayConfigurationError,
   GatewayHttpError,
   GatewayParseError,
+  GatewayRedirectError,
   GatewayResponseError,
   GatewayTimeoutError,
   GatewayTransportError,
@@ -265,6 +266,9 @@ export class GatewayMemoryClient {
         headers,
         body: encodedBody,
         signal: controller.signal,
+        // Never let fetch forward a request or Bearer token to a Location that
+        // has not passed the constructor's loopback/remote policy.
+        redirect: "manual",
       });
     } catch (cause) {
       clearTimeout(timer);
@@ -272,6 +276,15 @@ export class GatewayMemoryClient {
         throw new GatewayTimeoutError(url, this.timeoutMs, cause);
       }
       throw new GatewayTransportError(url, cause);
+    }
+
+    if (response.redirected || (response.status >= 300 && response.status < 400)) {
+      clearTimeout(timer);
+      throw new GatewayRedirectError(
+        url,
+        response.status,
+        (response.headers.get("location") ?? response.url) || undefined,
+      );
     }
 
     let responseBody: string;
