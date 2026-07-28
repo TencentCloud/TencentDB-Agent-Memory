@@ -189,6 +189,58 @@ const ZH_STOP_WORDS = new Set([
  * match more tokens higher, so precision is preserved while recall is
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
+ */
+
+/**
+ * Characters that have special meaning in FTS5 query syntax.
+ * Must be stripped from user-supplied tokens to prevent query injection.
+ *
+ * FTS5 special characters:
+ * - *  prefix operator (e.g. "hello*")
+ * - ^  weight operator (e.g. "hello"^2)
+ * - (  )  grouping operators
+ * - "  phrase delimiter
+ * - :  column restrict (e.g. title:hello)
+ * - -  boolean NOT (e.g. -hello)
+ * - +  boolean AND
+ * - /  NEAR operator (e.g. hello/5 world)
+ * - \  escape character
+ * - !  boolean NOT
+ */
+const FTS5_SPECIAL_CHARS = /[*\^()":\-+\/\\!]/g;
+
+/**
+ * Sanitize a token for safe inclusion in an FTS5 double-quoted phrase.
+ *
+ * Strips all FTS5 special characters and ensures the token contains only
+ * safe characters for inclusion in a quoted phrase. This prevents users
+ * from injecting FTS5 operators that would alter query semantics.
+ *
+ * @param token A single token from jieba segmentation or regex splitting
+ * @returns The sanitized token, or null if the token contains no safe chars
+ */
+function sanitizeFtsToken(token: string): string | null {
+  if (!token) return null;
+  // Strip all FTS5 special characters
+  const cleaned = token.replace(FTS5_SPECIAL_CHARS, "");
+  // After stripping, ensure the result still has alphanumeric content
+  if (!cleaned || !/[\p{L}\p{N}]/u.test(cleaned)) return null;
+  return cleaned;
+}
+
+/**
+ * Build an FTS5 MATCH query from raw text.
+ *
+ * When `@node-rs/jieba` is available, uses jieba's search-engine mode
+ * (`cutForSearch`) for accurate Chinese word segmentation, producing
+ * much better recall than the previous regex-only approach.
+ *
+ * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
+ * jieba is not installed.
+ *
+ * Tokens are sanitized to strip FTS5 special characters before being
+ * OR-joined as quoted phrase terms, preventing query injection from
+ * user-supplied operator characters like *, ^, (, ), :, -, +, /.
  *
  * Example (with jieba):
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
@@ -224,8 +276,14 @@ export function buildFtsQuery(raw: string): string | null {
         .filter(Boolean) ?? [];
   }
 
-  if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  // Sanitize each token to strip FTS5 operator characters
+  // and ensure safe embedding in double-quoted phrases
+  const sanitizedTokens = tokens
+    .map((t) => sanitizeFtsToken(t))
+    .filter((t): t is string => t !== null);
+
+  if (sanitizedTokens.length === 0) return null;
+  const quoted = sanitizedTokens.map((t) => `"${t}"`);
   return quoted.join(" OR ");
 }
 
