@@ -13,6 +13,7 @@ import process from "node:process";
 
 const PACKAGE_NAME = "@tencentdb-agent-memory/memory-tencentdb";
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const packageManagerEntry = process.env.npm_execpath;
 const root = process.cwd();
 const temporary = await mkdtemp(path.join(tmpdir(), "memory-tencentdb-pack-smoke-"));
 const packDirectory = path.join(temporary, "pack");
@@ -23,6 +24,16 @@ function run(command, args, options = {}) {
     cwd: root,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
+    ...options,
+  });
+}
+
+function runPackageManager(args, options = {}) {
+  if (packageManagerEntry) {
+    return run(process.execPath, [packageManagerEntry, ...args], options);
+  }
+  return run(npmCommand, args, {
+    shell: process.platform === "win32",
     ...options,
   });
 }
@@ -137,7 +148,7 @@ try {
   await mkdir(packDirectory, { recursive: true });
   await mkdir(installDirectory, { recursive: true });
 
-  run(npmCommand, [
+  runPackageManager([
     "pack",
     "--pack-destination",
     packDirectory,
@@ -155,8 +166,8 @@ try {
   }
   const tarball = path.join(packDirectory, tarballs[0]);
 
-  run(npmCommand, ["init", "-y"], { cwd: installDirectory });
-  run(npmCommand, [
+  runPackageManager(["init", "-y"], { cwd: installDirectory });
+  runPackageManager([
     "install",
     "--ignore-scripts",
     tarball,
