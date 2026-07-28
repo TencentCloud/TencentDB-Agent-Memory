@@ -1,6 +1,7 @@
 import {
   GatewayConfigurationError,
   GatewayHttpError,
+  GatewayParseError,
   GatewayResponseError,
   GatewayTimeoutError,
   GatewayTransportError,
@@ -27,15 +28,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function isHealthResponse(value: unknown): value is GatewayHealthResponse {
   if (!isRecord(value) || !isRecord(value.stores)) return false;
   return (value.status === "ok" || value.status === "degraded")
     && typeof value.version === "string"
-    && isFiniteNumber(value.uptime)
+    && isNonNegativeInteger(value.uptime)
     && typeof value.stores.vectorStore === "boolean"
     && typeof value.stores.embeddingService === "boolean";
 }
@@ -43,20 +44,28 @@ function isHealthResponse(value: unknown): value is GatewayHealthResponse {
 function isRecallResponse(value: unknown): value is GatewayRecallResponse {
   return isRecord(value)
     && typeof value.context === "string"
+    && (value.prepend_context === undefined || typeof value.prepend_context === "string")
+    && (
+      value.append_system_context === undefined
+      || typeof value.append_system_context === "string"
+    )
     && (value.strategy === undefined || typeof value.strategy === "string")
-    && (value.memory_count === undefined || isFiniteNumber(value.memory_count));
+    && (
+      value.memory_count === undefined
+      || isNonNegativeInteger(value.memory_count)
+    );
 }
 
 function isCaptureResponse(value: unknown): value is GatewayCaptureResponse {
   return isRecord(value)
-    && isFiniteNumber(value.l0_recorded)
+    && isNonNegativeInteger(value.l0_recorded)
     && typeof value.scheduler_notified === "boolean";
 }
 
 function isMemorySearchResponse(value: unknown): value is GatewayMemorySearchResponse {
   return isRecord(value)
     && typeof value.results === "string"
-    && isFiniteNumber(value.total)
+    && isNonNegativeInteger(value.total)
     && typeof value.strategy === "string";
 }
 
@@ -65,7 +74,7 @@ function isConversationSearchResponse(
 ): value is GatewayConversationSearchResponse {
   return isRecord(value)
     && typeof value.results === "string"
-    && isFiniteNumber(value.total);
+    && isNonNegativeInteger(value.total);
 }
 
 function isSessionEndResponse(value: unknown): value is GatewaySessionEndResponse {
@@ -107,6 +116,43 @@ function requireText(value: string, field: string): string {
   return text;
 }
 
+function optionalText(value: string | undefined, field: string): string | undefined {
+  return value === undefined ? undefined : requireText(value, field);
+}
+
+function optionalLimit(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 50) {
+    throw new GatewayConfigurationError("limit must be an integer between 1 and 50");
+  }
+  return value;
+}
+
+function normalizeMessages(
+  messages: GatewayCaptureInput["messages"],
+): GatewayCaptureInput["messages"] {
+  if (messages === undefined) return undefined;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new GatewayConfigurationError("messages must be a non-empty array when provided");
+  }
+  return messages.map((message, index) => {
+    if (!isRecord(message)) {
+      throw new GatewayConfigurationError(`messages[${index}] must be an object`);
+    }
+    const role = requireText(message.role, `messages[${index}].role`);
+    const content = requireText(message.content, `messages[${index}].content`);
+    if (
+      message.timestamp !== undefined
+      && (!Number.isSafeInteger(message.timestamp) || message.timestamp <= 0)
+    ) {
+      throw new GatewayConfigurationError(
+        `messages[${index}].timestamp must be a positive safe integer`,
+      );
+    }
+    return { ...message, role, content };
+  });
+}
+
 export class GatewayMemoryClient {
   private readonly baseUrl: string;
   private readonly apiKey?: string;
@@ -135,47 +181,57 @@ export class GatewayMemoryClient {
   }
 
   recall(input: GatewayRecallInput): Promise<GatewayRecallResponse> {
+    const userId = optionalText(input.userId, "userId");
     return this.request("POST", "/recall", {
       query: requireText(input.query, "query"),
       session_key: requireText(input.sessionKey, "sessionKey"),
-      ...(input.userId ? { user_id: input.userId } : {}),
+      ...(userId ? { user_id: userId } : {}),
     }, isRecallResponse);
   }
 
   capture(input: GatewayCaptureInput): Promise<GatewayCaptureResponse> {
+    const sessionId = optionalText(input.sessionId, "sessionId");
+    const userId = optionalText(input.userId, "userId");
+    const messages = normalizeMessages(input.messages);
     return this.request("POST", "/capture", {
       user_content: requireText(input.userContent, "userContent"),
       assistant_content: requireText(input.assistantContent, "assistantContent"),
       session_key: requireText(input.sessionKey, "sessionKey"),
-      ...(input.sessionId ? { session_id: input.sessionId } : {}),
-      ...(input.userId ? { user_id: input.userId } : {}),
-      ...(input.messages ? { messages: input.messages } : {}),
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(userId ? { user_id: userId } : {}),
+      ...(messages ? { messages } : {}),
     }, isCaptureResponse);
   }
 
   searchMemories(input: GatewayMemorySearchInput): Promise<GatewayMemorySearchResponse> {
+    const limit = optionalLimit(input.limit);
+    const type = optionalText(input.type, "type");
+    const scene = optionalText(input.scene, "scene");
     return this.request("POST", "/search/memories", {
       query: requireText(input.query, "query"),
-      ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      ...(input.type ? { type: input.type } : {}),
-      ...(input.scene ? { scene: input.scene } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(type ? { type } : {}),
+      ...(scene ? { scene } : {}),
     }, isMemorySearchResponse);
   }
 
   searchConversations(
     input: GatewayConversationSearchInput,
   ): Promise<GatewayConversationSearchResponse> {
+    const limit = optionalLimit(input.limit);
+    const sessionKey = optionalText(input.sessionKey, "sessionKey");
     return this.request("POST", "/search/conversations", {
       query: requireText(input.query, "query"),
-      ...(input.limit !== undefined ? { limit: input.limit } : {}),
-      ...(input.sessionKey ? { session_key: input.sessionKey } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+      ...(sessionKey ? { session_key: sessionKey } : {}),
     }, isConversationSearchResponse);
   }
 
   endSession(input: GatewaySessionEndInput): Promise<GatewaySessionEndResponse> {
+    const userId = optionalText(input.userId, "userId");
     return this.request("POST", "/session/end", {
       session_key: requireText(input.sessionKey, "sessionKey"),
-      ...(input.userId ? { user_id: input.userId } : {}),
+      ...(userId ? { user_id: userId } : {}),
     }, isSessionEndResponse);
   }
 
@@ -189,6 +245,16 @@ export class GatewayMemoryClient {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
+    let encodedBody: string | undefined;
+    try {
+      encodedBody = body === undefined ? undefined : JSON.stringify(body);
+    } catch (cause) {
+      clearTimeout(timer);
+      throw new GatewayConfigurationError("Gateway request body must be JSON-serializable", {
+        cause,
+      });
+    }
+
     let response: Response;
     try {
       const headers: Record<string, string> = {};
@@ -197,7 +263,7 @@ export class GatewayMemoryClient {
       response = await this.fetchImpl(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: encodedBody,
         signal: controller.signal,
       });
     } catch (cause) {
@@ -228,7 +294,7 @@ export class GatewayMemoryClient {
     try {
       parsed = JSON.parse(responseBody);
     } catch (cause) {
-      throw new GatewayResponseError(url, responseBody, cause, "malformed JSON");
+      throw new GatewayParseError(url, responseBody, cause);
     }
     if (!isRecord(parsed)) {
       throw new GatewayResponseError(url, responseBody, undefined, "expected JSON object");

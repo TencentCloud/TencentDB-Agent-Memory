@@ -28,7 +28,12 @@ export interface GatewayRecallInput {
 }
 
 export interface GatewayRecallResponse {
+  /** Legacy stable-context field retained by the Gateway for compatibility. */
   context: string;
+  /** Dynamic L1 context intended to accompany the current user turn. */
+  prepend_context?: string;
+  /** Stable L2/L3 context intended for the host's system context. */
+  append_system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
