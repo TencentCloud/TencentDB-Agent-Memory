@@ -105,15 +105,14 @@ export class SerialQueue {
 
     this.debugFn?.(`[queue:${this.name}] dequeued, starting execution (remaining=${this.queue.length})`);
 
-    entry
-      .task()
+    Promise.resolve()
+      .then(() => entry.task())
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
         this.running = false;
         this.debugFn?.(`[queue:${this.name}] task completed (remaining=${this.queue.length})`);
         if (this.queue.length === 0) {
-          // Notify idle waiters
           const resolvers = this.idleResolvers;
           this.idleResolvers = [];
           for (const resolve of resolvers) resolve();
