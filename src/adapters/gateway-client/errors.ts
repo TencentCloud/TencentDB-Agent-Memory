@@ -26,6 +26,27 @@ export class GatewayTimeoutError extends GatewayTransportError {
   }
 }
 
+/**
+ * The Gateway attempted to redirect the request.
+ *
+ * Redirects are deliberately rejected so a trusted loopback URL cannot move a
+ * request (and its Bearer token) to an unvalidated destination.
+ */
+export class GatewayRedirectError extends GatewayMemoryClientError {
+  readonly url: string;
+  readonly status: number;
+  readonly location?: string;
+
+  constructor(url: string, status: number, location?: string) {
+    super(
+      `Gateway redirect rejected${location ? ` to ${location}` : ""}: ${url}`,
+    );
+    this.url = url;
+    this.status = status;
+    this.location = location;
+  }
+}
+
 export class GatewayHttpError extends GatewayMemoryClientError {
   readonly status: number;
   readonly responseBody: string;
