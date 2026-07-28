@@ -527,6 +527,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| Codex MCP 适配 | 通过五个 MCP 工具接入 Gateway 记忆读写 |
+| Claude Code Hooks | 在 `UserPromptSubmit` / `Stop` / `SessionEnd` 自动召回、捕获和刷新 |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -538,6 +540,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 文档 | 内容 |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
+| [`docs/adapters/architecture.md`](./docs/adapters/architecture.md) | 跨平台适配架构、数据流与平台对比 |
+| [`docs/adapters/codex.md`](./docs/adapters/codex.md) | Codex STDIO MCP 配置与验证 |
+| [`docs/adapters/claude-code.md`](./docs/adapters/claude-code.md) | Claude Code Hook 插件配置与可靠性设计 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
