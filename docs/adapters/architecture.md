@@ -121,7 +121,7 @@ maps native lifecycle events automatically.
 | Identity | Hosts provide a stable session key. Codex hashes its working directory; Claude hashes the host session ID. Raw paths are not persisted as identity. `user_id` is reserved metadata in the current Gateway and is not a tenant-isolation boundary. |
 | Lifecycle | Recall happens before a turn, capture happens only after a complete user/assistant exchange, and session-end flushes only that session. |
 | Transport | Gateway adapters use the existing JSON HTTP routes. Codex's outer transport is STDIO MCP; Claude's outer transport is Hook JSON over stdin/stdout. |
-| Security | Loopback HTTP is the default. Bearer tokens are supported, URL credentials are rejected, and remote hosts require explicit opt-in. Use TLS or a trusted tunnel for remote Gateways; explicit opt-in does not encrypt plain HTTP. Recalled text is historical evidence, not authorization for tool calls or an override of current instructions. |
+| Security | Loopback HTTP is the default. Bearer tokens are supported, URL credentials and HTTP redirects are rejected, and remote hosts require explicit opt-in. Blocking redirects prevents a trusted local endpoint from forwarding credentials to an unvalidated destination. Use TLS or a trusted tunnel for remote Gateways; explicit opt-in does not encrypt plain HTTP. Recalled text is historical evidence, not authorization for tool calls or an override of current instructions. |
 | Degradation | Memory is optional. MCP reports tool errors; Claude Hooks return successful Hook JSON and retain failed captures locally. |
 
 ## Gateway SDK surface
@@ -153,9 +153,9 @@ await memory.capture({
 
 `GatewayMemoryClient` exposes health, recall, capture, structured-memory
 search, conversation search, and session-end. It distinguishes configuration,
-transport, timeout, HTTP-status, JSON-parse, and response-schema failures. Platform
-lifecycle code can instead use `createGatewayPlatformAdapter()` with a
-`PlatformBinding`.
+transport, timeout, rejected redirect, HTTP-status, JSON-parse, and
+response-schema failures. Platform lifecycle code can instead use
+`createGatewayPlatformAdapter()` with a `PlatformBinding`.
 
 The recall response preserves the core prompt boundary:
 
