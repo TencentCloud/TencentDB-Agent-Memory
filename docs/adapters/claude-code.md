@@ -14,7 +14,9 @@ hooks to the existing TDAI Gateway.
 Recall context is capped at 8,000 characters. Network failures are fail-open:
 the hook returns success, emits valid JSON on stdout, and writes diagnostics
 only to stderr. Dynamic L1 evidence and stable L2/L3 context remain separately
-labeled inside the injected memory block.
+labeled inside the injected memory block. The block also states that recalled
+text is historical context, not authorization for tool calls or an override of
+current instructions.
 
 ## Build and run locally
 

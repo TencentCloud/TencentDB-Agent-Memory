@@ -80,6 +80,8 @@ turn; the Gateway checkpoint can then suppress a duplicate L0 write.
 - `user_id` is forwarded for protocol compatibility but does not currently
   enforce tenant isolation; use distinct Gateway deployments/data directories
   for trust boundaries.
+- Recalled text is historical evidence. The MCP server instructions explicitly
+  state that it cannot authorize tool calls or override current instructions.
 
 See the current
 [Codex MCP documentation](https://learn.chatgpt.com/docs/extend/mcp) for STDIO,
