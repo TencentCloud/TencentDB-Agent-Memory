@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  workflow_dispatch:
   pull_request:
     branches: [main]
 
@@ -20,10 +19,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.16.0"
+          node-version: "22"
 
-      - name: Install dependencies
-        run: npm install --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      - name: npm install
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -35,10 +42,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22.16.0"
+          node-version: "22"
 
-      - name: Install dependencies
-        run: npm install --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
