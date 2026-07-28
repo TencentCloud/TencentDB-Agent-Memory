@@ -46,4 +46,12 @@ export default defineConfig([
       sourcemap: false,
     },
   },
+  {
+    ...shared,
+    entry: { "memory-tencentdb-mcp": "./src/adapters/mcp/server.ts" },
+    clean: false,
+    dts: {
+      sourcemap: false,
+    },
+  },
 ]);
