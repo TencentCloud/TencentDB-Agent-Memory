@@ -2,7 +2,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 //#region src/adapters/gateway-client/errors.ts
 var GatewayMemoryClientError = class extends Error {
 	constructor(message, options) {
@@ -24,6 +25,23 @@ var GatewayTimeoutError = class extends GatewayTransportError {
 		super(url, cause);
 		this.timeoutMs = timeoutMs;
 		this.message = `Gateway request timed out after ${timeoutMs}ms: ${url}`;
+	}
+};
+/**
+* The Gateway attempted to redirect the request.
+*
+* Redirects are deliberately rejected so a trusted loopback URL cannot move a
+* request (and its Bearer token) to an unvalidated destination.
+*/
+var GatewayRedirectError = class extends GatewayMemoryClientError {
+	url;
+	status;
+	location;
+	constructor(url, status, location) {
+		super(`Gateway redirect rejected${location ? ` to ${location}` : ""}: ${url}`);
+		this.url = url;
+		this.status = status;
+		this.location = location;
 	}
 };
 var GatewayHttpError = class extends GatewayMemoryClientError {
@@ -213,12 +231,17 @@ var GatewayMemoryClient = class {
 				method,
 				headers,
 				body: encodedBody,
-				signal: controller.signal
+				signal: controller.signal,
+				redirect: "manual"
 			});
 		} catch (cause) {
 			clearTimeout(timer);
 			if (controller.signal.aborted) throw new GatewayTimeoutError(url, this.timeoutMs, cause);
 			throw new GatewayTransportError(url, cause);
+		}
+		if (response.redirected || response.status >= 300 && response.status < 400) {
+			clearTimeout(timer);
+			throw new GatewayRedirectError(url, response.status, (response.headers.get("location") ?? response.url) || void 0);
 		}
 		let responseBody;
 		try {
@@ -241,6 +264,21 @@ var GatewayMemoryClient = class {
 		return parsed;
 	}
 };
+//#endregion
+//#region src/adapters/is-main-module.ts
+/**
+* Detect an ESM CLI entry even when a package manager invokes it through a
+* symlink. Node resolves import.meta.url to the real file, while argv can keep
+* the symlink path.
+*/
+function isMainModule(importMetaUrl, entry = process.argv[1]) {
+	if (!entry) return false;
+	try {
+		return realpathSync(entry) === realpathSync(fileURLToPath(importMetaUrl));
+	} catch {
+		return importMetaUrl === pathToFileURL(entry).href;
+	}
+}
 //#endregion
 //#region src/adapters/claude-code/hook.ts
 const MAX_CONTEXT_CHARS = 8e3;
@@ -548,11 +586,7 @@ async function runClaudeHookCli() {
 	}
 	process.stdout.write(`${JSON.stringify(output)}\n`);
 }
-function isMainModule() {
-	const entry = process.argv[1];
-	return !!entry && import.meta.url === pathToFileURL(entry).href;
-}
-if (isMainModule()) runClaudeHookCli().catch((error) => {
+if (isMainModule(import.meta.url)) runClaudeHookCli().catch((error) => {
 	const message = error instanceof Error ? error.message : String(error);
 	process.stderr.write(`[memory-tencentdb-claude-hook] ${message}\n`);
 	process.stdout.write("{}\n");

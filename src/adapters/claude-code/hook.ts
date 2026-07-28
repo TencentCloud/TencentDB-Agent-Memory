@@ -9,12 +9,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   GatewayMemoryClient,
   type GatewayMemoryClientOptions,
   type GatewayRecallResponse,
 } from "../gateway-client/index.js";
+import { isMainModule } from "../is-main-module.js";
 
 const MAX_CONTEXT_CHARS = 8_000;
 const MAX_QUEUED_TURNS = 100;
@@ -502,12 +502,7 @@ export async function runClaudeHookCli(): Promise<void> {
   process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-function isMainModule(): boolean {
-  const entry = process.argv[1];
-  return !!entry && import.meta.url === pathToFileURL(entry).href;
-}
-
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   runClaudeHookCli().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[memory-tencentdb-claude-hook] ${message}\n`);
