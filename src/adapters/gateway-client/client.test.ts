@@ -4,6 +4,7 @@ import { GatewayMemoryClient } from "./client.js";
 import {
   GatewayConfigurationError,
   GatewayHttpError,
+  GatewayParseError,
   GatewayResponseError,
   GatewayTimeoutError,
   GatewayTransportError,
@@ -78,7 +79,13 @@ describe("GatewayMemoryClient", () => {
             }),
           };
         case "/recall":
-          return { body: JSON.stringify({ context: "remembered" }) };
+          return {
+            body: JSON.stringify({
+              context: "stable",
+              prepend_context: "dynamic",
+              append_system_context: "stable",
+            }),
+          };
         case "/capture":
           return { body: JSON.stringify({ l0_recorded: 2, scheduler_notified: true }) };
         case "/search/memories":
@@ -96,7 +103,11 @@ describe("GatewayMemoryClient", () => {
     expect((await client.health()).status).toBe("ok");
     expect(
       await client.recall({ query: "q", sessionKey: "session", userId: "user" }),
-    ).toEqual({ context: "remembered" });
+    ).toEqual({
+      context: "stable",
+      prepend_context: "dynamic",
+      append_system_context: "stable",
+    });
     expect(
       await client.capture({
         userContent: "hello",
@@ -181,7 +192,7 @@ describe("GatewayMemoryClient", () => {
   it("distinguishes malformed JSON, timeouts, and transport failures", async () => {
     const { baseUrl } = await startServer(() => ({ body: "not-json" }));
     await expect(new GatewayMemoryClient({ baseUrl }).health())
-      .rejects.toBeInstanceOf(GatewayResponseError);
+      .rejects.toBeInstanceOf(GatewayParseError);
 
     const timeoutFetch = vi.fn((_input: unknown, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
@@ -217,6 +228,41 @@ describe("GatewayMemoryClient", () => {
     const client = new GatewayMemoryClient({ fetch: fetchImpl });
     expect(() => client.recall({ query: " ", sessionKey: "s" }))
       .toThrow(GatewayConfigurationError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("validates optional fields, limits, timestamps, and JSON serialization", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const client = new GatewayMemoryClient({ fetch: fetchImpl });
+
+    expect(() => client.searchMemories({ query: "q", limit: 0 }))
+      .toThrow(/between 1 and 50/);
+    expect(() => client.searchConversations({ query: "q", limit: 1.5 }))
+      .toThrow(/between 1 and 50/);
+    expect(() => client.endSession({ sessionKey: "s", userId: " " }))
+      .toThrow(/userId/);
+    expect(() => client.capture({
+      userContent: "hello",
+      assistantContent: "world",
+      sessionKey: "s",
+      messages: [],
+    })).toThrow(/non-empty array/);
+    expect(() => client.capture({
+      userContent: "hello",
+      assistantContent: "world",
+      sessionKey: "s",
+      messages: [
+        { role: "user", content: "hello", timestamp: Number.NaN },
+      ],
+    })).toThrow(/positive safe integer/);
+    await expect(client.capture({
+      userContent: "hello",
+      assistantContent: "world",
+      sessionKey: "s",
+      messages: [
+        { role: "user", content: "hello", unsupported: 1n },
+      ],
+    })).rejects.toThrow(/JSON-serializable/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

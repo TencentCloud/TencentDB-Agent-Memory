@@ -54,3 +54,10 @@ export class GatewayResponseError extends GatewayMemoryClientError {
     this.reason = reason;
   }
 }
+
+/** The Gateway returned a successful HTTP response that was not valid JSON. */
+export class GatewayParseError extends GatewayResponseError {
+  constructor(url: string, responseBody: string, cause?: unknown) {
+    super(url, responseBody, cause, "malformed JSON");
+  }
+}
