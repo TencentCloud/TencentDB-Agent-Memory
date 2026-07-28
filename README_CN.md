@@ -356,7 +356,35 @@ curl http://127.0.0.1:8420/health
 
 ---
 
-### 3. Hermes（Windows 原生安装）
+### 3. Claude Code
+
+Claude Code 通过自包含插件接入，使用官方 `UserPromptSubmit`、`Stop`、
+`SessionEnd` hooks，并内置 MCP Server。Hooks 自动召回和捕获对话，MCP
+提供显式的记忆与历史会话搜索工具。
+
+先启动现有 Gateway：
+
+```bash
+npm install
+export TDAI_LLM_API_KEY="你的模型服务密钥"
+export TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+export TDAI_LLM_MODEL="gpt-4o"
+export TDAI_GATEWAY_API_KEY="单独设置的-gateway-secret"
+npm run gateway
+```
+
+在另一个终端加载插件：
+
+```bash
+export TDAI_GATEWAY_URL="http://127.0.0.1:8420"
+export TDAI_GATEWAY_API_KEY="单独设置的-gateway-secret"
+claude --plugin-dir ./claude-code-plugin
+```
+
+安装方式、OpenRouter 配置、可调参数和故障排查见
+[`claude-code-plugin/README.md`](./claude-code-plugin/README.md)。
+
+### 4. Hermes（Windows 原生安装）
 
 Windows 原生 Hermes 环境下，在仓库根目录用 Command Prompt 或 PowerShell
 运行内置批处理脚本：
@@ -538,6 +566,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 文档 | 内容 |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
+| [`claude-code-plugin/README.md`](./claude-code-plugin/README.md) | Claude Code 插件安装与配置 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
@@ -559,7 +588,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 长期个性化记忆（L0 → L3）
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
-- [x] OpenClaw 插件与 Hermes Gateway 适配
+- [x] OpenClaw、Hermes 与 Claude Code 适配
 - [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
 - [ ] Skill自动生成
 - [ ] 可视化调试与记忆观测面板
