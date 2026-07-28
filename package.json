@@ -35,6 +35,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:pack-smoke": "node scripts/smoke-packed-adapters.mjs",
     "postinstall": "node scripts/postinstall.mjs"
   },
   "files": [
