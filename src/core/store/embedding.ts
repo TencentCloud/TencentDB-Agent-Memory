@@ -43,6 +43,17 @@ export interface OpenAIEmbeddingConfig {
   maxInputChars?: number;
   /** Timeout per API call in milliseconds (default: 10000). */
   timeoutMs?: number;
+  /**
+   * Maximum number of texts per batch embedding API call.
+   * Different providers have different per-request item limits:
+   * - Tencent API: 10
+   * - OpenAI: 2048 (documented)
+   * - DashScope: 10
+   *
+   * Defaults to 64 — a safe value that works across most providers.
+   * Set this to match your provider's documented limit.
+   */
+  maxBatchSize?: number;
 }
 
 export interface LocalEmbeddingConfig {
@@ -362,8 +373,15 @@ export class LocalEmbeddingService implements EmbeddingService {
 // OpenAI-compatible implementation
 // ============================
 
-/** Max texts per batch (OpenAI limit is 2048, we use a safe value) */
-const MAX_BATCH_SIZE = 256;
+/**
+ * Default max texts per batch for embedding API calls.
+ * Set to 64 as a safe cross-provider default:
+ * - Tencent API limit: 10
+ * - OpenAI limit: 2048
+ * - DashScope limit: 10
+ * Providers with known limits should configure maxBatchSize explicitly.
+ */
+const DEFAULT_MAX_BATCH_SIZE = 64;
 
 /**
  * Max retries for embedding API calls (transient errors: network, 429, DNS).
@@ -507,6 +525,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
   private readonly timeoutMs: number;
+  private readonly maxBatchSize: number;
   private readonly logger?: Logger;
 
   constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
@@ -531,6 +550,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
+    this.maxBatchSize = config.maxBatchSize && config.maxBatchSize > 0 ? config.maxBatchSize : DEFAULT_MAX_BATCH_SIZE;
     this.logger = logger;
   }
 
@@ -566,10 +586,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       : texts;
 
     // Split into sub-batches if needed
-    if (processedTexts.length > MAX_BATCH_SIZE) {
+    if (processedTexts.length > this.maxBatchSize) {
       const results: Float32Array[] = [];
-      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
-        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+      for (let i = 0; i < processedTexts.length; i += this.maxBatchSize) {
+        const chunk = processedTexts.slice(i, i + this.maxBatchSize);
         const chunkResults = await this._callApi(chunk, options?.timeoutMs);
         results.push(...chunkResults);
       }
@@ -665,6 +685,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
   private readonly sendDimensions: boolean;
   private readonly maxInputChars?: number;
   private readonly timeoutMs: number;
+  private readonly maxBatchSize: number;
   private readonly logger?: Logger;
 
   constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
@@ -687,6 +708,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
     this.sendDimensions = config.sendDimensions ?? true;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
+    this.maxBatchSize = config.maxBatchSize && config.maxBatchSize > 0 ? config.maxBatchSize : DEFAULT_MAX_BATCH_SIZE;
     this.logger = logger;
   }
 
@@ -718,10 +740,10 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
 
     const processedTexts = truncateEmbeddingInputs(texts, this.maxInputChars, this.logger);
 
-    if (processedTexts.length > MAX_BATCH_SIZE) {
+    if (processedTexts.length > this.maxBatchSize) {
       const results: Float32Array[] = [];
-      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
-        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+      for (let i = 0; i < processedTexts.length; i += this.maxBatchSize) {
+        const chunk = processedTexts.slice(i, i + this.maxBatchSize);
         const chunkResults = await this._callApi(chunk, options?.timeoutMs);
         results.push(...chunkResults);
       }
