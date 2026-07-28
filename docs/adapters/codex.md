@@ -60,7 +60,8 @@ five tools are connected.
 The default session key is `codex:` plus the first 12 hexadecimal characters
 of a SHA-256 digest of the working directory. The absolute path is not sent to
 the Gateway. Set `TDAI_CODEX_SESSION_KEY` or pass `session_key` to a tool when
-another grouping is required.
+another grouping is required. Recall, capture, conversation search, and
+session-end all use this default when a tool call omits `session_key`.
 
 `memory_capture` also accepts `user_timestamp_ms` and
 `assistant_timestamp_ms`. Provide both and reuse them when retrying the same
