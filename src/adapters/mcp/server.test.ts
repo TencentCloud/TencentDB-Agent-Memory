@@ -1,7 +1,11 @@
+import http from "node:http";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayMemoryClient } from "../gateway-client/index.js";
+import packageJson from "../../../package.json" with { type: "json" };
 import {
   createMemoryMcpServer,
   deriveCodexSessionKey,
@@ -46,6 +50,12 @@ describe("memory-tencentdb MCP server", () => {
     const client = await connectTestClient(mockGateway());
     const result = await client.listTools();
 
+    expect(client.getServerVersion()).toMatchObject({
+      name: "memory-tencentdb",
+      title: "TencentDB Agent Memory",
+      version: packageJson.version,
+    });
+    expect(client.getInstructions()).toContain("Use memory_recall before work");
     expect(result.tools.map((tool) => tool.name)).toEqual([
       "memory_recall",
       "memory_search",
@@ -73,6 +83,10 @@ describe("memory-tencentdb MCP server", () => {
       arguments: { query: "what matters?" },
     });
     expect(textJson(recall)).toEqual({ context: "remember this", memory_count: 1 });
+    expect(recall.structuredContent).toEqual({
+      context: "remember this",
+      memory_count: 1,
+    });
     expect(gateway.recall).toHaveBeenCalledWith({
       query: "what matters?",
       sessionKey: "codex:default",
@@ -104,6 +118,8 @@ describe("memory-tencentdb MCP server", () => {
         user_content: "hello",
         assistant_content: "world",
         session_id: "turn-1",
+        user_timestamp_ms: 100,
+        assistant_timestamp_ms: 200,
       },
     });
     expect(gateway.capture).toHaveBeenCalledWith(expect.objectContaining({
@@ -114,9 +130,7 @@ describe("memory-tencentdb MCP server", () => {
     }));
     const captureArg = vi.mocked(gateway.capture).mock.calls[0][0];
     expect(captureArg.messages).toHaveLength(2);
-    expect(captureArg.messages?.[0].timestamp).toBeLessThanOrEqual(
-      captureArg.messages?.[1].timestamp ?? 0,
-    );
+    expect(captureArg.messages?.map((message) => message.timestamp)).toEqual([100, 200]);
 
     await client.callTool({
       name: "memory_session_end",
@@ -136,6 +150,33 @@ describe("memory-tencentdb MCP server", () => {
     });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toMatch(/unexpected|unrecognized/i);
+
+    const partialTimestamp = await client.callTool({
+      name: "memory_capture",
+      arguments: {
+        user_content: "hello",
+        assistant_content: "world",
+        user_timestamp_ms: 100,
+      },
+    });
+    expect(partialTimestamp.isError).toBe(true);
+    expect(JSON.stringify(partialTimestamp.content)).toContain(
+      "must be provided together",
+    );
+
+    const reversedTimestamp = await client.callTool({
+      name: "memory_capture",
+      arguments: {
+        user_content: "hello",
+        assistant_content: "world",
+        user_timestamp_ms: 200,
+        assistant_timestamp_ms: 100,
+      },
+    });
+    expect(reversedTimestamp.isError).toBe(true);
+    expect(JSON.stringify(reversedTimestamp.content)).toContain(
+      "greater than or equal",
+    );
   });
 
   it("turns Gateway failures into MCP tool errors without throwing protocol errors", async () => {
@@ -171,6 +212,100 @@ describe("Codex defaults", () => {
       apiKey: "secret",
       timeoutMs: 2500,
       allowRemote: true,
+    });
+  });
+});
+
+describe("STDIO process integration", () => {
+  it("keeps stdout protocol-clean and reaches real local Gateway routes", async () => {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const gateway = http.createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
+          Record<string, unknown>;
+        requests.push({ path: request.url ?? "", body });
+        response.setHeader("Content-Type", "application/json");
+        if (request.url === "/capture") {
+          response.end(JSON.stringify({ l0_recorded: 2, scheduler_notified: true }));
+          return;
+        }
+        if (request.url === "/search/conversations") {
+          response.end(JSON.stringify({ results: "captured evidence", total: 1 }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: "missing route" }));
+      });
+    });
+    await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
+    const address = gateway.address();
+    if (!address || typeof address === "string") throw new Error("No Gateway address");
+
+    const inheritedEnv = Object.fromEntries(
+      Object.entries(process.env).filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [
+        "--import",
+        "tsx",
+        path.resolve("src/adapters/mcp/server.ts"),
+      ],
+      cwd: process.cwd(),
+      env: {
+        ...inheritedEnv,
+        TDAI_GATEWAY_URL: `http://127.0.0.1:${address.port}`,
+        TDAI_CODEX_SESSION_KEY: "codex:stdio-test",
+      },
+      stderr: "pipe",
+    });
+    let stderr = "";
+    transport.stderr?.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const client = new Client({ name: "stdio-test-client", version: "1.0.0" });
+
+    try {
+      await client.connect(transport);
+      expect((await client.listTools()).tools).toHaveLength(5);
+      const capture = await client.callTool({
+        name: "memory_capture",
+        arguments: {
+          user_content: "remember this",
+          assistant_content: "captured",
+          user_timestamp_ms: 100,
+          assistant_timestamp_ms: 200,
+        },
+      });
+      expect(capture.isError).not.toBe(true);
+      const search = await client.callTool({
+        name: "conversation_search",
+        arguments: { query: "remember" },
+      });
+      expect(textJson(search)).toEqual({ results: "captured evidence", total: 1 });
+    } finally {
+      await client.close();
+      await new Promise<void>((resolve, reject) => gateway.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      }));
+    }
+
+    expect(stderr).toBe("");
+    expect(requests.map((request) => request.path)).toEqual([
+      "/capture",
+      "/search/conversations",
+    ]);
+    expect(requests[0].body).toMatchObject({
+      session_key: "codex:stdio-test",
+      messages: [
+        { role: "user", content: "remember this", timestamp: 100 },
+        { role: "assistant", content: "captured", timestamp: 200 },
+      ],
     });
   });
 });

@@ -4,13 +4,14 @@ import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import packageJson from "../../../package.json" with { type: "json" };
 import {
   GatewayMemoryClient,
   type GatewayMemoryClientOptions,
 } from "../gateway-client/index.js";
 
 const SERVER_NAME = "memory-tencentdb";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = packageJson.version;
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8420";
 
 export interface MemoryMcpServerOptions {
@@ -45,8 +46,12 @@ function sessionKey(input: { session_key?: string }, fallback: string): string {
 }
 
 function textResult(value: unknown) {
+  const structuredContent = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : { value };
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
+    structuredContent,
   };
 }
 
@@ -63,7 +68,11 @@ export function createMemoryMcpServer(
   options: MemoryMcpServerOptions,
 ): McpServer {
   const server = new McpServer(
-    { name: SERVER_NAME, version: SERVER_VERSION },
+    {
+      name: SERVER_NAME,
+      title: "TencentDB Agent Memory",
+      version: SERVER_VERSION,
+    },
     {
       instructions:
         "Use memory_recall before work that may depend on prior user or project context. " +
@@ -82,6 +91,34 @@ export function createMemoryMcpServer(
     destructiveHint: false,
     idempotentHint: false,
   };
+  const captureInput = z.object({
+    user_content: z.string().trim().min(1),
+    assistant_content: z.string().trim().min(1),
+    session_key: z.string().trim().min(1).optional(),
+    session_id: z.string().trim().min(1).optional(),
+    user_id: z.string().trim().min(1).optional(),
+    user_timestamp_ms: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+    assistant_timestamp_ms: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).strict().superRefine((input, context) => {
+    const hasUserTimestamp = input.user_timestamp_ms !== undefined;
+    const hasAssistantTimestamp = input.assistant_timestamp_ms !== undefined;
+    if (hasUserTimestamp !== hasAssistantTimestamp) {
+      context.addIssue({
+        code: "custom",
+        message: "user_timestamp_ms and assistant_timestamp_ms must be provided together",
+      });
+    }
+    if (
+      hasUserTimestamp
+      && hasAssistantTimestamp
+      && input.assistant_timestamp_ms! < input.user_timestamp_ms!
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "assistant_timestamp_ms must be greater than or equal to user_timestamp_ms",
+      });
+    }
+  });
 
   server.registerTool(
     "memory_recall",
@@ -159,19 +196,16 @@ export function createMemoryMcpServer(
     "memory_capture",
     {
       title: "Capture a completed exchange",
-      description: "Write one completed user/assistant exchange to L0 memory.",
-      inputSchema: z.object({
-        user_content: z.string().trim().min(1),
-        assistant_content: z.string().trim().min(1),
-        session_key: z.string().trim().min(1).optional(),
-        session_id: z.string().trim().min(1).optional(),
-        user_id: z.string().trim().min(1).optional(),
-      }).strict(),
+      description:
+        "Write one completed user/assistant exchange to L0 memory. Reuse the optional " +
+        "timestamps when retrying the same turn so capture remains deduplicable.",
+      inputSchema: captureInput,
       annotations: writeAnnotations,
     },
     async (input) => {
       try {
-        const now = Date.now();
+        const assistantTimestamp = input.assistant_timestamp_ms ?? Date.now();
+        const userTimestamp = input.user_timestamp_ms ?? assistantTimestamp - 1;
         return textResult(await client.capture({
           userContent: input.user_content,
           assistantContent: input.assistant_content,
@@ -179,8 +213,12 @@ export function createMemoryMcpServer(
           sessionId: input.session_id,
           userId: input.user_id,
           messages: [
-            { role: "user", content: input.user_content, timestamp: now - 1 },
-            { role: "assistant", content: input.assistant_content, timestamp: now },
+            { role: "user", content: input.user_content, timestamp: userTimestamp },
+            {
+              role: "assistant",
+              content: input.assistant_content,
+              timestamp: assistantTimestamp,
+            },
           ],
         }));
       } catch (error) {
