@@ -6,6 +6,7 @@ export {
   GatewayTransportError,
   GatewayTimeoutError,
   GatewayHttpError,
+  GatewayParseError,
   GatewayResponseError,
 } from "./errors.js";
 export type {
