@@ -31,7 +31,7 @@ jobs:
           node-version: "22.16.0"
 
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: Test
         run: npm test
@@ -51,18 +51,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.16.0"
 
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        id: cache-deps
-        with:
-          path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
-
-      - name: npm install
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -74,13 +66,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.16.0"
 
-      - name: Restore node_modules
-        uses: actions/cache@v4
-        with:
-          path: node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
 
       - name: npm pack (dry-run)
         run: npm pack --dry-run
