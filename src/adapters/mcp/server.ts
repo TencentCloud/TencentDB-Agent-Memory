@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -9,6 +8,7 @@ import {
   GatewayMemoryClient,
   type GatewayMemoryClientOptions,
 } from "../gateway-client/index.js";
+import { isMainModule } from "../is-main-module.js";
 
 const SERVER_NAME = "memory-tencentdb";
 const SERVER_VERSION = packageJson.version;
@@ -269,12 +269,7 @@ export async function runStdioMcpServer(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-function isMainModule(): boolean {
-  const entry = process.argv[1];
-  return !!entry && import.meta.url === pathToFileURL(entry).href;
-}
-
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   runStdioMcpServer().catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[memory-tencentdb-mcp] ${message}\n`);
