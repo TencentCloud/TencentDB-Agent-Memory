@@ -70,14 +70,55 @@ Hermes scans two locations for memory providers, in precedence order (see
    collision.
 2. **User-installed** — `$HERMES_HOME/plugins/<name>/`, where
    `$HERMES_HOME` defaults to `~/.hermes` (see
-   `hermes_constants.get_hermes_home()`). This path is for third-party
-   providers; we don't use it for memory_tencentdb.
+   `hermes_constants.get_hermes_home()`). This path is used by the Windows
+   native `.bat` installer and by third-party provider installs.
 
 **The trailing directory name must be exactly `memory_tencentdb`** — Hermes
 uses that directory name as the provider key; it must match
 `plugin.yaml::name` and the value of `memory.provider` in `config.yaml`.
 (The hyphenated form `memory-tencentdb` is a *config-side alias*, not a
 valid directory name.)
+
+### Windows native install
+
+On Windows, use the bundled batch script from the memory-tencentdb repository
+root:
+
+```cmd
+set TDAI_LLM_API_KEY=sk-...
+set TDAI_LLM_BASE_URL=https://api.openai.com/v1
+set TDAI_LLM_MODEL=gpt-4o
+scripts\setup-hermes-memory-tencentdb.bat
+```
+
+PowerShell equivalent:
+
+```powershell
+$env:TDAI_LLM_API_KEY="sk-..."
+$env:TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+$env:TDAI_LLM_MODEL="gpt-4o"
+.\scripts\setup-hermes-memory-tencentdb.bat
+```
+
+The script performs the minimal native setup:
+
+- checks `node`, `npm`, Python, and the optional `hermes` command;
+- requires Node.js `>=22.16.0`;
+- runs `npm install --omit=dev` when `node_modules` is missing;
+- creates `%USERPROFILE%\.memory-tencentdb\memory-tdai`;
+- sets `TDAI_LLM_*` and `MEMORY_TENCENTDB_GATEWAY_*` in the current process
+  and writes them to `%USERPROFILE%\.hermes\.env`;
+- copies this provider to `%USERPROFILE%\.hermes\plugins\memory_tencentdb`;
+- creates `%USERPROFILE%\.hermes\config.yaml` with
+  `memory.provider: memory_tencentdb` when the file does not exist, or prints
+  the exact YAML to add when it already exists;
+- starts the Gateway and polls `GET /health`.
+
+After it finishes, verify the sidecar directly:
+
+```cmd
+curl.exe http://127.0.0.1:8420/health
+```
 
 Pick one of the two installation styles:
 
@@ -140,13 +181,19 @@ memory:
 ### 2. Provide Gateway runtime + LLM credentials
 
 At minimum the Gateway needs an OpenAI-compatible endpoint for L1/L2/L3
-extraction. Set these in the Hermes process environment:
+extraction. Set the Gateway-native variables in the Hermes process
+environment:
 
 ```bash
-export MEMORY_TENCENTDB_LLM_API_KEY="sk-..."
-export MEMORY_TENCENTDB_LLM_BASE_URL="https://api.openai.com/v1"   # optional
-export MEMORY_TENCENTDB_LLM_MODEL="gpt-4o"                         # optional
+export TDAI_LLM_API_KEY="sk-..."
+export TDAI_LLM_BASE_URL="https://api.openai.com/v1"   # optional
+export TDAI_LLM_MODEL="gpt-4o"                         # optional
 ```
+
+When the provider supervises the Gateway, it also accepts the legacy
+Hermes-side aliases `MEMORY_TENCENTDB_LLM_API_KEY`,
+`MEMORY_TENCENTDB_LLM_BASE_URL`, and `MEMORY_TENCENTDB_LLM_MODEL` and mirrors
+them into `TDAI_LLM_*` for the child process.
 
 ### 3. Start the Gateway
 
@@ -229,18 +276,27 @@ The old `MEMORY_TENCENTDB_DATA_DIR` env var is no longer read — it was never
 consumed by the Gateway anyway (names did not match), so removing it just
 eliminates a silent no-op.
 
-### Gateway LLM (consumed by the Node sidecar, not by this provider)
+### Gateway LLM (consumed by the Node sidecar)
 
-| Variable                          | Default                      | Description                         |
-|-----------------------------------|------------------------------|-------------------------------------|
-| `MEMORY_TENCENTDB_LLM_API_KEY`    | —                            | LLM API key (required for L1/L2/L3) |
-| `MEMORY_TENCENTDB_LLM_BASE_URL`   | `https://api.openai.com/v1`  | OpenAI-compatible API base URL      |
-| `MEMORY_TENCENTDB_LLM_MODEL`      | `gpt-4o`                     | Model name                          |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TDAI_LLM_API_KEY` | — | LLM API key (required for L1/L2/L3) |
+| `TDAI_LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
+| `TDAI_LLM_MODEL` | `gpt-4o` | Model name |
 
-> ⚠️ Only `MEMORY_TENCENTDB_*` env vars are honored by this provider for the
-> Gateway location and LLM credentials. Data-directory resolution is
-> deliberately delegated to the Gateway via `TDAI_DATA_DIR` (see above) so
-> the provider and the Gateway can never disagree about where L0~L3 live.
+When the provider starts the Gateway subprocess, it mirrors the legacy
+Hermes aliases below into the Gateway-native names above if the `TDAI_*`
+variables are not already set:
+
+| Alias | Mirrored to |
+|-------|-------------|
+| `MEMORY_TENCENTDB_LLM_API_KEY` | `TDAI_LLM_API_KEY` |
+| `MEMORY_TENCENTDB_LLM_BASE_URL` | `TDAI_LLM_BASE_URL` |
+| `MEMORY_TENCENTDB_LLM_MODEL` | `TDAI_LLM_MODEL` |
+
+> Data-directory resolution is deliberately delegated to the Gateway via
+> `TDAI_DATA_DIR` (see above) so the provider and the Gateway can never
+> disagree about where L0~L3 live.
 
 ## LLM Tools
 
