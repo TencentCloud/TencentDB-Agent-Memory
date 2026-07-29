@@ -28,6 +28,8 @@ const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search �
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
 
+let warnedEmbeddingFallback = false;
+
 /**
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
@@ -345,9 +347,13 @@ async function searchMemories(
   // Determine effective strategy (fall back to keyword if embedding not available)
   let effectiveStrategy = strategy;
   if ((strategy === "embedding" || strategy === "hybrid") && !embeddingAvailable) {
-    logger?.warn?.(
-      `${TAG} Strategy "${strategy}" requested but EmbeddingService not available, falling back to keyword`,
-    );
+    if (!warnedEmbeddingFallback) {
+      warnedEmbeddingFallback = true;
+      logger?.warn?.(
+        `${TAG} Strategy "${strategy}" requested but EmbeddingService not available, falling back to keyword. ` +
+        `This message appears only once. To suppress permanently, set recall.strategy: "keyword" in config.`,
+      );
+    }
     effectiveStrategy = "keyword";
   }
 
