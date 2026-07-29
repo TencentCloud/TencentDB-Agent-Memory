@@ -4,6 +4,11 @@ This document compares the platform adapter shapes relevant to issue #235.
 All paths reuse the same `TdaiCore` capability boundary: recall, capture,
 memory search, conversation search, and session flush.
 
+For the layered architecture and annotated data-flow diagrams, see
+[`platform-adapter-architecture.md`](./platform-adapter-architecture.md). The
+coding-agent hosts below (Claude Code, and any new agent) share one
+`CodingAgentPlatformAdapter` interface driven by `runCodingAgentAdapter`.
+
 ## Summary
 
 | Platform | Adapter shape | Runtime boundary | Recall timing | Capture timing | Status |
@@ -55,8 +60,10 @@ The Claude Code adapter intentionally stays thin:
   authoritative `last_assistant_message`, then captures it through the Gateway.
 - `SessionEnd` flushes the session without capturing the final turn twice.
 
-This keeps platform-specific behavior in `src/adapters/claude-code/` while
-reusing the generic `CodingAgentGatewayClient` HTTP wrapper.
+This keeps platform-specific behavior in `src/adapters/claude-code/` — which
+implements the shared `CodingAgentPlatformAdapter` interface — while the generic
+`runCodingAgentAdapter` runner and `CodingAgentGatewayClient` handle transport,
+auth, recall flattening, and fail-open for every coding-agent platform.
 
 ## Dify Notes
 

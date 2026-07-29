@@ -8,8 +8,9 @@
  *   adapters/
  *   ├── openclaw/       — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
  *   ├── standalone/     — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
- *   └── coding-agent/   — Gateway client for coding-agent hosts (Codex, Claude Code, Cursor)
- *   └── claude-code/    — Claude Code hook adapter (UserPromptSubmit / Stop)
+ *   ├── coding-agent/   — Unified coding-agent adapter SDK: Gateway client +
+ *   │                     CodingAgentPlatformAdapter interface + runCodingAgentAdapter
+ *   └── claude-code/    — Claude Code binding (reference CodingAgentPlatformAdapter impl)
  */
 
 // OpenClaw adapter
@@ -20,18 +21,29 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
 
-// Coding-agent Gateway client
-export { CodingAgentGatewayClient, CodingAgentGatewayError } from "./coding-agent/index.js";
+// Coding-agent Gateway client + unified platform adapter SDK
+export {
+  CodingAgentGatewayClient,
+  CodingAgentGatewayError,
+  combineRecallContext,
+  runCodingAgentAdapter,
+} from "./coding-agent/index.js";
 export type {
+  CodingAgentAdapterOptions,
+  CodingAgentAdapterResult,
+  CodingAgentClient,
   CodingAgentConversationSearchRequest,
+  CodingAgentEvent,
   CodingAgentGatewayClientOptions,
   CodingAgentMemorySearchRequest,
+  CodingAgentPlatformAdapter,
+  CodingAgentRecallLike,
   CodingAgentRecallRequest,
   CodingAgentTurn,
 } from "./coding-agent/index.js";
 
-// Claude Code hook adapter
-export { buildSessionKey, extractLatestTurn, handleClaudeCodeHook } from "./claude-code/index.js";
+// Claude Code hook adapter (reference implementation of CodingAgentPlatformAdapter)
+export { buildSessionKey, claudeCodeAdapter, extractLatestTurn, handleClaudeCodeHook } from "./claude-code/index.js";
 export type {
   ClaudeCodeHookClient,
   ClaudeCodeHookInput,

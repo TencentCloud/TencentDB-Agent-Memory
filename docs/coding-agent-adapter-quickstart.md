@@ -8,6 +8,61 @@ The adapter talks to the existing TDAI Gateway. It does not embed `TdaiCore`
 inside the host process, so each platform only needs to map its own session and
 message events into Gateway requests.
 
+For the full layered architecture and annotated recall/capture data-flow
+diagrams, see [`platform-adapter-architecture.md`](./platform-adapter-architecture.md).
+
+## Onboard a new platform: implement one interface
+
+The unified SDK lets a new coding-agent platform integrate by implementing a
+single `CodingAgentPlatformAdapter` interface. Transport, timeouts, Bearer auth,
+recall-context flattening, and fail-open handling are all provided by
+`runCodingAgentAdapter` — you never re-write them per platform.
+
+```ts
+import {
+  runCodingAgentAdapter,
+  type CodingAgentPlatformAdapter,
+} from "@tencentdb-agent-memory/memory-tencentdb";
+
+// 1. Map your platform's native payload → neutral lifecycle event,
+//    and recalled memory → your platform's native response shape.
+const myAdapter: CodingAgentPlatformAdapter<MyHostPayload> = {
+  platform: "my-agent",
+  toEvent(input) {
+    switch (input.stage) {
+      case "before-prompt":
+        return { kind: "recall", recall: { query: input.prompt, sessionKey: input.threadId } };
+      case "after-reply":
+        return {
+          kind: "capture",
+          turn: { userContent: input.prompt, assistantContent: input.reply, sessionKey: input.threadId },
+        };
+      case "close":
+        return { kind: "session-end", sessionKey: input.threadId };
+      default:
+        return { kind: "noop" };
+    }
+  },
+  renderRecall(context) {
+    // Return whatever shape your host expects to inject context.
+    return { systemPrompt: context };
+  },
+};
+
+// 2. Drive it — the SDK handles the Gateway call, timeout, auth, and fail-open.
+const result = await runCodingAgentAdapter(myAdapter, hostPayload, {
+  gateway: { baseUrl: process.env.TDAI_GATEWAY_URL, apiKey: process.env.TDAI_GATEWAY_API_KEY },
+});
+```
+
+The Claude Code adapter (`src/adapters/claude-code/`) is the reference
+implementation of exactly this interface.
+
+## Low-level client (optional)
+
+If you need direct control instead of the lifecycle runner, the same transport
+is available as `CodingAgentGatewayClient`.
+
 ## Architecture
 
 ```mermaid

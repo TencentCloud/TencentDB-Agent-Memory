@@ -1,5 +1,6 @@
 export {
   buildSessionKey,
+  claudeCodeAdapter,
   extractLatestTurn,
   handleClaudeCodeHook,
 } from "./hook-handler.js";

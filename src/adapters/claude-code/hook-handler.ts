@@ -1,7 +1,8 @@
 import fs from "node:fs";
-import { CodingAgentGatewayClient } from "../coding-agent/index.js";
+import { runCodingAgentAdapter } from "../coding-agent/index.js";
 import type {
   CodingAgentGatewayClientOptions,
+  CodingAgentPlatformAdapter,
   CodingAgentRecallRequest,
   CodingAgentTurn,
 } from "../coding-agent/index.js";
@@ -54,89 +55,76 @@ export interface TranscriptTurn {
   assistantTimestamp?: number;
 }
 
-export async function handleClaudeCodeHook(
-  input: ClaudeCodeHookInput,
-  options: ClaudeCodeHookOptions = {},
-): Promise<ClaudeCodeHookResult> {
-  const client = options.client ?? new CodingAgentGatewayClient(options.gateway);
-  const eventName = getEventName(input);
+/**
+ * Claude Code reference implementation of the unified {@link CodingAgentPlatformAdapter}.
+ *
+ * It only maps Claude Code hook payloads onto neutral lifecycle events and
+ * renders recalled memory back into `hookSpecificOutput`. Transport, timeouts,
+ * auth, recall flattening, and fail-open handling live in the shared SDK.
+ */
+export const claudeCodeAdapter: CodingAgentPlatformAdapter<ClaudeCodeHookInput> = {
+  platform: "claude-code",
 
-  try {
+  toEvent(input) {
+    const eventName = getEventName(input);
+
     if (eventName === "UserPromptSubmit") {
-      return await handleUserPromptSubmit(input, client);
+      const query = extractPrompt(input);
+      const sessionKey = buildSessionKey(input);
+      if (!query || !sessionKey) return { kind: "noop" };
+      return { kind: "recall", recall: { query, sessionKey } };
     }
+
     if (eventName === "Stop") {
-      return await handleStop(input, client);
+      const turn = extractLatestTurn(input);
+      const sessionKey = buildSessionKey(input);
+      if (!turn || !sessionKey) return { kind: "noop" };
+      const hasTimestamps = turn.userTimestamp !== undefined && turn.assistantTimestamp !== undefined;
+      return {
+        kind: "capture",
+        turn: {
+          userContent: turn.userContent,
+          assistantContent: turn.assistantContent,
+          sessionKey,
+          sessionId: getSessionId(input),
+          ...(hasTimestamps ? {
+            messages: [
+              { role: "user", content: turn.userContent, timestamp: turn.userTimestamp },
+              { role: "assistant", content: turn.assistantContent, timestamp: turn.assistantTimestamp },
+            ],
+            startedAt: Math.max(0, turn.userTimestamp! - 1),
+          } : {}),
+        },
+      };
     }
+
     if (eventName === "SessionEnd") {
       const sessionKey = buildSessionKey(input);
-      if (sessionKey) await client.endSession(sessionKey);
-      return { exitCode: 0 };
+      return sessionKey ? { kind: "session-end", sessionKey } : { kind: "noop" };
     }
+
     if (eventName === "SessionStart") {
-      await client.health();
-      return { exitCode: 0 };
+      return { kind: "health" };
     }
-    return { exitCode: 0 };
-  } catch (err) {
+
+    return { kind: "noop" };
+  },
+
+  renderRecall(context) {
     return {
-      exitCode: 0,
-      stderr: `tdai claude-code hook skipped: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-}
-
-async function handleUserPromptSubmit(
-  input: ClaudeCodeHookInput,
-  client: ClaudeCodeHookClient,
-): Promise<ClaudeCodeHookResult> {
-  const query = extractPrompt(input);
-  const sessionKey = buildSessionKey(input);
-  if (!query || !sessionKey) return { exitCode: 0 };
-
-  const result = await client.recall({
-    query,
-    sessionKey,
-  });
-
-  const context = combineRecallContext(result);
-  if (!context) return { exitCode: 0 };
-
-  return {
-    exitCode: 0,
-    stdout: JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "UserPromptSubmit",
         additionalContext: context,
       },
-    }),
-  };
-}
+    };
+  },
+};
 
-async function handleStop(
+export async function handleClaudeCodeHook(
   input: ClaudeCodeHookInput,
-  client: ClaudeCodeHookClient,
+  options: ClaudeCodeHookOptions = {},
 ): Promise<ClaudeCodeHookResult> {
-  const turn = extractLatestTurn(input);
-  const sessionKey = buildSessionKey(input);
-  if (turn && sessionKey) {
-    const hasTimestamps = turn.userTimestamp !== undefined && turn.assistantTimestamp !== undefined;
-    await client.capture({
-      userContent: turn.userContent,
-      assistantContent: turn.assistantContent,
-      sessionKey,
-      sessionId: getSessionId(input),
-      ...(hasTimestamps ? {
-        messages: [
-          { role: "user", content: turn.userContent, timestamp: turn.userTimestamp },
-          { role: "assistant", content: turn.assistantContent, timestamp: turn.assistantTimestamp },
-        ],
-        startedAt: Math.max(0, turn.userTimestamp! - 1),
-      } : {}),
-    });
-  }
-
-  return { exitCode: 0 };
+  return runCodingAgentAdapter(claudeCodeAdapter, input, options);
 }
 
 export function buildSessionKey(input: ClaudeCodeHookInput): string | null {
@@ -254,19 +242,6 @@ function extractPrompt(input: ClaudeCodeHookInput): string {
 function getLastAssistantMessage(input: ClaudeCodeHookInput): string {
   const value = input.last_assistant_message ?? input.lastAssistantMessage;
   return typeof value === "string" ? value.trim() : "";
-}
-
-function combineRecallContext(result: {
-  context?: string;
-  prepend_context?: string;
-  append_system_context?: string;
-}): string {
-  const dynamicContext = result.prepend_context?.trim();
-  const stableContext = (result.append_system_context ?? result.context)
-    ?.replace(/<memory-tools-guide>[\s\S]*?<\/memory-tools-guide>/gi, "")
-    .trim();
-  return [...new Set([dynamicContext, stableContext].filter((value): value is string => !!value))]
-    .join("\n\n");
 }
 
 function contentToText(value: unknown): string {

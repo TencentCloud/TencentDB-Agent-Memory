@@ -507,7 +507,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 | 文档 | 内容 |
 | :--- | :--- |
-| [`docs/coding-agent-adapter-quickstart.md`](./docs/coding-agent-adapter-quickstart.md) | 通用 Gateway 客户端与 Coding Agent 生命周期映射 |
+| [`docs/platform-adapter-architecture.md`](./docs/platform-adapter-architecture.md) | 分层适配架构、统一 SDK 接口与数据流图 |
+| [`docs/coding-agent-adapter-quickstart.md`](./docs/coding-agent-adapter-quickstart.md) | 实现一个接口即可接入新平台;通用 Gateway 客户端 |
 | [`docs/claude-code-adapter-setup.md`](./docs/claude-code-adapter-setup.md) | Claude Code Hook 适配器安装与配置 |
 | [`docs/hermes-adapter-setup.md`](./docs/hermes-adapter-setup.md) | Hermes Provider 与 Gateway 配置 |
 | [`docs/platform-adapter-comparison.md`](./docs/platform-adapter-comparison.md) | 跨平台适配架构与差异对比 |

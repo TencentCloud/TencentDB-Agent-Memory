@@ -48,6 +48,7 @@
     "hermes-plugin/",
     "openclaw.plugin.json",
     "README.md",
+    "docs/platform-adapter-architecture.md",
     "docs/coding-agent-adapter-quickstart.md",
     "docs/claude-code-adapter-setup.md",
     "docs/hermes-adapter-setup.md",
