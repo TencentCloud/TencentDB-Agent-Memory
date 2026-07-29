@@ -194,3 +194,36 @@ class MemoryTencentdbSdkClient:
         if config_override:
             body["config_override"] = config_override
         return self._post("/seed", body, timeout=timeout)
+
+    # -- Generic escape hatches for ad-hoc / future endpoints ---------------
+
+    def post_json(
+        self,
+        path: str,
+        body: Dict[str, Any],
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Post a JSON body to an *arbitrary* Gateway endpoint.
+
+        This is an escape hatch for endpoints whose public method has not
+        yet been added to :class:`MemoryTencentdbSdkClient` (for example the
+        offload V2 compact/ingest APIs consumed by the Hermes
+        ContextEngine adapter). It forwards directly to :meth:`_post`, so
+        the same timeout / auth / error-handling behaviour applies.
+        """
+        if not path.startswith("/"):
+            path = "/" + path
+        return self._post(path, body, timeout=timeout)
+
+    def get_json(
+        self,
+        path: str,
+        timeout: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """GET an arbitrary Gateway endpoint and decode the JSON response.
+
+        Companion to :meth:`post_json` for read-only ad-hoc endpoints.
+        """
+        if not path.startswith("/"):
+            path = "/" + path
+        return self._get(path, timeout=timeout)

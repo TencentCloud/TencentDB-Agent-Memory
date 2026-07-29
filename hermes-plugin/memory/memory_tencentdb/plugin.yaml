@@ -1,12 +1,13 @@
 name: memory_tencentdb
 display_name: memory-tencentdb
 version: 1.0.0
-description: "memory-tencentdb four-layer memory — L0 conversation recording, L1 episodic extraction, L2 scene blocks, L3 persona synthesis via local Node.js Gateway."
+description: "memory-tencentdb four-layer memory — L0 conversation recording, L1 episodic extraction, L2 scene blocks, L3 persona synthesis via local Node.js Gateway. Also registers a short-term ContextEngine that delegates to the Gateway's offload V2 compact/ingest endpoints for 4-level mid-turn context compression."
+slots:
+  memory_provider: memory_tencentdb
+  context_engine: memory_tencentdb
 hooks:
   - on_memory_write
   - on_session_end
-# Legacy provider name — kept so that users whose config still says
-# `memory.provider: tdai` continue to resolve to this provider.
 aliases:
   - tdai
   - memory-tencentdb
