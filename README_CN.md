@@ -385,6 +385,21 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Codex（MCP）
+
+在仓库根目录构建 MCP Server，然后使用提供的配置模板把生成的命令加入 Codex：
+
+```powershell
+npm install
+npm run build:codex
+```
+
+复制并按需修改 [`integrations/codex/templates/codex-config.example.toml`](./integrations/codex/templates/codex-config.example.toml)，
+再写入 Codex 的 MCP 配置。适配层提供 health、召回、捕获、结构化记忆搜索、原始对话搜索、session flush 与 seed 工具；它复用既有 Gateway，且在
+`MEMORY_TENCENTDB_CODEX_ENABLE_SUPERVISOR=true` 时可以自动启动本地 Gateway sidecar。
+
+推荐调用流程、环境变量和降级行为见 [`integrations/codex/README.md`](./integrations/codex/README.md)。
+
 
 ## 🔒 Gateway 安全配置（可选）
 
@@ -527,6 +542,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | :--- | :--- |
 | OpenClaw 插件 | 安装后即可自动捕获、提取、召回记忆 |
 | Hermes Gateway 适配 | `TdaiCore + HostAdapter` 解耦宿主框架 |
+| Codex MCP 适配 | Gateway-first stdio MCP 工具，并可选管理 Gateway sidecar |
 | 本地后端 | `SQLite + sqlite-vec`，开箱即用 |
 | 混合检索 | BM25 + 向量 + RRF，兼顾关键词和语义召回 |
 | Agent 工具 | `tdai_memory_search` / `tdai_conversation_search` |
@@ -540,6 +556,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
+| [`integrations/codex/README.md`](./integrations/codex/README.md) | Codex MCP 安装、配置和使用流程 |
 
 ---
 ## 社区与贡献
@@ -560,6 +577,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 - [x] 短期记忆压缩（Context Offload + Mermaid 画布）
 - [x] 可用本地 SQLite 后端与腾讯云向量数据库 TCVDB 后端
 - [x] OpenClaw 插件与 Hermes Gateway 适配
+- [x] Codex MCP Gateway 适配
 - [ ] 记忆可迁移：跨 Agent / 跨框架 / 跨设备的导入导出与热迁移
 - [ ] Skill自动生成
 - [ ] 可视化调试与记忆观测面板
