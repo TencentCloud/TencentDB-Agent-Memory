@@ -5,7 +5,7 @@
  *   1. The MCP bridge exposes `search_memories` / `search_conversations` and a
  *      real query is proxied all the way to the TdaiGateway
  *      (Codex "call tools in MCP" + Whale "see and use the tools").
- *   2. The Whale hooks (recall.py / capture.py / health.py) run and reach the
+ *   2. The Whale hooks (recall.js / capture.js / health.js) run and reach the
  *      gateway over HTTP.
  *   3. The Codex hooks (recall.js / capture.js / health.js) run and reach the
  *      gateway over HTTP.
@@ -20,7 +20,7 @@
  * Run:  npm run test:e2e
  */
 import { describe, it, beforeAll, afterAll, expect } from "vitest";
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -32,17 +32,6 @@ const ROOT = resolve(here, "../.."); // e2e/plugins -> repo root
 const WHALE_DIR = resolve(ROOT, "whale-memory-tdai");
 const CODEX_DIR = resolve(ROOT, "codex-memory-tdai");
 const NODE = process.execPath;
-
-function canExec(cmd: string): boolean {
-  try {
-    execSync(`${cmd} --version`, { stdio: ["ignore", "ignore", "ignore"] });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const PYTHON = canExec("python3") ? "python3" : "python";
 
 // ---- Mock gateway (mirrors src/gateway/server.ts contract) ----
 let server: http.Server | null = null;
@@ -235,11 +224,11 @@ describe("MCP tool discovery & query (Codex + Whale bridge)", () => {
   }
 });
 
-describe("Whale hooks (python)", () => {
+describe("Whale hooks (node)", () => {
   it("UserPromptSubmit recall reaches the gateway and returns context", async () => {
     const r = await runHook(
-      PYTHON,
-      [resolve(WHALE_DIR, "scripts/recall.py")],
+      NODE,
+      [resolve(WHALE_DIR, "scripts/recall.js")],
       { prompt: "what did we decide?", session_id: "sess-w1" },
       gatewayUrl,
     );
@@ -252,8 +241,8 @@ describe("Whale hooks (python)", () => {
 
   it("Stop capture runs without error (fire-and-forget)", async () => {
     const r = await runHook(
-      PYTHON,
-      [resolve(WHALE_DIR, "scripts/capture.py")],
+      NODE,
+      [resolve(WHALE_DIR, "scripts/capture.js")],
       { session_id: "sess-w1", prompt: "user text", last_assistant_text: "assistant text" },
       gatewayUrl,
     );
@@ -261,7 +250,7 @@ describe("Whale hooks (python)", () => {
   });
 
   it("SessionStart health runs without error", async () => {
-    const r = await runHook(PYTHON, [resolve(WHALE_DIR, "scripts/health.py")], {}, gatewayUrl);
+    const r = await runHook(NODE, [resolve(WHALE_DIR, "scripts/health.js")], {}, gatewayUrl);
     expect(r.code).toBe(0);
   });
 });

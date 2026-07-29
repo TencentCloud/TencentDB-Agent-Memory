@@ -1,6 +1,6 @@
 # FIX 交接文档：插件运行时变量展开修复（进行中）
 
-> 状态快照：2026-07-28。核心修复已完成并通过双平台端到端验证，**剩余 e2e 测试 3 个失败待修 + 收尾清理**。
+> 状态快照：2026-07-29。核心修复已完成并通过双平台端到端验证，e2e 测试已修复（13 全绿），临时文件已清理，记忆已更新。**剩余：用户交互式重测 + 提交/PR**。
 > 本文档供新会话直接接手，无需重新排查。
 
 ---
@@ -105,9 +105,9 @@ AssertionError: expected 2 to be +0   （进程退出码 2）
 
 ## 6. 收尾清单（按序执行）
 
-- [ ] 修复 e2e Whale hooks 组 3 个测试（见 §4）
-- [ ] `npm test`（应 120 绿）+ `npm run test:e2e`（应 13 绿）
-- [ ] 删除临时取证文件：`.qoder/tmp-dump-env.cjs`、`.qoder/tmp-ctx-strings.cjs`、`.qoder/tmp-var-strings.cjs`、`.qoder/tmp-emulate-whale-hook.cjs`、`.qoder/dump-*.json`（宿主侧安装缓存已通过重装恢复干净，无需处理）
+- [x] 修复 e2e Whale hooks 组 3 个测试（见 §4）—— describe 改 "Whale hooks (node)"，三用例改 `runHook(NODE, [...recall/capture/health.js])`，删除 `PYTHON`/`canExec` 及未用的 `execSync`/`ChildProcess` import
+- [x] `npm test`（120 绿）+ `npm run test:e2e`（13 绿）
+- [x] 删除临时取证文件：`.qoder/tmp-dump-env.cjs`、`.qoder/tmp-ctx-strings.cjs`、`.qoder/tmp-var-strings.cjs`、`.qoder/tmp-emulate-whale-hook.cjs`、`.qoder/dump-*.json`（宿主侧安装缓存已通过重装恢复干净，无需处理）
 - [ ] 请用户在 Whale / Codex 两个交互式会话中最终重测（用户装的插件已是修复后版本，**无需重装，重启会话即可**）
-- [ ] 更新记忆：宿主 `${VAR}` 展开矩阵 pitfall（修正既有「Whale components 声明与 Codex .mcp.json 包裹格式」相关记忆）
+- [x] 更新记忆：宿主 `${VAR}` 展开矩阵 pitfall（已新建记忆并合并去重）
 - [ ] 提交规范：`git commit -s`（DCO）、消息带 `Refs #235`；**推送到新分支/新 PR，不要推到原 `feat/codex-whale-plugins` 的 PR**（用户明确要求）
