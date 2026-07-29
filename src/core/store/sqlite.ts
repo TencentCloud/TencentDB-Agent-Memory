@@ -194,6 +194,14 @@ const ZH_STOP_WORDS = new Set([
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
+ *
+ * ## FTS5 operator safety (issue #160)
+ *
+ * Every token is emitted as a double-quoted FTS5 string. Inside a quoted
+ * string, FTS5 treats bareword operators (AND / OR / NOT / NEAR), the prefix
+ * star (`*`), column filters (`col:`), and parentheses as *literal text*, so a
+ * user token can never alter the query's boolean structure. The only character
+ * that must be escaped is the double quote itself — see {@link toFtsPhrase}.
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
@@ -225,8 +233,32 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map(toFtsPhrase);
+  if (quoted.length === 0) return null;
   return quoted.join(" OR ");
+}
+
+/**
+ * Escape a single token into a safe FTS5 quoted-string term.
+ *
+ * FTS5 treats a double-quoted string as a literal phrase: bareword operators
+ * (AND / OR / NOT / NEAR), the prefix star (`*`), column filters (`col:`), and
+ * parentheses inside the quotes are all literal text and cannot change the
+ * query's semantics. The only character that needs escaping is the double quote
+ * itself, which FTS5 escapes by doubling it (`""` → one literal `"`).
+ *
+ * We deliberately do NOT strip operator *substrings* from the raw input (the
+ * naive `raw.replace(/(AND|OR|NOT|NEAR)/gi, " ")` suggested elsewhere), because
+ * substring replacement silently corrupts ordinary words:
+ *   "android" → "roid", "notes" → "es", "network" → "netwk", "corner" → "cner".
+ * Per-token quoting is the correct, lossless neutralization — it keeps the
+ * search term intact while making operators inert.
+ */
+export function toFtsPhrase(token: string): string {
+  return `"${token.replace(/"/g, '""')}"`;
 }
 
 /**
