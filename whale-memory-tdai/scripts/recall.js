@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Codex UserPromptSubmit hook: recall relevant memories from the TdaiGateway
- * and print hookSpecificOutput.additionalContext for Codex to inject.
- * Fails silently (no output, exit 0) so the prompt is never blocked.
+ * Whale UserPromptSubmit hook: recall relevant memories from the TdaiGateway
+ * and print { decision, additional_context } for Whale to inject.
+ * Fails silently (no output, exit 0) so the user is never blocked.
  */
 
 import { TdaiGatewayClient, runRecallHook } from "../vendor/tdai-sdk/index.js";

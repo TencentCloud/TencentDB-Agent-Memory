@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Codex SessionStart hook: verify the TdaiGateway is reachable.
+ * Whale SessionStart hook: verify the TdaiGateway is reachable.
  * Fails silently (no output, exit 0) so session start is never blocked.
  */
 

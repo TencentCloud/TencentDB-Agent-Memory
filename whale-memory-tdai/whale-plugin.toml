@@ -2,3 +2,11 @@ id = "memory-tencentdb"
 name = "Memory (TencentDB)"
 version = "1.0.0"
 description = "Four-layer memory system for Whale (TencentDB Agent Memory)"
+
+# Whale only loads what is declared here — without this section the plugin
+# installs cleanly but exposes no hooks/MCP tools at runtime.
+[components]
+hooks = "hooks.toml"
+mcp = "mcp.json"
+commands = "commands"
+rules = "rules"

@@ -9,22 +9,29 @@ memory over REST, and this plugin's hooks call it at lifecycle events.
 
 ```
 .codex-plugin/plugin.json   # plugin manifest
-hooks/hooks.json            # SessionStart / UserPromptSubmit / Stop hooks
+hooks/hooks.json            # SessionStart / UserPromptSubmit / Stop / SessionEnd hooks
 .mcp.json                   # MCP server (search tools)
+adapter.js                  # Codex platform descriptor (TDAI Adapter SDK)
 scripts/
   health.js                 # SessionStart  -> GET  /health
   recall.js                 # UserPromptSubmit -> POST /recall   (inject context)
   capture.js                # Stop          -> POST /capture  (fire-and-forget)
+  session-end.js            # SessionEnd    -> POST /session/end (flush)
 skills/memory-usage/SKILL.md
 mcp-bridge.js               # stdio MCP server -> /search/*
+vendor/tdai-sdk/            # vendored TDAI Adapter SDK (sync: npm run build:adapters)
 ```
+
+All scripts are zero-dependency Node.js thin shims over the shared
+[TDAI Adapter SDK](../sdk/tdai-adapter-sdk/README.md); the vendored copy under
+`vendor/tdai-sdk/` keeps this directory independently distributable.
 
 ## Requirements
 
 - Node.js on PATH (hook scripts and the MCP bridge are zero-dependency
   Node — no bash/jq/curl needed, works on Windows/macOS/Linux).
 - A running `TdaiGateway` on `http://127.0.0.1:8420`
-  (override via `TDAI_GATEWAY_URL`).
+  (override via `TDAI_GATEWAY_URL`; optional Bearer auth via `TDAI_GATEWAY_API_KEY`).
 - Codex feature flag in `~/.codex/config.toml`:
   ```toml
   [features]

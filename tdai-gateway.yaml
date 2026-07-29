@@ -1,0 +1,29 @@
+# TdaiGateway configuration
+# Secrets are read from environment variables via ${VAR} interpolation,
+# so this file contains no credentials and is safe to commit.
+
+server:
+  port: 8420
+  host: 127.0.0.1
+
+# LLM used for record/persona extraction (chat). OpenAI-compatible.
+# SiliconFlow serves DeepSeek / Qwen chat models.
+llm:
+  baseUrl: "https://api.siliconflow.cn/v1"
+  apiKey: "${SILICONFLOW_API_KEY}"
+  model: "deepseek-ai/DeepSeek-V3"   # or any SiliconFlow chat model
+
+memory:
+  storeBackend: sqlite
+  embedding:
+    # SiliconFlow is OpenAI-compatible and serves BGE embedding models,
+    # which match this project's default bge-large-zh (1024-dim).
+    provider: openai
+    apiKey: "${SILICONFLOW_API_KEY}"
+    baseUrl: "https://api.siliconflow.cn/v1"
+    model: "BAAI/bge-large-zh-v1.5"
+    dimensions: 1024
+    # BGE models are not OpenAI text-embedding-3-* (Matryoshka), so they may
+    # reject the `dimensions` field. If /health shows embeddingService:false or
+    # the gateway logs an embedding error, set this to false:
+    # sendDimensions: false
