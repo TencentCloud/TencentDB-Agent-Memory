@@ -9,7 +9,8 @@
  * MCP-aware host (Codex, Whale, etc.).
  *
  * Wire compatibility: protocol version, serverInfo, tool names, input schemas
- * and output shapes are byte-identical to the original bridges.
+ * and output shapes match the original bridges byte-for-byte; only the tool
+ * descriptions were later enriched to encourage proactive (unprompted) use.
  *
  * Usage (a plugin's mcp-bridge.js becomes):
  *   import { TdaiGatewayClient, createMcpBridge } from "./vendor/tdai-sdk/index.js";
@@ -23,7 +24,13 @@ const TOOLS = [
   {
     name: "search_memories",
     description:
-      "Search the structured L1 memory store (records, scenes, persona) for relevant past knowledge.",
+      "Search the user's persistent long-term memory: past decisions, project conventions, " +
+      "user preferences, facts, and prior solutions from earlier sessions. Use this tool " +
+      "PROACTIVELY \u2014 without being asked \u2014 whenever the user refers to something from the past " +
+      "(e.g. \u201c\u4e4b\u524d\u201d, \u201c\u4e0a\u6b21\u201d, \u201c\u6211\u4eec\u8bf4\u8fc7\u201d, \u201c\u8fd8\u8bb0\u5f97\u5417\u201d, \u201cbefore\u201d, \u201clast time\u201d, \u201cwe decided\u201d, \u201cas discussed\u201d), " +
+      "asks about project history, conventions, or preferences, or when you lack context that " +
+      "a previous session likely established. Prefer calling this over answering from " +
+      "assumptions when past context could change the answer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -38,7 +45,10 @@ const TOOLS = [
   {
     name: "search_conversations",
     description:
-      "Search raw past conversations (L0) for relevant context by keyword/semantic query.",
+      "Search verbatim transcripts of past conversation sessions. Use this when you need the " +
+      "exact wording, code, commands, error messages, or step-by-step details from an earlier " +
+      "session \u2014 e.g. the user asks \u201cwhat exactly did we do/say last time\u201d \u2014 or when " +
+      "search_memories returned a summary that is not specific enough to act on.",
     inputSchema: {
       type: "object",
       properties: {
