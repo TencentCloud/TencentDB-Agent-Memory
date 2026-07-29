@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
+import { resolveDataDir, safePathExists } from "../utils/config-paths.js";
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
@@ -169,37 +170,38 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 function resolveConfigPath(): string | null {
   // 1. Explicit env var
   const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (explicit && safePathExists(explicit)) return explicit;
 
   // 2. CWD
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(process.cwd(), name);
-    if (fs.existsSync(p)) return p;
+    if (safePathExists(p)) return p;
   }
 
-  // 3. Default data dir
+  // 3. Platform-aware config dir
+  const configDir = resolveDataDir("memory-tencentdb");
+  for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
+    const p = path.join(configDir, name);
+    if (safePathExists(p)) return p;
+  }
+
+  // 4. Default data dir (backward compat)
   const dataDir = resolveDefaultDataDir();
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(dataDir, name);
-    if (fs.existsSync(p)) return p;
+    if (safePathExists(p)) return p;
   }
 
   return null;
 }
 
 function resolveDefaultDataDir(): string {
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
-
-  // New canonical location: everything related to standalone/Hermes-mode TDAI
-  // is collected under ~/.memory-tencentdb/ to avoid scattering top-level dirs
-  // in $HOME. The Gateway data dir lives at:
-  //
-  //   ~/.memory-tencentdb/memory-tdai/
-  //
-  // Note: this only governs the standalone/Hermes fallback. Under the openclaw
-  // host the plugin data dir is decided by `resolveStateDir() + "memory-tdai"`
-  // (typically ~/.openclaw/memory-tdai/) which is intentionally NOT changed.
-  const root = getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
+  // New canonical location: use platform-aware data directory
+  // instead of hardcoding ~/.memory-tencentdb for all platforms.
+  // Linux:   ~/.local/share/memory-tencentdb/memory-tdai
+  // macOS:   ~/Library/Application Support/memory-tencentdb/memory-tdai
+  // Windows: %LOCALAPPDATA%/memory-tencentdb/memory-tdai
+  const root = getEnv("MEMORY_TENCENTDB_ROOT") ?? resolveDataDir("memory-tencentdb");
   const newDefault = path.join(root, "memory-tdai");
 
   // Backward compatibility: if the new location does not yet exist but the
@@ -207,10 +209,10 @@ function resolveDefaultDataDir(): string {
   // users don't silently lose their memory store. The install script
   // (install_hermes_memory_tencentdb.sh, Step 0) will migrate it on next run.
   try {
-    if (!fs.existsSync(newDefault)) {
+    if (!safePathExists(newDefault)) {
+      const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
       const legacy = path.join(home, "memory-tdai");
-      if (fs.existsSync(legacy)) {
-        // Stderr-only deprecation hint; doesn't pollute structured logs.
+      if (safePathExists(legacy)) {
         process.stderr.write(
           `[tdai-gateway] DEPRECATED: using legacy data dir ${legacy}; ` +
           `move it to ${newDefault} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
@@ -219,7 +221,7 @@ function resolveDefaultDataDir(): string {
       }
     }
   } catch {
-    // existsSync should not throw, but guard anyway.
+    // safePathExists should not throw, but guard anyway.
   }
 
   return newDefault;

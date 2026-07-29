@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getEnv } from "./env.js";
+import { safePathExists, resolveConfigDir } from "./config-paths.js";
 import JSON5 from "json5";
 
 const PLUGIN_ID = "memory-tencentdb";
@@ -142,20 +143,25 @@ function isGatewayStart(): boolean {
 function resolveConfigPath(): string | null {
   // 1. OPENCLAW_CONFIG_PATH env override (same as core uses)
   const envPath = getEnv("OPENCLAW_CONFIG_PATH")?.trim();
-  if (envPath && fs.existsSync(envPath)) return envPath;
+  if (envPath && safePathExists(envPath)) return envPath;
 
   // 2. OPENCLAW_STATE_DIR override
   const stateDir = getEnv("OPENCLAW_STATE_DIR")?.trim();
   if (stateDir) {
     const p = path.join(stateDir, "openclaw.json");
-    if (fs.existsSync(p)) return p;
+    if (safePathExists(p)) return p;
   }
 
-  // 3. Standard location: ~/.openclaw/openclaw.json
+  // 3. Platform-aware location (Linux: ~/.config/openclaw, macOS: ~/Library/Application Support/openclaw)
+  const platformConfigDir = resolveConfigDir("openclaw");
+  const p1 = path.join(platformConfigDir, "openclaw.json");
+  if (safePathExists(p1)) return p1;
+
+  // 4. Legacy location: ~/.openclaw/openclaw.json (backward compat)
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "";
   if (!home) return null;
-  const p = path.join(home, ".openclaw", "openclaw.json");
-  return fs.existsSync(p) ? p : null;
+  const p2 = path.join(home, ".openclaw", "openclaw.json");
+  return safePathExists(p2) ? p2 : null;
 }
 
 function hasPolicyAlready(root: unknown): boolean {

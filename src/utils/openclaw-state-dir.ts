@@ -1,6 +1,5 @@
-import { homedir } from "node:os";
-import path from "node:path";
 import { getEnv } from "./env.js";
+import { resolveConfigDir } from "./config-paths.js";
 
 export interface OpenClawRuntimeStateLike {
   resolveStateDir?: () => string;
@@ -10,7 +9,12 @@ export interface OpenClawRuntimeStateLike {
  * Resolve the OpenClaw state directory.
  *
  * Prefer the host-injected `runtime.state.resolveStateDir()` (full mode);
- * otherwise fall back to `OPENCLAW_STATE_DIR` env / `~/.openclaw`.
+ * otherwise fall back to `OPENCLAW_STATE_DIR` env / platform-aware default.
+ *
+ * Default resolution by platform:
+ * - Linux:   ~/.config/openclaw (or $XDG_CONFIG_HOME/openclaw)
+ * - macOS:   ~/Library/Application Support/openclaw
+ * - Windows: %APPDATA%/openclaw
  *
  * The fallback path is only hit in lightweight registration modes
  * (e.g. cli-metadata) where this value is just passed to commander as
@@ -30,6 +34,6 @@ export function resolveOpenClawStateDir(
   return (
     runtimeState?.resolveStateDir?.() ||
     getEnv("OPENCLAW_STATE_DIR")?.trim() ||
-    path.join(homedir(), ".openclaw")
+    resolveConfigDir("openclaw")
   );
 }

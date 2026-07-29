@@ -11,11 +11,11 @@
 import { readFile, writeFile, appendFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
-import { homedir } from "node:os";
 import type { OffloadEntry, PluginLogger } from "./types.js";
+import { resolveConfigDir } from "../utils/config-paths.js";
 
 /** Default root data directory (parent of all agent subdirectories) */
-export const DEFAULT_DATA_ROOT = join(homedir(), ".openclaw", "context-offload");
+export const DEFAULT_DATA_ROOT = join(resolveConfigDir("openclaw"), "context-offload");
 
 // ─── StorageContext ──────────────────────────────────────────────────────────
 
