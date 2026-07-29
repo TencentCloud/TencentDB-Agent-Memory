@@ -61,20 +61,60 @@ export type L3TriggerStage = "after_tool_call" | "llm_input" | "assemble";
  */
 export type PatchEffective = "effective" | "missing_field" | "empty_messages" | "n/a";
 
-/** Inspects `event.messages` to classify patch health for after_tool_call. */
+export function resolveMessagesFromEvent(event: unknown, ctx?: unknown): any[] | undefined {
+  if (event && typeof event === "object") {
+    const ev = event as Record<string, unknown>;
+    if (Array.isArray(ev.messages)) return ev.messages as any[];
+    if (Array.isArray(ev.historyMessages)) return ev.historyMessages as any[];
+    const state = ev.state;
+    if (state && typeof state === "object" && Array.isArray((state as Record<string, unknown>).messages)) {
+      return (state as Record<string, unknown>).messages as any[];
+    }
+    const session = ev.session;
+    if (session && typeof session === "object" && Array.isArray((session as Record<string, unknown>).messages)) {
+      return (session as Record<string, unknown>).messages as any[];
+    }
+  }
+  if (ctx && typeof ctx === "object") {
+    const c = ctx as Record<string, unknown>;
+    const s = c.session;
+    if (s && typeof s === "object" && Array.isArray((s as Record<string, unknown>).messages)) {
+      return (s as Record<string, unknown>).messages as any[];
+    }
+    if (Array.isArray(c.messages)) return c.messages as any[];
+    if (Array.isArray(c.historyMessages)) return c.historyMessages as any[];
+  }
+  return undefined;
+}
+
 export function classifyPatchEffectiveness(
   event: unknown,
   stage: L3TriggerStage,
-): { status: PatchEffective; messagesLen: number } {
-  // Only after_tool_call depends on the runtime patch for event.messages.
-  if (stage !== "after_tool_call") return { status: "n/a", messagesLen: 0 };
+  ctx?: unknown,
+): { status: PatchEffective; messagesLen: number; resolvedFrom: string } {
+  if (stage !== "after_tool_call") return { status: "n/a", messagesLen: 0, resolvedFrom: "n/a" };
   if (!event || typeof event !== "object") {
-    return { status: "missing_field", messagesLen: 0 };
+    return { status: "missing_field", messagesLen: 0, resolvedFrom: "none" };
   }
-  const msgs = (event as { messages?: unknown }).messages;
-  if (!Array.isArray(msgs)) return { status: "missing_field", messagesLen: 0 };
-  if (msgs.length === 0) return { status: "empty_messages", messagesLen: 0 };
-  return { status: "effective", messagesLen: msgs.length };
+  const ev = event as Record<string, unknown>;
+  if (Array.isArray(ev.messages)) {
+    const len = (ev.messages as any[]).length;
+    return {
+      status: len === 0 ? "empty_messages" : "effective",
+      messagesLen: len,
+      resolvedFrom: "event.messages",
+    };
+  }
+  const resolved = resolveMessagesFromEvent(event, ctx);
+  if (resolved && Array.isArray(resolved)) {
+    const len = resolved.length;
+    return {
+      status: len === 0 ? "empty_messages" : "effective",
+      messagesLen: len,
+      resolvedFrom: "fallback",
+    };
+  }
+  return { status: "missing_field", messagesLen: 0, resolvedFrom: "none" };
 }
 
 // ─── Global cumulative counters ──────────────────────────────────────────────

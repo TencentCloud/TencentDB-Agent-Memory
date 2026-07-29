@@ -39,6 +39,7 @@ import {
   recordToolCall,
   REPORT_TYPE_L3,
   L3_FIXED_PATCH_COST_TOKENS,
+  resolveMessagesFromEvent,
 } from "../state-reporter.js";
 
 function isHeartbeatToolCall(event: any, cachedParams: any): boolean {
@@ -108,21 +109,39 @@ export function createAfterToolCallHandler(
     // rate, not just the cases where L3 actually runs.
     recordToolCall();
 
+    // ── OpenClaw 5.27+ compatibility layer ──
+    // After the channel/session identity hardening in 5.27, `event.messages`
+    // is no longer populated by the upstream patch without explicit opt-in.
+    // We resolve the conversation array from a chain of alternative sources
+    // (event.historyMessages / event.state.messages / event.session.messages
+    // / ctx.session.messages / ctx.messages / ctx.historyMessages) and
+    // transparently re-attach it to event.messages so the rest of the
+    // handler (MMD injection, L3 compression, snapshots, tracing) continues
+    // to work without refactoring every call site.
     const eventKeys = event ? Object.keys(event) : [];
+    const _originalMessages = event?.messages;
+    const _fallbackMessages = resolveMessagesFromEvent(event, ctx);
+    if ((!_originalMessages || !Array.isArray(_originalMessages)) && _fallbackMessages && Array.isArray(_fallbackMessages)) {
+      event.messages = _fallbackMessages;
+    }
+    const messages: any[] | undefined =
+      (event?.messages && Array.isArray(event.messages)) ? event.messages : undefined;
+
     const hasMsgsKey = "messages" in (event ?? {});
-    const msgsValue = event?.messages;
-    const hasMsgs = msgsValue && Array.isArray(msgsValue);
-    logger.debug?.(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, msgsType=${typeof msgsValue}, isArray=${Array.isArray(msgsValue)}, len=${hasMsgs ? msgsValue.length : "N/A"}`);
+    const hasMsgs = messages && Array.isArray(messages) && messages.length > 0;
+    const msgsValue = messages;
+    const _usedFallback = _originalMessages !== event.messages;
+    logger.debug?.(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, fallback=${_usedFallback}, isArray=${Array.isArray(messages)}, len=${hasMsgs ? messages!.length : "N/A"}`);
 
     // ── Patch-effectiveness detection ──
     // The upstream runtime patch is expected to populate event.messages with
     // the current conversation. If it is missing/empty the patch is NOT in
     // effect and L3 compression cannot run from this hook. Report that
     // explicitly so operators can detect misconfigurations.
-    const _patchStatus = classifyPatchEffectiveness(event, "after_tool_call");
+    const _patchStatus = classifyPatchEffectiveness(event, "after_tool_call", ctx);
     if (_patchStatus.status !== "effective") {
       logger.warn(
-        `[context-offload] after_tool_call patch check: NOT EFFECTIVE (status=${_patchStatus.status}). ` +
+        `[context-offload] after_tool_call patch check: NOT EFFECTIVE (status=${_patchStatus.status}, resolvedFrom=${_patchStatus.resolvedFrom}). ` +
         `event.messages is ${Array.isArray(msgsValue) ? "empty array" : typeof msgsValue}. ` +
         `L3 compression will be skipped this turn.`,
       );
