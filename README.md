@@ -106,6 +106,179 @@ graph LR
     style Agent fill:#fffbeb,stroke:#f59e0b,stroke-width:2px,color:#92400e
 ```
 
+### 2.1 End-to-End Example: Raw Tool Log → Mermaid Symbol → `node_id` Tracing
+
+To make the symbolization pipeline transparent, here is a concrete walk-through of one tool-call lifecycle as it flows through the L0 → L1.5 → L2 layers of short-term symbolic memory.
+
+#### Step A — Raw tool log (L0 offload entry in `offload-<sessionId>.jsonl`)
+
+Every tool call is recorded as a JSONL entry in the agent's data directory. The LLM prompt and full tool output text are written verbatim to a `refs/*.md` file; the JSONL entry only keeps a relative link plus structural metadata:
+
+```json
+{
+  "tool_call_id": "call_i4Bk8wVjGk3mYJ0qfL9xP5Nr",
+  "session_key": "agent:fix-user-123:sess_abc",
+  "agent_name": "fix-user-123",
+  "tool_name": "bash",
+  "tool_call": "bash: pnpm vitest run src/gateway/config.test.ts",
+  "tool_args": { "command": "pnpm vitest run src/gateway/config.test.ts" },
+  "summary_md": "refs/2026-07-29T10-23-45-000p2026-07-29T10-23-45-000p.md",
+  "timestamp": "2026-07-29T10:23:45.000Z",
+  "status": "success",
+  "cost_info": { "input_tokens": 42, "output_tokens": 18341 },
+  "offloaded": true
+}
+```
+
+Key properties:
+- **`tool_call_id`** is the stable primary key that every layer references.
+- **`summary_md`** is the relative path to the offloaded raw-text file (which can be several MB for a failing test, a grep across a repo, etc.).
+- **`cost_info.output_tokens`** is exactly why offloading matters: the raw output (`18341` tokens here) is never re-injected into context — only the symbol is.
+
+#### Step B — Full raw text stored in `refs/<timestamp>.md` (L0 bottom layer)
+
+The `summary_md` file contains the actual tool output, with a minimal header so the reader can always re-attribute it:
+
+```markdown
+# Tool Result: bash
+
+**Timestamp:** 2026-07-29T10:23:45.000Z
+
+---
+
+\`\`\`text
+ RUN  v2.1.8 /repos/tencentdb-agent-memory
+
+ ❯ src/gateway/config.test.ts (3)
+   ❯ resolves config from XDG_CONFIG_HOME on Linux (25 ms)
+     → expected 9511, received 8420 (default port)
+         at runTest src/gateway/config.test.ts:47
+         ...
+ FAIL  Failed to run 1 file
+\`\`\`
+
+[13,872 more lines of Vitest diff output ...]
+```
+
+This file is only ever loaded when the Agent explicitly asks to drill down via a `node_id`.
+
+#### Step C — L2 Mermaid canvas (top layer, injected into Agent context)
+
+When the L2 pipeline runs (triggered by enough entries with `node_id=null` or by timeout), an LLM builds/updates a `*.mmd` file. Nodes have a strict encoding contract:
+
+```
+<MMD_PREFIX>-N<seq>["<stage-label>: <macro-action><br/>
+  status: done|doing|paused|blocked<br/>
+  summary: <concise-conclusion><br/>
+  Timestamp: <ISO8601>"]
+```
+
+- **`MMD_PREFIX`** is a 3-digit session prefix (e.g. `047`) that prevents collisions across concurrent sessions.
+- **`status: blocked`** ("认知墓碑") marks dead-ends and failures, telling the model *not* to repeat the same mistakes.
+- **`summary`** is always ≤ 150 chars and is conclusion-oriented, not a parameter dump.
+- Shape encodes the node kind (subroutines, decisions, milestones, dead ends) to carry semantics without extra text.
+
+Here is the corresponding canvas after a few more steps:
+
+```mermaid
+flowchart TD
+    047-N1["Plan: repo triage<br/>status: done<br/>summary: Reproduced test failure in config path resolution<br/>Timestamp: 2026-07-29T10:15:00.000Z"]
+    047-N2["Exec: run config tests<br/>status: blocked<br/>summary: XDG_CONFIG_HOME test returns default port 8420 — Linux path lookup bug<br/>Timestamp: 2026-07-29T10:23:45.000Z"]
+    047-N3["Fix: patch config loader<br/>status: doing<br/>summary: Adding XDG fallback before ~/.memory-tencentdb in resolveDefaultDataDir<br/>Timestamp: 2026-07-29T10:28:10.000Z"]
+    047-N4["Verify: rerun tests<br/>status: todo<br/>summary: Re-run focused vitest after patch lands<br/>Timestamp: 2026-07-29T10:28:10.000Z"]
+
+    047-N1 --> 047-N2 -->|failure, investigate root cause| 047-N3 --> 047-N4
+    047-N2 -. "blocked by /home/user hardcoding" .-> 047-N3
+
+    classDef done fill:#ecfdf5,stroke:#10b981,stroke-width:2px,color:#065f46;
+    classDef doing fill:#eff6ff,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a;
+    classDef todo fill:#fffbeb,stroke:#f59e0b,stroke-width:2px,color:#92400e;
+    classDef blocked fill:#fef2f2,stroke:#ef4444,stroke-width:2px,color:#991b1b;
+    class 047-N1 done;
+    class 047-N3 doing;
+    class 047-N4 todo;
+    class 047-N2 blocked;
+```
+
+This whole canvas is **~1,100 characters** (well under the 4,000 char budget) versus the raw logs that totaled roughly **200,000 tokens** — a ~300× compression.
+
+#### Step D — `node_mapping` / `node_id` deterministically links symbol to evidence
+
+The L2 pipeline emits a JSON `node_mapping` that assigns every `tool_call_id` to exactly one Mermaid node (many-to-one):
+
+```json
+{
+  "file_action": "replace",
+  "replace_blocks": [
+    { "start_line": 4, "end_line": 7, "content": "..." }
+  ],
+  "node_mapping": {
+    "call_i4Bk8wVjGk3mYJ0qfL9xP5Nr": "047-N2",
+    "call_kb9Jvj3xKqMfHdCgN4tWv2aB": "047-N2",
+    "call_8Vpz4wMnQrT9xXbKjL2dF7cH": "047-N1",
+    "call_2Kd3xQrZvBpN6mHfL8tWvJ5P": "047-N3"
+  }
+}
+```
+
+After L2 runs, each offload entry's `node_id` field is **persistently written back** to its JSONL row:
+
+```diff
+ {
+   "tool_call_id": "call_i4Bk8wVjGk3mYJ0qfL9xP5Nr",
+   ...
++  "node_id": "047-N2",
+   "offloaded": true
+ }
+```
+
+So when the Agent notices a suspicious `status: blocked` node in the canvas:
+
+> 🧐 "Wait, **047-N2** says the config test is failing because of Linux path lookup? Show me the actual failure."
+
+the plugin performs the lookup:
+
+1. Parse node id prefix `047` → locate the agent data directory.
+2. Search offload entries where `node_id == "047-N2"` → collect `tool_call_id`s.
+3. Follow each entry's `summary_md` link → load the `refs/*.md` file.
+4. Inject only those referenced snippets *below* the next prompt, labeled with the node id.
+
+This guarantees **lossless recovery**: every symbol on the canvas expands deterministically back to the raw evidence, and every raw log is reachable from at least one symbol.
+
+#### Step E — JSONL + node_id lifecycle summary (how artifacts chain together)
+
+| Artifact | Location | When written | Key fields |
+|---|---|---|---|
+| Offload entry | `<agent>/offload-<id>.jsonl` | After every tool call | `tool_call_id`, `summary_md`, `timestamp`, `status`, **`node_id` (null → filled by L2)** |
+| Raw text ref | `<agent>/refs/<timestamp>.md` | After every tool call | Header with timestamp + tool name + full tool output text |
+| Mermaid canvas | `<agent>/mmds/<prefix>.mmd` | L2 pipeline runs | Meta header `%%{taskGoal,progress,...}%%` + nodes with `047-Nn[...]` + edges |
+| Node mapping | in-memory + persisted via backfill to offload JSONL | L2 pipeline runs | `{ tool_call_id → 047-Nn }` |
+
+```mermaid
+flowchart LR
+    A[L0 Tool Call] -->|1: append JSONL entry| B[offload-*.jsonl<br/>node_id = NULL]
+    A -->|2: write raw text| C[refs/&lt;timestamp&gt;.md<br/>~200KB]
+    B -->|3: L2 trigger<br/>≥N nulls OR timeout| D{L2 Mermaid Pipeline}
+    D -->|4: patch canvas| E[mmds/047.mmd<br/>≤4000 chars]
+    D -->|5: emit mapping| F[node_mapping JSON]
+    F -->|6: backfill| B
+    E -->|7: light inject| G[Agent Context<br/>~1KB symbol map]
+    G -->|8: Agent asks to drill down| H["node_id lookup → refs/*.md"]
+
+    classDef io fill:#f8fafc,stroke:#cbd5e1,stroke-width:2px,color:#334155;
+    classDef pipeline fill:#eff6ff,stroke:#3b82f6,stroke-width:2px,color:#1e3a8a;
+    class A pipeline;
+    class D pipeline;
+    class B io;
+    class C io;
+    class E io;
+    class F io;
+    class G io;
+    class H io;
+```
+
+> **Design mantra** the codebase lives by: "upper layers preserve *structure*, bottom layers preserve *evidence*." A canvas node can always be reconstructed from the JSONL, and a JSONL entry can always be expanded to its raw `refs/*.md` — nothing irreversible is ever dropped.
+
 ---
 
 ## Quick Start
