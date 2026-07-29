@@ -307,18 +307,25 @@ describe("Codex hooks (node)", () => {
 });
 
 describe("Plugin manifests (tool/hook discovery surface)", () => {
-  it("whale mcp.json points at a real bridge and exposes the server", () => {
+  it("whale mcp.json launches the bridge via env-resolved plugin root", () => {
     const m = readJson(resolve(WHALE_DIR, "mcp.json"));
     const srv = m.mcpServers["memory-tdai"];
     expect(srv.command).toBe("node");
-    expect(srv.args[0].endsWith("mcp-bridge.js")).toBe(true);
-    expect(existsSync(resolve(WHALE_DIR, stripToken(srv.args[0])))).toBe(true);
+    // Hosts don't expand ${VAR} on Windows, so the args resolve the root from
+    // the environment inside Node (WHALE_PLUGIN_ROOT) instead.
+    expect(srv.args[0]).toBe("-e");
+    expect(srv.args[1]).toContain("WHALE_PLUGIN_ROOT");
+    expect(srv.args[1]).toContain("mcp-bridge.js");
+    expect(existsSync(resolve(WHALE_DIR, "mcp-bridge.js"))).toBe(true);
   });
 
   it("codex .mcp.json points at a real bridge and exposes the server", () => {
     const m = readJson(resolve(CODEX_DIR, ".mcp.json"));
-    const srv = m["memory-tdai"];
+    const srv = m.mcpServers["memory-tdai"];
     expect(srv.command).toBe("node");
+    // Codex resolves "cwd": "." to the plugin root and passes args verbatim,
+    // so the bridge path must be relative.
+    expect(srv.cwd).toBe(".");
     expect(srv.args[0].endsWith("mcp-bridge.js")).toBe(true);
     expect(existsSync(resolve(CODEX_DIR, stripToken(srv.args[0])))).toBe(true);
   });
@@ -338,10 +345,14 @@ describe("Plugin manifests (tool/hook discovery surface)", () => {
     for (const ev of ["SessionStart", "UserPromptSubmit", "Stop"]) {
       expect(t).toContain(ev);
     }
-    for (const sc of ["scripts/health.py", "scripts/recall.py", "scripts/capture.py"]) {
+    for (const sc of ["scripts/health.js", "scripts/recall.js", "scripts/capture.js"]) {
       expect(t).toContain(sc);
       expect(existsSync(resolve(WHALE_DIR, sc))).toBe(true);
     }
+    // Commands must not rely on host-side ${VAR} expansion (breaks on Windows
+    // where hooks run under PowerShell); the root comes from the environment.
+    expect(t).not.toMatch(/command = .*\$\{WHALE_PLUGIN_ROOT\}/);
+    expect(t).toContain("process.env.WHALE_PLUGIN_ROOT");
   });
 
   it("codex plugin.json + whale-plugin.toml are valid and reference real files", () => {

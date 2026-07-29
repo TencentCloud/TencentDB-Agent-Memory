@@ -1,6 +1,9 @@
 {
-  "memory-tdai": {
-    "command": "node",
-    "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-bridge.js"]
+  "mcpServers": {
+    "memory-tdai": {
+      "command": "node",
+      "args": ["./mcp-bridge.js"],
+      "cwd": "."
+    }
   }
 }
