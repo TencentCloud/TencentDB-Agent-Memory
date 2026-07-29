@@ -42,6 +42,8 @@
     "scripts/read-local-memory/dist/",
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
+    "scripts/setup-hermes-memory-tencentdb.bat",
+    "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
