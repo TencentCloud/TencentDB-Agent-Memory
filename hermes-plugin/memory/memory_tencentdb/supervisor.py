@@ -13,6 +13,7 @@ import os
 import shlex
 import signal
 import subprocess
+import threading
 import time
 from typing import IO, Optional
 
@@ -20,17 +21,18 @@ from .client import MemoryTencentdbSdkClient
 
 logger = logging.getLogger(__name__)
 
-# Default Gateway address
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 
-# Health check parameters
-HEALTH_CHECK_INTERVAL = 0.5  # seconds between checks
-HEALTH_CHECK_MAX_WAIT = 30   # max seconds to wait for Gateway to start
-HEALTH_CHECK_RETRIES = 3     # retries for is_running check
+HEALTH_CHECK_INTERVAL = 0.5
+HEALTH_CHECK_MAX_WAIT = 30
+HEALTH_CHECK_RETRIES = 3
 
-# Log file rotation parameters
-LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
+LOG_TAIL_BYTES_ON_CRASH = 2048
+
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_PRESERVE_BYTES = 1 * 1024 * 1024
+LOG_ROTATE_INTERVAL = 2.0
 
 
 class GatewaySupervisor:
@@ -76,7 +78,10 @@ class GatewaySupervisor:
         # Gateway's event loop would block on write() after ~64 KB of logs).
         self._stdout_log: Optional[IO[bytes]] = None
         self._stderr_log: Optional[IO[bytes]] = None
+        self._stdout_log_path: Optional[str] = None
         self._stderr_log_path: Optional[str] = None
+        self._log_rotator: Optional[threading.Thread] = None
+        self._log_rotator_stop = threading.Event()
 
         # Resolve Gateway command
         # Priority: explicit arg > MEMORY_TENCENTDB_GATEWAY_CMD env
@@ -212,7 +217,9 @@ class GatewaySupervisor:
                 # Append mode: preserve previous runs for postmortem.
                 self._stdout_log = open(stdout_path, "ab", buffering=0)
                 self._stderr_log = open(stderr_path, "ab", buffering=0)
+                self._stdout_log_path = stdout_path
                 self._stderr_log_path = stderr_path
+                self._start_log_rotator()
                 stdout_target: object = self._stdout_log
                 stderr_target: object = self._stderr_log
             else:
@@ -271,6 +278,7 @@ class GatewaySupervisor:
 
     def _close_log_handles(self) -> None:
         """Close log file handles; safe to call multiple times."""
+        self._stop_log_rotator()
         for attr in ("_stdout_log", "_stderr_log"):
             handle: Optional[IO[bytes]] = getattr(self, attr, None)
             if handle is not None:
@@ -279,6 +287,73 @@ class GatewaySupervisor:
                 except Exception:
                     pass
                 setattr(self, attr, None)
+
+    def _start_log_rotator(self) -> None:
+        self._log_rotator_stop.clear()
+        self._log_rotator = threading.Thread(
+            target=self._log_rotator_loop,
+            daemon=True,
+            name="gateway-log-rotator",
+        )
+        self._log_rotator.start()
+        logger.debug("memory-tencentdb Gateway log rotator started (max=%d bytes)", LOG_MAX_BYTES)
+
+    def _stop_log_rotator(self) -> None:
+        self._log_rotator_stop.set()
+        if self._log_rotator is not None:
+            self._log_rotator.join(timeout=LOG_ROTATE_INTERVAL * 2)
+            self._log_rotator = None
+
+    def _log_rotator_loop(self) -> None:
+        while not self._log_rotator_stop.is_set():
+            try:
+                self._check_log_rotation(self._stdout_log, self._stdout_log_path)
+                self._check_log_rotation(self._stderr_log, self._stderr_log_path)
+            except Exception:
+                pass
+            self._log_rotator_stop.wait(LOG_ROTATE_INTERVAL)
+
+    def _check_log_rotation(self, log_handle: Optional[IO[bytes]], log_path: Optional[str]) -> None:
+        if log_handle is None or log_path is None:
+            return
+        try:
+            current_size = os.path.getsize(log_path)
+        except OSError:
+            return
+        if current_size <= LOG_MAX_BYTES:
+            return
+        try:
+            self._rotate_log_file(log_handle, log_path, current_size)
+        except Exception as e:
+            logger.warning("memory-tencentdb Gateway log rotation failed for %s: %s", log_path, e)
+
+    def _rotate_log_file(self, log_handle: IO[bytes], log_path: str, current_size: int) -> None:
+        fd = log_handle.fileno()
+        preserve = min(LOG_PRESERVE_BYTES, current_size)
+        try:
+            os.lseek(fd, -preserve, os.SEEK_END)
+        except OSError:
+            os.lseek(fd, 0, os.SEEK_SET)
+        tail_data = b""
+        try:
+            tail_data = os.read(fd, preserve)
+        except OSError:
+            pass
+        backup_path = log_path + ".1"
+        try:
+            with open(backup_path, "wb") as bf:
+                bf.write(tail_data)
+        except OSError as e:
+            logger.warning("memory-tencentdb Gateway log rotation: failed to write backup %s: %s", backup_path, e)
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        if tail_data:
+            os.write(fd, tail_data)
+        os.lseek(fd, 0, os.SEEK_END)
+        logger.warning(
+            "memory-tencentdb Gateway log rotation: %s was %d bytes, truncated to preserve %d bytes",
+            log_path, current_size, preserve,
+        )
 
     def _tail_stderr_log(self, max_bytes: int = LOG_TAIL_BYTES_ON_CRASH) -> str:
         """Return the last `max_bytes` of the stderr log for crash diagnostics."""
