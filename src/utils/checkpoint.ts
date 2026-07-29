@@ -144,6 +144,13 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+export interface RecalibrateSources {
+  /** Store-backed L0 count. When unavailable, L0 JSONL files are used. */
+  vectorStore?: {
+    countL0(): number | Promise<number>;
+  };
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -179,10 +186,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private readonly dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -291,6 +300,81 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Rebuild aggregate counters from their persisted sources of truth.
+   *
+   * L1 memories are counted from records/*.jsonl. L0 records are counted
+   * from the configured store, with conversations/*.jsonl as a degraded-mode
+   * fallback. Source reads happen before the checkpoint lock is acquired so
+   * slow filesystem or remote-store operations do not block other writers.
+   */
+  async recalibrate(sources: RecalibrateSources = {}): Promise<void> {
+    const previous = await this.readRaw();
+    let actualL1: number | undefined;
+    let actualL0: number | undefined;
+    let l0Source = "JSONL";
+
+    try {
+      actualL1 = await this.countJsonlRecords("records");
+    } catch (err) {
+      this.logger.warn?.(
+        `[checkpoint] recalibrate: failed to count L1 JSONL records; preserving checkpoint value: ${formatError(err)}`,
+      );
+    }
+
+    if (sources.vectorStore) {
+      try {
+        actualL0 = normalizeCount(await sources.vectorStore.countL0());
+        l0Source = "store";
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: failed to count L0 store records; falling back to JSONL: ${formatError(err)}`,
+        );
+      }
+    }
+
+    if (actualL0 === undefined) {
+      try {
+        actualL0 = await this.countJsonlRecords("conversations");
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: failed to count L0 JSONL records; preserving checkpoint value: ${formatError(err)}`,
+        );
+      }
+    }
+
+    const updated = await this.mutate((cp) => {
+      if (actualL1 !== undefined) cp.total_memories_extracted = actualL1;
+      if (actualL0 !== undefined) cp.l0_conversations_count = actualL0;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: ` +
+      `L1 ${previous.total_memories_extracted} -> ${updated.total_memories_extracted} (JSONL), ` +
+      `L0 ${previous.l0_conversations_count} -> ${updated.l0_conversations_count} (${l0Source})`,
+    );
+  }
+
+  private async countJsonlRecords(directoryName: string): Promise<number> {
+    const directoryPath = path.join(this.dataDir, directoryName);
+    let entries: import("node:fs").Dirent[];
+
+    try {
+      entries = await fs.readdir(directoryPath, { withFileTypes: true });
+    } catch (err) {
+      if (isNodeError(err) && err.code === "ENOENT") return 0;
+      throw err;
+    }
+
+    let count = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const raw = await fs.readFile(path.join(directoryPath, entry.name), "utf-8");
+      count += raw.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+    }
+    return count;
   }
 
   // ============================
@@ -485,4 +569,19 @@ export class CheckpointManager {
     });
   }
 
+}
+
+function normalizeCount(value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`invalid record count: ${value}`);
+  }
+  return Math.trunc(value);
+}
+
+function isNodeError(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error && "code" in value;
+}
+
+function formatError(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
 }
