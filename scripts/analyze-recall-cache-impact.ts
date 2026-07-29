@@ -4,6 +4,10 @@ import {
   stripRelevantMemoriesFromText,
   type RecallInjectionTurn,
 } from "../src/utils/recall-injection.js";
+import {
+  analyzeStableContextStability,
+  composeStableSystemContext,
+} from "../src/core/hooks/recall-stable-context.js";
 
 interface ReplayRow {
   turn: number;
@@ -135,3 +139,53 @@ console.log("Interpretation:");
 console.log("- cleanHist removes previous <relevant-memories> before persistence.");
 console.log("- injectedHist keeps previous <relevant-memories> in future history.");
 console.log("- lcp* is the longest common prefix with the previous full prompt.");
+
+// ============================================================================
+// System-prompt region stability (issue #120 secondary root cause, the fix)
+// ============================================================================
+//
+// The system prompt is the most cache-sensitive region for prefix-matching
+// providers. The bug: the memory tools guide (stable content) used to be
+// appended based on whether *this turn* matched a dynamic L1 memory, so for a
+// user without a persona the system region flipped between "guide" and "" —
+// busting the system-prompt cache every other turn.
+//
+// The fix decouples the stable system region from per-turn dynamic recall:
+// the guide follows stable persona/scene only. Below we replay a persona-less
+// session with intermittent memory matches under both behaviors.
+
+const GUIDE = "<memory-tools-guide>Use tdai_memory_search when injected context is insufficient.</memory-tools-guide>";
+
+// Per-turn: did this turn's query match any dynamic L1 memory?
+const MEMORY_MATCH_PER_TURN = [true, false, true, false, true, false];
+
+// OLD behavior: guide (stable) appended whenever stable content OR this turn's
+// dynamic memories were present. No persona/scene → region tracks the dynamic match.
+const oldRegionPerTurn = MEMORY_MATCH_PER_TURN.map((matched) => (matched ? GUIDE : undefined));
+
+// NEW behavior: stable region depends only on persona/scene, never on the
+// per-turn match. Persona-less user → no stable region at all (constant).
+const newRegionPerTurn = MEMORY_MATCH_PER_TURN.map(() =>
+  composeStableSystemContext({ /* no persona/scene yet */ }, { toolsGuide: GUIDE }),
+);
+
+// Established user (has a persona): the region is now byte-stable every turn.
+const establishedRegionPerTurn = MEMORY_MATCH_PER_TURN.map(() =>
+  composeStableSystemContext({ personaContent: "User prefers concise bullets." }, { toolsGuide: GUIDE }),
+);
+
+const oldStability = analyzeStableContextStability(oldRegionPerTurn);
+const newStability = analyzeStableContextStability(newRegionPerTurn);
+const establishedStability = analyzeStableContextStability(establishedRegionPerTurn);
+
+console.log("");
+console.log("System-prompt region stability (before vs after the fix)");
+console.log("========================================================");
+console.log(`turns simulated: ${MEMORY_MATCH_PER_TURN.length} (memory match per turn: ${MEMORY_MATCH_PER_TURN.join(", ")})`);
+console.log(`BEFORE (guide coupled to dynamic recall):     system-region changes = ${oldStability.changeCount}`);
+console.log(`AFTER  (persona-less user, decoupled):        system-region changes = ${newStability.changeCount}`);
+console.log(`AFTER  (established user with persona):        system-region changes = ${establishedStability.changeCount}`);
+console.log("");
+console.log("Interpretation:");
+console.log("- Fewer system-region changes = a longer stable prefix = higher prompt-cache hit rate.");
+console.log("- The fix removes per-turn flips in the cache-sensitive system prompt region.");

@@ -16,6 +16,7 @@ import { formatForLLM } from "../../utils/time.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { composeStableSystemContext } from "./recall-stable-context.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
@@ -193,13 +194,6 @@ async function performAutoRecallInner(params: {
   // prependContext (user prompt prefix — dynamic, per-turn):
   //   L1 relevant memories — different every turn, moved out of system prompt
   //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
@@ -208,14 +202,16 @@ async function performAutoRecallInner(params: {
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  // Stable part → appendSystemContext (system prompt). Composed deterministically
+  // and DECOUPLED from this turn's dynamic recall so the cache-sensitive system
+  // region stays byte-identical across turns while persona/scene are unchanged
+  // (issue #120). The tools guide follows the stable persona/scene rather than the
+  // per-turn dynamic memories, so the system region no longer flips presence based
+  // on whether this turn's query happened to match an L1 memory.
+  const appendSystemContext = composeStableSystemContext(
+    { personaContent, sceneNavigation },
+    { toolsGuide: MEMORY_TOOLS_GUIDE },
+  );
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(

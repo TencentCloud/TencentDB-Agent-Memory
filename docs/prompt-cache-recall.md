@@ -46,6 +46,50 @@ result compaction more likely. Once those mechanisms remove or rewrite different
 amounts of earlier content across turns, the continuous prefix seen by
 prefix-matching providers can drift and cache reuse drops.
 
+## Runtime Fix: Stabilize the System-Prompt Region
+
+Beyond the history-growth mitigation below, this branch fixes a concrete
+system-prompt cache regression (issue #120 "secondary" root cause).
+
+`appendSystemContext` is placed in the most cache-sensitive region of the request
+— the system prompt. It is supposed to be stable, but the memory **tools guide**
+(static content) used to be appended whenever *either* stable persona/scene
+content *or* this turn's dynamic L1 memories were present:
+
+```ts
+// before — stable guide coupled to per-turn dynamic recall
+if (stableParts.length > 0 || prependContext) stableParts.push(MEMORY_TOOLS_GUIDE);
+```
+
+For a user without a persona yet, the system region therefore **flipped between
+the guide and empty** depending on whether that turn's query happened to match an
+L1 memory — invalidating the system-prompt prefix cache every other turn.
+
+The fix (`src/core/hooks/recall-stable-context.ts`) composes the stable region
+deterministically and **decouples it from per-turn dynamic recall**: the tools
+guide follows stable persona/scene only.
+
+```ts
+// after — stable region depends only on stable inputs
+const appendSystemContext = composeStableSystemContext(
+  { personaContent, sceneNavigation },
+  { toolsGuide: MEMORY_TOOLS_GUIDE },
+);
+```
+
+Effect, from `npm run diagnose:recall-cache` over a persona-less session with
+intermittent memory matches (`true,false,true,false,true,false`):
+
+```text
+System-prompt region stability (before vs after the fix)
+BEFORE (guide coupled to dynamic recall):     system-region changes = 5
+AFTER  (persona-less user, decoupled):        system-region changes = 0
+AFTER  (established user with persona):        system-region changes = 0
+```
+
+Fewer system-region changes = a longer stable cacheable prefix = higher prompt
+cache hit rate for prefix-matching providers (DeepSeek, MiMo).
+
 ## Current Mitigation
 
 The OpenClaw hook keeps L1 recall in `prependContext` for the current turn, then
