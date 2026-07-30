@@ -160,6 +160,28 @@ export class TdaiCore {
         });
     }
 
+    // Reconcile drifted counters once the store is ready. `total_memories_extracted`
+    // and `l0_conversations_count` are append-only; nothing decrements them when
+    // memory-cleaner prunes JSONL / SQLite rows or when the operator edits the
+    // checkpoint by hand, so we recount from the sources of truth on each boot.
+    // Fire-and-forget: recalibration is best-effort and must not block startup
+    // or fail initialize() — the checkpoint remains usable in its pre-recount
+    // state if this errors.
+    void this.storeReady
+      .then(async () => {
+        try {
+          const cp = new CheckpointManager(this.dataDir, this.logger);
+          await cp.recalibrate(this.dataDir, this.vectorStore);
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Checkpoint recalibrate failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      })
+      .catch(() => {
+        // storeReady rejection is already logged above by the wirePipelineRunners branch.
+      });
+
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
 

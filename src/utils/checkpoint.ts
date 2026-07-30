@@ -29,6 +29,58 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 
 // ============================
+// Recount helpers (used by recalibrate)
+// ============================
+
+/**
+ * Optional store adapter used by `recalibrate()` to obtain authoritative counts.
+ * Structural so callers can pass an `IMemoryStore` directly without importing
+ * it here (avoids a cycle between `utils/checkpoint.ts` and `core/store/*`).
+ */
+export interface CheckpointStoreProbe {
+  countL0(): number | Promise<number>;
+  countL1(): number | Promise<number>;
+}
+
+/**
+ * Count valid JSONL records under `<dataDir>/records/*.jsonl`.
+ * Malformed lines are skipped silently — recalibration must never throw on a
+ * partially-corrupt shard. Returns 0 when `records/` is missing.
+ */
+async function countJsonlRecords(dataDir: string, logger?: CheckpointLogger): Promise<number> {
+  const recordsDir = path.join(dataDir, "records");
+  let files: string[];
+  try {
+    files = await fs.readdir(recordsDir);
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const file of files) {
+    if (!file.endsWith(".jsonl")) continue;
+    const filePath = path.join(recordsDir, file);
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          JSON.parse(trimmed);
+          total += 1;
+        } catch {
+          // Skip malformed line — do not abort the recount.
+        }
+      }
+    } catch (err) {
+      logger?.warn?.(
+        `[checkpoint] countJsonlRecords: failed to read ${file}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return total;
+}
+
+// ============================
 // Types
 // ============================
 
@@ -483,6 +535,125 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Recalibration (drift correction)
+  // ============================
+
+  /**
+   * Reconcile monotonic counters against actual on-disk / in-DB state.
+   *
+   * `total_memories_extracted` and `l0_conversations_count` are append-only —
+   * they grow on capture / L1 completion but nothing decrements them when the
+   * memory-cleaner prunes JSONL shards, when the operator hand-edits
+   * `recall_checkpoint.json`, or when SQLite rows expire via `deleteL0Expired`.
+   * The counters then permanently overstate reality, biasing the L2/L3
+   * persona-threshold logic and any status readout that surfaces them.
+   *
+   * Behavior:
+   * - Recounts L1 by walking `records/*.jsonl` (source-of-truth per l1-writer).
+   * - Recounts L0 via the optional `store` probe. Without a probe,
+   *   `l0_conversations_count` is left alone (no authoritative source outside
+   *   SQLite).
+   * - Clamps `memories_since_last_persona` to the new L1 total so persona
+   *   thresholds can't fire on phantom counts left over from pruning.
+   * - **Downward-only.** If the recount is *larger* than the stored value we
+   *   keep the stored value, so a partially-flushed shard on the disk side
+   *   can't reset counters and cause future double-counting when the pending
+   *   writes land.
+   *
+   * Safe to call repeatedly. Serialized via the per-file lock like every
+   * other mutating method.
+   *
+   * @param dataDir  Plugin data directory (same one the manager was
+   *   constructed with — passed explicitly so this method stays independent
+   *   of the private `filePath` layout; records live alongside `.metadata/`).
+   * @param store    Optional store probe supplying `countL0()` / `countL1()`.
+   *   When omitted, only JSONL is recounted.
+   */
+  async recalibrate(
+    dataDir: string,
+    store?: CheckpointStoreProbe,
+  ): Promise<{
+    total_memories_extracted: { before: number; after: number };
+    l0_conversations_count: { before: number; after: number };
+    memories_since_last_persona: { before: number; after: number };
+  }> {
+    // Recount OUTSIDE the file lock — reading JSONL shards can be slow on
+    // large installs and we don't want to block concurrent captures.
+    const jsonlL1 = await countJsonlRecords(dataDir, this.logger);
+    let dbL1: number | undefined;
+    let dbL0: number | undefined;
+    if (store) {
+      try {
+        dbL1 = await store.countL1();
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: countL1 failed (skipping L1 store probe): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      try {
+        dbL0 = await store.countL0();
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: countL0 failed (skipping L0 recount): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    // JSONL is the persistent source-of-truth for L1 per l1-writer.ts. If
+    // the store also reports a count, take the MAX — a shard pruned on one
+    // side but not yet on the other shouldn't clobber the healthier side.
+    const recountedL1 = dbL1 !== undefined ? Math.max(jsonlL1, dbL1) : jsonlL1;
+
+    let result!: {
+      total_memories_extracted: { before: number; after: number };
+      l0_conversations_count: { before: number; after: number };
+      memories_since_last_persona: { before: number; after: number };
+    };
+
+    await this.mutate((cp) => {
+      const beforeL1 = cp.total_memories_extracted;
+      const beforeL0 = cp.l0_conversations_count;
+      const beforeSince = cp.memories_since_last_persona;
+
+      if (recountedL1 < beforeL1) {
+        cp.total_memories_extracted = recountedL1;
+      }
+      if (dbL0 !== undefined && dbL0 < beforeL0) {
+        cp.l0_conversations_count = dbL0;
+      }
+      if (cp.memories_since_last_persona > cp.total_memories_extracted) {
+        cp.memories_since_last_persona = cp.total_memories_extracted;
+      }
+
+      result = {
+        total_memories_extracted: { before: beforeL1, after: cp.total_memories_extracted },
+        l0_conversations_count: { before: beforeL0, after: cp.l0_conversations_count },
+        memories_since_last_persona: { before: beforeSince, after: cp.memories_since_last_persona },
+      };
+    });
+
+    const drifted =
+      result.total_memories_extracted.before !== result.total_memories_extracted.after ||
+      result.l0_conversations_count.before !== result.l0_conversations_count.after ||
+      result.memories_since_last_persona.before !== result.memories_since_last_persona.after;
+    if (drifted) {
+      this.logger.info(
+        `[checkpoint] recalibrate: drift corrected — ` +
+        `total_memories_extracted ${result.total_memories_extracted.before}→${result.total_memories_extracted.after}, ` +
+        `l0_conversations_count ${result.l0_conversations_count.before}→${result.l0_conversations_count.after}, ` +
+        `memories_since_last_persona ${result.memories_since_last_persona.before}→${result.memories_since_last_persona.after} ` +
+        `(jsonl=${jsonlL1}, dbL1=${dbL1 ?? "n/a"}, dbL0=${dbL0 ?? "n/a"})`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate: no drift ` +
+        `(total_memories_extracted=${result.total_memories_extracted.after}, l0_conversations_count=${result.l0_conversations_count.after})`,
+      );
+    }
+    return result;
   }
 
 }
