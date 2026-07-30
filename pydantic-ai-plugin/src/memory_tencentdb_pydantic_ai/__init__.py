@@ -1,3 +1,4 @@
+from .agent import TencentDBMemoryAgent
 from .client import GatewayClient
 from .errors import (
     GatewayConnectionError,
@@ -15,5 +16,6 @@ __all__ = [
     "GatewayHTTPError",
     "GatewayResponseError",
     "MemoryIdentity",
+    "TencentDBMemoryAgent",
     "serialize_output",
 ]
