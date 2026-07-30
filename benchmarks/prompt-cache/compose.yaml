@@ -1,0 +1,55 @@
+name: memory-tencentdb-issue-120
+
+services:
+  offline:
+    image: node:24.15.0-bookworm-slim
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+      - ../../benchmark-runs:/repo/benchmark-runs
+    environment:
+      PROMPT_CACHE_BENCH_TURNS: ${PROMPT_CACHE_BENCH_TURNS:-6}
+      PROMPT_CACHE_BENCH_RESULT_DIR: /repo/benchmark-runs/issue-120
+    command:
+      - node
+      - benchmarks/prompt-cache/scripts/layout-benchmark.mjs
+
+  provider:
+    image: node:24.15.0-bookworm-slim
+    working_dir: /repo
+    volumes:
+      - ../..:/repo:ro
+      - ../../benchmark-runs:/repo/benchmark-runs
+    environment:
+      PROMPT_CACHE_BENCH_BASE_URL: ${PROMPT_CACHE_BENCH_BASE_URL:-}
+      PROMPT_CACHE_BENCH_API_KEY: ${PROMPT_CACHE_BENCH_API_KEY:-}
+      PROMPT_CACHE_BENCH_MODEL: ${PROMPT_CACHE_BENCH_MODEL:-}
+      PROMPT_CACHE_BENCH_TURNS: ${PROMPT_CACHE_BENCH_TURNS:-6}
+      PROMPT_CACHE_BENCH_DELAY_MS: ${PROMPT_CACHE_BENCH_DELAY_MS:-3000}
+      PROMPT_CACHE_BENCH_ORDER: ${PROMPT_CACHE_BENCH_ORDER:-legacy,optimized}
+      PROMPT_CACHE_BENCH_RESULT_DIR: /repo/benchmark-runs/issue-120
+    command:
+      - node
+      - benchmarks/prompt-cache/scripts/provider-benchmark.mjs
+
+  openclaw-legacy:
+    profiles: ["openclaw"]
+    build:
+      context: ../..
+      dockerfile: benchmarks/prompt-cache/docker/Dockerfile.openclaw
+      args:
+        OPENCLAW_VERSION: "2026.5.28"
+    environment:
+      OPENCLAW_HOME: /state/home
+      OPENCLAW_STATE_DIR: /state/runtime
+      OPENCLAW_CONFIG_PATH: /state/runtime/openclaw.json
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    volumes:
+      - openclaw-legacy-state:/state
+      - ../../benchmark-runs:/results
+    command:
+      - bash
+      - benchmarks/prompt-cache/scripts/openclaw-smoke.sh
+
+volumes:
+  openclaw-legacy-state:

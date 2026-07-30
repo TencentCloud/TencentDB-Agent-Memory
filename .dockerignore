@@ -1,0 +1,10 @@
+.git
+.github
+.env
+.env.*
+benchmark-runs
+dist
+node_modules
+workspace
+*.log
+*.tgz

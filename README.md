@@ -438,12 +438,31 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
+| `recall.historyMode` | `"persist-dedup"` | `"persist-dedup"` persists a versioned Recall ledger in session history and deduplicates by memory ID/revision; `"strip"` keeps the legacy cleanup behavior |
+| `recall.maxSessionRecallChars` | `32000` | Hard cap for persisted Recall ledger characters in one session; new automatic Recall stops at the cap and resumes if compaction removes old ledgers |
 | `pipeline.everyNConversations` | `5` | Trigger an L1 memory extraction every N turns |
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |
 | `offload.enabled` | `false` | Whether to enable short-term compression |
 
 </details>
+
+### Recall history and prompt caching
+
+By default, automatically recalled L1 memories are appended to the current user
+message in a versioned `<relevant-memories data-ledger-version="1">` block. The
+same block is persisted in OpenClaw session history so the next provider request
+can replay an append-only transcript. A memory is injected once per content
+revision; identical content from another record ID is also deduplicated. When a
+record changes, the new revision is appended and marks the revision it
+supersedes.
+
+The ledger is intentionally visible in raw OpenClaw session history. L0 capture
+continues to use the cached original user prompt, so recalled text is not fed
+back into memory extraction. Set `recall.historyMode` to `"strip"` to retain the
+pre-0.3.7 behavior that removes injected Recall content before session write.
+The `recall.maxSessionRecallChars` limit never rewrites existing history; after
+the limit is reached, agent-callable memory search tools remain available.
 
 <details>
 <summary><b>🟡 Level 2 · Advanced tuning</b> (long task / long session)</summary>
