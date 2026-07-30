@@ -384,6 +384,15 @@ memory:
 ```
 
 
+### 4. PydanticAI
+
+Python applications can use the independent
+[`pydantic-ai-plugin`](./pydantic-ai-plugin/README.md) adapter. It connects
+PydanticAI agents to the existing Gateway, recalls context before async or sync
+runs, captures successful turns, exposes memory and conversation search tools,
+and supports explicit session finalization. Offline and DeepSeek examples are
+included.
+
 ## 🔒 Gateway Security (optional)
 
 The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**
