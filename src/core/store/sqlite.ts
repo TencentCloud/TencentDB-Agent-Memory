@@ -380,6 +380,10 @@ export class VectorStore implements IMemoryStore {
   private stmtL0QueryAll!: StatementSync;
   /** L0 query for L1 runner: messages after a timestamp cursor */
   private stmtL0QueryAfter!: StatementSync;
+  /** L0 max timestamp by session */
+  private stmtL0MaxTsBySession!: StatementSync;
+  /** L1 stats by session (max updated_time + scene_name) */
+  private stmtL1StatsBySession!: StatementSync;
   /** L1 cursor-based pagination for migration (by PK) */
   private stmtL1QueryMigrationCursor!: StatementSync;
   /** L0 cursor-based pagination for migration (by PK) */
@@ -893,6 +897,17 @@ export class VectorStore implements IMemoryStore {
       WHERE record_id > ?
       ORDER BY record_id ASC
       LIMIT ?
+    `);
+
+    // Recovery helper prepared statements
+    this.stmtL0MaxTsBySession = this.db.prepare(
+      "SELECT MAX(timestamp) AS max_ts FROM l0_conversations WHERE session_key = ?",
+    );
+    this.stmtL1StatsBySession = this.db.prepare(`
+      SELECT updated_time, scene_name FROM l1_records
+      WHERE session_key = ?
+      ORDER BY updated_time DESC
+      LIMIT 1
     `);
 
     this.logger?.debug?.(`${TAG} Initialized (dimensions=${this.dimensions})`);
@@ -2296,6 +2311,37 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  // ── Recovery helpers ───────────────────────────────────────
+
+  /** Get max timestamp for L0 records by session. */
+  getL0MaxTimestampBySession(sessionKey: string): number {
+    if (this.degraded) return 0;
+    try {
+      const row = this.stmtL0MaxTsBySession.get(sessionKey) as { max_ts: number | null } | undefined;
+      return row?.max_ts ?? 0;
+    } catch (err) {
+      this.logger?.warn(`${TAG} getL0MaxTimestampBySession FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  /** Get max timestamp and last scene name for L1 records by session. */
+  getL1StatsBySession(sessionKey: string): { maxTimestamp: number; lastSceneName?: string } {
+    if (this.degraded) return { maxTimestamp: 0 };
+    try {
+      const row = this.stmtL1StatsBySession.get(sessionKey) as { updated_time: string; scene_name: string } | undefined;
+      if (!row?.updated_time) return { maxTimestamp: 0 };
+      const ts = Date.parse(row.updated_time);
+      return {
+        maxTimestamp: Number.isFinite(ts) ? ts : 0,
+        lastSceneName: row.scene_name || undefined,
+      };
+    } catch (err) {
+      this.logger?.warn(`${TAG} getL1StatsBySession FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return { maxTimestamp: 0 };
     }
   }
 

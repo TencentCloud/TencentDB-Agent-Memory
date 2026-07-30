@@ -1157,6 +1157,50 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
+  // ── Recovery helpers (stubs — TCVDB may not expose MAX queries) ──
+
+  async getL0MaxTimestampBySession(sessionKey: string): Promise<number> {
+    try {
+      await this._ensureInit();
+      if (this.degraded) return 0;
+
+      const docs = await this._queryAllDocs(
+        this.l0Collection,
+        `session_key = "${sessionKey}"`,
+        ["timestamp"],
+        1,
+        [{ fieldName: "timestamp", direction: "desc" }],
+      );
+      return docs.length > 0 ? Number(docs[0].timestamp ?? 0) : 0;
+    } catch (err) {
+      this.logger?.warn(`${TAG} [L0-maxTimestamp] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+
+  async getL1StatsBySession(sessionKey: string): Promise<{ maxTimestamp: number; lastSceneName?: string }> {
+    try {
+      await this._ensureInit();
+      if (this.degraded) return { maxTimestamp: 0 };
+
+      const docs = await this._queryAllDocs(
+        this.l1Collection,
+        `session_key = "${sessionKey}"`,
+        ["updated_time_ms", "scene_name"],
+        1,
+        [{ fieldName: "updated_time_ms", direction: "desc" }],
+      );
+      if (docs.length === 0) return { maxTimestamp: 0 };
+      return {
+        maxTimestamp: Number(docs[0].updated_time_ms ?? 0),
+        lastSceneName: docs[0].scene_name ? String(docs[0].scene_name) : undefined,
+      };
+    } catch (err) {
+      this.logger?.warn(`${TAG} [L1-statsBySession] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return { maxTimestamp: 0 };
+    }
+  }
+
   // ── Re-index ─────────────────────────────────────────────
 
   async reindexAll(

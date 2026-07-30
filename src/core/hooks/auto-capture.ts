@@ -262,6 +262,8 @@ export async function performAutoCapture(params: {
             try {
               const ok = await bgVectorStore.updateL0Embedding!(bgSnapshot[i].recordId, embeddings[i]);
               if (ok) bgUpdated++;
+              // Clear sqlite dirty tier 
+              await checkpoint.clearDirtyTier("l0", sessionKey, "sqlite");
             } catch (err) {
               bgLogger?.warn?.(
                 `${TAG} [L0-vec-index-bg] Failed to update embedding for ${bgSnapshot[i].recordId}: ` +

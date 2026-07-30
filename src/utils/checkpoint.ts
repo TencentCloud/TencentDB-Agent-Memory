@@ -32,6 +32,9 @@ import { randomBytes } from "node:crypto";
 // Types
 // ============================
 
+/** Storage tier identifiers for dirty tracking. */
+export type DirtyTier = "jsonl" | "sqlite" | "checkpoint";
+
 /**
  * Per-session state managed by L0/L1 runners (written directly to checkpoint).
  * These fields are ONLY written by CheckpointManager methods (markL1*, advanceSession*, etc.)
@@ -106,6 +109,18 @@ export interface Checkpoint {
   // ═══ L1 ═══
   /** Total L1 memories extracted across all time */
   total_memories_extracted: number;
+
+  // ═══ Dirty Tracker (per-session × per-layer × per-tier) ═══
+  /** Per-session L0 dirty markers. Key=sessionKey, value=array of dirty tier names. */
+  dirty_l0: Record<string, DirtyTier[]>;
+  /** Per-session L1 dirty markers. Same structure as dirty_l0. */
+  dirty_l1: Record<string, DirtyTier[]>;
+
+  // ═══ Clean Shutdown Flag ═══
+  /** Whether the last shutdown completed all pending writes successfully. */
+  last_shutdown_clean: boolean;
+  /** Epoch ms of the last shutdown. */
+  last_shutdown_ts: number;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -137,6 +152,10 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
   pipeline_states: {},
   l0_conversations_count: 0,
   total_memories_extracted: 0,
+  dirty_l0: {},
+  dirty_l1: {},
+  last_shutdown_clean: false,
+  last_shutdown_ts: 0,
 };
 
 export interface CheckpointLogger {
@@ -368,6 +387,108 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Dirty Tracker methods
+  // ============================
+
+  /** Mark specific tiers as dirty for a session+layer. Idempotent (deduplicates). */
+  async setDirtyTiers(layer: "l0" | "l1", sessionKey: string, tiers: DirtyTier[]): Promise<void> {
+    await this.mutate((cp) => {
+      const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+      if (!cp[key]) cp[key] = {};
+      const existing = cp[key][sessionKey] ?? [];
+      for (const tier of tiers) {
+        if (!existing.includes(tier)) existing.push(tier);
+      }
+      cp[key][sessionKey] = existing;
+    });
+  }
+
+  /** Clear a single tier for a session+layer. Removes empty session entries. */
+  async clearDirtyTier(layer: "l0" | "l1", sessionKey: string, tier: DirtyTier): Promise<void> {
+    await this.mutate((cp) => {
+      const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+      if (cp[key]?.[sessionKey]) {
+        cp[key][sessionKey] = cp[key][sessionKey].filter(t => t !== tier);
+        if (cp[key][sessionKey].length === 0) {
+          delete cp[key][sessionKey];
+        }
+      }
+    });
+  }
+
+  /** Clear ALL dirty tiers for a session in one mutate (recovery cleanup). */
+  async clearAllDirtyTiers(layer: "l0" | "l1", sessionKey: string): Promise<void> {
+    await this.mutate((cp) => {
+      const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+      if (cp[key]) {
+        delete cp[key][sessionKey];
+      }
+    });
+  }
+
+  /** Get dirty tiers for a session. Returns empty array if clean. */
+  getDirtyTiers(cp: Checkpoint, layer: "l0" | "l1", sessionKey: string): DirtyTier[] {
+    const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+    return cp[key]?.[sessionKey] ?? [];
+  }
+
+  /** Get all sessions that have any dirty tiers for a layer. */
+  getDirtySessions(cp: Checkpoint, layer: "l0" | "l1"): string[] {
+    const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+    return Object.keys(cp[key] ?? {});
+  }
+
+  // ============================
+  // Clean Shutdown Flag methods
+  // ============================
+
+  /** Mark shutdown as clean. Called at the end of destroy(). */
+  async markShutdownClean(): Promise<void> {
+    await this.mutate((cp) => {
+      cp.last_shutdown_clean = true;
+      cp.last_shutdown_ts = Date.now();
+    });
+  }
+
+  /** Mark shutdown as dirty. Called at initialize() after reading last_shutdown_clean=true. */
+  async markShutdownDirty(): Promise<void> {
+    await this.mutate((cp) => {
+      cp.last_shutdown_clean = false;
+    });
+  }
+
+  // ============================
+  // Cursor recalibration (recovery)
+  // ============================
+
+  /**
+   * Recalibrate cursor for a session+layer using actual data, and clear dirty markers
+   * in the same mutate (atomic). Uses Math.max to only advance, never retreat.
+   */
+  async recalibrateCursor(
+    sessionKey: string,
+    layer: "l0" | "l1",
+    actualMaxTimestamp: number,
+    actualLastSceneName?: string,
+  ): Promise<void> {
+    await this.mutate((cp) => {
+      const state = this.getRunnerState(cp, sessionKey);
+      if (layer === "l0") {
+        state.last_captured_timestamp = Math.max(state.last_captured_timestamp, actualMaxTimestamp);
+      } else {
+        if (actualMaxTimestamp > 0) {
+          state.last_l1_cursor = Math.max(state.last_l1_cursor, actualMaxTimestamp);
+        }
+        if (actualLastSceneName !== undefined) {
+          state.last_scene_name = actualLastSceneName;
+        }
+      }
+      const key = layer === "l0" ? "dirty_l0" : "dirty_l1";
+      if (cp[key]) delete cp[key][sessionKey];
+    });
+  }
+
+  // ============================
   // Per-session helpers — runner state (L0/L1 owned)
   // ============================
 
@@ -458,6 +579,13 @@ export class CheckpointManager {
       }
       cp.total_memories_extracted += memoriesExtracted;
       cp.memories_since_last_persona += memoriesExtracted;
+      // checkpoint are written - clear dirty flag
+      if (cp.dirty_l1?.[sessionKey]){
+        cp.dirty_l1[sessionKey]= cp.dirty_l1[sessionKey].filter(t => t !=="checkpoint");
+        if (cp.dirty_l1[sessionKey].length === 0) {
+          delete cp.dirty_l1[sessionKey];
+        }
+      }
     });
     this.logger.info(
       `[checkpoint] markL1ExtractionComplete session=${sessionKey}: ` +
@@ -499,6 +627,10 @@ export class CheckpointManager {
     await this.mutate(async (cp) => {
       // Read the per-session cursor inside the lock
       const state = this.getRunnerState(cp, sessionKey);
+      
+      // Mark all three tiers dirty before starting L0 capture.
+      if (!cp.dirty_l0) cp.dirty_l0 = {};
+      cp.dirty_l0[sessionKey] =["jsonl", "sqlite", "checkpoint"] as DirtyTier[];
       let afterTimestamp = state.last_captured_timestamp || 0;
 
       // Cold-start guard (same logic that was previously in auto-capture.ts)
@@ -507,6 +639,13 @@ export class CheckpointManager {
       }
 
       const result = await fn(afterTimestamp);
+      // JSONL are done — clear those tiers
+      if (cp.dirty_l0?.[sessionKey]){
+        cp.dirty_l0[sessionKey]= cp.dirty_l0[sessionKey].filter(t => t !=="jsonl");
+        if (cp.dirty_l0[sessionKey].length === 0) {
+          delete cp.dirty_l0[sessionKey];
+        }
+      }
 
       if (result) {
         // Advance per-session cursor (runner-owned)
@@ -516,6 +655,13 @@ export class CheckpointManager {
         cp.total_processed += result.messageCount;
         // Increment L0 conversation count (was a separate mutate() call before)
         cp.l0_conversations_count += 1;
+        // checkpoint are done — clear those tiers
+      if (cp.dirty_l0?.[sessionKey]){
+        cp.dirty_l0[sessionKey]= cp.dirty_l0[sessionKey].filter(t => t !=="checkpoint");
+        if (cp.dirty_l0[sessionKey].length === 0) {
+          delete cp.dirty_l0[sessionKey];
+        }
+      }
       }
     });
   }
