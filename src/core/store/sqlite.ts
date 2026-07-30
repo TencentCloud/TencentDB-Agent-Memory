@@ -175,6 +175,42 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * FTS5 reserved keywords that alter query semantics. Per the SQLite FTS5
+ * grammar (https://sqlite.org/fts5.html §3 "Full-text Query Syntax"), the
+ * bareword operators AND / OR / NOT and the NEAR() group operator are
+ * **case-sensitive** and only trigger when written entirely in UPPERCASE.
+ * Lowercase `and` / `or` / `not` / `near` are legitimate English words
+ * and must be preserved for recall (Chinese-mixed searches routinely
+ * include them).
+ *
+ * Even though tokens produced by this module are each wrapped in double
+ * quotes — which turns them into FTS5 phrase terms and mitigates most
+ * injection — stripping the uppercase keywords from the raw input is
+ * defense-in-depth: we own the join operator (`OR`) explicitly and never
+ * let user text supply one. NEAR is also stripped because a bare `NEAR`
+ * followed by `(` would open a NEAR group.
+ */
+const FTS5_RESERVED = /\b(?:AND|OR|NOT|NEAR)\b/g;
+
+/**
+ * Set form for post-tokenization filtering — case-sensitive match, mirrors
+ * FTS5's own bareword-vs-keyword rule. Guards against a tokenizer that
+ * segments differently in the future and re-emits a bare "AND".
+ */
+const FTS5_RESERVED_SET = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+/**
+ * Strip FTS5 reserved operators (uppercase only) from raw user input before
+ * tokenization.
+ *
+ * Exported for tests only — production callers should use {@link buildFtsQuery}.
+ * @internal
+ */
+export function sanitizeFtsInput(raw: string): string {
+  return raw.replace(FTS5_RESERVED, " ");
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -196,6 +232,10 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  // Defense-in-depth: strip FTS5 reserved keywords (AND / OR / NOT / NEAR)
+  // from raw input BEFORE tokenization so user text cannot alter the
+  // connective of the query we build. See FTS5_RESERVED above.
+  const sanitized = sanitizeFtsInput(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +243,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -211,6 +251,9 @@ export function buildFtsQuery(raw: string): string | null {
         if (!/[\p{L}\p{N}]/u.test(t)) return false;
         // Remove common Chinese stop-words to reduce noise
         if (ZH_STOP_WORDS.has(t)) return false;
+        // Second-layer guard: any residual reserved keyword token.
+        // Case-sensitive: only fully-uppercase forms are FTS5 operators.
+        if (FTS5_RESERVED_SET.has(t)) return false;
         return true;
       });
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
@@ -218,10 +261,10 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        .filter((t) => t && !FTS5_RESERVED_SET.has(t)) ?? [];
   }
 
   if (tokens.length === 0) return null;
