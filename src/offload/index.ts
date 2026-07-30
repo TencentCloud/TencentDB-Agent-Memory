@@ -75,6 +75,8 @@ import { resolveUserId, getUserIdSource } from "./user-id.js";
 let _l2Running = false;
 let _l2PollHandle: ReturnType<typeof setTimeout> | null = null;
 let _l2FirstNotifyAt: number | null = null;
+let _l2ConsecutiveIdleTicks = 0;
+const L2_MAX_IDLE_TICKS_BEFORE_HIBERNATE = 3;
 
 // L1.5 retry loop dispose flag
 let _l15Disposed = false;
@@ -899,10 +901,12 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   const clearL2Poll = () => {
     if (_l2PollHandle !== null) { clearTimeout(_l2PollHandle); _l2PollHandle = null; }
     _l2FirstNotifyAt = null;
+    _l2ConsecutiveIdleTicks = 0;
   };
 
   const armL2Poll = () => {
     if (_l2PollHandle !== null) return;
+    _l2ConsecutiveIdleTicks = 0;
     if (_l2FirstNotifyAt === null) _l2FirstNotifyAt = Date.now();
     const tick = async () => {
       _l2PollHandle = null;
@@ -925,7 +929,23 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
       try {
         const allEntries = await readAllOffloadEntries(mgr.ctx);
         const nullCount = allEntries.filter((e) => e.node_id === null).length;
-        if (nullCount === 0) { _l2FirstNotifyAt = null; return; }
+        if (nullCount === 0) {
+          _l2ConsecutiveIdleTicks++;
+          if (_l2ConsecutiveIdleTicks >= L2_MAX_IDLE_TICKS_BEFORE_HIBERNATE) {
+            logger.debug?.(
+              `[context-offload] L2 poll IDLE hibernation: ${_l2ConsecutiveIdleTicks} ticks with nullCount=0. ` +
+              `Stopping scheduler; next notifyL2NewNullEntries() will re-arm.`,
+            );
+            clearL2Poll();
+            return;
+          }
+          _l2FirstNotifyAt = null;
+          scheduleNextTick();
+          return;
+        }
+        // Real null entries seen — reset idle counter so threshold/age paths
+        // always get a clean window to fire.
+        _l2ConsecutiveIdleTicks = 0;
         if (_l2Running) { scheduleNextTick(); return; }
         const age = Date.now() - (_l2FirstNotifyAt ?? Date.now());
         if (nullCount >= l2Threshold) {
