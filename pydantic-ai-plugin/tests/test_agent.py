@@ -23,15 +23,18 @@ class RecordingMemoryClient:
         context: str = "",
         fail_recall: bool = False,
         fail_capture: bool = False,
+        fail_session: bool = False,
         flushed: bool = True,
     ) -> None:
         self.context = context
         self.fail_recall = fail_recall
         self.fail_capture = fail_capture
+        self.fail_session = fail_session
         self.flushed = flushed
         self.events: list[str] = []
         self.recalls: list[dict[str, Any]] = []
         self.captures: list[dict[str, Any]] = []
+        self.sessions: list[dict[str, str]] = []
 
     async def arecall(
         self,
@@ -89,6 +92,72 @@ class RecordingMemoryClient:
         session_key: str | None,
     ) -> dict[str, Any]:
         return {"results": "", "total": 0}
+
+    async def aend_session(
+        self,
+        session_key: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        self.events.append("session_end")
+        self.sessions.append(
+            {"session_key": session_key, "user_id": user_id}
+        )
+        if self.fail_session:
+            raise GatewayConnectionError("session end", "offline")
+        return {"flushed": self.flushed}
+
+    def recall(
+        self,
+        query: str,
+        session_key: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        self.events.append("recall")
+        self.recalls.append(
+            {
+                "query": query,
+                "session_key": session_key,
+                "user_id": user_id,
+            }
+        )
+        if self.fail_recall:
+            raise GatewayConnectionError("recall", "offline")
+        return {"context": self.context, "memory_count": int(bool(self.context))}
+
+    def capture(
+        self,
+        user_content: str,
+        assistant_content: str,
+        session_key: str,
+        session_id: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        self.events.append("capture")
+        self.captures.append(
+            {
+                "user_content": user_content,
+                "assistant_content": assistant_content,
+                "session_key": session_key,
+                "session_id": session_id,
+                "user_id": user_id,
+            }
+        )
+        if self.fail_capture:
+            raise GatewayConnectionError("capture", "offline")
+        return {"l0_recorded": 1, "scheduler_notified": True}
+
+    def end_session(
+        self,
+        session_key: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        self.events.append("session_end")
+        self.sessions.append(
+            {"session_key": session_key, "user_id": user_id}
+        )
+        if self.fail_session:
+            raise GatewayConnectionError("session end", "offline")
+        return {"flushed": self.flushed}
 
 
 class StructuredAnswer(BaseModel):
@@ -308,6 +377,132 @@ class TencentDBMemoryAgentAsyncTests(unittest.IsolatedAsyncioTestCase):
             await wrapped.run("hello", user_id="u", session_id="s")
 
         self.assertEqual(client.events, ["recall", "capture"])
+
+    async def test_end_session_uses_explicit_session_key(self) -> None:
+        client = RecordingMemoryClient(flushed=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="unused")),
+            client,
+        )
+
+        flushed = await wrapped.end_session(
+            user_id="u",
+            session_id="s",
+            session_key="shared-existing-key",
+        )
+
+        self.assertTrue(flushed)
+        self.assertEqual(
+            client.sessions,
+            [{"session_key": "shared-existing-key", "user_id": "u"}],
+        )
+
+    async def test_end_session_fail_open_returns_false(self) -> None:
+        client = RecordingMemoryClient(fail_session=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="unused")),
+            client,
+        )
+
+        with self.assertLogs(
+            "memory_tencentdb_pydantic_ai.agent",
+            level="WARNING",
+        ):
+            flushed = await wrapped.end_session(
+                user_id="u",
+                session_id="s",
+            )
+
+        self.assertFalse(flushed)
+
+    async def test_end_session_strict_propagates_gateway_error(self) -> None:
+        client = RecordingMemoryClient(fail_session=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="unused")),
+            client,
+            strict=True,
+        )
+
+        with self.assertRaises(GatewayConnectionError):
+            await wrapped.end_session(user_id="u", session_id="s")
+
+
+class TencentDBMemoryAgentSyncTests(unittest.TestCase):
+    def test_run_sync_matches_async_lifecycle(self) -> None:
+        client = RecordingMemoryClient(context="Known preference")
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="answer")),
+            client,
+        )
+
+        result = wrapped.run_sync(
+            "question",
+            user_id="u",
+            session_id="s",
+        )
+
+        self.assertEqual(result.output, "answer")
+        self.assertEqual(client.events, ["recall", "capture"])
+        self.assertIn(
+            "Known preference",
+            result.all_messages()[0].instructions,
+        )
+
+    def test_run_sync_fail_open_capture_preserves_result(self) -> None:
+        client = RecordingMemoryClient(fail_capture=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="answer")),
+            client,
+        )
+
+        with self.assertLogs(
+            "memory_tencentdb_pydantic_ai.agent",
+            level="WARNING",
+        ):
+            result = wrapped.run_sync(
+                "question",
+                user_id="u",
+                session_id="s",
+            )
+
+        self.assertEqual(result.output, "answer")
+        self.assertEqual(client.events, ["recall", "capture"])
+
+    def test_end_session_sync_returns_flushed(self) -> None:
+        client = RecordingMemoryClient(flushed=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="unused")),
+            client,
+        )
+
+        flushed = wrapped.end_session_sync(
+            user_id="u",
+            session_id="s",
+        )
+
+        self.assertTrue(flushed)
+        self.assertEqual(
+            client.sessions[0]["session_key"],
+            "pydantic-ai:u:s",
+        )
+
+    def test_end_session_sync_fail_open_returns_false(self) -> None:
+        client = RecordingMemoryClient(fail_session=True)
+        wrapped = TencentDBMemoryAgent(
+            Agent(TestModel(custom_output_text="unused")),
+            client,
+        )
+
+        with self.assertLogs(
+            "memory_tencentdb_pydantic_ai.agent",
+            level="WARNING",
+        ):
+            flushed = wrapped.end_session_sync(
+                user_id="u",
+                session_id="s",
+            )
+
+        self.assertFalse(flushed)
 
 
 if __name__ == "__main__":
