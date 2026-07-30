@@ -47,13 +47,21 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "pydantic-ai-plugin/",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
     "!src/**/*.test.ts",
     "!src/**/*.spec.ts",
-    "!src/**/__tests__/"
+    "!src/**/__tests__/",
+    "!pydantic-ai-plugin/.venv/",
+    "!pydantic-ai-plugin/build/",
+    "!pydantic-ai-plugin/dist/",
+    "!pydantic-ai-plugin/tests/",
+    "!pydantic-ai-plugin/**/*.egg-info/",
+    "!pydantic-ai-plugin/**/__pycache__/",
+    "!pydantic-ai-plugin/**/*.pyc"
   ],
   "keywords": [
     "openclaw",
