@@ -8,7 +8,8 @@
  *   POST /search/memories     — L1 memory search
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
- *   POST /seed               — Batch seed historical conversations (L0 → L1)
+ *   POST /seed                — Batch seed historical conversations (L0 → L1)
+ *   POST /before_prompt_build — L1.5 + L3 cleanup + MMD injection (Hermes `pre_llm_call` hook)
  *
  * Built with Node.js native `http` module — no Express/Fastify dependency.
  * Designed to run as a managed sidecar alongside Hermes.
@@ -38,6 +39,8 @@ import type {
   SeedRequest,
   SeedResponse,
   GatewayErrorResponse,
+  BeforePromptBuildRequest,
+  BeforePromptBuildResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
@@ -272,6 +275,8 @@ export class TdaiGateway {
           return await this.handleSessionEnd(req, res);
         case "POST /seed":
           return await this.handleSeed(req, res);
+        case "POST /before_prompt_build":
+          return await this.handleBeforePromptBuild(req, res);
         default:
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
@@ -475,6 +480,44 @@ export class TdaiGateway {
     await this.core.handleSessionEnd(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
+    sendJson(res, 200, response);
+  }
+
+  private async handleBeforePromptBuild(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<BeforePromptBuildRequest>(req);
+
+    if (!body.session_key) {
+      sendError(res, 400, "Missing required field: session_key");
+      return;
+    }
+    if (!body.messages || !Array.isArray(body.messages)) {
+      sendError(res, 400, "Missing or invalid required field: messages (must be an array)");
+      return;
+    }
+
+    const startMs = Date.now();
+    const result = await this.core.handleBeforePromptBuild(body.messages, body.session_key);
+    const elapsed = Date.now() - startMs;
+
+    this.logger.info(
+      `BeforePromptBuild completed in ${elapsed}ms: ` +
+      `in=${result.stats.messagesInput} out=${result.stats.messagesOutput} ` +
+      `deleted=${result.stats.offloadMessagesDeleted} mmd=${result.stats.mmdBlocksInjected}`,
+    );
+
+    const response: BeforePromptBuildResponse = {
+      messages: result.messages,
+      stats: {
+        messages_input: result.stats.messagesInput,
+        messages_output: result.stats.messagesOutput,
+        mmd_blocks_injected: result.stats.mmdBlocksInjected,
+        offload_messages_deleted: result.stats.offloadMessagesDeleted,
+        compression_rounds: result.stats.compressionRounds,
+        duration_ms: elapsed,
+        ...(result.stats.skipped !== undefined ? { skipped: result.stats.skipped } : {}),
+        ...(result.stats.skipReason !== undefined ? { skip_reason: result.stats.skipReason } : {}),
+      },
+    };
     sendJson(res, 200, response);
   }
 

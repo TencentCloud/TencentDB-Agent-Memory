@@ -225,6 +225,24 @@ export interface CaptureResult {
   }>;
 }
 
+/** Result from before_prompt_build / pre_llm_call (L1.5 extraction + L3 cleanup + MMD injection). */
+export interface BeforePromptBuildResult {
+  /** The (possibly modified) message list to forward to the LLM. */
+  messages: unknown[];
+  /** Opaque diagnostic counters — reported to logs/metrics but not part of the contract. */
+  stats: {
+    messagesInput: number;
+    messagesOutput: number;
+    mmdBlocksInjected: number;
+    offloadMessagesDeleted: number;
+    compressionRounds: number;
+    durationMs?: number;
+    skipped?: boolean;
+    skipReason?: "no_messages" | "session_filtered" | "gateway_disabled";
+    [key: string]: unknown;
+  };
+}
+
 /** Search parameters for L1 memory search. */
 export interface MemorySearchParams {
   query: string;

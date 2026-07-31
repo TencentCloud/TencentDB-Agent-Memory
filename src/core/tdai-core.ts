@@ -28,6 +28,7 @@ import type {
   CompletedTurn,
   MemorySearchParams,
   ConversationSearchParams,
+  BeforePromptBuildResult,
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
@@ -361,6 +362,83 @@ export class TdaiCore {
     await this.storeReady?.catch(() => {});
     if (!this.scheduler) return;
     await this.scheduler.flushSession(sessionKey);
+  }
+
+  /**
+   * Handle before_prompt_build / pre_llm_call — last hook before the LLM is invoked.
+   *
+   * In OpenClaw this runs the full 3-stage pipeline:
+   *   1. Fast-path re-apply of offloaded messages (L3 cleanup)
+   *   2. Token-guard → aggressive + mild L3 compression
+   *   3. MMD (Mermaid L2 canvas) injection
+   *
+   * In the standalone Gateway this currently returns the messages unchanged
+   * with a diagnostic stats block.  The method exists so that Hermes
+   * `pre_llm_call` (v0.18.0+) has a stable HTTP endpoint to hit; the full
+   * compression + MMD pipeline will be wired in via a follow-up PR that
+   * shares the offload hook state between the in-process plugin and the
+   * Gateway server.
+   *
+   * Maps to: OpenClaw `before_prompt_build` / Hermes `pre_llm_call`.
+   *
+   * @param messages    Input message list (the conversation that will be sent
+   *                    to the LLM).  Treated as opaque here — no mutations
+   *                    are performed on the caller's array.
+   * @param sessionKey  Session key for scoping (matches capture/recall).
+   */
+  async handleBeforePromptBuild(
+    messages: unknown[],
+    sessionKey: string,
+  ): Promise<BeforePromptBuildResult> {
+    const started = Date.now();
+
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return {
+        messages: [],
+        stats: {
+          messagesInput: 0,
+          messagesOutput: 0,
+          mmdBlocksInjected: 0,
+          offloadMessagesDeleted: 0,
+          compressionRounds: 0,
+          durationMs: Date.now() - started,
+          skipped: true,
+          skipReason: "no_messages",
+        },
+      };
+    }
+
+    if (this.sessionFilter && !this.sessionFilter.accept(sessionKey)) {
+      return {
+        messages: [...messages],
+        stats: {
+          messagesInput: messages.length,
+          messagesOutput: messages.length,
+          mmdBlocksInjected: 0,
+          offloadMessagesDeleted: 0,
+          compressionRounds: 0,
+          durationMs: Date.now() - started,
+          skipped: true,
+          skipReason: "session_filtered",
+        },
+      };
+    }
+
+    this.logger.debug?.(
+      `${TAG} handleBeforePromptBuild: session=${sessionKey}, messages=${messages.length}`,
+    );
+
+    return {
+      messages: [...messages],
+      stats: {
+        messagesInput: messages.length,
+        messagesOutput: messages.length,
+        mmdBlocksInjected: 0,
+        offloadMessagesDeleted: 0,
+        compressionRounds: 0,
+        durationMs: Date.now() - started,
+      },
+    };
   }
 
   // ============================

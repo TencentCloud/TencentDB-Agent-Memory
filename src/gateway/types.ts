@@ -141,3 +141,52 @@ export interface SeedResponse {
   duration_ms: number;
   output_dir: string;
 }
+
+// ============================
+// /before_prompt_build (pre_llm_call hook endpoint)
+// ============================
+
+/**
+ * Request body for `POST /before_prompt_build`.
+ *
+ * Called by the Hermes `pre_llm_call` hook (v0.18.0+) immediately before
+ * invoking the LLM.  Triggers the 3-stage before-prompt pipeline:
+ *   1. Fast-path re-apply of confirmed offload deletions
+ *   2. Token-guard → L3 aggressive + mild context compression
+ *   3. MMD (Mermaid L2 canvas) injection into the message stream
+ *
+ * Also reachable as the OpenClaw `before_prompt_build` hook HTTP mirror.
+ */
+export interface BeforePromptBuildRequest {
+  /** Full conversation message list that will be sent to the LLM. */
+  messages: unknown[];
+  /** Session key for scoping offload state and MMD lookups. */
+  session_key: string;
+  /** Optional user identifier for multi-tenant deployments. */
+  user_id?: string;
+}
+
+/**
+ * Response from `POST /before_prompt_build`.
+ *
+ * The returned `messages` list is the final list that should be forwarded to
+ * the LLM — callers MUST use this list instead of the original input, because
+ * the pipeline may have deleted offloaded tool blocks, compressed context, or
+ * injected Mermaid scene canvases.
+ */
+export interface BeforePromptBuildResponse {
+  /** The (possibly modified) message list to send to the model. */
+  messages: unknown[];
+  /** Diagnostic counters — for logs, metrics, debug UI; no behavioural contract. */
+  stats: {
+    messages_input: number;
+    messages_output: number;
+    mmd_blocks_injected: number;
+    offload_messages_deleted: number;
+    compression_rounds: number;
+    duration_ms?: number;
+    skipped?: boolean;
+    skip_reason?: "no_messages" | "session_filtered" | "gateway_disabled";
+    [key: string]: unknown;
+  };
+}

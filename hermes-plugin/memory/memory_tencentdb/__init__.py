@@ -1079,6 +1079,83 @@ class MemoryTencentdbProvider(MemoryProvider):
             except Exception as e:
                 logger.debug("memory-tencentdb on_session_end failed: %s", e)
 
+    def pre_llm_call(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        session_id: str = "",
+        **kwargs: Any,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Hermes v0.18.0+ hook: last chance to touch messages before the LLM runs.
+
+        Mirrors OpenClaw's ``before_prompt_build`` which runs the 3-stage
+        pipeline (offload-delete re-apply → L3 token-guard compression →
+        MMD canvas injection) against the Gateway's
+        ``POST /before_prompt_build`` endpoint.
+
+        Fail-open semantics: *any* problem (Gateway down, timeout, non-JSON
+        payload, missing ``messages`` field, breaker open, ...) returns the
+        input messages unchanged so the LLM call never stalls.
+        """
+        # 1. Fast-path: no input → nothing to do.  Return None means
+        #    "no change, keep original" — identical to a missing hook.
+        if not messages:
+            return None
+
+        # 2. Ensure the sidecar + client are ready (spawns Gateway process
+        #    lazily and refreshes the client handle).  If this fails we
+        #    silently skip — never block the hot path.
+        if not self._ensure_alive_for_request() or not self._client:
+            return None
+
+        effective_session = session_id or self._session_id
+
+        # 3. Call the Gateway.  We cap the timeout inside the client wrapper
+        #    at 8s (see client.before_prompt_build) so a slow Gateway never
+        #    stalls the user's LLM turn.
+        try:
+            result = self._client.before_prompt_build(
+                messages,
+                session_key=effective_session,
+                user_id=self._user_id,
+            )
+        except Exception as e:
+            # Circuit-breaker pattern: record the failure so we skip the
+            # next N requests, then attempt a non-blocking recovery.
+            self._record_failure()
+            self._try_recover_gateway()
+            logger.debug(
+                "memory-tencentdb pre_llm_call failed (fail-open): %s",
+                e,
+            )
+            return None
+
+        # 4. Validate the response shape.  The Gateway always returns
+        #    ``{messages, stats}`` but a proxy or partial payload shouldn't
+        #    take down the conversation.
+        if not isinstance(result, dict):
+            logger.debug(
+                "memory-tencentdb pre_llm_call: non-dict result, keeping original messages",
+            )
+            return None
+
+        returned_messages = result.get("messages")
+        if returned_messages is None:
+            logger.debug(
+                "memory-tencentdb pre_llm_call: response missing 'messages', keeping original",
+            )
+            return None
+
+        if not isinstance(returned_messages, list):
+            logger.debug(
+                "memory-tencentdb pre_llm_call: 'messages' not a list, keeping original",
+            )
+            return None
+
+        # 5. Success: hand the (possibly compressed / MMD-injected) message
+        #    list back to Hermes.
+        return returned_messages
+
     # -- Config ---------------------------------------------------------------
 
     def get_config_schema(self) -> List[Dict[str, Any]]:
