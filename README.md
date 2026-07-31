@@ -11,6 +11,7 @@
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
+[![OpenCode](https://img.shields.io/badge/OpenCode-Plugin-4C8BF5)](https://opencode.ai/docs/plugins/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
 [Highlights](#-highlights) · [Overview](#overview) · [Core Technology](#core-technology-reject-flat-storage-embrace-layering-and-symbolization) · [Features](#-features) · [Quick Start](#quick-start)
@@ -383,6 +384,19 @@ memory:
   provider: memory_tencentdb
 ```
 
+
+### 4. OpenCode
+
+The complete OpenCode adapter uses native `chat.message`, `session.idle`, `session.deleted`, and `dispose` lifecycle hooks while keeping the Gateway as the only owner of memory state.
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@tencentdb-agent-memory/memory-tencentdb-opencode"]
+}
+```
+
+It provides automatic recall/capture, session flush, seven explicit memory tools, Gateway supervision, Bearer authentication, circuit breaking, recovery, and non-fatal degradation. See [the OpenCode adapter guide](./integrations/opencode/README.md) for configuration and lifecycle details.
 
 ## 🔒 Gateway Security (optional)
 

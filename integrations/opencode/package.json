@@ -1,0 +1,41 @@
+{
+  "name": "@tencentdb-agent-memory/memory-tencentdb-opencode",
+  "version": "0.3.6",
+  "description": "Complete OpenCode adapter for TencentDB Agent Memory",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist/",
+    "templates/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown --config tsdown.config.ts",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "memory",
+    "ai-memory",
+    "tencentdb"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.18.10"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsdown": "^0.21.10",
+    "typescript": "^6.0.2"
+  }
+}
