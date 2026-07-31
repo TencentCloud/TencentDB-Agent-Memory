@@ -92,6 +92,68 @@ function rowToMemoryRecord(row: L1RecordRow): MemoryRecord {
 // ============================
 
 /**
+ * Count valid L1 records across all daily JSONL shards.
+ *
+ * The JSONL files are the source of truth for the checkpoint's
+ * `total_memories_extracted` counter. Empty and malformed lines are ignored.
+ * A missing records directory means no memories have been extracted yet;
+ * other I/O failures are propagated so startup recalibration cannot replace a
+ * valid checkpoint counter with a partial count.
+ */
+export async function countL1JsonlRecords(
+  baseDir: string,
+  logger?: Logger,
+  storage?: StorageAdapter,
+): Promise<number> {
+  let files: string[];
+
+  if (storage) {
+    files = await storage.readdirNames(StoragePaths.recordsDir, ".jsonl");
+  } else {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const recordsDir = path.default.join(baseDir, "records");
+
+    try {
+      files = (await fs.default.readdir(recordsDir)).filter((file) => file.endsWith(".jsonl"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw err;
+    }
+  }
+
+  let count = 0;
+
+  for (const file of files) {
+    let raw: string | null;
+    if (storage) {
+      raw = await storage.readFile(`${StoragePaths.recordsDir}${file}`);
+    } else {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      raw = await fs.default.readFile(path.default.join(baseDir, "records", file), "utf-8");
+    }
+
+    if (!raw) continue;
+
+    const lines = raw.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      try {
+        JSON.parse(line);
+        count += 1;
+      } catch {
+        logger?.warn?.(`${TAG} Skipping malformed JSONL line in ${file}:${i + 1}`);
+      }
+    }
+  }
+
+  return count;
+}
+
+/**
  * Read all memory records for a session from JSONL files.
  *
  * Current naming mode:

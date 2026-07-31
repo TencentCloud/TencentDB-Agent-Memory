@@ -50,6 +50,7 @@ import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
+import { countL1JsonlRecords } from "./record/l1-reader.js";
 
 const TAG = "[memory-tdai] [core]";
 
@@ -144,8 +145,10 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
-    // Initialize stores (async)
-    this.storeReady = this.initStores();
+    // Initialize stores, then reconcile checkpoint counters with actual data.
+    this.storeReady = this.initStores().then(async () => {
+      await this.recalibrateCheckpointCounters();
+    });
 
     // Create pipeline manager (sync — does not need store)
     if (this.cfg.extraction.enabled) {
@@ -161,6 +164,45 @@ export class TdaiCore {
     }
 
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
+  }
+
+  /**
+   * Reconcile checkpoint counters with the actual persisted records.
+   *
+   * L0 is counted from the memory store and L1 from the JSONL shards. This
+   * repairs counters that drifted after cleanup or manual record pruning.
+   * Recalibration is best-effort and must not prevent core startup.
+   */
+  private async recalibrateCheckpointCounters(): Promise<void> {
+    const store = this.vectorStore;
+
+    if (!store) {
+      this.logger.debug?.(
+        `${TAG} Checkpoint counter recalibration skipped: memory store unavailable`,
+      );
+      return;
+    }
+
+    try {
+      const [actualL0Count, actualL1Count] = await Promise.all([
+        Promise.resolve(store.countL0()),
+        countL1JsonlRecords(this.dataDir, this.logger),
+      ]);
+
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      await checkpoint.recalibrateCounters(actualL0Count, actualL1Count);
+
+      this.logger.debug?.(
+        `${TAG} Checkpoint counters recalibrated: ` +
+          `l0=${actualL0Count}, l1=${actualL1Count}`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint counter recalibration failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**

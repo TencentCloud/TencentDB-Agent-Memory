@@ -293,6 +293,48 @@ export class CheckpointManager {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
   }
 
+  /**
+   * Recalibrate aggregate counters from the current persisted data.
+   *
+   * Used during startup to repair counters that may have drifted after
+   * memory cleanup or manual data removal.
+   */
+  async recalibrateCounters(
+    actualL0Count: number,
+    actualL1Count: number,
+  ): Promise<void> {
+    if (
+      !Number.isFinite(actualL0Count) ||
+      !Number.isFinite(actualL1Count) ||
+      actualL0Count < 0 ||
+      actualL1Count < 0
+    ) {
+      throw new Error(
+        `Invalid checkpoint counters: l0=${actualL0Count}, l1=${actualL1Count}`,
+      );
+    }
+
+    const l0Count = Math.floor(actualL0Count);
+    const l1Count = Math.floor(actualL1Count);
+
+    let previousL0Count = 0;
+    let previousL1Count = 0;
+
+    await this.mutate((cp) => {
+      previousL0Count = cp.l0_conversations_count;
+      previousL1Count = cp.total_memories_extracted;
+
+      cp.l0_conversations_count = l0Count;
+      cp.total_memories_extracted = l1Count;
+    });
+
+    this.logger.info(
+      `[checkpoint] Counters recalibrated: ` +
+        `l0_conversations_count=${previousL0Count}->${l0Count}, ` +
+        `total_memories_extracted=${previousL1Count}->${l1Count}`,
+    );
+  }
+
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
