@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Legacy flattened context, with stable context before dynamic L1 recall. */
   context: string;
+  /** Cacheable Persona, Scene Navigation, and memory tool guidance. */
+  stable_context?: string;
+  /** Per-turn L1 recall that changes with the query. */
+  dynamic_context?: string;
   strategy?: string;
   memory_count?: number;
 }
