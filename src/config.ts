@@ -9,6 +9,7 @@
 
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+import { isAbsolute } from "node:path";
 
 // ============================
 // Type definitions
@@ -481,7 +482,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     temperature: num(offloadGroup, "temperature") ?? 0.2,
     disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
-    dataDir: optStr(offloadGroup, "dataDir"),
+    dataDir: normalizeDataDir(optStr(offloadGroup, "dataDir")),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
     maxPairsPerBatch: num(offloadGroup, "maxPairsPerBatch") ?? 20,
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
@@ -690,4 +691,23 @@ function normalizeOffloadRetentionDays(value: number): number {
   if (value <= 0) return 0;
   if (value < 3) return 0;
   return value;
+}
+
+/**
+ * Validate an `offload.dataDir` value per the documented absolute-path contract.
+ * Returns `undefined` for empty / relative / whitespace-only inputs so the
+ * downstream layer (`DEFAULT_DATA_ROOT`) takes over instead of creating the
+ * offload database at an undefined or process-CWD-relative location.
+ *
+ * Exported as @internal only so unit tests can pin the behaviour directly
+ * without having to construct a full MemoryTdaiConfig.
+ *
+ * @internal
+ */
+export function normalizeDataDir(value: string | undefined): string | undefined {
+  if (value == null) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  if (!isAbsolute(trimmed)) return undefined;
+  return trimmed;
 }
