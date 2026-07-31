@@ -36,7 +36,7 @@ TencentDB injects ~500–1700 tokens of recalled memory (`prependContext`) into 
 - Consider session-level deduplication of stable system prompt additions
 
 
-## 2. Core Principles: Prefix-Matching Cache Mechanism and the "Occlusion Effect"
+## 2. Core Principles: Prefix-Matching Cache and the "Occlusion Effect"
 
 ### 2.1 Cache Matching Rules
 
@@ -57,35 +57,11 @@ Therefore, the core strategy for improving hit rate is: **place as much stable c
 
 ### 2.3 The "Occlusion Effect" of Stable Content
 
-If stable content (e.g., Persona, Scene Navigation) is placed **after** dynamic content (e.g., timestamps, session IDs):
+If stable content (e.g., Persona, Scene Navigation) is placed **after** dynamic content (e.g., timestamps, session IDs), the cache engine finds a byte difference at the dynamic content, matching terminates, and stable content — though present and identical — is never examined, contributing 0 hits.
 
-1. Matching starts from the beginning of the Prompt
-2. When matching reaches the dynamic content, a byte difference is found
-3. Matching **terminates immediately**
-4. The cache engine stops checking — **stable content, though present and identical, is never examined**
-5. Stable content contributes 0 to hit rate
-
-**This is the "occlusion effect"**: stable content is blocked by the dynamic content in front of it.
-
-If stable content is placed **before** dynamic content:
-
-1. Matching starts from the beginning of the Prompt
-2. Stable content is matched first, fully hitting the cache
-3. When matching reaches the dynamic content, a difference is found and matching terminates
-4. Stable content has already been counted as hits
+If stable content is placed **before** dynamic content, it is matched first and fully hits the cache. Even if matching later breaks at the dynamic content, stable content has already been counted as hits.
 
 **Conclusion**: The **position** of stable content matters more than the content itself. It must be placed before all dynamic content to truly participate in cache hits.
-
-### 2.4 The True Role of CACHE_BOUNDARY
-
-CACHE_BOUNDARY is an internal OpenClaw marker used to identify "the end of the stable portion of the system prompt" in logs and debugging. **It does not affect cache matching** — the cache engine doesn't recognize this marker; it only compares bytes sequentially.
-
-What truly affects cache matching is the **actual order of content in the Prompt**:
-
-- If stable content is before the volatile tail → it is hit
-- If stable content is after the volatile tail → it is occluded and never hit
-
-Fix 2的本质 is moving stable content from "after the volatile tail" to "before the volatile tail," making it visible rather than occluded.
 
 
 ## 3. Baseline State Analysis (Before Modification)
@@ -139,8 +115,8 @@ Full Prompt structure (Turn 2 perspective, i.e., Turn 2's Prompt including Turn 
 |:---|:---|:---|:---|:---|
 | 1 | baseSystemPrompt | Same | Same | ✅ Hit |
 | 2 | CACHE_BOUNDARY | Same | Same | ✅ Hit |
-| 3 | Volatile tail: timestamp | `"10:00:01"` | `"10:01:23"` | ❌ **Byte differs, matching breaks** |
-| 4 | Stable content (Persona) | Same | Same | ⛔ **Match terminated, occluded, never examined** |
+| 3 | Volatile tail: timestamp | `"10:00:01"` | `"10:01:23"` | ❌ Byte differs, matching breaks |
+| 4 | Stable content (Persona) | Same | Same | ⛔ Match terminated, occluded, never examined |
 | 5 | Conversation history | Different | Different | ⛔ Never examined |
 | 6 | prependContext | Different | Different | ⛔ Never examined |
 | 7 | Current user input | Different | Different | ⛔ Never examined |
@@ -228,9 +204,9 @@ if (showInjected) return; // skip stripping
 
 | Step | Content Segment | Turn 1 (Cache Write) | Turn 2 (Attempt Match) | Result |
 |:---|:---|:---|:---|:---|
-| 1 | Stable content (Persona) | Same | Same | ✅ **Hit (no longer occluded)** |
-| 2 | baseSystemPrompt | Same | Same | ✅ **Hit** |
-| 3 | CACHE_BOUNDARY | Same | Same | ✅ **Hit** |
+| 1 | Stable content (Persona) | Same | Same | ✅ Hit (no longer occluded) |
+| 2 | baseSystemPrompt | Same | Same | ✅ Hit |
+| 3 | CACHE_BOUNDARY | Same | Same | ✅ Hit |
 | 4 | Volatile tail: timestamp | `"10:00:01"` | `"10:01:23"` | ❌ Byte differs, match breaks |
 | 5 | Dynamic content | — | — | ⛔ Never examined |
 
@@ -504,6 +480,15 @@ Hit rate ≈ systemPrompt / total Prompt
        ≈ 27%
 ```
 
+**Key correction note**:
+
+In the `showInjected=false` scenario, the actual cache break is not a simple single-character comparison like `<` vs `你`. The `<relevant-memories>` tags are only for readability in this document. In the actual Prompt:
+
+- **Turn 1 cached content**: Complete `<relevant-memories>` block (containing multiple memories) prepended before the user message
+- **Turn 2 history content**: Only the user's original message; the `<relevant-memories>` block has been completely stripped
+
+Therefore, when the cache engine reaches the conversation history entry point, the cached content is a complete byte sequence containing memory blocks, while the Turn 2 actual Prompt has a completely different byte sequence at the corresponding position — the two differ from the first byte, causing the match to break.
+
 **Comparison Summary**:
 
 | | showInjected=true | showInjected=false |
@@ -513,13 +498,6 @@ Hit rate ≈ systemPrompt / total Prompt
 | Cache break point | After Turn 1 assistant reply | At Turn 1 user message entry |
 | Missed content after break | Only Turn 2 new content | Turn 1 user message + assistant reply + Turn 2 new content |
 | Turn 2 hit rate (experiment) | ~98% | ~40% |
-
-**Note on the break mechanism**: In the `showInjected=false` scenario, the actual cache break is not a simple single-character comparison like `<` vs `你`. The `<relevant-memories>` tags are only for readability in this document. In the actual Prompt:
-
-- **Turn 1 cached content**: Complete `<relevant-memories>` block (containing multiple memories) prepended before the user message
-- **Turn 2 history content**: Only the user's original message; the `<relevant-memories>` block has been completely stripped
-
-Therefore, when the cache engine reaches the conversation history entry point, the cached content is a complete byte sequence containing memory blocks, while the Turn 2 actual Prompt has a completely different byte sequence at the corresponding position — the two differ from the first byte, causing the match to break.
 
 **Net effect**: The benefit of history stability (+truncation elimination) slightly outweighs the loss from prefix mismatch → +2.8%. The two cancel each other out, yielding limited gain.
 
@@ -686,7 +664,7 @@ When Turn 1 triggers L1 injection (D_normal), using the self-introduction exampl
 Turn 1 cached content (at history entry):
 <relevant-memories>...</relevant-memories>\n\nHello, my name is Wang Xiaoming...
 
-  ↓ before_message_write (showInjected=false) strips <relevant-memories>
+  ↓ before_message_write (showInjected=false) strips <relevant-memories> block
 
 Turn 1 stored in conversation history:
 Hello, my name is Wang Xiaoming, I am a software engineer.
@@ -1151,7 +1129,7 @@ Turn N+1's Prompt prefix:
 | `summaryBlock` (early conversation summaries) | `prependSystemContext` (before CACHE_BOUNDARY) | **Permanent immunity** — truncation scissors are after CACHE_BOUNDARY, can't reach |
 | `recentBlock` (last 15 messages) | `prependContext` (after CACHE_BOUNDARY) | Affected by truncation, **only 15 messages** — BASELINE's not-cacheable region contains dozens of history messages |
 
-**SPLIT's core value: convering "truncation-induced cache invalidation" from "unbounded range" to "bounded range (15 messages)".**
+**SPLIT's core value: converging "truncation-induced cache invalidation" from "unbounded range" to "bounded range (15 messages)".**
 
 **Quantitative comparison** (after truncation, only ~6000 tokens history retained):
 
@@ -1276,7 +1254,7 @@ Core idea: **L1 memory is no longer written to history. History stores only pure
 │  <relevant-memories>      ← L1 recalled memories (very tail)│
 │                                                             │
 │  [current user input]                                       │
-└────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
 ```
 
 **Three key design decisions**:
@@ -1357,81 +1335,45 @@ USER:
 
 **Step 1 — Effective context window**:
 
-\[
-L_{eff} = L - B - U - Tool - M
-\]
+<img src="https://latex.codecogs.com/svg.latex?L_{eff}%20=%20L%20-%20B%20-%20U%20-%20Tool%20-%20M" alt="effective context window" />
 
 **Step 2 — Stable region total length**:
 
-\[
-S_{total} = S + H_{stable}
-\]
+<img src="https://latex.codecogs.com/svg.latex?S_{total}%20=%20S%20+%20H_{stable}" alt="stable total" />
 
 **Step 3 — Available token space for recent history**:
 
-\[
-A = L_{eff} - S_{total}
-\]
+<img src="https://latex.codecogs.com/svg.latex?A%20=%20L_{eff}%20-%20S_{total}" alt="available space" />
 
 If \(A \le 0\), trigger emergency compression immediately.
 
 **Step 4 — Physical upper bound turns**:
 
-\[
-N_{max\_physical} = \left\lfloor \frac{A}{T} \right\rfloor
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{max\_physical}%20=%20\left\lfloor%20\frac{A}{T}%20\right\rfloor" alt="physical upper bound" />
 
 **Step 5 — Safety margin** (70%, reserving buffer for sudden fluctuations):
 
-\[
-N_{safe} = \left\lfloor 0.7 \times N_{max\_physical} \right\rfloor
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{safe}%20=%20\left\lfloor%200.7%20\times%20N_{max\_physical}%20\right\rfloor" alt="safety margin" />
 
 **Step 6 — Compression efficiency lower bound** (at least 50% space savings):
 
-\[
-N_{min\_efficiency} = \left\lceil \frac{2C}{T} \right\rceil
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{min\_efficiency}%20=%20\left\lceil%20\frac{2C}{T}%20\right\rceil" alt="efficiency lower bound" />
 
-Derivation: \(F = N \times T - C \ge 0.5 \times N \times T \;\Rightarrow\; C \le 0.5 \times N \times T \;\Rightarrow\; N \ge 2C / T\)
+Derivation: <img src="https://latex.codecogs.com/svg.latex?F%20=%20N%20\cdot%20T%20-%20C%20\ge%200.5%20\times%20N%20\cdot%20T%20\Rightarrow%20N%20\ge%202C%20/%20T" alt="derivation" />
 
 **Step 7 — Configuration boundaries**:
 
-\[
-N_{min\_config} = 3,\quad N_{max\_config} = 15
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{min\_config}%20=%203,\quad%20N_{max\_config}%20=%2015" alt="boundaries" />
 
 **Step 8 — Real-time hit rate dynamic adjustment**:
 
-\[
-\alpha =
-\begin{cases}
-0.8  & \text{if } H_{avg} < 0.70 \quad (\text{tighten}) \\
-1.0  & \text{if } 0.70 \le H_{avg} \le 0.85 \quad (\text{normal}) \\
-1.15 & \text{if } H_{avg} > 0.85 \quad (\text{expand})
-\end{cases}
-\]
+<img src="https://latex.codecogs.com/svg.latex?\alpha%20=%20\begin{cases}%200.8%20&%20\text{if%20}%20H_{avg}%20<%200.70%20\\%201.0%20&%20\text{if%20}%200.70%20\le%20H_{avg}%20\le%200.85%20\\%201.15%20&%20\text{if%20}%20H_{avg}%20>%200.85%20\end{cases}" alt="alpha" />
 
-\[
-N_{adjusted} = \text{clamp}\left(\left\lfloor \alpha \times N_{safe} \right\rfloor,\; N_{min\_config},\; N_{max\_config}\right)
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{adjusted}%20=%20\text{clamp}\left(\left\lfloor%20\alpha%20\times%20N_{safe}%20\right\rfloor,\;%20N_{min\_config},\;%20N_{max\_config}\right)" alt="adjusted" />
 
 **Step 9 — Final output**:
 
-\[
-\boxed{
-N_{optimal} = \text{clamp}\left(
-\max\left(
-\left\lfloor \alpha \times 0.7 \times \frac{L - B - U - Tool - M - S - H_{stable}}{T} \right\rfloor,
-\;
-\left\lceil \frac{2C}{T} \right\rceil
-\right),
-\;
-3,\;
-15
-\right)
-}
-\]
+<img src="https://latex.codecogs.com/svg.latex?N_{optimal}%20=%20\text{clamp}\left(%20\max\left(%20\left\lfloor%20\alpha%20\times%200.7%20\times%20\frac{L%20-%20B%20-%20U%20-%20Tool%20-%20M%20-%20S%20-%20H_{stable}}{T}%20\right\rfloor,%20\left\lceil%20\frac{2C}{T}%20\right\rceil%20\right),%203,%2015%20\right)" alt="final N_optimal" />
 
 #### Compression Trigger Conditions
 
@@ -1548,11 +1490,9 @@ Turn | Hit Rate
 
 **Correct calculation method** (weighted average):
 
-\[
-H_{overall} = \frac{\sum_{i=2}^{N} \text{cache\_hit\_tokens}_i}{\sum_{i=2}^{N} \text{prompt\_tokens}_i}
-\]
+<img src="https://latex.codecogs.com/svg.latex?H_{overall}%20=%20\frac{\sum_{i=2}^{N}%20\text{cache\_hit\_tokens}_i}{\sum_{i=2}^{N}%20\text{prompt\_tokens}_i}" alt="overall hit rate" />
 
-**Not** simple average (\(\frac{1}{N-1}\sum_{i=2}^{N} \text{rate}_i\)), because:
+**Not** simple average (<img src="https://latex.codecogs.com/svg.latex?\frac{1}{N-1}\sum_{i=2}^{N}%20\text{rate}_i" alt="simple average" />), because:
 
 - Turn 2 prompt ≈ 14K tokens, Turn 35 prompt ≈ 148K tokens
 - Simple average gives Turn 2 and Turn 35 equal weight, but Turn 35's token volume is ~10× Turn 2
@@ -1590,3 +1530,70 @@ Cache-Aware Context Lifecycle Management thoroughly resolves showInjected's dile
 3. **Append-only summaries**: New epochs appended without rewriting → prefix bytes permanently consistent → stable zone cache never expires
 
 In 35-turn long conversation testing, overall weighted hit rate reached **97.7%**, far exceeding the 85% target. From Turn 3 onward, hit rate consistently above 90%, proving the solution thoroughly eliminates both `showInjected=false`'s Turn 1→2 break and `showInjected=true`'s history bloat problem.
+
+
+## 17. Complete Proof: New Method Outperforms Old Method in All Scenarios
+
+### 17.1 Old Method's Hit Rate
+
+Old method's hit tokens are fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old}}%20=%20\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="old hit rate" />
+
+Hit tokens are fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />, denominator grows with <img src="https://latex.codecogs.com/svg.latex?H" alt="H" />, hit rate continuously decreases.
+
+### 17.2 New Method's Hit Rate
+
+New method's hit tokens are <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="new hit rate" />
+
+Hit tokens grow with <img src="https://latex.codecogs.com/svg.latex?K" alt="K" /> (epoch count), hit rate remains stable at a high level.
+
+### 17.3 Comparison in Normal Scenarios
+
+Difference in hit tokens between new and old methods:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20-%20\text{Hit}_{\text{old}}%20=%20S%20+%20K%20\cdot%20C%20%3E%200" alt="hit token difference" />
+
+With the same denominator:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20%3E%20\text{Rate}_{\text{old}}" alt="rate comparison" />
+
+### 17.4 Comparison in Truncation Scenarios
+
+In truncation scenarios:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old truncation" />
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="new truncation" />
+
+Difference:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="truncation diff" />
+
+### 17.5 Extreme Case: Summary Region Also Needs Compression
+
+When summary region also needs compression, after new method drops the oldest epochs:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new,min}}%20=%20P_{\text{base}}%20+%20S" alt="extreme hit tokens" />
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20=%20\frac{P_{\text{base}}%20+%20S}{L}" alt="extreme hit rate" />
+
+Old method under equivalent conditions:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old extreme" />
+
+New method always outperforms old method:
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S}{L}%20%3E%200" alt="extreme diff" />
+
+### 17.6 Summary
+
+| Scenario | Old Method Hit Rate | New Method Hit Rate | Difference |
+|:---|:---|:---|:---|
+| No truncation | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="old normal" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="new normal" /> | Grows with <img src="https://latex.codecogs.com/svg.latex?K" alt="K" /> |
+| After truncation | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="old after trunc" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="new after trunc" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="after trunc diff" /> |
+| Summary also compressed | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}}{L}" alt="old compressed" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{P_{\text{base}}%20+%20S}{L}" alt="new compressed" /> | <img src="https://latex.codecogs.com/svg.latex?\frac{S}{L}%20%3E%200" alt="compressed diff" /> |
+
+**Core Conclusion**: The new method's hit tokens are higher than the old method in all scenarios. In normal scenarios, the new method's hit tokens are <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />, growing with conversation turns, while the old method is fixed at <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />. In truncation scenarios, the old method's hit tokens remain <img src="https://latex.codecogs.com/svg.latex?P_{\text{base}}" alt="P_base" />, while the new method's hit tokens still include the full stable prefix. Even in the most extreme summary compression scenario, since <img src="https://latex.codecogs.com/svg.latex?S%20%3E%200" alt="S>0" />, the new method's hit rate lower bound is strictly higher than the old method. Therefore, **the new method strictly outperforms the old method in all scenarios**.
