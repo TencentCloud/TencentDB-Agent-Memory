@@ -499,6 +499,31 @@ export class MemoryPipelineManager {
   }
 
   /**
+   * Flush all pending L1 -> L2 -> L3 work without destroying the manager.
+   *
+   * Long-running batch callers such as `seed` need a completion barrier
+   * before closing storage resources. `destroy()` cannot provide that
+   * barrier because its short gateway-shutdown timeout is intentionally
+   * bounded and it marks the manager destroyed before flushing, which
+   * suppresses the L2 -> L3 cascade.
+   *
+   * After the current work is drained, cancel the recurring L2 timers that
+   * successful L2 runs arm for the live gateway. A finite batch has no future
+   * activity to poll, and leaving those timers pending would make the
+   * subsequent `destroy()` execute an unnecessary second L2 pass.
+   */
+  async flushAll(): Promise<void> {
+    if (this.destroyed) return;
+
+    await this._doFlush();
+
+    for (const timers of this.sessionTimers.values()) {
+      timers.l1Idle.cancel();
+      timers.l2Schedule.cancel();
+    }
+  }
+
+  /**
    * Maximum time (ms) to wait for pipeline flush during destroy.
    * Must be shorter than the gateway_stop hook timeout (3 s) to leave
    * headroom for VectorStore / EmbeddingService cleanup that runs after.
@@ -581,12 +606,12 @@ export class MemoryPipelineManager {
       }
     }
 
-    // Step 4: Wait for all remaining queues to drain
+    // Step 4: Wait for L2 before observing L3. L2 enqueues L3 near the end
+    // of its task, so waiting for both queues concurrently can observe L3 as
+    // idle too early and return while the newly-enqueued L3 task is running.
     this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
-    await Promise.all([
-      this.l2Queue.onIdle(),
-      this.l3Queue.onIdle(),
-    ]);
+    await this.l2Queue.onIdle();
+    await this.l3Queue.onIdle();
   }
 
   // ============================
