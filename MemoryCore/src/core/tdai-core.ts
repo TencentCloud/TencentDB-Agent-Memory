@@ -54,6 +54,7 @@ import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 import { resolveStandaloneLlmForRuntime } from "../adapters/standalone/llm-provider-resolver.js";
 import { MetricTrackingRunnerFactory } from "./report/metric-tracking-runner.js";
+import { countL1JsonlRecords } from "./record/l1-reader.js";
 
 // ── Skill module (v2 redesign 2026-06-17) ──
 import {
@@ -245,8 +246,15 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
-    // Initialize stores (async)
-    this.storeReady = this.initStores();
+    // Initialize stores. OpenClaw owns local storage from construction time, so
+    // it can safely recalibrate as soon as the memory store is ready. Gateway
+    // injects its StorageAdapter later and explicitly awaits recalibration only
+    // after that adapter has been selected (local or COS).
+    this.storeReady = this.initStores().then(async () => {
+      if (this.hostAdapter.hostType === "openclaw") {
+        await this.performCheckpointCounterRecalibration();
+      }
+    });
 
     // Create pipeline manager (sync — does not need store)
     if (this.cfg.extraction.enabled) {
@@ -287,6 +295,60 @@ export class TdaiCore {
     }
 
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
+  }
+
+  /**
+   * Reconcile checkpoint counters with the actual persisted records.
+   *
+   * L0 is counted from the memory store; L1 is counted from the JSONL shards,
+   * matching the data cleaned or manually pruned by local maintenance tools.
+   * Counter recalibration is best-effort and must not prevent core startup.
+   */
+  async recalibrateCheckpointCounters(): Promise<void> {
+    // External lifecycle callers (notably Gateway) may invoke this immediately
+    // after setStorage(). Always wait for the database store before counting.
+    await this.storeReady;
+    await this.performCheckpointCounterRecalibration();
+  }
+
+  private async performCheckpointCounterRecalibration(): Promise<void> {
+    const store = this.vectorStore;
+
+    if (!store) {
+      this.logger.debug?.(
+        `${TAG} Checkpoint counter recalibration skipped: memory store unavailable`,
+      );
+      return;
+    }
+
+    try {
+      const [actualL0Count, actualL1Count] = await Promise.all([
+        Promise.resolve(store.countL0()),
+        countL1JsonlRecords(this.dataDir, this.logger, this.storage),
+      ]);
+
+      const checkpoint = new CheckpointManager(
+        this.dataDir,
+        this.logger,
+        this.storage,
+      );
+
+      await checkpoint.recalibrateCounters(
+        actualL0Count,
+        actualL1Count,
+      );
+
+      this.logger.debug?.(
+        `${TAG} Checkpoint counters recalibrated: ` +
+          `l0=${actualL0Count}, l1=${actualL1Count}`,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint counter recalibration failed (non-fatal): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
