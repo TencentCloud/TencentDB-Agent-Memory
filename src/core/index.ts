@@ -16,6 +16,8 @@ export type {
   HostAdapter,
   CompletedTurn,
   RecallResult,
+  RecallContextPart,
+  RecallContextParts,
   CaptureResult,
   MemorySearchParams,
   ConversationSearchParams,
