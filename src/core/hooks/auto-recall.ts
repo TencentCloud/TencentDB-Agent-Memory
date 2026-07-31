@@ -705,7 +705,15 @@ function formatMemoryLine(m: FormatableMemory): string {
   return line;
 }
 
-function applyRecallBudget(
+/**
+ * Apply character-based recall budgets. Pure — returns a new array; does not
+ * mutate input. Exposed for direct unit testing via `/** @internal *\/` marker
+ * so tests don't have to bootstrap the full plugin + search + LLM stack.
+ *
+ * @internal — callers should rely on the public handleBeforeRecall / performAutoRecall
+ *   entrypoints; this function's argument shape and truncation logic may change.
+ */
+export function applyRecallBudget(
   lines: string[],
   recall: MemoryTdaiConfig["recall"],
   logger?: Logger,
@@ -761,22 +769,26 @@ function applyRecallBudget(
   }
 
   if (truncatedCount > 0 || droppedCount > 0) {
-    logger?.debug?.(
+    const message =
       `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
       `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
-      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
-    );
+      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}. ` +
+      `To restore unlimited behavior (pre-#70 default) set recall.maxCharsPerMemory=0 and/or recall.maxTotalRecallChars=0 in config.`;
+    logger?.debug?.(message);
+    logger?.info?.(`${TAG} Recall budget applied — ${truncatedCount} truncated, ${droppedCount} dropped; see debug log for details. Set recall budget to 0 to disable.`);
   }
 
   return budgeted;
 }
 
-function normalizeBudgetLimit(value: number | undefined): number | undefined {
+/** @internal — helper for unit testing; same caveats as applyRecallBudget */
+export function normalizeBudgetLimit(value: number | undefined): number | undefined {
   if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
   return Math.floor(value);
 }
 
-function truncateRecallLine(line: string, maxChars: number): string {
+/** @internal — helper for unit testing; same caveats as applyRecallBudget */
+export function truncateRecallLine(line: string, maxChars: number): string {
   // Count and slice by code point, not UTF-16 code unit, so a cut never lands
   // between the halves of a surrogate pair (which would corrupt a non-BMP
   // character to U+FFFD when the line is UTF-8 encoded for the request).

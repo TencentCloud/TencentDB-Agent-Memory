@@ -530,8 +530,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
-      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
-      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 1500,
+      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 6000,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
