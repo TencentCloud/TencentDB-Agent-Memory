@@ -186,4 +186,66 @@ describe("SessionWatcher", () => {
     await watcher.stop();
     expect(true).toBe(true);
   }, 10000);
+
+  it("captures a turn whose user and assistant arrive in different polls", async () => {
+    const calls: Array<{ method: string; body: unknown }> = [];
+    const config = makeConfig(["split-adapter"], 200);
+
+    // Poll 1 returns the user message; poll 2 returns the assistant response.
+    let parseCount = 0;
+    const adapter: SessionAdapter = {
+      name: "split-adapter",
+      sessionDir: () => os.tmpdir(),
+      discoverSessions: async () => [{ sessionKey: "split-1", sessionId: "split-1" }],
+      parseNewMessages: async () => {
+        parseCount++;
+        if (parseCount === 1) {
+          return [{ role: "user", content: "split question", timestamp: 1000 } as ParsedMessage];
+        }
+        if (parseCount === 2) {
+          return [{ role: "assistant", content: "split answer", timestamp: 2000 } as ParsedMessage];
+        }
+        return [];
+      },
+      detectTurns: (msgs) => {
+        const turns: ParsedTurn[] = [];
+        let currentUser: ParsedMessage | null = null;
+        let acc: ParsedMessage[] = [];
+        for (const m of msgs) {
+          if (m.role === "user") {
+            if (currentUser && acc.length) {
+              turns.push({ sessionKey: "split-1", sessionId: "split-1", userMessage: currentUser, assistantMessages: acc });
+            }
+            currentUser = m;
+            acc = [];
+          } else if (currentUser) {
+            acc.push(m);
+          }
+        }
+        if (currentUser && acc.length) {
+          turns.push({ sessionKey: "split-1", sessionId: "split-1", userMessage: currentUser, assistantMessages: acc });
+        }
+        return turns;
+      },
+    };
+
+    registerAdapter("split-adapter", () => adapter);
+    const watcher = new SessionWatcher(config, makeClient(calls));
+    await watcher.start();
+    await new Promise((r) => setTimeout(r, 900)); // several polls
+    await watcher.stop();
+
+    // The assistant-only poll must pair with the pending user from poll 1.
+    const captures = calls.filter((c) => c.method === "capture");
+    expect(captures.length).toBeGreaterThanOrEqual(1);
+    const body = captures[0].body as Record<string, unknown>;
+    expect(body.user_content).toBe("split question");
+    expect(body.assistant_content).toBe("split answer");
+    // The user message must not be recalled twice (pending poll + completed turn).
+    const recalls = calls.filter((c) => c.method === "recall");
+    const userRecalls = recalls.filter(
+      (c) => (c.body as Record<string, unknown>).query === "split question",
+    );
+    expect(userRecalls.length).toBe(1);
+  }, 10000);
 });

@@ -23,6 +23,11 @@ import { registerAdapter } from "./base.js";
 const DB_PATH = path.join(os.homedir(), ".local", "share", "opencode", "opencode.db");
 
 function createAdapter(): SessionAdapter {
+  // Highest message id seen per session. OpenCode's time_created is
+  // seconds-granularity, so a millisecond cursor alone would drop messages
+  // written in the same second as the cursor. Track ids to dedupe instead.
+  const lastIdBySession = new Map<string, number>();
+
   return {
     name: "opencode",
 
@@ -71,22 +76,28 @@ function createAdapter(): SessionAdapter {
       try {
         const db = new DatabaseSync(DB_PATH, { readOnly: true });
         const sinceSeconds = Math.floor(sinceTimestamp / 1000);
+        const lastId = lastIdBySession.get(sessionKey) ?? 0;
 
         const rows = db
           .prepare(
             `SELECT m.id, m.data, m.time_created
              FROM message m
              WHERE m.session_id = ?
-               AND m.time_created > ?
-             ORDER BY m.time_created ASC`,
+               AND m.time_created >= ?
+             ORDER BY m.time_created ASC, m.id ASC`,
           )
           .all(sessionKey, sinceSeconds) as Array<{
-          id: string;
+          id: number | string;
           data: string;
           time_created: number;
         }>;
 
+        let maxId = lastId;
         for (const row of rows) {
+          const id = Number(row.id);
+          // Same-second window: only accept rows never seen before.
+          if (id <= lastId) continue;
+          if (id > maxId) maxId = id;
           try {
             const m = JSON.parse(row.data);
             const role = m.role as string | undefined;
@@ -117,6 +128,7 @@ function createAdapter(): SessionAdapter {
             // Skip malformed messages
           }
         }
+        if (maxId > lastId) lastIdBySession.set(sessionKey, maxId);
         db.close();
       } catch (err) {
         process.stderr.write(

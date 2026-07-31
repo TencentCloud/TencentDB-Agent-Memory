@@ -15,6 +15,17 @@ import type { TdaiMcpConfig } from "./config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Resolve the gateway server entry file relative to the repo root.
+ *
+ * supervisor.ts lives at src/adapters/session-watcher/, so the repo root is
+ * three levels up: src/adapters/session-watcher → src/adapters → src → repo.
+ */
+export function resolveGatewayServerPath(): string {
+  const projectRoot = path.resolve(__dirname, "..", "..", "..");
+  return path.join(projectRoot, "src", "gateway", "server.ts");
+}
+
 export class GatewaySupervisor {
   private config: TdaiMcpConfig;
   private child?: ChildProcess;
@@ -75,8 +86,7 @@ export class GatewaySupervisor {
   }
 
   private async spawn(): Promise<void> {
-    const projectRoot = path.resolve(__dirname, "..", "..");
-    const gatewayPath = path.join(projectRoot, "src", "gateway", "server.ts");
+    const gatewayPath = resolveGatewayServerPath();
 
     const env = {
       ...process.env,

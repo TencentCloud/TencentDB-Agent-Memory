@@ -33,6 +33,12 @@ export class SessionWatcher {
   private client: GatewayMemoryClient;
   private timer?: ReturnType<typeof setInterval>;
   private cursors: Map<string, SessionCursor> = new Map();
+  /** Cached adapter instances so adapter-internal state survives across polls. */
+  private adapters: Map<string, SessionAdapter> = new Map();
+  /** Last user message per session waiting for an assistant response. */
+  private pendingUsers: Map<string, ParsedMessage> = new Map();
+  /** User messages already recalled, keyed `${adapter}:${sessionKey}`. */
+  private recalledUsers: Map<string, Set<string>> = new Map();
   private running = false;
 
   constructor(config: TdaiMcpConfig, client: GatewayMemoryClient) {
@@ -80,12 +86,18 @@ export class SessionWatcher {
     if (!this.running) return;
 
     for (const adapterName of this.config.watcher.adapters) {
-      const adapter = getAdapter(adapterName);
+      let adapter = this.adapters.get(adapterName);
       if (!adapter) {
-        process.stderr.write(
-          `[session-watcher] Unknown adapter: ${adapterName}\n`,
-        );
-        continue;
+        adapter = getAdapter(adapterName);
+        if (!adapter) {
+          process.stderr.write(
+            `[session-watcher] Unknown adapter: ${adapterName}\n`,
+          );
+          continue;
+        }
+        // Cache the instance so adapters can keep internal state (e.g. seen
+        // message ids, incremental file offsets) across polling cycles.
+        this.adapters.set(adapterName, adapter);
       }
 
       try {
@@ -117,12 +129,19 @@ export class SessionWatcher {
     const newTimestamp = lastMsg.timestamp ?? Date.now();
     this.updateCursor(session.sessionKey, adapter.name, newTimestamp);
 
-    const turns = adapter.detectTurns(newMessages);
+    // A user message seen on a previous poll is prepended so the assistant
+    // response that arrives in THIS poll (without its user in the same batch)
+    // still forms a complete turn and is captured.
+    const stateKey = `${adapter.name}:${session.sessionKey}`;
+    const pendingUser = this.pendingUsers.get(stateKey) ?? null;
+    const combined: ParsedMessage[] = pendingUser
+      ? [pendingUser, ...newMessages]
+      : newMessages;
+
+    const turns = adapter.detectTurns(combined);
 
     for (const turn of turns) {
-      if (turn.userMessage.content) {
-        await this.doRecall(turn.userMessage.content, session.sessionKey);
-      }
+      await this.doRecallOnce(turn.userMessage, stateKey, session.sessionKey);
 
       const assistantText = turn.assistantMessages
         .map((m) => m.content)
@@ -136,6 +155,49 @@ export class SessionWatcher {
         );
       }
     }
+
+    // Track a user message with no assistant yet so recall fires before the
+    // agent responds and its response is captured on a later poll.
+    const pending = this.findPendingUser(combined);
+    if (pending) {
+      await this.doRecallOnce(pending, stateKey, session.sessionKey);
+      this.pendingUsers.set(stateKey, pending);
+    } else {
+      this.pendingUsers.delete(stateKey);
+    }
+  }
+
+  /**
+   * Return the last user message that has no following non-user message
+   * (i.e. a turn that is still waiting for an assistant response).
+   */
+  private findPendingUser(msgs: ParsedMessage[]): ParsedMessage | null {
+    let pending: ParsedMessage | null = null;
+    for (const m of msgs) {
+      if (m.role === "user") pending = m;
+      else pending = null;
+    }
+    return pending;
+  }
+
+  private async doRecallOnce(
+    user: ParsedMessage,
+    stateKey: string,
+    sessionKey: string,
+  ): Promise<void> {
+    if (!user.content) return;
+    if (user.timestamp !== undefined) {
+      const seenKey = `${user.timestamp}|${user.content}`;
+      let seen = this.recalledUsers.get(stateKey);
+      if (!seen) {
+        seen = new Set();
+        this.recalledUsers.set(stateKey, seen);
+      }
+      if (seen.has(seenKey)) return; // already recalled (e.g. pending → completed)
+      if (seen.size > 1000) seen.clear(); // bounded growth
+      seen.add(seenKey);
+    }
+    await this.doRecall(user.content, sessionKey);
   }
 
   private async doRecall(
@@ -241,6 +303,16 @@ export class SessionWatcher {
     for (const [key, cursor] of capped) {
       data[key] = cursor;
     }
+
+    // Drop in-memory pending-user / recall state for evicted sessions.
+    const keptKeys = new Set(capped.map(([key]) => key));
+    for (const key of [...this.pendingUsers.keys()]) {
+      if (!keptKeys.has(key)) this.pendingUsers.delete(key);
+    }
+    for (const key of [...this.recalledUsers.keys()]) {
+      if (!keptKeys.has(key)) this.recalledUsers.delete(key);
+    }
+
     try {
       fs.mkdirSync(this.config.agentMemory.stateDir, { recursive: true });
       fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf-8");
