@@ -109,6 +109,8 @@ export interface SeedCommandOptions {
   strictRoundRole: boolean;
   /** Skip interactive confirmations. */
   yes: boolean;
+  /** Resume an existing output directory from its checkpoint. */
+  resume: boolean;
   /** Path to memory-tdai config override file (JSON, deep-merged on top of current plugin config). */
   configFile?: string;
 }

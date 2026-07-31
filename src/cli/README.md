@@ -26,6 +26,7 @@ openclaw memory-tdai seed --input <file> [options]
 | `--config <file>` | — | 配置覆盖文件（JSON，与 openclaw.json 插件配置深度合并） |
 | `--strict-round-role` | — | 严格校验每轮对话必须包含 user 和 assistant 消息 |
 | `--yes` | — | 跳过交互确认（如时间戳自动填充确认） |
+| `--resume` | — | 从指定输出目录的 checkpoint 恢复；必须同时提供 `--output-dir`，且输入消息必须有稳定时间戳 |
 
 ### 示例
 
@@ -44,7 +45,24 @@ openclaw memory-tdai seed --input data.json --yes
 
 # 严格模式 + 自定义配置
 openclaw memory-tdai seed --input data.json --config seed-config.json --strict-round-role --yes
+
+# 从中断的导入恢复（输入需保留原始时间戳）
+openclaw memory-tdai seed --input data.json --output-dir ./seed-output --resume
 ```
+
+### 从 checkpoint 恢复
+
+`--resume` 会复用输出目录中的 `.metadata/checkpoint.json`。命令仍读取完整输入文件，
+但已有 per-session capture cursor 会跳过已经落入 L0 的消息，并继续处理时间戳更晚的追加轮次。
+
+为避免重复导入，恢复模式采用 fail-fast 约束：
+
+- 必须显式传入 `--output-dir`，不能使用自动生成目录；
+- 输出目录必须已经存在，且包含 `.metadata/checkpoint.json`；
+- 输入中每条消息都必须保留稳定的原始 `timestamp`；恢复模式不会自动补时间戳；
+- 建议使用上一次运行的同一输入文件，或仅在末尾追加新轮次，不要重写已导入消息的时间戳。
+
+不带 `--resume` 时，已有 checkpoint 的目录仍会被拒绝，避免意外覆盖。
 
 ### 输入文件格式
 

@@ -32,12 +32,14 @@ export function registerSeedCommand(parent: Command, ctx: SeedCliContext): void 
     .option("--config <file>", "Path to memory-tdai config override file (JSON, deep-merged on top of current plugin config)")
     .option("--strict-round-role", "Require each round to have both user and assistant messages", false)
     .option("--yes", "Skip interactive confirmations (e.g. timestamp auto-fill)", false)
+    .option("--resume", "Resume an existing output directory from its checkpoint", false)
     .addHelpText("after", `
 Examples:
   openclaw memory-tdai seed --input conversations.json
   openclaw memory-tdai seed --input data.json --output-dir ./seed-output --strict-round-role
   openclaw memory-tdai seed --input data.json --config ./seed-config.json
   openclaw memory-tdai seed --input data.json --yes
+  openclaw memory-tdai seed --input data.json --output-dir ./seed-output --resume
 `)
     .action(async (rawOpts: Record<string, unknown>) => {
       const opts: SeedCommandOptions = {
@@ -46,6 +48,7 @@ Examples:
         sessionKey: rawOpts.sessionKey as string | undefined,
         strictRoundRole: rawOpts.strictRoundRole === true,
         yes: rawOpts.yes === true,
+        resume: rawOpts.resume === true,
         configFile: rawOpts.config as string | undefined,
       };
 
@@ -67,6 +70,7 @@ async function runSeedCommand(opts: SeedCommandOptions, ctx: SeedCliContext): Pr
   logger.info(`${TAG}   config:     ${opts.configFile ?? "(default)"}`);
   logger.info(`${TAG}   strict:     ${opts.strictRoundRole}`);
   logger.info(`${TAG}   yes:        ${opts.yes}`);
+  logger.info(`${TAG}   resume:     ${opts.resume}`);
 
   // 0. Load config override file and deep-merge with base plugin config
   const mergedPluginConfig = loadAndMergePluginConfig(
@@ -95,7 +99,31 @@ async function runSeedCommand(opts: SeedCommandOptions, ctx: SeedCliContext): Pr
     `${input.hasTimestamps ? "" : " (no timestamps)"}`,
   );
 
-  // 2. Timestamp confirmation (if all messages lack timestamps)
+  // 2. Resolve and validate the output plan before prompting for timestamps.
+  const outputDir = resolveOutputDir(opts.outputDir, ctx.stateDir);
+  const outputDirExists = fs.existsSync(outputDir);
+  const checkpointPath = path.join(outputDir, ".metadata", "checkpoint.json");
+  const checkpointExists = outputDirExists && fs.existsSync(checkpointPath);
+  const outputDirEmpty = !outputDirExists || fs.readdirSync(outputDir).length === 0;
+  const outputError = validateSeedOutputPlan({
+    resume: opts.resume,
+    hasExplicitOutputDir: Boolean(opts.outputDir),
+    inputHasTimestamps: input.hasTimestamps,
+    outputDirExists,
+    checkpointExists,
+    outputDirEmpty,
+    outputDir,
+  });
+  if (outputError) {
+    console.error(`\n❌ ${outputError}\n`);
+    process.exit(1);
+  }
+  logger.info(`${TAG} Output directory: ${outputDir}`);
+  if (opts.resume) {
+    console.log(`\n↻ Resuming from checkpoint: ${checkpointPath}`);
+  }
+
+  // 3. Timestamp confirmation (if all messages lack timestamps)
   if (needsTimestampConfirmation) {
     if (opts.yes) {
       console.log("   Timestamps missing — auto-filling with current time (--yes)");
@@ -112,35 +140,7 @@ async function runSeedCommand(opts: SeedCommandOptions, ctx: SeedCliContext): Pr
     }
   }
 
-  // 3. Resolve output directory
-  const outputDir = resolveOutputDir(opts.outputDir, ctx.stateDir);
-  logger.info(`${TAG} Output directory: ${outputDir}`);
-
-  // 4. Check for existing directory / checkpoint (resume detection)
-  if (fs.existsSync(outputDir)) {
-    const checkpointPath = path.join(outputDir, ".metadata", "checkpoint.json");
-    if (fs.existsSync(checkpointPath)) {
-      // Checkpoint exists → resume scenario → P0 not implemented
-      console.error(
-        "\n❌ Resume from checkpoint is not implemented in P0 yet. " +
-        "Please use a new output directory.\n" +
-        `   Existing: ${outputDir}\n`,
-      );
-      process.exit(1);
-    }
-
-    // Directory exists but no checkpoint → might have stale data
-    const entries = fs.readdirSync(outputDir);
-    if (entries.length > 0) {
-      console.error(
-        `\n❌ Output directory already exists and is not empty: ${outputDir}\n` +
-        "   Please use a new directory or clean the existing one.\n",
-      );
-      process.exit(1);
-    }
-  }
-
-  // 5. Execute seed pipeline
+  // 4. Execute seed pipeline
   console.log(`\n🔧 Output: ${outputDir}`);
   console.log(`▶️  Starting seed pipeline...\n`);
 
@@ -159,7 +159,7 @@ async function runSeedCommand(opts: SeedCommandOptions, ctx: SeedCliContext): Pr
     },
   });
 
-  // 6. Print summary
+  // 5. Print summary
   console.log("\n");
   console.log("╔══════════════════════════════════════════╗");
   console.log("║               Seed Summary               ║");
@@ -176,6 +176,60 @@ async function runSeedCommand(opts: SeedCommandOptions, ctx: SeedCliContext): Pr
 // ============================
 // Helpers
 // ============================
+
+export function validateSeedOutputPlan(params: {
+  resume: boolean;
+  hasExplicitOutputDir: boolean;
+  inputHasTimestamps: boolean;
+  outputDirExists: boolean;
+  checkpointExists: boolean;
+  outputDirEmpty: boolean;
+  outputDir: string;
+}): string | undefined {
+  const {
+    resume,
+    hasExplicitOutputDir,
+    inputHasTimestamps,
+    outputDirExists,
+    checkpointExists,
+    outputDirEmpty,
+    outputDir,
+  } = params;
+
+  if (resume) {
+    if (!hasExplicitOutputDir) {
+      return "--resume requires an explicit --output-dir.";
+    }
+    if (!inputHasTimestamps) {
+      return (
+        "--resume requires input messages with stable timestamps. " +
+        "Auto-filled timestamps change between runs and could duplicate imported data."
+      );
+    }
+    if (!outputDirExists) {
+      return `Resume output directory does not exist: ${outputDir}`;
+    }
+    if (!checkpointExists) {
+      return `Resume checkpoint not found: ${path.join(outputDir, ".metadata", "checkpoint.json")}`;
+    }
+    return undefined;
+  }
+
+  if (checkpointExists) {
+    return (
+      "Output directory already contains a checkpoint. " +
+      "Use --resume with the same timestamped input, or choose a new output directory.\n" +
+      `   Existing: ${outputDir}`
+    );
+  }
+  if (outputDirExists && !outputDirEmpty) {
+    return (
+      `Output directory already exists and is not empty: ${outputDir}\n` +
+      "   Please use a new directory or clean the existing one."
+    );
+  }
+  return undefined;
+}
 
 /**
  * Load an optional config override file and deep-merge it on top of the
