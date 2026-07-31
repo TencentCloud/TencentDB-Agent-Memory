@@ -132,3 +132,21 @@ jobs:
           else
             echo "✅ Size OK"
           fi
+
+  pydantic-ai-adapter:
+    name: PydanticAI Adapter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pydantic-ai-adapter/pyproject.toml
+
+      - name: Install adapter
+        run: python -m pip install -e "./pydantic-ai-adapter[test]"
+
+      - name: Test adapter
+        run: python -m pytest pydantic-ai-adapter/tests -q
