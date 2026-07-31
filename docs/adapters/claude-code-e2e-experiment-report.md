@@ -142,7 +142,7 @@ This is stronger than a unit test or isolated hook payload: it verifies the actu
 
 ## Limitations
 
-- The experiment validates short-term memory only. Long-term Gateway recall/capture still needs a separate E2E with a running Gateway.
+- The experiment validates the short-term memory path in isolation; long-term Gateway recall/capture was intentionally disabled here (see Scope). The long-term path is validated separately in the [Claude Code Adapter Long-term Memory E2E Experiment Report](./claude-code-long-term-e2e-experiment-report.md).
 - Claude Code explicit `--session-id` could report the session as already in use immediately after a previous run. `--resume <session-id>` worked for the reinjection test.
 - Raw PowerShell output can be noisy for Mermaid labels. Long directory listings are currently truncated, and Windows console encoding can render Chinese path segments inconsistently in local log viewing.
 - Current short-term summarization is deterministic, not LLM-based. It is stable and cheap, but less semantic than OpenClaw's deeper short-term pipeline.
@@ -153,4 +153,4 @@ The Claude Code adapter design is reasonable enough to include as an advanced-st
 
 - Ship current v1 as partial short-term parity with OpenClaw.
 - Document that Claude Code lacks OpenClaw-style mutable prompt/context-engine control, so the adapter uses hook-based `additionalContext` injection.
-- Add a follow-up issue for long-term Gateway E2E and for improving short-term summaries on noisy Windows PowerShell output.
+- Add a follow-up issue for improving short-term summaries on noisy Windows PowerShell output. The long-term Gateway E2E is already covered by the [Long-term Memory E2E Experiment Report](./claude-code-long-term-e2e-experiment-report.md).

@@ -166,10 +166,10 @@ This avoids feeding Claude both automatically recalled memory and a large search
 
 ## Recommendation
 
-Proceed with Claude Code as the new platform, but narrow the advanced-stage implementation target:
+Proceed with Claude Code as the new platform, narrowing the advanced-stage implementation target. The v1 implementation follows this recommendation:
 
-- Phase 1: long-term memory via Gateway plus MCP search tools.
-- Phase 2: lightweight short-term symbolic canvas through `PostToolUse` capture and `additionalContext` injection.
-- Phase 3: revisit full short-term compaction only if Claude Code exposes a deeper mutable-message or compaction-owner interface.
+- Phase 1: long-term memory via Gateway plus MCP search tools — implemented in `src/adapters/claude-code/` and validated in the [Long-term Memory E2E Experiment Report](./claude-code-long-term-e2e-experiment-report.md).
+- Phase 2: lightweight short-term symbolic canvas through `PostToolUse` capture and `additionalContext` injection — implemented and validated in the [E2E Experiment Report](./claude-code-e2e-experiment-report.md).
+- Phase 3: full short-term compaction — explicitly out of scope unless Claude Code exposes a deeper mutable-message or compaction-owner interface.
 
 

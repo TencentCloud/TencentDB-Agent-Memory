@@ -1,4 +1,4 @@
-﻿# Claude Code Adapter v1 Technical Design
+# Claude Code Adapter v1 Technical Design
 
 This document turns the Claude Code adapter review into an implementation-ready v1 plan.
 
@@ -364,11 +364,10 @@ Implemented in `src/adapters/claude-code/`:
 
 Still pending:
 
-- `PostToolUse` short-term refs/jsonl/mmd symbolic canvas.
-- Long-term Gateway E2E with a running Gateway.
 - Packaging/setup instructions beyond development `tsx` invocation.
 
-## E2E Experiment
+## E2E Experiments
 
-A real Claude Code runtime E2E for the short-term memory path passed on Windows with Claude Code 2.1.126 and `claude-sonnet-4-6`. See [Claude Code Adapter E2E Experiment Report](./claude-code-e2e-experiment-report.md).
+- Short-term memory path: a real Claude Code runtime E2E passed on Windows with Claude Code 2.1.126 and `claude-sonnet-4-6`. See [Claude Code Adapter E2E Experiment Report](./claude-code-e2e-experiment-report.md).
+- Long-term memory path: a real Claude Code runtime plus project-local Gateway E2E passed (LT-01 through LT-06). See [Claude Code Adapter Long-term Memory E2E Experiment Report](./claude-code-long-term-e2e-experiment-report.md).
 
