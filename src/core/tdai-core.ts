@@ -33,6 +33,7 @@ import type { MemoryTdaiConfig } from "../config.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
+import { RecallContextEpoch } from "./session/recall-context-epoch.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
@@ -80,6 +81,7 @@ export class TdaiCore {
   private runnerFactory: LLMRunnerFactory;
   private sessionFilter: SessionFilter;
   private instanceId?: string;
+  private recallContext: RecallContextEpoch;
 
   // Lazy-initialized resources
   private vectorStore?: IMemoryStore;
@@ -130,6 +132,7 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.recallContext = new RecallContextEpoch(this.dataDir, this.logger);
   }
 
   // ============================
@@ -243,6 +246,7 @@ export class TdaiCore {
    */
   async handleBeforeRecall(userText: string, sessionKey: string): Promise<RecallResult> {
     await this.storeReady?.catch(() => {});
+    const { epoch, snapshot } = await this.recallContext.resolve();
 
     const result = await performAutoRecall({
       userText,
@@ -253,9 +257,14 @@ export class TdaiCore {
       logger: this.logger,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      stableSnapshot: snapshot,
     });
 
-    return result ?? {};
+    return {
+      ...result,
+      cacheEpoch: epoch,
+      stableSnapshotHash: snapshot.hash,
+    };
   }
 
   /**
@@ -479,6 +488,9 @@ export class TdaiCore {
         logger: this.logger,
         instanceId: this.instanceId,
         llmRunner: l2l3LlmRunner,
+        onStableContextChanged: () => {
+          this.recallContext.publishStableContextChange("scene-navigation");
+        },
       });
       return l2Runner(sessionKey, cursor);
     });
@@ -493,6 +505,9 @@ export class TdaiCore {
         logger: this.logger,
         instanceId: this.instanceId,
         llmRunner: l2l3LlmRunner,
+        onStableContextChanged: () => {
+          this.recallContext.publishStableContextChange("persona");
+        },
       });
       await l3Runner();
     });

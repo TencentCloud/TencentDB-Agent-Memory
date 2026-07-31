@@ -93,6 +93,10 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /** Dynamic L1 delivery: legacy prepend/append or append-only memory epochs (default: "epoch"). */
+  injectionMode: "prepend" | "append" | "epoch";
+  /** Hard cap for persisted Memory Epoch events; also limited to 10% of the host context budget. */
+  epochMaxTokens: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +539,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      injectionMode: validateRecallInjectionMode(str(recallGroup, "injectionMode")) ?? "epoch",
+      epochMaxTokens: Math.max(256, Math.floor(num(recallGroup, "epochMaxTokens") ?? 8192)),
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -634,6 +640,7 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_RECALL_INJECTION_MODES: RecallConfig["injectionMode"][] = ["prepend", "append", "epoch"];
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +650,12 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateRecallInjectionMode(value: string | undefined): RecallConfig["injectionMode"] | undefined {
+  return VALID_RECALL_INJECTION_MODES.includes(value as RecallConfig["injectionMode"])
+    ? value as RecallConfig["injectionMode"]
     : undefined;
 }
 

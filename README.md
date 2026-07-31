@@ -454,6 +454,8 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `pipeline.l1IdleTimeoutSeconds` | `600` | Trigger L1 after the user has been idle for this many seconds |
 | `pipeline.l2MinIntervalSeconds` | `900` | Minimum interval between two L2 passes within the same session |
 | `recall.timeoutMs` | `5000` | Recall timeout; on timeout, skip injection without blocking the conversation |
+| `recall.injectionMode` | `"epoch"` | `epoch` persists only working-set changes as hidden append-only events; `prepend` / `append` retain per-turn transient injection |
+| `recall.epochMaxTokens` | `8192` | Hard cap for persisted Memory Epoch events; the effective cap is also limited to 10% of OpenClaw's context budget, then recall becomes ephemeral until compaction |
 | `extraction.enableDedup` | `true` | L1 vector dedup / conflict detection |
 | `capture.excludeAgents` | `[]` | Glob patterns to exclude specific agents (e.g. `bench-judge-*`) |
 | `capture.l0l1RetentionDays` | `0` | Local retention days for L0 / L1 files; `0` = never clean up |

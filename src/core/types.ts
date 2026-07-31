@@ -197,9 +197,9 @@ export interface CompletedTurn {
 
 /** Result from a recall (prefetch) operation. */
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
+  /** Dynamic L1 relevant memories; the host adapter chooses placement and persistence. */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
+  /** Stable recall context; the host adapter chooses its system-prompt placement. */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
@@ -207,6 +207,10 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /** Explicit cache epoch that produced appendSystemContext. */
+  cacheEpoch?: number;
+  /** Content hash of the stable snapshot for cache diagnostics. */
+  stableSnapshotHash?: string;
 }
 
 /** Result from a capture (sync_turn) operation. */
