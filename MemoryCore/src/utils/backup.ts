@@ -12,16 +12,20 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { StorageAdapter } from "../core/storage/adapter.js";
 
 export class BackupManager {
   private backupRoot: string;
+  private storage: StorageAdapter | undefined;
 
   /**
-   * @param backupRoot - Absolute path to the root backup directory
-   *                     (e.g. `<dataDir>/.backup`).
+   * @param backupRoot - Filesystem: absolute backup directory.
+   *                     StorageAdapter: relative object-key prefix.
+   * @param storage    - Optional object-storage adapter. When omitted, use fs.
    */
-  constructor(backupRoot: string) {
+  constructor(backupRoot: string, storage?: StorageAdapter) {
     this.backupRoot = backupRoot;
+    this.storage = storage;
   }
 
   /**
@@ -40,6 +44,23 @@ export class BackupManager {
     tag: string,
     maxKeep: number,
   ): Promise<void> {
+    if (this.storage) {
+      if (!(await this.storage.exists(srcFile))) {
+        return;
+      }
+
+      const destDir = path.posix.join(this.backupRoot, category);
+      const ext = path.posix.extname(srcFile);
+      const timestamp = formatTimestamp(new Date());
+      const destName = `${category}_${timestamp}_${tag}${ext}`;
+      await this.storage.copyFile(srcFile, path.posix.join(destDir, destName));
+
+      if (maxKeep > 0) {
+        await pruneOldStorageFiles(this.storage, destDir, maxKeep);
+      }
+      return;
+    }
+
     try {
       await fs.access(srcFile);
     } catch {
@@ -211,6 +232,33 @@ async function pruneOldEntries(
       } else {
         await fs.rm(path.join(dir, name), { recursive: true, force: true });
       }
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+async function pruneOldStorageFiles(
+  storage: StorageAdapter,
+  dir: string,
+  maxKeep: number,
+): Promise<void> {
+  let files: string[];
+  try {
+    const prefix = `${dir.replace(/\/+$/, "")}/`;
+    const entries = await storage.readdir(prefix);
+    files = entries
+      .filter((entry) => !entry.isDirectory && entry.key.startsWith(prefix))
+      .map((entry) => entry.key)
+      .sort();
+  } catch {
+    return;
+  }
+
+  const toRemove = files.slice(0, Math.max(0, files.length - maxKeep));
+  for (const key of toRemove) {
+    try {
+      await storage.unlink(key);
     } catch {
       // best-effort
     }
