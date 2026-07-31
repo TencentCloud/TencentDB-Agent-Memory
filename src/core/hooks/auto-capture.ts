@@ -299,7 +299,11 @@ export async function performAutoCapture(params: {
   // ============================
   const tNotifyStart = performance.now();
   // Pass empty array: L1 Runner reads from VectorStore DB (or L0 JSONL fallback), not from in-memory buffers.
-  if (scheduler) {
+  // Only count a conversation when this invocation actually captured new L0
+  // messages. Duplicate hook delivery and seed replay can legitimately produce
+  // an empty filtered batch; notifying in that case advances L1 thresholds for
+  // work that does not exist.
+  if (scheduler && filteredMessages.length > 0) {
     await scheduler.notifyConversation(sessionKey, []);
     logger?.debug?.(`${TAG} Scheduler notified of conversation round (sessionKey=${sessionKey})`);
 
@@ -333,7 +337,11 @@ export async function performAutoCapture(params: {
     `notify=${(performance.now() - tNotifyStart).toFixed(0)}ms`,
   );
 
-  logger?.debug?.(`${TAG} No scheduler provided, skipping notification`);
+  if (!scheduler) {
+    logger?.debug?.(`${TAG} No scheduler provided, skipping notification`);
+  } else {
+    logger?.debug?.(`${TAG} No new L0 messages captured, skipping scheduler notification`);
+  }
   return {
     schedulerNotified: false,
     l0RecordedCount: filteredMessages.length,
