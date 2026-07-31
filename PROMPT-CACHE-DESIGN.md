@@ -15,10 +15,10 @@ OpenAI-compatible provider 复用的是已经处理过的请求前缀。仅把�
 因此新方案的约束不是“把动态内容放到末尾”，而是：同一条 user message 在当前轮作为
 模型输入时是什么字节，下一轮作为历史重放时仍必须是相同字节。
 
-## Session Stable Snapshot + Memory Epoch Ledger
+## Stable Cache Epoch + Memory Epoch Ledger
 
 ```text
-system message（session 内冻结）
+system message（显式 Stable Cache Epoch 内冻结）
 ├─ Stable Snapshot: persona + scene navigation + epoch protocol + tools guide
 ├─ OpenClaw stable system prefix
 ├─ CACHE_BOUNDARY
@@ -34,8 +34,8 @@ messages（只追加）
 
 三项机制各自解决一个问题：
 
-1. Stable Snapshot 在 session 首轮冻结。L2/L3 发布会更新全局 Snapshot，但活跃
-   session 不改写开头；新 Snapshot 从下一 session 生效。
+1. Stable Snapshot 在显式 Cache Epoch 内冻结。L2/L3 发布新 Persona/Scene 后推进
+   Cache Epoch；活跃 session 下一轮切换到新 Snapshot，只发生一次有意的前缀失效。
 2. 每轮仍执行 L1。首次遇到一个内容 ID 时 register 全文；后续主题切换只更新 focus IDs。
    召回集合相同则不注入，切回旧主题也不重复整块记忆。
 3. `before_message_write` 把同一 Epoch Delta 写回当前 user message。Delta 使用 HTML
@@ -75,7 +75,7 @@ min(recall.epochMaxTokens, floor(OpenClaw contextTokenBudget × 10%))
 OpenClaw 插件 API 没有公开的主动 compaction 方法，因此本插件不探测或调用内部 API。
 即使宿主迟迟不 compaction，封口后新记忆也不会继续增加 transcript；代价是等待期的动态
 召回不再享受完整的跨轮前缀连续性。compaction 旋转物理 session generation 时，Ledger
-会保留逻辑 session 的 Stable Snapshot，并只把当前工作集带入新 generation。
+会保留当前 Cache Epoch 的 Stable Snapshot，并只把当前工作集带入新 generation。
 
 ## Prefix 连续性
 
@@ -94,12 +94,17 @@ Top-K 并跳过后续 L1，本方案保留每轮检索，用追加 Epoch 表达�
 ## OpenClaw 宿主契约
 
 - 稳定 Snapshot 通过 `prependSystemContext` 进入含 `CACHE_BOUNDARY` 的 base system
-  之前；仓库的 opt-in 真实 composer 测试验证 `openclaw@2026.5.28` 的位置。
+  之前；已核对官方发布包 `openclaw@2026.5.28` 的 hook 类型、
+  `composeSystemPromptWithHookContext` 和 `SYSTEM_PROMPT_CACHE_BOUNDARY` 实现。插件最低
+  OpenClaw 版本因此明确为 `2026.5.28`，不对更早且契约未知的版本静默降级。
 - OpenClaw 2026.7.1 会临时把 hook context 写入当前模型 prompt，同时保存原始 transcript
   prompt。插件因此必须在 `before_message_write` 主动补入同一 Epoch，不能依赖宿主自动
   持久化 hook context。
 - Epoch 不使用未公开的 message mutation 或 transcript API，只使用
   `before_prompt_build` 和 `before_message_write` 两个公开 hook。
+- `before_prompt_build` 使用 `runId` 让同一轮 hook 重试保持幂等；
+  `before_message_write` 不提供 `runId`，因此待写 Epoch 按 session 使用 FIFO 排队，
+  与 OpenClaw 顺序写入 transcript 的契约对齐，避免并发轮次互相覆盖。
 - `before_message_write` 的 session key 来自 hook context，而不是 event。真实 OpenClaw
   复测曾据此发现并修正“当前 prompt 有 Epoch、JSONL 没有 Epoch”的静默失配。
 
@@ -111,10 +116,10 @@ Top-K 并跳过后续 L1，本方案保留每轮检索，用追加 Epoch 表达�
   但在宿主 compaction 前会牺牲一部分动态尾部缓存连续性。
 - 语义：旧记忆不会从物理历史删除；Registry 保存已出现过的不可变内容，Focus 指定本轮
   应采用的 ID。主题 A→B→A 时，第二次 A 只写 ID。
-- Persona/Scene 在活跃 session 中不是立即刷新；立即刷新会改写系统前缀，等价于主动
-  失效缓存。
-- 进程重启可以从 transcript 恢复 Registry 与 Focus；如果 Persona/Scene 恰好在重启期间
-  改变，稳定 system snapshot 仍会重建并主动失效一次缓存。这是当前实现明确保留的边界。
+- Persona/Scene 只在 L2/L3 明确发布后刷新；刷新会有意改写一次系统前缀，随后新
+  Snapshot 在后续轮次继续稳定缓存，避免为了命中率长期向活跃 session 提供旧画像。
+- 进程重启可以从 transcript 恢复 Registry 与 Focus；稳定 system snapshot 从当前显式
+  Cache Epoch 重建。
 - HTML comment 是否在每一种 OpenClaw 前端都完全隐藏仍需 UI smoke test；provider 与
   JSONL 的逐字一致性已经验证。
 
@@ -175,8 +180,8 @@ Epoch 的加权缓存命中率提高 19.90 个百分点，平均 prompt tokens �
 - 稳定 persona/scene 位于缓存边界前：已实现，并在真实 OpenClaw prompt/provider 链路验证。
 - `showInjected` 导致同一召回反复膨胀：Registry 只注册一次正文，Focus 仅追加内容 ID；
   legacy 模式仍清理 `<relevant-memories>`。
-- session 级系统提示去重：Stable Snapshot 在 session 内冻结，新 session 才接收 L2/L3
-  更新；Gateway 重启从 transcript 恢复 Registry 与 Focus。
+- Stable Cache Epoch：Snapshot 在 Epoch 内去重，L2/L3 更新显式推进 Epoch；Gateway
+  重启从 transcript 恢复 Registry 与 Focus。
 - 缓存命中改善：DeepSeek 大型 recall A/B 和 MiMo 2.5 Pro 的 24 回合重复 A/B 均已证明。
 - 长会话 truncation：100 回合高基数测试证明插件持久增长受 token 预算约束；达到真实宿主
   截断阈值的端到端压力测试仍可作为后续补证。
@@ -200,11 +205,12 @@ Epoch 的加权缓存命中率提高 19.90 个百分点，平均 prompt tokens �
 
 - 当前轮模型使用的 Epoch 字节与写入历史的 Epoch 字节相同。
 - 相同召回集合不生成新 Epoch；新内容写 register，主题变化只写 focus IDs。
-- session 内 Stable Snapshot 不随 L2/L3 全局 Epoch 改写；新 session 使用新 Snapshot。
+- L2/L3 推进 Cache Epoch 后，当前 session 下一轮使用新 Snapshot；日志记录实际注入的
+  Epoch/hash。
 - Recall 超时保留当前 Focus；compaction 后只补一个 Registry checkpoint。
 - Gateway 重启后从历史恢复 Epoch、Registry 和 Focus，不重复注入已有记忆。
 - Epoch 达到 token 预算后只写一次 sealed 事件；后续召回不落历史，compaction 后只恢复
-  当前工作集；物理 session generation 旋转不改变 Stable Snapshot。
+  当前工作集；物理 session generation 旋转保留当时的 Stable Cache Epoch。
 - 全量测试、插件构建和 `git diff --check` 通过。
 - DeepSeek/MiMo A/B 分别报告 cache-read tokens、prompt tokens、TTFT、总时长与回答质量；
   不把本地微基准外推成 provider 指标。

@@ -18,6 +18,7 @@ interface EpochMemory {
 interface SessionEpochState {
   stableSystemContext?: string;
   stableSnapshotHash?: string;
+  stableCacheEpoch?: number;
   epoch: number;
   registered: Map<string, EpochMemory>;
   focused: Set<string>;
@@ -27,11 +28,12 @@ interface SessionEpochState {
 }
 
 interface PendingEpoch {
-  sessionId: string;
-  text: string;
+  turnId: string;
+  result: EpochRecallHookResult;
 }
 
 export interface EpochRecallHookResult extends OpenClawRecallHookResult {
+  stableCacheEpoch?: number;
   memoryEpoch: number;
   memoryEpochChanged: boolean;
   memoryEpochSealed: boolean;
@@ -80,7 +82,7 @@ export function buildOpenClawRecallHookResult(
  */
 export class OpenClawMemoryEpochLedger {
   private readonly sessions = new Map<string, SessionEpochState>();
-  private readonly pending = new Map<string, PendingEpoch>();
+  private readonly pending = new Map<string, PendingEpoch[]>();
   private readonly checkpointSessions = new Set<string>();
 
   constructor(private readonly maxTokens = DEFAULT_EPOCH_MAX_TOKENS) {}
@@ -88,10 +90,15 @@ export class OpenClawMemoryEpochLedger {
   prepare(params: {
     sessionKey: string;
     sessionId: string;
+    turnId: string;
     recall: RecallResult;
     historyMessages?: unknown[];
     contextTokenBudget?: number;
   }): EpochRecallHookResult {
+    const prepared = this.pending.get(params.sessionKey)
+      ?.find((pending) => pending.turnId === params.turnId);
+    if (prepared) return prepared.result;
+
     const key = this.key(params.sessionKey, params.sessionId);
     let state = this.sessions.get(key);
     if (!state) {
@@ -100,6 +107,7 @@ export class OpenClawMemoryEpochLedger {
       state = {
         stableSystemContext: previousGeneration?.stableSystemContext ?? params.recall.appendSystemContext,
         stableSnapshotHash: previousGeneration?.stableSnapshotHash ?? params.recall.stableSnapshotHash,
+        stableCacheEpoch: previousGeneration?.stableCacheEpoch ?? params.recall.cacheEpoch,
         epoch: Math.max(previousGeneration?.epoch ?? 0, restored.epoch),
         registered: restored.registered,
         focused: restored.focused,
@@ -110,6 +118,11 @@ export class OpenClawMemoryEpochLedger {
       this.sessions.set(key, state);
     }
     const session = state;
+    if (params.recall.cacheEpoch !== undefined && params.recall.cacheEpoch !== session.stableCacheEpoch) {
+      session.stableSystemContext = params.recall.appendSystemContext;
+      session.stableSnapshotHash = params.recall.stableSnapshotHash;
+      session.stableCacheEpoch = params.recall.cacheEpoch;
+    }
     if (this.checkpointSessions.delete(params.sessionKey)) session.checkpointRequired = true;
     const tokenBudget = params.contextTokenBudget
       ? Math.min(this.maxTokens, Math.max(1, Math.floor(params.contextTokenBudget * EPOCH_CONTEXT_SHARE)))
@@ -160,7 +173,6 @@ export class OpenClawMemoryEpochLedger {
         }
         session.tokenCount = countEpochTokens(epochText);
         session.checkpointRequired = false;
-        this.pending.set(params.sessionKey, { sessionId: params.sessionId, text: epochText });
       } else if (session.sealed) {
         ephemeralText = formatEphemeralRecall(params.recall, recalled);
       } else if (registrations.length > 0 || focusChanged) {
@@ -197,11 +209,10 @@ export class OpenClawMemoryEpochLedger {
           ephemeralText = formatEphemeralRecall(params.recall, recalled);
         }
         session.tokenCount += countEpochTokens(epochText);
-        this.pending.set(params.sessionKey, { sessionId: params.sessionId, text: epochText });
       }
     }
 
-    return {
+    const result = {
       prependSystemContext: session.stableSystemContext,
       prependContext: epochText,
       appendContext: ephemeralText,
@@ -210,19 +221,26 @@ export class OpenClawMemoryEpochLedger {
       memoryEpochSealed: session.sealed,
       memoryEpochTokens: session.tokenCount,
       memoryEpochTokenBudget: tokenBudget,
+      stableCacheEpoch: session.stableCacheEpoch,
       stableSnapshotHash: session.stableSnapshotHash,
     };
+    const queue = this.pending.get(params.sessionKey) ?? [];
+    queue.push({ turnId: params.turnId, result });
+    this.pending.set(params.sessionKey, queue);
+    return result;
   }
 
   persist(sessionKey: string, message: { role?: string; content?: unknown }): typeof message | undefined {
     if (message.role !== "user") return undefined;
-    const pending = this.pending.get(sessionKey);
-    if (!pending) return stripLegacyRecall(message);
-    this.pending.delete(sessionKey);
+    const queue = this.pending.get(sessionKey);
+    const pending = queue?.shift();
+    if (queue?.length === 0) this.pending.delete(sessionKey);
+    const epochText = pending?.result.prependContext;
+    if (!epochText) return stripLegacyRecall(message);
 
     if (typeof message.content === "string") {
       const clean = stripLegacyRecallText(message.content);
-      const content = clean.startsWith(pending.text) ? clean : `${pending.text}\n\n${clean}`;
+      const content = clean.startsWith(epochText) ? clean : `${epochText}\n\n${clean}`;
       return content === message.content ? undefined : { ...message, content };
     }
 
@@ -232,7 +250,7 @@ export class OpenClawMemoryEpochLedger {
       if (injected || part.type !== "text" || typeof part.text !== "string") return part;
       injected = true;
       const clean = stripLegacyRecallText(part.text);
-      return { ...part, text: clean.startsWith(pending.text) ? clean : `${pending.text}\n\n${clean}` };
+      return { ...part, text: clean.startsWith(epochText) ? clean : `${epochText}\n\n${clean}` };
     });
     return injected ? { ...message, content } : undefined;
   }
@@ -317,14 +335,8 @@ function userMessageText(message: unknown): string | undefined {
 function toEpochMemories(
   recall: RecallResult,
 ): EpochMemory[] {
-  const structured = recall.recalledL1Memories
-    ?.map((memory) => `- [${memory.type}] ${memory.content}`);
-  const recalled = structured?.length
-    ? structured
-    : recall.prependContext
-      ?.split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("- [")) ?? [];
+  const recalled = recall.recalledL1Memories
+    ?.map((memory) => `- [${memory.type}] ${memory.content}`) ?? [];
   const unique = new Map<string, EpochMemory>();
   for (const line of recalled) {
     const text = line.trim();

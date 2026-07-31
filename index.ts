@@ -594,6 +594,7 @@ export default function register(api: OpenClawPluginApi) {
           ? memoryEpochLedger.prepare({
               sessionKey: resolvedSessionKey,
               sessionId: ctx.sessionId,
+              turnId: ctx.runId ?? `${ctx.sessionId}:${event.messages.length}`,
               recall: result,
               historyMessages: event.messages,
               contextTokenBudget: ctx.contextTokenBudget,
@@ -606,7 +607,8 @@ export default function register(api: OpenClawPluginApi) {
           const epochResult = "memoryEpoch" in hookResult ? hookResult : undefined;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `epoch=${result.cacheEpoch}, snapshot=${result.stableSnapshotHash}, ` +
+            `epoch=${epochResult?.stableCacheEpoch ?? result.cacheEpoch}, ` +
+            `snapshot=${epochResult?.stableSnapshotHash ?? result.stableSnapshotHash}, ` +
             `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars` +
             (epochResult
               ? `, memoryEpoch=${epochResult.memoryEpoch}, delta=${epochResult.memoryEpochChanged ? "yes" : "no"}, ` +

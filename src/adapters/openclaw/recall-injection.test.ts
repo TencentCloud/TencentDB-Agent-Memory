@@ -25,14 +25,16 @@ describe("OpenClaw recall placement", () => {
 });
 
 describe("OpenClaw memory epoch ledger", () => {
-  it("persists exact deltas while freezing the snapshot and changing focus by ID", () => {
+  it("persists exact deltas and advances the snapshot only on an explicit cache epoch", () => {
     const ledger = new OpenClawMemoryEpochLedger();
     const session = { sessionKey: "agent:main:test", sessionId: "session-1" };
     const first = ledger.prepare({
       ...session,
+      turnId: "turn-1",
       recall: {
         appendSystemContext: "stable-v1",
         stableSnapshotHash: "hash-v1",
+        cacheEpoch: 1,
         recalledL1Memories: [memory("memory A"), memory("memory B")],
         recallStrategy: "hybrid",
       },
@@ -42,9 +44,11 @@ describe("OpenClaw memory epoch ledger", () => {
     expect(persisted?.content).toBe(`${first.prependContext}\n\nturn one`);
     const unchanged = ledger.prepare({
       ...session,
+      turnId: "turn-2",
       recall: {
         appendSystemContext: "stable-v2",
         stableSnapshotHash: "hash-v2",
+        cacheEpoch: 1,
         recalledL1Memories: [memory("memory A"), memory("memory B")],
         recallStrategy: "hybrid",
       },
@@ -52,10 +56,15 @@ describe("OpenClaw memory epoch ledger", () => {
     expect(unchanged.prependContext).toBeUndefined();
     expect(unchanged.prependSystemContext).toBe("stable-v1");
     expect(unchanged.stableSnapshotHash).toBe("hash-v1");
+    expect(ledger.persist(session.sessionKey, { role: "user", content: "turn two" })).toBeUndefined();
 
     const changed = ledger.prepare({
       ...session,
+      turnId: "turn-3",
       recall: {
+        appendSystemContext: "stable-v2",
+        stableSnapshotHash: "hash-v2",
+        cacheEpoch: 2,
         recalledL1Memories: [memory("memory B"), memory("memory C")],
         recallStrategy: "hybrid",
       },
@@ -64,17 +73,22 @@ describe("OpenClaw memory epoch ledger", () => {
     expect(changed.prependContext).not.toContain("memory B");
     expect(changed.prependContext).toMatch(/focus: [a-f0-9]{12}, [a-f0-9]{12}/);
     expect(changed.memoryEpoch).toBe(2);
+    expect(changed.prependSystemContext).toBe("stable-v2");
+    expect(changed.stableSnapshotHash).toBe("hash-v2");
+    ledger.persist(session.sessionKey, { role: "user", content: "turn three" });
 
     const timedOut = ledger.prepare({
       ...session,
+      turnId: "turn-4",
       recall: { recalledL1Memories: [], recallStrategy: "timed-out" },
     });
     expect(timedOut.prependContext).toBeUndefined();
     expect(timedOut.memoryEpoch).toBe(2);
+    expect(ledger.persist(session.sessionKey, { role: "user", content: "turn four" })).toBeUndefined();
 
-    ledger.persist(session.sessionKey, { role: "user", content: "turn two" });
     const switchedBack = ledger.prepare({
       ...session,
+      turnId: "turn-5",
       recall: {
         recalledL1Memories: [memory("memory A"), memory("memory B")],
         recallStrategy: "hybrid",
@@ -91,6 +105,7 @@ describe("OpenClaw memory epoch ledger", () => {
     const prepared = ledger.prepare({
       sessionKey: "agent:main:multiline",
       sessionId: "session-1",
+      turnId: "turn-1",
       recall: {
         prependContext: "<relevant-memories>\n- [fact] first line\nsecond line\n</relevant-memories>",
         recalledL1Memories: [memory("first line\nsecond -- line", "fact")],
@@ -114,6 +129,7 @@ describe("OpenClaw memory epoch ledger", () => {
     const session = { sessionKey: "agent:main:bounded", sessionId: "session-1" };
     const sealed = ledger.prepare({
       ...session,
+      turnId: "turn-1",
       recall: {
         recalledL1Memories: [memory(largeMemory("large-A"))],
         recallStrategy: "hybrid",
@@ -128,6 +144,7 @@ describe("OpenClaw memory epoch ledger", () => {
 
     const overflow = ledger.prepare({
       ...session,
+      turnId: "turn-2",
       recall: {
         recalledL1Memories: [memory(largeMemory("large-B"))],
         recallStrategy: "hybrid",
@@ -140,6 +157,7 @@ describe("OpenClaw memory epoch ledger", () => {
     ledger.requireCheckpoint(session.sessionKey);
     const checkpoint = ledger.prepare({
       ...session,
+      turnId: "turn-3",
       recall: {
         recalledL1Memories: [memory("small current memory")],
         recallStrategy: "hybrid",
@@ -157,9 +175,11 @@ describe("OpenClaw memory epoch ledger", () => {
     const first = ledger.prepare({
       sessionKey,
       sessionId: "generation-1",
+      turnId: "turn-1",
       recall: {
         appendSystemContext: "stable-before-compaction",
         stableSnapshotHash: "stable-hash",
+        cacheEpoch: 1,
         recalledL1Memories: [memory("old working memory")],
         recallStrategy: "hybrid",
       },
@@ -170,10 +190,12 @@ describe("OpenClaw memory epoch ledger", () => {
     const rotated = ledger.prepare({
       sessionKey,
       sessionId: "generation-2",
+      turnId: "turn-2",
       historyMessages: [],
       recall: {
         appendSystemContext: "newer-global-snapshot",
         stableSnapshotHash: "newer-hash",
+        cacheEpoch: 1,
         recalledL1Memories: [memory("current working memory")],
         recallStrategy: "hybrid",
       },
@@ -190,6 +212,7 @@ describe("OpenClaw memory epoch ledger", () => {
     const firstProcess = new OpenClawMemoryEpochLedger();
     const first = firstProcess.prepare({
       ...session,
+      turnId: "turn-1",
       recall: { recalledL1Memories: [memory("memory A")], recallStrategy: "hybrid" },
     });
     const persisted = firstProcess.persist(session.sessionKey, { role: "user", content: "turn one" });
@@ -197,19 +220,51 @@ describe("OpenClaw memory epoch ledger", () => {
     const secondProcess = new OpenClawMemoryEpochLedger();
     const unchanged = secondProcess.prepare({
       ...session,
+      turnId: "turn-2",
       historyMessages: [persisted],
       recall: { recalledL1Memories: [memory("memory A")], recallStrategy: "hybrid" },
     });
     expect(unchanged.memoryEpoch).toBe(1);
     expect(unchanged.prependContext).toBeUndefined();
+    expect(secondProcess.persist(session.sessionKey, { role: "user", content: "turn two" })).toBeUndefined();
 
     const changed = secondProcess.prepare({
       ...session,
+      turnId: "turn-3",
       recall: { recalledL1Memories: [memory("memory B")], recallStrategy: "hybrid" },
     });
     expect(first.prependContext).toContain("memory A");
     expect(changed.memoryEpoch).toBe(2);
     expect(changed.prependContext).toContain("memory B");
+  });
+
+  it("correlates concurrent turns in order and reuses the same result on retry", () => {
+    const ledger = new OpenClawMemoryEpochLedger();
+    const session = { sessionKey: "agent:main:concurrent", sessionId: "session-1" };
+    const first = ledger.prepare({
+      ...session,
+      turnId: "run-a",
+      recall: { recalledL1Memories: [memory("memory A")], recallStrategy: "hybrid" },
+    });
+    const retry = ledger.prepare({
+      ...session,
+      turnId: "run-a",
+      recall: { recalledL1Memories: [memory("retry must not replace A")], recallStrategy: "hybrid" },
+    });
+    const second = ledger.prepare({
+      ...session,
+      turnId: "run-b",
+      recall: { recalledL1Memories: [memory("memory B")], recallStrategy: "hybrid" },
+    });
+
+    const persistedFirst = ledger.persist(session.sessionKey, { role: "user", content: "turn A" });
+    const persistedSecond = ledger.persist(session.sessionKey, { role: "user", content: "turn B" });
+
+    expect(retry).toBe(first);
+    expect(persistedFirst?.content).toContain("memory A");
+    expect(persistedFirst?.content).not.toContain("memory B");
+    expect(persistedSecond?.content).toContain("memory B");
+    expect(second.memoryEpoch).toBe(2);
   });
 
   it("bounds persistent growth across high-cardinality turns", () => {
@@ -222,6 +277,7 @@ describe("OpenClaw memory epoch ledger", () => {
     for (let turn = 1; turn <= 100; turn += 1) {
       const result = ledger.prepare({
         ...session,
+        turnId: `turn-${turn}`,
         recall: {
           recalledL1Memories: [memory(`unique-${turn} ${"content ".repeat(30)}`)],
           recallStrategy: "hybrid",
@@ -245,6 +301,7 @@ describe("OpenClaw memory epoch ledger", () => {
     const result = new OpenClawMemoryEpochLedger(8192).prepare({
       sessionKey: "agent:main:context-budget",
       sessionId: "session-1",
+      turnId: "turn-1",
       contextTokenBudget: 4096,
       recall: { recalledL1Memories: [memory("small memory")], recallStrategy: "hybrid" },
     });
