@@ -154,6 +154,73 @@ def _resolve_gateway_api_key() -> Optional[str]:
     return None
 
 
+def _flag_is_false(value: Any) -> bool:
+    if value is False:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"false", "0", "no", "off"}
+    return False
+
+
+def _get_host_memory_flag(kwargs: Dict[str, Any], name: str) -> Any:
+    """Best-effort lookup for Hermes memory flags passed through initialize()."""
+    if name in kwargs:
+        return kwargs[name]
+
+    memory = kwargs.get("memory")
+    if isinstance(memory, dict) and name in memory:
+        return memory[name]
+
+    config = kwargs.get("config")
+    if isinstance(config, dict):
+        config_memory = config.get("memory")
+        if isinstance(config_memory, dict) and name in config_memory:
+            return config_memory[name]
+
+    return None
+
+
+def _log_startup_observability(
+    *,
+    session_id: str,
+    user_id: str,
+    host: str,
+    port: int,
+    gateway_cmd: Optional[str],
+    api_key: Optional[str],
+    kwargs: Dict[str, Any],
+) -> None:
+    gateway_mode = "auto-start" if gateway_cmd else "connect-only"
+    auth_mode = "bearer" if api_key else "none"
+    logger.info(
+        "memory-tencentdb provider loaded: reason=Hermes memory.provider selected "
+        "memory_tencentdb; session=%s user=%s gateway=http://%s:%d "
+        "gatewayMode=%s auth=%s. The provider will attach/start the Gateway, "
+        "serve recall/search tools, and capture turns for L0-L3 memory.",
+        session_id,
+        user_id,
+        host,
+        port,
+        gateway_mode,
+        auth_mode,
+    )
+
+    suspicious_flags = [
+        name
+        for name in ("memory_enabled", "user_profile_enabled")
+        if _flag_is_false(_get_host_memory_flag(kwargs, name))
+    ]
+    if suspicious_flags:
+        logger.warning(
+            "memory-tencentdb loaded even though Hermes %s false. In Hermes "
+            "these fields only control system-prompt/tool advertisement; they "
+            "do not disable this provider once memory.provider=memory_tencentdb. "
+            "To disable memory-tencentdb, unset memory.provider or set it to a "
+            "different provider.",
+            " and ".join(suspicious_flags),
+        )
+
+
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
 # set MEMORY_TENCENTDB_GATEWAY_CMD. Order matters: in-tree checkout (next to
 # this file) wins over ad-hoc clones in ``$HOME``.
@@ -750,6 +817,16 @@ class MemoryTencentdbProvider(MemoryProvider):
         # configure ``TDAI_GATEWAY_API_KEY`` / ``server.apiKey`` on the
         # Gateway side directly so both ends agree on the secret.
         api_key = _resolve_gateway_api_key()
+
+        _log_startup_observability(
+            session_id=session_id,
+            user_id=self._user_id,
+            host=host,
+            port=port,
+            gateway_cmd=gateway_cmd,
+            api_key=api_key,
+            kwargs=kwargs,
+        )
 
         self._supervisor = GatewaySupervisor(
             host=host,
