@@ -1227,59 +1227,59 @@ Turn 2 的 SPLIT 命中率（54.3%）低于 BASELINE（79.7%），原因与实�
 - 缓存正反馈循环：summaries 缓存命中 → 减少检索 → 节省 token → 推迟截断 → 更高命中率
 
 
-## 16. 实验四：Cache-Aware Context Lifecycle Management
+## 16. 实验 4：缓存感知的上下文生命周期管理
 
-### 16.1 问题回顾：showInjected 的两难困境
+### 16.1 问题回顾：showInjected 的困境
 
-实验一至三揭示了 `showInjected` 的根本性两难：
+实验 1-3 揭示了 `showInjected` 的根本性困境：
 
 | 设置 | 缓存效果 | 副作用 |
 |:---|:---|:---|
-| `showInjected=true` | Turn 2 起前缀匹配保持（实验一 Cond D: 93.1%） | L1 记忆写入历史 → 上下文膨胀 → 触发截断 → 熔断 |
-| `showInjected=false` | 无历史膨胀 | Turn 1→2 前缀断裂（实验二: −41.8%），每轮都在断裂 |
+| `showInjected=true` | 从第 2 轮起保持前缀匹配（实验 1 条件 C: 93.1%） | L1 记忆被写入历史 → 上下文膨胀 → 触发截断 → 崩溃 |
+| `showInjected=false` | 无历史膨胀 | 第 1 轮→第 2 轮前缀断裂（实验 2: −41.8%），且每轮都断裂 |
 
-**无论选哪个，都会在某一维度上受损。** 实验三的 Split-History 缓解了截断问题，但未解决 showInjected 的两难本身。
+**两种选择均有所牺牲。** 实验 3 的分段历史缓解了截断问题，但并未解决 showInjected 困境本身。
 
-### 16.2 新方案：Cache-Aware 三区 Prompt 架构
+### 16.2 新方案：缓存感知的三区提示词架构
 
-核心思路：**L1 记忆不再写入历史。历史只保存纯对话。Prompt 分为三个区域，各司其职。**
+核心思路：**L1 记忆不再写入历史。历史只存储纯对话。提示词分为三个区域，各司其职。**
 
 ```
-┌─ SYSTEM PROMPT（缓存区）────────────────────────────────────┐
-│  [Base System Prompt]                                      │
+┌─ 系统提示词（缓存区）────────────────────────────────────┐
+│  [基础系统提示词]                                          │
 │  CACHE_BOUNDARY                                            │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ <user-persona>           ← L3, 固定                  │   │
-│  │ <scene-navigation>       ← L2, 固定                  │   │
-│  │ <memory-tools-guide>     ← 静态, 固定                │   │
-│  │ <conversation-summaries> ← 追加式摘要, 前缀稳定      │   │
-│  │   <epoch id="1">...</epoch>                          │   │
-│  │   <epoch id="2">...</epoch>                          │   │
-│  └─────────────────────────────────────────────────────┘   │
-└────────────────────────────────────────────────────────────┘
-┌─ USER MESSAGE（动态区，每轮变化）──────────────────────────┐
-│  <recent-conversation>    ← 最近 N 轮纯对话（循环缓冲区）  │
-│  <relevant-memories>      ← L1 召回记忆（Prompt 最尾部）  │
-│                                                           │
-│  [当前用户输入]                                            │
+│  ┌─────────────────────────────────────────────────┐     │
+│  │ <user-persona>           ← L3，固定内容           │     │
+│  │ <scene-navigation>       ← L2，固定内容           │     │
+│  │ <memory-tools-guide>     ← 静态内容，固定         │     │
+│  │ <conversation-summaries> ← 仅追加摘要，           │     │
+│  │   <epoch id="1">...</epoch>                      │     │
+│  │   <epoch id="2">...</epoch>                      │     │
+│  └─────────────────────────────────────────────────┘     │
+└───────────────────────────────────────────────────────────┘
+┌─ 用户消息（动态区，每轮变化）───────────────────────────┐
+│  <recent-conversation>    ← 最近 N 轮纯对话              │
+│  <relevant-memories>      ← L1 召回的记忆（置于最末尾）  │
+│                                                          │
+│  [当前用户输入]                                          │
 └──────────────────────────────────────────────────────────┘
 ```
 
 **三个关键设计决策**：
 
-| # | 决策 | 原因 |
+| # | 决策 | 理由 |
 |:---|:---|:---|
-| 1 | L1 记忆放在 Prompt 尾部 | 动态内容在最后 → 不影响前缀匹配 → 不破坏 system prompt 缓存 |
-| 2 | L1 记忆**永不写入历史** | `before_message_write` 始终剥离 `<relevant-memories>`，历史只含纯对话 |
-| 3 | 稳定摘要**追加不重写** | 新 `<epoch>` 追加到末尾，旧 epoch 字节不变 → 前缀始终一致 → 永久缓存 |
+| 1 | 将 L1 记忆放在提示词末尾 | 动态内容置于最后 → 不影响前缀匹配 → 不破坏系统提示词缓存 |
+| 2 | L1 记忆**绝不写入历史** | `before_message_write` 始终剥离 `<relevant-memories>`，历史仅包含纯对话 |
+| 3 | 稳定摘要**仅追加，绝不重写** | 新 `<epoch>` 追加在末尾，旧 epoch 字节不变 → 前缀始终一致 → 永久缓存 |
 
-### 16.3 Prompt 模板对比
+### 16.3 提示词模板对比
 
-**Turn N 完整 Prompt（新方案）**：
+**第 N 轮完整提示词（新方案）**：
 
 ```
 SYSTEM:
-  [Base system prompt — OpenClaw framework]
+  [基础系统提示词 — OpenClaw 框架]
   --- CACHE_BOUNDARY ---
   <user-persona>
   张伟，全栈工程师，React + FastAPI...
@@ -1291,108 +1291,108 @@ SYSTEM:
   </scene-navigation>
   <conversation-summaries>
   ## 早期对话摘要
-  <epoch id="1" turns="1-8">用户张伟开始搭建任务管理应用，选择 FastAPI + PostgreSQL，定义了 Task 模型（status: todo/in_progress/review/done, priority: low/medium/high/urgent），实现了完整 CRUD API，采用软删除方案。</epoch>
+  <epoch id="1" turns="1-8">用户张伟开始构建任务管理应用，选择 FastAPI + PostgreSQL，定义 Task 模型（状态：todo/in_progress/review/done，优先级：low/medium/high/urgent），实现完整 CRUD API 并支持软删除。</epoch>
   </conversation-summaries>
   <memory-tools-guide>
-  [静态工具使用说明]
+  [静态工具使用指南]
   </memory-tools-guide>
 
 USER:
   <recent-conversation>
-  ## 最近的对话（最新在前）
-  [助手] Task 模型已创建，包含所有字段...
-  [用户] 帮我写一下 Task 模型...
+  ## 最近对话（最新在前）
+  [assistant] Task 模型已创建，包含所有字段...
+  [user] 请帮我编写 Task 模型...
   </recent-conversation>
   <relevant-memories>
-  以下是当前对话召回的相关记忆...
+  从当前对话中召回的相关记忆...
   - [instruction] 数据库使用 PostgreSQL + SQLAlchemy
   - [episodic] Task CRUD 已完成，使用软删除
   </relevant-memories>
 
-  [用户当前输入]
+  [当前用户输入]
 ```
 
-**与旧方案（BASELINE + showInjected=true）的关键区别**：
+**与旧方案（BASELINE + showInjected=true）的关键差异**：
 
-| 维度 | 旧方案（showInjected=true） | 新方案（Cache-Aware） |
+| 维度 | 旧方案 (showInjected=true) | 新方案 (缓存感知) |
 |:---|:---|:---|
-| L1 记忆位置 | prependContext（用户消息前缀） | prependContext 末尾（Prompt 尾部） |
-| L1 是否写入历史 | 是（导致膨胀） | **否**（始终剥离） |
-| 历史摘要方式 | buildReversedHistory 每轮重建 | **追加式** StableHistoryManager |
-| 最近历史 | 从 messages 数组每轮重建 | **循环缓冲区** RecentHistory |
+| L1 记忆位置 | prependContext（用户消息前缀） | prependContext 末尾（提示词尾部） |
+| L1 写入历史 | 是（导致膨胀） | **否**（始终剥离） |
+| 历史摘要化 | buildReversedHistory 每轮重建 | **仅追加** StableHistoryManager |
+| 最近历史 | 每轮从消息数组重建 | **循环缓冲区** RecentHistory |
 | N 轮数 | 固定 keepRecent=15 | **自适应** N_optimal |
 
-### 16.4 最佳历史保存轮次 N_optimal 完整计算公式
+### 16.4 最佳历史窗口 N_optimal 完整计算公式
 
 #### 变量定义
 
 | 符号 | 含义 | 单位 | 获取方式 |
 |:---|:---|:---|:---|
-| \(L\) | 模型上下文窗口 | tokens | 模型配置读取 |
-| \(B\) | OpenClaw 预留缓冲区（截断安全边际） | tokens | 固定常量，建议 4000 |
-| \(U\) | 当前用户问题平均长度 | tokens | 最近 5 轮滑动平均 |
-| \(Tool\) | 工具调用结果平均长度 | tokens | 最近 5 轮滑动平均 |
-| \(M\) | 每轮召回 L1 记忆平均长度 | tokens | 最近 5 轮滑动平均 |
-| \(S\) | CACHE_BOUNDARY 之前固定内容长度（Persona + Scene + Tools + System） | tokens | 启动时一次计算 |
-| \(H_{stable}\) | 当前稳定历史总长度（所有追加 `<epoch>` 摘要） | tokens | 运行时统计 |
-| \(T\) | 每轮对话平均 Token 数（User + Assistant） | tokens | 最近 10 轮滑动平均 |
-| \(C\) | 最近一次压缩生成的摘要平均长度 | tokens | 每次压缩后滑动平均 |
-| \(H_{avg}\) | 最近 10 轮平均缓存命中率（排除 Turn 1） | — | 运行时统计 |
+| \(L\) | 模型上下文窗口 | tokens | 从模型配置读取 |
+| \(B\) | OpenClaw 保留缓冲（截断安全边界） | tokens | 固定常量，推荐 4000 |
+| \(U\) | 平均用户问题长度 | tokens | 最近 5 轮滑动窗口 |
+| \(Tool\) | 平均工具调用结果长度 | tokens | 最近 5 轮滑动窗口 |
+| \(M\) | 平均 L1 召回记忆长度 | tokens | 最近 5 轮滑动窗口 |
+| \(S\) | CACHE_BOUNDARY 前的固定稳定内容长度（人设 + 场景 + 工具 + 系统） | tokens | 启动时计算 |
+| \(H_{stable}\) | 当前稳定历史总长度（所有已追加 `<epoch>` 摘要） | tokens | 运行时跟踪 |
+| \(T\) | 每轮对话的平均 token 数（用户 + 助手） | tokens | 最近 10 轮滑动窗口 |
+| \(C\) | 最近一次压缩摘要的平均长度 | tokens | 每次压缩后滑动平均 |
+| \(H_{avg}\) | 最近 10 轮平均缓存命中率（排除第 1 轮） | — | 运行时跟踪 |
 
 #### 完整计算步骤
 
-**Step 1 — 有效上下文窗口**：
+**步骤 1 — 有效上下文窗口**：
 
-<img src="https://latex.codecogs.com/svg.latex?L_{eff}%20=%20L%20-%20B%20-%20U%20-%20Tool%20-%20M" alt="有效上下文窗口" />
+<img src="https://latex.codecogs.com/svg.latex?L_{eff}%20=%20L%20-%20B%20-%20U%20-%20Tool%20-%20M" alt="effective context window" />
 
-**Step 2 — 稳定区总长度**：
+**步骤 2 — 稳定区域总长度**：
 
-<img src="https://latex.codecogs.com/svg.latex?S_{total}%20=%20S%20+%20H_{stable}" alt="稳定区总长度" />
+<img src="https://latex.codecogs.com/svg.latex?S_{total}%20=%20S%20+%20H_{stable}" alt="stable total" />
 
-**Step 3 — 可用于最近历史的 Token 空间**：
+**步骤 3 — 最近历史可用 token 空间**：
 
-<img src="https://latex.codecogs.com/svg.latex?A%20=%20L_{eff}%20-%20S_{total}" alt="可用空间" />
+<img src="https://latex.codecogs.com/svg.latex?A%20=%20L_{eff}%20-%20S_{total}" alt="available space" />
 
 若 \(A \le 0\)，立即触发紧急压缩。
 
-**Step 4 — 物理上限轮数**：
+**步骤 4 — 物理轮数上限**：
 
-<img src="https://latex.codecogs.com/svg.latex?N_{max\_physical}%20=%20\left\lfloor%20\frac{A}{T}%20\right\rfloor" alt="物理上限轮数" />
+<img src="https://latex.codecogs.com/svg.latex?N_{max\_physical}%20=%20\left\lfloor%20\frac{A}{T}%20\right\rfloor" alt="physical upper bound" />
 
-**Step 5 — 安全边际**（70%，为突发波动预留缓冲）：
+**步骤 5 — 安全边界**（70%，为突发波动预留缓冲）：
 
-<img src="https://latex.codecogs.com/svg.latex?N_{safe}%20=%20\left\lfloor%200.7%20\times%20N_{max\_physical}%20\right\rfloor" alt="安全边际" />
+<img src="https://latex.codecogs.com/svg.latex?N_{safe}%20=%20\left\lfloor%200.7%20\times%20N_{max\_physical}%20\right\rfloor" alt="safety margin" />
 
-**Step 6 — 压缩效率下限**（压缩至少节省 50% 空间）：
+**步骤 6 — 压缩效率下限**（至少节省 50% 空间）：
 
-<img src="https://latex.codecogs.com/svg.latex?N_{min\_efficiency}%20=%20\left\lceil%20\frac{2C}{T}%20\right\rceil" alt="压缩效率下限" />
+<img src="https://latex.codecogs.com/svg.latex?N_{min\_efficiency}%20=%20\left\lceil%20\frac{2C}{T}%20\right\rceil" alt="efficiency lower bound" />
 
-推导：<img src="https://latex.codecogs.com/svg.latex?F%20=%20N%20\cdot%20T%20-%20C%20\ge%200.5%20\times%20N%20\cdot%20T%20\Rightarrow%20N%20\ge%202C%20/%20T" alt="压缩效率推导" />
+推导：<img src="https://latex.codecogs.com/svg.latex?F%20=%20N%20\cdot%20T%20-%20C%20\ge%200.5%20\times%20N%20\cdot%20T%20\Rightarrow%20N%20\ge%202C%20/%20T" alt="derivation" />
 
-**Step 7 — 配置边界**：
+**步骤 7 — 配置边界**：
 
-<img src="https://latex.codecogs.com/svg.latex?N_{min\_config}%20=%203,\quad%20N_{max\_config}%20=%2015" alt="配置边界" />
+<img src="https://latex.codecogs.com/svg.latex?N_{min\_config}%20=%203,\quad%20N_{max\_config}%20=%2015" alt="boundaries" />
 
-**Step 8 — 实时命中率动态微调**：
+**步骤 8 — 实时命中率动态调整**：
 
-<img src="https://latex.codecogs.com/svg.latex?\alpha%20=%20\begin{cases}%200.8%20&%20\text{if%20}%20H_{avg}%20<%200.70%20\\%201.0%20&%20\text{if%20}%200.70%20\le%20H_{avg}%20\le%200.85%20\\%201.15%20&%20\text{if%20}%20H_{avg}%20>%200.85%20\end{cases}" alt="动态微调系数" />
+<img src="https://latex.codecogs.com/svg.latex?\alpha%20=%20\begin{cases}%200.8%20&%20\text{if%20}%20H_{avg}%20<%200.70%20\\%201.0%20&%20\text{if%20}%200.70%20\le%20H_{avg}%20\le%200.85%20\\%201.15%20&%20\text{if%20}%20H_{avg}%20>%200.85%20\end{cases}" alt="alpha" />
 
-<img src="https://latex.codecogs.com/svg.latex?N_{adjusted}%20=%20\text{clamp}\left(\left\lfloor%20\alpha%20\times%20N_{safe}%20\right\rfloor,\;%20N_{min\_config},\;%20N_{max\_config}\right)" alt="调整后窗口" />
+<img src="https://latex.codecogs.com/svg.latex?N_{adjusted}%20=%20\text{clamp}\left(\left\lfloor%20\alpha%20\times%20N_{safe}%20\right\rfloor,\;%20N_{min\_config},\;%20N_{max\_config}\right)" alt="adjusted" />
 
-**Step 9 — 最终输出**：
+**步骤 9 — 最终输出**：
 
-<img src="https://latex.codecogs.com/svg.latex?N_{optimal}%20=%20\text{clamp}\left(%20\max\left(%20\left\lfloor%20\alpha%20\times%200.7%20\times%20\frac{L%20-%20B%20-%20U%20-%20Tool%20-%20M%20-%20S%20-%20H_{stable}}{T}%20\right\rfloor,%20\left\lceil%20\frac{2C}{T}%20\right\rceil%20\right),%203,%2015%20\right)" alt="最终N_optimal" />
+<img src="https://latex.codecogs.com/svg.latex?N_{optimal}%20=%20\text{clamp}\left(%20\max\left(%20\left\lfloor%20\alpha%20\times%200.7%20\times%20\frac{L%20-%20B%20-%20U%20-%20Tool%20-%20M%20-%20S%20-%20H_{stable}}{T}%20\right\rfloor,%20\left\lceil%20\frac{2C}{T}%20\right\rceil%20\right),%203,%2015%20\right)" alt="final N_optimal" />
 
 #### 压缩触发条件
 
 1. **常规触发**：`recentHistory.size() >= N_optimal`
-2. **紧急触发**：`(S_total + N*T + M + U + Tool) / L > 0.85`（上下文使用率超 85%）
+2. **紧急触发**：`(S_total + N*T + M + U + Tool) / L > 0.85`（上下文使用率超过 85%）
 
 #### 特殊情况处理
 
-| 场景 | 处理 |
+| 场景 | 处理方式 |
 |:---|:---|
-| \(A \le 0\)（上下文满载） | 强制压缩最近历史并清空；若仍不足，压缩稳定历史最旧的 2 个 epoch |
+| \(A \le 0\)（上下文已满） | 强制压缩最近历史并清空；若仍不足，压缩稳定历史中最旧的 2 个 epoch |
 | \(N_{optimal} < 3\) | 强制设为 3 |
 | \(N_{optimal} > 15\) | 强制设为 15 |
 | \(H_{avg}\) 数据不足（< 5 轮） | \(\alpha = 1.0\) |
@@ -1402,41 +1402,41 @@ USER:
 ```
 src/core/history/
 ├── window-calculator.ts        # N_optimal 自适应窗口计算 + TurnTokenTracker
-├── recent-history.ts           # 循环缓冲区（纯对话，N 轮上限）
-└── stable-history-manager.ts   # 追加式摘要管理器 + buildCompressionPrompt()
+├── recent-history.ts           # 循环缓冲区（纯对话，限制 N 轮）
+└── stable-history-manager.ts   # 仅追加摘要管理器 + buildCompressionPrompt()
 ```
 
 **数据流**：
 
 ```
 agent_end:
-  1. 提取 user/assistant 消息（剥离 <relevant-memories>）
-  2. recentHistory.addTurn() → 若满 → 触发压缩
+  1. 提取用户/助手消息（剥离 <relevant-memories>）
+  2. recentHistory.addTurn() → 若已满 → 触发压缩
   3. buildCompressionPrompt() → LLM 生成摘要
   4. stableHistory.appendEpoch() → 追加（不重写旧 epoch）
   5. recentHistory.clear()
 
 before_prompt_build:
-  1. 稳定区: persona + scene + tools + stableHistory.getContent()
-     → prependSystemContext（CACHE_BOUNDARY 之前 → 缓存）
-  2. 动态区: recentHistory.getContent() + L1 记忆
-     → prependContext（Prompt 尾部 → 不影响前缀）
+  1. 稳定区域：persona + scene + tools + stableHistory.getContent()
+     → prependSystemContext（CACHE_BOUNDARY 之前 → 可缓存）
+  2. 动态区域：recentHistory.getContent() + L1 记忆
+     → prependContext（提示词尾部 → 不影响前缀）
 ```
 
 ### 16.6 实验结果
 
-**条件**：NEW（Cache-Aware History Enabled），35 轮 Task Tracker 对话，DeepSeek V4 Flash，MEMORY_TDAI_HISTORY_ENABLED=1。
+**条件**：NEW（缓存感知历史已启用），35 轮 Task Tracker 对话，DeepSeek V4 Flash，MEMORY_TDAI_HISTORY_ENABLED=1。
 
 | 指标 | 值 |
 |:---|:---|
-| 有效轮次（排除 Turn 1 + 2 次超时） | 32 |
-| Prompt tokens 总计 | 2,037,156 |
-| Cache hit tokens 总计 | 1,990,912 |
-| **整体命中率** | **97.7%** |
-| 中位数命中率 | 99.4% |
+| 有效轮次（排除第 1 轮 + 2 次超时） | 32 |
+| 总提示词 token 数 | 2,037,156 |
+| 总缓存命中 token 数 | 1,990,912 |
+| **总体命中率** | **97.7%** |
+| 中位命中率 | 99.4% |
 
 ```
-Turn | Hit Rate
+轮次 | 命中率
 -----+---------
   2  |  49.6%
   3  |  99.9%
@@ -1452,7 +1452,7 @@ Turn | Hit Rate
  13  |  98.8%
  14  |  99.1%
  15  |  92.1%
- 16  | (timeout)
+ 16  | (超时)
  17  |  99.6%
  18  |  96.9%
  19  |  99.6%
@@ -1468,52 +1468,52 @@ Turn | Hit Rate
  29  |  99.9%
  30  |  99.9%
  31  |  99.6%
- 32  | (timeout)
+ 32  | (超时)
  33  | 100.0%
  34  |  99.8%
  35  | 100.0%
 ```
 
-**注意**：整体命中率 = Total Hit Tokens / Total Prompt Tokens（Turn 2-35 排除超时）。这比逐轮 rate 平均更准确，因为不同轮次的 prompt 大小差异很大（14K → 148K tokens），简单平均会放大小 Prompt 轮次的权重。
+**注**：总体命中率 = 总命中 token 数 / 总提示词 token 数（第 2-35 轮，排除超时）。这比逐轮平均更准确，因为各轮提示词大小差异显著（14K → 148K tokens）；简单平均会过度加权小提示词轮次。
 
 **关键观察**：
 
-| 观察 | 说明 |
+| 观察 | 描述 |
 |:---|:---|:---|
-| Turn 2 命中率 49.6% | 启动代价（首次增量最大），与实验三的 Turn 2 模式一致 |
-| Turn 3+ > 90% | 从 Turn 3 开始稳定维持高位 |
-| Turn 16/32 超时 | API 瞬时故障，与缓存机制无关 |
-| Turn 5 70.9% | 偶发波动（工具调用结果较长），但整体不影响 |
-| Turn 24 86.6% | DeepSeek 缓存窗口边界波动，Turn 25 立即恢复 |
+| 第 2 轮命中率 49.6% | 启动成本（首次增量最大），与实验 3 第 2 轮模式一致 |
+| 第 3 轮起 > 90% | 从第 3 轮起保持稳定高位 |
+| 第 16/32 轮超时 | API 瞬时故障，与缓存机制无关 |
+| 第 5 轮 70.9% | 偶发波动（工具调用结果较长），不影响整体 |
+| 第 24 轮 86.6% | DeepSeek 缓存窗口边界波动，第 25 轮立即恢复 |
 
 **与预期对比**：
 
 | 指标 | 预期 | 实际 | 判定 |
 |:---|:---|:---|:---|
 | 平均命中率（35 轮） | >85% | **97.7%** | ✅ 大幅超出 |
-| Turn 1→2 断裂 | 无 | 49.6%（有波动但非断裂） | ✅ 非 showInjected=false 的 −41.8% 式断裂 |
-| 命中率稳定性 | 稳定 | 中位数 99.4%，StdDev 低 | ✅ 高度稳定 |
+| 第 1→2 轮断裂 | 无 | 49.6%（波动，非断裂） | ✅ 非 showInjected=false 的 −41.8% 断裂 |
+| 命中率稳定性 | 稳定 | 中位数 99.4%，低标准差 | ✅ 高度稳定 |
 
-### 16.7 整体命中率计算方法
+### 16.7 总体命中率计算方法
 
-**正确的计算方法**（加权平均）：
+**正确计算方法**（加权平均）：
 
-<img src="https://latex.codecogs.com/svg.latex?H_{overall}%20=%20\frac{\sum_{i=2}^{N}%20\text{cache\_hit\_tokens}_i}{\sum_{i=2}^{N}%20\text{prompt\_tokens}_i}" alt="整体命中率" />
+<img src="https://latex.codecogs.com/svg.latex?H_{overall}%20=%20\frac{\sum_{i=2}^{N}%20\text{cache\_hit\_tokens}_i}{\sum_{i=2}^{N}%20\text{prompt\_tokens}_i}" alt="overall hit rate" />
 
-**不是**简单平均（<img src="https://latex.codecogs.com/svg.latex?\frac{1}{N-1}\sum_{i=2}^{N}%20\text{rate}_i" alt="简单平均" />），因为：
+**而非**简单平均（<img src="https://latex.codecogs.com/svg.latex?\frac{1}{N-1}\sum_{i=2}^{N}%20\text{rate}_i" alt="simple average" />），原因：
 
-- Turn 2 prompt ≈ 14K tokens，Turn 35 prompt ≈ 148K tokens
-- 简单平均赋予 Turn 2 和 Turn 35 相同权重，但 Turn 35 的 token 量是 Turn 2 的 10 倍
-- 加权平均反映实际节省的 token 数量
+- 第 2 轮提示词约 14K tokens，第 35 轮提示词约 148K tokens
+- 简单平均给第 2 轮和第 35 轮相同权重，但第 35 轮的 token 量约为第 2 轮的 10 倍
+- 加权平均反映实际节省的 token
 
 ### 16.8 环境配置与终端命令
 
 ```bash
-# 生成 fixtures（首次运行）
+# 生成测试数据（首次运行）
 cd TencentDB-Agent-Memory
 python scripts/run_long_conversation_test.py --setup
 
-# 重新编译
+# 重新构建
 npm run build
 
 # 新方案测试（默认）
@@ -1522,126 +1522,123 @@ python scripts/test_cache_hit_rate.py --iterations 3
 # 旧方案对比
 python scripts/test_cache_hit_rate.py --baseline --iterations 3
 
-# 新旧方案对比
+# 新旧对比
 python scripts/test_cache_hit_rate.py --both --iterations 3
 
-# 仅验证配置（不发送 API 请求）
+# 仅验证配置（无 API 调用）
 python scripts/test_cache_hit_rate.py --dry-run
 ```
 
 ### 16.9 结论
 
-Cache-Aware Context Lifecycle Management 通过三个核心机制彻底解决了 showInjected 的两难困境：
+缓存感知的上下文生命周期管理通过三个核心机制彻底解决了 showInjected 的困境：
 
-1. **L1 记忆尾部化**：放在 Prompt 最末尾 → 动态变化不影响前缀匹配 → 不破坏缓存
-2. **历史纯净化**：始终剥离 `<relevant-memories>` → 历史不膨胀 → 无截断触发 → 无熔断
-3. **摘要追加化**：新 epoch 追加不重写 → 前缀字节永久一致 → 稳定区缓存永不过期
+1. **L1 记忆尾部放置**：置于提示词最末尾 → 动态变化不影响前缀匹配 → 不破坏缓存
+2. **纯净历史**：始终剥离 `<relevant-memories>` → 历史不膨胀 → 不触发截断 → 无崩溃
+3. **仅追加摘要**：新 epoch 追加而不重写 → 前缀字节永久一致 → 稳定区域缓存永不过期
 
-35 轮长对话测试中，整体加权命中率达到 **97.7%**，远超 85% 目标。从 Turn 3 起，命中率持续在 90%+，证明方案彻底消除了 showInjected=false 的 Turn 1→2 断裂和 showInjected=true 的历史膨胀问题。
-
-
-根据您的要求，我重新修改了 README 第 17 节的内容，使其与前面第 8 节的证明逻辑保持一致，明确旧方案的定义，并按照“旧方案 → 新方案 → 对比 → 极端情况 → 总结”的结构重新组织。
+在 35 轮长对话测试中，总体加权命中率达到 **97.7%**，远超 85% 的目标。自第 3 轮起，命中率持续高于 90%，证明该方案彻底消除了 `showInjected=false` 的第 1→2 轮断裂和 `showInjected=true` 的历史膨胀问题。
 
 ---
 
-## 17. 新方法在所有场景下均优于旧方法的完整证明
+## 17. 完整证明：新方法在所有场景下均优于旧方法
 
-### 17.1 旧方案的定义与命中率
+### 17.1 旧方法的定义及其命中率
 
-**旧方案即 Baseline（原始问题状态）** ，其配置为：
+**旧方法即 Baseline（原始问题状态）**，配置如下：
 
-- `showInjected=true`（L1 动态记忆被写入对话历史）
-- 稳定内容（Persona + Scene + Tools Guide）位于 `CACHE_BOUNDARY` **之后**
-- 无摘要区，无循环缓冲区，依赖 OpenClaw 框架的原始截断机制
+- `showInjected=true`（L1 动态记忆持久化至对话历史）
+- 稳定内容（人设 + 场景 + 工具指南）放置在 **CACHE_BOUNDARY 之后**
+- 无摘要区域，无循环缓冲区；依赖 OpenClaw 框架原有的截断机制
 
-旧方案的 Prompt 结构如下：
-
-```
-┌─ CACHE_BOUNDARY 之前 ────────────────────────────────────────────┐
-│  P_base（~2000 tokens，稳定）                                   │
-│  P_tail（~500 tokens，每轮变化，匹配在此断裂）                   │
-├─ CACHE_BOUNDARY ────────────────────────────────────────────────┤
-│  S（~2500 tokens，在边界后，被遮挡，命中贡献 0）                 │
-│  H（历史，随轮数增长）                                          │
-│  M + U                                                         │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-由于 `P_tail`（时间戳、会话 ID 等）每轮变化，缓存匹配在 `P_tail` 处断裂，`S` 虽稳定但位于断裂点之后，从未被缓存引擎检查到。因此：
-
-<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{old}}%20=%20P_{\text{base}}" alt="旧方案命中token" />
-
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old}}%20=%20\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="旧方案命中率" />
-
-旧方案的命中 token 固定为 `P_base`（约 2000 tokens），分母随历史 `H` 持续增长，命中率不断下降。在截断触发后，历史区域被动态裁剪，命中率进一步恶化。
-
-### 17.2 新方案的命中率
-
-新方案的 Prompt 结构：
+旧方法的提示词结构如下：
 
 ```
-┌─ CACHE_BOUNDARY 之前 ────────────────────────────────────────────┐
-│  P_base（~2000 tokens，稳定）                                   │
-│  S（~2500 tokens，稳定）                                        │
-│  Sum = K × C（摘要区，追加式增长）                              │
-├─ CACHE_BOUNDARY ────────────────────────────────────────────────┤
-│  N × T（最近 N 轮纯对话）                                       │
-│  M + U                                                         │
-└──────────────────────────────────────────────────────────────────┘
+┌─ CACHE_BOUNDARY 之前 ─────────────────────────────────────────────────┐
+│  P_base（~2000 tokens，稳定）                                        │
+│  P_tail（~500 tokens，每轮变化，匹配在此中断）                       │
+├─ CACHE_BOUNDARY ──────────────────────────────────────────────────────┤
+│  S（~2500 tokens，边界后，被遮挡，贡献 0 命中）                      │
+│  H（历史，随轮次增长）                                               │
+│  M + U                                                               │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
-新方案命中 token 为：
+由于 `P_tail`（时间戳、会话 ID 等）每轮变化，缓存匹配在 `P_tail` 处中断。虽然 `S` 是稳定的，但它位于中断点之后，缓存引擎永远不会检查。因此：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20=%20P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="新方案命中token" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{old}}%20=%20P_{\text{base}}" alt="old hit tokens" />
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="新方案命中率" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old}}%20=%20\frac{P_{\text{base}}}{P_{\text{base}}%20+%20P_{\text{tail}}%20+%20S%20+%20H%20+%20M%20+%20U}" alt="old hit rate" />
 
-命中 token 随 `K`（epoch 数量）增长，命中率稳定在较高水平。
+旧方法的命中 token 固定为 `P_base`（~2000 tokens），而分母随历史 `H` 增长，导致命中率持续下降。一旦触发截断，历史区域被动态裁剪，进一步降低命中率。
+
+### 17.2 新方法的命中率
+
+新方法的提示词结构：
+
+```
+┌─ CACHE_BOUNDARY 之前 ─────────────────────────────────────────────────┐
+│  P_base（~2000 tokens，稳定）                                        │
+│  S（~2500 tokens，稳定）                                             │
+│  Sum = K × C（摘要区域，仅追加式增长）                               │
+├─ CACHE_BOUNDARY ──────────────────────────────────────────────────────┤
+│  N × T（最近 N 轮纯对话）                                            │
+│  M + U                                                               │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+新方法的命中 token 为：
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20=%20P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C" alt="new hit tokens" />
+
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C%20+%20N%20\cdot%20T%20+%20M%20+%20U}" alt="new hit rate" />
+
+命中 token 随 `K`（epoch 数量）增长，命中率稳定保持在高位。
 
 ### 17.3 正常场景下的对比
 
-新旧方案命中 token 的差值：
+新旧方法命中 token 的差值：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20-%20\text{Hit}_{\text{old}}%20=%20S%20+%20K%20\cdot%20C%20%3E%200" alt="命中token差值" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new}}%20-%20\text{Hit}_{\text{old}}%20=%20S%20+%20K%20\cdot%20C%20%3E%200" alt="hit token difference" />
 
-新方案的命中内容始终比旧方案多出 `S + K × C`（约 2500 + 增长中的摘要区），因此新方案在任何场景下的命中率都高于旧方案。
+新方法的命中内容始终比旧方法多 `S + K × C`（约 2500 tokens 加上不断增长的摘要区域）。因此，新方法在所有场景下的命中率均高于旧方法。
 
 ### 17.4 截断场景下的对比
 
-在截断场景下，旧方法的历史区域被动态裁剪，命中 token 仍为 `P_base`：
+在截断场景下，旧方法的历史区域被动态裁剪，但其命中 token 仍为 `P_base`：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="旧方案截断命中率" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old truncation" />
 
-新方法的摘要区位于 CACHE_BOUNDARY 之前，永久免疫截断：
+新方法的摘要区域位于 CACHE_BOUNDARY 之前，永久免疫截断：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="新方案截断命中率" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20=%20\frac{P_{\text{base}}%20+%20S%20+%20K%20\cdot%20C}{L}" alt="new truncation" />
 
 差值：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="截断场景差值" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,trunc}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S%20+%20K%20\cdot%20C}{L}%20%3E%200" alt="truncation diff" />
 
-### 17.5 极端情况：摘要区也需压缩
+### 17.5 极端情况：摘要区域也需要压缩
 
-当摘要区也需压缩时，淘汰最旧的 epoch 后，新方法的命中内容为：
+当摘要区域也需要压缩时，丢弃最旧的 epochs 后，新方法的命中内容变为：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new,min}}%20=%20P_{\text{base}}%20+%20S" alt="极端情况命中token" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Hit}_{\text{new,min}}%20=%20P_{\text{base}}%20+%20S" alt="extreme hit tokens" />
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20=%20\frac{P_{\text{base}}%20+%20S}{L}" alt="极端情况命中率" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20=%20\frac{P_{\text{base}}%20+%20S}{L}" alt="extreme hit rate" />
 
-旧方法在同等条件下：
+在同等条件下，旧方法为：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="旧方法极端情况" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{old,trunc}}%20=%20\frac{P_{\text{base}}}{L}" alt="old extreme" />
 
-新方法始终高于旧方法：
+新方法始终优于旧方法：
 
-<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S}{L}%20%3E%200" alt="极端情况差值" />
+<img src="https://latex.codecogs.com/svg.latex?\text{Rate}_{\text{new,min}}%20-%20\text{Rate}_{\text{old,trunc}}%20=%20\frac{S}{L}%20%3E%200" alt="extreme diff" />
 
 ### 17.6 总结
 
-| 场景 | 旧方案命中内容 | 旧方案命中率 | 新方案命中内容 | 新方案命中率 | 差值 |
+| 场景 | 旧方法命中内容 | 旧方法命中率 | 新方法命中内容 | 新方法命中率 | 差异 |
 |:---|:---|:---|:---|:---|:---|
-| 无截断 | `P_base` | 随 H 增长持续下降 | `P_base + S + K × C` | 稳定在 >90% | `(S + K × C) / Total` |
+| 无截断 | `P_base` | 随 H 下降 | `P_base + S + K × C` | 稳定 >90% | `(S + K × C) / 总长度` |
 | 截断后 | `P_base` | `P_base / L` | `P_base + S + K × C` | `(P_base + S + K × C) / L` | `(S + K × C) / L > 0` |
-| 摘要区也压缩 | `P_base` | `P_base / L` | `P_base + S` | `(P_base + S) / L` | `S / L > 0` |
+| 摘要也被压缩 | `P_base` | `P_base / L` | `P_base + S` | `(P_base + S) / L` | `S / L > 0` |
 
-**核心结论**：新方法在所有场景下命中 token 数均高于旧方法。在正常场景和截断场景下，新方法的命中 token 为 `P_base + S + K × C`，随对话轮数增长；而旧方法固定为 `P_base`。即使在最极端的摘要压缩场景下，由于 `S > 0`，新方法的命中率下限仍然严格高于旧方法。因此，**新方法在任何场景下都严格优于旧方法**。
+**核心结论**：新方法在所有场景下均优于旧方法。在正常和截断场景中，新方法的命中 token 为 `P_base + S + K × C`，随对话轮次增长，而旧方法的命中 token 固定为 `P_base`。即使在最极端的摘要压缩场景中，由于 `S > 0`，新方法的下界严格高于旧方法的命中率。因此，**新方法在所有场景下均严格优于旧方法**。

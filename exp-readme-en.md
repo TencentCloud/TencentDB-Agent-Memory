@@ -1383,7 +1383,7 @@ Derivation: <img src="https://latex.codecogs.com/svg.latex?F%20=%20N%20\cdot%20T
 #### Special Case Handling
 
 | Scenario | Handling |
-|:---|:---|
+|:---|:---|:---|
 | \(A \le 0\) (context full) | Force compress recent history and clear; if still insufficient, compress oldest 2 epochs of stable history |
 | \(N_{optimal} < 3\) | Force set to 3 |
 | \(N_{optimal} > 15\) | Force set to 15 |
@@ -1471,7 +1471,7 @@ Turn | Hit Rate
 **Key observations**:
 
 | Observation | Description |
-|:---|:---|
+|:---|:---|:---|
 | Turn 2 hit rate 49.6% | Startup cost (first增量最大), consistent with Experiment 3 Turn 2 pattern |
 | Turn 3+ > 90% | Stable high from Turn 3 onward |
 | Turn 16/32 timeout | API transient failures, unrelated to cache mechanism |
@@ -1531,10 +1531,6 @@ Cache-Aware Context Lifecycle Management thoroughly resolves showInjected's dile
 
 In 35-turn long conversation testing, overall weighted hit rate reached **97.7%**, far exceeding the 85% target. From Turn 3 onward, hit rate consistently above 90%, proving the solution thoroughly eliminates both `showInjected=false`'s Turn 1→2 break and `showInjected=true`'s history bloat problem.
 
-
-好的，我理解了。你需要的是将中文版第 17 节修改后的内容（明确旧方案定义、完善极端情况证明）同步到英文版中。以下是修改后的完整英文版本，替换原文档中的第 17 节。
-
----
 
 ## 17. Complete Proof: New Method Outperforms Old Method in All Scenarios
 
