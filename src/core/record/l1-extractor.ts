@@ -26,6 +26,32 @@ import type { LLMRunner, Logger } from "../types.js";
 
 const TAG = "[memory-tdai][l1-extractor]";
 
+/**
+ * Minimum character count for `CleanContextRunner` to be used safely.
+ *
+ * Explanation (Issue #176):
+ *
+ * The `CleanContextRunner` executes extraction inside an isolated temporary
+ * workspace (clean-workspace) whose only input context is the prompt passed
+ * by the caller.  When the system + user prompt combination is shorter than
+ * ~512 characters, the resulting effective context collapses into a ~76-byte
+ * "stub" (the system-prompt override shell with barely any content).  LLMs
+ * reliably return empty JSON when given that stub, producing:
+ *
+ *   NO_JSON → parseExtractionResult → [] → 0 memories extracted
+ *
+ * We therefore short-circuit the CleanContextRunner path when
+ * `sysPromptLen + userPromptLen < MIN_CLEAN_CONTEXT_CHARS` and instead
+ * return an empty scene list *immediately*.  This avoids wasting a model
+ * call on a guaranteed-empty result, and it avoids the "stub context"
+ * failure mode entirely.
+ *
+ * Callers that provide their own `llmRunner` (host adapter path, no
+ * clean-workspace isolation) are *not* affected and continue normally —
+ * the host runner already has access to the full conversation context.
+ */
+export const MIN_CLEAN_CONTEXT_CHARS = 512;
+
 // ============================
 // Types
 // ============================
@@ -292,8 +318,11 @@ export async function extractL1Memories(params: {
 
 /**
  * Call LLM to extract scene-segmented memories from conversation messages.
+ *
+ * Exposed for unit testing (Issue #176 threshold guard).  Production
+ * callers should go through `extractL1Memories`.
  */
-async function callLlmExtraction(params: {
+export async function callLlmExtraction(params: {
   newMessages: ConversationMessage[];
   backgroundMessages: ConversationMessage[];
   previousSceneName?: string;
@@ -311,10 +340,26 @@ async function callLlmExtraction(params: {
     previousSceneName,
   });
 
+  const totalPromptChars = EXTRACT_MEMORIES_SYSTEM_PROMPT.length + userPrompt.length;
+
   // [l1-debug] ENTRY — what are we about to ask the LLM to extract?
   logger?.debug?.(
-    `${TAG} [l1-debug] ENTRY taskId=l1-extraction, newMsgs=${newMessages.length}, bgMsgs=${backgroundMessages.length}, userPromptLen=${userPrompt.length}, sysPromptLen=${EXTRACT_MEMORIES_SYSTEM_PROMPT.length}, model=${model ?? "(default)"}, previousSceneName=${previousSceneName ? JSON.stringify(previousSceneName) : "(none)"}, runnerKind=${llmRunner ? "llmRunner" : "CleanContextRunner"}`,
+    `${TAG} [l1-debug] ENTRY taskId=l1-extraction, newMsgs=${newMessages.length}, bgMsgs=${backgroundMessages.length}, userPromptLen=${userPrompt.length}, sysPromptLen=${EXTRACT_MEMORIES_SYSTEM_PROMPT.length}, totalChars=${totalPromptChars}, model=${model ?? "(default)"}, previousSceneName=${previousSceneName ? JSON.stringify(previousSceneName) : "(none)"}, runnerKind=${llmRunner ? "llmRunner" : "CleanContextRunner"}`,
   );
+
+  // --- Issue #176 guard: CleanContextRunner 76B stub short-circuit ------------
+  //
+  // When we have no host llmRunner (OpenClaw embedded agent path) and the
+  // combined prompt is shorter than MIN_CLEAN_CONTEXT_CHARS, the isolated
+  // clean-workspace execution collapses the context to a ~76-byte stub
+  // which the LLM cannot extract anything from.  Skip the model call and
+  // return an empty scene list right here.
+  if (!llmRunner && totalPromptChars < MIN_CLEAN_CONTEXT_CHARS) {
+    logger?.debug?.(
+      `${TAG} [l1-debug] STUB_SKIP taskId=l1-extraction: totalPromptChars=${totalPromptChars} < MIN_CLEAN_CONTEXT_CHARS=${MIN_CLEAN_CONTEXT_CHARS} on CleanContextRunner path — returning empty scene list to avoid the 76B stub → empty LLM failure mode.`,
+    );
+    return [];
+  }
 
   let result: string;
 
