@@ -8,7 +8,13 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 from pydantic_ai import Agent, BinaryContent
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import FunctionModel
 
 from tdai_pydantic_ai.client import TdaiGatewayError
@@ -510,3 +516,225 @@ def test_capability_api_is_exported_from_package_root() -> None:
         "TencentDBMemoryCapability"
     )
     assert tdai_pydantic_ai.Resolver is not None
+
+
+async def test_search_tools_are_registered_and_conversation_search_is_scoped() -> None:
+    """Break caught: search tools missing or crossing session boundaries."""
+    from tdai_pydantic_ai.capability import TencentDBMemoryCapability
+
+    fake = FakeGatewayClient()
+    seen_tool_names: list[list[str]] = []
+
+    async def model_function(messages, info):
+        seen_tool_names.append([tool.name for tool in info.function_tools])
+        has_tool_return = any(
+            isinstance(part, ToolReturnPart)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
+        if not has_tool_return:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "tdai_conversation_search",
+                        {"query": "deployment", "limit": 3},
+                        tool_call_id="search-1",
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    memory = TencentDBMemoryCapability(
+        client=fake,
+        session_key="session-search",
+    )
+    agent = Agent(FunctionModel(model_function), capabilities=[memory])
+
+    await agent.run("find the deployment note")
+
+    assert {
+        "tdai_memory_search",
+        "tdai_conversation_search",
+    }.issubset(set(seen_tool_names[0]))
+    assert (
+        "search_conversations",
+        {
+            "query": "deployment",
+            "limit": 3,
+            "session_key": "session-search",
+        },
+    ) in fake.calls
+
+
+async def _run_capability_tool(
+    fake: FakeGatewayClient,
+    tool_name: str,
+    args: dict[str, Any],
+) -> object:
+    from tdai_pydantic_ai.capability import TencentDBMemoryCapability
+
+    tool_result: list[object] = []
+
+    async def model_function(messages, info):
+        for message in messages:
+            if isinstance(message, ModelRequest):
+                for part in message.parts:
+                    if (
+                        isinstance(part, ToolReturnPart)
+                        and part.tool_name == tool_name
+                    ):
+                        tool_result.append(part.content)
+        if not tool_result:
+            return ModelResponse(
+                parts=[ToolCallPart(tool_name, args, tool_call_id="tool-1")]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(
+        FunctionModel(model_function),
+        capabilities=[
+            TencentDBMemoryCapability(
+                client=fake,
+                session_key="session-search",
+            )
+        ],
+    )
+    await agent.run("use memory search")
+    return tool_result[-1]
+
+
+async def test_structured_memory_search_forwards_filters() -> None:
+    """Break caught: memory search dropping filters or returning the wrong result."""
+    fake = FakeGatewayClient()
+
+    result = await _run_capability_tool(
+        fake,
+        "tdai_memory_search",
+        {
+            "query": "deployment",
+            "limit": 7,
+            "type": "preference",
+            "scene": "coding",
+        },
+    )
+
+    assert result == "memory result"
+    assert (
+        "search_memories",
+        {
+            "query": "deployment",
+            "limit": 7,
+            "type_filter": "preference",
+            "scene": "coding",
+        },
+    ) in fake.calls
+
+
+@pytest.mark.parametrize("limit", [0, 101])
+async def test_search_limit_is_validated_before_gateway(limit: int) -> None:
+    """Break caught: unsafe result limits reaching the Gateway."""
+    from tdai_pydantic_ai.capability import TencentDBMemoryCapability
+
+    fake = FakeGatewayClient()
+    model_calls = 0
+
+    async def model_function(messages, info):
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "tdai_memory_search",
+                        {"query": "query", "limit": limit},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("recovered")])
+
+    agent = Agent(
+        FunctionModel(model_function),
+        capabilities=[
+            TencentDBMemoryCapability(
+                client=fake,
+                session_key="session-search",
+            )
+        ],
+    )
+
+    result = await agent.run("search")
+
+    assert result.output == "recovered"
+    assert not any(name == "search_memories" for name, _ in fake.calls)
+
+
+@pytest.mark.parametrize(
+    ("route", "tool_name", "expected"),
+    [
+        (
+            "search_memories",
+            "tdai_memory_search",
+            "TencentDB memory search is temporarily unavailable.",
+        ),
+        (
+            "search_conversations",
+            "tdai_conversation_search",
+            "TencentDB conversation search is temporarily unavailable.",
+        ),
+    ],
+)
+async def test_search_failures_return_safe_tool_result(
+    route: str,
+    tool_name: str,
+    expected: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Break caught: search outages aborting runs or leaking query text."""
+    fake = FakeGatewayClient(fail_routes={route})
+
+    with caplog.at_level(logging.WARNING):
+        result = await _run_capability_tool(
+            fake,
+            tool_name,
+            {"query": "private deployment query"},
+        )
+
+    assert result == expected
+    assert "private deployment query" not in caplog.text
+
+
+async def test_health_and_end_session_use_explicit_identity() -> None:
+    """Break caught: explicit management calls swallowing errors or using run state."""
+    from tdai_pydantic_ai.capability import TencentDBMemoryCapability
+
+    fake = FakeGatewayClient()
+    memory = TencentDBMemoryCapability(client=fake, session_key="run-session")
+
+    assert await memory.health() == {"status": "ok"}
+    assert await memory.end_session(" conversation-9 ", " user-9 ") == {
+        "flushed": True
+    }
+    assert fake.calls[-2:] == [
+        ("health", {}),
+        (
+            "end_session",
+            {
+                "session_key": "conversation-9",
+                "user_id": "user-9",
+            },
+        ),
+    ]
+
+
+async def test_end_session_rejects_empty_key() -> None:
+    """Break caught: explicit session flush accepting an ambiguous empty key."""
+    from tdai_pydantic_ai.capability import TencentDBMemoryCapability
+
+    memory = TencentDBMemoryCapability(
+        client=FakeGatewayClient(),
+        session_key="run-session",
+    )
+
+    with pytest.raises(ValueError, match="session key must not be empty"):
+        await memory.end_session(" ")

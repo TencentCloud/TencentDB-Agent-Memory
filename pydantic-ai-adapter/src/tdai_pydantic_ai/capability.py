@@ -7,16 +7,19 @@ import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, TypeAlias
+from typing import Annotated, Any, TypeAlias
 
+from pydantic import Field
 from pydantic_ai import AgentRunResult, RunContext
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.toolsets import FunctionToolset
 
 from .client import GatewayClientProtocol, TdaiGatewayClient, TdaiGatewayError
 
 logger = logging.getLogger(__name__)
 
 Resolver: TypeAlias = str | Callable[[RunContext[Any]], str | Awaitable[str]]
+SearchLimit: TypeAlias = Annotated[int, Field(ge=1, le=100)]
 
 
 async def _resolve(
@@ -126,6 +129,90 @@ class TencentDBMemoryCapability(AbstractCapability[Any]):
             return self._recall_context
 
         return recall
+
+    def get_toolset(self) -> FunctionToolset[Any]:
+        toolset = FunctionToolset()
+
+        @toolset.tool
+        async def tdai_memory_search(
+            ctx: RunContext[Any],
+            query: str,
+            limit: SearchLimit = 5,
+            type: str = "",
+            scene: str = "",
+        ) -> str:
+            """Search structured TencentDB Agent Memory records."""
+            del ctx
+            try:
+                response = await self._client.search_memories(
+                    query,
+                    limit=limit,
+                    type_filter=type,
+                    scene=scene,
+                )
+                results = response.get("results", "")
+                if isinstance(results, str):
+                    return results
+                return json.dumps(
+                    response,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            except TdaiGatewayError as exc:
+                logger.warning(
+                    "TencentDB structured memory search unavailable: %s",
+                    exc,
+                )
+                return "TencentDB memory search is temporarily unavailable."
+
+        @toolset.tool
+        async def tdai_conversation_search(
+            ctx: RunContext[Any],
+            query: str,
+            limit: SearchLimit = 5,
+        ) -> str:
+            """Search raw conversations in the current TencentDB memory session."""
+            del ctx
+            try:
+                response = await self._client.search_conversations(
+                    query,
+                    limit=limit,
+                    session_key=self._resolved_session_key,
+                )
+                results = response.get("results", "")
+                if isinstance(results, str):
+                    return results
+                return json.dumps(
+                    response,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            except TdaiGatewayError as exc:
+                logger.warning(
+                    "TencentDB conversation search unavailable: %s",
+                    exc,
+                )
+                return "TencentDB conversation search is temporarily unavailable."
+
+        return toolset
+
+    async def health(self) -> dict[str, Any]:
+        """Return Gateway health without fail-open handling."""
+        return await self._client.health()
+
+    async def end_session(
+        self,
+        session_key: str,
+        user_id: str = "",
+    ) -> dict[str, Any]:
+        """Explicitly finalize a session and propagate management errors."""
+        resolved_session_key = session_key.strip()
+        if not resolved_session_key:
+            raise ValueError("TencentDB memory session key must not be empty")
+        return await self._client.end_session(
+            resolved_session_key,
+            user_id.strip(),
+        )
 
     async def after_run(
         self,
