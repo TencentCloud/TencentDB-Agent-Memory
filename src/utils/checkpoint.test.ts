@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CheckpointManager,
-  reconcileCheckpointFromStore,
 } from "./checkpoint.js";
 import { LocalMemoryCleaner } from "./memory-cleaner.js";
 import type { IMemoryStore } from "../core/store/types.js";
@@ -57,7 +56,7 @@ describe("Checkpoint counter reconciliation", () => {
       ],
     };
 
-    await reconcileCheckpointFromStore(manager, store);
+    await manager.reconcileCountersFromStore(store);
 
     expect(await manager.read()).toMatchObject({
       total_processed: 100,
@@ -78,8 +77,30 @@ describe("Checkpoint counter reconciliation", () => {
       queryL1Records: () => [],
     };
 
-    await expect(reconcileCheckpointFromStore(manager, store)).rejects.toThrow("database unavailable");
+    await expect(manager.reconcileCountersFromStore(store)).rejects.toThrow("database unavailable");
     expect(await manager.read()).toEqual(before);
+  });
+
+  it("does not double-count concurrent reconciliation and L1 completion", async () => {
+    const manager = await createCheckpointManager();
+    const initial = await manager.read();
+    await manager.write({ ...initial, total_memories_extracted: 20 });
+    const store = {
+      countL0: () => 8,
+      countL1: () => 21,
+      queryL1Records: () => [{ updated_time: "2026-07-22T00:00:00.000Z" }],
+    };
+
+    await Promise.all([
+      manager.reconcileCountersFromStore(store),
+      manager.markL1ExtractionComplete("session-a", 1, 1000, undefined, store),
+    ]);
+
+    expect(await manager.read()).toMatchObject({
+      l0_conversations_count: 8,
+      total_memories_extracted: 21,
+      memories_since_last_persona: 21,
+    });
   });
 
   it("reconciles counters after Cleaner deletes Store records", async () => {
@@ -123,13 +144,12 @@ describe("Checkpoint counter reconciliation", () => {
     });
   });
 
-  it("does not change counters when Cleaner deletes no records", async () => {
+  it("repairs existing drift even when Cleaner deletes no records", async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-checkpoint-"));
     tempDirs.push(dataDir);
     const manager = new CheckpointManager(dataDir);
     const initial = await manager.read();
-    await manager.write({ ...initial, l0_conversations_count: 50, total_memories_extracted: 20 });
-    const before = await manager.read();
+    await manager.write({ ...initial, l0_conversations_count: 90, total_memories_extracted: 70 });
     const store = {
       isDegraded: () => false,
       countL0: () => 50,
@@ -147,6 +167,10 @@ describe("Checkpoint counter reconciliation", () => {
 
     await cleaner.runOnce(new Date("2026-07-24T12:00:00.000Z").getTime());
 
-    expect(await manager.read()).toEqual(before);
+    expect(await manager.read()).toMatchObject({
+      l0_conversations_count: 50,
+      total_memories_extracted: 20,
+      memories_since_last_persona: 20,
+    });
   });
 });

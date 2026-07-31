@@ -8,7 +8,7 @@
 
 ### 🐛 修复
 
-- **Checkpoint 聚合计数在清理后漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：`memory-cleaner` 成功删除 L0/L1 Store 记录后，按 Store 中现存记录重新校准 `l0_conversations_count`、`total_memories_extracted` 与 `memories_since_last_persona`。`total_processed` 保持历史累计语义，不会因清理而回退。
+- **Checkpoint 聚合计数在清理后漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：启动、L1 完成和 `memory-cleaner` 运行后，按 Store 中当前可检索记录校准 `l0_conversations_count`、`total_memories_extracted` 与 `memories_since_last_persona`。`total_processed` 保持历史累计语义，不会因清理而回退。
 
 ### ✨ 新功能
 

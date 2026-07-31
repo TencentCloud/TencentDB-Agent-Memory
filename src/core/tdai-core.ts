@@ -409,6 +409,16 @@ export class TdaiCore {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
+      if (this.vectorStore) {
+        try {
+          await new CheckpointManager(this.dataDir, this.logger)
+            .reconcileCountersFromStore(this.vectorStore);
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Checkpoint counter reconciliation failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
     } catch (err) {
       this.logger.warn(

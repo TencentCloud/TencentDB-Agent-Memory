@@ -107,7 +107,7 @@ export interface Checkpoint {
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Current active/searchable L1 records (legacy field name). */
   total_memories_extracted: number;
 }
 
@@ -116,13 +116,13 @@ export interface Checkpoint {
  * Per-session cursors are intentionally absent: reconciliation must never
  * rewind incremental L0/L1 processing state.
  */
-export interface CheckpointCounters {
+interface CheckpointCounters {
   l0Conversations: number;
   totalMemoriesExtracted: number;
   memoriesSinceLastPersona: number;
 }
 
-/** Minimal Store surface required to recalculate aggregate counters after cleanup. */
+/** Minimal Store surface required to recalculate active aggregate counters. */
 export interface CheckpointCounterStore {
   countL0(): number | Promise<number>;
   countL1(): number | Promise<number>;
@@ -332,38 +332,13 @@ export class CheckpointManager {
   }
 
   /**
-   * @internal Replace aggregate counters with values already validated against
-   * durable data. Production callers should prefer reconcileCheckpointFromStore.
-   * Per-session timestamps and state remain unchanged because those cursors
-   * govern incremental processing rather than status.
-   */
-  async reconcileCounters(actual: CheckpointCounters): Promise<void> {
-    assertValidCounters(actual);
-
-    await this.mutate((cp) => {
-      applyCounters(cp, actual);
-    });
-  }
-
-  /**
-   * Recalculate aggregate counters while holding the checkpoint lock, so a
-   * capture that starts during cleanup cannot be overwritten by a stale count.
+   * Recalculate active aggregate counters while holding the checkpoint lock.
+   * Store counts are authoritative because update/merge removes superseded
+   * records there while the recovery JSONL remains append-only.
    */
   async reconcileCountersFromStore(store: CheckpointCounterStore): Promise<void> {
     await this.mutate(async (checkpoint) => {
-      const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
-        store.countL0(),
-        store.countL1(),
-      ]);
-      const memoriesSinceLastPersona = checkpoint.last_persona_time
-        ? (await store.queryL1Records({ updatedAfter: checkpoint.last_persona_time })).length
-        : totalMemoriesExtracted;
-
-      const actual = {
-        l0Conversations,
-        totalMemoriesExtracted,
-        memoriesSinceLastPersona,
-      };
+      const actual = await this.readStoreCounters(store, checkpoint.last_persona_time);
       assertValidCounters(actual);
       applyCounters(checkpoint, actual);
     });
@@ -488,8 +463,9 @@ export class CheckpointManager {
     memoriesExtracted: number,
     cursorRecordedAtMs?: number,
     lastSceneName?: string,
+    store?: CheckpointCounterStore,
   ): Promise<void> {
-    await this.mutate((cp) => {
+    await this.mutate(async (cp) => {
       const state = this.getRunnerState(cp, sessionKey);
       if (cursorRecordedAtMs) {
         state.last_l1_cursor = cursorRecordedAtMs;
@@ -497,14 +473,34 @@ export class CheckpointManager {
       if (lastSceneName !== undefined) {
         state.last_scene_name = lastSceneName;
       }
-      cp.total_memories_extracted += memoriesExtracted;
-      cp.memories_since_last_persona += memoriesExtracted;
+      if (store) {
+        const actual = await this.readStoreCounters(store, cp.last_persona_time);
+        assertValidCounters(actual);
+        applyCounters(cp, actual);
+      } else {
+        cp.total_memories_extracted += memoriesExtracted;
+        cp.memories_since_last_persona += memoriesExtracted;
+      }
     });
     this.logger.info(
       `[checkpoint] markL1ExtractionComplete session=${sessionKey}: ` +
       `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
       `lastScene="${lastSceneName ?? "(unchanged)"}"`,
     );
+  }
+
+  private async readStoreCounters(
+    store: CheckpointCounterStore,
+    lastPersonaTime: string,
+  ): Promise<CheckpointCounters> {
+    const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
+      store.countL0(),
+      store.countL1(),
+    ]);
+    const memoriesSinceLastPersona = lastPersonaTime
+      ? (await store.queryL1Records({ updatedAfter: lastPersonaTime })).length
+      : totalMemoriesExtracted;
+    return { l0Conversations, totalMemoriesExtracted, memoriesSinceLastPersona };
   }
 
   // ============================
@@ -561,16 +557,4 @@ export class CheckpointManager {
     });
   }
 
-}
-
-/**
- * Rebuild aggregate counters from the durable Store without touching any
- * per-session cursor. `l0_conversations_count` is normalized to persisted L0
- * message records so it has the same cross-backend meaning as `countL0()`.
- */
-export async function reconcileCheckpointFromStore(
-  manager: CheckpointManager,
-  store: CheckpointCounterStore,
-): Promise<void> {
-  await manager.reconcileCountersFromStore(store);
 }
