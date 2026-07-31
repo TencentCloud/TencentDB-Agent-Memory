@@ -37,6 +37,11 @@ import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
 import {
+  replayL1 as runL1Replay,
+  type L1ReplayReceipt,
+  type L1ReplayRequest,
+} from "./record/l1-replay.js";
+import {
   initDataDirectories,
   initStores,
   resetStores,
@@ -323,6 +328,34 @@ export class TdaiCore {
       text: formatConversationSearchResponse(result),
       total: result.total,
     };
+  }
+
+  /**
+   * Replay existing L0 rows through L1 extraction without moving the live
+   * scheduler cursor. Exact completed batches are skipped using the persisted
+   * replay receipt fingerprint.
+   */
+  async replayL1(params: L1ReplayRequest): Promise<L1ReplayReceipt> {
+    await this.storeReady?.catch(() => {});
+
+    const llmRunner = this.runnerFactory.createRunner({
+      modelRef: this.cfg.extraction.model,
+      enableTools: false,
+    });
+    const openclawConfig = this.hostAdapter.hostType === "openclaw"
+      ? (this.hostAdapter as { getOpenClawConfig?(): unknown }).getOpenClawConfig?.()
+      : undefined;
+
+    return runL1Replay(params, {
+      baseDir: this.dataDir,
+      cfg: this.cfg,
+      config: openclawConfig,
+      vectorStore: this.vectorStore,
+      embeddingService: this.embeddingService,
+      llmRunner,
+      logger: this.logger,
+      instanceId: this.instanceId,
+    });
   }
 
   /**

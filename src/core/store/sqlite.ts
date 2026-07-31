@@ -32,6 +32,8 @@ import type {
   L1FtsResult,
   L0SearchResult,
   L0FtsResult,
+  L0QueryRow,
+  L0ReplayQuery,
 } from "./types.js";
 import type { Logger } from "../types.js";
 
@@ -1934,6 +1936,57 @@ export class VectorStore implements IMemoryStore {
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L0-query] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  queryL0ForReplay(params: L0ReplayQuery): L0QueryRow[] {
+    if (this.degraded) {
+      this.logger?.warn(`${TAG} [L0-replay-query] SKIPPED (degraded mode)`);
+      return [];
+    }
+
+    try {
+      const conditions = ["session_key = ?"];
+      const values: Array<string | number> = [params.sessionKey];
+      if (params.fromRecordedAtMs != null) {
+        conditions.push("recorded_at >= ?");
+        values.push(new Date(params.fromRecordedAtMs).toISOString());
+      }
+      if (params.toRecordedAtMs != null) {
+        conditions.push("recorded_at <= ?");
+        values.push(new Date(params.toRecordedAtMs).toISOString());
+      }
+      values.push(params.limit);
+
+      const stmt = this.db.prepare(`
+        SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp
+        FROM l0_conversations
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY recorded_at ASC
+        LIMIT ?
+      `);
+      const rows = stmt.all(...values) as Array<Record<string, unknown>>;
+
+      this.logger?.info(
+        `${TAG} [L0-replay-query] session=${params.sessionKey}, ` +
+        `from=${params.fromRecordedAtMs ?? "(start)"}, to=${params.toRecordedAtMs ?? "(end)"}, ` +
+        `limit=${params.limit}, returned=${rows.length}`,
+      );
+
+      return rows.map((row) => ({
+        record_id: String(row.record_id ?? ""),
+        session_key: String(row.session_key ?? ""),
+        session_id: String(row.session_id ?? ""),
+        role: String(row.role ?? ""),
+        message_text: String(row.message_text ?? ""),
+        recorded_at: String(row.recorded_at ?? ""),
+        timestamp: Number(row.timestamp ?? 0),
+      }));
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} [L0-replay-query] FAILED: ${err instanceof Error ? err.message : String(err)}`,
       );
       return [];
     }

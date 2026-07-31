@@ -105,6 +105,42 @@ export interface SessionEndResponse {
 }
 
 // ============================
+// /admin/replay-l1
+// ============================
+
+export interface L1ReplayRequest {
+  session_key: string;
+  /** Inclusive ISO 8601 or epoch-ms recorded_at lower bound. */
+  from?: string | number;
+  /** Inclusive ISO 8601 or epoch-ms recorded_at upper bound. */
+  to?: string | number;
+  limit?: number;
+  dry_run?: boolean;
+}
+
+export interface L1ReplayResponse {
+  replay_id: string;
+  status: "dry-run" | "completed" | "failed" | "skipped";
+  session_key: string;
+  dry_run: boolean;
+  from_recorded_at_ms?: number;
+  to_recorded_at_ms?: number;
+  limit: number;
+  l0_record_ids: string[];
+  attempted_count: number;
+  group_count: number;
+  successful_groups: number;
+  extracted_count: number;
+  stored_count: number;
+  checkpoint_cursor_before: number;
+  checkpoint_cursor_after: number;
+  started_at: string;
+  completed_at: string;
+  reused_receipt_id?: string;
+  receipt_path: string;
+}
+
+// ============================
 // /seed
 // ============================
 

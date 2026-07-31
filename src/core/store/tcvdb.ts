@@ -24,6 +24,7 @@ import type {
   L0SearchResult,
   L0FtsResult,
   L0QueryRow,
+  L0ReplayQuery,
   L0SessionGroup,
   ProfileRecord,
   ProfileSyncRecord,
@@ -901,6 +902,42 @@ export class TcvdbMemoryStore implements IMemoryStore {
       return rows.reverse();
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-queryForL1] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+  }
+
+  async queryL0ForReplay(params: L0ReplayQuery): Promise<L0QueryRow[]> {
+    try {
+      await this._ensureInit();
+      if (this.degraded) return [];
+
+      const conditions = [`session_key = ${JSON.stringify(params.sessionKey)}`];
+      if (params.fromRecordedAtMs != null) {
+        conditions.push(`recorded_at_ms >= ${params.fromRecordedAtMs}`);
+      }
+      if (params.toRecordedAtMs != null) {
+        conditions.push(`recorded_at_ms <= ${params.toRecordedAtMs}`);
+      }
+
+      const docs = await this._queryAllDocs(
+        this.l0Collection,
+        conditions.join(" and "),
+        L0_OUTPUT_FIELDS,
+        params.limit,
+        [{ fieldName: "recorded_at_ms", direction: "asc" }],
+      );
+
+      return docs.map((doc) => ({
+        record_id: String(doc.id ?? ""),
+        session_key: String(doc.session_key ?? ""),
+        session_id: String(doc.session_id ?? ""),
+        role: String(doc.role ?? ""),
+        message_text: String(doc.message_text ?? ""),
+        recorded_at: epochMsToIso(Number(doc.recorded_at_ms ?? 0)),
+        timestamp: Number(doc.timestamp ?? 0),
+      }));
+    } catch (err) {
+      this.logger?.warn(`${TAG} [L0-replay-query] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     }
   }

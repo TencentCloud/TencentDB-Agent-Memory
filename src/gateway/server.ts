@@ -8,6 +8,7 @@
  *   POST /search/memories     — L1 memory search
  *   POST /search/conversations — L0 conversation search
  *   POST /session/end         — Session end + flush
+ *   POST /admin/replay-l1     — Replay historical L0 rows through L1
  *   POST /seed               — Batch seed historical conversations (L0 → L1)
  *
  * Built with Node.js native `http` module — no Express/Fastify dependency.
@@ -35,10 +36,16 @@ import type {
   ConversationSearchResponse,
   SessionEndRequest,
   SessionEndResponse,
+  L1ReplayRequest,
+  L1ReplayResponse,
   SeedRequest,
   SeedResponse,
   GatewayErrorResponse,
 } from "./types.js";
+import {
+  L1ReplayValidationError,
+  L1_REPLAY_RECEIPT_PATH,
+} from "../core/record/l1-replay.js";
 import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
@@ -105,6 +112,20 @@ function safeEqual(a: string, b: string): boolean {
   const bb = Buffer.from(b, "utf-8");
   if (ab.length !== bb.length) return false;
   return timingSafeEqual(ab, bb);
+}
+
+function parseReplayTimestamp(value: string | number | undefined, field: "from" | "to"): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "number") {
+    if (Number.isFinite(value) && value >= 0) return value;
+    throw new L1ReplayValidationError(`${field} must be a non-negative epoch millisecond value`);
+  }
+  const trimmed = value.trim();
+  const parsed = trimmed ? Date.parse(trimmed) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    throw new L1ReplayValidationError(`${field} must be a valid ISO 8601 timestamp or epoch milliseconds`);
+  }
+  return parsed;
 }
 
 // ============================
@@ -254,6 +275,13 @@ export class TdaiGateway {
         return this.handleHealth(res);
       }
 
+      // Replay performs LLM calls and persistent writes. Unlike the legacy
+      // public routes, it is never exposed when gateway auth is disabled.
+      if (pathname.startsWith("/admin/") && !this.config.server.apiKey) {
+        sendError(res, 503, "Admin endpoints require TDAI_GATEWAY_API_KEY");
+        return;
+      }
+
       // All other routes go through the optional auth gate. When apiKey is
       // unset the gate is a no-op (preserves legacy open behaviour) — the
       // startup WARN in `logSecurityPosture` covers that case.
@@ -270,6 +298,8 @@ export class TdaiGateway {
           return await this.handleSearchConversations(req, res);
         case "POST /session/end":
           return await this.handleSessionEnd(req, res);
+        case "POST /admin/replay-l1":
+          return await this.handleReplayL1(req, res);
         case "POST /seed":
           return await this.handleSeed(req, res);
         default:
@@ -476,6 +506,52 @@ export class TdaiGateway {
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
+  }
+
+  private async handleReplayL1(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const body = await parseJsonBody<L1ReplayRequest>(req);
+    if (!body.session_key?.trim()) {
+      sendError(res, 400, "Missing required field: session_key");
+      return;
+    }
+
+    try {
+      const receipt = await this.core.replayL1({
+        sessionKey: body.session_key,
+        fromRecordedAtMs: parseReplayTimestamp(body.from, "from"),
+        toRecordedAtMs: parseReplayTimestamp(body.to, "to"),
+        limit: body.limit,
+        dryRun: body.dry_run,
+      });
+      const response: L1ReplayResponse = {
+        replay_id: receipt.replayId,
+        status: receipt.status,
+        session_key: receipt.sessionKey,
+        dry_run: receipt.dryRun,
+        from_recorded_at_ms: receipt.fromRecordedAtMs,
+        to_recorded_at_ms: receipt.toRecordedAtMs,
+        limit: receipt.limit,
+        l0_record_ids: receipt.l0RecordIds,
+        attempted_count: receipt.attemptedCount,
+        group_count: receipt.groupCount,
+        successful_groups: receipt.successfulGroups,
+        extracted_count: receipt.extractedCount,
+        stored_count: receipt.storedCount,
+        checkpoint_cursor_before: receipt.checkpointCursorBefore,
+        checkpoint_cursor_after: receipt.checkpointCursorAfter,
+        started_at: receipt.startedAt,
+        completed_at: receipt.completedAt,
+        reused_receipt_id: receipt.reusedReceiptId,
+        receipt_path: L1_REPLAY_RECEIPT_PATH,
+      };
+      sendJson(res, 200, response);
+    } catch (err) {
+      if (err instanceof L1ReplayValidationError) {
+        sendError(res, 400, err.message);
+        return;
+      }
+      throw err;
+    }
   }
 
   private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {

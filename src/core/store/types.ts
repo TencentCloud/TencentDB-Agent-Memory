@@ -145,6 +145,17 @@ export interface L0QueryRow {
   timestamp: number;
 }
 
+/** Bounded range query used by the operator-facing L1 replay path. */
+export interface L0ReplayQuery {
+  sessionKey: string;
+  /** Inclusive lower recorded_at bound (epoch ms). */
+  fromRecordedAtMs?: number;
+  /** Inclusive upper recorded_at bound (epoch ms). */
+  toRecordedAtMs?: number;
+  /** Maximum rows returned in chronological order. */
+  limit: number;
+}
+
 /** L0 messages grouped by session ID (for L1 runner). */
 export interface L0SessionGroup {
   sessionId: string;
@@ -288,6 +299,7 @@ export interface IMemoryStore {
   countL0(): MaybePromise<number>;
   queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
   queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
+  queryL0ForReplay(params: L0ReplayQuery): MaybePromise<L0QueryRow[]>;
   getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;
 
   // ── L0 Search ────────────────────────────────────────────
