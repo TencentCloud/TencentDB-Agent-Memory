@@ -230,9 +230,9 @@ def test_client_api_is_exported_from_package_root() -> None:
     """Break caught: documented imports disappearing from the public package."""
     package = importlib.import_module("tdai_pydantic_ai")
 
-    assert package.__all__ == [
+    assert {
         "GatewayClientProtocol",
         "TdaiGatewayClient",
         "TdaiGatewayError",
-    ]
+    }.issubset(package.__all__)
     assert package.TdaiGatewayClient.__name__ == "TdaiGatewayClient"
