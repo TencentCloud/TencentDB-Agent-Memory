@@ -23,6 +23,7 @@ import type { IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import { report } from "../report/reporter.js";
 import type { LLMRunner, Logger } from "../types.js";
+import { preExtractHighConfidence } from "./pre-extractor.js";
 
 const TAG = "[memory-tdai][l1-extractor]";
 
@@ -145,29 +146,44 @@ export async function extractL1Memories(params: {
   const backgroundMessages = bgEndIdx > 0
     ? qualifiedMessages.slice(Math.max(0, bgEndIdx - maxBgMessages), bgEndIdx)
     : [];
+  const preExtracted = preExtractHighConfidence(newMessages);
+  const needsLlmExtraction = preExtracted.remainingMessages.some((message) => message.role === "user");
 
-  logger?.debug?.(`${TAG} Extracting from ${newMessages.length} new messages (+ ${backgroundMessages.length} background) [${qualifiedMessages.length} qualified from ${messages.length} input]`);
+  logger?.debug?.(
+    `${TAG} Extracting from ${preExtracted.remainingMessages.length} LLM message(s) + ` +
+    `${preExtracted.direct.length} direct rule memory/memories ` +
+    `(+ ${backgroundMessages.length} background) ` +
+    `[${qualifiedMessages.length} qualified from ${messages.length} input]`,
+  );
 
   // Step 1: LLM extraction (scene segmentation + memory extraction)
-  let scenes: SceneSegment[];
-  try {
-    scenes = await callLlmExtraction({
-      newMessages,
-      backgroundMessages,
-      previousSceneName: options.previousSceneName,
-      config,
-      logger,
-      model: options.model,
-      llmRunner: options.llmRunner,
-    });
-    logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
-  } catch (err) {
-    logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-    return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+  let scenes: SceneSegment[] = [];
+  if (needsLlmExtraction) {
+    try {
+      scenes = await callLlmExtraction({
+        newMessages: preExtracted.remainingMessages,
+        backgroundMessages,
+        previousSceneName: options.previousSceneName,
+        config,
+        logger,
+        model: options.model,
+        llmRunner: options.llmRunner,
+      });
+      logger?.debug?.(`${TAG} LLM detected ${scenes.length} scene(s)`);
+    } catch (err) {
+      logger?.error(`${TAG} LLM extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { success: false, extractedCount: 0, storedCount: 0, records: [], sceneNames: [] };
+    }
+  } else {
+    logger?.debug?.(
+      `${TAG} All new user messages handled by high-confidence rules; skipping LLM extraction`,
+    );
   }
 
   // Flatten all memories across scenes
-  const allExtracted: ExtractedMemory[] = [];
+  // Deterministic memories go first so maxMemoriesPerSession retains them
+  // before lower-confidence LLM inferences when the combined result is capped.
+  const allExtracted: ExtractedMemory[] = [...preExtracted.direct];
   const sceneNames: string[] = [];
 
   for (const scene of scenes) {
@@ -188,7 +204,6 @@ export async function extractL1Memories(params: {
       });
     }
   }
-
   logger?.debug?.(`${TAG} Total extracted memories: ${allExtracted.length} across ${scenes.length} scene(s)`);
 
   if (allExtracted.length === 0) {
