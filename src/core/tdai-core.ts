@@ -68,6 +68,37 @@ export interface TdaiCoreOptions {
   instanceId?: string;
 }
 
+export interface TdaiDiagnostics {
+  dataDir: string;
+  store: {
+    vectorStore: boolean;
+    embeddingService: boolean;
+    l0Count: number | null;
+    l1Count: number | null;
+    countError?: string;
+  };
+  scheduler: {
+    enabled: boolean;
+    started: boolean;
+    queues: ReturnType<MemoryPipelineManager["getQueueSizes"]> | null;
+  };
+  checkpoint: {
+    totalProcessed: number;
+    l0ConversationsCount: number;
+    totalMemoriesExtracted: number;
+    memoriesSinceLastPersona: number;
+    scenesProcessed: number;
+  };
+  sessions: Array<{
+    sessionKey: string;
+    trackedInMemory: boolean;
+    bufferedMessages: number;
+    schedulerState: ReturnType<MemoryPipelineManager["getSessionState"]> | null;
+    checkpointRunnerState: unknown;
+    checkpointPipelineState: unknown;
+  }>;
+}
+
 // ============================
 // TdaiCore
 // ============================
@@ -361,6 +392,74 @@ export class TdaiCore {
     await this.storeReady?.catch(() => {});
     if (!this.scheduler) return;
     await this.scheduler.flushSession(sessionKey);
+  }
+
+  /**
+   * Read-only diagnostics for Gateway/CLI observability.
+   *
+   * This intentionally avoids starting the scheduler by itself: diagnostics
+   * should report current state, not create new pipeline timers.
+   */
+  async getDiagnostics(): Promise<TdaiDiagnostics> {
+    await this.storeReady?.catch(() => {});
+
+    const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+    const cp = await checkpoint.read();
+    const scheduler = this.scheduler;
+
+    let l0Count: number | null = null;
+    let l1Count: number | null = null;
+    let countError: string | undefined;
+    if (this.vectorStore) {
+      try {
+        l0Count = await this.vectorStore.countL0();
+        l1Count = await this.vectorStore.countL1();
+      } catch (err) {
+        countError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const sessionKeys = new Set<string>([
+      ...Object.keys(cp.runner_states ?? {}),
+      ...Object.keys(cp.pipeline_states ?? {}),
+      ...(scheduler?.getSessionKeys() ?? []),
+    ]);
+
+    const sessions = Array.from(sessionKeys).sort().map((sessionKey) => {
+      const schedulerState = scheduler?.getSessionState(sessionKey) ?? null;
+      return {
+        sessionKey,
+        trackedInMemory: schedulerState !== null,
+        bufferedMessages: scheduler?.getBufferedMessageCount(sessionKey) ?? 0,
+        schedulerState,
+        checkpointRunnerState: cp.runner_states?.[sessionKey] ?? null,
+        checkpointPipelineState: cp.pipeline_states?.[sessionKey] ?? null,
+      };
+    });
+
+    return {
+      dataDir: this.dataDir,
+      store: {
+        vectorStore: !!this.vectorStore,
+        embeddingService: !!this.embeddingService,
+        l0Count,
+        l1Count,
+        ...(countError ? { countError } : {}),
+      },
+      scheduler: {
+        enabled: !!scheduler,
+        started: this.isSchedulerStarted(),
+        queues: scheduler?.getQueueSizes() ?? null,
+      },
+      checkpoint: {
+        totalProcessed: cp.total_processed,
+        l0ConversationsCount: cp.l0_conversations_count,
+        totalMemoriesExtracted: cp.total_memories_extracted,
+        memoriesSinceLastPersona: cp.memories_since_last_persona,
+        scenesProcessed: cp.scenes_processed,
+      },
+      sessions,
+    };
   }
 
   // ============================
