@@ -5,15 +5,9 @@
  * L1 runner, L2 runner, L3 runner, and persister wiring — keeping this
  * module focused on seed-specific concerns:
  * - Synchronous per-round L0 capture with progress reporting
- * - waitForL1Idle polling (L1 only — see FIXME below)
+ * - Per-batch L1 idle polling to preserve extraction boundaries
+ * - Final L1→L2→L3 drain before storage resources are closed
  * - Ctrl+C graceful shutdown
- *
- * FIXME: Currently we only wait for L1 to become idle before destroying the
- * pipeline.  L2 (scene extraction) and L3 (persona generation) may still be
- * in-flight when `pipeline.destroy()` is called.  This is intentional for now
- * to avoid excessively long seed runs, but means seed output may not include
- * the latest L2/L3 artifacts.  Re-evaluate adding a full L1+L2+L3 idle wait
- * once pipeline-manager exposes reliable L2/L3 idle signals.
  */
 
 import path from "node:path";
@@ -200,11 +194,8 @@ async function waitForL1Idle(
 // ============================
 
 /**
- * Execute the seed pipeline: feed normalized input through L0 → L1.
- *
- * L2/L3 runners are wired but their completion is **not** awaited — see the
- * module-level FIXME.  The pipeline is destroyed after L1 idle, so L2/L3 may
- * be interrupted mid-run.
+ * Execute the seed pipeline: feed normalized input through L0 → L1, then
+ * drain downstream L2/L3 work before closing the seed output store.
  *
  * This is the core runtime called by `src/cli/commands/seed.ts` after
  * all input validation and user confirmation are complete.
@@ -353,16 +344,13 @@ export async function executeSeed(
       }
     }
 
-    // Final wait for all sessions
+    // Final barrier for all sessions. Unlike the per-batch L1 waits above,
+    // this explicitly flushes scheduled L2 work and waits for the resulting
+    // L3 persona generation before the finally block closes storage.
     if (!interrupted) {
-      const allKeys = input.sessions.map((s) => s.sessionKey);
-      logger.info(`${TAG} Final L1 idle wait for all sessions...`);
-      await waitForL1Idle(
-        pipeline.scheduler,
-        allKeys,
-        logger,
-        { pollIntervalMs: 1_000, stableRounds: 3, maxWaitMs: 300_000 },
-      );
+      logger.info(`${TAG} Final L1→L2→L3 pipeline flush...`);
+      await pipeline.scheduler.flushAll();
+      logger.info(`${TAG} Final pipeline flush complete`);
     }
   } finally {
     process.removeListener("SIGINT", onSigint);
