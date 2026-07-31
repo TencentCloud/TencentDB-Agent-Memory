@@ -24,9 +24,11 @@
  * Writes use atomic tmp+rename to prevent corruption on crash.
  */
 
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { createInterface } from "node:readline";
 
 // ============================
 // Types
@@ -100,11 +102,11 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Number of L0 capture batches currently retained in local JSONL shards */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Number of L1 memory records currently retained in local JSONL shards */
   total_memories_extracted: number;
 }
 
@@ -146,6 +148,145 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+export interface CheckpointCounterValues {
+  l0ConversationsCount: number;
+  totalMemoriesExtracted: number;
+}
+
+export interface CheckpointCounterSourceResult {
+  ok: boolean;
+  count?: number;
+  skippedLines: number;
+}
+
+export interface CheckpointRecalibrationResult {
+  before: CheckpointCounterValues;
+  after: CheckpointCounterValues;
+  changed: boolean;
+  sources: {
+    l0: CheckpointCounterSourceResult;
+    l1: CheckpointCounterSourceResult;
+  };
+}
+
+interface JsonlScanResult {
+  count: number;
+  skippedLines: number;
+}
+
+type JsonlRecordCollector = (value: unknown) => boolean;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function scanJsonlDirectory(
+  dirPath: string,
+  collect: JsonlRecordCollector,
+): Promise<JsonlScanResult> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return { count: 0, skippedLines: 0 };
+    }
+    throw error;
+  }
+
+  const files = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => path.join(dirPath, entry.name))
+    .sort();
+
+  let count = 0;
+  let skippedLines = 0;
+
+  for (const filePath of files) {
+    const input = createReadStream(filePath, { encoding: "utf-8" });
+    const lines = createInterface({ input, crlfDelay: Infinity });
+
+    try {
+      for await (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        try {
+          const value = JSON.parse(trimmed) as unknown;
+          if (collect(value)) {
+            count += 1;
+          } else {
+            skippedLines += 1;
+          }
+        } catch {
+          skippedLines += 1;
+        }
+      }
+    } finally {
+      lines.close();
+      input.destroy();
+    }
+  }
+
+  return { count, skippedLines };
+}
+
+async function countL0CaptureBatches(dataDir: string): Promise<JsonlScanResult> {
+  const batchKeys = new Set<string>();
+
+  const scan = await scanJsonlDirectory(
+    path.join(dataDir, "conversations"),
+    (value) => {
+      if (!isRecord(value)) return false;
+
+      const isFlatMessage =
+        (value.role === "user" || value.role === "assistant") &&
+        typeof value.content === "string";
+      const isLegacyBatch = Array.isArray(value.messages);
+      if (!isFlatMessage && !isLegacyBatch) return false;
+
+      if (
+        typeof value.sessionKey !== "string" ||
+        typeof value.recordedAt !== "string"
+      ) {
+        return false;
+      }
+
+      const sessionId =
+        typeof value.sessionId === "string" ? value.sessionId : "";
+      const batchKey = JSON.stringify([
+        value.sessionKey,
+        sessionId,
+        value.recordedAt,
+      ]);
+
+      batchKeys.add(batchKey);
+      return true;
+    },
+  );
+
+  // scan.count is the number of valid L0 lines. The checkpoint counter tracks
+  // capture batches, so collapse lines written by the same capture event.
+  return { count: batchKeys.size, skippedLines: scan.skippedLines };
+}
+
+async function countL1MemoryRecords(dataDir: string): Promise<JsonlScanResult> {
+  return scanJsonlDirectory(path.join(dataDir, "records"), (value) => {
+    if (!isRecord(value)) return false;
+    const hasId =
+      typeof value.id === "string" || typeof value.record_id === "string";
+    return hasId && typeof value.content === "string";
+  });
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -179,10 +320,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -291,6 +434,107 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Recount the L0/L1 records that are currently present in local JSONL
+   * storage and repair drifted aggregate counters.
+   *
+   * L0 files contain one line per message, while the checkpoint increments
+   * once per capture event. All messages from one capture share
+   * sessionKey/sessionId/recordedAt, so they are collapsed into one batch.
+   *
+   * A missing data directory is treated as an empty layer. Other read errors
+   * leave that layer's previous checkpoint value untouched.
+   */
+  async recalibrateFromDisk(): Promise<CheckpointRecalibrationResult> {
+    const warnings: string[] = [];
+
+    const result = await withFileLock(this.filePath, async () => {
+      const cp = await this.readRaw();
+      const before: CheckpointCounterValues = {
+        l0ConversationsCount: cp.l0_conversations_count,
+        totalMemoriesExtracted: cp.total_memories_extracted,
+      };
+
+      const [l0Scan, l1Scan] = await Promise.allSettled([
+        countL0CaptureBatches(this.dataDir),
+        countL1MemoryRecords(this.dataDir),
+      ]);
+
+      const l0Source: CheckpointCounterSourceResult =
+        l0Scan.status === "fulfilled"
+          ? {
+              ok: true,
+              count: l0Scan.value.count,
+              skippedLines: l0Scan.value.skippedLines,
+            }
+          : { ok: false, skippedLines: 0 };
+      const l1Source: CheckpointCounterSourceResult =
+        l1Scan.status === "fulfilled"
+          ? {
+              ok: true,
+              count: l1Scan.value.count,
+              skippedLines: l1Scan.value.skippedLines,
+            }
+          : { ok: false, skippedLines: 0 };
+
+      if (l0Scan.status === "fulfilled") {
+        cp.l0_conversations_count = l0Scan.value.count;
+        if (l0Scan.value.skippedLines > 0) {
+          warnings.push(
+            `L0 recount skipped ${l0Scan.value.skippedLines} malformed or unrecognized JSONL line(s)`,
+          );
+        }
+      } else {
+        warnings.push(`L0 recount failed: ${errorMessage(l0Scan.reason)}`);
+      }
+
+      if (l1Scan.status === "fulfilled") {
+        cp.total_memories_extracted = l1Scan.value.count;
+        if (l1Scan.value.skippedLines > 0) {
+          warnings.push(
+            `L1 recount skipped ${l1Scan.value.skippedLines} malformed or unrecognized JSONL line(s)`,
+          );
+        }
+      } else {
+        warnings.push(`L1 recount failed: ${errorMessage(l1Scan.reason)}`);
+      }
+
+      const after: CheckpointCounterValues = {
+        l0ConversationsCount: cp.l0_conversations_count,
+        totalMemoriesExtracted: cp.total_memories_extracted,
+      };
+      const changed =
+        before.l0ConversationsCount !== after.l0ConversationsCount ||
+        before.totalMemoriesExtracted !== after.totalMemoriesExtracted;
+
+      if (changed) {
+        await this.writeRaw(cp);
+      }
+
+      return {
+        before,
+        after,
+        changed,
+        sources: {
+          l0: l0Source,
+          l1: l1Source,
+        },
+      };
+    });
+
+    for (const warning of warnings) {
+      this.logger.warn?.(`[checkpoint] ${warning}`);
+    }
+    this.logger.info(
+      `[checkpoint] recalibrateFromDisk: ` +
+      `L0 ${result.before.l0ConversationsCount} -> ${result.after.l0ConversationsCount}, ` +
+      `L1 ${result.before.totalMemoriesExtracted} -> ${result.after.totalMemoriesExtracted}, ` +
+      `changed=${result.changed}`,
+    );
+
+    return result;
   }
 
   // ============================

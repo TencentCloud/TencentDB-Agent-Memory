@@ -144,6 +144,19 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
+    // Repair checkpoint counters before any capture or extraction work starts.
+    // This also picks up manual JSONL pruning performed while the service was
+    // stopped. Recalibration is best-effort and must not block startup.
+    try {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      await checkpoint.recalibrateFromDisk();
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint counter recalibration failed at startup (non-fatal): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // Initialize stores (async)
     this.storeReady = this.initStores();
 
