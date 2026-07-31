@@ -105,8 +105,15 @@ export class SerialQueue {
 
     this.debugFn?.(`[queue:${this.name}] dequeued, starting execution (remaining=${this.queue.length})`);
 
-    entry
-      .task()
+    // Coerce task invocation to a microtask-promise chain so a *synchronous*
+    // throw from task() is captured and routed through the .catch/.finally
+    // block below. Without this wrapping, sync throws leave `this.running`
+    // stuck at true forever, which permanently starves all subsequent adds
+    // (see issue #518 reproducer: add sync throw → catch → add async task →
+    // 100ms timeout). Async-throw tasks were already correctly handled; the
+    // only missing branch was sync-throw.
+    Promise.resolve()
+      .then(() => entry.task())
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
