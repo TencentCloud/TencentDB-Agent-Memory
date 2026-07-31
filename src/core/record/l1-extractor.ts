@@ -23,6 +23,7 @@ import type { IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import { report } from "../report/reporter.js";
 import type { LLMRunner, Logger } from "../types.js";
+import { validateLlmMemory } from "./l1-confidence.js";
 
 const TAG = "[memory-tdai][l1-extractor]";
 
@@ -178,14 +179,23 @@ export async function extractL1Memories(params: {
         logger?.warn?.(`${TAG} Skipping memory with invalid type "${mem.type}"`);
         continue;
       }
-      allExtracted.push({
+      const extractedMemory: ExtractedMemory = {
         content: mem.content,
         type: memType,
         priority: typeof mem.priority === "number" ? mem.priority : 50,
         source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
         metadata: mem.metadata ?? {},
         scene_name: scene.scene_name,
-      });
+      };
+      const confidence = validateLlmMemory(extractedMemory, newMessages);
+      if (!confidence.accepted) {
+        logger?.debug?.(
+          `${TAG} Skipping low-confidence LLM memory: reason=${confidence.reason}, ` +
+          `type=${extractedMemory.type}, content=${JSON.stringify(extractedMemory.content.slice(0, 120))}`,
+        );
+        continue;
+      }
+      allExtracted.push(extractedMemory);
     }
   }
 
