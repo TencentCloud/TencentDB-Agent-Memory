@@ -7,12 +7,8 @@ describe("recall injection config", () => {
     expect(parseConfig({}).recall.epochMaxTokens).toBe(8192);
   });
 
-  it("accepts append injection", () => {
-    expect(parseConfig({ recall: { injectionMode: "append" } }).recall.injectionMode).toBe("append");
-  });
-
-  it("accepts prepend injection", () => {
-    expect(parseConfig({ recall: { injectionMode: "prepend" } }).recall.injectionMode).toBe("prepend");
+  it.each(["append", "prepend"] as const)("accepts %s injection", (injectionMode) => {
+    expect(parseConfig({ recall: { injectionMode } }).recall.injectionMode).toBe(injectionMode);
   });
 
   it("accepts a bounded memory epoch token budget", () => {

@@ -25,53 +25,9 @@ function ftsResult(content: string): L1FtsResult {
 }
 
 describe("auto recall prompt layout", () => {
-  it("keeps stable system context identical across different L1 recalls", async () => {
+  it("keeps one stable snapshot while recall remains fresh across six turns", async () => {
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-auto-recall-"));
     await fs.writeFile(path.join(dataDir, "persona.md"), "The user prefers concise answers.");
-
-    let recalledContent = "The user is working on issue 120.";
-    const store = {
-      isFtsAvailable: () => true,
-      searchL1Fts: async () => [ftsResult(recalledContent)],
-    } as unknown as IMemoryStore;
-    const cfg = parseConfig({ recall: { strategy: "keyword" } });
-    const { snapshot } = await new RecallContextEpoch(dataDir).resolve();
-
-    try {
-      const first = await performAutoRecall({
-        userText: "prompt cache",
-        actorId: "user",
-        sessionKey: "session",
-        cfg,
-        pluginDataDir: dataDir,
-        vectorStore: store,
-        stableSnapshot: snapshot,
-      });
-      recalledContent = "The user is measuring a different optimization.";
-      const second = await performAutoRecall({
-        userText: "prompt cache",
-        actorId: "user",
-        sessionKey: "session",
-        cfg,
-        pluginDataDir: dataDir,
-        vectorStore: store,
-        stableSnapshot: snapshot,
-      });
-
-      expect(first.appendSystemContext).toBe(second.appendSystemContext);
-      expect(first.appendSystemContext).toContain("<user-persona>");
-      expect(first.appendSystemContext).toContain("<memory-tools-guide>");
-      expect(first.appendSystemContext).not.toContain("<relevant-memories>");
-      expect(first.prependContext).toContain("issue 120");
-      expect(second.prependContext).toContain("different optimization");
-    } finally {
-      await fs.rm(dataDir, { recursive: true });
-    }
-  });
-
-  it("keeps automatic recall fresh across a six-turn snapshot epoch", async () => {
-    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "tdai-auto-recall-delta-"));
-    await fs.writeFile(path.join(dataDir, "persona.md"), "Stable profile");
 
     let turn = 0;
     const store = {
@@ -79,9 +35,9 @@ describe("auto recall prompt layout", () => {
       searchL1Fts: async () => [ftsResult(`fresh memory ${turn}`)],
     } as unknown as IMemoryStore;
     const cfg = parseConfig({ recall: { strategy: "keyword" } });
+    const { snapshot } = await new RecallContextEpoch(dataDir).resolve();
 
     try {
-      const binding = await new RecallContextEpoch(dataDir).resolve();
       const stableContexts = new Set<string>();
       const deltas = new Set<string>();
 
@@ -93,7 +49,7 @@ describe("auto recall prompt layout", () => {
           cfg,
           pluginDataDir: dataDir,
           vectorStore: store,
-          stableSnapshot: binding.snapshot,
+          stableSnapshot: snapshot,
         });
         stableContexts.add(result.appendSystemContext ?? "");
         deltas.add(result.prependContext ?? "");
@@ -101,6 +57,11 @@ describe("auto recall prompt layout", () => {
 
       expect(stableContexts.size).toBe(1);
       expect(deltas.size).toBe(6);
+      expect([...stableContexts][0]).toContain("<user-persona>");
+      expect([...stableContexts][0]).toContain("<memory-tools-guide>");
+      expect([...stableContexts][0]).not.toContain("<relevant-memories>");
+      expect([...deltas][0]).toContain("fresh memory 1");
+      expect([...deltas][5]).toContain("fresh memory 6");
     } finally {
       await fs.rm(dataDir, { recursive: true });
     }
