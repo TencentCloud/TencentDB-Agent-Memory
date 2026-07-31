@@ -25,6 +25,7 @@ import { createCodeGraphRoutes } from "./routes/code-graph.js";
 import { createToolsRoutes } from "./routes/tools.js";
 import { createHealthRoutes } from "./routes/health.js";
 import { createLlmBindingRoutes } from "./routes/llm-binding.js";
+import { createMcpHttpRoutes } from "./mcp/http-server.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createLogger } from "./logger.js";
@@ -80,6 +81,17 @@ export function createApp() {
   }));
 
   app.route(config.apiPrefix, api);
+
+  // MCP streamable-HTTP endpoint — remote agents connect here via URL + Bearer token.
+  // Auth: set KNOWLEDGE_MCP_AUTH_TOKEN to require Authorization: Bearer <token>.
+  app.route("/mcp", createMcpHttpRoutes({
+    httpOpts: {
+      baseUrl: `http://127.0.0.1:${config.port}`,
+      token: config.mcpAuthToken || undefined,
+    },
+    authToken: config.mcpAuthToken || undefined,
+  }));
+  log.info(`MCP streamable-HTTP endpoint mounted at /mcp (auth: ${config.mcpAuthToken ? "enabled" : "disabled"})`);
 
   // Swagger UI — serve OpenAPI spec from docs/api/openapi.yaml
   const currentDir = dirname(fileURLToPath(import.meta.url));
