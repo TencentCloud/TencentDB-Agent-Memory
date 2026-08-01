@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "../../dist",
+    "rootDir": "../..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "declaration": false,
+    "sourceMap": false,
+    "noEmit": true
+  },
+  "include": [
+    "replay-pipeline.ts",
+    "recording-runner.ts",
+    "../../src/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}
