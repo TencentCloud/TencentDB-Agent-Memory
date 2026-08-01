@@ -111,13 +111,16 @@ export class GitSourceFetcher implements ISourceFetcher {
 
   private extractHost(url: string): string {
     try {
-      return new URL(url).hostname;
+      return new URL(url).hostname.toLowerCase();
     } catch {
       return "";
     }
   }
 
   private isPrivateAddress(host: string): boolean {
-    return PRIVATE_ADDR_RE.test(host);
+    const clean = host.trim().toLowerCase();
+    if (PRIVATE_ADDR_RE.test(clean)) return true;
+    if (/\.(internal|local|lan|nip\.io|sslip\.io)$/i.test(clean)) return true;
+    return false;
   }
 }
