@@ -26,7 +26,6 @@
     "export-tencent-vdb": "node ./bin/export-tencent-vdb.mjs",
     "build:read-local-memory": "tsc --project scripts/read-local-memory/tsconfig.json",
     "read-local-memory": "node ./bin/read-local-memory.mjs",
-    "typecheck:replay-pipeline": "tsc --project scripts/replay-pipeline/tsconfig.json",
     "replay-pipeline": "tsx scripts/replay-pipeline/replay-pipeline.ts",
     "build:seed-v2": "tsc --project scripts/seed-v2/tsconfig.json",
     "seed-v2": "node ./bin/seed-v2.mjs",
