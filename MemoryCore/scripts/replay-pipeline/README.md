@@ -18,11 +18,43 @@
 
 - 默认把数据目录**复制**到临时工作目录再重跑，不污染线上数据。
 - **只有本工具 `mkdtemp` 创建的临时目录会被自动清理**；`--work-dir` 指定的
-  目录永远不会被自动删除（`--keep-workdir` / 用户目录均保留）。
+  目录永远不会被自动删除（`--keep-workdir` / 用户目录均保留）。即使中途
+  抛异常（store 初始化失败等），临时目录也会在 finally 中清理。
+- 复制时用 `VACUUM INTO` 为 `vectors.db` 生成**一致快照**，避免直接拷贝活跃
+  WAL 数据库导致的不一致；快照失败时回退到普通复制并告警。对正在运行的
+  Agent 数据目录，快照仍只代表复制瞬间的视图，L0 JSONL 与 SQLite 之间
+  可能仍有微小时间差。
+- `--clean`（默认开启）：按依赖关系清理工作目录中的派生数据：
+  - 跑 L1：清理 L1 记录 + records JSONL + checkpoint + 全部下游 L2/L3。
+  - 只跑 L2：保留 L1，清理各 profile scope 的 scene_blocks / persona。
+  - 只跑 L3：保留 L1/L2，只清理各 scope 的 persona。
+  - 清理覆盖 legacy 根目录 **和** `profiles/<encoded scope>/` 下的全部
+    profile scope（L2/L3 生产落盘位置）。
 - `--no-copy` 直接在原目录执行并写入数据，仅调试用。
-- `--clean`（默认开启）：清空工作目录中的派生数据（L1 记录 / scene_blocks
-  / persona / checkpoint），做隔离的 L0→L3 重建。`--keep-state` 则保留已有
-  状态做增量继续。
+- **危险组合保护**：
+  - `--no-copy + --clean`：会删除原目录全部派生数据，必须加 `--dangerous`
+    显式确认。
+  - `--no-copy + --session-key + --clean`：直接拒绝（无法局部清理其他
+    session 的派生数据）。
+- `--keep-state`：保留 checkpoint 与派生数据。L1 按 checkpoint 增量执行；
+  L2 会读取并回写各 scope 的 L2 cursor（`l2_last_extraction_time`）。
+
+## Profile scope（L2/L3 落盘）
+
+L2/L3 的生产逻辑按 team+agent 隔离写入
+`profiles/<encoded scope>/scene_blocks/` 与 `profiles/<encoded scope>/persona.md`
+（legacy 无隔离时写根目录）。本工具：
+
+- 枚举全部 profile scope（legacy `global` + `profiles/` 下各 scope）。
+- clean 按 scope 清理。
+- 报告的 `profiles` 字段按 scope 保存 L2/L3 快照：
+
+```jsonc
+"profiles": {
+  "global": { "scenesBefore": [], "scenesAfter": [], "personaChanged": false },
+  "team:T1|agent:A1": { "scenesBefore": [], "scenesAfter": [], "personaChanged": true }
+}
+```
 
 ## 敏感数据
 
@@ -103,14 +135,20 @@ npx tsx scripts/replay-pipeline/replay-pipeline.ts \
 | `--llm-base-url` / `--llm-api-key` / `--llm-model` | LLM 配置（必需） |
 | `--config` | JSON 配置文件，与 CLI 参数 deep-merge，CLI 优先 |
 | `--enable-dedup` | L1 开启冲突去重（需在 `--config` 中配置 embedding；未配置时降级为 FTS 去重） |
-| `--clean` | 清空派生数据做隔离重建（默认开启） |
-| `--keep-state` | 保留已有 checkpoint 与派生数据（增量继续） |
+| `--clean` | 按依赖关系清空派生数据做隔离重建（默认开启） |
+| `--keep-state` | 保留已有 checkpoint 与派生数据（L2 增量依赖 cursor） |
+| `--dangerous` | 确认 `--no-copy --clean` 危险模式 |
 | `--redact` | 报告对 prompt/response 脱敏（邮箱/手机号/密钥） |
 | `--work-dir` | 指定工作目录（默认临时目录；**不会被自动删除**） |
 | `--no-copy` | 不复制，直接在原目录重跑（危险） |
 | `--keep-workdir` | 保留临时工作目录不清理 |
 | `-o, --output` | 报告 JSON 输出路径，默认 `./replay-report.json` |
 | `--compare` | 对比两份报告并打印差异摘要 |
+
+安全组合约束：
+
+- `--no-copy + --clean` 必须加 `--dangerous`。
+- `--no-copy + --session-key + --clean` 直接拒绝。
 
 ## 报告结构
 
@@ -133,13 +171,27 @@ npx tsx scripts/replay-pipeline/replay-pipeline.ts \
       ],
       "detail": { "processedCount": 10, "storedCount": 8 }
     },
-    "L2": { "status": "ok", "llmCalls": [...], "detail": { "scenesBefore": [...], "scenesAfter": [...] } },
-    "L3": { "status": "ok", "llmCalls": [...], "detail": { "personaBeforeChars": 0, "personaAfterChars": 100 } }
+    "L2": { "status": "ok", "llmCalls": [...], "detail": { "scopes": [...], "scenesBeforeTotal": 3, "scenesAfterTotal": 4 } },
+    "L3": { "status": "ok", "llmCalls": [...], "detail": { "scopes": [...], "personaBeforeTotal": 0, "personaAfterTotal": 100 } }
+  },
+  "profiles": {
+    "global": { "scenesBefore": [], "scenesAfter": [], "personaBeforeChars": 0, "personaAfterChars": 100, "personaChanged": true },
+    "team:T1|agent:A1": { "scenesBefore": ["a.md"], "scenesAfter": ["a.md", "b.md"], "personaBeforeChars": 0, "personaAfterChars": 80, "personaChanged": true }
   }
 }
 ```
 
 任一阶段失败时 `failed=true`，进程退出码为 `1`；否则退出码 `0`。
+
+## 测试
+
+- `recording-runner.test.ts` — 录制器单元测试（成功 / 失败 / 工厂包装）。
+- `replay-pipeline.test.ts` — CLI 集成测试：
+  - 拒绝 `--no-copy --clean`（无 `--dangerous`）。
+  - 拒绝 `--no-copy --session-key --clean`。
+  - `--list-sessions` 从 SQLite 列出 session。
+  - 覆盖已存在 0644 报告后权限收紧为 0600。
+  - 异常路径（store 初始化失败）不残留临时目录。
 
 ## 局限
 
@@ -147,7 +199,7 @@ npx tsx scripts/replay-pipeline/replay-pipeline.ts \
   未保存，无法还原"当时为什么得到该结果"。
 - L2 / L3 的 LLM 走工具模式（LLM 直接读写 `scene_blocks/`），录制的
   response 是最终文本输出，中间工具调用细节不包含。
-- `--clean` 清空派生数据后，L2/L3 从空场景重建；若只想重跑某一段增量，
-  用 `--keep-state`。
+- 快照复制只对 `vectors.db` 用 `VACUUM INTO` 保证一致性；L0 JSONL 与
+  SQLite 之间对活跃目录仍可能有微小时间差。
 - 默认关闭 embedding 与 dedup（离线可跑）；要复现生产向量召回结果，请在
   `--config` 中配置 embedding 并加 `--enable-dedup`。

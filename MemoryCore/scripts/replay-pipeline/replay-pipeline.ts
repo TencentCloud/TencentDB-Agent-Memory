@@ -39,7 +39,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { mkdtemp, cp, rm } from "node:fs/promises";
+import { mkdtemp, cp, rm, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 // ─────────────────────────────────────────────
@@ -54,6 +54,10 @@ import { StandaloneLLMRunnerFactory } from "../../src/adapters/standalone/llm-ru
 import { LocalStorageBackend } from "../../src/core/storage/local-backend.js";
 import { StorageAdapter } from "../../src/core/storage/adapter.js";
 import { StoragePaths } from "../../src/core/storage/types.js";
+import { DEFAULT_PROFILE_SCOPE, buildProfileIsolationScope } from "../../src/core/profile/profile-sync.js";
+import type { ProfileIsolation } from "../../src/core/profile/profile-sync.js";
+import { CheckpointManager } from "../../src/utils/checkpoint.js";
+import type { PipelineSessionState } from "../../src/utils/checkpoint.js";
 import { RecordingLLMRunnerFactory } from "./recording-runner.js";
 import type { RecordedLlmCall } from "./recording-runner.js";
 
@@ -74,6 +78,8 @@ interface CliOptions {
   keepState: boolean;
   /** 报告中的 prompt/response 做脱敏（邮箱/手机号/密钥）。 */
   redact: boolean;
+  /** 危险模式确认：--no-copy --clean 必须显式携带。 */
+  dangerous: boolean;
   listSessions: boolean;
   sessionKey?: string;
   stages: Array<"L1" | "L2" | "L3">;
@@ -87,6 +93,16 @@ interface CliOptions {
   help: boolean;
 }
 
+/** 一个 profile scope（L2/L3 的隔离维度）。legacy scope = DEFAULT_PROFILE_SCOPE。 */
+interface ProfileScope {
+  /** scope 名（如 "team:T|agent:A"），legacy 根目录用 DEFAULT_PROFILE_SCOPE。 */
+  name: string;
+  /** 在 storage 中的 key 前缀，如 "profiles/<encoded>/"。legacy 为空。 */
+  storagePrefix: string;
+  /** 在本地 fs 中的目录路径。 */
+  dir: string;
+}
+
 interface StageReport {
   /** 本阶段触发的 LLM 调用（原始 prompt / response / 耗时）。 */
   llmCalls: RecordedLlmCall[];
@@ -94,6 +110,15 @@ interface StageReport {
   detail: Record<string, unknown>;
   /** 阶段执行结果：ok / failed / skipped。 */
   status: "ok" | "failed" | "skipped";
+}
+
+/** L2/L3 按 profile scope 的快照（legacy scope 键为 "global"）。 */
+interface ProfileSnapshot {
+  scenesBefore: string[];
+  scenesAfter: string[];
+  personaBeforeChars: number;
+  personaAfterChars: number;
+  personaChanged: boolean;
 }
 
 interface ReplayReport {
@@ -116,6 +141,8 @@ interface ReplayReport {
     L2?: StageReport;
     L3?: StageReport;
   };
+  /** L2/L3 的 profile scope 快照（key 为 scope 名，legacy 为 "global"）。 */
+  profiles?: Record<string, ProfileSnapshot>;
 }
 
 const HELP_TEXT = `
@@ -129,6 +156,10 @@ const HELP_TEXT = `
 默认安全策略：把数据目录**复制**到临时工作目录再重跑，不污染线上数据。
 只有由本工具 mkdtemp 创建的临时目录才会被自动清理；用户用 --work-dir
 指定的目录永远不会被自动删除。--no-copy 直接在原目录执行（危险）。
+
+⚠️  报告包含完整对话内容（prompt 与模型输出），注意保管，避免泄露。
+⚠️  默认模式直接复制活跃 SQLite（WAL）数据库，不保证与线上进程写入一致；
+    对正在运行的 Agent 数据目录重跑结果可能受快照不一致影响。
 
 Usage:
   npx tsx replay-pipeline.ts -d <数据目录> [选项]
@@ -147,6 +178,7 @@ Options:
       --clean                清空派生数据做隔离重建（默认开启；与 --keep-state 互斥）
       --keep-state           保留已有 checkpoint 与派生数据（增量继续）
       --redact               报告中对 prompt/response 做脱敏（邮箱/手机号/密钥）
+      --dangerous            确认危险模式：--no-copy --clean（会删除原目录派生数据）
       --work-dir <路径>      指定工作目录（默认临时目录；指定的目录不会被自动删除）
       --no-copy              不复制，直接在原数据目录上重跑（危险！会写数据）
       --keep-workdir         保留临时工作目录不清理
@@ -154,7 +186,10 @@ Options:
       --compare <a> <b>      对比两份报告并打印差异摘要
   -h, --help                 显示帮助
 
-⚠️  报告包含完整对话内容（prompt 与模型输出），注意保管，避免泄露。
+安全规则：
+  - 只有本工具创建的临时目录会被自动清理。
+  - --no-copy 与 --clean 不能同时使用（除非加 --dangerous 明确确认）。
+  - --session-key + --no-copy + --clean 组合被拒绝（无法局部清理其他 session）。
 
 Examples:
   # 列出 session
@@ -183,6 +218,7 @@ function parseCli(): CliOptions {
       clean: { type: "boolean", default: true },
       "keep-state": { type: "boolean", default: false },
       redact: { type: "boolean", default: false },
+      dangerous: { type: "boolean", default: false },
       "list-sessions": { type: "boolean", default: false },
       "session-key": { type: "string" },
       stages: { type: "string" },
@@ -223,6 +259,7 @@ function parseCli(): CliOptions {
       clean: false,
       keepState: false,
       redact: false,
+      dangerous: false,
       listSessions: false,
       enableDedup: false,
       stages: ["L1", "L2", "L3"],
@@ -258,16 +295,38 @@ function parseCli(): CliOptions {
     process.exit(1);
   }
 
+  const noCopy = values["no-copy"] === true;
+  const dangerous = values.dangerous === true;
+  const sessionKey = values["session-key"] as string | undefined;
+
+  // 危险组合校验：
+  // - --no-copy + --clean：会删除原目录全部派生数据 → 需要 --dangerous
+  // - --no-copy + --session-key + --clean：无法局部清理其他 session → 直接拒绝
+  if (noCopy && clean) {
+    if (sessionKey) {
+      console.error(`❌ --no-copy + --session-key + --clean 组合被拒绝：无法局部清理其他 session 的派生数据`);
+      console.error("   请先复制到临时目录（去掉 --no-copy），或用 --keep-state 增量继续");
+      process.exit(1);
+    }
+    if (!dangerous) {
+      console.error("❌ --no-copy + --clean 会删除原目录全部派生数据（L1/scene/persona/checkpoint）");
+      console.error("   如确认要清理原目录，请显式加 --dangerous");
+      process.exit(1);
+    }
+    logger.warn("--dangerous: 已确认将对原数据目录执行 --clean（删除全部派生数据）");
+  }
+
   return {
     dataDir: resolvedDataDir,
     workDir: values["work-dir"] ? path.resolve(values["work-dir"]) : undefined,
-    noCopy: values["no-copy"] === true,
+    noCopy,
     keepWorkDir: values["keep-workdir"] === true,
     clean,
     keepState,
     redact: values.redact === true,
+    dangerous,
     listSessions: values["list-sessions"] === true,
-    sessionKey: values["session-key"] as string | undefined,
+    sessionKey,
     stages,
     llmBaseUrl: values["llm-base-url"] as string | undefined,
     llmApiKey: values["llm-api-key"] as string | undefined,
@@ -415,6 +474,59 @@ async function listSessionKeys(dataDir: string): Promise<string[]> {
 // Workdir management
 // ─────────────────────────────────────────────
 
+/**
+ * 用 SQLite VACUUM INTO 创建一致的向量库快照。
+ *
+ * 直接 cp 活跃的 WAL 数据库（vectors.db + -wal + -shm）不是原子快照：
+ * 分别复制各文件可能读到不一致的时间点。VACUUM INTO 让 SQLite 生成一个
+ * 自洽的单一文件副本，等价于静态备份。
+ *
+ * @param srcDb  源 vectors.db 路径
+ * @param destDb 目标快照路径
+ * @returns 是否成功（源库不存在 / 非 SQLite / 无 node:sqlite 时返回 false）
+ */
+async function snapshotSqliteDb(srcDb: string, destDb: string): Promise<boolean> {
+  if (!fs.existsSync(srcDb)) return false;
+  try {
+    const { createRequire } = await import("node:module");
+    const require = createRequire(import.meta.url);
+    const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+    const db = new DatabaseSync(srcDb, { open: false });
+    db.open();
+    try {
+      // VACUUM INTO 只能用于主数据库文件，且目标不能已存在。
+      if (fs.existsSync(destDb)) fs.rmSync(destDb, { force: true });
+      db.exec(`VACUUM INTO '${destDb.replace(/'/g, "''")}'`);
+      return true;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 复制数据目录到目标目录，并对 vectors.db 做一致性快照（VACUUM INTO）。
+ * 若快照失败（无 node:sqlite / 非 SQLite），退化为普通递归 cp 并警告。
+ */
+async function copyDataDir(src: string, dest: string): Promise<void> {
+  const srcDb = path.join(src, "vectors.db");
+  const destDb = path.join(dest, "vectors.db");
+
+  // 先复制除 vectors.db 外的所有内容
+  await cp(src, dest, { recursive: true, filter: (s) => path.basename(s) !== "vectors.db" });
+  await rm(destDb, { force: true });
+
+  const snapshotted = await snapshotSqliteDb(srcDb, destDb);
+  if (snapshotted) {
+    logger.info("vectors.db: 已用 VACUUM INTO 生成一致快照");
+  } else if (fs.existsSync(srcDb)) {
+    logger.warn("vectors.db: 快照失败，已回退到直接复制（活跃 WAL 下可能不一致）");
+    await cp(srcDb, destDb);
+  }
+}
+
 interface PreparedWorkDir {
   /** 实际工作目录路径。 */
   dir: string;
@@ -457,7 +569,7 @@ async function prepareWorkDir(opts: CliOptions): Promise<PreparedWorkDir> {
       process.exit(1);
     }
     if (!fs.existsSync(work)) {
-      await cp(opts.dataDir!, work, { recursive: true });
+      await copyDataDir(opts.dataDir!, work);
       logger.info(`已复制数据到用户指定工作目录: ${work}`);
     } else {
       logger.info(`复用已存在的工作目录: ${work}（不复制）`);
@@ -467,7 +579,7 @@ async function prepareWorkDir(opts: CliOptions): Promise<PreparedWorkDir> {
   }
 
   const base = await mkdtemp(path.join(tmpdir(), "replay-"));
-  await cp(opts.dataDir!, base, { recursive: true });
+  await copyDataDir(opts.dataDir!, base);
   return { dir: base, createdByUs: true, cleanupPolicy: "temp" };
 }
 
@@ -585,87 +697,214 @@ function hasFailedLlmCalls(calls: RecordedLlmCall[]): boolean {
   return calls.some((c) => c.success === false);
 }
 
-function readSceneFilenames(workDir: string): string[] {
-  const dir = path.join(workDir, StoragePaths.sceneBlocksDir);
+// ─────────────────────────────────────────────
+// Profile scope helpers (L2/L3 write to profiles/<encoded scope>/)
+// ─────────────────────────────────────────────
+
+/** scope 名 → storage key 前缀（legacy 根目录为空字符串）。 */
+function profileStoragePrefix(scope: string): string {
+  return scope === DEFAULT_PROFILE_SCOPE ? "" : `profiles/${encodeURIComponent(scope)}/`;
+}
+
+/** scope 名 → 本地 fs 目录。 */
+function profileDir(workDir: string, scope: string): string {
+  return scope === DEFAULT_PROFILE_SCOPE ? workDir : path.join(workDir, "profiles", encodeURIComponent(scope));
+}
+
+/**
+ * 枚举数据目录下的全部 profile scope。
+ * - 总是包含 legacy 根目录（DEFAULT_PROFILE_SCOPE，key "global"）。
+ * - 其余来自 profiles/ 下的子目录名（URL-decode 后作为 scope 名）。
+ */
+function listProfileScopes(workDir: string): string[] {
+  const scopes = new Set<string>([DEFAULT_PROFILE_SCOPE]);
+  const profilesDir = path.join(workDir, "profiles");
+  if (fs.existsSync(profilesDir)) {
+    for (const entry of fs.readdirSync(profilesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        scopes.add(decodeURIComponent(entry.name));
+      } catch { /* 非 URL 编码的目录名跳过 */ }
+    }
+  }
+  return Array.from(scopes).sort();
+}
+
+/** 读某 scope 的 scene 文件列表。 */
+function readSceneFilenamesIn(scopeDir: string): string[] {
+  const dir = path.join(scopeDir, StoragePaths.sceneBlocksDir);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
 }
 
-function readPersona(workDir: string): string {
-  const p = path.join(workDir, StoragePaths.persona);
+/** 读某 scope 的 persona 内容。 */
+function readPersonaIn(scopeDir: string): string {
+  const p = path.join(scopeDir, StoragePaths.persona);
   if (!fs.existsSync(p)) return "";
   return fs.readFileSync(p, "utf-8");
+}
+
+/** 读某 scope 的 L2 cursor（pipeline_states[l2CursorKey].l2_last_extraction_time）。 */
+async function readL2Cursor(scopeDir: string, l2CursorKey: string, logger: PipelineLogger): Promise<string | undefined> {
+  try {
+    const cpManager = new CheckpointManager(scopeDir, logger);
+    const cp = await cpManager.read();
+    const state = cp.pipeline_states?.[l2CursorKey];
+    return state?.l2_last_extraction_time || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 写回某 scope 的 L2 cursor。 */
+async function writeL2Cursor(scopeDir: string, l2CursorKey: string, latestCursor: string, logger: PipelineLogger): Promise<void> {
+  if (!latestCursor) return;
+  try {
+    const cpManager = new CheckpointManager(scopeDir, logger);
+    const partial: PipelineSessionState = {
+      conversation_count: 0,
+      last_extraction_time: "",
+      last_extraction_updated_time: "",
+      last_active_time: Date.now(),
+      l2_pending_l1_count: 0,
+      warmup_threshold: 0,
+      l2_last_extraction_time: latestCursor,
+    };
+    await cpManager.mergePipelineStates({ [l2CursorKey]: partial });
+  } catch { /* best effort */ }
 }
 
 // ─────────────────────────────────────────────
 // Clean derived state (isolated rebuild)
 // ─────────────────────────────────────────────
 
+/** 单个 scope 内清理 L2/L3（scene_blocks + persona + scene_index + checkpoint 中 L2 相关字段）。 */
+async function cleanScopeL2L3(scopeDir: string, logger: PipelineLogger): Promise<void> {
+  const prefix = scopeDir; // 该 scope 已是目录
+
+  // scene_blocks/
+  const scenesDir = path.join(prefix, StoragePaths.sceneBlocksDir);
+  if (fs.existsSync(scenesDir)) {
+    let count = 0;
+    for (const f of fs.readdirSync(scenesDir)) {
+      if (f.endsWith(".md")) {
+        try { fs.unlinkSync(path.join(scenesDir, f)); count++; } catch { /* best effort */ }
+      }
+    }
+    logger.info(`  已清空 ${count} 个 scene block（${path.relative(process.cwd(), prefix) || "."}）`);
+  }
+
+  // persona.md
+  try {
+    const p = path.join(prefix, StoragePaths.persona);
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch { /* best effort */ }
+
+  // scene_index.json
+  try {
+    const idx = path.join(prefix, StoragePaths.sceneIndex);
+    if (fs.existsSync(idx)) fs.unlinkSync(idx);
+  } catch { /* best effort */ }
+}
+
 /**
- * 清空工作目录里的派生数据，做隔离的 L0→L3 重建：
- * - checkpoint / scene_index（metadata 目录内）
- * - L1 记录（l1_records + 向量 + FTS）
- * - scene_blocks/（L2）
- * - persona.md（L3）
- * - records/*.jsonl（L1 落盘）
+ * 按依赖关系清理派生数据。
  *
- * 保留 L0（conversations/*.jsonl 与 l0_conversations 表），因为它是
- * 重跑的输入源。
+ * 语义（依赖感知）：
+ * - L1 阶段：清理目标范围的 L1 记录 + 落盘 JSONL + checkpoint，以及全部
+ *   下游 L2/L3（scene_blocks / persona），因为它们基于旧 L1 生成。
+ * - 只跑 L2：保留 L1，只清理各 scope 的 scene_blocks + persona。
+ * - 只跑 L3：保留 L1/L2，只清理各 scope 的 persona。
+ *
+ * 保留 L0（conversations/*.jsonl 与 l0_conversations 表），因为它是重跑输入源。
  */
 async function cleanDerivedState(
   workDir: string,
   vectorStore: import("../../src/core/store/types.js").IMemoryStore,
-  storage: StorageAdapter,
   logger: PipelineLogger,
+  stages: Array<"L1" | "L2" | "L3">,
+  scopes: string[],
 ): Promise<void> {
-  logger.info("--clean: 清空派生数据（L1 记录 / scene_blocks / persona / checkpoint）...");
+  const cleanL1 = stages.includes("L1");
+  const cleanL2L3 = stages.includes("L2") || stages.includes("L3");
+  const cleanPersonaOnly = stages.length === 1 && stages[0] === "L3";
 
-  // 1. L1 记录：先查全部 id，再 batch 删除（deleteL1Batch 会一并清理向量与 FTS）
-  try {
-    const rows = await vectorStore.queryL1Records({});
-    const ids = rows.map((r) => r.record_id);
-    if (ids.length > 0) {
-      vectorStore.deleteL1Batch(ids);
-      logger.info(`  已清空 ${ids.length} 条 L1 记录`);
-    } else {
-      logger.info("  无 L1 记录可清理");
-    }
-  } catch (err) {
-    logger.warn(`  清空 L1 记录失败（非致命）: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  logger.info(`--clean: 清理派生数据（stages=${stages.join(",")}, L1=${cleanL1}, L2/L3=${cleanL2L3}, personaOnly=${cleanPersonaOnly}）...`);
 
-  // 2. checkpoint + scene_index
-  for (const rel of [StoragePaths.checkpoint, StoragePaths.sceneIndex]) {
+  // L1：SQLite 记录 + records/*.jsonl + checkpoint
+  if (cleanL1) {
     try {
-      if (await storage.exists(rel)) {
-        await storage.unlink(rel);
+      const rows = await vectorStore.queryL1Records({});
+      const ids = rows.map((r) => r.record_id);
+      if (ids.length > 0) {
+        vectorStore.deleteL1Batch(ids);
+        logger.info(`  已清空 ${ids.length} 条 L1 记录`);
+      } else {
+        logger.info("  无 L1 记录可清理");
       }
+    } catch (err) {
+      logger.warn(`  清空 L1 记录失败（非致命）: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // records/*.jsonl（L1 落盘镜像）
+    const recordsDir = path.join(workDir, StoragePaths.recordsDir);
+    if (fs.existsSync(recordsDir)) {
+      for (const f of fs.readdirSync(recordsDir)) {
+        if (f.endsWith(".jsonl")) {
+          try { fs.unlinkSync(path.join(recordsDir, f)); } catch { /* best effort */ }
+        }
+      }
+    }
+
+    // checkpoint（含 L1 cursor + 全局状态）
+    try {
+      const cp = path.join(workDir, StoragePaths.checkpoint);
+      if (fs.existsSync(cp)) fs.unlinkSync(cp);
     } catch { /* best effort */ }
   }
 
-  // 3. scene_blocks/（L2）
-  try {
-    const names = await storage.readdirNames(StoragePaths.sceneBlocksDir, ".md");
-    for (const name of names) {
-      try { await storage.unlink(`${StoragePaths.sceneBlocksDir}${name}`); } catch { /* best effort */ }
+  // L2/L3：按 scope 清理 scene_blocks / persona
+  if (cleanL2L3) {
+    for (const scope of scopes) {
+      const scopeDir = profileDir(workDir, scope);
+      if (!fs.existsSync(scopeDir)) continue;
+      if (cleanPersonaOnly) {
+        // 只跑 L3：保留 scene blocks，只删 persona
+        try {
+          const p = path.join(scopeDir, StoragePaths.persona);
+          if (fs.existsSync(p)) fs.unlinkSync(p);
+        } catch { /* best effort */ }
+      } else {
+        await cleanScopeL2L3(scopeDir, logger);
+      }
     }
-    logger.info(`  已清空 ${names.length} 个 scene block`);
-  } catch { /* 目录不存在则跳过 */ }
+  }
+}
 
-  // 4. persona.md（L3）
+// ─────────────────────────────────────────────
+// Atomic write with 0600
+// ─────────────────────────────────────────────
+
+/**
+ * 原子写入报告并强制 0600 权限：
+ * 先写随机临时文件（0600）→ fsync → rename 覆盖目标 → 再 chmod 兜底。
+ * 覆盖已存在且权限更宽的文件时，目标仍会被收紧到 0600。
+ */
+async function atomicWriteReport(outputPath: string, content: string): Promise<void> {
+  const dir = path.dirname(outputPath);
+  await mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.replay-report.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`);
   try {
-    if (await storage.exists(StoragePaths.persona)) {
-      await storage.unlink(StoragePaths.persona);
-    }
+    await fs.promises.writeFile(tmp, content, { encoding: "utf-8", mode: 0o600 });
+    await fs.promises.rename(tmp, outputPath);
+  } catch (err) {
+    try { await rm(tmp, { force: true }); } catch { /* best effort */ }
+    throw err;
+  }
+  // rename 会保留 tmp 的 0600 权限，但再 chmod 一次兜底（如目标已存在且被 rename 影响）。
+  try {
+    await chmod(outputPath, 0o600);
   } catch { /* best effort */ }
-
-  // 5. records/*.jsonl（L1 落盘镜像）
-  try {
-    const names = await storage.readdirNames(StoragePaths.recordsDir, ".jsonl");
-    for (const name of names) {
-      try { await storage.unlink(`${StoragePaths.recordsDir}${name}`); } catch { /* best effort */ }
-    }
-  } catch { /* 目录不存在则跳过 */ }
 }
 
 // ─────────────────────────────────────────────
@@ -692,8 +931,7 @@ async function runReplay(opts: CliOptions): Promise<number> {
   // ── 校验 LLM 配置 ──
   const cfg = assembleConfig(opts);
   if (!cfg.llm.enabled || !cfg.llm.apiKey) {
-    console.error("❌ 需要 LLM 配置：--llm-base-url / --llm-api-key / --llm-model（或用 --config 指定配置文件）");
-    process.exit(1);
+    throw new Error("需要 LLM 配置：--llm-base-url / --llm-api-key / --llm-model（或用 --config 指定配置文件）");
   }
 
   // ── 1. 准备工作目录（P0：只自动清理 mkdtemp 创建的目录） ──
@@ -701,262 +939,325 @@ async function runReplay(opts: CliOptions): Promise<number> {
   const workDir = prepared.dir;
   logger.info(`工作目录: ${workDir}（清理策略: ${prepared.cleanupPolicy}）`);
 
-  // ── 收集 session keys ──
-  let sessionKeys: string[];
-  if (opts.sessionKey) {
-    sessionKeys = [opts.sessionKey];
-  } else {
-    sessionKeys = await listSessionKeys(dataDir);
-  }
-  if (sessionKeys.length === 0) {
-    console.error("❌ 未发现任何 session（--list-sessions 可查看；或用 --session-key 指定）");
-    process.exit(1);
-  }
-  logger.info(`待重跑 session: ${sessionKeys.join(", ")}`);
-  logger.info(`重跑层级: ${opts.stages.join(" → ")} (dedup=${cfg.extraction.enableDedup}, clean=${opts.clean})`);
+  let vectorStore: import("../../src/core/store/types.js").IMemoryStore | undefined;
+  try {
+    // ── 收集 session keys ──
+    let sessionKeys: string[];
+    if (opts.sessionKey) {
+      sessionKeys = [opts.sessionKey];
+    } else {
+      sessionKeys = await listSessionKeys(dataDir);
+    }
+    if (sessionKeys.length === 0) {
+      throw new Error("未发现任何 session（--list-sessions 可查看；或用 --session-key 指定）");
+    }
+    logger.info(`待重跑 session: ${sessionKeys.join(", ")}`);
+    logger.info(`重跑层级: ${opts.stages.join(" → ")} (dedup=${cfg.extraction.enableDedup}, clean=${opts.clean})`);
 
-  // ── 2. 初始化 store（在工作目录上） ──
-  const { vectorStore, embeddingService } = await initStores(cfg, workDir, logger);
-  if (!vectorStore) {
-    console.error("❌ Store 初始化失败（工作目录可能缺少 vectors.db）");
-    process.exit(1);
-  }
-  logger.info(`Store 就绪: backend=${cfg.storeBackend}, degraded=${vectorStore.isDegraded()}`);
+    // ── 2. 初始化 store（在工作目录上） ──
+    const stores = await initStores(cfg, workDir, logger);
+    vectorStore = stores.vectorStore;
+    if (!vectorStore) {
+      throw new Error("Store 初始化失败（工作目录可能缺少 vectors.db）");
+    }
+    logger.info(`Store 就绪: backend=${cfg.storeBackend}, degraded=${vectorStore.isDegraded()}`);
 
-  const storage = new StorageAdapter(new LocalStorageBackend(workDir));
+    const storage = new StorageAdapter(new LocalStorageBackend(workDir));
 
-  // ── 3. clean 模式：清空派生数据，做隔离的 L0→L3 重建 ──
-  if (opts.clean && !opts.keepState) {
-    await cleanDerivedState(workDir, vectorStore, storage, logger);
-  }
+    // ── 枚举 profile scopes（L2/L3 落盘位置） ──
+    const scopes = listProfileScopes(workDir);
+    logger.info(`profile scopes: ${scopes.join(", ")}`);
 
-  // ── 4. 录制 LLM runner ──
-  const llmCalls: RecordedLlmCall[] = [];
-  const standaloneFactory = new StandaloneLLMRunnerFactory({
-    config: {
-      baseUrl: cfg.llm.baseUrl,
-      apiKey: cfg.llm.apiKey,
-      model: cfg.llm.model,
-      maxTokens: cfg.llm.maxTokens,
-      timeoutMs: cfg.llm.timeoutMs,
-    },
-    logger,
-  });
-  const recordingFactory = new RecordingLLMRunnerFactory(standaloneFactory, llmCalls, "replay");
-  const l1RunnerInstance = recordingFactory.createRunner({ enableTools: false });
-  const l2l3RunnerInstance = recordingFactory.createRunner({ enableTools: true });
+    // ── 3. clean 模式：依赖感知清理派生数据，做隔离的 L0→L3 重建 ──
+    if (opts.clean && !opts.keepState) {
+      await cleanDerivedState(workDir, vectorStore, logger, opts.stages, scopes);
+    }
 
-  const report: ReplayReport = {
-    tool: "replay-pipeline",
-    version: "1.1.0",
-    createdAt: new Date().toISOString(),
-    dataDir,
-    workDir: opts.noCopy ? undefined : workDir,
-    sessionKey: opts.sessionKey,
-    stages: opts.stages,
-    llm: { baseUrl: cfg.llm.baseUrl, model: cfg.llm.model },
-    enableDedup: cfg.extraction.enableDedup,
-    clean: opts.clean && !opts.keepState,
-    redacted: opts.redact,
-    failed: false,
-    results: {},
-  };
-
-  let anyFailed = false;
-
-  // ── L1 ──
-  if (opts.stages.includes("L1")) {
-    logger.info(`\n[L1] 开始原子抽取...`);
-    const l1Before = Date.now();
-    const l1Runner = createL1Runner({
-      pluginDataDir: workDir,
-      cfg,
-      openclawConfig: undefined,
-      vectorStore,
-      embeddingService,
+    // ── 4. 录制 LLM runner ──
+    const llmCalls: RecordedLlmCall[] = [];
+    const standaloneFactory = new StandaloneLLMRunnerFactory({
+      config: {
+        baseUrl: cfg.llm.baseUrl,
+        apiKey: cfg.llm.apiKey,
+        model: cfg.llm.model,
+        maxTokens: cfg.llm.maxTokens,
+        timeoutMs: cfg.llm.timeoutMs,
+      },
       logger,
-      llmRunner: l1RunnerInstance,
-      storage,
     });
+    const recordingFactory = new RecordingLLMRunnerFactory(standaloneFactory, llmCalls, "replay");
+    const l1RunnerInstance = recordingFactory.createRunner({ enableTools: false });
+    const l2l3RunnerInstance = recordingFactory.createRunner({ enableTools: true });
 
-    let processedCount = 0;
-    let storedCount = 0;
-    let l1Failed = false;
-    const l1Errors: string[] = [];
+    const report: ReplayReport = {
+      tool: "replay-pipeline",
+      version: "1.2.0",
+      createdAt: new Date().toISOString(),
+      dataDir,
+      workDir: opts.noCopy ? undefined : workDir,
+      sessionKey: opts.sessionKey,
+      stages: opts.stages,
+      llm: { baseUrl: cfg.llm.baseUrl, model: cfg.llm.model },
+      enableDedup: cfg.extraction.enableDedup,
+      clean: opts.clean && !opts.keepState,
+      redacted: opts.redact,
+      failed: false,
+      results: {},
+      profiles: {},
+    };
 
-    // 生产 runner 每轮最多处理 L1_BATCH_PROCESS=10 条 L0，且返回 hasMore /
-    // hasFullBacklog 指示是否有积压。这里循环直到两个标志都为 false，
-    // 确保历史消息超过一个批次时全部处理（P1）。
-    const MAX_L1_ROUNDS = 10000;
-    for (const key of sessionKeys) {
-      let rounds = 0;
-      for (;;) {
-        try {
-          const result = await l1Runner({ sessionKey: key });
-          processedCount += result?.processedCount ?? 0;
-          storedCount += result?.storedCount ?? 0;
-          const more = (result?.hasMore === true) || (result?.hasFullBacklog === true);
-          rounds++;
-          if (!more) break;
-          if (rounds >= MAX_L1_ROUNDS) {
-            l1Errors.push(`session ${key}: 达到最大批次上限 ${MAX_L1_ROUNDS}，可能有积压未处理`);
+    let anyFailed = false;
+
+    // ── L1 ──
+    if (opts.stages.includes("L1")) {
+      logger.info(`\n[L1] 开始原子抽取...`);
+      const l1Before = Date.now();
+      const l1Runner = createL1Runner({
+        pluginDataDir: workDir,
+        cfg,
+        openclawConfig: undefined,
+        vectorStore,
+        embeddingService: stores.embeddingService,
+        logger,
+        llmRunner: l1RunnerInstance,
+        storage,
+      });
+
+      let processedCount = 0;
+      let storedCount = 0;
+      let l1Failed = false;
+      const l1Errors: string[] = [];
+
+      // 生产 runner 每轮最多处理 L1_BATCH_PROCESS=10 条 L0，且返回 hasMore /
+      // hasFullBacklog 指示是否有积压。这里循环直到两个标志都为 false，
+      // 确保历史消息超过一个批次时全部处理（P1）。
+      const MAX_L1_ROUNDS = 10000;
+      for (const key of sessionKeys) {
+        let rounds = 0;
+        for (;;) {
+          try {
+            const result = await l1Runner({ sessionKey: key });
+            processedCount += result?.processedCount ?? 0;
+            storedCount += result?.storedCount ?? 0;
+            const more = (result?.hasMore === true) || (result?.hasFullBacklog === true);
+            rounds++;
+            if (!more) break;
+            if (rounds >= MAX_L1_ROUNDS) {
+              l1Errors.push(`session ${key}: 达到最大批次上限 ${MAX_L1_ROUNDS}，可能有积压未处理`);
+              l1Failed = true;
+              break;
+            }
+          } catch (err) {
             l1Failed = true;
+            l1Errors.push(`session ${key}: ${err instanceof Error ? err.message : String(err)}`);
+            logger.warn(`[L1] session ${key} 失败（继续下一个）: ${err instanceof Error ? err.message : String(err)}`);
             break;
           }
-        } catch (err) {
-          l1Failed = true;
-          l1Errors.push(`session ${key}: ${err instanceof Error ? err.message : String(err)}`);
-          logger.warn(`[L1] session ${key} 失败（继续下一个）: ${err instanceof Error ? err.message : String(err)}`);
-          break;
         }
       }
+
+      // 读取本次抽取后 L1 记录数（快照）
+      let l1Count = 0;
+      try { l1Count = await vectorStore.countL1(); } catch { /* ok */ }
+
+      const l1Calls = llmCalls.filter((c) => c.taskId === "l1-extraction" || c.taskId === "l1-conflict-detection");
+      // runner 内部会吞掉 LLM 失败（不抛异常），所以除了异常，还要检查录制到的调用是否失败。
+      const l1LlmFailed = hasFailedLlmCalls(l1Calls);
+      const l1FinalFailed = l1Failed || l1LlmFailed;
+
+      report.results.L1 = {
+        llmCalls: l1Calls,
+        detail: {
+          sessions: sessionKeys,
+          processedCount,
+          storedCount,
+          totalL1Count: l1Count,
+          durationMs: Date.now() - l1Before,
+          ...(l1Errors.length > 0 ? { errors: l1Errors } : {}),
+        },
+        status: l1FinalFailed ? "failed" : "ok",
+      };
+      if (l1FinalFailed) anyFailed = true;
+      logger.info(`[L1] 完成: processed=${processedCount}, stored=${storedCount}, total L1=${l1Count} (${Date.now() - l1Before}ms)`);
     }
 
-    // 读取本次抽取后 L1 记录数（快照）
-    let l1Count = 0;
-    try { l1Count = await vectorStore.countL1(); } catch { /* ok */ }
+    // ── L2 ──
+    if (opts.stages.includes("L2")) {
+      logger.info(`\n[L2] 开始场景抽取...`);
+      const l2Before = Date.now();
+      const l2Runner = createL2Runner({
+        pluginDataDir: workDir,
+        cfg,
+        openclawConfig: undefined,
+        vectorStore,
+        logger,
+        llmRunner: l2l3RunnerInstance,
+        storage,
+      });
 
-    const l1Calls = llmCalls.filter((c) => c.taskId === "l1-extraction" || c.taskId === "l1-conflict-detection");
-    // runner 内部会吞掉 LLM 失败（不抛异常），所以除了异常，还要检查录制到的调用是否失败。
-    const l1LlmFailed = hasFailedLlmCalls(l1Calls);
-    const l1FinalFailed = l1Failed || l1LlmFailed;
+      let l2Failed = false;
+      const l2Errors: string[] = [];
 
-    report.results.L1 = {
-      llmCalls: l1Calls,
-      detail: {
-        sessions: sessionKeys,
-        processedCount,
-        storedCount,
-        totalL1Count: l1Count,
-        durationMs: Date.now() - l1Before,
-        ...(l1Errors.length > 0 ? { errors: l1Errors } : {}),
-      },
-      status: l1FinalFailed ? "failed" : "ok",
-    };
-    if (l1FinalFailed) anyFailed = true;
-    logger.info(`[L1] 完成: processed=${processedCount}, stored=${storedCount}, total L1=${l1Count} (${Date.now() - l1Before}ms)`);
-  }
-
-  // ── L2 ──
-  if (opts.stages.includes("L2")) {
-    logger.info(`\n[L2] 开始场景抽取...`);
-    const scenesBefore = readSceneFilenames(workDir);
-    const l2Before = Date.now();
-    const l2Runner = createL2Runner({
-      pluginDataDir: workDir,
-      cfg,
-      openclawConfig: undefined,
-      vectorStore,
-      logger,
-      llmRunner: l2l3RunnerInstance,
-      storage,
-    });
-
-    let l2Failed = false;
-    const l2Errors: string[] = [];
-    for (const key of sessionKeys) {
-      try {
-        await l2Runner(key);
-      } catch (err) {
-        l2Failed = true;
-        l2Errors.push(`session ${key}: ${err instanceof Error ? err.message : String(err)}`);
-        logger.warn(`[L2] session ${key} 失败（继续）: ${err instanceof Error ? err.message : String(err)}`);
+      // --keep-state：L2 增量依赖 cursor。生产环境 L2 cursor 存在
+      // pipeline_states[l2CursorKey].l2_last_extraction_time；这里按 scope 读取并传入，
+      // runner 返回 latestCursor 后再写回（scopedDataDir 与 runner 内部一致）。
+      for (const key of sessionKeys) {
+        try {
+          // L2 的 cursor key：生产 pipeline-manager 用 sessionKey（含 profile: 前缀或裸 session）。
+          // 这里对每个 scope 用裸 sessionKey 作为 cursor key，与 scopedDataDirForScope 对应。
+          const cursor = opts.keepState ? await readL2Cursor(workDir, key, logger) : undefined;
+          const result = await l2Runner(key, cursor);
+          if (result?.latestCursor) {
+            await writeL2Cursor(workDir, key, result.latestCursor, logger);
+          }
+        } catch (err) {
+          l2Failed = true;
+          l2Errors.push(`session ${key}: ${err instanceof Error ? err.message : String(err)}`);
+          logger.warn(`[L2] session ${key} 失败（继续）: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
+
+      // 按 scope 快照 scenes
+      const l2Calls = llmCalls.filter((c) => c.taskId.startsWith("scene-extract"));
+      const l2FinalFailed = l2Failed || hasFailedLlmCalls(l2Calls);
+      let scenesBeforeTotal = 0;
+      let scenesAfterTotal = 0;
+      for (const scope of scopes) {
+        const scopeDir = profileDir(workDir, scope);
+        const before = readSceneFilenamesIn(scopeDir);
+        // 场景抽取后重新读取（clean 时 before 为空）
+        const after = readSceneFilenamesIn(scopeDir);
+        scenesBeforeTotal += before.length;
+        scenesAfterTotal += after.length;
+        if (report.profiles) {
+          const existing = report.profiles[scope] ?? {
+            scenesBefore: [],
+            scenesAfter: [],
+            personaBeforeChars: 0,
+            personaAfterChars: 0,
+            personaChanged: false,
+          };
+          existing.scenesBefore = before;
+          existing.scenesAfter = after;
+          report.profiles[scope] = existing;
+        }
+      }
+
+      report.results.L2 = {
+        llmCalls: l2Calls,
+        detail: {
+          sessions: sessionKeys,
+          scopes,
+          scenesBeforeTotal,
+          scenesAfterTotal,
+          durationMs: Date.now() - l2Before,
+          ...(l2Errors.length > 0 ? { errors: l2Errors } : {}),
+        },
+        status: l2FinalFailed ? "failed" : "ok",
+      };
+      if (l2FinalFailed) anyFailed = true;
+      logger.info(`[L2] 完成: scenes ${scenesBeforeTotal} → ${scenesAfterTotal} (${Date.now() - l2Before}ms)`);
     }
 
-    const scenesAfter = readSceneFilenames(workDir);
-    const l2Calls = llmCalls.filter((c) => c.taskId.startsWith("scene-extract"));
-    const l2FinalFailed = l2Failed || hasFailedLlmCalls(l2Calls);
-    report.results.L2 = {
-      llmCalls: l2Calls,
-      detail: {
-        scenesBefore,
-        scenesAfter,
-        scenesCreated: scenesAfter.filter((s) => !scenesBefore.includes(s)),
-        scenesDeleted: scenesBefore.filter((s) => !scenesAfter.includes(s)),
-        durationMs: Date.now() - l2Before,
-        ...(l2Errors.length > 0 ? { errors: l2Errors } : {}),
-      },
-      status: l2FinalFailed ? "failed" : "ok",
-    };
-    if (l2FinalFailed) anyFailed = true;
-    logger.info(`[L2] 完成: scenes ${scenesBefore.length} → ${scenesAfter.length} (${Date.now() - l2Before}ms)`);
-  }
+    // ── L3 ──
+    if (opts.stages.includes("L3")) {
+      logger.info(`\n[L3] 开始 Persona 生成...`);
+      const l3Before = Date.now();
+      const l3Runner = createL3Runner({
+        pluginDataDir: workDir,
+        cfg,
+        openclawConfig: undefined,
+        vectorStore,
+        logger,
+        llmRunner: l2l3RunnerInstance,
+        storage,
+      });
 
-  // ── L3 ──
-  if (opts.stages.includes("L3")) {
-    logger.info(`\n[L3] 开始 Persona 生成...`);
-    const personaBefore = readPersona(workDir);
-    const l3Before = Date.now();
-    const l3Runner = createL3Runner({
-      pluginDataDir: workDir,
-      cfg,
-      openclawConfig: undefined,
-      vectorStore,
-      logger,
-      llmRunner: l2l3RunnerInstance,
-      storage,
-    });
-
-    let l3Failed = false;
-    const l3Errors: string[] = [];
-    try {
-      await l3Runner();
-    } catch (err) {
-      l3Failed = true;
-      l3Errors.push(err instanceof Error ? err.message : String(err));
-      logger.warn(`[L3] 失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    const personaAfter = readPersona(workDir);
-    const l3Calls = llmCalls.filter((c) => c.taskId === "persona-generation");
-    const l3FinalFailed = l3Failed || hasFailedLlmCalls(l3Calls);
-    report.results.L3 = {
-      llmCalls: l3Calls,
-      detail: {
-        personaBeforeChars: personaBefore.length,
-        personaAfterChars: personaAfter.length,
-        personaChanged: personaBefore !== personaAfter,
-        durationMs: Date.now() - l3Before,
-        ...(l3Errors.length > 0 ? { errors: l3Errors } : {}),
-      },
-      status: l3FinalFailed ? "failed" : "ok",
-    };
-    if (l3FinalFailed) anyFailed = true;
-    logger.info(`[L3] 完成: persona ${personaBefore.length} → ${personaAfter.length} chars (${Date.now() - l3Before}ms)`);
-  }
-
-  report.failed = anyFailed;
-
-  // ── 5. 关闭 store，清理缓存 ──
-  try { resetStores(workDir); } catch { /* ok */ }
-  try { vectorStore.close(); } catch { /* ok */ }
-
-  // ── 6. 写报告（可选脱敏；严格权限 0600） ──
-  const finalReport = opts.redact ? redactReport(report) : report;
-  fs.mkdirSync(path.dirname(opts.output), { recursive: true });
-  fs.writeFileSync(opts.output, JSON.stringify(finalReport, null, 2), { encoding: "utf-8", mode: 0o600 });
-  console.log(`\n✅ 报告已写入: ${opts.output}（${opts.redact ? "已脱敏" : "未脱敏"}，含完整对话内容，注意保管）`);
-  console.log(`   共录制 ${llmCalls.length} 次 LLM 调用`);
-  if (anyFailed) {
-    console.log(`\n⚠️  部分阶段失败（详见报告各 stage.status），退出码为 1`);
-  }
-
-  // ── 7. 清理工作目录：只清理 mkdtemp 创建的临时目录 ──
-  if (prepared.createdByUs) {
-    if (opts.keepWorkDir) {
-      logger.info(`临时工作目录已保留: ${workDir}`);
-    } else {
+      let l3Failed = false;
+      const l3Errors: string[] = [];
       try {
-        await rm(workDir, { recursive: true, force: true });
-        logger.info(`已清理临时工作目录: ${workDir}`);
-      } catch { /* best effort */ }
-    }
-  } else {
-    logger.info(`工作目录非本工具创建，已保留: ${workDir}`);
-  }
+        await l3Runner();
+      } catch (err) {
+        l3Failed = true;
+        l3Errors.push(err instanceof Error ? err.message : String(err));
+        logger.warn(`[L3] 失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
 
-  return anyFailed ? 1 : 0;
+      // 按 scope 快照 persona
+      const l3Calls = llmCalls.filter((c) => c.taskId === "persona-generation");
+      const l3FinalFailed = l3Failed || hasFailedLlmCalls(l3Calls);
+      let personaBeforeTotal = 0;
+      let personaAfterTotal = 0;
+      for (const scope of scopes) {
+        const scopeDir = profileDir(workDir, scope);
+        const before = readPersonaIn(scopeDir);
+        const after = readPersonaIn(scopeDir);
+        personaBeforeTotal += before.length;
+        personaAfterTotal += after.length;
+        if (report.profiles) {
+          const existing = report.profiles[scope] ?? {
+            scenesBefore: [],
+            scenesAfter: [],
+            personaBeforeChars: 0,
+            personaAfterChars: 0,
+            personaChanged: false,
+          };
+          existing.personaBeforeChars = before.length;
+          existing.personaAfterChars = after.length;
+          existing.personaChanged = before !== after;
+          report.profiles[scope] = existing;
+        }
+      }
+
+      report.results.L3 = {
+        llmCalls: l3Calls,
+        detail: {
+          scopes,
+          personaBeforeTotal,
+          personaAfterTotal,
+          durationMs: Date.now() - l3Before,
+          ...(l3Errors.length > 0 ? { errors: l3Errors } : {}),
+        },
+        status: l3FinalFailed ? "failed" : "ok",
+      };
+      if (l3FinalFailed) anyFailed = true;
+      logger.info(`[L3] 完成: persona ${personaBeforeTotal} → ${personaAfterTotal} chars (${Date.now() - l3Before}ms)`);
+    }
+
+    report.failed = anyFailed;
+
+    // ── 6. 写报告（可选脱敏；原子写入 + 强制 0600） ──
+    const finalReport = opts.redact ? redactReport(report) : report;
+    await atomicWriteReport(opts.output, JSON.stringify(finalReport, null, 2));
+    console.log(`\n✅ 报告已写入: ${opts.output}（${opts.redact ? "已脱敏" : "未脱敏"}，含完整对话内容，注意保管）`);
+    console.log(`   共录制 ${llmCalls.length} 次 LLM 调用`);
+    if (anyFailed) {
+      console.log(`\n⚠️  部分阶段失败（详见报告各 stage.status），退出码为 1`);
+    }
+
+    return anyFailed ? 1 : 0;
+  } finally {
+    // ── 5. 关闭 store（先于目录清理） ──
+    if (vectorStore) {
+      try { resetStores(workDir); } catch { /* ok */ }
+      try { vectorStore.close(); } catch { /* ok */ }
+    }
+
+    // ── 7. 清理工作目录：只清理 mkdtemp 创建的临时目录。
+    //    即使中途抛异常，这里也会执行（异常路径不残留敏感副本）。 ──
+    if (prepared.createdByUs) {
+      if (opts.keepWorkDir) {
+        logger.info(`临时工作目录已保留: ${workDir}`);
+      } else {
+        try {
+          await rm(workDir, { recursive: true, force: true });
+          logger.info(`已清理临时工作目录: ${workDir}`);
+        } catch { /* best effort */ }
+      }
+    } else {
+      logger.info(`工作目录非本工具创建，已保留: ${workDir}`);
+    }
+  }
 }
 
 // ─────────────────────────────────────────────
