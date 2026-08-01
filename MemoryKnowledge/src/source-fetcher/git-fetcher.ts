@@ -61,6 +61,9 @@ export class GitSourceFetcher implements ISourceFetcher {
         "first version only supports public HTTPS repos; SSH/private repo support coming soon",
       );
     }
+    if (/\s|-c|--/.test(sourceUrl)) {
+      throw new Error("invalid repo_url: contains illegal spaces or git CLI flags");
+    }
     const host = this.extractHost(sourceUrl);
     if (!host) {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
