@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, rmSync, symlinkSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync, rmSync, symlinkSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { CheckpointManager } from "../../src/utils/checkpoint.js";
+import { LocalStorageBackend } from "../../src/core/storage/local-backend.js";
+import { StorageAdapter } from "../../src/core/storage/adapter.js";
 
 const require = createRequire(import.meta.url);
+
+function checkpointFor(dir: string): CheckpointManager {
+  return new CheckpointManager(dir, undefined, new StorageAdapter(new LocalStorageBackend(dir)));
+}
 
 /** 用 node:sqlite 写入最小 l0_conversations 表，供 store init 复用 schema。 */
 function writeSqliteL0(dbPath: string, rows: Array<[string, string]>): void {
@@ -149,6 +156,28 @@ describe("replay-pipeline CLI", () => {
     }
   });
 
+  it("rejects a workdir below a symlink when intermediate directories do not exist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    const link = join(tmpdir(), `replay-link-${Date.now()}`);
+    try {
+      try { symlinkSync(dir, link); } catch { return; }
+      const nestedWork = join(link, "new", "child");
+      const res = runCli([
+        "-d", dir,
+        "--work-dir", nestedWork,
+        "--llm-base-url", "http://x",
+        "--llm-api-key", "k",
+        "--llm-model", "m",
+      ]);
+      const text = res.stdout + res.stderr;
+      expect(res.code).not.toBe(0);
+      expect(text).toContain("不能互为子目录");
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("copy does not leak vectors.db sidecar files (-wal/-shm/-journal)", () => {
     const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
     try {
@@ -173,7 +202,7 @@ describe("replay-pipeline CLI", () => {
     }
   });
 
-  it("L1-only clean preserves scenes and persona (dependency-aware)", () => {
+  it("L1-only clean clears downstream scenes and persona", () => {
     const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
     try {
       mkdirSync(join(dir, "scene_blocks"), { recursive: true });
@@ -187,6 +216,135 @@ describe("replay-pipeline CLI", () => {
       expect(res.code).not.toBe(0);
       expect(existsSync(join(dir, "scene_blocks", "keep.md"))).toBe(false);
       expect(existsSync(join(dir, "persona.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks an L2 skip and clears its pending count", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      writeSqliteL0(join(dir, "vectors.db"), [["r1", "sess"]]);
+      const checkpoint = checkpointFor(dir);
+      await checkpoint.patchPipelineState("sess", {
+        l2_pending_l1_count: 4,
+        last_active_time: 123,
+      });
+      const output = join(dir, "report.json");
+
+      const res = runCli([
+        "-d", dir,
+        "--stages", "L2",
+        "--keep-state",
+        "--no-copy",
+        "--session-key", "sess",
+        "--llm-base-url", "http://localhost:1",
+        "--llm-api-key", "k",
+        "--llm-model", "m",
+        "--output", output,
+      ]);
+
+      expect(res.code).toBe(0);
+      const report = JSON.parse(readFileSync(output, "utf-8")) as {
+        results: { L2: { status: string } };
+      };
+      expect(report.results.L2.status).toBe("skipped");
+      expect((await checkpoint.read()).pipeline_states.sess.l2_pending_l1_count).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("L2-only clean preserves the global L1 runner cursor", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      writeSqliteL0(join(dir, "vectors.db"), [["r1", "sess"]]);
+      mkdirSync(join(dir, "scene_blocks"), { recursive: true });
+      writeFileSync(join(dir, "scene_blocks", "old.md"), "old scene");
+      const checkpoint = checkpointFor(dir);
+      await checkpoint.markL1ExtractionComplete("sess", 2, 987654321, "old scene");
+      const output = join(dir, "report.json");
+
+      const res = runCli([
+        "-d", dir,
+        "--stages", "L2",
+        "--no-copy",
+        "--clean",
+        "--dangerous",
+        "--llm-base-url", "http://localhost:1",
+        "--llm-api-key", "k",
+        "--llm-model", "m",
+        "--output", output,
+      ]);
+
+      expect(res.code).toBe(0);
+      const state = (await checkpoint.read()).runner_states.sess;
+      expect(state.last_l1_cursor).toBe(987654321);
+      expect(existsSync(join(dir, "scene_blocks", "old.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses sessions from a reused workdir snapshot", () => {
+    const source = mkdtempSync(join(tmpdir(), "replay-source-"));
+    const work = mkdtempSync(join(tmpdir(), "replay-work-"));
+    try {
+      writeSqliteL0(join(source, "vectors.db"), [["r-new", "session-new"]]);
+      writeSqliteL0(join(work, "vectors.db"), [["r-old", "session-old"]]);
+      const output = join(work, "report.json");
+
+      const res = runCli([
+        "-d", source,
+        "--work-dir", work,
+        "--stages", "L2",
+        "--keep-state",
+        "--llm-base-url", "http://localhost:1",
+        "--llm-api-key", "k",
+        "--llm-model", "m",
+        "--output", output,
+      ]);
+
+      expect(res.code).toBe(0);
+      const report = JSON.parse(readFileSync(output, "utf-8")) as {
+        results: { L2: { detail: { sessions: string[] } } };
+      };
+      expect(report.results.L2.detail.sessions).toEqual(["session-old"]);
+    } finally {
+      rmSync(source, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("limits keep-state profile keys to the selected session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      writeSqliteL0(join(dir, "vectors.db"), [["r-a", "session-a"], ["r-b", "session-b"]]);
+      const checkpoint = checkpointFor(dir);
+      await checkpoint.patchPipelineState("session-a", {});
+      await checkpoint.patchPipelineState("profile:team:T1|agent:A1|session:session-a", {});
+      await checkpoint.patchPipelineState("profile:team:T2|agent:A2|session:session-b", {});
+      const output = join(dir, "report.json");
+
+      const res = runCli([
+        "-d", dir,
+        "--stages", "L2",
+        "--keep-state",
+        "--no-copy",
+        "--session-key", "session-a",
+        "--llm-base-url", "http://localhost:1",
+        "--llm-api-key", "k",
+        "--llm-model", "m",
+        "--output", output,
+      ]);
+
+      expect(res.code).toBe(0);
+      const report = JSON.parse(readFileSync(output, "utf-8")) as {
+        results: { L2: { detail: { l2Keys: string[] } } };
+      };
+      expect(report.results.L2.detail.l2Keys).toEqual([
+        "profile:team:T1|agent:A1|session:session-a",
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

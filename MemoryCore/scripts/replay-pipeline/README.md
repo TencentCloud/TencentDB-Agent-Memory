@@ -26,7 +26,7 @@
   可能仍有微小时间差。
 - `--clean`（默认开启）：按依赖关系清理工作目录中的派生数据：
   - 跑 L1：清理 L1 记录 + records JSONL + checkpoint + 全部下游 L2/L3。
-  - 只跑 L2：保留 L1，清理各 profile scope 的 scene_blocks / persona。
+  - 只跑 L2：保留 L1 cursor，重置目标 L2 状态，并清理 scenes / persona。
   - 只跑 L3：保留 L1/L2，只清理各 scope 的 persona。
   - 清理覆盖 legacy 根目录 **和** `profiles/<encoded scope>/` 下的全部
     profile scope（L2/L3 生产落盘位置）。
@@ -188,15 +188,22 @@ npx tsx scripts/replay-pipeline/replay-pipeline.ts \
 ## 测试
 
 - `recording-runner.test.ts` — 录制器单元测试（成功 / 失败 / 工厂包装）。
-- `replay-pipeline.test.ts` — 8 个 CLI 集成测试：
+- `replay-pipeline.test.ts` — CLI 集成测试：
   - 拒绝 `--no-copy --clean`（无 `--dangerous`）。
   - 拒绝 `--no-copy --session-key --clean`。
   - `--list-sessions` 从 SQLite 列出 session。
   - 覆盖已存在 0644 报告后权限收紧为 0600。
   - 异常路径（store 初始化失败）不残留临时目录。
   - 符号链接 workdir 指向 data-dir 被拒绝。
+  - 多层缺失路径不能绕过符号链接检查。
   - 复制不残留 vectors.db sidecar（-wal/-shm/-journal）。
   - `--stages L1 --clean` 依赖感知清理下游 scenes/persona。
+  - L2-only clean 保留根 L1 cursor。
+  - L2 skipped 清零 pending 并报告 skipped。
+  - keep-state 只处理目标 session 的 profile key。
+  - 复用 workdir 时从工作快照读取 session。
+- `snapshot-utils.test.ts` — Persona 同长度内容变化测试。
+- `checkpoint.test.ts` — 新 pipeline key 的完整默认状态测试。
 
 ## 局限
 

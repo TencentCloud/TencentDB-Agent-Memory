@@ -418,6 +418,18 @@ export class CheckpointManager {
     });
   }
 
+  /** Apply a partial update and create a complete state when the key is new. */
+  async patchPipelineState(sessionKey: string, patch: Partial<PipelineSessionState>): Promise<void> {
+    await this.mutate((cp) => {
+      if (!cp.pipeline_states) cp.pipeline_states = {};
+      cp.pipeline_states[sessionKey] = {
+        ...DEFAULT_PIPELINE_STATE,
+        ...cp.pipeline_states[sessionKey],
+        ...patch,
+      };
+    });
+  }
+
   // ============================
   // L1-specific methods
   // ============================
