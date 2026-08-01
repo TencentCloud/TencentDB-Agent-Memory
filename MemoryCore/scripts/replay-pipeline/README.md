@@ -37,7 +37,9 @@
   - `--no-copy + --session-key + --clean`：直接拒绝（无法局部清理其他
     session 的派生数据）。
 - `--keep-state`：保留 checkpoint 与派生数据。L1 按 checkpoint 增量执行；
-  L2 会读取并回写各 scope 的 L2 cursor（`l2_last_extraction_time`）。
+  L2 会读取并回写各 scope 的 L2 cursor（`last_extraction_updated_time`，
+  与生产 `PipelineManager.runL2` 对齐；`l2_last_extraction_time` 记本次
+  完成的墙上时间）。
 
 ## Profile scope（L2/L3 落盘）
 
@@ -186,12 +188,15 @@ npx tsx scripts/replay-pipeline/replay-pipeline.ts \
 ## 测试
 
 - `recording-runner.test.ts` — 录制器单元测试（成功 / 失败 / 工厂包装）。
-- `replay-pipeline.test.ts` — CLI 集成测试：
+- `replay-pipeline.test.ts` — 8 个 CLI 集成测试：
   - 拒绝 `--no-copy --clean`（无 `--dangerous`）。
   - 拒绝 `--no-copy --session-key --clean`。
   - `--list-sessions` 从 SQLite 列出 session。
   - 覆盖已存在 0644 报告后权限收紧为 0600。
   - 异常路径（store 初始化失败）不残留临时目录。
+  - 符号链接 workdir 指向 data-dir 被拒绝。
+  - 复制不残留 vectors.db sidecar（-wal/-shm/-journal）。
+  - `--stages L1 --clean` 依赖感知清理下游 scenes/persona。
 
 ## 局限
 

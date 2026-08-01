@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, statSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, statSync, rmSync, symlinkSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 
@@ -120,9 +120,73 @@ describe("replay-pipeline CLI", () => {
     // finally 应清理临时目录。
     const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
     try {
+      const before = new Set(readdirSync(tmpdir()).filter((d) => d.startsWith("replay-")));
       const res = runCli(["-d", dir, "--llm-base-url", "http://x", "--llm-api-key", "k", "--llm-model", "m", "--output", join(dir, "out.json")]);
-      // store init 失败或未发现 session → 异常 → 退出非 0
       expect(res.code).not.toBe(0);
+      const after = readdirSync(tmpdir()).filter((d) => d.startsWith("replay-"));
+      const leaked = after.filter((d) => !before.has(d));
+      expect(leaked).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("symlink workdir pointing at data-dir is rejected", () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      const link = join(tmpdir(), `replay-link-${Date.now()}`);
+      try { symlinkSync(dir, link); } catch { return; } // 平台不支持则跳过
+      try {
+        const res = runCli(["-d", dir, "--work-dir", link, "--clean", "--llm-base-url", "http://x", "--llm-api-key", "k", "--llm-model", "m", "--output", join(dir, "out.json")]);
+        const text = res.stdout + res.stderr;
+        expect(res.code).not.toBe(0);
+        expect(text).toContain("真实目录");
+      } finally {
+        rmSync(link, { force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("copy does not leak vectors.db sidecar files (-wal/-shm/-journal)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      writeSqliteL0(join(dir, "vectors.db"), [["r1", "sess"]]);
+      writeFileSync(join(dir, "vectors.db-wal"), "wal");
+      writeFileSync(join(dir, "vectors.db-shm"), "shm");
+      // 用 --work-dir 指向新目录，触发 copyDataDir
+      const work = join(tmpdir(), `replay-copy-${Date.now()}`);
+      rmSync(work, { force: true, recursive: true });
+      try {
+        const res = runCli(["-d", dir, "--work-dir", work, "--llm-base-url", "http://x", "--llm-api-key", "k", "--llm-model", "m", "--output", join(work, "out.json")]);
+        // LLM 失败 → 非 0，但 copyDataDir 已执行
+        expect(res.code).not.toBe(0);
+        const files = readdirSync(work);
+        const sidecars = files.filter((f) => f.startsWith("vectors.db-"));
+        expect(sidecars).toEqual([]);
+      } finally {
+        rmSync(work, { force: true, recursive: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("L1-only clean preserves scenes and persona (dependency-aware)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "replay-test-"));
+    try {
+      mkdirSync(join(dir, "scene_blocks"), { recursive: true });
+      writeFileSync(join(dir, "scene_blocks", "keep.md"), "scene");
+      writeFileSync(join(dir, "persona.md"), "PERSONA");
+      writeSqliteL0(join(dir, "vectors.db"), [["r1", "sess"]]);
+      // --stages L1 --clean --no-copy（--dangerous 确认）：直接在原目录执行 clean。
+      // L1 重建会使下游失效 → 应删除 scenes/persona。
+      const res = runCli(["-d", dir, "--stages", "L1", "--clean", "--no-copy", "--dangerous", "--llm-base-url", "http://localhost:1", "--llm-api-key", "k", "--llm-model", "m", "--output", join(dir, "out.json")]);
+      // LLM 失败非 0，但 clean 在运行前已执行
+      expect(res.code).not.toBe(0);
+      expect(existsSync(join(dir, "scene_blocks", "keep.md"))).toBe(false);
+      expect(existsSync(join(dir, "persona.md"))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -39,7 +39,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseArgs } from "node:util";
-import { mkdtemp, cp, rm, mkdir, chmod } from "node:fs/promises";
+import { mkdtemp, cp, rm, mkdir, chmod, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 // ─────────────────────────────────────────────
@@ -506,17 +506,31 @@ async function snapshotSqliteDb(srcDb: string, destDb: string): Promise<boolean>
   }
 }
 
+/** 删除向量库 sidecar 文件（-wal / -shm / -journal），保证快照是干净单文件。 */
+function removeSqliteSidecars(base: string): void {
+  for (const suffix of ["-wal", "-shm", "-journal"]) {
+    const p = `${base}${suffix}`;
+    try { if (fs.existsSync(p)) fs.rmSync(p, { force: true }); } catch { /* best effort */ }
+  }
+}
+
 /**
  * 复制数据目录到目标目录，并对 vectors.db 做一致性快照（VACUUM INTO）。
  * 若快照失败（无 node:sqlite / 非 SQLite），退化为普通递归 cp 并警告。
+ * 任何情况下都排除并清理 vectors.db 的 sidecar（-wal/-shm/-journal）。
  */
 async function copyDataDir(src: string, dest: string): Promise<void> {
   const srcDb = path.join(src, "vectors.db");
   const destDb = path.join(dest, "vectors.db");
 
-  // 先复制除 vectors.db 外的所有内容
-  await cp(src, dest, { recursive: true, filter: (s) => path.basename(s) !== "vectors.db" });
-  await rm(destDb, { force: true });
+  // 先复制除 vectors.db 及其 sidecar 外的所有内容
+  await cp(src, dest, {
+    recursive: true,
+    filter: (s) => {
+      const base = path.basename(s);
+      return !(base === "vectors.db" || base.startsWith("vectors.db-"));
+    },
+  });
 
   const snapshotted = await snapshotSqliteDb(srcDb, destDb);
   if (snapshotted) {
@@ -525,6 +539,9 @@ async function copyDataDir(src: string, dest: string): Promise<void> {
     logger.warn("vectors.db: 快照失败，已回退到直接复制（活跃 WAL 下可能不一致）");
     await cp(srcDb, destDb);
   }
+
+  // 无论快照成功与否，目标目录都不得残留源库的旧 WAL/SHM/journal。
+  removeSqliteSidecars(destDb);
 }
 
 interface PreparedWorkDir {
@@ -540,6 +557,24 @@ interface PreparedWorkDir {
 }
 
 /**
+ * 解析路径的真实路径（跟随符号链接）。路径不存在时解析其已存在的最深祖先。
+ */
+async function resolveRealPath(p: string): Promise<string> {
+  try {
+    return await realpath(p);
+  } catch {
+    // 路径不存在：解析其父目录的真实路径，再拼接自身。
+    const parent = path.dirname(p);
+    try {
+      const realParent = await realpath(parent);
+      return path.join(realParent, path.basename(p));
+    } catch {
+      return path.resolve(p);
+    }
+  }
+}
+
+/**
  * 准备回放工作目录。
  *
  * 安全规则（P0）：
@@ -547,6 +582,9 @@ interface PreparedWorkDir {
  * - 用户用 --work-dir 指定的目录：**永不自动删除**（可能已有数据）。
  * - --no-copy：工作目录就是数据目录，永不删除。
  * - 拒绝 workDir 与 dataDir 相同、或 workDir 是 dataDir 的子目录。
+ *   **用 realpath 比较**，防止符号链接绕过检查（例如 work-dir 是指向
+ *   data-dir 的 symlink）。
+ * - 复制失败时自我清理刚创建的临时目录（不留给外层 finally）。
  */
 async function prepareWorkDir(opts: CliOptions): Promise<PreparedWorkDir> {
   if (opts.noCopy) {
@@ -554,18 +592,20 @@ async function prepareWorkDir(opts: CliOptions): Promise<PreparedWorkDir> {
     return { dir: opts.dataDir!, createdByUs: false, cleanupPolicy: "never" };
   }
 
+  const data = await resolveRealPath(opts.dataDir!);
+
   if (opts.workDir) {
     const work = path.resolve(opts.workDir);
-    const data = path.resolve(opts.dataDir!);
-    if (work === data) {
-      console.error(`❌ --work-dir 不能与 --data-dir 相同（${data}）`);
+    const workReal = await resolveRealPath(work);
+    if (workReal === data) {
+      console.error(`❌ --work-dir 与 --data-dir 解析到同一真实目录（${data}）`);
       console.error("   如需直接重跑原目录，请用 --no-copy");
       process.exit(1);
     }
-    if (work.startsWith(data + path.sep) || data.startsWith(work + path.sep)) {
-      console.error(`❌ --work-dir 与 --data-dir 不能互为子目录`);
+    if (workReal.startsWith(data + path.sep) || data.startsWith(workReal + path.sep)) {
+      console.error(`❌ --work-dir 与 --data-dir 不能互为子目录（含符号链接解析后）`);
       console.error(`   data-dir: ${data}`);
-      console.error(`   work-dir: ${work}`);
+      console.error(`   work-dir: ${workReal}`);
       process.exit(1);
     }
     if (!fs.existsSync(work)) {
@@ -578,8 +618,14 @@ async function prepareWorkDir(opts: CliOptions): Promise<PreparedWorkDir> {
     return { dir: work, createdByUs: false, cleanupPolicy: "keep-user" };
   }
 
+  // 临时目录：复制失败时在 prepareWorkDir 内自清理。
   const base = await mkdtemp(path.join(tmpdir(), "replay-"));
-  await copyDataDir(opts.dataDir!, base);
+  try {
+    await copyDataDir(opts.dataDir!, base);
+  } catch (err) {
+    try { await rm(base, { recursive: true, force: true }); } catch { /* best effort */ }
+    throw err;
+  }
   return { dir: base, createdByUs: true, cleanupPolicy: "temp" };
 }
 
@@ -744,41 +790,100 @@ function readPersonaIn(scopeDir: string): string {
   return fs.readFileSync(p, "utf-8");
 }
 
-/** 读某 scope 的 L2 cursor（pipeline_states[l2CursorKey].l2_last_extraction_time）。 */
+/** 快照所有 profile scope 的当前状态（运行前调用）。 */
+function snapshotProfiles(workDir: string): Record<string, ProfileSnapshot> {
+  const scopes = listProfileScopes(workDir);
+  const out: Record<string, ProfileSnapshot> = {};
+  for (const scope of scopes) {
+    const scopeDir = profileDir(workDir, scope);
+    out[scope] = {
+      scenesBefore: readSceneFilenamesIn(scopeDir),
+      scenesAfter: [],
+      personaBeforeChars: readPersonaIn(scopeDir).length,
+      personaAfterChars: 0,
+      personaChanged: false,
+    };
+  }
+  return out;
+}
+
+/** 运行后再次快照，并返回 before/after 并集的完整报告。 */
+function snapshotProfilesAfter(workDir: string, before: Record<string, ProfileSnapshot>): Record<string, ProfileSnapshot> {
+  const afterScopes = listProfileScopes(workDir);
+  const allScopes = Array.from(new Set([...Object.keys(before), ...afterScopes])).sort();
+  const out: Record<string, ProfileSnapshot> = {};
+  for (const scope of allScopes) {
+    const scopeDir = profileDir(workDir, scope);
+    const pre = before[scope];
+    const scenesAfter = readSceneFilenamesIn(scopeDir);
+    const personaAfter = readPersonaIn(scopeDir);
+    out[scope] = {
+      scenesBefore: pre?.scenesBefore ?? [],
+      scenesAfter,
+      personaBeforeChars: pre?.personaBeforeChars ?? 0,
+      personaAfterChars: personaAfter.length,
+      personaChanged: (pre?.personaBeforeChars ?? 0) !== personaAfter.length,
+    };
+  }
+  return out;
+}
+
+/** 读某 scope 的 L2 cursor（pipeline_states[key].last_extraction_updated_time）。 */
 async function readL2Cursor(scopeDir: string, l2CursorKey: string, logger: PipelineLogger): Promise<string | undefined> {
   try {
     const cpManager = new CheckpointManager(scopeDir, logger);
     const cp = await cpManager.read();
     const state = cp.pipeline_states?.[l2CursorKey];
-    return state?.l2_last_extraction_time || undefined;
+    return state?.last_extraction_updated_time || undefined;
   } catch {
     return undefined;
   }
 }
 
-/** 写回某 scope 的 L2 cursor。 */
+/**
+ * 只 patch L2 cursor 相关字段，保留 checkpoint 中其他 PipelineSessionState 字段。
+ *
+ * 与生产 PipelineManager.runL2 对齐：
+ * - last_extraction_updated_time = latestCursor（传给下轮 L2 的数据 cursor）
+ * - l2_last_extraction_time     = 当前 ISO 时间（本次 L2 完成的墙上时间）
+ * - l2_pending_l1_count         = 0（本轮已消费完）
+ *
+ * 不触碰 conversation_count / warmup_threshold / last_extraction_time 等字段。
+ */
 async function writeL2Cursor(scopeDir: string, l2CursorKey: string, latestCursor: string, logger: PipelineLogger): Promise<void> {
-  if (!latestCursor) return;
   try {
     const cpManager = new CheckpointManager(scopeDir, logger);
-    const partial: PipelineSessionState = {
-      conversation_count: 0,
-      last_extraction_time: "",
-      last_extraction_updated_time: "",
-      last_active_time: Date.now(),
+    const cp = await cpManager.read();
+    const existing = cp.pipeline_states?.[l2CursorKey] ?? {};
+    const patched: PipelineSessionState = {
+      ...existing,
+      last_extraction_updated_time: latestCursor || (existing.last_extraction_updated_time ?? ""),
+      l2_last_extraction_time: new Date().toISOString(),
       l2_pending_l1_count: 0,
-      warmup_threshold: 0,
-      l2_last_extraction_time: latestCursor,
     };
-    await cpManager.mergePipelineStates({ [l2CursorKey]: partial });
+    await cpManager.write({
+      ...cp,
+      pipeline_states: { ...(cp.pipeline_states ?? {}), [l2CursorKey]: patched },
+    });
   } catch { /* best effort */ }
+}
+
+/** 枚举 checkpoint 中已有的 profile L2 keys（"profile:team:...|session:..." 或 legacy session key）。 */
+async function listL2KeysFromCheckpoint(workDir: string, logger: PipelineLogger): Promise<string[]> {
+  try {
+    const cpManager = new CheckpointManager(workDir, logger);
+    const cp = await cpManager.read();
+    return Object.keys(cp.pipeline_states ?? {}).sort();
+  } catch {
+    return [];
+  }
 }
 
 // ─────────────────────────────────────────────
 // Clean derived state (isolated rebuild)
 // ─────────────────────────────────────────────
 
-/** 单个 scope 内清理 L2/L3（scene_blocks + persona + scene_index + checkpoint 中 L2 相关字段）。 */
+/** 单个 scope 内清理 L2/L3（scene_blocks + persona + scene_index + scoped checkpoint）。 */
 async function cleanScopeL2L3(scopeDir: string, logger: PipelineLogger): Promise<void> {
   const prefix = scopeDir; // 该 scope 已是目录
 
@@ -805,16 +910,25 @@ async function cleanScopeL2L3(scopeDir: string, logger: PipelineLogger): Promise
     const idx = path.join(prefix, StoragePaths.sceneIndex);
     if (fs.existsSync(idx)) fs.unlinkSync(idx);
   } catch { /* best effort */ }
+
+  // scoped checkpoint.json — PersonaTrigger 依赖其中的 scenes_processed /
+  // last_persona_at / request_persona_update，必须一并清理，否则 clean replay
+  // 仍受旧运行状态影响。
+  try {
+    const cp = path.join(prefix, StoragePaths.checkpoint);
+    if (fs.existsSync(cp)) fs.unlinkSync(cp);
+  } catch { /* best effort */ }
 }
 
 /**
  * 按依赖关系清理派生数据。
  *
- * 语义（依赖感知）：
- * - L1 阶段：清理目标范围的 L1 记录 + 落盘 JSONL + checkpoint，以及全部
- *   下游 L2/L3（scene_blocks / persona），因为它们基于旧 L1 生成。
- * - 只跑 L2：保留 L1，只清理各 scope 的 scene_blocks + persona。
- * - 只跑 L3：保留 L1/L2，只清理各 scope 的 persona。
+ * 语义（依赖感知，与生产依赖一致）：
+ * - 包含 L1：L1 重跑会重建全部 L1，下游 L2/L3 全部失效 → 清 L1 + 全部
+ *   scope 的 scenes/persona + checkpoint。
+ * - 包含 L2 但不含 L1：L1 保留，但场景重跑会改写 scene_blocks → 清各 scope
+ *   scenes + persona（persona 基于 scene 生成）。
+ * - 只跑 L3：L1/L2 保留，只清各 scope 的 persona。
  *
  * 保留 L0（conversations/*.jsonl 与 l0_conversations 表），因为它是重跑输入源。
  */
@@ -825,14 +939,17 @@ async function cleanDerivedState(
   stages: Array<"L1" | "L2" | "L3">,
   scopes: string[],
 ): Promise<void> {
-  const cleanL1 = stages.includes("L1");
-  const cleanL2L3 = stages.includes("L2") || stages.includes("L3");
-  const cleanPersonaOnly = stages.length === 1 && stages[0] === "L3";
+  const hasL1 = stages.includes("L1");
+  const hasL2 = stages.includes("L2");
+  const hasL3 = stages.includes("L3");
+  // L1 或 L2 都会改写 scene_blocks；L3 只改写 persona。
+  const cleanScenes = hasL1 || hasL2;
+  const cleanPersona = cleanScenes || hasL3;
 
-  logger.info(`--clean: 清理派生数据（stages=${stages.join(",")}, L1=${cleanL1}, L2/L3=${cleanL2L3}, personaOnly=${cleanPersonaOnly}）...`);
+  logger.info(`--clean: 清理派生数据（stages=${stages.join(",")}, scenes=${cleanScenes}, persona=${cleanPersona}）...`);
 
   // L1：SQLite 记录 + records/*.jsonl + checkpoint
-  if (cleanL1) {
+  if (hasL1) {
     try {
       const rows = await vectorStore.queryL1Records({});
       const ids = rows.map((r) => r.record_id);
@@ -863,19 +980,19 @@ async function cleanDerivedState(
     } catch { /* best effort */ }
   }
 
-  // L2/L3：按 scope 清理 scene_blocks / persona
-  if (cleanL2L3) {
+  // L2/L3：按 scope 清理 scene_blocks / persona（含 scoped checkpoint）
+  if (cleanScenes || cleanPersona) {
     for (const scope of scopes) {
       const scopeDir = profileDir(workDir, scope);
       if (!fs.existsSync(scopeDir)) continue;
-      if (cleanPersonaOnly) {
+      if (cleanScenes) {
+        await cleanScopeL2L3(scopeDir, logger);
+      } else if (cleanPersona) {
         // 只跑 L3：保留 scene blocks，只删 persona
         try {
           const p = path.join(scopeDir, StoragePaths.persona);
           if (fs.existsSync(p)) fs.unlinkSync(p);
         } catch { /* best effort */ }
-      } else {
-        await cleanScopeL2L3(scopeDir, logger);
       }
     }
   }
@@ -1007,6 +1124,8 @@ async function runReplay(opts: CliOptions): Promise<number> {
     };
 
     let anyFailed = false;
+    /** 本轮 L1 返回的 profile L2 keys（"profile:team:...|session:..."），用于驱动 L2。 */
+    const l1ProfileScopes = new Set<string>();
 
     // ── L1 ──
     if (opts.stages.includes("L1")) {
@@ -1039,6 +1158,8 @@ async function runReplay(opts: CliOptions): Promise<number> {
             const result = await l1Runner({ sessionKey: key });
             processedCount += result?.processedCount ?? 0;
             storedCount += result?.storedCount ?? 0;
+            // 收集 profile L2 keys（与生产 PipelineManager 一致）
+            for (const ps of result?.profileScopes ?? []) l1ProfileScopes.add(ps);
             const more = (result?.hasMore === true) || (result?.hasFullBacklog === true);
             rounds++;
             if (!more) break;
@@ -1098,13 +1219,24 @@ async function runReplay(opts: CliOptions): Promise<number> {
       let l2Failed = false;
       const l2Errors: string[] = [];
 
-      // --keep-state：L2 增量依赖 cursor。生产环境 L2 cursor 存在
-      // pipeline_states[l2CursorKey].l2_last_extraction_time；这里按 scope 读取并传入，
-      // runner 返回 latestCursor 后再写回（scopedDataDir 与 runner 内部一致）。
-      for (const key of sessionKeys) {
+      // 确定 L2 的驱动 key：
+      // - 本轮跑了 L1 → 用 L1 返回的 profile L2 keys（生产同款）。
+      // - 未跑 L1 → 用 checkpoint 中已存在的 profile/legacy keys。
+      // - 都没有 → 回退到裸 sessionKeys。
+      const l2Keys: string[] = l1ProfileScopes.size > 0
+        ? Array.from(l1ProfileScopes)
+        : opts.keepState
+          ? await listL2KeysFromCheckpoint(workDir, logger)
+          : sessionKeys;
+      const effectiveL2Keys = l2Keys.length > 0 ? l2Keys : sessionKeys;
+      logger.info(`[L2] 驱动 keys: ${effectiveL2Keys.join(", ")}`);
+
+      // 运行前快照所有 profile scope（含新建 scope 的并集在运行后处理）。
+      const profilesBefore = snapshotProfiles(workDir);
+
+      for (const key of effectiveL2Keys) {
         try {
-          // L2 的 cursor key：生产 pipeline-manager 用 sessionKey（含 profile: 前缀或裸 session）。
-          // 这里对每个 scope 用裸 sessionKey 作为 cursor key，与 scopedDataDirForScope 对应。
+          // cursor：生产 PipelineManager.runL2 用 state.last_extraction_updated_time。
           const cursor = opts.keepState ? await readL2Cursor(workDir, key, logger) : undefined;
           const result = await l2Runner(key, cursor);
           if (result?.latestCursor) {
@@ -1112,42 +1244,26 @@ async function runReplay(opts: CliOptions): Promise<number> {
           }
         } catch (err) {
           l2Failed = true;
-          l2Errors.push(`session ${key}: ${err instanceof Error ? err.message : String(err)}`);
-          logger.warn(`[L2] session ${key} 失败（继续）: ${err instanceof Error ? err.message : String(err)}`);
+          l2Errors.push(`key ${key}: ${err instanceof Error ? err.message : String(err)}`);
+          logger.warn(`[L2] key ${key} 失败（继续）: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
-      // 按 scope 快照 scenes
+      // 运行后快照，取 before/after 并集（本次首次创建的 profile scope 也会出现）。
+      report.profiles = snapshotProfilesAfter(workDir, profilesBefore);
+
       const l2Calls = llmCalls.filter((c) => c.taskId.startsWith("scene-extract"));
       const l2FinalFailed = l2Failed || hasFailedLlmCalls(l2Calls);
-      let scenesBeforeTotal = 0;
-      let scenesAfterTotal = 0;
-      for (const scope of scopes) {
-        const scopeDir = profileDir(workDir, scope);
-        const before = readSceneFilenamesIn(scopeDir);
-        // 场景抽取后重新读取（clean 时 before 为空）
-        const after = readSceneFilenamesIn(scopeDir);
-        scenesBeforeTotal += before.length;
-        scenesAfterTotal += after.length;
-        if (report.profiles) {
-          const existing = report.profiles[scope] ?? {
-            scenesBefore: [],
-            scenesAfter: [],
-            personaBeforeChars: 0,
-            personaAfterChars: 0,
-            personaChanged: false,
-          };
-          existing.scenesBefore = before;
-          existing.scenesAfter = after;
-          report.profiles[scope] = existing;
-        }
-      }
+      const profileEntries = Object.entries(report.profiles ?? {});
+      const scenesBeforeTotal = profileEntries.reduce((s, [, v]) => s + v.scenesBefore.length, 0);
+      const scenesAfterTotal = profileEntries.reduce((s, [, v]) => s + v.scenesAfter.length, 0);
 
       report.results.L2 = {
         llmCalls: l2Calls,
         detail: {
           sessions: sessionKeys,
-          scopes,
+          l2Keys: effectiveL2Keys,
+          scopes: profileEntries.map(([scope]) => scope),
           scenesBeforeTotal,
           scenesAfterTotal,
           durationMs: Date.now() - l2Before,
@@ -1175,6 +1291,10 @@ async function runReplay(opts: CliOptions): Promise<number> {
 
       let l3Failed = false;
       const l3Errors: string[] = [];
+
+      // 运行前快照（若 L2 已跑，profilesBefore 已被 L2 更新为 L2 后状态；否则新建）。
+      const profilesBeforeL3 = report.profiles ?? snapshotProfiles(workDir);
+
       try {
         await l3Runner();
       } catch (err) {
@@ -1183,36 +1303,19 @@ async function runReplay(opts: CliOptions): Promise<number> {
         logger.warn(`[L3] 失败: ${err instanceof Error ? err.message : String(err)}`);
       }
 
-      // 按 scope 快照 persona
+      // 运行后快照，取 before/after 并集。
+      report.profiles = snapshotProfilesAfter(workDir, profilesBeforeL3);
+
       const l3Calls = llmCalls.filter((c) => c.taskId === "persona-generation");
       const l3FinalFailed = l3Failed || hasFailedLlmCalls(l3Calls);
-      let personaBeforeTotal = 0;
-      let personaAfterTotal = 0;
-      for (const scope of scopes) {
-        const scopeDir = profileDir(workDir, scope);
-        const before = readPersonaIn(scopeDir);
-        const after = readPersonaIn(scopeDir);
-        personaBeforeTotal += before.length;
-        personaAfterTotal += after.length;
-        if (report.profiles) {
-          const existing = report.profiles[scope] ?? {
-            scenesBefore: [],
-            scenesAfter: [],
-            personaBeforeChars: 0,
-            personaAfterChars: 0,
-            personaChanged: false,
-          };
-          existing.personaBeforeChars = before.length;
-          existing.personaAfterChars = after.length;
-          existing.personaChanged = before !== after;
-          report.profiles[scope] = existing;
-        }
-      }
+      const profileEntries = Object.entries(report.profiles ?? {});
+      const personaBeforeTotal = profileEntries.reduce((s, [, v]) => s + v.personaBeforeChars, 0);
+      const personaAfterTotal = profileEntries.reduce((s, [, v]) => s + v.personaAfterChars, 0);
 
       report.results.L3 = {
         llmCalls: l3Calls,
         detail: {
-          scopes,
+          scopes: profileEntries.map(([scope]) => scope),
           personaBeforeTotal,
           personaAfterTotal,
           durationMs: Date.now() - l3Before,
