@@ -37,7 +37,10 @@ done
 
 ERRORS=0
 WARNS=0
-CURL=/usr/bin/curl
+CURL="${CURL:-curl}"
+if ! command -v "$CURL" >/dev/null 2>&1; then
+  die "curl not found; install curl or set CURL=/path/to/curl"
+fi
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
@@ -50,10 +53,17 @@ check_llm_openai() {
   base="${base%/messages}"
   base="${base%/chat/completions}"
   local url="${base}/models"
-  local code body_file=/tmp/llm-check.$$
+  local code body_file=/tmp/llm-check.$$ curl_error_file=/tmp/llm-check.$$.err
+  local curl_rc=0
   code=$("$CURL" -sS --max-time 10 -o "$body_file" -w "%{http_code}" \
     -H "Authorization: Bearer $key" \
-    "$url" 2>/dev/null || echo "000")
+    "$url" 2>"$curl_error_file") || curl_rc=$?
+  if (( curl_rc != 0 )); then
+    warn "$label curl failed (exit=${curl_rc}): $(head -c 200 "$curl_error_file" 2>/dev/null)"
+    rm -f "$body_file" "$curl_error_file"
+    return 1
+  fi
+  rm -f "$curl_error_file"
   if [[ "$code" == "200" ]]; then
     # 尝试解析 model 是否在列表里（宽松匹配，不匹配也只 warn）
     if grep -q "\"$model\"" "$body_file" 2>/dev/null; then
@@ -95,14 +105,21 @@ check_llm_anthropic() {
   else
     url="${base}/v1/messages"
   fi
-  local code body_file=/tmp/llm-check.$$
+  local code body_file=/tmp/llm-check.$$ curl_error_file=/tmp/llm-check.$$.err
+  local curl_rc=0
   code=$("$CURL" -sS --max-time 15 -o "$body_file" -w "%{http_code}" \
     -X POST -H "Content-Type: application/json" \
     -H "x-api-key: $key" \
     -H "Authorization: Bearer $key" \
     -H "anthropic-version: 2023-06-01" \
     -d "{\"model\":\"$model\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
-    "$url" 2>/dev/null || echo "000")
+    "$url" 2>"$curl_error_file") || curl_rc=$?
+  if (( curl_rc != 0 )); then
+    warn "$label curl failed (exit=${curl_rc}): $(head -c 200 "$curl_error_file" 2>/dev/null)"
+    rm -f "$body_file" "$curl_error_file"
+    return 1
+  fi
+  rm -f "$curl_error_file"
   case "$code" in
     200)
       ok "$label Anthropic 协议通路 OK（模型 $model 已应答）"
