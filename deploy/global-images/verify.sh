@@ -38,9 +38,6 @@ done
 ERRORS=0
 WARNS=0
 CURL="${CURL:-curl}"
-if ! command -v "$CURL" >/dev/null 2>&1; then
-  die "curl not found; install curl or set CURL=/path/to/curl"
-fi
 
 # ─── LLM 通路检查函数 ───────────────────────────────────────────────
 # check_llm_openai <label> <base_url> <api_key> <model>
@@ -256,6 +253,9 @@ else
     info "跳过 LLM 通路检查（--skip-llm）"
   elif (( ${#MISSING[@]} > 0 )); then
     warn "跳过 LLM 通路检查（必填参数未填齐）"
+  elif ! command -v "$CURL" >/dev/null 2>&1; then
+    ERRORS=$((ERRORS+1))
+    echo "${C_RED}[error]${C_RST} curl not found; install curl or set CURL=/path/to/curl" >&2
   else
     echo ""
     info "═══ LLM 通路检查 ═══════════════════════════════════════"
