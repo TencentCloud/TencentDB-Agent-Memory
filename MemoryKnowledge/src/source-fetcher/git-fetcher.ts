@@ -25,6 +25,23 @@ import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
 const PRIVATE_ADDR_RE =
   /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|localhost$|::1$|fe80:)/i;
 
+/** IPv4 / IPv6 私有-IP-Prüfung (zusätzlich zur Hostname-Regex). */
+const PRIVATE_IP_RE =
+  /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|127\.|0\.|::1$|fe80:|fc|fd)/i;
+
+/** Security #672: DNS-Auflösung für SSRF-Prüfung (async). */
+async function resolvePrivate(host: string): Promise<boolean> {
+  try {
+    const { lookup } = await import("node:dns/promises");
+    const { address } = await lookup(host, { all: false });
+    return PRIVATE_IP_RE.test(address);
+  } catch {
+    // Auflösung fehlgeschlagen → Host nicht erreichbar → als privat behandeln
+    // (fail-closed statt fail-open gegen DNS-Rebinding).
+    return true;
+  }
+}
+
 /**
  * 读取 SSRF 私网黑名单开关。默认开启；
  * 当 KNOWLEDGE_SSRF_CHECK 为 off/false/0/no（大小写不敏感）时关闭。
@@ -54,25 +71,40 @@ export class GitSourceFetcher implements ISourceFetcher {
     this.ssrfCheck = opts?.ssrfCheck ?? ssrfCheckEnabledFromEnv();
   }
 
-  validate(sourceUrl: string): void {
+  async validate(sourceUrl: string): Promise<void> {
     // 第一版：仅支持 public HTTPS 仓库（SSH / 私有仓库鉴权见文档 005）。
     if (!sourceUrl.startsWith("https://")) {
       throw new Error(
         "first version only supports public HTTPS repos; SSH/private repo support coming soon",
       );
     }
+    // Security #672 (Argument Injection): URL darf keine Git-Options-Separatoren
+    // oder Shell-Metazeichen enthalten, die in simpleGit().clone() als eigene
+    // Argumente interpretiert werden könnten (z.B. "--upload-pack=...").
+    if (/[\s"'`;|&<>]|--/.test(sourceUrl)) {
+      throw new Error(`invalid repo_url: contains forbidden characters: ${sourceUrl}`);
+    }
     const host = this.extractHost(sourceUrl);
     if (!host) {
       throw new Error(`invalid repo_url: cannot parse host from ${sourceUrl}`);
     }
     // R2: SSRF 防护 —— 禁止指向内网 / 环回地址（可经 KNOWLEDGE_SSRF_CHECK=off 关闭）。
-    if (this.ssrfCheck && this.isPrivateAddress(host)) {
-      throw new Error(`repo_url must not point to private/loopback address: ${host}`);
+    // Security #672: zusätzlich DNS-Auflösung (Hostname-Regex allein kann durch
+    // DNS-Rebinding / Cloud-Metadata-Hosts umgangen werden).
+    if (this.ssrfCheck) {
+      const hostPrivate = this.isPrivateAddress(host);
+      const resolvedPrivate = hostPrivate ? true : await resolvePrivate(host);
+      if (hostPrivate || resolvedPrivate) {
+        throw new Error(
+          `repo_url must not point to private/loopback address: ${host}` +
+          (resolvedPrivate && !hostPrivate ? " (via DNS resolution)" : ""),
+        );
+      }
     }
   }
 
   async fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
-    this.validate(sourceUrl);
+    await this.validate(sourceUrl);
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
     // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
@@ -85,7 +117,7 @@ export class GitSourceFetcher implements ISourceFetcher {
   }
 
   async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
-    this.validate(sourceUrl);
+    await this.validate(sourceUrl);
     const git = simpleGit(localPath);
     await git.fetch("origin", branch, { "--depth": 1 });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);

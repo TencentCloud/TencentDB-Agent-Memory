@@ -9,6 +9,19 @@
 
 ---
 
+## [Unreleased]
+
+### 🔒 安全修复
+
+- **修复 MemoryProxy 管理端点未授权访问** ([#672](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/672))：
+  - `rate-limits.ts`：`GET/PUT/DELETE /v3/admin/rate-limits` 现在强制 `checkAdminAuth`（之前无需认证即可查询/修改/删除租户限流）。
+  - `admin-auth.ts`：未配置 `admin.apiKey` 时 fail-closed（之前返回 `"ok"` = 无认证绕过，可触发 `POST /v3/instance/proxy-destroy` 远程清空数据）。
+- **修复 MemoryKnowledge Git 源抓取 SSRF + 参数注入** ([#672](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/672))：
+  - `git-fetcher.ts`：SSRF 校验增加 DNS 解析（hostname 正则可被 DNS-rebinding / 云元数据地址绕过）；`repo_url` 含 Git 选项分隔符（`--`）或 shell 元字符时拒绝。
+  - 新增回归测试：`MemoryProxy/src/routes/__tests__/security-672-auth.test.ts`（4 个）、`MemoryKnowledge/src/source-fetcher/__tests__/security-672-ssrf.test.ts`（6 个）。
+
+---
+
 ## [2.0.0-beta.1] — 2026-07-21
 
 首次公开发布。SemVer 从 `2.0.0-beta.1` 起步（npm 包名迁移到 `-v2` 后缀：
