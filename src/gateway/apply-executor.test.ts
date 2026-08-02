@@ -443,6 +443,68 @@ describe("ApplyExecutor", () => {
   });
 
   // ============================
+  // criterion 5 — dedup does NOT trigger a full reindex (deleteL1Batch
+  // dual-writes the vector, so vec-vs-meta stays consistent)
+  // ============================
+
+  it("criterion 5 — dedup via deleteL1 does NOT trigger a full reindex", async () => {
+    seedRecord("d_1", "dup one", "2026-08-01T00:00:00Z");
+    seedRecord("d_2", "dup two", "2026-08-01T00:00:00Z");
+    expect(store.consistencyCheck().metaCount).toBe(2);
+    expect(store.consistencyCheck().vecCount).toBe(2);
+
+    const reindexAll = vi.spyOn(store, "reindexAll");
+    const r = await executor().apply(
+      body({ deleteL1: [{ id: "d_2", updatedAt: "2026-08-01T00:00:00Z" }] }, {}, ["d_2"]),
+    );
+
+    expect(r.ok).toBe(true);
+    expect(r.applied.deletes).toEqual(["d_2"]);
+    // Dual-write keeps vec-vs-meta consistent → no needsReindex, no reindexAll.
+    const check = store.consistencyCheck();
+    expect(check.metaCount).toBe(1);
+    expect(check.vecCount).toBe(1);
+    expect(check.orphanIds).toEqual([]);
+    expect(r.reindexed).toBe(false);
+    expect(r.needsReindex).toBe(false);
+    expect(reindexAll).not.toHaveBeenCalled();
+  });
+
+  // ============================
+  // criterion 3 — after apply, scene/persona files on disk respect the
+  // mechanical limits (scene 1500 / persona 2000, acceptance-level)
+  // ============================
+
+  it("criterion 3 — after apply, scene/persona files on disk are within limits", async () => {
+    const scenePath = "scene_blocks/_global/big.md";
+    fs.writeFileSync(path.join(dataDir, scenePath), SCENE_CONTENT, "utf-8");
+    fs.writeFileSync(path.join(dataDir, "persona.md"), "old persona body", "utf-8");
+    const manifest = baseline(dataDir, [scenePath, "persona.md"]);
+
+    const sceneBody = "x".repeat(SCENE_LIMIT_CHARS - META_BLOCK.length - 2);
+    const newScene = `${META_BLOCK}\n\n${sceneBody}`;
+    expect(newScene.length).toBe(SCENE_LIMIT_CHARS);
+    const newPersona = "p".repeat(PERSONA_LIMIT_CHARS - 1);
+
+    const r = await executor().apply(
+      body(
+        { rewriteBlock: [{ path: scenePath, content: newScene }], rewritePersona: newPersona },
+        manifest,
+        [],
+      ),
+    );
+    expect(r.ok).toBe(true);
+
+    const onDiskScene = fs.readFileSync(path.join(dataDir, scenePath), "utf-8");
+    const onDiskPersona = fs.readFileSync(path.join(dataDir, "persona.md"), "utf-8");
+    expect(onDiskScene.length).toBeLessThanOrEqual(SCENE_LIMIT_CHARS);
+    expect(onDiskPersona.length).toBeLessThanOrEqual(PERSONA_LIMIT_CHARS);
+    expect(onDiskPersona.length).toBe(PERSONA_LIMIT_CHARS - 1);
+    expect(r.applied.rewrites).toContain(scenePath);
+    expect(r.applied.rewrites).toContain("persona.md");
+  });
+
+  // ============================
   // count check on fake vectors: orphan purge
   // ============================
 
