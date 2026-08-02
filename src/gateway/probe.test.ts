@@ -120,6 +120,27 @@ describe("computeProbeResults (precision@k)", () => {
     expect(r.top1HitRate).toBe(0);
   });
 
+  it("top1HitRate = 0 when the answer is at rank 2 even with topK>1 (precision@k stays 1)", async () => {
+    // Bug regression: any relevant hit in top-k used to count as a top-1 hit.
+    const search = async () => [
+      { content: "irrelevant rank-1" },
+      { content: "alpha found" }, // rank 2
+    ];
+    const r = await computeProbeResults({ queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] }, 3, search);
+    expect(r.top1HitRate).toBe(0);
+    expect(r.precisionAtK).toBe(1);
+  });
+
+  it("top1HitRate = 1 when the answer is at rank 1 (with irrelevant results below)", async () => {
+    const search = async () => [
+      { content: "alpha found" }, // rank 1
+      { content: "irrelevant rank-2" },
+    ];
+    const r = await computeProbeResults({ queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] }, 3, search);
+    expect(r.top1HitRate).toBe(1);
+    expect(r.precisionAtK).toBe(1);
+  });
+
   it("denominator is min(topK, #expected)", async () => {
     // expected has 2 answers, both retrieved in top-3 → precision 1.0
     const search = async () => [{ content: "gamma here" }, { content: "delta here" }];

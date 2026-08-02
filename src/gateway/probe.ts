@@ -145,7 +145,7 @@ export async function computeProbeResults(
     const hits = relevant.length;
     const denom = Math.min(k, q.expected.length);
     totalHits += denom > 0 ? hits / denom : 0;
-    if (top.length > 0 && relevant.length > 0) top1Hits += 1;
+    if (top.length > 0 && isRelevant(top[0], q.expected)) top1Hits += 1;
     evaluated.push({ id: q.id, top, hits });
   }
 
