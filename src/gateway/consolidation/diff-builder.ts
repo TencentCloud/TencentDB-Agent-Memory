@@ -44,6 +44,8 @@ export interface RecordEntry {
   id: string;
   type: string;
   updatedAt: string;
+  /** Original creation time — night date-anchoring anchor (optional; '' when absent). */
+  createdAt?: string;
   /** Sanitized content snippet (already fence-escaped). */
   content: string;
 }
@@ -87,12 +89,17 @@ export interface DiffBuilderOptions {
  * treat null as "unknown" (undercount is impossible; only an undercount is
  * acceptable per ТЗ — a failed count must never look like zero).
  */
-export function countNewL0Since(dbPath: string, cursorIso: string): number | null {
+export function countNewL0Since(
+  dbPath: string,
+  cursorIso: string,
+): number | null {
   try {
     const db = openReadonlySqlite(dbPath);
     try {
       const row = db
-        .prepare("SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND recorded_at >= ?")
+        .prepare(
+          "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND recorded_at >= ?",
+        )
         .get(cursorIso) as { c: number } | null;
       return row?.c ?? 0;
     } finally {
@@ -108,7 +115,9 @@ export function maxL0RecordedAt(dbPath: string): string {
   try {
     const db = openReadonlySqlite(dbPath);
     try {
-      const row = db.prepare("SELECT MAX(recorded_at) AS m FROM l0_conversations").get() as { m: string | null } | null;
+      const row = db
+        .prepare("SELECT MAX(recorded_at) AS m FROM l0_conversations")
+        .get() as { m: string | null } | null;
       return typeof row?.m === "string" && row.m ? row.m : "";
     } finally {
       db.close();
@@ -189,9 +198,12 @@ export function buildManifestBaseline(dataDir: string): ManifestBaseline {
 }
 
 /** Shape expected by the P4 ApplyExecutor manifest (path → sha256 hex). */
-export function manifestShaMap(baseline: ManifestBaseline): Record<string, string> {
+export function manifestShaMap(
+  baseline: ManifestBaseline,
+): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [relPath, entry] of Object.entries(baseline)) out[relPath] = entry.sha256;
+  for (const [relPath, entry] of Object.entries(baseline))
+    out[relPath] = entry.sha256;
   return out;
 }
 
@@ -221,7 +233,12 @@ export function collectBlockMeta(dataDir: string): BlockMeta[] {
         const fullPath = path.join(sceneRoot, slug, file);
         try {
           const size = fs.readFileSync(fullPath, "utf-8").length;
-          out.push({ path: `scene_blocks/${slug}/${file}`, kind: "scene", size, limit: SCENE_LIMIT_CHARS });
+          out.push({
+            path: `scene_blocks/${slug}/${file}`,
+            kind: "scene",
+            size,
+            limit: SCENE_LIMIT_CHARS,
+          });
         } catch {
           // Raced away — skip.
         }
@@ -234,7 +251,12 @@ export function collectBlockMeta(dataDir: string): BlockMeta[] {
   const personaPath = path.join(dataDir, "persona.md");
   try {
     const size = fs.readFileSync(personaPath, "utf-8").length;
-    out.push({ path: "persona.md", kind: "persona", size, limit: PERSONA_LIMIT_CHARS });
+    out.push({
+      path: "persona.md",
+      kind: "persona",
+      size,
+      limit: PERSONA_LIMIT_CHARS,
+    });
   } catch {
     // No persona yet.
   }
@@ -335,12 +357,19 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
   if (opts.overLimitBlocks.length > 0) {
     const sep = pushLine(">");
     const head =
-      sep && pushLine("> ### Переразмеренные файлы (метаданные; контент — GET /memory/blocks)");
+      sep &&
+      pushLine(
+        "> ### Переразмеренные файлы (метаданные; контент — GET /memory/blocks)",
+      );
     if (!sep || !head) {
       truncatedBy = "byte";
     } else {
       for (const b of opts.overLimitBlocks) {
-        if (!pushLine(`> - \`${b.path}\` — kind=${b.kind}, size=${b.size} chars, limit=${b.limit} (OVER)`)) {
+        if (
+          !pushLine(
+            `> - \`${b.path}\` — kind=${b.kind}, size=${b.size} chars, limit=${b.limit} (OVER)`,
+          )
+        ) {
           truncatedBy = "byte";
           break;
         }
@@ -353,7 +382,10 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
   if (truncatedBy === null) {
     const sep = pushLine(">");
     const head =
-      sep && pushLine(`> ### Свежие L1-записи с последнего прогона (первые ${opts.diffCap}, по возрастанию давности)`);
+      sep &&
+      pushLine(
+        `> ### Свежие L1-записи с последнего прогона (первые ${opts.diffCap}, по возрастанию давности)`,
+      );
     if (!sep || !head) {
       truncatedBy = "byte";
     } else if (opts.records.length > 0) {

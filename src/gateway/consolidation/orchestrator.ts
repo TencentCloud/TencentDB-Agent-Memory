@@ -445,17 +445,24 @@ export class ConsolidationOrchestrator {
       const overLimit = blocks.filter((b) => b.size > b.limit);
       summary.overLimitBlocks = overLimit.length;
 
+      const isNight = opts.role === "night-keeper";
+      const night = this.config.memory.consolidation.night;
       const records = this.queryRecentRecords(
         cp.l0Cursor,
-        this.config.memory.consolidation.diffCap,
+        isNight ? night.diffCap : this.config.memory.consolidation.diffCap,
+        isNight,
       );
       summary.recordsPresented = records.length;
 
       const baseline = buildManifestBaseline(this.dataDir);
       const diff = buildDiffSection({
         cursorIso: cp.l0Cursor,
-        diffCap: this.config.memory.consolidation.diffCap,
-        diffByteCap: this.config.memory.consolidation.diffByteCap,
+        diffCap: isNight
+          ? night.diffCap
+          : this.config.memory.consolidation.diffCap,
+        diffByteCap: isNight
+          ? night.diffByteCap
+          : this.config.memory.consolidation.diffByteCap,
         records,
         overLimitBlocks: overLimit,
         checkpointRunAt: cp.lastRunAt,
@@ -672,26 +679,40 @@ export class ConsolidationOrchestrator {
   }
 
   /** Fresh L1 records (updated/created >= cursor), oldest-first, capped. */
-  private queryRecentRecords(cursorIso: string, limit: number): RecordEntry[] {
+  private queryRecentRecords(
+    cursorIso: string,
+    limit: number,
+    fullStore = false,
+  ): RecordEntry[] {
     const dbPath = path.join(this.dataDir, "vectors.db");
     try {
       const db = openReadonlySqlite(dbPath);
       try {
-        const sql =
-          "SELECT record_id, type, updated_time, content FROM l1_records " +
-          "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
-          "ORDER BY updated_time ASC LIMIT ?";
-        const rows = db
-          .prepare(sql)
-          .all(
-            cursorIso || "1970-01-01T00:00:00.000Z",
-            cursorIso || "1970-01-01T00:00:00.000Z",
-            limit,
-          ) as Array<Record<string, unknown>>;
+        // Night (fullStore): sweep the WHOLE store (no cursor, no cap bound
+        // by cursor) — cleanup/dup-scan sees everything, not just the fresh
+        // tail. Day: fresh records since the cursor, capped.
+        const sql = fullStore
+          ? "SELECT record_id, type, updated_time, created_time, content FROM l1_records " +
+            "ORDER BY created_time ASC, record_id ASC"
+          : "SELECT record_id, type, updated_time, created_time, content FROM l1_records " +
+            "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
+            "ORDER BY updated_time ASC LIMIT ?";
+        const rows = fullStore
+          ? (db.prepare(sql).all() as Array<Record<string, unknown>>)
+          : (db
+              .prepare(sql)
+              .all(
+                cursorIso || "1970-01-01T00:00:00.000Z",
+                cursorIso || "1970-01-01T00:00:00.000Z",
+                limit,
+              ) as Array<Record<string, unknown>>);
         return rows.map((r) => ({
           id: String(r.record_id ?? ""),
           type: String(r.type ?? ""),
           updatedAt: String(r.updated_time ?? ""),
+          // Date-anchoring anchor: original creation time (night keeper
+          // rewrites relative dates against record metadata, not run-now).
+          createdAt: String(r.created_time ?? ""),
           content: String(r.content ?? "").slice(0, 500),
         }));
       } finally {
