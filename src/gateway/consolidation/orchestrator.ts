@@ -35,7 +35,10 @@ import { ApplyExecutor, type ApplyResult } from "../apply-executor.js";
 import { openReadonlySqlite } from "../http-utils.js";
 import { runRecallProbe, type ProbeResult } from "../probe.js";
 import { writeDashboard, writeDigest } from "../reports.js";
-import { ConsolidationCheckpoint, type ConsolidationCheckpointData } from "./checkpoint.js";
+import {
+  ConsolidationCheckpoint,
+  type ConsolidationCheckpointData,
+} from "./checkpoint.js";
 import {
   countNewL0Since,
   maxL0RecordedAt,
@@ -53,7 +56,12 @@ import {
   type ChildRunResult,
   type ChildProcess,
 } from "./child-spawn.js";
-import { loadRolePrompt, resolveRoleDir, buildSessionPrompt as composeSessionPrompt } from "../role-files.js";
+import {
+  loadRolePrompt,
+  resolveRoleDir,
+  buildSessionPrompt as composeSessionPrompt,
+  loadRoleConfig,
+} from "../role-files.js";
 
 // ============================
 // Types
@@ -128,6 +136,8 @@ export interface OrchestratorOptions {
   /** Injectable applier (tests may stub the P4 executor). */
   applyDiff?: ApplyDiffFn;
   roleName?: string;
+  /** Role dir override (tests point at a scratch dir; default resolveRoleDir()). */
+  roleDir?: string;
 }
 
 // ============================
@@ -236,6 +246,7 @@ export class ConsolidationOrchestrator {
   private readonly spawnChild: SpawnChildFn;
   private readonly applyDiff: ApplyDiffFn;
   private readonly roleName: string;
+  private readonly roleDir: string;
 
   private readonly checkpoint: ConsolidationCheckpoint;
   private readonly gate = new SerialGate();
@@ -258,6 +269,7 @@ export class ConsolidationOrchestrator {
     this.spawnChild = opts.spawnChild ?? ((ctx) => this.defaultSpawnChild(ctx));
     this.applyDiff = opts.applyDiff ?? ((body) => this.defaultApplyDiff(body));
     this.roleName = opts.roleName ?? "memory-keeper";
+    this.roleDir = opts.roleDir ?? resolveRoleDir();
     this.checkpoint = new ConsolidationCheckpoint(this.dataDir);
   }
 
@@ -307,7 +319,10 @@ export class ConsolidationOrchestrator {
    * 202-style result; the run continues in the background under single-flight.
    * Refused (busy/disabled) → accepted:false.
    */
-  async trigger(opts: { reason: string; dryRun?: boolean }): Promise<TriggerResult> {
+  async trigger(opts: {
+    reason: string;
+    dryRun?: boolean;
+  }): Promise<TriggerResult> {
     if (!this.config.memory.consolidation.enabled) {
       return { accepted: false, status: "disabled", reason: opts.reason };
     }
@@ -324,13 +339,18 @@ export class ConsolidationOrchestrator {
         release();
       })
       .catch((err) => {
-        this.logger.error?.(`[memory-keeper] unexpected run error: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.error?.(
+          `[memory-keeper] unexpected run error: ${err instanceof Error ? err.message : String(err)}`,
+        );
       });
     return { accepted: true, status: "started", runId, reason: opts.reason };
   }
 
   /** Awaitable run (tests + internal reuse). Single-flight enforced too. */
-  async runNow(opts: { reason: string; dryRun?: boolean }): Promise<RunSummary> {
+  async runNow(opts: {
+    reason: string;
+    dryRun?: boolean;
+  }): Promise<RunSummary> {
     const release = this.gate.tryAcquire();
     if (!release) return this.busySummary(opts);
     const runId = randomUUID();
@@ -368,7 +388,11 @@ export class ConsolidationOrchestrator {
     };
   }
 
-  private async executeRun(opts: { reason: string; dryRun?: boolean; runId: string }): Promise<RunSummary> {
+  private async executeRun(opts: {
+    reason: string;
+    dryRun?: boolean;
+    runId: string;
+  }): Promise<RunSummary> {
     const startedMs = this.now();
     const startedAt = new Date(startedMs).toISOString();
     const runScratch = path.join(this.scratchRoot, opts.runId);
@@ -399,7 +423,10 @@ export class ConsolidationOrchestrator {
       const overLimit = blocks.filter((b) => b.size > b.limit);
       summary.overLimitBlocks = overLimit.length;
 
-      const records = this.queryRecentRecords(cp.l0Cursor, this.config.memory.consolidation.diffCap);
+      const records = this.queryRecentRecords(
+        cp.l0Cursor,
+        this.config.memory.consolidation.diffCap,
+      );
       summary.recordsPresented = records.length;
 
       const baseline = buildManifestBaseline(this.dataDir);
@@ -414,7 +441,11 @@ export class ConsolidationOrchestrator {
 
       await fs.promises.mkdir(runScratch, { recursive: true });
       const promptPath = path.join(runScratch, "memory-keeper-prompt.md");
-      await fs.promises.writeFile(promptPath, this.buildSessionPrompt(diff.text), "utf-8");
+      await fs.promises.writeFile(
+        promptPath,
+        this.buildSessionPrompt(diff.text),
+        "utf-8",
+      );
 
       // Static keeper tools (fetch_dups/fetch_blocks/fetch_records/dump_bullets)
       // copied into runScratch/tools/ BEFORE the spawn — the sub-session uses
@@ -466,7 +497,10 @@ export class ConsolidationOrchestrator {
 
       let rawDiff: unknown;
       try {
-        const raw = await fs.promises.readFile(path.join(runScratch, "diff.json"), "utf-8");
+        const raw = await fs.promises.readFile(
+          path.join(runScratch, "diff.json"),
+          "utf-8",
+        );
         rawDiff = JSON.parse(raw);
       } catch (err) {
         summary.error =
@@ -489,7 +523,11 @@ export class ConsolidationOrchestrator {
       summary.reindexed = applyResult.reindexed;
       summary.needsReindex = applyResult.needsReindex;
       summary.error = applyResult.error;
-      summary.status = applyResult.ok ? "ok" : applyResult.status === "aborted" ? "aborted" : "failed";
+      summary.status = applyResult.ok
+        ? "ok"
+        : applyResult.status === "aborted"
+          ? "aborted"
+          : "failed";
 
       if (applyResult.ok) {
         // Advance the checkpoint ONLY on success — a failed run re-runs the
@@ -537,7 +575,9 @@ export class ConsolidationOrchestrator {
     // (the test for fail-open relies on a bogus override failing the copy).
     const envOverride = process.env.TDAI_KEEPER_TOOLS_DIR;
     if (envOverride) {
-      return fs.existsSync(path.join(envOverride, "fetch_dups.py")) ? envOverride : null;
+      return fs.existsSync(path.join(envOverride, "fetch_dups.py"))
+        ? envOverride
+        : null;
     }
     try {
       const here = path.dirname(fileURLToPath(import.meta.url));
@@ -562,7 +602,9 @@ export class ConsolidationOrchestrator {
   private async copyKeeperTools(runScratch: string): Promise<string | null> {
     const src = ConsolidationOrchestrator.resolveKeeperToolsDir();
     if (!src) {
-      this.logger.warn?.("[memory-keeper] keeper-tools dir not found — sub-session will generate its own scripts");
+      this.logger.warn?.(
+        "[memory-keeper] keeper-tools dir not found — sub-session will generate its own scripts",
+      );
       return null;
     }
     const dst = path.join(runScratch, "tools");
@@ -587,7 +629,13 @@ export class ConsolidationOrchestrator {
           "SELECT record_id, type, updated_time, content FROM l1_records " +
           "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
           "ORDER BY updated_time ASC LIMIT ?";
-        const rows = db.prepare(sql).all(cursorIso || "1970-01-01T00:00:00.000Z", cursorIso || "1970-01-01T00:00:00.000Z", limit) as Array<Record<string, unknown>>;
+        const rows = db
+          .prepare(sql)
+          .all(
+            cursorIso || "1970-01-01T00:00:00.000Z",
+            cursorIso || "1970-01-01T00:00:00.000Z",
+            limit,
+          ) as Array<Record<string, unknown>>;
         return rows.map((r) => ({
           id: String(r.record_id ?? ""),
           type: String(r.type ?? ""),
@@ -625,9 +673,20 @@ export class ConsolidationOrchestrator {
 
   private buildSessionPrompt(diffText: string): string {
     // P9: the session prompt = role.md (auditors pattern, ~/.pi/agent-memory/
-    // tdai/memory-keeper/<role>.md) + the diff section. Missing role file →
-    // fail-open fallback to the built-in DEFAULT_ROLE_PROMPT.
-    const rolePrompt = loadRolePrompt(this.roleName, resolveRoleDir()) ?? DEFAULT_ROLE_PROMPT;
+    // tdai/memory-keeper/<role>.md) + the diff section.
+    // Night role is FAIL-LOUD: a missing night-keeper.md must refuse the run,
+    // never silently run with day semantics (DEFAULT_ROLE_PROMPT). Day keeper
+    // keeps the fail-open fallback (backward compat).
+    const rolePrompt = loadRolePrompt(this.roleName, this.roleDir);
+    if (!rolePrompt) {
+      if (this.roleName === "night-keeper") {
+        throw new Error(
+          `[memory-keeper] role file "night-keeper.md" is missing in ${this.roleDir} — ` +
+            "night-keeper run refused (fail-loud, not day semantics)",
+        );
+      }
+      return composeSessionPrompt(DEFAULT_ROLE_PROMPT, diffText);
+    }
     return composeSessionPrompt(rolePrompt, diffText);
   }
 
@@ -658,7 +717,8 @@ export class ConsolidationOrchestrator {
       {
         runAt: summary.finishedAt,
         status: summary.status,
-        mergedDuplicates: summary.applied.deletes.length + summary.applied.merges.length,
+        mergedDuplicates:
+          summary.applied.deletes.length + summary.applied.merges.length,
         rewrittenScenes: summary.applied.rewrites.length,
         precisionAtK: probe.precisionAtK,
         elapsedMs: summary.elapsedMs,
@@ -674,7 +734,16 @@ export class ConsolidationOrchestrator {
   // Defaults (real spawn + P4 apply)
   // ============================
 
-  private async defaultSpawnChild(ctx: SpawnChildContext): Promise<ChildRunResult> {
+  private async defaultSpawnChild(
+    ctx: SpawnChildContext,
+  ): Promise<ChildRunResult> {
+    // Effective per-batch timeout: role-file timeout_min (minutes) wins over
+    // consolidation timeoutMs — one source per batch, never mixed.
+    const roleConfig = loadRoleConfig(this.roleName, this.roleDir);
+    const timeoutMs =
+      typeof roleConfig?.timeout_min === "number" && roleConfig.timeout_min > 0
+        ? roleConfig.timeout_min * 60_000
+        : this.config.memory.consolidation.timeoutMs;
     return runKeeperProcess({
       piBinary: this.config.memory.consolidation.piBinary,
       spawnFlags: this.config.memory.consolidation.spawnFlags,
@@ -684,7 +753,7 @@ export class ConsolidationOrchestrator {
       taskPrompt: ctx.taskPrompt,
       cwd: ctx.cwd,
       env: ctx.env,
-      timeoutMs: this.config.memory.consolidation.timeoutMs,
+      timeoutMs,
       logger: this.logger,
       onChild: (child: ChildProcess) => {
         this.currentChild = { kill: () => killChildGroup(child, this.logger) };
@@ -707,7 +776,10 @@ export class ConsolidationOrchestrator {
   // ============================
 
   /** Write dataDir/logs/<role>-<ts>.json (+ optional .diff.md sidecar). */
-  private async writeReport(summary: RunSummary, diffText?: string): Promise<string> {
+  private async writeReport(
+    summary: RunSummary,
+    diffText?: string,
+  ): Promise<string> {
     const finishedMs = this.now();
     summary.finishedAt = new Date(finishedMs).toISOString();
     summary.elapsedMs = Math.max(0, finishedMs - Date.parse(summary.startedAt));
@@ -719,7 +791,9 @@ export class ConsolidationOrchestrator {
       try {
         await this.runPostRunSteps(summary);
       } catch (err) {
-        this.logger.warn?.(`[memory-keeper] post-run extras failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.logger.warn?.(
+          `[memory-keeper] post-run extras failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -727,15 +801,23 @@ export class ConsolidationOrchestrator {
     await fs.promises.mkdir(logsDir, { recursive: true });
     const ts = summary.startedAt.replace(/[:.]/g, "-");
     const file = path.join(logsDir, `${this.roleName}-${ts}.json`);
-    await fs.promises.writeFile(file, JSON.stringify(summary, null, 2), "utf-8");
+    await fs.promises.writeFile(
+      file,
+      JSON.stringify(summary, null, 2),
+      "utf-8",
+    );
     if (diffText !== undefined) {
-      await fs.promises.writeFile(path.join(logsDir, `${this.roleName}-${ts}.diff.md`), diffText, "utf-8");
+      await fs.promises.writeFile(
+        path.join(logsDir, `${this.roleName}-${ts}.diff.md`),
+        diffText,
+        "utf-8",
+      );
     }
     this.lastRun = summary;
     this.logger.info?.(
       `[memory-keeper] run ${summary.status} (${summary.reason}): newL0=${summary.newL0}, ` +
-      `records=${summary.recordsPresented}, merges=${summary.applied.merges.length}, ` +
-      `rewrites=${summary.applied.rewrites.length}${summary.error ? `, error: ${summary.error}` : ""}`,
+        `records=${summary.recordsPresented}, merges=${summary.applied.merges.length}, ` +
+        `rewrites=${summary.applied.rewrites.length}${summary.error ? `, error: ${summary.error}` : ""}`,
     );
     return file;
   }
@@ -755,7 +837,9 @@ export class ConsolidationOrchestrator {
     files.sort();
     const latest = files[files.length - 1]!;
     try {
-      const parsed = JSON.parse(await fs.promises.readFile(path.join(logsDir, latest), "utf-8"));
+      const parsed = JSON.parse(
+        await fs.promises.readFile(path.join(logsDir, latest), "utf-8"),
+      );
       return parsed as RunSummary;
     } catch {
       return null;

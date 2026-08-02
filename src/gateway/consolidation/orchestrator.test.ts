@@ -12,7 +12,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseConfig } from "../../config.js";
-import { ConsolidationOrchestrator, type RunSummary, type SpawnChildContext } from "./orchestrator.js";
+import {
+  ConsolidationOrchestrator,
+  type RunSummary,
+  type SpawnChildContext,
+} from "./orchestrator.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import type { ChildRunResult } from "./child-spawn.js";
@@ -29,9 +33,21 @@ function makeConfig(dataDir: string, enabled = true): GatewayConfig {
   return {
     server: { port: 0, host: "127.0.0.1", corsOrigins: [] },
     data: { baseDir: dataDir },
-    llm: { baseUrl: "", apiKey: "", model: "fake", maxTokens: 1, timeoutMs: 1, disableThinking: false },
+    llm: {
+      baseUrl: "",
+      apiKey: "",
+      model: "fake",
+      maxTokens: 1,
+      timeoutMs: 1,
+      disableThinking: false,
+    },
     memory: parseConfig({
-      consolidation: { enabled, diffCap: 10, diffByteCap: 4096, timeoutMs: 5000 },
+      consolidation: {
+        enabled,
+        diffCap: 10,
+        diffByteCap: 4096,
+        timeoutMs: 5000,
+      },
       nightRun: { schedule: "06:00", threshold: 50, timezone: "system" },
     }),
   } as GatewayConfig;
@@ -63,8 +79,19 @@ function okApply(): ApplyResult {
 /** Fake spawner that writes a valid diff.json into the scratch dir. */
 function writingSpawn(diff: unknown) {
   return vi.fn(async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
-    await fs.promises.writeFile(path.join(ctx.scratchDir, "diff.json"), JSON.stringify(diff), "utf-8");
-    return { exitCode: 0, signal: null, stdout: "ok", stderr: "thinking trace", timedOut: false, killed: null };
+    await fs.promises.writeFile(
+      path.join(ctx.scratchDir, "diff.json"),
+      JSON.stringify(diff),
+      "utf-8",
+    );
+    return {
+      exitCode: 0,
+      signal: null,
+      stdout: "ok",
+      stderr: "thinking trace",
+      timedOut: false,
+      killed: null,
+    };
   });
 }
 
@@ -77,42 +104,71 @@ describe("ConsolidationOrchestrator (P6)", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-oc-"));
     dataDir = path.join(tmp, "tdai");
     scratchRoot = path.join(tmp, "scratch");
-    fs.mkdirSync(path.join(dataDir, "scene_blocks", "_global"), { recursive: true });
-    fs.writeFileSync(path.join(dataDir, "scene_blocks", "_global", "big.md"), `${META}\n\n${"x".repeat(2000)}`, "utf-8");
+    fs.mkdirSync(path.join(dataDir, "scene_blocks", "_global"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(dataDir, "scene_blocks", "_global", "big.md"),
+      `${META}\n\n${"x".repeat(2000)}`,
+      "utf-8",
+    );
   });
 
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  function makeOrchestrator(opts: {
-    enabled?: boolean;
-    spawn?: (ctx: SpawnChildContext) => Promise<ChildRunResult>;
-    apply?: (body: unknown) => Promise<ApplyResult>;
-  } = {}) {
+  function makeOrchestrator(
+    opts: {
+      enabled?: boolean;
+      roleName?: string;
+      roleDir?: string;
+      spawn?: (ctx: SpawnChildContext) => Promise<ChildRunResult>;
+      apply?: (body: unknown) => Promise<ApplyResult>;
+    } = {},
+  ) {
     return new ConsolidationOrchestrator({
       config: makeConfig(dataDir, opts.enabled ?? true),
       dataDir,
       scratchRoot,
       logger: silentLogger,
       gatewayUrl: "http://127.0.0.1:8420",
-      spawnChild: opts.spawn ?? writingSpawn({ deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }] }),
+      roleName: opts.roleName,
+      roleDir: opts.roleDir,
+      spawnChild:
+        opts.spawn ??
+        writingSpawn({
+          deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }],
+        }),
       applyDiff: opts.apply ?? vi.fn(async () => okApply()),
     });
   }
 
   it("runs the full pipeline: spawn → diff.json → apply → report → checkpoint", async () => {
     const captured: { prompt: string }[] = [];
-    const spawn = vi.fn(async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
-      // Capture the session prompt BEFORE the orchestrator cleans up scratch.
-      captured.push({ prompt: await fs.promises.readFile(ctx.promptPath, "utf-8") });
-      await fs.promises.writeFile(
-        path.join(ctx.scratchDir, "diff.json"),
-        JSON.stringify({ deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }] }),
-        "utf-8",
-      );
-      return { exitCode: 0, signal: null, stdout: "ok", stderr: "thinking trace", timedOut: false, killed: null };
-    });
+    const spawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        // Capture the session prompt BEFORE the orchestrator cleans up scratch.
+        captured.push({
+          prompt: await fs.promises.readFile(ctx.promptPath, "utf-8"),
+        });
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({
+            deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }],
+          }),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "thinking trace",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
     const apply = vi.fn(async () => okApply());
     const orch = makeOrchestrator({ spawn, apply });
 
@@ -127,7 +183,13 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     const spawnCtx = spawn.mock.calls[0]![0] as SpawnChildContext;
     expect(Object.keys(spawnCtx.env).sort()).toEqual(
-      ["HOME", "PATH", "PI_MEMORY_KEEPER", "PI_MEMORY_KEEPER_RUN", "TDAI_GATEWAY_URL"].sort(),
+      [
+        "HOME",
+        "PATH",
+        "PI_MEMORY_KEEPER",
+        "PI_MEMORY_KEEPER_RUN",
+        "TDAI_GATEWAY_URL",
+      ].sort(),
     );
     expect(spawnCtx.env.PI_MEMORY_KEEPER).toBe("1");
     expect(spawnCtx.env.PI_MEMORY_KEEPER_RUN).toBeTruthy();
@@ -150,15 +212,23 @@ describe("ConsolidationOrchestrator (P6)", () => {
       manifest: { baseline: Record<string, string> };
       context: { presentedRecordIds: string[] };
     };
-    expect(applyBody.diff).toEqual({ deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }] });
-    expect(applyBody.manifest.baseline["scene_blocks/_global/big.md"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(applyBody.diff).toEqual({
+      deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }],
+    });
+    expect(applyBody.manifest.baseline["scene_blocks/_global/big.md"]).toMatch(
+      /^[0-9a-f]{64}$/,
+    );
     expect(applyBody.context.presentedRecordIds).toEqual([]);
 
     // Report written to dataDir/logs/<role>-<ts>.json, valid JSON.
     const logsDir = path.join(dataDir, "logs");
-    const files = fs.readdirSync(logsDir).filter((f) => f.startsWith("memory-keeper-") && f.endsWith(".json"));
+    const files = fs
+      .readdirSync(logsDir)
+      .filter((f) => f.startsWith("memory-keeper-") && f.endsWith(".json"));
     expect(files.length).toBe(1);
-    const report = JSON.parse(fs.readFileSync(path.join(logsDir, files[0]!), "utf-8")) as RunSummary;
+    const report = JSON.parse(
+      fs.readFileSync(path.join(logsDir, files[0]!), "utf-8"),
+    ) as RunSummary;
     expect(report.status).toBe("ok");
     expect(report.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(report.child?.exitCode).toBe(0);
@@ -175,12 +245,27 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
   it("single-flight: a second trigger while a run is in flight is refused", async () => {
     let release!: () => void;
-    const gate = new Promise<void>((r) => { release = r; });
-    const slowSpawn = vi.fn(async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
-      await gate;
-      await fs.promises.writeFile(path.join(ctx.scratchDir, "diff.json"), JSON.stringify({}), "utf-8");
-      return { exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null };
+    const gate = new Promise<void>((r) => {
+      release = r;
     });
+    const slowSpawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        await gate;
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({}),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
     const orch = makeOrchestrator({ spawn: slowSpawn });
 
     const first = orch.runNow({ reason: "first" });
@@ -201,7 +286,14 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
   it("missing diff.json → failed run, apply never invoked (no partial apply)", async () => {
     const spawn = vi.fn(async (): Promise<ChildRunResult> => {
-      return { exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null };
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        killed: null,
+      };
     });
     const apply = vi.fn(async () => okApply());
     const orch = makeOrchestrator({ spawn, apply });
@@ -217,7 +309,15 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
   it("spawn failure → failed run, fail-open (критерий 21)", async () => {
     const spawn = vi.fn(async (): Promise<ChildRunResult> => {
-      return { exitCode: null, signal: null, stdout: "", stderr: "", timedOut: false, error: "ENOENT: pi not found", killed: null };
+      return {
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        error: "ENOENT: pi not found",
+        killed: null,
+      };
     });
     const orch = makeOrchestrator({ spawn });
     const summary = await orch.runNow({ reason: "test" });
@@ -227,7 +327,14 @@ describe("ConsolidationOrchestrator (P6)", () => {
   });
 
   it("dry-run builds the diff, spawns nothing and does not advance the checkpoint", async () => {
-    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({ exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null }));
+    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({
+      exitCode: 0,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killed: null,
+    }));
     const apply = vi.fn(async () => okApply());
     const orch = makeOrchestrator({ spawn, apply });
 
@@ -238,7 +345,9 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
     // The diff section is written as a sidecar next to the report.
     const logsDir = path.join(dataDir, "logs");
-    const sidecars = fs.readdirSync(logsDir).filter((f) => f.startsWith("memory-keeper-") && f.endsWith(".diff.md"));
+    const sidecars = fs
+      .readdirSync(logsDir)
+      .filter((f) => f.startsWith("memory-keeper-") && f.endsWith(".diff.md"));
     expect(sidecars.length).toBe(1);
     const diffText = fs.readFileSync(path.join(logsDir, sidecars[0]!), "utf-8");
     expect(diffText).toContain("## Текущий дифф (что разгрести)");
@@ -248,7 +357,14 @@ describe("ConsolidationOrchestrator (P6)", () => {
   });
 
   it("dry-run preserves the scratch dir with the copied tools/ (retention for inspection)", async () => {
-    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({ exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null }));
+    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({
+      exitCode: 0,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killed: null,
+    }));
     const orch = makeOrchestrator({ spawn });
 
     const summary = await orch.runNow({ reason: "manual", dryRun: true });
@@ -269,7 +385,9 @@ describe("ConsolidationOrchestrator (P6)", () => {
     const original = process.env.TDAI_KEEPER_TOOLS_DIR;
     try {
       // src-topology: the sibling of this module has the 4 scripts.
-      expect(ConsolidationOrchestrator["resolveKeeperToolsDir"]()).not.toBeNull();
+      expect(
+        ConsolidationOrchestrator["resolveKeeperToolsDir"](),
+      ).not.toBeNull();
       // env override: a fixture dir with fetch_dups.py wins.
       const fake = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-kt-env-"));
       fs.writeFileSync(path.join(fake, "fetch_dups.py"), "x", "utf-8");
@@ -298,7 +416,9 @@ describe("ConsolidationOrchestrator (P6)", () => {
         scratchRoot,
         logger,
         gatewayUrl: "http://127.0.0.1:8420",
-        spawnChild: writingSpawn({ deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }] }),
+        spawnChild: writingSpawn({
+          deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }],
+        }),
         applyDiff: vi.fn(async () => okApply()),
       });
       const summary = await orch.runNow({ reason: "manual" });
@@ -311,7 +431,14 @@ describe("ConsolidationOrchestrator (P6)", () => {
   });
 
   it("disabled consolidation → trigger refused with status disabled (fail-open)", async () => {
-    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({ exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null }));
+    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({
+      exitCode: 0,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killed: null,
+    }));
     const orch = makeOrchestrator({ enabled: false, spawn });
     const res = await orch.trigger({ reason: "manual" });
     expect(res.accepted).toBe(false);
@@ -327,5 +454,129 @@ describe("ConsolidationOrchestrator (P6)", () => {
     await fresh.start();
     expect(fresh.getLastRun()?.status).toBe("ok");
     expect(fresh.getLastRun()?.role).toBe("memory-keeper");
+  });
+
+  // ============================
+  // B3 — night-keeper role: fail-loud + role-file prompt + timeout_min
+  // ============================
+
+  it("night-keeper WITHOUT role file → run refused (fail-loud, not day semantics)", async () => {
+    const roleDir = path.join(tmp, "roles"); // empty dir — no night-keeper.md
+    fs.mkdirSync(roleDir, { recursive: true });
+    const spawn = vi.fn();
+    const orch = makeOrchestrator({ roleName: "night-keeper", roleDir, spawn });
+
+    const summary = await orch.runNow({ reason: "night" });
+    expect(summary.status).toBe("failed");
+    expect(summary.error).toMatch(/night-keeper\.md.*missing/);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("night-keeper WITH role file → prompt uses the role file, not DEFAULT_ROLE_PROMPT", async () => {
+    const roleDir = path.join(tmp, "roles2");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+
+    const captured: { prompt: string }[] = [];
+    const spawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        captured.push({
+          prompt: await fs.promises.readFile(ctx.promptPath, "utf-8"),
+        });
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({}),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
+    const orch = makeOrchestrator({ roleName: "night-keeper", roleDir, spawn });
+
+    const summary = await orch.runNow({ reason: "night" });
+    expect(summary.status).toBe("ok");
+    expect(summary.role).toBe("night-keeper");
+    expect(captured[0]?.prompt).toContain("ROLE-NIGHT-PROMPT");
+    expect(captured[0]?.prompt).not.toContain("Ты — memory-keeper"); // not DEFAULT_ROLE_PROMPT
+  });
+
+  it("day keeper WITHOUT role file → fail-open DEFAULT_ROLE_PROMPT (backward compat)", async () => {
+    const roleDir = path.join(tmp, "roles3");
+    fs.mkdirSync(roleDir, { recursive: true });
+    const captured: { prompt: string }[] = [];
+    const spawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        captured.push({
+          prompt: await fs.promises.readFile(ctx.promptPath, "utf-8"),
+        });
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({}),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
+    const orch = makeOrchestrator({ roleDir, spawn });
+
+    const summary = await orch.runNow({ reason: "test" });
+    expect(summary.status).toBe("ok");
+    expect(captured[0]?.prompt).toContain("Ты — memory-keeper"); // DEFAULT_ROLE_PROMPT
+  });
+
+  it("role-file timeout_min overrides consolidation timeoutMs (per-batch source)", async () => {
+    const roleDir = path.join(tmp, "roles4");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.json"),
+      JSON.stringify({ name: "night-keeper", timeout_min: 45 }),
+      "utf-8",
+    );
+    const spawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({}),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
+    const orch = makeOrchestrator({ roleName: "night-keeper", roleDir, spawn });
+
+    const summary = await orch.runNow({ reason: "night" });
+    expect(summary.status).toBe("ok");
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 });
