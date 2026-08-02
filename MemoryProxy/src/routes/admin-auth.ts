@@ -5,7 +5,10 @@ export type AdminAuthResult = "ok" | "missing" | "invalid";
 
 /** Shared Bearer authentication for proxy administration endpoints. */
 export function checkAdminAuth(c: Context, expected: string): AdminAuthResult {
-  if (!expected) return "ok";
+  // Security #672: fail-closed. Wenn kein admin.apiKey konfiguriert ist,
+  // sind Admin-Endpoints gesperrt (vorher: "ok" = voller Zugang ohne Auth).
+  // Wer Admin-Funktionen nutzen will, muss explizit einen Key setzen.
+  if (!expected) return "missing";
 
   const header = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
   if (!header.startsWith("Bearer ")) return "missing";
