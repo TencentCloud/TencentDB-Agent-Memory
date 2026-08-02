@@ -11,7 +11,7 @@
  * 2. Batch LLM judgment on all new memories + their candidate pools (single call)
  */
 
-import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType } from "./l1-writer.js";
+import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType, MemoryScope } from "./l1-writer.js";
 import { CONFLICT_DETECTION_SYSTEM_PROMPT, formatBatchConflictPrompt } from "../prompts/l1-dedup.js";
 import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
@@ -63,8 +63,11 @@ export async function batchDedup(params: {
   embeddingTimeoutMs?: number;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
+  /** Current project id — scopes candidate recall so merges cannot cross projects. */
+  projectId?: string;
 }): Promise<DedupDecision[]> {
   const { memories, config, logger, model, vectorStore, embeddingService, llmRunner } = params;
+  const projectId = params.projectId ?? "";
   const topK = params.conflictRecallTopK ?? 5;
 
   if (memories.length === 0) {
@@ -100,14 +103,14 @@ export async function batchDedup(params: {
     // === Tier 1: Vector recall mode ===
     logger?.debug?.(`${TAG} Using vector recall mode (topK=${topK})`);
     try {
-      matches = await findCandidatesByVector(memories, vectorStore!, embeddingService, topK, logger, params.embeddingTimeoutMs);
+      matches = await findCandidatesByVector(memories, vectorStore!, embeddingService, topK, logger, params.embeddingTimeoutMs, projectId);
     } catch (err) {
       logger?.warn?.(
         `${TAG} Vector recall failed, falling back to FTS keyword: ${err instanceof Error ? err.message : String(err)}`,
       );
       // Degrade to FTS keyword recall
       if (hasFts) {
-        matches = await findCandidatesByFts(memories, vectorStore!, logger);
+        matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
       } else {
         logger?.debug?.(`${TAG} FTS not available either, skipping conflict detection`);
         return storeAll();
@@ -116,7 +119,7 @@ export async function batchDedup(params: {
   } else if (hasFts) {
     // === Tier 2: FTS keyword recall ===
     logger?.debug?.(`${TAG} Using FTS keyword recall mode (no embedding service or no vector data)`);
-    matches = await findCandidatesByFts(memories, vectorStore!, logger);
+    matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
   } else {
     // Shouldn't reach here given the fast-path check above, but be defensive
     logger?.debug?.(`${TAG} No usable recall path, skipping conflict detection`);
@@ -196,6 +199,26 @@ async function runLlmJudgment(
 // ============================
 
 /**
+ * Merging across a scope boundary destroys data: a project memory merging into
+ * a global target rewrites that target as project-scoped, and the global memory
+ * silently disappears for every other project. Visibility alone does not protect
+ * against this (a global record is legitimately visible to every project), so
+ * candidates whose scope differs from the incoming memory are dropped outright —
+ * the LLM never sees them and returns "create" instead.
+ */
+export function sameScope(
+  candidate: { scope?: string; project_id?: string },
+  memoryScope: MemoryScope | undefined,
+  projectId: string,
+): boolean {
+  // Legacy records (no scope) and non-sqlite backends behave as before.
+  if (!candidate.scope) return true;
+  const wanted = memoryScope ?? "global";
+  if (candidate.scope !== wanted) return false;
+  return wanted !== "project" || candidate.project_id === projectId;
+}
+
+/**
  * Vector-based candidate recall (aligned with prototype):
  * batch-embed new memories → cosine search in VectorStore → exclude self-batch → return candidates.
  */
@@ -206,6 +229,7 @@ async function findCandidatesByVector(
   topK: number,
   logger?: Logger,
   embeddingTimeoutMs?: number,
+  projectId = "",
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
 
@@ -220,11 +244,12 @@ async function findCandidatesByVector(
     const queryVec = embeddings[i];
 
     // Vector search top-K (request extra to account for self-batch filtering)
-    const searchResults = await vectorStore.searchL1Vector(queryVec, topK + memories.length, mem.content);
+    const searchResults = await vectorStore.searchL1Vector(queryVec, topK + memories.length, mem.content, projectId);
 
     // Exclude records from current batch, convert to MemoryRecord format
     const candidates: MemoryRecord[] = searchResults
       .filter((r) => !newRecordIds.has(r.record_id))
+      .filter((r) => sameScope(r, mem.scope, projectId))
       .slice(0, topK)
       .map((r) => ({
         id: r.record_id,
@@ -260,6 +285,7 @@ async function findCandidatesByFts(
   memories: Array<ExtractedMemory & { record_id: string }>,
   vectorStore: IMemoryStore,
   _logger?: Logger,
+  projectId = "",
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
   const matches: CandidateMatch[] = [];
@@ -267,10 +293,11 @@ async function findCandidatesByFts(
   for (const mem of memories) {
     const ftsQuery = buildFtsQuery(mem.content);
     if (ftsQuery) {
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, 10);
+      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, 10, projectId);
       // Filter out records from the current batch
       const candidates: MemoryRecord[] = ftsResults
         .filter((r) => !newRecordIds.has(r.record_id))
+        .filter((r) => sameScope(r, mem.scope, projectId))
         .slice(0, 5)
         .map((r) => ({
           id: r.record_id,

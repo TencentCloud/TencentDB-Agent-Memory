@@ -144,7 +144,7 @@ openclaw memory-tdai seed --input data.json --config seed-config.json --strict-r
 <output-dir>/
 ├── conversations/          — L0 JSONL 文件
 ├── records/                — L1 JSONL 文件
-├── scene_blocks/           — L2 场景块
+├── scene_blocks/<项目>/    — L2 场景块（按项目分目录，无项目时为 `_global`）
 ├── vectors.db              — SQLite 向量数据库（仅 sqlite 后端）
 ├── .metadata/
 │   ├── manifest.json       — 元数据（store 绑定 + seed 运行记录）

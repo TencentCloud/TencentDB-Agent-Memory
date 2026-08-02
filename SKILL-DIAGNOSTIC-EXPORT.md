@@ -93,10 +93,10 @@ bash scripts/export-diagnostic.sh /tmp
 ~/.openclaw/memory-tdai/
 ├── conversations/          — L0 原始对话（每日 JSONL 分片）
 ├── records/                — L1 结构化记忆（每日 JSONL 分片）
-├── scene_blocks/           — L2 场景 Markdown 文件
+├── scene_blocks/<项目>/    — L2 场景 Markdown 文件（按项目分目录，无项目时为 `_global`）
 ├── persona.md              — L3 用户画像
 ├── vectors.db              — SQLite 数据库（向量 + 全文索引）
-├── .metadata/              — checkpoint、scene_index.json
+├── .metadata/              — checkpoint、scene_index/<项目>.json
 └── .backup/                — 滚动备份
 ```
 

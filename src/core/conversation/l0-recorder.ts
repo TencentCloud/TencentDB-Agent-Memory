@@ -51,6 +51,8 @@ export interface L0MessageRecord {
   role: "user" | "assistant";
   content: string;
   timestamp: number; // epoch ms
+  /** Project this message came from; travels to L1 because extraction is async. */
+  projectId?: string;
 }
 
 /**
@@ -60,6 +62,8 @@ export interface L0MessageRecord {
 export interface L0ConversationRecord {
   sessionKey: string;
   sessionId: string;
+  /** Project this recording event came from; absent on records written before scoping. */
+  projectId?: string;
   recordedAt: string; // ISO timestamp
   messageCount: number;
   messages: ConversationMessage[];
@@ -87,6 +91,8 @@ const TAG = "[memory-tdai][l0]";
  * @returns Filtered messages (for L1 to use directly), or empty array if nothing worth recording
  */
 export async function recordConversation(params: {
+  /** Project this turn happened in; persisted so async L1 extraction can scope it. */
+  projectId?: string;
   sessionKey: string;
   sessionId?: string;
   rawMessages: unknown[];
@@ -104,7 +110,7 @@ export async function recordConversation(params: {
    */
   originalUserMessageCount?: number;
 }): Promise<ConversationMessage[]> {
-  const { sessionKey, sessionId, rawMessages, baseDir, logger, originalUserText, afterTimestamp, originalUserMessageCount } = params;
+  const { sessionKey, sessionId, projectId, rawMessages, baseDir, logger, originalUserText, afterTimestamp, originalUserMessageCount } = params;
 
   // Step 1: Position slice + extract user/assistant messages.
   //
@@ -274,6 +280,7 @@ export async function recordConversation(params: {
       role: msg.role,
       content: msg.content,
       timestamp: msg.timestamp,
+      projectId: projectId || "",
     };
     lines.push(JSON.stringify(record));
   }
@@ -366,6 +373,7 @@ export async function readConversationRecords(
           records.push({
             sessionKey: (parsed.sessionKey as string) || sessionKey,
             sessionId: (parsed.sessionId as string) || "",
+            projectId: (parsed.projectId as string) || "",
             recordedAt: (parsed.recordedAt as string) || new Date().toISOString(),
             messageCount: 1,
             messages: [msg],
@@ -435,6 +443,8 @@ export async function readConversationMessages(
  */
 export interface SessionIdMessageGroup {
   sessionId: string;
+  /** Project this session belongs to; '' when the record predates project tagging. */
+  projectId?: string;
   messages: Array<ConversationMessage & { recordedAtMs: number }>;
 }
 
@@ -465,11 +475,14 @@ export async function readConversationMessagesGroupedBySessionId(
 
   // Collect all messages with their sessionId, filtering by recorded_at cursor
   const allMessages: Array<{ sessionId: string; msg: ConversationMessage & { recordedAtMs: number } }> = [];
+  // Project id belongs to the session, not to a message — first non-empty wins.
+  const projectBySid = new Map<string, string>();
 
   for (const record of records) {
     const sid = record.sessionId || "";
     const recMs = Date.parse(record.recordedAt) || 0;
     if (afterRecordedAtMs && recMs <= afterRecordedAtMs) continue;
+    if (record.projectId && !projectBySid.get(sid)) projectBySid.set(sid, record.projectId);
     for (const msg of record.messages) {
       allMessages.push({ sessionId: sid, msg: { ...msg, recordedAtMs: recMs } });
     }
@@ -503,7 +516,7 @@ export async function readConversationMessagesGroupedBySessionId(
   const groups: SessionIdMessageGroup[] = [];
   for (const [sessionId, messages] of groupMap) {
     if (messages.length > 0) {
-      groups.push({ sessionId, messages });
+      groups.push({ sessionId, projectId: projectBySid.get(sessionId) ?? "", messages });
     }
   }
   groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);

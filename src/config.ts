@@ -88,6 +88,8 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /** Max characters of L3 persona injected per turn. 0 disables the limit. */
+  maxPersonaChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -634,8 +636,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
-      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
-      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 500,
+      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 2000,
+      maxPersonaChars: num(recallGroup, "maxPersonaChars") ?? 6000,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,

@@ -16,7 +16,7 @@ import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
-import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
+import type { ExtractedMemory, MemoryRecord, MemoryType, MemoryScope, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
 import type { IMemoryStore } from "../store/types.js";
@@ -37,6 +37,8 @@ interface SceneSegment {
   memories: Array<{
     content: string;
     type: string;
+    /** Raw scope from the model — normalized to 'global'|'project' later (I3). */
+    scope: string;
     priority: number;
     source_message_ids: string[];
     metadata: Record<string, unknown>;
@@ -76,6 +78,8 @@ export async function extractL1Memories(params: {
   messages: ConversationMessage[];
   sessionKey: string;
   sessionId?: string;
+  /** Project these messages came from (git-root of cwd); '' when unknown. */
+  projectId?: string;
   baseDir: string;
   config: unknown;
   options?: {
@@ -109,7 +113,7 @@ export async function extractL1Memories(params: {
   /** Plugin instance ID for metric reporting (optional — metrics skipped if absent) */
   instanceId?: string;
 }): Promise<L1ExtractionResult> {
-  const { messages, sessionKey, sessionId, baseDir, config, logger, instanceId: metricInstanceId } = params;
+  const { messages, sessionKey, sessionId, projectId, baseDir, config, logger, instanceId: metricInstanceId } = params;
   const options = params.options ?? {};
   const maxNewMessages = options.maxMessagesPerExtraction ?? 10;
   const maxBgMessages = options.maxBackgroundMessages ?? 5;
@@ -185,6 +189,7 @@ export async function extractL1Memories(params: {
         source_message_ids: Array.isArray(mem.source_message_ids) ? mem.source_message_ids : [],
         metadata: mem.metadata ?? {},
         scene_name: scene.scene_name,
+        scope: mem.scope === "global" ? "global" : "project",
       });
     }
   }
@@ -219,10 +224,21 @@ export async function extractL1Memories(params: {
   }
 
   // Assign temporary IDs to extracted memories (needed for batch dedup)
+  // I3: the extraction model is free-form — anything that is not literally
+  // "global" is treated as project-scoped, so a typo can never leak a memory
+  // into every other project.
+  // I4 is applied here too (not only in writeMemory): a project scope without a
+  // project id is stored as global, and dedup must filter on the scope that will
+  // actually be persisted, otherwise every candidate is rejected and duplicates pile up.
   const memoriesWithIds = extracted.map((m) => ({
     ...m,
+    scope: (m.scope === "global" || !projectId ? "global" : "project") as MemoryScope,
     record_id: generateMemoryId(),
   }));
+
+  if (!projectId && memoriesWithIds.some((m) => m.scope === "global")) {
+    logger?.warn?.(`${TAG} No project_id for session ${sessionKey} — ${memoriesWithIds.length} memories stored as global (project_id plumbing broken upstream?)`);
+  }
 
   // Step 2: Batch Conflict Detection + Write
   let storedRecords: MemoryRecord[];
@@ -239,6 +255,7 @@ export async function extractL1Memories(params: {
         conflictRecallTopK: options.conflictRecallTopK,
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
+        projectId,
       });
 
       storedRecords = await applyDecisions({
@@ -247,16 +264,17 @@ export async function extractL1Memories(params: {
         baseDir,
         sessionKey,
         sessionId,
+        projectId,
         logger,
         vectorStore: options.vectorStore,
         embeddingService: options.embeddingService,
       });
     } catch (err) {
       logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
-      storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService);
+      storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, projectId, logger, options.vectorStore, options.embeddingService);
     }
   } else {
-    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, logger, options.vectorStore, options.embeddingService);
+    storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, projectId, logger, options.vectorStore, options.embeddingService);
   }
 
   logger?.info(`${TAG} Extraction complete: extracted=${extracted.length}, stored=${storedRecords.length}`);
@@ -402,6 +420,7 @@ function parseExtractionResult(raw: string, logger?: Logger): SceneSegment[] {
               .map((m) => ({
                 content: String(m.content),
                 type: String(m.type ?? "episodic"),
+                scope: String(m.scope ?? "project"),
                 priority: typeof m.priority === "number" ? m.priority : 50,
                 source_message_ids: Array.isArray(m.source_message_ids) ? m.source_message_ids.map(String) : [],
                 metadata: (m.metadata && typeof m.metadata === "object" ? m.metadata : {}) as Record<string, unknown>,
@@ -430,11 +449,12 @@ async function applyDecisions(params: {
   baseDir: string;
   sessionKey: string;
   sessionId?: string;
+  projectId?: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
 }): Promise<MemoryRecord[]> {
-  const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService } = params;
+  const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService } = params;
   const storedRecords: MemoryRecord[] = [];
 
   // Build a map from record_id → decision
@@ -457,6 +477,7 @@ async function applyDecisions(params: {
         baseDir,
         sessionKey,
         sessionId,
+        projectId,
         logger,
         vectorStore,
         embeddingService,
@@ -483,6 +504,7 @@ async function storeAllDirectly(
   baseDir: string,
   sessionKey: string,
   sessionId: string | undefined,
+  projectId: string | undefined,
   logger?: Logger,
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
@@ -501,6 +523,7 @@ async function storeAllDirectly(
         baseDir,
         sessionKey,
         sessionId,
+        projectId,
         logger,
         vectorStore,
         embeddingService,

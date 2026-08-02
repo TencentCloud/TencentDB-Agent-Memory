@@ -90,6 +90,15 @@ const LEVEL_DIRS: Record<string, string> = {
   L3: "persona.md",
 }
 
+/** 列出 scene_blocks 下所有场景文件，返回相对 scene_blocks 的路径（含项目子目录）。 */
+function listSceneFiles(blocksRoot: string): string[] {
+  return fs
+    .readdirSync(blocksRoot, { recursive: true })
+    .map((f) => String(f))
+    .filter((f) => f.endsWith(".md"))
+    .sort()
+}
+
 /** L0 表的允许过滤列（白名单防 SQL 注入） */
 const L0_FILTER_COLUMNS = new Set([
   "record_id", "session_key", "session_id", "role", "message_text", "recorded_at", "timestamp",
@@ -762,7 +771,8 @@ function queryL2(opts: CliOptions) {
     return
   }
 
-  const files = fs.readdirSync(dirPath).filter((f) => f.endsWith(".md")).sort()
+  // Blocks live one level down, per project: scene_blocks/<project-slug>/*.md
+  const files = listSceneFiles(dirPath)
   const entries: L2Entry[] = files.map((f) => parseL2File(path.join(dirPath, f)))
 
   // --file 参数：只返回指定文件的完整内容（含 body）
@@ -932,7 +942,7 @@ function showOverview(db: DatabaseSync, opts: CliOptions) {
   // ── L2 ──
   const l2Dir = path.join(opts.dataDir, LEVEL_DIRS.L2)
   if (fs.existsSync(l2Dir)) {
-    const files = fs.readdirSync(l2Dir).filter((f) => f.endsWith(".md"))
+    const files = listSceneFiles(l2Dir)
     const entries = files.map((f) => parseL2File(path.join(l2Dir, f)))
     const totalHeat = entries.reduce((sum, e) => sum + e.meta.heat, 0)
 

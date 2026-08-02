@@ -71,6 +71,10 @@ export interface MemoryRecord {
   sessionKey: string;
   /** Source session ID (single conversation instance identifier) */
   sessionId: string;
+  /** Project this memory belongs to (git-root of cwd); '' when unknown. */
+  projectId?: string;
+  /** Visibility axis: 'project' is hidden from other projects, 'global' is not. */
+  scope?: MemoryScope;
 }
 
 /**
@@ -85,9 +89,14 @@ export interface ExtractedMemory {
   metadata: EpisodicMetadata | Record<string, never>;
   /** Scene name this memory was extracted in */
   scene_name: string;
+  /** Visibility axis assigned by the extraction model, normalized in l1-extractor. */
+  scope?: MemoryScope;
 }
 
 export type DedupAction = "store" | "update" | "merge" | "skip";
+
+/** Visibility axis, orthogonal to MemoryType. */
+export type MemoryScope = "global" | "project";
 
 /**
  * v3 batch dedup decision — one per new memory, aligned with Kenty's conflict detection prompt.
@@ -118,6 +127,21 @@ const TAG = "[memory-tdai][l1-writer]";
 // Core functions
 // ============================
 
+/** Count of memories downgraded to global because project_id was missing (I4). */
+let scopeDowngradeCount = 0;
+
+function resolveScope(scope: MemoryScope | undefined, projectId: string | undefined, logger?: Logger): MemoryScope {
+  if (scope === "project" && !projectId) {
+    scopeDowngradeCount++;
+    logger?.warn(
+      `${TAG} scope='project' but project_id is empty — storing as 'global' (downgrades so far: ${scopeDowngradeCount}). ` +
+      `This means the project_id plumbing is broken upstream.`,
+    );
+    return "global";
+  }
+  return scope ?? "global";
+}
+
 /**
  * Generate a unique memory ID.
  */
@@ -142,13 +166,15 @@ export async function writeMemory(params: {
   baseDir: string;
   sessionKey: string;
   sessionId?: string;
+  /** Project this memory belongs to; '' when unknown. */
+  projectId?: string;
   logger?: Logger;
   /** Optional vector store for dual-write (JSONL + vector DB) */
   vectorStore?: IMemoryStore;
   /** Optional embedding service (required when vectorStore is provided) */
   embeddingService?: EmbeddingService;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, logger, vectorStore, embeddingService } = params;
+  const { memory, decision, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService } = params;
 
   if (decision.action === "skip") {
     logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
@@ -189,6 +215,11 @@ export async function writeMemory(params: {
     updatedAt: now,
     sessionKey,
     sessionId: sessionId || "",
+    projectId: projectId || "",
+    // I4: a project-scoped memory with no project id would be invisible
+    // everywhere. Fail open (store it as global) but say so loudly — a silent
+    // downgrade here is the only symptom of a broken project_id pipeline.
+    scope: resolveScope(memory.scope, projectId, logger),
   };
 
   const recordsDir = path.join(baseDir, "records");

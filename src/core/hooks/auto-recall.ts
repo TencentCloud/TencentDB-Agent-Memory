@@ -78,6 +78,10 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  /** Current project id (git-root of cwd); '' disables scope filtering entirely. */
+  projectId?: string;
+  /** Inject the L3 persona this turn (default true). Clients gate it to keep the per-turn cost down. */
+  includePersona?: boolean;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
@@ -108,8 +112,12 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  projectId?: string;
+  includePersona?: boolean;
 }): Promise<RecallResult | undefined> {
   const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const includePersona = params.includePersona ?? true;
+  const projectId = params.projectId ?? "";
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -122,7 +130,7 @@ async function performAutoRecallInner(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService, projectId);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -145,13 +153,26 @@ async function performAutoRecallInner(params: {
   const tPersonaStart = performance.now();
   let personaContent: string | undefined;
   try {
+    if (!includePersona) throw new Error("persona injection skipped this turn");
     const personaPath = path.join(pluginDataDir, "persona.md");
     const raw = await fs.readFile(personaPath, "utf-8");
     personaContent = stripSceneNavigation(raw).trim();
     if (!personaContent) personaContent = undefined;
+    const maxPersonaChars = normalizeBudgetLimit(cfg.recall.maxPersonaChars);
+    if (personaContent && maxPersonaChars && [...personaContent].length > maxPersonaChars) {
+      // The persona file grows without bound (35KB+ in practice) and is injected
+      // whole; cap it by code point so a cut never splits a surrogate pair.
+      const kept = [...personaContent].slice(0, maxPersonaChars).join("");
+      logger?.info(`${TAG} Persona truncated: ${personaContent.length} → ${kept.length} chars (recall.maxPersonaChars=${maxPersonaChars})`);
+      personaContent = `${kept}\n…(persona truncated)`;
+    }
     logger?.debug?.(`${TAG} Persona loaded: ${personaContent ? `${personaContent.length} chars` : "empty"}`);
   } catch {
-    logger?.debug?.(`${TAG} No persona file found (expected for new users)`);
+    logger?.debug?.(
+      includePersona
+        ? `${TAG} No persona file found (expected for new users)`
+        : `${TAG} Persona skipped this turn (client cadence gate)`,
+    );
   }
   const tPersonaEnd = performance.now();
 
@@ -159,10 +180,11 @@ async function performAutoRecallInner(params: {
   const tSceneStart = performance.now();
   let sceneNavigation: string | undefined;
   try {
-    const sceneIndex = await readSceneIndex(pluginDataDir);
+    // Scene blocks are stored per project — only the current project's index is read.
+    const sceneIndex = await readSceneIndex(pluginDataDir, projectId);
     if (sceneIndex.length > 0) {
-      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir);
-      logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes`);
+      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir, projectId);
+      logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes (project=${projectId || "(none)"})`);
     }
   } catch {
     logger?.debug?.(`${TAG} No scene index found`);
@@ -268,7 +290,7 @@ interface SearchResult {
  * Multiplies each item's score by the weight of its type BEFORE top-K
  * selection, so `instruction`/`persona` records can outrank `episodic` ones
  * for the same cosine/query match. Applied AFTER cosine scoring, BEFORE
- * top-K (TZ §5.15). All weights 1.0 (config default) = feature off — the
+ * top-K (ТЗ §5.15). All weights 1.0 (config default) = feature off — the
  * returned array is unchanged.
  *
  * `weights` is the `memory.recall.typeWeights` leaf (instruction/persona/
@@ -316,8 +338,9 @@ export async function searchMemoriesWithDetails(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  projectId = "",
 ): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
+  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService, projectId);
 
   // Extract structured data from formatted memory lines.
   // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
@@ -352,6 +375,7 @@ async function searchMemories(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  projectId = "",
 ): Promise<SearchResult> {
   const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
@@ -403,13 +427,13 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore, projectId);
       return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, typeWeights);
+      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights);
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
 
@@ -418,9 +442,13 @@ async function searchMemories(
     // to avoid a redundant second HTTP request and a wasted local embed().
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
+      // Native hybrid runs entirely inside the store, so the SQL-level scope
+      // filter never applies here — passesScope is the only guard on this path.
       // `searchL1Hybrid` is optional on IMemoryStore (SqliteMemoryStore does
-      // not implement it); the nativeHybridSearch guard above guarantees it exists here.
-      const results = await vectorStore.searchL1Hybrid!({ query: cleanText, topK: maxResults });
+      // not implement it); the nativeHybridSearch capability guard above
+      // guarantees the method exists on this path — non-null assertion.
+      const results = (await vectorStore.searchL1Hybrid!({ query: cleanText, topK: maxResults }))
+        .filter((r) => passesScope(r, projectId));
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
@@ -428,11 +456,29 @@ async function searchMemories(
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, typeWeights);
+    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
   }
+}
+
+// ============================
+// Scope predicate
+// ============================
+
+/**
+ * Single source of truth for project-scoped visibility. Mirrored verbatim by the
+ * SQL filter in sqlite.ts — the two must stay literally equivalent.
+ *
+ * Only records explicitly tagged to a *different* project are hidden. Anything
+ * without a scope (legacy rows, non-sqlite backends) stays visible, otherwise a
+ * store that never sets the field would lose 100% of its results.
+ */
+export function passesScope(r: { scope?: string; project_id?: string }, projectId?: string): boolean {
+  if (!projectId) return true;              // filter disabled
+  if (r.scope !== "project") return true;   // global / unset / legacy
+  return r.project_id === projectId;
 }
 
 // ============================
@@ -446,13 +492,15 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
+  projectId = "",
 ): Promise<string[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
     if (ftsQuery) {
       logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
+      const ftsResults = (await vectorStore.searchL1Fts(ftsQuery, maxResults * 2, projectId))
+        .filter((r) => passesScope(r, projectId));
       if (ftsResults.length > 0) {
         logger?.debug?.(
           `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
@@ -499,6 +547,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  projectId = "",
   typeWeights?: { instruction: number; persona: number; episodic: number },
 ): Promise<string[]> {
   logger?.debug?.(
@@ -511,7 +560,9 @@ async function searchByEmbedding(
     `searching top-${maxResults * 2}...`,
   );
   // Retrieve more candidates for subsequent filtering
-  const vecResults: L1SearchResult[] = await vectorStore.searchL1Vector(queryEmbedding, maxResults * 2);
+  const vecResults: L1SearchResult[] = (
+    await vectorStore.searchL1Vector(queryEmbedding, maxResults * 2, userText, projectId)
+  ).filter((r) => passesScope(r, projectId));
 
   if (vecResults.length === 0) {
     logger?.debug?.(`${TAG} [embedding-search] Returned 0 results`);
@@ -564,10 +615,13 @@ async function searchHybrid(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  projectId = "",
   typeWeights?: { instruction: number; persona: number; episodic: number },
 ): Promise<SearchResult> {
-  // Run keyword and embedding searches in parallel
-  const candidateK = maxResults * 3; // retrieve more for merging
+  // Run keyword and embedding searches in parallel.
+  // Over-retrieve harder when scoping, since foreign-project rows are dropped
+  // after retrieval and would otherwise eat the candidate budget.
+  const candidateK = maxResults * (projectId ? 6 : 3);
 
   const [keywordResult, embeddingResult] = await Promise.all([
     // Keyword search: FTS5 only (no in-memory fallback)
@@ -578,7 +632,8 @@ async function searchHybrid(
         if (vectorStore.isFtsAvailable()) {
           const ftsQuery = buildFtsQuery(userText);
           if (ftsQuery) {
-            const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
+            const ftsResults = (await vectorStore.searchL1Fts(ftsQuery, candidateK, projectId))
+              .filter((r) => passesScope(r, projectId));
             if (ftsResults.length > 0) {
               logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
               // Convert FtsSearchResult to ScoredRecord for RRF merge
@@ -620,7 +675,8 @@ async function searchHybrid(
         logger?.debug?.(
           `${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const results = await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText);
+        const results = (await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText, projectId))
+          .filter((r) => passesScope(r, projectId));
         logger?.debug?.(`${TAG} [hybrid-embedding] Got ${results.length} candidates`);
         return { results, ms: performance.now() - tStart };
       } catch (err) {
@@ -761,7 +817,7 @@ function formatMemoryLine(m: FormatableMemory): string {
   return line;
 }
 
-function applyRecallBudget(
+export function applyRecallBudget(
   lines: string[],
   recall: MemoryTdaiConfig["recall"],
   logger?: Logger,

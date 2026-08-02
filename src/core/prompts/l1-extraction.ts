@@ -81,6 +81,7 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与�
       {
         "content": "完整、独立的记忆陈述（按对应类型的句式要求）",
         "type": "persona|episodic|instruction",
+        "scope": "global|project",
         "priority": 80,
         "source_message_ids": ["消息ID_1", "消息ID_2"],
         "metadata": {}
@@ -88,6 +89,11 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与�
     ]
   }
 ]
+
+scope 字段说明（与 type 正交，决定这条记忆在其他项目里是否可见）：
+- "global"：跨项目通用 —— 用户本人的特质/偏好/禁忌、对 AI 的长期行为规则、与具体代码库无关的知识。
+- "project"：只对当前项目有意义 —— 该仓库的架构/约定/踩坑、当前任务与其状态、文件路径、部署细节。
+- 拿不准时一律输出 "project"（错标 project 只是少召回一次，错标 global 会污染其他所有项目）。
 
 metadata 字段说明：
 - episodic 类型：如能确定活动时间，填入 {"activity_start_time": "ISO8601", "activity_end_time": "ISO8601"}

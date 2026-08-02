@@ -46,6 +46,8 @@ export async function performAutoCapture(params: {
   messages: unknown[];
   sessionKey: string;
   sessionId?: string;
+  /** Project this turn happened in; travels with L0 because L1 extraction is async. */
+  projectId?: string;
   cfg: MemoryTdaiConfig;
   pluginDataDir: string;
   logger?: Logger;
@@ -84,7 +86,7 @@ export async function performAutoCapture(params: {
   bgTaskRegistry?: Set<Promise<void>>;
 }): Promise<AutoCaptureResult> {
   const {
-    messages, sessionKey, sessionId, cfg, pluginDataDir, logger, scheduler,
+    messages, sessionKey, sessionId, projectId, cfg, pluginDataDir, logger, scheduler,
     originalUserText, originalUserMessageCount, pluginStartTimestamp,
     vectorStore, embeddingService, bgTaskRegistry,
   } = params;
@@ -119,6 +121,7 @@ export async function performAutoCapture(params: {
         filteredMessages = await recordConversation({
           sessionKey,
           sessionId,
+          projectId,
           rawMessages: messages,
           baseDir: pluginDataDir,
           logger,
@@ -185,6 +188,7 @@ export async function performAutoCapture(params: {
           messageText: msg.content,
           recordedAt: now,
           timestamp: msg.timestamp,
+          projectId: projectId || "",
         };
 
         let embedding: Float32Array | undefined;

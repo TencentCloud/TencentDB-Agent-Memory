@@ -26,6 +26,65 @@ export interface HealthResponse {
 }
 
 // ============================
+// /status
+// ============================
+
+/**
+ * Diagnostic snapshot. Same auth posture as /health (unauth, loopback-only).
+ * Adds: traffic counters, totals, lastRecall (with truncated query +
+ * queryHash for safe monitoring), lastCapture, lastError (with category
+ * and ≤120-char message).
+ *
+ * `status` reflects vectorStore+embeddingService only; `totals.stale` is
+ * independent — a DB-read failure does NOT flip a healthy service to
+ * "degraded".
+ */
+export interface StatusResponse {
+  status: "ok" | "degraded";
+  version: string;
+  uptimeSec: number;
+  startedAt: string;
+  dataPath: string;
+  vectorStore: boolean;
+  embeddingService: boolean;
+  totals: {
+    l0Messages: number;
+    l1Records: number;
+    sceneBlocks: number;
+    stale: boolean;
+  };
+  counters: {
+    recalls: number;
+    captures: number;
+    sessionEnds: number;
+    searchMemories: number;
+    searchConversations: number;
+    seeds: number;
+    errors: number;
+  };
+  lastRecall: {
+    at: string;
+    query: string;
+    queryHash: string;
+    sessionKey: string;
+    latencyMs: number;
+    count: number;
+  } | null;
+  lastCapture: {
+    at: string;
+    sessionKey: string;
+    latencyMs: number;
+    status: "ok" | "failed";
+  } | null;
+  lastError: {
+    at: string;
+    source: string;
+    category: "validation" | "store" | "embedding" | "internal" | "other";
+    message: string;
+  } | null;
+}
+
+// ============================
 // /recall
 // ============================
 
@@ -33,6 +92,14 @@ export interface RecallRequest {
   query: string;
   session_key: string;
   user_id?: string;
+  /** Project this turn happened in (git-root of cwd). Optional: absent → no scope filtering. */
+  project_id?: string;
+  /**
+   * Inject the L3 persona in this response. Optional: absent → true (legacy behaviour).
+   * Clients that inject recall context every turn should send `false` on most turns —
+   * the persona is tens of KB and changes rarely.
+   */
+  include_persona?: boolean;
 }
 
 export interface RecallResponse {
@@ -52,6 +119,8 @@ export interface CaptureRequest {
   session_id?: string;
   user_id?: string;
   messages?: unknown[];
+  /** Project this turn happened in (git-root of cwd). Optional: absent → memory stays global. */
+  project_id?: string;
 }
 
 export interface CaptureResponse {

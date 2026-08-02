@@ -48,6 +48,10 @@ export interface L1SearchResult {
   session_key: string;
   session_id: string;
   metadata_json: string;
+  /** Project this memory came from (git-root of cwd); '' when unknown. */
+  project_id?: string;
+  /** 'global' | 'project' | undefined (legacy records and non-sqlite backends predate scoping). */
+  scope?: string;
 }
 
 /** Result from an L1 FTS keyword search. */
@@ -65,6 +69,10 @@ export interface L1FtsResult {
   session_key: string;
   session_id: string;
   metadata_json: string;
+  /** Project this memory came from (git-root of cwd); '' when unknown. */
+  project_id?: string;
+  /** 'global' | 'project' | undefined (legacy records and non-sqlite backends predate scoping). */
+  scope?: string;
 }
 
 /** Filter options for querying L1 records. */
@@ -90,6 +98,8 @@ export interface L1RecordRow {
   created_time: string;
   updated_time: string;
   metadata_json: string;
+  /** Project this memory belongs to; '' on legacy rows and non-sqlite backends. */
+  project_id?: string;
 }
 
 // ============================
@@ -106,6 +116,8 @@ export interface L0Record {
   recordedAt: string;
   /** Original message timestamp (epoch ms). */
   timestamp: number;
+  /** Project this message came from; travels to L1 because extraction is async. */
+  projectId?: string;
 }
 
 /** Result from an L0 vector similarity search. */
@@ -148,6 +160,8 @@ export interface L0QueryRow {
 /** L0 messages grouped by session ID (for L1 runner). */
 export interface L0SessionGroup {
   sessionId: string;
+  /** Project this session belongs to; '' when unknown or on backends that don't track it. */
+  projectId?: string;
   messages: Array<{
     id: string;
     role: string;
@@ -266,8 +280,8 @@ export interface IMemoryStore {
 
   // ── L1 Search ────────────────────────────────────────────
 
-  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number): MaybePromise<L1FtsResult[]>;
+  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, projectId?: string): MaybePromise<L1SearchResult[]>;
+  searchL1Fts(ftsQuery: string, limit?: number, projectId?: string): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;

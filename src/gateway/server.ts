@@ -24,6 +24,7 @@ import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import type {
   HealthResponse,
+  StatusResponse,
   RecallRequest,
   RecallResponse,
   CaptureRequest,
@@ -103,6 +104,22 @@ export class TdaiGateway {
   private nightRun: NightRunTimer;
   /** Workspace cleanup timer (P11a): age-based removal of run artifacts. */
   private cleanupTimer: CleanupTimer;
+
+  // ============================
+  // Diagnostic counters and last-event snapshots for /status
+  // (added 2026-07-24; see plan ~/.pi/agent/tasks/--home-penis--/2026-07-24/033000-tdai-memory-health.plan.md)
+  // ============================
+  private counterRecalls = 0;
+  private counterCaptures = 0;
+  private counterSessionEnds = 0;
+  private counterSearchMemories = 0;
+  private counterSearchConversations = 0;
+  private counterSeeds = 0;
+  private counterErrors = 0;
+  private lastRecall: StatusResponse["lastRecall"] = null;
+  private lastCapture: StatusResponse["lastCapture"] = null;
+  private lastError: StatusResponse["lastError"] = null;
+  private totalsStale = true;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -310,6 +327,12 @@ export class TdaiGateway {
         return this.serveStatus(res);
       }
 
+      // GET /status is also auth-free (diagnostic; same posture as /health).
+      // Returns REDACTED lastError (≤ 120 chars) and category enum.
+      if (method === "GET" && pathname === "/status") {
+        return this.handleStatus(res);
+      }
+
       // GET /memory/* — memory read routes + discovery, auth-free on loopback
       // (same posture as /status). Read-only; never exposes secrets.
       if (method === "GET" && pathname.startsWith("/memory/")) {
@@ -366,6 +389,7 @@ export class TdaiGateway {
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
     } catch (err) {
+      this.recordError(`${method} ${pathname}`, err);
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
       sendError(res, 500, msg);
@@ -611,6 +635,96 @@ export class TdaiGateway {
     sendJson(res, 200, response);
   }
 
+  /**
+   * Collect DB-level totals (l0 messages, l1 records, scene blocks).
+   * Uses bun:sqlite (gateway runs under bun per systemd unit).
+   * On any failure, sets totals.stale=true and returns last-known zeros;
+   * a DB-read failure does NOT flip overall service status — that is
+   * derived from vectorStore+embeddingService only.
+   */
+  private collectTotals(): StatusResponse["totals"] {
+    const sceneDir = nodePath.join(this.config.data.baseDir, "scene_blocks");
+    // Blocks are nested one level down per project (scene_blocks/<slug>/*.md).
+    const dbPath = nodePath.join(this.config.data.baseDir, "vectors.db");
+    let l0 = 0;
+    let l1 = 0;
+    let scene = 0;
+    let ok = true;
+    try {
+      const db = openReadonlySqlite(dbPath);
+      try {
+        const r0 = db.prepare("SELECT count(*) AS c FROM l0_conversations").get() as { c: number } | null;
+        const r1 = db.prepare("SELECT count(*) AS c FROM l1_records").get() as { c: number } | null;
+        l0 = r0?.c ?? 0;
+        l1 = r1?.c ?? 0;
+      } finally {
+        db.close();
+      }
+    } catch {
+      ok = false;
+    }
+    try {
+      scene = nodeFs.readdirSync(sceneDir, { recursive: true })
+        .filter((f) => String(f).endsWith(".md")).length;
+    } catch {
+      ok = false;
+    }
+    this.totalsStale = !ok;
+    return { l0Messages: l0, l1Records: l1, sceneBlocks: scene, stale: !ok };
+  }
+
+  /**
+   * Record a routing/handler error in /status.lastError with category
+   * classification and ≤120-char message redaction.
+   */
+  private recordError(source: string, err: unknown): void {
+    this.counterErrors++;
+    const raw = err instanceof Error ? err.message : String(err);
+    const message = raw.length > 120 ? raw.slice(0, 117) + "..." : raw;
+    const category =
+      /SeedValidation|invalid/i.test(raw)   ? "validation" :
+      /vec|store|sqlite|database/i.test(raw) ? "store" :
+      /embed|llm|api/i.test(raw)             ? "embedding" :
+                                              "internal";
+    this.lastError = { at: new Date().toISOString(), source, category, message };
+  }
+
+  /**
+   * /status — diagnostic extension of /health with traffic counters and
+   * last-event snapshots. Lives on the same auth-free /status path;
+   * returns REDACTED lastError (≤ 120 chars) and category enum.
+   */
+  private handleStatus(res: http.ServerResponse): void {
+    // Collect totals FIRST; status is derived from vectorStore+embeddingService
+    // ONLY — totals.stale is an independent flag.
+    const totals = this.collectTotals();
+    const vectorOk = !!this.core.getVectorStore();
+    const embeddingOk = !!this.core.getEmbeddingService();
+    const response: StatusResponse = {
+      status: vectorOk && embeddingOk ? "ok" : "degraded",
+      version: VERSION,
+      uptimeSec: Math.floor((Date.now() - this.startTime) / 1000),
+      startedAt: new Date(this.startTime).toISOString(),
+      dataPath: this.config.data.baseDir,
+      vectorStore: vectorOk,
+      embeddingService: embeddingOk,
+      totals,
+      counters: {
+        recalls: this.counterRecalls,
+        captures: this.counterCaptures,
+        sessionEnds: this.counterSessionEnds,
+        searchMemories: this.counterSearchMemories,
+        searchConversations: this.counterSearchConversations,
+        seeds: this.counterSeeds,
+        errors: this.counterErrors,
+      },
+      lastRecall: this.lastRecall,
+      lastCapture: this.lastCapture,
+      lastError: this.lastError,
+    };
+    sendJson(res, 200, response);
+  }
+
   private async handleRecall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const body = await parseJsonBody<RecallRequest>(req);
 
@@ -628,13 +742,32 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const result = await this.core.handleBeforeRecall(
+      body.query,
+      body.session_key,
+      sanitizeProjectId(body.project_id),
+      body.include_persona !== false,
+    );
     const elapsed = Date.now() - startMs;
 
     this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
 
+    // /status snapshot — truncated query (≤256) + sha256[:16] hash for safe monitoring.
+    this.counterRecalls++;
+    const q = body.query;
+    const truncated = q.length > 256 ? q.slice(0, 253) + "..." : q;
+    const qhash = createHash("sha256").update(q).digest("hex").slice(0, 16);
+    this.lastRecall = {
+      at: new Date().toISOString(),
+      query: truncated,
+      queryHash: qhash,
+      sessionKey: body.session_key,
+      latencyMs: elapsed,
+      count: result.recalledL1Memories?.length ?? 0,
+    };
+
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context: [result.prependContext, result.appendSystemContext].filter(Boolean).join("\n\n"),
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
@@ -650,19 +783,43 @@ export class TdaiGateway {
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
-      userText: body.user_content,
-      assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
-      sessionKey: body.session_key,
-      sessionId: body.session_id,
-    });
+    let result;
+    try {
+      result = await this.core.handleTurnCommitted({
+        userText: body.user_content,
+        assistantText: body.assistant_content,
+        messages: body.messages ?? [
+          { role: "user", content: body.user_content },
+          { role: "assistant", content: body.assistant_content },
+        ],
+        sessionKey: body.session_key,
+        sessionId: body.session_id,
+        projectId: sanitizeProjectId(body.project_id),
+      });
+    } catch (err) {
+      this.recordError("POST /capture", err);
+      this.lastCapture = {
+        at: new Date().toISOString(),
+        sessionKey: body.session_key,
+        latencyMs: Date.now() - startMs,
+        status: "failed",
+      };
+      const msg = err instanceof Error ? err.message : String(err);
+      sendError(res, 500, msg);
+      return;
+    }
     const elapsed = Date.now() - startMs;
 
     this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+
+    // /status snapshot — success path.
+    this.counterCaptures++;
+    this.lastCapture = {
+      at: new Date().toISOString(),
+      sessionKey: body.session_key,
+      latencyMs: elapsed,
+      status: "ok",
+    };
 
     const response: CaptureResponse = {
       l0_recorded: result.l0RecordedCount,
@@ -685,6 +842,8 @@ export class TdaiGateway {
       sendJson(res, 200, { results: "", total: 0, strategy: "gated" } satisfies MemorySearchResponse);
       return;
     }
+
+    this.counterSearchMemories++;
 
     const result = await this.core.searchMemories({
       query: body.query,
@@ -716,6 +875,8 @@ export class TdaiGateway {
       return;
     }
 
+    this.counterSearchConversations++;
+
     const result = await this.core.searchConversations({
       query: body.query,
       limit: body.limit,
@@ -739,6 +900,8 @@ export class TdaiGateway {
 
     await this.core.handleSessionEnd(body.session_key);
 
+    this.counterSessionEnds++;
+
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
   }
@@ -761,6 +924,7 @@ export class TdaiGateway {
       });
     } catch (err) {
       if (err instanceof SeedValidationError) {
+        this.recordError("POST /seed", err);
         sendJson(res, 400, {
           error: err.message,
           validation_errors: err.errors,
@@ -829,6 +993,9 @@ export class TdaiGateway {
       `Seed complete: sessions=${summary.sessionsProcessed}, rounds=${summary.roundsProcessed}, ` +
       `l0=${summary.l0RecordedCount}, duration=${(summary.durationMs / 1000).toFixed(1)}s`,
     );
+
+    // /status snapshot — seed success.
+    this.counterSeeds++;
 
     const response: SeedResponse = {
       sessions_processed: summary.sessionsProcessed,
