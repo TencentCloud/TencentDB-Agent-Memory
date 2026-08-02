@@ -90,11 +90,11 @@ def main(argv=None) -> int:
     except ConnectionError as e:
         print(f"error: connection: {e}", file=sys.stderr)
         return 1
-    except ValueError as e:
-        print(f"error: bad url: {e}", file=sys.stderr)
-        return 1
     except json.JSONDecodeError as e:
         print(f"error: non-json response: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"error: bad url: {e}", file=sys.stderr)
         return 1
 
     # Envelope version-guard: fail fast (not silently) when the API shape changes.

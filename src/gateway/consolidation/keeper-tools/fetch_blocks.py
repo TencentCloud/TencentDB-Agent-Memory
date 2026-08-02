@@ -93,11 +93,11 @@ def main(argv=None) -> int:
     except ConnectionError as e:
         print(f"error: connection: {e}", file=sys.stderr)
         return 1
-    except ValueError as e:
-        print(f"error: bad url: {e}", file=sys.stderr)
-        return 1
     except json.JSONDecodeError as e:
         print(f"error: non-json response: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"error: bad url: {e}", file=sys.stderr)
         return 1
 
     if not isinstance(listing, dict) or "blocks" not in listing:
@@ -130,7 +130,7 @@ def main(argv=None) -> int:
                 continue
             print(f"error: block {rel}: http {e.code}: {e.reason}", file=sys.stderr)
             return 1
-        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        except (http.client.HTTPException, urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as e:
             print(f"error: block {rel}: {e}", file=sys.stderr)
             return 1
         if not isinstance(entry, dict) or "content" not in entry:
