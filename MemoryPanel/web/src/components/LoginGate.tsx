@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Select, Input, Button, Alert } from 'tea-component';
 import { authVerifyApi, metaInstancesApi, type MetadataInstance, type PublicUser } from '@/lib/teamApi';
 import { getPanelSession, setPanelSession, clearPanelSession } from '@/lib/panelSession';
@@ -195,19 +196,14 @@ function HeroIllustration() {
   );
 }
 
-export default function LoginGate({
-  onLoggedIn,
-}: {
-  onLoggedIn: (auth: AuthState) => void;
-}) {
+export function LoginGate({ onLoggedIn }: { onLoggedIn: (auth: AuthState) => void }) {
+  const { t } = useTranslation();
   const [instances, setInstances] = useState<MetadataInstance[]>([]);
-  const [instanceId, setInstanceId] = useState('');
-  const [userKey, setUserKey] = useState('');
+  const [instancesError, setInstancesError] = useState<string | null>(null);
+  const [instanceId, setInstanceId] = useState<string>('');
+  const [userKey, setUserKey] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 实例列表是否加载失败 —— 用于把下拉 placeholder 从"加载中"切成"加载失败"，
-  // 避免加载失败时 placeholder 一直停留在"加载记忆实例中…"让用户误以为还在转圈。
-  const [instancesError, setInstancesError] = useState(false);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -217,23 +213,20 @@ export default function LoginGate({
     };
   }, []);
 
-  // 拉登录页要展示的真实实例列表（公开接口，无需鉴权）。
   useEffect(() => {
     let cancelled = false;
     metaInstancesApi
       .list()
       .then((list) => {
         if (cancelled) return;
-        setInstancesError(false);
         setInstances(list);
-        if (list.length > 0) setInstanceId(list[0].instance_id);
+        if (list.length > 0) {
+          setInstanceId((prev) => prev || list[0].instance_id);
+        }
       })
       .catch((err) => {
-        // 拉不到实例列表不阻塞页面，但要给出明确反馈：置错误态 + 顶部 Alert，
-        // 并把下拉 placeholder 切成"加载失败"，用户可刷新重试。
         if (cancelled) return;
-        setInstancesError(true);
-        setError(`加载记忆实例列表失败，请刷新页面重试${err instanceof Error ? `（${err.message}）` : ''}`);
+        setInstancesError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -243,12 +236,12 @@ export default function LoginGate({
   async function submit(e?: React.FormEvent) {
     e?.preventDefault();
     if (!instanceId) {
-      setError('请选择记忆实例。');
+      setError(t('login.selectInstance', { defaultValue: '请选择记忆实例。' }));
       return;
     }
     const key = userKey.trim();
     if (!key) {
-      setError('请输入你的 user_key（sk-mem-…）。');
+      setError(t('login.keyRequired', { defaultValue: '请输入你的 user_key（sk-mem-…）。' }));
       return;
     }
     setSubmitting(true);
@@ -256,12 +249,12 @@ export default function LoginGate({
     try {
       const { valid, user } = await authVerifyApi.verify(instanceId, key);
       if (!valid) {
-        setError('user_key 无效或已吊销，请确认后重新输入。');
+        setError(t('login.invalidKey', { defaultValue: 'user_key 无效或已吊销，请确认后重新输入。' }));
         setSubmitting(false);
         return;
       }
       if (!user) {
-        setError('登录响应缺少用户信息（data.user 为空），请联系后端确认 auth/verify 契约。');
+        setError(t('login.missingUser', { defaultValue: '登录响应缺少用户信息，请联系后端确认 auth/verify 契约。' }));
         setSubmitting(false);
         return;
       }
@@ -295,7 +288,7 @@ export default function LoginGate({
             TencentDB Memory Hub
           </h2>
           <p className="mt-2 text-sm text-slate-400 text-center max-w-xs">
-            集中管理 Agent 的记忆、技能与知识资产
+            {t('login.heroDesc', { defaultValue: '集中管理 Agent 的记忆、技能与知识资产' })}
           </p>
         </div>
 
@@ -326,9 +319,9 @@ export default function LoginGate({
         </div>
 
         <div className="flex-1 flex flex-col justify-center px-8 sm:px-12 lg:px-14 py-10">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white/95">欢迎回来</h1>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white/95">{t('login.title', { defaultValue: '欢迎使用 Memory Hub' })}</h1>
           <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
-            请选择记忆实例并输入你的 user_key 登录。
+            {t('login.subtitle', { defaultValue: '请选择记忆实例并输入你的 User Key 登录。' })}
           </p>
 
           <form onSubmit={submit} className="mt-8 _tdai-login-form">
@@ -342,7 +335,7 @@ export default function LoginGate({
                 setError(null);
               }}
               disabled={submitting || instances.length === 0}
-              placeholder={instancesError ? '加载失败，请刷新重试' : '加载记忆实例中…'}
+              placeholder={instancesError ? t('common.loadFailed', { defaultValue: '加载失败，请刷新重试' }) : t('common.loadingInstance', { defaultValue: '加载记忆实例中…' })}
               options={instances.map((inst) => ({ value: inst.instance_id, text: inst.name }))}
             />
 
@@ -357,13 +350,13 @@ export default function LoginGate({
                   setError(null);
                 }}
                 onKeyDown={onKeyDown}
-                placeholder="user_key，如 sk-mem-xxxxxxxxxxxxxxxx"
+                placeholder={t('login.userKeyPlaceholder', { defaultValue: 'user_key，如 sk-mem-xxxxxxxxxxxxxxxx' })}
                 autoComplete="current-password"
                 disabled={submitting}
                 rules={false}
               />
               <div className="_tdai-login-hint">
-                请使用管理员为你分配的 user_key；若还没有，请联系团队管理员开号。
+                {t('login.userKeyHint', { defaultValue: '请使用管理员为你分配的 user_key；若还没有，请联系团队管理员开号。' })}
               </div>
             </div>
 
@@ -375,7 +368,7 @@ export default function LoginGate({
               loading={submitting}
               disabled={submitting || !userKey.trim() || !instanceId}
             >
-              {submitting ? '登录中…' : '登录'}
+              <span>{submitting ? t('common.loggingIn', { defaultValue: '登录中…' }) : t('login.loginBtn', { defaultValue: '登录' })}</span>
             </Button>
           </form>
         </div>
@@ -383,3 +376,5 @@ export default function LoginGate({
     </div>
   );
 }
+
+export default LoginGate;

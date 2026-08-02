@@ -10,6 +10,7 @@
  */
 
 import { useState, useMemo, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Input, Modal } from 'tea-component';
 import { ToolsIcon, CodeIcon, BooksIcon, ChatIcon } from 'tea-icons-react';
 import { type Agent as StoreAgent, invalidateBackendCache, writeAgentUiMeta } from '@/services';
@@ -26,6 +27,7 @@ export default function AgentEditDialog({
   agent: StoreAgent;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const selfChatMemoryId = `chat_memory-${agent.team_id}-${agent.agent_id}`;
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description);
@@ -207,15 +209,15 @@ export default function AgentEditDialog({
   }, [agent, assets.loading, realBindingsLoaded, selfChatMemoryId]);
 
   return (
-    <Modal visible caption="Agent 详情" size="l" onClose={onClose}>
+    <Modal visible caption={t('team.agents.editAgent', { defaultValue: 'Agent 详情' })} size="l" onClose={onClose}>
       <Modal.Body>
         <div className="_memory-form-stack">
           <div className="_memory-modal-description">{agent.agent_id}</div>
-        <LightField label="名称">
+        <LightField label={t('common.name', { defaultValue: '名称' })}>
           <Input size="full" value={name} onChange={setName} disabled={savingPrompt} />
         </LightField>
 
-        <LightField label="一句话描述">
+        <LightField label={t('common.description', { defaultValue: '一句话描述' })}>
           <Input.TextArea size="full" value={description} onChange={setDescription} rows={2} disabled={savingPrompt} />
         </LightField>
 

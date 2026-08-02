@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Tag, Card, List, Text, Input } from 'tea-component';
 import { AddIcon, DeleteIcon, EditIcon, UserIcon, UsergroupIcon } from 'tea-icons-react';
 import {
@@ -275,12 +276,13 @@ export default function TaskWorkbench(props: {
 // ============= Sub views =============
 
 function EmptyTeam() {
+  const { t } = useTranslation();
   return (
     <Card>
       <Card.Body className="_memory-workbench-empty-card">
-        <Text theme="strong" className="_memory-workbench-empty-title">还没有可用的 Team</Text>
+        <Text theme="strong" className="_memory-workbench-empty-title">{t('workbench.noTeamTitle', { defaultValue: '还没有可用的 Team' })}</Text>
         <Text theme="weak" className="_memory-workbench-empty-desc">
-          请先在「团队管理」里创建一个 team，再回到工作台创建 task。
+          {t('workbench.noTeamDesc', { defaultValue: '请先在「团队管理」里创建一个 team，再回到工作台创建 task。' })}
         </Text>
       </Card.Body>
     </Card>
@@ -314,6 +316,7 @@ function BoardView({
   isAdmin?: boolean;
   participationByTask: Map<string, TaskParticipationView>;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="_memory-workbench-split">
       {/* Left: task list */}
@@ -321,43 +324,42 @@ function BoardView({
         <Card className="_memory-workbench-card">
           <Card.Body className="_memory-workbench-list-body">
             <div className="_memory-workbench-list-header">
-              <Text theme="strong">Task 列表</Text>
+              <Text theme="strong">{t('workbench.taskListTitle', { defaultValue: 'Task 列表' })}</Text>
               <Button type="primary" onClick={onCreate}>
                 <AddIcon size={14} />
-                新建 Task
+                {t('workbench.createTask', { defaultValue: '新建 Task' })}
               </Button>
             </div>
             {tasks.length === 0 ? (
               <div className="_memory-workbench-list-empty">
-                <Text theme="weak">暂无 task。点击右上角「新建 Task」创建第一个。</Text>
+                <Text theme="weak">{t('workbench.emptyState', { defaultValue: '暂无 task。点击右上角「新建 Task」创建第一个。' })}</Text>
               </div>
             ) : (
               <List split="divide" className="_memory-workbench-list-items">
-                {tasks.map((t) => {
-                  const active = selected?.task_id === t.task_id;
-                  const team = teams.find((x) => x.team_id === t.team_id) ?? null;
-                  const canDelete = canDeleteTask(t, team, currentUser) || isAdmin;
-                  // 参与者 / agent 数字统一来自 participation-log 观测——
-                  // 老的 t.participants (metadata.ui) 和 t.linked_agents (task-agent/link)
-                  // 不再展示。
-                  const view = participationOf(participationByTask, t.task_id);
+                {tasks.map((tItem) => {
+                  const active = selected?.task_id === tItem.task_id;
+                  const team = teams.find((x) => x.team_id === tItem.team_id) ?? null;
+                  const canDelete = canDeleteTask(tItem, team, currentUser) || isAdmin;
+                  const view = participationOf(participationByTask, tItem.task_id);
                   const imParticipant = view.users.includes(currentUser);
                   const agentNameById = new Map(agents.map((a) => [a.id, a.name]));
                   const agentLabels = view.agentIds.map((id) => agentNameById.get(id) ?? id);
+                  const statusText = tItem.status === 'running'
+                    ? t('workbench.statusFilter.running', { defaultValue: '进行中' })
+                    : t('workbench.statusFilter.completed', { defaultValue: '已完成' });
                   return (
                     <List.Item
-                      key={t.task_id}
+                      key={tItem.task_id}
                       selected={active}
-                      onClick={() => onSelect(t.task_id)}
+                      onClick={() => onSelect(tItem.task_id)}
                       className="_memory-workbench-item"
                     >
                       <div className="_memory-workbench-item-top">
-                        <Tag theme={STATUS_THEME[t.status]} variant="soft">
-                          {STATUS_LABEL[t.status]}
+                        <Tag theme={STATUS_THEME[tItem.status]} variant="soft">
+                          {statusText}
                         </Tag>
-                        {/* task_id 全局唯一，列表上也亮出来；rename / 同名 task 时唯一定位都靠它 */}
-                        <Text theme="weak" className="_memory-mono _memory-workbench-item-id" tooltip={t.task_id}>
-                          {t.task_id}
+                        <Text theme="weak" className="_memory-mono _memory-workbench-item-id" tooltip={tItem.task_id}>
+                          {tItem.task_id}
                         </Text>
                         {canDelete && (
                           <Button type="text"
@@ -365,18 +367,16 @@ function BoardView({
                             className="_memory-workbench-item-delete"
                             onClick={(e) => {
                               e?.stopPropagation();
-                              onDelete(t);
+                              onDelete(tItem);
                             }}
                           >
                             <DeleteIcon size={14} />
                           </Button>
                         )}
                       </div>
-                      <div className="_memory-workbench-item-title">{t.title}</div>
-                      <p className="_memory-workbench-item-desc">{t.description}</p>
+                      <div className="_memory-workbench-item-title">{tItem.title}</div>
+                      <p className="_memory-workbench-item-desc">{tItem.description}</p>
                       <div className="_memory-workbench-item-meta">
-                        {/* 参与者徽章：来源 participation-log 去重后的实际起过
-                            session 的 user 集合；hover 看完整 user_id 列表 */}
                         <span
                           className="_memory-workbench-badge"
                           title={view.users.length === 0 ? '暂无实际参与的 user' : `实际参与 User：\n${view.users.join('\n')}`}
@@ -385,13 +385,11 @@ function BoardView({
                           {view.users.length} 人
                           {imParticipant && <Tag theme="warning" variant="soft" size="sm">含你</Tag>}
                         </span>
-                        {/* agent 数字同源 —— 实际起过 session 的 agent 去重后个数；
-                            hover 看完整 agent name / agent_id 兜底 */}
                         <span title={agentLabels.length === 0 ? '暂无实际参与的 Agent' : `实际参与 Agent：\n${agentLabels.join('\n')}`}>
                           {agentLabels.length} 个 Agent
                         </span>
                         <span className="_memory-workbench-item-time">
-                          {new Date(t.updated_at_ms).toLocaleString()}
+                          {new Date(tItem.updated_at_ms).toLocaleString()}
                         </span>
                       </div>
                     </List.Item>

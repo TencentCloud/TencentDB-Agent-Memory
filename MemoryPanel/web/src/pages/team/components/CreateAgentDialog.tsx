@@ -4,6 +4,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Input, Modal, Tag } from 'tea-component';
 import {
   AddIcon,
@@ -32,14 +33,13 @@ export default function CreateAgentDialog({
   onCreated,
   busy,
 }: {
-  /** Agent 严格归属一个 team（PRD §15.4），这里不让用户在 dialog 里改归属或转交 owner
-   *  （owner 由后端在创建时固定为当前登录用户）。 */
   team: { team_id: string; name: string };
   currentUser: string;
   onClose: () => void;
   onCreated: (card: Omit<AgentCard, 'id' | 'icon' | 'accent'>) => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [rolePrompt, setRolePrompt] = useState('');
@@ -128,7 +128,7 @@ export default function CreateAgentDialog({
   }
 
   return (
-    <Modal visible caption="创建 Agent" size="l" onClose={onClose} disableEscape={busy}>
+    <Modal visible caption={t('team.agents.createAgent', { defaultValue: '创建 Agent' })} size="l" onClose={onClose} disableEscape={busy}>
       <Modal.Body>
         <div className="_memory-form-stack">
           <div className="_memory-modal-description">只有名字必填 · 描述 / 规则 prompt / 原子能力都可留空，创建后再补</div>

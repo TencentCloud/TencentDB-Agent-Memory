@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Moment } from 'moment';
 import moment from 'moment';
 import {
@@ -44,11 +45,11 @@ import './api-key-panel.css';
 const { autotip } = Table.addons;
 
 export default function ApiKeyPanel() {
+  const { t } = useTranslation();
   const role = useCurrentRole();
   const { auth } = useAuthStore();
   const [keys, setKeys] = useState<UserKey[]>([]);
   const [loading, setLoading] = useState(true);
-  // 客户端接入 gateway 根地址（来自当前登录的 instance 元数据；每个实例不同）
   const [gatewayEndpoint, setGatewayEndpoint] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,9 +69,7 @@ export default function ApiKeyPanel() {
     setLoading(true);
     try {
       const list = await userKeysApi.list();
-      // 按创建时间倒序（内核未必保证顺序）
       list.sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
-      // 已吊销的 key 不再展示
       setKeys(list.filter((k) => !k.revoked_at));
     } catch (e) {
       tea.notify.error(e);
@@ -84,12 +83,9 @@ export default function ApiKeyPanel() {
     void refresh();
   }, [refresh]);
 
-  // ---- 新建弹窗 ----
-  // 不再收集「名称」——列表本身也不展示名称列，创建时无需再让用户填写。
   const [showCreate, setShowCreate] = useState(false);
   const [newExpiresAt, setNewExpiresAt] = useState<Moment | null>(null);
   const [creating, setCreating] = useState(false);
-  // 刚创建出来的 key（含完整明文，仅展示一次）
   const [freshKey, setFreshKey] = useState<{ keyId: string; secret: string } | null>(null);
 
   async function handleCreate() {
@@ -113,9 +109,9 @@ export default function ApiKeyPanel() {
 
   async function handleDelete(key: UserKey) {
     const ok = await tea.confirm({
-      message: `确认吊销 Key「${key.key_prefix || key.key_id}」？`,
-      description: '吊销后对应客户端将立即失效，且不可恢复。',
-      okText: '吊销',
+      message: `${t('common.confirmRevokeTitle', { defaultValue: '确认吊销 Key' })}「${key.key_prefix || key.key_id}」？`,
+      description: t('common.confirmRevokeDesc', { defaultValue: '吊销后对应客户端将立即失效，且不可恢复。' }),
+      okText: t('common.revoke', { defaultValue: '吊销' }),
     });
     if (!ok) return;
     try {
@@ -135,20 +131,17 @@ export default function ApiKeyPanel() {
 
   return (
     <div className="_memory-apikey-body">
-      {/* ===== 刚创建的 Key 提示（仅展示一次） ===== */}
       {freshKey && (
         <Alert type="success" onClose={() => setFreshKey(null)}>
           <div className="_memory-apikey-fresh">
             <p className="_memory-apikey-fresh-desc">
-              以下是 <strong>{freshKey.keyId}</strong> 的完整 Key（<strong>仅展示这一次</strong>
-              ，请立即复制并安全保存；关闭后将无法再次查看明文）：
+              {t('common.freshKeyNoticeTitle', { defaultValue: '请保存你的完整 Key（仅展示一次）：' })} <strong>{freshKey.keyId}</strong>
             </p>
             <div className="_memory-apikey-fresh-code-row">
               <code className="_memory-apikey-fresh-code">{freshKey.secret}</code>
               <Copy
                 text={freshKey.secret}
                 onCopy={() => {
-                  // 复制成功后自动关闭完整 Key 显示，避免明文长时间停留在屏幕上
                   setFreshKey(null);
                 }}
               />
@@ -157,13 +150,12 @@ export default function ApiKeyPanel() {
         </Alert>
       )}
 
-      {/* ===== 页面头部（Justify 左右布局） ===== */}
       <Justify
         left={
           <div>
-            <H3>User_Key 管理</H3>
+            <H3>{t('common.titleKeyManagement', { defaultValue: 'User_Key 管理' })}</H3>
             <Text theme="text" parent="div" style={{ marginTop: 4 }}>
-              管理你的 User Key，用于外部客户端接入（如 CodeBuddy / ClaudeCode CLI）。
+              {t('common.descKeyManagement', { defaultValue: '管理你的 User Key，用于外部客户端接入（如 CodeBuddy / ClaudeCode CLI）。' })}
             </Text>
           </div>
         }
@@ -176,13 +168,12 @@ export default function ApiKeyPanel() {
               }}
             >
               <AddIcon size={14} />
-              新建 Key
+              {t('common.newKey', { defaultValue: '新建 Key' })}
             </Button>
           ) : null
         }
       />
 
-      {/* ===== Key 列表：key_id / key_prefix / 创建时间 + 操作 ===== */}
       <Card>
         <Table
           verticalTop
@@ -191,7 +182,7 @@ export default function ApiKeyPanel() {
           columns={[
             {
               key: 'key_id',
-              header: 'Key ID',
+              header: t('common.keyId', { defaultValue: 'Key ID' }),
               render: (key) => (
                 <Text parent="code" copyable style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 2, whiteSpace: 'nowrap' }}>
                   {key.key_id}
@@ -200,7 +191,7 @@ export default function ApiKeyPanel() {
             },
             {
               key: 'key_prefix',
-              header: 'Key Prefix',
+              header: t('common.keyPrefix', { defaultValue: 'Key Prefix' }),
               render: (key) => (
                 <Text parent="code" style={{ fontSize: 12 }}>
                   {key.key_prefix || '—'}
@@ -209,26 +200,26 @@ export default function ApiKeyPanel() {
             },
             {
               key: 'created_at',
-              header: '创建时间',
+              header: t('common.createdAt', { defaultValue: '创建时间' }),
               width: 180,
               render: (key) => <Text theme="text">{formatTime(key.created_at)}</Text>,
             },
             {
               key: 'expires_at',
-              header: '失效时间',
+              header: t('common.expiresAt', { defaultValue: '失效时间' }),
               width: 180,
               render: (key) => {
-                if (key.revoked_at) return <Text theme="weak">已吊销</Text>;
+                if (key.revoked_at) return <Text theme="weak">{t('common.revoked', { defaultValue: '已吊销' })}</Text>;
                 return key.expires_at ? (
                   <Text theme="text">{formatTime(key.expires_at)}</Text>
                 ) : (
-                  <Text theme="weak">永不过期</Text>
+                  <Text theme="weak">{t('common.neverExpires', { defaultValue: '永不过期' })}</Text>
                 );
               },
             },
             {
               key: 'actions',
-              header: '操作',
+              header: t('common.actions', { defaultValue: '操作' }),
               width: 100,
               align: 'right',
               render: (key) => (
@@ -236,7 +227,7 @@ export default function ApiKeyPanel() {
                   disabled={!!key.revoked_at}
                   onClick={() => void handleDelete(key)}
                 >
-                  吊销
+                  {t('common.revoke', { defaultValue: '吊销' })}
                 </Button>
               ),
             },
@@ -246,9 +237,9 @@ export default function ApiKeyPanel() {
               isLoading: loading,
               emptyText: (
                 <div className="_memory-apikey-empty">
-                  <div className="_memory-apikey-empty-title">你还没有任何 User Key</div>
+                  <div className="_memory-apikey-empty-title">{t('common.emptyKeysTitle', { defaultValue: '你还没有任何 User Key' })}</div>
                   <div className="_memory-apikey-empty-desc">
-                    点击右上角「新建 Key」创建你的第一把 Key
+                    {t('common.emptyKeysDesc', { defaultValue: '点击右上角「新建 Key」创建你的第一把 Key' })}
                   </div>
                 </div>
               ),
@@ -258,31 +249,23 @@ export default function ApiKeyPanel() {
         />
       </Card>
 
-      {/* ===== 接入指引 ===== */}
-      {/*
-        instance-id 从当前登录态注入（auth.instance_id）—— 用户不用再手工替换
-        [instance-id] 占位符，也不用去别处找自己现在连的是哪个实例。
-        未登录理论上不会走到这个页（LoginGate 挡在外面），仍保留占位 fallback 兜底。
-      */}
       <Card>
-        <Card.Body title="客户端接入地址">
+        <Card.Body title={t('common.clientEndpoints', { defaultValue: '客户端接入地址' })}>
           {auth?.instance_name && (
             <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-weak)' }}>
-              当前实例：<code>{auth.instance_name}</code>
+              {t('common.currentInstance', { defaultValue: '当前实例' })}：<code>{auth.instance_name}</code>
               <span style={{ opacity: 0.6, marginLeft: 6 }}>({auth.instance_id})</span>
             </div>
           )}
           <div className="_memory-apikey-endpoints">
             {(() => {
-              // gateway_endpoint 未拉到就显示加载中；防止用户误抄硬编码 URL
               if (!gatewayEndpoint) {
                 return (
                   <Text theme="weak" style={{ fontSize: 11 }}>
-                    正在加载接入地址…
+                    {t('common.loadingEndpoints', { defaultValue: '正在加载接入地址…' })}
                   </Text>
                 );
               }
-              // 去掉结尾斜杠，避免 base + /path 拼成双斜杠
               const base = gatewayEndpoint.replace(/\/+$/, '');
               const iid = auth?.instance_id ?? '[instance-id]';
               const endpoints: Array<{ label: string; url: string }> = [
@@ -308,7 +291,7 @@ export default function ApiKeyPanel() {
                       {ep.url}
                     </code>
                     <Copy text={ep.url}>
-                      <Button>复制</Button>
+                      <Button>{t('common.copy', { defaultValue: '复制' })}</Button>
                     </Copy>
                   </div>
                 </div>
@@ -317,24 +300,24 @@ export default function ApiKeyPanel() {
           </div>
         </Card.Body>
       </Card>
-      {/* ===== 新建弹窗：只需设置「过期时间」（可留空＝永不过期），不再需要名称 ===== */}
+
       {showCreate && (
-        <Modal visible caption="新建 User_Key" size="s" onClose={() => setShowCreate(false)} disableEscape={creating}>
+        <Modal visible caption={t('common.createKeyTitle', { defaultValue: '新建 User_Key' })} size="s" onClose={() => setShowCreate(false)} disableEscape={creating}>
           <Modal.Body>
             <Form>
-              <Form.Item label="过期时间" extra="留空表示永不过期">
+              <Form.Item label={t('common.expirationLabel', { defaultValue: '过期时间' })} extra={t('common.leaveBlankNeverExpire', { defaultValue: '留空表示永不过期' })}>
                 <DatePicker
                   value={newExpiresAt ?? undefined}
                   onChange={(v) => setNewExpiresAt(v)}
                   disabledDate={(d) => !d.isBefore(moment().startOf('day'))}
-                  placeholder="留空表示永不过期"
+                  placeholder={t('common.leaveBlankNeverExpire', { defaultValue: '留空表示永不过期' })}
                 />
               </Form.Item>
             </Form>
           </Modal.Body>
           <Modal.Footer>
-            <Button type="primary" onClick={() => void handleCreate()} disabled={creating} loading={creating}>创建</Button>
-            <Button onClick={() => setShowCreate(false)} disabled={creating}>取消</Button>
+            <Button type="primary" onClick={() => void handleCreate()} disabled={creating} loading={creating}>{t('common.create', { defaultValue: '创建' })}</Button>
+            <Button onClick={() => setShowCreate(false)} disabled={creating}>{t('common.cancel', { defaultValue: '取消' })}</Button>
           </Modal.Footer>
         </Modal>
       )}

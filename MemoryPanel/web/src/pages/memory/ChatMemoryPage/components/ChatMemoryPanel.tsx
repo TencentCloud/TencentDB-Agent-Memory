@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Segment, Select } from 'tea-component';
 import { AppIcon, UsergroupIcon } from 'tea-icons-react';
 import { useAgents, useTeams } from '@/services';
@@ -38,6 +39,7 @@ export default function ChatMemoryPanel(
     activeTeamId?: string | null;
   } = {},
 ) {
+  const { t } = useTranslation();
   const auth = readAuth();
   const { activeTeamId: storeActiveTeamId, activeTeam } = useTeams();
   const currentUserId = auth?.user_id ?? '';
@@ -507,7 +509,7 @@ export default function ChatMemoryPanel(
           <section className="_asset-memory-list-column">
             <div className="_asset-memory-list-panel">
               <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-semibold text-foreground/85">记忆块</div>
+                <div className="text-xs font-semibold text-foreground/85">{t('memory.title', { defaultValue: '记忆块' })}</div>
                 <div className="text-[11px] text-muted-foreground">
                   {filtered.length} / {blocks.length}
                 </div>

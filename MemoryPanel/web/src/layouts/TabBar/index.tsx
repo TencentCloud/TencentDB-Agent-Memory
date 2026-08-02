@@ -3,6 +3,7 @@
  *
  * 保留多标签页交互逻辑，使用 Tea Design Token 统一样式。
  */
+import { useTranslation } from 'react-i18next';
 import { ITEM_ICON, PAGE_META, type PageId } from '@/constants/menu';
 import './style.css';
 
@@ -17,6 +18,8 @@ export function TabBar({
   onNavigate: (id: PageId) => void;
   onClose: (id: PageId) => void;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="_memory-tabbar">
       {pages.map((id) => {
@@ -29,7 +32,7 @@ export function TabBar({
             className={`_memory-tabbar-item${isActive ? ' _memory-tabbar-item--active' : ''}`}
           >
             <span className="_memory-tabbar-icon" aria-hidden="true">{ITEM_ICON[id]}</span>
-            <span className="_memory-tabbar-label">{meta.label}</span>
+            <span className="_memory-tabbar-label">{t(`nav.items.${id}` as any, { defaultValue: meta.label })}</span>
             {!meta.affix && (
               <button
                 onClick={(e) => {

@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Justify, SearchBox, Segment, Select, Table, Tag } from 'tea-component';
 import {
   AddIcon,
@@ -40,12 +41,12 @@ export default function AgentGrid({
   mountedCounts: Record<string, AgentMountedCounts>;
   currentUser: string;
   isAdmin: boolean;
-  /** 是否有权限看到 team 内全部 agent（admin / team admin）。普通用户只能看到自己的，无需 Owner 筛选。 */
   canSeeAllAgents: boolean;
   onCreateAgent: () => void;
   onEditAgent: (agent: StoreAgent) => void;
   onDeleteAgent: (agent: StoreAgent) => void;
 }) {
+  const { t } = useTranslation();
   const [keyword, setKeyword] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -77,7 +78,6 @@ export default function AgentGrid({
   }, [agents, keyword, ownerFilter]);
 
   function canEdit(agent: StoreAgent): boolean {
-    // 全局 admin 当前是只读视图；其他用户沿用已有 owner / team admin 授权规则。
     return !isAdmin && canManageAsset(
       { owner_user_id: agent.owner_user_id, team_id: agent.team_id },
       activeTeam,
@@ -95,7 +95,7 @@ export default function AgentGrid({
         className={`_memory-agents-name-trigger${editable ? ' _memory-agents-name-trigger--editable' : ''}`}
         onClick={() => editable && onEditAgent(agent)}
         disabled={!editable}
-        title={editable ? '点击查看并编辑该 Agent' : `仅 owner（${agent.owner_user_id || '未设置'}）或 team 管理员可编辑`}
+        title={editable ? t('team.agents.editAgent', { defaultValue: '点击查看并编辑该 Agent' }) : `仅 owner（${agent.owner_user_id || '未设置'}）或 team 管理员可编辑`}
       >
         <span className={`_memory-agents-icon ${acc.bg}`}>{agent.icon}</span>
         <span className="_memory-agents-name" title={agent.name}>{agent.name}</span>
@@ -108,7 +108,7 @@ export default function AgentGrid({
     const ownerIsMe = agent.owner_user_id === currentUser;
     return (
       <Tag theme={ownerIsMe ? 'warning' : 'default'} size="sm">
-        {agent.owner_user_id || '未设置'}{ownerIsMe && '（你）'}
+        {agent.owner_user_id || t('common.none', { defaultValue: '未设置' })}{ownerIsMe && ` (${t('header.myProfile', { defaultValue: '你' })})`}
       </Tag>
     );
   }
@@ -131,9 +131,9 @@ export default function AgentGrid({
         <div>
           <h2 className="_memory-agents-section-title">Agents</h2>
           <div className="_memory-agents-section-subtitle">
-            当前 team「{activeTeam.name}」
+            {t('header.currentTeam', { defaultValue: '当前 team' })}「{activeTeam.name}」
             <span className="_memory-mono-inline">（{activeTeam.team_id}）</span>
-            中由你创建的 Agent · {agentsLoading ? '加载中…' : `共 ${agents.length} 个`}
+            · {agentsLoading ? t('common.loading', { defaultValue: '加载中…' }) : `${agents.length} Agents`}
           </div>
         </div>
       </div>
@@ -145,9 +145,8 @@ export default function AgentGrid({
               type="primary"
               onClick={onCreateAgent}
               style={{ visibility: isAdmin ? 'hidden' : 'visible' }}
-              title="在当前 team 下创建一个新 Agent"
             >
-              <AddIcon size={12} /> 新建 Agent
+              <AddIcon size={12} /> {t('team.agents.createAgent', { defaultValue: '新建 Agent' })}
             </Button>
           }
           right={
@@ -155,7 +154,7 @@ export default function AgentGrid({
               <SearchBox
                 value={keyword}
                 onChange={setKeyword}
-                placeholder="搜索 Agent 名称 / 描述 / ID"
+                placeholder={t('workbench.searchPlaceholder', { defaultValue: '搜索 Agent 名称 / 描述 / ID' })}
               />
               {canSeeAllAgents && (
                 <Select
@@ -163,7 +162,7 @@ export default function AgentGrid({
                   onChange={setOwnerFilter}
                   appearance="button"
                   options={[
-                    { value: '', text: '全部 Owner' },
+                    { value: '', text: t('common.all', { defaultValue: '全部 Owner' }) },
                     ...ownerOptions.map((ownerId) => ({ value: ownerId, text: ownerId })),
                   ]}
                   matchButtonWidth

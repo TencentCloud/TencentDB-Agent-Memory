@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -108,12 +109,16 @@ function statusLabel(s: string) {
 }
 
 export default function CodeSourcesPanel() {
+  const { t } = useTranslation();
   const [sources, setSources] = useState<CodeGraphDetail[]>([]);
   const [loading, setLoading] = useState(false);
   const [scopeTab, setScopeTab] = useState<ScopeTab>('team');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('codePanel.viewMode') : null;
+    return saved === 'list' ? 'list' : 'card';
+  });
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('card');
   const [inFlight, setInFlight] = useState<CodeGraphDetail[]>([]);
 
   // Detail view state
@@ -447,14 +452,14 @@ export default function CodeSourcesPanel() {
               <div className="_codedetail-header-left">
                 <CodeIcon size={18} />
                 <span className="_codedetail-title" title={selRepo}>{selRepo}</span>
-                <Text theme="label">分支 {selBranch}</Text>
+                <Text theme="label">{selBranch}</Text>
                 {selected?.commit_hash && <Text theme="label" className="_codedetail-mono">@ {selected.commit_hash}</Text>}
                 {selected && statusLabel(selected.status)}
                 {selected?.last_sync_at && <Text theme="label">{new Date(selected.last_sync_at).toLocaleString()}</Text>}
               </div>
               <div className="_codedetail-header-actions">
                 <Button type="primary" onClick={() => handleSync(selectedCgId)}>
-                  <span className="_codedetail-inline-icon"><RefreshIcon size={14} />同步</span>
+                  <span className="_codedetail-inline-icon"><RefreshIcon size={14} />{t('common.refresh', { defaultValue: '同步' })}</span>
                 </Button>
               </div>
             </div>
@@ -466,22 +471,22 @@ export default function CodeSourcesPanel() {
         {/* 统计 */}
         {selected?.stats && (
           <div className="_codedetail-stats">
-            <MetricsBoard title="文件" value={selected.stats.files?.toLocaleString() ?? '-'} />
-            <MetricsBoard title="图节点" value={selected.stats.nodes?.toLocaleString() ?? '-'} />
-            <MetricsBoard title="图边" value={selected.stats.edges?.toLocaleString() ?? '-'} />
+            <MetricsBoard title={t('common.type', { defaultValue: '文件' })} value={selected.stats.files?.toLocaleString() ?? '-'} />
+            <MetricsBoard title="Nodes" value={selected.stats.nodes?.toLocaleString() ?? '-'} />
+            <MetricsBoard title="Edges" value={selected.stats.edges?.toLocaleString() ?? '-'} />
           </div>
         )}
 
         {/* 仓库信息 */}
         {selected && (
           <Card>
-            <Card.Body title="仓库信息">
+            <Card.Body title={t('code.repos', { defaultValue: '仓库信息' })}>
               <div className="_codedetail-info-grid">
                 <Text theme="label">Code Graph ID</Text>
                 <Text className="_codedetail-mono">{selected.code_graph_id}</Text>
                 <Text theme="label">Git URL</Text>
                 <Text className="_codedetail-mono">{selected.repo_url || '—'}</Text>
-                <Text theme="label">最后同步</Text>
+                <Text theme="label">{t('common.updatedAt', { defaultValue: '最后同步' })}</Text>
                 <Text>{selected.last_sync_at ? new Date(selected.last_sync_at).toLocaleString() : '—'}</Text>
               </div>
             </Card.Body>
@@ -490,17 +495,14 @@ export default function CodeSourcesPanel() {
 
         {/* 代码搜索 */}
         <Card>
-          <Card.Body title="代码搜索">
-            <Text theme="label" parent="div" className="_codedetail-hint">
-              按符号名快速定位，只返回匹配的函数 / 类 / 变量所在的文件与行号，不含代码原文。适合"这个符号在哪里"。
-            </Text>
+          <Card.Body title={t('code.symbols', { defaultValue: '代码搜索' })}>
             <div className="_codedetail-search-row">
               <SearchBox
                 size="full"
                 value={searchQuery}
                 onChange={(v) => setSearchQuery(v)}
                 onSearch={() => void handleSearch()}
-                placeholder="输入符号名（函数 / 类 / 变量），返回其所在位置…"
+                placeholder={t('code.searchPlaceholder', { defaultValue: '搜索代码符号或文件...' })}
               />
             </div>
             {searching && <StatusTip status="loading" />}

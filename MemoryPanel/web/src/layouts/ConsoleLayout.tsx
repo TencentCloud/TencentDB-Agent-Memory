@@ -46,7 +46,10 @@ function legacyHashToPath(): string | null {
   return null;
 }
 
+import { useTranslation } from 'react-i18next';
+
 export function ConsoleLayout() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const { auth, logout } = useAuthStore();
@@ -85,11 +88,7 @@ export function ConsoleLayout() {
   const closePage = useCallback(
     (id: PageId) => {
       setOpenPages((prev) => {
-        // 关的是点了 × 的那个 tab（id），不是当前 active 的那个。
-        // 之前误写 `prev.filter((p) => p !== activePage)` —— 结果不管点哪个 tab
-        // 的 × 都是删当前 active tab，视觉上表现为「点第 N 个 × 却删了当前所在 tab」。
         const next = prev.filter((p) => p !== id);
-        // 只有关掉的正好是当前 active 那个 → 才需要切到剩下的最后一个
         if (id === activePage && next.length > 0) {
           navigateTo(next[next.length - 1]);
         }
@@ -99,16 +98,23 @@ export function ConsoleLayout() {
     [activePage, navigateTo]
   );
 
+  const groupKeyMap: Record<string, string> = {
+    '工作台': 'workbench',
+    '组织与权限': 'organization',
+    '资产管理': 'assets',
+  };
+
+  const getGroupTitle = (group: string) => {
+    const key = groupKeyMap[group];
+    return key ? t(`nav.groups.${key}` as any, { defaultValue: group }) : group;
+  };
+
   // ===== 基于 team role 的菜单过滤 =====
-  // 「资源管理」分组：admin 不可见
-  // 「成员管理」项：member / reviewer 不可见
   const menuGroups = useMemo(() => {
     const byGroup = new Map<string, PageMeta[]>();
 
     for (const meta of Object.values(PAGE_META)) {
-      // admin 角色 → 跳过所有「资源管理」分组下的项
-      if (userRole === 'admin' && meta.group === '资源管理') continue;
-      // reviewer → 跳过「成员管理」（member 可见，但新建/删除成员/Team 按钮在组件内按角色收敛）
+      if (userRole === 'admin' && meta.group === '资产管理') continue;
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
       const list = byGroup.get(meta.group) ?? [];
       list.push(meta);
@@ -118,21 +124,22 @@ export function ConsoleLayout() {
     return GROUP_ORDER
       .filter((g) => byGroup.has(g))
       .map((g) => ({
-        title: g,
+        rawTitle: g,
+        title: getGroupTitle(g),
         items: byGroup.get(g)!.sort((a, b) => a.order - b.order),
       }));
-  }, [userRole]);
+  }, [userRole, t]);
 
-  // 「工作台」分组只有任务看板一项，置顶展示为独立入口，不显示分组标题
-  const pinnedGroup = menuGroups.find((g) => g.title === '工作台');
-  const restGroups = menuGroups.filter((g) => g.title !== '工作台');
+  const pinnedGroup = menuGroups.find((g) => g.rawTitle === '工作台');
+  const restGroups = menuGroups.filter((g) => g.rawTitle !== '工作台');
 
   const renderMenuItem = (item: PageMeta) => {
     const isActive = activePage === item.id;
+    const label = t(`nav.items.${item.id}` as any, { defaultValue: item.label });
     return (
       <Menu.Item
         key={item.id}
-        title={item.label}
+        title={label}
         icon={ITEM_ICON[item.id]}
         selected={isActive}
         onClick={() => navigateTo(item.id)}

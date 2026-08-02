@@ -34,6 +34,7 @@
  */
 
 import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Tag } from 'tea-component';
 import { UsergroupIcon, AddIcon } from 'tea-icons-react';
 import {
@@ -63,8 +64,6 @@ function errMsg(e: unknown): string {
   return getErrorMessage(e);
 }
 
-// =================== Component ===================
-
 export default function TeamManagementPanel({
   currentUser,
   instanceId: _instanceId,
@@ -74,22 +73,13 @@ export default function TeamManagementPanel({
   currentUser: string;
   instanceId: string;
   isAdmin: boolean;
-  /**
-   * 控制本面板渲染哪一块内容（拆 tab 用，功能完全不变）：
-   *   - 'members'：仅成员管理
-   *   - 'agents' ：仅 Agent 管理
-   *   - 'all'    ：两者都渲染（向后兼容旧的单页用法）
-   */
   section?: 'members' | 'agents' | 'all';
 }) {
+  const { t } = useTranslation();
   const showMembers = section === 'members' || section === 'all';
   const showAgents = section === 'agents' || section === 'all';
   const { activeTeamId, activeTeam, loading: teamsLoading } = useTeams();
-  // 只取当前 team 的 agent — agent 严格归属 team，不会跨 team 显示
   const { agents: allAgents, loading: agentsLoading } = useAgents(activeTeamId);
-  // Agent 可见性（PRD §6.1/§10）：
-  //   - 全局 admin / 当前 team 的 admin(owner)：可见 team 内全部 agent
-  //   - 普通成员：只能看到自己 owner（创建）的 agent
   const canSeeAllAgents = !!activeTeam && (_isAdmin || isTeamAdmin(activeTeam, currentUser));
   const agents = useMemo(() => {
     if (!activeTeam || canSeeAllAgents) return allAgents;
@@ -137,11 +127,6 @@ export default function TeamManagementPanel({
       });
       await agentsApi.update(created.agent_id, { metadata_json: metadataJson });
 
-      // 资产绑定统一走真实挂载接口（不写 metadata_json.ui）。串行执行，任一失败即抛错，
-      // 由外层 catch 统一提示 —— 避免 allSettled 静默导致「显示绑了但实际没绑」。
-      //   - skill → forkToAgent（复制 owner=新 agent 的独立副本）
-      //   - code_graph / wiki → allocate（引用绑定）
-      //   - chat_memory → syncChatMemoryBindings
       await syncChatMemoryBindings(activeTeamId, created.agent_id, card.chatMemories);
       for (const skillId of card.skills) {
         await skillApi.forkToAgent(activeTeamId, skillId, created.agent_id);
@@ -179,17 +164,15 @@ export default function TeamManagementPanel({
       return;
     }
     const ok = await tea.confirm({
-      message: `确认删除 Agent「${agent.name}」？`,
-      description: `${agent.agent_id} 删除后不可恢复。`,
-      okText: '删除',
+      message: `${t('team.agents.confirmDelete', { defaultValue: '确认删除 Agent' })}「${agent.name}」？`,
+      description: `${agent.agent_id} ${t('workbench.confirmDeleteDesc', { defaultValue: '删除后不可恢复。' })}`,
+      okText: t('common.delete', { defaultValue: '删除' }),
     });
     if (!ok) return;
     try {
       await agentsApi.delete(agent.agent_id);
       invalidateBackendCache();
     } catch (err) {
-      // SKILL_DELETE_FAILED：控制台层已删了一部分 skill 但被中断，agent 未 archive
-      // —— 明确告诉用户去 skill 面板处理后重试，别只给一句技术错误码
       const raw = err instanceof Error ? err.message : String(err);
       if (raw.includes('SKILL_DELETE_FAILED')) {
         tea.notify.error(
@@ -217,13 +200,6 @@ export default function TeamManagementPanel({
 
   return (
     <div className="_memory-team-mgmt">
-      {/* === Header: 当前 team 概览 + ops ===
-        切 team 的入口只在左上角全局 TeamSwitcher（App.tsx），这里不再提供
-        平铺 chips 的切换入口，避免跟全局切换器形成两个语义重叠的控件。
-        本卡片只承担三件事：
-          1. 告诉用户「我现在操作的是哪个 team」（name + team_id + 成员数 + 描述）
-          2. 提供 team 级的操作（+ 新建 Team / + 新建 Agent）
-          3. 当尚未选 team 时，给出引导 */}
       <div className="_memory-panel-card">
         <div className="_memory-team-header-row">
           {teamsLoading ? (
@@ -237,7 +213,7 @@ export default function TeamManagementPanel({
                     className="_memory-team-header-name"
                     style={{ color: 'var(--muted-foreground)' }}
                   >
-                    加载中…
+                    {t('common.loading', { defaultValue: '加载中…' })}
                   </span>
                 </div>
               </div>
@@ -251,7 +227,7 @@ export default function TeamManagementPanel({
                 <div className="_memory-team-header-meta-row">
                   <span className="_memory-team-header-name">{activeTeam.name}</span>
                   <Tag size="sm">{activeTeam.team_id}</Tag>
-                  <span className="_memory-team-header-count">{activeTeam.members.length} 人</span>
+                  <span className="_memory-team-header-count">{t('team.membersCount', { count: activeTeam.members.length, defaultValue: `${activeTeam.members.length} 人` })}</span>
                 </div>
                 {activeTeam.description && (
                   <div className="_memory-team-header-desc">{activeTeam.description}</div>
@@ -260,24 +236,14 @@ export default function TeamManagementPanel({
             </div>
           ) : (
             <div className="_memory-team-header-empty-hint">
-              请在右上角选择一个 team，或新建一个 team 开始。
+              {t('team.noTeamsMember', { defaultValue: '你还没有被加入任何 team。请联系管理员将你加入团队。' })}
             </div>
           )}
 
           <div className="_memory-team-header-ops">
             {!teamsLoading && (isTeamAdmin(activeTeam, currentUser) || _isAdmin) && (
-              <Button onClick={() => setShowCreateTeam(true)} title="创建一个新 team">
-                <AddIcon size={14} /> 新建 Team
-              </Button>
-            )}
-            {activeTeam && (isTeamAdmin(activeTeam, currentUser) || _isAdmin) && (
-              <Button
-                onClick={() =>
-                  tea.notify.warning('团队删除功能尚未在后端稳定支持，请联系管理员处理。')
-                }
-                title="团队删除功能尚未在后端稳定支持"
-              >
-                删除当前 Team
+              <Button onClick={() => setShowCreateTeam(true)} title={t('header.createTeam', { defaultValue: '新建团队' })}>
+                <AddIcon size={14} /> {t('header.createTeam', { defaultValue: '新建团队' })}
               </Button>
             )}
           </div>
@@ -289,13 +255,12 @@ export default function TeamManagementPanel({
           className="_memory-panel-card"
           style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted-foreground)' }}
         >
-          加载中…
+          {t('common.loading', { defaultValue: '加载中…' })}
         </div>
       ) : !activeTeam ? (
         <EmptyTeamState onCreateTeam={() => setShowCreateTeam(true)} />
       ) : (
         <>
-          {/* === Members === */}
           {showMembers && (
             <MemberSection
               team={activeTeam}
@@ -305,7 +270,6 @@ export default function TeamManagementPanel({
             />
           )}
 
-          {/* === Agent grid === */}
           {showAgents && (
             <AgentGrid
               activeTeam={activeTeam}
@@ -323,7 +287,6 @@ export default function TeamManagementPanel({
         </>
       )}
 
-      {/* Modals */}
       {showCreateTeam && (
         <CreateTeamDialog
           onClose={() => setShowCreateTeam(false)}
@@ -372,16 +335,16 @@ export default function TeamManagementPanel({
  * 创建者自动成为 owner），因此这里不再区分 admin / 非 admin 展示不同文案。
  */
 function EmptyTeamState({ onCreateTeam }: { onCreateTeam: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="_memory-empty-team">
       <UsergroupIcon size={32} className="_memory-empty-team-icon" />
-      <div className="_memory-empty-team-title">还没有归属任何 Team</div>
+      <div className="_memory-empty-team-title">{t('header.noTeam', { defaultValue: '未加入任何团队' })}</div>
       <div className="_memory-empty-team-desc">
-        Team 是资产、agent 和 task 的主要边界。先创建一个 team 来开始，或联系已有 team
-        的管理员把你加入。
+        {t('team.noTeamsMember', { defaultValue: '你还没有被加入任何 team。请联系管理员将你加入团队。' })}
       </div>
       <Button type="primary" onClick={onCreateTeam} className="_memory-empty-team-cta">
-        <AddIcon size={14} /> 创建第一个 Team
+        <AddIcon size={14} /> {t('header.createTeam', { defaultValue: '创建第一个 Team' })}
       </Button>
     </div>
   );

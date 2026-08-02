@@ -4,6 +4,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Button, Copy, Form, Input, Modal, Segment, Select, Tag } from 'tea-component';
 import { AddIcon, CloseIcon } from 'tea-icons-react';
 import { isTeamAdmin, invalidateBackendCache, type Team } from '@/services';
@@ -24,15 +25,15 @@ export function MemberSection({
   onAdd: () => void;
   isAdmin: boolean;
 }) {
+  const { t } = useTranslation();
   const [removing, setRemoving] = useState<string | null>(null);
-  // 只有全局 admin 或 team admin/owner 才能添加成员；普通成员无此入口。
   const canAddMember = _globalAdmin || isTeamAdmin(team, currentUser);
 
   async function handleRemove(userId: string) {
     const ok = await tea.confirm({
-      message: `移除成员 ${userId}？`,
-      description: '此操作仅将该用户移出当前团队，不会删除用户账号。',
-      okText: '移除',
+      message: `${t('team.members.confirmRemoveTitle', { defaultValue: '移出成员' })} ${userId}？`,
+      description: t('team.members.confirmRemoveDesc', { defaultValue: '此操作仅将该用户移出当前团队，不会删除用户账号。' }),
+      okText: t('team.members.removeMember', { defaultValue: '移除' }),
     });
     if (!ok) return;
     setRemoving(userId);
@@ -51,17 +52,13 @@ export function MemberSection({
       <div className="_memory-section-header">
         <div className="_memory-section-header-info">
           <div className="_memory-section-header-title-row">
-            <div className="_memory-section-title">成员（{team.members.length}）</div>
+            <div className="_memory-section-title">{t('team.membersCount', { count: team.members.length, defaultValue: `成员（${team.members.length}）` })}</div>
             <Tag size="sm">{team.team_id}</Tag>
-          </div>
-          <div className="_memory-section-subtitle">
-            「{team.name}」的人类成员；admin 可管理 team 资产，member 可使用资产并创建 task ·
-            点击卡片查看详情
           </div>
         </div>
         {canAddMember && (
-          <Button onClick={onAdd} title="按 user_id 邀请成员加入">
-            <AddIcon size={14} /> 添加成员
+          <Button onClick={onAdd} title={t('team.members.addMember', { defaultValue: '添加成员' })}>
+            <AddIcon size={14} /> {t('team.members.addMember', { defaultValue: '添加成员' })}
           </Button>
         )}
       </div>
@@ -169,6 +166,7 @@ export function AddMemberDialog({
   currentUser: string;
   isAdmin: boolean;
 }) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<'existing' | 'new'>('existing');
   const [userId, setUserId] = useState('');
   const [role, setRole] = useState<'admin' | 'member'>('member');
@@ -188,11 +186,11 @@ export function AddMemberDialog({
   async function submitExisting() {
     const id = userId.trim();
     if (!id) {
-      setError('请输入对方的 user_id。');
+      setError(t('team.members.inviteModal.userIdLabel', { defaultValue: '请输入对方的 user_id。' }));
       return;
     }
     if (id === currentUser) {
-      setError('不能添加自己；如需调整角色，请由其他 team admin 操作。');
+      setError(t('team.members.confirmRemoveDesc', { defaultValue: '不能添加自己；如需调整角色，请由其他 team admin 操作。' }));
       return;
     }
     setSubmitting(true);
@@ -211,12 +209,12 @@ export function AddMemberDialog({
   async function submitNew() {
     const username = newUsername.trim();
     if (!username) {
-      setError('请输入用户名。');
+      setError(t('header.username', { defaultValue: '请输入用户名。' }));
       return;
     }
     // 用户名只允许英文字母、数字、下划线（与后端 user_id 段校验规则一致）
     if (!/^[A-Za-z0-9_]+$/.test(username)) {
-      setError('用户名仅支持英文字母、数字、下划线，不能包含其他符号或空格。');
+      setError(t('header.username', { defaultValue: '用户名仅支持英文字母、数字、下划线，不能包含其他符号或空格。' }));
       return;
     }
     setSubmitting(true);
@@ -260,15 +258,15 @@ export function AddMemberDialog({
   return (
     <Modal
       visible
-      caption={<>添加成员到「{team.name}」<Tag size="sm">{team.team_id}</Tag></>}
+      caption={<>{t('team.members.inviteModal.title', { defaultValue: '添加成员到' })} «{team.name}» <Tag size="sm">{team.team_id}</Tag></>}
       size="m"
       onClose={onClose}
       disableEscape={submitting}
     >
       <Modal.Body>
-        {!canGrantAdmin && <Alert type="info">仅 team admin 可授予 admin 角色</Alert>}
+        {!canGrantAdmin && <Alert type="info">{t('resource.adminLock', { defaultValue: '仅 team admin 可授予 admin 角色' })}</Alert>}
         <Form>
-      <Form.Item label="方式">
+      <Form.Item label={t('common.type', { defaultValue: '方式' })}>
         {canCreateUser ? (
           <Segment
             value={mode}
@@ -278,13 +276,13 @@ export function AddMemberDialog({
               if (v === 'new') setRole('member');
             }}
             options={[
-              { value: 'existing', text: '添加已有用户' },
-              { value: 'new', text: '新建用户并加入团队' },
+              { value: 'existing', text: t('team.members.addMember', { defaultValue: '添加已有用户' }) },
+              { value: 'new', text: t('team.members.inviteModal.title', { defaultValue: '新建用户并加入团队' }) },
             ]}
           />
         ) : (
           <div className="_memory-field-hint">
-            添加已有用户（按 user_id 邀请加入团队）。新建用户账号须全局 admin 权限。
+            {t('team.members.addMember', { defaultValue: '添加已有用户（按 user_id 邀请加入团队）。新建用户账号须全局 admin 权限。' })}
           </div>
         )}
       </Form.Item>
@@ -301,14 +299,14 @@ export function AddMemberDialog({
                 setError(null);
               }}
               onPressEnter={() => void handleSubmit()}
-              placeholder="例如 usr-xxxxxxxxxxxx"
+              placeholder="usr-xxxxxxxxxxxx"
             />
-            <div className="_memory-field-hint">可让对方在「我的资料」里复制发给你</div>
+            <div className="_memory-field-hint">{t('header.userIdHint', { defaultValue: '可让对方在「我的资料」里复制发给你' })}</div>
           </div>
         </Form.Item>
       ) : (
         <>
-          <Form.Item label="用户名" required>
+          <Form.Item label={t('header.username', { defaultValue: '用户名' })} required>
             <div>
               <Input
                 autoFocus
@@ -319,39 +317,39 @@ export function AddMemberDialog({
                   setError(null);
                 }}
                 onPressEnter={() => void handleSubmit()}
-                placeholder="例如 alice"
+                placeholder="alice"
               />
               {newUsername.trim() && !/^[A-Za-z0-9_]+$/.test(newUsername.trim()) ? (
                 <div className="_memory-field-hint" style={{ color: 'var(--tea-color-text-error-default)' }}>
-                  仅支持英文字母、数字、下划线，不能包含空格或其他符号
+                  {t('header.username', { defaultValue: '仅支持英文字母、数字、下划线，不能包含空格或其他符号' })}
                 </div>
               ) : (
-                <div className="_memory-field-hint">英文字母、数字、下划线，创建后不可修改</div>
+                <div className="_memory-field-hint">{t('header.username', { defaultValue: '英文字母、数字、下划线，创建后不可修改' })}</div>
               )}
             </div>
           </Form.Item>
         </>
       )}
 
-      <Form.Item label="角色">
+      <Form.Item label={t('team.members.role', { defaultValue: '角色' })}>
         <Select
           size="full"
           value="member"
           disabled
           options={[
-            { value: 'member', text: 'member（默认）' },
+            { value: 'member', text: `member (${t('common.none', { defaultValue: '默认' })})` },
           ]}
         />
-        <div className="_memory-field-hint">新成员默认角色为 member。</div>
+        <div className="_memory-field-hint">{t('team.members.roles.member', { defaultValue: '新成员默认角色为 member。' })}</div>
       </Form.Item>
           {error && <Form.Item><Alert type="error">{error}</Alert></Form.Item>}
         </Form>
       </Modal.Body>
       <Modal.Footer>
         <Button type="primary" onClick={() => void handleSubmit()} disabled={!canSubmit || submitting} loading={submitting}>
-          {mode === 'existing' ? '添加' : '新建并添加'}
+          {mode === 'existing' ? t('common.create', { defaultValue: '添加' }) : t('common.create', { defaultValue: '新建并添加' })}
         </Button>
-        <Button onClick={onClose} disabled={submitting}>取消</Button>
+        <Button onClick={onClose} disabled={submitting}>{t('common.cancel', { defaultValue: '取消' })}</Button>
       </Modal.Footer>
     </Modal>
   );

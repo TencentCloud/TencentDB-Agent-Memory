@@ -5,6 +5,7 @@
  *   右侧：同步状态指示 + 用户头像菜单
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Copy, Dropdown, List, Modal } from 'tea-component';
 import { SettingIcon } from 'tea-icons-react';
 import { SettingsDialog } from '@/components/SettingsDialog';
@@ -23,8 +24,16 @@ export function GlobalHeader({
   currentUserId?: string;
   onLogout: () => void;
 }) {
+  const { t, i18n } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
+  const currentLang = i18n.language.startsWith('zh') ? 'zh' : 'en';
+
+  const toggleLanguage = () => {
+    const nextLang = currentLang === 'zh' ? 'en' : 'zh';
+    i18n.changeLanguage(nextLang);
+  };
 
   return (
     <header className="_memory-global-header">
@@ -37,17 +46,27 @@ export function GlobalHeader({
         <TeamSwitcher userRole={userRole} />
       </div>
 
-      {/* 右侧：同步状态 + 用户菜单 */}
+      {/* 右侧：同步状态 + 语言切换 + 用户菜单 */}
       <div className="_memory-global-header-right">
-        <span className="_memory-global-header-sync" title="实时同步已连接">
+        <span className="_memory-global-header-sync" title={t('header.syncTooltip')}>
           <span className="_memory-global-header-sync-dot" />
-          实时同步
+          {t('header.syncConnected')}
         </span>
 
         <button
           type="button"
           className="_memory-global-header-icon-btn"
-          title="设置"
+          title={t('header.language')}
+          onClick={toggleLanguage}
+          style={{ fontSize: 12, fontWeight: 600, padding: '0 6px' }}
+        >
+          {currentLang === 'zh' ? 'EN' : '中文'}
+        </button>
+
+        <button
+          type="button"
+          className="_memory-global-header-icon-btn"
+          title={t('header.settings')}
           onClick={() => setSettingsOpen(true)}
         >
           <SettingIcon size={16} />
@@ -72,7 +91,7 @@ export function GlobalHeader({
                   setProfileOpen(true);
                 }}
               >
-                我的资料
+                {t('header.myProfile')}
               </List.Item>
               <List.Item
                 onClick={() => {
@@ -80,7 +99,7 @@ export function GlobalHeader({
                   onLogout();
                 }}
               >
-                退出登录
+                {t('header.logout')}
               </List.Item>
             </List>
           )}
@@ -88,18 +107,18 @@ export function GlobalHeader({
       </div>
 
       {profileOpen && currentUserId && (
-        <Modal visible caption="我的资料" size="s" onClose={() => setProfileOpen(false)}>
+        <Modal visible caption={t('header.myProfile')} size="s" onClose={() => setProfileOpen(false)}>
           <Modal.Body>
             <dl className="_memory-profile-details">
-              <div><dt>用户名</dt><dd>{currentUser}</dd></div>
+              <div><dt>{t('header.username')}</dt><dd>{currentUser}</dd></div>
               <div>
-                <dt>User ID</dt>
+                <dt>{t('header.userId')}</dt>
                 <dd><code>{currentUserId}</code> <Copy text={currentUserId} /></dd>
-                <small>发给团队管理员用于邀请你加入 Team</small>
+                <small>{t('header.userIdHint')}</small>
               </div>
             </dl>
           </Modal.Body>
-          <Modal.Footer><Button onClick={() => setProfileOpen(false)}>关闭</Button></Modal.Footer>
+          <Modal.Footer><Button onClick={() => setProfileOpen(false)}>{t('common.close')}</Button></Modal.Footer>
         </Modal>
       )}
 

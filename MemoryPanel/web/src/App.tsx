@@ -34,7 +34,7 @@ export default function App() {
   }
 
   if (auth === undefined) {
-    return <LoginGate onLoggedIn={(a) => setAuth(a)} />;
+    return <LoginGate onLoggedIn={(a: any) => setAuth(a)} />;
   }
 
   return <RouterProvider router={router} />;

@@ -13,50 +13,45 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Button, Form, Modal, Select, Tag } from 'tea-component';
 import { tea } from '@/lib/tea-bridge';
 import './allocate-dialog.css';
 
 export type AllocateAssetType = 'skill' | 'llm_wiki' | 'code_graph' | 'chat_memory';
 
-const TYPE_LABEL: Record<AllocateAssetType, string> = {
-  skill: 'Skill',
-  llm_wiki: 'Wiki',
-  code_graph: '代码图谱',
-  chat_memory: 'Memory'
-};
-
 export default function AllocateAssetDialog(props: {
-  /** 资产类型（决定标题措辞） */
   assetType: AllocateAssetType;
-  /** 资产展示名（如 wiki name / repo:branch / memory block 标题） */
   assetLabel: string;
-  /** Agent 列表 — 调用方已经按当前激活 team 过滤过 */
   agents: Array<{ id: string; name: string }>;
-  /** 当前操作所属的 team（来自右上角全局 TeamSwitcher）。
-   *  分配是 team 内行为：agent 严格归属一个 team（PRD §15.4），
-   *  这里展示出来让用户在生成时确认「我现在挂的是哪个 team 下的 agent」 */
   team?: { team_id: string; name: string } | null;
   onClose: () => void;
-  /** 用户点击「分配」时的回调，参数是选中的 agent id */
   onAllocate: (agentId: string) => Promise<void> | void;
 }) {
+  const { t } = useTranslation();
   const [agentId, setAgentId] = useState(props.agents[0]?.id ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const typeLabel = TYPE_LABEL[props.assetType];
+  const typeLabels: Record<AllocateAssetType, string> = {
+    skill: 'Skill',
+    llm_wiki: 'Wiki',
+    code_graph: t('nav.items.code', { defaultValue: 'Code Graph' }),
+    chat_memory: 'Memory'
+  };
+
+  const typeLabel = typeLabels[props.assetType];
 
   async function submit(): Promise<void> {
     if (!agentId) {
-      setError('请选择 agent。');
+      setError(t('team.agents.noAssets', { defaultValue: '请选择 agent。' }));
       return;
     }
     setError(null);
     setSubmitting(true);
     try {
       await props.onAllocate(agentId);
-      tea.notify.success(`已分配「${props.assetLabel}」→ ${agentId}`);
+      tea.notify.success(`${t('common.success', { defaultValue: '已分配' })} «${props.assetLabel}» → ${agentId}`);
       props.onClose();
     } catch (err) {
       tea.notify.error(err);
@@ -66,15 +61,15 @@ export default function AllocateAssetDialog(props: {
   }
 
   return (
-    <Modal visible caption={`分配 ${typeLabel} 到 Agent`} size="s" onClose={props.onClose} disableEscape={submitting}>
+    <Modal visible caption={`${t('resource.allocateToAgent', { defaultValue: '分配' })} ${typeLabel} → Agent`} size="s" onClose={props.onClose} disableEscape={submitting}>
       <Modal.Body>
         <Form>
           {props.team && (
-            <Form.Item label="所属 Team">
+            <Form.Item label={t('header.currentTeam', { defaultValue: '所属 Team' })}>
               <Form.Text>{props.team.name} <Tag size="sm">{props.team.team_id}</Tag></Form.Text>
             </Form.Item>
           )}
-          <Form.Item label="资产" extra="挂到所选 agent 的固定资产库（仅记录归属，不复制内容）">
+          <Form.Item label={t('common.type', { defaultValue: '资产' })}>
             <Form.Text>{props.assetLabel}</Form.Text>
           </Form.Item>
           <Form.Item label="Agent" required>
@@ -82,7 +77,7 @@ export default function AllocateAssetDialog(props: {
               size="full"
               value={agentId}
               onChange={setAgentId}
-              placeholder={props.agents.length === 0 ? '(暂无 agent)' : '请选择 agent'}
+              placeholder={props.agents.length === 0 ? `(${t('team.agents.noAssets', { defaultValue: '暂无 agent' })})` : t('workbench.createModal.agentLabel', { defaultValue: '请选择 agent' })}
               options={props.agents.map((a) => ({ value: a.id, text: `${a.id} · ${a.name}` }))}
               disabled={props.agents.length === 0}
             />
@@ -91,8 +86,8 @@ export default function AllocateAssetDialog(props: {
         </Form>
       </Modal.Body>
       <Modal.Footer>
-        <Button type="primary" onClick={() => void submit()} disabled={submitting || !agentId} loading={submitting}>分配</Button>
-        <Button onClick={props.onClose} disabled={submitting}>取消</Button>
+        <Button type="primary" onClick={() => void submit()} disabled={submitting || !agentId} loading={submitting}>{t('resource.allocateToAgent', { defaultValue: '分配' })}</Button>
+        <Button onClick={props.onClose} disabled={submitting}>{t('common.cancel', { defaultValue: '取消' })}</Button>
       </Modal.Footer>
     </Modal>
   );

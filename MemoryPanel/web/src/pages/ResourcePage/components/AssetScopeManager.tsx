@@ -19,6 +19,7 @@
  * asset_acl 接口即可，本组件不用改。
  */
 
+import { useTranslation } from 'react-i18next';
 import { Alert, Segment, Tag, Text } from 'tea-component';
 import { UsergroupIcon, LockOnIcon } from 'tea-icons-react';
 import {
@@ -41,11 +42,6 @@ export interface AssetScopeItem {
   meta?: string;
 }
 
-const SCOPE_OPTIONS: Array<{ value: AssetConfigScope; label: string }> = [
-  { value: 'team', label: '团队内可配置' },
-  { value: 'private', label: '仅自己私有' }
-];
-
 export default function AssetScopeManager({
   kind,
   label,
@@ -55,15 +51,19 @@ export default function AssetScopeManager({
   items
 }: {
   kind: AssetKind;
-  /** 资产类型中文名，用于标题 / 空态文案，如 "Skill" / "Agent" */
   label: string;
   currentUser: string;
   isAdmin: boolean;
   team: Team | null;
   items: AssetScopeItem[];
 }) {
-  // 订阅覆盖层变化：任意一条 scope 被改动后自动重渲染。
+  const { t } = useTranslation();
   useAssetConfigScopes();
+
+  const scopeOptions: Array<{ value: AssetConfigScope; label: string }> = [
+    { value: 'team', label: t('resource.team', { defaultValue: '团队 (Team)' }) },
+    { value: 'private', label: t('resource.private', { defaultValue: '私有 (Private)' }) }
+  ];
 
   return (
     <div className="_memory-asset-scope">
@@ -123,11 +123,11 @@ export default function AssetScopeManager({
                     onChange={(value) =>
                       setAssetConfigScope(kind, item.id, value as AssetConfigScope, currentUser, item.owner_user_id ?? '')
                     }
-                    options={SCOPE_OPTIONS}
+                    options={scopeOptions}
                   />
                 ) : (
                   <Tag theme={scope === 'private' ? 'default' : 'success'} size="sm">
-                    {scope === 'private' ? '仅自己私有' : '团队内可配置'}
+                    {scope === 'private' ? t('resource.private', { defaultValue: '私有 (Private)' }) : t('resource.team', { defaultValue: '团队 (Team)' })}
                   </Tag>
                 )}
               </li>
