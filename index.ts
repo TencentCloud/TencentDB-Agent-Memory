@@ -393,6 +393,8 @@ export default function register(api: OpenClawPluginApi) {
         );
 
         try {
+          await coreReady;
+          ensureEmbeddingWarmup();
           const result = await core.searchMemories({ query, limit, type: typeFilter, scene: sceneFilter });
 
           const elapsedMs = Date.now() - startMs;
@@ -477,6 +479,8 @@ export default function register(api: OpenClawPluginApi) {
         );
 
         try {
+          await coreReady;
+          ensureEmbeddingWarmup();
           const result = await core.searchConversations({ query, limit, sessionKey: sessionKeyFilter });
 
           const elapsedMs = Date.now() - startMs;
@@ -537,8 +541,6 @@ export default function register(api: OpenClawPluginApi) {
         return;
       }
 
-      ensureEmbeddingWarmup();
-
       // Cache original user prompt for agent_end
       const rawPrompt = event.prompt;
       const messages = Array.isArray(event.messages) ? event.messages : undefined;
@@ -563,6 +565,7 @@ export default function register(api: OpenClawPluginApi) {
 
       try {
         await coreReady;
+        ensureEmbeddingWarmup();
         const recallStartMs = Date.now();
         const result = await core.handleBeforeRecall(userText, resolvedSessionKey);
         const elapsedMs = Date.now() - startMs;
