@@ -863,6 +863,16 @@ describe("ConsolidationOrchestrator (P6)", () => {
   });
   describe("night multi-batch loop: advance anchor (plan §4)", () => {
     /** Seed a vectors.db with n L1 records + l0_conversations watermark. */
+    /** Grow the L0 watermark between chunks (discriminates anchored cursor
+     * from max-at-advance: anchored = chunk-1 slice-time T10, max = T11). */
+    function growL0(recordedAt: string): void {
+      const db = openSqlite(path.join(dataDir, "vectors.db"));
+      db.prepare(
+        "INSERT INTO l0_conversations (role, content, recorded_at) VALUES (?, ?, ?)",
+      ).run("user", "grow", recordedAt);
+      db.close();
+    }
+
     function seedStore(l0Max: string, n: number): void {
       const db = openSqlite(path.join(dataDir, "vectors.db"));
       db.exec(
@@ -952,8 +962,16 @@ describe("ConsolidationOrchestrator (P6)", () => {
       );
       seedStore("2026-08-02T10:00:00.000Z", 6);
       // Chunk 2 (second spawn) returns a target-missing merge skip.
+      let spawnCount = 0;
       const spawn = writingSpawn({});
       const spawnSpy = vi.fn(async (ctx: SpawnChildContext) => {
+        spawnCount += 1;
+        if (spawnCount === 1) {
+          // Between chunk 1 and chunk 2 the L0 watermark grows to T11 —
+          // the anchored cursor (chunk-1 slice-time T10) must NOT follow it;
+          // a naive max-at-advance implementation would advance to T11.
+          growL0("2026-08-02T11:00:00.000Z");
+        }
         await spawn(ctx);
         return {
           exitCode: 0,

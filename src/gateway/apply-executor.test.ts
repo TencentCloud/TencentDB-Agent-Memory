@@ -993,6 +993,34 @@ describe("ApplyExecutor", () => {
     expect(r.applied.rewrites).toEqual([]);
   });
 
+  it("rewriteRecord: heal-skip discriminates order — equal content + DRIFTED updatedAt still heals, not 409", async () => {
+    // The re-run case: content was already rewritten (== diff content) but
+    // updatedAt drifted since the diff was built. heal-skip (content equality)
+    // must win over the stale-abort — otherwise a partially applied rewrite
+    // re-run stale-aborts instead of healing. Regression lock for the
+    // content-eq-before-stale-abort order.
+    seedRecord("m_rw4b", "new content", "2026-08-02T00:00:00Z");
+    const r = await executor().apply(
+      body(
+        {
+          rewriteRecord: [
+            {
+              id: "m_rw4b",
+              updatedAt: "2026-08-01T00:00:00Z", // diff built yesterday
+              content: "new content", // already applied
+            },
+          ],
+        },
+        {},
+        ["m_rw4b"],
+      ),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.skipped.rewrites).toEqual(["m_rw4b"]);
+    expect(r.applied.rewrites).toEqual([]);
+    expect(store.countL1()).toBe(1); // record intact, no duplicate
+  });
+
   it("rewriteRecord: id overlap with merge in same diff → 400 (intersection ban)", async () => {
     seedRecord("m_rw5a", "a", "2026-08-01T00:00:00Z");
     seedRecord("m_rw5b", "b", "2026-08-01T00:00:00Z");
