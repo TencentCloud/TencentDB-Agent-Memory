@@ -3,7 +3,7 @@
  * scratch data dir with seeded memory files and exercises every GET route
  * plus the P2 write-gate contract on the reserved POST /memory/apply.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -306,5 +306,106 @@ describe("memory read routes (P3, integration)", () => {
     expect(body.consolidation.enabled).toBe(false);
     expect(String(body.consolidation.checkpoint)).toContain("consolidation_checkpoint.json");
     expect(body.consolidation.inFlight).toBe(false);
+  });
+});
+
+// ============================
+// P8 reindex-in-progress route gate (ТЗ §5.6): while a full reindex is
+// running, /recall + /search/memories + /search/conversations return EMPTY
+// 200 (fail-open), never an error. The flag lives on the vector store; the
+// store-level flag mechanics are covered in reindex-integration.test.ts —
+// here we exercise the HTTP routes against the flag being on.
+// ============================
+
+describe("reindex-in-progress route gate (P8)", () => {
+  let tmp: string;
+  let base: string;
+  let port: number;
+  let gateway: TdaiGateway;
+  let baseUrl: string;
+  // core is private on the gateway (compile-time only) — reach the store
+  // through the instance for the isReindexing spy.
+  let store: { isReindexing(): boolean };
+
+  beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-reindex-gate-"));
+    base = path.join(tmp, "tdai");
+    fs.mkdirSync(path.join(base, "scene_blocks", "_global"), { recursive: true });
+    fs.mkdirSync(path.join(base, "records"), { recursive: true });
+    port = 28_500 + Math.floor(Math.random() * 500);
+    gateway = new TdaiGateway({
+      data: { baseDir: base },
+      server: { port, host: "127.0.0.1", corsOrigins: [] },
+      memory: parseConfig({}),
+    });
+    await gateway.start();
+    const core = (gateway as unknown as {
+      core: { getVectorStore(): { isReindexing(): boolean } | undefined };
+    }).core;
+    store = core.getVectorStore()!;
+    baseUrl = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await gateway.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const post = (p: string, body: unknown) =>
+    fetch(`${baseUrl}${p}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  it("during a full reindex the read routes return EMPTY 200 (fail-open), never an error", async () => {
+    const flagSpy = vi.spyOn(store, "isReindexing").mockReturnValue(true);
+    const core = (gateway as unknown as {
+      core: {
+        handleBeforeRecall(...args: unknown[]): Promise<unknown>;
+        searchMemories(...args: unknown[]): Promise<unknown>;
+        searchConversations(...args: unknown[]): Promise<unknown>;
+      };
+    }).core;
+    const recallSpy = vi.spyOn(core, "handleBeforeRecall");
+    const memoriesSpy = vi.spyOn(core, "searchMemories");
+    const conversationsSpy = vi.spyOn(core, "searchConversations");
+    try {
+      const recall = await post("/recall", { query: "anything", session_key: "s-gate" });
+      expect(recall.status).toBe(200);
+      expect(await recall.json()).toEqual({ context: "", strategy: "gated", memory_count: 0 });
+
+      const memories = await post("/search/memories", { query: "anything" });
+      expect(memories.status).toBe(200);
+      expect(await memories.json()).toEqual({ results: "", total: 0, strategy: "gated" });
+
+      const conversations = await post("/search/conversations", { query: "anything" });
+      expect(conversations.status).toBe(200);
+      expect(await conversations.json()).toEqual({ results: "", total: 0 });
+
+      // The routes short-circuit at the gate — the core is never reached.
+      expect(recallSpy).not.toHaveBeenCalled();
+      expect(memoriesSpy).not.toHaveBeenCalled();
+      expect(conversationsSpy).not.toHaveBeenCalled();
+
+      // /status mirrors the flag.
+      const status = await (await fetch(`${baseUrl}/status`)).json();
+      expect(status.reindexInProgress).toBe(true);
+    } finally {
+      flagSpy.mockRestore();
+      recallSpy.mockRestore();
+      memoriesSpy.mockRestore();
+      conversationsSpy.mockRestore();
+    }
+  });
+
+  it("gate off (default): /status reports reindexInProgress=false and the routes reach the core", async () => {
+    expect(store.isReindexing()).toBe(false);
+    const status = await (await fetch(`${baseUrl}/status`)).json();
+    expect(status.reindexInProgress).toBe(false);
+    const memories = await post("/search/memories", { query: "anything" });
+    expect(memories.status).toBe(200);
+    const body = (await memories.json()) as { strategy?: string };
+    expect(body.strategy).not.toBe("gated"); // no gate marker — normal path ran
   });
 });

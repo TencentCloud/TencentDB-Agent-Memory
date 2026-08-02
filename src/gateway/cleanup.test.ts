@@ -193,6 +193,26 @@ describe("runCleanup", () => {
     expect(fs.existsSync(path.join(dataDir, "persona.md"))).toBe(true);
   });
 
+  it("rejects paths resolving to the dataDir root ('.', './') — no root sweep", () => {
+    // Age the memory data so a root sweep WOULD delete it (the P11a
+    // acceptance: records/vectors must never be touched).
+    const recordFile = path.join(dataDir, "records", "2026-08-01.jsonl");
+    const vecDb = path.join(dataDir, "vectors.db");
+    ageByDays(recordFile, 3);
+    ageByDays(vecDb, 3);
+
+    const stats = runCleanup(makeDeps({ paths: [".", "./"] }));
+
+    // Both variants rejected as non-dataDir-relative → error recorded, no sweep.
+    expect(stats.errors.some((e) => e.includes("rejected"))).toBe(true);
+    expect(stats.scanned.some((p) => path.resolve(p) === path.resolve(dataDir))).toBe(false);
+    expect(fs.existsSync(recordFile)).toBe(true);
+    expect(fs.existsSync(vecDb)).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "persona.md"))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md"))).toBe(true);
+    expect(fs.existsSync(dataDir)).toBe(true);
+  });
+
   it("disabled cleanup is a no-op", () => {
     const oldLog = path.join(dataDir, "logs", "old.json");
     fs.writeFileSync(oldLog, "{}");

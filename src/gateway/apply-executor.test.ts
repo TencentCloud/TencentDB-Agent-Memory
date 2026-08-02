@@ -18,7 +18,13 @@ import type { MemoryRecord } from "../core/record/l1-writer.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { Logger } from "../core/types.js";
-import { ApplyExecutor, handleMemoryApply, SCENE_LIMIT_CHARS, PERSONA_LIMIT_CHARS } from "./apply-executor.js";
+import {
+  ApplyExecutor,
+  handleMemoryApply,
+  SCENE_LIMIT_CHARS,
+  PERSONA_LIMIT_CHARS,
+  MAX_REINDEX_RETRIES,
+} from "./apply-executor.js";
 import type { GatewayConfig } from "./config.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -477,6 +483,67 @@ describe("ApplyExecutor", () => {
     expect(r.counts?.consistent).toBeNull();
     expect(r.reindexed).toBe(false);
     expect(r.needsReindex).toBe(false);
+  });
+
+  // ============================
+  // P8 livelock cap (ТЗ §5.6): persistent count-mismatch → 2 reindexAll
+  // retries, then per-row delta backfill (reindexL1Records) — never a 3rd
+  // full reindex.
+  // ============================
+
+  it("livelock cap: persistent mismatch survives 2 reindexAll retries, per-row backfill resolves", async () => {
+    const reindexAllCalls: number[] = [];
+    const backfilled: string[][] = [];
+    let fixed = false;
+    const stub = {
+      // reindexAll keeps failing (skip-dual-write delta persists) until the
+      // per-row backfill repairs the missing rows.
+      consistencyCheck: async () =>
+        fixed
+          ? { metaCount: 2, vecCount: 2, orphanIds: [], missingIds: [] }
+          : { metaCount: 2, vecCount: 3, orphanIds: [], missingIds: ["m_delta"] },
+      reindexAll: async () => { reindexAllCalls.push(1); return { l1Count: 0, l0Count: 0 }; },
+      reindexL1Records: async (ids: string[]) => {
+        backfilled.push(ids);
+        fixed = true;
+        return { done: ids.length, total: ids.length };
+      },
+      reindexL0Records: async () => { throw new Error("L0 heal must not run when L1 resolved"); },
+    } as unknown as IMemoryStore;
+
+    const r = await executor({ vectorStore: stub }).apply(EMPTY_DIFF);
+
+    // Retry cap: exactly MAX_REINDEX_RETRIES full reindexes — no 3rd attempt.
+    expect(reindexAllCalls.length).toBe(MAX_REINDEX_RETRIES);
+    // Then the delta is backfilled per-row (reindexL1Records), not re-full-reindexed.
+    expect(backfilled).toEqual([["m_delta"]]);
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("applied");
+    expect(r.counts).toEqual({ metaCount: 2, vecCount: 2, consistent: true });
+    expect(r.reindexed).toBe(true);
+    expect(r.needsReindex).toBe(false);
+  });
+
+  it("livelock cap: backfill also unresolved → run failed, cap documented in the error", async () => {
+    const reindexAllCalls: number[] = [];
+    const backfilled: string[][] = [];
+    const stub = {
+      // Truly persistent mismatch — reindexAll AND per-row backfill cannot fix.
+      consistencyCheck: async () => ({ metaCount: 2, vecCount: 3, orphanIds: [], missingIds: ["m_delta"] }),
+      reindexAll: async () => { reindexAllCalls.push(1); return { l1Count: 0, l0Count: 0 }; },
+      reindexL1Records: async (ids: string[]) => { backfilled.push(ids); return { done: ids.length, total: ids.length }; },
+    } as unknown as IMemoryStore;
+
+    const r = await executor({ vectorStore: stub }).apply(EMPTY_DIFF);
+
+    expect(reindexAllCalls.length).toBe(MAX_REINDEX_RETRIES);
+    expect(backfilled).toEqual([["m_delta"]]);
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("failed");
+    expect(r.needsReindex).toBe(true);
+    expect(r.error).toMatch(
+      new RegExp(`unresolved after ${MAX_REINDEX_RETRIES} reindex attempt\\(s\\) \\+ per-row backfill`),
+    );
   });
 
   // ============================

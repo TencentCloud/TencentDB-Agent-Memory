@@ -201,7 +201,11 @@ function resolveDataDirRelative(dataDir: string, rel: string): string | null {
   if (!rel || rel.startsWith("/") || rel.startsWith("~") || rel.includes("..")) return null;
   const dataRoot = path.resolve(dataDir);
   const resolved = path.resolve(dataRoot, rel);
-  if (resolved !== dataRoot && !resolved.startsWith(dataRoot + path.sep)) return null;
+  // Root sweep guard: a path resolving to dataDir itself ('.', './', the
+  // dataDir basename) would age-sweep EVERYTHING including records/*.jsonl
+  // and vectors.db — always reject, never treat the root as a sweep target.
+  if (resolved === dataRoot) return null;
+  if (!resolved.startsWith(dataRoot + path.sep)) return null;
   const base = path.basename(resolved);
   if (base === "records" || base === "vectors.db" || base === "scene_blocks" || base === "persona.md") {
     return null;
