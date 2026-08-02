@@ -31,7 +31,11 @@ import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
-import { ApplyExecutor, type ApplyResult } from "../apply-executor.js";
+import {
+  ApplyExecutor,
+  type ApplyResult,
+  MAX_PRESENTED_IDS,
+} from "../apply-executor.js";
 import { openReadonlySqlite } from "../http-utils.js";
 import { runRecallProbe, type ProbeResult } from "../probe.js";
 import { writeDashboard, writeDigest } from "../reports.js";
@@ -112,6 +116,8 @@ export interface SpawnChildContext {
   taskPrompt: string;
   env: Record<string, string>;
   cwd: string;
+  /** Effective role for this run (runType ?? constructor roleName). */
+  role: string;
 }
 
 export type SpawnChildFn = (ctx: SpawnChildContext) => Promise<ChildRunResult>;
@@ -505,6 +511,7 @@ export class ConsolidationOrchestrator {
         taskPrompt: DEFAULT_TASK_PROMPT,
         env,
         cwd: runScratch,
+        role: opts.role,
       });
       summary.child = {
         exitCode: childResult.exitCode,
@@ -691,14 +698,20 @@ export class ConsolidationOrchestrator {
         // Night (fullStore): sweep the WHOLE store (no cursor, no cap bound
         // by cursor) — cleanup/dup-scan sees everything, not just the fresh
         // tail. Day: fresh records since the cursor, capped.
+        // Night (fullStore): sweep the WHOLE store oldest-first, BUT bounded
+        // by MAX_PRESENTED_IDS (5000) — presentedRecordIds feeds the apply
+        // zod cap; a store beyond 5000 rows needs the multi-batch loop
+        // (documented TODO), never an oversize single presented set.
         const sql = fullStore
           ? "SELECT record_id, type, updated_time, created_time, content FROM l1_records " +
-            "ORDER BY created_time ASC, record_id ASC"
+            "ORDER BY created_time ASC, record_id ASC LIMIT ?"
           : "SELECT record_id, type, updated_time, created_time, content FROM l1_records " +
             "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
             "ORDER BY updated_time ASC LIMIT ?";
         const rows = fullStore
-          ? (db.prepare(sql).all() as Array<Record<string, unknown>>)
+          ? (db.prepare(sql).all(MAX_PRESENTED_IDS) as Array<
+              Record<string, unknown>
+            >)
           : (db
               .prepare(sql)
               .all(
@@ -813,9 +826,10 @@ export class ConsolidationOrchestrator {
   private async defaultSpawnChild(
     ctx: SpawnChildContext,
   ): Promise<ChildRunResult> {
-    // Effective per-batch timeout: role-file timeout_min (minutes) wins over
-    // consolidation timeoutMs — one source per batch, never mixed.
-    const roleConfig = loadRoleConfig(this.roleName, this.roleDir);
+    // Effective per-batch timeout: role-file timeout_min (minutes) of the
+    // PER-RUN role wins over consolidation timeoutMs — one source per batch,
+    // never mixed; the night run resolves night-keeper.json, not the day one.
+    const roleConfig = loadRoleConfig(ctx.role, this.roleDir);
     const timeoutMs =
       typeof roleConfig?.timeout_min === "number" && roleConfig.timeout_min > 0
         ? roleConfig.timeout_min * 60_000
@@ -898,13 +912,15 @@ export class ConsolidationOrchestrator {
     return file;
   }
 
-  /** Resume the last run summary from logs/<role>-*.json on start. */
+  /** Resume the last run summary from logs/<role>-*.json across ALL roles
+   * (day keeper + night-keeper share the logs dir; /status and ranToday must
+   * see the most recent run regardless of which role produced it). */
   private async readLastReport(): Promise<RunSummary | null> {
     const logsDir = path.join(this.dataDir, "logs");
     let files: string[];
     try {
-      files = (await fs.promises.readdir(logsDir)).filter(
-        (f) => f.startsWith(`${this.roleName}-`) && f.endsWith(".json"),
+      files = (await fs.promises.readdir(logsDir)).filter((f) =>
+        f.endsWith(".json"),
       );
     } catch {
       return null;

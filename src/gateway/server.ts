@@ -196,12 +196,25 @@ export class TdaiGateway {
       },
       trigger: async (reason: string, runType?: string) =>
         this.orchestrator.trigger({ reason, runType }),
-      // Threshold refused while the night window holds the gate → retry the
-      // day run shortly (never drop the threshold crossing).
+      // Threshold refused while the night window holds the gate → re-arm the
+      // deferred day retry until it is ACCEPTED (the night window can hold the
+      // SerialGate up to maxRunMs=90min; a one-shot +5min retry would hit busy
+      // again and silently drop the crossing). Backoff: 5min → 10min → 20min.
       onThresholdDeferred: () => {
-        setTimeout(() => {
-          void this.orchestrator.trigger({ reason: "threshold-deferred" });
-        }, 5 * 60_000);
+        let attempt = 0;
+        const delays = [5 * 60_000, 10 * 60_000, 20 * 60_000];
+        const arm = (): void => {
+          const delay = delays[Math.min(attempt, delays.length - 1)];
+          attempt += 1;
+          setTimeout(() => {
+            void this.orchestrator
+              .trigger({ reason: "threshold-deferred" })
+              .then((res) => {
+                if (!res.accepted && res.status === "busy") arm(); // night still holds gate
+              });
+          }, delay);
+        };
+        arm();
       },
       logger: this.logger,
     });

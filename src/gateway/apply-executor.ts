@@ -666,16 +666,16 @@ export class ApplyExecutor {
         result.skipped.rewrites.push(op.id);
         continue;
       }
+      if (row.content === op.content) {
+        // heal re-run: rewrite already applied → skip, never stale-abort.
+        result.skipped.rewrites.push(op.id);
+        continue;
+      }
       if (row.updated_time !== op.updatedAt) {
         throw new StaleDeleteError(
           `rewriteRecord target "${op.id}" was updated since the diff was built ` +
             `(diff updatedAt "${op.updatedAt}", current "${row.updated_time}") — aborting to protect fresh data`,
         );
-      }
-      if (row.content === op.content) {
-        // heal re-run: rewrite already applied → skip, never stale-abort.
-        result.skipped.rewrites.push(op.id);
-        continue;
       }
 
       const memory = {
