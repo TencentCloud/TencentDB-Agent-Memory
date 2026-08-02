@@ -34,10 +34,10 @@
    "rule": "nogo-l1-prompt",
    "spec_ref": "wave.md INVARIANT nogo-l1-prompt",
    "severity": "critical",
-   "status": "open",
+   "status": "fixed",
    "waiver": "",
    "approved_by": "",
-   "note": "014808 фикс (判据-line, 2 exclusion, MAX_CONTENT_CHARS=600) ТОЛЬКО в незакоммиченном worktree; committed HEAD pre-fix. Follow-up: закоммитить 014808 дельту отдельным пакетом."
+   "note": "014808 фикс (判据-line, 2 exclusion, MAX_CONTENT_CHARS=600) ТОЛЬКО в незакоммиченном worktree; committed HEAD pre-fix. Follow-up: закоммитить 014808 дельту отдельным пакетом. FIXED: 014808 delta committed 1cbfa75, INVARIANT CHECK green on HEAD."
   }
  ]
 }
