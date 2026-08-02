@@ -32,6 +32,8 @@ import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import { ApplyExecutor, type ApplyResult } from "../apply-executor.js";
 import { openReadonlySqlite } from "../http-utils.js";
+import { runRecallProbe, type ProbeResult } from "../probe.js";
+import { writeDashboard, writeDigest } from "../reports.js";
 import { ConsolidationCheckpoint, type ConsolidationCheckpointData } from "./checkpoint.js";
 import {
   countNewL0Since,
@@ -80,6 +82,8 @@ export interface RunSummary {
   reindexed: boolean;
   needsReindex: boolean;
   child?: ChildSummary;
+  /** Recall-quality probe result (P10, #1) — attached to every real run. */
+  probe?: ProbeResult;
 }
 
 export interface TriggerResult {
@@ -544,6 +548,45 @@ export class ConsolidationOrchestrator {
     return composeSessionPrompt(rolePrompt, diffText);
   }
 
+  /**
+   * P10 post-run extras (probe → dashboard → digest). Each step is fail-open;
+   * this method itself never throws.
+   */
+  private async runPostRunSteps(summary: RunSummary): Promise<void> {
+    const probe = await runRecallProbe({
+      dataDir: this.dataDir,
+      cfg: this.config.memory,
+      vectorStore: this.vectorStore?.(),
+      embeddingService: this.embeddingService?.(),
+      logger: this.logger,
+    });
+    summary.probe = probe;
+
+    await writeDashboard({
+      dataDir: this.dataDir,
+      logger: this.logger,
+      vectorStore: this.vectorStore?.(),
+      embeddingService: this.embeddingService?.(),
+      probe,
+    });
+
+    writeDigest(
+      this.dataDir,
+      {
+        runAt: summary.finishedAt,
+        status: summary.status,
+        mergedDuplicates: summary.applied.deletes.length + summary.applied.merges.length,
+        rewrittenScenes: summary.applied.rewrites.length,
+        precisionAtK: probe.precisionAtK,
+        elapsedMs: summary.elapsedMs,
+        newL0: summary.newL0,
+        recordsPresented: summary.recordsPresented,
+        error: summary.error,
+      },
+      this.logger,
+    );
+  }
+
   // ============================
   // Defaults (real spawn + P4 apply)
   // ============================
@@ -585,6 +628,17 @@ export class ConsolidationOrchestrator {
     const finishedMs = this.now();
     summary.finishedAt = new Date(finishedMs).toISOString();
     summary.elapsedMs = Math.max(0, finishedMs - Date.parse(summary.startedAt));
+
+    // P10 post-run extras for REAL (non-dry) runs: recall-quality probe (#1),
+    // dashboard memory_health.md (#15), digest .metadata/last-digest.json (#13).
+    // Fail-open: extras failures are logged, never propagated to the run.
+    if (!summary.dryRun) {
+      try {
+        await this.runPostRunSteps(summary);
+      } catch (err) {
+        this.logger.warn?.(`[memory-keeper] post-run extras failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     const logsDir = path.join(this.dataDir, "logs");
     await fs.promises.mkdir(logsDir, { recursive: true });

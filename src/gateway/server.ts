@@ -53,6 +53,8 @@ import {
   type MemoryRoutesContext,
 } from "./memory-routes.js";
 import { handleMemoryApply, type ApplyRouteContext } from "./apply-executor.js";
+import { handleMemorySearch, handleMemoryNote, type MemoryToolsContext } from "./memory-tools.js";
+import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
@@ -328,6 +330,20 @@ export class TdaiGateway {
         return this.handleMemoryRun(req, res, url);
       }
 
+      // Memory feedback loop (#4): the pi extension bumps recall priority with
+      // raw 80-char dedup keys. Write route (same gate as /memory/apply).
+      if (method === "POST" && pathname === "/memory/feedback") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryFeedback(req, res);
+      }
+
+      // Memory tools for the main agent (#12): POST /memory/note records an
+      // L0 note into L1 extraction. Write route (same gate).
+      if (method === "POST" && pathname === "/memory/note") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryNote(req, res);
+      }
+
       // All other routes go through the optional auth gate. When apiKey is
       // unset the gate is a no-op (preserves legacy open behaviour) — the
       // startup WARN in `logSecurityPosture` covers that case.
@@ -434,6 +450,8 @@ export class TdaiGateway {
         return await handleMemoryBlocks(ctx, url, res);
       case "/memory/validate":
         return await handleMemoryValidate(ctx, url, res);
+      case "/memory/search":
+        return await this.handleMemorySearch(ctx, url, res);
       default:
         sendError(res, 404, `Not found: GET ${pathname}`);
     }
@@ -471,6 +489,38 @@ export class TdaiGateway {
       reason: result.reason,
       runId: result.runId ?? null,
     });
+  }
+
+  /**
+   * GET /memory/search — memory_search tool for the main agent (#12).
+   * Auth-free loopback (same posture as /status). Reuses the tdai_memory_search
+   * machinery via TdaiCore.
+   */
+  private async handleMemorySearch(
+    ctx: MemoryRoutesContext,
+    url: URL,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const toolsCtx: MemoryToolsContext = { core: this.core, logger: this.logger };
+    return await handleMemorySearch(toolsCtx, url, res);
+  }
+
+  /**
+   * POST /memory/note — memory_note tool for the main agent (#12). Writes an
+   * L0 note through the existing capture path (write-gate already ran).
+   */
+  private async handleMemoryNote(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const toolsCtx: MemoryToolsContext = { core: this.core, logger: this.logger };
+    return await handleMemoryNote(toolsCtx, req, res);
+  }
+
+  /**
+   * POST /memory/feedback — agent feedback loop (#4). The write-gate already
+   * ran; the handler bumps L1 priorities for the received 80-char keys.
+   */
+  private async handleMemoryFeedback(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const feedbackCtx: FeedbackRouteContext = { dataDir: this.config.data.baseDir, logger: this.logger };
+    return await handleMemoryFeedback(feedbackCtx, req, res);
   }
 
   /**

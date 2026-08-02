@@ -409,3 +409,130 @@ describe("reindex-in-progress route gate (P8)", () => {
     expect(body.strategy).not.toBe("gated"); // no gate marker — normal path ran
   });
 });
+
+
+// ============================
+// P10 memory tools routes (#12) + feedback loop (#4)
+// ============================
+
+describe("memory tools + feedback routes (P10, integration)", () => {
+  let tmp: string;
+  let base: string;
+  let port: number;
+  let gateway: TdaiGateway;
+  let baseUrl: string;
+  let token: string;
+
+  beforeAll(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-tools-"));
+    base = path.join(tmp, "tdai");
+    fs.mkdirSync(base, { recursive: true });
+
+    port = 29_000 + Math.floor(Math.random() * 500);
+    gateway = new TdaiGateway({
+      data: { baseDir: base },
+      server: { port, host: "127.0.0.1", corsOrigins: [] },
+      memory: parseConfig({}),
+    });
+    await gateway.start();
+    token = fs.readFileSync(path.join(tmp, "tdai-gateway.token"), "utf-8").trim();
+    baseUrl = `http://127.0.0.1:${port}`;
+
+    // Seed one feedback target record (priority 40).
+    const db = openSqlite(path.join(base, "vectors.db"));
+    db.prepare(
+      "INSERT INTO l1_records " +
+        "(record_id, content, type, priority, scene_name, session_key, session_id, " +
+        "timestamp_str, created_time, updated_time, metadata_json) " +
+        "VALUES (?, ?, ?, ?, '', '', '', '', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z', '{}')",
+    ).run("fb-target", "Feedback target content with a long enough prefix to be a dedup key", "episodic", 40);
+    db.close();
+  });
+
+  afterAll(async () => {
+    await gateway.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const get = (p: string) => fetch(`${baseUrl}${p}`);
+  const postJson = (p: string, body: unknown, headers?: Record<string, string>) =>
+    fetch(`${baseUrl}${p}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+
+  const readPriority = (recordId: string): number => {
+    const db = openSqlite(path.join(base, "vectors.db"));
+    try {
+      const row = (db as unknown as {
+        prepare(sql: string): { get(...params: unknown[]): unknown };
+      })
+        .prepare("SELECT priority FROM l1_records WHERE record_id = ?")
+        .get(recordId) as { priority: number } | undefined;
+      return row?.priority ?? -1;
+    } finally {
+      db.close();
+    }
+  };
+
+  it("GET /memory/search?query= returns 200 with results shape (auth-free)", async () => {
+    const res = await get("/memory/search?query=feedback");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.results).toBe("string");
+    expect(typeof body.total).toBe("number");
+    expect(typeof body.strategy).toBe("string");
+  });
+
+  it("GET /memory/search without query returns 400", async () => {
+    const res = await get("/memory/search");
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /memory/note without token → 401 (write-gate)", async () => {
+    const res = await postJson("/memory/note", { content: "a note" });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /memory/note with loopback token records an L0 note", async () => {
+    const res = await postJson("/memory/note", { content: "remember this detail", session_key: "s-note" }, { "x-memory-token": token });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.l0_recorded).toBe("number");
+    expect(typeof body.scheduler_notified).toBe("boolean");
+    expect(body.session_key).toBe("s-note");
+  });
+
+  it("POST /memory/note with wrong Content-Type → 415", async () => {
+    const res = await fetch(`${baseUrl}/memory/note`, {
+      method: "POST",
+      headers: { "x-memory-token": token, "Content-Type": "text/plain" },
+      body: JSON.stringify({ content: "x" }),
+    });
+    expect(res.status).toBe(415);
+  });
+
+  it("POST /memory/feedback without token → 401", async () => {
+    const res = await postJson("/memory/feedback", { keys: ["Feedback target"] });
+    expect(res.status).toBe(401);
+  });
+
+  it("POST /memory/feedback bumps priority of startsWith-matched records", async () => {
+    const res = await postJson(
+      "/memory/feedback",
+      { keys: ["Feedback target content with a long enough prefix to be a dedup key"] },
+      { "x-memory-token": token },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.matched).toBe(1);
+    expect(body.bumped).toBe(1);
+    expect(readPriority("fb-target")).toBe(41); // 40 + 1 (positive, capped)
+  });
+
+  it("POST /memory/feedback with invalid body → 400", async () => {
+    const res = await postJson("/memory/feedback", { keys: "nope" }, { "x-memory-token": token });
+    expect(res.status).toBe(400);
+  });
+});

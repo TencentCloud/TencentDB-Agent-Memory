@@ -66,6 +66,25 @@ export function openReadonlySqlite(dbPath: string): ReadonlySqlite {
   return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
 }
 
+/** Writable SQLite connection (feedback priority bumps; never used on records files). */
+export interface WritableSqlite {
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+    run(...params: unknown[]): unknown;
+  };
+  close(): void;
+}
+
+export function openWritableSqlite(dbPath: string): WritableSqlite {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    return new Database(dbPath) as unknown as WritableSqlite;
+  }
+  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  return new DatabaseSync(dbPath) as unknown as WritableSqlite;
+}
+
 /**
  * Constant-time string equality for secrets.
  *

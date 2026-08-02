@@ -23,6 +23,8 @@ import type { GatewayConfig } from "./config.js";
 import type { LoopbackTokenManager } from "./token.js";
 import type { Logger } from "../core/types.js";
 import type { L1SearchResult } from "../core/store/types.js";
+import type { IMemoryStore } from "../core/store/types.js";
+import type { EmbeddingService } from "../core/store/embedding.js";
 import { sendJson, sendError, openReadonlySqlite, type ReadonlySqlite } from "./http-utils.js";
 import type {
   MemoryInfoResponse,
@@ -117,7 +119,7 @@ export async function handleMemoryRecords(
   const type = url.searchParams.get("type") ?? undefined;
   const limit = clampInt(url.searchParams.get("limit"), 1, 1000, 200);
 
-  const rows = queryL1Rows(ctx, { since, project, type, limit });
+  const rows = queryL1Rows(ctx.config.data.baseDir, ctx.logger, { since, project, type, limit });
   if (!rows) {
     sendError(res, 500, "memory records query failed");
     return;
@@ -134,38 +136,32 @@ export async function handleMemoryRecords(
  * Vector-only candidate finding: batch-embed records, cosine search topK,
  * sameScope filter — exactly the l1-dedup candidate mechanism (l1-dedup.ts
  * findCandidatesByVector), WITHOUT the LLM judgment phase.
+ *
+ * Explicit deps (store/embed/dataDir/logger) instead of the route ctx so the
+ * P10 dashboard can reuse the same cluster-finding for memory_health.md
+ * (fail-open when resources are missing).
  */
-export async function handleMemoryDuplicates(
-  ctx: MemoryRoutesContext,
-  url: URL,
-  res: http.ServerResponse,
-): Promise<void> {
-  const store = ctx.core.getVectorStore();
-  const embed = ctx.core.getEmbeddingService();
+export async function findDuplicateClusters(
+  deps: {
+    store?: IMemoryStore;
+    embed?: EmbeddingService;
+    dataDir: string;
+    logger: Logger;
+  },
+  opts: { since?: string; project?: string; type?: string; topK: number; threshold: number; limit: number },
+): Promise<{
+  clusters: MemoryDuplicatesResponse["clusters"];
+  degraded: boolean;
+  reason?: string;
+}> {
+  const { store, embed, dataDir, logger } = deps;
   if (!store || !embed) {
-    const response: MemoryDuplicatesResponse = {
-      total: 0,
-      clusters: [],
-      topK: 0,
-      threshold: 0,
-      degraded: true,
-      reason: "vector store or embedding service unavailable",
-    };
-    sendJson(res, 200, response);
-    return;
+    return { clusters: [], degraded: true, reason: "vector store or embedding service unavailable" };
   }
 
-  const since = url.searchParams.get("since") ?? undefined;
-  const project = url.searchParams.get("project") ?? undefined;
-  const type = url.searchParams.get("type") ?? undefined;
-  const topK = clampInt(url.searchParams.get("topK"), 1, 20, ctx.config.memory.embedding.conflictRecallTopK || 5);
-  const threshold = clampFloat(url.searchParams.get("threshold"), 0, 1, ctx.config.memory.recall.scoreThreshold);
-  const limit = clampInt(url.searchParams.get("limit"), 1, 500, 100);
-
-  const rows = queryL1Rows(ctx, { since, project, type, limit });
+  const rows = queryL1Rows(dataDir, logger, { since: opts.since, project: opts.project, type: opts.type, limit: opts.limit });
   if (!rows) {
-    sendError(res, 500, "memory records query failed");
-    return;
+    return { clusters: [], degraded: true, reason: "memory records query failed" };
   }
 
   const clusters: MemoryDuplicatesResponse["clusters"] = [];
@@ -176,7 +172,7 @@ export async function handleMemoryDuplicates(
     try {
       vec = await embed.embed(content);
     } catch (err) {
-      ctx.logger.warn(
+      logger.warn(
         `[memory/duplicates] embed failed for ${String(row.record_id)}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
       );
@@ -194,11 +190,11 @@ export async function handleMemoryDuplicates(
       topK?: number,
       text?: string,
       projectId?: string,
-    ) => Promise<DuplicateCandidate[]>)(vec, topK, content, projectId);
+    ) => Promise<DuplicateCandidate[]>)(vec, opts.topK, content, projectId);
     const similar = hits
       .filter((h) => h.record_id !== row.record_id)
       .filter((h) => sameScope(h, scope, projectId))
-      .filter((h) => h.score >= threshold)
+      .filter((h) => h.score >= opts.threshold)
       .map((h) => ({
         record_id: h.record_id,
         score: Math.round(h.score * 10_000) / 10_000,
@@ -211,12 +207,32 @@ export async function handleMemoryDuplicates(
     }
   }
 
+  return { clusters, degraded: false };
+}
+
+export async function handleMemoryDuplicates(
+  ctx: MemoryRoutesContext,
+  url: URL,
+  res: http.ServerResponse,
+): Promise<void> {
+  const since = url.searchParams.get("since") ?? undefined;
+  const project = url.searchParams.get("project") ?? undefined;
+  const type = url.searchParams.get("type") ?? undefined;
+  const topK = clampInt(url.searchParams.get("topK"), 1, 20, ctx.config.memory.embedding.conflictRecallTopK || 5);
+  const threshold = clampFloat(url.searchParams.get("threshold"), 0, 1, ctx.config.memory.recall.scoreThreshold);
+  const limit = clampInt(url.searchParams.get("limit"), 1, 500, 100);
+
+  const found = await findDuplicateClusters(
+    { store: ctx.core.getVectorStore(), embed: ctx.core.getEmbeddingService(), dataDir: ctx.config.data.baseDir, logger: ctx.logger },
+    { since, project, type, topK, threshold, limit },
+  );
   const response: MemoryDuplicatesResponse = {
-    total: clusters.length,
-    clusters,
+    total: found.clusters.length,
+    clusters: found.clusters,
     topK,
     threshold,
-    degraded: false,
+    degraded: found.degraded,
+    reason: found.reason,
   };
   sendJson(res, 200, response);
 }
@@ -287,8 +303,8 @@ interface L1RowFilter {
  * empty literals so the response shape stays uniform in both worlds. A
  * `project` filter that cannot be honored (no column) is ignored.
  */
-function queryL1Rows(ctx: MemoryRoutesContext, filter: L1RowFilter): Array<Record<string, unknown>> | null {
-  const dbPath = path.join(ctx.config.data.baseDir, "vectors.db");
+function queryL1Rows(dataDir: string, logger: Logger, filter: L1RowFilter): Array<Record<string, unknown>> | null {
+  const dbPath = path.join(dataDir, "vectors.db");
   const where: string[] = [];
   const params: unknown[] = [];
 
@@ -337,7 +353,7 @@ function queryL1Rows(ctx: MemoryRoutesContext, filter: L1RowFilter): Array<Recor
       db.close();
     }
   } catch (err) {
-    ctx.logger.warn(`[memory] l1_records query failed: ${err instanceof Error ? err.message : String(err)}`);
+    logger.warn(`[memory] l1_records query failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -345,9 +361,9 @@ function queryL1Rows(ctx: MemoryRoutesContext, filter: L1RowFilter): Array<Recor
 /**
  * Collect scene block + persona stats: byte size, char count, per-kind limit.
  * Char count is the relevant measure — the memory-keeper role caps are
- * char-based (scene 1500, persona 2000).
+ * char-based (scene 1500, persona 2000). Exported for the P10 dashboard.
  */
-function collectBlockStats(dataDir: string): { blocks: MemoryBlockInfo[]; overLimit: MemoryBlockInfo[] } {
+export function collectBlockStats(dataDir: string): { blocks: MemoryBlockInfo[]; overLimit: MemoryBlockInfo[] } {
   const blocks: MemoryBlockInfo[] = [];
   const sceneRoot = path.join(dataDir, "scene_blocks");
   try {
@@ -511,8 +527,9 @@ function countVecRows(db: ReadonlySqlite): number | null {
  * vec-vs-meta count consistency: COUNT(l1_records) vs COUNT(l1_vec) in one
  * readonly connection. `consistent` is null when the vec0 table is absent
  * (embedding provider "none" / fresh store) or vectors.db is unavailable.
+ * Exported for the P10 dashboard.
  */
-function checkVecMetaCounts(dataDir: string): MemoryValidateResponse["checks"]["vecMeta"] {
+export function checkVecMetaCounts(dataDir: string): MemoryValidateResponse["checks"]["vecMeta"] {
   const dbPath = path.join(dataDir, "vectors.db");
   try {
     const db = openReadonlySqlite(dbPath);

@@ -263,13 +263,52 @@ interface SearchResult {
 }
 
 /**
+ * Per-type recall rerank (wave tdai-memory-subagents-2026-08-02, improvement #2).
+ *
+ * Multiplies each item's score by the weight of its type BEFORE top-K
+ * selection, so `instruction`/`persona` records can outrank `episodic` ones
+ * for the same cosine/query match. Applied AFTER cosine scoring, BEFORE
+ * top-K (TZ §5.15). All weights 1.0 (config default) = feature off — the
+ * returned array is unchanged.
+ *
+ * `weights` is the `memory.recall.typeWeights` leaf (instruction/persona/
+ * episodic). Types outside the three known ones get weight 1.0. Sorting is
+ * stable, so ties preserve the original (score-ordered) sequence.
+ */
+export function applyTypeWeights<T extends { score: number; type?: string }>(
+  items: T[],
+  weights: { instruction: number; persona: number; episodic: number } | undefined,
+): T[] {
+  if (!weights) return items;
+  if (
+    weights.instruction === 1 &&
+    weights.persona === 1 &&
+    weights.episodic === 1
+  ) {
+    return items; // feature off — preserve current behavior exactly
+  }
+  const weightOf = (type: string | undefined): number => {
+    if (type === "instruction") return weights.instruction;
+    if (type === "persona") return weights.persona;
+    if (type === "episodic") return weights.episodic;
+    return 1;
+  };
+  return items
+    .map((item) => ({ item, weighted: item.score * weightOf(item.type) }))
+    .sort((a, b) => b.weighted - a.weighted)
+    .map((x) => x.item);
+}
+
+/**
  * Search memories and return both formatted lines and structured details.
  *
  * This is a thin wrapper around `searchMemories` that also captures
  * the recalled memory metadata for metric reporting (agent_turn event).
  * It parses the returned formatted lines to extract type/content info.
+ * Exported so the gateway recall-quality probe (P10) can measure the real
+ * recall pipeline (strategy + typeWeights) end-to-end.
  */
-async function searchMemoriesWithDetails(
+export async function searchMemoriesWithDetails(
   userText: string,
   pluginDataDir: string,
   cfg: MemoryTdaiConfig,
@@ -332,6 +371,9 @@ async function searchMemories(
 
   const maxResults = cfg.recall.maxResults ?? 5;
   const threshold = cfg.recall.scoreThreshold ?? 0.3;
+  // Per-type rerank weights (improvement #2) — applied after cosine scoring,
+  // before top-K. All 1.0 = off (default, current behavior preserved).
+  const typeWeights = cfg.recall.typeWeights;
 
   const embeddingAvailable = !!vectorStore && !!embeddingService;
 
@@ -367,7 +409,7 @@ async function searchMemories(
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, typeWeights);
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
 
@@ -386,7 +428,7 @@ async function searchMemories(
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, typeWeights);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
@@ -457,6 +499,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  typeWeights?: { instruction: number; persona: number; episodic: number },
 ): Promise<string[]> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
@@ -483,9 +526,11 @@ async function searchByEmbedding(
     );
   }
 
-  const filtered = vecResults
-    .filter((r) => r.score >= threshold)
-    .slice(0, maxResults);
+  // Type rerank (improvement #2): re-sort by weighted score BEFORE top-K.
+  const filtered = applyTypeWeights(
+    vecResults.filter((r) => r.score >= threshold),
+    typeWeights,
+  ).slice(0, maxResults);
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
@@ -519,6 +564,7 @@ async function searchHybrid(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
+  typeWeights?: { instruction: number; persona: number; episodic: number },
 ): Promise<SearchResult> {
   // Run keyword and embedding searches in parallel
   const candidateK = maxResults * 3; // retrieve more for merging
@@ -630,9 +676,17 @@ async function searchHybrid(
     }
   }
 
-  // Sort by combined RRF score and take top results
-  const sorted = [...mergedMap.entries()]
-    .sort((a, b) => b[1].rrfScore - a[1].rrfScore)
+  // Type rerank (improvement #2): multiply the fused RRF score by the
+  // per-type weight, then re-sort BEFORE top-K. Off (all 1.0) = unchanged.
+  const entries = [...mergedMap.entries()].map(([id, v]) => ({
+    id,
+    rrfScore: v.rrfScore * (typeWeights && typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"] != null
+      ? typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"]
+      : 1),
+    formatable: v.formatable,
+  }));
+  const sorted = entries
+    .sort((a, b) => b.rrfScore - a.rrfScore)
     .slice(0, maxResults);
 
   if (sorted.length > 0) {
@@ -640,7 +694,7 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    return { lines: sorted.map((e) => formatMemoryLine(e.formatable)), timing };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
