@@ -183,7 +183,7 @@ export class CheckpointManager {
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
-    this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
+    this.filePath = path.resolve(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
 
