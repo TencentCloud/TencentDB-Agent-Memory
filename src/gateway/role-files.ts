@@ -42,18 +42,29 @@ export interface RoleConfigFile {
  * Read + parse `<role>.json`. Tolerates missing/malformed files (null) — the
  * orchestrator treats an absent role config as "defaults apply" (fail-open).
  */
-export function loadRoleConfig(roleName: string, roleDir: string): RoleConfigFile | null {
+export function loadRoleConfig(
+  roleName: string,
+  roleDir: string | null | undefined,
+): RoleConfigFile | null {
+  if (!roleDir) return null;
   const file = path.join(roleDir, `${roleName}.json`);
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      return null;
     return {
       name: typeof parsed.name === "string" ? parsed.name : undefined,
       model: typeof parsed.model === "string" ? parsed.model : undefined,
-      prompt_file: typeof parsed.prompt_file === "string" ? parsed.prompt_file : undefined,
+      prompt_file:
+        typeof parsed.prompt_file === "string" ? parsed.prompt_file : undefined,
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : undefined,
-      thinking: typeof parsed.thinking === "string" ? parsed.thinking : undefined,
-      timeout_min: typeof parsed.timeout_min === "number" ? parsed.timeout_min : undefined,
+      thinking:
+        typeof parsed.thinking === "string" ? parsed.thinking : undefined,
+      timeout_min:
+        typeof parsed.timeout_min === "number" ? parsed.timeout_min : undefined,
     };
   } catch {
     return null;
@@ -61,7 +72,10 @@ export function loadRoleConfig(roleName: string, roleDir: string): RoleConfigFil
 }
 
 /** Read the `<role>.md` prompt file; null when missing/unreadable (fail-open). */
-export function loadRolePrompt(roleName: string, roleDir: string): string | null {
+export function loadRolePrompt(
+  roleName: string,
+  roleDir: string,
+): string | null {
   try {
     return fs.readFileSync(path.join(roleDir, `${roleName}.md`), "utf-8");
   } catch {
@@ -115,6 +129,9 @@ export function listRoles(roleDir: string): RoleListing[] {
  * role prompt and the data block are kept as separate top-level blocks so an
  * embedded fence can never restructure the role instructions.
  */
-export function buildSessionPrompt(rolePrompt: string, diffSection: string): string {
+export function buildSessionPrompt(
+  rolePrompt: string,
+  diffSection: string,
+): string {
   return `${rolePrompt.replace(/\s+$/, "")}\n\n${diffSection.trimEnd()}\n`;
 }

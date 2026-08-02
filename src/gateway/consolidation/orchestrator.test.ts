@@ -14,6 +14,7 @@ import path from "node:path";
 import { parseConfig } from "../../config.js";
 import {
   ConsolidationOrchestrator,
+  resolveRoleTimeoutMs,
   type RunSummary,
   type SpawnChildContext,
 } from "./orchestrator.js";
@@ -21,6 +22,28 @@ import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import type { ChildRunResult } from "./child-spawn.js";
 import type { ApplyResult } from "../apply-executor.js";
+import { createRequire } from "node:module";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const require = createRequire(import.meta.url);
+
+/** Open a sqlite DB regardless of runtime (bun:sqlite or node:sqlite). */
+function openSqlite(dbPath: string): {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...params: unknown[]): void };
+  close(): void;
+} {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string) => unknown;
+    };
+    return new Database(dbPath) as unknown as ReturnType<typeof openSqlite>;
+  }
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => unknown;
+  };
+  return new DatabaseSync(dbPath) as unknown as ReturnType<typeof openSqlite>;
+}
 
 const silentLogger: Logger = {
   debug: () => undefined,
@@ -625,5 +648,216 @@ describe("ConsolidationOrchestrator (P6)", () => {
     });
     expect(summary.status).toBe("ok");
     expect(summary.role).toBe("night-keeper"); // per-run role, not constructor
+  });
+
+  describe("resolveRoleTimeoutMs (per-run role timeout)", () => {
+    it("night-keeper role file timeout_min wins (minutes → ms)", () => {
+      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t-"));
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.json"),
+        JSON.stringify({ name: "night-keeper", timeout_min: 7 }),
+        "utf-8",
+      );
+      expect(resolveRoleTimeoutMs("night-keeper", roleDir, 5000)).toBe(420_000);
+      fs.rmSync(roleDir, { recursive: true, force: true });
+    });
+
+    it("missing role file → fallback ms (day keeper keeps config timeout)", () => {
+      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t2-"));
+      expect(resolveRoleTimeoutMs("keeper", roleDir, 5000)).toBe(5000);
+      expect(resolveRoleTimeoutMs("night-keeper", null, 5000)).toBe(5000);
+      fs.rmSync(roleDir, { recursive: true, force: true });
+    });
+
+    it("zero/negative timeout_min → fallback (guard from plan #9)", () => {
+      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t3-"));
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.json"),
+        JSON.stringify({ name: "night-keeper", timeout_min: 0 }),
+        "utf-8",
+      );
+      expect(resolveRoleTimeoutMs("night-keeper", roleDir, 9000)).toBe(9000);
+      fs.rmSync(roleDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("readLastReport picks the newest run by startedAt (any role)", () => {
+    it("flip: older night-keeper + newer memory-keeper → memory-keeper wins", async () => {
+      const logsDir = path.join(dataDir, "logs");
+      fs.mkdirSync(logsDir, { recursive: true });
+      // Lexicographically night-keeper-* sorts AFTER memory-keeper-*,
+      // but here the NIGHT report is OLDER — body startedAt must win.
+      fs.writeFileSync(
+        path.join(logsDir, "night-keeper-2026-08-02T03-00-00.000Z.json"),
+        JSON.stringify({
+          role: "night-keeper",
+          status: "ok",
+          startedAt: "2026-08-02T03:00:00.000Z",
+          finishedAt: "2026-08-02T03:10:00.000Z",
+          elapsedMs: 600000,
+          reason: "schedule",
+          dryRun: false,
+          newL0: 10,
+          recordsPresented: 200,
+          overLimitBlocks: 0,
+          applied: { merges: [], deletes: [], rewrites: [] },
+          skipped: { merges: [], deletes: [], rewrites: [] },
+          reindexed: false,
+          needsReindex: false,
+        }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(logsDir, "memory-keeper-2026-08-02T04-00-00.000Z.json"),
+        JSON.stringify({
+          role: "memory-keeper",
+          status: "ok",
+          startedAt: "2026-08-02T04:00:00.000Z",
+          finishedAt: "2026-08-02T04:05:00.000Z",
+          elapsedMs: 300000,
+          reason: "threshold",
+          dryRun: false,
+          newL0: 3,
+          recordsPresented: 5,
+          overLimitBlocks: 0,
+          applied: { merges: [], deletes: [], rewrites: [] },
+          skipped: { merges: [], deletes: [], rewrites: [] },
+          reindexed: false,
+          needsReindex: false,
+        }),
+        "utf-8",
+      );
+      const orch = makeOrchestrator({});
+      await orch.start();
+      const last = orch.getLastRun();
+      expect(last?.role).toBe("memory-keeper"); // newest by startedAt, not by name
+    });
+
+    it("corrupt JSON is skipped, newest valid run still wins", async () => {
+      const logsDir = path.join(dataDir, "logs");
+      fs.mkdirSync(logsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(logsDir, "night-keeper-2026-08-02T03-00-00.000Z.json"),
+        "{broken json",
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(logsDir, "memory-keeper-2026-08-02T05-00-00.000Z.json"),
+        JSON.stringify({
+          role: "memory-keeper",
+          status: "ok",
+          startedAt: "2026-08-02T05:00:00.000Z",
+          finishedAt: "2026-08-02T05:01:00.000Z",
+          elapsedMs: 60000,
+          reason: "threshold",
+          dryRun: false,
+          newL0: 1,
+          recordsPresented: 1,
+          overLimitBlocks: 0,
+          applied: { merges: [], deletes: [], rewrites: [] },
+          skipped: { merges: [], deletes: [], rewrites: [] },
+          reindexed: false,
+          needsReindex: false,
+        }),
+        "utf-8",
+      );
+      const orch = makeOrchestrator({});
+      await orch.start();
+      const last = orch.getLastRun();
+      expect(last?.role).toBe("memory-keeper");
+      expect(last?.startedAt).toBe("2026-08-02T05:00:00.000Z");
+    });
+  });
+
+  describe("night multi-batch cap accumulation", () => {
+    it("two chunks share ONE per-run delete budget (residual, not 2×cap)", async () => {
+      const roleDir = path.join(tmp, "roles-cap");
+      fs.mkdirSync(roleDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.md"),
+        "ROLE-NIGHT-PROMPT",
+        "utf-8",
+      );
+      // Seed 6 L1 records → with night.diffCap=5 the full-store sweep splits
+      // into 2 chunks. deleteCapPerRun=50 default. Chunk 1 requests 40
+      // deletes, chunk 2 requests 15 → total 55 > 50 → chunk 2 refused.
+      const db = openSqlite(path.join(dataDir, "vectors.db"));
+      db.exec(
+        "CREATE TABLE l1_records (" +
+          "record_id TEXT PRIMARY KEY, content TEXT, type TEXT, priority INTEGER, scene_name TEXT, " +
+          "session_key TEXT, session_id TEXT, timestamp_str TEXT, created_time TEXT, updated_time TEXT, metadata_json TEXT)",
+      );
+      for (let i = 0; i < 6; i++) {
+        db.prepare(
+          "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, ?, ?)",
+        ).run(
+          `m_rec${i}`,
+          `record content ${i}`,
+          "episodic",
+          50,
+          `2026-08-0${i + 1}T00:00:00Z`,
+          `2026-08-0${i + 1}T00:00:00Z`,
+        );
+      }
+      db.close();
+      // Patch the config: night.diffCap=5, keep day defaults.
+      const base = makeConfig(dataDir, true);
+      const cfg = {
+        ...base,
+        memory: {
+          ...base.memory,
+          consolidation: {
+            ...base.memory.consolidation,
+            night: { ...base.memory.consolidation.night, diffCap: 5 },
+          },
+        },
+      } as GatewayConfig;
+      const spawnCalls: number[] = [];
+      const spawn = vi.fn(
+        async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+          const n = spawnCalls.length;
+          spawnCalls.push(n);
+          const deletes =
+            n === 0
+              ? Array.from({ length: 40 }, (_, i) => ({
+                  id: `m_a${i}`,
+                  updatedAt: "2026-08-01T00:00:00Z",
+                }))
+              : Array.from({ length: 15 }, (_, i) => ({
+                  id: `m_b${i}`,
+                  updatedAt: "2026-08-01T00:00:00Z",
+                }));
+          await fs.promises.writeFile(
+            path.join(ctx.scratchDir, "diff.json"),
+            JSON.stringify({ deleteL1: deletes }),
+            "utf-8",
+          );
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: "ok",
+            stderr: "",
+            timedOut: false,
+            killed: null,
+          };
+        },
+      );
+      const orch = new ConsolidationOrchestrator({
+        config: cfg,
+        dataDir,
+        scratchRoot,
+        logger: silentLogger,
+        gatewayUrl: "http://127.0.0.1:8420",
+        roleName: "night-keeper",
+        roleDir,
+        spawnChild: spawn,
+        applyDiff: vi.fn(async () => okApply()),
+      });
+      const summary = await orch.runNow({ reason: "night" });
+      // Chunk 2 refused: 40 + 15 = 55 > deleteCapPerRun=50 (residual gate).
+      expect(summary.status).toBe("failed");
+      expect(summary.error).toMatch(/delete cap exceeded/);
+      expect(spawnCalls.length).toBe(2); // both chunks spawned, second refused at gate
+    });
   });
 });

@@ -62,6 +62,8 @@ export interface DiffSection {
   bytes: number;
   /** Which cap stopped the assembly (null = none hit). */
   truncatedBy: "byte" | "count" | null;
+  /** Record ids ACTUALLY embedded — the apply presentedRecordIds source. */
+  presentedRecordIds: string[];
 }
 
 export interface DiffBuilderOptions {
@@ -73,10 +75,21 @@ export interface DiffBuilderOptions {
   diffByteCap: number;
   /** Fresh L1 records (already sorted newest-first, id/type/updatedAt/content). */
   records: RecordEntry[];
-  /** Over-limit blocks (metadata only — content is fetched via /memory/blocks). */
-  overLimitBlocks: BlockMeta[];
-  /** ISO timestamp of the checkpoint run (display line). */
-  checkpointRunAt: string;
+  /**
+   * Night mode: embed id+dates only (no content snippet) — the keeper pulls
+   * full content via fetch_records.py. Saves the byte budget so a night batch
+   * covers far more of the store per diff.
+   */
+  idsOnly?: boolean;
+  /** Over-limit block metadata (path/size/limit) to list. */
+  overLimitBlocks?: Array<{
+    path: string;
+    kind: string;
+    size: number;
+    limit: number;
+  }>;
+  /** Checkpoint lastRunAt ISO (shown in the header). */
+  checkpointRunAt?: string;
 }
 
 // ============================
@@ -330,6 +343,7 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
   let recordEntries = 0;
   let blockEntries = 0;
   let truncatedBy: DiffSection["truncatedBy"] = null;
+  const presentedRecordIds: string[] = [];
 
   // Fixed base (header + data-not-instructions banner + checkpoint line) —
   // tiny relative to the default 8 KiB cap. The byte cap gates the DATA
@@ -354,7 +368,7 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
 
   // Over-limit blocks: metadata lines are byte-gated TOO — with many
   // oversized files the listing must not grow past the cap (byte-cap-bypass).
-  if (opts.overLimitBlocks.length > 0) {
+  if ((opts.overLimitBlocks ?? []).length > 0) {
     const sep = pushLine(">");
     const head =
       sep &&
@@ -364,7 +378,7 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
     if (!sep || !head) {
       truncatedBy = "byte";
     } else {
-      for (const b of opts.overLimitBlocks) {
+      for (const b of opts.overLimitBlocks ?? []) {
         if (
           !pushLine(
             `> - \`${b.path}\` — kind=${b.kind}, size=${b.size} chars, limit=${b.limit} (OVER)`,
@@ -394,13 +408,17 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
           truncatedBy = "count";
           break;
         }
-        const snippet = escapeFenceContent(entry.content).slice(0, 200);
-        const line = `> - id=\`${entry.id}\` type=${entry.type} updated=${entry.updatedAt} content: "${snippet}"`;
+        // Night (idsOnly): embed id+dates only — full content via
+        // fetch_records.py. Saves byte budget so a batch covers more store.
+        const line = opts.idsOnly
+          ? `> - id=\`${entry.id}\` type=${entry.type} updated=${entry.updatedAt}`
+          : `> - id=\`${entry.id}\` type=${entry.type} updated=${entry.updatedAt} content: "${escapeFenceContent(entry.content).slice(0, 200)}"`;
         if (!pushLine(line)) {
           truncatedBy = "byte";
           break;
         }
         recordEntries++;
+        presentedRecordIds.push(entry.id);
       }
     } else {
       pushLine("> - (нет свежих записей)");
@@ -422,5 +440,6 @@ export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
     blockEntries,
     bytes: Buffer.byteLength(text, "utf-8"),
     truncatedBy,
+    presentedRecordIds,
   };
 }

@@ -123,6 +123,24 @@ export interface SpawnChildContext {
 export type SpawnChildFn = (ctx: SpawnChildContext) => Promise<ChildRunResult>;
 export type ApplyDiffFn = (body: unknown) => Promise<ApplyResult>;
 
+/**
+ * Effective per-run timeout: the role-file `timeout_min` (minutes) of the
+ * PER-RUN role wins over the consolidation fallback. Positive `timeout_min`
+ * only; missing/zero file or config → fallbackMs. One source per batch,
+ * never mixed (night runs resolve night-keeper.json, not the day one).
+ */
+export function resolveRoleTimeoutMs(
+  role: string,
+  roleDir: string | null | undefined,
+  fallbackMs: number,
+): number {
+  const roleConfig = loadRoleConfig(role, roleDir);
+  return typeof roleConfig?.timeout_min === "number" &&
+    roleConfig.timeout_min > 0
+    ? roleConfig.timeout_min * 60_000
+    : fallbackMs;
+}
+
 export interface OrchestratorOptions {
   config: GatewayConfig;
   dataDir: string;
@@ -453,152 +471,133 @@ export class ConsolidationOrchestrator {
 
       const isNight = opts.role === "night-keeper";
       const night = this.config.memory.consolidation.night;
-      const records = this.queryRecentRecords(
+      const allRecords = this.queryRecentRecords(
         cp.l0Cursor,
         isNight ? night.diffCap : this.config.memory.consolidation.diffCap,
         isNight,
       );
-      summary.recordsPresented = records.length;
 
-      const baseline = buildManifestBaseline(this.dataDir);
-      const diff = buildDiffSection({
-        cursorIso: cp.l0Cursor,
-        diffCap: isNight
-          ? night.diffCap
-          : this.config.memory.consolidation.diffCap,
-        diffByteCap: isNight
-          ? night.diffByteCap
-          : this.config.memory.consolidation.diffByteCap,
-        records,
-        overLimitBlocks: overLimit,
-        checkpointRunAt: cp.lastRunAt,
-      });
+      // Night multi-batch loop: slice the WHOLE store into per-batch diffs,
+      // each with its own presented set; accumulate applied/skipped; advance
+      // ONCE at the end (anchored). Day: a single batch (legacy behaviour).
+      const batches: RecordEntry[][] = isNight
+        ? chunkRecords(allRecords, night.diffCap)
+        : [allRecords];
 
-      await fs.promises.mkdir(runScratch, { recursive: true });
-      const promptPath = path.join(runScratch, "memory-keeper-prompt.md");
-      await fs.promises.writeFile(
-        promptPath,
-        this.buildSessionPrompt(diff.text, opts.role),
-        "utf-8",
-      );
+      let anyApplied = false;
+      let dryRunDiffText: string | undefined;
+      let anchoredCursor: string | null = null; // max sliceTime of applied chunks up to first skip-merge
+      let skipMergeSeen = false;
+      let remainingDeleteCap = night.deleteCapPerRun;
+      let remainingRewriteCap = night.rewriteCapPerRun;
+      let presentedTotal = 0;
 
-      // Static keeper tools (fetch_dups/fetch_blocks/fetch_records/dump_bullets)
-      // copied into runScratch/tools/ BEFORE the spawn — the sub-session uses
-      // them instead of generating its own (saves minutes per run). Fail-open:
-      // a missing tools dir must never abort the run (criterion-21); the prompt
-      // wording is conditional on the dir actually being present.
-      await this.copyKeeperTools(runScratch);
+      for (let i = 0; i < batches.length; i++) {
+        if (isNight && this.now() - startedMs > night.maxRunMs) {
+          summary.status = "failed";
+          summary.error = `night maxRunMs exceeded (${night.maxRunMs}ms) after batch ${i}/${batches.length}`;
+          break;
+        }
+        const batch = batches[i]!;
+        const batchScratch = isNight
+          ? path.join(runScratch, `b${i}`)
+          : runScratch;
+        const batchRes = await this.runBatch({
+          records: batch,
+          overLimit,
+          cp,
+          runId: opts.runId,
+          role: opts.role,
+          dryRun: !!opts.dryRun,
+          scratchDir: batchScratch,
+          isNight,
+          remainingDeleteCap,
+          remainingRewriteCap,
+          startedMs,
+        });
+        presentedTotal += batchRes.presented;
+        summary.applied.merges.push(...batchRes.applied.merges);
+        summary.applied.deletes.push(...batchRes.applied.deletes);
+        summary.applied.rewrites.push(...batchRes.applied.rewrites);
+        summary.skipped.merges.push(...batchRes.skipped.merges);
+        summary.skipped.deletes.push(...batchRes.skipped.deletes);
+        summary.skipped.rewrites.push(...batchRes.skipped.rewrites);
+        summary.reindexed = summary.reindexed || batchRes.reindexed;
+        summary.needsReindex = summary.needsReindex || batchRes.needsReindex;
+        if (batchRes.child) summary.child = batchRes.child;
+        // Keep the first batch's diff as the report sidecar (dry-run).
+        if (dryRunDiffText === undefined && batchRes.diffText) {
+          dryRunDiffText = batchRes.diffText;
+        }
+        if (batchRes.error) {
+          summary.error = batchRes.error;
+          summary.status =
+            (batchRes.status as RunSummary["status"]) ?? "failed";
+          break;
+        }
+        if (batchRes.status === "dry-run") {
+          summary.status = "dry-run";
+          // dry-run touches nothing; keep looping to render every batch diff
+          continue;
+        }
+        if (
+          batchRes.applied.merges.length > 0 ||
+          batchRes.applied.deletes.length > 0 ||
+          batchRes.applied.rewrites.length > 0
+        ) {
+          anyApplied = true;
+        }
+        if (!skipMergeSeen) {
+          if (batchRes.skipped.merges.length > 0) {
+            // First skip-merge anchors the advance: chunks AFTER this one
+            // (even if applied) never move the cursor — their members stay
+            // visible to the next run. Per plan #9: the loop STOPS here —
+            // later chunks re-present next run (heal-skip is idempotent).
+            skipMergeSeen = true;
+            if (isNight) {
+              anchoredCursor = batchRes.sliceTime; // applied chunks up to (incl.) this one
+            }
+            break; // spawn-count = index of the skip chunk
+          } else if (batchRes.status === "ok" && isNight) {
+            anchoredCursor = batchRes.sliceTime;
+          }
+        }
+        if (batchRes.status !== "ok" && batchRes.status !== "dry-run") {
+          // apply failed/aborted → stop the loop (re-run heals next time)
+          summary.status =
+            (batchRes.status as RunSummary["status"]) ?? "failed";
+          break;
+        }
+        if (isNight) {
+          remainingDeleteCap = Math.max(
+            0,
+            remainingDeleteCap - batchRes.deleteOps,
+          );
+          remainingRewriteCap = Math.max(
+            0,
+            remainingRewriteCap - batchRes.rewriteOps,
+          );
+        }
+      }
+
+      summary.recordsPresented = presentedTotal;
 
       if (opts.dryRun) {
-        // Dry-run: show the diff, touch nothing (no spawn, no apply, no
-        // checkpoint advance). The section lands next to the report.
         summary.status = "dry-run";
-        await this.writeReport(summary, diff.text);
+        await this.writeReport(summary, dryRunDiffText);
         return summary;
       }
 
-      const env = buildChildEnv({
-        home: process.env.HOME ?? "/tmp",
-        pathValue: process.env.PATH ?? "/usr/bin:/bin",
-        gatewayUrl: this.gatewayUrl,
-        runUuid: opts.runId,
-      });
-
-      const childResult = await this.spawnChild({
-        runId: opts.runId,
-        scratchDir: runScratch,
-        promptPath,
-        taskPrompt: DEFAULT_TASK_PROMPT,
-        env,
-        cwd: runScratch,
-        role: opts.role,
-      });
-      summary.child = {
-        exitCode: childResult.exitCode,
-        timedOut: childResult.timedOut,
-        stdout: truncate(childResult.stdout, 2000),
-        stderr: truncate(childResult.stderr, 4000),
-      };
-
-      if (childResult.error) {
-        summary.error = `keeper spawn failed: ${childResult.error}`;
-        await this.writeReport(summary);
-        return summary;
+      if (summary.error === undefined && anyApplied) {
+        // Advance ONCE with the anchored cursor (night) or current max (day).
+        // Night partial advance is legal under cap/maxRunMs-exceed: applied
+        // chunks move the cursor, unapplied ones re-present next run.
+        const anchor =
+          isNight && anchoredCursor !== null ? anchoredCursor : undefined;
+        await this.advanceCheckpoint(cp.l0Cursor, newL0, summary, anchor);
       }
-      if (childResult.timedOut) {
-        summary.error = "keeper timed out — process group killed";
-        await this.writeReport(summary);
-        return summary;
-      }
-
-      let rawDiff: unknown;
-      try {
-        const raw = await fs.promises.readFile(
-          path.join(runScratch, "diff.json"),
-          "utf-8",
-        );
-        rawDiff = JSON.parse(raw);
-      } catch (err) {
-        summary.error =
-          `diff.json missing or malformed in scratch (${path.join(runScratch, "diff.json")}): ` +
-          `${err instanceof Error ? err.message : String(err)}`;
-        await this.writeReport(summary);
-        return summary;
-      }
-
-      // Apply through the P4 ApplyExecutor — manifest recheck + backup +
-      // abort loop + syncSceneIndex all live there. presentedRecordIds =
-      // exactly the ids embedded in the diff section.
-      if (opts.role === "night-keeper") {
-        const night = this.config.memory.consolidation.night;
-        const diffObj = (rawDiff ?? {}) as Record<string, unknown>;
-        const deleteOps = Array.isArray(diffObj.deleteL1)
-          ? (diffObj.deleteL1 as unknown[]).length
-          : 0;
-        const mergeMembers = Array.isArray(diffObj.merge)
-          ? (diffObj.merge as Array<{ cluster?: unknown[] }>).reduce(
-              (acc: number, m) => acc + (m.cluster?.length ?? 0),
-              0,
-            )
-          : 0;
-        const rewriteOps = Array.isArray(diffObj.rewriteRecord)
-          ? (diffObj.rewriteRecord as unknown[]).length
-          : 0;
-        if (deleteOps + mergeMembers > night.deleteCapPerRun) {
-          summary.error =
-            `night delete cap exceeded (deleteL1=${deleteOps} + mergeMembers=${mergeMembers} > ` +
-            `deleteCapPerRun=${night.deleteCapPerRun}) — apply refused (mechanical gate)`;
-          await this.writeReport(summary);
-          return summary;
-        }
-        if (rewriteOps > night.rewriteCapPerRun) {
-          summary.error =
-            `night rewrite cap exceeded (rewriteRecord=${rewriteOps} > ` +
-            `rewriteCapPerRun=${night.rewriteCapPerRun}) — apply refused (mechanical gate)`;
-          await this.writeReport(summary);
-          return summary;
-        }
-      }
-      const applyResult = await this.applyDiff({
-        diff: rawDiff,
-        manifest: { baseline: manifestShaMap(baseline) },
-        context: { presentedRecordIds: records.map((r) => r.id) },
-      });
-      summary.applied = applyResult.applied;
-      summary.skipped = applyResult.skipped;
-      summary.reindexed = applyResult.reindexed;
-      summary.needsReindex = applyResult.needsReindex;
-      summary.error = applyResult.error;
-      summary.status = applyResult.ok
-        ? "ok"
-        : applyResult.status === "aborted"
-          ? "aborted"
-          : "failed";
-
-      if (applyResult.ok) {
-        // Advance the checkpoint ONLY on success — a failed run re-runs the
-        // same diff (ApplyExecutor skips already-applied ops: idempotent heal).
-        await this.advanceCheckpoint(cp.l0Cursor, newL0, summary);
+      if (summary.error === undefined) {
+        summary.status = "ok";
       }
 
       await this.writeReport(summary);
@@ -627,6 +626,219 @@ export class ConsolidationOrchestrator {
           // Best-effort scratch cleanup.
         }
       }
+    }
+  }
+
+  /**
+   * Run ONE batch: build diff (idsOnly for night) → prompt → spawn keeper →
+   * parse diff.json → mechanical caps check → apply with presentedRecordIds
+   * = the ids ACTUALLY embedded in the diff section (not the whole slice).
+   * Returns partial result + sliceTime (maxL0RecordedAt at batch start).
+   */
+  private async runBatch(args: {
+    records: RecordEntry[];
+    overLimit: Array<{
+      path: string;
+      kind: string;
+      size: number;
+      limit: number;
+    }>;
+    cp: { l0Cursor: string; lastRunAt: string | null };
+    runId: string;
+    role: string;
+    dryRun: boolean;
+    scratchDir: string;
+    isNight: boolean;
+    remainingDeleteCap: number;
+    remainingRewriteCap: number;
+    startedMs: number;
+  }): Promise<{
+    presented: number;
+    sliceTime: string | null;
+    applied: { merges: string[]; deletes: string[]; rewrites: string[] };
+    skipped: { merges: string[]; deletes: string[]; rewrites: string[] };
+    deleteOps: number;
+    rewriteOps: number;
+    reindexed: boolean;
+    needsReindex: boolean;
+    child?: {
+      exitCode: number | null;
+      timedOut: boolean;
+      stdout: string;
+      stderr: string;
+    };
+    diffText?: string;
+    error?: string;
+    status?: string;
+  }> {
+    const empty = {
+      merges: [] as string[],
+      deletes: [] as string[],
+      rewrites: [] as string[],
+    };
+    const result: ReturnType<
+      ConsolidationOrchestrator["runBatch"]
+    > extends Promise<infer R>
+      ? R
+      : never = {
+      presented: 0,
+      sliceTime: null,
+      applied: { merges: [], deletes: [], rewrites: [] },
+      skipped: { merges: [], deletes: [], rewrites: [] },
+      deleteOps: 0,
+      rewriteOps: 0,
+      reindexed: false,
+      needsReindex: false,
+    };
+    void empty;
+    const night = this.config.memory.consolidation.night;
+    const cap = args.isNight ? night : undefined;
+    const dbPath = path.join(this.dataDir, "vectors.db");
+
+    try {
+      // sliceTime = maxL0RecordedAt at chunk-build time (L0 space) — anchors
+      // the night advance; the keeper's date anchoring reads record meta.
+      const sliceTime = args.isNight ? maxL0RecordedAt(dbPath) : null;
+
+      // Manifest baseline per chunk: a previous chunk may have rewritten
+      // scene/persona files → a run-start baseline would 409 on chunk 2+.
+      const baseline = buildManifestBaseline(this.dataDir);
+      const diff = buildDiffSection({
+        cursorIso: args.cp.l0Cursor,
+        diffCap: cap?.diffCap ?? this.config.memory.consolidation.diffCap,
+        diffByteCap:
+          cap?.diffByteCap ?? this.config.memory.consolidation.diffByteCap,
+        records: args.records,
+        overLimitBlocks: args.overLimit,
+        checkpointRunAt: args.cp.lastRunAt ?? undefined,
+        idsOnly: args.isNight,
+      });
+      result.presented = diff.presentedRecordIds.length;
+
+      await fs.promises.mkdir(args.scratchDir, { recursive: true });
+      const promptPath = path.join(args.scratchDir, "memory-keeper-prompt.md");
+      await fs.promises.writeFile(
+        promptPath,
+        this.buildSessionPrompt(diff.text, args.role),
+        "utf-8",
+      );
+
+      // Static keeper tools copied into scratch/tools/ BEFORE the spawn —
+      // fail-open (criterion-21); the prompt wording is conditional on it.
+      await this.copyKeeperTools(args.scratchDir);
+
+      if (args.dryRun) {
+        result.status = "dry-run";
+        result.diffText = diff.text;
+        return result;
+      }
+
+      const env = buildChildEnv({
+        home: process.env.HOME ?? "/tmp",
+        pathValue: process.env.PATH ?? "/usr/bin:/bin",
+        gatewayUrl: this.gatewayUrl,
+        runUuid: args.runId,
+      });
+
+      const childResult = await this.spawnChild({
+        runId: args.runId,
+        scratchDir: args.scratchDir,
+        promptPath,
+        taskPrompt: DEFAULT_TASK_PROMPT,
+        env,
+        cwd: args.scratchDir,
+        role: args.role,
+      });
+      result.child = {
+        exitCode: childResult.exitCode,
+        timedOut: childResult.timedOut,
+        stdout: truncate(childResult.stdout, 2000),
+        stderr: truncate(childResult.stderr, 4000),
+      };
+
+      if (childResult.error) {
+        result.error = `keeper spawn failed: ${childResult.error}`;
+        result.status = "failed";
+        return result;
+      }
+      if (childResult.timedOut) {
+        result.error = "keeper timed out — process group killed";
+        result.status = "failed";
+        return result;
+      }
+
+      let rawDiff: unknown;
+      try {
+        const raw = await fs.promises.readFile(
+          path.join(args.scratchDir, "diff.json"),
+          "utf-8",
+        );
+        rawDiff = JSON.parse(raw);
+      } catch (err) {
+        result.error =
+          `diff.json missing or malformed in scratch (${path.join(args.scratchDir, "diff.json")}): ` +
+          `${err instanceof Error ? err.message : String(err)}`;
+        result.status = "failed";
+        return result;
+      }
+
+      // Mechanical per-run caps — gate BEFORE apply. Budget is the residual
+      // (accumulated across chunks), so N chunks cannot each pass and double
+      // the per-run total.
+      if (cap) {
+        const diffObj = (rawDiff ?? {}) as Record<string, unknown>;
+        const deleteOps = Array.isArray(diffObj.deleteL1)
+          ? (diffObj.deleteL1 as unknown[]).length
+          : 0;
+        const mergeMembers = Array.isArray(diffObj.merge)
+          ? (diffObj.merge as Array<{ cluster?: unknown[] }>).reduce(
+              (acc: number, m) => acc + (m.cluster?.length ?? 0),
+              0,
+            )
+          : 0;
+        const rewriteOps = Array.isArray(diffObj.rewriteRecord)
+          ? (diffObj.rewriteRecord as unknown[]).length
+          : 0;
+        result.deleteOps = deleteOps + mergeMembers;
+        result.rewriteOps = rewriteOps;
+        if (result.deleteOps > args.remainingDeleteCap) {
+          result.error =
+            `night delete cap exceeded (batch deleteL1=${deleteOps} + mergeMembers=${mergeMembers} > ` +
+            `remaining deleteCapPerRun=${args.remainingDeleteCap}) — apply refused (mechanical gate)`;
+          result.status = "failed";
+          return result;
+        }
+        if (result.rewriteOps > args.remainingRewriteCap) {
+          result.error =
+            `night rewrite cap exceeded (batch rewriteRecord=${rewriteOps} > ` +
+            `remaining rewriteCapPerRun=${args.remainingRewriteCap}) — apply refused (mechanical gate)`;
+          result.status = "failed";
+          return result;
+        }
+      }
+
+      const applyResult = await this.applyDiff({
+        diff: rawDiff,
+        manifest: { baseline: manifestShaMap(baseline) },
+        context: { presentedRecordIds: diff.presentedRecordIds },
+      });
+      result.applied = applyResult.applied;
+      result.skipped = applyResult.skipped;
+      result.reindexed = applyResult.reindexed;
+      result.needsReindex = applyResult.needsReindex;
+      result.status = applyResult.ok
+        ? "ok"
+        : applyResult.status === "aborted"
+          ? "aborted"
+          : "failed";
+      if (applyResult.error) result.error = applyResult.error;
+      result.sliceTime = sliceTime ?? null;
+      result.diffText = diff.text;
+      return result;
+    } catch (err) {
+      result.error = `unexpected batch error: ${err instanceof Error ? err.message : String(err)}`;
+      result.status = "failed";
+      return result;
     }
   }
 
@@ -740,8 +952,12 @@ export class ConsolidationOrchestrator {
     prevCursor: string,
     newL0: number,
     summary: RunSummary,
+    /** Anchored l0Cursor (night multi-batch: max slice-time of applied chunks
+     * up to the first skip-merge). Omitted → current maxL0RecordedAt (day). */
+    anchoredCursor?: string,
   ): Promise<void> {
-    const cursor = maxL0RecordedAt(path.join(this.dataDir, "vectors.db"));
+    const cursor = (anchoredCursor ??
+      maxL0RecordedAt(path.join(this.dataDir, "vectors.db")))!;
     await this.checkpoint.update((d) => {
       d.lastRunAt = summary.finishedAt;
       if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
@@ -829,11 +1045,11 @@ export class ConsolidationOrchestrator {
     // Effective per-batch timeout: role-file timeout_min (minutes) of the
     // PER-RUN role wins over consolidation timeoutMs — one source per batch,
     // never mixed; the night run resolves night-keeper.json, not the day one.
-    const roleConfig = loadRoleConfig(ctx.role, this.roleDir);
-    const timeoutMs =
-      typeof roleConfig?.timeout_min === "number" && roleConfig.timeout_min > 0
-        ? roleConfig.timeout_min * 60_000
-        : this.config.memory.consolidation.timeoutMs;
+    const timeoutMs = resolveRoleTimeoutMs(
+      ctx.role,
+      this.roleDir,
+      this.config.memory.consolidation.timeoutMs,
+    );
     return runKeeperProcess({
       piBinary: this.config.memory.consolidation.piBinary,
       spawnFlags: this.config.memory.consolidation.spawnFlags,
@@ -926,16 +1142,34 @@ export class ConsolidationOrchestrator {
       return null;
     }
     if (files.length === 0) return null;
-    files.sort();
-    const latest = files[files.length - 1]!;
-    try {
-      const parsed = JSON.parse(
-        await fs.promises.readFile(path.join(logsDir, latest), "utf-8"),
-      );
-      return parsed as RunSummary;
-    } catch {
-      return null;
+    // Pick the NEWEST report by startedAt from the JSON BODY — the filename
+    // ts (`<role>-<ts>.json`) is Date.parse-NaN (dashed ISO) and the
+    // lexicographic sort puts memory-keeper-* before night-keeper-* forever,
+    // hiding the fresher day report after a night run + restart.
+    // A corrupt JSON file is SKIPPED — it must not hide the newest valid run.
+    let newest: RunSummary | null = null;
+    for (const file of files) {
+      try {
+        const parsed = JSON.parse(
+          await fs.promises.readFile(path.join(logsDir, file), "utf-8"),
+        ) as RunSummary;
+        if (
+          typeof parsed.startedAt !== "string" ||
+          Number.isNaN(Date.parse(parsed.startedAt))
+        ) {
+          continue; // not a run report (or malformed) — skip
+        }
+        if (
+          newest === null ||
+          Date.parse(parsed.startedAt) > Date.parse(newest.startedAt)
+        ) {
+          newest = parsed;
+        }
+      } catch {
+        // corrupt JSON → skip; never hide the freshest valid report
+      }
     }
+    return newest;
   }
 }
 
@@ -945,4 +1179,16 @@ export class ConsolidationOrchestrator {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
+/** Split records into fixed-size chunks (night multi-batch slices).
+ * Empty input → a single empty chunk: the pipeline still runs once
+ * (spawn → diff.json → caps → apply) instead of short-circuiting. */
+function chunkRecords<T>(records: T[], size: number): T[][] {
+  if (records.length === 0) return [[]];
+  const chunks: T[][] = [];
+  for (let i = 0; i < records.length; i += size) {
+    chunks.push(records.slice(i, i + size));
+  }
+  return chunks;
 }
