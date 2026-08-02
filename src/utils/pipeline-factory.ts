@@ -40,6 +40,28 @@ import type { Logger } from "../core/types.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
 
+/**
+ * Emit a warning at most once per distinct message (module-level memo — the
+ * same caching style as the store-init singleton in this module).
+ */
+const warnOnceEmitted = new Set<string>();
+function warnOnce(logger: PipelineLogger, message: string): void {
+  if (warnOnceEmitted.has(message)) return;
+  warnOnceEmitted.add(message);
+  logger.warn(`${TAG} ${message}`);
+}
+
+/**
+ * Single-writer gate (§5.8, P5): when memory.consolidation.enabled, the
+ * inline L2/L3 runners become no-ops — scene/persona writes are owned by the
+ * memory-keeper sub-session via /memory/apply. Seed with consolidation
+ * enabled therefore yields L1-only memory by construction (the no-op runners
+ * never reach scene/persona writers). Default enabled=false = current behaviour.
+ */
+function isConsolidationEnabled(cfg: MemoryTdaiConfig): boolean {
+  return cfg.consolidation?.enabled === true;
+}
+
 function supportsProfileSyncWrite(store?: IMemoryStore): boolean {
   return !!(store?.syncProfiles || store?.deleteProfiles);
 }
@@ -434,6 +456,18 @@ export function createL2Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
 }): L2Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
+
+  // P5 single-writer gate: scene extraction is delegated to the memory-keeper
+  // sub-session (memory.consolidation.enabled) — no-op + warnOnce at activation.
+  if (isConsolidationEnabled(cfg)) {
+    warnOnce(
+      logger,
+      "[single-writer-gate] memory.consolidation.enabled=true: inline L2 scene extraction is a no-op " +
+        "(scene writes owned by the memory-keeper via POST /memory/apply)",
+    );
+    return async (_sessionKey: string, cursor?: string) => ({ skipped: true, latestCursor: cursor || undefined });
+  }
+
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
 
   return async (sessionKey: string, cursor?: string) => {
@@ -591,6 +625,17 @@ export function createL3Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
 }): L3Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
+
+  // P5 single-writer gate: persona generation is delegated to the memory-keeper
+  // sub-session (memory.consolidation.enabled) — no-op + warnOnce at activation.
+  if (isConsolidationEnabled(cfg)) {
+    warnOnce(
+      logger,
+      "[single-writer-gate] memory.consolidation.enabled=true: inline L3 persona generation is a no-op " +
+        "(persona writes owned by the memory-keeper via POST /memory/apply)",
+    );
+    return async () => undefined;
+  }
 
   return async () => {
     const trigger = new PersonaTrigger({

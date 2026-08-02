@@ -52,6 +52,7 @@ import {
   handleMemoryValidate,
   type MemoryRoutesContext,
 } from "./memory-routes.js";
+import { handleMemoryApply, type ApplyRouteContext } from "./apply-executor.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { createHash } from "node:crypto";
@@ -239,10 +240,14 @@ export class TdaiGateway {
 
       // Memory write routes — dedicated write-gate: EITHER `Authorization:
       // Bearer <apiKey>` OR `x-memory-token` (alternative credentials, NOT
-      // stacked on top of checkAuth below). Handlers land in later wave
-      // batches (P4 apply-executor, P6 orchestrator); B1 reserves the gated
-      // routes so the auth contract is verifiable end-to-end.
-      if (method === "POST" && (pathname === "/memory/apply" || pathname === "/memory/run")) {
+      // stacked on top of checkAuth below). POST /memory/apply is implemented
+      // by the P4 ApplyExecutor (apply-executor.ts); POST /memory/run lands in
+      // the P6 orchestrator batch and stays reserved here.
+      if (method === "POST" && pathname === "/memory/apply") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryApply(req, res);
+      }
+      if (method === "POST" && pathname === "/memory/run") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
         sendError(res, 501, `${method} ${pathname} not implemented yet (wave B1 reserved the route)`);
         return;
@@ -357,6 +362,21 @@ export class TdaiGateway {
       default:
         sendError(res, 404, `Not found: GET ${pathname}`);
     }
+  }
+
+  /**
+   * POST /memory/apply — apply a memory-keeper diff through the ApplyExecutor
+   * (P4, apply-executor.ts). The write-gate already ran; this method only
+   * builds the route context and delegates. Content-Type enforcement and
+   * status mapping live in the handler.
+   */
+  private async handleMemoryApply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const ctx: ApplyRouteContext = {
+      core: this.core,
+      config: this.config,
+      logger: this.logger,
+    };
+    return await handleMemoryApply(ctx, req, res);
   }
 
   /**

@@ -251,7 +251,7 @@ describe("memory read routes (P3, integration)", () => {
     }
   });
 
-  it("POST /memory/apply: no token → 401; valid x-memory-token → 501 (reserved)", async () => {
+  it("POST /memory/apply: no token → 401; valid x-memory-token → 400 (invalid diff)", async () => {
     const noAuth = await fetch(`${baseUrl}/memory/apply`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -261,12 +261,17 @@ describe("memory read routes (P3, integration)", () => {
 
     const info = await (await get("/memory/info")).json();
     const token = fs.readFileSync(info.tokenPath, "utf-8").trim();
+    // P4 implemented the route: an empty body is an invalid diff → 400, and
+    // the response carries the structured abort result (no partial apply).
     const authed = await fetch(`${baseUrl}/memory/apply`, {
       method: "POST",
       headers: { "x-memory-token": token, "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    expect(authed.status).toBe(501);
+    expect(authed.status).toBe(400);
+    const body = (await authed.json()) as { status: string; partial: boolean };
+    expect(body.status).toBe("aborted");
+    expect(body.partial).toBe(false);
 
     const wrongToken = await fetch(`${baseUrl}/memory/apply`, {
       method: "POST",

@@ -306,6 +306,29 @@ export interface IMemoryStore {
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
   ): Promise<{ l1Count: number; l0Count: number }>;
 
+  // ── Consistency (wave tdai-memory-subagents-2026-08-02, P4 apply-executor) ──
+
+  /**
+   * vec-vs-meta consistency snapshot: both COUNTs and the orphan vector id set
+   * (vec ∖ meta) computed in a single transaction (ТЗ §5.5 post-apply count check).
+   *
+   * Optional — backends that cannot count vectors omit it. Fault-tolerant:
+   * `vecCount: null` means no vec0 tables / degraded store (check must be
+   * skipped, NOT treated as mismatch); an empty `orphanIds` means consistent.
+   */
+  consistencyCheck?(): MaybePromise<{
+    metaCount: number;
+    vecCount: number | null;
+    orphanIds: string[];
+  }>;
+
+  /**
+   * Delete stray l1_vec rows whose record_id has no l1_records row, one
+   * transaction (per-id via the prepared stmtDeleteVec). No-op true when the
+   * list is empty or vec tables are absent. Fault-tolerant: false on failure.
+   */
+  purgeOrphanVectors?(orphanIds: string[]): MaybePromise<boolean>;
+
   // ── FTS (always sync — cached flag) ──────────────────────
 
   isFtsAvailable(): boolean;

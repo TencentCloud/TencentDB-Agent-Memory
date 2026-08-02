@@ -1794,6 +1794,92 @@ export class VectorStore implements IMemoryStore {
   // ── Re-index operations ──────────────────────────────────
 
   /**
+   * vec-vs-meta consistency snapshot (wave tdai-memory-subagents-2026-08-02,
+   * P4 apply-executor post-apply count check).
+   *
+   * Both COUNTs and the id sets are read inside ONE transaction so the caller
+   * sees a single WAL snapshot — a non-transactional COUNT raced against a
+   * concurrent L1 dual-write produces a spurious mismatch (ТЗ §5.5/§5.6).
+   *
+   * Fault-tolerant: on degraded store or any DB failure returns
+   * `{ metaCount: 0, vecCount: null, orphanIds: [] }` — the caller must treat
+   * `vecCount === null` as "check not possible", NOT as a mismatch.
+   */
+  consistencyCheck(): { metaCount: number; vecCount: number | null; orphanIds: string[] } {
+    if (this.degraded) return { metaCount: 0, vecCount: null, orphanIds: [] };
+    try {
+      this.db.exec("BEGIN");
+      try {
+        const metaCount =
+          (this.db.prepare("SELECT COUNT(*) AS c FROM l1_records").get() as { c: number } | null)?.c ?? 0;
+
+        let vecCount: number | null = null;
+        const vecIds = new Set<string>();
+        if (this.vecTablesReady) {
+          const rows = this.db.prepare("SELECT record_id FROM l1_vec").all() as Array<{ record_id: string }>;
+          for (const row of rows) vecIds.add(row.record_id);
+          vecCount = vecIds.size;
+        }
+
+        const metaRows = this.db.prepare("SELECT record_id FROM l1_records").all() as Array<{ record_id: string }>;
+        const metaIds = new Set<string>();
+        for (const row of metaRows) metaIds.add(row.record_id);
+
+        const orphanIds: string[] = [];
+        for (const id of vecIds) {
+          if (!metaIds.has(id)) orphanIds.push(id);
+        }
+
+        this.db.exec("COMMIT");
+        return { metaCount, vecCount, orphanIds };
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch { /* ignore rollback errors */ }
+        throw err;
+      }
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} consistencyCheck failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { metaCount: 0, vecCount: null, orphanIds: [] };
+    }
+  }
+
+  /**
+   * Delete stray l1_vec rows (record_id has no l1_records row) via the
+   * prepared per-id stmtDeleteVec in a single transaction (ТЗ §5.5 orphan
+   * purge — in-process reindexAll cannot remove orphans, sqlite.ts:1914).
+   *
+   * Fault-tolerant: no-op true when the list is empty or vec tables are
+   * absent; false (with a warn) when the transaction fails.
+   */
+  purgeOrphanVectors(orphanIds: string[]): boolean {
+    if (this.degraded || !this.vecTablesReady || orphanIds.length === 0) return true;
+    try {
+      this.db.exec("BEGIN");
+      try {
+        for (const id of orphanIds) {
+          this.stmtDeleteVec!.run(id);
+        }
+        this.db.exec("COMMIT");
+        this.logger?.info?.(`${TAG} Purged ${orphanIds.length} orphan l1_vec row(s)`);
+        return true;
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch { /* ignore rollback errors */ }
+        throw err;
+      }
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} purgeOrphanVectors failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * Get all L1 record texts for re-embedding.
    * Returns record_id → content pairs.
    */
