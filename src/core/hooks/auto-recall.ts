@@ -376,7 +376,9 @@ async function searchMemories(
     // to avoid a redundant second HTTP request and a wasted local embed().
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
+      // `searchL1Hybrid` is optional on IMemoryStore (SqliteMemoryStore does
+      // not implement it); the nativeHybridSearch guard above guarantees it exists here.
+      const results = await vectorStore.searchL1Hybrid!({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));

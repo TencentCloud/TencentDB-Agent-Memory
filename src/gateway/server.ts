@@ -16,7 +16,7 @@
 
 import http from "node:http";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { createRequire } from "node:module";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -37,12 +37,46 @@ import type {
   SessionEndResponse,
   SeedRequest,
   SeedResponse,
-  GatewayErrorResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import { parseJsonBody, sendJson, sendError, safeEqual } from "./http-utils.js";
+import { LoopbackTokenManager } from "./token.js";
+import { checkWriteAuth as isMemoryWriteAuthed } from "./write-auth.js";
+import {
+  handleMemoryInfo,
+  handleMemoryRecords,
+  handleMemoryDuplicates,
+  handleMemoryBlocks,
+  handleMemoryValidate,
+  type MemoryRoutesContext,
+} from "./memory-routes.js";
+// Runtime-agnostic SQLite loader (same pattern as src/core/store/sqlite.ts):
+// bun:sqlite under Bun (the systemd unit ExecStart is `bun src/gateway/server.ts`),
+// node:sqlite under Node (vitest forks). Only readonly diagnostic queries are
+// used here. The project does not pull @types/bun, so the handles are typed
+// structurally and treated as `any`-ish for typecheck purposes.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const require = createRequire(import.meta.url);
+
+interface ReadonlySqlite {
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  };
+  close(): void;
+}
+
+function openReadonlySqlite(dbPath: string): ReadonlySqlite {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite") as { Database: new (p: string, o?: { readonly?: boolean }) => unknown };
+    return new Database(dbPath, { readonly: true }) as unknown as ReadonlySqlite;
+  }
+  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown };
+  return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
+}
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -61,55 +95,13 @@ function createConsoleLogger(): Logger {
 }
 
 // ============================
-// Request body parser
-// ============================
-
-async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf-8");
-        resolve(JSON.parse(body) as T);
-      } catch (err) {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
-    req.on("error", reject);
-  });
-}
-
-function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
-  const json = JSON.stringify(body);
-  res.writeHead(status, {
-    "Content-Type": "application/json",
-    "Content-Length": Buffer.byteLength(json),
-  });
-  res.end(json);
-}
-
-function sendError(res: http.ServerResponse, status: number, message: string): void {
-  sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
-}
-
-/**
- * Constant-time string equality for secrets.
- *
- * Returns `false` on any length mismatch (without comparing bytes), and uses
- * `crypto.timingSafeEqual` for the equal-length case so that an attacker
- * probing the API key cannot use response timing to learn a prefix match.
- */
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf-8");
-  const bb = Buffer.from(b, "utf-8");
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-// ============================
 // Gateway Server
 // ============================
+
+/** Clients are untrusted: accept a string, cap its length, everything else is "unknown project". */
+function sanitizeProjectId(raw: unknown): string {
+  return typeof raw === "string" ? raw.slice(0, 512) : "";
+}
 
 export class TdaiGateway {
   private config: GatewayConfig;
@@ -117,10 +109,13 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  /** Loopback memory token manager (write-gate credential for /memory/* routes). */
+  private tokenManager: LoopbackTokenManager;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
     this.logger = createConsoleLogger();
+    this.tokenManager = new LoopbackTokenManager(this.config.data.baseDir, this.logger);
 
     // Create host adapter
     const adapter = new StandaloneHostAdapter({
@@ -144,6 +139,10 @@ export class TdaiGateway {
   async start(): Promise<void> {
     // Initialize data directories
     initDataDirectories(this.config.data.baseDir);
+
+    // Ensure the loopback token file exists (0600, outside dataDir) before
+    // serving — the pi extension discovers it via GET /memory/info.
+    this.tokenManager.ensure();
 
     // Initialize core
     await this.core.initialize();
@@ -254,6 +253,23 @@ export class TdaiGateway {
         return this.handleHealth(res);
       }
 
+      // GET /memory/* — memory read routes + discovery, auth-free on loopback
+      // (same posture as /status). Read-only; never exposes secrets.
+      if (method === "GET" && pathname.startsWith("/memory/")) {
+        return await this.handleMemoryRead(req, res, pathname);
+      }
+
+      // Memory write routes — dedicated write-gate: EITHER `Authorization:
+      // Bearer <apiKey>` OR `x-memory-token` (alternative credentials, NOT
+      // stacked on top of checkAuth below). Handlers land in later wave
+      // batches (P4 apply-executor, P6 orchestrator); B1 reserves the gated
+      // routes so the auth contract is verifiable end-to-end.
+      if (method === "POST" && (pathname === "/memory/apply" || pathname === "/memory/run")) {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        sendError(res, 501, `${method} ${pathname} not implemented yet (wave B1 reserved the route)`);
+        return;
+      }
+
       // All other routes go through the optional auth gate. When apiKey is
       // unset the gate is a no-op (preserves legacy open behaviour) — the
       // startup WARN in `logSecurityPosture` covers that case.
@@ -313,6 +329,56 @@ export class TdaiGateway {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Write-gate for memory mutation routes (wave tdai-memory-subagents-2026-08-02).
+   *
+   * Accepts EITHER `Authorization: Bearer <apiKey>` OR `x-memory-token` —
+   * alternative credentials, NOT stacked on top of checkAuth. The loopback
+   * token always exists (generated at startup), so memory write routes are
+   * never open even when no server.apiKey is configured. Constant-time
+   * compare; 401 on missing/mismatch.
+   */
+  private checkMemoryWriteAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const token = this.tokenManager.ensure();
+    if (isMemoryWriteAuthed(req.headers, this.config.server.apiKey, token)) return true;
+    sendError(res, 401, "Unauthorized: missing or invalid memory token");
+    return false;
+  }
+
+  /**
+   * Auth-free loopback dispatch for GET /memory/* (read routes + discovery).
+   * Handlers live in memory-routes.ts; they only read the store and memory
+   * tree (INVARIANT nogo-records-rewrite) and never expose credentials.
+   */
+  private async handleMemoryRead(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    pathname: string,
+  ): Promise<void> {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const ctx: MemoryRoutesContext = {
+      core: this.core,
+      config: this.config,
+      tokenManager: this.tokenManager,
+      logger: this.logger,
+      version: VERSION,
+    };
+    switch (pathname) {
+      case "/memory/info":
+        return handleMemoryInfo(ctx, res);
+      case "/memory/records":
+        return await handleMemoryRecords(ctx, url, res);
+      case "/memory/duplicates":
+        return await handleMemoryDuplicates(ctx, url, res);
+      case "/memory/blocks":
+        return await handleMemoryBlocks(ctx, url, res);
+      case "/memory/validate":
+        return await handleMemoryValidate(ctx, url, res);
+      default:
+        sendError(res, 404, `Not found: GET ${pathname}`);
+    }
   }
 
   /**
