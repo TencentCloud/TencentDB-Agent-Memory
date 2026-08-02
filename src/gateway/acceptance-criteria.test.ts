@@ -261,10 +261,10 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
 // ============================
 
 describe("criterion 20 — negative INVARIANT checks (static)", () => {
-  it("nogo-l1-prompt: L1 prompt 014808 (判据 + exclusion) and MAX_CONTENT_CHARS=600 stay in place", () => {
+  it("nogo-l1-prompt: L1 prompt 014808 (критерий + исключения) and MAX_CONTENT_CHARS=600 stay in place", () => {
     const l1 = readRepo("src/core/prompts/l1-extraction.ts");
-    expect(l1).toContain("判据");
-    expect(l1).toContain("不应该提取的内容");
+    expect(l1).toContain("Критерий");
+    expect(l1).toContain("Не следует извлекать");
     const extractor = readRepo("src/core/record/l1-extractor.ts");
     expect(extractor).toMatch(/MAX_CONTENT_CHARS\s*=\s*600/);
   });

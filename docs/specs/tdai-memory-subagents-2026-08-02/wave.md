@@ -57,8 +57,8 @@ pi-саб-сессии («пчёлки»), добавить ночной про�
 
 Формат: `INVARIANT:` на старте строки + `CHECK:` в том же блоке (см. ~/.agents/skills/system-constitution/coverage-gate.sh). CHECK = негативный grep-ban против **коммиченного HEAD** (не worktree): rc=0 пока инвариант держится, rc!=0 при нарушении.
 
-INVARIANT: nogo-l1-prompt — L1-промт-фиксы 014808 держать в коммиченном дереве: 判据-критерий + exclusion-пункты в l1-extraction.ts, MAX_CONTENT_CHARS=600 в l1-extractor.ts. Per-artifact presence (откат любого артефакта = нарушение).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -q "判据" HEAD -- src/core/prompts/l1-extraction.ts && git grep -q "不应该提取的内容" HEAD -- src/core/prompts/l1-extraction.ts && git grep -qE "MAX_CONTENT_CHARS[[:space:]]*=[[:space:]]*600" HEAD -- src/core/record/l1-extractor.ts'
+INVARIANT: nogo-l1-prompt — L1-промт-фиксы 014808 держать в коммиченном дереве: Критерий-маркер + exclusion-пункты (Не следует извлекать) в l1-extraction.ts, MAX_CONTENT_CHARS=600 в l1-extractor.ts. Per-artifact presence (откат любого артефакта = нарушение). (2026-08-02: маркеры переведены на русский при RU-only переводе промтов — 判据→Критерий, 不应该提取的内容→Не следует извлекать.)
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -q "Критерий" HEAD -- src/core/prompts/l1-extraction.ts && git grep -q "Не следует извлекать" HEAD -- src/core/prompts/l1-extraction.ts && git grep -qE "MAX_CONTENT_CHARS[[:space:]]*=[[:space:]]*600" HEAD -- src/core/record/l1-extractor.ts'
 
 INVARIANT: nogo-recall-knobs — recall-кнобы yaml (scoreThreshold 0.85 / maxResults 3 / strategy embedding) не менять; в коммиченном src нет переопределения кнобов-констант.
 CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && grep -q "scoreThreshold: 0.85" tdai-gateway.yaml && grep -q "maxResults: 3" tdai-gateway.yaml && grep -q "strategy: embedding" tdai-gateway.yaml && ! git grep -qE "scoreThreshold[[:space:]]*=[[:space:]]*0\.85|maxResults[[:space:]]*=[[:space:]]*3" HEAD -- src/core'
