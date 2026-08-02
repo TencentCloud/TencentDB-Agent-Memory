@@ -58,7 +58,7 @@ pi-саб-сессии («пчёлки»), добавить ночной про�
 Формат: `INVARIANT:` на старте строки + `CHECK:` в том же блоке (см. ~/.agents/skills/system-constitution/coverage-gate.sh). CHECK = негативный grep-ban против **коммиченного HEAD** (не worktree): rc=0 пока инвариант держится, rc!=0 при нарушении.
 
 INVARIANT: nogo-l1-prompt — L1-промт-фиксы 014808 держать в коммиченном дереве: 判据-критерий + exclusion-пункты в l1-extraction.ts, MAX_CONTENT_CHARS=600 в l1-extractor.ts. Per-artifact presence (откат любого артефакта = нарушение).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -q "判据" HEAD -- src/core/prompts/l1-extraction.ts && git grep -q "MAX_CONTENT_CHARS" HEAD -- src/core/record/l1-extractor.ts'
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -q "判据" HEAD -- src/core/prompts/l1-extraction.ts && git grep -q "不应该提取的内容" HEAD -- src/core/prompts/l1-extraction.ts && git grep -qE "MAX_CONTENT_CHARS[[:space:]]*=[[:space:]]*600" HEAD -- src/core/record/l1-extractor.ts'
 
 INVARIANT: nogo-recall-knobs — recall-кнобы yaml (scoreThreshold 0.85 / maxResults 3 / strategy embedding) не менять; в коммиченном src нет переопределения кнобов-констант.
 CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && grep -q "scoreThreshold: 0.85" tdai-gateway.yaml && grep -q "maxResults: 3" tdai-gateway.yaml && grep -q "strategy: embedding" tdai-gateway.yaml && ! git grep -qE "scoreThreshold[[:space:]]*=[[:space:]]*0\.85|maxResults[[:space:]]*=[[:space:]]*3" HEAD -- src/core'
@@ -73,7 +73,7 @@ INVARIANT: nogo-pi-core [semantic] — tdai-memory.ts при включённо�
 JUSTIFICATION: tdai-memory.ts лежит в ~/.pi/agent/extensions (не git-репо) — механический diff-CHECK невозможен; поведенческая проверка (реколл работает как сейчас) — ручная, Tier-2.
 
 INVARIANT: nogo-secrets — саб-сессия/тулы не получают gateway-ключей; apiKey не в коммиченном дереве; yaml с apiKey остаётся untracked (негатив: hardcoded ключ в src/ = нарушение; yaml закоммичен = нарушение).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "sk-[A-Za-z0-9]{20,}" HEAD -- src/ && { ! git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; }'
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "sk-[A-Za-z0-9]{20,}" HEAD && { ! git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; }'
 
 ## Wave-close
 
