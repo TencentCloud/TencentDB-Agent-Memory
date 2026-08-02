@@ -8,10 +8,10 @@
    "rule": "nogo-secrets",
    "spec_ref": "wave.md INVARIANT nogo-secrets",
    "severity": "medium",
-   "status": "open",
+   "status": "fixed",
    "waiver": "",
-   "approved_by": "",
-   "note": "yaml untracked с живым llm.apiKey, НЕ в .gitignore — careless git add . застейджит реальный кред. Hardening: добавить tdai-gateway.yaml в .gitignore (правка конфига рантайма — требует go/no-go юзера, §2.2)"
+   "approved_by": "user (go: 2026-08-02)",
+   "note": "tdai-gateway.yaml добавлен в .gitignore (go/no-go юзера получен), git check-ignore подтверждает."
   },
   {
    "id": "D-2",
