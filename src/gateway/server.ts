@@ -56,6 +56,8 @@ import { handleMemoryApply, type ApplyRouteContext } from "./apply-executor.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
+import { listRoles, resolveRoleDir } from "./role-files.js";
+import { CleanupTimer, runCleanup } from "./cleanup.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { createHash } from "node:crypto";
@@ -97,6 +99,8 @@ export class TdaiGateway {
   private orchestrator: ConsolidationOrchestrator;
   /** Night-run timer (P7): schedule + threshold + catch-up inside the gateway. */
   private nightRun: NightRunTimer;
+  /** Workspace cleanup timer (P11a): age-based removal of run artifacts. */
+  private cleanupTimer: CleanupTimer;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -149,6 +153,24 @@ export class TdaiGateway {
       trigger: async (reason: string) => this.orchestrator.trigger({ reason }),
       logger: this.logger,
     });
+
+    // Workspace cleanup (P11a): run artifacts (logs/diffs/reports/backups/stale
+    // scratch + the child tasks subtree) on memory.cleanup.intervalHours.
+    this.cleanupTimer = new CleanupTimer({
+      enabled: this.config.memory.cleanup.enabled,
+      intervalHours: this.config.memory.cleanup.intervalHours,
+      run: () =>
+        runCleanup({
+          dataDir: this.config.data.baseDir,
+          scratchRoot: nodePath.join(nodePath.dirname(this.config.data.baseDir), "tdai-memory-keeper"),
+          home: process.env.HOME ?? "/tmp",
+          config: this.config.memory.cleanup,
+          now: () => Date.now(),
+          logger: this.logger,
+        }),
+      now: () => Date.now(),
+      logger: this.logger,
+    });
   }
 
   /**
@@ -168,6 +190,7 @@ export class TdaiGateway {
     // Consolidation: restore checkpoint, sweep stale keepers, catch-up check.
     await this.orchestrator.start();
     this.nightRun.start();
+    this.cleanupTimer.start();
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -246,6 +269,7 @@ export class TdaiGateway {
     }
 
     this.nightRun.stop();
+    this.cleanupTimer.stop();
     await this.orchestrator.stop();
 
     await this.core.destroy();
@@ -469,7 +493,19 @@ export class TdaiGateway {
         inFlight: this.orchestrator.isRunning,
         lastRun,
       },
+      roles: listRoles(resolveRoleDir()),
+      reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
     });
+  }
+
+  /**
+   * reindex-in-progress gate (ТЗ §5.6): true while a full reindex is running.
+   * The vector store fails OPEN (empty result) — the route-level check below
+   * covers the FTS/keyword fallback paths too, so /recall and the search
+   * routes return an empty result as a whole, never an error.
+   */
+  private reindexGateOn(): boolean {
+    return this.core.getVectorStore()?.isReindexing?.() ?? false;
   }
 
   /**
@@ -533,6 +569,14 @@ export class TdaiGateway {
       return;
     }
 
+    // reindex-in-progress gate (ТЗ §5.6): during a full reindex return an
+    // EMPTY result, never an error (fail-open).
+    if (this.reindexGateOn()) {
+      this.logger.info?.("[tdai-gateway] /recall gate: full reindex in progress — returning empty (fail-open)");
+      sendJson(res, 200, { context: "", strategy: "gated", memory_count: 0 } satisfies RecallResponse);
+      return;
+    }
+
     const startMs = Date.now();
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
@@ -585,6 +629,13 @@ export class TdaiGateway {
       return;
     }
 
+    // reindex-in-progress gate (ТЗ §5.6): empty result, not an error.
+    if (this.reindexGateOn()) {
+      this.logger.info?.("[tdai-gateway] /search/memories gate: full reindex in progress — returning empty (fail-open)");
+      sendJson(res, 200, { results: "", total: 0, strategy: "gated" } satisfies MemorySearchResponse);
+      return;
+    }
+
     const result = await this.core.searchMemories({
       query: body.query,
       limit: body.limit,
@@ -605,6 +656,13 @@ export class TdaiGateway {
 
     if (!body.query) {
       sendError(res, 400, "Missing required field: query");
+      return;
+    }
+
+    // reindex-in-progress gate (ТЗ §5.6): empty result, not an error.
+    if (this.reindexGateOn()) {
+      this.logger.info?.("[tdai-gateway] /search/conversations gate: full reindex in progress — returning empty (fail-open)");
+      sendJson(res, 200, { results: "", total: 0 } satisfies ConversationSearchResponse);
       return;
     }
 

@@ -21,10 +21,10 @@
    "rule": "drift-risk",
    "spec_ref": "B4 packets (P8 l1-dedup)",
    "severity": "medium",
-   "status": "open",
+   "status": "fixed",
    "waiver": "",
    "approved_by": "",
-   "note": "duplicates re-implements sameScope локально — drift risk если l1-dedup семантика меняется в P4/P8; проверить при B2/B4. B2-проверка (2026-08-02, P4 executor): семантика НЕ дрейфует — локальная sameScope в memory-routes.ts:75-85 байт-идентична l1-dedup.sameScope (l1-dedup.ts:209-222); P4 не трогал l1-dedup (non_goal). Остаётся open: P8 (reindex-integration) может менять l1-dedup — перепроверить при B4."
+   "note": "B4-проверка (P8 executor, 2026-08-02): тело sameScope (4 логические строки) побайтово идентично memory-routes.ts:62-70 vs l1-dedup.ts:209-222 (worktree; committed HEAD sameScope НЕ содержит — экспорт из незакоммиченного I3/I4). Различие только в сигнатуре (inline-union \"global\" | \"project\" vs MemoryScope-алиас), export-модификаторе и комментарии — семантика НЕ дрейфует; P8 l1-dedup не трогал (non_goal). Закрыт как семантически-эквивалентный (НЕ байт-эквивалентный на уровне файла)."
   },
   {
    "id": "D-3",

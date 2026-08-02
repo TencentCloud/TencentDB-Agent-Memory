@@ -320,7 +320,43 @@ export interface IMemoryStore {
     metaCount: number;
     vecCount: number | null;
     orphanIds: string[];
+    /** meta∖vec — per-row backfill targets (P8 livelock-cap delta). Optional: backends without it fall back to needsReindex. */
+    missingIds?: string[];
+    /** l0_vec logical rows (null when vec0 absent). Optional (P8 L0 window-skip heal). */
+    l0VecCount?: number | null;
+    /** l0_conversations∖l0_vec — L0 per-row backfill targets. Optional. */
+    l0MissingIds?: string[];
   }>;
+
+  /**
+   * Incremental per-row L1 reindex (ТЗ §5.6): per-row `l1_vec` delete+insert
+   * for the given record ids (NOT a SQL UPDATE). Used for the count-mismatch
+   * delta backfill after the reindex livelock cap and for content-rewrite
+   * re-embedding. Optional — backends without it fall back to needsReindex.
+   */
+  reindexL1Records?(
+    ids: string[],
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ done: number; total: number }>;
+
+  /**
+   * Incremental per-row L0 reindex (ТЗ §5.6 window-skip heal): per-row
+   * `l0_vec` delete+insert for l0_conversations ids whose vector is missing
+   * after a full reindex window. Optional.
+   */
+  reindexL0Records?(
+    ids: string[],
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ done: number; total: number }>;
+
+  /**
+   * True while a full reindexAll is in flight. Read routes (recall, memory
+   * search, conversation search) must fail OPEN with an empty result, never an
+   * error (reindex-in-progress gate, ТЗ §5.6). Optional.
+   */
+  isReindexing?(): boolean;
 
   /**
    * Delete stray l1_vec rows whose record_id has no l1_records row, one

@@ -39,9 +39,11 @@
  * - Partial-apply semantics: an abort on the 2nd+ mutation leaves earlier
  *   mutations applied; the report lists them and the run is idempotent — a
  *   re-run skips already-applied ops (heal).
- * - Post-apply vec-vs-meta count check: both COUNTs + orphan id-set in one
- *   store transaction; mismatch → orphan purge (per-id stmtDeleteVec) →
- *   reindexAll with a livelock cap; unresolved → run failed + report.
+ * - Post-apply vec-vs-meta count check: both COUNTs + orphan/missing id-sets
+ *   in one store transaction; mismatch → orphan purge (per-id stmtDeleteVec)
+ *   → reindexAll with a livelock cap (2) → per-row backfill of the delta
+ *   (reindexL1Records, ТЗ §5.6 — NOT a third full reindex) + L0 window-skip
+ *   heal (reindexL0Records); unresolved → run failed + report.
  * - Scene/persona rewritten atomically (tmp + rename) with a backup in
  *   dataDir/.backup; syncSceneIndex after apply (error → run failed + log;
  *   rebuild happens on the next /memory/validate).
@@ -703,15 +705,24 @@ export class ApplyExecutor {
   // ============================
 
   /**
-   * vec-vs-meta count check: both COUNTs + orphan id-set in ONE store
+   * vec-vs-meta count check: both COUNTs + orphan/missing id-sets in ONE store
    * transaction. Match → done. Mismatch → orphan purge (per-id stmtDeleteVec,
-   * one transaction) → reindexAll with a livelock cap → unresolved → failed.
+   * one transaction) → reindexAll with a livelock cap (MAX_REINDEX_RETRIES) →
+   * per-row backfill of the remaining delta (reindexL1Records) + L0 window-skip
+   * heal (reindexL0Records) → unresolved → failed.
    */
   private async verifyCounts(result: ApplyResult): Promise<boolean> {
     const store = this.deps.vectorStore;
     if (!store?.consistencyCheck) return true; // backend cannot check — skip
 
-    const updateCounts = (c: { metaCount: number; vecCount: number | null; orphanIds: string[] }): void => {
+    const updateCounts = (c: {
+      metaCount: number;
+      vecCount: number | null;
+      orphanIds: string[];
+      missingIds?: string[];
+      l0VecCount?: number | null;
+      l0MissingIds?: string[];
+    }): void => {
       result.counts = {
         metaCount: c.metaCount,
         vecCount: c.vecCount,
@@ -741,7 +752,7 @@ export class ApplyExecutor {
       }
     }
 
-    // Still mismatched → full reindex (livelock-capped).
+    // Still mismatched → full reindex (livelock-capped, ТЗ §5.6).
     if (!this.deps.embeddingService) {
       result.needsReindex = true;
       result.error = "vec-vs-meta mismatch unresolved (no embedding service available for reindex)";
@@ -760,9 +771,41 @@ export class ApplyExecutor {
       if (check.vecCount === check.metaCount) return true;
     }
 
+    // Livelock cap reached and still mismatched → backfill the delta per-row
+    // (reindexL1Records) INSTEAD of a third full reindex — skip-dual-write
+    // during the reindex window produces exactly this delta, and per-row
+    // delete+insert is idempotent under concurrent dual-writes.
+    const missingIds = check.missingIds ?? [];
+    if (missingIds.length > 0 && store.reindexL1Records) {
+      this.deps.logger.warn?.(
+        `[memory/apply] livelock cap reached — backfilling ${missingIds.length} L1 row(s) per-row`,
+      );
+      await store.reindexL1Records(missingIds, embedFn);
+      result.reindexed = true;
+      check = await store.consistencyCheck();
+      updateCounts(check);
+    }
+
+    // L0 window-skip heal: L0 vector rows skipped during the reindex window
+    // (updateL0Embedding returns false while the flag is set, auto-capture
+    // treats it as non-fatal) are backfilled per-row here so messages captured
+    // during the window stay searchable. Runs regardless of the L1 outcome.
+    // Idempotent under a concurrent background embed (delete+insert replaces).
+    const l0Missing = check.l0MissingIds ?? [];
+    if (l0Missing.length > 0 && store.reindexL0Records) {
+      this.deps.logger.warn?.(
+        `[memory/apply] backfilling ${l0Missing.length} L0 row(s) per-row (reindex window-skip heal)`,
+      );
+      await store.reindexL0Records(l0Missing, embedFn);
+      result.reindexed = true;
+    }
+
+    if (check.vecCount === null) return true;
+    if (check.vecCount === check.metaCount) return true;
+
     result.needsReindex = true;
     result.error =
-      `vec-vs-meta mismatch unresolved after ${MAX_REINDEX_RETRIES} reindex attempt(s) ` +
+      `vec-vs-meta mismatch unresolved after ${MAX_REINDEX_RETRIES} reindex attempt(s) + per-row backfill ` +
       `(vec=${check.vecCount}, meta=${check.metaCount})`;
     return false;
   }

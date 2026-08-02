@@ -50,6 +50,7 @@ import {
   type ChildRunResult,
   type ChildProcess,
 } from "./child-spawn.js";
+import { loadRolePrompt, resolveRoleDir, buildSessionPrompt as composeSessionPrompt } from "../role-files.js";
 
 // ============================
 // Types
@@ -536,7 +537,11 @@ export class ConsolidationOrchestrator {
   }
 
   private buildSessionPrompt(diffText: string): string {
-    return `${DEFAULT_ROLE_PROMPT}\n\n${diffText}\n`;
+    // P9: the session prompt = role.md (auditors pattern, ~/.pi/agent-memory/
+    // tdai/memory-keeper/<role>.md) + the diff section. Missing role file →
+    // fail-open fallback to the built-in DEFAULT_ROLE_PROMPT.
+    const rolePrompt = loadRolePrompt(this.roleName, resolveRoleDir()) ?? DEFAULT_ROLE_PROMPT;
+    return composeSessionPrompt(rolePrompt, diffText);
   }
 
   // ============================
