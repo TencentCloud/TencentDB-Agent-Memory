@@ -50,7 +50,7 @@
    "status": "fixed",
    "waiver": "",
    "approved_by": "",
-   "note": "3 CHECK-строки структурно сломаны (grep -L+wc -l no-op; двойная инверсия secrets; pi-core premature). FIXED: переписаны как негативные grep-bans + nogo-pi-core помечен [semantic] с JUSTIFICATION; coverage-gate 6/6 green."
+   "note": "v3: все 5 mechanized CHECK как негативные grep-bans против HEAD (не worktree), path-exact allowlist, per-artifact l1-prompt, pi-core [semantic]. 7 негативных зондов прошли. coverage-gate 6/6 green."
   }
  ]
 }

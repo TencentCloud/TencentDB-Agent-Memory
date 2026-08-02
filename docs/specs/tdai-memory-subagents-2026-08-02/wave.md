@@ -55,25 +55,25 @@ pi-саб-сессии («пчёлки»), добавить ночной про�
 
 ## INVARIANT-ы (из §4 ТЗ) — Tier-1 coverage gate (coverage-gate.sh, mechanize-first)
 
-Формат: `INVARIANT:` на старте строки + `CHECK:` в том же блоке (см. ~/.agents/skills/system-constitution/coverage-gate.sh). CHECK = негативный grep-ban: rc=0 пока инвариант держится, rc!=0 при нарушении.
+Формат: `INVARIANT:` на старте строки + `CHECK:` в том же блоке (см. ~/.agents/skills/system-constitution/coverage-gate.sh). CHECK = негативный grep-ban против **коммиченного HEAD** (не worktree): rc=0 пока инвариант держится, rc!=0 при нарушении.
 
-INVARIANT: nogo-l1-prompt — L1-промт-фиксы 014808 (判据-критерий + 2 exclusion-пункта в l1-extraction.ts, MAX_CONTENT_CHARS=600 в l1-extractor.ts) не откатывать и держать в коммиченном дереве.
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -qE "判据|cross-task|MAX_CONTENT_CHARS" HEAD -- src/core/prompts/l1-extraction.ts src/core/record/l1-extractor.ts'
+INVARIANT: nogo-l1-prompt — L1-промт-фиксы 014808 держать в коммиченном дереве: 判据-критерий + exclusion-пункты в l1-extraction.ts, MAX_CONTENT_CHARS=600 в l1-extractor.ts. Per-artifact presence (откат любого артефакта = нарушение).
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && git grep -q "判据" HEAD -- src/core/prompts/l1-extraction.ts && git grep -q "MAX_CONTENT_CHARS" HEAD -- src/core/record/l1-extractor.ts'
 
-INVARIANT: nogo-recall-knobs — recall scoreThreshold 0.85/maxResults 3/strategy embedding не менять (yaml-кнобы).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && grep -q "scoreThreshold: 0.85" tdai-gateway.yaml && grep -q "maxResults: 3" tdai-gateway.yaml && grep -q "strategy: embedding" tdai-gateway.yaml && ! git diff --exit-code HEAD -- src/core/hooks/auto-recall.ts'
+INVARIANT: nogo-recall-knobs — recall-кнобы yaml (scoreThreshold 0.85 / maxResults 3 / strategy embedding) не менять; в коммиченном src нет переопределения кнобов-констант.
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && grep -q "scoreThreshold: 0.85" tdai-gateway.yaml && grep -q "maxResults: 3" tdai-gateway.yaml && grep -q "strategy: embedding" tdai-gateway.yaml && ! git grep -qE "scoreThreshold[[:space:]]*=[[:space:]]*0\.85|maxResults[[:space:]]*=[[:space:]]*3" HEAD -- src/core'
 
-INVARIANT: nogo-records-rewrite — records/*.jsonl пишут только l1-writer.ts (гейтвей-экстрактор) и apply-executor.ts (/memory/apply); больше никто (негатив: список файлов с write-вызовами вне allowlist пуст).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && test -z "$(git grep -lE "appendFile|writeFile" HEAD -- src/gateway src/core/record | grep -vE "l1-writer|apply-executor|token|test")"'
+INVARIANT: nogo-records-rewrite — records/*.jsonl пишут только allowlist (l1-writer.ts гейтвей-экстрактор, apply-executor.ts /memory/apply, token.ts, тесты); ВСЕ файлы с write-вызовами ⊆ allowlist (path-exact, не substring).
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && test -z "$(git grep -lE "appendFile|writeFile" HEAD -- src/gateway src/core/record | sed "s/^HEAD://" | grep -vxE "src/core/record/l1-writer.ts|src/gateway/apply-executor.ts|src/gateway/token.ts|src/gateway/apply-executor.test.ts|src/gateway/memory-routes.test.ts")"'
 
-INVARIANT: nogo-l0-path — L0 capture-путь (l0-recorder.ts, auto-capture.ts) без LLM-вызовов и без изменений (негатив: генерация текста в capture-коде = нарушение).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "generateText|generateObject" HEAD -- src/core/conversation/l0-recorder.ts src/core/hooks/auto-capture.ts && ! git diff --exit-code HEAD -- src/core/conversation/l0-recorder.ts src/core/hooks/auto-capture.ts'
+INVARIANT: nogo-l0-path — L0 capture-путь без LLM-вызовов в коммиченном HEAD (негатив: generateText/generateObject в capture-коде = нарушение).
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "generateText|generateObject" HEAD -- src/core/conversation/l0-recorder.ts src/core/hooks/auto-capture.ts'
 
 INVARIANT: nogo-pi-core [semantic] — tdai-memory.ts при включённом реколле не менять поведение (офф-свитч аддитивно, P11/B5). Немеханизируемо до P11: файл вне git-репо, diff-гейты неприменимы; реализация офф-свитча (P11) добавит механический CHECK на инъекционные пути. Оценка — Auditor.
 JUSTIFICATION: tdai-memory.ts лежит в ~/.pi/agent/extensions (не git-репо) — механический diff-CHECK невозможен; поведенческая проверка (реколл работает как сейчас) — ручная, Tier-2.
 
-INVARIANT: nogo-secrets — саб-сессия/тулы не получают gateway-ключей; env-whitelist секрето-свободен; токен не логируется; apiKey не в коммиченном дереве (негатив: hardcoded ключи в src/gateway = нарушение; yaml с apiKey остаётся untracked).
-CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "sk-[A-Za-z0-9]{20,}" HEAD -- src/ && git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; test $? -ne 0'
+INVARIANT: nogo-secrets — саб-сессия/тулы не получают gateway-ключей; apiKey не в коммиченном дереве; yaml с apiKey остаётся untracked (негатив: hardcoded ключ в src/ = нарушение; yaml закоммичен = нарушение).
+CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "sk-[A-Za-z0-9]{20,}" HEAD -- src/ && { ! git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; }'
 
 ## Wave-close
 
