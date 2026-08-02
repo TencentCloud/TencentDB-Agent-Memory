@@ -56,7 +56,8 @@ import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import type { Logger } from "../core/types.js";
 import { writeMemory, type ExtractedMemory, type DedupDecision, type MemoryType } from "../core/record/l1-writer.js";
-import { syncSceneIndexAllProjects } from "../core/scene/scene-index.js";
+import { parseSceneBlock } from "../core/scene/scene-format.js";
+import * as sceneIndex from "../core/scene/scene-index.js";
 import { parseJsonBody, sendJson, sendError, openReadonlySqlite } from "./http-utils.js";
 import type { GatewayConfig } from "./config.js";
 import type { TdaiCore } from "../core/tdai-core.js";
@@ -469,15 +470,18 @@ export class ApplyExecutor {
         throw new ApplyRuntimeError(`merge target "${op.target}" is missing (members still present)`);
       }
 
-      const memory: ExtractedMemory = {
+      const memory = {
         content: op.content,
         type: (targetRow.type as MemoryType) || "episodic",
         priority: targetRow.priority ?? 50,
         source_message_ids: [],
         metadata: parseMetadata(targetRow.metadata_json),
         scene_name: targetRow.scene_name ?? "",
+        // The committed ExtractedMemory has no `scope` (I3/I4 adds it). Passing
+        // it is harmless on the committed writer — unknown fields are ignored —
+        // and preserves the merge target's scope on the merged tree.
         scope: targetRow.scope === "project" ? "project" : undefined,
-      };
+      } as ExtractedMemory;
       const decision: DedupDecision = {
         record_id: op.target,
         action: "merge",
@@ -495,11 +499,14 @@ export class ApplyExecutor {
           baseDir: dataDir,
           sessionKey: targetRow.session_key,
           sessionId: targetRow.session_id,
+          // The committed writeMemory signature has no `projectId` (I3/I4 adds
+          // it). The committed writer ignores the extra key; the merged one
+          // uses it to keep the merged record's project attribution.
           projectId: targetRow.project_id,
           logger,
           vectorStore,
           embeddingService,
-        });
+        } as Parameters<typeof writeMemory>[0]);
       } catch (err) {
         throw new ApplyRuntimeError(
           `writeMemory failed for merge target "${op.target}": ${err instanceof Error ? err.message : String(err)}`,
@@ -614,7 +621,21 @@ export class ApplyExecutor {
 
   private async syncSceneIndex(): Promise<boolean> {
     try {
-      await syncSceneIndexAllProjects(this.deps.dataDir);
+      // The committed scene-index module only exposes the legacy flat single-call
+      // API; the I3/I4 scene split adds syncSceneIndexAllProjects (the per-project
+      // rebuild apply needs after rewriting scene_blocks/<slug>). Feature-detect so
+      // the committed tree compiles and runs standalone, while the merged tree
+      // keeps the authoritative module implementation.
+      const allProjects = (
+        sceneIndex as typeof sceneIndex & {
+          syncSceneIndexAllProjects?: (dataDir: string) => Promise<unknown>;
+        }
+      ).syncSceneIndexAllProjects;
+      if (typeof allProjects === "function") {
+        await allProjects(this.deps.dataDir);
+      } else {
+        await this.syncSceneIndexPerProject();
+      }
       return true;
     } catch (err) {
       this.deps.logger.warn?.(
@@ -622,6 +643,58 @@ export class ApplyExecutor {
         "scene_index.json rebuilds on the next /memory/validate",
       );
       return false;
+    }
+  }
+
+  /**
+   * Committed-tree fallback for syncSceneIndexAllProjects. The committed
+   * scene-index.ts scans scene_blocks/ flat and cannot index the per-project
+   * scene_blocks/<slug>/ layout that apply rewrites, so mirror the per-project
+   * rebuild here (same layout memory-routes.ts /memory/validate expects:
+   * .metadata/scene_index/<slug>.json). Superseded by the I3/I4 module export
+   * once that lands.
+   */
+  private async syncSceneIndexPerProject(): Promise<void> {
+    const blocksRoot = path.join(this.deps.dataDir, "scene_blocks");
+    let slugs: string[];
+    try {
+      slugs = (await fs.promises.readdir(blocksRoot, { withFileTypes: true }))
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch {
+      return; // no scene_blocks yet — nothing to index
+    }
+
+    for (const slug of slugs) {
+      const blocksDir = path.join(blocksRoot, slug);
+      let files: string[];
+      try {
+        files = (await fs.promises.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+      } catch {
+        continue;
+      }
+
+      const entries: sceneIndex.SceneIndexEntry[] = [];
+      for (const file of files) {
+        try {
+          const raw = await fs.promises.readFile(path.join(blocksDir, file), "utf-8");
+          const block = parseSceneBlock(raw, file);
+          entries.push({
+            filename: file,
+            summary: block.meta.summary,
+            heat: block.meta.heat,
+            created: block.meta.created,
+            updated: block.meta.updated,
+          });
+        } catch {
+          // Deleted between readdir and readFile — skip it, keep the rest.
+          continue;
+        }
+      }
+
+      const indexPath = path.join(this.deps.dataDir, ".metadata", "scene_index", `${slug}.json`);
+      await fs.promises.mkdir(path.dirname(indexPath), { recursive: true });
+      await fs.promises.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
     }
   }
 
@@ -718,14 +791,22 @@ export class ApplyExecutor {
 
     const dbPath = path.join(this.deps.dataDir, "vectors.db");
     const placeholders = unique.map(() => "?").join(", ");
-    const sql =
-      "SELECT record_id, updated_time, type, priority, scene_name, session_key, session_id, " +
-      "project_id, COALESCE(scope, '') AS scope, metadata_json " +
-      `FROM l1_records WHERE record_id IN (${placeholders})`;
 
     try {
       const db = openReadonlySqlite(dbPath);
       try {
+        // project_id/scope are I3/I4 columns (ALTER TABLE migration); the
+        // committed l1_records schema predates them. Probe once so the same
+        // query serves both trees — absent columns read as ''.
+        const columns = new Set(
+          (db.prepare("PRAGMA table_info(l1_records)").all() as Array<{ name: string }>).map((c) => c.name),
+        );
+        const projectIdExpr = columns.has("project_id") ? "project_id" : "'' AS project_id";
+        const scopeExpr = columns.has("scope") ? "COALESCE(scope, '')" : "''";
+        const sql =
+          "SELECT record_id, updated_time, type, priority, scene_name, session_key, session_id, " +
+          `${projectIdExpr}, ${scopeExpr} AS scope, metadata_json ` +
+          `FROM l1_records WHERE record_id IN (${placeholders})`;
         const rows = db.prepare(sql).all(...unique) as Array<Record<string, unknown>>;
         for (const row of rows) {
           const recordId = String(row.record_id ?? "");
