@@ -38,6 +38,19 @@
    "waiver": "",
    "approved_by": "",
    "note": "014808 фикс (判据-line, 2 exclusion, MAX_CONTENT_CHARS=600) ТОЛЬКО в незакоммиченном worktree; committed HEAD pre-fix. Follow-up: закоммитить 014808 дельту отдельным пакетом. FIXED: 014808 delta committed 1cbfa75, INVARIANT CHECK green on HEAD."
+  },
+  {
+   "id": "D-4",
+   "found_by": "auditor",
+   "packet": "B2",
+   "loc": "wave.md INVARIANT CHECKs",
+   "rule": "invariant-unenforced",
+   "spec_ref": "wave.md",
+   "severity": "critical",
+   "status": "fixed",
+   "waiver": "",
+   "approved_by": "",
+   "note": "3 CHECK-строки структурно сломаны (grep -L+wc -l no-op; двойная инверсия secrets; pi-core premature). FIXED: переписаны как негативные grep-bans + nogo-pi-core помечен [semantic] с JUSTIFICATION; coverage-gate 6/6 green."
   }
  ]
 }
