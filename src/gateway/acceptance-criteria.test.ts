@@ -16,13 +16,30 @@
  * Static checks read COMMITTED files relative to this module (works from a
  * fresh worktree). Integration boots a real TdaiGateway on a scratch dir.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TdaiGateway } from "./server.js";
 import { parseConfig } from "../config.js";
+import * as childSpawn from "./consolidation/child-spawn.js";
+
+/**
+ * Test-isolation (B6 R2, reviewer medium test-system-side-effect): a real
+ * gateway boot calls orchestrator.start() → sweepKeeperOrphans(null) which
+ * scans /proc for PI_MEMORY_KEEPER=1 processes and `kill -KILL`s them (no
+ * active run → EVERY marker-carrying process is an orphan). A scratch gateway
+ * booted by vitest would therefore SIGKILL a LIVE system keeper
+ * (tdai-gateway.service mid-consolidation). Stub the sweep to a no-op for
+ * this file's module graph so the test gateway never scans /proc and never
+ * kills system processes. The regression assertion in the criterion-2 test
+ * proves the dangerous call site is still reached — and intercepted.
+ */
+vi.mock("./consolidation/child-spawn.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./consolidation/child-spawn.js")>();
+  return { ...actual, sweepKeeperOrphans: vi.fn(() => 0) };
+});
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 /** Repo root: <repo>/src/gateway → <repo>. */
@@ -68,6 +85,11 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
   it("start → /status 200 → stop → restart on the SAME dataDir → /status 200 again", async () => {
     const first = makeGateway();
     await first.start();
+    // Regression guard (B6 R2): the dangerous sweep site — start() with no
+    // active run, which would SIGKILL every PI_MEMORY_KEEPER=1 process — is
+    // reached by the test gateway, but the stubbed no-op intercepted it: no
+    // /proc scan, no kill of system processes.
+    expect(childSpawn.sweepKeeperOrphans).toHaveBeenCalledWith(null, expect.anything());
     try {
       const res = await fetch(`${baseUrl}/status`);
       expect(res.status).toBe(200);
