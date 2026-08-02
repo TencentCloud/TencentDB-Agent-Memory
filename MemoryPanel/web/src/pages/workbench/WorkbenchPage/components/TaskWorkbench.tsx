@@ -407,7 +407,7 @@ function BoardView({
           <Card.Body className="_memory-workbench-detail-body">
             {!selected ? (
               <div className="_memory-workbench-detail-empty">
-                <Text theme="weak">在左侧选中一条 task，或点击「新建 Task」开始一个新任务。</Text>
+                <Text theme="weak">{t('workbench.searchPlaceholder', { defaultValue: '在左侧选中一条 task，或点击「新建 Task」开始一个新任务。' })}</Text>
               </div>
             ) : (
               <TaskDetail

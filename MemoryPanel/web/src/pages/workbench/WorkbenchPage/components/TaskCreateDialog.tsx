@@ -20,6 +20,7 @@
  */
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Alert, Tag, Input, Button, Form, Modal } from 'tea-component';
 import './task-create-dialog.css';
 
@@ -31,17 +32,15 @@ export interface TaskDraft {
   description: string;
   source_type: TaskSourceType;
   source_url: string;
-  /** 关联 Agent 在创建后再挂载，这里始终空数组传出。 */
   linked_agents: string[];
 }
 
 export default function TaskCreateDialog(props: {
-  /** 当前激活 team — 由调用方从右上角全局 TeamSwitcher 同步过来。
-   *  没有 team（还没选 / 一个都没加入）时，应当由父组件挡掉，不应该走到这里。 */
   team: { team_id: string; name: string };
   onClose: () => void;
   onCreate: (draft: TaskDraft) => Promise<void> | void;
 }) {
+  const { t } = useTranslation();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -69,14 +68,14 @@ export default function TaskCreateDialog(props: {
   }
 
   return (
-    <Modal visible caption="新建 Task" size="m" onClose={props.onClose} disableEscape={submitting}>
+    <Modal visible caption={t('workbench.createTask', { defaultValue: '新建 Task' })} size="m" onClose={props.onClose} disableEscape={submitting}>
       <Modal.Body>
         <Form>
-          <Form.Item label="所属 Team">
+          <Form.Item label={t('header.currentTeam', { defaultValue: '所属 Team' })}>
             <div className="_memory-tcd-team-row">
               <span className="_memory-tcd-team-avatar">{props.team.name.slice(0, 1).toUpperCase()}</span>
               <div className="_memory-tcd-team-meta">
-                <div className="_memory-tcd-team-label">将创建到 team</div>
+                <div className="_memory-tcd-team-label">{t('team.switchDesc', { defaultValue: '将创建到 team' })}</div>
                 <div className="_memory-tcd-team-name-row">
                   <span className="_memory-tcd-team-name">{props.team.name}</span>
                   <Tag size="sm">{props.team.team_id}</Tag>
@@ -84,30 +83,30 @@ export default function TaskCreateDialog(props: {
               </div>
             </div>
           </Form.Item>
-          <Form.Item label="标题" required>
+          <Form.Item label={t('workbench.taskName', { defaultValue: '标题' })} required>
             <Input
               autoFocus
               size="full"
               value={title}
               onChange={setTitle}
-              placeholder="例如：修复 #142 macOS 14 启动失败"
+              placeholder={t('workbench.taskName', { defaultValue: '例如：修复 #142 macOS 14 启动失败' })}
             />
           </Form.Item>
-          <Form.Item label="描述" required extra="关联 Agent 可在创建后再挂载">
+          <Form.Item label={t('common.description', { defaultValue: '描述' })} required extra={t('team.agents.noAssets', { defaultValue: '关联 Agent 可在创建后再挂载' })}>
             <Input.TextArea
               size="full"
               value={description}
               onChange={setDescription}
               rows={4}
-              placeholder="包含背景、目标、验收标准。建议越具体越好，方便 agent 理解上下文。"
+              placeholder={t('common.description', { defaultValue: '包含背景、目标、验收标准。建议越具体越好，方便 agent 理解上下文。' })}
             />
           </Form.Item>
           {error && <Form.Item><Alert type="error">{error}</Alert></Form.Item>}
         </Form>
       </Modal.Body>
       <Modal.Footer>
-        <Button type="primary" onClick={() => void submit()} disabled={!canSubmit} loading={submitting}>创建 Task</Button>
-        <Button onClick={props.onClose} disabled={submitting}>取消</Button>
+        <Button type="primary" onClick={() => void submit()} disabled={!canSubmit} loading={submitting}>{t('workbench.createTask', { defaultValue: '创建 Task' })}</Button>
+        <Button onClick={props.onClose} disabled={submitting}>{t('common.cancel', { defaultValue: '取消' })}</Button>
       </Modal.Footer>
     </Modal>
   );
