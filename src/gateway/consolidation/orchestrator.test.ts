@@ -579,4 +579,51 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(summary.status).toBe("ok");
     expect(spawn).toHaveBeenCalledTimes(1);
   });
+
+  it("night delete cap exceeded → apply refused (mechanical gate, not a prompt)", async () => {
+    const roleDir = path.join(tmp, "roles5");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+    // diff with 51 deleteL1 ops > default deleteCapPerRun=50
+    const manyDeletes = Array.from({ length: 51 }, (_, i) => ({
+      id: `m_d${i}`,
+      updatedAt: "2026-08-01T00:00:00Z",
+    }));
+    const spawn = writingSpawn({ deleteL1: manyDeletes });
+    const apply = vi.fn(async () => okApply());
+    const orch = makeOrchestrator({
+      roleName: "night-keeper",
+      roleDir,
+      spawn,
+      apply,
+    });
+
+    const summary = await orch.runNow({ reason: "night" });
+    expect(summary.status).toBe("failed");
+    expect(summary.error).toMatch(/delete cap exceeded/);
+    expect(apply).not.toHaveBeenCalled(); // mechanical gate refuses apply
+  });
+
+  it("night runType routes through runNow with role=night-keeper even when constructor roleName is keeper", async () => {
+    const roleDir = path.join(tmp, "roles6");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+    const spawn = writingSpawn({});
+    const orch = makeOrchestrator({ roleDir, spawn }); // constructor roleName = keeper
+
+    const summary = await orch.runNow({
+      reason: "night",
+      runType: "night-keeper",
+    });
+    expect(summary.status).toBe("ok");
+    expect(summary.role).toBe("night-keeper"); // per-run role, not constructor
+  });
 });

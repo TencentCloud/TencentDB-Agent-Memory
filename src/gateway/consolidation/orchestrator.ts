@@ -322,6 +322,8 @@ export class ConsolidationOrchestrator {
   async trigger(opts: {
     reason: string;
     dryRun?: boolean;
+    /** Role for this run: "keeper" (default) | "night-keeper". */
+    runType?: string;
   }): Promise<TriggerResult> {
     if (!this.config.memory.consolidation.enabled) {
       return { accepted: false, status: "disabled", reason: opts.reason };
@@ -333,7 +335,11 @@ export class ConsolidationOrchestrator {
     const runId = randomUUID();
     this.activeRunUuid = runId;
     // Never reject: run failures are recorded in the report + lastRun.
-    void this.executeRun({ ...opts, runId })
+    void this.executeRun({
+      ...opts,
+      runId,
+      role: opts.runType ?? this.roleName,
+    })
       .finally(() => {
         this.activeRunUuid = null;
         release();
@@ -350,13 +356,23 @@ export class ConsolidationOrchestrator {
   async runNow(opts: {
     reason: string;
     dryRun?: boolean;
+    /** Role for this run: "keeper" (default) | "night-keeper". */
+    runType?: string;
   }): Promise<RunSummary> {
     const release = this.gate.tryAcquire();
-    if (!release) return this.busySummary(opts);
+    if (!release)
+      return this.busySummary({
+        ...opts,
+        runType: opts.runType ?? this.roleName,
+      });
     const runId = randomUUID();
     this.activeRunUuid = runId;
     try {
-      return await this.executeRun({ ...opts, runId });
+      return await this.executeRun({
+        ...opts,
+        runId,
+        role: opts.runType ?? this.roleName,
+      });
     } finally {
       this.activeRunUuid = null;
       release();
@@ -367,10 +383,14 @@ export class ConsolidationOrchestrator {
   // Run pipeline
   // ============================
 
-  private busySummary(opts: { reason: string; dryRun?: boolean }): RunSummary {
+  private busySummary(opts: {
+    reason: string;
+    dryRun?: boolean;
+    runType?: string;
+  }): RunSummary {
     const startedMs = this.now();
     return {
-      role: this.roleName,
+      role: opts.runType ?? this.roleName,
       status: "failed",
       startedAt: new Date(startedMs).toISOString(),
       finishedAt: new Date(startedMs).toISOString(),
@@ -392,12 +412,14 @@ export class ConsolidationOrchestrator {
     reason: string;
     dryRun?: boolean;
     runId: string;
+    /** Effective role for this run (runType ?? constructor roleName). */
+    role: string;
   }): Promise<RunSummary> {
     const startedMs = this.now();
     const startedAt = new Date(startedMs).toISOString();
     const runScratch = path.join(this.scratchRoot, opts.runId);
     const summary: RunSummary = {
-      role: this.roleName,
+      role: opts.role,
       status: "failed",
       startedAt,
       finishedAt: startedAt,
@@ -443,7 +465,7 @@ export class ConsolidationOrchestrator {
       const promptPath = path.join(runScratch, "memory-keeper-prompt.md");
       await fs.promises.writeFile(
         promptPath,
-        this.buildSessionPrompt(diff.text),
+        this.buildSessionPrompt(diff.text, opts.role),
         "utf-8",
       );
 
@@ -513,6 +535,36 @@ export class ConsolidationOrchestrator {
       // Apply through the P4 ApplyExecutor — manifest recheck + backup +
       // abort loop + syncSceneIndex all live there. presentedRecordIds =
       // exactly the ids embedded in the diff section.
+      if (opts.role === "night-keeper") {
+        const night = this.config.memory.consolidation.night;
+        const diffObj = (rawDiff ?? {}) as Record<string, unknown>;
+        const deleteOps = Array.isArray(diffObj.deleteL1)
+          ? (diffObj.deleteL1 as unknown[]).length
+          : 0;
+        const mergeMembers = Array.isArray(diffObj.merge)
+          ? (diffObj.merge as Array<{ cluster?: unknown[] }>).reduce(
+              (acc: number, m) => acc + (m.cluster?.length ?? 0),
+              0,
+            )
+          : 0;
+        const rewriteOps = Array.isArray(diffObj.rewriteRecord)
+          ? (diffObj.rewriteRecord as unknown[]).length
+          : 0;
+        if (deleteOps + mergeMembers > night.deleteCapPerRun) {
+          summary.error =
+            `night delete cap exceeded (deleteL1=${deleteOps} + mergeMembers=${mergeMembers} > ` +
+            `deleteCapPerRun=${night.deleteCapPerRun}) — apply refused (mechanical gate)`;
+          await this.writeReport(summary);
+          return summary;
+        }
+        if (rewriteOps > night.rewriteCapPerRun) {
+          summary.error =
+            `night rewrite cap exceeded (rewriteRecord=${rewriteOps} > ` +
+            `rewriteCapPerRun=${night.rewriteCapPerRun}) — apply refused (mechanical gate)`;
+          await this.writeReport(summary);
+          return summary;
+        }
+      }
       const applyResult = await this.applyDiff({
         diff: rawDiff,
         manifest: { baseline: manifestShaMap(baseline) },
@@ -660,7 +712,7 @@ export class ConsolidationOrchestrator {
       d.lastRunAt = summary.finishedAt;
       if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
       d.l0Count += newL0;
-      d.roles[this.roleName] = {
+      d.roles[summary.role] = {
         lastRunAt: summary.finishedAt,
         recordsProcessed: summary.recordsPresented,
         overLimitBlocks: summary.overLimitBlocks,
@@ -671,15 +723,18 @@ export class ConsolidationOrchestrator {
     });
   }
 
-  private buildSessionPrompt(diffText: string): string {
+  private buildSessionPrompt(
+    diffText: string,
+    role: string = this.roleName,
+  ): string {
     // P9: the session prompt = role.md (auditors pattern, ~/.pi/agent-memory/
     // tdai/memory-keeper/<role>.md) + the diff section.
     // Night role is FAIL-LOUD: a missing night-keeper.md must refuse the run,
     // never silently run with day semantics (DEFAULT_ROLE_PROMPT). Day keeper
     // keeps the fail-open fallback (backward compat).
-    const rolePrompt = loadRolePrompt(this.roleName, this.roleDir);
+    const rolePrompt = loadRolePrompt(role, this.roleDir);
     if (!rolePrompt) {
-      if (this.roleName === "night-keeper") {
+      if (role === "night-keeper") {
         throw new Error(
           `[memory-keeper] role file "night-keeper.md" is missing in ${this.roleDir} — ` +
             "night-keeper run refused (fail-loud, not day semantics)",
@@ -800,7 +855,7 @@ export class ConsolidationOrchestrator {
     const logsDir = path.join(this.dataDir, "logs");
     await fs.promises.mkdir(logsDir, { recursive: true });
     const ts = summary.startedAt.replace(/[:.]/g, "-");
-    const file = path.join(logsDir, `${this.roleName}-${ts}.json`);
+    const file = path.join(logsDir, `${summary.role}-${ts}.json`);
     await fs.promises.writeFile(
       file,
       JSON.stringify(summary, null, 2),
@@ -808,7 +863,7 @@ export class ConsolidationOrchestrator {
     );
     if (diffText !== undefined) {
       await fs.promises.writeFile(
-        path.join(logsDir, `${this.roleName}-${ts}.diff.md`),
+        path.join(logsDir, `${summary.role}-${ts}.diff.md`),
         diffText,
         "utf-8",
       );
