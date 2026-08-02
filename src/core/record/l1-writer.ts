@@ -130,12 +130,16 @@ const TAG = "[memory-tdai][l1-writer]";
 /** Count of memories downgraded to global because project_id was missing (I4). */
 let scopeDowngradeCount = 0;
 
-function resolveScope(scope: MemoryScope | undefined, projectId: string | undefined, logger?: Logger): MemoryScope {
+function resolveScope(
+  scope: MemoryScope | undefined,
+  projectId: string | undefined,
+  logger?: Logger,
+): MemoryScope {
   if (scope === "project" && !projectId) {
     scopeDowngradeCount++;
     logger?.warn(
       `${TAG} scope='project' but project_id is empty — storing as 'global' (downgrades so far: ${scopeDowngradeCount}). ` +
-      `This means the project_id plumbing is broken upstream.`,
+        `This means the project_id plumbing is broken upstream.`,
     );
     return "global";
   }
@@ -173,11 +177,30 @@ export async function writeMemory(params: {
   vectorStore?: IMemoryStore;
   /** Optional embedding service (required when vectorStore is provided) */
   embeddingService?: EmbeddingService;
+  /**
+   * Preserve the ORIGINAL created time on update/merge rewrites. writeMemory
+   * hardcodes createdAt=now, which would reset a record's age (breaking
+   * cleanup-staleness and date anchoring). When set, it wins over `now`.
+   */
+  createdAtOverride?: string;
 }): Promise<MemoryRecord | null> {
-  const { memory, decision, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService } = params;
+  const {
+    memory,
+    decision,
+    baseDir,
+    sessionKey,
+    sessionId,
+    projectId,
+    logger,
+    vectorStore,
+    embeddingService,
+    createdAtOverride,
+  } = params;
 
   if (decision.action === "skip") {
-    logger?.debug?.(`${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`);
+    logger?.debug?.(
+      `${TAG} Skipping memory: ${memory.content.slice(0, 50)}...`,
+    );
     return null;
   }
 
@@ -211,7 +234,7 @@ export async function writeMemory(params: {
     source_message_ids: memory.source_message_ids,
     metadata: memory.metadata,
     timestamps: finalTimestamps,
-    createdAt: now,
+    createdAt: createdAtOverride ?? now,
     updatedAt: now,
     sessionKey,
     sessionId: sessionId || "",
@@ -228,14 +251,19 @@ export async function writeMemory(params: {
   const shardDate = formatLocalDate(new Date());
   const filePath = path.join(recordsDir, `${shardDate}.jsonl`);
 
-  if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0) {
+  if (
+    (decision.action === "update" || decision.action === "merge") &&
+    decision.target_ids.length > 0
+  ) {
     // Remove target records from VectorStore (real-time deletion for retrieval accuracy).
     // JSONL is append-only — old records remain in files and are cleaned up periodically
     // by memory-cleaner (which reconciles against VectorStore as source of truth).
     if (vectorStore) {
       try {
         await vectorStore.deleteL1Batch(decision.target_ids);
-        logger?.debug?.(`${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`);
+        logger?.debug?.(
+          `${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`,
+        );
       } catch (err) {
         logger?.warn?.(
           `${TAG} VectorStore delete failed for ${decision.action}: ${err instanceof Error ? err.message : String(err)}`,
@@ -243,11 +271,15 @@ export async function writeMemory(params: {
       }
     }
     await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
-    logger?.debug?.(`${TAG} ${decision.action} memory: removed [${decision.target_ids.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`);
+    logger?.debug?.(
+      `${TAG} ${decision.action} memory: removed [${decision.target_ids.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`,
+    );
   } else {
     // store: append a new line
     await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
-    logger?.debug?.(`${TAG} Stored memory ${record.id}: ${finalContent.slice(0, 80)}...`);
+    logger?.debug?.(
+      `${TAG} Stored memory ${record.id}: ${finalContent.slice(0, 80)}...`,
+    );
   }
 
   // === Vector Store dual-write ===
@@ -255,7 +287,7 @@ export async function writeMemory(params: {
     try {
       logger?.debug?.(
         `${TAG} [vec-dual-write] START id=${record.id}, contentLen=${record.content.length}, ` +
-        `content="${record.content.slice(0, 80)}..."`,
+          `content="${record.content.slice(0, 80)}..."`,
       );
 
       let embedding: Float32Array | undefined;
@@ -265,20 +297,22 @@ export async function writeMemory(params: {
           embedding = await embeddingService.embed(record.content);
           logger?.debug?.(
             `${TAG} [vec-dual-write] Embedding OK: dims=${embedding.length}, ` +
-            `norm=${Math.sqrt(Array.from(embedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}`,
+              `norm=${Math.sqrt(Array.from(embedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}`,
           );
         } catch (embedErr) {
           // Embedding failed — pass undefined to upsert() which writes
           // metadata + FTS only, skipping the vec0 table.
           logger?.warn(
             `${TAG} [vec-dual-write] Embedding FAILED for id=${record.id}, ` +
-            `will write metadata only: ${embedErr instanceof Error ? embedErr.message : String(embedErr)}`,
+              `will write metadata only: ${embedErr instanceof Error ? embedErr.message : String(embedErr)}`,
           );
         }
       }
 
       const upsertOk = await vectorStore.upsertL1(record, embedding);
-      logger?.debug?.(`${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`);
+      logger?.debug?.(
+        `${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`,
+      );
     } catch (err) {
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(

@@ -57,10 +57,20 @@ import { z } from "zod";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import type { Logger } from "../core/types.js";
-import { writeMemory, type ExtractedMemory, type DedupDecision, type MemoryType } from "../core/record/l1-writer.js";
+import {
+  writeMemory,
+  type ExtractedMemory,
+  type DedupDecision,
+  type MemoryType,
+} from "../core/record/l1-writer.js";
 import { parseSceneBlock } from "../core/scene/scene-format.js";
 import * as sceneIndex from "../core/scene/scene-index.js";
-import { parseJsonBody, sendJson, sendError, openReadonlySqlite } from "./http-utils.js";
+import {
+  parseJsonBody,
+  sendJson,
+  sendError,
+  openReadonlySqlite,
+} from "./http-utils.js";
 import { isSceneBlockRelPathOrPersona } from "./block-paths.js";
 import type { GatewayConfig } from "./config.js";
 import type { TdaiCore } from "../core/tdai-core.js";
@@ -80,6 +90,8 @@ export const MAX_MERGE_OPS = 100;
 export const MAX_REWRITE_OPS = 100;
 export const MAX_MERGE_CLUSTER = 50;
 export const MAX_PRESENTED_IDS = 5000;
+/** L1 content cap — mirrors l1-extractor MAX_CONTENT_CHARS (600). */
+export const MAX_L1_CONTENT_CHARS = 600;
 /** Livelock cap for reindexAll retries (ТЗ §5.6). */
 export const MAX_REINDEX_RETRIES = 2;
 
@@ -115,10 +127,20 @@ const rewriteBlockOpSchema = z.strictObject({
   content: z.string().max(SCENE_LIMIT_CHARS),
 });
 
+const rewriteRecordOpSchema = z.strictObject({
+  /** Record id to rewrite in place. */
+  id: z.string().min(1),
+  /** updatedAt observed by the memory-keeper when the diff was built (stale-check). */
+  updatedAt: z.string(),
+  /** New content (≤ L1 content cap, like l1-extractor MAX_CONTENT_CHARS=600). */
+  content: z.string().max(MAX_L1_CONTENT_CHARS),
+});
+
 const diffSchema = z.strictObject({
   deleteL1: z.array(deleteL1OpSchema).max(MAX_DELETE_L1_OPS).optional(),
   merge: z.array(mergeOpSchema).max(MAX_MERGE_OPS).optional(),
   rewriteBlock: z.array(rewriteBlockOpSchema).max(MAX_REWRITE_OPS).optional(),
+  rewriteRecord: z.array(rewriteRecordOpSchema).max(MAX_REWRITE_OPS).optional(),
   rewritePersona: z.string().max(PERSONA_LIMIT_CHARS).optional(),
 });
 
@@ -206,6 +228,7 @@ interface ParsedApplyRequest {
     deleteL1?: Array<{ id: string; updatedAt: string }>;
     merge?: Array<{ cluster: string[]; target: string; content: string }>;
     rewriteBlock?: Array<{ path: string; content: string }>;
+    rewriteRecord?: Array<{ id: string; updatedAt: string; content: string }>;
     rewritePersona?: string;
   };
   manifest: { baseline: Record<string, string> };
@@ -216,6 +239,10 @@ interface ParsedApplyRequest {
 interface MetaRow {
   record_id: string;
   updated_time: string;
+  /** Original creation time — preserved on rewriteRecord/merge via createdAtOverride. */
+  created_time: string;
+  /** Current content — heal-skip (rewrite already applied) compares against it. */
+  content: string;
   type: string;
   priority: number;
   scene_name: string;
@@ -273,10 +300,15 @@ export class ApplyExecutor {
       // 3. Trust-boundary manifest recheck — before any mutation.
       this.checkManifest(parsed);
 
-      // 4. Mutations: writes (merge) → deletes (deleteL1) → files (scene/persona).
+      // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes (deleteL1) → files (scene/persona).
       await this.applyMerges(parsed.diff.merge, result);
+      await this.applyRewritesRecords(parsed.diff.rewriteRecord, result);
       await this.applyDeletes(parsed.diff.deleteL1, result);
-      await this.applyRewrites(parsed.diff.rewriteBlock, parsed.diff.rewritePersona, result);
+      await this.applyRewrites(
+        parsed.diff.rewriteBlock,
+        parsed.diff.rewritePersona,
+        result,
+      );
 
       // 5. Scene index rebuild after file rewrites.
       result.sceneIndexSynced = await this.syncSceneIndex();
@@ -365,12 +397,31 @@ export class ApplyExecutor {
       }
       allMergeTargets.push(op.target);
     }
+    // Existence-check (was hard-reject): a missing merge target now falls
+    // through to applyMerges' skip-if-missing (cross-batch partner deleted in
+    // an earlier night batch must not abort the run). Structural checks above
+    // (target ∈ cluster, members ⊆ presented) stay hard. Missing records here
+    // are tolerated; applyMerges decides skip vs error per row.
     if (allMergeTargets.length > 0) {
-      const existing = await this.fetchMetaRows(allMergeTargets);
-      for (const target of allMergeTargets) {
-        if (!existing.has(target)) {
-          throw new ApplyValidationError(`merge target "${target}" does not exist in records`);
-        }
+      await this.fetchMetaRows(allMergeTargets); // warm cache; no reject
+    }
+
+    // rewriteRecord: presented-check + no id overlap with deleteL1/merge
+    // (an id in two sections of one diff → stale-abort, never double-mutate).
+    const touchedByOther = new Set<string>([
+      ...(diff.deleteL1 ?? []).map((o) => o.id),
+      ...(diff.merge ?? []).flatMap((o) => o.cluster),
+    ]);
+    for (const op of diff.rewriteRecord ?? []) {
+      if (!presented.has(op.id)) {
+        throw new ApplyValidationError(
+          `rewriteRecord id "${op.id}" was not presented to the memory-keeper (rewriteRecord ids must be ⊆ the diff)`,
+        );
+      }
+      if (touchedByOther.has(op.id)) {
+        throw new ApplyValidationError(
+          `rewriteRecord id "${op.id}" also appears in deleteL1/merge of the same diff (id-set intersection forbidden)`,
+        );
       }
     }
 
@@ -401,11 +452,15 @@ export class ApplyExecutor {
    * allowed; the old ASCII-only regex dropped Cyrillic rewriteBlock ops). */
   private assertAllowedRewritePath(relPath: string): void {
     if (!isSceneBlockRelPathOrPersona(relPath)) {
-      throw new ApplyValidationError(`rewriteBlock path "${relPath}" is not in the allowlist (scene_blocks/** or persona.md)`);
+      throw new ApplyValidationError(
+        `rewriteBlock path "${relPath}" is not in the allowlist (scene_blocks/** or persona.md)`,
+      );
     }
     const resolved = this.resolveWithinDataDir(relPath);
     if (!resolved) {
-      throw new ApplyValidationError(`rewriteBlock path "${relPath}" escapes the data dir`);
+      throw new ApplyValidationError(
+        `rewriteBlock path "${relPath}" escapes the data dir`,
+      );
     }
   }
 
@@ -419,18 +474,23 @@ export class ApplyExecutor {
     const { manifest, diff } = parsed;
     const rewrites = new Map<string, string>();
     for (const op of diff.rewriteBlock ?? []) rewrites.set(op.path, op.content);
-    if (diff.rewritePersona !== undefined) rewrites.set("persona.md", diff.rewritePersona);
+    if (diff.rewritePersona !== undefined)
+      rewrites.set("persona.md", diff.rewritePersona);
 
     for (const [relPath, baselineHash] of Object.entries(manifest.baseline)) {
       const resolved = this.resolveWithinDataDir(relPath);
       if (!resolved) {
-        throw new ManifestDriftError(`manifest path "${relPath}" escapes the data dir`);
+        throw new ManifestDriftError(
+          `manifest path "${relPath}" escapes the data dir`,
+        );
       }
       let current: string;
       try {
         current = fs.readFileSync(resolved, "utf-8");
       } catch {
-        throw new ManifestDriftError(`manifest drift: "${relPath}" missing on disk (baseline hash ${baselineHash.slice(0, 8)}…)`);
+        throw new ManifestDriftError(
+          `manifest drift: "${relPath}" missing on disk (baseline hash ${baselineHash.slice(0, 8)}…)`,
+        );
       }
       const currentHash = createHash("sha256").update(current).digest("hex");
       if (currentHash === baselineHash) continue;
@@ -452,7 +512,8 @@ export class ApplyExecutor {
    * deleteL1Batch(cluster∖target). Pre-check: already applied when the target
    * exists and every other member is gone → skip (idempotent heal). */
   private async applyMerges(
-    ops: Array<{ cluster: string[]; target: string; content: string }> | undefined,
+    ops:
+      Array<{ cluster: string[]; target: string; content: string }> | undefined,
     result: ApplyResult,
   ): Promise<void> {
     if (!ops || ops.length === 0) return;
@@ -461,7 +522,9 @@ export class ApplyExecutor {
     for (const op of ops) {
       const rows = await this.fetchMetaRows([op.target, ...op.cluster]);
       const targetRow = rows.get(op.target);
-      const membersPresent = op.cluster.some((m) => m !== op.target && rows.has(m));
+      const membersPresent = op.cluster.some(
+        (m) => m !== op.target && rows.has(m),
+      );
 
       if (targetRow && !membersPresent) {
         result.skipped.merges.push(op.target);
@@ -469,7 +532,11 @@ export class ApplyExecutor {
       }
       if (!targetRow) {
         // Target gone but members remain — nothing sane to merge into.
-        throw new ApplyRuntimeError(`merge target "${op.target}" is missing (members still present)`);
+        // Skip-if-missing (like deleteL1) instead of aborting the whole run:
+        // a cross-batch partner deleted in an earlier night batch must not
+        // abort the rest of the night.
+        result.skipped.merges.push(op.target);
+        continue;
       }
 
       const memory = {
@@ -505,6 +572,8 @@ export class ApplyExecutor {
           // it). The committed writer ignores the extra key; the merged one
           // uses it to keep the merged record's project attribution.
           projectId: targetRow.project_id,
+          // Preserve the ORIGINAL created time — merge must not reset age.
+          createdAtOverride: targetRow.created_time || undefined,
           logger,
           vectorStore,
           embeddingService,
@@ -515,18 +584,24 @@ export class ApplyExecutor {
         );
       }
       if (!written) {
-        throw new ApplyRuntimeError(`writeMemory returned null for merge target "${op.target}"`);
+        throw new ApplyRuntimeError(
+          `writeMemory returned null for merge target "${op.target}"`,
+        );
       }
 
       const members = op.cluster.filter((m) => m !== op.target);
       if (members.length > 0 && vectorStore) {
         const ok = await vectorStore.deleteL1Batch(members);
         if (!ok) {
-          throw new ApplyRuntimeError(`deleteL1Batch failed after merge "${op.target}" (members [${members.join(", ")}])`);
+          throw new ApplyRuntimeError(
+            `deleteL1Batch failed after merge "${op.target}" (members [${members.join(", ")}])`,
+          );
         }
       }
       result.applied.merges.push(op.target);
-      logger.info?.(`[memory/apply] merged ${op.cluster.length} records into ${op.target}`);
+      logger.info?.(
+        `[memory/apply] merged ${op.cluster.length} records into ${op.target}`,
+      );
     }
   }
 
@@ -552,7 +627,7 @@ export class ApplyExecutor {
       if (row.updated_time !== op.updatedAt) {
         throw new StaleDeleteError(
           `delete target "${op.id}" was updated since the diff was built ` +
-          `(diff updatedAt "${op.updatedAt}", current "${row.updated_time}") — aborting to protect fresh data`,
+            `(diff updatedAt "${op.updatedAt}", current "${row.updated_time}") — aborting to protect fresh data`,
         );
       }
       toDelete.push(op.id);
@@ -561,10 +636,96 @@ export class ApplyExecutor {
     if (toDelete.length > 0 && this.deps.vectorStore) {
       const ok = await this.deps.vectorStore.deleteL1Batch(toDelete);
       if (!ok) {
-        throw new ApplyRuntimeError(`deleteL1Batch failed for [${toDelete.join(", ")}]`);
+        throw new ApplyRuntimeError(
+          `deleteL1Batch failed for [${toDelete.join(", ")}]`,
+        );
       }
     }
     result.applied.deletes.push(...toDelete);
+  }
+
+  /**
+   * rewriteRecord: in-place content rewrite of ONE L1 record, preserving
+   * created_time (age must not reset — cleanup staleness + date anchoring).
+   * Pipeline: fetch meta → stale-check updatedAt (abort like deleteL1) →
+   * heal-skip (content already equal → skipped.rewrites) → writeMemory with
+   * action=update, stable id, createdAtOverride → vector rewrite + JSONL.
+   */
+  private async applyRewritesRecords(
+    ops: Array<{ id: string; updatedAt: string; content: string }> | undefined,
+    result: ApplyResult,
+  ): Promise<void> {
+    if (!ops || ops.length === 0) return;
+    const { logger, dataDir, vectorStore, embeddingService } = this.deps;
+
+    const rows = await this.fetchMetaRows(ops.map((o) => o.id));
+    for (const op of ops) {
+      const row = rows.get(op.id);
+      if (!row) {
+        // Record gone → already applied / deleted elsewhere → skip (heal path).
+        result.skipped.rewrites.push(op.id);
+        continue;
+      }
+      if (row.updated_time !== op.updatedAt) {
+        throw new StaleDeleteError(
+          `rewriteRecord target "${op.id}" was updated since the diff was built ` +
+            `(diff updatedAt "${op.updatedAt}", current "${row.updated_time}") — aborting to protect fresh data`,
+        );
+      }
+      if (row.content === op.content) {
+        // heal re-run: rewrite already applied → skip, never stale-abort.
+        result.skipped.rewrites.push(op.id);
+        continue;
+      }
+
+      const memory = {
+        content: op.content,
+        type: (row.type as MemoryType) || "episodic",
+        priority: row.priority ?? 50,
+        source_message_ids: [],
+        metadata: parseMetadata(row.metadata_json),
+        scene_name: row.scene_name ?? "",
+        scope: row.scope === "project" ? "project" : undefined,
+      } as ExtractedMemory;
+      const decision: DedupDecision = {
+        record_id: op.id, // stable id — rewrite, never a new record
+        action: "update",
+        target_ids: [],
+        merged_content: op.content,
+        merged_type: memory.type,
+        merged_priority: memory.priority,
+      };
+
+      let written: Awaited<ReturnType<typeof writeMemory>>;
+      try {
+        written = await writeMemory({
+          memory,
+          decision,
+          baseDir: dataDir,
+          sessionKey: row.session_key,
+          sessionId: row.session_id,
+          projectId: row.project_id,
+          // Preserve original created time — rewrite must not reset age.
+          createdAtOverride: row.created_time || undefined,
+          logger,
+          vectorStore,
+          embeddingService,
+        } as Parameters<typeof writeMemory>[0]);
+      } catch (err) {
+        throw new ApplyRuntimeError(
+          `writeMemory failed for rewriteRecord "${op.id}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (!written) {
+        throw new ApplyRuntimeError(
+          `writeMemory returned null for rewriteRecord "${op.id}"`,
+        );
+      }
+      result.applied.rewrites.push(op.id);
+      logger.info?.(
+        `[memory/apply] rewrote record ${op.id} (${op.content.length} chars)`,
+      );
+    }
   }
 
   /** Rewrite scene/persona atomically (tmp + rename) with a backup. */
@@ -574,13 +735,17 @@ export class ApplyExecutor {
     result: ApplyResult,
   ): Promise<void> {
     const targets: Array<{ relPath: string; content: string }> = [];
-    for (const op of blocks ?? []) targets.push({ relPath: op.path, content: op.content });
-    if (persona !== undefined) targets.push({ relPath: "persona.md", content: persona });
+    for (const op of blocks ?? [])
+      targets.push({ relPath: op.path, content: op.content });
+    if (persona !== undefined)
+      targets.push({ relPath: "persona.md", content: persona });
 
     for (const target of targets) {
       const resolved = this.resolveWithinDataDir(target.relPath);
       if (!resolved) {
-        throw new ApplyRuntimeError(`rewrite path "${target.relPath}" escapes the data dir`);
+        throw new ApplyRuntimeError(
+          `rewrite path "${target.relPath}" escapes the data dir`,
+        );
       }
 
       let current: string | null = null;
@@ -605,7 +770,9 @@ export class ApplyExecutor {
         );
       }
       result.applied.rewrites.push(target.relPath);
-      this.deps.logger.info?.(`[memory/apply] rewrote ${target.relPath} (${target.content.length} chars)`);
+      this.deps.logger.info?.(
+        `[memory/apply] rewrote ${target.relPath} (${target.content.length} chars)`,
+      );
     }
   }
 
@@ -617,7 +784,10 @@ export class ApplyExecutor {
     const backupDir = path.join(this.deps.dataDir, ".backup");
     await fs.promises.mkdir(backupDir, { recursive: true });
     const safeName = relPath.replace(/[^A-Za-z0-9._-]+/g, "_");
-    const backupPath = path.join(backupDir, `apply-${Date.now()}-${safeName}.bak`);
+    const backupPath = path.join(
+      backupDir,
+      `apply-${Date.now()}-${safeName}.bak`,
+    );
     await fs.promises.writeFile(backupPath, content, "utf-8");
   }
 
@@ -642,7 +812,7 @@ export class ApplyExecutor {
     } catch (err) {
       this.deps.logger.warn?.(
         `[memory/apply] syncSceneIndex failed: ${err instanceof Error ? err.message : String(err)} — ` +
-        "scene_index.json rebuilds on the next /memory/validate",
+          "scene_index.json rebuilds on the next /memory/validate",
       );
       return false;
     }
@@ -671,7 +841,9 @@ export class ApplyExecutor {
       const blocksDir = path.join(blocksRoot, slug);
       let files: string[];
       try {
-        files = (await fs.promises.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+        files = (await fs.promises.readdir(blocksDir)).filter((f) =>
+          f.endsWith(".md"),
+        );
       } catch {
         continue;
       }
@@ -679,7 +851,10 @@ export class ApplyExecutor {
       const entries: sceneIndex.SceneIndexEntry[] = [];
       for (const file of files) {
         try {
-          const raw = await fs.promises.readFile(path.join(blocksDir, file), "utf-8");
+          const raw = await fs.promises.readFile(
+            path.join(blocksDir, file),
+            "utf-8",
+          );
           const block = parseSceneBlock(raw, file);
           entries.push({
             filename: file,
@@ -694,9 +869,18 @@ export class ApplyExecutor {
         }
       }
 
-      const indexPath = path.join(this.deps.dataDir, ".metadata", "scene_index", `${slug}.json`);
+      const indexPath = path.join(
+        this.deps.dataDir,
+        ".metadata",
+        "scene_index",
+        `${slug}.json`,
+      );
       await fs.promises.mkdir(path.dirname(indexPath), { recursive: true });
-      await fs.promises.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+      await fs.promises.writeFile(
+        indexPath,
+        JSON.stringify(entries, null, 2),
+        "utf-8",
+      );
     }
   }
 
@@ -755,7 +939,8 @@ export class ApplyExecutor {
     // Still mismatched → full reindex (livelock-capped, ТЗ §5.6).
     if (!this.deps.embeddingService) {
       result.needsReindex = true;
-      result.error = "vec-vs-meta mismatch unresolved (no embedding service available for reindex)";
+      result.error =
+        "vec-vs-meta mismatch unresolved (no embedding service available for reindex)";
       return false;
     }
     const embedFn = (text: string) => this.deps.embeddingService!.embed(text);
@@ -818,7 +1003,8 @@ export class ApplyExecutor {
   private resolveWithinDataDir(relPath: string): string | null {
     const dataRoot = path.resolve(this.deps.dataDir);
     const resolved = path.resolve(dataRoot, relPath);
-    if (resolved !== dataRoot && !resolved.startsWith(dataRoot + path.sep)) return null;
+    if (resolved !== dataRoot && !resolved.startsWith(dataRoot + path.sep))
+      return null;
     return resolved;
   }
 
@@ -842,20 +1028,30 @@ export class ApplyExecutor {
         // committed l1_records schema predates them. Probe once so the same
         // query serves both trees — absent columns read as ''.
         const columns = new Set(
-          (db.prepare("PRAGMA table_info(l1_records)").all() as Array<{ name: string }>).map((c) => c.name),
+          (
+            db.prepare("PRAGMA table_info(l1_records)").all() as Array<{
+              name: string;
+            }>
+          ).map((c) => c.name),
         );
-        const projectIdExpr = columns.has("project_id") ? "project_id" : "'' AS project_id";
+        const projectIdExpr = columns.has("project_id")
+          ? "project_id"
+          : "'' AS project_id";
         const scopeExpr = columns.has("scope") ? "COALESCE(scope, '')" : "''";
         const sql =
-          "SELECT record_id, updated_time, type, priority, scene_name, session_key, session_id, " +
+          "SELECT record_id, updated_time, created_time, content, type, priority, scene_name, session_key, session_id, " +
           `${projectIdExpr}, ${scopeExpr} AS scope, metadata_json ` +
           `FROM l1_records WHERE record_id IN (${placeholders})`;
-        const rows = db.prepare(sql).all(...unique) as Array<Record<string, unknown>>;
+        const rows = db.prepare(sql).all(...unique) as Array<
+          Record<string, unknown>
+        >;
         for (const row of rows) {
           const recordId = String(row.record_id ?? "");
           out.set(recordId, {
             record_id: recordId,
             updated_time: String(row.updated_time ?? ""),
+            created_time: String(row.created_time ?? ""),
+            content: String(row.content ?? ""),
             type: String(row.type ?? ""),
             priority: typeof row.priority === "number" ? row.priority : 50,
             scene_name: String(row.scene_name ?? ""),
@@ -903,7 +1099,10 @@ export async function handleMemoryApply(
   res: http.ServerResponse,
 ): Promise<void> {
   const contentType = req.headers["content-type"];
-  if (typeof contentType !== "string" || !contentType.toLowerCase().startsWith("application/json")) {
+  if (
+    typeof contentType !== "string" ||
+    !contentType.toLowerCase().startsWith("application/json")
+  ) {
     sendError(res, 415, "Content-Type must be application/json");
     return;
   }
@@ -930,7 +1129,11 @@ export async function handleMemoryApply(
     ctx.logger.error?.(
       `[memory/apply] unexpected error: ${err instanceof Error ? err.message : String(err)}`,
     );
-    sendError(res, 500, `Apply executor failed: ${err instanceof Error ? err.message : String(err)}`);
+    sendError(
+      res,
+      500,
+      `Apply executor failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return;
   }
 
@@ -960,7 +1163,8 @@ function hasApplied(result: ApplyResult): boolean {
 function parseMetadata(raw: string): ExtractedMemory["metadata"] {
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as ExtractedMemory["metadata"];
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+      return parsed as ExtractedMemory["metadata"];
   } catch {
     // malformed metadata_json — fall through to {}
   }
@@ -971,7 +1175,10 @@ function parseMetadata(raw: string): ExtractedMemory["metadata"] {
 async function atomicWrite(targetPath: string, content: string): Promise<void> {
   const dir = path.dirname(targetPath);
   await fs.promises.mkdir(dir, { recursive: true });
-  const tmpPath = path.join(dir, `.apply-tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const tmpPath = path.join(
+    dir,
+    `.apply-tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   await fs.promises.writeFile(tmpPath, content, "utf-8");
   await fs.promises.rename(tmpPath, targetPath);
 }
