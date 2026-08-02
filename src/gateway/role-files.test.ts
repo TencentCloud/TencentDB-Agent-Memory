@@ -94,5 +94,14 @@ describe("role-files", () => {
     // hardcoded ~/.pi/agent/tasks (SKILL.md:29 has no env override).
     expect(content).toContain("<scratch-dir>/tasks/");
     expect(content).toContain("/memory/apply");
+    // Keeper-tools section: the canonical prompt must reference the copied
+    // tools/ dir and all four scripts (the runtime copy is re-cp'd from it).
+    expect(content).toContain("tools/");
+    expect(content).toContain("fetch_dups.py");
+    expect(content).toContain("fetch_blocks.py");
+    expect(content).toContain("fetch_records.py");
+    expect(content).toContain("dump_bullets.py");
+    // Direct dataDir reads are forbidden — content only via GET ?path= / records.
+    expect(content).toMatch(/НЕ читай файлы\s*\n?\s*dataDir/i);
   });
 });

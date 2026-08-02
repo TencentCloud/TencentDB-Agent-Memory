@@ -26,6 +26,7 @@ import type { L1SearchResult } from "../core/store/types.js";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { sendJson, sendError, openReadonlySqlite, type ReadonlySqlite } from "./http-utils.js";
+import { isAddressableBlockPath } from "./block-paths.js";
 import type {
   MemoryInfoResponse,
   MemoryRecordsResponse,
@@ -243,10 +244,57 @@ export async function handleMemoryDuplicates(
 
 export async function handleMemoryBlocks(
   ctx: MemoryRoutesContext,
-  _url: URL,
+  url: URL,
   res: http.ServerResponse,
 ): Promise<void> {
-  const { blocks } = collectBlockStats(ctx.config.data.baseDir);
+  const dataDir = ctx.config.data.baseDir;
+
+  // `?path=<rel>` — read the CONTENT of one addressable block (scene_blocks/**
+  // or persona.md). Additive read-only route used by the keeper-tools
+  // fetch_blocks.py; sanitized like cleanup.ts (decode → reject .. / absolute /
+  // empty → allowlist → realpath containment → read the realpath'd path).
+  const rel = url.searchParams.get("path");
+  if (rel !== null) {
+    if (!isAddressableBlockPath(rel)) {
+      sendError(res, 400, `Not an addressable memory block: ${rel}`);
+      return;
+    }
+    let resolved: string;
+    try {
+      resolved = path.resolve(dataDir, rel);
+      const rootReal = await fs.promises.realpath(dataDir);
+      let targetReal: string;
+      try {
+        targetReal = await fs.promises.realpath(resolved);
+      } catch {
+        // Missing file / broken symlink → 404 (tres-realpath-enoent).
+        sendError(res, 404, `Block not found: ${rel}`);
+        return;
+      }
+      const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep;
+      if (targetReal !== rootReal && !targetReal.startsWith(rootPrefix)) {
+        sendError(res, 400, `Block escapes data root: ${rel}`);
+        return;
+      }
+      if (!isAddressableBlockPath(path.relative(rootReal, targetReal))) {
+        sendError(res, 400, `Block escapes allowlist: ${rel}`);
+        return;
+      }
+      const stat = await fs.promises.stat(targetReal);
+      if (!stat.isFile()) {
+        sendError(res, 400, `Not a file: ${rel}`);
+        return;
+      }
+      const content = await fs.promises.readFile(targetReal, "utf-8");
+      const kind = rel === "persona.md" ? "persona" : "scene";
+      sendJson(res, 200, { path: rel, kind, content });
+    } catch (err) {
+      sendError(res, 500, `Failed to read block: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return;
+  }
+
+  const { blocks } = collectBlockStats(dataDir);
   const response: MemoryBlocksResponse = {
     limits: { scene: SCENE_LIMIT_CHARS, persona: PERSONA_LIMIT_CHARS },
     blocks,

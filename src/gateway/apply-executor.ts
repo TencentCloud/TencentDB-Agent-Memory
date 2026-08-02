@@ -61,6 +61,7 @@ import { writeMemory, type ExtractedMemory, type DedupDecision, type MemoryType 
 import { parseSceneBlock } from "../core/scene/scene-format.js";
 import * as sceneIndex from "../core/scene/scene-index.js";
 import { parseJsonBody, sendJson, sendError, openReadonlySqlite } from "./http-utils.js";
+import { isSceneBlockRelPathOrPersona } from "./block-paths.js";
 import type { GatewayConfig } from "./config.js";
 import type { TdaiCore } from "../core/tdai-core.js";
 
@@ -87,8 +88,6 @@ export const MAX_REINDEX_RETRIES = 2;
 // content that parseSceneBlock treats as body-only).
 const META_START = "-----META-START-----";
 const META_END = "-----META-END-----";
-
-const REWRITE_BLOCK_PATH_RE = /^scene_blocks\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.md$/;
 
 // ============================
 // Diff schema (zod ^4.4.3, z.strictObject)
@@ -397,10 +396,11 @@ export class ApplyExecutor {
     }
   }
 
-  /** Allowlist: scene_blocks/<slug>/<file>.md or persona.md, no traversal. */
+  /** Allowlist: scene_blocks/<slug>/<file>.md or persona.md, no traversal
+   * (shared with the read side via block-paths.ts — Unicode scene names
+   * allowed; the old ASCII-only regex dropped Cyrillic rewriteBlock ops). */
   private assertAllowedRewritePath(relPath: string): void {
-    if (relPath === "persona.md") return;
-    if (!REWRITE_BLOCK_PATH_RE.test(relPath)) {
+    if (!isSceneBlockRelPathOrPersona(relPath)) {
       throw new ApplyValidationError(`rewriteBlock path "${relPath}" is not in the allowlist (scene_blocks/** or persona.md)`);
     }
     const resolved = this.resolveWithinDataDir(relPath);

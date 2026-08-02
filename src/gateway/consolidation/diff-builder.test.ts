@@ -157,6 +157,12 @@ describe("diff section assembly (P6, double cap)", () => {
       expect(line.startsWith(">")).toBe(true);
     }
     expect(diff.text).toContain("id=`m_1`");
+    // Task boundary AFTER the data: trailer must come after the record lines.
+    const recordIdx = diff.text.indexOf("id=`m_1`");
+    const trailerIdx = diff.text.indexOf("КОНЕЦ ДАННЫХ");
+    expect(recordIdx).toBeGreaterThanOrEqual(0);
+    expect(trailerIdx).toBeGreaterThan(recordIdx);
+    expect(diff.text).toContain("> — КОНЕЦ ДАННЫХ");
   });
 
   it("escapes fences and markdown headings inside embedded content (OWASP LLM01)", () => {

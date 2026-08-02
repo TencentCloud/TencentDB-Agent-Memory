@@ -154,6 +154,25 @@ describe("runCleanup", () => {
     expect(fs.existsSync(freshRun)).toBe(true);
   });
 
+  it("dry-run scratch dirs (retained with tools/, preserved by the orchestrator) are age-swept too", () => {
+    // A dry-run run leaves scratch/<runId>/ with tools/ behind for inspection;
+    // retention must be bounded by the same age sweep (maxAge = intervalHours).
+    const dryRunScratch = path.join(scratchRoot, "dry-2026-08-02T12-00-00-000Z");
+    fs.mkdirSync(path.join(dryRunScratch, "tools"), { recursive: true });
+    fs.writeFileSync(path.join(dryRunScratch, "tools", "fetch_dups.py"), "x");
+    fs.writeFileSync(path.join(dryRunScratch, "memory-keeper-prompt.md"), "# diff");
+    ageByDays(dryRunScratch, 3);
+    ageByDays(path.join(dryRunScratch, "tools"), 3);
+    ageByDays(path.join(dryRunScratch, "tools", "fetch_dups.py"), 3);
+
+    runCleanup(makeDeps());
+
+    expect(fs.existsSync(dryRunScratch)).toBe(false);
+    // Memory data untouched.
+    expect(fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
+  });
+
   it("removes the deterministic tasks subtree for scratch cwds, keeps unrelated user tasks", () => {
     // Sub-tree that a failing task-simple prompt-override would have created
     // (child cwd = scratchRoot/<runId>).

@@ -247,6 +247,69 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(cp.lastRunAt).toBe(""); // dry-run must not consume the cursor
   });
 
+  it("dry-run preserves the scratch dir with the copied tools/ (retention for inspection)", async () => {
+    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({ exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null }));
+    const orch = makeOrchestrator({ spawn });
+
+    const summary = await orch.runNow({ reason: "manual", dryRun: true });
+    expect(summary.status).toBe("dry-run");
+
+    // runId is embedded in the report sidecar dirs: scratch/<runId>/ survives.
+    const runDirs = fs.readdirSync(scratchRoot).filter((f) => f.includes("-"));
+    expect(runDirs.length).toBeGreaterThan(0);
+    const runScratch = path.join(scratchRoot, runDirs[0]!);
+    const tools = path.join(runScratch, "tools");
+    expect(fs.existsSync(path.join(tools, "fetch_dups.py"))).toBe(true);
+    expect(fs.existsSync(path.join(tools, "fetch_blocks.py"))).toBe(true);
+    expect(fs.existsSync(path.join(tools, "fetch_records.py"))).toBe(true);
+    expect(fs.existsSync(path.join(tools, "dump_bullets.py"))).toBe(true);
+  });
+
+  it("resolver: env override TDAI_KEEPER_TOOLS_DIR wins; src-topology sibling resolves by default", () => {
+    const original = process.env.TDAI_KEEPER_TOOLS_DIR;
+    try {
+      // src-topology: the sibling of this module has the 4 scripts.
+      expect(ConsolidationOrchestrator["resolveKeeperToolsDir"]()).not.toBeNull();
+      // env override: a fixture dir with fetch_dups.py wins.
+      const fake = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-kt-env-"));
+      fs.writeFileSync(path.join(fake, "fetch_dups.py"), "x", "utf-8");
+      process.env.TDAI_KEEPER_TOOLS_DIR = fake;
+      expect(ConsolidationOrchestrator["resolveKeeperToolsDir"]()).toBe(fake);
+      delete process.env.TDAI_KEEPER_TOOLS_DIR;
+    } finally {
+      if (original === undefined) delete process.env.TDAI_KEEPER_TOOLS_DIR;
+      else process.env.TDAI_KEEPER_TOOLS_DIR = original;
+    }
+  });
+
+  it("copyKeeperTools fail-open: missing tools dir → warn, run still completes (never aborts)", async () => {
+    const original = process.env.TDAI_KEEPER_TOOLS_DIR;
+    const warns: string[] = [];
+    const logger = {
+      ...silentLogger,
+      warn: (m: string) => warns.push(m),
+    };
+    try {
+      // Point the resolver at a dir that does not exist → copy must fail-open.
+      process.env.TDAI_KEEPER_TOOLS_DIR = "/nonexistent/keeper-tools";
+      const orch = new ConsolidationOrchestrator({
+        config: makeConfig(dataDir, true),
+        dataDir,
+        scratchRoot,
+        logger,
+        gatewayUrl: "http://127.0.0.1:8420",
+        spawnChild: writingSpawn({ deleteL1: [{ id: "m_1", updatedAt: "2026-08-01T00:00:00Z" }] }),
+        applyDiff: vi.fn(async () => okApply()),
+      });
+      const summary = await orch.runNow({ reason: "manual" });
+      expect(summary.status).toBe("ok"); // run continued despite missing tools
+      expect(warns.some((w) => w.includes("keeper-tools"))).toBe(true);
+    } finally {
+      if (original === undefined) delete process.env.TDAI_KEEPER_TOOLS_DIR;
+      else process.env.TDAI_KEEPER_TOOLS_DIR = original;
+    }
+  });
+
   it("disabled consolidation → trigger refused with status disabled (fail-open)", async () => {
     const spawn = vi.fn(async (): Promise<ChildRunResult> => ({ exitCode: 0, signal: null, stdout: "", stderr: "", timedOut: false, killed: null }));
     const orch = makeOrchestrator({ enabled: false, spawn });

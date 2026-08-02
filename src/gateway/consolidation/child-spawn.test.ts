@@ -15,6 +15,7 @@ import {
   parsePgrpFromStat,
   readPgrpOf,
   snapshotPgrp,
+  scanKeeperProcesses,
   sweepKeeperOrphans,
   killProcessGroup,
 } from "./child-spawn.js";
@@ -86,8 +87,24 @@ describe("/proc stat parsing (pid-reuse-guard)", () => {
     expect(killProcessGroup(999_999)).toBe(false);
   });
 
-  it("orphan sweep finds nothing on a clean system (no keeper processes)", () => {
-    expect(sweepKeeperOrphans(null, silentLogger)).toBe(0);
-    expect(sweepKeeperOrphans("some-active-run", silentLogger)).toBe(0);
+  it("orphan sweep does not kill a live keeper protected by its RUN-uuid", () => {
+    // A production gateway may legitimately have keeper sub-sessions running
+    // (PI_MEMORY_KEEPER=1 in /proc) — this test must be robust to that, never
+    // asserting an absolute 0 (test isolation, cf. acceptance B6 r2 stub).
+    const live = scanKeeperProcesses();
+    if (live.length === 0) {
+      // Clean system: sweep finds nothing.
+      expect(sweepKeeperOrphans(null, silentLogger)).toBe(0);
+      expect(sweepKeeperOrphans("some-active-run", silentLogger)).toBe(0);
+      return;
+    }
+    // Live keepers exist: with their RUN-uuid as the active run, the sweep
+    // must NOT kill them (the whole point of the RUN-uuid predicate).
+    const uuid = live[0]!.runUuid ?? null;
+    if (uuid !== null) {
+      expect(sweepKeeperOrphans(uuid, silentLogger)).toBe(0);
+    }
+    // The null-active sweep may kill stale orphans — but must never error.
+    expect(() => sweepKeeperOrphans(null, silentLogger)).not.toThrow();
   });
 });

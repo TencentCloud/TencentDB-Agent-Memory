@@ -227,6 +227,18 @@ describe("ApplyExecutor", () => {
     expect(r.error).toMatch(/allowlist/);
   });
 
+  it("rewriteBlock with a Cyrillic scene path applies (Unicode allowlist, not ASCII-only)", async () => {
+    const cyrPath = "scene_blocks/_global/технический-отчет.md";
+    fs.writeFileSync(path.join(dataDir, cyrPath), SCENE_CONTENT, "utf-8");
+    const newContent = `${META_BLOCK}\n\nобновлённое содержание`;
+    const r = await executor().apply(
+      body({ rewriteBlock: [{ path: cyrPath, content: newContent }] }, baseline(dataDir, [cyrPath]), []),
+    );
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(r.error).toBeUndefined();
+    expect(fs.readFileSync(path.join(dataDir, cyrPath), "utf-8")).toBe(newContent);
+  });
+
   it("rewriteBlock content without META delimiters → 400 before any mutation", async () => {
     const scenePath = "scene_blocks/_global/ok.md";
     fs.writeFileSync(path.join(dataDir, scenePath), SCENE_CONTENT, "utf-8");

@@ -307,6 +307,86 @@ describe("memory read routes (P3, integration)", () => {
     expect(String(body.consolidation.checkpoint)).toContain("consolidation_checkpoint.json");
     expect(body.consolidation.inFlight).toBe(false);
   });
+
+  // ============================
+  // GET /memory/blocks?path= — read CONTENT of one addressable block (keeper
+  // tools fetch_blocks.py). Sanitized: allowlist (scene_blocks/** + persona.md),
+  // reject .. / absolute / empty, realpath containment, symlink-escape → 400.
+  // ============================
+
+  it("GET /memory/blocks?path=scene_blocks/_global/ok.md → 200 + content", async () => {
+    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/ok.md"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.kind).toBe("scene");
+    expect(body.content).toContain("short content");
+  });
+
+  it("GET /memory/blocks?path=persona.md → 200 (second allowlist member)", async () => {
+    const res = await get("/memory/blocks?path=persona.md");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.kind).toBe("persona");
+    expect(body.content.length).toBe(2500);
+  });
+
+  it("GET /memory/blocks?path=../../etc/passwd → 400 (traversal)", async () => {
+    const res = await get("/memory/blocks?path=" + encodeURIComponent("../../etc/passwd"));
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=%2e%2e/etc/passwd → 400 (encoded traversal)", async () => {
+    const res = await get("/memory/blocks?path=%2e%2e/etc/passwd");
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=/abs → 400 (absolute)", async () => {
+    const res = await get("/memory/blocks?path=" + encodeURIComponent("/abs"));
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=~ → 400 (tilde)", async () => {
+    const res = await get("/memory/blocks?path=~");
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=memory_health.md → 400 (not in allowlist)", async () => {
+    fs.writeFileSync(path.join(base, "memory_health.md"), "health", "utf-8");
+    const res = await get("/memory/blocks?path=memory_health.md");
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=scene_blocks/_global/missing.md → 404", async () => {
+    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/missing.md"));
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /memory/blocks?path=scene_blocks → 400 (dir, not a file)", async () => {
+    const res = await get("/memory/blocks?path=scene_blocks");
+    expect(res.status).toBe(400);
+  });
+
+  it("GET /memory/blocks?path=<cyrillic> → 200 (Unicode allowlist)", async () => {
+    const cyr = "scene_blocks/_global/технический-отчет.md";
+    fs.writeFileSync(path.join(base, "scene_blocks", "_global", "технический-отчет.md"), `${META}\n\ncyrillic body`, "utf-8");
+    const res = await get("/memory/blocks?path=" + encodeURIComponent(cyr));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.content).toContain("cyrillic body");
+  });
+
+  it("GET /memory/blocks?path=<symlink escape> → 400 (realpath containment)", async () => {
+    const linkPath = path.join(base, "scene_blocks", "_global", "link.md");
+    try {
+      fs.symlinkSync("/etc/passwd", linkPath);
+    } catch {
+      // Symlinks may be unavailable on some filesystems — skip the probe.
+      return;
+    }
+    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/link.md"));
+    expect(res.status).toBe(400);
+    fs.unlinkSync(linkPath);
+  });
 });
 
 // ============================
