@@ -7,8 +7,77 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { TdaiGateway } from "./server.js";
 import { parseConfig } from "../config.js";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const require = createRequire(import.meta.url);
+
+/**
+ * Open a SQLite DB read-write on the current test runtime (bun:sqlite under
+ * Bun, node:sqlite under Node — mirrors http-utils.openReadonlySqlite).
+ */
+function openSqlite(dbPath: string): {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...params: unknown[]): void };
+  close(): void;
+} {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    return new Database(dbPath) as unknown as {
+      exec(sql: string): void;
+      prepare(sql: string): { run(...params: unknown[]): void };
+      close(): void;
+    };
+  }
+  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  return new DatabaseSync(dbPath) as unknown as {
+    exec(sql: string): void;
+    prepare(sql: string): { run(...params: unknown[]): void };
+    close(): void;
+  };
+}
+
+/**
+ * Add the scoping columns to l1_records and insert one project-scoped row,
+ * simulating the I3/I4 scoped schema the gateway may run against. The store
+ * migration already ran at init, so the ALTERs fail with "duplicate column"
+ * if a scoped schema is already present — that is fine (try/catch).
+ */
+function seedScopedL1Record(base: string): void {
+  const db = openSqlite(path.join(base, "vectors.db"));
+  try {
+    try {
+      db.exec("ALTER TABLE l1_records ADD COLUMN project_id TEXT DEFAULT ''");
+      db.exec("ALTER TABLE l1_records ADD COLUMN scope TEXT DEFAULT 'global'");
+    } catch {
+      // Columns already exist — scoped schema was already set up.
+    }
+    db.prepare(
+      "INSERT INTO l1_records " +
+        "(record_id, content, type, priority, scene_name, session_key, session_id, " +
+        "timestamp_str, created_time, updated_time, metadata_json, project_id, scope) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "r-scoped",
+      "project scoped memory content",
+      "persona",
+      80,
+      "",
+      "s-scoped",
+      "",
+      "",
+      "2026-08-01T00:00:00Z",
+      "2026-08-01T00:00:00Z",
+      "{}",
+      "projA",
+      "project",
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const META = [
   "-----META-START-----",
@@ -48,6 +117,10 @@ describe("memory read routes (P3, integration)", () => {
       memory: parseConfig({}),
     });
     await gateway.start();
+    // Simulate the scoped schema (I3/I4): project_id/scope columns + one
+    // project-scoped record. Exercises the project-only filter path that
+    // regressed into `FROM l1_records AND project_id = ?` (syntax error).
+    seedScopedL1Record(base);
     baseUrl = `http://127.0.0.1:${port}`;
   });
 
@@ -87,6 +160,41 @@ describe("memory read routes (P3, integration)", () => {
     expect(Array.isArray(body.records)).toBe(true);
   });
 
+  it("GET /memory/records?project=projA (project-only filter on scoped schema) does not 500", async () => {
+    // Regression: when neither since nor type is given, the project predicate
+    // must be emitted as `WHERE project_id = ?` — a bare `AND project_id = ?`
+    // after `FROM l1_records` is a syntax error (500 on scoped schemas).
+    const res = await get(`/memory/records?project=${encodeURIComponent("projA")}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const scoped = body.records.find((r: { record_id: string }) => r.record_id === "r-scoped");
+    expect(scoped).toBeDefined();
+    expect(scoped.project_id).toBe("projA");
+    // Other projects must not leak in.
+    const other = await get(`/memory/records?project=${encodeURIComponent("projB")}`);
+    expect(other.status).toBe(200);
+    const otherBody = await other.json();
+    expect(otherBody.records.find((r: { record_id: string }) => r.record_id === "r-scoped")).toBeUndefined();
+  });
+
+  it("GET /memory/records project filter combines with since/type on scoped schema", async () => {
+    const since = "2026-01-01T00:00:00Z";
+    const res = await get(
+      `/memory/records?project=${encodeURIComponent("projA")}&since=${encodeURIComponent(since)}&type=persona`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const scoped = body.records.find((r: { record_id: string }) => r.record_id === "r-scoped");
+    expect(scoped).toBeDefined();
+  });
+
+  it("GET /memory/duplicates honors project-only filter on scoped schema (no 500)", async () => {
+    const res = await get(`/memory/duplicates?project=${encodeURIComponent("projA")}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.clusters)).toBe(true);
+  });
+
   it("GET /memory/blocks reports limits and oversize flags", async () => {
     const res = await get("/memory/blocks");
     expect(res.status).toBe(200);
@@ -124,8 +232,9 @@ describe("memory read routes (P3, integration)", () => {
     expect(body.checks.meta.valid).toBe(true);
     expect(body.checks.meta.checked).toBeGreaterThanOrEqual(2);
 
-    // vec-vs-meta: fresh store without vec0 tables → consistent null, counts known
-    expect(body.checks.vecMeta.metaCount).toBe(0);
+    // vec-vs-meta: no vec0 tables → consistent null, counts known. metaCount
+    // is 1 because seedScopedL1Record inserted one project-scoped row.
+    expect(body.checks.vecMeta.metaCount).toBe(1);
     expect(body.checks.vecMeta.consistent).toBeNull();
   });
 

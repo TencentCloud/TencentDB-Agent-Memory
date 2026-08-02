@@ -8,6 +8,7 @@
 
 import http from "node:http";
 import { timingSafeEqual } from "node:crypto";
+import { createRequire } from "node:module";
 import type { GatewayErrorResponse } from "./types.js";
 
 /** Parse a JSON request body. Rejects with an Error on malformed JSON. */
@@ -38,6 +39,31 @@ export function sendJson(res: http.ServerResponse, status: number, body: unknown
 
 export function sendError(res: http.ServerResponse, status: number, message: string): void {
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
+}
+
+// Runtime-agnostic SQLite loader (single source of truth; same pattern as
+// src/core/store/sqlite.ts): bun:sqlite under Bun (the systemd gateway
+// runtime), node:sqlite under Node (vitest forks). Only readonly diagnostic
+// queries are used by the memory routes and /status totals.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+const require = createRequire(import.meta.url);
+
+export interface ReadonlySqlite {
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  };
+  close(): void;
+}
+
+/** Open a SQLite database in readonly mode on the current runtime. */
+export function openReadonlySqlite(dbPath: string): ReadonlySqlite {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite") as { Database: new (p: string, o?: { readonly?: boolean }) => unknown };
+    return new Database(dbPath, { readonly: true }) as unknown as ReadonlySqlite;
+  }
+  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown };
+  return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
 }
 
 /**

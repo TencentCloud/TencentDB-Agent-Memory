@@ -16,7 +16,6 @@
 
 import http from "node:http";
 import { URL } from "node:url";
-import { createRequire } from "node:module";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -42,7 +41,7 @@ import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
-import { parseJsonBody, sendJson, sendError, safeEqual } from "./http-utils.js";
+import { parseJsonBody, sendJson, sendError, safeEqual, openReadonlySqlite } from "./http-utils.js";
 import { LoopbackTokenManager } from "./token.js";
 import { checkWriteAuth as isMemoryWriteAuthed } from "./write-auth.js";
 import {
@@ -53,30 +52,9 @@ import {
   handleMemoryValidate,
   type MemoryRoutesContext,
 } from "./memory-routes.js";
-// Runtime-agnostic SQLite loader (same pattern as src/core/store/sqlite.ts):
-// bun:sqlite under Bun (the systemd unit ExecStart is `bun src/gateway/server.ts`),
-// node:sqlite under Node (vitest forks). Only readonly diagnostic queries are
-// used here. The project does not pull @types/bun, so the handles are typed
-// structurally and treated as `any`-ish for typecheck purposes.
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-const require = createRequire(import.meta.url);
-
-interface ReadonlySqlite {
-  prepare(sql: string): {
-    get(...params: unknown[]): unknown;
-    all(...params: unknown[]): unknown[];
-  };
-  close(): void;
-}
-
-function openReadonlySqlite(dbPath: string): ReadonlySqlite {
-  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string, o?: { readonly?: boolean }) => unknown };
-    return new Database(dbPath, { readonly: true }) as unknown as ReadonlySqlite;
-  }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown };
-  return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
-}
+import nodeFs from "node:fs";
+import nodePath from "node:path";
+import { createHash } from "node:crypto";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";

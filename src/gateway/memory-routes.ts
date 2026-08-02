@@ -18,13 +18,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type http from "node:http";
-import { createRequire } from "node:module";
 import type { TdaiCore } from "../core/tdai-core.js";
 import type { GatewayConfig } from "./config.js";
 import type { LoopbackTokenManager } from "./token.js";
 import type { Logger } from "../core/types.js";
 import type { L1SearchResult } from "../core/store/types.js";
-import { sendJson, sendError } from "./http-utils.js";
+import { sendJson, sendError, openReadonlySqlite, type ReadonlySqlite } from "./http-utils.js";
 import type {
   MemoryInfoResponse,
   MemoryRecordsResponse,
@@ -39,25 +38,8 @@ import type {
 // bun:sqlite under Bun (the systemd gateway runtime), node:sqlite under Node
 // (vitest forks). Only readonly queries are used here — these routes never
 // write to the store (INVARIANT nogo-records-rewrite).
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-const require = createRequire(import.meta.url);
-
-interface ReadonlySqlite {
-  prepare(sql: string): {
-    get(...params: unknown[]): unknown;
-    all(...params: unknown[]): unknown[];
-  };
-  close(): void;
-}
-
-function openReadonlySqlite(dbPath: string): ReadonlySqlite {
-  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string, o?: { readonly?: boolean }) => unknown };
-    return new Database(dbPath, { readonly: true }) as unknown as ReadonlySqlite;
-  }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown };
-  return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
-}
+// The loader itself lives in http-utils.ts (single source of truth — it is
+// also used by server.ts /status totals); this module imports it.
 
 // Memory content limits enforced by the memory-keeper role (ТЗ §5.6):
 // scene blocks ≤ 1500 chars, persona.md ≤ 2000 chars. Sizes here are
@@ -323,20 +305,22 @@ function queryL1Rows(ctx: MemoryRoutesContext, filter: L1RowFilter): Array<Recor
     const db = openReadonlySqlite(dbPath);
     try {
       let scopeCols = "";
-      let scopeProjectWhere = "";
-      let hasScopeCols = false;
       try {
         const cols = db.prepare("PRAGMA table_info(l1_records)").all() as Array<{ name: string }>;
-        hasScopeCols = cols.some((c) => c.name === "project_id") && cols.some((c) => c.name === "scope");
+        const hasScopeCols = cols.some((c) => c.name === "project_id") && cols.some((c) => c.name === "scope");
+        if (hasScopeCols) {
+          scopeCols = ", project_id, COALESCE(scope, '') AS scope";
+          // Project predicate goes into the shared WHERE clause so that a
+          // project-only request (no since/type) still emits a valid
+          // `WHERE project_id = ?` — a bare `AND project_id = ?` after
+          // `FROM l1_records` is a syntax error (500 on scoped schemas).
+          if (filter.project !== undefined) {
+            where.push("project_id = ?");
+            params.push(filter.project);
+          }
+        }
       } catch {
         // PRAGMA failure — treat as legacy schema.
-      }
-      if (hasScopeCols) {
-        scopeCols = ", project_id, COALESCE(scope, '') AS scope";
-        if (filter.project !== undefined) {
-          scopeProjectWhere = " AND project_id = ?";
-          params.push(filter.project);
-        }
       }
 
       const sql =
@@ -345,7 +329,6 @@ function queryL1Rows(ctx: MemoryRoutesContext, filter: L1RowFilter): Array<Recor
         scopeCols +
         " FROM l1_records" +
         (where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "") +
-        scopeProjectWhere +
         " ORDER BY MAX(updated_time, created_time) DESC, record_id DESC LIMIT ?";
       params.push(filter.limit);
 
