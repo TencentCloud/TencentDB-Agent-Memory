@@ -53,16 +53,22 @@ pi-саб-сессии («пчёлки»), добавить ночной про�
 после — `diff -u` против baseline; Reviewer/Teamlead ревьюят по этому диффу;
 откат — восстановление из бэкапа. Тот же механизм, что у task 014808 (L1-промт).
 
-## INVARIANT-ы (из §4 ТЗ)
+## INVARIANT-ы (из §4 ТЗ) — каждый с CHECK-строкой (Tier-1, mechanize-first)
 
-- `INVARIANT: nogo-l1-prompt` — L1-промт-фиксы 014808 не откатывать.
-- `INVARIANT: nogo-recall-knobs` — recall scoreThreshold/maxResults/strategy не менять.
-- `INVARIANT: nogo-records-rewrite` — records не переписывать вне /memory/apply.
-- `INVARIANT: nogo-l0-path` — L0 capture-путь не трогать.
-- `INVARIANT: nogo-pi-core` — tdai-memory.ts при включённом реколле не менять поведение.
-- `INVARIANT: nogo-secrets` — саб-сессия/тулы не получают gateway-ключей/auth; env-whitelist секрето-свободен.
+- `INVARIANT: nogo-l1-prompt` — L1-промт-фиксы 014808 (判据-line, 2 exclusion-пункта, MAX_CONTENT_CHARS=600) не откатывать и держать в коммиченном дереве.
+  CHECK: bash -c 'cd <repo> && git grep -qE "cross-task|не относится к текущей задаче|600" HEAD -- src/core/prompts/l1-extraction.ts src/core/record/l1-extractor.ts'
+- `INVARIANT: nogo-recall-knobs` — recall scoreThreshold 0.85/maxResults 3/strategy embedding не менять.
+  CHECK: bash -c 'cd <repo> && git diff --exit-code HEAD -- src/core/hooks/auto-recall.ts && grep -q "scoreThreshold: 0.85" tdai-gateway.yaml && grep -q "maxResults: 3" tdai-gateway.yaml'
+- `INVARIANT: nogo-records-rewrite` — records/*.jsonl пишут только l1-writer (гейтвей-экстрактор) и apply-executor (/memory/apply); больше никто.
+  CHECK: bash -c 'cd <repo> && grep -rLn "appendFile\|writeFile" src/gateway src/core/record | grep -vE "l1-writer|apply-executor|token" | wc -l'
+- `INVARIANT: nogo-l0-path` — L0 capture-путь (l0-recorder, auto-capture) без LLM и без изменений.
+  CHECK: bash -c 'cd <repo> && git diff --exit-code HEAD -- src/core/conversation/l0-recorder.ts src/core/hooks/auto-capture.ts && ! grep -qE "generateText|chat\(" src/core/conversation/l0-recorder.ts'
+- `INVARIANT: nogo-pi-core` — tdai-memory.ts при включённом реколле не менять поведение (офф-свитч аддитивно).
+  CHECK: bash -c 'grep -c "TDAI_MEMORY_RECALL" ~/.pi/agent/extensions/tdai-memory.ts'
+- `INVARIANT: nogo-secrets` — саб-сессия/тулы не получают gateway-ключей; env-whitelist секрето-свободен; токен не логируется.
+  CHECK: bash -c 'cd <repo> && ! grep -rE "apiKey\s*=|sk-[A-Za-z0-9]{20}" src/gateway/ | grep -v test && git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; test $? -ne 0'
 
-Каждый INVARIANT — с CHECK-строкой (Tier-1, mechanize-first).
+Каждый CHECK — негативный/механический grep-ban (fail при нарушении), запускается coverage-gate.sh с таймаутом. Тип: все mechanizable.
 
 ## Wave-close
 

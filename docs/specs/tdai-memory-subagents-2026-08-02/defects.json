@@ -1,4 +1,43 @@
-{"defects": [
-  {"id": "D-1", "found_by": "auditor", "packet": "B1", "loc": "tdai-gateway.yaml (untracked)", "rule": "nogo-secrets", "spec_ref": "wave.md INVARIANT nogo-secrets", "severity": "medium", "status": "open", "waiver": "", "approved_by": "", "note": "yaml untracked с живым llm.apiKey, НЕ в .gitignore — careless git add . застейджит реальный кред. Hardening: добавить tdai-gateway.yaml в .gitignore (правка конфига рантайма — требует go/no-go юзера, §2.2)"},
-  {"id": "D-2", "found_by": "auditor", "packet": "B1", "loc": "src/gateway/memory-routes.ts (/memory/duplicates)", "rule": "drift-risk", "spec_ref": "B4 packets (P8 l1-dedup)", "severity": "medium", "status": "open", "waiver": "", "approved_by": "", "note": "duplicates re-implements sameScope локально — drift risk если l1-dedup семантика меняется в P4/P8; проверить при B2/B4. B2-проверка (2026-08-02, P4 executor): семантика НЕ дрейфует — локальная sameScope в memory-routes.ts:75-85 байт-идентична l1-dedup.sameScope (l1-dedup.ts:209-222); P4 не трогал l1-dedup (non_goal). Остаётся open: P8 (reindex-integration) может менять l1-dedup — перепроверить при B4."}
-]}
+{
+ "defects": [
+  {
+   "id": "D-1",
+   "found_by": "auditor",
+   "packet": "B1",
+   "loc": "tdai-gateway.yaml (untracked)",
+   "rule": "nogo-secrets",
+   "spec_ref": "wave.md INVARIANT nogo-secrets",
+   "severity": "medium",
+   "status": "open",
+   "waiver": "",
+   "approved_by": "",
+   "note": "yaml untracked с живым llm.apiKey, НЕ в .gitignore — careless git add . застейджит реальный кред. Hardening: добавить tdai-gateway.yaml в .gitignore (правка конфига рантайма — требует go/no-go юзера, §2.2)"
+  },
+  {
+   "id": "D-2",
+   "found_by": "auditor",
+   "packet": "B1",
+   "loc": "src/gateway/memory-routes.ts (/memory/duplicates)",
+   "rule": "drift-risk",
+   "spec_ref": "B4 packets (P8 l1-dedup)",
+   "severity": "medium",
+   "status": "open",
+   "waiver": "",
+   "approved_by": "",
+   "note": "duplicates re-implements sameScope локально — drift risk если l1-dedup семантика меняется в P4/P8; проверить при B2/B4. B2-проверка (2026-08-02, P4 executor): семантика НЕ дрейфует — локальная sameScope в memory-routes.ts:75-85 байт-идентична l1-dedup.sameScope (l1-dedup.ts:209-222); P4 не трогал l1-dedup (non_goal). Остаётся open: P8 (reindex-integration) может менять l1-dedup — перепроверить при B4."
+  },
+  {
+   "id": "D-3",
+   "found_by": "auditor",
+   "packet": "B2",
+   "loc": "src/core/prompts/l1-extraction.ts + l1-extractor.ts",
+   "rule": "nogo-l1-prompt",
+   "spec_ref": "wave.md INVARIANT nogo-l1-prompt",
+   "severity": "critical",
+   "status": "open",
+   "waiver": "",
+   "approved_by": "",
+   "note": "014808 фикс (判据-line, 2 exclusion, MAX_CONTENT_CHARS=600) ТОЛЬКО в незакоммиченном worktree; committed HEAD pre-fix. Follow-up: закоммитить 014808 дельту отдельным пакетом."
+  }
+ ]
+}
