@@ -137,6 +137,31 @@ export interface ConsolidationConfig {
   diffByteCap: number;
   /** Sub-session kill policy on timeout (default: "group-kill"). */
   killPolicy: "group-kill" | "sweep" | "systemd-scope";
+  /**
+   * Night-run parameters (`memory.consolidation.night`). The night-run
+   * TRIGGER (schedule/threshold/timezone) lives in `memory.nightRun`;
+   * the run PARAMETERS live here. Split is deliberate — one source per
+   * concern, no diffCap/timeoutMs duplication across sections.
+   */
+  night: NightConsolidationConfig;
+}
+
+/** Night-run run parameters (`memory.consolidation.night`). */
+export interface NightConsolidationConfig {
+  /** Max diff entries per night batch (default: 200 — full-store sweep, not diffCap=5). */
+  diffCap: number;
+  /** Byte cap for a night batch diff section (default: 32768 = 32 KB). */
+  diffByteCap: number;
+  /** Per-batch sub-session timeout (default: 1800000 = 30 min). */
+  timeoutMs: number;
+  /** Records untouched for this many days become cleanup candidates (default: 30). */
+  cleanupPeriodDays: number;
+  /** Max deleteL1+merge-member ops per night run — mechanical gate, not a prompt (default: 50). */
+  deleteCapPerRun: number;
+  /** Max rewriteRecord ops per night run — rewrites are irreversible (default: 100). */
+  rewriteCapPerRun: number;
+  /** Overall night window (all batches, ms) — SerialGate must not be held forever (default: 5400000 = 90 min). */
+  maxRunMs: number;
 }
 
 /** Night-run trigger settings (`memory.nightRun`). */
@@ -420,7 +445,9 @@ export interface MemoryTdaiConfig {
  * Parse plugin config from raw user input.
  * All fields have sensible defaults — minimal config is just {}.
  */
-export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTdaiConfig {
+export function parseConfig(
+  raw: Record<string, unknown> | undefined,
+): MemoryTdaiConfig {
   const c = raw ?? {};
 
   // --- Capture (L0) ---
@@ -428,7 +455,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Retention days validation (from capture.l0l1RetentionDays) ---
   const rawRetentionDays = num(captureGroup, "l0l1RetentionDays") ?? 0;
-  const allowAggressiveCleanup = bool(captureGroup, "allowAggressiveCleanup") ?? false;
+  const allowAggressiveCleanup =
+    bool(captureGroup, "allowAggressiveCleanup") ?? false;
 
   let retentionDays: number | undefined;
   if (rawRetentionDays <= 0) {
@@ -465,11 +493,19 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   const probeGroup = obj(c, "probe");
   const typeWeightsGroup = obj(recallGroup, "typeWeights");
 
-  validateStrictSection("memory.consolidation", consolidationGroup, consolidationSchema);
+  validateStrictSection(
+    "memory.consolidation",
+    consolidationGroup,
+    consolidationSchema,
+  );
   validateStrictSection("memory.nightRun", nightRunGroup, nightRunSchema);
   validateStrictSection("memory.cleanup", cleanupGroup, cleanupSchema);
   validateStrictSection("memory.probe", probeGroup, probeSchema);
-  validateStrictSection("memory.recall.typeWeights", typeWeightsGroup, typeWeightsSchema);
+  validateStrictSection(
+    "memory.recall.typeWeights",
+    typeWeightsGroup,
+    typeWeightsSchema,
+  );
 
   // --- Embedding ---
   const embeddingGroup = obj(c, "embedding");
@@ -509,7 +545,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     if (!embeddingBaseUrl) missingFields.push("baseUrl");
     if (!embeddingApiKey) missingFields.push("apiKey");
     if (!embeddingModelRaw) missingFields.push("model");
-    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0) missingFields.push("dimensions");
+    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0)
+      missingFields.push("dimensions");
 
     if (missingFields.length > 0) {
       const errorMsg =
@@ -527,7 +564,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     if (!embeddingApiKey) missingFields.push("apiKey");
     if (!embeddingBaseUrl) missingFields.push("baseUrl");
     if (!embeddingModelRaw) missingFields.push("model");
-    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0) missingFields.push("dimensions");
+    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0)
+      missingFields.push("dimensions");
 
     if (missingFields.length > 0) {
       // Configuration error: disable embedding and log detailed error
@@ -549,18 +587,19 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   // This avoids creating vec0 tables with a placeholder dimension that would
   // mismatch if the user later enables a different-dimensional provider.
   const defaultDimensions =
-    embeddingProvider === "none" ? 0 :
-    embeddingDimensionsRaw ?? 0;
+    embeddingProvider === "none" ? 0 : (embeddingDimensionsRaw ?? 0);
   const defaultModel = embeddingProvider === "none" ? "" : embeddingModelRaw;
 
-  const cleanTime = normalizeCleanTime(str(captureGroup, "cleanTime")) ?? "03:00";
+  const cleanTime =
+    normalizeCleanTime(str(captureGroup, "cleanTime")) ?? "03:00";
 
   // --- BM25 (local @tencentdb-agent-memory/tcvdb-text encoder) ---
   const bm25Group = obj(c, "bm25");
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend =
+    storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
@@ -585,7 +624,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mode: offloadMode,
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
-    disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
+    disableThinking: normalizeDisableThinking(
+      boolOrStr(offloadGroup, "disableThinking"),
+    ),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
     dataDir: optStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
@@ -593,12 +634,15 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
     l2TimeoutSeconds: num(offloadGroup, "l2TimeoutSeconds") ?? 300,
     mildOffloadRatio: num(offloadGroup, "mildOffloadRatio") ?? 0.5,
-    aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
+    aggressiveCompressRatio:
+      num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
     backendUrl: optStr(offloadGroup, "backendUrl"),
     backendApiKey: optStr(offloadGroup, "backendApiKey"),
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
-    offloadRetentionDays: normalizeOffloadRetentionDays(num(offloadGroup, "offloadRetentionDays") ?? 0),
+    offloadRetentionDays: normalizeOffloadRetentionDays(
+      num(offloadGroup, "offloadRetentionDays") ?? 0,
+    ),
     logMaxSizeMb: num(offloadGroup, "logMaxSizeMb") ?? 50,
     userId: optStr(offloadGroup, "userId"),
   };
@@ -614,7 +658,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     extraction: {
       enabled: bool(extractionGroup, "enabled") ?? true,
       enableDedup: bool(extractionGroup, "enableDedup") ?? true,
-      maxMemoriesPerSession: num(extractionGroup, "maxMemoriesPerSession") ?? 20,
+      maxMemoriesPerSession:
+        num(extractionGroup, "maxMemoriesPerSession") ?? 20,
       model: optStr(extractionGroup, "model"),
     },
     persona: {
@@ -631,7 +676,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 10,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,
-      sessionActiveWindowHours: num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
+      sessionActiveWindowHours:
+        num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
@@ -650,14 +696,36 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     consolidation: {
       enabled: bool(consolidationGroup, "enabled") ?? false,
-      model: str(consolidationGroup, "model") ?? "opencode-go/deepseek-v4-flash",
+      model:
+        str(consolidationGroup, "model") ?? "opencode-go/deepseek-v4-flash",
       piBinary: expandHome(str(consolidationGroup, "piBinary") ?? "pi"),
-      spawnFlags: strArray(consolidationGroup, "spawnFlags") ?? ["-p", "--no-context-files", "--no-session"],
+      spawnFlags: strArray(consolidationGroup, "spawnFlags") ?? [
+        "-p",
+        "--no-context-files",
+        "--no-session",
+      ],
       thinking: str(consolidationGroup, "thinking") ?? "low",
       timeoutMs: num(consolidationGroup, "timeoutMs") ?? 600_000,
       diffCap: num(consolidationGroup, "diffCap") ?? 20,
       diffByteCap: num(consolidationGroup, "diffByteCap") ?? 8 * 1024,
-      killPolicy: (str(consolidationGroup, "killPolicy") as ConsolidationConfig["killPolicy"]) ?? "group-kill",
+      killPolicy:
+        (str(
+          consolidationGroup,
+          "killPolicy",
+        ) as ConsolidationConfig["killPolicy"]) ?? "group-kill",
+      // Night-run parameters (trigger lives in memory.nightRun; run params here).
+      night: (() => {
+        const nightGroup = obj(consolidationGroup, "night");
+        return {
+          diffCap: num(nightGroup, "diffCap") ?? 200,
+          diffByteCap: num(nightGroup, "diffByteCap") ?? 32 * 1024,
+          timeoutMs: num(nightGroup, "timeoutMs") ?? 1_800_000,
+          cleanupPeriodDays: num(nightGroup, "cleanupPeriodDays") ?? 30,
+          deleteCapPerRun: num(nightGroup, "deleteCapPerRun") ?? 50,
+          rewriteCapPerRun: num(nightGroup, "rewriteCapPerRun") ?? 100,
+          maxRunMs: num(nightGroup, "maxRunMs") ?? 5_400_000,
+        };
+      })(),
     },
     nightRun: {
       schedule: normalizeCleanTime(str(nightRunGroup, "schedule")) ?? "06:00",
@@ -670,7 +738,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       paths: strArray(cleanupGroup, "paths") ?? ["logs"],
     },
     probe: {
-      corpusPath: expandHome(str(probeGroup, "corpusPath") ?? "probe-corpus.json"),
+      corpusPath: expandHome(
+        str(probeGroup, "corpusPath") ?? "probe-corpus.json",
+      ),
       precisionTarget: num(probeGroup, "precisionTarget") ?? 0.9,
       topK: num(probeGroup, "topK") ?? 3,
     },
@@ -704,7 +774,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
-      language: (str(bm25Group, "language") === "en" ? "en" : "zh") as "zh" | "en",
+      language: (str(bm25Group, "language") === "en" ? "en" : "zh") as
+        "zh" | "en",
     },
     memoryCleanup,
     report: {
@@ -720,7 +791,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
-        disableThinking: normalizeDisableThinking(boolOrStr(llmGroup, "disableThinking")),
+        disableThinking: normalizeDisableThinking(
+          boolOrStr(llmGroup, "disableThinking"),
+        ),
       };
     })(),
     offload,
@@ -734,7 +807,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 /** Get sub-object by key, or empty object if missing. */
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = c[key];
-  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
 }
 
 function str(src: Record<string, unknown>, key: string): string | undefined {
@@ -758,26 +833,41 @@ function bool(src: Record<string, unknown>, key: string): boolean | undefined {
 }
 
 /** Read a field that may be boolean or string. */
-function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+function boolOrStr(
+  src: Record<string, unknown>,
+  key: string,
+): boolean | string | undefined {
   const v = src[key];
   if (typeof v === "boolean") return v;
   if (typeof v === "string" && v.trim()) return v.trim();
   return undefined;
 }
 
-function strArray(src: Record<string, unknown>, key: string): string[] | undefined {
+function strArray(
+  src: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
   const v = src[key];
   if (!Array.isArray(v)) return undefined;
-  return v.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return v.filter(
+    (item): item is string =>
+      typeof item === "string" && item.trim().length > 0,
+  );
 }
 
-const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_STRATEGIES: RecallConfig["strategy"][] = [
+  "embedding",
+  "keyword",
+  "hybrid",
+];
 
 /**
  * Validate recall strategy against whitelist.
  * Returns the strategy if valid, undefined otherwise (caller falls back to default).
  */
-function validateStrategy(value: string | undefined): RecallConfig["strategy"] | undefined {
+function validateStrategy(
+  value: string | undefined,
+): RecallConfig["strategy"] | undefined {
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
@@ -849,10 +939,24 @@ const consolidationSchema = z.strictObject({
   diffCap: z.number().int().positive().optional(),
   diffByteCap: z.number().int().positive().optional(),
   killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
+  night: z
+    .strictObject({
+      diffCap: z.number().int().positive().optional(),
+      diffByteCap: z.number().int().positive().optional(),
+      timeoutMs: z.number().positive().optional(),
+      cleanupPeriodDays: z.number().int().positive().optional(),
+      deleteCapPerRun: z.number().int().positive().optional(),
+      rewriteCapPerRun: z.number().int().positive().optional(),
+      maxRunMs: z.number().positive().optional(),
+    })
+    .optional(),
 });
 
 const nightRunSchema = z.strictObject({
-  schedule: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/).optional(),
+  schedule: z
+    .string()
+    .regex(/^([01]?\d|2[0-3]):[0-5]\d$/)
+    .optional(),
   threshold: z.number().int().positive().optional(),
   timezone: z.string().optional(),
 });
@@ -880,13 +984,18 @@ const typeWeightsSchema = z.strictObject({
  * Throws on ANY invalid input (fail-loud) with a readable message listing
  * the offending key(s). Empty `{}` (absent section) always passes.
  */
-function validateStrictSection(path: string, value: Record<string, unknown>, schema: z.ZodType): void {
+function validateStrictSection(
+  path: string,
+  value: Record<string, unknown>,
+  schema: z.ZodType,
+): void {
   const result = schema.safeParse(value);
   if (!result.success) {
     const details = result.error.issues
       .map((issue) => {
         if (issue.code === "unrecognized_keys") {
-          const keys = "keys" in issue ? (issue as { keys?: string[] }).keys ?? [] : [];
+          const keys =
+            "keys" in issue ? ((issue as { keys?: string[] }).keys ?? []) : [];
           return `unknown key(s) [${keys.join(", ")}]`;
         }
         const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
