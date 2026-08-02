@@ -23,6 +23,8 @@ export interface HealthResponse {
     vectorStore: boolean;
     embeddingService: boolean;
   };
+  /** Fix #679: FTS5-Verfügbarkeit für Keyword-Search (false → recall degrades to embedding-only). */
+  keywordSearchAvailable: boolean;
 }
 
 // ============================
