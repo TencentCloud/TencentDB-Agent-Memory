@@ -69,8 +69,8 @@ CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && test -z "$(git grep -lE
 INVARIANT: nogo-l0-path — L0 capture-путь без LLM-вызовов в коммиченном HEAD (негатив: generateText/generateObject в capture-коде = нарушение).
 CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "generateText|generateObject" HEAD -- src/core/conversation/l0-recorder.ts src/core/hooks/auto-capture.ts'
 
-INVARIANT: nogo-pi-core [semantic] — tdai-memory.ts при включённом реколле не менять поведение (офф-свитч аддитивно, P11/B5). Немеханизируемо до P11: файл вне git-репо, diff-гейты неприменимы; реализация офф-свитча (P11) добавит механический CHECK на инъекционные пути. Оценка — Auditor.
-JUSTIFICATION: tdai-memory.ts лежит в ~/.pi/agent/extensions (не git-репо) — механический diff-CHECK невозможен; поведенческая проверка (реколл работает как сейчас) — ручная, Tier-2.
+INVARIANT: nogo-pi-core — tdai-memory.ts при включённом реколле не менять поведение (офф-свитч аддитивно). Механический CHECK — детерминированный негативный набор bun-тестов расширения (офф-свитч/keeper-гвард/аддитивность при реколле-on; добавлен P11/B5): fail при нарушении аддитивности.
+CHECK: bash -c 'cd ~/.pi/agent/extensions && bun test tests/tdai-memory-p11.test.ts tests/tdai-memory.test.ts 2>&1 | grep -qE "^[[:space:]]*0 fail"' 
 
 INVARIANT: nogo-secrets — саб-сессия/тулы не получают gateway-ключей; apiKey не в коммиченном дереве; yaml с apiKey остаётся untracked (негатив: hardcoded ключ в src/ = нарушение; yaml закоммичен = нарушение).
 CHECK: bash -c 'cd /home/penis/TencentDB-Agent-Memory && ! git grep -qE "sk-[A-Za-z0-9]{20,}" HEAD && { ! git ls-files --error-unmatch tdai-gateway.yaml >/dev/null 2>&1; }'
