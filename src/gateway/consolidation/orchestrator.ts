@@ -19,8 +19,12 @@
  *   rechecks it before any mutation; drift → abort.
  * - Fail-open (критерий 21): spawn failure / missing diff.json / apply abort
  *   never take the gateway down — the run is recorded as failed and reported.
- * - Idempotent heal: a failed run does NOT advance the checkpoint; a re-run
- *   re-presents the same diff and ApplyExecutor skips already-applied ops.
+ * - Idempotent heal: a failed DAY run does NOT advance the checkpoint; a
+ *   re-run re-presents the same diff and ApplyExecutor skips already-applied
+ *   ops. NIGHT exception (plan #9 recovery): a partial night (cap/maxRunMs
+ *   exceeded) DOES advance for the chunks that applied — the anchored cursor
+ *   stops at the last applied chunk before the first target-missing merge;
+ *   unapplied chunks re-present next run (heal-skip is idempotent).
  */
 
 import fs from "node:fs";
@@ -31,11 +35,7 @@ import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
-import {
-  ApplyExecutor,
-  type ApplyResult,
-  MAX_PRESENTED_IDS,
-} from "../apply-executor.js";
+import { ApplyExecutor, type ApplyResult } from "../apply-executor.js";
 import { openReadonlySqlite } from "../http-utils.js";
 import { runRecallProbe, type ProbeResult } from "../probe.js";
 import { writeDashboard, writeDigest } from "../reports.js";
@@ -122,6 +122,14 @@ export interface SpawnChildContext {
 
 export type SpawnChildFn = (ctx: SpawnChildContext) => Promise<ChildRunResult>;
 export type ApplyDiffFn = (body: unknown) => Promise<ApplyResult>;
+
+/**
+ * Night full-store sweep bound. Per-batch apply presents ≤ night.diffCap ids
+ * (≤ 200), so the per-apply zod cap MAX_PRESENTED_IDS=5000 no longer limits
+ * the sweep; 25_000 rows ≈ 25 MB materialized content, acceptable. Beyond
+ * that the store needs the documented multi-batch loop (already present).
+ */
+const NIGHT_SWEEP_LIMIT = 25_000;
 
 /**
  * Effective per-run timeout: the role-file `timeout_min` (minutes) of the
@@ -548,15 +556,12 @@ export class ConsolidationOrchestrator {
           anyApplied = true;
         }
         if (!skipMergeSeen) {
-          if (batchRes.skipped.merges.length > 0) {
-            // First skip-merge anchors the advance: chunks AFTER this one
-            // (even if applied) never move the cursor — their members stay
-            // visible to the next run. Per plan #9: the loop STOPS here —
-            // later chunks re-present next run (heal-skip is idempotent).
+          if (batchRes.skippedMergesMissingTarget.length > 0) {
+            // FIRST target-missing merge anchors the advance: the cursor stops
+            // at the last APPLIED chunk BEFORE this one (never includes the
+            // skip chunk itself — its non-skip ops re-present next run via
+            // idempotent heal). The loop STOPS here: later chunks re-present.
             skipMergeSeen = true;
-            if (isNight) {
-              anchoredCursor = batchRes.sliceTime; // applied chunks up to (incl.) this one
-            }
             break; // spawn-count = index of the skip chunk
           } else if (batchRes.status === "ok" && isNight) {
             anchoredCursor = batchRes.sliceTime;
@@ -588,12 +593,16 @@ export class ConsolidationOrchestrator {
         return summary;
       }
 
-      if (summary.error === undefined && anyApplied) {
-        // Advance ONCE with the anchored cursor (night) or current max (day).
-        // Night partial advance is legal under cap/maxRunMs-exceed: applied
-        // chunks move the cursor, unapplied ones re-present next run.
-        const anchor =
-          isNight && anchoredCursor !== null ? anchoredCursor : undefined;
+      if (anyApplied || (!isNight && summary.error === undefined)) {
+        // Advance ONCE. Night: anchored cursor (max slice-time of applied
+        // chunks BEFORE the first target-missing merge; null → the anchor is
+        // the PREVIOUS cursor — a skip in chunk 1 never advances, its ops
+        // re-present next run). Partial night advance is legal under
+        // cap/maxRunMs-exceed (plan #9 recovery: apply passed chunks, fail
+        // the rest). Day advances on ANY ok run (empty/heal-skip diffs are a
+        // no-op, not a failure — the cursor still moves past the fresh tail)
+        // but NEVER on a failed run (idempotent retry keeps the same diff).
+        const anchor = isNight ? (anchoredCursor ?? cp.l0Cursor) : undefined;
         await this.advanceCheckpoint(cp.l0Cursor, newL0, summary, anchor);
       }
       if (summary.error === undefined) {
@@ -657,6 +666,11 @@ export class ConsolidationOrchestrator {
     sliceTime: string | null;
     applied: { merges: string[]; deletes: string[]; rewrites: string[] };
     skipped: { merges: string[]; deletes: string[]; rewrites: string[] };
+    /** Merge ops skipped because the TARGET is missing (cross-batch partner
+     * deleted earlier) — the night anchor, NOT heal-skip. */
+    skippedMergesMissingTarget: string[];
+    /** True when this batch applied NOTHING (empty/heal-skip diff). */
+    appliedNothing: boolean;
     deleteOps: number;
     rewriteOps: number;
     reindexed: boolean;
@@ -671,11 +685,6 @@ export class ConsolidationOrchestrator {
     error?: string;
     status?: string;
   }> {
-    const empty = {
-      merges: [] as string[],
-      deletes: [] as string[],
-      rewrites: [] as string[],
-    };
     const result: ReturnType<
       ConsolidationOrchestrator["runBatch"]
     > extends Promise<infer R>
@@ -685,12 +694,13 @@ export class ConsolidationOrchestrator {
       sliceTime: null,
       applied: { merges: [], deletes: [], rewrites: [] },
       skipped: { merges: [], deletes: [], rewrites: [] },
+      skippedMergesMissingTarget: [],
+      appliedNothing: true,
       deleteOps: 0,
       rewriteOps: 0,
       reindexed: false,
       needsReindex: false,
     };
-    void empty;
     const night = this.config.memory.consolidation.night;
     const cap = args.isNight ? night : undefined;
     const dbPath = path.join(this.dataDir, "vectors.db");
@@ -824,6 +834,12 @@ export class ConsolidationOrchestrator {
       });
       result.applied = applyResult.applied;
       result.skipped = applyResult.skipped;
+      result.skippedMergesMissingTarget =
+        applyResult.skippedMergesMissingTarget;
+      result.appliedNothing =
+        applyResult.applied.merges.length === 0 &&
+        applyResult.applied.deletes.length === 0 &&
+        applyResult.applied.rewrites.length === 0;
       result.reindexed = applyResult.reindexed;
       result.needsReindex = applyResult.needsReindex;
       result.status = applyResult.ok
@@ -907,13 +923,13 @@ export class ConsolidationOrchestrator {
     try {
       const db = openReadonlySqlite(dbPath);
       try {
-        // Night (fullStore): sweep the WHOLE store (no cursor, no cap bound
-        // by cursor) — cleanup/dup-scan sees everything, not just the fresh
-        // tail. Day: fresh records since the cursor, capped.
-        // Night (fullStore): sweep the WHOLE store oldest-first, BUT bounded
-        // by MAX_PRESENTED_IDS (5000) — presentedRecordIds feeds the apply
-        // zod cap; a store beyond 5000 rows needs the multi-batch loop
-        // (documented TODO), never an oversize single presented set.
+        // Night (fullStore): sweep the WHOLE store oldest-first (no cursor) —
+        // cleanup/dup-scan sees everything, not just the fresh tail. Bound by
+        // NIGHT_SWEEP_LIMIT (25_000): per-batch apply presents ≤ night.diffCap
+        // ids (≤ 200), so the per-apply zod cap MAX_PRESENTED_IDS=5000 no
+        // longer constrains the sweep; beyond 25k rows the store needs the
+        // documented multi-batch loop (already present) — never an oversize
+        // single presented set.
         const sql = fullStore
           ? "SELECT record_id, type, updated_time, created_time, content FROM l1_records " +
             "ORDER BY created_time ASC, record_id ASC LIMIT ?"
@@ -921,7 +937,7 @@ export class ConsolidationOrchestrator {
             "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
             "ORDER BY updated_time ASC LIMIT ?";
         const rows = fullStore
-          ? (db.prepare(sql).all(MAX_PRESENTED_IDS) as Array<
+          ? (db.prepare(sql).all(NIGHT_SWEEP_LIMIT) as Array<
               Record<string, unknown>
             >)
           : (db

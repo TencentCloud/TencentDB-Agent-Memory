@@ -217,6 +217,10 @@ export interface ApplyResult {
   error?: string;
   applied: { merges: string[]; deletes: string[]; rewrites: string[] };
   skipped: { merges: string[]; deletes: string[]; rewrites: string[] };
+  /** Merge ops skipped because the TARGET is missing (cross-batch partner
+   * deleted earlier) — distinct from heal-skip (target alive, members gone).
+   * The night loop anchors its cursor on the FIRST such skip (plan #9). */
+  skippedMergesMissingTarget: string[];
   counts: ApplyCounts | null;
   reindexed: boolean;
   needsReindex: boolean;
@@ -259,6 +263,7 @@ const EMPTY_RESULT = (): ApplyResult => ({
   partial: false,
   applied: { merges: [], deletes: [], rewrites: [] },
   skipped: { merges: [], deletes: [], rewrites: [] },
+  skippedMergesMissingTarget: [],
   counts: null,
   reindexed: false,
   needsReindex: false,
@@ -527,6 +532,7 @@ export class ApplyExecutor {
       );
 
       if (targetRow && !membersPresent) {
+        // heal-skip: target alive, members already merged — NOT an anchor.
         result.skipped.merges.push(op.target);
         continue;
       }
@@ -534,8 +540,9 @@ export class ApplyExecutor {
         // Target gone but members remain — nothing sane to merge into.
         // Skip-if-missing (like deleteL1) instead of aborting the whole run:
         // a cross-batch partner deleted in an earlier night batch must not
-        // abort the rest of the night.
+        // abort the rest of the night. This is the FIRST-skip-merge anchor.
         result.skipped.merges.push(op.target);
+        result.skippedMergesMissingTarget.push(op.target);
         continue;
       }
 

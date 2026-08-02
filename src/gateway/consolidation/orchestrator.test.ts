@@ -92,6 +92,7 @@ function okApply(): ApplyResult {
     partial: false,
     applied: { merges: [], deletes: ["m_1"], rewrites: [] },
     skipped: { merges: [], deletes: [], rewrites: [] },
+    skippedMergesMissingTarget: [],
     counts: null,
     reindexed: false,
     needsReindex: false,
@@ -858,6 +859,170 @@ describe("ConsolidationOrchestrator (P6)", () => {
       expect(summary.status).toBe("failed");
       expect(summary.error).toMatch(/delete cap exceeded/);
       expect(spawnCalls.length).toBe(2); // both chunks spawned, second refused at gate
+    });
+  });
+  describe("night multi-batch loop: advance anchor (plan §4)", () => {
+    /** Seed a vectors.db with n L1 records + l0_conversations watermark. */
+    function seedStore(l0Max: string, n: number): void {
+      const db = openSqlite(path.join(dataDir, "vectors.db"));
+      db.exec(
+        "CREATE TABLE l1_records (" +
+          "record_id TEXT PRIMARY KEY, content TEXT, type TEXT, priority INTEGER, scene_name TEXT, " +
+          "session_key TEXT, session_id TEXT, timestamp_str TEXT, created_time TEXT, updated_time TEXT, metadata_json TEXT)",
+      );
+      db.exec(
+        "CREATE TABLE l0_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, recorded_at TEXT)",
+      );
+      db.prepare(
+        "INSERT INTO l0_conversations (role, content, recorded_at) VALUES (?, ?, ?)",
+      ).run("user", "w", l0Max);
+      for (let i = 0; i < n; i++) {
+        db.prepare(
+          "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, ?, ?)",
+        ).run(
+          `m_rec${i}`,
+          `record content ${i}`,
+          "episodic",
+          50,
+          `2026-08-0${(i % 9) + 1}T00:00:00Z`,
+          `2026-08-0${(i % 9) + 1}T00:00:00Z`,
+        );
+      }
+      db.close();
+    }
+
+    function nightOrch(
+      diffCap: number,
+      apply: (body: unknown) => Promise<ApplyResult>,
+      spawn: (ctx: SpawnChildContext) => Promise<ChildRunResult>,
+      roleDir: string,
+    ): ConsolidationOrchestrator {
+      const base = makeConfig(dataDir, true);
+      const cfg = {
+        ...base,
+        memory: {
+          ...base.memory,
+          consolidation: {
+            ...base.memory.consolidation,
+            night: { ...base.memory.consolidation.night, diffCap },
+          },
+        },
+      } as GatewayConfig;
+      return new ConsolidationOrchestrator({
+        config: cfg,
+        dataDir,
+        scratchRoot,
+        logger: silentLogger,
+        gatewayUrl: "http://127.0.0.1:8420",
+        roleName: "night-keeper",
+        roleDir,
+        spawnChild: spawn,
+        applyDiff: apply,
+      });
+    }
+
+    it("3 chunks → 3 spawns, accumulate, advance ONCE (anchor = last applied slice-time)", async () => {
+      const roleDir = path.join(tmp, "roles-adv");
+      fs.mkdirSync(roleDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.md"),
+        "ROLE-NIGHT-PROMPT",
+        "utf-8",
+      );
+      // 6 records, diffCap=2 → 3 chunks. l0 watermark = T10.
+      seedStore("2026-08-02T10:00:00.000Z", 6);
+      const spawn = writingSpawn({});
+      const spawnSpy = vi.fn(spawn);
+      const apply = vi.fn(async () => okApply());
+      const orch = nightOrch(2, apply, spawnSpy, roleDir);
+      const summary = await orch.runNow({ reason: "night" });
+      expect(summary.status).toBe("ok");
+      expect(spawnSpy).toHaveBeenCalledTimes(3);
+      const cp = await orch.readCheckpoint();
+      expect(cp.l0Cursor).toBe("2026-08-02T10:00:00.000Z"); // anchored to max slice-time
+    });
+
+    it("skip-merge in chunk 2 → anchor stops at chunk-1 slice-time (chunk 3 NOT advanced)", async () => {
+      const roleDir = path.join(tmp, "roles-adv2");
+      fs.mkdirSync(roleDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.md"),
+        "ROLE-NIGHT-PROMPT",
+        "utf-8",
+      );
+      seedStore("2026-08-02T10:00:00.000Z", 6);
+      // Chunk 2 (second spawn) returns a target-missing merge skip.
+      const spawn = writingSpawn({});
+      const spawnSpy = vi.fn(async (ctx: SpawnChildContext) => {
+        await spawn(ctx);
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      });
+      let call = 0;
+      const apply = vi.fn(async () => {
+        call += 1;
+        if (call === 2) {
+          // chunk 2: applied NOTHING, target-missing merge → skip anchor
+          return {
+            ...okApply(),
+            applied: { merges: [], deletes: [], rewrites: [] },
+            skipped: { merges: ["gone_target"], deletes: [], rewrites: [] },
+            skippedMergesMissingTarget: ["gone_target"],
+          };
+        }
+        return okApply(); // chunk 1 applies m_1 → anchor = its slice-time
+      });
+      const orch = nightOrch(2, apply, spawnSpy, roleDir);
+      const summary = await orch.runNow({ reason: "night" });
+      expect(summary.status).toBe("ok");
+      expect(spawnSpy).toHaveBeenCalledTimes(2); // loop STOPS at the skip chunk
+      const cp = await orch.readCheckpoint();
+      expect(cp.l0Cursor).toBe("2026-08-02T10:00:00.000Z"); // chunk-1 slice-time == l0 max
+    });
+
+    it("skip-merge in chunk 1 → prevCursor (NO advance; whole chunk re-presents)", async () => {
+      const roleDir = path.join(tmp, "roles-adv3");
+      fs.mkdirSync(roleDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(roleDir, "night-keeper.md"),
+        "ROLE-NIGHT-PROMPT",
+        "utf-8",
+      );
+      seedStore("2026-08-02T10:00:00.000Z", 6);
+      const spawn = writingSpawn({});
+      const spawnSpy = vi.fn(async (ctx: SpawnChildContext) => {
+        await spawn(ctx);
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "ok",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      });
+      const apply = vi.fn(async () => ({
+        ...okApply(),
+        applied: { merges: [], deletes: [], rewrites: [] },
+        skipped: { merges: ["gone"], deletes: [], rewrites: [] },
+        skippedMergesMissingTarget: ["gone"],
+      }));
+      const orch = nightOrch(2, apply, spawnSpy, roleDir);
+      // Pre-seed the checkpoint cursor so "prevCursor" is observable.
+      await orch.readCheckpoint(); // ensure dir exists
+      const cpBefore = await orch.readCheckpoint();
+      void cpBefore;
+      const summary = await orch.runNow({ reason: "night" });
+      expect(summary.status).toBe("ok");
+      expect(spawnSpy).toHaveBeenCalledTimes(1); // skip in chunk 1 → stop
+      const cp = await orch.readCheckpoint();
+      expect(cp.l0Cursor).toBe(""); // prevCursor (initial "") — NOT chunk-1 slice-time
     });
   });
 });
