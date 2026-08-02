@@ -281,7 +281,7 @@ describe("memory read routes (P3, integration)", () => {
     expect(wrongToken.status).toBe(401);
   });
 
-  it("POST /memory/run follows the same write-gate", async () => {
+  it("POST /memory/run follows the same write-gate and answers 202", async () => {
     const noAuth = await fetch(`${baseUrl}/memory/run`, { method: "POST" });
     expect(noAuth.status).toBe(401);
     const info = await (await get("/memory/info")).json();
@@ -290,6 +290,21 @@ describe("memory read routes (P3, integration)", () => {
       method: "POST",
       headers: { "x-memory-token": token },
     });
-    expect(authed.status).toBe(501);
+    // P6 implemented the route: async 202 + status. Consolidation is disabled
+    // in this scratch config, so the trigger reports "disabled" (fail-open).
+    expect(authed.status).toBe(202);
+    const body = (await authed.json()) as { accepted: boolean; status: string };
+    expect(body.accepted).toBe(false);
+    expect(body.status).toBe("disabled");
+  });
+
+  it("GET /status reports consolidation state (P6)", async () => {
+    const res = await get("/status");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.consolidation).toBeDefined();
+    expect(body.consolidation.enabled).toBe(false);
+    expect(String(body.consolidation.checkpoint)).toContain("consolidation_checkpoint.json");
+    expect(body.consolidation.inFlight).toBe(false);
   });
 });

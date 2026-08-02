@@ -53,6 +53,9 @@ import {
   type MemoryRoutesContext,
 } from "./memory-routes.js";
 import { handleMemoryApply, type ApplyRouteContext } from "./apply-executor.js";
+import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
+import { NightRunTimer } from "./consolidation/night-run.js";
+import { countNewL0Since } from "./consolidation/diff-builder.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { createHash } from "node:crypto";
@@ -90,6 +93,10 @@ export class TdaiGateway {
   private startTime = Date.now();
   /** Loopback memory token manager (write-gate credential for /memory/* routes). */
   private tokenManager: LoopbackTokenManager;
+  /** Consolidation orchestrator (wave tdai-memory-subagents-2026-08-02, P6). */
+  private orchestrator: ConsolidationOrchestrator;
+  /** Night-run timer (P7): schedule + threshold + catch-up inside the gateway. */
+  private nightRun: NightRunTimer;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -110,6 +117,35 @@ export class TdaiGateway {
       config: this.config.memory,
       sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
     });
+
+    // Consolidation orchestrator + night-run timer (P6/P7). Created here so
+    // stop()/shutdown can always kill an in-flight keeper child group. Store
+    // accessors are lazy — the vector store initializes in core.initialize().
+    const gatewayUrl = `http://${this.config.server.host}:${this.config.server.port}`;
+    this.orchestrator = new ConsolidationOrchestrator({
+      config: this.config,
+      dataDir: this.config.data.baseDir,
+      scratchRoot: nodePath.join(this.config.data.baseDir, "scratch"),
+      logger: this.logger,
+      gatewayUrl,
+      vectorStore: () => this.core.getVectorStore(),
+      embeddingService: () => this.core.getEmbeddingService(),
+    });
+    this.nightRun = new NightRunTimer({
+      enabled: this.config.memory.consolidation.enabled,
+      schedule: this.config.memory.nightRun.schedule,
+      threshold: this.config.memory.nightRun.threshold,
+      timezone: this.config.memory.timezone,
+      now: () => Date.now(),
+      tickIntervalMs: 60_000,
+      getLastRunAt: () => this.orchestrator.getLastRun()?.startedAt ?? null,
+      countNewL0: async () => {
+        const cp = await this.orchestrator.readCheckpoint();
+        return countNewL0Since(nodePath.join(this.config.data.baseDir, "vectors.db"), cp.l0Cursor);
+      },
+      trigger: async (reason: string) => this.orchestrator.trigger({ reason }),
+      logger: this.logger,
+    });
   }
 
   /**
@@ -125,6 +161,10 @@ export class TdaiGateway {
 
     // Initialize core
     await this.core.initialize();
+
+    // Consolidation: restore checkpoint, sweep stale keepers, catch-up check.
+    await this.orchestrator.start();
+    this.nightRun.start();
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -202,6 +242,9 @@ export class TdaiGateway {
       });
     }
 
+    this.nightRun.stop();
+    await this.orchestrator.stop();
+
     await this.core.destroy();
     this.logger.info("Gateway stopped");
   }
@@ -232,6 +275,12 @@ export class TdaiGateway {
         return this.handleHealth(res);
       }
 
+      // GET /status — diagnostic snapshot including the last consolidation run
+      // (wave tdai-memory-subagents-2026-08-02, P6). Auth-free like /health.
+      if (method === "GET" && pathname === "/status") {
+        return this.serveStatus(res);
+      }
+
       // GET /memory/* — memory read routes + discovery, auth-free on loopback
       // (same posture as /status). Read-only; never exposes secrets.
       if (method === "GET" && pathname.startsWith("/memory/")) {
@@ -249,8 +298,7 @@ export class TdaiGateway {
       }
       if (method === "POST" && pathname === "/memory/run") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
-        sendError(res, 501, `${method} ${pathname} not implemented yet (wave B1 reserved the route)`);
-        return;
+        return this.handleMemoryRun(req, res, url);
       }
 
       // All other routes go through the optional auth gate. When apiKey is
@@ -377,6 +425,48 @@ export class TdaiGateway {
       logger: this.logger,
     };
     return await handleMemoryApply(ctx, req, res);
+  }
+
+  /**
+   * POST /memory/run — manual consolidation trigger (P6). Asynchronous: 202 +
+   * status immediately; the run proceeds in the background under single-flight
+   * (timer / threshold / manual / catch-up never overlap). `?dry=1` → dry-run
+   * (builds the diff, touches nothing). Fail-open (критерий 21): answers 202
+   * with a status even when consolidation is disabled or a spawn would fail.
+   */
+  private async handleMemoryRun(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+    const dryRun = url.searchParams.get("dry") === "1";
+    const result = await this.orchestrator.trigger({ reason: "manual", dryRun });
+    sendJson(res, 202, {
+      accepted: result.accepted,
+      status: result.status,
+      dryRun,
+      reason: result.reason,
+      runId: result.runId ?? null,
+    });
+  }
+
+  /**
+   * GET /status — auth-free diagnostic snapshot including the last
+   * consolidation run (P6/P7). Self-contained so it typechecks on the
+   * committed tree without the I3/I4 status additions; the operator merge can
+   * fold the `consolidation` block into a richer status later.
+   */
+  private serveStatus(res: http.ServerResponse): void {
+    const lastRun = this.orchestrator.getLastRun();
+    sendJson(res, 200, {
+      status: this.core.getVectorStore() && this.core.getEmbeddingService() ? "ok" : "degraded",
+      version: VERSION,
+      uptimeSec: Math.floor((Date.now() - this.startTime) / 1000),
+      startedAt: new Date(this.startTime).toISOString(),
+      dataPath: this.config.data.baseDir,
+      consolidation: {
+        enabled: this.config.memory.consolidation.enabled,
+        checkpoint: this.orchestrator.checkpointFile,
+        inFlight: this.orchestrator.isRunning,
+        lastRun,
+      },
+    });
   }
 
   /**
