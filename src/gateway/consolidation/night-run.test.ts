@@ -6,7 +6,13 @@
  * overlap (timer does not double-trigger while a run is in flight).
  */
 import { describe, it, expect, vi } from "vitest";
-import { NightRunTimer, zonedParts, scheduleDueInZone, sameZoneDay, type NightRunDeps } from "./night-run.js";
+import {
+  NightRunTimer,
+  zonedParts,
+  scheduleDueInZone,
+  sameZoneDay,
+  type NightRunDeps,
+} from "./night-run.js";
 import type { Logger } from "../../core/types.js";
 
 const silentLogger: Logger = {
@@ -29,7 +35,11 @@ function makeTimer(overrides: Partial<NightRunDeps> = {}): {
   deps: () => NightRunDeps;
 } {
   const state: { lastRunAt: string | null } = { lastRunAt: YESTERDAY_MSK };
-  const trigger = vi.fn(async (reason: string) => ({ accepted: true, status: "started" as const, reason }));
+  const trigger = vi.fn(async (reason: string) => ({
+    accepted: true,
+    status: "started" as const,
+    reason,
+  }));
   const countNewL0 = vi.fn(async () => 0);
   const deps: NightRunDeps = {
     enabled: true,
@@ -45,7 +55,13 @@ function makeTimer(overrides: Partial<NightRunDeps> = {}): {
     ...overrides,
   };
   const timer = new NightRunTimer(deps);
-  return { timer, trigger, countNewL0, getLastRunAt: () => state.lastRunAt, deps: () => deps };
+  return {
+    timer,
+    trigger,
+    countNewL0,
+    getLastRunAt: () => state.lastRunAt,
+    deps: () => deps,
+  };
 }
 
 describe("zone helpers", () => {
@@ -64,7 +80,9 @@ describe("zone helpers", () => {
   it("sameZoneDay distinguishes today from yesterday in the zone", () => {
     expect(sameZoneDay(MSK_0601, YESTERDAY_MSK, "Europe/Moscow")).toBe(false);
     // 2026-08-02T03:01:00Z == 06:01 MSK — same day as a 04:00 MSK instant.
-    expect(sameZoneDay(MSK_0601, "2026-08-02T01:00:00.000Z", "Europe/Moscow")).toBe(true);
+    expect(
+      sameZoneDay(MSK_0601, "2026-08-02T01:00:00.000Z", "Europe/Moscow"),
+    ).toBe(true);
   });
 
   it("invalid timezone falls back to system time (fail-safe, no throw)", () => {
@@ -82,7 +100,11 @@ describe("NightRunTimer (P7)", () => {
 
   it("(a-neg) schedule does NOT re-trigger when a run already happened today", async () => {
     const state = { lastRunAt: "2026-08-02T02:00:00.000Z" }; // today 05:00 MSK
-    const trigger = vi.fn(async (reason: string) => ({ accepted: true, status: "started" as const, reason }));
+    const trigger = vi.fn(async (reason: string) => ({
+      accepted: true,
+      status: "started" as const,
+      reason,
+    }));
     const timer = new NightRunTimer({
       enabled: true,
       schedule: "06:00",
@@ -107,6 +129,90 @@ describe("NightRunTimer (P7)", () => {
     expect(trigger).toHaveBeenCalledTimes(1);
   });
 
+  it("(B5) schedule fires the NIGHT role (runType=night-keeper), threshold fires day keeper", async () => {
+    // schedule → night-keeper
+    const calls: Array<[string, string | undefined]> = [];
+    const mkTimer = (now: number) => {
+      const trigger = vi.fn(async (_r: string, _rt?: string) => ({
+        accepted: true,
+        status: "started" as const,
+        reason: _r,
+      }));
+      const timer = new NightRunTimer({
+        enabled: true,
+        schedule: "06:00",
+        threshold: 50,
+        timezone: "Europe/Moscow",
+        now: () => now,
+        tickIntervalMs: 1000,
+        getLastRunAt: () => YESTERDAY_MSK,
+        countNewL0: async () => 0,
+        trigger: (reason: string, runType?: string) => {
+          calls.push([reason, runType]);
+          return trigger(reason, runType);
+        },
+        logger: silentLogger,
+      });
+      return { timer, trigger };
+    };
+
+    // (1) schedule due (06:01 MSK) → night-keeper
+    const sched = mkTimer(MSK_0601);
+    await sched.timer.checkNow("tick");
+    expect(sched.trigger).toHaveBeenCalledWith("schedule", "night-keeper");
+
+    // (2) threshold crossing (02:30 MSK, newL0=60) → day keeper (no runType)
+    const thr = mkTimer(MSK_0230);
+    const count = vi.fn(async () => 60);
+    const timer2 = new NightRunTimer({
+      enabled: true,
+      schedule: "06:00",
+      threshold: 50,
+      timezone: "Europe/Moscow",
+      now: () => MSK_0230,
+      tickIntervalMs: 1000,
+      getLastRunAt: () => YESTERDAY_MSK,
+      countNewL0: count,
+      trigger: (reason: string, runType?: string) => {
+        calls.push([reason, runType]);
+        return Promise.resolve({
+          accepted: true,
+          status: "started" as const,
+          reason,
+        });
+      },
+      logger: silentLogger,
+    });
+    await timer2.checkNow("tick");
+    expect(calls.some(([r, rt]) => r === "threshold" && rt === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("(B5) threshold refused by busy night → deferred day retry hook fires", async () => {
+    const deferred = vi.fn();
+    const trigger = vi.fn(async (_r: string) => ({
+      accepted: false,
+      status: "busy" as const,
+      reason: _r,
+    }));
+    const timer = new NightRunTimer({
+      enabled: true,
+      schedule: "06:00",
+      threshold: 50,
+      timezone: "Europe/Moscow",
+      now: () => MSK_0230,
+      tickIntervalMs: 1000,
+      getLastRunAt: () => YESTERDAY_MSK,
+      countNewL0: async () => 60,
+      trigger: (reason: string) => trigger(reason),
+      onThresholdDeferred: deferred,
+      logger: silentLogger,
+    });
+    await timer.checkNow("tick");
+    expect(deferred).toHaveBeenCalledTimes(1);
+  });
+
   it("(b-neg) threshold below limit does not trigger", async () => {
     const { timer, trigger, countNewL0 } = makeTimer({ now: () => MSK_0230 });
     countNewL0.mockResolvedValue(49);
@@ -121,7 +227,11 @@ describe("NightRunTimer (P7)", () => {
   });
 
   it("(c-neg) no catch-up when a run already happened today", async () => {
-    const trigger2 = vi.fn(async (reason: string) => ({ accepted: true, status: "started" as const, reason }));
+    const trigger2 = vi.fn(async (reason: string) => ({
+      accepted: true,
+      status: "started" as const,
+      reason,
+    }));
     const timer2 = new NightRunTimer({
       enabled: true,
       schedule: "06:00",
@@ -163,7 +273,11 @@ describe("NightRunTimer (P7)", () => {
   });
 
   it("disabled timer does nothing (no catch-up, no triggers)", async () => {
-    const trigger = vi.fn(async () => ({ accepted: true, status: "started" as const, reason: "x" }));
+    const trigger = vi.fn(async () => ({
+      accepted: true,
+      status: "started" as const,
+      reason: "x",
+    }));
     const timer = new NightRunTimer({
       enabled: false,
       schedule: "06:00",

@@ -35,9 +35,17 @@ export interface NightRunDeps {
   getLastRunAt: () => string | null;
   /** New L0 messages since the checkpoint cursor (null = unknown). */
   countNewL0: () => Promise<number | null>;
-  /** Shared P6 trigger — enforces single-flight; returns busy when in-flight. */
-  trigger: (reason: string) => Promise<{ accepted: boolean; status: string }>;
+  /** Shared P6 trigger — enforces single-flight; returns busy when in-flight.
+   * runType: "keeper" (threshold) | "night-keeper" (schedule/catch-up). */
+  trigger: (
+    reason: string,
+    runType?: string,
+  ) => Promise<{ accepted: boolean; status: string }>;
   logger: Logger;
+  /** Optional deferred-day-retry hook: when a threshold run is refused because
+   * the night window holds the SerialGate, the timer asks the caller to retry
+   * the day run after the night finishes (no data loss). */
+  onThresholdDeferred?: () => void;
 }
 
 export class NightRunTimer {
@@ -82,12 +90,20 @@ export class NightRunTimer {
     try {
       const nowMs = this.deps.now();
       const lastRunAt = this.deps.getLastRunAt();
-      const scheduleDue = scheduleDueInZone(nowMs, this.deps.schedule, this.deps.timezone);
-      const ranToday = lastRunAt !== null && sameZoneDay(nowMs, lastRunAt, this.deps.timezone);
+      const scheduleDue = scheduleDueInZone(
+        nowMs,
+        this.deps.schedule,
+        this.deps.timezone,
+      );
+      const ranToday =
+        lastRunAt !== null && sameZoneDay(nowMs, lastRunAt, this.deps.timezone);
 
       if (scheduleDue && !ranToday) {
         const reason = source === "start" ? "catch-up" : "schedule";
-        const res = await this.deps.trigger(reason);
+        // Schedule + catch-up run the NIGHT role (full-store sweep); the day
+        // threshold keeps the light keeper — a full-store run must not fire on
+        // every threshold crossing throughout the day.
+        const res = await this.deps.trigger(reason, "night-keeper");
         if (!res.accepted) {
           this.deps.logger.info?.(
             `[night-run] ${reason} trigger refused (${res.status}) — in-flight run or disabled`,
@@ -99,11 +115,17 @@ export class NightRunTimer {
 
       const newL0 = await this.deps.countNewL0();
       if (newL0 !== null && newL0 >= this.deps.threshold) {
+        // Day threshold → light keeper (NOT the night full-store role).
         const res = await this.deps.trigger("threshold");
         if (!res.accepted) {
           this.deps.logger.info?.(
             `[night-run] threshold trigger refused (${res.status}) — in-flight run`,
           );
+          if (res.status === "busy" && this.deps.onThresholdDeferred) {
+            // Night window holds the SerialGate — schedule a deferred day
+            // consolidation instead of dropping the threshold crossing.
+            this.deps.onThresholdDeferred();
+          }
         }
       }
     } finally {
@@ -169,21 +191,32 @@ export function zonedParts(nowMs: number, timezone: string): ZoneParts {
 }
 
 /** Parse a normalized "HH:MM" schedule (fallback 06:00 on malformed input). */
-export function parseSchedule(schedule: string): { hour: number; minute: number } {
+export function parseSchedule(schedule: string): {
+  hour: number;
+  minute: number;
+} {
   const m = /^(\d{2}):(\d{2})$/.exec(schedule);
   if (!m) return { hour: 6, minute: 0 };
   return { hour: Number(m[1]), minute: Number(m[2]) };
 }
 
 /** True when the schedule moment for TODAY has already passed in the zone. */
-export function scheduleDueInZone(nowMs: number, schedule: string, timezone: string): boolean {
+export function scheduleDueInZone(
+  nowMs: number,
+  schedule: string,
+  timezone: string,
+): boolean {
   const p = zonedParts(nowMs, timezone);
   const s = parseSchedule(schedule);
   return p.hour > s.hour || (p.hour === s.hour && p.minute >= s.minute);
 }
 
 /** True when `iso` falls on the same zone-local day as `nowMs`. */
-export function sameZoneDay(nowMs: number, iso: string, timezone: string): boolean {
+export function sameZoneDay(
+  nowMs: number,
+  iso: string,
+  timezone: string,
+): boolean {
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return false;
   const a = zonedParts(nowMs, timezone);
