@@ -13,9 +13,11 @@
  *
  * The section is wrapped in a fenced markdown blockquote and every inline
  * content snippet is sanitized BEFORE embedding: ``` fences and markdown
- * headings are stripped/escaped and the child is told the block is DATA, not
- * instructions (OWASP LLM01) — a malicious-looking memory must not hijack the
- * keeper prompt.
+ * headings are stripped/escaped, embedded newlines stay inside the quote
+ * (each continuation line is prefixed with "> ") and the child is told the
+ * block is DATA, not instructions (OWASP LLM01) — a malicious-looking memory
+ * must not hijack the keeper prompt. The byte cap gates BOTH the record
+ * entries and the over-limit block metadata listing (no cap bypass).
  */
 
 import fs from "node:fs";
@@ -248,17 +250,24 @@ export function collectBlockMeta(dataDir: string): BlockMeta[] {
  * Sanitize an inline content snippet BEFORE it is embedded into the fenced
  * quote block: triple backticks are replaced, markdown heading lines and
  * blockquote markers are escaped so the snippet can never terminate or
- * restructure the surrounding quote fence.
+ * restructure the surrounding quote fence. Embedded newlines are ALSO
+ * neutralized: every line after the first is prefixed with "> " so the whole
+ * snippet body stays INSIDE the quote (fence-breakout, OWASP LLM01) — a
+ * multi-line record can never emit a bare unquoted line into the prompt.
  */
 export function escapeFenceContent(raw: string): string {
   return raw
     .replace(/```/g, "'''")
     .replace(/~~~+/g, "~~~")
     .split("\n")
-    .map((line) => {
-      if (/^#{1,6}\s/.test(line)) return `\\${line}`;
-      if (/^>\s?/.test(line)) return `\\>${line.slice(1)}`;
-      return line;
+    .map((line, i) => {
+      let escaped = line;
+      if (/^#{1,6}\s/.test(escaped)) escaped = `\\${escaped}`;
+      if (/^>\s?/.test(escaped)) escaped = `\\>${escaped.slice(1)}`;
+      // Continuation lines stay inside the surrounding blockquote: prefix
+      // every line after the first with "> " so an embedded newline can
+      // never break out of the fenced quote.
+      return i === 0 ? escaped : `> ${escaped}`;
     })
     .join("\n");
 }
@@ -282,56 +291,81 @@ const DATA_NOT_INSTRUCTIONS =
  */
 export function buildDiffSection(opts: DiffBuilderOptions): DiffSection {
   const lines: string[] = [];
+  let recordEntries = 0;
+  let blockEntries = 0;
+  let truncatedBy: DiffSection["truncatedBy"] = null;
+
+  // Fixed base (header + data-not-instructions banner + checkpoint line) —
+  // tiny relative to the default 8 KiB cap. The byte cap gates the DATA
+  // sections below (block metadata + records), which is what can grow.
   lines.push(DIFF_HEADER);
   lines.push("");
   lines.push(`> ${DATA_NOT_INSTRUCTIONS}`);
   lines.push(">");
   lines.push(`> Чекпоинт: ${opts.checkpointRunAt || "(нет — первый прогон)"}`);
 
-  if (opts.overLimitBlocks.length > 0) {
-    lines.push(">");
-    lines.push("> ### Переразмеренные файлы (метаданные; контент — GET /memory/blocks)");
-    for (const b of opts.overLimitBlocks) {
-      lines.push(`> - \`${b.path}\` — kind=${b.kind}, size=${b.size} chars, limit=${b.limit} (OVER)`);
-    }
-  }
-
-  lines.push(">");
-  lines.push(`> ### Свежие L1-записи с последнего прогона (первые ${opts.diffCap}, по возрастанию давности)`);
-
-  let recordEntries = 0;
-  let truncatedBy: DiffSection["truncatedBy"] = null;
-
-  const pushRecord = (entry: RecordEntry): boolean => {
-    const snippet = escapeFenceContent(entry.content).slice(0, 200);
-    const line = `> - id=\`${entry.id}\` type=${entry.type} updated=${entry.updatedAt} content: "${snippet}"`;
+  /**
+   * Push one section line under the byte cap; false = cap reached. Monotonic:
+   * `lines` only grows, so once one push fails every later push fails too —
+   * the first false means the section is complete.
+   */
+  const pushLine = (line: string): boolean => {
     const candidate = lines.join("\n") + "\n" + line + "\n";
-    if (Buffer.byteLength(candidate, "utf-8") > opts.diffByteCap) {
-      truncatedBy = "byte";
-      return false;
-    }
+    if (Buffer.byteLength(candidate, "utf-8") > opts.diffByteCap) return false;
     lines.push(line);
-    recordEntries++;
     return true;
   };
 
-  if (opts.records.length > 0) {
-    for (const entry of opts.records) {
-      if (recordEntries >= opts.diffCap) {
-        truncatedBy = "count";
-        break;
+  // Over-limit blocks: metadata lines are byte-gated TOO — with many
+  // oversized files the listing must not grow past the cap (byte-cap-bypass).
+  if (opts.overLimitBlocks.length > 0) {
+    const sep = pushLine(">");
+    const head =
+      sep && pushLine("> ### Переразмеренные файлы (метаданные; контент — GET /memory/blocks)");
+    if (!sep || !head) {
+      truncatedBy = "byte";
+    } else {
+      for (const b of opts.overLimitBlocks) {
+        if (!pushLine(`> - \`${b.path}\` — kind=${b.kind}, size=${b.size} chars, limit=${b.limit} (OVER)`)) {
+          truncatedBy = "byte";
+          break;
+        }
+        blockEntries++;
       }
-      if (!pushRecord(entry)) break;
     }
-  } else {
-    lines.push("> - (нет свежих записей)");
+  }
+
+  // Fresh L1 records — the count cap and the byte cap both apply.
+  if (truncatedBy === null) {
+    const sep = pushLine(">");
+    const head =
+      sep && pushLine(`> ### Свежие L1-записи с последнего прогона (первые ${opts.diffCap}, по возрастанию давности)`);
+    if (!sep || !head) {
+      truncatedBy = "byte";
+    } else if (opts.records.length > 0) {
+      for (const entry of opts.records) {
+        if (recordEntries >= opts.diffCap) {
+          truncatedBy = "count";
+          break;
+        }
+        const snippet = escapeFenceContent(entry.content).slice(0, 200);
+        const line = `> - id=\`${entry.id}\` type=${entry.type} updated=${entry.updatedAt} content: "${snippet}"`;
+        if (!pushLine(line)) {
+          truncatedBy = "byte";
+          break;
+        }
+        recordEntries++;
+      }
+    } else {
+      pushLine("> - (нет свежих записей)");
+    }
   }
 
   const text = lines.join("\n");
   return {
     text,
     recordEntries,
-    blockEntries: opts.overLimitBlocks.length,
+    blockEntries,
     bytes: Buffer.byteLength(text, "utf-8"),
     truncatedBy,
   };

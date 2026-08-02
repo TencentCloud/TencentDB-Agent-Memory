@@ -153,7 +153,13 @@ export interface CleanupConfig {
   enabled: boolean;
   /** Cleanup interval in hours (default: 24). */
   intervalHours: number;
-  /** Relative (to dataDir) directories to clean: logs, diffs, reports, backups, scratch. Never records/vectors. */
+  /**
+   * Directories to clean, relative to dataDir: logs, diffs, reports, backups.
+   * Never records/vectors. Scratch is NOT listed here — since P6 the scratch
+   * root lives OUTSIDE the memory tree (sibling `tdai-memory-keeper/` next to
+   * dataDir, server.ts), per-run subdirs are removed by the orchestrator
+   * itself and stale roots are a P11a cleanup concern.
+   */
   paths: string[];
 }
 
@@ -658,7 +664,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     cleanup: {
       enabled: bool(cleanupGroup, "enabled") ?? true,
       intervalHours: num(cleanupGroup, "intervalHours") ?? 24,
-      paths: strArray(cleanupGroup, "paths") ?? ["logs", "scratch"],
+      paths: strArray(cleanupGroup, "paths") ?? ["logs"],
     },
     probe: {
       corpusPath: expandHome(str(probeGroup, "corpusPath") ?? "probe-corpus.json"),

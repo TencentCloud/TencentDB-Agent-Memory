@@ -121,11 +121,14 @@ export class TdaiGateway {
     // Consolidation orchestrator + night-run timer (P6/P7). Created here so
     // stop()/shutdown can always kill an in-flight keeper child group. Store
     // accessors are lazy — the vector store initializes in core.initialize().
+    // Scratch root is a SIBLING of dataDir, OUTSIDE the memory tree (ТЗ §5.1:
+    // cwd = scratch-dir вне дерева памяти) — a relative-path escape from the
+    // child cwd (../persona.md) cannot reach real memory files.
     const gatewayUrl = `http://${this.config.server.host}:${this.config.server.port}`;
     this.orchestrator = new ConsolidationOrchestrator({
       config: this.config,
       dataDir: this.config.data.baseDir,
-      scratchRoot: nodePath.join(this.config.data.baseDir, "scratch"),
+      scratchRoot: nodePath.join(nodePath.dirname(this.config.data.baseDir), "tdai-memory-keeper"),
       logger: this.logger,
       gatewayUrl,
       vectorStore: () => this.core.getVectorStore(),

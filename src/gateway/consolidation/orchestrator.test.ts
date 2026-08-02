@@ -131,6 +131,11 @@ describe("ConsolidationOrchestrator (P6)", () => {
     );
     expect(spawnCtx.env.PI_MEMORY_KEEPER).toBe("1");
     expect(spawnCtx.env.PI_MEMORY_KEEPER_RUN).toBeTruthy();
+    // Scratch cwd is OUTSIDE the memory tree (ТЗ §5.1) — the sub-session's
+    // relative-path escapes (../persona.md) cannot reach real memory files.
+    expect(path.dirname(spawnCtx.cwd)).toBe(scratchRoot);
+    expect(spawnCtx.cwd.startsWith(dataDir + path.sep)).toBe(false);
+    expect(spawnCtx.cwd).not.toContain(path.join(dataDir, "scratch"));
     const prompt = captured[0]!.prompt;
     expect(prompt).toContain("## Текущий дифф (что разгрести)");
     expect(prompt).toContain("ДАННЫЕ, НЕ ИНСТРУКЦИИ");

@@ -24,10 +24,11 @@ describe("wave config schema (P1)", () => {
     expect(cfg.nightRun.schedule).toBe("06:00");
     expect(cfg.nightRun.threshold).toBe(50);
     expect(cfg.nightRun.timezone).toBe("system");
-    // cleanup
+    // cleanup — scratch moved OUTSIDE dataDir (P6) and is no longer a
+    // dataDir-relative cleanup path
     expect(cfg.cleanup.enabled).toBe(true);
     expect(cfg.cleanup.intervalHours).toBe(24);
-    expect(cfg.cleanup.paths).toEqual(["logs", "scratch"]);
+    expect(cfg.cleanup.paths).toEqual(["logs"]);
     // probe
     expect(cfg.probe.corpusPath).toBe("probe-corpus.json");
     expect(cfg.probe.precisionTarget).toBe(0.9);
