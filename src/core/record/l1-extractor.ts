@@ -209,6 +209,15 @@ export async function extractL1Memories(params: {
     extracted = extracted.slice(0, maxMemoriesPerSession);
   }
 
+  // Truncate overlong contents — recall caps at maxTotalRecallChars anyway,
+  // and a single >1500-char record eats the whole injection budget.
+  const MAX_CONTENT_CHARS = 600;
+  for (const m of extracted) {
+    if (m.content.length > MAX_CONTENT_CHARS) {
+      m.content = m.content.slice(0, MAX_CONTENT_CHARS);
+    }
+  }
+
   // Assign temporary IDs to extracted memories (needed for batch dedup)
   const memoriesWithIds = extracted.map((m) => ({
     ...m,
