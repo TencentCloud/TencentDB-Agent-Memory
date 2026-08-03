@@ -36,9 +36,9 @@ PLATFORM="${PLATFORM:-linux/amd64}"
 err() { echo "[build-combined] error: $*" >&2; exit 1; }
 
 [[ -d "$TMC_DIR/package.json" || -f "$TMC_DIR/package.json" ]] \
-  || err "MemoryPanel 不在 $TMC_DIR（设 TMC_DIR=<path> 指定）"
+  || err "MemoryPanel 不在 ${TMC_DIR}（设 TMC_DIR=<path> 指定）"
 [[ -f "$KNOWLEDGE_DIR/package.json" ]] \
-  || err "MemoryKnowledge 不在 $KNOWLEDGE_DIR（设 KNOWLEDGE_DIR=<path> 指定）"
+  || err "MemoryKnowledge 不在 ${KNOWLEDGE_DIR}（设 KNOWLEDGE_DIR=<path> 指定）"
 [[ -f "$SCRIPT_DIR/Dockerfile" ]] || err "Dockerfile 不在 $SCRIPT_DIR"
 [[ -f "$SCRIPT_DIR/start-combined.sh" ]] || err "start-combined.sh 不在 $SCRIPT_DIR"
 
@@ -133,4 +133,4 @@ docker build --platform "$PLATFORM" -t "$IMAGE_NAME:$IMAGE_TAG" "$CTX_DIR"
 
 echo ""
 echo "[build-combined] ✅ done: $IMAGE_NAME:$IMAGE_TAG"
-echo "[build-combined] context 保留在 $CTX_DIR（KEEP_CTX=0 时下次会清掉）"
+echo "[build-combined] context 保留在 ${CTX_DIR}（KEEP_CTX=0 时下次会清掉）"
