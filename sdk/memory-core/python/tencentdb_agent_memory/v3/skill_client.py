@@ -33,6 +33,7 @@ from .._v3_http import AsyncHttpStub, HttpStub
 from ..errors import ParamError
 
 _V3 = "/v3/skill"
+_UNSET = object()
 
 # ── Numeric error codes returned in envelope.code for /v3/skill/*. ──
 SKILL_ERROR_CODE: Dict[str, int] = {
@@ -178,19 +179,23 @@ class SkillClient:
     def with_defaults(
         self,
         *,
-        team_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        task_id: Optional[str] = None,
+        team_id: Any = _UNSET,
+        agent_id: Any = _UNSET,
+        user_id: Any = _UNSET,
+        task_id: Any = _UNSET,
     ) -> "SkillClient":
-        """Return a clone sharing the transport but with overridden defaults."""
+        """Clone this client with selected defaults overridden.
+
+        Pass ``None`` to clear a default; omitted arguments retain their
+        current values.
+        """
         clone = object.__new__(SkillClient)
         clone._stub = self._stub
         clone._defaults = _SkillDefaults(
-            team_id if team_id is not None else self._defaults.team_id,
-            agent_id if agent_id is not None else self._defaults.agent_id,
-            user_id if user_id is not None else self._defaults.user_id,
-            task_id if task_id is not None else self._defaults.task_id,
+            self._defaults.team_id if team_id is _UNSET else team_id,
+            self._defaults.agent_id if agent_id is _UNSET else agent_id,
+            self._defaults.user_id if user_id is _UNSET else user_id,
+            self._defaults.task_id if task_id is _UNSET else task_id,
         )
         return clone
 
@@ -617,18 +622,23 @@ class AsyncSkillClient:
     def with_defaults(
         self,
         *,
-        team_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        task_id: Optional[str] = None,
+        team_id: Any = _UNSET,
+        agent_id: Any = _UNSET,
+        user_id: Any = _UNSET,
+        task_id: Any = _UNSET,
     ) -> "AsyncSkillClient":
+        """Clone this client with selected defaults overridden.
+
+        Pass ``None`` to clear a default; omitted arguments retain their
+        current values.
+        """
         clone = object.__new__(AsyncSkillClient)
         clone._stub = self._stub
         clone._defaults = _SkillDefaults(
-            team_id if team_id is not None else self._defaults.team_id,
-            agent_id if agent_id is not None else self._defaults.agent_id,
-            user_id if user_id is not None else self._defaults.user_id,
-            task_id if task_id is not None else self._defaults.task_id,
+            self._defaults.team_id if team_id is _UNSET else team_id,
+            self._defaults.agent_id if agent_id is _UNSET else agent_id,
+            self._defaults.user_id if user_id is _UNSET else user_id,
+            self._defaults.task_id if task_id is _UNSET else task_id,
         )
         return clone
 
