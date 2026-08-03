@@ -21,6 +21,35 @@ const log = createLogger("telemetry");
 
 let sdk: NodeSDK | null = null;
 
+interface TelemetrySdk {
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Build a one-shot SIGTERM handler that flushes telemetry before restoring the
+ * signal's terminating behavior. The injected terminate hook keeps lifecycle
+ * behavior deterministic in tests.
+ */
+export function createTelemetrySigtermHandler(
+  telemetrySdk: TelemetrySdk,
+  terminate: () => void = () => {
+    process.kill(process.pid, "SIGTERM");
+  },
+): () => void {
+  let shuttingDown = false;
+  return () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    void telemetrySdk.shutdown()
+      .catch((err) => {
+        log.warn("Langfuse telemetry shutdown failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(terminate);
+  };
+}
+
 /** 初始化 OpenTelemetry + Langfuse。未配置 key 时静默跳过。 */
 export function initTelemetry(): void {
   if (sdk) return; // 防止重复初始化
@@ -51,9 +80,9 @@ export function initTelemetry(): void {
   }
 
   // 优雅退出时 flush 残留 span
-  process.on("SIGTERM", () => {
-    sdk?.shutdown().catch(() => {});
-  });
+  if (sdk) {
+    process.once("SIGTERM", createTelemetrySigtermHandler(sdk));
+  }
 }
 
 // ── Tracing helpers ──
