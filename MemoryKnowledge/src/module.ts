@@ -20,11 +20,17 @@ import {
   type ILlmBindingStore,
 } from "./store/llm-binding-store.js";
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
-import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
+import { indexProject, openIndex, syncIndex, getStats, closeIndex } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { AutoSyncScheduler, resolveAutoSyncConfig, type AutoSyncConfig } from "./store/auto-sync-scheduler.js";
+import {
+  createCodeGraphInstancePool,
+  type CodeGraphInstancePool,
+} from "./code-graph-instance-pool.js";
+
+export type { CodeGraphInstancePool } from "./code-graph-instance-pool.js";
 
 const log = createLogger("knowledge-module");
 
@@ -41,13 +47,6 @@ export interface KnowledgeModuleConfig {
   wikiWorker?: WikiWorker;
   /** Optional: externally injected code worker (for testing). */
   codeWorker?: CodeGraphWorker;
-}
-
-export interface CodeGraphInstancePool {
-  get(codeGraphId: string): CodeGraphInstance | undefined;
-  set(codeGraphId: string, instance: CodeGraphInstance): void;
-  delete(codeGraphId: string): void;
-  loadIfMissing?(codeGraphId: string, dir: string): Promise<CodeGraphInstance | undefined>;
 }
 
 export interface KnowledgeModule {
@@ -84,24 +83,11 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     resolveLlmConfig(serviceId, llmBindingStore.get(serviceId), llmConfig);
 
   // Instance pool (code-graph) — lazy loading
-  const _poolMap = new Map<string, CodeGraphInstance>();
-  const instancePool: CodeGraphInstancePool = {
-    get(id: string) { return _poolMap.get(id); },
-    set(id: string, inst: CodeGraphInstance) { _poolMap.set(id, inst); },
-    delete(id: string) { _poolMap.delete(id); },
-    async loadIfMissing(id: string, dir: string) {
-      if (_poolMap.has(id)) return _poolMap.get(id);
-      try {
-        const instance = await openIndex(dir);
-        _poolMap.set(id, instance);
-        log.info(`[code-graph] lazy-loaded instance ${id}`);
-        return instance;
-      } catch (err) {
-        log.warn(`[code-graph] lazy-load failed ${id}: ${err instanceof Error ? err.message : String(err)}`);
-        return undefined;
-      }
-    },
-  };
+  const instancePool: CodeGraphInstancePool = createCodeGraphInstancePool({
+    loadIndex: openIndex,
+    closeIndex,
+    logger: log,
+  });
 
   // Wiki engine manager
   const wikiMgr = createWikiSourceManager(join(dataDir, "_wiki_engines"));
