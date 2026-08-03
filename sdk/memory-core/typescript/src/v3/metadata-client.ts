@@ -84,6 +84,13 @@ function body(o: object): Record<string, unknown> {
   return stripUndefined(o as Record<string, unknown>);
 }
 
+function paginationFields(pagination?: PaginationInput): PaginationInput {
+  return {
+    limit: pagination?.limit,
+    offset: pagination?.offset,
+  };
+}
+
 function requireAnyString(
   payload: Record<string, unknown>,
   fields: string[],
@@ -146,7 +153,7 @@ export class MetadataClient {
     pagination?: PaginationInput,
   ): Promise<PaginatedResult<UserPublic>> {
     if (typeof teamIdOrRequest === "string") {
-      return this.http.post(`${V3}/user/list`, body({ team_id: teamIdOrRequest, ...pagination }));
+      return this.http.post(`${V3}/user/list`, body({ ...paginationFields(pagination), team_id: teamIdOrRequest }));
     }
     return this.http.post(`${V3}/user/list`, body(teamIdOrRequest));
   }
@@ -160,7 +167,7 @@ export class MetadataClient {
     pagination?: PaginationInput,
   ): Promise<PaginatedResult<UserKeyPublic>> {
     if (typeof userIdOrRequest === "string") {
-      return this.http.post(`${V3}/user-key/list`, body({ user_id: userIdOrRequest, ...pagination }));
+      return this.http.post(`${V3}/user-key/list`, body({ ...paginationFields(pagination), user_id: userIdOrRequest }));
     }
     return this.http.post(`${V3}/user-key/list`, body(userIdOrRequest));
   }
@@ -181,7 +188,7 @@ export class MetadataClient {
   ): Promise<PaginatedResult<TeamEntity>> {
     const payload = body(
       typeof userIdOrRequest === "string"
-        ? { user_id: userIdOrRequest, ...pagination }
+        ? { ...paginationFields(pagination), user_id: userIdOrRequest }
         : userIdOrRequest,
     );
     requireAnyString(payload, ["user_id", "user_key"], "listTeams");
@@ -192,7 +199,7 @@ export class MetadataClient {
   addTeamMember(p: AddTeamMemberRequest): Promise<TeamMemberEntity> { return this.http.post(`${V3}/team-member/add`, body(p)); }
   removeTeamMember(teamId: string, userId: string): Promise<{ ok: true }> { return this.http.post(`${V3}/team-member/remove`, { team_id: teamId, user_id: userId }); }
   listTeamMembers(teamId: string, pagination?: PaginationInput): Promise<PaginatedResult<TeamMemberEntity>> {
-    return this.http.post(`${V3}/team-member/list`, body({ team_id: teamId, ...pagination }));
+    return this.http.post(`${V3}/team-member/list`, body({ ...paginationFields(pagination), team_id: teamId }));
   }
   getTeamMember(teamId: string, userId: string): Promise<TeamMemberEntity> { return this.http.post(`${V3}/team-member/get`, { team_id: teamId, user_id: userId }); }
 
@@ -218,7 +225,7 @@ export class MetadataClient {
   ): Promise<PaginatedResult<TaskEntity>> {
     const payload = body(
       typeof teamIdOrRequest === "string"
-        ? { team_id: teamIdOrRequest, status, ...pagination }
+        ? { ...paginationFields(pagination), team_id: teamIdOrRequest, status }
         : teamIdOrRequest,
     );
     requireAnyString(payload, ["team_id", "creator_user_id", "creator_user_key"], "listTasks");
@@ -230,7 +237,7 @@ export class MetadataClient {
   linkTaskAgent(taskId: string, agentId: string, roleInTask?: string): Promise<TaskAgentEntity> { return this.http.post(`${V3}/task-agent/link`, body({ task_id: taskId, agent_id: agentId, role_in_task: roleInTask })); }
   unlinkTaskAgent(taskId: string, agentId: string): Promise<{ ok: true }> { return this.http.post(`${V3}/task-agent/unlink`, { task_id: taskId, agent_id: agentId }); }
   listTaskAgents(taskId: string, pagination?: PaginationInput): Promise<PaginatedResult<TaskAgentEntity>> {
-    return this.http.post(`${V3}/task-agent/list`, body({ task_id: taskId, ...pagination }));
+    return this.http.post(`${V3}/task-agent/list`, body({ ...paginationFields(pagination), task_id: taskId }));
   }
 
   // ── ParticipationLog ──
@@ -255,7 +262,7 @@ export class MetadataClient {
   // ── AgentFixedAsset ──
   setAgentFixedAssets(agentId: string, bindings: FixedAssetBindingInput[]): Promise<{ ok: true }> { return this.http.post(`${V3}/agent-fixed-asset/set`, { agent_id: agentId, bindings }); }
   listAgentFixedAssets(agentId: string, pagination?: PaginationInput): Promise<PaginatedResult<FixedAssetBindingEntity>> {
-    return this.http.post(`${V3}/agent-fixed-asset/list`, body({ agent_id: agentId, ...pagination }));
+    return this.http.post(`${V3}/agent-fixed-asset/list`, body({ ...paginationFields(pagination), agent_id: agentId }));
   }
   listAgentFixedAssetsWithDetail(p: ListWithDetailRequest): Promise<AgentFixedAssetDetailResult> { return this.http.post(`${V3}/agent-fixed-asset/list-with-detail`, body(p)); }
   summarizeAgentFixedAssetsByAgents(p: SummarizeAgentFixedAssetsRequest): Promise<AgentFixedAssetSummaryResult> {
@@ -266,7 +273,7 @@ export class MetadataClient {
   grantAcl(p: GrantAclRequest): Promise<AclEntity> { return this.http.post(`${V3}/acl/grant`, body(p)); }
   revokeAcl(id: string): Promise<{ ok: true }> { return this.http.post(`${V3}/acl/revoke`, { id }); }
   listAcl(assetId: string, pagination?: PaginationInput): Promise<PaginatedResult<AclEntity>> {
-    return this.http.post(`${V3}/acl/list`, body({ asset_id: assetId, ...pagination }));
+    return this.http.post(`${V3}/acl/list`, body({ ...paginationFields(pagination), asset_id: assetId }));
   }
   checkAcl(p: CheckAclRequest): Promise<PermCheckResult> { return this.http.post(`${V3}/acl/check`, body(p)); }
 
