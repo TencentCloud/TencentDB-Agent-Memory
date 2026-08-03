@@ -26,6 +26,13 @@ export interface RoleConfigFile {
   max_run_ms?: number;
   fail_on_missing_prompt?: boolean;
   critic_role?: string | null;
+  /** Optional per-role spawn wiring (forked task-cycle path б): extension to
+   * load via --extension, skill dir via --skill, scratch root override. */
+  runtime?: {
+    extension_path?: string;
+    skill_path?: string;
+    scratch_root?: string;
+  };
 }
 
 /** 19 required field names for the strict schema. */
@@ -33,7 +40,7 @@ export const REQUIRED_ROLE_FIELDS = [
   "name", "model", "prompt_file", "enabled", "thinking", "timeout_min",
   "scope", "trigger", "schedule", "threshold", "idsOnly",
   "diff_cap", "diff_byte_cap", "ops_subset", "tools_subset", "caps",
-  "max_run_ms", "fail_on_missing_prompt", "critic_role",
+  "max_run_ms", "fail_on_missing_prompt", "critic_role", "runtime",
 ] as const;
 
 export function isApplyOp(v: unknown): v is ApplyOp {
@@ -75,5 +82,12 @@ export function validateRoleConfig(parsed: unknown): RoleConfigFile | null {
   if (typeof obj.diff_cap !== "number") return null;
   if (typeof obj.diff_byte_cap !== "number") return null;
   if (obj.critic_role !== null && typeof obj.critic_role !== "string") return null;
+  if (obj.runtime !== undefined) {
+    const rt = obj.runtime as Record<string, unknown>;
+    for (const k of Object.keys(rt)) {
+      if (!["extension_path", "skill_path", "scratch_root"].includes(k)) return null;
+      if (typeof rt[k] !== "string") return null;
+    }
+  }
   return obj as unknown as RoleConfigFile;
 }

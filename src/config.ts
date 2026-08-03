@@ -160,7 +160,7 @@ export interface NightConsolidationConfig {
   deleteCapPerRun: number;
   /** Max rewriteRecord ops per night run — rewrites are irreversible (default: 100). */
   rewriteCapPerRun: number;
-  /** Overall night window (all batches, ms) — SerialGate must not be held forever (default: 5400000 = 90 min). */
+  /** Overall night window (all batches, ms) — the per-role gate must not be held forever (default: 5400000 = 90 min). */
   maxRunMs: number;
 }
 

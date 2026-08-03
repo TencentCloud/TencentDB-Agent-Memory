@@ -11,6 +11,18 @@ import { createRequire } from "node:module";
 import { TdaiGateway } from "./server.js";
 import { parseConfig } from "../config.js";
 
+// Real gateway boot calls sweepKeeperOrphans(null) on start — stub it so a
+// live gateway's keeper sub-sessions on this host are never SIGKILLed by the
+// test suite (cf. acceptance-criteria.test.ts:42).
+vi.mock("./consolidation/child-spawn.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./consolidation/child-spawn.js")>();
+  return {
+    ...actual,
+    sweepKeeperOrphans: vi.fn(() => 0),
+  };
+});
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
 const require = createRequire(import.meta.url);
 
@@ -24,14 +36,18 @@ function openSqlite(dbPath: string): {
   close(): void;
 } {
   if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string) => unknown;
+    };
     return new Database(dbPath) as unknown as {
       exec(sql: string): void;
       prepare(sql: string): { run(...params: unknown[]): void };
       close(): void;
     };
   }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => unknown;
+  };
   return new DatabaseSync(dbPath) as unknown as {
     exec(sql: string): void;
     prepare(sql: string): { run(...params: unknown[]): void };
@@ -102,13 +118,25 @@ describe("memory read routes (P3, integration)", () => {
     // scene blocks (one in-limit, one oversized)
     const globalDir = path.join(base, "scene_blocks", "_global");
     fs.mkdirSync(globalDir, { recursive: true });
-    fs.writeFileSync(path.join(globalDir, "ok.md"), `${META}\n\nshort content`, "utf-8");
-    fs.writeFileSync(path.join(globalDir, "big.md"), `${META}\n\n${"x".repeat(2000)}`, "utf-8");
+    fs.writeFileSync(
+      path.join(globalDir, "ok.md"),
+      `${META}\n\nshort content`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalDir, "big.md"),
+      `${META}\n\n${"x".repeat(2000)}`,
+      "utf-8",
+    );
     // oversized persona (limit 2000 chars)
     fs.writeFileSync(path.join(base, "persona.md"), "y".repeat(2500), "utf-8");
     // records with one malformed JSONL line
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
-    fs.writeFileSync(path.join(base, "records", "2026-08-02.jsonl"), '{"id":"a"}\n{broken json}\n', "utf-8");
+    fs.writeFileSync(
+      path.join(base, "records", "2026-08-02.jsonl"),
+      '{"id":"a"}\n{broken json}\n',
+      "utf-8",
+    );
 
     port = 28_000 + Math.floor(Math.random() * 500);
     gateway = new TdaiGateway({
@@ -154,7 +182,9 @@ describe("memory read routes (P3, integration)", () => {
 
   it("GET /memory/records honors the since/project/type filters", async () => {
     const since = "2026-01-01T00:00:00Z";
-    const res = await get(`/memory/records?since=${encodeURIComponent(since)}&type=persona&project=`);
+    const res = await get(
+      `/memory/records?since=${encodeURIComponent(since)}&type=persona&project=`,
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.records)).toBe(true);
@@ -164,17 +194,27 @@ describe("memory read routes (P3, integration)", () => {
     // Regression: when neither since nor type is given, the project predicate
     // must be emitted as `WHERE project_id = ?` — a bare `AND project_id = ?`
     // after `FROM l1_records` is a syntax error (500 on scoped schemas).
-    const res = await get(`/memory/records?project=${encodeURIComponent("projA")}`);
+    const res = await get(
+      `/memory/records?project=${encodeURIComponent("projA")}`,
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
-    const scoped = body.records.find((r: { record_id: string }) => r.record_id === "r-scoped");
+    const scoped = body.records.find(
+      (r: { record_id: string }) => r.record_id === "r-scoped",
+    );
     expect(scoped).toBeDefined();
     expect(scoped.project_id).toBe("projA");
     // Other projects must not leak in.
-    const other = await get(`/memory/records?project=${encodeURIComponent("projB")}`);
+    const other = await get(
+      `/memory/records?project=${encodeURIComponent("projB")}`,
+    );
     expect(other.status).toBe(200);
     const otherBody = await other.json();
-    expect(otherBody.records.find((r: { record_id: string }) => r.record_id === "r-scoped")).toBeUndefined();
+    expect(
+      otherBody.records.find(
+        (r: { record_id: string }) => r.record_id === "r-scoped",
+      ),
+    ).toBeUndefined();
   });
 
   it("GET /memory/records project filter combines with since/type on scoped schema", async () => {
@@ -184,12 +224,16 @@ describe("memory read routes (P3, integration)", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    const scoped = body.records.find((r: { record_id: string }) => r.record_id === "r-scoped");
+    const scoped = body.records.find(
+      (r: { record_id: string }) => r.record_id === "r-scoped",
+    );
     expect(scoped).toBeDefined();
   });
 
   it("GET /memory/duplicates honors project-only filter on scoped schema (no 500)", async () => {
-    const res = await get(`/memory/duplicates?project=${encodeURIComponent("projA")}`);
+    const res = await get(
+      `/memory/duplicates?project=${encodeURIComponent("projA")}`,
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.clusters)).toBe(true);
@@ -201,15 +245,21 @@ describe("memory read routes (P3, integration)", () => {
     const body = await res.json();
     expect(body.limits).toEqual({ scene: 1500, persona: 2000 });
 
-    const big = body.blocks.find((b: { path: string }) => b.path.endsWith("big.md"));
+    const big = body.blocks.find((b: { path: string }) =>
+      b.path.endsWith("big.md"),
+    );
     expect(big).toBeDefined();
     expect(big.over).toBe(true);
     expect(big.size).toBeGreaterThan(1500);
 
-    const ok = body.blocks.find((b: { path: string }) => b.path.endsWith("ok.md"));
+    const ok = body.blocks.find((b: { path: string }) =>
+      b.path.endsWith("ok.md"),
+    );
     expect(ok.over).toBe(false);
 
-    const persona = body.blocks.find((b: { kind: string }) => b.kind === "persona");
+    const persona = body.blocks.find(
+      (b: { kind: string }) => b.kind === "persona",
+    );
     expect(persona.over).toBe(true);
     expect(persona.limit).toBe(2000);
   });
@@ -275,7 +325,10 @@ describe("memory read routes (P3, integration)", () => {
 
     const wrongToken = await fetch(`${baseUrl}/memory/apply`, {
       method: "POST",
-      headers: { "x-memory-token": "deadbeef", "Content-Type": "application/json" },
+      headers: {
+        "x-memory-token": "deadbeef",
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({}),
     });
     expect(wrongToken.status).toBe(401);
@@ -304,7 +357,9 @@ describe("memory read routes (P3, integration)", () => {
     const body = await res.json();
     expect(body.consolidation).toBeDefined();
     expect(body.consolidation.enabled).toBe(false);
-    expect(String(body.consolidation.checkpoint)).toContain("consolidation_checkpoint.json");
+    expect(String(body.consolidation.checkpoint)).toContain(
+      "consolidation_checkpoint.json",
+    );
     expect(body.consolidation.inFlight).toBe(false);
   });
 
@@ -315,7 +370,9 @@ describe("memory read routes (P3, integration)", () => {
   // ============================
 
   it("GET /memory/blocks?path=scene_blocks/_global/ok.md → 200 + content", async () => {
-    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/ok.md"));
+    const res = await get(
+      "/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/ok.md"),
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.kind).toBe("scene");
@@ -331,7 +388,9 @@ describe("memory read routes (P3, integration)", () => {
   });
 
   it("GET /memory/blocks?path=../../etc/passwd → 400 (traversal)", async () => {
-    const res = await get("/memory/blocks?path=" + encodeURIComponent("../../etc/passwd"));
+    const res = await get(
+      "/memory/blocks?path=" + encodeURIComponent("../../etc/passwd"),
+    );
     expect(res.status).toBe(400);
   });
 
@@ -357,7 +416,10 @@ describe("memory read routes (P3, integration)", () => {
   });
 
   it("GET /memory/blocks?path=scene_blocks/_global/missing.md → 404", async () => {
-    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/missing.md"));
+    const res = await get(
+      "/memory/blocks?path=" +
+        encodeURIComponent("scene_blocks/_global/missing.md"),
+    );
     expect(res.status).toBe(404);
   });
 
@@ -368,7 +430,11 @@ describe("memory read routes (P3, integration)", () => {
 
   it("GET /memory/blocks?path=<cyrillic> → 200 (Unicode allowlist)", async () => {
     const cyr = "scene_blocks/_global/технический-отчет.md";
-    fs.writeFileSync(path.join(base, "scene_blocks", "_global", "технический-отчет.md"), `${META}\n\ncyrillic body`, "utf-8");
+    fs.writeFileSync(
+      path.join(base, "scene_blocks", "_global", "технический-отчет.md"),
+      `${META}\n\ncyrillic body`,
+      "utf-8",
+    );
     const res = await get("/memory/blocks?path=" + encodeURIComponent(cyr));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -383,7 +449,10 @@ describe("memory read routes (P3, integration)", () => {
       // Symlinks may be unavailable on some filesystems — skip the probe.
       return;
     }
-    const res = await get("/memory/blocks?path=" + encodeURIComponent("scene_blocks/_global/link.md"));
+    const res = await get(
+      "/memory/blocks?path=" +
+        encodeURIComponent("scene_blocks/_global/link.md"),
+    );
     expect(res.status).toBe(400);
     fs.unlinkSync(linkPath);
   });
@@ -410,7 +479,9 @@ describe("reindex-in-progress route gate (P8)", () => {
   beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-reindex-gate-"));
     base = path.join(tmp, "tdai");
-    fs.mkdirSync(path.join(base, "scene_blocks", "_global"), { recursive: true });
+    fs.mkdirSync(path.join(base, "scene_blocks", "_global"), {
+      recursive: true,
+    });
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
     port = 28_500 + Math.floor(Math.random() * 500);
     gateway = new TdaiGateway({
@@ -419,9 +490,11 @@ describe("reindex-in-progress route gate (P8)", () => {
       memory: parseConfig({}),
     });
     await gateway.start();
-    const core = (gateway as unknown as {
-      core: { getVectorStore(): { isReindexing(): boolean } | undefined };
-    }).core;
+    const core = (
+      gateway as unknown as {
+        core: { getVectorStore(): { isReindexing(): boolean } | undefined };
+      }
+    ).core;
     store = core.getVectorStore()!;
     baseUrl = `http://127.0.0.1:${port}`;
   });
@@ -440,26 +513,41 @@ describe("reindex-in-progress route gate (P8)", () => {
 
   it("during a full reindex the read routes return EMPTY 200 (fail-open), never an error", async () => {
     const flagSpy = vi.spyOn(store, "isReindexing").mockReturnValue(true);
-    const core = (gateway as unknown as {
-      core: {
-        handleBeforeRecall(...args: unknown[]): Promise<unknown>;
-        searchMemories(...args: unknown[]): Promise<unknown>;
-        searchConversations(...args: unknown[]): Promise<unknown>;
-      };
-    }).core;
+    const core = (
+      gateway as unknown as {
+        core: {
+          handleBeforeRecall(...args: unknown[]): Promise<unknown>;
+          searchMemories(...args: unknown[]): Promise<unknown>;
+          searchConversations(...args: unknown[]): Promise<unknown>;
+        };
+      }
+    ).core;
     const recallSpy = vi.spyOn(core, "handleBeforeRecall");
     const memoriesSpy = vi.spyOn(core, "searchMemories");
     const conversationsSpy = vi.spyOn(core, "searchConversations");
     try {
-      const recall = await post("/recall", { query: "anything", session_key: "s-gate" });
+      const recall = await post("/recall", {
+        query: "anything",
+        session_key: "s-gate",
+      });
       expect(recall.status).toBe(200);
-      expect(await recall.json()).toEqual({ context: "", strategy: "gated", memory_count: 0 });
+      expect(await recall.json()).toEqual({
+        context: "",
+        strategy: "gated",
+        memory_count: 0,
+      });
 
       const memories = await post("/search/memories", { query: "anything" });
       expect(memories.status).toBe(200);
-      expect(await memories.json()).toEqual({ results: "", total: 0, strategy: "gated" });
+      expect(await memories.json()).toEqual({
+        results: "",
+        total: 0,
+        strategy: "gated",
+      });
 
-      const conversations = await post("/search/conversations", { query: "anything" });
+      const conversations = await post("/search/conversations", {
+        query: "anything",
+      });
       expect(conversations.status).toBe(200);
       expect(await conversations.json()).toEqual({ results: "", total: 0 });
 
@@ -490,7 +578,6 @@ describe("reindex-in-progress route gate (P8)", () => {
   });
 });
 
-
 // ============================
 // P10 memory tools routes (#12) + feedback loop (#4)
 // ============================
@@ -515,7 +602,9 @@ describe("memory tools + feedback routes (P10, integration)", () => {
       memory: parseConfig({}),
     });
     await gateway.start();
-    token = fs.readFileSync(path.join(tmp, "tdai-gateway.token"), "utf-8").trim();
+    token = fs
+      .readFileSync(path.join(tmp, "tdai-gateway.token"), "utf-8")
+      .trim();
     baseUrl = `http://127.0.0.1:${port}`;
 
     // Seed one feedback target record (priority 40).
@@ -525,7 +614,12 @@ describe("memory tools + feedback routes (P10, integration)", () => {
         "(record_id, content, type, priority, scene_name, session_key, session_id, " +
         "timestamp_str, created_time, updated_time, metadata_json) " +
         "VALUES (?, ?, ?, ?, '', '', '', '', '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z', '{}')",
-    ).run("fb-target", "Feedback target content with a long enough prefix to be a dedup key", "episodic", 40);
+    ).run(
+      "fb-target",
+      "Feedback target content with a long enough prefix to be a dedup key",
+      "episodic",
+      40,
+    );
     db.close();
   });
 
@@ -535,7 +629,11 @@ describe("memory tools + feedback routes (P10, integration)", () => {
   });
 
   const get = (p: string) => fetch(`${baseUrl}${p}`);
-  const postJson = (p: string, body: unknown, headers?: Record<string, string>) =>
+  const postJson = (
+    p: string,
+    body: unknown,
+    headers?: Record<string, string>,
+  ) =>
     fetch(`${baseUrl}${p}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
@@ -545,9 +643,11 @@ describe("memory tools + feedback routes (P10, integration)", () => {
   const readPriority = (recordId: string): number => {
     const db = openSqlite(path.join(base, "vectors.db"));
     try {
-      const row = (db as unknown as {
-        prepare(sql: string): { get(...params: unknown[]): unknown };
-      })
+      const row = (
+        db as unknown as {
+          prepare(sql: string): { get(...params: unknown[]): unknown };
+        }
+      )
         .prepare("SELECT priority FROM l1_records WHERE record_id = ?")
         .get(recordId) as { priority: number } | undefined;
       return row?.priority ?? -1;
@@ -576,7 +676,11 @@ describe("memory tools + feedback routes (P10, integration)", () => {
   });
 
   it("POST /memory/note with loopback token records an L0 note", async () => {
-    const res = await postJson("/memory/note", { content: "remember this detail", session_key: "s-note" }, { "x-memory-token": token });
+    const res = await postJson(
+      "/memory/note",
+      { content: "remember this detail", session_key: "s-note" },
+      { "x-memory-token": token },
+    );
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(typeof body.l0_recorded).toBe("number");
@@ -594,14 +698,20 @@ describe("memory tools + feedback routes (P10, integration)", () => {
   });
 
   it("POST /memory/feedback without token → 401", async () => {
-    const res = await postJson("/memory/feedback", { keys: ["Feedback target"] });
+    const res = await postJson("/memory/feedback", {
+      keys: ["Feedback target"],
+    });
     expect(res.status).toBe(401);
   });
 
   it("POST /memory/feedback bumps priority of startsWith-matched records", async () => {
     const res = await postJson(
       "/memory/feedback",
-      { keys: ["Feedback target content with a long enough prefix to be a dedup key"] },
+      {
+        keys: [
+          "Feedback target content with a long enough prefix to be a dedup key",
+        ],
+      },
       { "x-memory-token": token },
     );
     expect(res.status).toBe(200);
@@ -612,7 +722,11 @@ describe("memory tools + feedback routes (P10, integration)", () => {
   });
 
   it("POST /memory/feedback with invalid body → 400", async () => {
-    const res = await postJson("/memory/feedback", { keys: "nope" }, { "x-memory-token": token });
+    const res = await postJson(
+      "/memory/feedback",
+      { keys: "nope" },
+      { "x-memory-token": token },
+    );
     expect(res.status).toBe(400);
   });
 });

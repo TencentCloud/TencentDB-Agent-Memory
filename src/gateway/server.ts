@@ -17,6 +17,7 @@
 import http from "node:http";
 import { URL } from "node:url";
 import { TdaiCore } from "../core/tdai-core.js";
+import { createDevLogger, isDevMode } from "../utils/dev-logger.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
@@ -83,16 +84,11 @@ const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
 
 // ============================
-// Console logger (for standalone gateway — no OpenClaw logger available)
+// Dev logger (for standalone gateway): console + file sink; debug only in dev mode.
 // ============================
 
 function createConsoleLogger(): Logger {
-  return {
-    debug: (msg: string) => console.debug(`${TAG} ${msg}`),
-    info: (msg: string) => console.info(`${TAG} ${msg}`),
-    warn: (msg: string) => console.warn(`${TAG} ${msg}`),
-    error: (msg: string) => console.error(`${TAG} ${msg}`),
-  };
+  return createDevLogger({ tag: TAG, dev: isDevMode() });
 }
 
 // ============================
@@ -198,7 +194,7 @@ export class TdaiGateway {
         this.orchestrator.trigger({ reason, runType }),
       // Threshold refused while the night window holds the gate → re-arm the
       // deferred day retry until it is ACCEPTED (the night window can hold the
-      // SerialGate up to maxRunMs=90min; a one-shot +5min retry would hit busy
+      // Per-role gate up to maxRunMs=90min; a one-shot +5min retry would hit busy
       // again and silently drop the crossing). Backoff: 5min → 10min → 20min.
       onThresholdDeferred: () => {
         let attempt = 0;
@@ -402,25 +398,42 @@ export class TdaiGateway {
       // the P6 orchestrator batch and stays reserved here.
       if (method === "POST" && pathname === "/memory/apply") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
-        return await this.handleMemoryApply(req, res);
+        const t0 = performance.now();
+        this.logger.debug?.("[route] POST /memory/apply start");
+        await this.handleMemoryApply(req, res);
+        this.logger.info(`[route] POST /memory/apply done in ${(performance.now() - t0).toFixed(0)}ms`);
+        return;
       }
       if (method === "POST" && pathname === "/memory/run") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
-        return this.handleMemoryRun(req, res, url);
+        const t0 = performance.now();
+        const dry = url.searchParams.get("dry");
+        this.logger.debug?.(`[route] POST /memory/run start dry=${dry ?? "0"}`);
+        await this.handleMemoryRun(req, res, url);
+        this.logger.info(`[route] POST /memory/run done in ${(performance.now() - t0).toFixed(0)}ms`);
+        return;
       }
 
       // Memory feedback loop (#4): the pi extension bumps recall priority with
       // raw 80-char dedup keys. Write route (same gate as /memory/apply).
       if (method === "POST" && pathname === "/memory/feedback") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
-        return await this.handleMemoryFeedback(req, res);
+        const t0 = performance.now();
+        this.logger.debug?.("[route] POST /memory/feedback start");
+        await this.handleMemoryFeedback(req, res);
+        this.logger.info(`[route] POST /memory/feedback done in ${(performance.now() - t0).toFixed(0)}ms`);
+        return;
       }
 
       // Memory tools for the main agent (#12): POST /memory/note records an
       // L0 note into L1 extraction. Write route (same gate).
       if (method === "POST" && pathname === "/memory/note") {
         if (!this.checkMemoryWriteAuth(req, res)) return;
-        return await this.handleMemoryNote(req, res);
+        const t0 = performance.now();
+        this.logger.debug?.("[route] POST /memory/note start");
+        await this.handleMemoryNote(req, res);
+        this.logger.info(`[route] POST /memory/note done in ${(performance.now() - t0).toFixed(0)}ms`);
+        return;
       }
 
       // All other routes go through the optional auth gate. When apiKey is
@@ -661,7 +674,7 @@ export class TdaiGateway {
         inFlight: this.orchestrator.isRunning,
         lastRun,
       },
-      roles: listRoles(resolveRoleDir()),
+      roles: listRoles(),
       reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
     });
   }

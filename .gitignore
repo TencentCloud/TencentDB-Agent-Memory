@@ -48,3 +48,10 @@ test-offload-sessions.sh
 tdai-gateway.yaml
 bun.lock
 node_modules
+
+# Local backups (agent/session artifacts)
+*.bak-*
+.bak-factory-*
+
+# Pi local rules state
+.pi/

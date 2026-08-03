@@ -16,7 +16,15 @@ const REPO_ROOT = path.resolve(
   "..",
 );
 const SKILLS_SRC = path.join(REPO_ROOT, "src", "core", "prompts", "skills");
-const SKILLS_DST = path.join(os.homedir(), ".pi", "agent", "skills");
+// Runtime copies now live in tdai (forked task-cycle per-role skills); the
+// repo canonical is the single source, synced by scripts/sync-memory-skills.sh.
+const SKILLS_DST = path.join(
+  os.homedir(),
+  ".pi",
+  "agent-memory",
+  "tdai",
+  "skills",
+);
 const ROLE_SRC = path.join(
   REPO_ROOT,
   "src",
@@ -38,6 +46,8 @@ const SKILL_NAMES = [
   "memory-critic",
   "night-keeper",
   "night-critic",
+  "dedup-daily",
+  "dedup-daily-critic",
 ] as const;
 
 describe("memory-role skills parity (canon = runtime)", () => {
@@ -60,7 +70,7 @@ describe("memory-role skills parity (canon = runtime)", () => {
         path.join(SKILLS_DST, name, "SKILL.md"),
         "utf-8",
       );
-      expect(runtime, `~/.pi/agent/skills/${name}/SKILL.md parity`).toBe(canon);
+      expect(runtime, `~/.pi/agent-memory/tdai/skills/${name}/SKILL.md parity`).toBe(canon);
     }
   });
 

@@ -16,10 +16,14 @@ import {
   type ManifestBaseline,
 } from "./diff-builder.js";
 import { buildChildEnv, type ChildRunResult } from "./child-spawn.js";
-import { DEFAULT_TASK_PROMPT, buildSessionPrompt as composeSessionPrompt } from "./prompt-builder.js";
-import { copyKeeperTools } from "./runner-helpers.js";
+import {
+  DEFAULT_TASK_PROMPT,
+  buildSessionPrompt as composeSessionPrompt,
+} from "./prompt-builder.js";
+import { copyKeeperTools } from "./keeper-tools.js";
 import { truncate } from "./chunk.js";
 import { checkCaps } from "./check-caps.js";
+import { readScratchDiff } from "./scratch-diff.js";
 import type { OrchestratorContext } from "./context.js";
 import type { NightConsolidationConfig } from "../../config.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
@@ -39,6 +43,7 @@ export async function preApply(
   result: RunBatchResult,
 ): Promise<PreApplyResult> {
   const dbPath = path.join(ctx.dataDir, "vectors.db");
+  ctx.logger.debug?.(`[stages] preApply start role=${args.role} records=${args.records?.length ?? 0} isNight=${args.isNight}`);
   const sliceTime = args.isNight ? maxL0RecordedAt(dbPath) : null;
 
   // Manifest baseline per chunk: a previous chunk may have rewritten
@@ -47,7 +52,8 @@ export async function preApply(
   const diff = buildDiffSection({
     cursorIso: args.cp.l0Cursor,
     diffCap: cap?.diffCap ?? ctx.config.memory.consolidation.diffCap,
-    diffByteCap: cap?.diffByteCap ?? ctx.config.memory.consolidation.diffByteCap,
+    diffByteCap:
+      cap?.diffByteCap ?? ctx.config.memory.consolidation.diffByteCap,
     records: args.records,
     overLimitBlocks: args.overLimit,
     checkpointRunAt: args.cp.lastRunAt ?? undefined,
@@ -62,6 +68,14 @@ export async function preApply(
   await fs.promises.writeFile(
     promptPath,
     composeSessionPrompt(diff.text, args.role, ctx.roleDir, ctx.roleName),
+    "utf-8",
+  );
+  // Diff dup in file (forked task-cycle path б): the role agent reads the
+  // presented diff from <scratchDir>/diff.json (not only the prompt text),
+  // and the critic cross-checks the role's diff.json against this file.
+  await fs.promises.writeFile(
+    path.join(args.scratchDir, "diff.json"),
+    diff.text,
     "utf-8",
   );
   await copyKeeperTools(ctx, args.scratchDir);
@@ -81,6 +95,7 @@ export async function preApply(
       pathValue: process.env.PATH ?? "/usr/bin:/bin",
       gatewayUrl: ctx.gatewayUrl,
       runUuid: args.runId,
+      ownerPid: ctx.ownerPid,
     }),
     cwd: args.scratchDir,
     role: args.role,
@@ -110,7 +125,16 @@ export async function preApply(
     return { ok: false };
   }
 
-  if (cap && !checkCaps(raw.value, cap, args.remainingDeleteCap, args.remainingRewriteCap, result)) {
+  if (
+    cap &&
+    !checkCaps(
+      raw.value,
+      cap,
+      args.remainingDeleteCap,
+      args.remainingRewriteCap,
+      result,
+    )
+  ) {
     return { ok: false };
   }
 
@@ -120,21 +144,4 @@ export async function preApply(
     baseline,
     presentedRecordIds: diff.presentedRecordIds,
   };
-}
-
-async function readScratchDiff(
-  scratchDir: string,
-): Promise<{ value: unknown; error?: undefined } | { value: null; error: string }> {
-  try {
-    const raw = await fs.promises.readFile(
-      path.join(scratchDir, "diff.json"),
-      "utf-8",
-    );
-    return { value: JSON.parse(raw) };
-  } catch (err) {
-    return {
-      value: null,
-      error: `diff.json missing or malformed in scratch (${path.join(scratchDir, "diff.json")}): ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
 }

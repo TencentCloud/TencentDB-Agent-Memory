@@ -21,6 +21,7 @@ import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import { mkFailedSummary } from "./summary.js";
+import { resolveRoleRuntimeFromDir } from "./role-runtime.js";
 
 export async function executeRunDay(
   ctx: OrchestratorContext,
@@ -28,8 +29,17 @@ export async function executeRunDay(
 ): Promise<RunSummary> {
   const startedMs = ctx.now();
   const startedAt = new Date(startedMs).toISOString();
-  const runScratch = path.join(ctx.scratchRoot, opts.runId);
-  const summary: RunSummary = mkFailedSummary(opts.role, startedAt, opts.reason, opts.dryRun);
+  // Per-role scratch override (forked task-cycle path б): role.json runtime.scratch_root
+  // wins over the shared ctx.scratchRoot; legacy roles keep the shared root.
+  const roleRt = resolveRoleRuntimeFromDir(opts.role, ctx.roleDir);
+  const scratchRoot = roleRt?.runtime.scratchRoot ?? ctx.scratchRoot;
+  const runScratch = path.join(scratchRoot, opts.runId);
+  const summary: RunSummary = mkFailedSummary(
+    opts.role,
+    startedAt,
+    opts.reason,
+    opts.dryRun,
+  );
 
   try {
     const cp = (await ctx.checkpoint.read()) as {
@@ -82,12 +92,12 @@ export async function executeRunDay(
     } else if (!batchRes.appliedNothing) {
       // anyApplied: advance unconditionally (idempotent retry re-presents
       // the same diff, but the cursor moves past the fresh tail).
-      await advanceCheckpoint(ctx, cp.l0Cursor, newL0, summary, undefined);
       summary.status = "ok";
+      await advanceCheckpoint(ctx, cp.l0Cursor, newL0, summary, undefined);
     } else if (summary.error === undefined) {
       // empty/heal-skip: day still advances past the fresh tail.
-      await advanceCheckpoint(ctx, cp.l0Cursor, newL0, summary, undefined);
       summary.status = "ok";
+      await advanceCheckpoint(ctx, cp.l0Cursor, newL0, summary, undefined);
     }
 
     await writeReport(ctx, summary);
@@ -103,7 +113,7 @@ export async function executeRunDay(
     }
     return summary;
   } finally {
-    ctx.currentChildRef.value = null;
+    ctx.childrenRef.value.delete(opts.runId);
     if (!opts.dryRun) {
       try {
         await fs.promises.rm(runScratch, { recursive: true, force: true });

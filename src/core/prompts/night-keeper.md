@@ -55,3 +55,20 @@ GET, diff.json-контракт, task-simple цикл, данные≠инстр
 - Не удаляй «устаревшее» напрямую — только rewriteRecord-сжатие или
   подтверждённый дубль (delete).
 - Не превышай per-run капы (deleteCapPerRun, rewriteCapPerRun).
+
+## Завершение (graceful exit — иначе hard kill)
+
+Та же логика, что у дневной пчёлки: после записи `diff.json` для **последнего
+батча** и вывода итоговой сводки в stdout — **немедленно return final answer**.
+НЕ открывай новых subagent/HTTP/watcher/MCP-хэндлов после сводки — каждый
+handle держит event loop → child не exits → `timeout_min` (45 мин) → hard
+kill (`kill -KILL -- -<pgid>` в `child-spawn.ts:killChildGroup`) → orchestrator
+возвращает `status: "failed"` без apply → все батчи теряются.
+
+Контрольный чек перед final answer:
+- `diff.json` для последнего батча записан в cwd и валиден по схеме.
+- Сводка в stdout — итог по всем батчам (deleted/merged/rewritten total).
+- Никаких pending хэндлов.
+
+Если subagent/HTTP завис — **не жди**, выводи сводку и final answer.
+Hard kill на 45 мин потеряет весь прогон.

@@ -37,7 +37,8 @@ import * as childSpawn from "./consolidation/child-spawn.js";
  * proves the dangerous call site is still reached — and intercepted.
  */
 vi.mock("./consolidation/child-spawn.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./consolidation/child-spawn.js")>();
+  const actual =
+    await importOriginal<typeof import("./consolidation/child-spawn.js")>();
   return { ...actual, sweepKeeperOrphans: vi.fn(() => 0) };
 });
 
@@ -64,7 +65,9 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
   beforeAll(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-restart-"));
     base = path.join(tmp, "tdai");
-    fs.mkdirSync(path.join(base, "scene_blocks", "_global"), { recursive: true });
+    fs.mkdirSync(path.join(base, "scene_blocks", "_global"), {
+      recursive: true,
+    });
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
     port = 29_700 + Math.floor(Math.random() * 300);
     baseUrl = `http://127.0.0.1:${port}`;
@@ -89,20 +92,30 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
     // active run, which would SIGKILL every PI_MEMORY_KEEPER=1 process — is
     // reached by the test gateway, but the stubbed no-op intercepted it: no
     // /proc scan, no kill of system processes.
-    expect(childSpawn.sweepKeeperOrphans).toHaveBeenCalledWith(null, expect.anything());
+    expect(childSpawn.sweepKeeperOrphans).toHaveBeenCalledWith(
+      null,
+      expect.anything(),
+      expect.any(Number),
+    );
     try {
       const res = await fetch(`${baseUrl}/status`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         status: string;
         dataPath: string;
-        consolidation: { enabled: boolean; checkpoint: string; inFlight: boolean };
+        consolidation: {
+          enabled: boolean;
+          checkpoint: string;
+          inFlight: boolean;
+        };
       };
       // "ok" with a live embedder; scratch boots fail-open as "degraded" —
       // both are serving states, never an error page.
       expect(["ok", "degraded"]).toContain(body.status);
       expect(body.dataPath).toBe(base);
-      expect(body.consolidation.checkpoint).toContain("consolidation_checkpoint.json");
+      expect(body.consolidation.checkpoint).toContain(
+        "consolidation_checkpoint.json",
+      );
       expect(body.consolidation.inFlight).toBe(false);
       // Loopback token written OUTSIDE the dataDir (P2 contract).
       expect(fs.existsSync(path.join(tmp, "tdai-gateway.token"))).toBe(true);
@@ -119,11 +132,17 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
       const body = (await res.json()) as {
         status: string;
         dataPath: string;
-        consolidation: { checkpoint: string; inFlight: boolean; lastRun: unknown };
+        consolidation: {
+          checkpoint: string;
+          inFlight: boolean;
+          lastRun: unknown;
+        };
       };
       expect(["ok", "degraded"]).toContain(body.status);
       expect(body.dataPath).toBe(base);
-      expect(body.consolidation.checkpoint).toContain("consolidation_checkpoint.json");
+      expect(body.consolidation.checkpoint).toContain(
+        "consolidation_checkpoint.json",
+      );
       expect(body.consolidation.inFlight).toBe(false);
 
       // Discovery + write-gate survive the restart: the pi extension can
@@ -139,8 +158,15 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
       const token = fs.readFileSync(infoBody.tokenPath, "utf-8").trim();
       const authed = await fetch(`${baseUrl}/memory/apply`, {
         method: "POST",
-        headers: { "x-memory-token": token, "Content-Type": "application/json" },
-        body: JSON.stringify({ diff: {}, manifest: { baseline: {} }, context: { presentedRecordIds: [] } }),
+        headers: {
+          "x-memory-token": token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          diff: {},
+          manifest: { baseline: {} },
+          context: { presentedRecordIds: [] },
+        }),
       });
       // Empty diff is valid — proves the write-gate itself works post-restart.
       expect(authed.status).toBe(200);
@@ -174,7 +200,9 @@ describe("criterion 9 — memory-keeper role prompt mandates the task-simple cyc
     expect(prompt).toContain("≤ 1500 символов");
     expect(prompt).toContain("≤ 2000 символов");
     expect(prompt).toContain("diff.json");
-    expect(flat).toContain("ТОЛЬКО через POST /memory/apply со стороны гейтвея");
+    expect(flat).toContain(
+      "ТОЛЬКО через POST /memory/apply со стороны гейтвея",
+    );
   });
 
   it("forbids direct writes and POST routes — the sub-session is GET-only", () => {
@@ -219,7 +247,10 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
     for (const rel of NEW_MODULES) {
       const src = readRepo(rel);
       for (const pattern of HARDCODE_PATTERNS) {
-        expect(src.includes(pattern), `${rel} must not contain ${pattern}`).toBe(false);
+        expect(
+          src.includes(pattern),
+          `${rel} must not contain ${pattern}`,
+        ).toBe(false);
       }
     }
   });
@@ -237,7 +268,9 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
     const cfg = readRepo("src/config.ts");
     expect(cfg).toContain('?? "opencode-go/deepseek-v4-flash"');
     expect(cfg).toContain('?? "06:00"');
-    expect(cfg).toMatch(/threshold:\s*num\(nightRunGroup, "threshold"\) \?\? 50/);
+    expect(cfg).toMatch(
+      /threshold:\s*num\(nightRunGroup, "threshold"\) \?\? 50/,
+    );
   });
 
   it("parseConfig({}) exposes those defaults through the config object", () => {
@@ -252,7 +285,11 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
     expect(cfg.nightRun.schedule).toBe("06:00");
     expect(cfg.nightRun.threshold).toBe(50);
     expect(cfg.nightRun.timezone).toBe("system");
-    expect(cfg.recall.typeWeights).toEqual({ instruction: 1, persona: 1, episodic: 1 });
+    expect(cfg.recall.typeWeights).toEqual({
+      instruction: 1,
+      persona: 1,
+      episodic: 1,
+    });
   });
 });
 
@@ -285,9 +322,14 @@ describe("criterion 20 — negative INVARIANT checks (static)", () => {
   });
 
   it("nogo-l0-path: capture code stays LLM-free (no generateText/generateObject)", () => {
-    for (const rel of ["src/core/conversation/l0-recorder.ts", "src/core/hooks/auto-capture.ts"]) {
+    for (const rel of [
+      "src/core/conversation/l0-recorder.ts",
+      "src/core/hooks/auto-capture.ts",
+    ]) {
       const src = readRepo(rel);
-      expect(src, `${rel} must stay LLM-free`).not.toMatch(/generateText|generateObject/);
+      expect(src, `${rel} must stay LLM-free`).not.toMatch(
+        /generateText|generateObject/,
+      );
     }
   });
 
@@ -295,7 +337,9 @@ describe("criterion 20 — negative INVARIANT checks (static)", () => {
     const server = readRepo("src/gateway/server.ts");
     const calls = server.match(/checkMemoryWriteAuth\(req, res\)/g) ?? [];
     expect(calls.length).toBeGreaterThanOrEqual(4);
-    expect(server).toMatch(/import \{ checkWriteAuth as isMemoryWriteAuthed \} from "\.\/write-auth\.js"/);
+    expect(server).toMatch(
+      /import \{ checkWriteAuth as isMemoryWriteAuthed \} from "\.\/write-auth\.js"/,
+    );
   });
 
   it("the role prompt forbids POST routes and direct memory writes (child never calls /memory/apply)", () => {
@@ -306,9 +350,13 @@ describe("criterion 20 — negative INVARIANT checks (static)", () => {
   });
 
   it("no --no-skills in the spawn module (skills/subagents stay available to the child)", () => {
-    const spawn = readRepo("src/gateway/consolidation/child-spawn.ts");
-    expect(spawn.includes('"--no-skills"')).toBe(false);
-    expect(spawn).toContain("spawnFlags"); // flags come from config, not a literal list
+    // spawnKeeper (with spawnFlags) lives in keeper-run.ts; child-spawn.ts is
+    // the env+re-export shim. Check both for the banned literal.
+    const run = readRepo("src/gateway/consolidation/keeper-run.ts");
+    expect(run.includes('"--no-skills"')).toBe(false);
+    expect(run).toContain("spawnFlags"); // flags come from config, not a literal list
+    const shim = readRepo("src/gateway/consolidation/child-spawn.ts");
+    expect(shim.includes('"--no-skills"')).toBe(false);
   });
 
   it("env whitelist is explicit — buildChildEnv hard-codes exactly the allowlist (nogo-secrets)", () => {
@@ -328,7 +376,10 @@ describe("criterion 20 — negative INVARIANT checks (static)", () => {
 function walkTs(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) out.push(...walkTs(path.join(dir, entry.name)).map((p) => `${entry.name}/${p}`));
+    if (entry.isDirectory())
+      out.push(
+        ...walkTs(path.join(dir, entry.name)).map((p) => `${entry.name}/${p}`),
+      );
     else if (entry.name.endsWith(".ts")) out.push(entry.name);
   }
   return out;

@@ -8,8 +8,12 @@
  * night-keeper is fail-loud).
  */
 
-import { loadRolePrompt, resolveRoleDir, buildSessionPrompt as composeSessionPrompt } from "../role-files.js";
+import {
+  resolveRoleDir,
+  buildSessionPrompt as composeSessionPrompt,
+} from "../role-files.js";
 import { loadRoleConfig } from "../role-files.js";
+import { loadRolePromptFromDir } from "./role-dir-loader.js";
 import type { Logger } from "../../core/types.js";
 
 export const DEFAULT_ROLE_PROMPT = `Ты — memory-keeper «пчёлка» системы памяти tdai-memory.
@@ -83,7 +87,11 @@ export function buildSessionPrompt(
   roleDir: string,
   fallbackRoleName: string,
 ): string {
-  const rolePrompt = loadRolePrompt(role, roleDir);
+  // roleDir here is the roles/ directory (canonical per-role subdirs
+  // <role>/prompt.md). loadRolePromptFromDir resolves canonical + bare flat;
+  // loadRolePrompt(role, roleDir) would build a doubled path
+  // (roleDir/.pi/.../roles/<role>) and fail to find canonical prompts.
+  const rolePrompt = loadRolePromptFromDir(role, roleDir);
   if (!rolePrompt) {
     if (role === "night-keeper") {
       throw new Error(

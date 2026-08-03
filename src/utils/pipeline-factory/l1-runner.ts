@@ -78,6 +78,7 @@ export function createL1Runner(opts: {
       let totalExtracted = 0;
       let totalStored = 0;
       let lastSceneName: string | undefined;
+      let anyFailed = false;
       for (const group of groups) {
         logger.debug?.(`${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"}: ${group.messages.length} messages`);
         const l1Result = await extractL1Memories({
@@ -96,9 +97,18 @@ export function createL1Runner(opts: {
           logger,
           instanceId: getInstanceId?.(),
         });
+        if (!l1Result.success) {
+          anyFailed = true;
+          logger.warn(`${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"} failed: ${l1Result.error ?? "unknown"} — cursor NOT advanced, batch will re-present`);
+          break;
+        }
         totalExtracted += l1Result.extractedCount;
         totalStored += l1Result.storedCount;
         if (l1Result.lastSceneName) lastSceneName = l1Result.lastSceneName;
+      }
+      if (anyFailed) {
+        // Preserve the cursor so the failed batch is re-presented next cycle.
+        return { processedCount: 0 };
       }
       await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
       logger.info(`${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`);

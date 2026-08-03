@@ -10,7 +10,7 @@
  *     today has already passed and no run happened today → trigger once.
  *
  * Single-flight is SHARED with P6: the timer calls the orchestrator's
- * trigger(), whose SerialGate refuses overlaps (timer, threshold, manual
+ * trigger(), whose per-role gate refuses overlaps (timer, threshold, manual
  * POST /memory/run and catch-up never run concurrently).
  *
  * Time handling is injectable (`now`) so the schedule/threshold/catch-up
@@ -43,7 +43,7 @@ export interface NightRunDeps {
   ) => Promise<{ accepted: boolean; status: string }>;
   logger: Logger;
   /** Optional deferred-day-retry hook: when a threshold run is refused because
-   * the night window holds the SerialGate, the timer asks the caller to retry
+   * the night window holds the per-role gate, the timer asks the caller to retry
    * the day run after the night finishes (no data loss). */
   onThresholdDeferred?: () => void;
 }
@@ -122,7 +122,7 @@ export class NightRunTimer {
             `[night-run] threshold trigger refused (${res.status}) — in-flight run`,
           );
           if (res.status === "busy" && this.deps.onThresholdDeferred) {
-            // Night window holds the SerialGate — schedule a deferred day
+            // Night window holds the per-role gate — schedule a deferred day
             // consolidation instead of dropping the threshold crossing.
             this.deps.onThresholdDeferred();
           }

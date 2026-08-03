@@ -24,6 +24,32 @@ import type { ChildRunResult } from "./child-spawn.js";
 import type { ApplyResult } from "../apply-executor.js";
 import { createRequire } from "node:module";
 
+// Mock runKeeperProcess at module level (hoisted): the stop()-both-kill test
+// needs the REAL defaultSpawnChild onChild registration to fill childrenRef
+// without spawning a real pi sub-session. Tests that pass an explicit
+// `spawn` override are unaffected; tests using defaultSpawnChild without a
+// real run (start()/getLastRun()) never reach the spawner.
+vi.mock("./keeper-run.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./keeper-run.js")>();
+  return {
+    ...actual,
+    runKeeperProcess: vi.fn(),
+  };
+});
+vi.mock("./child-spawn.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./child-spawn.js")>();
+  return {
+    ...actual,
+    killChildGroup: vi.fn(),
+    // stop()/start() sweep real keepers — stub so the stop-both-kill test
+    // never SIGKILLs live gateway keepers on this host (cf.
+    // acceptance-criteria.test.ts:42 which does the same).
+    sweepKeeperOrphans: vi.fn(() => 0),
+  };
+});
+import { runKeeperProcess as runKeeperProcessMock } from "./keeper-run.js";
+import { killChildGroup as killChildGroupMock } from "./child-spawn.js";
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
 const require = createRequire(import.meta.url);
 
@@ -151,6 +177,11 @@ describe("ConsolidationOrchestrator (P6)", () => {
       apply?: (body: unknown) => Promise<ApplyResult>;
     } = {},
   ) {
+    // Default roleDir = empty tmp dir → role resolution returns null (no role
+    // json) → shared scratchRoot fallback. Tests that need a real role pass
+    // an explicit roleDir (e.g. night-keeper B3 block).
+    const emptyRoleDir = path.join(tmp, "empty-roles");
+    fs.mkdirSync(emptyRoleDir, { recursive: true });
     return new ConsolidationOrchestrator({
       config: makeConfig(dataDir, opts.enabled ?? true),
       dataDir,
@@ -158,7 +189,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       logger: silentLogger,
       gatewayUrl: "http://127.0.0.1:8420",
       roleName: opts.roleName,
-      roleDir: opts.roleDir,
+      roleDir: opts.roleDir ?? emptyRoleDir,
       spawnChild:
         opts.spawn ??
         writingSpawn({
@@ -211,6 +242,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         "HOME",
         "PATH",
         "PI_MEMORY_KEEPER",
+        "PI_MEMORY_KEEPER_OWNER",
         "PI_MEMORY_KEEPER_RUN",
         "TDAI_GATEWAY_URL",
       ].sort(),
@@ -1042,5 +1074,188 @@ describe("ConsolidationOrchestrator (P6)", () => {
       const cp = await orch.readCheckpoint();
       expect(cp.l0Cursor).toBe(""); // prevCursor (initial "") — NOT chunk-1 slice-time
     });
+  });
+
+  // ============================
+  // Per-role lock (RoleGate) — different roles run in parallel, same role
+  // is single-flight (§5.1), stop() kills ALL in-flight children.
+  // ============================
+
+  it("per-role: night-keeper trigger is NOT busy while memory-keeper is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const slowSpawn = vi.fn(
+      async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
+        await gate;
+        await fs.promises.writeFile(
+          path.join(ctx.scratchDir, "diff.json"),
+          JSON.stringify({}),
+          "utf-8",
+        );
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        };
+      },
+    );
+    const orch = makeOrchestrator({ spawn: slowSpawn });
+    const roleDir = path.join(tmp, "roles-par");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+    // Rebuild with the night-keeper role file so executeRunNight is not
+    // fail-loud (missing prompt) before it can spawn.
+    const orchPar = makeOrchestrator({ spawn: slowSpawn, roleDir });
+
+    const first = orchPar.runNow({ reason: "first" }); // memory-keeper (default)
+    await new Promise((r) => setTimeout(r, 20));
+    expect(orchPar.isRunning).toBe(true);
+
+    // Same role refused…
+    const sameRole = await orchPar.trigger({ reason: "second" });
+    expect(sameRole.accepted).toBe(false);
+    expect(sameRole.status).toBe("busy");
+
+    // …but night-keeper (different role) is accepted in parallel.
+    const night = await orchPar.trigger({
+      reason: "night",
+      runType: "night-keeper",
+    });
+    expect(night.accepted).toBe(true);
+    expect(night.status).toBe("started");
+
+    release();
+    const summary = await first;
+    expect(summary.status).toBe("ok");
+    // memory-keeper spawned exactly once (its own run); the parallel night
+    // trigger was accepted at the gate level (per-role lock) even though the
+    // night run has an empty store (0 batches → no spawn). The gate, not the
+    // batch pipeline, is what this test exercises.
+    expect(slowSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stop() kills all in-flight child handles (parallel roles)", async () => {
+    // Real defaultSpawnChild onChild registration: runKeeperProcess is mocked
+    // at module level (vi.mock hoists), so spawn resolves without a real pi
+    // sub-session, but the kill handles ARE registered in childrenRef via the
+    // real runner-helpers wiring (the point of the parallel-child-leak fix).
+    const killed: string[] = [];
+    (
+      runKeeperProcessMock as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementation(
+      (opts: {
+        onChild?: (c: { kill: () => void }) => void;
+        timeoutMs: number;
+      }): Promise<ChildRunResult> => {
+        opts.onChild?.({ kill: () => killed.push("child") });
+        return Promise.resolve({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        });
+      },
+    );
+
+    const roleDir = path.join(tmp, "roles-stop");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+
+    // Use the DEFAULT spawn path (no `spawn` override in the constructor) so
+    // onChild registration flows through the real runner-helpers wiring →
+    // mocked runKeeperProcess fills childrenRef, and stop() calls the
+    // registered kill handle. killChildGroup is mocked too, so a REAL
+    // childrenRef iteration is proven (kill called once per runId); without
+    // it the assertion would pass with zero kills (critic test-gap).
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    (
+      killChildGroupMock as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementation(() => {
+      killed.push("child");
+      return {
+        killed: 1,
+        survivors: [],
+        method: "group-kill",
+      } as never;
+    });
+    (
+      runKeeperProcessMock as unknown as ReturnType<typeof vi.fn>
+    ).mockImplementation(
+      (opts: {
+        onChild?: (c: { kill: () => void }) => void;
+        timeoutMs: number;
+      }): Promise<ChildRunResult> => {
+        // onChild receives the spawned child; runner-helpers registers
+        // { kill: () => killChildGroup(child, logger) } in childrenRef.
+        opts.onChild?.({ pid: 99999 } as never);
+        return gate.then(() => ({
+          exitCode: 0,
+          signal: null,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          killed: null,
+        }));
+      },
+    );
+    const orch = new ConsolidationOrchestrator({
+      config: makeConfig(dataDir, true),
+      dataDir,
+      scratchRoot,
+      logger: silentLogger,
+      gatewayUrl: "http://127.0.0.1:8420",
+      roleDir,
+    });
+    await orch.start();
+
+    // Seed a store so the night (full-store) run actually reaches the spawner.
+    const db = openSqlite(path.join(dataDir, "vectors.db"));
+    db.exec(
+      "CREATE TABLE l1_records (" +
+        "record_id TEXT PRIMARY KEY, content TEXT, type TEXT, priority INTEGER, scene_name TEXT, " +
+        "session_key TEXT, session_id TEXT, timestamp_str TEXT, created_time TEXT, updated_time TEXT, metadata_json TEXT)",
+    );
+    db.prepare(
+      "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(
+      "m_n1",
+      "night rec",
+      "episodic",
+      50,
+      "2026-08-02T01:00:00.000Z",
+      "2026-08-02T01:00:00.000Z",
+    );
+    db.close();
+
+    // Two parallel runs of different roles, both held in flight.
+    const a = orch.runNow({ reason: "a" });
+    await new Promise((r) => setTimeout(r, 20));
+    const b = orch.runNow({ reason: "b", runType: "night-keeper" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(orch.isRunning).toBe(true);
+
+    await orch.stop();
+    expect(killed.length).toBe(2); // both child handles killed
+    release(); // let the mocked runKeeperProcess promises settle
+    await Promise.all([a, b]);
+    expect(orch.isRunning).toBe(false);
   });
 });

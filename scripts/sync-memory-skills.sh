@@ -3,8 +3,8 @@
 # copies to their runtime locations. Single-source: repo is the canonical
 # source; runtime copies must equal the repo (parity test enforces).
 #
-#   repo  src/core/prompts/skills/{memory-keeper,memory-critic,night-keeper,night-critic}/SKILL.md
-#     →   ~/.pi/agent/skills/<name>/SKILL.md
+#   repo  src/core/prompts/skills/{memory-keeper,memory-critic,night-keeper,night-critic,dedup-daily,dedup-daily-critic}/SKILL.md
+#     →   ~/.pi/agent-memory/tdai/skills/<name>/SKILL.md   (forked task-cycle per-role skills)
 #   repo  src/core/prompts/night-keeper.md
 #     →   ~/.pi/agent-memory/tdai/memory-keeper/night-keeper.md
 #
@@ -15,11 +15,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILLS_SRC="$REPO_ROOT/src/core/prompts/skills"
-SKILLS_DST="$HOME/.pi/agent/skills"
+SKILLS_DST="$HOME/.pi/agent-memory/tdai/skills"
 ROLE_SRC="$REPO_ROOT/src/core/prompts/night-keeper.md"
 ROLE_DST_DIR="$HOME/.pi/agent-memory/tdai/memory-keeper"
 
-SKILL_NAMES=(memory-keeper memory-critic night-keeper night-critic)
+SKILL_NAMES=(memory-keeper memory-critic night-keeper night-critic dedup-daily dedup-daily-critic)
 
 fail() {
   echo "sync-memory-skills: $1" >&2
@@ -32,7 +32,7 @@ for name in "${SKILL_NAMES[@]}"; do
   [ -f "$src" ] || fail "missing canonical skill: $src"
   mkdir -p "$SKILLS_DST/$name"
   cp "$src" "$SKILLS_DST/$name/SKILL.md"
-  echo "synced ~/.pi/agent/skills/$name/SKILL.md"
+  echo "synced ~/.pi/agent-memory/tdai/skills/$name/SKILL.md"
 done
 
 [ -f "$ROLE_SRC" ] || fail "missing canonical role file: $ROLE_SRC"

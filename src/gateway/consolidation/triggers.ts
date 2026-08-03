@@ -14,37 +14,13 @@
 import { randomUUID } from "node:crypto";
 import { resolveRoleDir } from "../role-files.js";
 import { sweepKeeperOrphans } from "./child-spawn.js";
+import { busySummary } from "./busy-summary.js";
+import type { RoleGate } from "./role-gate.js";
 import type {
   OrchestratorOptions,
   RunSummary,
   TriggerResult,
 } from "./types.js";
-
-/** Build the busy-summary that the gate returns when a run is in flight. */
-export function busySummary(
-  now: () => number,
-  roleName: string,
-  opts: { reason: string; dryRun?: boolean; runType?: string },
-): RunSummary {
-  const startedMs = now();
-  return {
-    role: opts.runType ?? roleName,
-    status: "failed",
-    startedAt: new Date(startedMs).toISOString(),
-    finishedAt: new Date(startedMs).toISOString(),
-    elapsedMs: 0,
-    reason: opts.reason,
-    dryRun: !!opts.dryRun,
-    newL0: 0,
-    recordsPresented: 0,
-    overLimitBlocks: 0,
-    applied: { merges: [], deletes: [], rewrites: [] },
-    skipped: { merges: [], deletes: [], rewrites: [] },
-    error: "another consolidation run is in flight (single-flight)",
-    reindexed: false,
-    needsReindex: false,
-  };
-}
 
 /** Orchestrator handle (just the lifecycle methods). The full class lives
  * in orchestrator.ts; this file holds the dispatchable triggers so the
@@ -57,10 +33,11 @@ export interface TriggerHandle {
   dataDir: string;
   scratchRoot: string;
   logger: OrchestratorOptions["logger"];
-  activeRunUuid: { value: string | null };
-  currentChild: { value: { kill: () => unknown } | null };
+  ownerPid: number;
+  activeRunUuid: { value: Set<string> };
+  children: { value: Map<string, { kill: () => unknown }> };
   lastRunRef: { value: RunSummary | null };
-  gate: { tryAcquire: () => (() => void) | null; isLocked: boolean };
+  gate: RoleGate;
   executeRun: (opts: {
     reason: string;
     dryRun?: boolean;
@@ -79,17 +56,22 @@ export async function trigger(
   if (!self.config.memory.consolidation.enabled) {
     return { accepted: false, status: "disabled", reason: opts.reason };
   }
-  const release = self.gate.tryAcquire();
+  const role = opts.runType ?? self.roleName;
+  const release = self.gate.tryAcquire(role);
   if (!release) {
+    self.logger.debug?.(`[trigger] busy role=${role} reason=${opts.reason}`);
     return { accepted: false, status: "busy", reason: opts.reason };
   }
   const runId = randomUUID();
-  self.activeRunUuid.value = runId;
+  self.logger.debug?.(`[trigger] start role=${role} runId=${runId} reason=${opts.reason}`);
+  self.activeRunUuid.value.add(runId);
   // Never reject: run failures are recorded in the report + lastRun.
   void self
-    .executeRun({ ...opts, runId, role: opts.runType ?? self.roleName })
+    .executeRun({ ...opts, runId, role })
     .finally(() => {
-      self.activeRunUuid.value = null;
+      self.activeRunUuid.value.delete(runId);
+      self.children.value.delete(runId);
+      self.logger.debug?.(`[trigger] cleanup runId=${runId}`);
       release();
     })
     .catch((err: unknown) => {
@@ -105,22 +87,24 @@ export async function runNow(
   self: TriggerHandle,
   opts: { reason: string; dryRun?: boolean; runType?: string },
 ): Promise<RunSummary> {
-  const release = self.gate.tryAcquire();
+  const role = opts.runType ?? self.roleName;
+  const release = self.gate.tryAcquire(role);
   if (!release)
     return busySummary(self.now, self.roleName, {
       ...opts,
-      runType: opts.runType ?? self.roleName,
+      runType: role,
     });
   const runId = randomUUID();
-  self.activeRunUuid.value = runId;
+  self.activeRunUuid.value.add(runId);
   try {
     return await self.executeRun({
       ...opts,
       runId,
-      role: opts.runType ?? self.roleName,
+      role,
     });
   } finally {
-    self.activeRunUuid.value = null;
+    self.activeRunUuid.value.delete(runId);
+    self.children.value.delete(runId);
     release();
   }
 }
@@ -128,23 +112,28 @@ export async function runNow(
 /** Restore checkpoint + orphan sweep. */
 export async function start(self: TriggerHandle): Promise<void> {
   await self.checkpoint.read();
-  sweepKeeperOrphans(null, self.logger);
+  sweepKeeperOrphans(null, self.logger, self.ownerPid);
   self.lastRunRef.value = await self.readLastReport();
 }
 
-/** Kill the in-flight child group + sweep leftovers (gateway shutdown). */
+/** Kill ALL in-flight child groups + sweep leftovers (gateway shutdown). */
 export async function stop(self: TriggerHandle): Promise<void> {
-  if (self.currentChild.value) {
+  for (const handle of self.children.value.values()) {
     try {
-      self.currentChild.value.kill();
+      handle.kill();
     } catch (err) {
       self.logger.warn?.(
         `[memory-keeper] kill on shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    self.currentChild.value = null;
   }
-  sweepKeeperOrphans(self.activeRunUuid.value, self.logger);
+  self.children.value.clear();
+  // Empty active set (no live runs) → treat as null: sweep everything.
+  sweepKeeperOrphans(
+    self.activeRunUuid.value.size > 0 ? self.activeRunUuid.value : null,
+    self.logger,
+    self.ownerPid,
+  );
 }
 
 /** Default roleDir when not set in OrchestratorOptions. */

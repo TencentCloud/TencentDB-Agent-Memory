@@ -75,6 +75,7 @@ export async function advanceCheckpoint(
 ): Promise<void> {
   const cursor = (anchoredCursor ??
     maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db")))!;
+  ctx.logger.debug?.(`[checkpoint] advance role=${summary.role} prev=${prevCursor} new=${cursor} newL0=${newL0} status=${summary.status}`);
   await ctx.checkpoint.update((d) => {
     d.lastRunAt = summary.finishedAt;
     if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;

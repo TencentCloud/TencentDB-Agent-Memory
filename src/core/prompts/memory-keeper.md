@@ -71,3 +71,24 @@
 - Никаких записей вне scratch-каталога.
 - Никаких изменений памяти напрямую (файлы scene_blocks/, persona.md, records/, vectors.db).
 - Транспорт: `python3 tools/*` + `bash + curl` на `$TDAI_GATEWAY_URL` (auth-free GET на loopback).
+
+## Завершение (graceful exit — иначе hard kill)
+
+После записи `diff.json` (схема выше) и вывода сводки в stdout
+("Консолидация выполнена") **немедленно верни final answer** — не открывай
+новых subagent-сессий (`task`, `mcp_task_*`, `/task`), не делай HTTP-запросов,
+не запускай файловых watcher'ов и MCP-соединений. Каждый открытый handle
+держит event loop child-процесса → child не exits → через `timeout_min`
+(30 мин) прилетит `kill -KILL -- -<pgid>` (см. `child-spawn.ts:killChildGroup`)
+→ orchestrator вернёт `status: "failed"` без apply (`runBatch` после
+`childResult.timedOut` выходит ДО `applyDiff`) → `diff.json` **не будет
+применён** и зависнет до следующего threshold-deferred триггера.
+
+Контрольный чек перед final answer:
+- `diff.json` существует в cwd, валиден по схеме (≤1500/≤2000/≤600 где применимо).
+- Сводка в stdout — одна строка, не блок, не длинный transcript.
+- Никаких pending HTTP / subagent / file-watcher / MCP-соединений.
+
+Если что-то висит (subagent не отвечает, HTTP застрял) — **не жди**.
+Сразу выводи сводку и возвращай final answer; зависшие хэндлы не
+восстановятся, а hard kill отнимет весь результат.

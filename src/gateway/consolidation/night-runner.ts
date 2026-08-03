@@ -12,12 +12,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { runBatch } from "./runner.js";
 import { writeReport } from "./reports.js";
+import { resolveRoleRuntimeFromDir } from "./role-runtime.js";
 import { advanceCheckpoint, queryRecentRecords } from "./queries.js";
 import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import { chunkRecords } from "./chunk.js";
-import { stepBatch } from "./night-loop-step.js";
+import { runNightBatches } from "./night-batches.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import { mkFailedSummary } from "./summary.js";
@@ -28,8 +28,18 @@ export async function executeRunNight(
 ): Promise<RunSummary> {
   const startedMs = ctx.now();
   const startedAt = new Date(startedMs).toISOString();
-  const runScratch = path.join(ctx.scratchRoot, opts.runId);
-  const summary: RunSummary = mkFailedSummary(opts.role, startedAt, opts.reason, opts.dryRun);
+  // Per-role scratch override (forked task-cycle path б): night-keeper's
+  // runtime.scratch_root routes the sub-session cwd into its own runs dir
+  // instead of the shared orchestrator scratchRoot.
+  const roleRt = resolveRoleRuntimeFromDir(opts.role, ctx.roleDir);
+  const scratchRoot = roleRt?.runtime.scratchRoot ?? ctx.scratchRoot;
+  const runScratch = path.join(scratchRoot, opts.runId);
+  const summary: RunSummary = mkFailedSummary(
+    opts.role,
+    startedAt,
+    opts.reason,
+    opts.dryRun,
+  );
 
   try {
     const cp = (await ctx.checkpoint.read()) as {
@@ -44,79 +54,44 @@ export async function executeRunNight(
     summary.overLimitBlocks = blocks.filter((b) => b.size > b.limit).length;
 
     const night = ctx.config.memory.consolidation.night;
-    const allRecords = queryRecentRecords(ctx, cp.l0Cursor, night.diffCap, true);
+    const allRecords = queryRecentRecords(
+      ctx,
+      cp.l0Cursor,
+      night.diffCap,
+      true,
+    );
     const batches = chunkRecords(allRecords, night.diffCap);
 
-    let anyApplied = false;
-    let dryRunDiffText: string | undefined;
-    let anchoredCursor: string | null = null;
-    let skipMergeSeen = false;
-    let remainingDeleteCap = night.deleteCapPerRun;
-    let remainingRewriteCap = night.rewriteCapPerRun;
-    let presentedTotal = 0;
+    const res = await runNightBatches(ctx, {
+      reason: opts.reason,
+      dryRun: opts.dryRun,
+      runId: opts.runId,
+      role: opts.role,
+      runScratch,
+      batches,
+      blocks,
+      cp,
+      summary,
+      startedMs,
+    });
 
-    for (let i = 0; i < batches.length; i++) {
-      if (ctx.now() - startedMs > night.maxRunMs) {
-        summary.status = "failed";
-        summary.error = `night maxRunMs exceeded (${night.maxRunMs}ms) after batch ${i}/${batches.length}`;
-        break;
-      }
-      const batch = batches[i]!;
-      const batchScratch = path.join(runScratch, `b${i}`);
-      const batchRes = await runBatch(ctx, {
-        records: batch,
-        overLimit: blocks,
-        cp,
-        runId: opts.runId,
-        role: opts.role,
-        dryRun: !!opts.dryRun,
-        scratchDir: batchScratch,
-        isNight: true,
-        remainingDeleteCap,
-        remainingRewriteCap,
-        startedMs,
-      });
-      presentedTotal += batchRes.presented;
-      summary.applied.merges.push(...batchRes.applied.merges);
-      summary.applied.deletes.push(...batchRes.applied.deletes);
-      summary.applied.rewrites.push(...batchRes.applied.rewrites);
-      summary.skipped.merges.push(...batchRes.skipped.merges);
-      summary.skipped.deletes.push(...batchRes.skipped.deletes);
-      summary.skipped.rewrites.push(...batchRes.skipped.rewrites);
-      summary.reindexed ||= batchRes.reindexed;
-      summary.needsReindex ||= batchRes.needsReindex;
-      if (batchRes.child) summary.child = batchRes.child;
-      if (dryRunDiffText === undefined && batchRes.diffText) {
-        dryRunDiffText = batchRes.diffText;
-      }
-      const step = stepBatch(summary, batchRes, ctx.now() - startedMs > night.maxRunMs);
-      if (step.exit) {
-        break;
-      }
-      if (step.continueDryRun) continue;
-      anyApplied = anyApplied || step.anyApplied;
-      if (step.anchoredCursor !== undefined) anchoredCursor = step.anchoredCursor;
-      if (step.skipMergeSeen) break;
-      remainingDeleteCap = Math.max(0, remainingDeleteCap - batchRes.deleteOps);
-      remainingRewriteCap = Math.max(0, remainingRewriteCap - batchRes.rewriteOps);
-    }
-
-    summary.recordsPresented = presentedTotal;
+    summary.recordsPresented = res.presentedTotal;
 
     if (opts.dryRun) {
       summary.status = "dry-run";
-      await writeReport(ctx, summary, dryRunDiffText);
+      await writeReport(ctx, summary, res.dryRunDiffText);
       return summary;
     }
 
-    if (anyApplied) {
+    if (res.anyApplied) {
       // Anchored cursor: max slice-time of applied chunks BEFORE the first
       // skip-merge. null → the anchor is the PREVIOUS cursor (a skip in
       // chunk 1 never advances; the ops re-present next run).
-      const anchor = anchoredCursor ?? cp.l0Cursor;
+      const anchor = res.anchoredCursor ?? cp.l0Cursor;
+      if (summary.error === undefined) summary.status = "ok";
       await advanceCheckpoint(ctx, cp.l0Cursor, newL0, summary, anchor);
     }
-    if (summary.error === undefined) summary.status = "ok";
+    if (summary.error === undefined && !res.anyApplied) summary.status = "ok";
 
     await writeReport(ctx, summary);
     return summary;
@@ -131,7 +106,7 @@ export async function executeRunNight(
     }
     return summary;
   } finally {
-    ctx.currentChildRef.value = null;
+    ctx.childrenRef.value.delete(opts.runId);
     if (!opts.dryRun) {
       try {
         await fs.promises.rm(runScratch, { recursive: true, force: true });
