@@ -1,10 +1,11 @@
 """TencentDB Agent Memory v3 Python SDK — 严格 isolation 数据面客户端。
 
-构造时必须提供 team_id / agent_id / user_id / session_id 四元组；
+构造时必须提供 team_id / agent_id / user_id；session_id 对
+``add_conversation`` 写入必填，对查询/搜索/计数可选（缺省时跨 session 聚合）。
 路径走 ``/v3/...``。详见 ``v3.client.MemoryClient`` docstring。
 
 管理面客户端 :class:`MetadataClient` / :class:`AsyncMetadataClient` 不需要 isolation
-四元组，封装 ``/v3/meta/*`` 公开接口（54 条，与 Panel ``META_ACTIONS`` 对齐）及
+字段，封装 ``/v3/meta/*`` 公开接口（54 条，与 Panel ``META_ACTIONS`` 对齐）及
 ``/v3/knowledge/*`` Knowledge CRUD，详见 ``v3.metadata_client``。
 
 Skill 客户端 :class:`SkillClient` / :class:`AsyncSkillClient` 封装 14 条

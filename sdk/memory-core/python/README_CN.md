@@ -106,7 +106,10 @@ asyncio.run(main())
 
 ### v3（推荐）
 
-> v3 与 v2 的主要差异：L0/L1 强制要求 `session_id`（strict session isolation），请求路径从 `/v2/*` 升级为 `/v3/*`，响应包络结构一致。
+> v3 与 v2 的主要差异：构造时显式绑定 `team_id` / `agent_id` /
+> `user_id`。L0 写入必须提供 `session_id`；L0/L1 读取可选，缺省时按
+> `(team_id, agent_id, user_id)` 跨 session 聚合。请求路径从 `/v2/*`
+> 升级为 `/v3/*`，响应包络结构一致。
 
 | 层级 | 方法 | 接口 |
 |------|------|------|
@@ -157,14 +160,14 @@ asyncio.run(main())
 | 维度 | v2 | v3 |
 |------|----|----|
 | 路径前缀 | `/v2/*` | `/v3/*` |
-| L0/L1 隔离 | `(team_id, user_id, agent_id)` 三元组 | 三元组 + `session_id`（strict session isolation） |
-| `session_id` | 可选 | L0/L1 必填，缺失返回 422 |
+| L0/L1 隔离 | `(team_id, user_id, agent_id)` 三元组 | 三元组 + 可选的 `session_id` 读取范围 |
+| `session_id` | 可选 | `add_conversation` 必填；查询/搜索/计数可选 |
 | L2/L3 | 仅三元组隔离 | 仅三元组隔离（无变化） |
 | 响应包络 | `{ code, message, data, request_id }` | 同 v2，结构不变 |
 
 ### MetadataClient（v3 管理面）
 
-`MetadataClient` / `AsyncMetadataClient` 封装网关 v3 管理面接口。与 `MemoryClient` 不同，**不需要** isolation 四元组（team/agent/user/session）；鉴权用 Bearer + `x-tdai-service-id`，`team_id` 等业务字段放在请求 body 里。
+`MetadataClient` / `AsyncMetadataClient` 封装网关 v3 管理面接口。与 `MemoryClient` 不同，**不需要**数据面 isolation 字段；鉴权用 Bearer + `x-tdai-service-id`，`team_id` 等业务字段放在请求 body 里。
 
 当前先落地 **Knowledge 实体管理** 5 个端点（`/v3/knowledge/*`，类型 `wiki` | `code-graph`）。其余 v3/meta 实体（user/team/agent/task/asset/acl/config）后续再补。
 

@@ -3,8 +3,8 @@
 与 ``v3.client.MemoryClient``（数据面，严格 isolation L0–L3）的区别
 ------------------------------------------------------------------
 
-- 数据面客户端构造时必须提供 ``team_id`` / ``agent_id`` / ``user_id`` 四元组。
-- 管理面客户端**不需要** isolation 四元组；鉴权用 Bearer + ``x-tdai-service-id``，
+- 数据面客户端构造时必须提供 ``team_id`` / ``agent_id`` / ``user_id`` 三元组。
+- 管理面客户端**不需要** isolation 字段；鉴权用 Bearer + ``x-tdai-service-id``，
   ``team_id`` 等业务字段放在请求 body 里。可选 ``user_key`` 走 ``x-tdai-user-key``
   头（``user/create``、``user/delete`` 等 system_admin 接口需要）。
 

@@ -126,7 +126,7 @@ asyncio.run(main())
 
 ## MetadataClient (v3 management plane)
 
-`MetadataClient` / `AsyncMetadataClient` wrap the gateway's v3 management-plane endpoints. Unlike `MemoryClient` they do **not** require the isolation quad (team/agent/user/session); auth is Bearer + `x-tdai-service-id`, with business fields like `team_id` in the request body.
+`MetadataClient` / `AsyncMetadataClient` wrap the gateway's v3 management-plane endpoints. Unlike the v3 data-plane `MemoryClient`, they do **not** require data-plane isolation fields; auth is Bearer + `x-tdai-service-id`, with business fields like `team_id` in the request body.
 
 Covers all **54 public `/v3/meta/*` routes** (aligned with Panel Control `META_ACTIONS`, including `user-key/*`), plus **5 `/v3/knowledge/*` Knowledge CRUD** routes.
 

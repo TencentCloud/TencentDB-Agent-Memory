@@ -222,7 +222,7 @@ except TDAMError as e:
 
 ## 7. 管理面：Knowledge / 元数据
 
-上面讲的都是 `MemoryClient`（数据面：读写记忆）。如果你还需要**管理** Knowledge 知识源（wiki / code-graph）的元数据，用 `MetadataClient`（v3 管理面，不需要 isolation 四元组）：
+上面讲的都是 `MemoryClient`（数据面：读写记忆）。如果你还需要**管理** Knowledge 知识源（wiki / code-graph）的元数据，用 `MetadataClient`（v3 管理面，不需要数据面 isolation 字段）：
 
 ```python
 from tencentdb_agent_memory.v3 import MetadataClient
