@@ -340,7 +340,7 @@ export class StatefulPipelineManager {
     }
     await this.stateBackend.setTimer(
       effectiveId,
-      `${sessionKey}:L2_schedule`,
+      buildPipelineTimerMember(sessionKey, "L2_schedule", { teamId, agentId }),
       Date.now() + this.l2MaxIntervalMs,
     );
   }
