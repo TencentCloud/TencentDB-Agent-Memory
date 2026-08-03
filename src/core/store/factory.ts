@@ -91,7 +91,8 @@ export function createStoreBundle(
     default: {
       // ── Embedding service (only when enabled) ──
       let embeddingService: EmbeddingService | undefined;
-      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.apiKey) {
+      // Allow local provider without API key, but require API key for remote providers
+      if (config.embedding.enabled && (config.embedding.provider === "local" || config.embedding.apiKey)) {
         embeddingService = createEmbeddingService({
           provider: config.embedding.provider,
           baseUrl: config.embedding.baseUrl,
@@ -101,6 +102,15 @@ export function createStoreBundle(
           sendDimensions: config.embedding.sendDimensions,
           maxInputChars: config.embedding.maxInputChars,
         }, logger);
+
+        // Trigger warmup for local embedding to ensure the GGUF model is loaded
+        if (config.embedding.provider === "local") {
+          logger?.info?.(`${TAG} Triggering local embedding warmup...`);
+          // Fire-and-forget; warmup is safe to call multiple times
+          void embeddingService.startWarmup().catch((err) => {
+            logger?.warn?.(`${TAG} Local embedding warmup failed: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
       }
 
       // dimensions from config (0 when provider="none" → vec0 deferred)

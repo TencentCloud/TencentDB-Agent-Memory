@@ -389,13 +389,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     embeddingProvider = "none";
     embeddingEnabled = false;
   } else if (embeddingProviderRaw === "local") {
-    // Local embedding is not exposed to users; treat as disabled at entry level.
-    // Internal LocalEmbeddingService code is preserved but not reachable from config.
-    embeddingProvider = "none";
-    embeddingEnabled = false;
-    embeddingConfigError =
-      "Local embedding provider is not available in user config. " +
-      "Please configure a remote embedding provider (e.g. openai, deepseek). Embedding has been disabled.";
+    // Local embedding provider (node-llama-cpp): enabled, no API key required
+    // startWarmup() will be called during core/gateway initialization
+    embeddingProvider = "local";
+    embeddingEnabled = true;
   } else if (embeddingProviderRaw === "qclaw") {
     // qclaw provider: requires proxyUrl for local proxy forwarding
     const missingFields: string[] = [];
