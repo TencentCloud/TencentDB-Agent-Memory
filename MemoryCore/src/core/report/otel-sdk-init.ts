@@ -68,14 +68,20 @@ export interface OTelSDKInitOptions {
 
 let _sdkInstance: { shutdown: () => Promise<void> } | undefined;
 let _initialized = false;
+let _initPromise: Promise<boolean> | undefined;
+let _shutdownPromise: Promise<void> | undefined;
 
 /**
  * 初始化 OpenTelemetry SDK。
  * 安全地多次调用 — 后续调用为 no-op。
  * 如果 SDK 包未安装，记录警告并返回 false。
  */
-export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boolean> {
-  if (_initialized) return true;
+export function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boolean> {
+  if (_shutdownPromise) {
+    return _shutdownPromise.then(() => initOTelSDK(options));
+  }
+  if (_initialized) return Promise.resolve(true);
+  if (_initPromise) return _initPromise;
 
   // 当配置了 endpoint 或 Langfuse 时启用 SDK
   const hasLangfuse = typeof options.langfuse === "object" && options.langfuse && options.langfuse.host;
@@ -84,14 +90,28 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
     : hasLangfuse
       ? true
       : process.env.TDAI_OTEL_ENABLED === "true";
-  if (!enabled) return false;
+  if (!enabled) return Promise.resolve(false);
 
   // @opentelemetry/api 不可用时直接返回
   if (!_otelApiAvailable) {
     console.warn("[core][otel] @opentelemetry/api not available, skipping SDK init.");
-    return false;
+    return Promise.resolve(false);
   }
 
+  const pending = Promise.resolve().then(() => performOTelSDKInit(options));
+  _initPromise = pending;
+  void pending.then(
+    () => {
+      if (_initPromise === pending) _initPromise = undefined;
+    },
+    () => {
+      if (_initPromise === pending) _initPromise = undefined;
+    },
+  );
+  return pending;
+}
+
+async function performOTelSDKInit(options: OTelSDKInitOptions): Promise<boolean> {
   if (options.debug || process.env.OTEL_LOG_LEVEL === "DEBUG") {
     diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
   }
@@ -363,14 +383,40 @@ export async function initOTelSDK(options: OTelSDKInitOptions = {}): Promise<boo
 /**
  * 优雅关闭 OTel SDK。
  */
-export async function shutdownOTelSDK(): Promise<void> {
-  if (!_sdkInstance) return;
+export function shutdownOTelSDK(): Promise<void> {
+  if (_shutdownPromise) return _shutdownPromise;
+
+  const pending = Promise.resolve().then(performOTelSDKShutdown);
+  _shutdownPromise = pending;
+  void pending.then(
+    () => {
+      if (_shutdownPromise === pending) _shutdownPromise = undefined;
+    },
+    () => {
+      if (_shutdownPromise === pending) _shutdownPromise = undefined;
+    },
+  );
+  return pending;
+}
+
+async function performOTelSDKShutdown(): Promise<void> {
   try {
-    await _sdkInstance.shutdown();
+    await _initPromise;
+  } catch {
+    // Failed initialization leaves no SDK to shut down.
+  }
+
+  const instance = _sdkInstance;
+  if (!instance) {
+    _initialized = false;
+    return;
+  }
+  try {
+    await instance.shutdown();
   } catch {
     // Best-effort shutdown
   } finally {
-    _sdkInstance = undefined;
+    if (_sdkInstance === instance) _sdkInstance = undefined;
     _initialized = false;
   }
 }
