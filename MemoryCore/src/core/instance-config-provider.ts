@@ -106,6 +106,11 @@ interface VdbCacheEntry {
   lastAccessedAt: number;
 }
 
+interface VdbFetchEntry {
+  promise: Promise<VdbConfig>;
+  invalidation: { invalidated: boolean };
+}
+
 // ════════════════════════════════════════════════════════
 // InstanceConfigProvider
 // ════════════════════════════════════════════════════════
@@ -137,7 +142,7 @@ export class InstanceConfigProvider {
    * 并发首次访问同一 instanceId 时，复用同一个 fetch Promise，
    * 避免向 source 同时发出 N 次请求触发限流。
    */
-  private vdbFetchPromises = new Map<string, Promise<VdbConfig>>();
+  private vdbFetchPromises = new Map<string, VdbFetchEntry>();
 
   // ── COS: 全局单例缓存 (一份凭证，按 PathPrefix 隔离) ──
   private cosCache: CosConfig | null = null;
@@ -193,18 +198,22 @@ export class InstanceConfigProvider {
     const inflight = this.vdbFetchPromises.get(instanceId);
     if (inflight) {
       this.logger.debug?.(`[instance-config] VDB fetch in-flight for ${instanceId}, awaiting...`);
-      return inflight;
+      return inflight.promise;
     }
 
     this.logger.debug?.(`[instance-config] VDB cache ${cached ? "expired" : "miss"} for ${instanceId}, fetching...`);
-    const fetchPromise = this.fetchAndStoreVdb(instanceId);
-    this.vdbFetchPromises.set(instanceId, fetchPromise);
+    const invalidation = { invalidated: false };
+    const fetchPromise = this.fetchAndStoreVdb(instanceId, invalidation);
+    const fetchEntry = { promise: fetchPromise, invalidation };
+    this.vdbFetchPromises.set(instanceId, fetchEntry);
     try {
       return await fetchPromise;
     } finally {
-      // 清理 in-flight 标记。注意要在 await 之后清理 (即使 fetch 抛错也清), 
-      // 否则一次失败会让该 instanceId 永久卡住。
-      this.vdbFetchPromises.delete(instanceId);
+      // Only remove our own request. evictVdb() may have invalidated this
+      // request and allowed a newer fetch to occupy the same map key.
+      if (this.vdbFetchPromises.get(instanceId) === fetchEntry) {
+        this.vdbFetchPromises.delete(instanceId);
+      }
     }
   }
 
@@ -212,7 +221,10 @@ export class InstanceConfigProvider {
    * 实际执行 source fetch + 写入 vdbPool。
    * 仅由 resolveVdb 内部调用 (并发去重保证只跑一次)。
    */
-  private async fetchAndStoreVdb(instanceId: string): Promise<VdbConfig> {
+  private async fetchAndStoreVdb(
+    instanceId: string,
+    invalidation: { invalidated: boolean },
+  ): Promise<VdbConfig> {
     const config = await this.source.fetchVdb(instanceId);
 
     // source 返回空 → 直接报错记录日志
@@ -220,6 +232,16 @@ export class InstanceConfigProvider {
       const msg = `[instance-config] Config source returned empty VDB config for instanceId="${instanceId}" (url=${config?.url})`;
       this.logger.error(msg);
       throw new Error(msg);
+    }
+
+    // An explicit eviction happened while the request was in flight. The
+    // original caller still receives the fetched value, but stale data must
+    // not resurrect the cache entry.
+    if (invalidation.invalidated) {
+      this.logger.debug?.(
+        `[instance-config] Ignoring stale VDB fetch result for ${instanceId}`,
+      );
+      return config;
     }
 
     // LRU 淘汰
@@ -264,7 +286,10 @@ export class InstanceConfigProvider {
    * 清除指定实例的 VDB 缓存 (实例下线时调用)
    */
   evictVdb(instanceId: string): void {
+    const inflight = this.vdbFetchPromises.get(instanceId);
+    if (inflight) inflight.invalidation.invalidated = true;
     this.vdbPool.delete(instanceId);
+    this.vdbFetchPromises.delete(instanceId);
     this.logger.debug?.(`[instance-config] Evicted VDB cache for ${instanceId}`);
   }
 
@@ -279,6 +304,10 @@ export class InstanceConfigProvider {
    * 清除所有缓存
    */
   clear(): void {
+    for (const inflight of this.vdbFetchPromises.values()) {
+      inflight.invalidation.invalidated = true;
+    }
+    this.vdbFetchPromises.clear();
     this.vdbPool.clear();
     this.cosCache = null;
     this.cosExpiresAt = 0;
