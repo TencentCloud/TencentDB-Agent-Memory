@@ -22,8 +22,6 @@
  *     或后续 GC 清）。这比现状好得多：不再有丢任务风险。
  */
 
-import { randomUUID } from "node:crypto";
-
 import type {
   AgentTuple,
   ISkillAgentTaskQueue,
@@ -35,6 +33,7 @@ import type {
   SkillTaskEntry,
 } from "./buffer-storage.js";
 import { obsLogger } from "../../report/obs-logger.js";
+import { randomBase62 } from "../../../utils/short-id.js";
 
 export interface TriggerArchiveInput {
   session: SessionKey;
@@ -113,7 +112,7 @@ export class SkillTriggerService {
     // task_id=…` 与 worker 侧 `[skill-perf] kind=worker phase=consume.*` 共用同一
     // 值，grep 一次拉全 handler + worker 双段耗时。老数据前缀 `task-` 会被
     // worker 自然消费掉，无迁移风险（filter 按 task_id 值等价比较，不解析前缀）。
-    const taskId = `skill-extract-task-${randomUUID().slice(0, 8)}`;
+    const taskId = `skill-extract-task-${randomBase62(12)}`;
     const agent: AgentTuple = {
       space_id: session.space_id,
       user_id: session.user_id,
