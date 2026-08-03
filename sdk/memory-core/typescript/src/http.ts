@@ -4,10 +4,11 @@
  * - Auth: `Authorization: Bearer {apiKey}` + `x-tdai-service-id` + optional `x-tdai-user-key`
  * - Envelope unwrap: `code === 0` → return `data`; else throw `TDAMError`
  * - trace_id: extracted from `x-trace-id` response header
- * - Zero runtime dependencies — uses native `fetch`.
+ * - Uses native `fetch` with an undici dispatcher for TLS configuration.
  * - TLS: `rejectUnauthorized` defaults to `false` (self-signed cert friendly).
  */
 
+import { Agent } from "undici";
 import { TDAMError } from "./errors.js";
 import type { ApiResponseEnvelope } from "./types.js";
 
@@ -28,7 +29,7 @@ export class HttpTransport {
   private readonly endpoint: string;
   private readonly headers: Record<string, string>;
   private readonly timeout: number;
-  private dispatcher: unknown;
+  private readonly dispatcher?: Agent;
 
   constructor(opts: HttpTransportOptions) {
     this.endpoint = opts.endpoint.replace(/\/+$/, "");
@@ -46,19 +47,9 @@ export class HttpTransport {
     // skips TLS certificate validation. This mirrors the Python SDK's
     // `verify=False` default for self-signed cert environments.
     if (opts.rejectUnauthorized !== true) {
-      try {
-        // Node 18+ bundles undici; dynamic import to keep zero-dep for bundlers
-        const { Agent } = require("undici");
-        this.dispatcher = new Agent({
-          connect: { rejectUnauthorized: false },
-        });
-      } catch {
-        // If undici is not available (browser/edge runtime), fall back to
-        // process.env which only works in Node.js.
-        if (typeof process !== "undefined") {
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-        }
-      }
+      this.dispatcher = new Agent({
+        connect: { rejectUnauthorized: false },
+      });
     }
   }
 
