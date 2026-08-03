@@ -172,9 +172,11 @@ export class ClickHouseDirectExporter {
 
   // 并发控制
   private activeInserts = 0;
+  private readonly pendingInserts = new Set<Promise<void>>();
 
   private flushTimer: ReturnType<typeof setInterval> | undefined;
   private _shutdown = false;
+  private shutdownPromise: Promise<void> | undefined;
 
   constructor(options: ClickHouseExporterOptions = {}) {
     const endpoint = options.endpoint
@@ -497,12 +499,24 @@ export class ClickHouseDirectExporter {
   /**
    * 优雅关闭：flush 剩余数据，关闭连接池.
    */
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = this.performShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
     this._shutdown = true;
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = undefined;
     }
+
+    // Drain rows still buffered, then wait for threshold-triggered inserts that
+    // were already running in the background. A failed in-flight insert may
+    // requeue its rows, so flush once more before closing the shared client.
+    await this.flush();
+    await Promise.allSettled([...this.pendingInserts]);
     await this.flush();
     await this.client.close();
     if (this.debug) {
@@ -566,26 +580,35 @@ export class ClickHouseDirectExporter {
     }
 
     this.activeInserts++;
-    try {
-      await this.client.insert({
-        table,
-        values: rows,
-        format: "JSONEachRow",
-      });
+    const pending = (async () => {
+      try {
+        await this.client.insert({
+          table,
+          values: rows,
+          format: "JSONEachRow",
+        });
 
-      if (this.debug) {
-        console.debug(`[clickhouse-exporter] INSERT ${table}: ${rows.length} rows OK`);
+        if (this.debug) {
+          console.debug(`[clickhouse-exporter] INSERT ${table}: ${rows.length} rows OK`);
+        }
+      } catch (err) {
+        if (this.debug) {
+          console.warn(
+            `[clickhouse-exporter] INSERT ${table} error: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        // 失败的数据放回缓冲区
+        this.requeue(table, rows);
+      } finally {
+        this.activeInserts--;
       }
-    } catch (err) {
-      if (this.debug) {
-        console.warn(
-          `[clickhouse-exporter] INSERT ${table} error: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-      // 失败的数据放回缓冲区
-      this.requeue(table, rows);
+    })();
+
+    this.pendingInserts.add(pending);
+    try {
+      await pending;
     } finally {
-      this.activeInserts--;
+      this.pendingInserts.delete(pending);
     }
   }
 
