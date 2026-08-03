@@ -452,6 +452,10 @@ export class SkillConversationExtractWorker {
           dur_ms: Date.now() - t0Del,
           remaining: remainingTasks,
         });
+        // Success and ghost handling are terminal for this task. Retaining the
+        // sampling streak would leak one map entry per recovered task and make
+        // a reused task id inherit stale logging state.
+        this.transientFailStreak.delete(head.task_id);
 
         // trace.report 后端 span：跟 skill.extract / skill.conversation_add 对齐，
         // 按 task_id 就能在 clickhouse / langfuse 里拉到 handler + worker 双段。
