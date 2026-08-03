@@ -796,6 +796,10 @@ export interface RawYamlConfig {
   admin?: {
     apiKey?: string;
   };
+  memCommand?: {
+    enabled?: boolean;
+    allowedCommands?: string[];
+  };
 }
 
 /** request event — written when a request is intercepted (metadata only, no messages). */

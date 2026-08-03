@@ -96,7 +96,7 @@ async function fetchTeamsAndAgents(
         metadataClient.listAgents(t.team_id, userId),
         metadataClient.listTasks(t.team_id),
       ]);
-      const tasks = tasksRaw.map((tk) => ({
+      const tasks: TeamOption["tasks"] = tasksRaw.map((tk) => ({
         task_id: tk.task_id,
         task_name: tk.title,
       }));
