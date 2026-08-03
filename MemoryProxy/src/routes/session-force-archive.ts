@@ -13,6 +13,7 @@ import type { ProxyConfig } from "../types.js";
 import { getSessionStore } from "../session/store.js";
 import { getCoreSkillClient } from "../skill/core-client.js";
 import type { SessionInitState } from "../session/types.js";
+import { adminAuthError, checkAdminAuth } from "./admin-auth.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -112,6 +113,11 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
  */
 export function createSessionForceArchiveHandler(config: ProxyConfig) {
   return async (c: Context): Promise<Response> => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") {
+      return adminAuthError(c, authResult);
+    }
+
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();
