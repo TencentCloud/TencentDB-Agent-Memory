@@ -153,8 +153,8 @@ export function registerTaskRoutes(api: Hono, deps: PanelDeps): void {
         okEnvelope(c, {
           items,
           total,
-          limit: (listPayload.limit as number) ?? 50,
-          offset: (listPayload.offset as number) ?? 0,
+          limit: taskData?.limit ?? (listPayload.limit as number) ?? 50,
+          offset: taskData?.offset ?? (listPayload.offset as number) ?? 0,
         }),
       );
     },
