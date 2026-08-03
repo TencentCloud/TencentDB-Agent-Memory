@@ -433,6 +433,7 @@ export class MetadataClient {
       total = result.total;
       allItems.push(...result.items);
       if (allItems.length >= total) break;
+      if (result.items.length === 0) break;
       offset += pageSize;
     }
 
