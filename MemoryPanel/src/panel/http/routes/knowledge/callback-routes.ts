@@ -135,13 +135,13 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
         if (body.type === 'wiki') {
           const detail = await kc.wikiGet(body.knowledge_id);
           if (!detail?.service_url) {
-            log.error(`[knowledge-callback] wiki ${body.knowledge_id}: null service_url; skip kernel detail sync`);
+            throw new Error(`wiki ${body.knowledge_id}: null service_url`);
           } else {
             log.info('[knowledge-callback] wiki → writing kernel entity', {
               knowledge_id: detail.wiki_id, team_id: detail.team_id, owner: detail.owner_user_id,
               has_summary: !!body.summary,
             });
-            await deps.kernelHttp.postEnvelope('/v3/knowledge/create', {
+            const env = await deps.kernelHttp.postEnvelope('/v3/knowledge/create', {
               knowledge_id: detail.wiki_id,
               type: 'wiki',
               service_url: detail.service_url,
@@ -150,6 +150,9 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
               team_id: detail.team_id,
               user_id: detail.owner_user_id,
             }, cred);
+            if (env.code !== 0) {
+              throw new Error(`kernel knowledge/create rejected: code=${env.code} message=${env.message}`);
+            }
             log.info('[knowledge-callback] wiki → kernel entity written', { knowledge_id: detail.wiki_id });
             // wiki 的 meta 资产在创建时已注册，callback 不再重复注册。
           }
@@ -160,13 +163,13 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
             has_service_url: !!detail?.service_url, owner: detail?.owner_user_id,
           });
           if (!detail?.service_url) {
-            log.error(`[knowledge-callback] code-graph ${body.knowledge_id}: null service_url; skip kernel detail sync`);
+            throw new Error(`code-graph ${body.knowledge_id}: null service_url`);
           } else {
             log.info('[knowledge-callback] code-graph → writing kernel entity', {
               knowledge_id: detail.code_graph_id, team_id: detail.team_id, owner: detail.owner_user_id,
               has_summary: !!body.summary,
             });
-            await deps.kernelHttp.postEnvelope('/v3/knowledge/create', {
+            const env = await deps.kernelHttp.postEnvelope('/v3/knowledge/create', {
               knowledge_id: detail.code_graph_id,
               type: 'code-graph',
               service_url: detail.service_url,
@@ -177,6 +180,9 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
               repo_url: detail.repo_url,
               branch: detail.branch,
             }, cred);
+            if (env.code !== 0) {
+              throw new Error(`kernel knowledge/create rejected: code=${env.code} message=${env.message}`);
+            }
             log.info('[knowledge-callback] code-graph → kernel entity written', { knowledge_id: detail.code_graph_id });
             // 注册 meta asset（主力路径）：用 create 时 stash 的 owner key 以 owner 身份
             // 打 /v3/meta/asset/create。callback 本身是 S2S 无 user_key，靠内存任务表补。
@@ -186,6 +192,12 @@ export function registerKnowledgeCallbackRoutes(api: Hono, deps: PanelDeps): voi
         }
       } catch (err) {
         log.error(`[knowledge-callback] kernel detail sync error for ${body.knowledge_id}: ${(err as Error).message}`);
+        return c.json({
+          code: 502,
+          message: 'knowledge detail sync failed',
+          request_id: '',
+          data: null,
+        }, 502);
       }
     } else if (body.status === 'failed') {
       log.info('[knowledge-callback] failed; not writing entity/meta (UI reads KS status)', { knowledge_id: body.knowledge_id, sync_error: body.sync_error });
