@@ -118,12 +118,17 @@ let buffer: ClickHouseRow[] = [];
 let rawBuffer: ClickHouseRawUsageRow[] = [];
 let flushTimer: ReturnType<typeof setInterval> | null = null;
 let disabled = false;
+let initPromise: Promise<void> | null = null;
+let shutdownPromise: Promise<void> | null = null;
 
 /**
  * Initialize the ClickHouse writer.
  * Must be called once at startup. Idempotent.
  */
 export function initClickHouse(cfg: ClickHouseConfig): void {
+  if (client || initPromise || shutdownPromise) {
+    return;
+  }
   if (!cfg.enabled) {
     disabled = true;
     return;
@@ -138,11 +143,13 @@ export function initClickHouse(cfg: ClickHouseConfig): void {
   disabled = false;
 
   // Periodic flush (both main and raw buffers)
-  flushTimer = setInterval(() => {
-    void flush();
-    void flushRaw();
-  }, cfg.flushIntervalMs);
-  flushTimer.unref(); // Don't prevent process exit
+  if (!flushTimer) {
+    flushTimer = setInterval(() => {
+      void flush();
+      void flushRaw();
+    }, cfg.flushIntervalMs);
+    flushTimer.unref(); // Don't prevent process exit
+  }
 
   log.info("clickhouse.init", {
     url: cfg.url,
@@ -154,11 +161,17 @@ export function initClickHouse(cfg: ClickHouseConfig): void {
   });
 
   // Fire-and-forget: create client + database + table (idempotent)
-  ensureClickHouse(cfg).catch((err: unknown) => {
-    log.warn("clickhouse.init.ensureFailed", {
-      error: err instanceof Error ? err.message : String(err),
+  const pending = ensureClickHouse(cfg);
+  initPromise = pending;
+  void pending
+    .catch((err: unknown) => {
+      log.warn("clickhouse.init.ensureFailed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      if (initPromise === pending) initPromise = null;
     });
-  });
 }
 
 /**
@@ -186,7 +199,7 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
   }
 
   // Target client bound to the database, reused for all inserts.
-  client = createClient({
+  const targetClient = createClient({
     url: cfg.url,
     username: cfg.user,
     password: cfg.password,
@@ -231,49 +244,55 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     .filter(Boolean)
     .join("\n");
 
-  await client.command({
-    query: ddl,
-    clickhouse_settings: { wait_end_of_query: 1 },
-  });
-
-  // Raw usage table (traceability for non-TokenHub / unrecognized format).
-  if (cfg.rawTable) {
-    // 新表默认排序键用 user_id（与主表对齐）；老表继续用 key_id（在 migrate 里补齐 user_id 列即可）
-    const rawDdl = [
-      `CREATE TABLE IF NOT EXISTS ${cfg.rawTable} (`,
-      "  timestamp DateTime64(3, 'Asia/Shanghai'),",
-      "  model_id String,",
-      "  model_name String DEFAULT '',",
-      "  key_id LowCardinality(String),",
-      "  user_id String DEFAULT '',",
-      "  session_key String,",
-      "  turn_seq UInt32 DEFAULT 0,",
-      "  user_input String DEFAULT '',",
-      "  upstream_url String,",
-      "  stream UInt8,",
-      "  usage String,",
-      "  reason LowCardinality(String),",
-      "  routed_from String DEFAULT '',",
-      "  space_id String DEFAULT '',",
-      "  source_tag LowCardinality(String) DEFAULT 'proxy',",
-      "  host LowCardinality(String),",
-      "  upstream_request_id String DEFAULT ''",
-      ") ENGINE = MergeTree()",
-      "ORDER BY (user_id, timestamp)",
-      ttlClause,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    await client.command({
-      query: rawDdl,
+  try {
+    await targetClient.command({
+      query: ddl,
       clickhouse_settings: { wait_end_of_query: 1 },
     });
-  }
 
-  // 补齐历史 schema 漂移：对存量表执行 ALTER TABLE ADD COLUMN IF NOT EXISTS。
-  // 幂等且失败不阻断（缺 DDL 权限时降级为 warn，业务继续用可写字段）。
-  await migrateSchema(client, cfg);
+    // Raw usage table (traceability for non-TokenHub / unrecognized format).
+    if (cfg.rawTable) {
+      // 新表默认排序键用 user_id（与主表对齐）；老表继续用 key_id（在 migrate 里补齐 user_id 列即可）
+      const rawDdl = [
+        `CREATE TABLE IF NOT EXISTS ${cfg.rawTable} (`,
+        "  timestamp DateTime64(3, 'Asia/Shanghai'),",
+        "  model_id String,",
+        "  model_name String DEFAULT '',",
+        "  key_id LowCardinality(String),",
+        "  user_id String DEFAULT '',",
+        "  session_key String,",
+        "  turn_seq UInt32 DEFAULT 0,",
+        "  user_input String DEFAULT '',",
+        "  upstream_url String,",
+        "  stream UInt8,",
+        "  usage String,",
+        "  reason LowCardinality(String),",
+        "  routed_from String DEFAULT '',",
+        "  space_id String DEFAULT '',",
+        "  source_tag LowCardinality(String) DEFAULT 'proxy',",
+        "  host LowCardinality(String),",
+        "  upstream_request_id String DEFAULT ''",
+        ") ENGINE = MergeTree()",
+        "ORDER BY (user_id, timestamp)",
+        ttlClause,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      await targetClient.command({
+        query: rawDdl,
+        clickhouse_settings: { wait_end_of_query: 1 },
+      });
+    }
+
+    // 补齐历史 schema 漂移：对存量表执行 ALTER TABLE ADD COLUMN IF NOT EXISTS。
+    // 幂等且失败不阻断（缺 DDL 权限时降级为 warn，业务继续用可写字段）。
+    await migrateSchema(targetClient, cfg);
+    client = targetClient;
+  } catch (err) {
+    await targetClient.close().catch(() => {});
+    throw err;
+  }
 
   log.info("clickhouse.init.tableReady", {
     table: `${cfg.database}.${cfg.table}`,
@@ -810,15 +829,43 @@ export async function flushRaw(): Promise<void> {
 /**
  * Graceful shutdown: stop timer, flush remaining buffer, close client.
  */
-export async function shutdownClickHouse(): Promise<void> {
+export function shutdownClickHouse(): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+  const pending = performShutdown();
+  shutdownPromise = pending;
+  void pending.then(
+    () => {
+      if (shutdownPromise === pending) shutdownPromise = null;
+    },
+    () => {
+      if (shutdownPromise === pending) shutdownPromise = null;
+    },
+  );
+  return pending;
+}
+
+async function performShutdown(): Promise<void> {
   if (flushTimer) {
     clearInterval(flushTimer);
     flushTimer = null;
   }
+  await initPromise?.catch(() => {});
   await flush();
   await flushRaw();
   if (client) {
     await client.close().catch(() => {});
     client = null;
   }
+}
+
+/** Reset module state between unit tests. */
+export async function __resetClickHouseForTests(): Promise<void> {
+  await shutdownClickHouse();
+  config = null;
+  client = null;
+  buffer = [];
+  rawBuffer = [];
+  disabled = false;
+  initPromise = null;
+  shutdownPromise = null;
 }
