@@ -29,8 +29,22 @@ function isMode(v: unknown): v is LlmBindingMode {
   return v === "proxy" || v === "byo";
 }
 
-function asOptString(v: unknown): string | undefined {
-  return typeof v === "string" && v.length > 0 ? v : undefined;
+function asNonBlankString(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+}
+
+function asHttpUrl(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const value = v.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.hostname
+      ? value
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function createLlmBindingRoutes(deps: LlmBindingRouteDeps): Hono {
@@ -51,10 +65,20 @@ export function createLlmBindingRoutes(deps: LlmBindingRouteDeps): Hono {
       return c.json(wrapError(400, "mode must be 'proxy' or 'byo'"), 400);
     }
 
-    const apiKey = asOptString(body.api_key);
-    const proxyBaseUrl = asOptString(body.proxy_base_url);
-    const baseUrl = asOptString(body.base_url);
+    const apiKey = asNonBlankString(body.api_key);
+    const proxyBaseUrl = asHttpUrl(body.proxy_base_url);
+    const baseUrl = asHttpUrl(body.base_url);
     const enabled = body.enabled === undefined ? undefined : body.enabled !== false;
+
+    if (body.api_key !== undefined && !apiKey) {
+      return c.json(wrapError(400, "api_key must be a non-blank string"), 400);
+    }
+    if (body.proxy_base_url !== undefined && !proxyBaseUrl) {
+      return c.json(wrapError(400, "proxy_base_url must be a valid HTTP(S) URL"), 400);
+    }
+    if (body.base_url !== undefined && !baseUrl) {
+      return c.json(wrapError(400, "base_url must be a valid HTTP(S) URL"), 400);
+    }
 
     // proxy_base_url / base_url 始终必填（KS 调 LLM 需要地址）
     if (mode === "proxy" && !proxyBaseUrl) {
@@ -75,7 +99,7 @@ export function createLlmBindingRoutes(deps: LlmBindingRouteDeps): Hono {
     const row = llmBindingStore.upsert(serviceId, {
       mode,
       proxy_base_url: proxyBaseUrl ?? null,
-      // asOptString 返回 string | undefined；upsert 层把 undefined 解释为"保留原值"
+      // undefined means "preserve the existing value" in the upsert layer.
       api_key: apiKey,
       base_url: baseUrl ?? null,
       enabled,
