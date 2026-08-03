@@ -537,7 +537,9 @@ export TDAI_MEMORY_SERVICE_ID="agent-customer-support"
 
 ### 示例 4：K8s 生产部署
 
-参考 `MemoryCore/deploy/k8s/tdai-memory.yaml`（Gateway + Redis Cluster）和 `MemoryCore/deploy/k8s/multi-hermes.yaml`（多 Hermes Agent 编排）。
+仓库当前未提供可直接应用到生产环境的通用 K8s 清单。请以上文
+[Service 模式的 K8s Deployment/Service 片段](#k8s-部署)为起点，结合实际的
+Redis、TCVDB、COS、Secret 管理和多 Hermes Agent 编排方案生成环境专用清单。
 
 ---
 

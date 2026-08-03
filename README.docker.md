@@ -15,94 +15,43 @@ AI Agent 长期记忆服务，为任意 Agent 框架提供四层渐进式记忆�
 
 ## 快速开始
 
-以下命令默认在 `MemoryCore/` 目录内执行；如果你位于仓库根目录，请先 `cd MemoryCore`。
+仓库当前通过 `deploy/global-images/` 提供预构建镜像启动脚本，不包含
+`MemoryCore/Dockerfile` 或本地 Compose 构建清单。以下命令从仓库根目录执行。
 
-### 1. 构建镜像
+### 1. 准备配置
 
 ```bash
-docker build -t tencentdb-agent-memory:latest .
+cd deploy/global-images
+cp .env.example .env
+$EDITOR .env
 ```
 
-### 2. 准备配置文件
+`.env` 至少需要填写 `MEMORY_LLM_*` 和 `PROXY_UPSTREAM_*` 两组 LLM 参数。
+镜像、端口、数据卷和内部凭据也可以在同一文件中覆盖。
 
-项目提供两个配置模板：
-
-| 模板 | 适用场景 |
-|------|---------|
-| `tdai-gateway.standalone.yaml` | 本地开发、单机部署，零外部依赖 |
-| `tdai-gateway.service.yaml` | K8s 多副本、多租户云服务 |
-
-复制模板并修改：
+### 2. 启动前校验
 
 ```bash
-# 单机模式
-cp tdai-gateway.standalone.yaml tdai-gateway.yaml
-
-# 服务模式
-cp tdai-gateway.service.yaml tdai-gateway.yaml
+./verify.sh
+# 离线环境可跳过外部 LLM 通路检查：
+# ./verify.sh --skip-llm
 ```
 
-### 3. 启动容器
-
-**Standalone 模式（最简）：**
+### 3. 启动并验证
 
 ```bash
-docker run -d --name agent-memory \
-  -v $(pwd)/tdai-gateway.yaml:/data/config/tdai-gateway.yaml:ro \
-  -e TDAI_LLM_API_KEY=sk-your-key \
-  -p 8420:8420 \
-  tencentdb-agent-memory:latest
-```
-
-**Service 模式（需要 Redis）：**
-
-```bash
-# 启动 Redis（如果没有远端 Redis）
-docker run -d --name redis -p 6379:6379 redis:7-alpine
-
-# 启动 mock-shark（本地提供 VDB/COS 凭证）
-VDB_ENDPOINT=http://your-vdb:8100 \
-VDB_API_KEY=xxx \
-VDB_DATABASE=your-db \
-COS_BUCKET=your-bucket \
-COS_REGION=ap-guangzhou \
-COS_SECRET_ID=xxx \
-COS_SECRET_KEY=xxx \
-npx tsx scripts/mock-shark-server.ts &
-
-# 启动 Memory Service
-docker run -d --name agent-memory \
-  -v $(pwd)/tdai-gateway.real.yaml:/data/config/tdai-gateway.yaml:ro \
-  -e TDAI_LLM_API_KEY=sk-your-key \
-  -p 8420:8420 \
-  tencentdb-agent-memory:latest
-```
-
-**Docker Compose 一键启动（含 Redis）：**
-
-```bash
-TDAI_LLM_API_KEY=sk-your-key docker compose -f docker-compose.local.yaml up --build
-```
-
-### 4. 验证服务
-
-```bash
+./start-all.sh
 curl http://localhost:8420/health
 ```
 
-正常返回：
+也可以只启动 memory-core：
 
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "services": {
-    "timerScanner": { "isLeader": true },
-    "pipelineWorker": { "workerId": "worker-xxx" },
-    "stateBackend": "connected"
-  }
-}
+```bash
+./start-memory-core.sh
 ```
+
+完整镜像、端口、凭据和清理说明见
+[`deploy/global-images/README.md`](deploy/global-images/README.md)。
 
 ## 配置方式
 
@@ -158,7 +107,8 @@ memory:                      # 记忆引擎调参
     strategy: "hybrid"
 ```
 
-完整配置参考 `tdai-gateway.standalone.yaml` 和 `tdai-gateway.service.yaml`。
+Standalone 配置参考 `MemoryCore/tdai-gateway.standalone.yaml`。Service 模式的
+环境变量和 YAML 示例见 [部署与集成指南](README.deployment.md#service-模式服务化)。
 
 ### 环境变量与配置文件对照表
 
@@ -181,7 +131,8 @@ memory:                      # 记忆引擎调参
 
 ## K8s / TKE 部署
 
-参考 `MemoryCore/deploy/k8s/tdai-memory.yaml`，核心做法：
+仓库当前未提供可直接应用的通用 K8s 清单。可以基于下方片段和
+[部署与集成指南中的 Service 模式示例](README.deployment.md#k8s-部署)生成环境专用清单，核心做法：
 
 1. **ConfigMap** 挂载 `tdai-gateway.yaml` 到 `/app/config/`
 2. **Secret** 通过环境变量注入 `TDAI_LLM_API_KEY` + `REDIS_PASSWORD`
@@ -251,14 +202,12 @@ volumes:
 ```
 .
 ├── MemoryCore/
-│   ├── Dockerfile                       # 镜像构建
-│   ├── docker-compose.local.yaml        # 本地一键测试 (含 Redis)
 │   ├── tdai-gateway.standalone.yaml     # Standalone 配置模板
-│   ├── tdai-gateway.service.yaml        # Service 配置模板
-│   ├── tdai-gateway.real.yaml           # 本地测试配置 (连真实服务)
-│   ├── deploy/k8s/tdai-memory.yaml      # K8s/TKE 部署清单
-│   ├── scripts/mock-shark-server.ts     # Mock Shark (本地开发)
+│   ├── tdai-gateway.yaml                # Standalone + Skill 默认配置
 │   └── src/gateway/server.ts            # 服务入口
+└── deploy/
+    ├── global-images/                    # 预构建镜像启动脚本
+    └── panel-knowledge-combined/         # Panel + Knowledge 组合镜像
 ```
 
 ## License
