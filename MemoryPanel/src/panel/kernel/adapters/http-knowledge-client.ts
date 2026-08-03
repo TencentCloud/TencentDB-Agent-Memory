@@ -62,8 +62,27 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });
-      const json = (await resp.json()) as CoreEnvelope<T>;
-      if (json.code !== undefined && json.code !== 0) {
+      let raw: unknown;
+      try {
+        raw = await resp.json();
+      } catch {
+        throw new CoreUpstreamError(
+          'CORE_UPSTREAM_ERROR',
+          resp.status >= 400 ? resp.status : 502,
+          `invalid JSON from knowledge service at ${path} (HTTP ${resp.status})`,
+          0,
+        );
+      }
+      if (!raw || typeof raw !== 'object' || typeof (raw as { code?: unknown }).code !== 'number') {
+        throw new CoreUpstreamError(
+          'CORE_UPSTREAM_ERROR',
+          resp.status >= 400 ? resp.status : 502,
+          `invalid envelope from knowledge service at ${path} (HTTP ${resp.status})`,
+          0,
+        );
+      }
+      const json = raw as CoreEnvelope<T>;
+      if (json.code !== 0) {
         throw new CoreUpstreamError(
           'CORE_UPSTREAM_ERROR',
           resp.status >= 400 ? resp.status : 502,
@@ -75,6 +94,19 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
         throw new CoreUpstreamError('CORE_UPSTREAM_ERROR', resp.status, json.message || `HTTP ${resp.status}`, 0);
       }
       return json.data as T;
+    } catch (err) {
+      if (err instanceof CoreUpstreamError) throw err;
+      const isTimeout =
+        ctrl.signal.aborted ||
+        (err as { name?: string }).name === 'AbortError' ||
+        (err as { name?: string }).name === 'TimeoutError';
+      throw new CoreUpstreamError(
+        'CORE_UPSTREAM_ERROR',
+        isTimeout ? 504 : 502,
+        isTimeout
+          ? `knowledge service timeout at ${path}`
+          : `knowledge service request failed at ${path}`,
+      );
     } finally {
       clearTimeout(timer);
     }
