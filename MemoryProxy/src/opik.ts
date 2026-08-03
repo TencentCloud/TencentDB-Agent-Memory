@@ -11,6 +11,8 @@ import { createHash, randomBytes } from "node:crypto";
 import type { ProxyConfig } from "./types.js";
 import { log } from "./report/log.js";
 
+const OPIK_REQUEST_TIMEOUT_MS = 10_000;
+
 /**
  * Generate a UUID v7 (time-ordered), required by Opik API.
  * Layout: 48-bit unix_ts_ms | 4-bit ver(0x7) | 12-bit rand_a | 2-bit var(0b10) | 62-bit rand_b
@@ -99,6 +101,7 @@ function fireCreateTrace(
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(OPIK_REQUEST_TIMEOUT_MS),
   }).then(async (res) => {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -184,6 +187,7 @@ export function opikUpdateTrace(
       output: update.output,
       usage: update.usage, // raw, unmodified
     }),
+    signal: AbortSignal.timeout(OPIK_REQUEST_TIMEOUT_MS),
   }).then(async (res) => {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -206,6 +210,7 @@ function fireCreateLlmSpan(
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(OPIK_REQUEST_TIMEOUT_MS),
   }).then(async (res) => {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
