@@ -350,7 +350,7 @@ export class TdaiClient {
         throw new Error(`acl/check http ${res.status}: ${body.slice(0, 200)}`);
       }
       const envelope = (await res.json()) as TdaiEnvelope<AclCheckResult>;
-      if (typeof envelope.code === "number" && envelope.code !== 0) {
+      if (envelope.code !== 0) {
         throw new Error(`acl/check envelope code=${envelope.code} msg=${envelope.message ?? ""}`);
       }
       const data = envelope.data;
