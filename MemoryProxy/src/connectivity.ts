@@ -67,15 +67,16 @@ export async function checkConnectivity(config: ProxyConfig): Promise<void> {
 /** Probe an HTTP endpoint. Returns "ok (Xms)" or "FAIL: reason". */
 async function probe(url: string, headers?: Record<string, string>): Promise<string> {
   const start = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), TIMEOUT);
     const resp = await fetch(url, { method: "GET", signal: ctrl.signal, headers, redirect: "follow" });
-    clearTimeout(t);
     await resp.text().catch(() => {});
     return `ok (${Date.now() - start}ms)`;
   } catch (err: unknown) {
     return `FAIL: ${err instanceof Error ? err.message : String(err)}`;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
