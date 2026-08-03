@@ -16,6 +16,7 @@ import { registerContextEngine, startReclaimScheduler } from "./register-engine.
 import { engineState } from "./engine.js";
 import {
   clearL2Poll, armL2Poll, tryTriggerL2, notifyL2NewNullEntries,
+  resetL2SchedulerState,
   type L2SchedulerDeps,
 } from "./l2-scheduler.js";
 import { readAllOffloadEntries } from "./storage.js";
@@ -53,13 +54,37 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   const ctx = buildRegisterCtx(api, offloadConfig);
   const { logger } = ctx;
 
+  // ── Diagnostic: detect whether api.on / api.registerHook is functional ──
+  const regMode = api.registrationMode ?? "(not exposed)";
+  const hasRegisterHook = typeof api.registerHook === "function";
+  const hasOn = typeof api.on === "function";
+  const hasRegisterContextEngine = typeof api.registerContextEngine === "function";
+  const onFnName = api.on?.name ?? "(unnamed)";
+  const onFnBody = String(api.on).slice(0, 200);
+  logger.debug?.(
+    `[context-offload] [DIAG] registrationMode=${regMode}, ` +
+    `registerHook=${hasRegisterHook}, api.on=${hasOn} name="${onFnName}", ` +
+    `registerContextEngine=${hasRegisterContextEngine}, ` +
+    `api.on body=${onFnBody}`,
+  );
+
   logger.debug?.("[context-offload] Registering offload module...");
   wireCtx(ctx);
 
-  // Reset L2 scheduler state on re-registration (previous call may have polled).
-  clearL2Poll();
+  // Reset per-registration state (previous call may have polled / disposed L1.5).
+  resetL2SchedulerState();
+  engineState.l15Disposed = false;
   ctx.lastActiveMgr = null;
   ctx.lastActiveSessionKey = null;
+
+  // LLM mode diagnostic (mirrors original).
+  if (ctx.backendClient && (offloadConfig.mode === "backend" || offloadConfig.mode === "collect")) {
+    logger.debug?.(`[context-offload] LLM mode: backend (${offloadConfig.backendUrl})`);
+  } else if (ctx.backendClient) {
+    logger.debug?.(`[context-offload] LLM mode: local (${offloadConfig.model ?? "main-agent-model"})`);
+  } else {
+    logger.warn("[context-offload] LLM client not available. L1/L1.5/L2/L4 disabled (L3 compression still active).");
+  }
 
   const tracker: HookTracker = { names: [] };
   registerToolCallHooks(ctx, tracker);

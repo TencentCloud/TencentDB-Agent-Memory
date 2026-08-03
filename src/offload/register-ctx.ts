@@ -68,7 +68,10 @@ export function buildRegisterCtx(
     aggressiveCompressRatio: offloadConfig.aggressiveCompressRatio,
     mmdMaxTokenRatio: offloadConfig.mmdMaxTokenRatio,
   };
+  // Fix 4: Configure token tracker encoding to match plugin config (default: o200k_base)
+  const _encoding = pCfg.l3TiktokenEncoding ?? PLUGIN_DEFAULTS.l3TiktokenEncoding;
   configureTokenTracker(pCfg.l3TiktokenEncoding);
+  logger.debug?.(`[context-offload] Token tracker encoding: ${_encoding} (configured from ${pCfg.l3TiktokenEncoding ? "pluginConfig" : "default"})`);
 
   const dataRoot = offloadConfig.dataDir ?? DEFAULT_DATA_ROOT;
   // Session Registry — module-level singleton (engineState) so engine + hooks always share the same instance.
