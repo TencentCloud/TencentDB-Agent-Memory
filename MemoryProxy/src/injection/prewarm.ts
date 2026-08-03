@@ -122,12 +122,18 @@ export async function prewarmAll(
 
   // Top-level total deadline: even if one hook hangs longer than per-hook,
   // we don't want session_init to block forever.
-  const settled = await Promise.race([
-    Promise.allSettled(runs),
-    new Promise<PromiseSettledResult<unknown>[]>((resolve) => {
-      setTimeout(() => resolve([]), totalBudget + 500);
-    }),
-  ]);
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  let settled: PromiseSettledResult<unknown>[];
+  try {
+    settled = await Promise.race([
+      Promise.allSettled(runs),
+      new Promise<PromiseSettledResult<unknown>[]>((resolve) => {
+        deadlineTimer = setTimeout(() => resolve([]), totalBudget + 500);
+      }),
+    ]);
+  } finally {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  }
 
   if (settled.length === 0) {
     console.warn(
