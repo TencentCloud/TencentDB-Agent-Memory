@@ -167,6 +167,19 @@ export async function executeMetaFetch<T>(
       });
       throw err;
     }
+    if (!resp.ok && env.code === 0) {
+      const code = resp.status >= 400 && resp.status < 600 ? resp.status : 502;
+      const err = new KernelFetchError(code, `remote metadata HTTP ${resp.status} at ${path}`);
+      logRemoteMeta(log, 'error', env.request_id ?? reqId, {
+        path,
+        request_id: env.request_id ?? reqId,
+        durationMs: Date.now() - startedAt,
+        httpStatus: resp.status,
+        envelopeCode: env.code,
+        error: err.message,
+      });
+      throw err;
+    }
     const envelope: MetaEnvelope<unknown> = {
       code: env.code,
       message: env.message ?? (env.code === 0 ? 'ok' : `error ${env.code}`),
