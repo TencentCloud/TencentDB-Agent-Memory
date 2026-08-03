@@ -10,6 +10,7 @@ import { SerialQueue } from "./serial-queue.js";
 
 export class BuildQueue {
   private readonly queues = new Map<string, SerialQueue>();
+  private readonly cleanupScheduled = new WeakSet<SerialQueue>();
 
   /** Enqueue job to this key's serial queue; fire-and-forget. */
   enqueue(key: string, job: () => Promise<void>): void {
@@ -18,9 +19,11 @@ export class BuildQueue {
       q = new SerialQueue(key);
       this.queues.set(key, q);
     }
-    void q.add(job).catch(() => {
-      /* job already set failed status; swallow unhandled rejection */
-    });
+    const queue = q;
+    const cleanup = () => {
+      this.scheduleRemoval(key, queue);
+    };
+    void queue.add(job).then(cleanup, cleanup);
   }
 
   /** Wait for a key (or all) queue to be idle. Mainly for tests / shutdown. */
@@ -30,5 +33,22 @@ export class BuildQueue {
       return;
     }
     await Promise.all([...this.queues.values()].map((q) => q.onIdle()));
+  }
+
+  private scheduleRemoval(key: string, queue: SerialQueue): void {
+    if (this.cleanupScheduled.has(queue)) return;
+    this.cleanupScheduled.add(queue);
+    void this.removeWhenIdle(key, queue);
+  }
+
+  private async removeWhenIdle(key: string, queue: SerialQueue): Promise<void> {
+    try {
+      await queue.onIdle();
+      if (queue.idle && this.queues.get(key) === queue) {
+        this.queues.delete(key);
+      }
+    } finally {
+      this.cleanupScheduled.delete(queue);
+    }
   }
 }
