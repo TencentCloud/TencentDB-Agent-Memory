@@ -34,6 +34,45 @@ class Stub(ABC):
         ...
 
 
+def _decode_success_response(resp: httpx.Response) -> dict:
+    request_id = (
+        resp.headers.get("x-qcloud-transaction-id")
+        or resp.headers.get("x-trace-id")
+        or ""
+    )
+    try:
+        envelope = resp.json()
+    except ValueError as exc:
+        raise TDAMError(-1, "API response must be valid JSON", request_id) from exc
+
+    if not isinstance(envelope, dict):
+        raise TDAMError(-1, "API response must be a JSON object", request_id)
+
+    code = envelope.get("code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        raise TDAMError(-1, "API response code must be an integer", request_id)
+    if code != 0:
+        payload = envelope.get("data")
+        details = payload if isinstance(payload, dict) else None
+        raise TDAMError(
+            code=code,
+            message=envelope.get("message", "unknown error"),
+            request_id=request_id or envelope.get("request_id", ""),
+            details=details,
+        )
+
+    result = envelope.get("data")
+    if result is None:
+        result = {}
+    if not isinstance(result, dict):
+        raise TDAMError(-1, "API response data must be a JSON object", request_id)
+
+    trace_id = resp.headers.get("x-trace-id")
+    if trace_id:
+        result["trace_id"] = trace_id
+    return result
+
+
 class HttpStub(Stub):
     """Synchronous HTTP transport backed by :mod:`httpx`.
 
@@ -84,22 +123,7 @@ class HttpStub(Stub):
         )
         logger.debug("Response %s %s", path, resp.text)
         resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != 0:
-            req_id = resp.headers.get("x-qcloud-transaction-id", data.get("request_id", ""))
-            payload = data.get("data")
-            details = payload if isinstance(payload, dict) else None
-            raise TDAMError(
-                code=data.get("code", -1),
-                message=data.get("message", "unknown error"),
-                request_id=req_id,
-                details=details,
-            )
-        result: dict = data.get("data", {})
-        trace_id = resp.headers.get("x-trace-id")
-        if trace_id:
-            result["trace_id"] = trace_id
-        return result
+        return _decode_success_response(resp)
 
     def close(self) -> None:
         if isinstance(self.client, httpx.Client):
@@ -144,22 +168,7 @@ class AsyncHttpStub:
         )
         logger.debug("Response %s %s", path, resp.text)
         resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") != 0:
-            req_id = resp.headers.get("x-qcloud-transaction-id", data.get("request_id", ""))
-            payload = data.get("data")
-            details = payload if isinstance(payload, dict) else None
-            raise TDAMError(
-                code=data.get("code", -1),
-                message=data.get("message", "unknown error"),
-                request_id=req_id,
-                details=details,
-            )
-        result: dict = data.get("data", {})
-        trace_id = resp.headers.get("x-trace-id")
-        if trace_id:
-            result["trace_id"] = trace_id
-        return result
+        return _decode_success_response(resp)
 
     async def close(self) -> None:
         if isinstance(self.client, httpx.AsyncClient):
