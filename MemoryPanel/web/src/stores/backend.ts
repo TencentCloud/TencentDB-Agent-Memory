@@ -23,6 +23,7 @@ import {
 import { tea } from '@/lib/tea-bridge';
 import i18n from '@/i18n';
 import { seedDisplayNameCache } from '@/services/user-profile-store';
+import { taskRequestKey } from './task-request-key';
 
 // 从 backendStore.ts re-import 纯函数（adapters / types），避免循环依赖
 import {
@@ -183,12 +184,16 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     const offset = params?.offset ?? 0;
     // 缓存 key：按 (offset, limit) 粒度（teamId 已在 tasksPagesByTeam[teamId] 这层隔离）
     const cacheKey = `${offset}:${limit}`;
+    const inflightKey = taskRequestKey(teamId, offset, limit);
     // 已缓存且非强制刷新 → 直接返回
     if (!params?.force && state.tasksPagesByTeam[teamId]?.[cacheKey]) {
       return state.tasksPagesByTeam[teamId][cacheKey];
     }
     // in-flight 去重
-    if (state.inflightTasks[cacheKey]) { await state.inflightTasks[cacheKey]; return get().tasksPagesByTeam[teamId]?.[cacheKey] ?? []; }
+    if (state.inflightTasks[inflightKey]) {
+      await state.inflightTasks[inflightKey];
+      return get().tasksPagesByTeam[teamId]?.[cacheKey] ?? [];
+    }
 
     const promise = (async () => {
       try {
@@ -202,7 +207,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
             tasksPagesByTeam: { ...s.tasksPagesByTeam, [teamId]: { ...teamPages, [cacheKey]: adapted } },
             tasksTotalByTeam: { ...s.tasksTotalByTeam, [teamId]: total },
             inflightTasks: Object.fromEntries(
-              Object.entries(s.inflightTasks).filter(([k]) => k !== cacheKey)
+              Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
             ),
           };
         });
@@ -211,7 +216,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
         console.error('[backend store] fetchTasks failed:', err);
         set((s) => ({
           inflightTasks: Object.fromEntries(
-            Object.entries(s.inflightTasks).filter(([k]) => k !== cacheKey)
+            Object.entries(s.inflightTasks).filter(([k]) => k !== inflightKey)
           ),
         }));
         tea.notify.error(i18n.t('backend.loadTasksFailed'));
@@ -219,7 +224,7 @@ export const useBackendStore = create<BackendState>((set, get) => ({
       }
     })();
 
-    set((s) => ({ inflightTasks: { ...s.inflightTasks, [cacheKey]: promise } }));
+    set((s) => ({ inflightTasks: { ...s.inflightTasks, [inflightKey]: promise } }));
     return promise;
   },
 
