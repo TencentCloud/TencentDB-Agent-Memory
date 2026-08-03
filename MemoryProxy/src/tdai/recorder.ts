@@ -24,7 +24,7 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
     if (msg?.role !== "user") continue;
     // 只取真实 user_query，避免把 harness 上下文写进 L0
     const content = extractUserQueryText(extractContentText(msg.content));
-    if (content.trim()) return { role: "user", content };
+    return content.trim() ? { role: "user", content } : null;
   }
   return null;
 }
