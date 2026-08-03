@@ -142,11 +142,25 @@ export function resolveRoleTimeoutMs(
   roleDir: string | null | undefined,
   fallbackMs: number,
 ): number {
-  const roleConfig = loadRoleConfig(role, roleDir);
-  return typeof roleConfig?.timeout_min === "number" &&
-    roleConfig.timeout_min > 0
-    ? roleConfig.timeout_min * 60_000
-    : fallbackMs;
+  // Lenient read — the role file may be minimal ({name, timeout_min}): tests
+  // and legacy configs don't carry the full 19-field strict schema. Search
+  // canonical per-role, bare flat, then legacy memory-keeper layout.
+  const candidates = [
+    path.join(roleDir ?? "", role, "role.json"),
+    path.join(roleDir ?? "", `${role}.json`),
+    path.join(roleDir ?? "", "memory-keeper", `${role}.json`),
+  ];
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    try {
+      const t = (JSON.parse(fs.readFileSync(p, "utf-8")) as { timeout_min?: unknown })
+        ?.timeout_min;
+      return typeof t === "number" && t > 0 ? t * 60_000 : fallbackMs;
+    } catch {
+      return fallbackMs;
+    }
+  }
+  return fallbackMs;
 }
 
 export interface OrchestratorOptions {
@@ -998,7 +1012,7 @@ export class ConsolidationOrchestrator {
     // Night role is FAIL-LOUD: a missing night-keeper.md must refuse the run,
     // never silently run with day semantics (DEFAULT_ROLE_PROMPT). Day keeper
     // keeps the fail-open fallback (backward compat).
-    const rolePrompt = loadRolePrompt(role, this.roleDir);
+    const rolePrompt = loadRolePrompt(role, this.roleDir ?? undefined);
     if (!rolePrompt) {
       if (role === "night-keeper") {
         throw new Error(

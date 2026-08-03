@@ -1,5 +1,7 @@
 /**
- * P9 — role-files tests (wave tdai-memory-subagents-2026-08-02).
+ * P9 — role-files tests (wave tdai-memory-subagents-2026-08-02; factory-0457
+ * updated the contract: canonical `roles/<name>/role.json` + `prompt.md`,
+ * strict 19-field schema, `listRoles` scans per-role subdirs).
  *
  * Fake role dirs only. Covers: role.json / role.md parsing, listRoles, the
  * session-prompt composition (role.md + diff section — fence escaping itself
@@ -21,13 +23,39 @@ import {
 
 const REPO_ROOT = path.resolve(process.cwd());
 
+/** Minimal but schema-valid role.json (all 19 strict fields). */
+function roleConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "memory-keeper",
+    model: "opencode-go/deepseek-v4-flash",
+    prompt_file: "prompt.md",
+    enabled: true,
+    thinking: "low",
+    timeout_min: 10,
+    scope: "fresh_tail",
+    trigger: "threshold",
+    schedule: null,
+    threshold: 50,
+    idsOnly: false,
+    diff_cap: 200,
+    diff_byte_cap: 60_000,
+    ops_subset: ["deleteL1", "merge", "rewriteBlock", "rewriteRecord"],
+    tools_subset: [],
+    caps: { delete_per_run: 500, rewrite_per_run: 100 },
+    max_run_ms: 30 * 60_000,
+    fail_on_missing_prompt: false,
+    critic_role: "memory-critic",
+    ...overrides,
+  };
+}
+
 describe("role-files", () => {
   let tmp: string;
   let roleDir: string;
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-"));
-    roleDir = path.join(tmp, ROLE_DIR_NAME);
+    roleDir = resolveRoleDir(tmp); // tmp/.pi/agent-memory/tdai/roles
     fs.mkdirSync(roleDir, { recursive: true });
   });
 
@@ -35,42 +63,62 @@ describe("role-files", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("resolveRoleDir points at ~/.pi/agent-memory/tdai/memory-keeper", () => {
-    expect(resolveRoleDir("/home/x")).toBe("/home/x/.pi/agent-memory/tdai/memory-keeper");
+  it("resolveRoleDir points at ~/.pi/agent-memory/tdai/roles", () => {
+    expect(resolveRoleDir("/home/x")).toBe("/home/x/.pi/agent-memory/tdai/roles");
   });
 
   it("parses role.json (model, timeout, enabled) and role.md", () => {
-    fs.writeFileSync(
-      path.join(roleDir, "memory-keeper.json"),
-      JSON.stringify({ name: "memory-keeper", model: "opencode-go/deepseek-v4-flash", enabled: true, thinking: "low", timeout_min: 10 }),
-    );
-    fs.writeFileSync(path.join(roleDir, "memory-keeper.md"), "# memory-keeper role prompt");
+    const perRole = path.join(roleDir, "memory-keeper");
+    fs.mkdirSync(perRole, { recursive: true });
+    fs.writeFileSync(path.join(perRole, "role.json"), JSON.stringify(roleConfig()));
+    fs.writeFileSync(path.join(perRole, "prompt.md"), "# memory-keeper role prompt");
 
-    const cfg = loadRoleConfig("memory-keeper", roleDir);
-    expect(cfg).toEqual({
-      name: "memory-keeper",
-      model: "opencode-go/deepseek-v4-flash",
-      enabled: true,
-      thinking: "low",
-      timeout_min: 10,
-    });
-    expect(loadRolePrompt("memory-keeper", roleDir)).toContain("memory-keeper role prompt");
+    const cfg = loadRoleConfig("memory-keeper", tmp);
+    expect(cfg).toEqual(roleConfig());
+    expect(loadRolePrompt("memory-keeper", tmp)).toContain("memory-keeper role prompt");
   });
 
   it("tolerates missing/malformed role files (fail-open → null)", () => {
-    expect(loadRoleConfig("missing", roleDir)).toBeNull();
-    expect(loadRolePrompt("missing", roleDir)).toBeNull();
-    fs.writeFileSync(path.join(roleDir, "broken.json"), "{not json");
-    expect(loadRoleConfig("broken", roleDir)).toBeNull();
+    expect(loadRoleConfig("missing", tmp)).toBeNull();
+    expect(loadRolePrompt("missing", tmp)).toBeNull();
+    const broken = path.join(roleDir, "broken");
+    fs.mkdirSync(broken, { recursive: true });
+    fs.writeFileSync(path.join(broken, "role.json"), "{not json");
+    expect(loadRoleConfig("broken", tmp)).toBeNull();
   });
 
-  it("listRoles scans json+md pairs; absent json defaults enabled=true", () => {
-    fs.writeFileSync(path.join(roleDir, "memory-keeper.json"), JSON.stringify({ name: "memory-keeper", model: "m1" }));
-    fs.writeFileSync(path.join(roleDir, "memory-keeper.md"), "prompt");
-    fs.writeFileSync(path.join(roleDir, "disabled-role.md"), "prompt only — no json");
-    const roles = listRoles(roleDir);
-    expect(roles).toContainEqual({ name: "memory-keeper", enabled: true, model: "m1", hasPrompt: true });
-    expect(roles).toContainEqual({ name: "disabled-role", enabled: true, model: null, hasPrompt: true });
+  it("listRoles scans per-role dirs; absent json defaults enabled=false", () => {
+    const keeper = path.join(roleDir, "memory-keeper");
+    fs.mkdirSync(keeper, { recursive: true });
+    fs.writeFileSync(
+      path.join(keeper, "role.json"),
+      JSON.stringify(roleConfig({ name: "memory-keeper", model: "m1", enabled: true })),
+    );
+    fs.writeFileSync(path.join(keeper, "prompt.md"), "prompt");
+    // prompt-only dir (no role.json) → discovered, enabled=false, model=null.
+    const promptOnly = path.join(roleDir, "prompt-only");
+    fs.mkdirSync(promptOnly, { recursive: true });
+    fs.writeFileSync(path.join(promptOnly, "prompt.md"), "prompt only — no json");
+
+    const roles = listRoles(tmp);
+    expect(roles).toContainEqual({
+      name: "memory-keeper",
+      enabled: true,
+      model: "m1",
+      hasPrompt: true,
+      scope: "fresh_tail",
+      trigger: "threshold",
+      criticRole: "memory-critic",
+    });
+    expect(roles).toContainEqual({
+      name: "prompt-only",
+      enabled: false,
+      model: null,
+      hasPrompt: true,
+      scope: null,
+      trigger: null,
+      criticRole: null,
+    });
   });
 
   it("buildSessionPrompt composes role.md + the diff section as separate blocks", () => {
