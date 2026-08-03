@@ -14,9 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "generate:meta-openapi": "tsx scripts/generate-meta-openapi.ts",
-    "test:panel:e2e": "tests/panel/e2e-panel-meta.sh",
-    "test:knowledge:e2e": "tsx tests/knowledge/e2e-knowledge-chain.ts",
-    "test:knowledge:e2e:full": "E2E_MODE=full tsx tests/knowledge/e2e-knowledge-chain.ts",
+    "test:panel:e2e": "npm run test:knowledge:e2e && npm run test:skill:e2e",
+    "test:knowledge:e2e": "bash scripts/e2e-knowledge-authz.sh",
+    "test:skill:e2e": "bash scripts/e2e-skill-authz.sh",
     "mock-kernel": "tsx scripts/mock-memory-server.ts"
   },
   "dependencies": {

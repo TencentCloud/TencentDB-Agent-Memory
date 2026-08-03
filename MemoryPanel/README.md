@@ -97,8 +97,9 @@ npm run dev
 | `pnpm typecheck` | 执行 TypeScript 类型检查 |
 | `pnpm test` | 运行单元测试 |
 | `pnpm generate:meta-openapi` | 生成 Meta OpenAPI 文档 |
-| `pnpm test:panel:e2e` | 运行 Panel Meta E2E |
-| `pnpm test:knowledge:e2e` | 运行 Knowledge E2E |
+| `pnpm test:panel:e2e` | 依次运行 Knowledge 与 Skill 授权 E2E |
+| `pnpm test:knowledge:e2e` | 运行 Knowledge 资产授权 E2E |
+| `pnpm test:skill:e2e` | 运行 Skill 资产与 ACL E2E |
 | `cd web && npm run dev` | 启动前端开发服务器 |
 | `cd web && npm run build` | 构建前端到 `web/dist/` |
 | `bash scripts/secret-scan.sh` | 扫描敏感信息 |
