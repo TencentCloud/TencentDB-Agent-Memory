@@ -84,8 +84,8 @@ export class SerialQueue {
     const entry = this.queue.shift()!;
     this.running = true;
 
-    entry
-      .task()
+    Promise.resolve()
+      .then(() => entry.task())
       .then((result) => entry.resolve(result))
       .catch((err) => entry.reject(err))
       .finally(() => {
