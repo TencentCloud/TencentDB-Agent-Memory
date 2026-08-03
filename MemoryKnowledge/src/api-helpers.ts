@@ -68,6 +68,37 @@ export function extractIdFields(
   return fields;
 }
 
+// ───────────────────────── Pagination ─────────────────────────
+
+export type ListPaginationResult =
+  | { ok: true; limit: number; offset: number }
+  | { ok: false; message: string };
+
+/** Validate shared offset pagination for Knowledge list endpoints. */
+export function parseListPagination(body: Record<string, unknown>): ListPaginationResult {
+  const limit = body.limit === undefined ? 20 : body.limit;
+  if (
+    typeof limit !== "number"
+    || !Number.isFinite(limit)
+    || !Number.isInteger(limit)
+    || limit < 1
+  ) {
+    return { ok: false, message: "limit must be a positive integer" };
+  }
+
+  const offset = body.offset === undefined ? 0 : body.offset;
+  if (
+    typeof offset !== "number"
+    || !Number.isFinite(offset)
+    || !Number.isInteger(offset)
+    || offset < 0
+  ) {
+    return { ok: false, message: "offset must be a non-negative integer" };
+  }
+
+  return { ok: true, limit, offset };
+}
+
 // ───────────────────────── ApiResponseEnvelope ─────────────────────────
 
 export interface ApiResponseEnvelope<T = unknown> {

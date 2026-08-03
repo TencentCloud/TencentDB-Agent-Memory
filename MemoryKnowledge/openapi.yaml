@@ -833,9 +833,11 @@ components:
               enum: [draft, pending, processing, ready, failed]
             limit:
               type: integer
+              minimum: 1
               default: 20
             offset:
               type: integer
+              minimum: 0
               default: 0
 
     WikiListData:
@@ -1072,9 +1074,11 @@ components:
               enum: [pending, processing, ready, failed]
             limit:
               type: integer
+              minimum: 1
               default: 20
             offset:
               type: integer
+              minimum: 0
               default: 0
 
     CodeGraphListData:

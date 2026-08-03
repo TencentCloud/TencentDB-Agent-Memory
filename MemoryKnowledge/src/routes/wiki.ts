@@ -22,6 +22,7 @@ import type { WikiStatus } from "../store/index.js";
 import {
   extractIdFields,
   isValidIdSegment,
+  parseListPagination,
   wrapOk,
   wrapError,
   toWikiDetail,
@@ -187,10 +188,14 @@ export function createWikiRoutes(deps: WikiRouteDeps): Hono {
     if (!ids) return c.json(wrapError(400, "x-tdai-service-id header and team_id are required"), 400);
 
     const status = typeof body.status === "string" ? (body.status as WikiStatus) : undefined;
-    const limit = typeof body.limit === "number" ? body.limit : 20;
-    const offset = typeof body.offset === "number" ? body.offset : 0;
+    const pagination = parseListPagination(body);
+    if (!pagination.ok) return c.json(wrapError(400, pagination.message), 400);
 
-    const items = wikiService.list(ids.service_id, ids.team_id, { syncStatus: status, limit, offset });
+    const items = wikiService.list(ids.service_id, ids.team_id, {
+      syncStatus: status,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    });
     const total = wikiService.count(ids.service_id, ids.team_id, status ? { syncStatus: status } : undefined);
     return c.json(wrapOk({ items: items.map(toWikiDetail), total }));
   });

@@ -21,6 +21,7 @@ import { toCodeGraphToolName, CODEGRAPH_QUERY_TOOL_NAMES } from "./tools.js";
 import {
   extractIdFields,
   isValidIdSegment,
+  parseListPagination,
   wrapOk,
   wrapError,
   toCodeGraphDetail,
@@ -221,10 +222,14 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (!idFields) return c.json(wrapError(400, "x-tdai-service-id header and team_id are required"), 400);
 
     const status = typeof body.status === "string" ? (body.status as SyncStatus) : undefined;
-    const limit = typeof body.limit === "number" ? body.limit : 20;
-    const offset = typeof body.offset === "number" ? body.offset : 0;
+    const pagination = parseListPagination(body);
+    if (!pagination.ok) return c.json(wrapError(400, pagination.message), 400);
 
-    const items = cgService.list(idFields.service_id, idFields.team_id, { syncStatus: status, limit, offset });
+    const items = cgService.list(idFields.service_id, idFields.team_id, {
+      syncStatus: status,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    });
     const total = cgService.count(idFields.service_id, idFields.team_id, status ? { syncStatus: status } : undefined);
     return c.json(wrapOk({ items: items.map(toCodeGraphDetail), total }));
   });
