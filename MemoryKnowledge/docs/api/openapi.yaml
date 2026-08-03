@@ -1,0 +1,494 @@
+openapi: 3.1.0
+info:
+  title: TencentDB Agent Memory Knowledge API
+  version: 0.1.0
+  description: |
+    HTTP contract for the standalone Wiki and CodeGraph knowledge service.
+    All `/v3` data-plane requests are tenant-scoped by
+    `x-tdai-service-id`.
+servers:
+  - url: http://localhost:8421
+tags:
+  - name: Health
+  - name: Wiki
+  - name: CodeGraph
+  - name: Tools
+  - name: LLMBinding
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      responses:
+        "200":
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /v3/wiki/create:
+    post:
+      tags: [Wiki]
+      operationId: createWiki
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+  /v3/wiki/list:
+    post:
+      tags: [Wiki]
+      operationId: listWikis
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/get:
+    post:
+      tags: [Wiki]
+      operationId: getWiki
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v3/wiki/update-meta:
+    post:
+      tags: [Wiki]
+      operationId: updateWikiMetadata
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/ingest:
+    post:
+      tags: [Wiki]
+      operationId: ingestWiki
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "202":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v3/wiki/delete:
+    post:
+      tags: [Wiki]
+      operationId: deleteWikis
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/raw/ls:
+    post:
+      tags: [Wiki]
+      operationId: listWikiRawFiles
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/raw/read:
+    post:
+      tags: [Wiki]
+      operationId: readWikiRawFiles
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/raw/write:
+    post:
+      tags: [Wiki]
+      operationId: writeWikiRawFiles
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "413":
+          $ref: "#/components/responses/Error"
+  /v3/wiki/raw/rm:
+    post:
+      tags: [Wiki]
+      operationId: removeWikiRawFiles
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/page/ls:
+    post:
+      tags: [Wiki]
+      operationId: listWikiPages
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/page/read:
+    post:
+      tags: [Wiki]
+      operationId: readWikiPages
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/page/write:
+    post:
+      tags: [Wiki]
+      operationId: writeWikiPages
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/page/rm:
+    post:
+      tags: [Wiki]
+      operationId: removeWikiPages
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/graph:
+    post:
+      tags: [Wiki]
+      operationId: getWikiGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/wiki/search:
+    post:
+      tags: [Wiki]
+      operationId: searchWiki
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+
+  /v3/code-graph/create:
+    post:
+      tags: [CodeGraph]
+      operationId: createCodeGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/list:
+    post:
+      tags: [CodeGraph]
+      operationId: listCodeGraphs
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/get:
+    post:
+      tags: [CodeGraph]
+      operationId: getCodeGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/update-meta:
+    post:
+      tags: [CodeGraph]
+      operationId: updateCodeGraphMetadata
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/sync:
+    post:
+      tags: [CodeGraph]
+      operationId: syncCodeGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "202":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v3/code-graph/delete:
+    post:
+      tags: [CodeGraph]
+      operationId: deleteCodeGraphs
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/search:
+    post:
+      tags: [CodeGraph]
+      operationId: searchCodeGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/explore:
+    post:
+      tags: [CodeGraph]
+      operationId: exploreCodeGraph
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/callers:
+    post:
+      tags: [CodeGraph]
+      operationId: findCodeGraphCallers
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/callees:
+    post:
+      tags: [CodeGraph]
+      operationId: findCodeGraphCallees
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/impact:
+    post:
+      tags: [CodeGraph]
+      operationId: analyzeCodeGraphImpact
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/node:
+    post:
+      tags: [CodeGraph]
+      operationId: getCodeGraphNode
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/status:
+    post:
+      tags: [CodeGraph]
+      operationId: getCodeGraphStatus
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/code-graph/files:
+    post:
+      tags: [CodeGraph]
+      operationId: listCodeGraphFiles
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/CodeGraphQuery"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+
+  /v3/tools/list:
+    post:
+      tags: [Tools]
+      operationId: listKnowledgeTools
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/tools/call:
+    post:
+      tags: [Tools]
+      operationId: callKnowledgeTool
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "403":
+          $ref: "#/components/responses/Error"
+
+  /v3/internal/llm-binding/set:
+    post:
+      tags: [LLMBinding]
+      operationId: setLlmBinding
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/internal/llm-binding/status:
+    post:
+      tags: [LLMBinding]
+      operationId: getLlmBindingStatus
+      parameters:
+        - $ref: "#/components/parameters/ServiceId"
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /v3/internal/llm-binding/list:
+    post:
+      tags: [LLMBinding]
+      operationId: listLlmBindings
+      requestBody:
+        $ref: "#/components/requestBodies/JsonObject"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+
+components:
+  parameters:
+    ServiceId:
+      name: x-tdai-service-id
+      in: header
+      required: true
+      description: Tenant/service identifier.
+      schema:
+        type: string
+        minLength: 1
+  requestBodies:
+    JsonObject:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+    CodeGraphQuery:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [code_graph_id]
+            properties:
+              code_graph_id:
+                type: string
+            additionalProperties: true
+  responses:
+    Success:
+      description: Successful response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiEnvelope"
+    Error:
+      description: Error response.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiEnvelope"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          const: ok
+        timestamp:
+          type: string
+          format: date-time
+    ApiEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+        request_id:
+          type: string
+        data: {}
+      additionalProperties: false
