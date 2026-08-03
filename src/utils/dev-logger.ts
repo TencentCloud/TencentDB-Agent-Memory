@@ -27,6 +27,8 @@ export interface DevLoggerOptions {
   tag?: string;
   /** Directory for gateway-dev.log (default: ~/.pi/agent-memory/tdai/logs). */
   logDir?: string;
+  /** Full log file path — overrides logDir (default: <logDir>/gateway-dev.log). */
+  logFile?: string;
   /** Emit debug lines (default: isDevMode()). */
   dev?: boolean;
 }
@@ -37,7 +39,10 @@ export function isDevMode(): boolean {
 }
 
 /** Resolve the log file path, honoring a tilde prefix. */
-export function resolveLogFile(logDir?: string): string {
+export function resolveLogFile(logDir?: string, logFile?: string): string {
+  if (logFile) {
+    return logFile.startsWith("~") ? path.join(os.homedir(), logFile.slice(2)) : logFile;
+  }
   const dir = logDir ?? "~/.pi/agent-memory/tdai/logs";
   const expanded = dir.startsWith("~")
     ? path.join(os.homedir(), dir.slice(2))
@@ -79,7 +84,7 @@ export async function flushLogs(): Promise<void> {
  */
 export function createDevLogger(opts: DevLoggerOptions = {}): Logger {
   const { tag = "", dev = isDevMode() } = opts;
-  const file = resolveLogFile(opts.logDir);
+  const file = resolveLogFile(opts.logDir, opts.logFile);
 
   const emit = (
     level: "DEBUG" | "INFO" | "WARN" | "ERROR",

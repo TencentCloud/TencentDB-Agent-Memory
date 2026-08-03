@@ -66,6 +66,13 @@ export interface GatewayConfig {
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
   memory: MemoryTdaiConfig;
+  /** Dev logging options (default: console-only, debug off). */
+  logging: {
+    /** Log file path (default: <dataDir>/logs/gateway-dev.log). */
+    file?: string;
+    /** "debug" enables DEBUG lines (same as TDAI_DEV=1); "info" hides them. */
+    level?: "debug" | "info";
+  };
 }
 
 // ============================
@@ -142,11 +149,19 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const memoryRaw = obj(fileConfig, "memory");
   const memory = parseMemoryConfig(memoryRaw as Record<string, unknown> | undefined);
 
+  // Logging config (dev-mode file sink + level). Env TDAI_DEV=1 wins over yaml.
+  const loggingConfig = obj(fileConfig, "logging");
+  const logging = {
+    file: str(loggingConfig, "file"),
+    level: (str(loggingConfig, "level") === "debug" ? "debug" : "info") as "debug" | "info",
+  };
+
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
     data: { baseDir },
     llm,
     memory,
+    logging,
   };
 
   // Merge overrides one level deep so partial `server`/`data`/`llm` patches
@@ -159,6 +174,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     server: { ...base.server, ...(overrides.server ?? {}) },
     data: { ...base.data, ...(overrides.data ?? {}) },
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
+    logging: { ...base.logging, ...(overrides.logging ?? {}) },
   };
 }
 

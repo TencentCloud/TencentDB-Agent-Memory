@@ -85,11 +85,8 @@ const VERSION = "0.1.0";
 
 // ============================
 // Dev logger (for standalone gateway): console + file sink; debug only in dev mode.
+// The actual logger is created in the constructor from config.logging.
 // ============================
-
-function createConsoleLogger(): Logger {
-  return createDevLogger({ tag: TAG, dev: isDevMode() });
-}
 
 // ============================
 // Gateway Server
@@ -133,7 +130,13 @@ export class TdaiGateway {
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
-    this.logger = createConsoleLogger();
+    // Dev logger: file sink from config.logging.file, debug from yaml level
+    // OR TDAI_DEV=1 (env wins — see dev-logger.isDevMode).
+    this.logger = createDevLogger({
+      tag: TAG,
+      dev: this.config.logging.level === "debug" || isDevMode(),
+      logFile: this.config.logging.file,
+    });
     this.tokenManager = new LoopbackTokenManager(
       this.config.data.baseDir,
       this.logger,
