@@ -29,6 +29,7 @@ import { LOG_LEVEL_PRIORITY } from "./types.js";
 let fileLogger: FileLogger | null = null;
 let backend: ILogBackend = new NoopLogBackend();
 let minLevel: LogLevel = "info";
+let initialized = false;
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
@@ -41,6 +42,9 @@ let minLevel: LogLevel = "info";
  * @param customBackend Optional custom ILogBackend (for testing/extension)
  */
 export function initLogger(config: LogConfig, customBackend?: ILogBackend): void {
+  if (initialized) return;
+  initialized = true;
+
   minLevel = config.level;
 
   // Initialize file logger
