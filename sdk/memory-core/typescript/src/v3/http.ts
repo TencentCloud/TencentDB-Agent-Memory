@@ -62,9 +62,9 @@ export class V3HttpTransport {
         response.headers.get("x-trace-id") ??
         "";
 
-      let envelope: ApiResponseEnvelope<T>;
+      let parsed: unknown;
       try {
-        envelope = JSON.parse(responseText) as ApiResponseEnvelope<T>;
+        parsed = JSON.parse(responseText) as unknown;
       } catch {
         throw new TDAMError(
           response.ok ? -1 : response.status,
@@ -72,12 +72,23 @@ export class V3HttpTransport {
           headerRequestId,
         );
       }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new TDAMError(-1, "API response must be a JSON object", headerRequestId);
+      }
+      const envelope = parsed as ApiResponseEnvelope<T>;
 
       const businessCode = typeof envelope.code === "number" ? envelope.code : undefined;
       if (!response.ok || businessCode !== 0) {
-        const code = businessCode && businessCode !== 0 ? businessCode : response.status;
+        const code =
+          businessCode !== undefined && businessCode !== 0
+            ? businessCode
+            : response.ok
+              ? -1
+              : response.status;
         const details =
-          envelope.data && typeof envelope.data === "object"
+          envelope.data &&
+          typeof envelope.data === "object" &&
+          !Array.isArray(envelope.data)
             ? (envelope.data as Record<string, unknown>)
             : undefined;
         throw new TDAMError(
@@ -88,7 +99,11 @@ export class V3HttpTransport {
         );
       }
 
-      const result = (envelope.data ?? {}) as T & { trace_id?: string };
+      const data = envelope.data ?? {};
+      if (typeof data !== "object" || Array.isArray(data)) {
+        throw new TDAMError(-1, "API response data must be a JSON object", headerRequestId);
+      }
+      const result = data as T & { trace_id?: string };
       const traceId = response.headers.get("x-trace-id");
       if (traceId && result && typeof result === "object") {
         (result as Record<string, unknown>).trace_id = traceId;
