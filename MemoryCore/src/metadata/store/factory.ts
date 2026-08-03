@@ -180,6 +180,8 @@ interface CachedStore {
  */
 export class MetadataStorePool {
   private readonly cache = new Map<string, CachedStore>();
+  /** Deduplicates concurrent cold starts for the same instance database. */
+  private readonly pendingStores = new Map<string, Promise<IMetadataStore>>();
   private readonly config: MetadataStoreConfig;
   private sharedMongoClient: import("mongodb").MongoClient | null = null;
   private sharedMongoClientPromise: Promise<import("mongodb").MongoClient> | null = null;
@@ -237,6 +239,23 @@ export class MetadataStorePool {
       return existing.store;
     }
 
+    const pending = this.pendingStores.get(instanceId);
+    if (pending) return pending;
+
+    const creation = this.createAndCacheStore(instanceId);
+    this.pendingStores.set(instanceId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.pendingStores.get(instanceId) === creation) {
+        this.pendingStores.delete(instanceId);
+      }
+    }
+  }
+
+  private async createAndCacheStore(
+    instanceId: string,
+  ): Promise<IMetadataStore> {
     if (this.config.backend === "mongodb") {
       const client = await this.getSharedMongoClient();
       const { MongoMetadataStore } = await import("./mongodb-adapter.js");
@@ -261,6 +280,10 @@ export class MetadataStorePool {
 
   async purgeInstance(instanceId: string): Promise<PurgeMetadataResult> {
     const dbName = resolveMetadataDbName(instanceId, this.dbPrefix);
+    // A cold getStore() may still be initializing this instance. Wait for it
+    // before closing/dropping so the completed request cannot repopulate the
+    // cache after purge.
+    await this.pendingStores.get(instanceId)?.catch(() => {});
     const cached = this.cache.get(instanceId);
     if (cached) {
       await Promise.resolve(cached.store.close()).catch(() => {});
@@ -280,6 +303,10 @@ export class MetadataStorePool {
   }
 
   async closeAll(): Promise<void> {
+    // Ensure stores already being initialized are visible in the cache before
+    // the shutdown sweep. Otherwise they can complete after closeAll() and
+    // leave a live connection behind.
+    await Promise.allSettled([...this.pendingStores.values()]);
     for (const [key, entry] of this.cache) {
       await Promise.resolve(entry.store.close()).catch(() => {});
       this.cache.delete(key);
