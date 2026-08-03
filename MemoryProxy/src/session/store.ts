@@ -106,6 +106,7 @@ export class SessionStore {
     if (state.status !== "initialized" && Date.now() - state.startedAt > this.ttlMs) {
       this.states.delete(keyId);
       const id = this.identities.get(keyId);
+      this.identities.delete(keyId);
       if (id) this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
       return undefined;
     }
@@ -176,6 +177,7 @@ export class SessionStore {
   delete(keyId: string): void {
     this.states.delete(keyId);
     const id = this.identities.get(keyId);
+    this.identities.delete(keyId);
     if (!id) return;
     this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
     void this.bindingRepo
@@ -193,6 +195,7 @@ export class SessionStore {
       if (state.status !== "initialized" && now - state.startedAt > this.ttlMs) {
         this.states.delete(keyId);
         const id = this.identities.get(keyId);
+        this.identities.delete(keyId);
         if (id) this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
       }
     }
