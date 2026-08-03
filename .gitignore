@@ -46,3 +46,4 @@ test-offload-sessions.sh
 *.log
 # tdai-memory gateway config carries a live llm.apiKey — never track it
 tdai-gateway.yaml
+bun.lock
