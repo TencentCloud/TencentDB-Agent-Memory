@@ -46,7 +46,16 @@ export class InstanceRegistry {
   private readonly byId: Map<string, InstanceEntry>;
 
   constructor(entries: InstanceEntry[]) {
-    this.byId = new Map(entries.map((e) => [e.instance_id, e]));
+    this.byId = new Map();
+    for (const entry of entries) {
+      if (this.byId.has(entry.instance_id)) {
+        throw new InstanceRegistryError(
+          500,
+          `duplicate metadata instance id: ${entry.instance_id}`,
+        );
+      }
+      this.byId.set(entry.instance_id, entry);
+    }
   }
 
   static load(configPath: string): InstanceRegistry {
