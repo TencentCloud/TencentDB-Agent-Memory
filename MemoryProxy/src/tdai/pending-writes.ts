@@ -57,9 +57,16 @@ export async function flushPendingWrites(deadlineMs: number = 10_000): Promise<{
   if (pendingWrites.size === 0) return { drained: true, remaining: 0 };
   const snapshot = [...pendingWrites];
   const settled = Promise.allSettled(snapshot);
-  const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), deadlineMs));
-  const outcome = await Promise.race([settled.then(() => "ok" as const), timeout]);
-  return { drained: outcome === "ok", remaining: pendingWrites.size };
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timeoutHandle = setTimeout(() => resolve("timeout"), deadlineMs);
+  });
+  try {
+    const outcome = await Promise.race([settled.then(() => "ok" as const), timeout]);
+    return { drained: outcome === "ok", remaining: pendingWrites.size };
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
 }
 
 /**
