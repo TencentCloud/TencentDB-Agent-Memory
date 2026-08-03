@@ -74,7 +74,7 @@ async function ksPost<T>(
       signal: ctrl.signal,
     });
     const json = (await resp.json().catch(() => null)) as KsEnvelope<T> | null;
-    if (!json || (json.code !== undefined && json.code !== 0)) {
+    if (!resp.ok || !json || (json.code !== undefined && json.code !== 0)) {
       throw new Error(`KS ${path} failed (http ${resp.status}, code ${json?.code}): ${json?.message ?? ''}`);
     }
     return (json.data ?? {}) as T;
