@@ -12,14 +12,10 @@ export class OffloadApiClient {
   /** Health check: GET /v2/offload/health. Returns true if server is reachable (any HTTP response = reachable). */
   async checkHealth(): Promise<boolean> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${this.config.serverUrl}/v2/offload/health`, {
+      const res = await this.fetchWithTimeout(`${this.config.serverUrl}/v2/offload/health`, {
         method: "GET",
         headers: { Authorization: `Bearer ${this.config.apiKey}` },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      }, 5000);
       // Any HTTP response (including 401/403) means server is reachable
       return res.status < 500;
     } catch {
@@ -63,17 +59,11 @@ export class OffloadApiClient {
     const body = JSON.stringify(payload);
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.ingestTimeoutMs);
-
-      await fetch(url, {
+      await this.fetchWithTimeout(url, {
         method: "POST",
         headers: this.buildHeaders(),
         body,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timer);
+      }, this.config.ingestTimeoutMs);
     } catch (err) {
       this.logger.warn(`[offload-client] ingest failed: ${err}`);
     }
@@ -94,17 +84,11 @@ export class OffloadApiClient {
     const body = JSON.stringify(payload);
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.ingestTimeoutMs);
-
-      const response = await fetch(url, {
+      const response = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: this.buildHeaders(),
         body,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timer);
+      }, this.config.ingestTimeoutMs);
 
       if (!response.ok) {
         this.logger.warn(`[offload-client] ingestL15 returned ${response.status}`);
@@ -137,17 +121,11 @@ export class OffloadApiClient {
     });
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), this.config.compactionTimeoutMs);
-
-      const response = await fetch(url, {
+      const response = await this.fetchWithTimeout(url, {
         method: "POST",
         headers: this.buildHeaders(),
         body,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timer);
+      }, this.config.compactionTimeoutMs);
 
       if (!response.ok) {
         this.logger.warn(`[offload-client] compaction returned ${response.status}`);
@@ -164,6 +142,20 @@ export class OffloadApiClient {
     } catch (err) {
       this.logger.warn(`[offload-client] compaction failed: ${err}`);
       return null;
+    }
+  }
+
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
     }
   }
 
