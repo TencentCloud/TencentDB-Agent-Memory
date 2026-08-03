@@ -51,8 +51,12 @@ def _decode_response(resp: httpx.Response) -> dict:
         raise TDAMError(-1, "API response must be a JSON object", header_request_id)
 
     code = envelope.get("code")
-    if resp.is_error or code != 0:
-        effective_code = code if isinstance(code, int) and code != 0 else resp.status_code
+    if resp.is_error:
+        effective_code = (
+            code
+            if isinstance(code, int) and not isinstance(code, bool) and code != 0
+            else resp.status_code
+        )
         payload = envelope.get("data")
         details = payload if isinstance(payload, dict) else None
         raise TDAMError(
@@ -62,7 +66,21 @@ def _decode_response(resp: httpx.Response) -> dict:
             details=details,
         )
 
-    result = envelope.get("data") or {}
+    if isinstance(code, bool) or not isinstance(code, int):
+        raise TDAMError(-1, "API response code must be an integer", header_request_id)
+    if code != 0:
+        payload = envelope.get("data")
+        details = payload if isinstance(payload, dict) else None
+        raise TDAMError(
+            code=code,
+            message=str(envelope.get("message") or f"HTTP {resp.status_code}"),
+            request_id=str(envelope.get("request_id") or header_request_id),
+            details=details,
+        )
+
+    result = envelope.get("data")
+    if result is None:
+        result = {}
     if not isinstance(result, dict):
         raise TDAMError(-1, "API response data must be a JSON object", header_request_id)
     trace_id = resp.headers.get("x-trace-id")
