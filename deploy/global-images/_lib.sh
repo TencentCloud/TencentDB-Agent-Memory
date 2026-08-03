@@ -75,6 +75,21 @@ find_docker() {
   die "找不到 docker 命令。请先安装 Docker Desktop / OrbStack / colima + docker CLI。"
 }
 
+find_curl() {
+  local candidate="${CURL:-curl}"
+  local resolved
+  resolved="$(command -v "$candidate" 2>/dev/null || true)"
+  if [[ -n "$resolved" ]]; then
+    echo "$resolved"
+    return
+  fi
+  if [[ -x "$candidate" ]]; then
+    echo "$candidate"
+    return
+  fi
+  die "找不到 curl 命令（CURL=${candidate}）。请安装 curl 或通过 CURL 指定可执行文件。"
+}
+
 DOCKER="$(find_docker)"
 
 # 幂等移除同名容器
