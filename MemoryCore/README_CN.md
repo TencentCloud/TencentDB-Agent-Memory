@@ -154,7 +154,26 @@ TDAI_MEMORY_INSTANCE_ID=default
 
 ### Hermes
 
-`hermes-plugin/` 提供 Hermes Memory Provider。它遵循同样的 Adapter 模式，通过 Gateway 完成对话写入与记忆召回。
+`hermes-plugin/` 同时提供 Hermes Memory Provider 和由 Offload V2 API
+驱动的短期 ContextEngine：
+
+```bash
+bash scripts/install-hermes-plugin.sh
+```
+
+安装脚本会链接两个插件、写入共享的 Gateway 连接参数，并配置：
+
+```yaml
+memory:
+  provider: memory_tencentdb
+context:
+  engine: tencentdb_offload
+```
+
+Memory Provider 负责对话写入与长期记忆召回；ContextEngine 将阈值触发的
+上下文压缩和 MMD 注入委托给 `POST /v2/offload/compact`。环境变量和降级
+行为见
+[`hermes-plugin/context_engine/tencentdb_offload/README.md`](hermes-plugin/context_engine/tencentdb_offload/README.md)。
 
 ### 自定义 Agent
 
@@ -177,6 +196,7 @@ TDAI_MEMORY_INSTANCE_ID=default
 | `/v2/conversation/*` | L0 写入、查询、搜索、删除和计数 | 稳定 |
 | `/v2/atomic/*` | L1 查询、搜索、更新、删除和计数 | 稳定 |
 | `/v2/scenario/*`、`/v2/core/*` | L2/L3 读写 | 稳定 |
+| `/v2/offload/ingest`、`/v2/offload/compact`、`/v2/offload/query-mmd` | 短期上下文卸载 | 稳定 |
 | `/v3/conversation/*`、`/v3/atomic/*`、`/v3/scenario/*`、`/v3/core/*` | 强隔离的 L0–L3 数据面 | 推荐新接入使用 |
 | `/v3/skill/*` | Skill 管理、检索、版本、资源和抽取 | 稳定 |
 | `/v3/meta/*` | User、Team、Agent、Task、Asset 和权限关系 | 管理面 |
@@ -232,10 +252,10 @@ MemoryCore/
 ├── src/gateway/           HTTP Gateway 与 v2/v3 Router
 ├── src/services/          Pipeline Scanner、Worker 和调度服务
 ├── openclaw-plugin/       OpenClaw 轻量客户端 Adapter
-├── hermes-plugin/         Hermes Memory Provider
+├── hermes-plugin/         Hermes Memory Provider 与 ContextEngine
 ├── scripts/               安装、构建、迁移和运维工具
-│   ├── install-hermes-plugin.sh         Hermes provider 安装脚本
-│   ├── install-openclaw-plugin-v2.sh    OpenClaw 插件安装脚本
+│   ├── install-hermes-plugin.sh         Hermes Provider/ContextEngine 安装脚本
+│   ├── install-openclaw-plugin.sh       OpenClaw 插件安装脚本
 │   └── migrate-v2-to-v3/                数据迁移工具（v2 → v3）
 ├── Dockerfile             MemoryCore Gateway 镜像
 ├── tdai-gateway*.yaml     Gateway 配置模板

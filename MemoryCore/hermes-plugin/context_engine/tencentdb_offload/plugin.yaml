@@ -1,0 +1,4 @@
+name: tencentdb_offload
+display_name: TencentDB Offload ContextEngine
+version: 1.0.0
+description: "Hermes ContextEngine backed by MemoryCore's Offload V2 compaction API."

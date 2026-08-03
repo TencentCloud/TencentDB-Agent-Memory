@@ -154,7 +154,28 @@ TDAI_MEMORY_INSTANCE_ID=default
 
 ### Hermes
 
-`hermes-plugin/` provides the Hermes Memory Provider. It follows the same adapter model and uses the Gateway for conversation capture and memory recall.
+`hermes-plugin/` provides both the Hermes Memory Provider and a short-term
+ContextEngine backed by the Gateway's Offload V2 API:
+
+```bash
+bash scripts/install-hermes-plugin.sh
+```
+
+The installer links both plugins, writes their shared Gateway connection
+settings, and configures:
+
+```yaml
+memory:
+  provider: memory_tencentdb
+context:
+  engine: tencentdb_offload
+```
+
+The provider handles conversation capture and long-term recall. The
+ContextEngine delegates threshold-based compaction and MMD injection to
+`POST /v2/offload/compact`. See
+[`hermes-plugin/context_engine/tencentdb_offload/README.md`](hermes-plugin/context_engine/tencentdb_offload/README.md)
+for its environment variables and failure behavior.
 
 ### Custom Agents
 
@@ -177,6 +198,7 @@ An adapter generally has three responsibilities:
 | `/v2/conversation/*` | L0 write, query, search, delete, and count | Stable |
 | `/v2/atomic/*` | L1 query, search, update, delete, and count | Stable |
 | `/v2/scenario/*`, `/v2/core/*` | L2/L3 read and write | Stable |
+| `/v2/offload/ingest`, `/v2/offload/compact`, `/v2/offload/query-mmd` | Short-term context offload | Stable |
 | `/v3/conversation/*`, `/v3/atomic/*`, `/v3/scenario/*`, `/v3/core/*` | Strongly isolated L0–L3 data plane | Recommended for new integrations |
 | `/v3/skill/*` | Skill management, search, versions, resources, and extraction | Stable |
 | `/v3/meta/*` | User, Team, Agent, Task, Asset, and access relationships | Management plane |
@@ -232,7 +254,7 @@ MemoryCore/
 ├── src/gateway/           HTTP Gateway and v2/v3 routers
 ├── src/services/          Pipeline scanner, workers, and scheduling services
 ├── openclaw-plugin/       Lightweight OpenClaw client adapter
-├── hermes-plugin/         Hermes Memory Provider
+├── hermes-plugin/         Hermes Memory Provider and ContextEngine
 ├── scripts/               Installation, build, migration, and operations tools
 ├── Dockerfile             MemoryCore Gateway image
 ├── tdai-gateway*.yaml     Gateway configuration templates

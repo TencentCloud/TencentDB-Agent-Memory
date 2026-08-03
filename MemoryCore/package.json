@@ -59,6 +59,7 @@
     "scripts/memory-tencentdb-ctl.sh",
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/install-hermes-plugin-v2.sh",
+    "scripts/install-hermes-plugin.sh",
     "scripts/install-openclaw-plugin.sh",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
