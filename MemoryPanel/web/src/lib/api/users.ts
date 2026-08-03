@@ -2,6 +2,7 @@
  * api/users.ts — User + UserKey + UserConfig（链路 A：meta/user/* + meta/user-key/* + meta/config/user/*）。
  */
 import { metaPost, metaListAll, getCurrentUser, dedupeInFlight } from './base';
+import { getPanelSession } from '../panelSession';
 import type { PublicUser } from './types';
 
 /** 内核 user/create 响应（CreateUserResult） — 不含 username，含一次性密钥 */
@@ -60,9 +61,16 @@ export interface UserKey {
   last_used_at?: string;
 }
 
+function userKeyListDedupeKey(): string {
+  const session = getPanelSession();
+  if (!session) return 'user-key/list:anonymous';
+  const principal = session.user?.user_id ?? session.userKey;
+  return `user-key/list:${JSON.stringify([session.instanceId, principal])}`;
+}
+
 export const userKeysApi = {
   /** 列出当前登录用户的全部 API Key（按内核分页拉全量） */
-  list: () => dedupeInFlight('user-key/list', () => metaListAll<UserKey>('user-key/list', {})),
+  list: () => dedupeInFlight(userKeyListDedupeKey(), () => metaListAll<UserKey>('user-key/list', {})),
 
   /** 创建一把新 Key；返回值里的 key_value 明文只展示这一次，调用方需立即展示给用户 */
   create: (data: { name?: string; expires_at?: string; user_id?: string }) => metaPost<UserKey>('user-key/create', data),
