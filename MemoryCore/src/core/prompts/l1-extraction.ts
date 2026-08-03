@@ -12,6 +12,14 @@ import type { ConversationMessage } from "../conversation/l0-recorder.js";
 // System Prompt
 // ============================
 
+export const USER_GROUNDED_ASSISTANT_CORRECTION_RULES = `【用户锚定的助手纠正结论】
+- 通常不得提取 AI 助手单方面生成的判断、建议、猜测或输出。
+- 仅当同一批【待提取的新消息】中的 user 明确给出正确事实、纠正、确认或认可，且后续 assistant 只是完整复述该用户信息或基于明确证据总结双方共同结论时，才允许提取 assistant 消息中的最终完整表述。
+- 这类记忆必须表述为"用户确认/纠正的事实或决定"，不得表述为"AI 认为/发现"。
+- \`source_message_ids\` 必须同时包含提供纠正或确认的 user 消息 ID，以及承载最终完整表述的 assistant 消息 ID。
+- 如果 assistant 单方面提出结论，user 只说"你错了"而未提供正确事实，或 assistant 最终表述与 user 的明确纠正冲突，则不得从 assistant 输出推断或提取该结论。
+- 如果正确事实已完整出现在 user 消息中，应直接以 user 消息为事实来源；不得为了使用 assistant 输出而改写、扩大或替代用户原意。`;
+
 export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与记忆提取专家"。
 你的任务是分析用户的对话，判断情境切换，并从中提取结构化的核心记忆（仅限 persona, episodic, instruction 三类）。
 
@@ -33,6 +41,8 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与�
 1. 宁缺毋滥：过滤琐碎闲聊、临时性指令和一次性操作（如"这次、本单"）；剔除不可靠的边缘信息。
 2. 独立完整：记忆必须"跳出当前对话依然成立"，无上下文也能看懂。提取主体必须以"用户（姓名）"或"AI"为核心。
 3. 归纳合并：强关联或因果关系的多条消息，必须合并为一条完整记忆，不可碎片化。
+
+${USER_GROUNDED_ASSISTANT_CORRECTION_RULES}
 
 【支持提取的三大类型】（必须严格遵守类型规则）
 > 下面给出的"提取句式"和"触发词"仅作为中文骨架参考；**实际 \`content\` 必须按上述输出语言书写**（例如英文用户 → "The user (Maya) is a senior product manager based in Berlin"）。
@@ -60,7 +70,7 @@ export const EXTRACT_MEMORIES_SYSTEM_PROMPT = `你是专业的"情境切分与�
 ### 不应该提取的内容
 - 琐碎闲聊、问候；临时性的纯工具性请求（如"这次帮我翻译一下"）
 - 一次性操作指令（如"这次、本单"相关）
-- 重复的内容；AI助手自身的行为或输出
+- 重复的内容；不满足上述"用户锚定的助手纠正结论"例外的 AI 助手行为或输出
 - 不属于以上3类的信息
 - 纯主观感受（不带客观事件的情绪表达）
 
@@ -178,6 +188,8 @@ export const EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT = `你是专业的"工作情境
    - 不要把 AI 的建议自动当成团队事实或团队决策。
    - 只有当人类成员采纳、确认，或 Agent 输出本身是明确的工具执行结果、交付物、实验结果时，才可以提取。
    - AI 生成的草案、方案、分析，如被明确作为后续工作资产使用，可提取为 work_artifact 或 work_method。
+
+${USER_GROUNDED_ASSISTANT_CORRECTION_RULES}
 
 ---
 
