@@ -34,16 +34,24 @@ logger = logging.getLogger(__name__)
 # COS URL parser
 # ---------------------------------------------------------------------------
 
-def _parse_cos_url(cos_url: str) -> tuple[str, str]:
-    """Parse CosUrl like ``https://bucket.cos.region.myqcloud.com`` → (bucket, region)."""
+def _parse_cos_url(cos_url: str) -> tuple[str, str, str]:
+    """Parse a public or internal COS URL into ``(bucket, region, host)``."""
     host = urlparse(cos_url).hostname or ""
-    # Pattern: {bucket}.cos.{region}.myqcloud.com
-    m = re.match(r"^(.+?)\.cos\.(.+?)\.myqcloud\.com$", host)
-    if m:
-        return m.group(1), m.group(2)
+    public = re.match(r"^(.+?)\.cos\.(.+?)\.myqcloud\.com$", host)
+    if public:
+        return public.group(1), public.group(2), host
+    internal = re.match(
+        r"^(.+?)\.cos-internal\.(.+?)\.tencentcos\.cn$",
+        host,
+    )
+    if internal:
+        return internal.group(1), internal.group(2), host
     raise TDAMError(
         code=-1,
-        message=f"Cannot parse CosUrl: {cos_url!r} (expected {{bucket}}.cos.{{region}}.myqcloud.com)",
+        message=(
+            f"Cannot parse CosUrl: {cos_url!r} "
+            "(expected a public myqcloud.com or internal tencentcos.cn COS URL)"
+        ),
     )
 
 
@@ -68,7 +76,7 @@ class StsCredential:
 
     __slots__ = (
         "tmp_secret_id", "tmp_secret_key", "token",
-        "bucket", "region", "prefix", "expires_at_epoch",
+        "bucket", "region", "_cos_host", "prefix", "expires_at_epoch",
     )
 
     def __init__(self, data: Dict[str, Any]) -> None:
@@ -78,7 +86,8 @@ class StsCredential:
         # Parse bucket + region from CosUrl
         self.bucket: str
         self.region: str
-        self.bucket, self.region = _parse_cos_url(data["CosUrl"])
+        self._cos_host: str
+        self.bucket, self.region, self._cos_host = _parse_cos_url(data["CosUrl"])
         # PathPrefix — ensure trailing slash for key concatenation
         prefix = data.get("PathPrefix", "")
         self.prefix: str = prefix if prefix.endswith("/") else f"{prefix}/"
@@ -100,7 +109,7 @@ class StsCredential:
 
     @property
     def cos_host(self) -> str:
-        return f"{self.bucket}.cos.{self.region}.myqcloud.com"
+        return self._cos_host
 
 
 # ---------------------------------------------------------------------------
