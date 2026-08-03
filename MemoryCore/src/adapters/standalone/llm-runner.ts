@@ -19,6 +19,7 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { generateText, tool, stepCountIs, jsonSchema } from "ai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import type {
@@ -78,7 +79,9 @@ function buildTelemetryMetadata(params: LLMRunParams): Record<string, unknown> {
 // ============================
 
 export interface StandaloneLLMConfig {
-  /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
+  /** Wire protocol used by the configured endpoint (default: "openai"). */
+  protocol?: "openai" | "anthropic";
+  /** Provider API base URL. */
   baseUrl: string;
   /** API key for authentication. */
   apiKey: string;
@@ -280,14 +283,19 @@ export class StandaloneLLMRunner implements LLMRunner {
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
-    // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
-    const provider = createOpenAI({
-      baseURL: this.config.baseUrl,
-      apiKey: this.config.apiKey,
-      compatibility: "compatible",
-    });
+    // Select the AI SDK provider from the explicit wire protocol. Access mode
+    // (`provider=openai|proxy`) is resolved by the Gateway before this runner
+    // is created and remains independent from the HTTP wire shape.
+    const provider = this.config.protocol === "anthropic"
+      ? createAnthropic({
+          baseURL: this.config.baseUrl,
+          apiKey: this.config.apiKey,
+        })
+      : createOpenAI({
+          baseURL: this.config.baseUrl,
+          apiKey: this.config.apiKey,
+          compatibility: "compatible",
+        });
 
     // Select tools based on mode + storage
     // Service mode (COS): use storage-backed tools → LLM reads/writes via StorageAdapter

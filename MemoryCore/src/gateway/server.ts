@@ -1509,6 +1509,7 @@ export class TdaiGateway {
       ...baseConfig,
       llm: {
         enabled: true,
+        protocol: this.config.llm.protocol,
         baseUrl: this.config.llm.baseUrl,
         apiKey: this.config.llm.apiKey,
         model: this.config.llm.model,
@@ -1940,6 +1941,7 @@ export class TdaiGateway {
 
     const llmRunner = new StandaloneLLMRunner({
       config: {
+        protocol: effective.protocol,
         baseUrl: effective.baseUrl,
         apiKey: effective.apiKey,
         model: effective.model ?? "default",

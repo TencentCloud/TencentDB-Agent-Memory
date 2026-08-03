@@ -626,6 +626,7 @@ export class TdaiCore {
    * apiKey 用 env.TDAI_MEMORY_SYSTEM_USER_KEY。四个 runner factory 构造点共用。
    */
   private resolveRuntimeLlm(): {
+    protocol: "openai" | "anthropic";
     baseUrl: string;
     apiKey: string;
     model: string;
@@ -634,6 +635,7 @@ export class TdaiCore {
   } {
     const resolved = resolveStandaloneLlmForRuntime(this.cfg.llm, this.instanceId);
     return {
+      protocol: resolved.protocol ?? "openai",
       baseUrl: resolved.baseUrl,
       apiKey: resolved.apiKey,
       model: resolved.model,
@@ -999,6 +1001,7 @@ export class TdaiCore {
     const runtimeLlm = this.resolveRuntimeLlm();
     const runner = new StandaloneLLMRunner({
       config: {
+        protocol: runtimeLlm.protocol,
         baseUrl: runtimeLlm.baseUrl,
         apiKey: runtimeLlm.apiKey,
         model: runtimeLlm.model,

@@ -445,7 +445,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
+  const llmProtocol = (
+    env("TDAI_LLM_PROTOCOL") ?? str(llmConfig, "protocol")
+  ) === "anthropic"
+    ? "anthropic"
+    : "openai";
   const llm: StandaloneLLMConfig = {
+    protocol: llmProtocol,
     baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
     apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",

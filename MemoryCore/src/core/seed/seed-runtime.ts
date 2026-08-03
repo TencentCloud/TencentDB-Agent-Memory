@@ -82,6 +82,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
   if (cfg.llm.enabled && cfg.llm.apiKey) {
     const runnerFactory = new StandaloneLLMRunnerFactory({
       config: {
+        protocol: cfg.llm.protocol,
         baseUrl: cfg.llm.baseUrl,
         apiKey: cfg.llm.apiKey,
         model: cfg.llm.model,

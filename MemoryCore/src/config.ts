@@ -202,7 +202,9 @@ export interface ReportConfig {
 export interface StandaloneLLMOverrideConfig {
   /** Enable standalone LLM mode (default: false). When false, uses host LLM. */
   enabled: boolean;
-  /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
+  /** Wire protocol used by the endpoint (default: "openai"). */
+  protocol: "openai" | "anthropic";
+  /** Provider API base URL. */
   baseUrl: string;
   /** API key for authentication. */
   apiKey: string;
@@ -620,9 +622,13 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       const rawProvider = str(llmGroup, "provider");
       const provider: "openai" | "proxy" =
         rawProvider === "proxy" ? "proxy" : "openai";
+      const protocol = str(llmGroup, "protocol") === "anthropic"
+        ? "anthropic"
+        : "openai";
       const proxyGroup = obj(llmGroup, "proxy");
       return {
         enabled: bool(llmGroup, "enabled") ?? false,
+        protocol,
         baseUrl: str(llmGroup, "baseUrl") ?? "https://api.openai.com/v1",
         apiKey: str(llmGroup, "apiKey") ?? "",
         model: str(llmGroup, "model") ?? "gpt-4o",

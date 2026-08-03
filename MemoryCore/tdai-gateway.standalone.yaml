@@ -17,6 +17,7 @@ data:
 
 # ── LLM (必填) ──
 llm:
+  protocol: "openai"                # "openai" (/chat/completions) or "anthropic" (/messages)
   baseUrl: "https://api.openai.com/v1"
   apiKey: "${TDAI_LLM_API_KEY}"    # 通过环境变量注入
   model: "gpt-4o"
