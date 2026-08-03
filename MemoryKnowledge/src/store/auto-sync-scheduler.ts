@@ -87,8 +87,8 @@ export class AutoSyncScheduler {
   /** 启动延迟 + 周期 scan 的 timer。 */
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private scanTimer: ReturnType<typeof setInterval> | null = null;
-  /** worker 空转 sleep 的 timer 集合（stop 时统一清理）。 */
-  private readonly workerSleepTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** worker 空转 sleep 的 timer + 唤醒回调（stop 时统一清理并 resolve）。 */
+  private readonly workerSleeps = new Map<ReturnType<typeof setTimeout>, () => void>();
 
   /** FIFO 待处理队列 + 去重 Set（队列内 + 处理中的 id）。 */
   private readonly queue: CodeGraphRow[] = [];
@@ -98,6 +98,8 @@ export class AutoSyncScheduler {
   private activeSyncs = 0;
   /** worker 数（常驻）。 */
   private workerCount = 0;
+  /** 每次 start/stop 都递增，防止旧 worker 在快速重启后加入新一轮。 */
+  private runGeneration = 0;
   /** 停止标记。stop 后 workers 循环退出。 */
   private stopped = true;
   /** 上一轮 scan 是否仍在进行。 */
@@ -125,6 +127,7 @@ export class AutoSyncScheduler {
       return;
     }
     this.stopped = false;
+    const generation = ++this.runGeneration;
     log.info("[auto-sync] starting scheduler", {
       scanIntervalMs: this.config.scanIntervalMs,
       maxConcurrentSyncs: this.config.maxConcurrentSyncs,
@@ -133,7 +136,7 @@ export class AutoSyncScheduler {
     // 启动常驻 worker pool
     for (let i = 0; i < this.config.maxConcurrentSyncs; i++) {
       this.workerCount++;
-      void this.runWorker(i).finally(() => { this.workerCount--; });
+      void this.runWorker(i, generation).finally(() => { this.workerCount--; });
     }
 
     // 延迟首扫 30s
@@ -153,6 +156,7 @@ export class AutoSyncScheduler {
   /** 停止调度器：取消 timer、通知 worker 退出（已在跑的 sync 自然完成）。 */
   stop(): void {
     this.stopped = true;
+    this.runGeneration++;
     if (this.startupTimer !== null) {
       clearTimeout(this.startupTimer);
       this.startupTimer = null;
@@ -161,8 +165,11 @@ export class AutoSyncScheduler {
       clearInterval(this.scanTimer);
       this.scanTimer = null;
     }
-    for (const t of this.workerSleepTimers) clearTimeout(t);
-    this.workerSleepTimers.clear();
+    for (const [timer, wake] of this.workerSleeps) {
+      clearTimeout(timer);
+      wake();
+    }
+    this.workerSleeps.clear();
     log.info("[auto-sync] stopped");
   }
 
@@ -254,9 +261,9 @@ export class AutoSyncScheduler {
    * 一个常驻 worker：循环 shift 队列执行 sync；空则短睡后重试。
    * stop() 后 loop 自然退出。异常一律吞掉（记录日志），保证 worker 不死。
    */
-  private async runWorker(workerIdx: number): Promise<void> {
+  private async runWorker(workerIdx: number, generation: number): Promise<void> {
     log.debug(`[auto-sync] worker#${workerIdx} started`);
-    while (!this.stopped) {
+    while (!this.stopped && generation === this.runGeneration) {
       const row = this.queue.shift();
       if (!row) {
         await this.sleep(WORKER_IDLE_POLL_MS);
@@ -306,11 +313,18 @@ export class AutoSyncScheduler {
   /** setTimeout 版 sleep，stop 时统一清理避免测试环境 timer 泄漏。 */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      const t = setTimeout(() => {
-        this.workerSleepTimers.delete(t);
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const wake = () => {
+        if (settled) return;
+        settled = true;
+        this.workerSleeps.delete(timer);
         resolve();
+      };
+      timer = setTimeout(() => {
+        wake();
       }, ms);
-      this.workerSleepTimers.add(t);
+      this.workerSleeps.set(timer, wake);
     });
   }
 }
