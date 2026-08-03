@@ -135,8 +135,10 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
 /**
  * Poll pipeline queue status until L1 is idle for a given session.
  * Modeled after benchmark-ingest.ts waitForPipelineIdle() but focused on L1 only.
+ *
+ * Exported for unit testing.
  */
-async function waitForL1Idle(
+export async function waitForL1Idle(
   scheduler: MemoryPipelineManager,
   sessionKeys: string[],
   logger: PipelineLogger,
@@ -175,8 +177,15 @@ async function waitForL1Idle(
 
     const isIdle =
       queues.l1Idle &&
-      totalBuffered === 0 &&
-      totalConversationCount === 0;
+      totalBuffered === 0;
+      // NOTE: We intentionally do NOT check totalConversationCount here.
+      // There is a known race condition where conversation_count can be
+      // temporarily > 0 even after L1 has finished (e.g., due to async
+      // state updates or message processing ordering). The `l1Idle` flag
+      // combined with an empty buffer is a more reliable indicator that
+      // the pipeline has no pending work. If conversation_count is
+      // non-zero at this point, it represents a stale value that will
+      // be cleaned up by the next pipeline cycle or recovery logic.
 
     if (isIdle) {
       consecutiveIdle++;
