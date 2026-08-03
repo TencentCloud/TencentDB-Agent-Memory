@@ -58,6 +58,7 @@ export class TimerScanner {
   private logger: Logger;
 
   private scanTimer: ReturnType<typeof setInterval> | null = null;
+  private scanInFlight: Promise<void> | null = null;
   private destroyed = false;
 
   // Metrics
@@ -92,9 +93,13 @@ export class TimerScanner {
   }
 
   async stop(): Promise<void> {
-    if (this.destroyed) return;
+    if (this.destroyed) {
+      await this.scanInFlight;
+      return;
+    }
     this.destroyed = true;
     this.stopScanLoop();
+    await this.scanInFlight;
     this.logger.info(`${TAG} Stopped (scans=${this.metrics.scansCompleted}, enqueued=${this.metrics.tasksEnqueued})`);
   }
 
@@ -108,7 +113,14 @@ export class TimerScanner {
 
   private startScanLoop(): void {
     if (this.scanTimer) return;
-    this.scanTimer = setInterval(() => this.scan(), this.config.scanIntervalMs);
+    this.scanTimer = setInterval(() => {
+      if (this.scanInFlight) return;
+      const scan = this.scan();
+      this.scanInFlight = scan;
+      void scan.finally(() => {
+        if (this.scanInFlight === scan) this.scanInFlight = null;
+      });
+    }, this.config.scanIntervalMs);
   }
 
   private stopScanLoop(): void {
