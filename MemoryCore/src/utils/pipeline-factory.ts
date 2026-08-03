@@ -234,8 +234,10 @@ const _storeInitCache = new Map<string, Promise<StoreInitResult>>();
  * Initialize store backend and (optionally) EmbeddingService.
  *
  * **Once-async semantics per dataDir**: the first call for a given
- * `pluginDataDir` creates the store and caches the result; subsequent
- * calls with the same dir return the cached Promise immediately.
+ * `pluginDataDir` creates the store and caches the result; concurrent and
+ * subsequent calls with the same dir return the cached Promise immediately.
+ * Failed/degraded results are evicted after they settle so a later call can
+ * retry without requiring a full process restart.
  * Call `resetStores()` during shutdown to clear the cache.
  *
  * Supports both SQLite (sync init) and TCVDB (async init) backends.
@@ -246,10 +248,29 @@ export function initStores(
   logger: PipelineLogger,
 ): Promise<StoreInitResult> {
   const key = pluginDataDir;
-  if (!_storeInitCache.has(key)) {
-    _storeInitCache.set(key, _doInitStores(cfg, pluginDataDir, logger));
-  }
-  return _storeInitCache.get(key)!;
+  const cached = _storeInitCache.get(key);
+  if (cached) return cached;
+
+  let cacheEntry: Promise<StoreInitResult>;
+  cacheEntry = _doInitStores(cfg, pluginDataDir, logger).then(
+    (result) => {
+      if (
+        !result.vectorStore &&
+        _storeInitCache.get(key) === cacheEntry
+      ) {
+        _storeInitCache.delete(key);
+      }
+      return result;
+    },
+    (err) => {
+      if (_storeInitCache.get(key) === cacheEntry) {
+        _storeInitCache.delete(key);
+      }
+      throw err;
+    },
+  );
+  _storeInitCache.set(key, cacheEntry);
+  return cacheEntry;
 }
 
 /**
