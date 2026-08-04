@@ -20,6 +20,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { generateText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { report } from "../../core/report/reporter.js";
 import type {
   LLMRunner,
@@ -88,6 +89,13 @@ export interface StandaloneLLMConfig {
   maxTokens?: number;
   /** Request timeout in milliseconds (default: 120_000). */
   timeoutMs?: number;
+  /**
+   * LLM 线协议（wire protocol）：
+   *   - "openai"（默认）：OpenAI 兼容协议（POST /chat/completions）
+   *   - "anthropic"：Anthropic 原生协议（POST /v1/messages，x-api-key + anthropic-version）
+   * 未设置或未知值按 "openai" 处理，向后兼容。
+   */
+  protocol?: "openai" | "anthropic";
   /**
    * LLM 访问模式（gateway 层解释；runner 拿到的是已解析后的 baseUrl/apiKey）：
    *   - "openai": 直连通用 OpenAI 兼容服务（默认，向后兼容）
@@ -280,14 +288,20 @@ export class StandaloneLLMRunner implements LLMRunner {
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
-    // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
-    const provider = createOpenAI({
-      baseURL: this.config.baseUrl,
-      apiKey: this.config.apiKey,
-      compatibility: "compatible",
-    });
+    // Create the provider via AI SDK. Two wire protocols are supported:
+    //   - openai (default): OpenAI-compatible /chat/completions — works with
+    //     DeepSeek, Qwen, etc.
+    //   - anthropic: native Anthropic /v1/messages (x-api-key header)
+    const provider = this.config.protocol === "anthropic"
+      ? createAnthropic({
+          baseURL: this.config.baseUrl,
+          apiKey: this.config.apiKey,
+        })
+      : createOpenAI({
+          baseURL: this.config.baseUrl,
+          apiKey: this.config.apiKey,
+          compatibility: "compatible",
+        });
 
     // Select tools based on mode + storage
     // Service mode (COS): use storage-backed tools → LLM reads/writes via StorageAdapter
