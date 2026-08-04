@@ -96,6 +96,19 @@ pnpm test
 pnpm build        # tsdown → dist/
 ```
 
+## MCP stdio
+
+MCP server 通过 HTTP 转发工具调用到本服务，启动时需把租户身份 `service_id` 一并注入：
+
+```bash
+KNOWLEDGE_API_URL=http://localhost:8421 \
+KNOWLEDGE_SERVICE_ID=<tenant-id> \
+pnpm dev:mcp
+```
+
+`KNOWLEDGE_SERVICE_ID` 会以 `x-tdai-service-id` 请求头发送（每个 `/v3` 端点必传，缺失返回 400）。  
+MCP 是 stdio 协议，诊断日志统一走 stderr，stdout 仅承载 JSON-RPC。
+
 ## 可选：Langfuse
 
 配置 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`（及可选 `LANGFUSE_BASE_URL`）即可上报 Wiki LLM 调用。  
