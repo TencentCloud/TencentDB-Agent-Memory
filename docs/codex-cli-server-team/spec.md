@@ -58,8 +58,8 @@ MemoryCore/src/adapters/codex/
 |---|---|
 | Codex CLI 本地交互会话 | Codex App、IDE、Cloud |
 | Hooks 生命周期映射 | MemoryProxy Responses API |
-| L0 回流、L1/L0 MCP | Skill、Knowledge |
-| L2/L3 轻量注入 | Cursor 代码重写 |
+| L0 回流、L1/L0/L2 MCP | Skill、Knowledge |
+| `SessionStart` 限时直读 L2/L3 | Cursor 代码重写 |
 | 用户级或项目级安全安装 | Team/Agent/Task 交互选择 |
 | 真实 Codex transcript spike | 从文档推断 transcript 格式 |
 
@@ -71,7 +71,7 @@ MemoryCore/src/adapters/codex/
 2. 核对顶层会话与 subagent 的事件边界。
 3. 核对 `transcript_path` 是否能稳定提取本轮 user 与最终 assistant。
 4. 核对 Hook detached 进程能否在 Codex 退出后完成本地追加。
-5. 核对 `SessionStart` 返回的附加上下文首轮可见。
+5. 核对 `SessionStart` 限时直读 L2/L3 的延迟、降级和首轮可见性。
 6. 核对 CLI、版本、OS 和 trust 设置。
 
 任一关键门禁不满足时，先修订本规格，不直接复制 Cursor parser。
@@ -80,13 +80,14 @@ MemoryCore/src/adapters/codex/
 
 ```mermaid
 flowchart TD
-  SS[Codex SessionStart] --> C[读取本地 L2/L3 缓存]
+  SS[Codex SessionStart] --> C[限时并发 readCore/listScenarios]
   ST[Codex Stop] --> T[Codex transcript parser]
   T --> P[pending]
   ST --> W[detached worker]
   SE[Codex SessionEnd] -->|best-effort| W
   W --> V3[v3 conversation/add]
   MCP[Codex MCP] --> Q[v3 L1/L0 search]
+  MCP --> S[v3 scenario/read]
 ```
 
 ## 模块输入与输出
@@ -95,8 +96,8 @@ flowchart TD
 |---|---|---|
 | Codex Hooks | 官方 Hook JSON | context、pending、worker 唤醒 |
 | Codex parser | `transcript_path` | 经 spike 证明的一轮消息 |
-| worker | pending、v3 isolation | L0 ACK、缓存刷新 |
-| MCP | 查询参数 | L1/L0 结果 |
+| worker | pending、v3 isolation | L0 ACK |
+| MCP | 查询参数或场景 path | L1/L0 结果、L2 正文 |
 | installer | `.codex` 现有配置 | 仅修改 Adapter 所有项 |
 
 ## 交互接口
@@ -109,8 +110,10 @@ MemoryCore 接口与阶段 1 相同：
 | 已落地 | `/v3/atomic/search` | L1 检索 | 同上 |
 | 已落地 | `/v3/conversation/search` | L0 检索 | 同上 |
 | 已落地 | `/v3/scenario/ls` | L2 导航 | 同上 |
+| 已落地 | `/v3/scenario/read` | L2 正文 | 同上 |
 | 已落地 | `/v3/core/read` | L3 | 同上 |
 | 设计新增 | Codex Hook/Transcript 映射 | 宿主生命周期适配 | 本规格，须经 spike 确认 |
+| 设计新增 | `tdai_scenario_read` MCP 工具 | 场景 path → L2 正文 | 本规格 |
 
 ## 失败语义
 
@@ -118,7 +121,8 @@ MemoryCore 接口与阶段 1 相同：
 - transcript 不能无歧义解析时不写 L0。
 - 服务端不可用时保留 pending。
 - `SessionEnd` 只作为主线程的 best-effort 唤醒，不保证及时触发，也不承担 pending 必达；主要推进点仍是 `Stop` 和后续事件。
-- 缓存缺失不阻断 Codex；MCP 可实时检索。
+- `SessionStart` L2/L3 查询失败或超时只降低注入，不阻断 Codex；MCP 可实时检索。
+- worker 按 SDK `ParamError` / `TDAMError.code` 分类，不沿用 Cursor v1 的 HTTP status 模型。
 - 安装器不得覆盖用户已有 Hook、MCP 或其它 `.codex` 配置。
 - 未完成 spike 和 E2E 前，不宣称 Codex CLI 已接入。
 

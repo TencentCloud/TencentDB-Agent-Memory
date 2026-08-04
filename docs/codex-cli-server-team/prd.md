@@ -10,8 +10,8 @@ Cursor 阶段完成后，为 Codex CLI 增加独立本地 Adapter。它通过官
 
 1. 使用 Codex `SessionStart`、`Stop` 接入主要会话生命周期，`SessionEnd` 仅作 best-effort 唤醒。
 2. 每轮结束后将 user/assistant 对话写入 v3 L0。
-3. 提供 L1/L0 两个只读 MCP 检索工具。
-4. 会话开始时从本地快照注入 L2/L3 导航和检索指引。
+3. 提供 L1、L0 和 L2 正文三个只读 MCP 工具。
+4. 会话开始时限时直读 L2/L3，注入成功结果和检索指引。
 5. 所有 v3 调用携带 service/team/agent/user，task 可选。
 
 ## 非功能需求
@@ -52,12 +52,12 @@ MemoryProxy 当前不是本阶段方案：Codex 自定义 Provider 使用 Respon
 
 ```mermaid
 flowchart LR
-  A[Codex SessionStart] --> B[读取 L2/L3 缓存]
+  A[Codex SessionStart] --> B[限时并发 readCore/listScenarios]
   C[Codex Stop] --> D[解析 transcript]
   D --> E[pending]
   E --> F[detached worker]
   F --> G[v3 conversation/add]
-  H[Codex MCP] --> I[v3 L1/L0 search]
+  H[Codex MCP] --> I[v3 L1/L0 search和scenario read]
 ```
 
 ## 降级容错方案
@@ -65,7 +65,7 @@ flowchart LR
 - transcript 不明确：跳过写入并记录 bounded 摘要。
 - MemoryCore 不可用：保留 pending。
 - `SessionEnd` 可能延迟且只覆盖主线程，不作为 pending 必达保证。
-- 缓存不可用：只保留 MCP 主动检索。
+- `SessionStart` 查询失败或超时：只使用成功结果；全部失败时保留 MCP 主动检索。
 - Hook 失败：退出 0，不阻断当前任务。
 
 # 概要设计
@@ -86,10 +86,9 @@ MemoryCore/src/adapters/codex/
 |---|---:|---|
 | session marker | 会话结束清理 | 顶层会话分类，最终形式由 spike 决定 |
 | pending | 不完整记录有限保留 | L0 可重试投递 |
-| L2/L3 cache | 无硬 TTL | 前台无网络注入 |
 | `codex:<session_id>` | 会话期 | v3 session |
 
-上述本地格式为设计方向；字段和封口键须在 Codex spike 后写实，不能直接照搬 Cursor transcript 字段。
+上述本地格式为设计方向；字段和封口键须在 Codex spike 后写实，不能直接照搬 Cursor transcript 字段。阶段 2 不预设本地 L2/L3 缓存。
 
 ## 交互接口
 
@@ -99,8 +98,12 @@ MemoryCore/src/adapters/codex/
 | 已落地 | `/v3/atomic/search` | L1 检索 | 同上 |
 | 已落地 | `/v3/conversation/search` | L0 检索 | 同上 |
 | 已落地 | `/v3/scenario/ls` | L2 导航 | 同上 |
+| 已落地 | `/v3/scenario/read` | L2 正文 | 同上 |
 | 已落地 | `/v3/core/read` | L3 | 同上 |
 | 设计新增 | Codex Hook/Transcript 映射 | 宿主适配 | `docs/codex-cli-server-team/spec.md`，待 spike 确认 |
+| 设计新增 | `tdai_scenario_read` | 场景 path → L2 正文 | `docs/codex-cli-server-team/spec.md` |
+
+worker 沿用阶段 1 已验证的 SDK 错误分类：正常返回才 ACK；`ParamError` 与可恢复/未知 `TDAMError.code` 保留 pending，不再按 HTTP status 判断。
 
 # 实现前门禁
 
