@@ -4,7 +4,7 @@
 
 ## 结论
 
-本阶段复用现有 Cursor Adapter 的会话识别、transcript、pending、worker 和安全安装机制。数据面切换到 `feat/server_team` 的 MemoryCore v3；`sessionStart` 直接并发读取远端 L2/L3，不新增本地缓存。
+本阶段复用现有 Cursor Adapter 的会话识别、transcript、pending、worker 和安全安装机制。数据面切换到 `feat/server_team` 的 MemoryCore v3；删除 Cursor 对旧 Gateway 客户端的依赖及参数链，`sessionStart` 直接并发读取远端 L2/L3，不新增本地缓存。
 
 ```text
 Cursor Hooks / MCP
@@ -73,7 +73,7 @@ flowchart TD
   L --> V3[v3 MemoryClient.addConversation]
   MCP[stdio MCP] --> Q1[v3 searchAtomic]
   MCP --> Q0[v3 searchConversation]
-  MCP --> Q2[v3 readScenario]
+  MCP --> Q2[tdai_read_cos → v3 readScenario]
 ```
 
 ### 模块输入与输出
@@ -107,14 +107,25 @@ flowchart TD
 | `POST /search/memories` | `MemoryClient.searchAtomic()` | 使用严格隔离的 L1 接口 |
 | `POST /search/conversations` | `MemoryClient.searchConversation()` | 使用严格隔离的 L0 接口 |
 | 读取 Gateway 本地 L2/L3 文件 | `sessionStart` 并发调用 `readCore()`、`listScenarios()` | server_team 可独立或远端部署 |
-| 按绝对路径读取 L2 正文 | MCP `tdai_scenario_read` 调用 `readScenario()` | 远端场景没有本地绝对路径 |
+| 按绝对路径读取 L2 正文 | `tdai_read_cos` → v3 `readScenario()` | 沿用 OpenClaw 命名，只读 L2 场景相对 path，不访问 COS/STS |
 | worker 调用 ctl 拉起 Gateway | 删除 | Adapter 不拥有服务端生命周期 |
 | best-effort `/session/end` | 删除 | v3 SDK 没有对应契约，且阶段 1 无直接消费者 |
+| `sessionEndKey` 参数链 | 从 hooks、CLI、worker 和测试中整链删除 | `/session/end` 删除后无消费者 |
+| Cursor `gateway.ts` 及其对 `src/gateway/types.ts` 的引用 | 删除 Cursor 侧依赖；保留共享类型文件 | worker、MCP 统一直接调用 v3 SDK |
+| `ctlPath`、`dataDir` 配置及传参 | 删除 | ctl 与本地 L2/L3 文件读取均已删除 |
 | 三字段 capture body | v3 isolation + messages | v3 L0 写入契约要求 |
-| 现有 Rule 与工具指引 | 改为通过 `tdai_scenario_read` 读取场景正文 | 原文依赖本地绝对路径和旧工具 |
-| 本地 scene navigation formatter | 按 v3 `ScenarioEntry` 的 path/summary/timestamps 生成导航 | v3 列表没有本地热度字段 |
+| 现有 Rule 与工具指引 | 改为通过 `tdai_read_cos` 读取场景正文 | 原文依赖本地绝对路径和旧工具 |
+| 本地 scene navigation formatter | 复用 OpenClaw recall/format 行为，输入改为 v3 `ScenarioEntry` | 删除 `core/scene/*` 与 `utils/sanitize` 依赖 |
+| `spike.ts`、CLI `spike`/`spike-sentinel` 及测试 | 仅作验证资产 | 不纳入生产构建产物或运行时依赖 |
 
 `hooks.ts` 的事件路由可复用；`context.ts`、`mcp.ts`、`worker.ts` 和 installer 的 Rule 文案必须修改。不得把这些模块整体标为原样复用。
+
+### Recall 复用边界
+
+- 以 `MemoryCore/openclaw-plugin/src/hooks/recall.ts` 的 `Promise.allSettled` 降级方式和 `MemoryCore/openclaw-plugin/src/format.ts` 的上下文格式为参考，不直接导入 OpenClaw 源码。
+- Cursor `sessionStart` 没有本轮检索词，本阶段只调用 `readCore()`、`listScenarios()`，不为复用额外调用 L1。
+- 最小适配代码归属 `cursor-plugin`；不跨包导入 OpenClaw 源码，也不新增公共框架。
+- Cursor 将稳定上下文映射到 `additional_context`；L2 导航使用服务端返回的相对 path，不再生成本地绝对路径或热度。
 
 ## 配置
 
@@ -134,6 +145,8 @@ flowchart TD
 | `transcriptsRoot` | 否 | Cursor transcript 允许根目录 |
 
 会话 ID 固定为 `cursor:<conversation_id>`，同时用于 pending 折叠后的 v3 `session_id`。
+
+`cursor-plugin/package.json` 精确依赖已发布的 `@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`；不复制 SDK，也不新增打包方案。
 
 ## 数据结构
 
@@ -155,7 +168,7 @@ flowchart TD
 | 已落地 | `POST /v3/scenario/ls` | team/agent/user | L2 entries | 同文件 `listScenarios` |
 | 已落地 | `POST /v3/scenario/read` | team/agent/user、path | L2 正文 | 同文件 `readScenario` |
 | 已落地 | `POST /v3/core/read` | team/agent/user | L3 content | 同文件 `readCore` |
-| 设计新增 | `tdai_scenario_read` MCP 工具 | 场景 path | `readScenario()` 结果 | 本规格 |
+| 设计新增 | `tdai_read_cos` MCP 工具 | L2 场景相对 path | `readScenario()` 结果 | 沿用 OpenClaw 命名；不访问 COS/STS |
 
 阶段 1 不直接拼 HTTP body；统一通过目标分支 TypeScript v3 SDK 调用。
 
@@ -165,7 +178,7 @@ flowchart TD
 
 1. `sessionStart` 识别顶层交互式会话并写 marker。
 2. 在 `recallTimeoutMs` 总预算内，以 `Promise.allSettled` 并发调用 `readCore()` 和 `listScenarios()`。
-3. 分别使用成功结果：L3 生成 persona，L2 按 path/summary/timestamps 生成导航。
+3. 分别使用成功结果，并按 OpenClaw formatter 的稳定上下文结构生成 L3 persona 与 L2 相对路径导航。
 4. 任一调用失败或超时只跳过对应部分；工具指引始终可注入。
 
 ### 每轮结束
@@ -176,25 +189,26 @@ flowchart TD
 4. worker 在全局锁内调用 `addConversation()`。
 5. SDK 成功返回后删除 pending；worker 不读取 L2/L3。
 
+### 会话结束
+
+`sessionEnd` 只调用无参数 `spawnWorker()` 并清理 marker；不再生成或传递 `sessionEndKey`，也不访问网络。
+
 ### 主动检索
 
 1. Rule 指导 Agent 在依赖历史时先调用 `tdai_memory_search`。
 2. 需要原话和证据时调用 `tdai_conversation_search`。
-3. 命中 L2 导航后调用 `tdai_scenario_read(path)` 读取正文。
+3. 命中 L2 导航后调用 `tdai_read_cos(path)`；该名称沿用 OpenClaw，Cursor 实现调用 v3 `readScenario()` 读取 L2 场景相对 path，不访问 COS/STS。
 4. 三个 MCP 工具直接调用 v3 SDK。
 
 ## 失败语义
 
 - `stop`、`sessionEnd` 前台不访问网络；所有 Hook 内部错误均退出 0。
 - `sessionStart` 仅执行限时 L2/L3 查询；超过内部预算或任一请求失败时 fail-open。
-- `addConversation()` 正常返回是删除 pending 的成功 ACK；HTTP 2xx 本身不是 ACK。
-- 本地 `ParamError` 表示配置或调用构造错误：保留 pending，停止本次 drain。
-- `TDAMError.code` 为 `400` 或 `413` 时，视为同一不可变 payload 重试无效：写 bounded 摘要，删除当前 pending，继续。
-- `TDAMError.code` 为 `-1`、`401`、`403`、`404`、`405`、`422`、`4291`、`5xx` 或未知值时保留 pending，停止本次 drain。
-- 网络错误、超时和非 `TDAMError` 未知异常保留 pending，停止本次 drain。
+- `addConversation()` 正常返回才 ACK；HTTP 2xx 本身不是 ACK。
+- 允许删除 pending 的错误码仅有 `400`、`413`；其他错误全部保留并停止本次 drain。
 - Adapter 不启动、不停止、不重启 MemoryCore。
 
-错误分类基于 SDK 类型和 `TDAMError.code`，不读取旧 `GatewayResult.status`。`422` 可能来自可修复的 isolation 配置，`4291` 是 HTTP 200 中的 quota 业务码，两者不得删除 pending。
+错误分类只读取 SDK `TDAMError.code`，不读取旧 `GatewayResult.status`。其他错误包括 `ParamError`、`422`、`4291`、网络、超时和未知异常。
 
 ## 测试与验收
 
@@ -202,17 +216,19 @@ flowchart TD
 
 - 现有 Cursor Adapter 单元测试迁移后全部通过。
 - transcript、marker、pending、锁及 installer 安全合并机制不变；Rule 文案和 context/MCP 数据源按本规格修改。
-- 迁移后的 Cursor Adapter 不再引用旧 `/capture`、`/search/*`、ctl 和 `/session/end`；不删除 MemoryCore 的兼容接口。
+- 迁移后的 Cursor Adapter 不再引用旧 `/capture`、`/search/*`、ctl 和 `/session/end`；删除 Cursor `gateway.ts`、`sessionEndKey`、`ctlPath`、`dataDir` 及相关测试，不删除 MemoryCore 的兼容接口或共享 `src/gateway/types.ts`。
 - 生产包位于 `MemoryCore/cursor-plugin/`，不混入进程内 `MemoryCore/src/adapters/`。
+- 生产包仅依赖包内代码和声明的 npm 依赖；不得导入 `MemoryCore/src/*` 或 `MemoryCore/openclaw-plugin/src/*`。
+- spike 源码、命令和测试仅作验证资产，不纳入生产构建产物或运行时依赖。
 
 ### v3 契约
 
 - fake v3 client 核对 service/team/agent/user/session/task 映射。
 - L0 写入仅发送本轮 user/assistant messages。
-- MCP 分别映射 `searchAtomic`、`searchConversation` 与 `readScenario`。
+- MCP 分别映射 `searchAtomic`、`searchConversation` 与 `tdai_read_cos` → `readScenario`。
 - `sessionStart` 并发查询、2 秒预算和 partial-success 注入可控测试。
-- Rule 不再要求绝对路径读取，导航不再依赖本地热度字段。
-- `ParamError` 与各类 `TDAMError.code` 的保留/删除行为逐项测试。
+- Recall 格式以 OpenClaw 实现为基线；Rule 不再要求绝对路径读取，导航不再依赖本地热度字段。
+- 错误测试只证明白名单边界：`400`/`413` 删除，其余代表性 SDK、网络和未知错误保留。
 - 不同 isolation 的请求和 pending 不串用。
 
 ### 真实 E2E

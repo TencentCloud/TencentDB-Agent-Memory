@@ -8,7 +8,7 @@ Cursor 阶段完成后，为 Codex CLI 增加独立本地 Adapter。它通过官
 
 ## 功能需求
 
-1. 使用 Codex `SessionStart`、`Stop` 接入主要会话生命周期，`SessionEnd` 仅作 best-effort 唤醒。
+1. 使用 Codex `SessionStart`、`Stop` 接入主要会话生命周期，`SessionEnd` 仅作尽力唤醒（best-effort）。
 2. 每轮结束后将 user/assistant 对话写入 v3 L0。
 3. 提供 L1、L0 和 L2 正文三个只读 MCP 工具。
 4. 会话开始时限时直读 L2/L3，注入成功结果和检索指引。
@@ -57,7 +57,7 @@ flowchart LR
   D --> E[pending]
   E --> F[detached worker]
   F --> G[v3 conversation/add]
-  H[Codex MCP] --> I[v3 L1/L0 search和scenario read]
+  H[Codex MCP] --> I[v3 L1/L0 检索与 scenario/read]
 ```
 
 ## 降级容错方案
@@ -101,9 +101,9 @@ MemoryCore/src/adapters/codex/
 | 已落地 | `/v3/scenario/read` | L2 正文 | 同上 |
 | 已落地 | `/v3/core/read` | L3 | 同上 |
 | 设计新增 | Codex Hook/Transcript 映射 | 宿主适配 | `docs/codex-cli-server-team/spec.md`，待 spike 确认 |
-| 设计新增 | `tdai_scenario_read` | 场景 path → L2 正文 | `docs/codex-cli-server-team/spec.md` |
+| 设计新增 | `tdai_read_cos` | L2 场景相对 path → `readScenario()` | 沿用阶段 1/OpenClaw 命名；不访问 COS/STS |
 
-worker 沿用阶段 1 已验证的 SDK 错误分类：正常返回才 ACK；`ParamError` 与可恢复/未知 `TDAMError.code` 保留 pending，不再按 HTTP status 判断。
+worker 沿用阶段 1 规则：正常返回才 ACK；允许删除 pending 的错误码仅有 `400`、`413`；其他错误全部保留。
 
 # 实现前门禁
 

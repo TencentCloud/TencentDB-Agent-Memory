@@ -113,16 +113,16 @@ MemoryCore 接口与阶段 1 相同：
 | 已落地 | `/v3/scenario/read` | L2 正文 | 同上 |
 | 已落地 | `/v3/core/read` | L3 | 同上 |
 | 设计新增 | Codex Hook/Transcript 映射 | 宿主生命周期适配 | 本规格，须经 spike 确认 |
-| 设计新增 | `tdai_scenario_read` MCP 工具 | 场景 path → L2 正文 | 本规格 |
+| 设计新增 | `tdai_read_cos` MCP 工具 | L2 场景相对 path → `readScenario()` | 沿用阶段 1/OpenClaw 命名；不访问 COS/STS |
 
 ## 失败语义
 
 - Hook 始终 fail-open。
 - transcript 不能无歧义解析时不写 L0。
 - 服务端不可用时保留 pending。
-- `SessionEnd` 只作为主线程的 best-effort 唤醒，不保证及时触发，也不承担 pending 必达；主要推进点仍是 `Stop` 和后续事件。
+- `SessionEnd` 只作尽力唤醒（best-effort），不保证及时触发，也不承担 pending 必达；主要推进点仍是 `Stop` 和后续事件。
 - `SessionStart` L2/L3 查询失败或超时只降低注入，不阻断 Codex；MCP 可实时检索。
-- worker 按 SDK `ParamError` / `TDAMError.code` 分类，不沿用 Cursor v1 的 HTTP status 模型。
+- worker 沿用阶段 1 规则：正常返回才 ACK；允许删除 pending 的错误码仅有 `400`、`413`；其他错误全部保留。
 - 安装器不得覆盖用户已有 Hook、MCP 或其它 `.codex` 配置。
 - 未完成 spike 和 E2E 前，不宣称 Codex CLI 已接入。
 
