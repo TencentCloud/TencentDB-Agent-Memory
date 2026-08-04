@@ -213,6 +213,13 @@ export interface StandaloneLLMOverrideConfig {
   /** Request timeout in milliseconds (default: 120000). */
   timeoutMs: number;
   /**
+   * LLM 线协议（wire protocol）：
+   *   - "openai"（默认）：OpenAI 兼容协议（POST /chat/completions）
+   *   - "anthropic"：Anthropic 原生协议（POST /v1/messages，x-api-key + anthropic-version）
+   * 未设置或未知值按 "openai" 处理，向后兼容。
+   */
+  protocol?: "openai" | "anthropic";
+  /**
    * LLM 访问模式：
    *   - "openai": 直连 OpenAI 兼容服务（默认）
    *   - "proxy":  走 context_proxy，运行时把 baseUrl 拼成
@@ -620,6 +627,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       const rawProvider = str(llmGroup, "provider");
       const provider: "openai" | "proxy" =
         rawProvider === "proxy" ? "proxy" : "openai";
+      const rawProtocol = str(llmGroup, "protocol");
+      const protocol: "openai" | "anthropic" =
+        rawProtocol === "anthropic" ? "anthropic" : "openai";
       const proxyGroup = obj(llmGroup, "proxy");
       return {
         enabled: bool(llmGroup, "enabled") ?? false,
@@ -628,6 +638,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
+        protocol,
         provider,
         proxy: {
           // 默认 true：走 proxy 时用 memory 系统用户 key 作为 Authorization。
