@@ -121,7 +121,7 @@ skill:
     maxResourceSizeBytes: 5000000
 YAML
 
-info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
+info "启动 memory-core (image=${MEMORY_CORE_IMAGE}, port=${MEMORY_CORE_PORT})"
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-core \
@@ -172,7 +172,7 @@ verify_user_key() {
   [[ "$code" == "200" ]]
 }
 
-info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → $ADMIN_KEY_FILE）..."
+info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
 
 # 生成随机 key（首次 init-admin 用；若之前有 file 就复用）
 if [[ -s "$ADMIN_KEY_FILE" ]]; then
