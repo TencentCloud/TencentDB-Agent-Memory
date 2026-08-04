@@ -290,6 +290,10 @@ async function _doInitStores(
     });
     vectorStore = bundle.store;
     embeddingService = bundle.embedding ?? undefined;
+    // Kick off model download/load for local embedding providers (no-op for
+    // remote providers, idempotent). Without this the GGUF model is never
+    // loaded and embed() throws EmbeddingNotReadyError (issue #678).
+    embeddingService?.startWarmup?.();
 
     const providerInfo = embeddingService?.getProviderInfo();
     const initResult = await vectorStore.init(providerInfo);
