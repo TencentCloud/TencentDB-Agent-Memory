@@ -11,7 +11,8 @@
     "tools": [
       "tdai_memory_search",
       "tdai_conversation_search",
-      "tdai_read_cos"
+      "tdai_read_cos",
+      "tdai_read_local"
     ]
   },
   "configSchema": {
@@ -87,6 +88,16 @@
             "type": "boolean",
             "default": true,
             "description": "是否启用自动对话捕获 (L0)"
+          }
+        }
+      },
+      "storage": {
+        "type": "object",
+        "description": "本地存储配置（无 COS 时从本地目录读取场景记忆，见 issue #762）",
+        "properties": {
+          "localDir": {
+            "type": "string",
+            "description": "本地场景记忆根目录的绝对路径。设置时注册 tdai_read_local 替代 tdai_read_cos；未设置时不注册本地读取工具"
           }
         }
       }
