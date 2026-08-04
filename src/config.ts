@@ -103,6 +103,25 @@ export interface RecallConfig {
    * (wave tdai-memory-subagents-2026-08-02, improvement #2)
    */
   typeWeights: RecallTypeWeights;
+  /**
+   * Cross-project visibility mode.
+   * - "hidden" (default): strict project_id filter — cross-project records
+   *   are never returned. Today's behavior, fully backward-compatible.
+   * - "decay": cross-project records are returned but their score is
+   *   multiplied by `crossProjectDecay` per unique path segment between
+   *   the record and the query project (see scope-decay.ts). The effective
+   *   per-record gate becomes `cosine * decayMultiplier >= scoreThreshold`.
+   */
+  crossProject: "hidden" | "decay";
+  /** Steepness of the prefix-depth decay (default: 0.5). */
+  crossProjectDecay: number;
+  /** Multiplier when both the projectMap and the prefix-depth miss (default: 0.5). */
+  defaultCrossProjectMultiplier: number;
+  /**
+   * Operator override map: project_id (or ancestor prefix, or "__root__")
+   * → multiplier. Leaf-to-root walk; first match wins. Empty = feature off.
+   */
+  projectMap: Record<string, number>;
 }
 
 /** Recall type weights (leaf under `memory.recall.typeWeights`). */
@@ -685,7 +704,7 @@ export function parseConfig(
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 500,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 2000,
       maxPersonaChars: num(recallGroup, "maxPersonaChars") ?? 6000,
-      scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
+      scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.2,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
       typeWeights: {
@@ -693,6 +712,18 @@ export function parseConfig(
         persona: num(typeWeightsGroup, "persona") ?? 1.0,
         episodic: num(typeWeightsGroup, "episodic") ?? 1.0,
       },
+      crossProject: validateCrossProject(str(recallGroup, "crossProject")) ?? "hidden",
+      crossProjectDecay: num(recallGroup, "crossProjectDecay") ?? 0.5,
+      defaultCrossProjectMultiplier: num(recallGroup, "defaultCrossProjectMultiplier") ?? 0.5,
+      projectMap: ((): Record<string, number> => {
+        const raw = obj(recallGroup, "projectMap");
+        if (!raw || typeof raw !== "object") return {};
+        const out: Record<string, number> = {};
+        for (const [k, v] of Object.entries(raw)) {
+          if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+        }
+        return out;
+      })(),
     },
     consolidation: {
       enabled: bool(consolidationGroup, "enabled") ?? false,
@@ -871,6 +902,17 @@ function validateStrategy(
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+const VALID_CROSS_PROJECT = ["hidden", "decay"] as const;
+
+function validateCrossProject(
+  value: string | undefined,
+): RecallConfig["crossProject"] | undefined {
+  if (!value) return undefined;
+  return (VALID_CROSS_PROJECT as readonly string[]).includes(value)
+    ? (value as RecallConfig["crossProject"])
     : undefined;
 }
 

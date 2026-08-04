@@ -130,3 +130,36 @@ describe("searchMemoriesWithDetails rerank integration (embedding strategy)", ()
     expect(r.memories[0]!.type).toBe("episodic");
   });
 });
+
+// ============================
+// Cross-project scope decay integration
+// ============================
+
+describe("searchMemories crossProject integration", () => {
+  it("hidden mode: cross-project records are filtered out (back-compat)", async () => {
+    const cfg = makeConfig({ crossProject: "hidden" });
+    const crossStore = fakeStore([
+      { record_id: "a", content: "a content", type: "episodic", priority: 50, scene_name: "", score: 0.9, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis/projects/u24", scope: "project" },
+      { record_id: "b", content: "b content", type: "episodic", priority: 50, scene_name: "", score: 0.85, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis", scope: "project" },
+      { record_id: "c", content: "c content", type: "episodic", priority: 50, scene_name: "", score: 0.8, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis/projects/base-extention", scope: "project" },
+    ]);
+    const r = await searchMemoriesWithDetails("query", "/tmp", cfg, silentLogger, "embedding", crossStore, fakeEmbedding, "/home/penis");
+    const ids = r.memories.map((m) => m.content.split(" ")[0]);
+    expect(ids).toEqual(["b"]);
+  });
+
+  it("decay mode: cross-project records surface; order is by post-multiplier score", async () => {
+    const cfg = makeConfig({ crossProject: "decay", scoreThreshold: 0.1, maxResults: 3 });
+    const crossStore = fakeStore([
+      { record_id: "a", content: "a content", type: "episodic", priority: 50, scene_name: "", score: 0.9, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis/projects/u24", scope: "project" },
+      { record_id: "b", content: "b content", type: "episodic", priority: 50, scene_name: "", score: 0.85, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis", scope: "project" },
+      { record_id: "c", content: "c content", type: "episodic", priority: 50, scene_name: "", score: 0.5, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/home/penis/projects/base-extention", scope: "project" },
+      { record_id: "d", content: "d content", type: "episodic", priority: 50, scene_name: "", score: 0.3, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "/cosmic", scope: "project" },
+      { record_id: "g", content: "g content", type: "episodic", priority: 50, scene_name: "", score: 0.7, timestamp_str: "", timestamp_start: "", timestamp_end: "", session_key: "s", session_id: "s", metadata_json: "{}", project_id: "", scope: "global" },
+    ]);
+    const r = await searchMemoriesWithDetails("query", "/tmp", cfg, silentLogger, "embedding", crossStore, fakeEmbedding, "/home/penis");
+    expect(r.memories.length).toBe(3);
+    const order = r.memories.map((m) => m.content.split(" ")[0]);
+    expect(order).toEqual(["b", "g", "a"]);
+  });
+});

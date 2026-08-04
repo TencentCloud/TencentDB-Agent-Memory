@@ -21,10 +21,19 @@ import type { Logger } from "../../types.js";
  * Single source of truth for project-scoped visibility. Mirrored verbatim
  * by the SQL filter in `sqlite.ts` — the two must stay literally equivalent.
  * Only records explicitly tagged to a *different* project are hidden.
+ *
+ * 2-arg form (legacy) = hidden mode. 3-arg mode-aware: in `decay` mode the
+ * strict project_id equality is skipped — cross-project records survive
+ * and are downweighted further down the pipeline (scope-decay.ts).
  */
-export function passesScope(r: { scope?: string; project_id?: string }, projectId?: string): boolean {
-  if (!projectId) return true;              // filter disabled
-  if (r.scope !== "project") return true;   // global / unset / legacy
+export function passesScope(
+  r: { scope?: string; project_id?: string },
+  projectId?: string,
+  mode: "hidden" | "decay" = "hidden",
+): boolean {
+  if (mode === "decay") return true;       // multiplier handles it downstream
+  if (!projectId) return true;            // filter disabled
+  if (r.scope !== "project") return true; // global / unset / legacy
   return r.project_id === projectId;
 }
 

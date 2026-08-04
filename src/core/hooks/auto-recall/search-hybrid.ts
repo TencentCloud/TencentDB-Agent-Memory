@@ -6,6 +6,7 @@ import type { L1SearchResult, IMemoryStore } from "../../store/types.js";
 import type { Logger } from "../../types.js";
 import { TAG, type FormatableMemory, type ScoredRecord, type SearchResult, type TypeWeights } from "./types.js";
 import { passesScope } from "./scope.js";
+import { scopeDecayMultiplier, type ScopeDecayConfig } from "./scope-decay.js";
 import { formatMemoryLine, recordToFormatable, vectorResultToFormatable } from "./format.js";
 import { buildFtsQuery } from "../../store/sqlite.js";
 
@@ -22,11 +23,13 @@ export async function searchHybrid(
   embeddingCallOpts?: EmbeddingCallOptions,
   projectId = "",
   typeWeights?: TypeWeights,
+  scopeDecayCfg?: ScopeDecayConfig,
+  mode: "hidden" | "decay" = "hidden",
 ): Promise<SearchResult> {
   const candidateK = maxResults * (projectId ? 6 : 3);
   const [keywordResult, embeddingResult] = await Promise.all([
-    runKeywordPart(userText, vectorStore, candidateK, projectId, logger),
-    runEmbeddingPart(userText, vectorStore, embeddingService, candidateK, embeddingCallOpts, projectId, logger),
+    runKeywordPart(userText, vectorStore, candidateK, projectId, logger, scopeDecayCfg, mode),
+    runEmbeddingPart(userText, vectorStore, embeddingService, candidateK, embeddingCallOpts, projectId, logger, scopeDecayCfg, mode),
   ]);
   const keywordResults = keywordResult.records;
   const embeddingResults = embeddingResult.results;
@@ -35,14 +38,14 @@ export async function searchHybrid(
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
     return { lines: [], timing };
   }
-  const mergedMap = new Map<string, { rrfScore: number; formatable: FormatableMemory }>();
+  const mergedMap = new Map<string, { rrfScore: number; formatable: FormatableMemory; scope?: string; project_id?: string }>();
   for (let rank = 0; rank < keywordResults.length; rank++) {
     const r = keywordResults[rank]!;
     const id = r.record.id;
     const rrfScore = 1 / (RRF_K + rank + 1);
     const existing = mergedMap.get(id);
     if (existing) existing.rrfScore += rrfScore;
-    else mergedMap.set(id, { rrfScore, formatable: recordToFormatable(r.record) });
+    else mergedMap.set(id, { rrfScore, formatable: recordToFormatable(r.record), scope: r.record.projectId });
   }
   for (let rank = 0; rank < embeddingResults.length; rank++) {
     const r = embeddingResults[rank]!;
@@ -50,13 +53,19 @@ export async function searchHybrid(
     const rrfScore = 1 / (RRF_K + rank + 1);
     const existing = mergedMap.get(id);
     if (existing) existing.rrfScore += rrfScore;
-    else mergedMap.set(id, { rrfScore, formatable: vectorResultToFormatable(r) });
+    else mergedMap.set(id, { rrfScore, formatable: vectorResultToFormatable(r), scope: r.scope, project_id: r.project_id });
   }
   // Type rerank (improvement #2): multiply fused RRF score by type weight, re-sort BEFORE top-K.
+  // Hybrid cross-project semantics: multiplier applies to RRF (1/(60+rank+1)), not cosine.
+  // RRF and cosine live on different scales; the multiplier is a soft signal here.
   const entries = [...mergedMap.entries()].map(([id, v]) => ({
     id,
-    rrfScore: v.rrfScore * (typeWeights && typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"] != null
-      ? typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"]! : 1),
+    rrfScore:
+      v.rrfScore *
+      (typeWeights && typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"] != null
+        ? typeWeights[v.formatable.type as "instruction" | "persona" | "episodic"]!
+        : 1) *
+      scopeDecayMultiplier({ scope: v.scope, project_id: v.project_id }, projectId, scopeDecayCfg),
     formatable: v.formatable,
   }));
   const sorted = entries.sort((a, b) => b.rrfScore - a.rrfScore).slice(0, maxResults);
@@ -74,14 +83,16 @@ async function runKeywordPart(
   candidateK: number,
   projectId: string,
   logger?: Logger,
+  _scopeDecayCfg?: ScopeDecayConfig,
+  mode: "hidden" | "decay" = "hidden",
 ): Promise<{ records: ScoredRecord[]; ms: number }> {
   const tStart = performance.now();
   try {
     if (vectorStore.isFtsAvailable()) {
       const ftsQuery = buildFtsQuery(userText);
       if (ftsQuery) {
-        const ftsResults = (await vectorStore.searchL1Fts(ftsQuery, candidateK, projectId))
-          .filter((r) => passesScope(r, projectId));
+        const ftsResults = (await vectorStore.searchL1Fts(ftsQuery, candidateK, projectId, mode))
+          .filter((r) => passesScope(r, projectId, mode));
         if (ftsResults.length > 0) {
           logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
           const records = ftsResults.map((r): ScoredRecord => ({
@@ -114,14 +125,16 @@ async function runEmbeddingPart(
   embeddingCallOpts: EmbeddingCallOptions | undefined,
   projectId: string,
   logger?: Logger,
+  _scopeDecayCfg?: ScopeDecayConfig,
+  mode: "hidden" | "decay" = "hidden",
 ): Promise<{ results: L1SearchResult[]; ms: number }> {
   const tStart = performance.now();
   try {
     logger?.debug?.(`${TAG} [hybrid-embedding] Generating query embedding...`);
     const queryEmbedding = await embeddingService.embed(userText, embeddingCallOpts);
-    logger?.debug?.(`${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`);
-    const results = (await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText, projectId))
-      .filter((r) => passesScope(r, projectId));
+    logger?.debug?.(`${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}, mode=${mode}...`);
+    const results = (await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText, projectId, mode))
+      .filter((r) => passesScope(r, projectId, mode));
     logger?.debug?.(`${TAG} [hybrid-embedding] Got ${results.length} candidates`);
     return { results, ms: performance.now() - tStart };
   } catch (err) {

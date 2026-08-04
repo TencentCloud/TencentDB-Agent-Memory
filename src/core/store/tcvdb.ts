@@ -634,7 +634,11 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L1 Search Operations ─────────────────────────────────
 
-  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string): Promise<L1SearchResult[]> {
+  // TODO: add projectId and mode params to the impl signature and thread them
+  // through searchL1HybridAsync so cross-project decay can be honored. The
+  // IMemoryStore interface (types.ts:283) declares them optional; impl is
+  // currently assignable but the params are unused.
+  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string, _projectId?: string, _mode?: "hidden" | "decay"): Promise<L1SearchResult[]> {
     // TCVDB uses server-side embedding — delegate to hybrid search with text
     if (queryText) {
       return this.searchL1HybridAsync({ queryText, topK });
@@ -644,7 +648,9 @@ export class TcvdbMemoryStore implements IMemoryStore {
     return [];
   }
 
-  async searchL1Fts(ftsQuery: string, limit?: number): Promise<L1FtsResult[]> {
+  // TODO: add projectId and mode params to the impl signature and thread them
+  // through searchL1HybridAsync. See searchL1Vector above.
+  async searchL1Fts(ftsQuery: string, limit?: number, _projectId?: string, _mode?: "hidden" | "decay"): Promise<L1FtsResult[]> {
     // TCVDB has no pure FTS — use hybrid search with sparse-only path
     // The ftsQuery is raw text, use it as queryText for hybrid
     if (!ftsQuery) return [];

@@ -19,6 +19,8 @@ import { TAG, type RecallStrategy, type SearchResult, type TypeWeights } from ".
 import { searchByKeyword } from "./search-keyword.js";
 import { searchByEmbedding } from "./search-embedding.js";
 import { searchHybrid } from "./search-hybrid.js";
+import { passesScope } from "./scope.js";
+import type { ScopeDecayConfig } from "./scope-decay.js";
 
 const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
 
@@ -42,8 +44,14 @@ export async function searchMemories(
   }
 
   const maxResults = cfg.recall.maxResults ?? 5;
-  const threshold = cfg.recall.scoreThreshold ?? 0.3;
+  const threshold = cfg.recall.scoreThreshold ?? 0.2;
   const typeWeights = cfg.recall.typeWeights;
+  const mode = cfg.recall.crossProject ?? "hidden";
+  const scopeDecayCfg: ScopeDecayConfig = {
+    crossProjectDecay: cfg.recall.crossProjectDecay,
+    defaultCrossProjectMultiplier: cfg.recall.defaultCrossProjectMultiplier,
+    projectMap: cfg.recall.projectMap,
+  };
   const embeddingAvailable = !!vectorStore && !!embeddingService;
 
   logger?.debug?.(
@@ -66,32 +74,32 @@ export async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore, projectId);
+      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore, projectId, scopeDecayCfg, mode);
       return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
     }
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights);
+      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights, scopeDecayCfg, mode);
       return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
     }
     // Hybrid: short-circuit to single store-side call when supported.
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
+      // TODO: thread mode + projectId through searchL1Hybrid when tcvdb
+      // adds them to its impl signature (interface already accepts them).
       const results = (await vectorStore.searchL1Hybrid!({ query: cleanText, topK: maxResults }))
-        .filter((r) => passesScope(r, projectId));
+        .filter((r) => passesScope(r, projectId, mode));
       const nativeMs = performance.now() - tNative;
-      logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
+      logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms, mode=${mode}`);
       const { formatMemoryLine, vectorResultToFormatable } = await import("./format.js");
       const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
       return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
-    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights);
+    return await searchHybrid(cleanText, pluginDataDir, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts, projectId, typeWeights, scopeDecayCfg, mode);
   } catch (err) {
     logger?.warn?.(`${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`);
     return emptyResult;
   }
 }
 
-// Inline import to avoid top-level cycle: scope.ts → search.ts is cyclic, but
-// search.ts only uses passesScope at function-call time, so a local import works.
-import { passesScope } from "./scope.js";
+// passesScope imported at the top of the file (alongside other strategy imports).

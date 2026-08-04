@@ -926,7 +926,7 @@ export class VectorStore implements IMemoryStore {
         FROM l1_fts
         JOIN l1_records r ON r.record_id = l1_fts.record_id
         WHERE l1_fts MATCH ?1
-          AND (?2 = '' OR COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2)
+          AND (?2 = '' OR ?2 = '__decay_all__' OR COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2)
         ORDER BY rank ASC
         LIMIT ?3
       `);
@@ -1241,6 +1241,7 @@ export class VectorStore implements IMemoryStore {
     topK = 5,
     _queryText?: string,
     projectId = "",
+    mode: "hidden" | "decay" = "hidden",
   ): VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
@@ -1318,8 +1319,10 @@ export class VectorStore implements IMemoryStore {
         }
 
         // Same predicate as passesScope() in auto-recall.ts — only records
-        // explicitly tagged to a different project are hidden.
-        if (projectId && meta.scope === "project" && meta.project_id !== projectId) continue;
+        // explicitly tagged to a different project are hidden. In `decay`
+        // mode the strict project_id equality is skipped; the JS-side
+        // scopeDecayMultiplier applies the soft penalty (see search-embedding.ts).
+        if (mode === "hidden" && projectId && meta.scope === "project" && meta.project_id !== projectId) continue;
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -2472,10 +2475,13 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20, projectId = ""): FtsSearchResult[] {
+  searchL1Fts(ftsQuery: string, limit = 20, projectId = "", mode: "hidden" | "decay" = "hidden"): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, projectId, limit) as Array<{
+      // In decay mode, the scope WHERE is rewritten to admit all rows; the
+      // JS-side scopeDecayMultiplier applies the soft penalty.
+      const scopeParam = mode === "decay" ? "__decay_all__" : projectId;
+      const rows = this.stmtL1FtsSearch.all(ftsQuery, scopeParam, limit) as Array<{
         record_id: string;
         content: string;
         type: string;
