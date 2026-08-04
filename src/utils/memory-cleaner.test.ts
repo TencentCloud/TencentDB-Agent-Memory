@@ -80,13 +80,14 @@ describe("LocalMemoryCleaner onAfterCleanup", () => {
       total_memories_extracted: 50,
     });
 
-    // 创建一些 JSONL 文件
+    // 创建一些 JSONL 文件（用"今天"日期，避免被 retentionDays=7 的清理删除）
     const convDir = path.join(tmpDir, "conversations");
     const recDir = path.join(tmpDir, "records");
     await fs.mkdir(convDir, { recursive: true });
     await fs.mkdir(recDir, { recursive: true });
-    await fs.writeFile(path.join(convDir, "2026-07-01.jsonl"), '{"a":1}\n{"b":2}\n{"c":3}\n');
-    await fs.writeFile(path.join(recDir, "2026-07-01.jsonl"), '{"x":1}\n');
+    const todayStr = new Date().toISOString().slice(0, 10);
+    await fs.writeFile(path.join(convDir, `${todayStr}.jsonl`), '{"a":1}\n{"b":2}\n{"c":3}\n');
+    await fs.writeFile(path.join(recDir, `${todayStr}.jsonl`), '{"x":1}\n');
 
     // 回调中校准 checkpoint
     const onAfter = async () => {

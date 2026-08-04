@@ -3,7 +3,7 @@
  *
  * 特性：
  * - 指数退避: initialDelay * (2 ** (attempt - 1))
- * - 随机抖动: ±25% 避免惊群效应（thundering herd）
+ * - 随机抖动: full jitter（[delay/2, delay] 区间）避免惊群效应（thundering herd）
  * - 最大延迟上限: maxDelay（默认 30 秒）
  * - 可重试错误判断: retryableStatusCodes + 自定义 shouldRetry 函数
  * - 总超时控制: signal 参数支持 AbortSignal
@@ -65,7 +65,7 @@ const RETRYABLE_STATUS_CODES = new Set([
  * 计算指定尝试次数的退避延迟。
  *
  * 公式: min(maxDelay, initialDelay * 2^(attempt-1))
- * 抖动: 在 [0.75 * delay, 1.25 * delay] 范围内随机
+ * 抖动: full jitter，在 [0.5 * delay, delay] 范围内随机
  *
  * @param attempt - 当前尝试次数（从 1 开始）
  * @param opts   - 重试选项
@@ -195,10 +195,16 @@ export async function withRetry<T>(
  */
 function delayWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
+    let onAbort: (() => void) | undefined;
+
+    const timer = setTimeout(() => {
+      // 定时器先触发：移除 abort 监听器，避免在长生命周期 signal 上累积泄漏
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
 
     if (signal) {
-      const onAbort = () => {
+      onAbort = () => {
         clearTimeout(timer);
         reject(new DOMException("重试被取消", "AbortError"));
       };

@@ -33,45 +33,6 @@ export type {
   MemoryHealthResult,
 } from "./memory-platform-adapter.js";
 
-// MCP adapter
-export { McpMemoryAdapter, McpServer, ErrorCode, TDAI_TOOLS } from "./mcp/index.js";
-export type {
-  McpServerOptions,
-  JsonRpcRequest,
-  JsonRpcResponse,
-  McpToolDefinition,
-  ToolsListResult,
-  ToolsCallResult,
-} from "./mcp/index.js";
-
-// Codex adapter
-export {
-  CodexMemoryAdapter,
-  generateRecallHook,
-  generateCaptureHook,
-  generateCodexHookConfig,
-  generateCodexMcpConfig,
-  getCodexTools,
-} from "./codex/index.js";
-export type { CodexHookContext, CodexHookConfig, CodexMcpConfig } from "./codex/index.js";
-
-// Claude Code adapter
-export {
-  ClaudeCodeMemoryAdapter,
-  generateBeforeRecallHook,
-  generateAfterCaptureHook,
-  generateStopHook,
-  generateClaudeCodeHookConfig,
-  generateClaudeCodeMcpConfig,
-} from "./claude-code/index.js";
-export type { ClaudeCodeHookConfig, ClaudeCodeMcpConfig } from "./claude-code/index.js";
-
-// Dify adapter
-export { DifyMemoryAdapter, generateDifyOpenApiSpec } from "./dify/index.js";
-
-// REST adapter
-export { RestMemoryAdapter } from "./rest/index.js";
-
 // -- Transport Layer + New Adapters (Issue #235 Round 2) --
 
 // Transport layer
