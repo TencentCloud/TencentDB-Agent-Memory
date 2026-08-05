@@ -16,7 +16,7 @@
 
 [安装](#安装) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark)
 
-[English](./README.md) · [**简体中文**](./README_CN.md)
+[English](./README.md) · [**简体中文**](./README_CN.md) · [日本語](./README_JA.md)
 
 </div>
 
