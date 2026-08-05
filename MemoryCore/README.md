@@ -248,6 +248,10 @@ npm run seed-v2
 # Export memory assets (chat-memory) to a portable ZIP bundle (issue #779, step 1)
 npm run build:export-memory
 npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out ./memory-backup.zip
+
+# Validate an export bundle before applying — dry-run, nothing is written (issue #779, step 2)
+npm run build:import-memory
+npm run import-memory -- --file ./memory-backup.zip --dry-run
 ```
 
 ## Security recommendations
