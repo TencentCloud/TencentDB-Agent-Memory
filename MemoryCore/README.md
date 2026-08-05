@@ -252,6 +252,10 @@ npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out 
 # Validate an export bundle before applying — dry-run, nothing is written (issue #779, step 2)
 npm run build:import-memory
 npm run import-memory -- --file ./memory-backup.zip --dry-run
+
+# Apply an export bundle into a data directory (issue #779, step 3).
+# --on-conflict: skip (default) | rename | replace
+npm run import-memory -- --file ./memory-backup.zip --data-dir "$HOME/.memory-tencentdb/memory-tdai" --apply --on-conflict skip
 ```
 
 ## Security recommendations

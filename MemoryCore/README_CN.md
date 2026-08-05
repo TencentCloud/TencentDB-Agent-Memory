@@ -255,6 +255,10 @@ npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out 
 # 导入前校验导出包（dry-run，不写入；issue #779 第二步）
 npm run build:import-memory
 npm run import-memory -- --file ./memory-backup.zip --dry-run
+
+# 应用导出包到数据目录（issue #779 第三步）。
+# --on-conflict: skip（默认）| rename | replace
+npm run import-memory -- --file ./memory-backup.zip --data-dir "$HOME/.memory-tencentdb/memory-tdai" --apply --on-conflict skip
 ```
 
 ## 安全建议
