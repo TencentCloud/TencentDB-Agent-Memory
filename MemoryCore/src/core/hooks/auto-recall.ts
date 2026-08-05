@@ -430,6 +430,34 @@ async function searchMemoriesWithDetails(
  *
  * Falls back to keyword if embedding resources are unavailable.
  */
+/**
+ * Resolve the effective recall strategy given whether an EmbeddingService is
+ * available.
+ *   - "embedding" + unavailable → throws RecallErrors.configMissingEmbedding
+ *   - "hybrid"   + unavailable → degrades to "keyword" (issue #579)
+ *   - otherwise                → unchanged
+ */
+export function resolveEffectiveStrategy(
+  strategy: "keyword" | "embedding" | "hybrid",
+  embeddingAvailable: boolean,
+  logger?: Logger,
+): "keyword" | "embedding" | "hybrid" {
+  if (strategy === "embedding" && !embeddingAvailable) {
+    // H-15: throw structured RecallFailure so the top-level catch in
+    // performAutoRecallInner can translate it into RecallResult.error
+    // (preserves fast-fail semantics + observability while keeping the
+    // hook contract "always resolves, never rejects").
+    throw RecallErrors.configMissingEmbedding(strategy);
+  }
+  if (strategy === "hybrid" && !embeddingAvailable) {
+    logger?.warn?.(
+      `${TAG} [recall] strategy=hybrid but EmbeddingService unavailable — degrading to keyword-only`,
+    );
+    return "keyword";
+  }
+  return strategy;
+}
+
 async function searchMemories(
   userText: string,
   pluginDataDir: string,
@@ -467,15 +495,9 @@ async function searchMemories(
     `maxResults=${maxResults}, threshold=${threshold}`,
   );
 
-  // Determine effective strategy — no degradation: if embedding is configured but unavailable, fail
-  let effectiveStrategy = strategy;
-  if ((strategy === "embedding" || strategy === "hybrid") && !embeddingAvailable) {
-    // H-15: throw structured RecallFailure so the top-level catch in
-    // performAutoRecallInner can translate it into RecallResult.error
-    // (preserves fast-fail semantics + observability while keeping the
-    // hook contract "always resolves, never rejects").
-    throw RecallErrors.configMissingEmbedding(strategy);
-  }
+  // Determine effective strategy (hybrid degrades to keyword-only without an
+  // EmbeddingService; embedding stays a hard failure) — issue #579.
+  const effectiveStrategy = resolveEffectiveStrategy(strategy, embeddingAvailable, logger);
 
   logger?.debug?.(`${TAG} Search strategy: ${effectiveStrategy} (configured: ${strategy})`);
 
