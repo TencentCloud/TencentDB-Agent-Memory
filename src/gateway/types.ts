@@ -129,6 +129,12 @@ export interface SeedRequest {
   strict_round_role?: boolean;
   /** Auto-fill missing timestamps (default: true). */
   auto_fill_timestamps?: boolean;
+  /**
+   * Seed output target.
+   * - isolated: write to a timestamped seed directory (default)
+   * - live: import into the same data directory used by /capture
+   */
+  target?: "isolated" | "live";
   /** Plugin config overrides (deep-merged on top of gateway memory config). */
   config_override?: Record<string, unknown>;
 }
