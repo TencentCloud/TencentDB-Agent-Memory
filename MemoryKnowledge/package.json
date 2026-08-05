@@ -6,12 +6,15 @@
   "main": "./dist/server.js",
   "bin": {
     "knowledge-server": "./bin/server.mjs",
-    "knowledge-mcp": "./bin/mcp.mjs"
+    "knowledge-mcp": "./bin/mcp.mjs",
+    "export-knowledge": "./bin/export-knowledge.mjs"
   },
   "scripts": {
     "dev": "tsx src/server.ts",
     "dev:mcp": "tsx src/mcp/server.ts",
     "build": "tsdown",
+    "build:export-knowledge": "tsc --project scripts/export-knowledge/tsconfig.json",
+    "export-knowledge": "node ./bin/export-knowledge.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -46,6 +49,7 @@
     "js-tiktoken": "^1.0.18",
     "js-yaml": "^4.2.0",
     "json5": "^2.2.3",
+    "jszip": "^3.10.1",
     "lru-cache": "^11.0.0",
     "minisearch": "^7.2.0",
     "simple-git": "^3.36.0",
