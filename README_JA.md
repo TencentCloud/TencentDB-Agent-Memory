@@ -263,7 +263,7 @@ PersonaMem は、長期にわたるやり取りのあとで、エージェント
 - [インストールガイド（完全版）](./INSTALL.md)（Memory Core + Hub + Proxy のワンクリックデプロイ）
 - [データ移行ツール（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README.md)（旧リリースを使っていて、既存データを移行したい場合）
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
-- [コントリビューションガイド](./CONTRIBUTING.md)
+- [コントリビューションガイド](./CONTRIBUTING_JA.md)
 
 エージェントメモリには、まだ定まった標準がありません。バグ報告、ドキュメント、ベンチマーク、新しいフレームワークのアダプター、そして Memory Hub の創造的な使い方まで、どれも歓迎します。
 
@@ -285,7 +285,7 @@ TencentDB Agent Memory は、オープンソースコミュニティの成果の
 
 - 🐞 **バグを見つけた、質問がある？** [GitHub Issues](https://github.com/Tencent/TencentDB-Agent-Memory/issues) に issue を立ててください。24 時間以内に返信します。
 - 💡 **アイデアを共有したい？** [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) でスレッドを立ててください。
-- 🛠️ **コードで貢献したい？** まず [CONTRIBUTING.md](./CONTRIBUTING.md) をお読みください。
+- 🛠️ **コードで貢献したい？** まず [CONTRIBUTING.md](./CONTRIBUTING_JA.md) をお読みください。
 - 💬 **私たちと話したい？** [Discord コミュニティ](https://discord.gg/dJQM6mKMF) に参加して、コア開発者と直接お話しください。
 
 ---
