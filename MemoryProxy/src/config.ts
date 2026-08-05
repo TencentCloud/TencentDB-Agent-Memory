@@ -238,20 +238,31 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
  * a glance).
  */
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: Record<string, { url?: string; apiKey?: string; headers?: Record<string, string> } | null | undefined> | undefined,
+): Record<string, { url: string; apiKey?: string; headers?: Record<string, string> }> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<string, { url: string; apiKey?: string; headers?: Record<string, string> }> = {};
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
     if (typeof url !== "string" || url.length === 0) continue;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
-      ? { url, apiKey }
-      : { url };
+    const headers = (entry as { headers?: unknown }).headers;
+    const parsed: { url: string; apiKey?: string; headers?: Record<string, string> } = { url };
+    if (typeof apiKey === "string" && apiKey.length > 0) parsed.apiKey = apiKey;
+    if (headers && typeof headers === "object") parsed.headers = parseUpstreamHeaders(headers);
+    out[name] = parsed;
   }
   return out;
+}
+
+function parseUpstreamHeaders(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -276,6 +287,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         yaml.upstream?.url ??
         DEFAULT_CONFIG.upstream.url,
       apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
+      headers: parseUpstreamHeaders(yaml.upstream?.headers),
       agents: parseUpstreamAgents(yaml.upstream?.agents),
     },
     log: {

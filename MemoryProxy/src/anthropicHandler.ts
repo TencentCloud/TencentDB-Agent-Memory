@@ -325,13 +325,21 @@ function buildUpstreamBody(
 
 /**
  * Build upstream headers from request headers + cost guard auth overrides.
+ *
+ * Custom headers are merged in this priority (low → high):
+ *   1. Global `config.upstream.headers` (applied first)
+ *   2. Per-agent `config.upstream.agents[name].headers` (can override global)
+ *   3. Adapter-provided dynamic headers
+ *   4. Auth headers (effectiveApiKey, target.authHeaders — always win)
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
+  agentName?: string,
+  agentHeaders?: Record<string, string>,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
@@ -341,6 +349,31 @@ function buildUpstreamHeaders(
   }
   headers["content-type"] = "application/json";
 
+  // 1. Global custom headers from config.upstream.headers
+  if (config.upstream.headers) {
+    for (const [k, v] of Object.entries(config.upstream.headers)) {
+      headers[k.toLowerCase()] = v;
+    }
+  }
+
+  // 2. Per-agent custom headers (override global)
+  if (agentName) {
+    const agentEntry = config.upstream.agents?.[agentName];
+    if (agentEntry?.headers) {
+      for (const [k, v] of Object.entries(agentEntry.headers)) {
+        headers[k.toLowerCase()] = v;
+      }
+    }
+  }
+
+  // 3. Adapter-provided dynamic headers
+  if (agentHeaders) {
+    for (const [k, v] of Object.entries(agentHeaders)) {
+      headers[k.toLowerCase()] = v;
+    }
+  }
+
+  // 4. Auth headers (always win)
   // `effectiveApiKey` is pre-resolved by the caller according to the
   // per-agent fallback rule (see the resolveEffectiveApiKey call site).
   //   - non-empty string → inject as server-side key, drop client's own
@@ -1137,7 +1170,8 @@ export async function handleAnthropicMessages(
   const effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
-  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+  const agentHeaders = agentAdapter.headers ? agentAdapter.headers(sessionKey) : undefined;
+  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey, agentFromPath, agentHeaders);
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
   if (sanitizedCount > 0) {
     pipe.info(

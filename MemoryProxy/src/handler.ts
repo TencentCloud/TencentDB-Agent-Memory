@@ -33,6 +33,7 @@ import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.j
 import { writeRequestLog } from "./requestLog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
+import { resolveAgentAdapter } from "./agent-adapters/index.js";
 import { inspectAndRecord } from "./identity.js";
 import { writeFailedReportRaw } from "./clickhouse.js";
 import { verifyUserKey } from "./auth.js";
@@ -251,13 +252,21 @@ function buildUpstreamBody(
  * Build upstream headers from request headers + routing auth overrides.
  * If config.upstream.apiKey is set, it overrides the request's Authorization header
  * only for the default route (not alternate model route).
+ *
+ * Custom headers are merged in this priority (low → high):
+ *   1. Global `config.upstream.headers` (applied first)
+ *   2. Per-agent `config.upstream.agents[name].headers` (can override global)
+ *   3. Adapter-provided dynamic headers (e.g. Zen API's x-opencode-* headers)
+ *   4. Auth headers (effectiveApiKey, target.authHeaders — always win)
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
+  agentName?: string,
+  agentHeaders?: Record<string, string>,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
@@ -267,6 +276,31 @@ function buildUpstreamHeaders(
   }
   headers["content-type"] = "application/json";
 
+  // 1. Global custom headers from config.upstream.headers
+  if (config.upstream.headers) {
+    for (const [k, v] of Object.entries(config.upstream.headers)) {
+      headers[k.toLowerCase()] = v;
+    }
+  }
+
+  // 2. Per-agent custom headers (override global)
+  if (agentName) {
+    const agentEntry = config.upstream.agents?.[agentName];
+    if (agentEntry?.headers) {
+      for (const [k, v] of Object.entries(agentEntry.headers)) {
+        headers[k.toLowerCase()] = v;
+      }
+    }
+  }
+
+  // 3. Adapter-provided dynamic headers (e.g. Zen API's x-opencode-*)
+  if (agentHeaders) {
+    for (const [k, v] of Object.entries(agentHeaders)) {
+      headers[k.toLowerCase()] = v;
+    }
+  }
+
+  // 4. Auth headers (always win)
   // `effectiveApiKey` is pre-resolved by the caller — see the resolveEffective
   // block near the call site. Non-empty → inject as server-side Bearer;
   // empty/undefined → passthrough (client's own Authorization survives).
@@ -995,7 +1029,9 @@ export async function handleChatCompletions(
   writeRequestLog(config, body);
 
   // ── Build upstream request ───────────────────────────────────────────────
-  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+  const agentAdapter = resolveAgentAdapter(agentFromPath ?? "unknown");
+  const agentHeaders = agentAdapter.headers ? agentAdapter.headers(sessionKey) : undefined;
+  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey, agentFromPath, agentHeaders);
   const upstreamBody = buildUpstreamBody(body, target);
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the

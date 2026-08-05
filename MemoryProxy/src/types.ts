@@ -368,6 +368,13 @@ export interface AgentUpstreamEntry {
    * that fallback only applies when this agent has no entry at all.
    */
   apiKey?: string;
+  /**
+   * Per-agent custom headers injected into every upstream request.
+   * Merged before auth headers — auth always wins and cannot be overridden.
+   * Use this for upstreams that require special headers (e.g. Zen API's
+   * `x-opencode-*` headers).
+   */
+  headers?: Record<string, string>;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -381,6 +388,11 @@ export interface ProxyConfig {
   upstream: {
     url: string; // OpenAI-compatible upstream URL
     apiKey: string; // 若非空则替换请求中的 API Key
+    /**
+     * Global custom headers injected into every upstream request.
+     * Merged after auth headers but before per-agent headers.
+     */
+    headers?: Record<string, string>;
     /**
      * Per-agent overrides keyed by agent name (URL path prefix, e.g. "claude-code").
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
@@ -653,8 +665,10 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+    /** Global custom headers injected into every upstream request. */
+    headers?: Record<string, string>;
     /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    agents?: Record<string, { url?: string; apiKey?: string; headers?: Record<string, string> } | null | undefined>;
   };
   log?: {
     file?: string;
