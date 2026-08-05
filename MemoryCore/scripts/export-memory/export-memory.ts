@@ -33,6 +33,7 @@ import JSZip from "jszip";
 import {
   MANIFEST_SCHEMA_VERSION,
   validateManifest,
+  type ExportAsset,
   type ExportManifest,
 } from "./manifest.js";
 
@@ -75,13 +76,65 @@ async function collectDir(
   return out;
 }
 
+export type ExportAssetKind = "chat-memory" | "skill";
+
 export interface ExportOptions {
-  /** Root data directory (contains conversations/ and records/). */
+  /** Root data directory (contains conversations/, records/, vectors.db). */
   dataDir: string;
   /** Instance id recorded in the manifest (default "default"). */
   instanceId?: string;
-  /** Whether to include L1 records/ (default true). */
+  /** Whether to include L1 records/ for chat-memory (default true). */
   includeRecords?: boolean;
+  /** Which assets to export. Default: all supported. */
+  assets?: ExportAssetKind[];
+}
+
+/**
+ * Collect the "skill" asset: head skill rows from the `skills` table in
+ * vectors.db, plus each skill's resource files from its storage_dir.
+ * Returns [] when vectors.db is absent or has no skills.
+ */
+async function collectSkillAsset(zip: JSZip, dataDir: string): Promise<CollectedFile[]> {
+  const dbPath = path.join(dataDir, "vectors.db");
+
+  let DatabaseSync: typeof import("node:sqlite").DatabaseSync;
+  try {
+    ({ DatabaseSync } = await import("node:sqlite"));
+  } catch {
+    return [];
+  }
+
+  let db: InstanceType<typeof DatabaseSync>;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+  } catch {
+    return []; // no vectors.db → no skill data
+  }
+
+  try {
+    const rows = db.prepare("SELECT * FROM skills WHERE is_head = 1").all() as Record<string, unknown>[];
+    if (rows.length === 0) return [];
+
+    const jsonl = rows.map((r) => JSON.stringify(r)).join("\n");
+    zip.file("skills.jsonl", jsonl);
+    const files: CollectedFile[] = [{
+      path: "skills.jsonl",
+      checksum: `sha256:${await sha256(Buffer.from(jsonl))}`,
+      size: Buffer.byteLength(jsonl),
+    }];
+
+    // Pack each skill's resource directory as skills/resources/<n>/<file>.
+    const storageDirs = [...new Set(
+      rows.map((r) => (typeof r.storage_dir === "string" ? r.storage_dir : "")).filter(Boolean),
+    )];
+    for (let i = 0; i < storageDirs.length; i++) {
+      const res = await collectDir(zip, storageDirs[i], `skills/resources/${i}`);
+      files.push(...res);
+    }
+    return files;
+  } finally {
+    db.close();
+  }
 }
 
 export interface ExportResult {
@@ -91,29 +144,43 @@ export interface ExportResult {
 }
 
 /**
- * Build a portable chat-memory export bundle from a data directory.
+ * Build a portable export bundle from a data directory.
  * Returns the validated manifest + the ZIP buffer (not yet written to disk).
  */
 export async function buildExportBundle(opts: ExportOptions): Promise<ExportResult> {
   const zip = new JSZip();
+  const assetId = opts.instanceId ?? "default";
+  const kinds: ExportAssetKind[] = opts.assets ?? ["chat-memory", "skill"];
+  const assets: ExportAsset[] = [];
 
-  const convFiles = await collectDir(zip, path.join(opts.dataDir, "conversations"), "conversations");
-  const recordFiles =
-    opts.includeRecords === false
-      ? []
-      : await collectDir(zip, path.join(opts.dataDir, "records"), "records");
-
-  const files = [...convFiles, ...recordFiles];
-  if (files.length === 0) {
-    throw new Error("未找到可导出的记忆文件（conversations/ 或 records/ 为空）");
+  if (kinds.includes("chat-memory")) {
+    const convFiles = await collectDir(zip, path.join(opts.dataDir, "conversations"), "conversations");
+    const recordFiles =
+      opts.includeRecords === false
+        ? []
+        : await collectDir(zip, path.join(opts.dataDir, "records"), "records");
+    const files = [...convFiles, ...recordFiles];
+    if (files.length > 0) {
+      assets.push({ type: "chat-memory", id: assetId, files });
+    }
   }
 
-  const assetId = opts.instanceId ?? "default";
+  if (kinds.includes("skill")) {
+    const skillFiles = await collectSkillAsset(zip, opts.dataDir);
+    if (skillFiles.length > 0) {
+      assets.push({ type: "skill", id: assetId, files: skillFiles });
+    }
+  }
+
+  if (assets.length === 0) {
+    throw new Error("未找到可导出的记忆资产（conversations/、records/ 或 skills 为空）");
+  }
+
   const manifest: ExportManifest = {
     schema_version: MANIFEST_SCHEMA_VERSION,
     created_at: new Date().toISOString(),
     ...(opts.instanceId ? { source_instance_id: opts.instanceId } : {}),
-    assets: [{ type: "chat-memory", id: assetId, files }],
+    assets,
   };
 
   // Self-check: the manifest must round-trip through the schema.
@@ -131,6 +198,7 @@ async function main(): Promise<void> {
       "out": { type: "string", short: "o", required: true },
       "instance-id": { type: "string" },
       "skip-records": { type: "boolean", default: false },
+      asset: { type: "string", default: "all" },
     },
   });
 
@@ -140,21 +208,31 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const rawAssets = (values["asset"] ?? "all") as string;
+  const assetKinds: ExportAssetKind[] | undefined =
+    rawAssets === "all" ? undefined : [rawAssets as ExportAssetKind];
+
   const { manifest, zip } = await buildExportBundle({
     dataDir,
     instanceId: values["instance-id"],
     includeRecords: values["skip-records"] ? false : true,
+    assets: assetKinds,
   });
 
   const outPath = values["out"] as string;
   await fs.mkdir(path.dirname(path.resolve(outPath)), { recursive: true });
   await fs.writeFile(outPath, zip);
 
-  const files = manifest.assets[0].files;
-  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  const totalBytes = manifest.assets.reduce(
+    (sum, a) => sum + a.files.reduce((s, f) => s + f.size, 0),
+    0,
+  );
+  const totalFiles = manifest.assets.reduce((sum, a) => sum + a.files.length, 0);
   console.log(`✅ 导出完成 → ${outPath}`);
-  console.log(`   资产: chat-memory (id=${manifest.assets[0].id})`);
-  console.log(`   文件: ${files.length} 个 (${totalBytes} bytes)`);
+  for (const asset of manifest.assets) {
+    console.log(`   资产: ${asset.type} (id=${asset.id}, files=${asset.files.length})`);
+  }
+  console.log(`   文件: ${totalFiles} 个 (${totalBytes} bytes)`);
   console.log(`   schema_version: ${manifest.schema_version}`);
 }
 
