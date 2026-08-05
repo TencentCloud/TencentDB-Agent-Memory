@@ -45,6 +45,7 @@
     "smoke:skill:all": "tsx scripts/smoke-skill/smoke-skill-all.ts",
     "e2e:memory-prompt:vdb-cos": "tsx scripts/e2e-memory-prompt-vdb-cos.ts",
     "import:opik": "tsx scripts/import-opik-to-memory-core/index.ts",
+    "eval:memory": "tsx scripts/eval-memory/cli-entry.ts",
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
   },
   "files": [

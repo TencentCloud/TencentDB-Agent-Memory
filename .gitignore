@@ -132,3 +132,6 @@ coverage/
 
 # Local project docs (generated, not for VCS)
 .local-docs/
+
+# eval-memory run artifacts (reports, per-run gateway data/config)
+MemoryCore/scripts/eval-memory/results/
