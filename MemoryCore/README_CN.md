@@ -248,9 +248,9 @@ MemoryCore/
 npm run read-local-memory
 npm run seed-v2
 
-# 导出记忆资产（chat-memory）为可移植 ZIP（issue #779 第一步）
+# 导出记忆资产为可移植 ZIP（issue #779）。--asset: chat-memory | skill | all（默认 all）
 npm run build:export-memory
-npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out ./memory-backup.zip
+npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out ./memory-backup.zip --asset all
 
 # 导入前校验导出包（dry-run，不写入；issue #779 第二步）
 npm run build:import-memory
