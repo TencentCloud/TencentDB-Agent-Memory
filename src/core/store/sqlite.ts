@@ -251,6 +251,11 @@ export function buildFtsQuery(raw: string): string | null {
 function _sanitizeFts5Input(raw: string): string {
   let s = raw;
 
+  // Remove FTS5 boolean/structural operators.  Must run BEFORE
+  // column-prefix stripping so that "NOT content:secret" is handled
+  // correctly.
+  s = s.replace(/\b(?:AND|OR|NOT|NEAR)\b/gi, " ");
+
   // Remove FTS5 column-prefix patterns: "colname:term" → strip "colname:"
   // Simple heuristic: any word immediately followed by ':' that looks like
   // an identifier (not part of a URL scheme like "https:")
