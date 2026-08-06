@@ -160,6 +160,14 @@ export class TdaiCore {
         });
     }
 
+    // Recalibrate checkpoint counters after store is ready.
+    // This fixes any drift caused by prior cleanup operations or manual deletions.
+    this.storeReady
+      .then(() => this.recalibrateCounters())
+      .catch((err) => {
+        this.logger.warn(`${TAG} Recalibrate skipped (store unavailable): ${err instanceof Error ? err.message : String(err)}`);
+      });
+
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
 
@@ -414,6 +422,33 @@ export class TdaiCore {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  private async recalibrateCounters(): Promise<void> {
+    if (!this.vectorStore) {
+      this.logger.debug?.(`${TAG} Recalibrate skipped: no vectorStore`);
+      return;
+    }
+
+    try {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      const result = await checkpoint.recalibrate({
+        countL0: () => this.vectorStore!.countL0(),
+        countL1: () => this.vectorStore!.countL1(),
+      });
+
+      if (result.updated) {
+        this.logger.info(
+          `${TAG} Checkpoint recalibrated: l0=${result.l0Count}, l1=${result.l1Count}`,
+        );
+      } else if (result.error) {
+        this.logger.warn(`${TAG} Recalibrate warning: ${result.error}`);
+      } else {
+        this.logger.debug?.(`${TAG} Checkpoint counters in sync`);
+      }
+    } catch (err) {
+      this.logger.warn(`${TAG} Recalibrate failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
