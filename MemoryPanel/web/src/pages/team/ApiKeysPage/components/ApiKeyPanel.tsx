@@ -133,7 +133,9 @@ export default function ApiKeyPanel() {
       .then(([agents, tasks]) => {
         if (cancelled) return;
         setCodexAgents(agents.filter((agent) => agent.status === 'active'));
-        setCodexTasks(tasks);
+        // Session initialization only resolves active work. Do not let the
+        // profile generator offer completed tasks that the Proxy will reject.
+        setCodexTasks(tasks.filter((task) => task.status === 'running'));
       })
       .catch((error) => {
         if (!cancelled) tea.notify.error(error);
