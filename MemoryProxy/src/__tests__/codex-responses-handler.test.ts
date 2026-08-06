@@ -85,4 +85,24 @@ describe("native Codex Responses route", () => {
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(await response.text()).toBe(sse);
   });
+
+  it("requires a Hub-generated Team, Agent, and Task selection when session memory is enabled", async () => {
+    const config = createTestConfig();
+    config.sessionInit.enabled = true;
+    const upstream = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", upstream);
+
+    const app = createApp(config);
+    const response = await app.fetch(codexRequest({
+      model: "gpt-5.6-sol",
+      stream: false,
+      input: "This must not become an unbound memory session",
+    }));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "codex_identity_required" },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+  });
 });

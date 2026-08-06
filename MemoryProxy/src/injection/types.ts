@@ -70,7 +70,12 @@ export interface AgentTool {
 /**
  * Protocol identifier.
  */
-export type Protocol = "openai" | "anthropic";
+/**
+ * Wire formats supported by the injection pipeline. `responses` is the native
+ * OpenAI Responses shape used by Codex; it is deliberately distinct from
+ * Chat Completions because its conversation lives in `input`, not `messages`.
+ */
+export type Protocol = "openai" | "anthropic" | "responses";
 
 /**
  * Request-level metadata attached to every AgentContext.

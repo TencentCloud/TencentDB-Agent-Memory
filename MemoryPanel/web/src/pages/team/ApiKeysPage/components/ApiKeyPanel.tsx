@@ -34,9 +34,20 @@ import {
   H3,
   Form,
   Modal,
+  Select,
 } from 'tea-component';
 import { AddIcon } from 'tea-icons-react';
-import { userKeysApi, metaInstancesApi, type UserKey } from '@/lib/teamApi';
+import {
+  agentsApi,
+  metaInstancesApi,
+  tasksApi,
+  teamsApi,
+  userKeysApi,
+  type Agent,
+  type BackendTask,
+  type Team,
+  type UserKey,
+} from '@/lib/teamApi';
 import { useCurrentRole } from '@/services/useCurrentRole';
 import { useAuthStore } from '@/stores/auth';
 import { tea } from '@/lib/tea-bridge';
@@ -54,6 +65,13 @@ export default function ApiKeyPanel() {
   // 优先取 proxy_endpoint —— 开源本地部署 core+proxy 分开时客户端要接的是 proxy；
   // 未配置时回落 gateway_endpoint，等同老行为（线上 gateway 前置 proxy，两者合一）。
   const [clientBaseUrl, setClientBaseUrl] = useState<string | null>(null);
+  const [codexTeams, setCodexTeams] = useState<Team[]>([]);
+  const [codexAgents, setCodexAgents] = useState<Agent[]>([]);
+  const [codexTasks, setCodexTasks] = useState<BackendTask[]>([]);
+  const [codexTeamId, setCodexTeamId] = useState('');
+  const [codexAgentId, setCodexAgentId] = useState('');
+  const [codexTaskId, setCodexTaskId] = useState('');
+  const [codexLoading, setCodexLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +93,58 @@ export default function ApiKeyPanel() {
       cancelled = true;
     };
   }, [auth?.instance_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!auth?.user_id) {
+      setCodexTeams([]);
+      return;
+    }
+    void teamsApi
+      .list()
+      .then((teams) => {
+        if (!cancelled) setCodexTeams(teams.filter((team) => team.status === 'active'));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setCodexTeams([]);
+          tea.notify.error(error);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.user_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCodexAgentId('');
+    setCodexTaskId('');
+    setCodexAgents([]);
+    setCodexTasks([]);
+    if (!codexTeamId || !auth?.user_id) return;
+
+    setCodexLoading(true);
+    void Promise.all([
+      // Proxy session initialization applies the same owner-scoped agent rule.
+      agentsApi.list(codexTeamId, { owner_user_id: auth.user_id }),
+      tasksApi.list(codexTeamId),
+    ])
+      .then(([agents, tasks]) => {
+        if (cancelled) return;
+        setCodexAgents(agents.filter((agent) => agent.status === 'active'));
+        setCodexTasks(tasks);
+      })
+      .catch((error) => {
+        if (!cancelled) tea.notify.error(error);
+      })
+      .finally(() => {
+        if (!cancelled) setCodexLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth?.user_id, codexTeamId]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -144,6 +214,26 @@ export default function ApiKeyPanel() {
     if (Number.isNaN(d.getTime())) return iso;
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
+
+  const codexProfile = (() => {
+    if (!clientBaseUrl || !auth?.instance_id || !codexTeamId || !codexAgentId || !codexTaskId) {
+      return null;
+    }
+    const base = clientBaseUrl.replace(/\/+$/, '');
+    const quote = (value: string) => JSON.stringify(value);
+    return [
+      'model_provider = "tdai_codex"',
+      'model = "gpt-5.6-sol"',
+      '',
+      '[model_providers.tdai_codex]',
+      'name = "TencentDB Agent Memory"',
+      `base_url = ${quote(`${base}/codex/${auth.instance_id}/v1`)}`,
+      'wire_api = "responses"',
+      'env_key = "OPENAI_API_KEY"',
+      `http_headers = { "x-tdai-team-id" = ${quote(codexTeamId)}, "x-tdai-agent-id" = ${quote(codexAgentId)}, "x-tdai-task-id" = ${quote(codexTaskId)} }`,
+    ].join('\n');
+  })();
+
   return (
     <div className="_memory-apikey-body">
       {/* ===== 刚创建的 Key 提示（仅展示一次） ===== */}
@@ -337,6 +427,51 @@ export default function ApiKeyPanel() {
                 </div>
               ));
             })()}
+          </div>
+          <div className="_memory-apikey-codex" aria-busy={codexLoading}>
+            <Text theme="label" parent="div" style={{ marginBottom: 12 }}>
+              {t('apiKey.codex.title')}
+            </Text>
+            <Form layout="inline">
+              <Form.Item label={t('apiKey.codex.team')}>
+                <Select
+                  value={codexTeamId}
+                  onChange={setCodexTeamId}
+                  placeholder={t('apiKey.codex.team.placeholder')}
+                  options={codexTeams.map((team) => ({ value: team.team_id, text: `${team.name} · ${team.team_id}` }))}
+                />
+              </Form.Item>
+              <Form.Item label={t('apiKey.codex.agent')}>
+                <Select
+                  value={codexAgentId}
+                  onChange={setCodexAgentId}
+                  disabled={!codexTeamId || codexLoading || codexAgents.length === 0}
+                  placeholder={t('apiKey.codex.agent.placeholder')}
+                  options={codexAgents.map((agent) => ({ value: agent.agent_id, text: `${agent.name} · ${agent.agent_id}` }))}
+                />
+              </Form.Item>
+              <Form.Item label={t('apiKey.codex.task')}>
+                <Select
+                  value={codexTaskId}
+                  onChange={setCodexTaskId}
+                  disabled={!codexTeamId || codexLoading || codexTasks.length === 0}
+                  placeholder={t('apiKey.codex.task.placeholder')}
+                  options={codexTasks.map((task) => ({ value: task.task_id, text: `${task.title} · ${task.task_id}` }))}
+                />
+              </Form.Item>
+            </Form>
+            {codexProfile ? (
+              <div className="_memory-apikey-codex-profile">
+                <code>{codexProfile}</code>
+                <Copy text={codexProfile}>
+                  <Button>{t('apiKey.codex.copy')}</Button>
+                </Copy>
+              </div>
+            ) : (
+              <Text theme="weak" parent="div" className="_memory-apikey-codex-pending">
+                {t('apiKey.codex.pending')}
+              </Text>
+            )}
           </div>
         </Card.Body>
       </Card>

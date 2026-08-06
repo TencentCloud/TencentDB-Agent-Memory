@@ -902,7 +902,7 @@ export const zhCN = {
 
   // ===== ApiKeyPanel =====
   'apiKey.title': 'User_Key 管理',
-  'apiKey.desc': '管理你的 User Key，用于外部客户端接入（如 CodeBuddy / ClaudeCode CLI）。',
+  'apiKey.desc': '管理你的 User Key，用于外部客户端接入（如 CodeBuddy、Claude Code、Codex）。',
   'apiKey.create': '新建 Key',
   'apiKey.fresh.desc':
     '以下是 {{keyId}} 的完整 Key（仅展示这一次，请立即复制并安全保存；关闭后将无法再次查看明文）：',
@@ -923,6 +923,15 @@ export const zhCN = {
   'apiKey.endpoint.current': '当前实例：',
   'apiKey.endpoint.loading': '正在加载接入地址…',
   'apiKey.endpoint.copy': '复制',
+  'apiKey.codex.title': 'Codex 工作空间绑定',
+  'apiKey.codex.team': 'Team',
+  'apiKey.codex.team.placeholder': '选择 Team',
+  'apiKey.codex.agent': '工作 Agent',
+  'apiKey.codex.agent.placeholder': '选择 Agent',
+  'apiKey.codex.task': 'Task',
+  'apiKey.codex.task.placeholder': '选择 Task',
+  'apiKey.codex.copy': '复制 Profile',
+  'apiKey.codex.pending': '选择 Team、Agent 和 Task 后生成 Profile',
   'apiKey.create.caption': '新建 User_Key',
   'apiKey.create.expiresAt': '过期时间',
   'apiKey.create.expiresAt.extra': '留空表示永不过期',

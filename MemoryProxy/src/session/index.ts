@@ -100,7 +100,7 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  if (agentSource === "claude-code") {
+  if (agentSource === "claude-code" || agentSource === "codex") {
     return ccHandle(
       sessionKey, userId, messages, config, store,
       // protocol MUST be forwarded — without it, applyArtifactsAndContext
@@ -111,7 +111,7 @@ export async function handleSessionInit(
       // hoists role=system back onto body.system as a safety net; but forwarding
       // the correct protocol keeps intent and implementation aligned and
       // survives `injection.enabled=false` where no adapter runs.
-      { stream: reqCtx.stream, modelId: reqCtx.modelId, protocol: reqCtx.protocol },
+      { stream: reqCtx.stream, modelId: reqCtx.modelId, protocol: reqCtx.protocol, agentSource },
       metadataClient,
       userKey,
       spaceId,

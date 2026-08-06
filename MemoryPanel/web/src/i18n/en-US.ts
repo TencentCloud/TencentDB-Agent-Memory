@@ -944,7 +944,7 @@ export const enUS = {
   // ===== ApiKeyPanel =====
   'apiKey.title': 'User_Key Management',
   'apiKey.desc':
-    'Manage your User Keys for external client access (e.g. CodeBuddy / ClaudeCode CLI).',
+    'Manage your User Keys for external client access (e.g. CodeBuddy, Claude Code, and Codex).',
   'apiKey.create': 'New Key',
   'apiKey.fresh.desc':
     'Here is the full Key for {{keyId}} (shown only once. Please copy and save it securely immediately. You will not be able to view it again after closing):',
@@ -966,6 +966,15 @@ export const enUS = {
   'apiKey.endpoint.current': 'Current instance: ',
   'apiKey.endpoint.loading': 'Loading access endpoint…',
   'apiKey.endpoint.copy': 'Copy',
+  'apiKey.codex.title': 'Codex workspace binding',
+  'apiKey.codex.team': 'Team',
+  'apiKey.codex.team.placeholder': 'Select Team',
+  'apiKey.codex.agent': 'Working Agent',
+  'apiKey.codex.agent.placeholder': 'Select Agent',
+  'apiKey.codex.task': 'Task',
+  'apiKey.codex.task.placeholder': 'Select Task',
+  'apiKey.codex.copy': 'Copy Profile',
+  'apiKey.codex.pending': 'Select a Team, Agent, and Task to generate the profile',
   'apiKey.create.caption': 'New User_Key',
   'apiKey.create.expiresAt': 'Expires At',
   'apiKey.create.expiresAt.extra': 'Leave empty for never expires',

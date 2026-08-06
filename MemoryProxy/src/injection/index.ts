@@ -69,6 +69,7 @@ export type { PrewarmOptions, PrewarmResult } from "./prewarm.js";
 export type { ProtocolAdapter } from "./adapters/interface.js";
 export { OpenAIAdapter } from "./adapters/openai.js";
 export { AnthropicAdapter } from "./adapters/anthropic.js";
+export { ResponsesAdapter } from "./adapters/responses.js";
 
 // Injectors
 export { SkillInjector } from "./injectors/skill-injector.js";
@@ -96,6 +97,7 @@ import { InjectionPipeline } from "./pipeline.js";
 import { HookRegistryImpl } from "./registry.js";
 import { OpenAIAdapter } from "./adapters/openai.js";
 import { AnthropicAdapter } from "./adapters/anthropic.js";
+import { ResponsesAdapter } from "./adapters/responses.js";
 import { SkillInjector } from "./injectors/skill-injector.js";
 import { SkillToolsInjector } from "./injectors/skill-tools-injector.js";
 import { TdaiProfileMemoryInjector } from "./injectors/tdai-profile-memory-injector.js";
@@ -201,6 +203,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   const adapters = new Map<string, ProtocolAdapter>();
   adapters.set("openai", new OpenAIAdapter());
   adapters.set("anthropic", new AnthropicAdapter());
+  adapters.set("responses", new ResponsesAdapter());
 
   // Register configured injectors. Each injector reads its own kernel config
   // (`coreSkill`, `tdai`, ...); there is no shared external endpoint anymore.

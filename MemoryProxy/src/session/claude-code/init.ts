@@ -48,6 +48,8 @@ import { getLastUserMessageText } from "./cleaner.js";
 export interface SessionRequestContext {
   stream: boolean;
   modelId: string;
+  /** Storage / audit namespace. Defaults to Claude Code for legacy callers. */
+  agentSource?: string;
   /**
    * Wire protocol of the incoming request. Anthropic keeps the system prompt
    * on `body.system` (not in `messages`), so session-context injection cannot
@@ -520,7 +522,7 @@ async function completeRegistration(
         task_id: regData.task_id,
         agent_id: regData.agent_id,
         user_id: regData.user_id,
-        source: "context_proxy:claude-code",
+        source: `context_proxy:${reqCtx.agentSource ?? "claude-code"}`,
       })
       .catch((err: unknown) => {
         console.warn(
@@ -569,7 +571,7 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  const compositeKey = `${reqCtx.agentSource ?? "claude-code"}:${sessionKey}`;
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
