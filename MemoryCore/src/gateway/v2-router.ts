@@ -967,8 +967,21 @@ async function handleConversationDelete(body: unknown, auth: V2AuthContext, requ
   let deletedCount = 0;
 
   if (message_ids && message_ids.length > 0) {
+    // 按 id 删除时，只使用显式传入的 isolation 维度作为 filter。
+    // resolveIsolation() 在调用方没传 session_id 时会把 sessionId 填成占位值
+    // ("default")，而 rowMatchesIsolation() 会拿它和真实 session 比对 —— 结果
+    // 是任何不带 session_id 的按 id 删除都匹配不上、静默删 0 条。
+    // 与 handleAtomicDelete 的处理保持一致。
+    const iso = deps.requestIsolation;
+    const deleteFilter = iso ? {
+      ...(iso.teamId ? { teamId: iso.teamId } : {}),
+      ...(iso.userId ? { userId: iso.userId } : {}),
+      ...(iso.agentId ? { agentId: iso.agentId } : {}),
+      ...(iso.taskId ? { taskId: iso.taskId } : {}),
+      // 不传 sessionId：按 id 删除不应被默认 sessionId 限制
+    } : undefined;
     for (const id of message_ids) {
-      const ok = await store.deleteL0(id, deps.requestIsolation);
+      const ok = await store.deleteL0(id, deleteFilter);
       if (ok) deletedCount++;
     }
   } else if (session_id) {
