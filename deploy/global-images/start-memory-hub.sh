@@ -44,15 +44,19 @@ detect_host_ip() {
     [[ -n "$ip" ]] && { echo "$ip"; return; }
   fi
   # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
+  # 注意: 必须先 uname 守卫, 否则在 Windows Git Bash 下 `command -v ipconfig` 会命中
+  # Windows 自带 ipconfig.exe, 它不支持 macOS 的 `getifaddr` 子命令, 会输出多行
+  # 网络配置信息, 被脚本当成 IP 塞进 MEMORY_HUB_PROXY_PUBLIC_URL, 容器内 Python
+  # 解析时 SyntaxError. 详见 issue #817.
+  if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] && command -v ipconfig >/dev/null 2>&1; then
     for iface in en0 en1 en2; do
-      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
+      ip=$(ipconfig getifaddr "$iface" 2>/dev/null | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' | head -n1)
       [[ -n "$ip" ]] && { echo "$ip"; return; }
     done
   fi
   # 兜底：ip route（Linux 无 hostname -I 时）
   if command -v ip >/dev/null 2>&1; then
-    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
+    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}' | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' | head -n1)
     [[ -n "$ip" ]] && { echo "$ip"; return; }
   fi
   echo "localhost"
