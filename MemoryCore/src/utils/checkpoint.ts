@@ -179,11 +179,13 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
   private storage: StorageAdapter | undefined;
 
   constructor(dataDir: string, logger?: CheckpointLogger, storage?: StorageAdapter) {
+    this.dataDir = dataDir;
     this.storage = storage;
     if (storage) {
       this.filePath = StoragePaths.checkpoint;
@@ -421,6 +423,77 @@ export class CheckpointManager {
   // ============================
   // L1-specific methods
   // ============================
+
+  /**
+   * Count non-empty JSONL records under a storage prefix (e.g. `records/` for
+   * L1 memories, `conversations/` for L0 conversations). Works in both
+   * storage-backed and fs-based modes; missing directories count as zero.
+   */
+  private async countJsonlRecords(dirPrefix: string): Promise<number> {
+    let files: string[];
+    if (this.storage) {
+      files = await this.storage.readdirNames(dirPrefix, ".jsonl");
+    } else {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const dir = path.default.join(this.dataDir, dirPrefix);
+      try {
+        files = (await fs.default.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+      } catch {
+        return 0;
+      }
+    }
+
+    let count = 0;
+    for (const file of files) {
+      let content: string | null;
+      if (this.storage) {
+        content = await this.storage.readFile(`${dirPrefix}${file}`);
+      } else {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        try {
+          content = await fs.default.readFile(
+            path.default.join(this.dataDir, dirPrefix, file),
+            "utf-8",
+          );
+        } catch {
+          continue;
+        }
+      }
+      if (!content) continue;
+      for (const line of content.split("\n")) {
+        if (line.trim()) count += 1;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Reconcile the aggregate counters with the actual persisted data.
+   *
+   * `total_memories_extracted` and `l0_conversations_count` are only ever
+   * incremented (see `markL1ExtractionComplete` / `captureAtomically`), so any
+   * cleanup — deleting test pipeline states, running memory-cleaner, or manual
+   * JSONL pruning — leaves them permanently overstating reality. This method
+   * recounts the real records from `records/*.jsonl` and
+   * `conversations/*.jsonl` and rewrites the counters to match.
+   *
+   * Intended to be called once on gateway startup.
+   */
+  async recalibrate(): Promise<Checkpoint> {
+    return this.mutate(async (cp) => {
+      const actualL1 = await this.countJsonlRecords(StoragePaths.recordsDir);
+      const actualL0 = await this.countJsonlRecords(StoragePaths.conversationsDir);
+      this.logger.info(
+        `[checkpoint] recalibrate: total_memories_extracted ` +
+        `${cp.total_memories_extracted} → ${actualL1}, l0_conversations_count ` +
+        `${cp.l0_conversations_count} → ${actualL0}`,
+      );
+      cp.total_memories_extracted = actualL1;
+      cp.l0_conversations_count = actualL0;
+    });
+  }
 
   /**
    * Mark L1 extraction completed: reset sinceL1 counter, advance L1 cursor,

@@ -27,6 +27,7 @@ import type { GatewayConfig } from "./config.js";
 import { applyMetadataEnvFromGatewayConfig } from "./metadata-env.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
+import { CheckpointManager } from "../utils/checkpoint.js";
 import { WorkerPermitPool } from "../services/worker-permit-pool.js";
 import { createExtractorAdapter, SkillExtractor as SkillExtractorClass } from "../core/skill/skill-extractor.js";
 import type { SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
@@ -592,6 +593,22 @@ export class TdaiGateway {
       const backend = new LocalStorageBackend(this.config.data.baseDir);
       this.core.setStorage(new StorageAdapter(backend));
       this.logger.info(`${TAG} StorageAdapter initialized (local: ${this.config.data.baseDir})`);
+    }
+
+    // ── Reconcile checkpoint counters with actual persisted data (issue #157) ──
+    // total_memories_extracted / l0_conversations_count only ever increment,
+    // so data cleanup leaves them overstating reality. Recount once at startup.
+    try {
+      const checkpoint = new CheckpointManager(
+        this.config.data.baseDir,
+        this.logger,
+        this.core.getStorage(),
+      );
+      await checkpoint.recalibrate();
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} checkpoint recalibrate skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     // ── Skill module post-wiring (after storage is set) ──
