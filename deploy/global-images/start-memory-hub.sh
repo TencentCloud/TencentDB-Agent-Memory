@@ -36,24 +36,41 @@ MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY:-local}"
 # 显式设了 MEMORY_HUB_PROXY_PUBLIC_URL 环境变量则完全按你给的值来。
 # 显式设为空字符串则 Panel 前端回落到 gateway_endpoint（老行为）。
 # Panel 后端 → Kernel 的转发地址始终走 REMOTE_INSTANCE_URL，不受此变量影响。
+is_usable_ipv4() {
+  local address="${1:-}" octet
+  local -a octets
+
+  [[ "$address" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  IFS='.' read -r -a octets <<< "$address"
+  for octet in "${octets[@]}"; do
+    ((10#$octet <= 255)) || return 1
+  done
+  [[ "$address" != "0.0.0.0" && "$address" != 127.* && "$address" != 169.254.* ]]
+}
+
 detect_host_ip() {
   local ip=""
   # Linux
   if command -v hostname >/dev/null 2>&1; then
-    ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\./ && $0 !~ /^127\./ && $0 !~ /^169\.254\./' | head -n1)
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
+    while IFS= read -r ip; do
+      is_usable_ipv4 "$ip" && { echo "$ip"; return; }
+    done < <(hostname -I 2>/dev/null | tr ' ' '\n')
   fi
   # macOS
-  if command -v ipconfig >/dev/null 2>&1; then
+  # Git Bash exposes Windows ipconfig.exe, which is incompatible with the
+  # macOS-only `getifaddr` subcommand and can print multi-line prose (issue #817).
+  if [[ "$(uname -s 2>/dev/null)" == "Darwin" ]] && command -v ipconfig >/dev/null 2>&1; then
     for iface in en0 en1 en2; do
-      ip=$(ipconfig getifaddr "$iface" 2>/dev/null)
-      [[ -n "$ip" ]] && { echo "$ip"; return; }
+      if ip=$(ipconfig getifaddr "$iface" 2>/dev/null); then
+        is_usable_ipv4 "$ip" && { echo "$ip"; return; }
+      fi
     done
   fi
   # 兜底：ip route（Linux 无 hostname -I 时）
   if command -v ip >/dev/null 2>&1; then
-    ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1); exit}')
-    [[ -n "$ip" ]] && { echo "$ip"; return; }
+    if ip=$(ip -4 route get 1 2>/dev/null | awk '/src/ {for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}'); then
+      is_usable_ipv4 "$ip" && { echo "$ip"; return; }
+    fi
   fi
   echo "localhost"
 }
