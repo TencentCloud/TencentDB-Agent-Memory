@@ -175,6 +175,35 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * FTS5 query operators that must never be forwarded as user-controlled syntax.
+ * They are filtered out instead of quoted because users often type them as
+ * natural-language glue words, and keeping them would add noisy recall terms.
+ */
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+const FTS5_SAFE_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+function sanitizeFtsQueryTokens(rawTokens: string[]): string[] {
+  const sanitized: string[] = [];
+
+  for (const rawToken of rawTokens) {
+    const parts = rawToken.normalize("NFKC").match(FTS5_SAFE_TOKEN_RE) ?? [];
+    for (const part of parts) {
+      if (!part) continue;
+      if (ZH_STOP_WORDS.has(part)) continue;
+      if (FTS5_RESERVED_OPERATORS.has(part.toUpperCase())) continue;
+      sanitized.push(part);
+    }
+  }
+
+  return [...new Set(sanitized)];
+}
+
+function quoteFtsPhraseToken(token: string): string {
+  return `"${token}"`;
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -190,6 +219,11 @@ const ZH_STOP_WORDS = new Set([
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
  *
+ * User-controlled FTS5 syntax is removed before quoting. This keeps MATCH
+ * expressions deterministic: characters like `"`, `'`, `(`, `)`, `:`, `*`,
+ * and reserved words such as `AND` / `OR` / `NOT` / `NEAR` cannot change the
+ * boolean structure of the query or trigger syntax errors.
+ *
  * Example (with jieba):
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
  * Example (fallback):
@@ -198,34 +232,23 @@ const ZH_STOP_WORDS = new Set([
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
 
-  let tokens: string[];
+  let rawTokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
+    rawTokens = jieba.cutForSearch(raw, true).map((t) => t.trim());
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
+    rawTokens =
       raw
-        .match(/[\p{L}\p{N}_]+/gu)
+        .match(FTS5_SAFE_TOKEN_RE)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
   }
 
+  const tokens = sanitizeFtsQueryTokens(rawTokens);
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(quoteFtsPhraseToken);
   return quoted.join(" OR ");
 }
 
