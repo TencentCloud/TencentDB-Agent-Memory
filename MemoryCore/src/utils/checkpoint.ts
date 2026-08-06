@@ -458,6 +458,7 @@ export class CheckpointManager {
             "utf-8",
           );
         } catch {
+          this.logger.warn?.(`[checkpoint] recalibrate: failed to read ${dirPrefix}${file}, skipping`);
           continue;
         }
       }

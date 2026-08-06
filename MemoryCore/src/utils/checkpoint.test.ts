@@ -80,4 +80,33 @@ describe("CheckpointManager.recalibrate", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("handles empty files and files without trailing newline", async () => {
+    const dir = await makeDataDir();
+    try {
+      // Empty shard (whitespace only) + shard without trailing newline
+      await writeFile(join(dir, "records/2026-07-01.jsonl"), "\n  \n\n");
+      await writeFile(join(dir, "records/2026-07-02.jsonl"), '{"id":1}\n{"id":2}');
+      await writeFile(join(dir, "conversations/2026-07-01.jsonl"), "");
+
+      await writeFile(
+        join(dir, ".metadata/recall_checkpoint.json"),
+        JSON.stringify({
+          runner_states: {},
+          pipeline_states: {},
+          l0_conversations_count: 7,
+          total_memories_extracted: 9,
+        }),
+      );
+
+      const mgr = new CheckpointManager(dir);
+      const cp = await mgr.recalibrate();
+
+      // Blank lines are not records; the no-trailing-newline record still counts
+      expect(cp.total_memories_extracted).toBe(2);
+      expect(cp.l0_conversations_count).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
