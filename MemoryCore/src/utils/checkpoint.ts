@@ -424,11 +424,6 @@ export class CheckpointManager {
   // L1-specific methods
   // ============================
 
-  /**
-   * Count non-empty JSONL records under a storage prefix (e.g. `records/` for
-   * L1 memories, `conversations/` for L0 conversations). Works in both
-   * storage-backed and fs-based modes; missing directories count as zero.
-   */
   private async countJsonlRecords(dirPrefix: string): Promise<number> {
     let files: string[];
     if (this.storage) {
@@ -470,18 +465,6 @@ export class CheckpointManager {
     return count;
   }
 
-  /**
-   * Reconcile the aggregate counters with the actual persisted data.
-   *
-   * `total_memories_extracted` and `l0_conversations_count` are only ever
-   * incremented (see `markL1ExtractionComplete` / `captureAtomically`), so any
-   * cleanup — deleting test pipeline states, running memory-cleaner, or manual
-   * JSONL pruning — leaves them permanently overstating reality. This method
-   * recounts the real records from `records/*.jsonl` and
-   * `conversations/*.jsonl` and rewrites the counters to match.
-   *
-   * Intended to be called once on gateway startup.
-   */
   async recalibrate(): Promise<Checkpoint> {
     return this.mutate(async (cp) => {
       const actualL1 = await this.countJsonlRecords(StoragePaths.recordsDir);

@@ -595,9 +595,6 @@ export class TdaiGateway {
       this.logger.info(`${TAG} StorageAdapter initialized (local: ${this.config.data.baseDir})`);
     }
 
-    // ── Reconcile checkpoint counters with actual persisted data (issue #157) ──
-    // total_memories_extracted / l0_conversations_count only ever increment,
-    // so data cleanup leaves them overstating reality. Recount once at startup.
     try {
       const checkpoint = new CheckpointManager(
         this.config.data.baseDir,
