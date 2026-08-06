@@ -465,10 +465,74 @@ export class CheckpointManager {
     return count;
   }
 
+  private async countL0CaptureEvents(): Promise<number> {
+    const lines = await this.readJsonlLines(StoragePaths.conversationsDir);
+    const seen = new Set<string>();
+    let count = 0;
+    for (const line of lines) {
+      try {
+        const record = JSON.parse(line) as { sessionKey?: unknown; recordedAt?: unknown };
+        if (typeof record.sessionKey !== "string" || typeof record.recordedAt !== "string") {
+          count += 1;
+          continue;
+        }
+        const key = `${record.sessionKey}\u0000${record.recordedAt}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          count += 1;
+        }
+      } catch {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  private async readJsonlLines(dirPrefix: string): Promise<string[]> {
+    let files: string[];
+    if (this.storage) {
+      files = await this.storage.readdirNames(dirPrefix, ".jsonl");
+    } else {
+      const fs = await import("node:fs/promises");
+      const path = await import("node:path");
+      const dir = path.default.join(this.dataDir, dirPrefix);
+      try {
+        files = (await fs.default.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+      } catch {
+        return [];
+      }
+    }
+
+    const lines: string[] = [];
+    for (const file of files) {
+      let content: string | null;
+      if (this.storage) {
+        content = await this.storage.readFile(`${dirPrefix}${file}`);
+      } else {
+        const fs = await import("node:fs/promises");
+        const path = await import("node:path");
+        try {
+          content = await fs.default.readFile(
+            path.default.join(this.dataDir, dirPrefix, file),
+            "utf-8",
+          );
+        } catch {
+          this.logger.warn?.(`[checkpoint] recalibrate: failed to read ${dirPrefix}${file}, skipping`);
+          continue;
+        }
+      }
+      if (!content) continue;
+      for (const line of content.split("\n")) {
+        if (line.trim()) lines.push(line);
+      }
+    }
+    return lines;
+  }
+
   async recalibrate(): Promise<Checkpoint> {
     return this.mutate(async (cp) => {
       const actualL1 = await this.countJsonlRecords(StoragePaths.recordsDir);
-      const actualL0 = await this.countJsonlRecords(StoragePaths.conversationsDir);
+      const actualL0 = await this.countL0CaptureEvents();
       this.logger.info(
         `[checkpoint] recalibrate: total_memories_extracted ` +
         `${cp.total_memories_extracted} → ${actualL1}, l0_conversations_count ` +

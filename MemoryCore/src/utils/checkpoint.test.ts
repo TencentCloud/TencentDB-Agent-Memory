@@ -58,6 +58,41 @@ describe("CheckpointManager.recalibrate", () => {
     }
   });
 
+  it("counts L0 capture events, not message lines, for l0_conversations_count", async () => {
+    const dir = await makeDataDir();
+    try {
+      // One capture event wrote 3 messages (same sessionKey + recordedAt), another wrote 2
+      const event1 = "2026-07-01T10:00:00.000Z";
+      const event2 = "2026-07-01T11:00:00.000Z";
+      const lines = [
+        JSON.stringify({ sessionKey: "s1", recordedAt: event1, id: 1 }),
+        JSON.stringify({ sessionKey: "s1", recordedAt: event1, id: 2 }),
+        JSON.stringify({ sessionKey: "s1", recordedAt: event1, id: 3 }),
+        JSON.stringify({ sessionKey: "s2", recordedAt: event2, id: 4 }),
+        JSON.stringify({ sessionKey: "s2", recordedAt: event2, id: 5 }),
+      ].join("\n") + "\n";
+      await writeFile(join(dir, "conversations/2026-07-01.jsonl"), lines);
+
+      await writeFile(
+        join(dir, ".metadata/recall_checkpoint.json"),
+        JSON.stringify({
+          runner_states: {},
+          pipeline_states: {},
+          l0_conversations_count: 9,
+          total_memories_extracted: 0,
+        }),
+      );
+
+      const mgr = new CheckpointManager(dir);
+      const cp = await mgr.recalibrate();
+
+      // 5 message lines but only 2 distinct capture events
+      expect(cp.l0_conversations_count).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("zeroes counters when no records exist", async () => {
     const dir = await makeDataDir();
     try {
