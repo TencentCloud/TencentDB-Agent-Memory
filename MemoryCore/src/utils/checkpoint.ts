@@ -179,10 +179,10 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
-  private readonly dataDir: string;
-  private readonly filePath: string;
-  private readonly logger: CheckpointLogger;
-  private readonly storage?: StorageAdapter;
+  private dataDir: string;
+  private filePath: string;
+  private logger: CheckpointLogger;
+  private storage: StorageAdapter | undefined;
 
   constructor(dataDir: string, logger?: CheckpointLogger, storage?: StorageAdapter) {
     this.dataDir = dataDir;
