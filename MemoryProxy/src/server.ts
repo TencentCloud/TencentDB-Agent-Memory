@@ -2,6 +2,7 @@
 
 import { Hono } from "hono";
 import { handleChatCompletions } from "./handler.js";
+import { handleCodexResponses } from "./codex-responses-handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
 import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
@@ -181,6 +182,7 @@ export function createApp(config: ProxyConfig): Hono {
   app.post("/:agent/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  app.post("/codex/:spaceId/v1/responses", (c) => handleCodexResponses(c, config));
   app.post("/:agent/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
 
   // Agent-prefixed routes without spaceId (deprecated: no credit reporting)

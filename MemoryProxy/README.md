@@ -2,7 +2,7 @@
 
 MemoryProxy is a **transparent LLM request proxy**: instead of having a coding agent (Claude Code / CodeBuddy / ...) talk to the LLM directly, requests are routed through the proxy first. Around each forward it automatically runs session initialization, memory injection, conversation write-back and more, so an agent can tap into the team memory, Skills and Knowledge provided by [MemoryCore](../MemoryCore/README.md) **without changing a single line of code**.
 
-It is "transparent" to both the client and the upstream model — it changes no protocol and forwards OpenAI `/v1/chat/completions` and Anthropic `/v1/messages` verbatim. It just does a few extra things on the way in and out: **session initialization, context injection, conversation write-back, authentication and usage reporting**.
+It is "transparent" to both the client and the upstream model — it changes no protocol and forwards OpenAI `/v1/chat/completions`, OpenAI `/v1/responses` and Anthropic `/v1/messages` verbatim. It just does a few extra things on the way in and out: **session initialization, context injection, conversation write-back, authentication and usage reporting**.
 
 > In one line: MemoryProxy handles "access & forwarding"; MemoryCore handles "storage & processing" of memory. The proxy itself persists no memory data — all Memory / Skill / Knowledge reads and writes go through the MemoryCore Gateway (default `:8420`). For the overall product positioning, see the repo root [README.md](../README.md).
 
@@ -183,12 +183,26 @@ Anthropic Messages client:
 }
 ```
 
+Native Codex Responses client:
+
+```toml
+[model_providers.tdai_codex]
+name = "TDAI Memory Proxy"
+base_url = "http://localhost:8096/codex/<spaceId>/v1"
+env_key = "TDAI_CODEX_MEMORY_API_KEY"
+wire_api = "responses"
+http_headers = { "x-team-id" = "<teamId>", "x-agent-id" = "<agentId>" }
+```
+
+The client key authenticates to MemoryProxy and is never passed to the model upstream. The proxy uses its configured upstream key for the subsequent Responses request. `x-team-id` and `x-agent-id` bind the Codex session to the Team and Agent whose memory should be used.
+
 ## Main HTTP endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `POST` | `/proxy/<spaceId>/v1/chat/completions` | OpenAI-compatible main-model call (with memory instance id) |
 | `POST` | `/proxy/<spaceId>/v1/messages` | Anthropic Messages main-model call |
+| `POST` | `/codex/<spaceId>/v1/responses` | Native OpenAI Responses endpoint for Codex, including SSE pass-through |
 | `POST` | `/v1/messages` | Anthropic Messages API (fallback without spaceId) |
 | `POST` | `/*` | OpenAI-compatible chat endpoint (catch-all) |
 | `ALL`  | `/skill-bridge/**` | reverse-proxy for MemoryCore skill HTTP tools |
