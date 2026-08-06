@@ -174,6 +174,41 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+// FTS5 parses these words as query operators, so never forward them as
+// user-controlled syntax. Dropping them keeps natural-language recall stable.
+const FTS5_RESERVED_OPERATORS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+const FTS5_SAFE_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+const FTS5_NEAR_FUNCTION_DISTANCE_RE = /\bNEAR\s*\(\s*([^)]*?)\s*,\s*\d+\s*\)/gi;
+const FTS5_NEAR_SLASH_DISTANCE_RE = /\bNEAR\s*\/\s*\d+\b/gi;
+
+function normalizeFtsQueryInput(raw: string): string {
+  return raw
+    .normalize("NFKC")
+    .replace(FTS5_NEAR_FUNCTION_DISTANCE_RE, " $1 ")
+    .replace(FTS5_NEAR_SLASH_DISTANCE_RE, " NEAR ");
+}
+
+function sanitizeFtsQueryTokens(rawTokens: string[]): string[] {
+  const tokens: string[] = [];
+
+  for (const rawToken of rawTokens) {
+    const parts = rawToken.normalize("NFKC").match(FTS5_SAFE_TOKEN_RE) ?? [];
+    for (const part of parts) {
+      if (!part) continue;
+      if (ZH_STOP_WORDS.has(part)) continue;
+      if (FTS5_RESERVED_OPERATORS.has(part.toUpperCase())) continue;
+      tokens.push(part);
+    }
+  }
+
+  return [...new Set(tokens)];
+}
+
+function quoteFtsPhraseToken(token: string): string {
+  return `"${token}"`;
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -190,6 +225,10 @@ const ZH_STOP_WORDS = new Set([
  * significantly improved — especially for longer queries and when running
  * in FTS-only fallback mode (no embedding available).
  *
+ * User-provided FTS5 syntax is stripped before phrase quoting. This keeps
+ * operators such as AND / OR / NOT / NEAR, column filters, prefix markers,
+ * and grouping characters from changing the MATCH expression semantics.
+ *
  * Example (with jieba):
  *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
  * Example (fallback):
@@ -197,35 +236,25 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const normalizedRaw = normalizeFtsQueryInput(raw);
 
-  let tokens: string[];
+  let rawTokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
+    rawTokens = jieba.cutForSearch(normalizedRaw, true).map((t) => t.trim());
   } else {
     // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
+    rawTokens =
+      normalizedRaw
+        .match(FTS5_SAFE_TOKEN_RE)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
   }
 
+  const tokens = sanitizeFtsQueryTokens(rawTokens);
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(quoteFtsPhraseToken);
   return quoted.join(" OR ");
 }
 
