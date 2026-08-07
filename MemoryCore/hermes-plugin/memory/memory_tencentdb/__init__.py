@@ -872,7 +872,11 @@ class MemoryTencentdbProvider(MemoryProvider):
                     user_id=self._user_id,
                 )
                 self._record_success()
-                items = result.get("data", {}).get("items", [])
+                # Conversation search returns { data: { messages: [...] } } per
+                # the OpenAPI contract — "items" would be silently empty, so
+                # conversation_search always returned "No conversations found"
+                # (issue #823).
+                items = result.get("data", {}).get("messages", [])
                 if not items:
                     return "No conversations found for this query."
                 lines = []
