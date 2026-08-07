@@ -640,9 +640,13 @@ export async function handleAnthropicMessages(
   }
 
 // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  // Clients without a conversation header (e.g. CodeBuddy 4.10.2~4.10.4) fall back
+  // to the ID injected into the prompt by the SessionStart hook.
+  const { resolveConversationId, extractConversationIdFromPrompt, stripConversationMarker } = await import("./session/session-key.js");
+  const conversationId = resolveConversationId(c) ?? extractConversationIdFromPrompt(body);
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  // Drop the injected marker before forwarding — it is metadata only, not for the upstream LLM.
+  stripConversationMarker(body?.messages as Array<Record<string, unknown>> | undefined);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
