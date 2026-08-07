@@ -513,7 +513,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
-    dataDir: optStr(offloadGroup, "dataDir"),
+    dataDir: optionalAbsoluteDir(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
     maxPairsPerBatch: num(offloadGroup, "maxPairsPerBatch") ?? 20,
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
@@ -668,6 +668,24 @@ function normalizePromptMode(value: string | undefined, fallback: MemoryPromptMo
 function optStr(src: Record<string, unknown>, key: string): string | undefined {
   const v = src[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** True when a string is a non-empty absolute path (POSIX or Windows). */
+function isAbsolutePath(p: string): boolean {
+  const trimmed = p.trim();
+  if (!trimmed) return false;
+  return /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.startsWith("/");
+}
+
+/**
+ * offload.dataDir must be an absolute path per its contract. Empty or relative
+ * values would silently land offload data under the process CWD (issue #521),
+ * so they are treated as omitted (fall back to the default root).
+ */
+function optionalAbsoluteDir(src: Record<string, unknown>, key: string): string | undefined {
+  const v = optStr(src, key);
+  if (!v || !isAbsolutePath(v)) return undefined;
+  return v.trim();
 }
 
 function num(src: Record<string, unknown>, key: string): number | undefined {
