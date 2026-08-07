@@ -280,13 +280,15 @@ Disable the full pipeline (passthrough only): `PROXY_FULL_STACK=0 ./start-proxy.
 
 [CodeBuddy](https://www.codebuddy.ai/) is Tencent's AI coding assistant IDE plugin. By configuring a custom model, you can route CodeBuddy's chat requests through the Proxy to get the same memory capabilities as Claude Code, directly within your IDE.
 
-### ⚠️ Version Restrictions
+### ⚠️ Known Session-Init Limitation
 
-> CodeBuddy versions **4.10.2, 4.10.3, and 4.10.4** have a known bug: these
-> versions do not send a `sessionId` in requests, preventing the Proxy from
-> completing session initialization.
->
-> **Use CodeBuddy ≥ 4.10.5 or ≤ 4.10.1.**
+CodeBuddy versions **4.10.2, 4.10.3, and 4.10.4** have a known bug: these
+versions do not send a `sessionId` / conversation header in requests, preventing
+the Proxy from completing session initialization. The Proxy mitigates this via a
+[`SessionStart` hook](https://www.codebuddy.ai/docs/zh/ide/User-guide/Hooks) that
+injects the conversation ID into the prompt, which the Proxy then extracts and
+uses as a fallback (see [below](#optional-fix-conversation-id-for-broken-codebuddy-versions)).
+If the hook is not configured on these versions, session init will fail.
 
 ### Configuration
 
@@ -321,6 +323,36 @@ Create or edit `~/.codebuddy/models.json` on your development machine (replace t
 
 Once configured, select the model name in CodeBuddy's chat panel and start chatting.
 The session init flow is the same as Claude Code (pick Team → Agent → Task).
+
+#### Optional: fix conversation ID for broken CodeBuddy versions
+
+For CodeBuddy **4.10.2 ~ 4.10.4** (which omit the conversation header), enable the
+provided `SessionStart` hook so the conversation ID is injected into the prompt
+and used by the Proxy as a fallback. Set the hook to point at
+`deploy/global-images/hooks/session_start.py` (absolute path):
+
+```jsonc
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /absolute/path/to/deploy/global-images/hooks/session_start.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Place this under CodeBuddy's project-level config (or `settings.json`) on the
+development machine. The hook only injects the session ID and never blocks
+startup; newer versions (≥ 4.10.5 or ≤ 4.10.1) that already send the header are
+unaffected.
 
 ## Using Proxy with Hermes
 

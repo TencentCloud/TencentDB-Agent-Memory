@@ -256,12 +256,14 @@ Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/age
 
 [CodeBuddy](https://www.codebuddy.ai/) 是腾讯推出的 AI 编程助手 IDE 插件。通过自定义模型配置，你可以把 CodeBuddy 的对话请求路由到 Proxy，在 IDE 内获得与 Claude Code 相同的记忆能力。
 
-### ⚠️ 版本限制
+### ⚠️ 已知的会话初始化限制
 
-> CodeBuddy **4.10.2、4.10.3、4.10.4** 存在已知 Bug：这些版本不会在请求中
-> 携带 `sessionId`，导致 Proxy 无法完成 Session 初始化。
->
-> **请使用 CodeBuddy ≥ 4.10.5 或 ≤ 4.10.1。**
+CodeBuddy **4.10.2、4.10.3、4.10.4** 存在已知 Bug：这些版本不会在请求中
+携带 `sessionId` / 会话头，导致 Proxy 无法完成 Session 初始化。Proxy 通过
+[`SessionStart` hook](https://www.codebuddy.ai/docs/zh/ide/User-guide/Hooks) 兜底：
+将会话 ID 注入到 prompt 中，Proxy 端提取后作为回退（见下方
+[「为有问题的 CodeBuddy 版本修复会话 ID」](#为有问题的-codebuddy-版本修复会话-id)）。
+若这些版本未配置 hook，会话初始化将失败。
 
 ### 配置
 
@@ -295,6 +297,34 @@ Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/age
 
 配置完成后，在 CodeBuddy 对话框中选择刚才配置的模型名称即可开始对话。
 Session init 流程与 Claude Code 一致（选 Team → Agent → Task）。
+
+#### 可选：为有问题的 CodeBuddy 版本修复会话 ID
+
+针对 **4.10.2 ~ 4.10.4**（这些版本不携带会话头），启用项目自带的
+`SessionStart` hook，将会话 ID 注入到 prompt，供 Proxy 端兜底提取。
+将 hook 指向 `deploy/global-images/hooks/session_start.py`（绝对路径）：
+
+```jsonc
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python /绝对路径/deploy/global-images/hooks/session_start.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+将该配置放到开发机 CodeBuddy 的**项目级配置**（或 `settings.json`）中。
+hook 仅注入会话 ID，不会阻断启动；已能正常携带会话头的版本（≥ 4.10.5 或
+≤ 4.10.1）不受影响。
 
 ## 通过 Proxy 使用 Hermes
 
