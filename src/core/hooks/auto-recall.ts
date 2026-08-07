@@ -20,7 +20,7 @@ import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
-import { sanitizeText } from "../../utils/sanitize.js";
+import { escapeXmlTags, sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
@@ -195,17 +195,22 @@ async function performAutoRecallInner(params: {
   //   so it doesn't bust the system prompt cache.
   const stableParts: string[] = [];
   if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+    stableParts.push(
+      `<user-persona>\n${escapeXmlTags(personaContent)}\n</user-persona>`,
+    );
   }
   if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+    stableParts.push(
+      `<scene-navigation>\n${escapeXmlTags(sceneNavigation)}\n</scene-navigation>`,
+    );
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
+    const safeMemoryLines = memoryLines.map(escapeXmlTags);
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${safeMemoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
