@@ -41,6 +41,12 @@ export interface OpenAIEmbeddingConfig {
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). */
   maxInputChars?: number;
+  /**
+   * Max texts per embedding batch request. Some providers enforce a strict
+   * limit (e.g. Dashscope = 10); the default 256 exceeds it, causing L0
+   * embedding to fail with HTTP 400 for batches of 11..256 texts (issue #236).
+   */
+  maxBatchSize?: number;
   /** Timeout per API call in milliseconds (default: 10000). */
   timeoutMs?: number;
 }
@@ -408,6 +414,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly providerName: string;
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
+  private readonly maxBatchSize: number;
   private readonly timeoutMs: number;
   private readonly logger?: Logger;
 
@@ -432,6 +439,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.providerName = config.provider || "openai";
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
+    this.maxBatchSize = config.maxBatchSize && config.maxBatchSize > 0 ? config.maxBatchSize : MAX_BATCH_SIZE;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
     this.logger = logger;
   }
@@ -467,11 +475,12 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       ? texts.map((t) => this.truncateInput(t))
       : texts;
 
-    // Split into sub-batches if needed
-    if (processedTexts.length > MAX_BATCH_SIZE) {
+    // Split into sub-batches if needed (batch limit is provider-specific, see
+    // config.embedding.maxBatchSize — issue #236).
+    if (processedTexts.length > this.maxBatchSize) {
       const results: Float32Array[] = [];
-      for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
-        const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
+      for (let i = 0; i < processedTexts.length; i += this.maxBatchSize) {
+        const chunk = processedTexts.slice(i, i + this.maxBatchSize);
         const chunkResults = await this._callApi(chunk, options?.timeoutMs);
         results.push(...chunkResults);
       }

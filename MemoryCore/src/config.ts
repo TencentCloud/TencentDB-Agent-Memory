@@ -126,6 +126,12 @@ export interface EmbeddingConfig {
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). Texts exceeding this limit are truncated with a warning. */
   maxInputChars: number;
+  /**
+   * Max texts per embedding batch request (default: 256). Some providers
+   * enforce a stricter limit (e.g. Dashscope = 10) and reject larger batches
+   * with HTTP 400 — set this to match your provider (issue #236).
+   */
+  maxBatchSize: number;
   /** Timeout per embedding API call in milliseconds (default: 10000). */
   timeoutMs: number;
   /** Override timeoutMs for recall-path embedding calls (user-facing, should be shorter). Falls back to timeoutMs. */
@@ -588,6 +594,7 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,
+      maxBatchSize: num(embeddingGroup, "maxBatchSize") ?? 256,
       timeoutMs: num(embeddingGroup, "timeoutMs") ?? 10_000,
       recallTimeoutMs: num(embeddingGroup, "recallTimeoutMs") ?? undefined,
       captureTimeoutMs: num(embeddingGroup, "captureTimeoutMs") ?? undefined,
