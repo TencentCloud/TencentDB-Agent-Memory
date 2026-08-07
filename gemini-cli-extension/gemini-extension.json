@@ -1,0 +1,25 @@
+{
+  "name": "memory-tencentdb-gemini",
+  "description": "TencentDB Agent Memory hooks for Gemini CLI",
+  "version": "0.1.0",
+  "settings": [
+    {
+      "name": "TDAI Gateway URL",
+      "description": "Base URL of the memory-tencentdb Gateway, e.g. http://127.0.0.1:8420",
+      "envVar": "TDAI_GATEWAY_URL",
+      "sensitive": false
+    },
+    {
+      "name": "TDAI Gateway API Key",
+      "description": "Optional Bearer token matching TDAI_GATEWAY_API_KEY on the Gateway",
+      "envVar": "TDAI_GATEWAY_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "TDAI Gateway Timeout",
+      "description": "Hook request timeout in milliseconds",
+      "envVar": "TDAI_GATEWAY_TIMEOUT_MS",
+      "sensitive": false
+    }
+  ]
+}
