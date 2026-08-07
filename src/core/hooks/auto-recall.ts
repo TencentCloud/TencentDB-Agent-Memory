@@ -114,7 +114,7 @@ async function performAutoRecallInner(params: {
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
-  let memoryLines: string[] = [];
+  let renderedMemoryLines: string[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
@@ -123,21 +123,28 @@ async function performAutoRecallInner(params: {
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
-    memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
-    memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
+    // Escape before applying the budget so configured limits cover the text
+    // that is actually injected after boundary tags expand into entities.
+    renderedMemoryLines = applyRecallBudget(
+      searchResult.lines.map(escapeXmlTags),
+      cfg.recall,
+      logger,
+    );
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
-    recalledL1Memories = memoryLines.map((line) => {
-      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-      if (match) {
-        const tag = match[1];
-        const content = match[2].trim();
-        const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-        return { content, score: 0, type: typePart };
-      }
-      return { content: line, score: 0, type: "unknown" };
-    });
+    recalledL1Memories = searchResult.lines
+      .slice(0, renderedMemoryLines.length)
+      .map((line) => {
+        const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
+        if (match) {
+          const tag = match[1];
+          const content = match[2].trim();
+          const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
+          return { content, score: 0, type: typePart };
+        }
+        return { content: line, score: 0, type: "unknown" };
+      });
   }
   const tSearchEnd = performance.now();
 
@@ -169,11 +176,11 @@ async function performAutoRecallInner(params: {
   }
   const tSceneEnd = performance.now();
 
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
+  if (renderedMemoryLines.length === 0 && !personaContent && !sceneNavigation) {
     const totalMs = performance.now() - tRecallStart;
     logger?.info(
       `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
+      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${renderedMemoryLines.length},` +
       `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
       `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
       `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms, ` +
@@ -207,10 +214,9 @@ async function performAutoRecallInner(params: {
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
-    const safeMemoryLines = memoryLines.map(escapeXmlTags);
+  if (renderedMemoryLines.length > 0) {
     prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${safeMemoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${renderedMemoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
@@ -225,7 +231,7 @@ async function performAutoRecallInner(params: {
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
     `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-    `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
+    `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${renderedMemoryLines.length},` +
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
     `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
