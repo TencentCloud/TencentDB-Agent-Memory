@@ -1624,6 +1624,29 @@ export class MetadataService {
     return this.archiveAgent(agentId);
   }
 
+  /**
+   * Caller-scoped team agent list. Plain listAgentsByTeam has no membership
+   * check, so any key holder can enumerate agents (including prompt) for an
+   * arbitrary team_id. Gate on active membership, same as listTeamMembersForCaller.
+   * visibility=private rows stay owner-only (aligned with getAgentForCaller).
+   */
+  async listAgentsByTeamForCaller(
+    teamId: string,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+    filter?: AgentFilter,
+  ): Promise<PaginatedResult<AgentEntity>> {
+    await this.requireActiveTeamMember(ctx, teamId);
+    const page = await this.listAgentsByTeam(teamId, pagination, filter);
+    const callerId = this.requireCallerId(ctx);
+    const items = page.items.filter(
+      (agent) => agent.visibility !== "private" || agent.owner_user_id === callerId,
+    );
+    if (items.length === page.items.length) return page;
+    const hidden = page.items.length - items.length;
+    return { ...page, items, total: Math.max(0, page.total - hidden) };
+  }
+
   async createTaskForCaller(input: CreateTaskInput, ctx: V3AuthContext): Promise<TaskEntity> {
     await this.assertTeamExists(input.team_id);
     await this.requireActiveTeamMember(ctx, input.team_id);
@@ -1652,6 +1675,19 @@ export class MetadataService {
     return this.archiveTask(taskId);
   }
 
+  /**
+   * Caller-scoped team task list. Plain listTasksByTeam has no membership check.
+   */
+  async listTasksByTeamForCaller(
+    teamId: string,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+    filter?: TaskFilter,
+  ): Promise<PaginatedResult<TaskEntity>> {
+    await this.requireActiveTeamMember(ctx, teamId);
+    return this.listTasksByTeam(teamId, pagination, filter);
+  }
+
   async linkTaskAgentForCaller(
     taskId: string,
     agentId: string,
@@ -1665,6 +1701,22 @@ export class MetadataService {
   async unlinkTaskAgentForCaller(taskId: string, agentId: string, ctx: V3AuthContext): Promise<void> {
     await this.assertCallerIsTaskCreator(ctx, taskId);
     return this.unlinkTaskAgent(taskId, agentId);
+  }
+
+  /**
+   * Caller-scoped task-agent link list. Plain listTaskAgents has no authz, so any
+   * key holder can enumerate agents linked to an arbitrary task_id. Require the
+   * task to exist and the caller to be an active member of that task's team.
+   */
+  async listTaskAgentsForCaller(
+    taskId: string,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+  ): Promise<PaginatedResult<TaskAgentEntity>> {
+    const task = await this.getTaskById(taskId);
+    if (!task) throw new MetadataError("task_not_found", `task not found: ${taskId}`);
+    await this.requireActiveTeamMember(ctx, task.team_id);
+    return this.listTaskAgents(taskId, pagination);
   }
 
   async appendParticipationLogForCaller(
