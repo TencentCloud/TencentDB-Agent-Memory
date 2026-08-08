@@ -50,9 +50,12 @@ export function AllocateMemoryDialog({
         <Form>
           <Form.Item label={t('allocMemory.descLabel')}><Form.Text>{description}</Form.Text></Form.Item>
           {agents.length === 0 ? (
-            <Alert type="warning">
-              {t('allocMemory.noAgents')}<br />{t('allocMemory.noAgents.reason1')}<br />{t('allocMemory.noAgents.reason2')}<br />{t('allocMemory.noAgents.reason3')}
-            </Alert>
+            // Wrap in Form.Item: bare Alert under Tea Form (table layout) collapses to ~1em and stacks CJK vertically.
+            <Form.Item>
+              <Alert type="warning">
+                {t('allocMemory.noAgents')}<br />{t('allocMemory.noAgents.reason1')}<br />{t('allocMemory.noAgents.reason2')}<br />{t('allocMemory.noAgents.reason3')}
+              </Alert>
+            </Form.Item>
           ) : (
             <Form.Item label={t('allocMemory.agent')} required>
               <Select size="full" value={agentId} onChange={setAgentId} placeholder={t('allocMemory.agent.placeholder')}

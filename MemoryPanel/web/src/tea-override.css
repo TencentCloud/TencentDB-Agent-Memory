@@ -132,8 +132,10 @@ a, .tea-link-external {
   color: var(--tea-color-text-link-default);
 }
 
-/* Tea Alert 在 flex 容器中拉满宽度 */
+/* Tea Alert 在 flex / Form table 布局中拉满宽度，避免被压成单列竖排文字 */
 .tea-alert {
+  width: 100%;
+  box-sizing: border-box;
   margin-left: 0 !important;
   margin-right: 0 !important;
 }
