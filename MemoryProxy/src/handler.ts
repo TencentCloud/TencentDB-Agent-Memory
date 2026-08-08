@@ -842,13 +842,15 @@ export async function handleChatCompletions(
   }
 
   const tdaiClient = assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
-  const tdaiIdentity = injectedSkipped
-    ? null
-    : deriveTdaiIdentity({
-        sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
-        sessionKey,
-      });
+  // 始终尝试派生身份（包含匿名兜底），使 L0 写入对匿名客户端（如 CodeBuddy）也可用。
+  // injection 是否跳过仍由 injectedSkipped 控制，互不影响。
+  const tdaiIdentity = deriveTdaiIdentity({
+    sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
+    userId: userId || null,
+    sessionKey,
+    agentSource,
+    anonymous: config.tdai?.anonymous ?? null,
+  });
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
   // ── Context injection (before cost guard) ──────────────────────────────

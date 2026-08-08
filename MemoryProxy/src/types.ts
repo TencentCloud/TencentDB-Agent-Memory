@@ -263,6 +263,13 @@ export interface TdaiConfig {
     l2Limit: number;
     timeoutMs: number;
   };
+  /** 匿名客户端（无 auth / 无 session 的 CodeBuddy 等）的默认身份兜底，使其记忆可落盘。 */
+  anonymous?: {
+    enabled: boolean;
+    teamId: string;
+    agentId: string;
+    userId: string;
+  } | null;
 }
 
 /**
@@ -774,6 +781,13 @@ export interface RawYamlConfig {
     apiKey?: string;
     serviceId?: string;
     memory?: Partial<TdaiConfig["memory"]>;
+    /** 匿名客户端（无 auth / 无 session 的 CodeBuddy 等）的默认身份兜底，使其记忆可落盘。 */
+    anonymous?: {
+      enabled?: boolean;
+      teamId?: string;
+      agentId?: string;
+      userId?: string;
+    };
   };
   /**
    * Skill/Kernel bridge config. Historically named `coreSkill`; accepted under
