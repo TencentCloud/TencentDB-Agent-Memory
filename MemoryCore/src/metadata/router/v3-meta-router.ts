@@ -246,8 +246,8 @@ const routeTable: Record<string, Handler> = {
     const { team_id, limit, offset, ...filter } = d;
     return s.listAssetsByTeam(team_id, resolvePagination({ limit, offset }), filter);
   }),
-  [`${V3_PREFIX}/asset/list-accessible`]: bind(S.assetListAccessibleSchema, (d, _c, s) =>
-    s.listAccessibleAssets(d)),
+  [`${V3_PREFIX}/asset/list-accessible`]: bind(S.assetListAccessibleSchema, (d, c, s) =>
+    s.listAccessibleAssetsForCaller(d, c)),
 
   [`${V3_PREFIX}/asset/touch-usage`]: bind(S.assetTouchUsageSchema, async (d, c, s) => {
     await s.touchAssetUsageForCaller(d.asset_id, c);
@@ -282,9 +282,9 @@ const routeTable: Record<string, Handler> = {
   [`${V3_PREFIX}/acl/list`]: bind(S.aclListSchema, (d, c, s) =>
     s.listAclByAssetForCaller(d.asset_id, c, resolvePagination(d)),
   ),
-  [`${V3_PREFIX}/acl/check`]: bind(S.aclCheckSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/acl/check`]: bind(S.aclCheckSchema, async (d, c, s) => {
     if (d.agent_id) await requireEntity(s, EntityType.Agent, d.agent_id);
-    return s.checkAssetPermission(d);
+    return s.checkAssetPermissionForCaller(d, c);
   }),
 
   // Auth

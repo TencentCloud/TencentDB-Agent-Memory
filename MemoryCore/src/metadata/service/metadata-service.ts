@@ -1752,4 +1752,57 @@ export class MetadataService {
     await this.assertCallerIsAssetOwnerOrTeamAdmin(ctx, assetId);
     return this.listAclByAsset(assetId, pagination);
   }
+
+  /**
+   * Caller-scoped permission check. The plain checkAssetPermission resolves
+   * the subject from the request body's user_id / user_key, so any holder of
+   * a valid user key can evaluate (and oracle) another user's permissions.
+   * Identity is taken from the authenticated context; a body subject that
+   * disagrees is rejected.
+   */
+  async checkAssetPermissionForCaller(
+    params: CheckPermissionParams,
+    ctx: V3AuthContext,
+  ): Promise<PermCheckResult> {
+    const callerId = this.requireCallerSubject(params, ctx);
+    return this.checkAssetPermission({
+      ...params,
+      user_id: callerId,
+      user_key: undefined,
+    });
+  }
+
+  /**
+   * Caller-scoped accessible-asset listing. The plain listAccessibleAssets
+   * resolves the subject from the request body, so a caller can dump every
+   * asset (including visibility=private) another user can read. Identity is
+   * taken from the authenticated context; a body subject that disagrees is
+   * rejected.
+   */
+  async listAccessibleAssetsForCaller(
+    params: ListAccessibleAssetsParams,
+    ctx: V3AuthContext,
+  ): Promise<PaginatedResult<AssetEntity>> {
+    const callerId = this.requireCallerSubject(params, ctx);
+    return this.listAccessibleAssets({
+      ...params,
+      user_id: callerId,
+      user_key: undefined,
+    });
+  }
+
+  /** Force subject = authenticated caller; reject body spoofing. */
+  private async requireCallerSubject(
+    params: { user_id?: string; user_key?: string },
+    ctx: V3AuthContext,
+  ): Promise<string> {
+    const callerId = this.requireCallerId(ctx);
+    if (params.user_id || params.user_key) {
+      const requested = await resolveUserId(this, params);
+      if (requested !== callerId) {
+        throw new MetadataError("permission_denied", "user_id must match caller");
+      }
+    }
+    return callerId;
+  }
 }
