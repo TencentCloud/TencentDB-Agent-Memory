@@ -128,7 +128,7 @@ const routeTable: Record<string, Handler> = {
 
   // Team
   [`${V3_PREFIX}/team/create`]: bind(S.teamCreateSchema, (d, c, s) => s.createTeamForCaller(d, c)),
-  [`${V3_PREFIX}/team/get`]: bind(S.teamGetSchema, async (d, _c, s) => orNotFound(await s.getTeamById(d.team_id), "team_not_found", d.team_id)),
+  [`${V3_PREFIX}/team/get`]: bind(S.teamGetSchema, async (d, c, s) => orNotFound(await s.getTeamForCaller(d.team_id, c), "team_not_found", d.team_id)),
   [`${V3_PREFIX}/team/update`]: bind(S.teamUpdateSchema, async (d, c, s) => {
     const { team_id, ...patch } = d;
     return s.updateTeamForCaller(team_id, patch, c);
@@ -158,7 +158,7 @@ const routeTable: Record<string, Handler> = {
 
   // Agent
   [`${V3_PREFIX}/agent/create`]: bind(S.agentCreateSchema, (d, c, s) => s.createAgentForCaller(d, c)),
-  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, async (d, _c, s) => orNotFound(await s.getAgentById(d.agent_id), "agent_not_found", d.agent_id)),
+  [`${V3_PREFIX}/agent/get`]: bind(S.agentGetSchema, async (d, c, s) => orNotFound(await s.getAgentForCaller(d.agent_id, c), "agent_not_found", d.agent_id)),
   [`${V3_PREFIX}/agent/update`]: bind(S.agentUpdateSchema, async (d, c, s) => {
     const { agent_id, ...patch } = d;
     return s.updateAgentForCaller(agent_id, patch, c);
@@ -185,7 +185,7 @@ const routeTable: Record<string, Handler> = {
 
   // Task
   [`${V3_PREFIX}/task/create`]: bind(S.taskCreateSchema, (d, c, s) => s.createTaskForCaller(d, c)),
-  [`${V3_PREFIX}/task/get`]: bind(S.taskGetSchema, async (d, _c, s) => orNotFound(await s.getTaskById(d.task_id), "task_not_found", d.task_id)),
+  [`${V3_PREFIX}/task/get`]: bind(S.taskGetSchema, async (d, c, s) => orNotFound(await s.getTaskForCaller(d.task_id, c), "task_not_found", d.task_id)),
   [`${V3_PREFIX}/task/update`]: bind(S.taskUpdateSchema, (d, c, s) => {
     const { task_id, ...patch } = d;
     return s.updateTaskForCaller(task_id, patch, c);

@@ -1596,6 +1596,50 @@ export class MetadataService {
     return member;
   }
 
+  /**
+   * Caller-scoped team read. Plain getTeamById has no membership check, so any
+   * authenticated key holder can load arbitrary team rows by id. Denial returns
+   * null (router maps to team_not_found) rather than becoming an existence oracle.
+   */
+  async getTeamForCaller(teamId: string, ctx: V3AuthContext): Promise<TeamEntity | null> {
+    const team = await this.getTeamById(teamId);
+    if (!team) return null;
+    const callerId = this.requireCallerId(ctx);
+    const member = await this.store.getTeamMember(teamId, callerId);
+    if (!member || member.status !== "active") return null;
+    return team;
+  }
+
+  /**
+   * Caller-scoped agent read. Plain getAgentById returns the full agent row
+   * including prompt with no authz. Require active membership of the agent's
+   * team; visibility=private is owner-only (same private semantics as assets).
+   * Denial returns null → agent_not_found (no existence oracle).
+   */
+  async getAgentForCaller(agentId: string, ctx: V3AuthContext): Promise<AgentEntity | null> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent) return null;
+    const callerId = this.requireCallerId(ctx);
+    if (agent.owner_user_id === callerId) return agent;
+    if (agent.visibility === "private") return null;
+    const member = await this.store.getTeamMember(agent.team_id, callerId);
+    if (!member || member.status !== "active") return null;
+    return agent;
+  }
+
+  /**
+   * Caller-scoped task read. Plain getTaskById has no membership check.
+   * Denial returns null → task_not_found.
+   */
+  async getTaskForCaller(taskId: string, ctx: V3AuthContext): Promise<TaskEntity | null> {
+    const task = await this.getTaskById(taskId);
+    if (!task) return null;
+    const callerId = this.requireCallerId(ctx);
+    const member = await this.store.getTeamMember(task.team_id, callerId);
+    if (!member || member.status !== "active") return null;
+    return task;
+  }
+
   async createAgentForCaller(input: CreateAgentInput, ctx: V3AuthContext): Promise<AgentEntity> {
     await this.assertTeamExists(input.team_id);
     await this.requireActiveTeamMember(ctx, input.team_id);
