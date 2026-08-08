@@ -46,6 +46,8 @@ export const DEFAULT_PIPELINE_STATE: PipelineSessionState = {
 // ============================
 
 export interface TimerEntry {
+  /** Present for local in-process timers so callbacks preserve request-scoped instances. */
+  instanceId?: string;
   member: string;
   fireAtMs: number;
 }

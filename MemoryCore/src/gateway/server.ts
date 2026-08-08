@@ -1633,7 +1633,7 @@ export class TdaiGateway {
             taskType = parsed.taskType;
             teamId = parsed.teamId;
             agentId = parsed.agentId;
-            instanceId = this.config.instanceId ?? "default";
+            instanceId = entry.instanceId ?? this.config.instanceId ?? "default";
           }
           const now = Date.now();
           // Extract targetMmdFile from member for offload-l2 (needed by pipeline-worker lockKey)
