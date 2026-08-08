@@ -1499,6 +1499,36 @@ export class MetadataService {
     return team;
   }
 
+  /**
+   * Agent readable by caller: owner always; visibility=private is owner-only;
+   * otherwise active membership of the agent's team. Same read model as the
+   * entity-get ForCaller path. Returns null on denial (no existence oracle).
+   */
+  private async readableAgentForCaller(
+    agentId: string,
+    ctx: V3AuthContext,
+  ): Promise<AgentEntity | null> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent) return null;
+    const callerId = this.requireCallerId(ctx);
+    if (agent.owner_user_id === callerId) return agent;
+    if (agent.visibility === "private") return null;
+    const member = await this.store.getTeamMember(agent.team_id, callerId);
+    if (!member || member.status !== "active") return null;
+    return agent;
+  }
+
+  private async requireReadableAgentForCaller(
+    agentId: string,
+    ctx: V3AuthContext,
+  ): Promise<AgentEntity> {
+    const agent = await this.readableAgentForCaller(agentId, ctx);
+    if (!agent) {
+      throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+    }
+    return agent;
+  }
+
   private async assertCallerIsAgentOwner(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
     const agent = await this.getAgentById(agentId);
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
@@ -1726,6 +1756,75 @@ export class MetadataService {
   ): Promise<void> {
     await this.assertCallerIsAgentOwner(ctx, agentId);
     return this.setAgentFixedAssets(agentId, bindings);
+  }
+
+  /**
+   * Caller-scoped fixed-asset binding list. Plain listAgentFixedAssets has no
+   * authz, so any key holder can enumerate bindings for an arbitrary agent_id.
+   * Gate on the same agent-read model as entity get (membership / private owner).
+   */
+  async listAgentFixedAssetsForCaller(
+    agentId: string,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+  ): Promise<PaginatedResult<FixedAssetBindingEntity>> {
+    await this.requireReadableAgentForCaller(agentId, ctx);
+    return this.listAgentFixedAssets(agentId, pagination);
+  }
+
+  /**
+   * Caller-scoped list-with-detail. The raw path returns agent.prompt plus bound
+   * asset metadata with no authz. Denial maps to agent_not_found.
+   */
+  async listAgentFixedAssetsWithDetailForCaller(
+    params: ListWithDetailParams,
+    ctx: V3AuthContext,
+  ): Promise<AgentFixedAssetDetailResult> {
+    await this.requireReadableAgentForCaller(params.agent_id, ctx);
+    return this.listAgentFixedAssetsWithDetail(params);
+  }
+
+  /**
+   * Caller-scoped summary-by-agents. Plain summarize accepts arbitrary agent_ids
+   * and returns binding-type counts with no membership check. Filter the request
+   * to agents the caller can read; unauthorized ids get empty counts so the
+   * response shape stays stable without leaking binding inventory.
+   */
+  async summarizeAgentFixedAssetsByAgentsForCaller(
+    params: SummarizeAgentFixedAssetsParams,
+    ctx: V3AuthContext,
+  ): Promise<AgentFixedAssetSummaryResult> {
+    const requested = [...new Set(params.agent_ids.filter((id) => id.length > 0))];
+    if (requested.length === 0) {
+      return { items: [], total: 0 };
+    }
+
+    const allowed: string[] = [];
+    for (const agentId of requested) {
+      if (await this.readableAgentForCaller(agentId, ctx)) {
+        allowed.push(agentId);
+      }
+    }
+
+    const summarized = await this.summarizeAgentFixedAssetsByAgents({
+      agent_ids: allowed,
+      asset_id: params.asset_id,
+    });
+    const byAgent = new Map(summarized.items.map((item) => [item.agent_id, item]));
+    const emptyCounts = (): FixedAssetTypeCounts => ({
+      skill: 0,
+      code_graph: 0,
+      llm_wiki: 0,
+      chat_memory: 0,
+    });
+
+    const items: AgentFixedAssetSummary[] = requested.map((agent_id) => {
+      const hit = byAgent.get(agent_id);
+      if (hit) return hit;
+      return { agent_id, counts: emptyCounts(), total: 0 };
+    });
+
+    return { items, total: items.length };
   }
 
   async grantAclForCaller(input: GrantAclInput, ctx: V3AuthContext): Promise<AclEntity> {
