@@ -261,6 +261,22 @@ export class StatefulPipelineManager {
     // 取消 idle timer
     await this.stateBackend.removeTimer(effectiveInstanceId, buildPipelineTimerMember(sessionKey, "L1_idle", { teamId, agentId }));
 
+    // Issue #549: /session/end must actually fire L1 with whatever has
+    // accumulated (the documented "session ends → L1 fires" semantics), not
+    // just cancel the idle timer. Enqueue an L1 task to force extraction.
+    const now = Date.now();
+    await this.stateBackend.enqueueTask({
+      id: `L1-${sessionKey}-${now}`,
+      type: "L1",
+      instanceId: effectiveInstanceId,
+      sessionId: sessionKey,
+      teamId,
+      agentId,
+      priority: 0,
+      data: { instanceId: effectiveInstanceId, teamId, agentId, ...serializeTraceContext() },
+      createdAt: now,
+    });
+
     // 入队 flush task
     await this.stateBackend.enqueueTask({
       id: `flush-${sessionKey}-${Date.now()}`,
