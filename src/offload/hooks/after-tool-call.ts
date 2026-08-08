@@ -36,8 +36,6 @@ import {
   buildL3TriggerReport,
   reportL3Trigger,
   recordToolCall,
-  REPORT_TYPE_L3,
-  L3_FIXED_PATCH_COST_TOKENS,
 } from "../state-reporter.js";
 
 function isHeartbeatToolCall(event: any, cachedParams: any): boolean {

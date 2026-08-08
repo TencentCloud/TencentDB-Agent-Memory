@@ -4,8 +4,6 @@
  * OpenClaw runtime patch has been removed — the after_tool_call hook now uses
  * the official OpenClaw getSessionMessages API instead. See #851.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
