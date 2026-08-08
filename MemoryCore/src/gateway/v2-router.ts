@@ -985,6 +985,22 @@ async function handleConversationDelete(body: unknown, auth: V2AuthContext, requ
     }
   }
 
+  // Issue #871: an explicit delete that removed nothing must not silently
+  // return code 0 — the caller cannot distinguish "nothing matched" from
+  // "delete not implemented / isolation mismatch". Fail loudly so a memory
+  // store that cannot be corrected is never silently trusted.
+  if (deletedCount === 0 && (message_ids?.length || session_id)) {
+    return errorEnvelope(
+      400,
+      `No messages deleted: L0 backend did not remove ` +
+      (message_ids?.length
+        ? `${message_ids.length} message(s)`
+        : `session "${session_id}"`) +
+      ` (verify isolation ids match the records, or that delete is supported)`,
+      requestId,
+    );
+  }
+
   // Report memory deletion (non-fatal)
   if (deps.quotaManager && deletedCount > 0) {
     deps.quotaManager.reportMemoryDeleted(auth.serviceId, deletedCount).catch(() => {});
