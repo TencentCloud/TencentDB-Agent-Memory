@@ -62,6 +62,7 @@ export type L3TriggerStage = "after_tool_call" | "llm_input" | "assemble";
 export type PatchEffective = "effective" | "missing_field" | "empty_messages" | "n/a";
 
 /** Inspects `event.messages` to classify patch health for after_tool_call. */
+/** @deprecated Use getSessionMessages API instead. See #851 */
 export function classifyPatchEffectiveness(
   event: unknown,
   stage: L3TriggerStage,

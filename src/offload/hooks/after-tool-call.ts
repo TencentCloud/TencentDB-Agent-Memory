@@ -34,7 +34,6 @@ import type { PluginConfig, PluginLogger, ToolPair } from "../types.js";
 import type { BackendClient } from "../backend-client.js";
 import {
   buildL3TriggerReport,
-  classifyPatchEffectiveness,
   reportL3Trigger,
   recordToolCall,
   REPORT_TYPE_L3,
@@ -92,6 +91,7 @@ function _tryParseArgs(args: any): any {
 }
 
 export function createAfterToolCallHandler(
+  getSessionMessages: ((sessionKey: string, limit?: number) => Promise<any[] | undefined>) | undefined,
   stateManager: OffloadStateManager,
   logger: PluginLogger,
   getContextWindow: (() => number) | undefined,
@@ -114,37 +114,23 @@ export function createAfterToolCallHandler(
     const hasMsgs = msgsValue && Array.isArray(msgsValue);
     logger.debug?.(`[context-offload] after_tool_call event keys=[${eventKeys.join(",")}], hasMsgsKey=${hasMsgsKey}, msgsType=${typeof msgsValue}, isArray=${Array.isArray(msgsValue)}, len=${hasMsgs ? msgsValue.length : "N/A"}`);
 
-    // ── Patch-effectiveness detection ──
-    // The upstream runtime patch is expected to populate event.messages with
-    // the current conversation. If it is missing/empty the patch is NOT in
-    // effect and L3 compression cannot run from this hook. Report that
-    // explicitly so operators can detect misconfigurations.
-    const _patchStatus = classifyPatchEffectiveness(event, "after_tool_call");
-    if (_patchStatus.status !== "effective") {
-      logger.warn(
-        `[context-offload] after_tool_call patch check: NOT EFFECTIVE (status=${_patchStatus.status}). ` +
-        `event.messages is ${Array.isArray(msgsValue) ? "empty array" : typeof msgsValue}. ` +
-        `L3 compression will be skipped this turn.`,
-      );
-      if (backendClient) {
-        try {
-          backendClient
-            .storeState({
-              reportType: REPORT_TYPE_L3,
-              reportedAt: new Date().toISOString(),
-              sessionKey: _sk ?? null,
-              stage: "after_tool_call",
-              triggerReason: "patch_not_effective",
-              patch: _patchStatus,
-              pluginState: {
-                l15Settled: stateManager.l15Settled === true,
-                pendingCount: stateManager.getPendingCount(),
-                activeMmdFile: stateManager.getActiveMmdFile?.() ?? null,
-              },
-              fixedPatchCostTokens: L3_FIXED_PATCH_COST_TOKENS,
-            })
-            .catch((err) => logger.warn(`[context-offload] patch-miss report failed: ${err}`));
-        } catch { /* ignore */ }
+    // ── Message recovery via official OpenClaw API ──
+    // When event.messages is missing (e.g. the runtime patch is not in effect),
+    // use the official OpenClaw getSessionMessages API to retrieve conversation
+    // messages. This replaces the fragile dist-file monkey-patch approach.
+    // See https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/851
+    if (!hasMsgs && getSessionMessages && _sk) {
+      try {
+        const sessionMessages = await getSessionMessages(_sk, 50);
+        if (sessionMessages && sessionMessages.length > 0) {
+          event.messages = sessionMessages;
+          logger.debug?.(
+            `[context-offload] after_tool_call recovered messages from getSessionMessages API ` +
+            `(len=${sessionMessages.length})`,
+          );
+        }
+      } catch (err) {
+        logger.warn(`[context-offload] after_tool_call getSessionMessages failed: ${err}`);
       }
     }
 
