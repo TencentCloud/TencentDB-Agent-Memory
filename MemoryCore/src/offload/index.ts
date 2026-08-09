@@ -1402,16 +1402,22 @@ class OffloadContextEngine {
     // Resolve stateManager: prefer params._offloadManager (set by bootstrap),
     // then fall back to SessionRegistry resolve (framework may pass different params objects).
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
-    if (!stateManager && params.sessionKey) {
-      try {
-        const entry = await this._sessions.resolveIfAllowed(params.sessionKey, params.sessionId);
-        if (entry) {
-          stateManager = entry.manager;
-          params._offloadManager = entry.manager; // cache for compact/afterTurn
-          logger.debug?.(`[context-offload] assemble: resolved manager from SessionRegistry for ${params.sessionKey}`);
+    if (!stateManager) {
+      // OpenClaw's afterTurn/assemble call passes sessionId but not always
+      // sessionKey — fall back to those so L1.5 / L3 / MMD still resolve their
+      // session manager (issue #878). Mirrors the compact() resolution path.
+      const sessionKey = params.sessionKey ?? params.sessionId ?? params.sessionTarget?.sessionKey;
+      if (sessionKey) {
+        try {
+          const entry = await this._sessions.resolveIfAllowed(sessionKey, params.sessionId);
+          if (entry) {
+            stateManager = entry.manager;
+            params._offloadManager = entry.manager; // cache for compact/afterTurn
+            logger.debug?.(`[context-offload] assemble: resolved manager from SessionRegistry for ${sessionKey}`);
+          }
+        } catch (err) {
+          logger.warn(`[context-offload] assemble: failed to resolve session ${sessionKey}: ${err}`);
         }
-      } catch (err) {
-        logger.warn(`[context-offload] assemble: failed to resolve session ${params.sessionKey}: ${err}`);
       }
     }
     const pCfg = this._pCfg;
@@ -2259,11 +2265,18 @@ class OffloadContextEngine {
     const logger = this._logger;
     logger.debug?.(`[context-offload] >>> CE.afterTurn CALLED: sessionKey=${_params?.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = _params?._offloadManager;
-    if (!stateManager && _params?.sessionKey && !isInternalMemorySession(_params.sessionKey)) {
-      try {
-        const entry = this._sessions.get(_params.sessionKey);
-        stateManager = entry?.manager;
-      } catch { /* ignore */ }
+    if (!stateManager) {
+      // OpenClaw's afterTurn hook may pass sessionId (or sessionTarget.sessionKey)
+      // without a top-level sessionKey — fall back so per-turn L1 flush still runs
+      // (issue #878). Mirrors the assemble() resolution path.
+      const sessionKey = _params?.sessionKey ?? _params?.sessionId ?? _params?.sessionTarget?.sessionKey;
+      if (sessionKey && !isInternalMemorySession(sessionKey)) {
+        try {
+          const entry = this._sessions.get(sessionKey);
+          stateManager = entry?.manager;
+          if (stateManager) _params!._offloadManager = stateManager; // cache
+        } catch { /* ignore */ }
+      }
     }
     if (!stateManager) return;
     try {
