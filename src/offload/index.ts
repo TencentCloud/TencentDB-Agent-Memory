@@ -1393,20 +1393,23 @@ class OffloadContextEngine {
   async assemble(params: any) {
     const { messages, tokenBudget, prompt } = params;
     const logger = this._logger;
-    logger.debug?.(`[context-offload] assemble CALLED: msgs=${messages?.length ?? 0}, budget=${tokenBudget ?? "N/A"}, prompt=${typeof prompt === "string" ? prompt.length + " chars" : "none"}, sessionKey=${params.sessionKey ?? "?"}`);
+    // OpenClaw's context-engine API does not guarantee a sessionKey on every
+    // call. Fall back to sessionTarget?.sessionKey or sessionId when missing.
+    const effectiveSessionKey = params.sessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId ?? params.key;
+    logger.debug?.(`[context-offload] assemble CALLED: msgs=${messages?.length ?? 0}, budget=${tokenBudget ?? "N/A"}, prompt=${typeof prompt === "string" ? prompt.length + " chars" : "none"}, sessionKey=${effectiveSessionKey ?? "?"}`);
     // Resolve stateManager: prefer params._offloadManager (set by bootstrap),
     // then fall back to SessionRegistry resolve (framework may pass different params objects).
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
-    if (!stateManager && params.sessionKey) {
+    if (!stateManager && effectiveSessionKey && !isInternalMemorySession(effectiveSessionKey)) {
       try {
-        const entry = await this._sessions.resolveIfAllowed(params.sessionKey, params.sessionId);
+        const entry = await this._sessions.resolveIfAllowed(effectiveSessionKey, params.sessionId);
         if (entry) {
           stateManager = entry.manager;
           params._offloadManager = entry.manager; // cache for compact/afterTurn
-          logger.debug?.(`[context-offload] assemble: resolved manager from SessionRegistry for ${params.sessionKey}`);
+          logger.debug?.(`[context-offload] assemble: resolved manager from SessionRegistry for ${effectiveSessionKey}`);
         }
       } catch (err) {
-        logger.warn(`[context-offload] assemble: failed to resolve session ${params.sessionKey}: ${err}`);
+        logger.warn(`[context-offload] assemble: failed to resolve session ${effectiveSessionKey}: ${err}`);
       }
     }
     const pCfg = this._pCfg;
@@ -2150,9 +2153,10 @@ class OffloadContextEngine {
     const logger = this._logger;
     logger.debug?.(`[context-offload] >>> CE.compact CALLED: sessionKey=${params.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
-    if (!stateManager && params.sessionKey) {
+    if (!stateManager && (params.sessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId ?? params.key)) {
       try {
-        const entry = await this._sessions.resolveIfAllowed(params.sessionKey, params.sessionId);
+        const effectiveSessionKey = params.sessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId ?? params.key;
+        const entry = await this._sessions.resolveIfAllowed(effectiveSessionKey, params.sessionId);
         if (entry) stateManager = entry.manager;
       } catch { /* ignore */ }
     }
@@ -2259,6 +2263,16 @@ class OffloadContextEngine {
         const entry = this._sessions.get(_params.sessionKey);
         stateManager = entry?.manager;
       } catch { /* ignore */ }
+    }
+    // Also try sessionTarget?.sessionKey or sessionId when sessionKey is missing
+    if (!stateManager) {
+      const effectiveSessionKey = _params?.sessionKey ?? _params?.sessionTarget?.sessionKey ?? _params?.sessionId ?? _params?.key;
+      if (effectiveSessionKey && !isInternalMemorySession(effectiveSessionKey)) {
+        try {
+          const entry = this._sessions.get(effectiveSessionKey);
+          stateManager = entry?.manager;
+        } catch { /* ignore */ }
+      }
     }
     if (!stateManager) return;
     try {
