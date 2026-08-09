@@ -9,8 +9,9 @@
  * 规则：
  *   - 扫描 .ts / .tsx 文件
  *   - 排除 src/i18n/ 目录（locale 文件本身就是中文/英文映射表）
- *   - 排除代码注释（// 开头、* 开头、/* 开头的行）
- *   - 检测含 CJK 统一汉字（U+4E00–U+9FFF）的行
+ *   - 剥离所有代码注释（行注释、块注释、JSX 注释），
+ *     在剥离时考虑字符串字面量，避免误伤 "http://..." 中的 //
+ *   - 检测剥离注释后仍含 CJK 统一汉字（U+4E00–U+9FFF）的行
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
@@ -36,41 +37,86 @@ function walk(dir, excludeDirs = []) {
   return out;
 }
 
-/** 判断一行是否为纯注释行（// 开头、* 开头、/* 开头） */
-function isCommentLine(line) {
-  const trimmed = line.trim();
-  return (
-    trimmed.startsWith('//') ||
-    trimmed.startsWith('*') ||
-    trimmed.startsWith('/*')
-  );
-}
-
 /**
- * 剥离行内注释（// 到行尾），但避免误删字符串字面量中的 //。
- * 粗略方法：从左到右扫描，跟踪引号状态，只在引号外遇到 // 时截断。
+ * 逐行剥离代码注释，返回与原文件等行数的处理后字符串数组。
+ *
+ * 剥离类型：
+ *   - // 行注释（直到行尾）
+ *   - 块注释（可能跨行）
+ *   - JSX 注释（可能跨行）
+ *
+ * 在字符串字面量（单/双引号/模板字符串）内的注释符不被处理，
+ * 避免 "http://..." 被误伤。
+ *
+ * 跨行状态（inBlock, inJsx, inTemplate）在行之间传递。
  */
-function stripInlineComment(line) {
-  let inSingle = false;  // 单引号
-  let inDouble = false;  // 双引号
-  let inTemplate = false; // 模板字符串反引号
-  let escaped = false;
-  for (let i = 0; i < line.length - 1; i++) {
-    const ch = line[i];
-    const next = line[i + 1];
-    if (escaped) { escaped = false; continue; }
-    if (ch === '\\') { escaped = true; continue; }
-    if (!inDouble && !inTemplate && ch === "'") inSingle = !inSingle;
-    else if (!inSingle && !inTemplate && ch === '"') inDouble = !inDouble;
-    else if (!inSingle && !inDouble && ch === '`') inTemplate = !inTemplate;
-    else if (!inSingle && !inDouble && !inTemplate && ch === '/' && next === '/') {
-      return line.slice(0, i);
+function stripCommentsByLine(content) {
+  const lines = content.split('\n');
+  const output = [];
+  let inBlock = false;       // 块注释
+  let inJsx = false;         // JSX 注释
+  let inTemplate = false;    // `...`（可跨行）
+
+  for (let line of lines) {
+    let result = '';
+    let i = 0;
+    let inSingle = false;
+    let inDouble = false;
+    let escaped = false;
+
+    while (i < line.length) {
+      const ch = line[i];
+      const next = line[i + 1];
+
+      if (escaped) { escaped = false; i++; continue; }
+      if ((inSingle || inDouble) && ch === '\\') { escaped = true; i++; continue; }
+
+      // ── JSX comment ──
+      if (!inSingle && !inDouble && !inTemplate && ch === '{' && line.slice(i, i + 3) === '{/*') {
+        inJsx = true;
+        i += 3;
+        continue;
+      }
+      if (inJsx) {
+        if (ch === '*' && next === '}') { inJsx = false; i += 2; continue; }
+        i++;
+        continue;
+      }
+
+      // ── Block comment ──
+      if (!inSingle && !inDouble && !inTemplate && ch === '/' && next === '*') {
+        inBlock = true;
+        i += 2;
+        continue;
+      }
+      if (inBlock) {
+        if (ch === '*' && next === '/') { inBlock = false; i += 2; continue; }
+        i++;
+        continue;
+      }
+
+      // ── Line comment: // ──
+      if (!inSingle && !inDouble && !inTemplate && ch === '/' && next === '/') {
+        break; // 跳过本行剩余内容
+      }
+
+      // ── 字符串字面量状态追踪 ──
+      if (!inDouble && !inTemplate && ch === "'") inSingle = !inSingle;
+      else if (!inSingle && !inTemplate && ch === '"') inDouble = !inDouble;
+      else if (!inSingle && !inDouble && ch === '`') inTemplate = !inTemplate;
+
+      result += ch;
+      i++;
     }
+
+    output.push(result);
   }
-  return line;
+
+  return output;
 }
 
 const CJK_REGEX = /[\u4e00-\u9fff]/;
+const IGNORE_REGEX = /i18n-ignore/;
 
 function scan() {
   const excludeDirs = ['i18n'];
@@ -81,14 +127,15 @@ function scan() {
 
   for (const file of files) {
     const content = readFileSync(file, 'utf-8');
-    const lines = content.split('\n');
+    const strippedLines = stripCommentsByLine(content);
+    const originalLines = content.split('\n');
     const hits = [];
 
-    lines.forEach((line, i) => {
-      if (isCommentLine(line)) return;
-      const codeOnly = stripInlineComment(line);
-      if (CJK_REGEX.test(codeOnly)) {
-        hits.push({ line: i + 1, content: line });
+    strippedLines.forEach((stripped, i) => {
+      // 尊重 // i18n-ignore 或 /* i18n-ignore */ 注释
+      if (IGNORE_REGEX.test(originalLines[i])) return;
+      if (CJK_REGEX.test(stripped)) {
+        hits.push({ line: i + 1, content: originalLines[i] });
         totalHits++;
       }
     });

@@ -18,7 +18,7 @@ export function LanguageSwitcher() {
       button={
         <button type="button" className="_memory-lang-switcher-btn" title="Language">
           <InternetIcon size={16} />
-          <span className="_memory-lang-switcher-label">{current === 'zh-CN' ? '中文' : 'English'}</span>
+          <span className="_memory-lang-switcher-label">{current === 'zh-CN' ? '中文' : 'English'}</span> {/* i18n-ignore: native language name */}
         </button>
       }
     >
@@ -28,7 +28,7 @@ export function LanguageSwitcher() {
             selected={current === 'zh-CN'}
             onClick={() => { changeLanguage('zh-CN'); }}
           >
-            中文
+            中文 {/* i18n-ignore: native language name */}
           </List.Item>
           <List.Item
             selected={current === 'en-US'}
