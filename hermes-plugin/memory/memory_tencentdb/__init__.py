@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
 
-from .client import MemoryTencentdbSdkClient
+from .client import MemoryTencentdbSdkClient, RECALL_TIMEOUT
 from .supervisor import GatewaySupervisor
 
 logger = logging.getLogger(__name__)
@@ -1167,6 +1167,9 @@ class MemoryTencentdbProvider(MemoryProvider):
 
         Fail-open: any error is logged and swallowed — sealing is a
         durability improvement, never a hard dependency for the host.
+        The end_session request is bounded by RECALL_TIMEOUT: seals fire
+        during context compression, so a hung Gateway must add at most
+        ~5s there, never the full client default.
         """
         if not (self._client and self._gateway_available) or not self._session_id:
             return
@@ -1175,6 +1178,7 @@ class MemoryTencentdbProvider(MemoryProvider):
             self._client.end_session(
                 session_key=self._session_id,
                 user_id=self._user_id,
+                timeout=RECALL_TIMEOUT,
             )
             logger.info(
                 "memory-tencentdb sealed session %s (%s)",

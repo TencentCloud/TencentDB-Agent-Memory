@@ -207,6 +207,7 @@ class TestSealHooks:
         assert result == ""  # no summary contribution
         provider._client.end_session.assert_called_once_with(
             session_key="sess-original", user_id="tester",
+            timeout=client_module.RECALL_TIMEOUT,
         )
         assert "sealed session sess-original" in catch_provider_logs.text()
         assert "pre_compress" in catch_provider_logs.text()
@@ -220,6 +221,7 @@ class TestSealHooks:
         )
         provider._client.end_session.assert_called_once_with(
             session_key="sess-original", user_id="tester",
+            timeout=client_module.RECALL_TIMEOUT,
         )
         assert provider._session_id == "sess-next"
         assert "session_switch" in catch_provider_logs.text()
