@@ -363,6 +363,24 @@ describe("memory read routes (P3, integration)", () => {
     expect(body.consolidation.inFlight).toBe(false);
   });
 
+  // Regression: /status used to be registered TWICE. The first branch served a
+  // consolidation-only body and the second — the one README-STATUS.md
+  // documents (counters/totals/lastError) — was unreachable. One handler now
+  // serves both, so this asserts the documented fields alongside P6.
+  it("GET /status serves the documented counters/totals AND the consolidation block", async () => {
+    const body = (await (await get("/status")).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(body.counters).toBeDefined();
+    expect(body.totals).toBeDefined();
+    expect(body).toHaveProperty("lastError");
+    expect(body).toHaveProperty("vectorStore");
+    expect(body.consolidation).toBeDefined();
+    // tz-09 Ф1: control-plane projection, empty on a store with no runs.
+    expect(Array.isArray(body.runs)).toBe(true);
+  });
+
   // ============================
   // GET /memory/blocks?path= — read CONTENT of one addressable block (keeper
   // tools fetch_blocks.py). Sanitized: allowlist (scene_blocks/** + persona.md),

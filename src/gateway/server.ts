@@ -78,6 +78,7 @@ import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
 import { listRoleContracts } from "./consolidation/role-contract.js";
 import { CleanupTimer, runCleanup } from "./cleanup.js";
+import { listRecentRuns } from "./control-plane/run-repo.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { createHash } from "node:crypto";
@@ -401,14 +402,10 @@ export class TdaiGateway {
         return this.handleHealth(res);
       }
 
-      // GET /status — diagnostic snapshot including the last consolidation run
-      // (wave tdai-memory-subagents-2026-08-02, P6). Auth-free like /health.
-      if (method === "GET" && pathname === "/status") {
-        return this.serveStatus(res);
-      }
-
-      // GET /status is also auth-free (diagnostic; same posture as /health).
-      // Returns REDACTED lastError (≤ 120 chars) and category enum.
+      // GET /status — auth-free diagnostic snapshot (same posture as /health):
+      // counters + totals + REDACTED lastError, the consolidation block (P6)
+      // and the control-plane runs (tz-09). One handler: this path used to be
+      // claimed twice, and the second (documented, richer) branch was dead.
       if (method === "GET" && pathname === "/status") {
         return this.handleStatus(res);
       }
@@ -688,34 +685,6 @@ export class TdaiGateway {
   }
 
   /**
-   * GET /status — auth-free diagnostic snapshot including the last
-   * consolidation run (P6/P7). Self-contained so it typechecks on the
-   * committed tree without the I3/I4 status additions; the operator merge can
-   * fold the `consolidation` block into a richer status later.
-   */
-  private serveStatus(res: http.ServerResponse): void {
-    const lastRun = this.orchestrator.getLastRun();
-    sendJson(res, 200, {
-      status:
-        this.core.getVectorStore() && this.core.getEmbeddingService()
-          ? "ok"
-          : "degraded",
-      version: VERSION,
-      uptimeSec: Math.floor((Date.now() - this.startTime) / 1000),
-      startedAt: new Date(this.startTime).toISOString(),
-      dataPath: this.config.data.baseDir,
-      consolidation: {
-        enabled: this.config.memory.consolidation.enabled,
-        checkpoint: this.orchestrator.checkpointFile,
-        inFlight: this.orchestrator.isRunning,
-        lastRun,
-      },
-      roles: listRoles(),
-      reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
-    });
-  }
-
-  /**
    * reindex-in-progress gate (ТЗ §5.6): true while a full reindex is running.
    * The vector store fails OPEN (empty result) — the route-level check below
    * covers the FTS/keyword fallback paths too, so /recall and the search
@@ -885,8 +854,34 @@ export class TdaiGateway {
       lastRecall: this.lastRecall,
       lastCapture: this.lastCapture,
       lastError: this.lastError,
+      consolidation: {
+        enabled: this.config.memory.consolidation.enabled,
+        checkpoint: this.orchestrator.checkpointFile,
+        inFlight: this.orchestrator.isRunning,
+        lastRun: this.orchestrator.getLastRun(),
+      },
+      roles: listRoles(),
+      reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
+      runs: this.recentRuns(),
     };
     sendJson(res, 200, response);
+  }
+
+  /** Control-plane projection for /status (tz-09 Ф1). Fails soft: an absent
+   * or unreadable control plane yields [], never a 500 on a diagnostic route. */
+  private recentRuns(): StatusResponse["runs"] {
+    try {
+      return listRecentRuns(this.config.data.baseDir).map((r) => ({
+        runId: r.runId,
+        role: r.roleId,
+        state: r.state,
+        fence: r.fence,
+        startedAt: r.createdAt,
+        errorClass: r.errorClass,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   private async handleRecall(

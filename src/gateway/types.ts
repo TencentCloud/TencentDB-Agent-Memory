@@ -82,6 +82,26 @@ export interface StatusResponse {
     category: "validation" | "store" | "embedding" | "internal" | "other";
     message: string;
   } | null;
+  /** Consolidation snapshot (P6/P7) — merged in from the second /status
+   * handler that used to shadow this one. */
+  consolidation: {
+    enabled: boolean;
+    checkpoint: string;
+    inFlight: boolean;
+    lastRun: unknown;
+  };
+  roles: unknown;
+  reindexInProgress: boolean;
+  /** Last runs from the control plane (tz-09 Ф1) — empty when the control
+   * plane is unavailable; /status never fails over it. */
+  runs: Array<{
+    runId: string;
+    role: string;
+    state: string;
+    fence: number;
+    startedAt: string;
+    errorClass: string | null;
+  }>;
 }
 
 // ============================
