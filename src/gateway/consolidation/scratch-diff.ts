@@ -21,9 +21,12 @@ export async function readScratchDiff(
     const raw = await fs.promises.readFile(diffPath, "utf-8");
     return { value: JSON.parse(raw) };
   } catch (err) {
-    // Defensive: log raw content for debugging when diff.json is malformed
-    // (bug (a) — child echoes input section name as markdown preamble).
-    // Best-effort append; never throw from this catch.
+    // Defensive: log raw content for debugging when diff.json is malformed.
+    // Until the presented diff moved to `presented-diff.md`, most of these
+    // lines were our OWN input read back: the preparation stage wrote the
+    // markdown into the very path the role was supposed to overwrite. Now a
+    // silent role gives ENOENT and only a genuinely broken candidate is logged
+    // here. Best-effort append; never throw from this catch.
     try {
       const raw = await fs.promises.readFile(diffPath, "utf-8").catch(() => "");
       const head = raw.slice(0, 200).replace(/[\r\n]+/g, "\\n");

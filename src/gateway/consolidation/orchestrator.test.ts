@@ -512,6 +512,30 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(fs.existsSync(path.join(tools, "dump_bullets.py"))).toBe(true);
   });
 
+  // The presented diff must NOT occupy the path the role writes its candidate
+  // to: sharing it made "the role produced nothing" read as "the role produced
+  // malformed JSON", because the reader parsed our own markdown back.
+  it("preparation writes the presented diff beside diff.json, never into it", async () => {
+    const spawn = vi.fn(async (): Promise<ChildRunResult> => ({
+      exitCode: 0,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      killed: null,
+    }));
+    const orch = makeOrchestrator({ spawn });
+
+    await orch.runNow({ reason: "manual", dryRun: true });
+
+    const runDirs = fs.readdirSync(scratchRoot).filter((f) => f.includes("-"));
+    const runScratch = path.join(scratchRoot, runDirs[0]!);
+    expect(fs.existsSync(path.join(runScratch, "presented-diff.md"))).toBe(
+      true,
+    );
+    expect(fs.existsSync(path.join(runScratch, "diff.json"))).toBe(false);
+  });
+
   it("resolver: env override TDAI_KEEPER_TOOLS_DIR wins; src-topology sibling resolves by default", () => {
     const original = process.env.TDAI_KEEPER_TOOLS_DIR;
     try {

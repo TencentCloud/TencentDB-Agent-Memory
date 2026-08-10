@@ -73,11 +73,16 @@ export async function preApply(
     composeSessionPrompt(diff.text, contract),
     "utf-8",
   );
-  // Diff dup in file (forked task-cycle path б): the role agent reads the
-  // presented diff from <scratchDir>/diff.json (not only the prompt text),
-  // and the critic cross-checks the role's diff.json against this file.
+  // The presented diff on disk (forked task-cycle path б), for a role or
+  // critic that wants the input as a file rather than as prompt text.
+  //
+  // NOT `diff.json`: that is the file the role is contractually required to
+  // WRITE. Sharing one path made the input indistinguishable from the output —
+  // a role that produced nothing left our own markdown behind, and the reader
+  // parsed it and reported "malformed JSON" instead of "no candidate". The
+  // live instance logged 335 such lines into .metadata/diff-malformed.log.
   await fs.promises.writeFile(
-    path.join(args.scratchDir, "diff.json"),
+    path.join(args.scratchDir, "presented-diff.md"),
     diff.text,
     "utf-8",
   );
