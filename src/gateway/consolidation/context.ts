@@ -13,10 +13,13 @@ import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import { ConsolidationCheckpoint } from "./checkpoint.js";
 import { RoleGate } from "./role-gate.js";
-import type { RunSummary, SpawnChildFn, ApplyDiffFn } from "./types.js";
 import type {
-  RoleLegacyDefaults,
-} from "./role-contract-types.js";
+  ChildHandle,
+  RunSummary,
+  SpawnChildFn,
+  ApplyDiffFn,
+} from "./types.js";
+import type { RoleLegacyDefaults } from "./role-contract-types.js";
 
 export interface OrchestratorContext {
   /** Kept for the post-run recall probe (memory-wide knobs). Role parameters
@@ -55,6 +58,6 @@ export interface OrchestratorContext {
   /** Mutable state wrapped in refs so module-level functions can read/write. */
   activeRunUuidRef: { value: Set<string> };
   /** Per-run kill handles (parallel roles → multiple children alive at once). */
-  childrenRef: { value: Map<string, { kill: () => unknown }> };
+  childrenRef: { value: Map<string, ChildHandle> };
   lastRunRef: { value: RunSummary | null };
 }

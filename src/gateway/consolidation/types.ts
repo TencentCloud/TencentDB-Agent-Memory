@@ -137,3 +137,11 @@ export interface OrchestratorOptions {
   /** Role dir override (tests point at a scratch dir; default resolveRoleDir()). */
   roleDir?: string;
 }
+
+/** A live child as the orchestrator holds it. `cancelAndWait` appears once the
+ * launcher returned a handle; it is the only path to the `cancelled` terminal
+ * status, so shutdown must prefer it over the raw kill (tz-06 L7). */
+export interface ChildHandle {
+  kill: () => unknown;
+  cancelAndWait?: () => Promise<unknown>;
+}

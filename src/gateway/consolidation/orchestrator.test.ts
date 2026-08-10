@@ -1336,9 +1336,13 @@ describe("ConsolidationOrchestrator (P6)", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(orch.isRunning).toBe(true);
 
-    await orch.stop();
+    // stop() now goes through the launcher's cancelAndWait, which waits for
+    // the child to reap — so the mocked runner has to be allowed to settle
+    // while the shutdown is in flight, exactly as a real exit would.
+    const stopping = orch.stop();
+    release();
+    await stopping;
     expect(killed.length).toBe(2); // both child handles killed
-    release(); // let the mocked runner promises settle
     await Promise.all([a, b]);
     expect(orch.isRunning).toBe(false);
   });

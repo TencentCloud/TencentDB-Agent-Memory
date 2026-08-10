@@ -23,6 +23,38 @@ export function attemptSessionDir(input: LaunchInput): string {
   return dir;
 }
 
+/**
+ * Link (never copy) identity files from the operator's host home into the
+ * attempt's private one.
+ *
+ * Every host here locates its credentials through the same env var that also
+ * names the session store, so pointing that var at a fresh per-attempt dir
+ * takes the login away along with the isolation. A COPY would be a second
+ * secret on disk with its own lifetime; a symlink expires with the attempt.
+ *
+ * Best-effort: a host without credentials fails loudly by itself, and that is
+ * a run error, not a launch one.
+ */
+export function linkIdentity(
+  sessionDir: string,
+  home: string,
+  names: readonly string[],
+  logger: Logger,
+  tag: string,
+): void {
+  for (const name of names) {
+    const src = path.join(home, name);
+    const dst = path.join(sessionDir, name);
+    try {
+      if (fs.existsSync(src) && !fs.existsSync(dst)) fs.symlinkSync(src, dst);
+    } catch (err) {
+      logger.debug?.(
+        `[${tag}] could not link ${name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
 export interface StartOptions {
   binary: string;
   args: string[];

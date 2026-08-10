@@ -11,9 +11,16 @@
  * a per-request thinking level) is declared MISSING instead of approximated —
  * that is what makes `host-incompatible` mean something (tz-06 R2/L5).
  */
+import os from "node:os";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stripOwnedFlags } from "./pi-config.js";
-import { attemptSessionDir, readSystemPrompt, startHosted } from "./start.js";
+import {
+  attemptSessionDir,
+  linkIdentity,
+  readSystemPrompt,
+  startHosted,
+} from "./start.js";
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
@@ -70,6 +77,26 @@ export function claudeArgs(
   ];
 }
 
+/** The operator's real claude home — where `.credentials.json` lives. */
+export function operatorClaudeHome(): string {
+  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+}
+
+/** Only the credential file. `settings.json` is deliberately NOT linked: it
+ * carries the operator's hooks and permissions, and a role session is not the
+ * place to replay them. Verified against the real binary — with the link the
+ * child answers, without it claude prints "Not logged in · Please run /login"
+ * and exits 0, so the role would produce no candidate and no error. */
+export function linkClaudeIdentity(sessionDir: string, logger: Logger): void {
+  linkIdentity(
+    sessionDir,
+    operatorClaudeHome(),
+    [".credentials.json"],
+    logger,
+    "claude",
+  );
+}
+
 export function createClaudeLauncher(
   settings: LauncherSettings,
   logger: Logger,
@@ -79,6 +106,9 @@ export function createClaudeLauncher(
     capabilities: CLAUDE_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
       const sessionRef = attemptSessionDir(input);
+      // CLAUDE_CONFIG_DIR is BOTH the transcript store and where the login
+      // lives, so an empty per-attempt dir means an unauthenticated child.
+      linkClaudeIdentity(sessionRef, logger);
       const prompt = readSystemPrompt(input);
       if (!prompt.ok) return prompt.outcome;
 

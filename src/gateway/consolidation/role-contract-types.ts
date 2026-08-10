@@ -120,5 +120,3 @@ export interface RoleLegacyDefaults {
     maxRunMs: number;
   };
 }
-
-

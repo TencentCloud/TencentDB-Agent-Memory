@@ -147,6 +147,16 @@ export async function defaultSpawnChild(
     };
   }
 
+  // Shutdown must reach the launcher's own cancel path, not the raw kill:
+  // only `cancelAndWait` produces the `cancelled` terminal status and waits
+  // for the reap, so without this a shutdown lands on the row as `failed`.
+  ctx.childrenRef.value.set(childCtx.runId, {
+    kill: () => {
+      void outcome.handle.cancelAndWait();
+    },
+    cancelAndWait: () => outcome.handle.cancelAndWait(),
+  });
+
   // The attempt's session is what makes a run inspectable afterwards, so the
   // reference goes onto the Attempt row rather than only into a log line.
   finishAttempt(
@@ -175,6 +185,13 @@ export async function defaultSpawnChild(
       sessionRef: outcome.handle.sessionRef,
       launcherId: launcher.id,
       exitCode: res.exitCode,
+      // Criterion 8: the operator surface needs the FULL output, and the
+      // in-memory tail is capped. Without the spool paths on the row the
+      // artefacts exist but nothing points at them.
+      stdoutFile: res.stdoutFile ?? null,
+      stderrFile: res.stderrFile ?? null,
+      stdoutBytes: res.stdoutBytes,
+      stderrBytes: res.stderrBytes,
       ...(kind === undefined ? {} : { message: res.launchError!.message }),
     }),
     new Date(ctx.now()).toISOString(),

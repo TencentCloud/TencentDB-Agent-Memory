@@ -13,7 +13,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stripOwnedFlags } from "./pi-config.js";
-import { attemptSessionDir, readSystemPrompt, startHosted } from "./start.js";
+import {
+  attemptSessionDir,
+  linkIdentity,
+  readSystemPrompt,
+  startHosted,
+} from "./start.js";
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
@@ -70,23 +75,15 @@ export function operatorCodexHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
 }
 
-/** Link (never copy) identity into the attempt home: a copy of auth.json is a
- * second secret on disk with its own lifetime. Best-effort — a codex without
- * credentials fails loudly on its own, and that is a run error, not a launch
- * one. */
+/** Auth and config for the attempt's private CODEX_HOME. */
 export function linkCodexIdentity(sessionDir: string, logger: Logger): void {
-  const home = operatorCodexHome();
-  for (const name of ["auth.json", "config.toml"]) {
-    const src = path.join(home, name);
-    const dst = path.join(sessionDir, name);
-    try {
-      if (fs.existsSync(src) && !fs.existsSync(dst)) fs.symlinkSync(src, dst);
-    } catch (err) {
-      logger.debug?.(
-        `[codex] could not link ${name}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
+  linkIdentity(
+    sessionDir,
+    operatorCodexHome(),
+    ["auth.json", "config.toml"],
+    logger,
+    "codex",
+  );
 }
 
 export function createCodexLauncher(

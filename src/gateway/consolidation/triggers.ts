@@ -22,10 +22,14 @@ import { resolveRoleContract } from "./role-contract.js";
 import type { RoleGate } from "./role-gate.js";
 import type { RoleLegacyDefaults } from "./role-contract-types.js";
 import type {
+  ChildHandle,
   OrchestratorOptions,
   RunSummary,
   TriggerResult,
 } from "./types.js";
+
+/** How long shutdown waits for one child's cancel to reap before moving on. */
+const SHUTDOWN_CANCEL_MS = 5_000;
 
 /** Orchestrator handle (just the lifecycle methods). The full class lives
  * in orchestrator.ts; this file holds the dispatchable triggers so the
@@ -41,7 +45,7 @@ export interface TriggerHandle {
   logger: OrchestratorOptions["logger"];
   ownerPid: number;
   activeRunUuid: { value: Set<string> };
-  children: { value: Map<string, { kill: () => unknown }> };
+  children: { value: Map<string, ChildHandle> };
   lastRunRef: { value: RunSummary | null };
   gate: RoleGate;
   /** Legacy snapshot for the contract resolver (lock ttl = maxRunMs). */
@@ -193,7 +197,17 @@ export async function start(self: TriggerHandle): Promise<void> {
 export async function stop(self: TriggerHandle): Promise<void> {
   for (const handle of self.children.value.values()) {
     try {
-      handle.kill();
+      // The launcher's own cancel path when it exists: it marks the attempt
+      // `cancelled` and waits for the reap, where a bare kill leaves the run
+      // to be classified as a failure it did not have. Bounded, because a
+      // shutdown that waits forever on one unreapable child is worse than a
+      // shutdown that gives up on its terminal status.
+      if (handle.cancelAndWait !== undefined) {
+        await Promise.race([
+          handle.cancelAndWait(),
+          new Promise((r) => setTimeout(r, SHUTDOWN_CANCEL_MS)),
+        ]);
+      } else handle.kill();
     } catch (err) {
       self.logger.warn?.(
         `[memory-keeper] kill on shutdown failed: ${err instanceof Error ? err.message : String(err)}`,
