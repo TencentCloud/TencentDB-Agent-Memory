@@ -79,6 +79,7 @@ import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
+import { listRoleContracts } from "./consolidation/role-contract.js";
 import { CleanupTimer, runCleanup } from "./cleanup.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
@@ -193,12 +194,15 @@ export class TdaiGateway {
     });
     this.nightRun = new NightRunTimer({
       enabled: this.config.memory.consolidation.enabled,
-      schedule: this.config.memory.nightRun.schedule,
-      threshold: this.config.memory.nightRun.threshold,
       timezone: this.config.memory.timezone,
       now: () => Date.now(),
       tickIntervalMs: 60_000,
-      getLastRunAt: () => this.orchestrator.getLastRun()?.startedAt ?? null,
+      // Which roles are due comes from their contracts, not from
+      // memory.nightRun.schedule/threshold (tz-01 B6): those stay only as the
+      // legacy snapshot the adapter falls back to.
+      listRoleContracts: () =>
+        listRoleContracts(resolveRoleDir(), buildRoleDefaults(consolidationCfg)),
+      readCheckpoint: () => this.orchestrator.readCheckpoint(),
       countNewL0: async () => {
         const cp = await this.orchestrator.readCheckpoint();
         return countNewL0Since(

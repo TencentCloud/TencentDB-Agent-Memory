@@ -255,13 +255,17 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
     }
   });
 
-  it("night-run reads schedule/threshold/timezone from config deps (no literals in code)", () => {
+  it("dispatch values are injected, never built into the timer (tz-01 B6: they now come from the role contract)", () => {
     const nightRun = readRepo("src/gateway/consolidation/night-run.ts");
-    expect(nightRun).toMatch(/schedule:\s*string/); // injected, not built-in
-    expect(nightRun).toMatch(/threshold:\s*number/);
+    // The timer only receives the zone and the contracts; schedule and
+    // threshold belong to each role's `dispatch` block.
     expect(nightRun).toMatch(/timezone:\s*string/);
+    expect(nightRun).toMatch(/listRoleContracts:/);
     expect(nightRun).not.toMatch(/\?\?\s*"06:00"/);
     expect(nightRun).not.toMatch(/=\s*"06:00"/);
+    const dispatcher = readRepo("src/gateway/consolidation/dispatcher.ts");
+    expect(dispatcher).toMatch(/c\.dispatch/);
+    expect(dispatcher).not.toMatch(/"06:00"/);
   });
 
   it("the documented defaults live in src/config.ts (single source of truth)", () => {

@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeReport } from "./reports.js";
-import { advanceCheckpoint } from "./queries.js";
+import { advanceCheckpoint, stampRoleRun } from "./queries.js";
 import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import { mkFailedSummary } from "./summary.js";
 import { runFreshTailSingleBatch } from "./run-strategy-fresh-tail.js";
@@ -77,6 +77,10 @@ export async function runRole(
         summary,
         outcome.advance.anchor,
       );
+    } else {
+      // The role ran even though the cursor stayed — the dispatcher needs the
+      // per-role stamp, otherwise a scheduled no-op run repeats every tick.
+      await stampRoleRun(ctx, summary);
     }
     await writeReport(ctx, summary);
     return summary;

@@ -9,10 +9,7 @@
 
 import path from "node:path";
 import { openReadonlySqlite } from "../http-utils.js";
-import {
-  maxL0RecordedAt,
-  type RecordEntry,
-} from "./diff-builder.js";
+import { maxL0RecordedAt, type RecordEntry } from "./diff-builder.js";
 import { NIGHT_SWEEP_LIMIT } from "./types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
@@ -37,12 +34,16 @@ export function queryRecentRecords(
           "WHERE (updated_time != '' AND updated_time >= ?) OR (created_time >= ?) " +
           "ORDER BY updated_time ASC LIMIT ?";
       const rows = fullStore
-        ? (db.prepare(sql).all(NIGHT_SWEEP_LIMIT) as Array<Record<string, unknown>>)
-        : (db.prepare(sql).all(
-            cursorIso || "1970-01-01T00:00:00.000Z",
-            cursorIso || "1970-01-01T00:00:00.000Z",
-            limit,
-          ) as Array<Record<string, unknown>>);
+        ? (db.prepare(sql).all(NIGHT_SWEEP_LIMIT) as Array<
+            Record<string, unknown>
+          >)
+        : (db
+            .prepare(sql)
+            .all(
+              cursorIso || "1970-01-01T00:00:00.000Z",
+              cursorIso || "1970-01-01T00:00:00.000Z",
+              limit,
+            ) as Array<Record<string, unknown>>);
       return rows.map((r) => ({
         id: String(r.record_id ?? ""),
         type: String(r.type ?? ""),
@@ -61,6 +62,29 @@ export function queryRecentRecords(
 }
 
 /**
+ * Stamp `roles[<role>].lastRunAt` for a run that did NOT advance the cursor
+ * (an empty sweep, a refused apply). The dispatcher's per-role `ranToday`
+ * asks "did this role run today", not "did it move the cursor" — without the
+ * stamp a scheduled role with nothing to do would re-fire every tick.
+ */
+export async function stampRoleRun(
+  ctx: OrchestratorContext,
+  summary: RunSummary,
+): Promise<void> {
+  await ctx.checkpoint.update((d) => {
+    const prev = d.roles[summary.role];
+    d.roles[summary.role] = {
+      recordsProcessed: summary.recordsPresented,
+      overLimitBlocks: summary.overLimitBlocks,
+      merges: prev?.merges ?? 0,
+      rewrites: prev?.rewrites ?? 0,
+      errors: summary.status === "ok" ? (prev?.errors ?? 0) : 1,
+      lastRunAt: summary.finishedAt,
+    };
+  });
+}
+
+/**
  * Advance the consolidation checkpoint.
  * Day: anchoredCursor omitted → cursor = current maxL0RecordedAt().
  * Night: anchoredCursor = max slice-time of applied chunks BEFORE the
@@ -75,7 +99,9 @@ export async function advanceCheckpoint(
 ): Promise<void> {
   const cursor = (anchoredCursor ??
     maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db")))!;
-  ctx.logger.debug?.(`[checkpoint] advance role=${summary.role} prev=${prevCursor} new=${cursor} newL0=${newL0} status=${summary.status}`);
+  ctx.logger.debug?.(
+    `[checkpoint] advance role=${summary.role} prev=${prevCursor} new=${cursor} newL0=${newL0} status=${summary.status}`,
+  );
   await ctx.checkpoint.update((d) => {
     d.lastRunAt = summary.finishedAt;
     if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;

@@ -18,7 +18,11 @@ import type { Logger } from "../core/types.js";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { openReadonlySqlite } from "./http-utils.js";
-import { findDuplicateClusters, collectBlockStats, checkVecMetaCounts } from "./memory-routes.js";
+import {
+  findDuplicateClusters,
+  collectBlockStats,
+  checkVecMetaCounts,
+} from "./memory-routes.js";
 import type { ProbeResult } from "./probe.js";
 
 // ============================
@@ -49,7 +53,11 @@ export function digestPath(dataDir: string): string {
 }
 
 /** Write the digest atomically (tmp + rename). Never throws for the caller. */
-export function writeDigest(dataDir: string, digest: DigestData, logger?: Logger): void {
+export function writeDigest(
+  dataDir: string,
+  digest: DigestData,
+  logger?: Logger,
+): void {
   try {
     const file = digestPath(dataDir);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -100,24 +108,51 @@ export function countL1ByType(dataDir: string, logger?: Logger): L1TypeCount[] {
     const db = openReadonlySqlite(path.join(dataDir, "vectors.db"));
     try {
       const rows = db
-        .prepare("SELECT COALESCE(type, '') AS type, COUNT(*) AS c FROM l1_records GROUP BY type ORDER BY c DESC")
+        .prepare(
+          "SELECT COALESCE(type, '') AS type, COUNT(*) AS c FROM l1_records GROUP BY type ORDER BY c DESC",
+        )
         .all() as Array<{ type: string; c: number }>;
-      return rows.map((r) => ({ type: String(r.type ?? ""), count: Number(r.c) || 0 }));
+      return rows.map((r) => ({
+        type: String(r.type ?? ""),
+        count: Number(r.c) || 0,
+      }));
     } finally {
       db.close();
     }
   } catch (err) {
-    logger?.warn?.(`[memory] dashboard L1-by-type query failed: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.warn?.(
+      `[memory] dashboard L1-by-type query failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return [];
   }
 }
 
 /** Last N run reports from dataDir/logs/<role>-*.json (newest last). */
-export function readLastRuns(dataDir: string, n: number): Array<Record<string, unknown>> {
+export function readLastRuns(
+  dataDir: string,
+  n: number,
+): Array<Record<string, unknown>> {
   const logsDir = path.join(dataDir, "logs");
   let files: string[];
   try {
-    files = fs.readdirSync(logsDir).filter((f) => f.endsWith(".json")).sort();
+    // Reports are named `<role>-<ISO ts>.json`, so a plain name sort orders by
+    // ROLE first and only then by time: with many `memory-keeper-*` files a
+    // lexicographically smaller role prefix could never reach the last N.
+    // Sort by the timestamp in the name (the ISO form is monotonic as text);
+    // a name without one sorts last, by name.
+    const tsOf = (f: string): string =>
+      /-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.json$/.exec(f)?.[1] ?? "";
+    files = fs
+      .readdirSync(logsDir)
+      .filter((f) => f.endsWith(".json"))
+      .sort((a, b) => {
+        const ta = tsOf(a);
+        const tb = tsOf(b);
+        if (ta === tb) return a.localeCompare(b);
+        if (ta === "") return 1;
+        if (tb === "") return -1;
+        return ta.localeCompare(tb);
+      });
   } catch {
     return [];
   }
@@ -125,9 +160,12 @@ export function readLastRuns(dataDir: string, n: number): Array<Record<string, u
   const runs: Array<Record<string, unknown>> = [];
   for (const f of last) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(logsDir, f), "utf-8")) as Record<string, unknown>;
+      const parsed = JSON.parse(
+        fs.readFileSync(path.join(logsDir, f), "utf-8"),
+      ) as Record<string, unknown>;
       runs.push({
         file: f,
+        role: parsed.role ?? "",
         status: parsed.status ?? "unknown",
         startedAt: parsed.startedAt ?? "",
         elapsedMs: parsed.elapsedMs ?? 0,
@@ -176,7 +214,8 @@ export function buildDashboardMarkdown(
   if (byType.length === 0) {
     lines.push("n/a (no l1_records or query failed)", "");
   } else {
-    for (const t of byType) lines.push(`- **${t.type || "(empty)"}**: ${t.count}`);
+    for (const t of byType)
+      lines.push(`- **${t.type || "(empty)"}**: ${t.count}`);
     lines.push("");
   }
 
@@ -188,7 +227,9 @@ export function buildDashboardMarkdown(
     lines.push("n/a (no scene blocks / persona)", "");
   } else {
     for (const b of blocks) {
-      lines.push(`- ${b.path}: ${b.size}/${b.limit} chars${b.over ? " **OVER LIMIT**" : ""}`);
+      lines.push(
+        `- ${b.path}: ${b.size}/${b.limit} chars${b.over ? " **OVER LIMIT**" : ""}`,
+      );
     }
     if (overLimit.length === 0) lines.push("", "All files within limits.");
     lines.push("");
@@ -213,6 +254,7 @@ export function buildDashboardMarkdown(
     for (const r of runs) {
       lines.push(
         `- ${String(r.startedAt ?? "")} [${String(r.status ?? "")}] ` +
+          `role=${String(r.role ?? "")}, ` +
           `newL0=${String(r.newL0 ?? 0)}, elapsed=${String(r.elapsedMs ?? 0)}ms` +
           (r.error ? `, error: ${String(r.error)}` : ""),
       );
@@ -227,7 +269,9 @@ export function buildDashboardMarkdown(
  * Write the dashboard file (memory_health.md) atomically. Fail-open: never
  * throws — the run continues even if the dashboard cannot be written.
  */
-export async function writeDashboard(input: DashboardInput): Promise<string | null> {
+export async function writeDashboard(
+  input: DashboardInput,
+): Promise<string | null> {
   const { dataDir, logger, vectorStore, embeddingService, probe } = input;
 
   // Duplicate clusters need vector+embedding; compute them only when available
@@ -236,7 +280,12 @@ export async function writeDashboard(input: DashboardInput): Promise<string | nu
   if (vectorStore && embeddingService) {
     try {
       const found = await findDuplicateClusters(
-        { store: vectorStore, embed: embeddingService, dataDir, logger: logger ?? silentLogger() },
+        {
+          store: vectorStore,
+          embed: embeddingService,
+          dataDir,
+          logger: logger ?? silentLogger(),
+        },
         { topK: 5, threshold: 0.8, limit: 100 },
       );
       if (found.degraded) {
@@ -244,16 +293,24 @@ export async function writeDashboard(input: DashboardInput): Promise<string | nu
       } else if (found.clusters.length === 0) {
         clustersLine = "no duplicate clusters found in the recent window";
       } else {
-        const totalMembers = found.clusters.reduce((s, c) => s + c.similar.length, 0);
+        const totalMembers = found.clusters.reduce(
+          (s, c) => s + c.similar.length,
+          0,
+        );
         clustersLine = `${found.clusters.length} cluster(s), ${totalMembers} duplicate member(s)`;
       }
     } catch (err) {
-      logger?.warn?.(`[memory] dashboard cluster scan failed: ${err instanceof Error ? err.message : String(err)}`);
+      logger?.warn?.(
+        `[memory] dashboard cluster scan failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       clustersLine = "cluster scan failed";
     }
   }
 
-  let markdown = buildDashboardMarkdown({ ...input, clustersSummary: clustersLine });
+  let markdown = buildDashboardMarkdown({
+    ...input,
+    clustersSummary: clustersLine,
+  });
 
   try {
     const file = path.join(dataDir, "memory_health.md");
@@ -270,5 +327,10 @@ export async function writeDashboard(input: DashboardInput): Promise<string | nu
 }
 
 function silentLogger(): Logger {
-  return { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+  return {
+    debug: () => undefined,
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  };
 }

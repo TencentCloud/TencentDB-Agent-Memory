@@ -1,13 +1,13 @@
 /**
- * Night-run timer (wave tdai-memory-subagents-2026-08-02, P7).
+ * Role timer (wave tdai-memory-subagents-2026-08-02, P7; contract-driven
+ * since tz-01 B6).
  *
- * Runs the consolidation trigger INSIDE the gateway (no cron unit):
- *   - schedule: memory.nightRun.schedule (default "06:00") in memory.timezone
- *     (default "system" — never hardcoded to Europe/Moscow);
- *   - OR threshold: newL0 >= memory.nightRun.threshold (default 50) since the
- *     last run;
- *   - missed-schedule catch-up at gateway start: if the schedule moment for
- *     today has already passed and no run happened today → trigger once.
+ * Runs role dispatch INSIDE the gateway (no cron unit): every tick it asks
+ * the dispatcher which roles are due, from each role's own contract
+ * (`dispatch.trigger` / `schedule` / `threshold`) and its own `lastRunAt` in
+ * the checkpoint — the timer itself knows no role names and no schedule.
+ * A schedule moment missed while the gateway was down is caught up once at
+ * start.
  *
  * Single-flight is SHARED with P6: the timer calls the orchestrator's
  * trigger(), whose per-role gate refuses overlaps (timer, threshold, manual
@@ -17,34 +17,34 @@
  * scenarios are unit-testable with a fake clock — no real waiting.
  */
 
+import { computeDueRoles } from "./dispatcher.js";
+import type { RoleResolution } from "./role-contract-types.js";
 import type { Logger } from "../../core/types.js";
 
 export interface NightRunDeps {
   enabled: boolean;
-  /** Local time "HH:MM" of the daily run (already normalized by config). */
-  schedule: string;
-  /** Trigger a run when newL0 since the last run >= this. */
-  threshold: number;
   /** "system" | IANA name | UTC offset (ECMA-402 2024). */
   timezone: string;
   /** Injectable clock (tests use a fixed one). */
   now: () => number;
   /** Tick cadence (ms) — also the resolution of "just passed the schedule". */
   tickIntervalMs: number;
-  /** ISO timestamp of the last successful run (null = never). */
-  getLastRunAt: () => string | null;
+  /** All role contracts, re-resolved each pass (an edited role.json takes
+   * effect without a gateway restart; the resolver is cached by mtime). */
+  listRoleContracts: () => readonly RoleResolution[];
+  /** Consolidation checkpoint — `roles[<role>].lastRunAt` per role. */
+  readCheckpoint: () => Promise<{ roles?: Record<string, unknown> }>;
   /** New L0 messages since the checkpoint cursor (null = unknown). */
   countNewL0: () => Promise<number | null>;
-  /** Shared P6 trigger — enforces single-flight; returns busy when in-flight.
-   * runType: "keeper" (threshold) | "night-keeper" (schedule/catch-up). */
+  /** Shared P6 trigger — enforces single-flight; returns busy when in-flight. */
   trigger: (
     reason: string,
     runType?: string,
   ) => Promise<{ accepted: boolean; status: string }>;
   logger: Logger;
-  /** Optional deferred-day-retry hook: when a threshold run is refused because
-   * the night window holds the per-role gate, the timer asks the caller to retry
-   * the day run after the night finishes (no data loss). */
+  /** Optional deferred-retry hook: when a threshold run is refused because
+   * another run holds the per-role gate, the timer asks the caller to retry
+   * after it finishes (no data loss). */
   onThresholdDeferred?: () => void;
 }
 
@@ -52,6 +52,8 @@ export class NightRunTimer {
   private readonly deps: NightRunDeps;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
+  /** Roles already reported as skipped — one log line per role, not per tick. */
+  private readonly loggedSkips = new Set<string>();
 
   constructor(deps: NightRunDeps) {
     this.deps = deps;
@@ -80,146 +82,59 @@ export class NightRunTimer {
   }
 
   /**
-   * Single evaluation: (a) schedule due + no run today → trigger (catch-up on
-   * start, schedule on tick); (b) newL0 >= threshold → trigger. Both funnel
-   * into the shared P6 single-flight — an in-flight run yields busy.
+   * Single evaluation: ask the dispatcher which roles are due and trigger
+   * each one. Every trigger funnels into the shared P6 single-flight — a
+   * role whose run is in flight yields busy.
    */
   async checkNow(source: "start" | "tick"): Promise<void> {
     if (!this.deps.enabled || this.checking) return;
     this.checking = true;
     try {
-      const nowMs = this.deps.now();
-      const lastRunAt = this.deps.getLastRunAt();
-      const scheduleDue = scheduleDueInZone(
-        nowMs,
-        this.deps.schedule,
-        this.deps.timezone,
-      );
-      const ranToday =
-        lastRunAt !== null && sameZoneDay(nowMs, lastRunAt, this.deps.timezone);
+      const cp = await this.deps.readCheckpoint();
+      const due = computeDueRoles({
+        contracts: this.deps.listRoleContracts(),
+        roleState: cp.roles ?? {},
+        nowMs: this.deps.now(),
+        timezone: this.deps.timezone,
+        newL0: await this.deps.countNewL0(),
+        source,
+        onSkip: (role, why) => this.logSkip(role, why),
+      });
 
-      if (scheduleDue && !ranToday) {
-        const reason = source === "start" ? "catch-up" : "schedule";
-        // Schedule + catch-up run the NIGHT role (full-store sweep); the day
-        // threshold keeps the light keeper — a full-store run must not fire on
-        // every threshold crossing throughout the day.
-        const res = await this.deps.trigger(reason, "night-keeper");
-        if (!res.accepted) {
-          this.deps.logger.info?.(
-            `[night-run] ${reason} trigger refused (${res.status}) — in-flight run or disabled`,
-          );
-          return;
-        }
-        return; // schedule fired — threshold re-check happens next tick
-      }
-
-      const newL0 = await this.deps.countNewL0();
-      if (newL0 !== null && newL0 >= this.deps.threshold) {
-        // Day threshold → light keeper (NOT the night full-store role).
-        const res = await this.deps.trigger("threshold");
-        if (!res.accepted) {
-          this.deps.logger.info?.(
-            `[night-run] threshold trigger refused (${res.status}) — in-flight run`,
-          );
-          if (res.status === "busy" && this.deps.onThresholdDeferred) {
-            // Night window holds the per-role gate — schedule a deferred day
-            // consolidation instead of dropping the threshold crossing.
-            this.deps.onThresholdDeferred();
-          }
+      for (const { role, reason } of due) {
+        const res = await this.deps.trigger(reason, role);
+        if (res.accepted) continue;
+        this.deps.logger.info?.(
+          `[night-run] ${reason} trigger for ${role} refused (${res.status}) — in-flight run or disabled`,
+        );
+        if (
+          reason === "threshold" &&
+          res.status === "busy" &&
+          this.deps.onThresholdDeferred
+        ) {
+          // Another run holds the per-role gate — schedule a deferred retry
+          // instead of dropping the threshold crossing.
+          this.deps.onThresholdDeferred();
         }
       }
     } finally {
       this.checking = false;
     }
   }
-}
 
-// ============================
-// Timezone helpers (memory.timezone, default "system")
-// ============================
-
-export interface ZoneParts {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-}
-
-/**
- * Current wall-clock parts in the configured zone. "system" uses local time;
- * IANA names / UTC offsets go through Intl.DateTimeFormat (ECMA-402 2024).
- * An invalid zone falls back to system time (fail-safe — the timer must not
- * crash the gateway over a typo).
- */
-export function zonedParts(nowMs: number, timezone: string): ZoneParts {
-  const d = new Date(nowMs);
-  if (!timezone || timezone === "system") {
-    return {
-      year: d.getFullYear(),
-      month: d.getMonth() + 1,
-      day: d.getDate(),
-      hour: d.getHours(),
-      minute: d.getMinutes(),
-    };
-  }
-  try {
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    });
-    const parts = fmt.formatToParts(d);
-    const get = (type: string): number => {
-      const v = parts.find((p) => p.type === type)?.value;
-      return v === undefined ? 0 : Number(v);
-    };
-    return {
-      year: get("year"),
-      month: get("month"),
-      day: get("day"),
-      hour: get("hour"),
-      minute: get("minute"),
-    };
-  } catch {
-    return zonedParts(nowMs, "system");
+  private logSkip(role: string, why: string): void {
+    if (this.loggedSkips.has(role)) return;
+    this.loggedSkips.add(role);
+    this.deps.logger.info?.(`[night-run] role ${role} not dispatchable: ${why}`);
   }
 }
 
-/** Parse a normalized "HH:MM" schedule (fallback 06:00 on malformed input). */
-export function parseSchedule(schedule: string): {
-  hour: number;
-  minute: number;
-} {
-  const m = /^(\d{2}):(\d{2})$/.exec(schedule);
-  if (!m) return { hour: 6, minute: 0 };
-  return { hour: Number(m[1]), minute: Number(m[2]) };
-}
-
-/** True when the schedule moment for TODAY has already passed in the zone. */
-export function scheduleDueInZone(
-  nowMs: number,
-  schedule: string,
-  timezone: string,
-): boolean {
-  const p = zonedParts(nowMs, timezone);
-  const s = parseSchedule(schedule);
-  return p.hour > s.hour || (p.hour === s.hour && p.minute >= s.minute);
-}
-
-/** True when `iso` falls on the same zone-local day as `nowMs`. */
-export function sameZoneDay(
-  nowMs: number,
-  iso: string,
-  timezone: string,
-): boolean {
-  const ts = Date.parse(iso);
-  if (!Number.isFinite(ts)) return false;
-  const a = zonedParts(nowMs, timezone);
-  const b = zonedParts(ts, timezone);
-  return a.year === b.year && a.month === b.month && a.day === b.day;
-}
+// Timezone helpers moved to zone-time.ts (night-run.ts stays within the
+// module size convention); re-exported for existing importers.
+export {
+  zonedParts,
+  parseSchedule,
+  scheduleDueInZone,
+  sameZoneDay,
+  type ZoneParts,
+} from "./zone-time.js";

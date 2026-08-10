@@ -1,8 +1,8 @@
 /**
  * Initial-failed RunSummary factory.
  *
- * Shared by day-runner.ts and night-runner.ts (both start with status:
- * "failed" and grow the summary as the run progresses).
+ * Used by run-role.ts: a run starts as "failed" and grows the summary as it
+ * progresses.
  */
 
 import type { RunSummary } from "./types.js";
