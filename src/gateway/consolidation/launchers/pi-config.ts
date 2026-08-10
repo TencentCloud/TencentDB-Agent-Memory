@@ -34,6 +34,29 @@ export const LAUNCHER_OWNED_FLAGS: readonly string[] = [
   "--session-id",
 ];
 
+/**
+ * Owned flags that take a VALUE. Everything else is a switch.
+ *
+ * The list is explicit because the alternative — guessing from the flag's
+ * shape — silently ate the next argument: `--dangerously-skip-permissions -p`
+ * stripped BOTH, and a claude launched without `-p` waits on a stdin that is
+ * `ignore`d, i.e. hangs until the timeout. Same shape for codex's `--ephemeral
+ * exec`, which loses the subcommand and opens a TUI.
+ */
+const OWNED_FLAGS_WITH_VALUE: ReadonlySet<string> = new Set([
+  "--session-dir",
+  "--session",
+  "--session-id",
+  "--resume",
+  "--permission-mode",
+  "-C",
+  "--cd",
+  "-s",
+  "--sandbox",
+  "-m",
+  "--model",
+]);
+
 /** Drop launcher-owned flags (and the value of those that take one). Each
  * host owns its OWN session flags, so the list is a parameter. */
 export function stripOwnedFlags(
@@ -47,8 +70,17 @@ export function stripOwnedFlags(
       kept.push(flag);
       continue;
     }
-    // A `--no-*` switch carries nothing; the rest take a value with them.
-    if (!flag.startsWith("--no-")) i += 1;
+    // Consume the value only when the flag has one AND the next token looks
+    // like a value: `--resume` is optional-valued on claude, so a following
+    // `-p` is the next FLAG, never its argument.
+    const next = flags[i + 1];
+    if (
+      OWNED_FLAGS_WITH_VALUE.has(flag) &&
+      next !== undefined &&
+      !next.startsWith("-")
+    ) {
+      i += 1;
+    }
   }
   return kept;
 }

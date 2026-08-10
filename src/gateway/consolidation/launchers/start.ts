@@ -16,9 +16,16 @@ import { confineArgv } from "./isolation.js";
 import type { Logger } from "../../../core/types.js";
 import type { HostRunResult, LaunchInput, LaunchOutcome } from "./types.js";
 
+/** `<cwd>/attempts/<attemptId>` — the private root of ONE attempt. The run's
+ * cwd is shared (the keeper and its critic run in the same scratch), so
+ * anything an attempt owns hangs off here and not off the cwd. */
+export function attemptDir(input: LaunchInput): string {
+  return path.join(input.cwd, ATTEMPTS_DIR, input.attemptId);
+}
+
 /** `<cwd>/attempts/<attemptId>/session` — created, not just named. */
 export function attemptSessionDir(input: LaunchInput): string {
-  const dir = path.join(input.cwd, ATTEMPTS_DIR, input.attemptId, "session");
+  const dir = path.join(attemptDir(input), "session");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -82,6 +89,9 @@ export function startHosted(opts: StartOptions): LaunchOutcome {
     binary: cmd.binary,
     args: cmd.args,
     cwd: opts.input.cwd,
+    // Spool into the ATTEMPT's dir: the keeper and its critic share a cwd, so
+    // a per-run spool made both attempt rows point at one appended file.
+    artifactRoot: attemptDir(opts.input),
     env: opts.env,
     timeoutMs: opts.input.contract.timeoutMs,
     logger: opts.logger,

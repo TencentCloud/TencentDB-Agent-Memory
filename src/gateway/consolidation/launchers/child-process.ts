@@ -46,6 +46,10 @@ export interface RunChildOptions {
   /** Called right after spawn — lets the orchestrator register a killer for
    * the gateway SIGTERM/exit path. */
   onChild?: (child: ChildProcess) => void;
+  /** Where `artifacts/` goes. Defaults to `cwd`, but the keeper and the critic
+   * of one run SHARE a cwd, so a per-run spool makes both attempt rows point
+   * at one appended file whose size contradicts either row's byte count. */
+  artifactRoot?: string;
 }
 
 /** Run a child to completion: spawn, drain pipes, wait exit/timeout. */
@@ -76,8 +80,9 @@ export function runChildProcess(
       return;
     }
 
-    const out = createSpool(opts.cwd, "stdout");
-    const err = createSpool(opts.cwd, "stderr");
+    const artifactRoot = opts.artifactRoot ?? opts.cwd;
+    const out = createSpool(artifactRoot, "stdout");
+    const err = createSpool(artifactRoot, "stderr");
     let timedOut = false;
     let killed: KillOutcome | null = null;
     let settled = false;
