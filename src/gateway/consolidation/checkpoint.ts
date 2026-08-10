@@ -37,6 +37,11 @@ export interface RoleProgress {
   rewrites: number;
   /** Errors observed during the run (0 = clean). */
   errors: number;
+  /** Failed runs since the last successful one — bounded by the role's
+   * `retry_budget` so a broken role stops re-spawning every tick. */
+  consecutiveFailures?: number;
+  /** ISO timestamp of the last failed run (the budget resets on a new day). */
+  lastFailureAt?: string;
 }
 
 export interface ConsolidationCheckpointData {

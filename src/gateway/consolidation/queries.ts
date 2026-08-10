@@ -13,6 +13,7 @@ import { maxL0RecordedAt, type RecordEntry } from "./diff-builder.js";
 import { NIGHT_SWEEP_LIMIT } from "./types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
+import type { RoleProgress } from "./checkpoint.js";
 
 /** Fresh L1 records (updated/created >= cursor), oldest-first, capped. */
 export function queryRecentRecords(
@@ -67,20 +68,32 @@ export function queryRecentRecords(
  * asks "did this role run today", not "did it move the cursor" — without the
  * stamp a scheduled role with nothing to do would re-fire every tick.
  */
+/** The per-role progress record after a run. A FAILED run keeps the previous
+ * `lastRunAt` (it did not run successfully, so the dispatcher must retry) but
+ * counts the failure, which is what bounds those retries. */
+export function roleProgressAfterRun(
+  prev: RoleProgress | undefined,
+  summary: RunSummary,
+): RoleProgress {
+  const ok = summary.status === "ok";
+  return {
+    lastRunAt: ok ? summary.finishedAt : (prev?.lastRunAt ?? ""),
+    recordsProcessed: summary.recordsPresented,
+    overLimitBlocks: summary.overLimitBlocks,
+    merges: ok ? summary.applied.merges.length : (prev?.merges ?? 0),
+    rewrites: ok ? summary.applied.rewrites.length : (prev?.rewrites ?? 0),
+    errors: ok ? 0 : 1,
+    consecutiveFailures: ok ? 0 : (prev?.consecutiveFailures ?? 0) + 1,
+    lastFailureAt: ok ? undefined : summary.finishedAt,
+  };
+}
+
 export async function stampRoleRun(
   ctx: OrchestratorContext,
   summary: RunSummary,
 ): Promise<void> {
   await ctx.checkpoint.update((d) => {
-    const prev = d.roles[summary.role];
-    d.roles[summary.role] = {
-      recordsProcessed: summary.recordsPresented,
-      overLimitBlocks: summary.overLimitBlocks,
-      merges: prev?.merges ?? 0,
-      rewrites: prev?.rewrites ?? 0,
-      errors: summary.status === "ok" ? (prev?.errors ?? 0) : 1,
-      lastRunAt: summary.finishedAt,
-    };
+    d.roles[summary.role] = roleProgressAfterRun(d.roles[summary.role], summary);
   });
 }
 
@@ -106,13 +119,6 @@ export async function advanceCheckpoint(
     d.lastRunAt = summary.finishedAt;
     if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
     d.l0Count += newL0;
-    d.roles[summary.role] = {
-      lastRunAt: summary.finishedAt,
-      recordsProcessed: summary.recordsPresented,
-      overLimitBlocks: summary.overLimitBlocks,
-      merges: summary.applied.merges.length,
-      rewrites: summary.applied.rewrites.length,
-      errors: summary.status === "ok" ? 0 : 1,
-    };
+    d.roles[summary.role] = roleProgressAfterRun(d.roles[summary.role], summary);
   });
 }

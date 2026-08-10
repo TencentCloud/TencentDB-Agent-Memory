@@ -77,11 +77,11 @@ export async function runRole(
         summary,
         outcome.advance.anchor,
       );
-    } else if (summary.status === "ok") {
-      // A successful run that moved no cursor still counts as "ran today" for
-      // the dispatcher, otherwise a scheduled no-op repeats every tick. A
-      // FAILED run is deliberately not stamped: it must stay retryable, both
-      // on the next tick and via catch-up after a restart.
+    } else {
+      // A successful run that moved no cursor still counts as "ran today",
+      // otherwise a scheduled no-op repeats every tick. A FAILED run does not
+      // touch lastRunAt — it stays retryable — but its failure IS counted, and
+      // that count is what bounds the retries (contract retry_budget).
       await stampRoleRun(ctx, summary);
     }
     await writeReport(ctx, summary);

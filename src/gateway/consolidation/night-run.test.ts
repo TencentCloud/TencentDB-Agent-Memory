@@ -49,6 +49,7 @@ function roleContract(
       role,
       enabled,
       dispatch: { schedule: null, threshold: null, ...dispatch },
+      policy: { retryBudget: 2 },
     } as ResolvedRoleContract,
   };
 }

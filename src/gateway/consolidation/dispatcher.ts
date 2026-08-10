@@ -42,6 +42,26 @@ export interface DispatchInput {
   legacy?: LegacyDispatch;
 }
 
+/** Failure state of a role: how many runs failed since the last success and
+ * when the last one failed. */
+export function failureStateOf(
+  roleState: Record<string, unknown>,
+  role: string,
+): { failures: number; lastFailureAt: string | null } {
+  const entry = roleState[role];
+  if (entry === null || typeof entry !== "object")
+    return { failures: 0, lastFailureAt: null };
+  const e = entry as { consecutiveFailures?: unknown; lastFailureAt?: unknown };
+  return {
+    failures:
+      typeof e.consecutiveFailures === "number" ? e.consecutiveFailures : 0,
+    lastFailureAt:
+      typeof e.lastFailureAt === "string" && e.lastFailureAt.length > 0
+        ? e.lastFailureAt
+        : null,
+  };
+}
+
 /** Per-role `lastRunAt` from the checkpoint (null = never ran). */
 export function lastRunAtOf(
   roleState: Record<string, unknown>,
@@ -66,6 +86,22 @@ export function computeDueRoles(input: DispatchInput): DueRole[] {
       input.onSkip?.(c.role, "enabled=false");
       continue;
     }
+    // Retry budget (tz-01 B4): a role whose runs keep failing must not
+    // re-spawn a sub-session on every tick. The budget is spent per zone-day,
+    // so tomorrow's schedule tries again, and a successful run resets it.
+    const { failures, lastFailureAt } = failureStateOf(input.roleState, c.role);
+    if (
+      failures >= c.policy.retryBudget &&
+      lastFailureAt !== null &&
+      sameZoneDay(input.nowMs, lastFailureAt, input.timezone)
+    ) {
+      input.onSkip?.(
+        c.role,
+        `retry budget exhausted (${failures}/${c.policy.retryBudget} failed runs today)`,
+      );
+      continue;
+    }
+
     const { trigger, schedule, threshold } = legacy
       ? {
           trigger:

@@ -38,7 +38,7 @@ export interface RoleLockInfo {
 export interface RoleLock {
   path: string;
   info: RoleLockInfo;
-  /** Idempotent; removes the file only while it still holds OUR pid. */
+  /** Idempotent; removes the file only while it still holds OUR token. */
   release: () => void;
 }
 
@@ -64,6 +64,10 @@ function pidAlive(pid: number): boolean {
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+
+/** How long one takeover attempt may hold the `.steal` gate. Takeover is a
+ * few syscalls; anything older is a crashed taker-over. */
+const STEAL_TTL_MS = 5_000;
 
 /** True when an existing lock may be taken over (stale ttl or dead local pid). */
 function isStale(info: RoleLockInfo, nowMs: number): boolean {
@@ -131,16 +135,47 @@ export function acquireRoleLock(
   const held = readLock(file);
   // An unparseable lock file is a leftover, not an owner.
   if (held !== null && !isStale(held, nowMs)) return null;
-  // Stale takeover: re-read immediately before unlinking so a lock acquired
-  // in the meantime is not destroyed, then let the link decide the winner —
-  // two processes taking over the same stale lock both unlink (the second is
-  // a no-op) and only one link succeeds.
-  const stillHeld = readLock(file);
-  if (stillHeld !== null && !isStale(stillHeld, nowMs)) return null;
-  try {
-    fs.rmSync(file, { force: true });
-  } catch {
-    // best-effort: the ttl still expires the stale lock
+
+  // Takeover is itself a critical section: without it two processes reaping
+  // the SAME stale lock both unlink and both link — the second unlink would
+  // delete the first one's fresh lock. The `.steal` gate is taken with the
+  // same exclusive link, so only one process ever reaps.
+  const stealFile = `${file}.steal`;
+  if (!linkLock(stealFile, info)) {
+    reapStaleSteal(stealFile, nowMs);
+    if (!linkLock(stealFile, info)) return null;
   }
-  return linkLock(file, info) ? mk() : null;
+  try {
+    // Re-read under the gate: the previous reaper may already have handed the
+    // lock to a live run.
+    const stillHeld = readLock(file);
+    if (stillHeld !== null && !isStale(stillHeld, nowMs)) return null;
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      // best-effort: the ttl still expires the stale lock
+    }
+    return linkLock(file, info) ? mk() : null;
+  } finally {
+    try {
+      fs.rmSync(stealFile, { force: true });
+    } catch {
+      // best-effort: a leftover gate is reaped by STEAL_TTL_MS
+    }
+  }
+}
+
+/** Drop a `.steal` gate left behind by a crashed taker-over. */
+function reapStaleSteal(stealFile: string, nowMs: number): void {
+  const info = readLock(stealFile);
+  const age = info === null ? Infinity : nowMs - Date.parse(info.acquiredAt);
+  const deadLocally =
+    info !== null && info.host === os.hostname() && !pidAlive(info.pid);
+  if (info === null || deadLocally || !(age <= STEAL_TTL_MS)) {
+    try {
+      fs.rmSync(stealFile, { force: true });
+    } catch {
+      // best-effort
+    }
+  }
 }

@@ -28,6 +28,7 @@ function role(
       role: name,
       enabled,
       dispatch: { schedule: null, threshold: null, ...dispatch },
+      policy: { retryBudget: 2 },
     } as ResolvedRoleContract,
   };
 }
@@ -142,6 +143,55 @@ describe("computeDueRoles (tz-01 B6)", () => {
     expect(
       computeDueRoles({ ...base, contracts: [manual], roleState: {} }),
     ).toEqual([]);
+  });
+
+  it("retry budget: a role that keeps failing today stops being dispatched", () => {
+    const failedToday = {
+      "dedup-daily": {
+        lastRunAt: YESTERDAY,
+        consecutiveFailures: 2,
+        lastFailureAt: "2026-08-02T00:00:30.000Z", // today, 03:00:30 MSK
+      },
+    };
+    const skipped: string[] = [];
+    const due = computeDueRoles({
+      ...base,
+      contracts: [DEDUP],
+      roleState: failedToday,
+      onSkip: (r, why) => skipped.push(`${r}: ${why}`),
+    });
+    expect(due).toEqual([]);
+    expect(skipped[0]).toContain("retry budget exhausted (2/2");
+  });
+
+  it("retry budget: one failure is still under the budget → the role retries", () => {
+    const due = computeDueRoles({
+      ...base,
+      contracts: [DEDUP],
+      roleState: {
+        "dedup-daily": {
+          lastRunAt: YESTERDAY,
+          consecutiveFailures: 1,
+          lastFailureAt: "2026-08-02T00:00:30.000Z",
+        },
+      },
+    });
+    expect(due).toEqual([{ role: "dedup-daily", reason: "schedule" }]);
+  });
+
+  it("retry budget resets on a new zone-day (yesterday's failures do not block)", () => {
+    const due = computeDueRoles({
+      ...base,
+      contracts: [DEDUP],
+      roleState: {
+        "dedup-daily": {
+          lastRunAt: YESTERDAY,
+          consecutiveFailures: 9,
+          lastFailureAt: YESTERDAY,
+        },
+      },
+    });
+    expect(due).toEqual([{ role: "dedup-daily", reason: "schedule" }]);
   });
 
   it("rollback (contractDispatch=false): one schedule, configured roles", () => {

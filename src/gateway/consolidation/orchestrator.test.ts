@@ -397,7 +397,13 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(cp.lastRunAt).toBe("");
     // ...and must NOT be stamped as "this role ran today" either: the
     // dispatcher has to keep retrying it (tick and catch-up after restart).
-    expect(cp.roles["memory-keeper"]).toBeUndefined();
+    // The FAILURE is counted though — that is what bounds those retries.
+    const progress = cp.roles["memory-keeper"] as {
+      lastRunAt: string;
+      consecutiveFailures: number;
+    };
+    expect(progress.lastRunAt).toBe("");
+    expect(progress.consecutiveFailures).toBe(1);
   });
 
   it("chunked run that applied nothing IS stamped as ran-today (no cursor move)", async () => {
