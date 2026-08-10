@@ -19,10 +19,15 @@
  * the previous in-process behaviour (the gateway must not die over it).
  */
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 
 export interface RoleLockInfo {
+  /** Unique per acquisition: pid+host is NOT enough to identify the owner —
+   * two sequential locks in one process share them, and the older handle
+   * would then release the newer lock. */
+  token: string;
   pid: number;
   host: string;
   role: string;
@@ -67,17 +72,28 @@ function isStale(info: RoleLockInfo, nowMs: number): boolean {
   return info.host === os.hostname() && !pidAlive(info.pid);
 }
 
-function writeLock(file: string, info: RoleLockInfo): void {
-  const tmp = `${file}.${process.pid}.tmp`;
+/** Write the payload to a private temp file and hard-link it into place.
+ * `link()` fails with EEXIST when the target exists, so the LINK — not the
+ * preceding write — is the mutual exclusion: there is no window in which the
+ * lock file exists but is still empty. */
+function linkLock(file: string, info: RoleLockInfo): boolean {
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(info), "utf-8");
-  fs.renameSync(tmp, file);
+  try {
+    fs.linkSync(tmp, file);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // best-effort temp cleanup
+    }
+  }
 }
 
-/**
- * Acquire the lock for `role`, or null when another live run holds it.
- * Throws only when the lock directory itself is unusable — the caller
- * decides whether that degrades to in-process-only locking.
- */
 export function acquireRoleLock(
   dataDir: string,
   role: string,
@@ -87,6 +103,7 @@ export function acquireRoleLock(
   const file = roleLockPath(dataDir, role);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const info: RoleLockInfo = {
+    token: randomUUID(),
     pid: process.pid,
     host: os.hostname(),
     role,
@@ -99,11 +116,7 @@ export function acquireRoleLock(
     info,
     release: () => {
       const held = readLock(file);
-      if (
-        held !== null &&
-        held.pid === process.pid &&
-        held.host === info.host
-      ) {
+      if (held !== null && held.token === info.token) {
         try {
           fs.rmSync(file, { force: true });
         } catch {
@@ -113,22 +126,21 @@ export function acquireRoleLock(
     },
   });
 
-  try {
-    // "wx" is atomic on every POSIX filesystem — the exclusive create IS the
-    // mutual exclusion; everything below only handles a leftover file.
-    fs.closeSync(fs.openSync(file, "wx"));
-    writeLock(file, info);
-    return mk();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-  }
+  if (linkLock(file, info)) return mk();
 
   const held = readLock(file);
   // An unparseable lock file is a leftover, not an owner.
   if (held !== null && !isStale(held, nowMs)) return null;
-  writeLock(file, info);
-  // Re-read: two processes may have raced through the takeover branch.
-  const winner = readLock(file);
-  if (winner === null || winner.pid !== process.pid) return null;
-  return mk();
+  // Stale takeover: re-read immediately before unlinking so a lock acquired
+  // in the meantime is not destroyed, then let the link decide the winner —
+  // two processes taking over the same stale lock both unlink (the second is
+  // a no-op) and only one link succeeds.
+  const stillHeld = readLock(file);
+  if (stillHeld !== null && !isStale(stillHeld, nowMs)) return null;
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // best-effort: the ttl still expires the stale lock
+  }
+  return linkLock(file, info) ? mk() : null;
 }

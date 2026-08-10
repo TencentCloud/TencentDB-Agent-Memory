@@ -395,6 +395,41 @@ describe("ConsolidationOrchestrator (P6)", () => {
     // Failed run must NOT advance the checkpoint (idempotent retry).
     const cp = await orch.readCheckpoint();
     expect(cp.lastRunAt).toBe("");
+    // ...and must NOT be stamped as "this role ran today" either: the
+    // dispatcher has to keep retrying it (tick and catch-up after restart).
+    expect(cp.roles["memory-keeper"]).toBeUndefined();
+  });
+
+  it("chunked run that applied nothing IS stamped as ran-today (no cursor move)", async () => {
+    // The chunked strategy does not advance the cursor when nothing was
+    // applied, so without the explicit stamp the dispatcher would re-fire
+    // this scheduled role on every tick.
+    const roleDir = path.join(tmp, "roles-stamp");
+    fs.mkdirSync(roleDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roleDir, "night-keeper.md"),
+      "ROLE-NIGHT-PROMPT",
+      "utf-8",
+    );
+    nightContract(roleDir);
+    const orch = makeOrchestrator({
+      roleName: "night-keeper",
+      roleDir,
+      spawn: writingSpawn({}),
+      // Nothing applied → the chunked strategy returns no advance.
+      apply: vi.fn(async () => ({
+        ...okApply(),
+        applied: { merges: [], deletes: [], rewrites: [] },
+      })),
+    });
+    const summary = await orch.runNow({ reason: "night" });
+    expect(summary.status).toBe("ok");
+    const cp = await orch.readCheckpoint();
+    expect(cp.lastRunAt).toBe(""); // cursor untouched
+    expect(
+      (cp.roles["night-keeper"] as { lastRunAt?: string } | undefined)
+        ?.lastRunAt,
+    ).toBeTruthy(); // but the role is marked as having run
   });
 
   it("spawn failure → failed run, fail-open (критерий 21)", async () => {

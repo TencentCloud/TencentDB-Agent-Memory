@@ -77,9 +77,11 @@ export async function runRole(
         summary,
         outcome.advance.anchor,
       );
-    } else {
-      // The role ran even though the cursor stayed — the dispatcher needs the
-      // per-role stamp, otherwise a scheduled no-op run repeats every tick.
+    } else if (summary.status === "ok") {
+      // A successful run that moved no cursor still counts as "ran today" for
+      // the dispatcher, otherwise a scheduled no-op repeats every tick. A
+      // FAILED run is deliberately not stamped: it must stay retryable, both
+      // on the next tick and via catch-up after a restart.
       await stampRoleRun(ctx, summary);
     }
     await writeReport(ctx, summary);

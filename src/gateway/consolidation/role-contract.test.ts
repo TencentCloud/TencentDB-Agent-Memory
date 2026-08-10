@@ -277,3 +277,25 @@ describe("role-contract resolver (tz-01 B1)", () => {
     expect(after.ok && after.contract.prompt.text).toBe("P2-longer");
   });
 });
+
+describe("cache invalidation of a fail-closed role", () => {
+  it("adding the missing prompt re-enables the role without a restart", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-rc-reopen-"));
+    fs.mkdirSync(path.join(dir, "role-a"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "role-a", "role.json"),
+      JSON.stringify(fullContract({ fail_on_missing_prompt: true })),
+      "utf-8",
+    );
+    // No prompt yet → fail-closed, and that verdict is cached.
+    const first = resolveRoleContract("role-a", dir, LEGACY);
+    expect(first.ok).toBe(false);
+    expect(resolveRoleContract("role-a", dir, LEGACY).ok).toBe(false);
+
+    // The operator adds the prompt the contract asked for.
+    fs.writeFileSync(path.join(dir, "role-a", "role-a.md"), "PROMPT", "utf-8");
+    const after = resolveRoleContract("role-a", dir, LEGACY);
+    expect(after.ok).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

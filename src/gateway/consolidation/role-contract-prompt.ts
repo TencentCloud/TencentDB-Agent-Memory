@@ -13,6 +13,10 @@ import path from "node:path";
 export interface PromptResolution {
   path: string | null;
   text: string | null;
+  /** Where the prompt WOULD be when nothing was found. The cache stamps this
+   * path, so adding the missing file invalidates the cached resolution
+   * instead of freezing the role until a restart. */
+  expectedPath: string;
   /** Empty when `prompt_file` itself was used. */
   warnings: string[];
 }
@@ -45,9 +49,11 @@ export function resolveRolePrompt(
   roleDir: string,
   promptFile: string,
 ): PromptResolution {
-  for (const cand of promptFileCandidates(promptFile, role, roleDir)) {
+  const candidates = promptFileCandidates(promptFile, role, roleDir);
+  const expectedPath = candidates[0]!;
+  for (const cand of candidates) {
     const text = readIfPresent(cand);
-    if (text !== null) return { path: cand, text, warnings: [] };
+    if (text !== null) return { path: cand, text, expectedPath, warnings: [] };
   }
   const canonical = path.join(roleDir, role, "prompt.md");
   const canonicalText = readIfPresent(canonical);
@@ -55,6 +61,7 @@ export function resolveRolePrompt(
     return {
       path: canonical,
       text: canonicalText,
+      expectedPath,
       warnings: [
         `prompt_file "${promptFile}" not found — fell back to ${canonical}`,
       ],
@@ -66,10 +73,11 @@ export function resolveRolePrompt(
     return {
       path: bare,
       text: bareText,
+      expectedPath,
       warnings: [
         `prompt_file "${promptFile}" not found — fell back to ${bare}`,
       ],
     };
   }
-  return { path: null, text: null, warnings: [] };
+  return { path: null, text: null, expectedPath, warnings: [] };
 }
