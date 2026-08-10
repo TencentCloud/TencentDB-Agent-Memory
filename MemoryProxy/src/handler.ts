@@ -244,7 +244,39 @@ function buildUpstreamBody(
   if (target.bodyOverrides) {
     upstreamBody = { ...body, ...target.bodyOverrides };
   }
+  // DeepSeek thinking 模型要求历史中每个 assistant 消息都带 reasoning_content，
+  // 否则 400 "The `reasoning_content` in the thinking mode must be passed back to the API."。
+  // proxy 生成的表单 assistant tool_calls 消息没有该字段，这里为缺失的补空串。
+  upstreamBody = patchMissingReasoningContent(upstreamBody);
   return upstreamBody;
+}
+
+/**
+ * Patch assistant messages that lack a `reasoning_content` field with an empty
+ * string. DeepSeek's thinking-mode API rejects message histories where an
+ * assistant turn (e.g. a proxy-generated session-init form tool_call) has no
+ * `reasoning_content`, returning HTTP 400. An empty string satisfies the API
+ * while preserving normal thinking behaviour. Non-assistant messages and
+ * assistant messages that already carry the field are left untouched.
+ */
+function patchMissingReasoningContent(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return body;
+
+  let changed = false;
+  const patched = messages.map((m) => {
+    if (typeof m !== "object" || m === null) return m;
+    const msg = m as Record<string, unknown>;
+    if (msg.role !== "assistant") return m;
+    if (msg.reasoning_content !== undefined) return m;
+    changed = true;
+    return { ...msg, reasoning_content: "" };
+  });
+
+  if (!changed) return body;
+  return { ...body, messages: patched };
 }
 
 /**
