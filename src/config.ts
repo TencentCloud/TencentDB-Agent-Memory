@@ -173,6 +173,13 @@ export interface ConsolidationConfig {
    */
   applyGateMode: "shadow" | "enforce";
   /**
+   * Require a control-plane Run for every apply (tz-09 Ф6, criterion 1).
+   * true — an apply without a live `runId` is refused before any mutation and
+   * the ops/caps policy is read from the Run's pinned contract snapshot, not
+   * from the caller. false — the documented rollback to pre-tz-09 apply.
+   */
+  applyRunRepo: boolean;
+  /**
    * Night-run parameters (`memory.consolidation.night`). The night-run
    * TRIGGER (schedule/threshold/timezone) lives in `memory.nightRun`;
    * the run PARAMETERS live here. Split is deliberate — one source per
@@ -767,6 +774,7 @@ export function parseConfig(
           "killPolicy",
         ) as ConsolidationConfig["killPolicy"]) ?? "group-kill",
       contractDispatch: bool(consolidationGroup, "contractDispatch") ?? true,
+      applyRunRepo: bool(consolidationGroup, "applyRunRepo") ?? true,
       applyGateMode:
         (str(consolidationGroup, "applyGateMode") as
           "shadow" | "enforce" | undefined) ?? "shadow",
@@ -1011,6 +1019,7 @@ const consolidationSchema = z.strictObject({
   killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
   contractDispatch: z.boolean().optional(),
   applyGateMode: z.enum(["shadow", "enforce"]).optional(),
+  applyRunRepo: z.boolean().optional(),
   night: z
     .strictObject({
       diffCap: z.number().int().positive().optional(),

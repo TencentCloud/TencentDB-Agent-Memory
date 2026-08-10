@@ -127,6 +127,8 @@ export interface OrchestratorOptions {
   applyDiff?: ApplyDiffFn;
   /** tz-09 Ф3 gate mode; omitted → shadow. */
   applyGateMode?: "shadow" | "enforce";
+  /** tz-09 Ф6 run-repository requirement; omitted → off (tests, rollback). */
+  applyRunRepo?: boolean;
   roleName?: string;
   /** Role dir override (tests point at a scratch dir; default resolveRoleDir()). */
   roleDir?: string;

@@ -107,6 +107,7 @@ export async function defaultApplyDiff(
     logger: ctx.logger,
     vectorStore: ctx.vectorStore?.(),
     embeddingService: ctx.embeddingService?.(),
+    runRepo: ctx.applyRunRepo,
   });
   return executor.apply(body, run);
 }

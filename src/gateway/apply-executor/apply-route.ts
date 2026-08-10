@@ -84,11 +84,16 @@ export async function handleMemoryApply(
     logger: ctx.logger,
     vectorStore: ctx.core.getVectorStore(),
     embeddingService: ctx.core.getEmbeddingService(),
+    runRepo: ctx.config.memory?.consolidation?.applyRunRepo === true,
   });
+  const runId = (body as { runId?: unknown } | null)?.runId;
 
   let result: ApplyResult;
   try {
-    result = await executor.apply(body);
+    result = await executor.apply(
+      body,
+      typeof runId === "string" ? { runId } : undefined,
+    );
   } catch (err) {
     ctx.logger.error?.(
       `[memory/apply] unexpected error: ${err instanceof Error ? err.message : String(err)}`,

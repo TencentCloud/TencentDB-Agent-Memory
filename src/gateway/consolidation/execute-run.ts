@@ -83,6 +83,15 @@ export async function executeRunForRole(
   return runRole(ctx, { ...opts, contract });
 }
 
+/** `policy.opsSubset` is a Set, and a plain JSON.stringify turns a Set into
+ * `{}` — the snapshot would silently lose the very policy Ф6 reads back from
+ * it. Sets become arrays here, once. */
+function serializeContract(contract: ResolvedRoleContract): string {
+  return JSON.stringify(contract, (_key, value: unknown) =>
+    value instanceof Set ? [...value] : value,
+  );
+}
+
 function openRunRecord(
   ctx: OrchestratorContext,
   opts: ExecuteRunOpts,
@@ -96,7 +105,7 @@ function openRunRecord(
         runId: opts.runId,
         roleId: opts.role,
         contractHash: contract.contractHash,
-        contractJson: JSON.stringify(contract),
+        contractJson: serializeContract(contract),
         binding: JSON.stringify(contract.binding),
         scratchPath: contract.assets.scratchRoot ?? ctx.scratchRoot,
         reason: opts.reason,

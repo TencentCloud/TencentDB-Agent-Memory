@@ -62,6 +62,7 @@ export class ConsolidationOrchestrator {
       enabled: opts.enabled,
       roleDefaults: opts.roleDefaults,
       applyGateMode: opts.applyGateMode ?? "shadow",
+      applyRunRepo: opts.applyRunRepo ?? false,
       launcher: opts.launcher,
       dataDir: opts.dataDir,
       scratchRoot: opts.scratchRoot,

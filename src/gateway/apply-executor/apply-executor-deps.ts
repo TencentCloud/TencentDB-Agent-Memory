@@ -16,4 +16,8 @@ export interface ApplyExecutorDeps {
   logger: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  /** tz-09 Ф6: when true an apply must name a live Run and its ops/caps come
+   * from that Run's pinned contract. Absent → the pre-tz-09 behaviour, which
+   * is what the direct call sites (and the rollback switch) rely on. */
+  runRepo?: boolean;
 }

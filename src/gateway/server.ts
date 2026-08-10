@@ -180,6 +180,7 @@ export class TdaiGateway {
       enabled: consolidationCfg.enabled,
       roleDefaults: buildRoleDefaults(consolidationCfg),
       applyGateMode: consolidationCfg.applyGateMode,
+      applyRunRepo: consolidationCfg.applyRunRepo,
       launcher: buildLauncherDefaults(consolidationCfg),
       dataDir: this.config.data.baseDir,
       scratchRoot: nodePath.join(

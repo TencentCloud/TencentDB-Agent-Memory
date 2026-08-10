@@ -30,6 +30,9 @@ export interface OrchestratorContext {
   /** Apply-gate mode (tz-09 Ф3) — read once at the composition root from
    * `memory.consolidation.applyGateMode`, never from inside consolidation/. */
   applyGateMode: "shadow" | "enforce";
+  /** tz-09 Ф6: require a control-plane Run for every apply. Composition-root
+   * value from `memory.consolidation.applyRunRepo`. */
+  applyRunRepo: boolean;
   /** Host launch parameters (binary + fixed flags); tz-06 owns their move
    * into a launcher module. */
   launcher: LauncherDefaults;

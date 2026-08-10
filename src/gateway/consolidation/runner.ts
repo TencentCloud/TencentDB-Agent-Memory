@@ -67,6 +67,9 @@ export async function runBatch(
       // body — never inside it.
       {
         runId: args.runId,
+        // Half of every operationId (Ф5): the journal is bound to THIS
+        // candidate, so a replay of a different one cannot collide with it.
+        candidateDigest: digestOf(pre.rawDiff),
         opsSubset: args.contract.policy.opsSubset,
         caps: args.contract.policy.caps,
         gateMode: ctx.applyGateMode,

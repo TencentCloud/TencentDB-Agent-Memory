@@ -27,6 +27,7 @@ import {
 } from "./apply-executor/validate.js";
 import { checkManifest } from "./apply-executor/manifest.js";
 import { runApplyGate } from "./apply-executor/gate.js";
+import { resolveRunPolicy } from "./apply-executor/run-policy.js";
 import { countOps, createOpJournal } from "./apply-executor/op-journal.js";
 import { applyMerges } from "./apply-executor/apply-ops-merge.js";
 import { applyRewritesRecords } from "./apply-executor/apply-ops-record.js";
@@ -104,16 +105,24 @@ export class ApplyExecutor {
       const parsed = parseRequest(rawBody);
       // 2. Semantic guardrails (DB reads) — before any mutation.
       await validateSemantics(this.deps, parsed);
+      // 2a. Run identity + policy (tz-09 Ф6): with runRepo on, an apply
+      // without a live Run is refused here, and the policy the gate uses is
+      // the Run's pinned contract, not what the caller passed.
+      const scoped = resolveRunPolicy(
+        this.deps.dataDir,
+        run,
+        this.deps.runRepo === true,
+      );
       // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
       // ONLY call site — a second one would be a way past it.
-      runApplyGate(this.deps, parsed.diff, run);
+      runApplyGate(this.deps, parsed.diff, scoped);
       // 3. Trust-boundary manifest recheck — before any mutation.
       checkManifest(this.deps, parsed);
       // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes →
       // files. tz-09 Ф5: each one journals prepared/applied, so a crash in
       // the middle leaves a record of exactly how far the apply got. The
       // canonical opIndex order IS this call order (control-plane/oplog.ts).
-      const onOp = this.journalFor(parsed.diff, run);
+      const onOp = this.journalFor(parsed.diff, scoped);
       await applyMerges(this.deps, parsed.diff.merge, result, onOp);
       await applyRewritesRecords(
         this.deps,

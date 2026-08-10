@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { TdaiGateway } from "./server.js";
 import { parseConfig } from "../config.js";
 import * as childSpawn from "./consolidation/child-spawn.js";
+import { createRun } from "./control-plane/run-repo.js";
 
 /**
  * Test-isolation (B6 R2, reviewer medium test-system-side-effect): a real
@@ -156,19 +157,43 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
       const noAuth = await fetch(`${baseUrl}/memory/apply`, { method: "POST" });
       expect(noAuth.status).toBe(401);
       const token = fs.readFileSync(infoBody.tokenPath, "utf-8").trim();
-      const authed = await fetch(`${baseUrl}/memory/apply`, {
-        method: "POST",
-        headers: {
-          "x-memory-token": token,
-          "Content-Type": "application/json",
+      const post = (extra: Record<string, unknown>) =>
+        fetch(`${baseUrl}/memory/apply`, {
+          method: "POST",
+          headers: {
+            "x-memory-token": token,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            ...extra,
+            diff: {},
+            manifest: { baseline: {} },
+            context: { presentedRecordIds: [] },
+          }),
+        });
+
+      // tz-09 criterion 1: past the write-gate is not past the run gate — an
+      // apply that names no Run is refused before any mutation.
+      const noRun = await post({});
+      expect(noRun.status).toBe(400);
+      expect(((await noRun.json()) as { error?: string }).error).toContain(
+        "runId",
+      );
+
+      // With a live Run the same body applies — proves the write-gate itself
+      // works post-restart (empty diff is valid).
+      createRun(
+        base,
+        {
+          runId: "run-acceptance",
+          roleId: "memory-keeper",
+          contractHash: "h",
+          contractJson: "{}",
+          binding: "{}",
         },
-        body: JSON.stringify({
-          diff: {},
-          manifest: { baseline: {} },
-          context: { presentedRecordIds: [] },
-        }),
-      });
-      // Empty diff is valid — proves the write-gate itself works post-restart.
+        new Date().toISOString(),
+      );
+      const authed = await post({ runId: "run-acceptance" });
       expect(authed.status).toBe(200);
     } finally {
       await second.stop();

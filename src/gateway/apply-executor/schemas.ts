@@ -62,6 +62,10 @@ export const diffSchema = z.strictObject({
 });
 
 export const applyRequestSchema = z.strictObject({
+  /** tz-09 Ф6: the HTTP path is the ONE place a run id travels in the body —
+   * an internal caller passes a RunContext as the second argument instead.
+   * Optional here widens the strict object; every pre-tz-09 body stays valid. */
+  runId: z.string().optional(),
   diff: diffSchema,
   manifest: z.strictObject({
     baseline: z.record(z.string(), z.string()),
