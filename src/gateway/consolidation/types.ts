@@ -65,6 +65,9 @@ export interface TriggerResult {
 
 export interface SpawnChildContext {
   runId: string;
+  /** The attempt row this spawn belongs to (tz-06 Ф3): the session lives
+   * under it, and its `detail` carries the sessionRef back. */
+  attemptId: string;
   /** Per-run scratch dir (<scratchRoot>/<runId>) — cwd of the sub-session. */
   scratchDir: string;
   /** Session prompt file path (role prompt + diff section). */

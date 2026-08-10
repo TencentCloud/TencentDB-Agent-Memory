@@ -17,7 +17,6 @@ describe("wave config schema (P1)", () => {
     expect(cfg.consolidation.launchers.pi!.flags).toEqual([
       "-p",
       "--no-context-files",
-      "--no-session",
     ]);
     expect(cfg.consolidation.thinking).toBe("low");
     expect(cfg.consolidation.timeoutMs).toBe(600_000);

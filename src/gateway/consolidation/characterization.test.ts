@@ -329,7 +329,11 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     // Role part = everything before the generated diff section.
     const rolePrompt = promptText.split("\n## ")[0]!.trim();
     return {
-      spawnFlags: opts.spawnFlags as string[],
+      // tz-06 Ф3: the last flag is a per-attempt session dir (fresh uuid every
+      // run) — normalized so the digest tracks BEHAVIOR, not the uuid.
+      spawnFlags: (opts.spawnFlags as string[]).map((a) =>
+        a.startsWith(tmp) && a.endsWith("/session") ? "<SESSION>" : a,
+      ),
       // The fixture root is a fresh mkdtemp per test — normalize it out, or
       // the digest changes on every run instead of on every behavior change.
       extraArgs: ((opts.extraArgs as string[]) ?? []).map((a) =>
@@ -345,7 +349,14 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
 
   it("memory-keeper spawn surface is stable", async () => {
     const s = await captureSurface("memory-keeper");
-    expect(s.spawnFlags).toEqual(["-p", "--no-context-files", "--no-session"]);
+    // tz-06 Ф3, `session-per-attempt`: `--no-session` is gone and the
+    // launcher owns `--session-dir <scratch>/attempts/<attemptId>/session`.
+    expect(s.spawnFlags).toEqual([
+      "-p",
+      "--no-context-files",
+      "--session-dir",
+      "<SESSION>",
+    ]);
     expect(s.extraArgs).toEqual([
       "--no-extensions",
       "--extension",
@@ -407,9 +418,9 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     // memory-keeper and night-keeper never moved.
     expect(digests).toMatchInlineSnapshot(`
       {
-        "dedup-daily": "b0620d5eaa355a9b",
-        "memory-keeper": "15d145a549408a2c",
-        "night-keeper": "fead96eadceea8bd",
+        "dedup-daily": "9e4376acd7d43447",
+        "memory-keeper": "84cb6a7d65762336",
+        "night-keeper": "584b9512e9353b92",
       }
     `);
   });

@@ -7,12 +7,14 @@
  * `exit`, output is still unbounded. Ф2 fixes the lifecycle in this file,
  * with the characterization tests of Ф0 as the before-picture.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { runKeeperProcess } from "./pi-process.js";
 import { killChildGroup } from "../child-spawn.js";
 import type { Logger } from "../../../core/types.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
 import type { LauncherSettings } from "./pi-config.js";
-import { PI_LAUNCHER_ID } from "./pi-config.js";
+import { ATTEMPTS_DIR, PI_LAUNCHER_ID, stripOwnedFlags } from "./pi-config.js";
 import type {
   HostRunResult,
   LaunchError,
@@ -57,11 +59,27 @@ export function createPiLauncher(
       const { contract } = input;
       let cancel: (() => void) | undefined;
 
+      // Session per ATTEMPT (tz-06 Ф3): two attempts of one run must not share
+      // a transcript, or the second reads as a continuation of the first.
+      const sessionDir = path.join(
+        input.cwd,
+        ATTEMPTS_DIR,
+        input.attemptId,
+        "session",
+      );
+      fs.mkdirSync(sessionDir, { recursive: true });
+
       // The handle is returned WITHOUT awaiting the run: a caller that cannot
       // cancel until the child is done has no cancel at all.
       const completion: Promise<HostRunResult> = runKeeperProcess({
         piBinary: settings.binary,
-        spawnFlags: settings.flags,
+        // The session flags belong to the launcher, never to the operator's
+        // fixed flags — see stripOwnedFlags.
+        spawnFlags: [
+          ...stripOwnedFlags(settings.flags),
+          "--session-dir",
+          sessionDir,
+        ],
         extraArgs: piAssetArgs(contract),
         model: contract.binding.model,
         thinking: contract.binding.thinking,
@@ -96,8 +114,7 @@ export function createPiLauncher(
       return {
         ok: true,
         handle: {
-          // pi writes its session under --session-dir; Ф3 gives it a value.
-          sessionRef: "",
+          sessionRef: sessionDir,
           completion,
           cancelAndWait: async () => {
             cancel?.();

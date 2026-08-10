@@ -12,6 +12,7 @@ import {
   type ApplyResult,
   type RunContext,
 } from "../apply-executor.js";
+import { finishAttempt } from "../control-plane/attempt-repo.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary, SpawnChildContext } from "./types.js";
@@ -68,6 +69,7 @@ export async function defaultSpawnChild(
   const launcher = ctx.launcherFor(childCtx.contract.binding.launcherId);
   const outcome = await launcher.launch({
     runId: childCtx.runId,
+    attemptId: childCtx.attemptId,
     cwd: childCtx.cwd,
     promptPath: childCtx.promptPath,
     taskPrompt: childCtx.taskPrompt,
@@ -92,7 +94,33 @@ export async function defaultSpawnChild(
     };
   }
 
+  // The attempt's session is what makes a run inspectable afterwards, so the
+  // reference goes onto the Attempt row rather than only into a log line.
+  finishAttempt(
+    ctx.dataDir,
+    childCtx.attemptId,
+    "launched",
+    JSON.stringify({
+      sessionRef: outcome.handle.sessionRef,
+      launcherId: launcher.id,
+    }),
+    new Date(ctx.now()).toISOString(),
+  );
+
   const res = await outcome.handle.completion;
+  // Terminal outcome on the SAME row: "launched" is where it started, not
+  // how it ended, and a row frozen at "launched" reads as a wedged attempt.
+  finishAttempt(
+    ctx.dataDir,
+    childCtx.attemptId,
+    res.status,
+    JSON.stringify({
+      sessionRef: outcome.handle.sessionRef,
+      launcherId: launcher.id,
+      exitCode: res.exitCode,
+    }),
+    new Date(ctx.now()).toISOString(),
+  );
   return {
     exitCode: res.exitCode,
     signal: res.signal,

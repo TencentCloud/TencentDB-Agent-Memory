@@ -13,13 +13,41 @@ import { z } from "zod";
 
 export const PI_LAUNCHER_ID = "pi";
 
+/** Per-attempt working data lives under `<scratch>/attempts/<attemptId>/`. */
+export const ATTEMPTS_DIR = "attempts";
+
 export const DEFAULT_PI_BINARY = "pi";
-/** `--no-session` leaves with tz-06 Ф3; until then it is the pi default. */
-export const DEFAULT_PI_FLAGS: readonly string[] = [
-  "-p",
-  "--no-context-files",
+export const DEFAULT_PI_FLAGS: readonly string[] = ["-p", "--no-context-files"];
+
+/**
+ * Session flags the launcher OWNS (tz-06 Ф3, `session-per-attempt`).
+ *
+ * A run without a session cannot be inspected after the fact, and two attempts
+ * sharing one session glue their transcripts together — both break the
+ * protocol, so an operator's fixed flags may not decide this. Whatever the
+ * config says, these are stripped and the launcher appends its own.
+ */
+export const LAUNCHER_OWNED_FLAGS: readonly string[] = [
   "--no-session",
+  "--session-dir",
+  "--session",
+  "--session-id",
 ];
+
+/** Drop launcher-owned flags (and the value of those that take one). */
+export function stripOwnedFlags(flags: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let i = 0; i < flags.length; i += 1) {
+    const flag = flags[i]!;
+    if (!LAUNCHER_OWNED_FLAGS.includes(flag)) {
+      kept.push(flag);
+      continue;
+    }
+    // `--no-session` is a switch; the rest carry a value that goes with them.
+    if (flag !== "--no-session") i += 1;
+  }
+  return kept;
+}
 
 export interface LauncherSettings {
   binary: string;

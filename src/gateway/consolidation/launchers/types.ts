@@ -53,6 +53,8 @@ export interface RunningHandle {
 
 export interface LaunchInput {
   runId: string;
+  /** The attempt this launch IS. Sessions are per attempt, not per run. */
+  attemptId: string;
   /** Working dir of the attempt; also where the role leaves diff.json. */
   cwd: string;
   /** System prompt file prepared by the pipeline. */

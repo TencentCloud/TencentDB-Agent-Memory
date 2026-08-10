@@ -23,6 +23,7 @@ import {
 import { copyKeeperTools } from "./keeper-tools.js";
 import { truncate } from "./chunk.js";
 import { checkCaps } from "./check-caps.js";
+import { recordAttempt } from "../control-plane/attempt-repo.js";
 import { readScratchDiff } from "./scratch-diff.js";
 import { rejectStaleArtifact } from "./artifact-fence.js";
 import type { OrchestratorContext } from "./context.js";
@@ -99,8 +100,18 @@ export async function preApply(
     return { ok: false };
   }
 
+  // The launch is an ATTEMPT of the run (tz-09 Ф1 rows, tz-06 Ф3 sessions):
+  // preallocated here so the session dir and the outcome have a row to land on
+  // even if the host refuses to start.
+  const attemptId = recordAttempt(
+    ctx.dataDir,
+    args.runId,
+    "launch",
+    new Date(ctx.now()).toISOString(),
+  );
   const childResult: ChildRunResult = await ctx.spawnChild({
     runId: args.runId,
+    attemptId,
     scratchDir: args.scratchDir,
     promptPath,
     taskPrompt: DEFAULT_TASK_PROMPT,

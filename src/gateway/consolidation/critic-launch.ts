@@ -68,6 +68,7 @@ export async function launchCritic(
 
   const child = await ctx.spawnChild({
     runId: args.runId,
+    attemptId,
     scratchDir: args.scratchDir,
     promptPath,
     taskPrompt: TASK_PROMPT,
