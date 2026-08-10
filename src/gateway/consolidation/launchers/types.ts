@@ -37,6 +37,12 @@ export interface HostRunResult {
   signal: string | null;
   stdout: string;
   stderr: string;
+  /** Where the FULL stream was spooled, and how much of it there was —
+   * the in-memory fields above are a bounded tail (tz-06 критерий 8). */
+  stdoutFile?: string | null;
+  stderrFile?: string | null;
+  stdoutBytes?: number;
+  stderrBytes?: number;
   /** Set when the host itself failed rather than the role. */
   error?: string;
   /** The same failure, typed, when it is the host refusing to launch. */

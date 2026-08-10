@@ -12,7 +12,11 @@ import { attemptSessionDir, startHosted } from "./start.js";
 import type { Logger } from "../../../core/types.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
 import type { LauncherSettings } from "./pi-config.js";
-import { PI_LAUNCHER_ID, stripOwnedFlags } from "./pi-config.js";
+import {
+  DEFAULT_PI_FLAGS,
+  PI_LAUNCHER_ID,
+  stripOwnedFlags,
+} from "./pi-config.js";
 
 /** @see capabilities.ts — the role's vocabulary, not pi's flag names. */
 const PI_CAPABILITIES: ReadonlySet<string> = new Set([
@@ -58,7 +62,7 @@ export function createPiLauncher(
           // The session flags belong to the launcher, never to the operator's
           // fixed flags — see stripOwnedFlags.
           spawnFlags: [
-            ...stripOwnedFlags(settings.flags),
+            ...stripOwnedFlags(settings.flags ?? [...DEFAULT_PI_FLAGS]),
             "--session-dir",
             sessionRef,
           ],

@@ -253,6 +253,30 @@ describe("critic launch — the verdict producer (tz-09 Ф4a)", () => {
     expect(listAttempts(dir, "r1").map((a) => a.kind)).toEqual(["critic"]);
   });
 
+  it("an approve from a critic that EXITED NON-ZERO is refused", async () => {
+    // The apply gate hangs on this verdict, so "the file says approve" is not
+    // enough — the process that wrote it has to have succeeded (L7).
+    const spawn = vi.fn(async () => {
+      fs.writeFileSync(
+        path.join(scratch, CRITIC_VERDICT_FILE),
+        JSON.stringify({ verdict: "approve", candidateDigest: "abc" }),
+        "utf-8",
+      );
+      return { exitCode: 1, timedOut: false, stdout: "", stderr: "boom" };
+    });
+    ctx = ctxWith(spawn as never);
+
+    const res = await launchCritic(ctx, {
+      runId: "r1",
+      scratchDir: scratch,
+      critic: criticContract(),
+      candidateDigest: "abc",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("critic exited code 1");
+    expect(listAttempts(dir, "r1")[0]?.outcome).toBe("failed");
+  });
+
   it("a verdict left by a PREVIOUS attempt is never reused", async () => {
     fs.writeFileSync(
       path.join(scratch, CRITIC_VERDICT_FILE),

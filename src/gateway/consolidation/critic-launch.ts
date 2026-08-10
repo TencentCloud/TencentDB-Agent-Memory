@@ -92,6 +92,17 @@ export async function launchCritic(
     finish("timeout", null);
     return { ok: false, error: "critic timed out — process group killed" };
   }
+  // L7, same rule as the main role (Ф2/критерий 9): a critic that died still
+  // leaves its verdict file behind. "approve" from a process that exited 1 is
+  // not an approval — and this is the gate the whole apply hangs on.
+  if (child.exitCode !== 0) {
+    const how =
+      child.exitCode === null
+        ? `signal ${child.signal ?? "?"}`
+        : `code ${child.exitCode}`;
+    finish("failed", `critic exited ${how}`);
+    return { ok: false, error: `critic exited ${how} — verdict refused` };
+  }
 
   let verdictText: string;
   try {

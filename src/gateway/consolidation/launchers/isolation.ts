@@ -39,16 +39,34 @@ const SYMLINKS: Array<[string, string]> = [
   ["usr/sbin", "/sbin"],
 ];
 
-export function isolationAvailable(): boolean {
-  for (const dir of (process.env.PATH ?? "").split(":")) {
+/** Where an executable actually lives. A bare name means "somewhere on PATH",
+ * and inside the namespace PATH is not the host's — so the name has to become
+ * a path BEFORE the bind list is built, or the bind is never made. */
+export function resolveExecutable(binary: string): string | null {
+  if (binary.includes(path.sep)) {
+    const abs = path.resolve(binary);
     try {
-      accessSync(`${dir}/${ISOLATION_BINARY}`, constants.X_OK);
-      return true;
+      accessSync(abs, constants.X_OK);
+      return abs;
+    } catch {
+      return null;
+    }
+  }
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir === "") continue;
+    const candidate = path.join(dir, binary);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
     } catch {
       /* keep looking */
     }
   }
-  return false;
+  return null;
+}
+
+export function isolationAvailable(): boolean {
+  return resolveExecutable(ISOLATION_BINARY) !== null;
 }
 
 /**
@@ -64,12 +82,13 @@ export function confineArgv(
   // The host binary is usually NOT under /usr — pi lives in ~/.bun/bin, claude
   // in ~/.local/bin. Without its directory bound read-only the sandbox cannot
   // exec the very thing it is confining, and every confined run dies at exec.
-  const binDir = path.dirname(path.resolve(binary));
-  const extra =
-    binary.includes(path.sep) &&
-    !RO_BINDS.some((p) => binDir === p || binDir.startsWith(`${p}/`))
-      ? ["--ro-bind", binDir, binDir]
-      : [];
+  // `claude` and `pi` are bare names on PATH in every real config — resolving
+  // them here is what makes the bind below exist at all.
+  const resolved = resolveExecutable(binary) ?? path.resolve(binary);
+  const binDir = path.dirname(resolved);
+  const extra = RO_BINDS.some((p) => binDir === p || binDir.startsWith(`${p}/`))
+    ? []
+    : ["--ro-bind", binDir, binDir];
   const wrapped = [
     ...RO_BINDS.flatMap((p) => ["--ro-bind", p, p]),
     ...SYMLINKS.flatMap(([target, link]) => ["--symlink", target, link]),
@@ -91,7 +110,7 @@ export function confineArgv(
     cwd,
     "--unshare-all",
     "--die-with-parent",
-    binary,
+    resolved,
     ...args,
   ];
   return { binary: ISOLATION_BINARY, args: wrapped };

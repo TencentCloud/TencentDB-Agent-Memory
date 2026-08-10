@@ -55,7 +55,10 @@ export function stripOwnedFlags(
 
 export interface LauncherSettings {
   binary: string;
-  flags: string[];
+  /** Absent means "the launcher's own defaults" — a host's flags belong to
+   * the host (`no-host-hardcode`), so the config only carries an OVERRIDE.
+   * An empty array is a deliberate "no flags", not "give me the defaults". */
+  flags?: string[];
 }
 
 /** `memory.consolidation.launchers.<id>` — the new home. */
@@ -127,7 +130,7 @@ export function readLauncherConfig(
     const cfg = raw as Raw;
     settings[id] = {
       binary: expandHome(str(cfg, "binary") ?? id),
-      flags: strArray(cfg, "flags") ?? [],
+      flags: strArray(cfg, "flags"),
     };
   }
   return { settings, deprecated };

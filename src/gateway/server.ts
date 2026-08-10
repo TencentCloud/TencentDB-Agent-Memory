@@ -177,7 +177,7 @@ export class TdaiGateway {
     // only what the LegacyRoleAdapter may fall back to for a legacy role.
     const consolidationCfg = this.config.memory.consolidation;
     // tz-06 Ф1: legacy launcher keys keep working, but silently — an operator
-    // whose config still says `piBinary` has no way to learn it moved.
+    // whose config still names the old keys has no way to learn they moved.
     const notice = deprecationNotice(consolidationCfg.deprecatedLauncherKeys);
     if (notice !== "") this.logger.warn?.(`[config] ${notice}`);
     this.orchestrator = new ConsolidationOrchestrator({

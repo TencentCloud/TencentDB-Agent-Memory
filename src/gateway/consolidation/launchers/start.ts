@@ -35,6 +35,9 @@ export interface StartOptions {
 
 export function startHosted(opts: StartOptions): LaunchOutcome {
   let cancel: (() => void) | undefined;
+  // A cancel is not a failure of the role: the caller asked for it. Without
+  // this the two are indistinguishable downstream.
+  let cancelled = false;
   // Past the L6 gate (runner-helpers), a role with a profile runs CONFINED —
   // the wrapper is applied here so no launcher can forget it.
   const cmd =
@@ -57,13 +60,21 @@ export function startHosted(opts: StartOptions): LaunchOutcome {
   }).then((res) => ({
     status: res.timedOut
       ? ("timed_out" as const)
-      : res.error !== undefined || res.exitCode !== 0
-        ? ("failed" as const)
-        : ("succeeded" as const),
+      : cancelled
+        ? ("cancelled" as const)
+        : res.error !== undefined || res.exitCode !== 0
+          ? ("failed" as const)
+          : ("succeeded" as const),
     exitCode: res.exitCode,
     signal: res.signal,
     stdout: res.stdout,
     stderr: res.stderr,
+    // The bounded tail is useless without the pointer to the whole stream —
+    // "full output available by artifact ref" was the claim (критерий 8).
+    stdoutFile: res.stdoutFile ?? null,
+    stderrFile: res.stderrFile ?? null,
+    stdoutBytes: res.stdoutBytes,
+    stderrBytes: res.stderrBytes,
     error: res.error,
     launchError:
       res.error === undefined ? undefined : classifyLaunchError(res.error),
@@ -75,6 +86,7 @@ export function startHosted(opts: StartOptions): LaunchOutcome {
       sessionRef: opts.sessionRef,
       completion,
       cancelAndWait: async () => {
+        cancelled = true;
         cancel?.();
         return completion;
       },

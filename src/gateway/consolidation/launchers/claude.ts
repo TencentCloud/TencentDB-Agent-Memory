@@ -41,7 +41,7 @@ export function claudeArgs(
 ): string[] {
   const tools = input.contract.toolsSubset;
   return [
-    ...stripOwnedFlags(settings.flags, OWNED),
+    ...stripOwnedFlags(settings.flags ?? [...DEFAULT_CLAUDE_FLAGS], OWNED),
     "--session-id",
     sessionId,
     "--model",
