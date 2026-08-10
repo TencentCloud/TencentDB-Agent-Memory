@@ -13,6 +13,8 @@
 
 import { randomUUID } from "node:crypto";
 import { resolveRoleDir } from "../role-files.js";
+import { recoverOrphanRuns } from "../control-plane/recover.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import { sweepKeeperOrphans } from "./child-spawn.js";
 import { busySummary } from "./busy-summary.js";
 import { acquireRoleLock } from "./role-lock.js";
@@ -162,6 +164,28 @@ export async function runNow(
 export async function start(self: TriggerHandle): Promise<void> {
   await self.checkpoint.read();
   sweepKeeperOrphans(null, self.logger, self.ownerPid);
+  // tz-09 Ф2: the process-level sweep above kills orphan CHILDREN; this one
+  // settles the RUNS they belonged to. Taking a run over bumps its fence, so
+  // an artefact from the previous process is refused at ingestion; a run
+  // caught mid-apply is parked for reconciliation instead.
+  try {
+    const recovered = recoverOrphanRuns(
+      self.dataDir,
+      runOwnerId(self.ownerPid),
+      { nowMs: self.now(), ttlMs: 60_000 },
+    );
+    for (const r of recovered) {
+      self.logger.warn?.(
+        `[run] recovered ${r.runId}: ${r.from} → ${r.to} fence=${r.fence}` +
+          (r.reason === undefined ? "" : ` (${r.reason})`),
+      );
+    }
+  } catch (err) {
+    self.logger.warn?.(
+      `[run] orphan-run recovery failed: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   self.lastRunRef.value = await self.readLastReport();
 }
 

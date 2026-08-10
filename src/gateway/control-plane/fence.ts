@@ -8,7 +8,16 @@
  */
 import { openControlPlane } from "./db.js";
 import { readRunRow } from "./run-row.js";
-import type { RunRow } from "./run-types.js";
+import type { RunRow, RunState } from "./run-types.js";
+
+/** States in which a run may still produce an artefact. */
+const PRODUCING: readonly RunState[] = [
+  "created",
+  "claimed",
+  "running",
+  "reviewed",
+  "applying",
+];
 
 export interface FenceCheck {
   ok: boolean;
@@ -41,6 +50,17 @@ export function checkArtifactFence(
     }
     if (row.state === "needs-reconciliation") {
       return { ok: false, reason: "run needs reconciliation", row };
+    }
+    // Every other state that is over refuses too. Listing only the two above
+    // let a run that had already FAILED (or applied) still ingest the artefact
+    // its dead child left behind — the fence alone does not catch it, because
+    // a run recovered from a process that never wrote a lease keeps its fence.
+    if (!PRODUCING.includes(row.state)) {
+      return {
+        ok: false,
+        reason: `run is ${row.state}: artefact refused`,
+        row,
+      };
     }
     return { ok: true, row };
   } finally {

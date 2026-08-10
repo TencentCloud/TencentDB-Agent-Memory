@@ -12,6 +12,7 @@
  */
 import { updateRun } from "../control-plane/run-repo.js";
 import { reconcileRun } from "../control-plane/reconcile.js";
+import { cancelRun } from "../control-plane/lease.js";
 import {
   classifyFailure,
   reactionFor,
@@ -77,6 +78,12 @@ export function finalizeRunOutcome(
       `[run] ${summary.role}/${input.runId} failed: class=${cls} ` +
         `reaction=${reaction.reaction} terminal=${reaction.terminalForRun}`,
     );
+    if (cls === "timeout-cancel") {
+      // `cancel-means-no-late-apply`: the child was killed but may still be
+      // writing. Cancelling bumps the fence, which is what makes the artefact
+      // it leaves behind unusable (control-plane/fence.ts).
+      cancelRun(ctx.dataDir, input.runId, ctx.now());
+    }
     if (cls === "partial-apply") {
       // Read the store back immediately: an apply that aborted after every
       // journalled op had already landed is complete, not partial (Ф5/P8).

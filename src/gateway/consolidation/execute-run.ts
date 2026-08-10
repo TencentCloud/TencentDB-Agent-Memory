@@ -12,6 +12,8 @@ import { resolveRoleContract } from "./role-contract.js";
 import { runRole } from "./run-role.js";
 import { mkFailedSummary } from "./summary.js";
 import { createRun } from "../control-plane/run-repo.js";
+import { claimRun } from "../control-plane/lease.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import { resolveCriticPackage } from "./critic-bootstrap.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
@@ -112,6 +114,19 @@ function openRunRecord(
       },
       new Date(ctx.now()).toISOString(),
     );
+    // tz-09 Ф2: the run is LEASED, not merely recorded. Without an owner the
+    // fence never moves, and every artefact-fence check downstream compares 1
+    // against 1 forever — a gate that cannot refuse anything.
+    const claim = claimRun(ctx.dataDir, opts.runId, runOwnerId(ctx.ownerPid), {
+      nowMs: ctx.now(),
+      ttlMs: Math.max(contract.timeoutMs, 60_000),
+      state: "running",
+    });
+    if (!claim.ok) {
+      ctx.logger.warn?.(
+        `[run] lease refused for ${opts.role}/${opts.runId}: ${claim.reason}`,
+      );
+    }
   } catch (err) {
     // The control plane is diagnostics + protocol state, not the run itself:
     // a broken db must not stop consolidation before the gates depend on it
