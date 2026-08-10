@@ -13,8 +13,11 @@
  */
 import { readRun } from "../control-plane/run-repo.js";
 import { ApplyValidationError } from "./errors.js";
+import { digestOf } from "./op-journal.js";
 import type { ApplyOp } from "./schemas.js";
 import type { RunContext } from "./run-context.js";
+import type { RunRow } from "../control-plane/run-types.js";
+import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 
 /** States that must never mutate the store: the run is over, or someone else
  * took it over and this artefact lost the race (Ф2). */
@@ -50,12 +53,60 @@ function policyFromSnapshot(contractJson: string): SnapshotPolicy {
   }
 }
 
+/**
+ * The candidate half of the gate: the artefact being applied must be the one
+ * a critic approved for THIS run. Without it a caller with a valid runId can
+ * apply any diff it likes — the run record proves a critic ran, not what the
+ * critic looked at.
+ *
+ * `reviewed` is written only on approval (critic-stage.ts), so the state is
+ * the approval; the digest ties the approval to these exact bytes.
+ */
+function assertApprovedCandidate(
+  deps: ApplyExecutorDeps,
+  row: RunRow,
+  candidate: unknown,
+  enforce: boolean,
+): void {
+  const refuse = (why: string): void => {
+    if (!enforce) {
+      deps.logger.warn?.(
+        `[memory/apply] candidate gate SHADOW (would refuse in enforce) ` +
+          `run=${row.runId}: ${why}`,
+      );
+      return;
+    }
+    throw new ApplyValidationError(`apply refused: ${why}`);
+  };
+
+  if (row.state !== "reviewed") {
+    refuse(`run "${row.runId}" is ${row.state}, not reviewed by a critic`);
+    return;
+  }
+  if (
+    row.candidateDigest === null ||
+    row.verdictDigest === null ||
+    row.criticReceipt === null
+  ) {
+    refuse(`run "${row.runId}" carries no critic receipt`);
+    return;
+  }
+  const applied = digestOf(JSON.stringify(candidate ?? null));
+  if (applied !== row.candidateDigest) {
+    refuse(
+      `the diff is not the approved candidate ` +
+        `(applying ${applied.slice(0, 12)}…, approved ${row.candidateDigest.slice(0, 12)}…)`,
+    );
+  }
+}
+
 export function resolveRunPolicy(
-  dataDir: string,
+  deps: ApplyExecutorDeps,
   run: RunContext | undefined,
-  runRepo: boolean,
+  candidate: unknown,
 ): RunContext | undefined {
-  if (!runRepo) return run;
+  const dataDir = deps.dataDir;
+  if (deps.runRepo !== true) return run;
   if (run?.runId === undefined || run.runId === "") {
     throw new ApplyValidationError(
       "apply without runId is refused (memory.consolidation.applyRunRepo)",
@@ -72,9 +123,26 @@ export function resolveRunPolicy(
       `apply refused: run "${run.runId}" is ${row.state}`,
     );
   }
+  const enforce = (run.gateMode ?? "shadow") === "enforce";
+  assertApprovedCandidate(deps, row, candidate, enforce);
+
   const snapshot = policyFromSnapshot(row.contractJson);
+  // Fail-closed: a snapshot without a policy is a snapshot that cannot bound
+  // anything, and falling back to the caller's policy hands the bound to the
+  // party being bounded.
+  if (
+    enforce &&
+    (snapshot.opsSubset === undefined || snapshot.caps === undefined)
+  ) {
+    throw new ApplyValidationError(
+      `apply refused: run "${run.runId}" pinned no ops/caps policy`,
+    );
+  }
   return {
     ...run,
+    // The journal's operation ids come from the RECORD, not from the caller:
+    // a caller-chosen digest could collide a replay onto this run's journal.
+    candidateDigest: row.candidateDigest ?? run.candidateDigest,
     opsSubset: snapshot.opsSubset ?? run.opsSubset,
     caps: snapshot.caps ?? run.caps,
   };

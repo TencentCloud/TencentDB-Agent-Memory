@@ -16,6 +16,7 @@ import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { createRun } from "../../src/gateway/control-plane/run-repo.js";
 import { claimRun } from "../../src/gateway/control-plane/lease.js";
+import { runOwnerId } from "../../src/gateway/control-plane/owner.js";
 import { rejectStaleArtifact } from "../../src/gateway/consolidation/artifact-fence.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
 
@@ -51,6 +52,7 @@ console.log(`winners=${winners.length} (must be 1)`);
 
 const ctx = {
   dataDir: sbx.dataDir,
+  ownerPid: process.pid,
   logger: {
     debug: () => undefined,
     info: () => undefined,
@@ -59,14 +61,21 @@ const ctx = {
   },
 } as unknown as OrchestratorContext;
 
-// 2. The winner writes its passport, exactly as run-role.ts does before spawn.
-const fence = Number(/fence=(\d+)/.exec(winners[0] ?? "")?.[1] ?? "1");
+// 2. This process takes the run over and writes its passport, exactly as
+// execute-run.ts + run-role.ts do before a spawn. It has to be THIS process:
+// ingestion refuses an artefact of a run held by anyone else, and that is the
+// half of the fence a deleted passport cannot switch off.
+const mine = claimRun(sbx.dataDir, RUN, runOwnerId(process.pid), {
+  nowMs: Date.now() + 3_600_000,
+  ttlMs: 3_600_000,
+});
+const fence = mine.ok ? mine.fence : 1;
 fs.writeFileSync(
   path.join(scratch, "run.json"),
   JSON.stringify({
     runId: RUN,
     fence,
-    owner: "winner",
+    owner: runOwnerId(process.pid),
     role: "memory-keeper",
     copyOf: "control-plane.db",
   }),
@@ -77,7 +86,7 @@ console.log(`passport fence=${fence}`);
 // 3. Takeover by a third owner once the lease has expired.
 if (process.env.FALSIFY !== "1") {
   const taken = claimRun(sbx.dataDir, RUN, "owner-c", {
-    nowMs: Date.now() + 3_600_000,
+    nowMs: Date.now() + 7_200_000,
     ttlMs: 60_000,
   });
   console.log(`takeover ok=${taken.ok} fence=${taken.ok ? taken.fence : "-"}`);

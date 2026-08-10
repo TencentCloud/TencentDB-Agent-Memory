@@ -118,12 +118,15 @@ export function writeWithFence(
 ): boolean {
   const db = openControlPlane(dataDir);
   try {
-    db.prepare(
-      `UPDATE runs SET state = ?, updatedAt = ?
-       WHERE runId = ? AND leaseOwner = ? AND fence = ?`,
-    ).run(state, new Date(nowMs).toISOString(), runId, owner, fence);
-    const after = read(db, runId);
-    return after !== null && after.state === state;
+    // The row count, not a re-read: a run ALREADY in `state` would otherwise
+    // report success to an owner whose write matched nothing.
+    const info = db
+      .prepare(
+        `UPDATE runs SET state = ?, updatedAt = ?
+         WHERE runId = ? AND leaseOwner = ? AND fence = ?`,
+      )
+      .run(state, new Date(nowMs).toISOString(), runId, owner, fence);
+    return Number(info.changes ?? 0) > 0;
   } finally {
     db.close();
   }

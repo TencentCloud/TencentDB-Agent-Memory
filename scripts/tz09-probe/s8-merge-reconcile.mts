@@ -19,8 +19,10 @@ import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import {
   createRun,
+  updateRun,
   readRun,
 } from "../../src/gateway/control-plane/run-repo.js";
 import { listOps } from "../../src/gateway/control-plane/oplog.js";
@@ -128,23 +130,38 @@ console.log(
 );
 console.log(`records before: ${store.countL1()}`);
 
+const mergeDiff = {
+  merge: [
+    {
+      cluster: ["s8_target", "s8_member"],
+      target: "s8_target",
+      content: "MERGED CONTENT",
+    },
+  ],
+};
+// Enforce refuses a candidate no verdict named, so the crash this probe is
+// about is only reachable once the critic receipt is on the row.
+updateRun(
+  dataDir,
+  RUN,
+  {
+    state: "reviewed",
+    candidateDigest: digestOf(JSON.stringify(mergeDiff)),
+    verdictDigest: "v",
+    criticReceipt: '{"verdict":"approve"}',
+  },
+  new Date().toISOString(),
+);
+
 let applyError = "-";
 try {
   await executor.apply(
     {
-      diff: {
-        merge: [
-          {
-            cluster: ["s8_target", "s8_member"],
-            target: "s8_target",
-            content: "MERGED CONTENT",
-          },
-        ],
-      },
+      diff: mergeDiff,
       manifest: { baseline: {} },
       context: { presentedRecordIds: ["s8_target", "s8_member"] },
     },
-    { runId: RUN, candidateDigest: DIGEST, gateMode: "enforce" },
+    { runId: RUN, gateMode: "enforce" },
   );
 } catch (err) {
   applyError = err instanceof Error ? err.message : String(err);

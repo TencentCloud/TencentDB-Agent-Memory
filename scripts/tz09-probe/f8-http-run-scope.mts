@@ -15,7 +15,11 @@ import { makeSandbox } from "./sandbox.mts";
 import { TdaiGateway } from "../../src/gateway/server.js";
 import { parseConfig } from "../../src/config.js";
 import { VectorStore } from "../../src/core/store/sqlite.js";
-import { createRun } from "../../src/gateway/control-plane/run-repo.js";
+import {
+  createRun,
+  updateRun,
+} from "../../src/gateway/control-plane/run-repo.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import { listOps } from "../../src/gateway/control-plane/oplog.js";
 import type { Logger } from "../../src/core/types.js";
 
@@ -104,12 +108,29 @@ const countL1 = (): number => {
 };
 
 const before = countL1();
+// The HTTP body carries the diff, so the receipt has to name these bytes:
+// what the route may NOT do is decide the policy, which is what this probes.
+const httpDiff = {
+  deleteL1: [{ id: "h_1", updatedAt: "2026-08-01T00:00:00Z" }],
+};
+updateRun(
+  dataDir,
+  "run-http",
+  {
+    state: "reviewed",
+    candidateDigest: digestOf(JSON.stringify(httpDiff)),
+    verdictDigest: "v",
+    criticReceipt: '{"verdict":"approve"}',
+  },
+  new Date().toISOString(),
+);
+
 const res = await fetch(`${baseUrl}/memory/apply`, {
   method: "POST",
   headers: { "Content-Type": "application/json", "x-memory-token": token },
   body: JSON.stringify({
     runId: "run-http",
-    diff: { deleteL1: [{ id: "h_1", updatedAt: "2026-08-01T00:00:00Z" }] },
+    diff: httpDiff,
     manifest: { baseline: {} },
     context: { presentedRecordIds: ["h_1"] },
   }),

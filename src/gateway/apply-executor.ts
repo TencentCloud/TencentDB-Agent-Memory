@@ -113,10 +113,12 @@ export class ApplyExecutor {
       // 2a. Run identity + policy (tz-09 Ф6): with runRepo on, an apply
       // without a live Run is refused here, and the policy the gate uses is
       // the Run's pinned contract, not what the caller passed.
+      // The RAW diff, not `parsed.diff`: the critic digested the bytes the
+      // child produced, and zod rebuilds objects in schema key order.
       const scoped = resolveRunPolicy(
-        this.deps.dataDir,
+        this.deps,
         run,
-        this.deps.runRepo === true,
+        (rawBody as { diff?: unknown } | null)?.diff,
       );
       // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
       // ONLY call site — a second one would be a way past it.

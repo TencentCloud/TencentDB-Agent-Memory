@@ -11,11 +11,14 @@ import path from "node:path";
 import { rejectStaleArtifact } from "./artifact-fence.js";
 import { createRun } from "../control-plane/run-repo.js";
 import { cancelRun, claimRun } from "../control-plane/lease.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunPassport } from "../control-plane/run-types.js";
 
 const T0 = 1_700_000_000_000;
 const TTL = 60_000;
+/** The owner the ingesting process itself would write — see runOwnerId. */
+const mine = runOwnerId(process.pid);
 
 describe("artefact fence at ingestion (tz-09 Ф2)", () => {
   let dir: string;
@@ -31,6 +34,7 @@ describe("artefact fence at ingestion (tz-09 Ф2)", () => {
     warns = [];
     ctx = {
       dataDir: dir,
+      ownerPid: process.pid,
       logger: {
         debug: () => undefined,
         info: () => undefined,
@@ -74,13 +78,13 @@ describe("artefact fence at ingestion (tz-09 Ф2)", () => {
   });
 
   it("current fence → allowed", () => {
-    claimRun(dir, "r1", "owner-a", { nowMs: T0, ttlMs: TTL });
+    claimRun(dir, "r1", mine, { nowMs: T0, ttlMs: TTL });
     passport({ fence: 1 });
     expect(rejectStaleArtifact(ctx, "r1", scratch)).toBeNull();
   });
 
   it("artefact of a taken-over attempt → refused", () => {
-    claimRun(dir, "r1", "owner-a", { nowMs: T0, ttlMs: TTL });
+    claimRun(dir, "r1", mine, { nowMs: T0, ttlMs: TTL });
     passport({ fence: 1 });
     claimRun(dir, "r1", "owner-b", { nowMs: T0 + TTL + 1, ttlMs: TTL });
 
@@ -89,8 +93,20 @@ describe("artefact fence at ingestion (tz-09 Ф2)", () => {
     expect(warns.join("\n")).toMatch(/artefact refused/);
   });
 
+  // The blocker Codex found: the passport lives in the CHILD's scratch dir,
+  // so "delete run.json" must not be a way past the fence.
+  it("takeover + deleted passport → still refused", () => {
+    claimRun(dir, "r1", mine, { nowMs: T0, ttlMs: TTL });
+    claimRun(dir, "r1", "owner-b", { nowMs: T0 + TTL + 1, ttlMs: TTL });
+    fs.rmSync(path.join(scratch, "run.json"), { force: true });
+
+    expect(rejectStaleArtifact(ctx, "r1", scratch)).toMatch(
+      /stale-fence-rejected/,
+    );
+  });
+
   it("artefact of a cancelled run → refused", () => {
-    claimRun(dir, "r1", "owner-a", { nowMs: T0, ttlMs: TTL });
+    claimRun(dir, "r1", mine, { nowMs: T0, ttlMs: TTL });
     passport({ fence: 1 });
     cancelRun(dir, "r1", T0 + 10);
     expect(rejectStaleArtifact(ctx, "r1", scratch)).toMatch(/rejected|cancel/);

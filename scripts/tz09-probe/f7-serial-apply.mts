@@ -14,8 +14,10 @@ import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import {
   createRun,
+  updateRun,
   readRun,
 } from "../../src/gateway/control-plane/run-repo.js";
 import { beginApplying } from "../../src/gateway/control-plane/applying.js";
@@ -108,15 +110,30 @@ const executor = new ApplyExecutor({
   runRepo: RUN_REPO,
 });
 
-const apply = (runId: string, id: string) =>
-  executor.apply(
+const apply = (runId: string, id: string) => {
+  const diff = { deleteL1: [{ id, updatedAt: "2026-08-01T00:00:00Z" }] };
+  // Enforce binds apply to the candidate a critic approved, so the probe has
+  // to record that approval the way the critic stage does.
+  updateRun(
+    dataDir,
+    runId,
     {
-      diff: { deleteL1: [{ id, updatedAt: "2026-08-01T00:00:00Z" }] },
+      state: "reviewed",
+      candidateDigest: digestOf(JSON.stringify(diff)),
+      verdictDigest: "v",
+      criticReceipt: '{"verdict":"approve"}',
+    },
+    new Date().toISOString(),
+  );
+  return executor.apply(
+    {
+      diff,
       manifest: { baseline: {} },
       context: { presentedRecordIds: [id] },
     },
-    { runId, candidateDigest: `d-${id}`, gateMode: "enforce" },
+    { runId, gateMode: "enforce" },
   );
+};
 
 console.log(`runRepo=${RUN_REPO} L1 before=${store.countL1()}`);
 const [a, b] = await Promise.all([

@@ -11,8 +11,10 @@ import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import {
   createRun,
+  updateRun,
   readRun,
 } from "../../src/gateway/control-plane/run-repo.js";
 import { claimRun } from "../../src/gateway/control-plane/lease.js";
@@ -104,17 +106,30 @@ const executor = new ApplyExecutor({
 });
 
 console.log(`records before: ${store.countL1()}`);
+const partialDiff = {
+  merge: [{ cluster: ["m_a", "m_b"], target: "m_a", content: "AB" }],
+  // drifted updatedAt → aborts AFTER the merge landed
+  deleteL1: [{ id: "m_c", updatedAt: "2026-07-01T00:00:00Z" }],
+};
+// The critic receipt this candidate needs to reach the store at all.
+updateRun(
+  dataDir,
+  RUN,
+  {
+    state: "reviewed",
+    candidateDigest: digestOf(JSON.stringify(partialDiff)),
+    verdictDigest: "v",
+    criticReceipt: '{"verdict":"approve"}',
+  },
+  new Date().toISOString(),
+);
 const res = await executor.apply(
   {
-    diff: {
-      merge: [{ cluster: ["m_a", "m_b"], target: "m_a", content: "AB" }],
-      // drifted updatedAt → aborts AFTER the merge landed
-      deleteL1: [{ id: "m_c", updatedAt: "2026-07-01T00:00:00Z" }],
-    },
+    diff: partialDiff,
     manifest: { baseline: {} },
     context: { presentedRecordIds: ["m_a", "m_b", "m_c"] },
   },
-  { runId: RUN, candidateDigest: DIGEST, gateMode: "enforce" },
+  { runId: RUN, gateMode: "enforce" },
 );
 console.log(
   `apply: status=${res.status} partial=${res.partial} records after: ${store.countL1()}`,

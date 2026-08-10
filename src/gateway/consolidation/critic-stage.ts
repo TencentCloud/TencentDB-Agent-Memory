@@ -14,6 +14,7 @@ import { resolveCriticPackage } from "./critic-bootstrap.js";
 import { launchCritic } from "./critic-launch.js";
 import { rejectStaleArtifact } from "./artifact-fence.js";
 import { updateRun } from "../control-plane/run-repo.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 
@@ -103,39 +104,62 @@ export async function runCriticStage(
     return refuse("verdict was produced from a different input");
   }
 
-  writeReceipt(ctx, args, candidateDigest, launched.verdictText ?? "");
-  if (verdict.verdict === "reject") {
+  const approved = verdict.verdict === "approve";
+  // `reviewed` is what apply reads as "a critic approved THIS candidate"
+  // (run-policy.ts), so a rejecting verdict must not write that state — only
+  // its receipt.
+  const receipt = writeReceipt(
+    ctx,
+    args,
+    candidateDigest,
+    launched.verdictText ?? "",
+    approved,
+  );
+  if (!approved) {
     const reasons = Array.isArray(verdict.reasons)
       ? verdict.reasons.join("; ")
       : "no reasons given";
     return refuse(`critic rejected the candidate: ${reasons}`);
   }
+  // A receipt we could not write is a receipt apply cannot read: losing the
+  // run between the verdict and the record must stop the apply, not race it.
+  if (!receipt) return refuse("critic receipt could not be recorded");
   return { ok: true, candidateDigest };
 }
 
-/** The receipt ties the verdict to the exact candidate it judged. */
+/** The receipt ties the verdict to the exact candidate it judged.
+ * @returns false when the write did not land — see the caller. */
 function writeReceipt(
   ctx: OrchestratorContext,
   args: CriticStageArgs,
   candidateDigest: string,
   verdictText: string,
-): void {
+  approved: boolean,
+): boolean {
   try {
-    updateRun(
+    const ok = updateRun(
       ctx.dataDir,
       args.runId,
       {
-        state: "reviewed",
+        state: approved ? "reviewed" : undefined,
         candidateDigest,
         verdictDigest: digestOf(verdictText),
         criticReceipt: verdictText.slice(0, 2000),
       },
       new Date(ctx.now()).toISOString(),
+      { owner: runOwnerId(ctx.ownerPid) },
     );
+    if (!ok) {
+      ctx.logger.warn?.(
+        `[critic] receipt refused for ${args.runId}: run no longer owned here`,
+      );
+    }
+    return ok;
   } catch (err) {
     ctx.logger.warn?.(
       `[critic] receipt write failed for ${args.runId}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
+    return false;
   }
 }

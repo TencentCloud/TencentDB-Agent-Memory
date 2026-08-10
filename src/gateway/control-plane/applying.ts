@@ -11,8 +11,15 @@ import { openControlPlane } from "./db.js";
 import { readRunRow } from "./run-row.js";
 import type { RunState } from "./run-types.js";
 
-/** States a run may enter `applying` from. `applying` itself is absent on
- * purpose: re-entering it is exactly the double-apply this prevents. */
+/**
+ * States a run may enter `applying` from. `applying` itself is absent on
+ * purpose: re-entering it is exactly the double-apply this prevents.
+ *
+ * This door decides WHO applies, not WHETHER the candidate was approved:
+ * narrowing it to `reviewed` would also refuse every shadow-mode run, where
+ * the critic deliberately writes no receipt. The approval check is
+ * run-policy.ts, on the enforce switch, and it runs before this door.
+ */
 const FROM: readonly RunState[] = ["created", "claimed", "running", "reviewed"];
 
 export interface BeginApplyingResult {

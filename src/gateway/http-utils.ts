@@ -28,7 +28,11 @@ export async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
   });
 }
 
-export function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+export function sendJson(
+  res: http.ServerResponse,
+  status: number,
+  body: unknown,
+): void {
   const json = JSON.stringify(body);
   res.writeHead(status, {
     "Content-Type": "application/json",
@@ -37,7 +41,11 @@ export function sendJson(res: http.ServerResponse, status: number, body: unknown
   res.end(json);
 }
 
-export function sendError(res: http.ServerResponse, status: number, message: string): void {
+export function sendError(
+  res: http.ServerResponse,
+  status: number,
+  message: string,
+): void {
   sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
 }
 
@@ -59,11 +67,19 @@ export interface ReadonlySqlite {
 /** Open a SQLite database in readonly mode on the current runtime. */
 export function openReadonlySqlite(dbPath: string): ReadonlySqlite {
   if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string, o?: { readonly?: boolean }) => unknown };
-    return new Database(dbPath, { readonly: true }) as unknown as ReadonlySqlite;
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string, o?: { readonly?: boolean }) => unknown;
+    };
+    return new Database(dbPath, {
+      readonly: true,
+    }) as unknown as ReadonlySqlite;
   }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown };
-  return new DatabaseSync(dbPath, { readOnly: true }) as unknown as ReadonlySqlite;
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string, o?: { readOnly?: boolean }) => unknown;
+  };
+  return new DatabaseSync(dbPath, {
+    readOnly: true,
+  }) as unknown as ReadonlySqlite;
 }
 
 /** Writable SQLite connection (feedback priority bumps; never used on records files). */
@@ -71,17 +87,24 @@ export interface WritableSqlite {
   prepare(sql: string): {
     get(...params: unknown[]): unknown;
     all(...params: unknown[]): unknown[];
-    run(...params: unknown[]): unknown;
+    /** node:sqlite and bun:sqlite both report the affected row count here —
+     * the only way a conditional UPDATE can tell "matched nothing" from
+     * "wrote the value it already had". */
+    run(...params: unknown[]): { changes?: number | bigint };
   };
   close(): void;
 }
 
 export function openWritableSqlite(dbPath: string): WritableSqlite {
   if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string) => unknown;
+    };
     return new Database(dbPath) as unknown as WritableSqlite;
   }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => unknown;
+  };
   return new DatabaseSync(dbPath) as unknown as WritableSqlite;
 }
 

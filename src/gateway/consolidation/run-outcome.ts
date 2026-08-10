@@ -13,6 +13,7 @@
 import { updateRun } from "../control-plane/run-repo.js";
 import { reconcileRun } from "../control-plane/reconcile.js";
 import { cancelRun } from "../control-plane/lease.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import {
   classifyFailure,
   reactionFor,
@@ -39,13 +40,23 @@ export function finalizeRunOutcome(
   if (input.dryRun === true) return null;
   const nowIso = new Date(ctx.now()).toISOString();
   try {
+    const guard = { owner: runOwnerId(ctx.ownerPid) };
     if (summary.status === "ok") {
-      updateRun(
-        ctx.dataDir,
-        input.runId,
-        { state: "applied", finishedAt: nowIso },
-        nowIso,
-      );
+      if (
+        !updateRun(
+          ctx.dataDir,
+          input.runId,
+          { state: "applied", finishedAt: nowIso },
+          nowIso,
+          guard,
+        )
+      ) {
+        // Not ours any more: another owner took the run over while this
+        // process was finishing. Its outcome is the one that counts.
+        ctx.logger.warn?.(
+          `[run] outcome for ${input.runId} refused: run no longer owned here`,
+        );
+      }
       return null;
     }
     if (summary.status === "dry-run" || summary.status === "disabled") {
@@ -73,6 +84,7 @@ export function finalizeRunOutcome(
         finishedAt: reaction.terminalForRun ? nowIso : undefined,
       },
       nowIso,
+      guard,
     );
     ctx.logger.warn?.(
       `[run] ${summary.role}/${input.runId} failed: class=${cls} ` +

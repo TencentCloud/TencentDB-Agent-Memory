@@ -16,7 +16,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { VectorStore } from "../../core/store/sqlite.js";
 import { ApplyExecutor } from "../apply-executor.js";
-import { createRun, readRun } from "../control-plane/run-repo.js";
+import { createRun, readRun, updateRun } from "../control-plane/run-repo.js";
+import { digestOf } from "./op-journal.js";
 import { listOps } from "../control-plane/oplog.js";
 import { beginApplying, finishApplying } from "../control-plane/applying.js";
 import { reconcileRun } from "../control-plane/reconcile.js";
@@ -123,11 +124,30 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
       runRepo: true,
     });
 
-  const body = (diff: Record<string, unknown>, presented: string[]) => ({
-    diff,
-    manifest: { baseline: {} },
-    context: { presentedRecordIds: presented },
-  });
+  /** Body + the critic receipt that makes this exact diff appliable: in
+   * enforce, apply refuses a candidate no verdict named (run-policy.ts). */
+  const body = (
+    runId: string,
+    diff: Record<string, unknown>,
+    presented: string[],
+  ) => {
+    updateRun(
+      dataDir,
+      runId,
+      {
+        state: "reviewed",
+        candidateDigest: digestOf(JSON.stringify(diff)),
+        verdictDigest: "v",
+        criticReceipt: '{"verdict":"approve"}',
+      },
+      NOW,
+    );
+    return {
+      diff,
+      manifest: { baseline: {} },
+      context: { presentedRecordIds: presented },
+    };
+  };
 
   it("an apply that mutated and then failed parks the run, it does not wedge it", async () => {
     seed("m_a");
@@ -137,6 +157,7 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
 
     const res = await executor().apply(
       body(
+        "r-partial",
         {
           merge: [{ cluster: ["m_a", "m_b"], target: "m_a", content: "AB" }],
           deleteL1: [{ id: "m_c", updatedAt: "2026-07-01T00:00:00Z" }],
@@ -156,7 +177,9 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
     run("r-clean", ["rewriteBlock"]);
 
     const res = await executor().apply(
-      body({ deleteL1: [{ id: "m_x", updatedAt: UPDATED }] }, ["m_x"]),
+      body("r-clean", { deleteL1: [{ id: "m_x", updatedAt: UPDATED }] }, [
+        "m_x",
+      ]),
       { runId: "r-clean", candidateDigest: "d", gateMode: "enforce" },
     );
 
@@ -164,7 +187,7 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
     expect(res.partial).toBe(false);
     // The gate refuses BEFORE the door, so the run never entered `applying`
     // and keeps the state it had — the wedge is impossible here by ordering.
-    expect(readRun(dataDir, "r-clean")?.state).toBe("created");
+    expect(readRun(dataDir, "r-clean")?.state).toBe("reviewed");
     expect(store.countL1()).toBe(1);
   });
 
@@ -174,6 +197,7 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
 
     const res = await executor().apply(
       body(
+        "r-index",
         {
           deleteL1: [
             { id: "m_gone", updatedAt: UPDATED }, // not in the store → skipped
@@ -200,6 +224,7 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
 
     const res = await executor().apply(
       body(
+        "r-rewrite",
         {
           rewriteRecord: [
             { id: "m_1", updatedAt: UPDATED, content: "rewritten" },
@@ -264,7 +289,9 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
 
     await expect(
       broken.apply(
-        body({ deleteL1: [{ id: "m_raw", updatedAt: UPDATED }] }, ["m_raw"]),
+        body("r-raw", { deleteL1: [{ id: "m_raw", updatedAt: UPDATED }] }, [
+          "m_raw",
+        ]),
         {
           runId: "r-raw",
           candidateDigest: "d",
@@ -280,16 +307,23 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
     seed("m_door");
     run("r-door", ["deleteL1"]);
 
-    // Handler A is mid-apply: it holds `applying`.
+    // The verdict lands first, exactly as it does in a real run…
+    const req = body(
+      "r-door",
+      { deleteL1: [{ id: "m_door", updatedAt: UPDATED }] },
+      ["m_door"],
+    );
+    // …then handler A is mid-apply: it holds `applying`.
     expect(beginApplying(dataDir, "r-door", NOW).ok).toBe(true);
 
     // Handler B arrives, is refused at the door — and must leave A's run alone.
-    const res = await executor().apply(
-      body({ deleteL1: [{ id: "m_door", updatedAt: UPDATED }] }, ["m_door"]),
-      { runId: "r-door", candidateDigest: "d", gateMode: "enforce" },
-    );
+    const res = await executor().apply(req, {
+      runId: "r-door",
+      candidateDigest: "d",
+      gateMode: "enforce",
+    });
     expect(res.status).toBe("aborted");
-    expect(res.error).toContain("run is applying");
+    expect(res.error).toMatch(/applying/);
     expect(readRun(dataDir, "r-door")?.state).toBe("applying");
 
     // …so A's own finish still lands: its outcome is not lost.

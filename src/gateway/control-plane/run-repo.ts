@@ -88,12 +88,21 @@ export interface RunPatch {
   finishedAt?: string;
 }
 
-/** Patch a run. Unknown runId → false (never creates a row implicitly). */
+/**
+ * Patch a run. Unknown runId → false (never creates a row implicitly).
+ *
+ * `guard` is the write half of the fence (tz-09 P4): a caller that names the
+ * owner it believes it is only writes while it still holds the lease, so a
+ * taken-over process cannot move the run it lost. The row count decides —
+ * re-reading the state after the fact would accept a row someone else just
+ * wrote to the same value.
+ */
 export function updateRun(
   dataDir: string,
   runId: string,
   patch: RunPatch,
   nowIso: string,
+  guard?: { owner: string; fence?: number },
 ): boolean {
   const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return false;
@@ -101,12 +110,31 @@ export function updateRun(
   try {
     if (readRunWith(db, runId) === null) return false;
     const setSql = entries.map(([k]) => `${k} = ?`).join(", ");
-    db.prepare(`UPDATE runs SET ${setSql}, updatedAt = ? WHERE runId = ?`).run(
-      ...entries.map(([, v]) => v as string),
-      nowIso,
-      runId,
-    );
-    return true;
+    // "not owned by someone else", not "owned by me": a run whose lease was
+    // never taken (the claim is best-effort, execute-run.ts) still has to be
+    // writable by the process that is driving it.
+    const where =
+      guard === undefined
+        ? ""
+        : ` AND (leaseOwner IS NULL OR leaseOwner = ?)` +
+          `${guard.fence === undefined ? "" : " AND fence = ?"}`;
+    const guardArgs =
+      guard === undefined
+        ? []
+        : guard.fence === undefined
+          ? [guard.owner]
+          : [guard.owner, guard.fence];
+    const info = db
+      .prepare(
+        `UPDATE runs SET ${setSql}, updatedAt = ? WHERE runId = ?${where}`,
+      )
+      .run(
+        ...entries.map(([, v]) => v as string),
+        nowIso,
+        runId,
+        ...(guardArgs as string[]),
+      );
+    return Number(info.changes ?? 0) > 0;
   } finally {
     db.close();
   }

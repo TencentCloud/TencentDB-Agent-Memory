@@ -18,6 +18,7 @@ import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import {
   createRun,
   updateRun,
@@ -117,6 +118,24 @@ const deleteBody = (id: string) => ({
   manifest: { baseline: {} },
   context: { presentedRecordIds: [id] },
 });
+
+/** Enforce binds apply to an approved candidate, so a probe that wants to
+ * reach the OPS gate has to pass the candidate gate first. */
+function approve(runId: string, id: string): void {
+  updateRun(
+    dataDir,
+    runId,
+    {
+      state: "reviewed",
+      candidateDigest: digestOf(JSON.stringify(deleteBody(id).diff)),
+      verdictDigest: "v",
+      criticReceipt: '{"verdict":"approve"}',
+    },
+    new Date().toISOString(),
+  );
+}
+approve("run-blocks-only", "m_3");
+approve("run-may-delete", "m_4");
 
 console.log(`runRepo=${RUN_REPO}`);
 for (const [label, id, run] of [
