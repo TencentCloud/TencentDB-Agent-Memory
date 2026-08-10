@@ -68,8 +68,13 @@ export function createOpenCodeMemoryHooks({
       if (!turn) return;
       const key = turnKey(turn);
       if (capturedTurns.has(key)) return;
-      await memory.captureTurn(turn);
       capturedTurns.add(key);
+      try {
+        await memory.captureTurn(turn);
+      } catch (error) {
+        capturedTurns.delete(key);
+        throw error;
+      }
       if (capturedTurns.size > 100) capturedTurns.delete(capturedTurns.values().next().value!);
     } catch (error) {
       await log("warn", "Failed to capture completed OpenCode turn", {

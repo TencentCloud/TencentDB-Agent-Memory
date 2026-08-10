@@ -102,6 +102,41 @@ describe("OpenCode memory hooks", () => {
     );
   });
 
+  it("captures a completed turn only once across concurrent idle events", async () => {
+    const { hooks, memory } = setup();
+    let finishCapture!: () => void;
+    vi.mocked(memory.captureTurn)
+      .mockImplementationOnce(
+        () => new Promise<void>((resolve) => {
+          finishCapture = resolve;
+        }),
+      )
+      .mockResolvedValue(undefined);
+    const idle = { type: "session.idle", properties: { sessionID: "s1" } } as never;
+
+    const firstCapture = hooks.event!({ event: idle });
+    await vi.waitFor(() => expect(memory.captureTurn).toHaveBeenCalledTimes(1));
+    const duplicateCapture = hooks.event!({ event: idle });
+
+    await duplicateCapture;
+    expect(memory.captureTurn).toHaveBeenCalledTimes(1);
+    finishCapture();
+    await firstCapture;
+  });
+
+  it("allows a later idle event to retry a failed capture", async () => {
+    const { hooks, memory } = setup();
+    vi.mocked(memory.captureTurn)
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce(undefined);
+    const idle = { type: "session.idle", properties: { sessionID: "s1" } } as never;
+
+    await hooks.event!({ event: idle });
+    await hooks.event!({ event: idle });
+
+    expect(memory.captureTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("exposes a status tool backed by the memory service", async () => {
     const { hooks } = setup();
     const context = { abort: new AbortController().signal } as ToolContext;
