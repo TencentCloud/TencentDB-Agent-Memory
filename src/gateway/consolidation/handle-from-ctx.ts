@@ -22,6 +22,7 @@ export function handleFromCtx(ctx: OrchestratorContext): TriggerHandle {
     children: ctx.childrenRef,
     lastRunRef: ctx.lastRunRef,
     gate: ctx.gate,
+    roleDefaults: ctx.roleDefaults,
     executeRun: (o: {
       reason: string;
       dryRun?: boolean;

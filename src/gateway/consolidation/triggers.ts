@@ -15,7 +15,10 @@ import { randomUUID } from "node:crypto";
 import { resolveRoleDir } from "../role-files.js";
 import { sweepKeeperOrphans } from "./child-spawn.js";
 import { busySummary } from "./busy-summary.js";
+import { acquireRoleLock } from "./role-lock.js";
+import { resolveRoleContract } from "./role-contract.js";
 import type { RoleGate } from "./role-gate.js";
+import type { RoleLegacyDefaults } from "./role-contract-types.js";
 import type {
   OrchestratorOptions,
   RunSummary,
@@ -39,6 +42,8 @@ export interface TriggerHandle {
   children: { value: Map<string, { kill: () => unknown }> };
   lastRunRef: { value: RunSummary | null };
   gate: RoleGate;
+  /** Legacy snapshot for the contract resolver (lock ttl = maxRunMs). */
+  roleDefaults: RoleLegacyDefaults;
   executeRun: (opts: {
     reason: string;
     dryRun?: boolean;
@@ -47,6 +52,47 @@ export interface TriggerHandle {
   }) => Promise<RunSummary>;
   readLastReport: () => Promise<RunSummary | null>;
   checkpoint: { read: () => Promise<unknown>; file: string };
+}
+
+/**
+ * Both halves of `single-writer-per-role`: the in-process gate (fast refusal
+ * inside this gateway) and the cross-process file lock (another process on
+ * the same dataDir). Either one refusing means busy. Returns a combined,
+ * idempotent release.
+ *
+ * The lock ttl is the role's own `maxRunMs`, so a live run can never expire
+ * under itself. A role that does not resolve takes the gate only — the run
+ * is refused downstream with the reason (`fail-closed-role`).
+ */
+function acquireRole(self: TriggerHandle, role: string): (() => void) | null {
+  const releaseGate = self.gate.tryAcquire(role);
+  if (!releaseGate) return null;
+  const resolution = resolveRoleContract(role, self.roleDir, self.roleDefaults);
+  if (!resolution.ok) return releaseGate;
+  let releaseFile: (() => void) | null = null;
+  try {
+    const lock = acquireRoleLock(self.dataDir, role, {
+      ttlMs: resolution.contract.policy.maxRunMs,
+      nowMs: self.now(),
+    });
+    if (lock === null) {
+      releaseGate();
+      self.logger.info?.(
+        `[trigger] role=${role} held by another process — refused`,
+      );
+      return null;
+    }
+    releaseFile = lock.release;
+  } catch (err) {
+    // Unusable lock dir: degrade to in-process locking, never crash.
+    self.logger.warn?.(
+      `[trigger] cross-process lock unavailable for ${role} (${err instanceof Error ? err.message : String(err)}) — in-process gate only`,
+    );
+  }
+  return () => {
+    releaseFile?.();
+    releaseGate();
+  };
 }
 
 /** Manual/scheduled trigger. Fire-and-forget. */
@@ -58,13 +104,15 @@ export async function trigger(
     return { accepted: false, status: "disabled", reason: opts.reason };
   }
   const role = opts.runType ?? self.roleName;
-  const release = self.gate.tryAcquire(role);
+  const release = acquireRole(self, role);
   if (!release) {
     self.logger.debug?.(`[trigger] busy role=${role} reason=${opts.reason}`);
     return { accepted: false, status: "busy", reason: opts.reason };
   }
   const runId = randomUUID();
-  self.logger.debug?.(`[trigger] start role=${role} runId=${runId} reason=${opts.reason}`);
+  self.logger.debug?.(
+    `[trigger] start role=${role} runId=${runId} reason=${opts.reason}`,
+  );
   self.activeRunUuid.value.add(runId);
   // Never reject: run failures are recorded in the report + lastRun.
   void self
@@ -89,7 +137,7 @@ export async function runNow(
   opts: { reason: string; dryRun?: boolean; runType?: string },
 ): Promise<RunSummary> {
   const role = opts.runType ?? self.roleName;
-  const release = self.gate.tryAcquire(role);
+  const release = acquireRole(self, role);
   if (!release)
     return busySummary(self.now, self.roleName, {
       ...opts,
