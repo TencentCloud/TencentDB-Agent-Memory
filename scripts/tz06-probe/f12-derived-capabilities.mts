@@ -1,10 +1,13 @@
 /**
  * tz-06 critic r4 [high] silent-degradation: роль объявляет `requires_capabilities`
  * добровольно, и ни одна живая role.json его не несёт. Значит роль с
- * `runtime.extension_path` / `runtime.skill_path` / явным `thinking` считалась
- * совместимой с ЛЮБЫМ хостом, и claude запускал её БЕЗ расширения, БЕЗ скилла и
- * БЕЗ уровня размышления, выходя с кодом 0 — «худший исход» S5: молчаливая
- * деградация вместо отказа.
+ * `runtime.extension_path` / `runtime.skill_path` считалась совместимой с ЛЮБЫМ
+ * хостом, и claude запускал её БЕЗ расширения и БЕЗ скилла, выходя с кодом 0 —
+ * «худший исход» S5: молчаливая деградация вместо отказа.
+ *
+ * `thinking` НЕ выводится намеренно: это обязательное поле схемы, его несёт
+ * каждая валидная role.json, и вывод сделал бы все роли pi-only. Дропнутый
+ * уровень вместо этого ЗАПИСЫВАЕТСЯ — вторая половина пробы.
  *
  * Проба берёт настоящий адаптер контракта и настоящий реестр лаунчеров и
  * спрашивает: что claude ответит на такую роль.
@@ -14,7 +17,10 @@
  * claude — оказаться без extension/skill/thinking, что и есть дефект.
  */
 import { adaptRoleContract } from "../../src/gateway/consolidation/role-contract-legacy.js";
-import { checkCapabilities } from "../../src/gateway/consolidation/launchers/capabilities.js";
+import {
+  checkCapabilities,
+  unusedBinding,
+} from "../../src/gateway/consolidation/launchers/capabilities.js";
 import { claudeArgs } from "../../src/gateway/consolidation/launchers/claude.js";
 import { piAssetArgs } from "../../src/gateway/consolidation/launchers/pi.js";
 import type { RoleConfigFile } from "../../src/gateway/role-schema.js";
@@ -62,7 +68,7 @@ console.log(`контракт требует: ${JSON.stringify(required)}`);
 
 // Настоящие наборы возможностей хостов — через тот же checkCapabilities,
 // которым решает пайплайн.
-const CLAUDE = new Set(["session", "tool-subset"]);
+const CLAUDE = new Set(["session", "tool-subset", "isolation"]);
 const err = checkCapabilities("claude", required, CLAUDE);
 console.log(
   `claude отказал: ${err !== null} (должно быть true)` +
@@ -88,4 +94,48 @@ console.log(
 );
 console.log(
   `для сравнения, pi передаёт: ${JSON.stringify(piAssetArgs(contract))}`,
+);
+
+// Вторая половина: уровень размышления НЕ повод для отказа (иначе pi-only),
+// но и не молчание — дроп обязан попасть в лог запуска.
+const dropped = unusedBinding("claude", contract.binding.thinking, CLAUDE);
+console.log(
+  `claude ЗАПИСАЛ дропнутый thinking: ${dropped !== null} (должно быть true)`,
+);
+console.log(`  ${dropped ?? "(ничего не записано)"}`);
+console.log(
+  `pi ничего не дропает: ` +
+    `${unusedBinding("pi", contract.binding.thinking, new Set(["thinking"])) === null}` +
+    ` (должно быть true)`,
+);
+
+// Критерий 3: схемно-полная роль БЕЗ собственных ассетов обязана уезжать на
+// второй хост. Это то, что ломал вывод "thinking" — там требование появлялось
+// у каждой валидной role.json, и второй хост становился недостижим.
+const plain = adaptRoleContract({
+  role: "memory-keeper",
+  cfg: {
+    name: "memory-keeper",
+    model: "anthropic/sonnet",
+    thinking: "high",
+  } as unknown as RoleConfigFile,
+  missing: [],
+  legacy: {
+    model: "m",
+    thinking: "low",
+    timeoutMs: 600_000,
+    diffCap: 20,
+    diffByteCap: 8192,
+    night: {},
+    failOpenPromptRoles: [],
+  } as never,
+  promptPath: null,
+  promptText: null,
+  source: "legacy",
+});
+console.log(
+  `роль без ассетов требует: ${JSON.stringify(plain.requiresCapabilities)}; ` +
+    `claude берёт её: ` +
+    `${checkCapabilities("claude", plain.requiresCapabilities, CLAUDE) === null} ` +
+    `(должно быть true — это критерий 3)`,
 );

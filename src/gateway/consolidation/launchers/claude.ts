@@ -43,6 +43,9 @@ export const DEFAULT_CLAUDE_FLAGS: readonly string[] = ["-p"];
 const CLAUDE_CAPABILITIES: ReadonlySet<string> = new Set([
   "session",
   "tool-subset",
+  // See pi.ts: confinement is the host-agnostic bwrap wrapper, not a claude
+  // flag.
+  "isolation",
 ]);
 
 /** Session flags this launcher owns, for the same reason pi owns its own —

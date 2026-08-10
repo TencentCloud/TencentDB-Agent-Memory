@@ -21,9 +21,9 @@ const silent = {
   error: () => undefined,
 };
 
-const contract = (requires: string[]) =>
+const contract = (requires: string[], launcherId = "pi") =>
   ({
-    binding: { launcherId: "pi", model: "m", thinking: "low" },
+    binding: { launcherId, model: "m", thinking: "low" },
     assets: {},
     timeoutMs: 1000,
     requiresCapabilities: requires,
@@ -43,7 +43,10 @@ const input = (requires: string[]) =>
 describe("tz-06 Ф4 — capability matrix", () => {
   const registry = () =>
     createLauncherRegistry(
-      { pi: { binary: "/nonexistent/pi", flags: [] } },
+      {
+        pi: { binary: "/nonexistent/pi", flags: [] },
+        claude: { binary: "/nonexistent/claude", flags: [] },
+      },
       silent,
     );
 
@@ -56,7 +59,7 @@ describe("tz-06 Ф4 — capability matrix", () => {
       logger: silent,
     }) as never;
 
-  const childCtx = (requires: string[]) =>
+  const childCtx = (requires: string[], launcherId = "pi") =>
     ({
       runId: "r1",
       attemptId: "a1",
@@ -64,15 +67,21 @@ describe("tz-06 Ф4 — capability matrix", () => {
       promptPath: path.join(os.tmpdir(), "p.md"),
       taskPrompt: "t",
       env: {},
-      contract: contract(requires),
+      contract: contract(requires, launcherId),
     }) as never;
 
   it("refuses host-incompatible BEFORE any process exists", async () => {
-    const res = await defaultSpawnChild(ctx(), childCtx(["isolation"]));
+    // `extension` and not `isolation`: confinement is the host-agnostic bwrap
+    // wrapper, so every launcher provides it — a role's own extension bundle
+    // is a knob claude genuinely does not have.
+    const res = await defaultSpawnChild(
+      ctx(),
+      childCtx(["extension"], "claude"),
+    );
     // The refusal names what is missing — an operator fixing it blind is an
     // operator restarting the gateway five times.
     expect(res.error).toContain("host-incompatible");
-    expect(res.error).toContain("isolation");
+    expect(res.error).toContain("extension");
   });
 
   it("gates a RAW launcher handed in past the registry", async () => {

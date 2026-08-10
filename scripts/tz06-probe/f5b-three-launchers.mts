@@ -8,8 +8,11 @@
  * ФАЛЬСИФИКАЦИИ:
  *   FALSIFY=codex-differs — codex-хост пишет ДРУГОЙ кандидат → дайджесты
  *                           обязаны разойтись (иначе проба ничего не сверяет).
- *   FALSIFY=no-isolation  — потребовать capability "isolation": её заявляет
- *                           только codex, pi и claude обязаны отказать.
+ *   FALSIFY=no-extension  — потребовать capability "extension": её заявляет
+ *                           только pi, claude и codex обязаны отказать.
+ *                           (Раньше здесь стояла "isolation" — посылка была
+ *                           ложной: confineArgv host-agnostic, и изоляцию
+ *                           даёт bwrap, а не флаг конкретного хоста.)
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -68,7 +71,7 @@ const contract = (launcherId: string): ResolvedRoleContract =>
     assets: {},
     timeoutMs: 20_000,
     toolsSubset: null,
-    requiresCapabilities: MODE === "no-isolation" ? ["isolation"] : ["session"],
+    requiresCapabilities: MODE === "no-extension" ? ["extension"] : ["session"],
   }) as unknown as ResolvedRoleContract;
 
 const digests = new Map<string, string>();

@@ -18,7 +18,7 @@
 import { accessSync, constants } from "node:fs";
 import path from "node:path";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
-import type { LaunchError, RoleLauncher } from "./types.js";
+import type { LaunchError } from "./types.js";
 
 /**
  * L6 exit criterion. Flipping this to `true` is a SECURITY decision that the
@@ -123,7 +123,6 @@ export function confineArgv(
  */
 export function isolationRefusal(
   contract: ResolvedRoleContract,
-  launcher: RoleLauncher,
 ): LaunchError | null {
   // `?? null` and not `=== null`: a contract pinned before the field existed
   // has no profile at all, and "absent" is the legacy path, not a request.
@@ -137,12 +136,12 @@ export function isolationRefusal(
         "— executable roles stay disabled until the security review passes",
     };
   }
-  if (!launcher.capabilities.has("isolation")) {
-    return {
-      kind: "isolation-unavailable",
-      message: `launcher "${launcher.id}" cannot confine a child`,
-    };
-  }
+  // Deliberately NOT a per-launcher capability: confinement is `confineArgv`
+  // applied in start.ts to whatever argv a launcher produced, so it works the
+  // same for every host. Keying the gate to a capability only codex declared
+  // (because of its own `-s`, which this file's own comment says is a
+  // DIFFERENT mechanism) would refuse pi and claude for a confinement they can
+  // in fact get. What actually decides is whether bwrap exists.
   if (!isolationAvailable()) {
     return {
       kind: "isolation-unavailable",

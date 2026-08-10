@@ -29,6 +29,9 @@ const PI_CAPABILITIES: ReadonlySet<string> = new Set([
   "skill",
   "thinking",
   "tool-subset",
+  // Confinement is not a pi feature: `confineArgv` wraps whatever argv a
+  // launcher produced (start.ts), so every host here can be confined.
+  "isolation",
 ]);
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
 

@@ -13,7 +13,10 @@ import {
   type RunContext,
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
-import { checkCapabilities } from "./launchers/capabilities.js";
+import {
+  checkCapabilities,
+  unusedBinding,
+} from "./launchers/capabilities.js";
 import { isolationRefusal } from "./launchers/isolation.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type {
@@ -85,9 +88,18 @@ async function launchSafely(
     launcher.capabilities,
   );
   if (incompatible !== null) return { ok: false, error: incompatible };
+  // Not every mismatch is a refusal: a knob the host lacks but the role only
+  // inherited from the instance default is dropped — loudly, so the run's log
+  // does not claim a level that was never applied.
+  const dropped = unusedBinding(
+    launcher.id,
+    input.contract.binding.thinking,
+    launcher.capabilities,
+  );
+  if (dropped !== null) ctx.logger.warn?.(`[launcher] ${dropped}`);
   // L6: a role that asks to be confined is refused until the gate opens —
   // launching it unconfined "for now" is the outcome the gate exists to stop.
-  const unconfinable = isolationRefusal(input.contract, launcher);
+  const unconfinable = isolationRefusal(input.contract);
   if (unconfinable !== null) return { ok: false, error: unconfinable };
   try {
     return await launcher.launch(input);

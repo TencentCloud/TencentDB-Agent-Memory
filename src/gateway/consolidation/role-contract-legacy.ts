@@ -48,31 +48,34 @@ export interface AdaptInput {
 }
 
 /**
- * Build the resolved contract. `missing` drives the warnings: a complete
- * contract produces none, which is what `source: "contract"` means.
- */
-/**
  * What the role actually NEEDS, not only what it remembered to declare.
  *
  * `requires_capabilities` is opt-in, and no live role.json carries it — so a
- * role that ships an extension, a skill dir or an explicit thinking level
- * declared nothing, every host looked compatible, and a host without those
- * knobs ran the role STRIPPED and exited 0. That is the "худший исход" the
- * package's S5 names: a silent degraded launch instead of a refusal.
+ * role that ships an extension bundle or a skill dir declared nothing, every
+ * host looked compatible, and a host without those knobs ran the role
+ * STRIPPED and exited 0. That is the "худший исход" the package's S5 names: a
+ * silent degraded launch instead of a refusal.
  *
- * Only EXPLICIT intent counts. `thinking` always resolves to a value because
- * the instance config has a default, and treating that default as a
- * requirement would make every host that lacks the knob refuse every role —
- * a gate that refuses everything protects nothing.
+ * Only ASSETS are derived. `thinking` deliberately is not: it is one of
+ * REQUIRED_PRESENT_FIELDS (role-schema.ts:130), so EVERY schema-complete
+ * role.json declares it, and deriving it would make every valid role pi-only
+ * — criterion 3 ("одна роль под вторым хостом") would then be reachable only
+ * through a deliberately incomplete contract. The two are not alike: a
+ * missing extension bundle is a role that cannot do its job, while a thinking
+ * level is a preference every host has its own default for. A dropped level
+ * is recorded by `warnUnusedBinding` instead.
  */
 function derivedCapabilities(cfg: RoleConfigFile): string[] {
   const need = new Set<string>(cfg.requires_capabilities ?? []);
   if (cfg.runtime?.extension_path) need.add("extension");
   if (cfg.runtime?.skill_path) need.add("skill");
-  if (cfg.thinking !== undefined) need.add("thinking");
   return [...need].sort();
 }
 
+/**
+ * Build the resolved contract. `missing` drives the warnings: a complete
+ * contract produces none, which is what `source: "contract"` means.
+ */
 export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
   const { role, cfg, legacy } = input;
   const warnings: string[] = [];
