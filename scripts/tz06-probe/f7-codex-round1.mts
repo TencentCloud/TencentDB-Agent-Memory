@@ -94,7 +94,10 @@ for (const [name, make] of [
     }`,
   );
   if (name === "codex") {
-    console.log(`  внутренняя песочница codex (-s): ${argv.includes("-s")}`);
+    const at = argv.indexOf("-s");
+    console.log(
+      `  режим шелла ребёнка: ${at < 0 ? "НЕ ЗАДАН (дефолт read-only — роль не запишет кандидат)" : argv[at + 1]}`,
+    );
     const linked = fs.existsSync(path.join(out.handle.sessionRef, "auth.json"));
     console.log(
       `  auth оператора виден в CODEX_HOME попытки: ${linked} ` +

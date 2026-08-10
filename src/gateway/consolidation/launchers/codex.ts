@@ -34,13 +34,19 @@ const CODEX_CAPABILITIES: ReadonlySet<string> = new Set([
   "isolation",
 ]);
 
-/** Owned by the launcher: the session and the working root are decided per
- * attempt. `-s/--sandbox` is owned too, but to REMOVE it: confinement in this
- * codebase is the L6 bwrap path (isolation.ts), and codex's own sandbox is a
- * second, different confinement — on this machine it does not even run (it
- * wants a `[permissions]` profile and then dies on a missing vendored
- * binary). Two sandboxes, one of them broken, is worse than one. */
+/** Owned by the launcher: the session, the working root and the sandbox mode
+ * are decided per attempt, not by an operator flag.
+ *
+ * `-s` is NOT the L6 confinement (that is bwrap, isolation.ts) — it is what
+ * the child's own shell tool may touch, and it must permit writing the run
+ * directory. codex exec defaults to `read-only`, under which the role exits 0
+ * having written no `diff.json` at all: a silent "no candidate" on every run.
+ * The standalone `codex sandbox` subcommand is the broken one here; this flag
+ * is a different mechanism and is required. */
 const OWNED = ["-C", "--cd", "--ephemeral", "-s", "--sandbox"];
+
+/** The child writes its candidate into its own scratch and nothing else. */
+export const SANDBOX_MODE = "workspace-write";
 
 export function codexArgs(
   settings: LauncherSettings,
@@ -51,6 +57,8 @@ export function codexArgs(
     ...stripOwnedFlags(settings.flags ?? [...DEFAULT_CODEX_FLAGS], OWNED),
     "-C",
     input.cwd,
+    "-s",
+    SANDBOX_MODE,
     "-m",
     input.contract.binding.model,
     prompt,
