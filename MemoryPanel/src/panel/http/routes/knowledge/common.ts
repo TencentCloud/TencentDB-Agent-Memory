@@ -229,6 +229,36 @@ export async function deleteKnowledgeCascade(
 const META_LIST_PAGE = 100;
 const FILTERED_ASSET_STATUSES = new Set(['archived', 'deprecated', 'failed']);
 
+/**
+ * Fetch every fixed-asset binding before a read-modify-write operation.
+ *
+ * The metadata API is paginated (20 items by default).  Allocation and
+ * unbinding replace the complete binding set, so using a single default page
+ * would silently drop bindings once an agent has more than 20 assets.
+ */
+export async function fetchAllAgentFixedAssetBindings<T>(
+  deps: PanelDeps,
+  ctx: MetaCallContext,
+  agentId: string,
+): Promise<{ items: T[]; error?: MetaEnvelope<unknown> }> {
+  const all: T[] = [];
+  let offset = 0;
+  for (;;) {
+    const env = await deps.metaKernel.invoke(
+      'agent-fixed-asset/list',
+      { agent_id: agentId, limit: META_LIST_PAGE, offset },
+      ctx,
+    );
+    if (env.code !== 0) return { items: all, error: env };
+    const batch = extractListItems<T>(env);
+    all.push(...batch);
+    const total = (env.data as { total?: number } | null)?.total ?? all.length;
+    if (all.length >= total || batch.length === 0) break;
+    offset += META_LIST_PAGE;
+  }
+  return { items: all };
+}
+
 export interface KnowledgeAssetMetaRaw {
   asset_id: string;
   team_id: string;
