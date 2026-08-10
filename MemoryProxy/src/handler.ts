@@ -32,7 +32,7 @@ import {
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
 import { writeRequestLog } from "./requestLog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
-import { resolveModelId, isModelInPricing } from "./pricing.js";
+import { resolveModelId, isModelInPricing, getModelPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
 import { writeFailedReportRaw } from "./clickhouse.js";
 import { verifyUserKey } from "./auth.js";
@@ -239,6 +239,7 @@ export function extractSseUsage(sseText: string): Record<string, unknown> | null
 function buildUpstreamBody(
   body: Record<string, unknown>,
   target: ForwardTarget,
+  config: ProxyConfig,
 ): Record<string, unknown> {
   let upstreamBody = body;
   if (target.bodyOverrides) {
@@ -247,7 +248,13 @@ function buildUpstreamBody(
   // DeepSeek thinking 模型要求历史中每个 assistant 消息都带 reasoning_content，
   // 否则 400 "The `reasoning_content` in the thinking mode must be passed back to the API."。
   // proxy 生成的表单 assistant tool_calls 消息没有该字段，这里为缺失的补空串。
-  upstreamBody = patchMissingReasoningContent(upstreamBody);
+  //
+  // 仅在 creditPricing 中显式标记 requiresReasoningContent=true 的模型启用，
+  // 避免给非 DeepSeek 上游（OpenAI/Claude 等）补上未知字段，影响其正常解析。
+  const pricing = getModelPricing(config.creditPricing, target.model);
+  if (pricing?.requiresReasoningContent === true) {
+    upstreamBody = patchMissingReasoningContent(upstreamBody);
+  }
   return upstreamBody;
 }
 
@@ -1028,7 +1035,7 @@ export async function handleChatCompletions(
 
   // ── Build upstream request ───────────────────────────────────────────────
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
-  const upstreamBody = buildUpstreamBody(body, target);
+  const upstreamBody = buildUpstreamBody(body, target, config);
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
   // default upstream (never the alternate route), so its apiKey must be applied

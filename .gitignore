@@ -24,6 +24,9 @@ scripts/read-local-memory/dist/
 # Root-level build output (not used at runtime, not published)
 dist/
 
+# Codewiki analysis cache (local test artifacts, never commit)
+.codewiki/
+
 node_modules/
 benchmark-runs/
 .codebuddy
