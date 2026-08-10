@@ -1065,18 +1065,26 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
 
 /**
  * 从 chat_memory-{team_id}-{agent_id} 解出 team_id / agent_id
- * 依赖 agent id 以 `agt` 开头这一稳定前缀。
+ * 依赖 agent id 以 `agt` 开头这一稳定前缀（新版格式：chat_memory-{team}-agt{agent}）。
+ * 兼容旧版格式：chat_memory-{team}-{agent}（agent id 无 `agt` 前缀，
+ * MemoryCore buildChatMemoryAssetId 生成，v2.0.0 及更早数据）。
  */
 function parseChatMemoryAssetId(assetId: string): { teamId: string; agentId: string } | null {
   if (!assetId.startsWith('chat_memory-')) return null;
-  const idx = assetId.lastIndexOf('-agt');
-  if (idx < 0) return null;
   const inner = assetId.slice('chat_memory-'.length);
   const dashAgt = inner.lastIndexOf('-agt');
-  if (dashAgt < 0) return null;
+  if (dashAgt >= 0) {
+    return {
+      teamId: inner.slice(0, dashAgt),
+      agentId: inner.slice(dashAgt + 1),
+    };
+  }
+  // 旧版格式：agent id 无 `agt` 前缀，按最后一个 '-' 分割
+  const dash = inner.lastIndexOf('-');
+  if (dash <= 0) return null;
   return {
-    teamId: inner.slice(0, dashAgt),
-    agentId: inner.slice(dashAgt + 1),
+    teamId: inner.slice(0, dash),
+    agentId: inner.slice(dash + 1),
   };
 }
 
