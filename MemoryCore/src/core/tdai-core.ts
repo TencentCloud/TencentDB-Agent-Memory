@@ -443,6 +443,7 @@ export class TdaiCore {
       scene: params.scene,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      scoreThreshold: this.cfg.recall.scoreThreshold,
       logger: this.logger,
     });
 
@@ -464,6 +465,7 @@ export class TdaiCore {
       sessionKey: params.sessionKey,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      scoreThreshold: this.cfg.recall.scoreThreshold,
       logger: this.logger,
     });
 
@@ -528,6 +530,11 @@ export class TdaiCore {
   /** Get the shared EmbeddingService (may be undefined if not configured). */
   getEmbeddingService(): EmbeddingService | undefined {
     return this.embeddingService;
+  }
+
+  /** Get the configured minimum cosine similarity for recall candidates. */
+  getRecallScoreThreshold(): number {
+    return this.cfg.recall.scoreThreshold;
   }
 
   /** Get the pipeline scheduler (may be undefined if extraction disabled). */

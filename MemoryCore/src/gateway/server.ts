@@ -874,6 +874,7 @@ export class TdaiGateway {
       const v2Deps: V2RouterDeps = {
         getStore: () => this.core.getVectorStore(),
         getEmbedding: () => this.core.getEmbeddingService(),
+        getRecallScoreThreshold: () => this.core.getRecallScoreThreshold(),
         getStorage: () => this.core.getStorage(),
         deployMode: this.config.deployMode,
         // Inject pipeline introspection deps for /v2/pipeline/status (standalone-only).

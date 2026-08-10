@@ -90,6 +90,8 @@ export async function executeConversationSearch(params: {
   filter?: IsolationFilter;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  /** Minimum cosine similarity for vector candidates. A value of 0 disables filtering. */
+  scoreThreshold?: number;
   logger?: Logger;
 }): Promise<ConversationSearchResult> {
   const {
@@ -99,6 +101,7 @@ export async function executeConversationSearch(params: {
     filter: isolationFilter,
     vectorStore,
     embeddingService,
+    scoreThreshold = 0,
     logger,
   } = params;
 
@@ -213,10 +216,18 @@ export async function executeConversationSearch(params: {
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const vecResults: L0SearchResult[] = isolationFilter
+        const vecRaw: L0SearchResult[] = isolationFilter
           ? await vectorStore.searchL0Vector(queryEmbedding, candidateK, query, isolationFilter)
           : await vectorStore.searchL0Vector(queryEmbedding, candidateK, query);
-        logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
+        // Vector scores are cosine similarities; filter before RRF so weak
+        // candidates cannot gain relevance merely by occupying a rank slot.
+        const vecResults = scoreThreshold > 0
+          ? vecRaw.filter((r) => r.score >= scoreThreshold)
+          : vecRaw;
+        logger?.debug?.(
+          `${TAG} [hybrid-vec] Vector search returned ${vecResults.length}/${vecRaw.length} candidates ` +
+          `(threshold=${scoreThreshold})`,
+        );
         return vecResults.map((r) => ({
           id: r.record_id,
           session_key: r.session_key,

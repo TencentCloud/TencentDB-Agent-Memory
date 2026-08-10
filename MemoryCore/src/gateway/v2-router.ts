@@ -224,6 +224,8 @@ export interface V2RouterDeps {
   getStore: () => IMemoryStore | undefined;
   /** Get the default EmbeddingService (standalone fallback). */
   getEmbedding: () => EmbeddingService | undefined;
+  /** Get the configured minimum cosine similarity for recall candidates. */
+  getRecallScoreThreshold?: () => number;
   /** Get the default StorageAdapter (standalone fallback). */
   getStorage: () => StorageAdapter | undefined;
   logger: Logger;
@@ -907,6 +909,7 @@ async function handleConversationSearch(body: unknown, auth: V2AuthContext, requ
     filter: searchFilter,
     vectorStore: deps.getStore(),
     embeddingService: deps.getEmbedding(),
+    scoreThreshold: deps.getRecallScoreThreshold?.() ?? 0,
     logger: deps.logger,
   });
   const recallLatencyMs = performance.now() - tStart;
@@ -1164,6 +1167,7 @@ async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId:
     filter: searchFilter,
     vectorStore: deps.getStore(),
     embeddingService: deps.getEmbedding(),
+    scoreThreshold: deps.getRecallScoreThreshold?.() ?? 0,
     logger: deps.logger,
   });
   const recallLatencyMs = performance.now() - tStart;
