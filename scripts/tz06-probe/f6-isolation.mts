@@ -53,7 +53,9 @@ fs.writeFileSync(
 cat ${foreignAuth} >/dev/null 2>&1 && echo READ_OK || echo READ_DENIED
 (echo x > ${outsideTarget}) 2>/dev/null && echo WRITE_OK || echo WRITE_DENIED
 (echo x > ./inside.txt) 2>/dev/null && echo INSIDE_OK || echo INSIDE_DENIED
-timeout 5 curl -s -o /dev/null https://example.com && echo NET_OK || echo NET_DENIED
+# Адрес, а не имя: холодный DNS съедал бюджет и давал NET_DENIED по
+# ПОСТОРОННЕЙ причине — фальсификация краснела не из-за изоляции.
+timeout 20 curl -s -o /dev/null --connect-timeout 15 http://1.1.1.1 && echo NET_OK || echo NET_DENIED
 `,
   { mode: 0o755 },
 );
