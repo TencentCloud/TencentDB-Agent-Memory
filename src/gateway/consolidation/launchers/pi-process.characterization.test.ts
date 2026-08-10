@@ -1,14 +1,14 @@
 /**
- * tz-06 Ф0 — характеризация ТЕКУЩЕГО поведения runKeeperProcess.
+ * tz-06 Ф0 → Ф2: те же три свойства, теперь с ПЕРЕВЁРНУТЫМ ожиданием.
  *
- * Эти тесты не описывают желаемое: они фиксируют то, что есть сегодня, чтобы
- * Ф1/Ф2 переворачивали конкретные строки, а не «наверное починили». Три
- * свойства, которые пакет обязан изменить:
- *   1. форма аргументов — вся pi-специфика собрана прямо здесь (§Критерий 1);
- *   2. терминальный результат приходит на `exit`, до `close` и reap, поэтому
- *      вывод, который ребёнок (или его потомок) печатает позже, теряется
+ * Ф0 зафиксировала, как было (коммит 917c0e9): результат приходил на `exit`,
+ * поздний вывод терялся, stdout копился без границы. Ф2 меняет ровно эти
+ * строки:
+ *   1. форма аргументов — по-прежнему здесь, внутри launchers/ (критерий 1);
+ *   2. терминальный результат — только после `close` и reap, поэтому вывод,
+ *      напечатанный потомком уже после смерти ребёнка, ПОПАДАЕТ в результат
  *      (L7, критерий 7);
- *   3. stdout копится в память без границы (критерий 8).
+ *   3. в памяти живёт только хвост, полный поток — в artifacts/ (критерий 8).
  *
  * Ребёнок — /bin/sh, никакой pi-сессии не запускается.
  */
@@ -17,6 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runKeeperProcess } from "./pi-process.js";
+import { OUTPUT_TAIL_BYTES } from "./output-spool.js";
 import type { Logger } from "../../../core/types.js";
 
 const silent: Logger = {
@@ -79,7 +80,7 @@ describe("keeper-run: сегодняшнее поведение (tz-06 Ф0)", ()
     expect(res.exitCode).toBe(0);
   });
 
-  it("результат приходит на exit: вывод, напечатанный позже, ТЕРЯЕТСЯ", async () => {
+  it("результат приходит после close: поздний вывод потомка ПОПАДАЕТ в него", async () => {
     const late = script(
       "late.sh",
       "( sleep 0.4; echo LATE-CHILD-OUTPUT ) &\necho EARLY\nexit 0\n",
@@ -88,12 +89,23 @@ describe("keeper-run: сегодняшнее поведение (tz-06 Ф0)", ()
     const res = await run([late]);
 
     expect(res.stdout).toContain("EARLY");
-    // Труба ещё открыта — её держит переживший родителя потомок, — но
-    // промис уже разрешён на `exit`. С ожиданием `close` этот вывод бы приехал.
-    expect(res.stdout).not.toContain("LATE-CHILD-OUTPUT");
+    // Потомок пережил ребёнка и держал трубу открытой — ждём `close`, поэтому
+    // его вывод больше не теряется.
+    expect(res.stdout).toContain("LATE-CHILD-OUTPUT");
   });
 
-  it("stdout не ограничен: сколько ребёнок напечатал, столько и в памяти", async () => {
+  it("таймаут: результат всё равно приходит после reap, с killed и timedOut", async () => {
+    const hang = script("hang.sh", "trap '' TERM\necho STARTED\nsleep 30\n");
+
+    const res = await run([hang], undefined, 300);
+
+    expect(res.timedOut).toBe(true);
+    expect(res.killed).not.toBeNull();
+    // Вывод, успевший до убийства, доезжает — результат собран после reap.
+    expect(res.stdout).toContain("STARTED");
+  });
+
+  it("stdout ограничен: в памяти хвост, весь поток — в artifacts/", async () => {
     const lines = 1024;
     const width = 1023; // + \n = 1 КиБ на строку
     const big = script(
@@ -103,6 +115,14 @@ describe("keeper-run: сегодняшнее поведение (tz-06 Ф0)", ()
 
     const res = await run([big]);
 
-    expect(res.stdout.length).toBe(lines * (width + 1));
+    const produced = lines * (width + 1); // 1 МиБ
+    expect(res.stdoutBytes).toBe(produced);
+    expect(res.stdout.length).toBeLessThanOrEqual(OUTPUT_TAIL_BYTES);
+    // Хвост, а не начало: ошибка ребёнка всегда в конце.
+    expect(
+      res.stdout.endsWith(String(lines - 1).padStart(width, "0") + "\n"),
+    ).toBe(true);
+    const spooled = fs.statSync(res.stdoutFile!).size;
+    expect(spooled).toBe(produced);
   });
 });

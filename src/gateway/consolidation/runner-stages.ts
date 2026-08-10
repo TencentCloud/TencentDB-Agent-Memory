@@ -132,6 +132,16 @@ export async function preApply(
     result.status = "failed";
     return { ok: false };
   }
+  // tz-06 L7 / критерий 9: a role that died still leaves its diff.json behind.
+  // "The process failed" is not "the result is ready", so a non-zero (or
+  // signalled) exit forbids parse/apply no matter how valid the file looks.
+  if (childResult.exitCode !== 0) {
+    result.error =
+      `keeper exited ${childResult.exitCode ?? "on signal " + (childResult.signal ?? "?")}` +
+      " — candidate refused";
+    result.status = "failed";
+    return { ok: false };
+  }
 
   const raw = await readScratchDiff(args.scratchDir);
   if (raw.error) {
