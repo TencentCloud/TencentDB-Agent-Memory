@@ -376,7 +376,7 @@ export function createL1Runner(opts: {
    * 可选：按 user_id 解析用户显示名（gateway 模式注入，查 metadata users）。
    * 解析结果注入 L1 extraction prompt；未提供时沿用旧行为（prompt 兜底规则）。
    */
-  resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
+  resolveUserDisplayName?: (userId: string, instanceId?: string) => Promise<string | undefined>;
 }): (params: { sessionKey: string }) => Promise<{
   processedCount: number;
   storedCount: number;
@@ -572,10 +572,11 @@ export function createL1Runner(opts: {
         );
 
         // 可选钩子必须失败安全：解析显示名只是 prompt 增强，任何异常都不能中断提取主流程。
+        // instanceId 来自本次 runner 调用不可变的 getInstanceId（service 多实例下不读共享可变状态）。
         let userDisplayName: string | undefined;
         if (resolveUserDisplayName) {
           try {
-            userDisplayName = await resolveUserDisplayName(group.userId);
+            userDisplayName = await resolveUserDisplayName(group.userId, getInstanceId?.());
           } catch (err) {
             logger.debug?.(
               `${TAG} [l1] resolveUserDisplayName failed for ${group.userId}: ${err instanceof Error ? err.message : String(err)}`,

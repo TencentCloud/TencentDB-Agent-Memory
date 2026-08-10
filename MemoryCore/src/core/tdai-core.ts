@@ -143,7 +143,7 @@ export interface TdaiCoreOptions {
    * 从未注入姓名，模型只能猜测/编造称呼）。与 skillAssetHooks 同模式：不注入
    * （undefined）→ L1 提取不带显示名、走 prompt 兜底规则，保持既有行为。
    */
-  resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
+  resolveUserDisplayName?: (userId: string, instanceId?: string) => Promise<string | undefined>;
 }
 
 // ============================
@@ -197,7 +197,7 @@ export class TdaiCore {
    */
   private skillAssetHooks?: SkillAssetHooks;
   /** 可选：按 user_id 解析用户显示名（gateway 注入，见 TdaiCoreOptions）。 */
-  private resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
+  private resolveUserDisplayName?: (userId: string, instanceId?: string) => Promise<string | undefined>;
   /**
    * B1 fix: in-flight guard for `ensureSkillModuleWired()`. The original guard
    * was a sync `if (this.skillCore) return`, but assignment to `skillCore`
@@ -1049,6 +1049,7 @@ export class TdaiCore {
     store: IMemoryStore,
     embedding: EmbeddingService,
     storage?: StorageAdapter,
+    instanceId?: string,
   ): Promise<{ storedCount: number; creditUsed: number; hasMore: boolean; hasFullBacklog: boolean; profileScopes: string[] }> {
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
@@ -1073,6 +1074,9 @@ export class TdaiCore {
       ? trackingFactory.createRunner({ enableTools: false })
       : undefined;
 
+    // instanceId 优先用本次调用显式传入的不可变值（service 多实例下 PipelineWorker
+    // 并发处理不同实例，读共享 this.instanceId 存在竞态）；未传时回退 core 当前值。
+    const runInstanceId = instanceId ?? this.instanceId;
     const runner = createL1Runner({
       pluginDataDir: this.dataDir,
       cfg: this.cfg,
@@ -1080,7 +1084,7 @@ export class TdaiCore {
       vectorStore: store,
       embeddingService: embedding,
       logger: this.logger,
-      getInstanceId: () => this.instanceId,
+      getInstanceId: () => runInstanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
       resolveUserDisplayName: this.resolveUserDisplayName,
