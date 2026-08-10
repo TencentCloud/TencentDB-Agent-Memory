@@ -6,15 +6,6 @@ import { describe, it, expect } from "vitest";
 import path from "node:path";
 import { confineArgv, isolationRefusal, L6_SIGNED_OFF } from "./isolation.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
-import type { RoleLauncher } from "./types.js";
-
-const launcher = (caps: string[]): RoleLauncher => ({
-  id: "codex",
-  capabilities: new Set(caps),
-  launch: async () => {
-    throw new Error("not reached");
-  },
-});
 
 const contract = (profile: string | null) =>
   ({
@@ -29,13 +20,13 @@ describe("tz-06 Ф6 — isolation gate", () => {
   });
 
   it("refuses a role that asks for a profile", () => {
-    const err = isolationRefusal(contract("confined"), launcher(["isolation"]));
+    const err = isolationRefusal(contract("confined"));
     expect(err?.kind).toBe("isolation-unavailable");
     expect(err?.message).toContain("L6");
   });
 
   it("leaves a role that asks for nothing alone (the legacy path)", () => {
-    expect(isolationRefusal(contract(null), launcher([]))).toBeNull();
+    expect(isolationRefusal(contract(null))).toBeNull();
   });
 
   it("binds the host binary's own directory, after the tmpfs", () => {

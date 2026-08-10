@@ -5,9 +5,10 @@
  * session flag at all), and there is no system-prompt flag — the prompt the
  * pipeline wrote is prepended to the task text.
  *
- * Unlike pi and claude, codex CAN confine the child: `-s <mode>` is a real
- * sandbox, so this is the one launcher that claims `isolation` (the L6 gate
- * of Ф6 is what proves the claim).
+ * codex has its own sandbox flag (`-s <mode>`), and it is NOT the package's
+ * confinement: L6 is the bwrap wrapper in isolation.ts, applied to every
+ * host's argv alike. `-s` only bounds what the child's own shell tool may
+ * touch, and it must permit writing the run dir.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -32,14 +33,14 @@ export const DEFAULT_CODEX_FLAGS: readonly string[] = [
   "--skip-git-repo-check",
 ];
 
-/** @see capabilities.ts. `isolation` is real here (`-s`), `session` is the
- * CODEX_HOME below, and `tool-subset` is the host-agnostic one: only the
- * role's declared helpers are copied into `<scratch>/tools/`
- * (keeper-tools.ts:81). No extension/skill/thinking: codex has no
- * equivalent. */
+/** @see capabilities.ts. `session` is the CODEX_HOME below; `tool-subset` is
+ * the host-agnostic one — only the role's declared helpers are copied into
+ * `<scratch>/tools/` (keeper-tools.ts:81). No extension/skill/thinking: codex
+ * has no equivalent. Confinement is not listed at all: `-s` is codex's own
+ * sandbox, NOT the L6 wrapper, and L6 is decided by isolation.ts for every
+ * host alike. */
 const CODEX_CAPABILITIES: ReadonlySet<string> = new Set([
   "session",
-  "isolation",
   "tool-subset",
 ]);
 

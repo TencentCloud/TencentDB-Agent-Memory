@@ -13,10 +13,7 @@ import {
   type RunContext,
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
-import {
-  checkCapabilities,
-  unusedBinding,
-} from "./launchers/capabilities.js";
+import { checkCapabilities, unusedBinding } from "./launchers/capabilities.js";
 import { isolationRefusal } from "./launchers/isolation.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type {
@@ -88,15 +85,6 @@ async function launchSafely(
     launcher.capabilities,
   );
   if (incompatible !== null) return { ok: false, error: incompatible };
-  // Not every mismatch is a refusal: a knob the host lacks but the role only
-  // inherited from the instance default is dropped — loudly, so the run's log
-  // does not claim a level that was never applied.
-  const dropped = unusedBinding(
-    launcher.id,
-    input.contract.binding.thinking,
-    launcher.capabilities,
-  );
-  if (dropped !== null) ctx.logger.warn?.(`[launcher] ${dropped}`);
   // L6: a role that asks to be confined is refused until the gate opens —
   // launching it unconfined "for now" is the outcome the gate exists to stop.
   const unconfinable = isolationRefusal(input.contract);
@@ -121,6 +109,19 @@ export async function defaultSpawnChild(
   childCtx: SpawnChildContext,
 ): Promise<ChildRunResult> {
   const launcher = ctx.launcherFor(childCtx.contract.binding.launcherId);
+  // Onto the ROW, not only into the log: `RoleRun.binding` persists the
+  // thinking level, so a reader of the run would otherwise see a level the
+  // host never applied and nothing saying so.
+  const droppedBinding = unusedBinding(
+    launcher.id,
+    childCtx.contract.binding.thinking,
+    launcher.capabilities,
+  );
+  // Not every mismatch is a refusal: a knob the host lacks but the role only
+  // inherited from the instance default is dropped — loudly, so neither the
+  // log nor the row claims a level that was never applied.
+  if (droppedBinding !== null)
+    ctx.logger.warn?.(`[launcher] ${droppedBinding}`);
   const outcome = await launchSafely(ctx, launcher, {
     runId: childCtx.runId,
     attemptId: childCtx.attemptId,
@@ -178,6 +179,7 @@ export async function defaultSpawnChild(
     JSON.stringify({
       sessionRef: outcome.handle.sessionRef,
       launcherId: launcher.id,
+      droppedBinding,
     }),
     new Date(ctx.now()).toISOString(),
   );
@@ -196,6 +198,7 @@ export async function defaultSpawnChild(
     JSON.stringify({
       sessionRef: outcome.handle.sessionRef,
       launcherId: launcher.id,
+      droppedBinding,
       exitCode: res.exitCode,
       // Criterion 8: the operator surface needs the FULL output, and the
       // in-memory tail is capped. Without the spool paths on the row the

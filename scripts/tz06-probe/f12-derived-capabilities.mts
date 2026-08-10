@@ -68,7 +68,7 @@ console.log(`контракт требует: ${JSON.stringify(required)}`);
 
 // Настоящие наборы возможностей хостов — через тот же checkCapabilities,
 // которым решает пайплайн.
-const CLAUDE = new Set(["session", "tool-subset", "isolation"]);
+const CLAUDE = new Set(["session", "tool-subset"]);
 const err = checkCapabilities("claude", required, CLAUDE);
 console.log(
   `claude отказал: ${err !== null} (должно быть true)` +
@@ -139,3 +139,13 @@ console.log(
     `${checkCapabilities("claude", plain.requiresCapabilities, CLAUDE) === null} ` +
     `(должно быть true — это критерий 3)`,
 );
+
+// Дыра, которую нашёл раунд 6: пока "isolation" была объявлена всеми хостами,
+// роль с requires_capabilities:["isolation"] и БЕЗ isolationProfileRef
+// проходила все гейты и запускалась НЕЗАКОНФАЙНЕННОЙ. Теперь такого имени в
+// словаре нет, и роль отказывается — громко.
+const iso = checkCapabilities("claude", ["isolation"], CLAUDE);
+console.log(
+  `роль, просящая "isolation", отказана: ${iso !== null} (должно быть true)`,
+);
+console.log(`  ${iso?.message ?? "(прошла — это и есть дыра)"}`);

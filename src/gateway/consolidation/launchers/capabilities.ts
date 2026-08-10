@@ -25,8 +25,11 @@ export const KNOWN_CAPABILITIES = [
   "thinking",
   /** Restricting the child to a subset of host tools. */
   "tool-subset",
-  /** Running the child under an isolation profile (Ф6). */
-  "isolation",
+  // No `isolation`: confinement is decided by `binding.isolationProfileRef`
+  // plus bwrap (isolation.ts), the same question for every host, so a
+  // capability name here could only ever answer "yes" — and a role that
+  // declared it without a profile ref then passed every gate and ran
+  // UNCONFINED, which is the reduced launch L5 exists to forbid.
 ] as const;
 
 export type Capability = (typeof KNOWN_CAPABILITIES)[number];

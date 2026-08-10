@@ -3,7 +3,7 @@
  *
  * Три запуска через настоящий registry и настоящий defaultSpawnChild,
  * на preallocated Attempt-строках в настоящей control-plane базе:
- *   1. роль требует capability, которой у pi нет → host-incompatible;
+ *   1. роль требует capability, которой у claude нет → host-incompatible;
  *   2. бинаря нет на диске                       → binary-not-found;
  *   3. launcher бросает исключение               → internal-launcher.
  * Во всех трёх промис сервиса РЕЗОЛВИТСЯ, а kind виден в listAttempts.
@@ -76,6 +76,9 @@ async function attempt(
   );
   const cwd = path.join(dir, runId);
   fs.mkdirSync(cwd, { recursive: true });
+  // Настоящий системный промпт: без него фальсификация «убрать требование»
+  // упиралась бы в permission-denied и не показывала бы, что роль запустилась.
+  fs.writeFileSync(path.join(cwd, "p.md"), "SYSTEM PROMPT");
   const res = await defaultSpawnChild(ctxWith(launcherFor), {
     runId,
     attemptId,
@@ -92,15 +95,21 @@ async function attempt(
   );
 }
 
-// 1. Роль требует изоляции; pi её пока не предоставляет (см. PI_CAPABILITIES).
+// 1. Роль требует собственный extension-бандл; у claude такого нет.
+// Не "isolation": confinement решают isolationProfileRef + bwrap, одинаково
+// для всех хостов, поэтому такой capability в словаре больше нет — она могла
+// бы отвечать только "да" и пропускала бы роль незаконфайненной.
 const realRegistry = createLauncherRegistry(
-  { pi: { binary: trueBin, flags: ["-p"] } },
+  {
+    pi: { binary: trueBin, flags: ["-p"] },
+    claude: { binary: trueBin, flags: ["-p"] },
+  },
   silent,
 );
 await attempt(
   "capability отсутствует",
   realRegistry,
-  contractWith(["isolation"]),
+  contractWith(["extension"], "claude"),
 );
 
 // 2. Бинаря нет — ENOENT приходит из процесса, а не из проверки матрицы.

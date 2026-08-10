@@ -29,9 +29,6 @@ const PI_CAPABILITIES: ReadonlySet<string> = new Set([
   "skill",
   "thinking",
   "tool-subset",
-  // Confinement is not a pi feature: `confineArgv` wraps whatever argv a
-  // launcher produced (start.ts), so every host here can be confined.
-  "isolation",
 ]);
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
 
@@ -55,8 +52,6 @@ export function createPiLauncher(
 ): RoleLauncher {
   return {
     id: PI_LAUNCHER_ID,
-    // pi has all of these today; `isolation` is deliberately absent until Ф6
-    // gives it a real profile — claiming it now would make L6 unfalsifiable.
     capabilities: PI_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
       // Session per ATTEMPT (tz-06 Ф3): two attempts of one run must not share
