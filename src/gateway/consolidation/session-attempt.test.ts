@@ -57,6 +57,7 @@ describe("tz-06 Ф3 — sessionRef on the attempt row", () => {
     );
     const launcher: RoleLauncher = {
       id: "pi",
+      capabilities: new Set(["session"]),
       launch: async () => ({
         ok: true,
         handle: {
@@ -94,6 +95,7 @@ describe("tz-06 Ф3 — sessionRef on the attempt row", () => {
     );
     const launcher: RoleLauncher = {
       id: "pi",
+      capabilities: new Set(["session"]),
       launch: async () => ({
         ok: false,
         error: { kind: "binary-not-found", message: "ENOENT" },
