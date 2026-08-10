@@ -17,7 +17,7 @@ export function formatRecall(bundle: RecallBundle, maxChars: number): string | n
   if (bundle.atomic.length > 0) {
     const items = bundle.atomic.map((item, index) => {
       const background = item.background?.trim() ? `\n   Context: ${item.background.trim()}` : "";
-      return `${index + 1}. [${item.type}] ${sanitizeBoundary(item.content.trim())}${sanitizeBoundary(background)}`;
+      return `${index + 1}. [${sanitizeBoundary(item.type)}] ${sanitizeBoundary(item.content.trim())}${sanitizeBoundary(background)}`;
     });
     sections.push(`## Relevant memories\n${items.join("\n")}`);
   }
