@@ -18,6 +18,7 @@ import { VectorStore } from "../../core/store/sqlite.js";
 import { ApplyExecutor } from "../apply-executor.js";
 import { createRun, readRun } from "../control-plane/run-repo.js";
 import { listOps } from "../control-plane/oplog.js";
+import { beginApplying, finishApplying } from "../control-plane/applying.js";
 import { reconcileRun } from "../control-plane/reconcile.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import type { Logger } from "../../core/types.js";
@@ -240,5 +241,59 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
     const again = reconcileRun(dataDir, "r-rewrite", NOW);
     expect(again.resolved).toBe(false);
     expect(again.unresolved[0]?.detail).toContain("content differs");
+  });
+
+  it("a raw throw from the store still lets the run out of `applying`", async () => {
+    seed("m_raw");
+    run("r-raw", ["deleteL1"]);
+
+    // Not one of the four typed errors: the store itself blows up mid-apply
+    // (SQLITE_BUSY and friends land here), which used to skip every exit hook.
+    const broken = new ApplyExecutor({
+      dataDir,
+      logger,
+      vectorStore: {
+        ...(store as unknown as Record<string, unknown>),
+        deleteL1Batch: async () => {
+          throw new Error("SQLITE_BUSY: database is locked");
+        },
+      } as never,
+      embeddingService: embedding,
+      runRepo: true,
+    });
+
+    await expect(
+      broken.apply(
+        body({ deleteL1: [{ id: "m_raw", updatedAt: UPDATED }] }, ["m_raw"]),
+        {
+          runId: "r-raw",
+          candidateDigest: "d",
+          gateMode: "enforce",
+        },
+      ),
+    ).rejects.toThrow(/SQLITE_BUSY/);
+
+    expect(readRun(dataDir, "r-raw")?.state).not.toBe("applying");
+  });
+
+  it("a handler refused at the door does not write its outcome onto the in-flight run", async () => {
+    seed("m_door");
+    run("r-door", ["deleteL1"]);
+
+    // Handler A is mid-apply: it holds `applying`.
+    expect(beginApplying(dataDir, "r-door", NOW).ok).toBe(true);
+
+    // Handler B arrives, is refused at the door — and must leave A's run alone.
+    const res = await executor().apply(
+      body({ deleteL1: [{ id: "m_door", updatedAt: UPDATED }] }, ["m_door"]),
+      { runId: "r-door", candidateDigest: "d", gateMode: "enforce" },
+    );
+    expect(res.status).toBe("aborted");
+    expect(res.error).toContain("run is applying");
+    expect(readRun(dataDir, "r-door")?.state).toBe("applying");
+
+    // …so A's own finish still lands: its outcome is not lost.
+    finishApplying(dataDir, "r-door", "needs-reconciliation", NOW);
+    expect(readRun(dataDir, "r-door")?.state).toBe("needs-reconciliation");
   });
 });

@@ -25,19 +25,22 @@ function scopedRunId(
 }
 
 /** The single door into `applying` (criterion 2): a second handler of the
- * same run is refused here, before it can mutate anything. */
+ * same run is refused here, before it can mutate anything. Returns whether
+ * THIS call opened the door — the caller must not later write a state onto a
+ * run it never entered. */
 export function enterApplying(
   deps: ApplyExecutorDeps,
   run: RunContext | undefined,
-): void {
+): boolean {
   const runId = scopedRunId(deps, run);
-  if (runId === undefined) return;
+  if (runId === undefined) return false;
   const door = beginApplying(deps.dataDir, runId, new Date().toISOString());
   if (!door.ok) {
     throw new ApplyValidationError(
       `apply refused: ${door.reason ?? "run is already applying"}`,
     );
   }
+  return true;
 }
 
 /** Leave `applying` for the state the OUTCOME earned — called on every exit
@@ -45,12 +48,18 @@ export function enterApplying(
  * it forever: takeover from `applying` is forbidden (P5) and the door refuses
  * every later apply, so nothing could ever resolve it. A run that mutated and
  * then failed is parked for reconciliation; one that never mutated failed
- * outright. */
+ * outright.
+ *
+ * `entered` is not a formality: a handler REFUSED at the door would otherwise
+ * write its own outcome onto the run that is still applying, and the real
+ * owner's `finishApplying` — conditioned on `state = 'applying'` — would then
+ * silently do nothing, losing the outcome of a half-written store. */
 export function leaveApplying(
   deps: ApplyExecutorDeps,
   run: RunContext | undefined,
-  outcome: { ok: boolean; mutated: boolean },
+  outcome: { ok: boolean; mutated: boolean; entered: boolean },
 ): void {
+  if (!outcome.entered) return;
   const runId = scopedRunId(deps, run);
   if (runId === undefined) return;
   const state = outcome.ok

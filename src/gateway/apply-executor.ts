@@ -103,6 +103,8 @@ export class ApplyExecutor {
     // Visible to the catch path: whatever happens, the run must not be left
     // sitting in `applying` (tz-09 Ф7 — a wedged run has no way out).
     let scopedForFinish: RunContext | undefined;
+    // Set only when THIS call opened the door — see leaveApplying.
+    let entered = false;
     try {
       // 1. zod validation (strict, readable errors) — before any mutation.
       const parsed = parseRequest(rawBody);
@@ -128,7 +130,7 @@ export class ApplyExecutor {
       const onOp = journalFor(this.deps, parsed.diff, scoped);
       await withStoreApplyLock(this.deps.dataDir, async () => {
         checkManifest(this.deps, parsed);
-        enterApplying(this.deps, scoped);
+        entered = enterApplying(this.deps, scoped);
         await applyMutations(this.deps, parsed.diff, result, onOp);
       });
 
@@ -140,7 +142,7 @@ export class ApplyExecutor {
         result.ok = false;
         result.error =
           "syncSceneIndex failed (files applied; scene_index.json rebuilds on the next /memory/validate)";
-        return this.finish(result, scoped);
+        return this.finish(result, scoped, entered);
       }
 
       // 6. Post-apply vec-vs-meta count check.
@@ -153,7 +155,7 @@ export class ApplyExecutor {
         result.statusCode = 500;
         result.ok = false;
       }
-      return this.finish(result, scoped);
+      return this.finish(result, scoped, entered);
     } catch (err) {
       if (
         err instanceof ApplyValidationError ||
@@ -165,9 +167,15 @@ export class ApplyExecutor {
         result.partial = hasApplied(result);
         result.status = "aborted";
         result.statusCode = err.statusCode;
-        return this.finish(result, scopedForFinish);
+        return this.finish(result, scopedForFinish, entered);
       }
-      // Unexpected — propagate to the HTTP layer (500 with raw message).
+      // Unexpected — propagate to the HTTP layer (500 with raw message). The
+      // run still has to leave `applying`: a raw throw from the store (a
+      // SQLITE_BUSY out of deleteL1Batch, say) would otherwise wedge it as
+      // surely as a typed one, and it is exactly the case where the store may
+      // be half-written.
+      result.partial = hasApplied(result);
+      this.finish(result, scopedForFinish, entered);
       throw err;
     }
   }
@@ -178,10 +186,12 @@ export class ApplyExecutor {
   private finish(
     result: ApplyResult,
     run: RunContext | undefined,
+    entered: boolean,
   ): ApplyResult {
     leaveApplying(this.deps, run, {
       ok: result.ok,
       mutated: hasApplied(result),
+      entered,
     });
     return result;
   }
