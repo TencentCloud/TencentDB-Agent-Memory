@@ -20,19 +20,24 @@ import { advanceCheckpoint, queryRecentRecords } from "./queries.js";
 import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 import { mkFailedSummary } from "./summary.js";
-import { resolveRoleRuntimeFromDir } from "./role-runtime.js";
 
 export async function executeRunDay(
   ctx: OrchestratorContext,
-  opts: { reason: string; dryRun?: boolean; runId: string; role: string },
+  opts: {
+    reason: string;
+    dryRun?: boolean;
+    runId: string;
+    role: string;
+    contract: ResolvedRoleContract;
+  },
 ): Promise<RunSummary> {
   const startedMs = ctx.now();
   const startedAt = new Date(startedMs).toISOString();
   // Per-role scratch override (forked task-cycle path б): role.json runtime.scratch_root
   // wins over the shared ctx.scratchRoot; legacy roles keep the shared root.
-  const roleRt = resolveRoleRuntimeFromDir(opts.role, ctx.roleDir);
-  const scratchRoot = roleRt?.runtime.scratchRoot ?? ctx.scratchRoot;
+  const scratchRoot = opts.contract.assets.scratchRoot ?? ctx.scratchRoot;
   const runScratch = path.join(scratchRoot, opts.runId);
   const summary: RunSummary = mkFailedSummary(
     opts.role,
@@ -56,7 +61,7 @@ export async function executeRunDay(
     const allRecords = queryRecentRecords(
       ctx,
       cp.l0Cursor,
-      ctx.config.memory.consolidation.diffCap,
+      opts.contract.batching.diffCap,
       false,
     );
 
@@ -68,7 +73,7 @@ export async function executeRunDay(
       role: opts.role,
       dryRun: !!opts.dryRun,
       scratchDir: runScratch,
-      isNight: false,
+      contract: opts.contract,
       remainingDeleteCap: 0,
       remainingRewriteCap: 0,
       startedMs,

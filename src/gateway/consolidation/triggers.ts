@@ -29,7 +29,8 @@ export interface TriggerHandle {
   roleName: string;
   roleDir: string;
   now: () => number;
-  config: OrchestratorOptions["config"];
+  /** Consolidation master switch (no config read on the role path). */
+  enabled: boolean;
   dataDir: string;
   scratchRoot: string;
   logger: OrchestratorOptions["logger"];
@@ -53,7 +54,7 @@ export async function trigger(
   self: TriggerHandle,
   opts: { reason: string; dryRun?: boolean; runType?: string },
 ): Promise<TriggerResult> {
-  if (!self.config.memory.consolidation.enabled) {
+  if (!self.enabled) {
     return { accepted: false, status: "disabled", reason: opts.reason };
   }
   const role = opts.runType ?? self.roleName;

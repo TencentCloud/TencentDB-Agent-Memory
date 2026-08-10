@@ -12,9 +12,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseConfig } from "../../config.js";
+import { buildRoleDefaults, buildLauncherDefaults } from "../role-defaults.js";
 import {
   ConsolidationOrchestrator,
-  resolveRoleTimeoutMs,
   type RunSummary,
   type SpawnChildContext,
 } from "./orchestrator.js";
@@ -22,6 +22,7 @@ import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import type { ChildRunResult } from "./child-spawn.js";
 import type { ApplyResult } from "../apply-executor.js";
+import { clearRoleContractCache } from "./role-contract.js";
 import { createRequire } from "node:module";
 
 // Mock runKeeperProcess at module level (hoisted): the stop()-both-kill test
@@ -71,6 +72,24 @@ function openSqlite(dbPath: string): {
   return new DatabaseSync(dbPath) as unknown as ReturnType<typeof openSqlite>;
 }
 
+/**
+ * tz-01 B2: night semantics come from the CONTRACT (`scope: "full_store"` →
+ * batching.strategy = bounded-full-store-chunked), never from the role name.
+ * Every night fixture below therefore declares a role file; the rest of the
+ * contract stays legacy (filled from the global snapshot by the adapter), so
+ * the expectations of these tests (night caps, night diffCap) are unchanged.
+ */
+function nightContract(
+  roleDir: string,
+  extra: Record<string, unknown> = {},
+): void {
+  fs.writeFileSync(
+    path.join(roleDir, "night-keeper.json"),
+    JSON.stringify({ name: "night-keeper", scope: "full_store", ...extra }),
+    "utf-8",
+  );
+}
+
 const silentLogger: Logger = {
   debug: () => undefined,
   info: () => undefined,
@@ -100,6 +119,18 @@ function makeConfig(dataDir: string, enabled = true): GatewayConfig {
       nightRun: { schedule: "06:00", threshold: 50, timezone: "system" },
     }),
   } as GatewayConfig;
+}
+
+/** Global snapshot the orchestrator now takes explicitly (tz-01): role
+ * parameters come from the contract, this is only the LegacyRoleAdapter's
+ * fallback plus the host launch parameters. */
+function roleOpts(cfg: GatewayConfig) {
+  const c = cfg.memory.consolidation;
+  return {
+    enabled: c.enabled,
+    roleDefaults: buildRoleDefaults(c),
+    launcher: buildLauncherDefaults(c),
+  };
 }
 
 const META = [
@@ -151,6 +182,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
   let scratchRoot: string;
 
   beforeEach(() => {
+    clearRoleContractCache();
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-oc-"));
     dataDir = path.join(tmp, "tdai");
     scratchRoot = path.join(tmp, "scratch");
@@ -182,8 +214,10 @@ describe("ConsolidationOrchestrator (P6)", () => {
     // an explicit roleDir (e.g. night-keeper B3 block).
     const emptyRoleDir = path.join(tmp, "empty-roles");
     fs.mkdirSync(emptyRoleDir, { recursive: true });
+    const cfg = makeConfig(dataDir, opts.enabled ?? true);
     return new ConsolidationOrchestrator({
-      config: makeConfig(dataDir, opts.enabled ?? true),
+      config: cfg,
+      ...roleOpts(cfg),
       dataDir,
       scratchRoot,
       logger: silentLogger,
@@ -468,6 +502,8 @@ describe("ConsolidationOrchestrator (P6)", () => {
       process.env.TDAI_KEEPER_TOOLS_DIR = "/nonexistent/keeper-tools";
       const orch = new ConsolidationOrchestrator({
         config: makeConfig(dataDir, true),
+        ...roleOpts(makeConfig(dataDir, true)),
+        ...roleOpts(makeConfig(dataDir, true)),
         dataDir,
         scratchRoot,
         logger,
@@ -516,16 +552,17 @@ describe("ConsolidationOrchestrator (P6)", () => {
   // B3 — night-keeper role: fail-loud + role-file prompt + timeout_min
   // ============================
 
-  it("night-keeper WITHOUT role file → run refused (fail-loud, not day semantics)", async () => {
-    const roleDir = path.join(tmp, "roles"); // empty dir — no night-keeper.md
+  it("night-keeper WITHOUT prompt file → run refused (fail-closed role)", async () => {
+    const roleDir = path.join(tmp, "roles"); // contract, but no night-keeper.md
     fs.mkdirSync(roleDir, { recursive: true });
+    nightContract(roleDir, { fail_on_missing_prompt: true });
     const spawn = vi.fn();
     const orch = makeOrchestrator({ roleName: "night-keeper", roleDir, spawn });
 
     const summary = await orch.runNow({ reason: "night" });
-    expect(summary.status).toBe("failed");
-    expect(summary.error).toMatch(/night-keeper\.md.*missing/);
-    expect(spawn).not.toHaveBeenCalled();
+    // The role does not resolve → it does not run (`fail-closed-role`).
+    expect(summary.status).toBe("disabled");
+    expect(summary.error).toMatch(/night-keeper\.md.*fail_on_missing_prompt/);
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -537,6 +574,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
+    nightContract(roleDir);
 
     const captured: { prompt: string }[] = [];
     const spawn = vi.fn(
@@ -607,11 +645,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
-    fs.writeFileSync(
-      path.join(roleDir, "night-keeper.json"),
-      JSON.stringify({ name: "night-keeper", timeout_min: 45 }),
-      "utf-8",
-    );
+    nightContract(roleDir, { timeout_min: 45 });
     const spawn = vi.fn(
       async (ctx: SpawnChildContext): Promise<ChildRunResult> => {
         await fs.promises.writeFile(
@@ -644,6 +678,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
+    nightContract(roleDir);
     // diff with 51 deleteL1 ops > default deleteCapPerRun=50
     const manyDeletes = Array.from({ length: 51 }, (_, i) => ({
       id: `m_d${i}`,
@@ -672,6 +707,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
+    nightContract(roleDir);
     const spawn = writingSpawn({});
     const orch = makeOrchestrator({ roleDir, spawn }); // constructor roleName = keeper
 
@@ -683,36 +719,9 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(summary.role).toBe("night-keeper"); // per-run role, not constructor
   });
 
-  describe("resolveRoleTimeoutMs (per-run role timeout)", () => {
-    it("night-keeper role file timeout_min wins (minutes → ms)", () => {
-      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t-"));
-      fs.writeFileSync(
-        path.join(roleDir, "night-keeper.json"),
-        JSON.stringify({ name: "night-keeper", timeout_min: 7 }),
-        "utf-8",
-      );
-      expect(resolveRoleTimeoutMs("night-keeper", roleDir, 5000)).toBe(420_000);
-      fs.rmSync(roleDir, { recursive: true, force: true });
-    });
-
-    it("missing role file → fallback ms (day keeper keeps config timeout)", () => {
-      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t2-"));
-      expect(resolveRoleTimeoutMs("keeper", roleDir, 5000)).toBe(5000);
-      expect(resolveRoleTimeoutMs("night-keeper", null, 5000)).toBe(5000);
-      fs.rmSync(roleDir, { recursive: true, force: true });
-    });
-
-    it("zero/negative timeout_min → fallback (guard from plan #9)", () => {
-      const roleDir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-t3-"));
-      fs.writeFileSync(
-        path.join(roleDir, "night-keeper.json"),
-        JSON.stringify({ name: "night-keeper", timeout_min: 0 }),
-        "utf-8",
-      );
-      expect(resolveRoleTimeoutMs("night-keeper", roleDir, 9000)).toBe(9000);
-      fs.rmSync(roleDir, { recursive: true, force: true });
-    });
-  });
+  // `resolveRoleTimeoutMs` was deleted in tz-01 B1 (a SECOND reader of
+  // role.json). The per-run timeout now comes from the resolved contract and
+  // is covered in role-contract.test.ts ("timeout_min wins", "fallback").
 
   describe("readLastReport picks the newest run by startedAt (any role)", () => {
     it("flip: older night-keeper + newer memory-keeper → memory-keeper wins", async () => {
@@ -811,6 +820,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         "ROLE-NIGHT-PROMPT",
         "utf-8",
       );
+      nightContract(roleDir);
       // Seed 6 L1 records → with night.diffCap=5 the full-store sweep splits
       // into 2 chunks. deleteCapPerRun=50 default. Chunk 1 requests 40
       // deletes, chunk 2 requests 15 → total 55 > 50 → chunk 2 refused.
@@ -877,6 +887,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       );
       const orch = new ConsolidationOrchestrator({
         config: cfg,
+        ...roleOpts(cfg),
         dataDir,
         scratchRoot,
         logger: silentLogger,
@@ -952,6 +963,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       } as GatewayConfig;
       return new ConsolidationOrchestrator({
         config: cfg,
+        ...roleOpts(cfg),
         dataDir,
         scratchRoot,
         logger: silentLogger,
@@ -971,6 +983,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         "ROLE-NIGHT-PROMPT",
         "utf-8",
       );
+      nightContract(roleDir);
       // 6 records, diffCap=2 → 3 chunks. l0 watermark = T10.
       seedStore("2026-08-02T10:00:00.000Z", 6);
       const spawn = writingSpawn({});
@@ -992,6 +1005,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         "ROLE-NIGHT-PROMPT",
         "utf-8",
       );
+      nightContract(roleDir);
       seedStore("2026-08-02T10:00:00.000Z", 6);
       // Chunk 2 (second spawn) returns a target-missing merge skip.
       let spawnCount = 0;
@@ -1044,6 +1058,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         "ROLE-NIGHT-PROMPT",
         "utf-8",
       );
+      nightContract(roleDir);
       seedStore("2026-08-02T10:00:00.000Z", 6);
       const spawn = writingSpawn({});
       const spawnSpy = vi.fn(async (ctx: SpawnChildContext) => {
@@ -1112,6 +1127,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
+    nightContract(roleDir);
     // Rebuild with the night-keeper role file so executeRunNight is not
     // fail-loud (missing prompt) before it can spawn.
     const orchPar = makeOrchestrator({ spawn: slowSpawn, roleDir });
@@ -1175,6 +1191,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       "ROLE-NIGHT-PROMPT",
       "utf-8",
     );
+    nightContract(roleDir);
 
     // Use the DEFAULT spawn path (no `spawn` override in the constructor) so
     // onChild registration flows through the real runner-helpers wiring →
@@ -1218,6 +1235,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
     );
     const orch = new ConsolidationOrchestrator({
       config: makeConfig(dataDir, true),
+      ...roleOpts(makeConfig(dataDir, true)),
       dataDir,
       scratchRoot,
       logger: silentLogger,

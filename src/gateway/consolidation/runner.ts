@@ -5,14 +5,11 @@
  * → caps check) then ctx.applyDiff and records the result. The heavy
  * stages live in runner-stages.ts to keep this file ≤150 lines.
  *
- * Day and night runners (day-runner.ts, night-runner.ts) both call this
- * with their own isNight flag and cap budgets.
+ * Both batching strategies call this with the resolved role contract and
+ * their remaining cap budgets.
  */
 
-import {
-  buildManifestBaseline,
-  manifestShaMap,
-} from "./diff-builder.js";
+import { manifestShaMap } from "./diff-builder.js";
 import { preApply } from "./runner-stages.js";
 import { recordApplyResult } from "./apply-batch.js";
 import type { OrchestratorContext } from "./context.js";
@@ -41,10 +38,7 @@ export async function runBatch(
 ): Promise<RunBatchResult> {
   const result = emptyResult();
   try {
-    const night = ctx.config.memory.consolidation.night;
-    const cap = args.isNight ? night : undefined;
-
-    const pre = await preApply(ctx, args, cap, result);
+    const pre = await preApply(ctx, args, result);
     if (!pre.ok || !pre.baseline || pre.rawDiff === undefined) return result;
 
     const applyResult = await ctx.applyDiff({

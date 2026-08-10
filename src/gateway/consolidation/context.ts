@@ -13,9 +13,23 @@ import type { EmbeddingService } from "../../core/store/embedding.js";
 import { ConsolidationCheckpoint } from "./checkpoint.js";
 import { RoleGate } from "./role-gate.js";
 import type { RunSummary, SpawnChildFn, ApplyDiffFn } from "./types.js";
+import type {
+  LauncherDefaults,
+  RoleLegacyDefaults,
+} from "./role-contract-types.js";
 
 export interface OrchestratorContext {
+  /** Kept for the post-run recall probe (memory-wide knobs). Role parameters
+   * NEVER come from here — they come from the resolved contract (tz-01). */
   config: GatewayConfig;
+  /** Consolidation master switch, lifted out of the config read path. */
+  enabled: boolean;
+  /** Global fallbacks the LegacyRoleAdapter may use, snapshotted by the
+   * composition root (server.ts) — see `contract-drives-execution`. */
+  roleDefaults: RoleLegacyDefaults;
+  /** Host launch parameters (binary + fixed flags); tz-06 owns their move
+   * into a launcher module. */
+  launcher: LauncherDefaults;
   dataDir: string;
   scratchRoot: string;
   logger: Logger;

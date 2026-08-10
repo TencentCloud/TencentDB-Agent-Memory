@@ -13,26 +13,31 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeReport } from "./reports.js";
-import { resolveRoleRuntimeFromDir } from "./role-runtime.js";
 import { advanceCheckpoint, queryRecentRecords } from "./queries.js";
 import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import { chunkRecords } from "./chunk.js";
 import { runNightBatches } from "./night-batches.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 import { mkFailedSummary } from "./summary.js";
 
 export async function executeRunNight(
   ctx: OrchestratorContext,
-  opts: { reason: string; dryRun?: boolean; runId: string; role: string },
+  opts: {
+    reason: string;
+    dryRun?: boolean;
+    runId: string;
+    role: string;
+    contract: ResolvedRoleContract;
+  },
 ): Promise<RunSummary> {
   const startedMs = ctx.now();
   const startedAt = new Date(startedMs).toISOString();
   // Per-role scratch override (forked task-cycle path б): night-keeper's
   // runtime.scratch_root routes the sub-session cwd into its own runs dir
   // instead of the shared orchestrator scratchRoot.
-  const roleRt = resolveRoleRuntimeFromDir(opts.role, ctx.roleDir);
-  const scratchRoot = roleRt?.runtime.scratchRoot ?? ctx.scratchRoot;
+  const scratchRoot = opts.contract.assets.scratchRoot ?? ctx.scratchRoot;
   const runScratch = path.join(scratchRoot, opts.runId);
   const summary: RunSummary = mkFailedSummary(
     opts.role,
@@ -53,20 +58,16 @@ export async function executeRunNight(
     const blocks = collectBlockMeta(ctx.dataDir);
     summary.overLimitBlocks = blocks.filter((b) => b.size > b.limit).length;
 
-    const night = ctx.config.memory.consolidation.night;
-    const allRecords = queryRecentRecords(
-      ctx,
-      cp.l0Cursor,
-      night.diffCap,
-      true,
-    );
-    const batches = chunkRecords(allRecords, night.diffCap);
+    const diffCap = opts.contract.batching.diffCap;
+    const allRecords = queryRecentRecords(ctx, cp.l0Cursor, diffCap, true);
+    const batches = chunkRecords(allRecords, diffCap);
 
     const res = await runNightBatches(ctx, {
       reason: opts.reason,
       dryRun: opts.dryRun,
       runId: opts.runId,
       role: opts.role,
+      contract: opts.contract,
       runScratch,
       batches,
       blocks,

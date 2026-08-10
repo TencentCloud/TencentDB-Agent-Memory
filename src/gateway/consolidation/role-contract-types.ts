@@ -75,7 +75,10 @@ export interface ResolvedRoleContract {
     text: string | null;
     failOnMissing: boolean;
   };
-  toolsSubset: ReadonlySet<string>;
+  /** Declared tools, or null when the legacy file never declared any — null
+   * keeps the pre-tz-01 behaviour (the whole catalogue) instead of silently
+   * leaving the role with no tools. An empty SET means "declared none". */
+  toolsSubset: ReadonlySet<string> | null;
   timeoutMs: number;
   binding: ExecutionBinding;
   assets: {
@@ -97,6 +100,10 @@ export type RoleResolution =
  * in, so no module under consolidation/ reads `config.memory.*` itself.
  */
 export interface RoleLegacyDefaults {
+  /** Roles whose prompt was fail-OPEN before the contract existed (the day
+   * keeper). Comes from the composition root: a role name must never be
+   * compared against a literal inside consolidation/ (tz-01 B2). */
+  failOpenPromptRoles: readonly string[];
   model: string;
   thinking: string;
   timeoutMs: number;

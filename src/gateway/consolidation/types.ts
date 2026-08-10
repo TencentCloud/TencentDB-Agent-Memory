@@ -8,21 +8,23 @@
  * OrchestratorOptions: constructor args (lazy store accessors — the
  * gateway stores initialize AFTER the orchestrator is constructed).
  *
- * NIGHT_SWEEP_LIMIT + resolveRoleTimeoutMs are also exported here because
- * they're shared between day and night runs. DEFAULT_ROLE_PROMPT and
- * DEFAULT_TASK_PROMPT live in prompt-builder.ts.
+ * NIGHT_SWEEP_LIMIT is exported here because it is shared between the
+ * batching strategies. DEFAULT_ROLE_PROMPT and DEFAULT_TASK_PROMPT live in
+ * prompt-builder.ts.
  */
 
 import type { GatewayConfig } from "../config.js";
-import fs from "node:fs";
-import path from "node:path";
 import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import type { ApplyResult } from "../apply-executor.js";
-import { loadRoleConfig } from "../role-files.js";
 import type { ChildRunResult } from "./child-spawn.js";
 import type { ProbeResult } from "../probe.js";
+import type {
+  LauncherDefaults,
+  ResolvedRoleContract,
+  RoleLegacyDefaults,
+} from "./role-contract-types.js";
 
 export interface ChildSummary {
   exitCode: number | null;
@@ -71,6 +73,9 @@ export interface SpawnChildContext {
   cwd: string;
   /** Effective role for this run (runType ?? constructor roleName). */
   role: string;
+  /** Resolved contract of that role — the launcher reads model/thinking/
+   * timeout/assets from here, never from the global config (tz-01 B5). */
+  contract: ResolvedRoleContract;
 }
 
 export type SpawnChildFn = (ctx: SpawnChildContext) => Promise<ChildRunResult>;
@@ -84,40 +89,22 @@ export type ApplyDiffFn = (body: unknown) => Promise<ApplyResult>;
  */
 export const NIGHT_SWEEP_LIMIT = 25_000;
 
-/**
- * Effective per-run timeout: the role-file `timeout_min` (minutes) of the
- * PER-RUN role wins over the consolidation fallback. Positive `timeout_min`
- * only; missing/zero file or config → fallbackMs. One source per batch,
- * never mixed (night runs resolve night-keeper.json, not the day one).
- */
-export function resolveRoleTimeoutMs(
-  role: string,
-  roleDir: string | null | undefined,
-  fallbackMs: number,
-): number {
-  // Lenient read — the role file may be minimal ({name, timeout_min}): tests
-  // and legacy configs don't carry the full 19-field strict schema. Search
-  // canonical per-role, bare flat, then legacy memory-keeper layout.
-  const candidates = [
-    path.join(roleDir ?? "", role, "role.json"),
-    path.join(roleDir ?? "", `${role}.json`),
-    path.join(roleDir ?? "", "memory-keeper", `${role}.json`),
-  ];
-  for (const p of candidates) {
-    if (!fs.existsSync(p)) continue;
-    try {
-      const t = (JSON.parse(fs.readFileSync(p, "utf-8")) as { timeout_min?: unknown })
-        ?.timeout_min;
-      return typeof t === "number" && t > 0 ? t * 60_000 : fallbackMs;
-    } catch {
-      return fallbackMs;
-    }
-  }
-  return fallbackMs;
-}
+// `resolveRoleTimeoutMs` is gone (tz-01 B1): it was a SECOND reader of
+// role.json alongside the role runtime, which the "one resolver" requirement
+// forbids. The per-run timeout now comes from
+// `ResolvedRoleContract.timeoutMs`, and its behaviour (role `timeout_min`
+// wins over the global fallback) is covered in role-contract.test.ts.
 
 export interface OrchestratorOptions {
   config: GatewayConfig;
+  /** Global fallbacks for the LegacyRoleAdapter + host launch parameters.
+   * Built by the composition root so no module under consolidation/ reads
+   * `config.memory.consolidation.*` for a role parameter (tz-01 criterion 7). */
+  roleDefaults: RoleLegacyDefaults;
+  launcher: LauncherDefaults;
+  /** Consolidation master switch (`memory.consolidation.enabled`), resolved
+   * by the caller so the read does not live on the role path. */
+  enabled: boolean;
   dataDir: string;
   /** Scratch root OUTSIDE the memory tree — per-run subdirs live here. */
   scratchRoot: string;

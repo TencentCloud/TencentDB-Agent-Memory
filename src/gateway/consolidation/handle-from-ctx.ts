@@ -2,8 +2,7 @@
  * Adapt the OrchestratorContext to the TriggerHandle shape that triggers.ts
  * functions consume. Pure projection — no shared state.
  */
-import { executeRunDay } from "./day-runner.js";
-import { executeRunNight } from "./night-runner.js";
+import { executeRunForRole } from "./execute-run.js";
 import { readLastReport } from "./reports.js";
 import type { TriggerHandle } from "./triggers.js";
 import type { OrchestratorContext } from "./context.js";
@@ -14,7 +13,7 @@ export function handleFromCtx(ctx: OrchestratorContext): TriggerHandle {
     roleName: ctx.roleName,
     roleDir: ctx.roleDir,
     now: ctx.now,
-    config: ctx.config,
+    enabled: ctx.enabled,
     dataDir: ctx.dataDir,
     scratchRoot: ctx.scratchRoot,
     logger: ctx.logger as Logger,
@@ -28,10 +27,7 @@ export function handleFromCtx(ctx: OrchestratorContext): TriggerHandle {
       dryRun?: boolean;
       runId: string;
       role: string;
-    }) =>
-      o.role === "night-keeper"
-        ? executeRunNight(ctx, o)
-        : executeRunDay(ctx, o),
+    }) => executeRunForRole(ctx, o),
     readLastReport: () => readLastReport(ctx),
     checkpoint: ctx.checkpoint,
   };

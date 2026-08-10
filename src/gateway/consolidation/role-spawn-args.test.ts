@@ -1,15 +1,38 @@
 /**
  * P6 — forked task-cycle spawn args (path б).
  *
- * buildRoleSpawnArgs maps role.json `runtime.extension_path` / `skill_path`
- * to `--extension` / `--skill` CLI args for the keeper sub-session. Tested
- * against an isolated tmp roleDir (no os.homedir() dependency).
+ * buildRoleSpawnArgs maps the RESOLVED contract's instance assets
+ * (role.json `runtime.extension_path` / `skill_path`) to `--extension` /
+ * `--skill` CLI args for the keeper sub-session. tz-01 B1: the args come
+ * from the contract, so the test resolves a real role dir first instead of
+ * re-reading role.json itself.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildRoleSpawnArgs } from "./role-spawn-args.js";
+import {
+  resolveRoleContract,
+  clearRoleContractCache,
+} from "./role-contract.js";
+import type { RoleLegacyDefaults } from "./role-contract-types.js";
+
+const LEGACY: RoleLegacyDefaults = {
+  failOpenPromptRoles: ["memory-keeper"],
+  model: "legacy/global-model",
+  thinking: "low",
+  timeoutMs: 600_000,
+  diffCap: 20,
+  diffByteCap: 8192,
+  night: {
+    diffCap: 200,
+    diffByteCap: 32_768,
+    deleteCapPerRun: 50,
+    rewriteCapPerRun: 100,
+    maxRunMs: 5_400_000,
+  },
+};
 
 function fakeRoleDir(role: string, runtime?: unknown): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-spawn-args-"));
@@ -41,27 +64,25 @@ function fakeRoleDir(role: string, runtime?: unknown): string {
     JSON.stringify(cfg),
     "utf-8",
   );
-  fs.writeFileSync(path.join(dir, role, "prompt.md"), "ROLE", "utf-8");
+  fs.writeFileSync(path.join(dir, role, `${role}.md`), "ROLE", "utf-8");
   return dir;
 }
 
-function childCtx(role: string) {
-  return {
-    role,
-    env: {},
-    promptPath: "/tmp/prompt.md",
-    cwd: "/tmp",
-  } as never;
+function argsFor(role: string, roleDir: string): string[] {
+  const res = resolveRoleContract(role, roleDir, LEGACY);
+  if (!res.ok) throw new Error(`role did not resolve: ${res.reason}`);
+  return buildRoleSpawnArgs(res.contract);
 }
 
 describe("buildRoleSpawnArgs (forked task-cycle path б)", () => {
+  beforeEach(() => clearRoleContractCache());
+
   it("emits --no-extensions/--extension/--skill from runtime.extension_path/skill_path", () => {
     const roleDir = fakeRoleDir("memory-keeper", {
       extension_path: "/ext/task-cycle-memory-keeper/index.ts",
       skill_path: "/skills/memory-keeper/SKILL.md",
     });
-    const args = buildRoleSpawnArgs(childCtx("memory-keeper"), roleDir);
-    expect(args).toEqual([
+    expect(argsFor("memory-keeper", roleDir)).toEqual([
       "--no-extensions",
       "--extension",
       "/ext/task-cycle-memory-keeper/index.ts",
@@ -72,13 +93,11 @@ describe("buildRoleSpawnArgs (forked task-cycle path б)", () => {
 
   it("legacy role without runtime → no extra args", () => {
     const roleDir = fakeRoleDir("night-keeper");
-    const args = buildRoleSpawnArgs(childCtx("night-keeper"), roleDir);
-    expect(args).toEqual([]);
+    expect(argsFor("night-keeper", roleDir)).toEqual([]);
   });
 
-  it("missing role dir → no extra args (never throws)", () => {
+  it("role with no role.json → adapter contract, no extra args (never throws)", () => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-empty-roles-"));
-    const args = buildRoleSpawnArgs(childCtx("ghost-role"), empty);
-    expect(args).toEqual([]);
+    expect(argsFor("memory-keeper", empty)).toEqual([]);
   });
 });

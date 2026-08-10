@@ -4,8 +4,8 @@
  * Holds the OrchestratorContext (deps + state refs) and delegates to
  * module-level functions:
  *   - start/stop/trigger/runNow → triggers.ts
- *   - executeRun → day-runner.ts (single batch) or night-runner.ts
- *     (multi-batch, anchored cursor, cap accumulation)
+ *   - executeRun → execute-run.ts: resolves the role contract, then runs
+ *     the batching strategy the contract names
  * Pipeline helpers (runBatch, writeReport, queryRecentRecords, etc.) live
  * in their own files (runner.ts, queries.ts, reports.ts, runner-helpers.ts,
  * prompt-builder.ts, runner-stages.ts).
@@ -22,8 +22,7 @@ import {
   runNow as runNowLifecycle,
 } from "./triggers.js";
 import { handleFromCtx } from "./handle-from-ctx.js";
-import { executeRunDay } from "./day-runner.js";
-import { executeRunNight } from "./night-runner.js";
+import { executeRunForRole } from "./execute-run.js";
 import { defaultSpawnChild, defaultApplyDiff } from "./runner-helpers.js";
 import { resolveRoleDir } from "../role-files.js";
 import { resolveKeeperToolsDir as resolveKeeperToolsDirHelper } from "./keeper-tools.js";
@@ -34,7 +33,7 @@ import type {
 } from "./types.js";
 import type { OrchestratorContext } from "./context.js";
 
-export { resolveRoleTimeoutMs, NIGHT_SWEEP_LIMIT } from "./types.js";
+export { NIGHT_SWEEP_LIMIT } from "./types.js";
 export {
   buildSessionPrompt,
   DEFAULT_ROLE_PROMPT,
@@ -60,6 +59,9 @@ export class ConsolidationOrchestrator {
   constructor(opts: OrchestratorOptions) {
     this.ctx = {
       config: opts.config,
+      enabled: opts.enabled,
+      roleDefaults: opts.roleDefaults,
+      launcher: opts.launcher,
       dataDir: opts.dataDir,
       scratchRoot: opts.scratchRoot,
       logger: opts.logger,
@@ -132,7 +134,7 @@ export class ConsolidationOrchestrator {
     await stopLifecycle(handleFromCtx(this.ctx));
   }
 
-  /** Dispatch to day or night runner based on role. */
+  /** Resolve the role contract, then run the strategy it names. */
   async executeRun(opts: {
     reason: string;
     dryRun?: boolean;
@@ -140,9 +142,7 @@ export class ConsolidationOrchestrator {
     role: string;
   }): Promise<RunSummary> {
     const runId = opts.runId ?? randomUUID();
-    return opts.role === "night-keeper"
-      ? executeRunNight(this.ctx, { ...opts, runId })
-      : executeRunDay(this.ctx, { ...opts, runId });
+    return executeRunForRole(this.ctx, { ...opts, runId });
   }
 }
 

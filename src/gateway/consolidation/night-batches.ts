@@ -9,6 +9,7 @@ import { stepBatch } from "./night-loop-step.js";
 import type { BlockMeta, RecordEntry } from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 
 export interface NightBatchResult {
   anyApplied: boolean;
@@ -27,6 +28,7 @@ export async function runNightBatches(
     dryRun?: boolean;
     runId: string;
     role: string;
+    contract: ResolvedRoleContract;
     runScratch: string;
     batches: RecordEntry[][];
     blocks: BlockMeta[];
@@ -35,19 +37,21 @@ export async function runNightBatches(
     startedMs: number;
   },
 ): Promise<NightBatchResult> {
-  const night = ctx.config.memory.consolidation.night;
+  // Per-run budgets and the overall window come from the role contract
+  // (tz-01 `contract-drives-execution`), not from the global night config.
+  const { caps, maxRunMs } = opts.contract.policy;
   let anyApplied = false;
   let dryRunDiffText: string | undefined;
   let anchoredCursor: string | null = null;
   let skipMergeSeen = false;
-  let remainingDeleteCap = night.deleteCapPerRun;
-  let remainingRewriteCap = night.rewriteCapPerRun;
+  let remainingDeleteCap = caps.deletePerRun;
+  let remainingRewriteCap = caps.rewritePerRun;
   let presentedTotal = 0;
 
   for (let i = 0; i < opts.batches.length; i++) {
-    if (ctx.now() - opts.startedMs > night.maxRunMs) {
+    if (ctx.now() - opts.startedMs > maxRunMs) {
       opts.summary.status = "failed";
-      opts.summary.error = `night maxRunMs exceeded (${night.maxRunMs}ms) after batch ${i}/${opts.batches.length}`;
+      opts.summary.error = `max_run_ms exceeded (${maxRunMs}ms) after batch ${i}/${opts.batches.length}`;
       break;
     }
     const batch = opts.batches[i]!;
@@ -60,7 +64,7 @@ export async function runNightBatches(
       role: opts.role,
       dryRun: !!opts.dryRun,
       scratchDir: batchScratch,
-      isNight: true,
+      contract: opts.contract,
       remainingDeleteCap,
       remainingRewriteCap,
       startedMs: opts.startedMs,
@@ -81,7 +85,7 @@ export async function runNightBatches(
     const step = stepBatch(
       opts.summary,
       batchRes,
-      ctx.now() - opts.startedMs > night.maxRunMs,
+      ctx.now() - opts.startedMs > maxRunMs,
     );
     if (step.exit) break;
     if (step.continueDryRun) continue;

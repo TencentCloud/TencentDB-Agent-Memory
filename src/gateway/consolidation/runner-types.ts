@@ -5,6 +5,7 @@
  */
 
 import type { RecordEntry } from "./diff-builder.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 
 export interface RunBatchArgs {
   records: RecordEntry[];
@@ -14,7 +15,8 @@ export interface RunBatchArgs {
   role: string;
   dryRun: boolean;
   scratchDir: string;
-  isNight: boolean;
+  /** Resolved role contract — the ONLY source of run parameters (tz-01). */
+  contract: ResolvedRoleContract;
   remainingDeleteCap: number;
   remainingRewriteCap: number;
   startedMs: number;

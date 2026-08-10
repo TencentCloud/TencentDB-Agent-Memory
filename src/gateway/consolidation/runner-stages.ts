@@ -25,7 +25,6 @@ import { truncate } from "./chunk.js";
 import { checkCaps } from "./check-caps.js";
 import { readScratchDiff } from "./scratch-diff.js";
 import type { OrchestratorContext } from "./context.js";
-import type { NightConsolidationConfig } from "../../config.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
 
 export interface PreApplyResult {
@@ -39,25 +38,28 @@ export interface PreApplyResult {
 export async function preApply(
   ctx: OrchestratorContext,
   args: RunBatchArgs,
-  cap: NightConsolidationConfig | undefined,
   result: RunBatchResult,
 ): Promise<PreApplyResult> {
+  const contract = args.contract;
+  const chunked = contract.batching.strategy === "bounded-full-store-chunked";
   const dbPath = path.join(ctx.dataDir, "vectors.db");
-  ctx.logger.debug?.(`[stages] preApply start role=${args.role} records=${args.records?.length ?? 0} isNight=${args.isNight}`);
-  const sliceTime = args.isNight ? maxL0RecordedAt(dbPath) : null;
+  ctx.logger.debug?.(
+    `[stages] preApply start role=${args.role} ` +
+      `records=${args.records?.length ?? 0} strategy=${contract.batching.strategy}`,
+  );
+  const sliceTime = chunked ? maxL0RecordedAt(dbPath) : null;
 
   // Manifest baseline per chunk: a previous chunk may have rewritten
   // scene/persona files → a run-start baseline would 409 on chunk 2+.
   const baseline = buildManifestBaseline(ctx.dataDir);
   const diff = buildDiffSection({
     cursorIso: args.cp.l0Cursor,
-    diffCap: cap?.diffCap ?? ctx.config.memory.consolidation.diffCap,
-    diffByteCap:
-      cap?.diffByteCap ?? ctx.config.memory.consolidation.diffByteCap,
+    diffCap: contract.batching.diffCap,
+    diffByteCap: contract.batching.diffByteCap,
     records: args.records,
     overLimitBlocks: args.overLimit,
     checkpointRunAt: args.cp.lastRunAt ?? undefined,
-    idsOnly: args.isNight,
+    idsOnly: contract.batching.idsOnly,
   });
   result.presented = diff.presentedRecordIds.length;
   result.sliceTime = sliceTime ?? null;
@@ -67,7 +69,7 @@ export async function preApply(
   const promptPath = path.join(args.scratchDir, "memory-keeper-prompt.md");
   await fs.promises.writeFile(
     promptPath,
-    composeSessionPrompt(diff.text, args.role, ctx.roleDir, ctx.roleName),
+    composeSessionPrompt(diff.text, contract),
     "utf-8",
   );
   // Diff dup in file (forked task-cycle path б): the role agent reads the
@@ -78,7 +80,7 @@ export async function preApply(
     diff.text,
     "utf-8",
   );
-  await copyKeeperTools(ctx, args.scratchDir);
+  await copyKeeperTools(ctx, args.scratchDir, contract.toolsSubset);
 
   if (args.dryRun) {
     result.status = "dry-run";
@@ -99,6 +101,7 @@ export async function preApply(
     }),
     cwd: args.scratchDir,
     role: args.role,
+    contract,
   });
   result.child = {
     exitCode: childResult.exitCode,
@@ -126,10 +129,9 @@ export async function preApply(
   }
 
   if (
-    cap &&
+    chunked &&
     !checkCaps(
       raw.value,
-      cap,
       args.remainingDeleteCap,
       args.remainingRewriteCap,
       result,

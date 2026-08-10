@@ -11,25 +11,22 @@
  * (resource-loader detectExtensionConflicts → exit 1). The role sub-session
  * runs in its own sandbox (cwd=runs/<role>) and needs only its fork.
  */
-import type { SpawnChildContext } from "./types.js";
-import { resolveRoleRuntimeFromDir } from "./role-runtime.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 
-/** Build --no-extensions/--extension/--skill CLI args from the role runtime. */
-export function buildRoleSpawnArgs(
-  childCtx: SpawnChildContext,
-  roleDir: string,
-): string[] {
-  const roleRt = resolveRoleRuntimeFromDir(childCtx.role, roleDir);
+/** Build --no-extensions/--extension/--skill CLI args from the contract's
+ * instance assets (tz-01: assets come from the resolved contract, never from
+ * a second read of role.json). */
+export function buildRoleSpawnArgs(contract: ResolvedRoleContract): string[] {
   const extraArgs: string[] = [];
-  if (roleRt?.runtime.extensionPath) {
+  if (contract.assets.extensionPath) {
     extraArgs.push(
       "--no-extensions",
       "--extension",
-      roleRt.runtime.extensionPath,
+      contract.assets.extensionPath,
     );
   }
-  if (roleRt?.runtime.skillPath) {
-    extraArgs.push("--skill", roleRt.runtime.skillPath);
+  if (contract.assets.skillPath) {
+    extraArgs.push("--skill", contract.assets.skillPath);
   }
   return extraArgs;
 }

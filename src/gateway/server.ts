@@ -71,6 +71,10 @@ import {
   type MemoryToolsContext,
 } from "./memory-tools.js";
 import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
+import {
+  buildRoleDefaults,
+  buildLauncherDefaults,
+} from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
@@ -166,8 +170,17 @@ export class TdaiGateway {
     // cwd = scratch-dir вне дерева памяти) — a relative-path escape from the
     // child cwd (../persona.md) cannot reach real memory files.
     const gatewayUrl = `http://${this.config.server.host}:${this.config.server.port}`;
+    // Composition root of the role path (tz-01 criterion 7): the global
+    // consolidation knobs are read HERE, once, and handed to the orchestrator
+    // as an explicit snapshot. Nothing under consolidation/ reads them —
+    // role parameters come from the resolved contract, and the snapshot is
+    // only what the LegacyRoleAdapter may fall back to for a legacy role.
+    const consolidationCfg = this.config.memory.consolidation;
     this.orchestrator = new ConsolidationOrchestrator({
       config: this.config,
+      enabled: consolidationCfg.enabled,
+      roleDefaults: buildRoleDefaults(consolidationCfg),
+      launcher: buildLauncherDefaults(consolidationCfg),
       dataDir: this.config.data.baseDir,
       scratchRoot: nodePath.join(
         nodePath.dirname(this.config.data.baseDir),

@@ -19,6 +19,7 @@ import {
 import type { RoleLegacyDefaults } from "./role-contract-types.js";
 
 const LEGACY: RoleLegacyDefaults = {
+  failOpenPromptRoles: ["memory-keeper"],
   model: "legacy/global-model",
   thinking: "legacy-thinking",
   timeoutMs: 600_000,

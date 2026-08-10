@@ -78,6 +78,12 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
   filled("diff_byte_cap", "config.memory.consolidation(.night).diffByteCap");
   filled("caps", "config.memory.consolidation.night.*CapPerRun");
   filled("max_run_ms", "config.memory.consolidation.night.maxRunMs");
+  if (input.missing.includes("tools_subset")) {
+    warnings.push(
+      'legacy fallback: "tools_subset" absent → the whole keeper-tools ' +
+        "catalogue is copied, as before the contract",
+    );
+  }
 
   const model = cfg.model ?? legacy.model;
   const binding: ExecutionBinding = {
@@ -122,10 +128,13 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       file: cfg.prompt_file ?? `${role}.md`,
       path: input.promptPath,
       text: input.promptText,
-      // Legacy default (unchanged): only the day keeper was fail-open.
-      failOnMissing: cfg.fail_on_missing_prompt ?? role !== "memory-keeper",
+      // Legacy default (unchanged): only the fail-open roles named by the
+      // composition root tolerated a missing prompt.
+      failOnMissing:
+        cfg.fail_on_missing_prompt ??
+        !legacy.failOpenPromptRoles.includes(role),
     },
-    toolsSubset: new Set<string>(cfg.tools_subset ?? []),
+    toolsSubset: cfg.tools_subset ? new Set<string>(cfg.tools_subset) : null,
     timeoutMs:
       typeof cfg.timeout_min === "number" && cfg.timeout_min > 0
         ? cfg.timeout_min * 60_000
@@ -159,7 +168,7 @@ export function hashContract(c: ResolvedRoleContract): string {
     criticRole: c.criticRole,
     prompt: { file: c.prompt.file, failOnMissing: c.prompt.failOnMissing },
     promptText: c.prompt.text,
-    toolsSubset: [...c.toolsSubset].sort(),
+    toolsSubset: c.toolsSubset ? [...c.toolsSubset].sort() : null,
     timeoutMs: c.timeoutMs,
     binding: c.binding,
     assets: c.assets,

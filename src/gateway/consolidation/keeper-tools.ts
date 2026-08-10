@@ -36,12 +36,18 @@ export function resolveKeeperToolsDir(): string | null {
 }
 
 /**
- * Copy the static keeper-tools into `<runScratch>/tools/`. FAIL-OPEN: any
- * error (missing dir, fs failure) → warn + continue, never aborts the run.
+ * Copy the role's tools into `<runScratch>/tools/`. Only the files named by
+ * the contract's `tools_subset` are copied — the whole catalogue used to be
+ * cp'd regardless of the contract (tz-01 criterion 3). An empty subset means
+ * the role asked for no tools; nothing is copied and that is logged.
+ *
+ * FAIL-OPEN on infrastructure errors (missing source dir, fs failure): warn +
+ * continue, never aborts the run.
  */
 export async function copyKeeperTools(
   ctx: OrchestratorContext,
   runScratch: string,
+  toolsSubset: ReadonlySet<string> | null,
 ): Promise<string | null> {
   const src = resolveKeeperToolsDir();
   if (!src) {
@@ -51,8 +57,37 @@ export async function copyKeeperTools(
     return null;
   }
   const dst = path.join(runScratch, "tools");
+  if (toolsSubset === null) {
+    // Legacy role with no declared tools: keep the old whole-catalogue copy
+    // (the contract resolver already warned about the missing declaration).
+    try {
+      await fs.promises.cp(src, dst, { recursive: true });
+      return dst;
+    } catch (err) {
+      ctx.logger.warn?.(
+        `[memory-keeper] copy keeper-tools failed (${err instanceof Error ? err.message : String(err)}) — continuing without tools`,
+      );
+      return null;
+    }
+  }
+  if (toolsSubset.size === 0) {
+    ctx.logger.info?.(
+      "[memory-keeper] role contract declares an empty tools_subset — no tools copied",
+    );
+    return null;
+  }
   try {
-    await fs.promises.cp(src, dst, { recursive: true });
+    await fs.promises.mkdir(dst, { recursive: true });
+    for (const tool of toolsSubset) {
+      const from = path.join(src, tool);
+      if (!fs.existsSync(from)) {
+        ctx.logger.warn?.(
+          `[memory-keeper] tools_subset lists "${tool}", which is not in ${src} — skipped`,
+        );
+        continue;
+      }
+      await fs.promises.cp(from, path.join(dst, tool), { recursive: true });
+    }
     return dst;
   } catch (err) {
     ctx.logger.warn?.(

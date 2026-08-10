@@ -12,8 +12,7 @@ import {
   resolveRoleDir,
   buildSessionPrompt as composeSessionPrompt,
 } from "../role-files.js";
-import { loadRoleConfig } from "../role-files.js";
-import { loadRolePromptFromDir } from "./role-dir-loader.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 import type { Logger } from "../../core/types.js";
 
 export const DEFAULT_ROLE_PROMPT = `Ты — memory-keeper «пчёлка» системы памяти tdai-memory.
@@ -77,34 +76,24 @@ export const DEFAULT_TASK_PROMPT = `Выполни консолидацию па
 НЕ пиши файлы вне scratch-каталога. НЕ вызывай POST-роуты.`;
 
 /**
- * Build the session prompt: role.md (auditors pattern) + the diff section.
- * Night role is FAIL-LOUD: a missing night-keeper.md must refuse the run,
- * never silently run with day semantics. Day keeper keeps fail-open fallback.
+ * Build the session prompt: the contract's prompt + the diff section.
+ *
+ * The prompt was already resolved (and `fail_on_missing_prompt` already
+ * enforced) by the role-contract resolver — a role whose prompt is missing
+ * under a fail-loud contract never reaches this point. Reaching it with a
+ * null prompt therefore means a fail-OPEN contract, which keeps the built-in
+ * default. No role NAME is consulted here any more (tz-01 criterion 2).
  */
 export function buildSessionPrompt(
   diffText: string,
-  role: string,
-  roleDir: string,
-  fallbackRoleName: string,
+  contract: ResolvedRoleContract,
 ): string {
-  // roleDir here is the roles/ directory (canonical per-role subdirs
-  // <role>/prompt.md). loadRolePromptFromDir resolves canonical + bare flat;
-  // loadRolePrompt(role, roleDir) would build a doubled path
-  // (roleDir/.pi/.../roles/<role>) and fail to find canonical prompts.
-  const rolePrompt = loadRolePromptFromDir(role, roleDir);
-  if (!rolePrompt) {
-    if (role === "night-keeper") {
-      throw new Error(
-        `[memory-keeper] role file "night-keeper.md" is missing in ${roleDir} — ` +
-          "night-keeper run refused (fail-loud, not day semantics)",
-      );
-    }
-    return composeSessionPrompt(DEFAULT_ROLE_PROMPT, diffText);
-  }
-  return composeSessionPrompt(rolePrompt, diffText);
+  return composeSessionPrompt(
+    contract.prompt.text ?? DEFAULT_ROLE_PROMPT,
+    diffText,
+  );
 }
 
 /** Re-export for backwards-compat with the original orchestrator.ts. */
 export { resolveRoleDir };
-export { loadRoleConfig };
 export type { Logger };

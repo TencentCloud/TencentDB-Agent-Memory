@@ -26,6 +26,10 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { parseConfig } from "../../config.js";
 import { ConsolidationOrchestrator } from "./orchestrator.js";
+import {
+  buildRoleDefaults,
+  buildLauncherDefaults,
+} from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import { createRequire } from "node:module";
@@ -300,6 +304,9 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     } as GatewayConfig;
     const orch = new ConsolidationOrchestrator({
       config,
+      enabled: config.memory.consolidation.enabled,
+      roleDefaults: buildRoleDefaults(config.memory.consolidation),
+      launcher: buildLauncherDefaults(config.memory.consolidation),
       dataDir,
       scratchRoot,
       logger: silentLogger,
@@ -376,16 +383,34 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     expect(s.rolePrompt).toBe("ROLE-PROMPT-dedup-daily");
   });
 
+  it("tools are the contract's tools_subset, not the whole catalogue (criterion 3)", async () => {
+    // The ONE intended surface change of tz-01: dedup-daily declares two of
+    // the four scripts, and now receives exactly those two. memory-keeper and
+    // night-keeper declare all four, so their surfaces stay byte-identical —
+    // which is what the parity digests below assert.
+    const dedup = await captureSurface("dedup-daily");
+    expect(dedup.tools).toEqual(["fetch_dups.py", "fetch_records.py"]);
+    const keeper = await captureSurface("memory-keeper");
+    expect(keeper.tools).toEqual([
+      "dump_bullets.py",
+      "fetch_blocks.py",
+      "fetch_dups.py",
+      "fetch_records.py",
+    ]);
+  });
+
   it("parity digests of all three roles (criterion 9 — must not move)", async () => {
     const digests: Record<string, string> = {};
     for (const role of Object.keys(ROLE_FIXTURES)) {
       digests[role] = digest(await captureSurface(role));
     }
     // Pinned on the legacy path; the generic contract-driven path must
-    // reproduce byte-identical surfaces.
+    // reproduce byte-identical surfaces. `dedup-daily` moved exactly once,
+    // when tools stopped being the whole catalogue (see the test above);
+    // memory-keeper and night-keeper never moved.
     expect(digests).toMatchInlineSnapshot(`
       {
-        "dedup-daily": "9c687f6a99a873e7",
+        "dedup-daily": "b0620d5eaa355a9b",
         "memory-keeper": "15d145a549408a2c",
         "night-keeper": "fead96eadceea8bd",
       }

@@ -1,17 +1,18 @@
 /**
- * Mechanical per-run caps check (night only).
+ * Mechanical per-run caps check (chunked strategy).
+ *
+ * Budgets come from the role contract (`policy.caps`), not from the global
+ * night config — tz-01 `contract-drives-execution`.
  *
  * Splits from runner-stages.ts to keep that file ≤150 lines. Returns
  * true on pass, false on overflow (with result.error + result.status
  * mutated to "failed").
  */
 
-import type { NightConsolidationConfig } from "../../config.js";
 import type { RunBatchResult } from "./runner-types.js";
 
 export function checkCaps(
   rawDiff: unknown,
-  cap: NightConsolidationConfig,
   remainingDeleteCap: number,
   remainingRewriteCap: number,
   result: RunBatchResult,
@@ -32,12 +33,12 @@ export function checkCaps(
   result.deleteOps = deleteOps + mergeMembers;
   result.rewriteOps = rewriteOps;
   if (result.deleteOps > remainingDeleteCap) {
-    result.error = `night delete cap exceeded (batch deleteL1=${deleteOps} + mergeMembers=${mergeMembers} > remaining deleteCapPerRun=${remainingDeleteCap}) — apply refused (mechanical gate)`;
+    result.error = `delete cap exceeded (batch deleteL1=${deleteOps} + mergeMembers=${mergeMembers} > remaining delete_per_run=${remainingDeleteCap}) — apply refused (mechanical gate)`;
     result.status = "failed";
     return false;
   }
   if (result.rewriteOps > remainingRewriteCap) {
-    result.error = `night rewrite cap exceeded (batch rewriteRecord=${rewriteOps} > remaining rewriteCapPerRun=${remainingRewriteCap}) — apply refused (mechanical gate)`;
+    result.error = `rewrite cap exceeded (batch rewriteRecord=${rewriteOps} > remaining rewrite_per_run=${remainingRewriteCap}) — apply refused (mechanical gate)`;
     result.status = "failed";
     return false;
   }
