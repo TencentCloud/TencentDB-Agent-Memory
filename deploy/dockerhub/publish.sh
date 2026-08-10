@@ -57,7 +57,7 @@ TARGET="${1:-}"
 case "$TARGET" in
   memory-core|memory-proxy|memory-hub|all) ;;
   -h|--help|"") usage ;;
-  *) die "未知组件: $TARGET（可选 memory-core | memory-proxy | memory-hub | all）" ;;
+  *) die "未知组件: ${TARGET}（可选 memory-core | memory-proxy | memory-hub | all）" ;;
 esac
 
 [[ -n "${VERSION:-}" ]] || die "请显式指定 VERSION，例：VERSION=1.0.0 ./publish.sh $TARGET"
@@ -196,7 +196,7 @@ JSON
   scan "$ctx" src package.json packages
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    ok "DRY_RUN=1 → context 就绪在 $ctx，跳过 build/push"
+    ok "DRY_RUN=1 → context 就绪在 ${ctx}，跳过 build/push"
     return 0
   fi
   build_image "$image" "$ctx"
@@ -257,7 +257,7 @@ build_memory_hub() {
   scan "$ctx" panel knowledge Dockerfile start-combined.sh
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    ok "DRY_RUN=1 → context 就绪在 $ctx，跳过 build/push"
+    ok "DRY_RUN=1 → context 就绪在 ${ctx}，跳过 build/push"
     return 0
   fi
   build_image "$image" "$ctx"
