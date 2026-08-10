@@ -27,7 +27,10 @@ export async function applyDeletes(
   result: ApplyResult,
 ): Promise<void> {
   if (!ops || ops.length === 0) return;
-  const rows = await fetchMetaRows(deps.dataDir, ops.map((o) => o.id));
+  const rows = await fetchMetaRows(
+    deps.dataDir,
+    ops.map((o) => o.id),
+  );
 
   const toDelete: string[] = [];
   for (const op of ops) {

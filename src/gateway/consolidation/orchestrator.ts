@@ -61,6 +61,7 @@ export class ConsolidationOrchestrator {
       config: opts.config,
       enabled: opts.enabled,
       roleDefaults: opts.roleDefaults,
+      applyGateMode: opts.applyGateMode ?? "shadow",
       launcher: opts.launcher,
       dataDir: opts.dataDir,
       scratchRoot: opts.scratchRoot,
@@ -70,7 +71,8 @@ export class ConsolidationOrchestrator {
       embeddingService: opts.embeddingService,
       now: opts.now ?? (() => Date.now()),
       spawnChild: opts.spawnChild ?? ((c) => defaultSpawnChild(this.ctx, c)),
-      applyDiff: opts.applyDiff ?? ((b) => defaultApplyDiff(this.ctx, b)),
+      applyDiff:
+        opts.applyDiff ?? ((b, run) => defaultApplyDiff(this.ctx, b, run)),
       roleName: opts.roleName ?? "memory-keeper",
       roleDir: opts.roleDir ?? resolveRoleDir(),
       ownerPid: process.pid,

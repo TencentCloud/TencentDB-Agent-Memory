@@ -20,17 +20,29 @@
  *   - apply-executor/apply-route.ts        — handleMemoryApply + syncSceneIndex
  *   - src/gateway/limits.ts                — SCENE, PERSONA, MAX, META_START, META_END constants
  */
-import { parseRequest, validateSemantics, assertOpsSubset } from "./apply-executor/validate.js";
+import {
+  parseRequest,
+  validateSemantics,
+  assertOpsSubset,
+} from "./apply-executor/validate.js";
 import { checkManifest } from "./apply-executor/manifest.js";
+import { runApplyGate } from "./apply-executor/gate.js";
 import { applyMerges } from "./apply-executor/apply-ops-merge.js";
 import { applyRewritesRecords } from "./apply-executor/apply-ops-record.js";
-import { applyDeletes, applyRewrites } from "./apply-executor/apply-ops-rewrite.js";
+import {
+  applyDeletes,
+  applyRewrites,
+} from "./apply-executor/apply-ops-rewrite.js";
 import { syncSceneIndex } from "./apply-executor/apply-route.js";
 import { verifyCounts } from "./apply-executor/verify-counts.js";
-import { fetchMetaRows, resolveWithinDataDir } from "./apply-executor/apply-helpers.js";
+import {
+  fetchMetaRows,
+  resolveWithinDataDir,
+} from "./apply-executor/apply-helpers.js";
 import { hasApplied } from "./apply-executor/apply-route-helpers.js";
 import { EMPTY_RESULT, type ApplyResult } from "./apply-executor/types.js";
 import type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
+import type { RunContext } from "./apply-executor/run-context.js";
 import {
   ApplyRuntimeError,
   ApplyValidationError,
@@ -56,6 +68,8 @@ export type {
 export type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
 export { EMPTY_RESULT } from "./apply-executor/types.js";
 export { assertOpsSubset } from "./apply-executor/validate.js";
+export { countCapUsage } from "./apply-executor/run-context.js";
+export type { RunContext, GateMode } from "./apply-executor/run-context.js";
 export {
   handleMemoryApply,
   type ApplyRouteContext,
@@ -81,13 +95,16 @@ export class ApplyExecutor {
    * returns an ApplyResult with status applied/aborted/failed and the HTTP
    * statusCode for aborts. Throws only on unexpected internal errors.
    */
-  async apply(rawBody: unknown): Promise<ApplyResult> {
+  async apply(rawBody: unknown, run?: RunContext): Promise<ApplyResult> {
     const result = EMPTY_RESULT();
     try {
       // 1. zod validation (strict, readable errors) — before any mutation.
       const parsed = parseRequest(rawBody);
       // 2. Semantic guardrails (DB reads) — before any mutation.
       await validateSemantics(this.deps, parsed);
+      // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
+      // ONLY call site — a second one would be a way past it.
+      runApplyGate(this.deps, parsed.diff, run);
       // 3. Trust-boundary manifest recheck — before any mutation.
       checkManifest(this.deps, parsed);
       // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes → files.

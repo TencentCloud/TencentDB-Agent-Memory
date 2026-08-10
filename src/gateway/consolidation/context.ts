@@ -27,6 +27,9 @@ export interface OrchestratorContext {
   /** Global fallbacks the LegacyRoleAdapter may use, snapshotted by the
    * composition root (server.ts) — see `contract-drives-execution`. */
   roleDefaults: RoleLegacyDefaults;
+  /** Apply-gate mode (tz-09 Ф3) — read once at the composition root from
+   * `memory.consolidation.applyGateMode`, never from inside consolidation/. */
+  applyGateMode: "shadow" | "enforce";
   /** Host launch parameters (binary + fixed flags); tz-06 owns their move
    * into a launcher module. */
   launcher: LauncherDefaults;

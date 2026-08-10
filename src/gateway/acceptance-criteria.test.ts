@@ -475,3 +475,51 @@ describe("tz-01 criterion 8 — no name-based dispatch", () => {
     expect(orchestrator).toContain('opts.roleName ?? "memory-keeper"');
   });
 });
+
+// ============================
+// tz-09 criterion 4 — `[a]` no path in apply() around assertOpsSubset + caps
+// ============================
+
+describe("tz-09 criterion 4 — apply() has no path around the gate", () => {
+  it("runApplyGate is called exactly once in apply(), before every mutation", () => {
+    const src = readRepo("src/gateway/apply-executor.ts");
+    const lines = codeOnly(src);
+    const gateCalls = lines.filter((l) => l.includes("runApplyGate("));
+    expect(gateCalls).toHaveLength(1);
+    // …and it must be an unconditional STATEMENT. `if (…) runApplyGate(…)`
+    // keeps the call count at one while opening a way past the gate, which
+    // is exactly the shape criterion 4 forbids.
+    expect(gateCalls[0]?.trim().startsWith("runApplyGate(")).toBe(true);
+
+    const idx = (needle: string): number =>
+      lines.findIndex((l) => l.includes(needle));
+    const gateAt = idx("runApplyGate(");
+    // Every mutation entry point must come AFTER the gate line.
+    for (const mutation of [
+      "applyMerges(",
+      "applyRewritesRecords(",
+      "applyDeletes(",
+      "applyRewrites(",
+    ]) {
+      const at = idx(mutation);
+      expect(at, `${mutation} must appear after the gate`).toBeGreaterThan(
+        gateAt,
+      );
+    }
+  });
+
+  it("the gate module is the ONLY caller of assertOpsSubset in the apply path", () => {
+    const callers: string[] = [];
+    const dir = path.join(REPO_ROOT, "src/gateway/apply-executor");
+    for (const entry of fs.readdirSync(dir)) {
+      if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
+      const src = fs.readFileSync(path.join(dir, entry), "utf-8");
+      // The definition lives in validate.ts; every other mention is a call.
+      if (entry === "validate.ts") continue;
+      if (codeOnly(src).some((l) => l.includes("assertOpsSubset("))) {
+        callers.push(entry);
+      }
+    }
+    expect(callers).toEqual(["gate.ts"]);
+  });
+});

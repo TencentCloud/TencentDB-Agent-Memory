@@ -25,7 +25,10 @@ export async function applyRewritesRecords(
   if (!ops || ops.length === 0) return;
   const { logger, dataDir } = deps;
 
-  const rows = await fetchMetaRows(dataDir, ops.map((o) => o.id));
+  const rows = await fetchMetaRows(
+    dataDir,
+    ops.map((o) => o.id),
+  );
   for (const op of ops) {
     const row = rows.get(op.id);
     if (!row) {

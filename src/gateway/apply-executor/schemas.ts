@@ -20,11 +20,7 @@ import {
 /** All apply ops a diff may carry. Used as the set-membership domain for
  * assertOpsSubset (the role's ops_subset is a subset of this). */
 export type ApplyOp =
-  | "deleteL1"
-  | "merge"
-  | "rewriteBlock"
-  | "rewriteRecord"
-  | "rewritePersona";
+  "deleteL1" | "merge" | "rewriteBlock" | "rewriteRecord" | "rewritePersona";
 
 /** Untyped diff shape (post-parse; only the ops + payloads we act on). */
 export interface ApplyDiff {

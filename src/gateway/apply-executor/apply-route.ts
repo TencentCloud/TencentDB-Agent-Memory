@@ -25,7 +25,9 @@ export interface ApplyRouteContext {
   logger: Logger;
 }
 
-export async function syncSceneIndex(deps: ApplyExecutorDeps): Promise<boolean> {
+export async function syncSceneIndex(
+  deps: ApplyExecutorDeps,
+): Promise<boolean> {
   try {
     const allProjects = (
       sceneIndex as typeof sceneIndex & {

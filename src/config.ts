@@ -166,6 +166,13 @@ export interface ConsolidationConfig {
    */
   contractDispatch: boolean;
   /**
+   * Apply-gate mode (tz-09 Ф3): "shadow" logs a role-scoped violation and
+   * lets the apply through, "enforce" refuses it before any mutation.
+   * Default shadow — the gate ships dark and arming it is an operator
+   * decision after a day without divergences (tz-09 R1).
+   */
+  applyGateMode: "shadow" | "enforce";
+  /**
    * Night-run parameters (`memory.consolidation.night`). The night-run
    * TRIGGER (schedule/threshold/timezone) lives in `memory.nightRun`;
    * the run PARAMETERS live here. Split is deliberate — one source per
@@ -760,6 +767,9 @@ export function parseConfig(
           "killPolicy",
         ) as ConsolidationConfig["killPolicy"]) ?? "group-kill",
       contractDispatch: bool(consolidationGroup, "contractDispatch") ?? true,
+      applyGateMode:
+        (str(consolidationGroup, "applyGateMode") as
+          "shadow" | "enforce" | undefined) ?? "shadow",
       // Night-run parameters (trigger lives in memory.nightRun; run params here).
       night: (() => {
         const nightGroup = obj(consolidationGroup, "night");
@@ -1000,6 +1010,7 @@ const consolidationSchema = z.strictObject({
   diffByteCap: z.number().int().positive().optional(),
   killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
   contractDispatch: z.boolean().optional(),
+  applyGateMode: z.enum(["shadow", "enforce"]).optional(),
   night: z
     .strictObject({
       diffCap: z.number().int().positive().optional(),

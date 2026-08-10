@@ -19,6 +19,7 @@ import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import type { ApplyResult } from "../apply-executor.js";
 import type { ChildRunResult } from "./child-spawn.js";
+import type { RunContext } from "../apply-executor.js";
 import type { ProbeResult } from "../probe.js";
 import type {
   LauncherDefaults,
@@ -79,7 +80,10 @@ export interface SpawnChildContext {
 }
 
 export type SpawnChildFn = (ctx: SpawnChildContext) => Promise<ChildRunResult>;
-export type ApplyDiffFn = (body: unknown) => Promise<ApplyResult>;
+export type ApplyDiffFn = (
+  body: unknown,
+  run?: RunContext,
+) => Promise<ApplyResult>;
 
 /**
  * Night full-store sweep bound. Per-batch apply presents ≤ night.diffCap ids
@@ -121,6 +125,8 @@ export interface OrchestratorOptions {
   spawnChild?: SpawnChildFn;
   /** Injectable applier (tests may stub the P4 executor). */
   applyDiff?: ApplyDiffFn;
+  /** tz-09 Ф3 gate mode; omitted → shadow. */
+  applyGateMode?: "shadow" | "enforce";
   roleName?: string;
   /** Role dir override (tests point at a scratch dir; default resolveRoleDir()). */
   roleDir?: string;

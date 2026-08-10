@@ -18,8 +18,7 @@ import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 export async function applyMerges(
   deps: ApplyExecutorDeps,
   ops:
-    | Array<{ cluster: string[]; target: string; content: string }>
-    | undefined,
+    Array<{ cluster: string[]; target: string; content: string }> | undefined,
   result: ApplyResult,
 ): Promise<void> {
   if (!ops || ops.length === 0) return;

@@ -13,9 +13,7 @@ import path from "node:path";
 import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 import type { ApplyResult } from "./types.js";
 
-export function parseMetadata(
-  raw: string,
-): ExtractedMemory["metadata"] {
+export function parseMetadata(raw: string): ExtractedMemory["metadata"] {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed))

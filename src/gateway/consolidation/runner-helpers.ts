@@ -10,7 +10,11 @@ import { runRecallProbe } from "../probe.js";
 import type { ChildProcess } from "node:child_process";
 import { runKeeperProcess } from "./keeper-run.js";
 import { killChildGroup } from "./child-spawn.js";
-import { ApplyExecutor, type ApplyResult } from "../apply-executor.js";
+import {
+  ApplyExecutor,
+  type ApplyResult,
+  type RunContext,
+} from "../apply-executor.js";
 import { buildRoleSpawnArgs } from "./role-spawn-args.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary, SpawnChildContext } from "./types.js";
@@ -88,10 +92,15 @@ export async function defaultSpawnChild(
   });
 }
 
-/** Default applier: instantiate ApplyExecutor and call apply(body). */
+/** Default applier: instantiate ApplyExecutor and call apply(body).
+ *
+ * tz-09 Ф3: the role-scoped policy travels as the SECOND argument, never in
+ * the body — `applyRequestSchema` is a strict object, and a policy inside the
+ * payload is a policy the payload's author can rewrite. */
 export async function defaultApplyDiff(
   ctx: OrchestratorContext,
   body: unknown,
+  run?: RunContext,
 ): Promise<ApplyResult> {
   const executor = new ApplyExecutor({
     dataDir: ctx.dataDir,
@@ -99,5 +108,5 @@ export async function defaultApplyDiff(
     vectorStore: ctx.vectorStore?.(),
     embeddingService: ctx.embeddingService?.(),
   });
-  return executor.apply(body);
+  return executor.apply(body, run);
 }

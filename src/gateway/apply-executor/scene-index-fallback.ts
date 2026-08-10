@@ -33,7 +33,9 @@ export async function syncSceneIndexPerProject(
     const blocksDir = path.join(blocksRoot, slug);
     let files: string[];
     try {
-      files = (await fs.promises.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+      files = (await fs.promises.readdir(blocksDir)).filter((f) =>
+        f.endsWith(".md"),
+      );
     } catch {
       continue;
     }
@@ -41,7 +43,10 @@ export async function syncSceneIndexPerProject(
     const entries: sceneIndex.SceneIndexEntry[] = [];
     for (const file of files) {
       try {
-        const raw = await fs.promises.readFile(path.join(blocksDir, file), "utf-8");
+        const raw = await fs.promises.readFile(
+          path.join(blocksDir, file),
+          "utf-8",
+        );
         const block = parseSceneBlock(raw, file);
         entries.push({
           filename: file,
@@ -56,8 +61,17 @@ export async function syncSceneIndexPerProject(
       }
     }
 
-    const indexPath = path.join(deps.dataDir, ".metadata", "scene_index", `${slug}.json`);
+    const indexPath = path.join(
+      deps.dataDir,
+      ".metadata",
+      "scene_index",
+      `${slug}.json`,
+    );
     await fs.promises.mkdir(path.dirname(indexPath), { recursive: true });
-    await fs.promises.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+    await fs.promises.writeFile(
+      indexPath,
+      JSON.stringify(entries, null, 2),
+      "utf-8",
+    );
   }
 }

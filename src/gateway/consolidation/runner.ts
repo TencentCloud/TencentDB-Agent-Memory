@@ -41,11 +41,21 @@ export async function runBatch(
     const pre = await preApply(ctx, args, result);
     if (!pre.ok || !pre.baseline || pre.rawDiff === undefined) return result;
 
-    const applyResult = await ctx.applyDiff({
-      diff: pre.rawDiff,
-      manifest: { baseline: manifestShaMap(pre.baseline) },
-      context: { presentedRecordIds: pre.presentedRecordIds ?? [] },
-    });
+    const applyResult = await ctx.applyDiff(
+      {
+        diff: pre.rawDiff,
+        manifest: { baseline: manifestShaMap(pre.baseline) },
+        context: { presentedRecordIds: pre.presentedRecordIds ?? [] },
+      },
+      // tz-09 Ф3: what this run may do comes from the CONTRACT, alongside the
+      // body — never inside it.
+      {
+        runId: args.runId,
+        opsSubset: args.contract.policy.opsSubset,
+        caps: args.contract.policy.caps,
+        gateMode: ctx.applyGateMode,
+      },
+    );
     recordApplyResult(result, applyResult);
     return result;
   } catch (err) {
