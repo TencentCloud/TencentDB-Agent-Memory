@@ -77,6 +77,7 @@ import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
 import { listRoleContracts } from "./consolidation/role-contract.js";
+import { deprecationNotice } from "./consolidation/launchers/pi-config.js";
 import { CleanupTimer, runCleanup } from "./cleanup.js";
 import { listRecentRuns } from "./control-plane/run-repo.js";
 import nodeFs from "node:fs";
@@ -175,6 +176,10 @@ export class TdaiGateway {
     // role parameters come from the resolved contract, and the snapshot is
     // only what the LegacyRoleAdapter may fall back to for a legacy role.
     const consolidationCfg = this.config.memory.consolidation;
+    // tz-06 Ф1: legacy launcher keys keep working, but silently — an operator
+    // whose config still says `piBinary` has no way to learn it moved.
+    const notice = deprecationNotice(consolidationCfg.deprecatedLauncherKeys);
+    if (notice !== "") this.logger.warn?.(`[config] ${notice}`);
     this.orchestrator = new ConsolidationOrchestrator({
       config: this.config,
       enabled: consolidationCfg.enabled,

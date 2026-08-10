@@ -139,6 +139,8 @@ export function deprecationNotice(deprecated: string[]): string {
   return (
     `memory.consolidation.${deprecated.join("/")} is deprecated — ` +
     `move it to memory.consolidation.launchers.${PI_LAUNCHER_ID}.` +
-    `{binary,flags}. The old keys still work for now.`
+    `{binary,flags}. The old keys still work for now — but the session ` +
+    `flags among them (${LAUNCHER_OWNED_FLAGS.join(", ")}) are IGNORED: ` +
+    `the launcher owns the session (tz-06 Ф3).`
   );
 }
