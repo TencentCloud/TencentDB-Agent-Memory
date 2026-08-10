@@ -16,18 +16,17 @@ import { parseSceneBlock } from "../../core/scene/scene-format.js";
 import * as sceneIndex from "../../core/scene/scene-index.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 
+/**
+ * @param slugs exactly the projects to rebuild. Reading them from the CALLER
+ * and not from a `readdir` of `scene_blocks/` is the point (tz-02 критерий
+ * 1c): a scan answers "what is on disk now", which includes projects a
+ * concurrent run is writing and has nothing to do with this diff.
+ */
 export async function syncSceneIndexPerProject(
   deps: ApplyExecutorDeps,
+  slugs: ReadonlySet<string>,
 ): Promise<void> {
   const blocksRoot = path.join(deps.dataDir, "scene_blocks");
-  let slugs: string[];
-  try {
-    slugs = (await fs.promises.readdir(blocksRoot, { withFileTypes: true }))
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  } catch {
-    return; // no scene_blocks yet
-  }
 
   for (const slug of slugs) {
     const blocksDir = path.join(blocksRoot, slug);

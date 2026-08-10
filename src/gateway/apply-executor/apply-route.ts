@@ -11,7 +11,6 @@
 
 import type http from "node:http";
 import { parseJsonBody, sendJson, sendError } from "../http-utils.js";
-import * as sceneIndex from "../../core/scene/scene-index.js";
 import type { TdaiCore } from "../../core/tdai-core.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
@@ -25,20 +24,19 @@ export interface ApplyRouteContext {
   logger: Logger;
 }
 
+/**
+ * @param slugs the projects the diff touched (tz-02 критерий 1c). An empty
+ * set is "nothing to rebuild" and returns immediately — the module-wide
+ * `syncSceneIndexAllProjects` is deliberately NOT called any more, because it
+ * rewrites the index of every project on every apply.
+ */
 export async function syncSceneIndex(
   deps: ApplyExecutorDeps,
+  slugs: ReadonlySet<string>,
 ): Promise<boolean> {
+  if (slugs.size === 0) return true;
   try {
-    const allProjects = (
-      sceneIndex as typeof sceneIndex & {
-        syncSceneIndexAllProjects?: (dataDir: string) => Promise<unknown>;
-      }
-    ).syncSceneIndexAllProjects;
-    if (typeof allProjects === "function") {
-      await allProjects(deps.dataDir);
-    } else {
-      await syncSceneIndexPerProject(deps);
-    }
+    await syncSceneIndexPerProject(deps, slugs);
     return true;
   } catch (err) {
     deps.logger.warn?.(

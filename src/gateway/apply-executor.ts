@@ -28,6 +28,7 @@ import {
 import { checkManifest } from "./apply-executor/manifest.js";
 import { runApplyGate } from "./apply-executor/gate.js";
 import { resolveRunPolicy } from "./apply-executor/run-policy.js";
+import { touchedSlugs } from "./apply-executor/touched-slugs.js";
 import { applyMutations } from "./apply-executor/mutate.js";
 import { withStoreApplyLock } from "./apply-executor/store-lock.js";
 import {
@@ -124,20 +125,28 @@ export class ApplyExecutor {
       // ONLY call site — a second one would be a way past it.
       scopedForFinish = scoped;
       runApplyGate(this.deps, parsed.diff, scoped);
-      // 3-4. Critical section (tz-09 Ф7): the manifest recheck and every
-      // mutation run under ONE store-wide lock. The baseline is only worth
-      // rechecking while nobody else can write between the check and the
-      // first mutation. Inside it, the run passes through the single door
-      // into `applying`, so two handlers of the same run cannot both mutate.
+      // 3-5. Critical section (tz-09 Ф7, tz-02 критерий 1a): the manifest
+      // recheck, every mutation AND the index rebuild run under ONE
+      // store-wide lock. The baseline is only worth rechecking while nobody
+      // else can write between the check and the first mutation. Inside it,
+      // the run passes through the single door into `applying`, so two
+      // handlers of the same run cannot both mutate.
+      //
+      // The rebuild belongs inside for a reason of its own: two runs writing
+      // DIFFERENT files of the same slug do not contend on any file, but they
+      // do contend on that slug's index, which is written afterwards and
+      // without an atomic swap — so outside the lock the later rebuild could
+      // publish a snapshot taken before the earlier write.
       const onOp = journalFor(this.deps, parsed.diff, scoped);
       await withStoreApplyLock(this.deps.dataDir, async () => {
         checkManifest(this.deps, parsed);
         entered = enterApplying(this.deps, scoped);
         await applyMutations(this.deps, parsed.diff, result, onOp);
+        result.sceneIndexSynced = await syncSceneIndex(
+          this.deps,
+          touchedSlugs(parsed.diff),
+        );
       });
-
-      // 5. Scene index rebuild after file rewrites.
-      result.sceneIndexSynced = await syncSceneIndex(this.deps);
       if (!result.sceneIndexSynced) {
         result.status = "failed";
         result.statusCode = 500;

@@ -41,7 +41,11 @@ describe("tz-02 Ф0 characterization — scenes and scratch as they are", () => 
     expect(gate.tryAcquire("memory-keeper")).toBeNull();
   });
 
-  it("one apply rebuilds the index of EVERY slug, not the touched one", async () => {
+  // Ф0 characterized the opposite: ANY apply rebuilt EVERY slug's index, so a
+  // persona-only apply bumped the mtime of a project it never touched. Ф1
+  // narrows the rebuild to the slugs the diff names, and this is the test that
+  // now pins the new behaviour.
+  it("a rebuild touches only the slugs it was given", async () => {
     const blocks = path.join(dir, "scene_blocks");
     for (const slug of ["project-a", "project-b"]) {
       fs.mkdirSync(path.join(blocks, slug), { recursive: true });
@@ -55,21 +59,41 @@ describe("tz-02 Ф0 characterization — scenes and scratch as they are", () => 
       logger: silent,
     } as unknown as ApplyExecutorDeps;
 
-    expect(await syncSceneIndex(deps)).toBe(true);
+    const both = new Set(["project-a", "project-b"]);
+    expect(await syncSceneIndex(deps, both)).toBe(true);
     const indexB = path.join(dir, ".metadata", "scene_index", "project-b.json");
     const before = fs.statSync(indexB).mtimeMs;
 
-    // Touch ONLY project-a, then sync again.
+    // Touch ONLY project-a, then sync ONLY project-a.
     fs.writeFileSync(
       path.join(blocks, "project-a", "scene-1.md"),
       "# scene\n\nchanged\n",
     );
     await new Promise((r) => setTimeout(r, 10));
-    expect(await syncSceneIndex(deps)).toBe(true);
+    expect(await syncSceneIndex(deps, new Set(["project-a"]))).toBe(true);
 
-    // The untouched project's index was rewritten anyway — this is what Ф2
-    // narrows, and why a claim model would otherwise need every slug.
-    expect(fs.statSync(indexB).mtimeMs).toBeGreaterThan(before);
+    expect(fs.statSync(indexB).mtimeMs).toBe(before);
+    const indexA = path.join(dir, ".metadata", "scene_index", "project-a.json");
+    expect(fs.readFileSync(indexA, "utf-8")).toContain("scene-1.md");
+  });
+
+  // An empty set is "nothing to rebuild", never "rebuild everything" — a
+  // persona-only apply must not touch a single index.
+  it("an empty slug set rebuilds nothing", async () => {
+    const blocks = path.join(dir, "scene_blocks");
+    fs.mkdirSync(path.join(blocks, "project-a"), { recursive: true });
+    fs.writeFileSync(
+      path.join(blocks, "project-a", "scene-1.md"),
+      "# scene\n\na\n",
+    );
+    const deps = {
+      dataDir: dir,
+      logger: silent,
+    } as unknown as ApplyExecutorDeps;
+    expect(await syncSceneIndex(deps, new Set())).toBe(true);
+    expect(fs.existsSync(path.join(dir, ".metadata", "scene_index"))).toBe(
+      false,
+    );
   });
 
   it("inline L2 is a no-op while consolidation is enabled (the gate stays)", async () => {
