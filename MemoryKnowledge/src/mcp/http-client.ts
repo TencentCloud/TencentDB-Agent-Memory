@@ -10,10 +10,15 @@ import { createLogger } from "../logger.js";
 
 const log = createLogger("mcp-http");
 
+/** Default per-call timeout in ms; aborts a request if the upstream never responds. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 export interface HttpClientOptions {
   baseUrl: string;
   /** Optional bearer token for auth. */
   token?: string;
+  /** Optional per-call timeout in ms (default: 30000). */
+  timeoutMs?: number;
 }
 
 export interface ApiResponse {
@@ -45,6 +50,7 @@ export async function callApi(
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
