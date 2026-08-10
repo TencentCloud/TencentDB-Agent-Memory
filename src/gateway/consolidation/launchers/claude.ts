@@ -11,21 +11,12 @@
  * a per-request thinking level) is declared MISSING instead of approximated —
  * that is what makes `host-incompatible` mean something (tz-06 R2/L5).
  */
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { runChildProcess } from "./child-process.js";
-import { killChildGroup } from "../child-spawn.js";
-import { ATTEMPTS_DIR, stripOwnedFlags } from "./pi-config.js";
-import { classifyLaunchError } from "./spawn-errors.js";
+import { stripOwnedFlags } from "./pi-config.js";
+import { attemptSessionDir, readSystemPrompt, startHosted } from "./start.js";
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
-import type {
-  HostRunResult,
-  LaunchInput,
-  LaunchOutcome,
-  RoleLauncher,
-} from "./types.js";
+import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
 
 export const CLAUDE_LAUNCHER_ID = "claude";
 export const DEFAULT_CLAUDE_BINARY = "claude";
@@ -72,73 +63,20 @@ export function createClaudeLauncher(
     id: CLAUDE_LAUNCHER_ID,
     capabilities: CLAUDE_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
-      const sessionDir = path.join(
-        input.cwd,
-        ATTEMPTS_DIR,
-        input.attemptId,
-        "session",
-      );
-      fs.mkdirSync(sessionDir, { recursive: true });
+      const sessionRef = attemptSessionDir(input);
+      const prompt = readSystemPrompt(input);
+      if (!prompt.ok) return prompt.outcome;
 
-      let systemPrompt: string;
-      try {
-        systemPrompt = fs.readFileSync(input.promptPath, "utf-8");
-      } catch (err) {
-        // The pipeline wrote this file; an unreadable one is the host side
-        // refusing to start, not the role failing.
-        return {
-          ok: false,
-          error: {
-            kind: "permission-denied",
-            message: `system prompt unreadable: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          },
-        };
-      }
-
-      const sessionId = randomUUID();
-      let cancel: (() => void) | undefined;
-      const completion: Promise<HostRunResult> = runChildProcess({
+      return startHosted({
         binary: settings.binary,
-        args: claudeArgs(settings, input, sessionId, systemPrompt),
-        cwd: input.cwd,
+        args: claudeArgs(settings, input, randomUUID(), prompt.text),
         // The transcript location IS the session here — CLAUDE_CONFIG_DIR is
         // the only knob, so it points at this attempt's dir and nowhere else.
-        env: { ...input.env, CLAUDE_CONFIG_DIR: sessionDir },
-        timeoutMs: input.contract.timeoutMs,
+        env: { ...input.env, CLAUDE_CONFIG_DIR: sessionRef },
+        sessionRef,
+        input,
         logger,
-        onChild: (child) => {
-          cancel = () => killChildGroup(child, logger);
-          input.onSpawn?.(cancel);
-        },
-      }).then((res) => ({
-        status: res.timedOut
-          ? ("timed_out" as const)
-          : res.error !== undefined || res.exitCode !== 0
-            ? ("failed" as const)
-            : ("succeeded" as const),
-        exitCode: res.exitCode,
-        signal: res.signal,
-        stdout: res.stdout,
-        stderr: res.stderr,
-        error: res.error,
-        launchError:
-          res.error === undefined ? undefined : classifyLaunchError(res.error),
-      }));
-
-      return {
-        ok: true,
-        handle: {
-          // The dir, not the uuid: it is what an operator can open.
-          sessionRef: sessionDir,
-          completion,
-          cancelAndWait: async () => {
-            cancel?.();
-            return completion;
-          },
-        },
-      };
+      });
     },
   };
 }

@@ -7,15 +7,12 @@
  * `exit`, output is still unbounded. Ф2 fixes the lifecycle in this file,
  * with the characterization tests of Ф0 as the before-picture.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { runKeeperProcess } from "./pi-process.js";
-import { classifyLaunchError } from "./spawn-errors.js";
-import { killChildGroup } from "../child-spawn.js";
+import { piArgs } from "./pi-process.js";
+import { attemptSessionDir, startHosted } from "./start.js";
 import type { Logger } from "../../../core/types.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
 import type { LauncherSettings } from "./pi-config.js";
-import { ATTEMPTS_DIR, PI_LAUNCHER_ID, stripOwnedFlags } from "./pi-config.js";
+import { PI_LAUNCHER_ID, stripOwnedFlags } from "./pi-config.js";
 
 /** @see capabilities.ts — the role's vocabulary, not pi's flag names. */
 const PI_CAPABILITIES: ReadonlySet<string> = new Set([
@@ -25,12 +22,7 @@ const PI_CAPABILITIES: ReadonlySet<string> = new Set([
   "thinking",
   "tool-subset",
 ]);
-import type {
-  HostRunResult,
-  LaunchInput,
-  LaunchOutcome,
-  RoleLauncher,
-} from "./types.js";
+import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
 
 /** Instance assets → CLI args. A role that brings its own extension disables
  * the ambient ones: the forked task-cycle registers the same tool names, and
@@ -56,72 +48,33 @@ export function createPiLauncher(
     // gives it a real profile — claiming it now would make L6 unfalsifiable.
     capabilities: PI_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
-      const { contract } = input;
-      let cancel: (() => void) | undefined;
-
       // Session per ATTEMPT (tz-06 Ф3): two attempts of one run must not share
       // a transcript, or the second reads as a continuation of the first.
-      const sessionDir = path.join(
-        input.cwd,
-        ATTEMPTS_DIR,
-        input.attemptId,
-        "session",
-      );
-      fs.mkdirSync(sessionDir, { recursive: true });
-
-      // The handle is returned WITHOUT awaiting the run: a caller that cannot
-      // cancel until the child is done has no cancel at all.
-      const completion: Promise<HostRunResult> = runKeeperProcess({
-        piBinary: settings.binary,
-        // The session flags belong to the launcher, never to the operator's
-        // fixed flags — see stripOwnedFlags.
-        spawnFlags: [
-          ...stripOwnedFlags(settings.flags),
-          "--session-dir",
-          sessionDir,
-        ],
-        extraArgs: piAssetArgs(contract),
-        model: contract.binding.model,
-        thinking: contract.binding.thinking,
-        systemPromptPath: input.promptPath,
-        taskPrompt: input.taskPrompt,
-        cwd: input.cwd,
+      const sessionRef = attemptSessionDir(input);
+      return startHosted({
+        binary: settings.binary,
+        args: piArgs({
+          piBinary: settings.binary,
+          // The session flags belong to the launcher, never to the operator's
+          // fixed flags — see stripOwnedFlags.
+          spawnFlags: [
+            ...stripOwnedFlags(settings.flags),
+            "--session-dir",
+            sessionRef,
+          ],
+          extraArgs: piAssetArgs(input.contract),
+          model: input.contract.binding.model,
+          thinking: input.contract.binding.thinking,
+          systemPromptPath: input.promptPath,
+          taskPrompt: input.taskPrompt,
+          cwd: input.cwd,
+          env: input.env,
+        }),
         env: input.env,
-        timeoutMs: contract.timeoutMs,
+        sessionRef,
+        input,
         logger,
-        onChild: (child) => {
-          // Group kill, exactly as before the port existed: the kill policy
-          // belongs to child-spawn, not to a launcher (Ф1 changes no
-          // semantics).
-          cancel = () => killChildGroup(child, logger);
-          input.onSpawn?.(cancel);
-        },
-      }).then((res) => ({
-        status: res.timedOut
-          ? ("timed_out" as const)
-          : res.error !== undefined || res.exitCode !== 0
-            ? ("failed" as const)
-            : ("succeeded" as const),
-        exitCode: res.exitCode,
-        signal: res.signal,
-        stdout: res.stdout,
-        stderr: res.stderr,
-        error: res.error,
-        launchError:
-          res.error === undefined ? undefined : classifyLaunchError(res.error),
-      }));
-
-      return {
-        ok: true,
-        handle: {
-          sessionRef: sessionDir,
-          completion,
-          cancelAndWait: async () => {
-            cancel?.();
-            return completion;
-          },
-        },
-      };
+      });
     },
   };
 }

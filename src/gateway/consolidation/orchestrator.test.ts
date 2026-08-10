@@ -25,16 +25,17 @@ import type { ApplyResult } from "../apply-executor.js";
 import { clearRoleContractCache } from "./role-contract.js";
 import { createRequire } from "node:module";
 
-// Mock runKeeperProcess at module level (hoisted): the stop()-both-kill test
+// Mock the process runner at module level (hoisted): the stop()-both-kill test
 // needs the REAL defaultSpawnChild onChild registration to fill childrenRef
 // without spawning a real pi sub-session. Tests that pass an explicit
 // `spawn` override are unaffected; tests using defaultSpawnChild without a
 // real run (start()/getLastRun()) never reach the spawner.
-vi.mock("./launchers/pi-process.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./launchers/pi-process.js")>();
+vi.mock("./launchers/child-process.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./launchers/child-process.js")>();
   return {
     ...actual,
-    runKeeperProcess: vi.fn(),
+    runChildProcess: vi.fn(),
   };
 });
 vi.mock("./child-spawn.js", async (importOriginal) => {
@@ -48,7 +49,7 @@ vi.mock("./child-spawn.js", async (importOriginal) => {
     sweepKeeperOrphans: vi.fn(() => 0),
   };
 });
-import { runKeeperProcess as runKeeperProcessMock } from "./launchers/pi-process.js";
+import { runChildProcess as runChildProcessMock } from "./launchers/child-process.js";
 import { killChildGroup as killChildGroupMock } from "./child-spawn.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -1225,13 +1226,13 @@ describe("ConsolidationOrchestrator (P6)", () => {
   });
 
   it("stop() kills all in-flight child handles (parallel roles)", async () => {
-    // Real defaultSpawnChild onChild registration: runKeeperProcess is mocked
+    // Real defaultSpawnChild onChild registration: the process runner is mocked
     // at module level (vi.mock hoists), so spawn resolves without a real pi
     // sub-session, but the kill handles ARE registered in childrenRef via the
     // real runner-helpers wiring (the point of the parallel-child-leak fix).
     const killed: string[] = [];
     (
-      runKeeperProcessMock as unknown as ReturnType<typeof vi.fn>
+      runChildProcessMock as unknown as ReturnType<typeof vi.fn>
     ).mockImplementation(
       (opts: {
         onChild?: (c: { kill: () => void }) => void;
@@ -1260,7 +1261,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
     // Use the DEFAULT spawn path (no `spawn` override in the constructor) so
     // onChild registration flows through the real runner-helpers wiring →
-    // mocked runKeeperProcess fills childrenRef, and stop() calls the
+    // the mocked runner fills childrenRef, and stop() calls the
     // registered kill handle. killChildGroup is mocked too, so a REAL
     // childrenRef iteration is proven (kill called once per runId); without
     // it the assertion would pass with zero kills (critic test-gap).
@@ -1279,7 +1280,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
       } as never;
     });
     (
-      runKeeperProcessMock as unknown as ReturnType<typeof vi.fn>
+      runChildProcessMock as unknown as ReturnType<typeof vi.fn>
     ).mockImplementation(
       (opts: {
         onChild?: (c: { kill: () => void }) => void;
@@ -1337,7 +1338,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
     await orch.stop();
     expect(killed.length).toBe(2); // both child handles killed
-    release(); // let the mocked runKeeperProcess promises settle
+    release(); // let the mocked runner promises settle
     await Promise.all([a, b]);
     expect(orch.isRunning).toBe(false);
   });

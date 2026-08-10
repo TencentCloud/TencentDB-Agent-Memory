@@ -31,9 +31,13 @@ import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import { createRequire } from "node:module";
 
-vi.mock("./launchers/pi-process.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./launchers/pi-process.js")>();
-  return { ...actual, runKeeperProcess: vi.fn() };
+// tz-06 Ф5b: every host now goes through ONE process runner, so the surface
+// is captured as the child's real argv instead of pi's pre-split option bag.
+// Same information, one layer lower — and host-agnostic, which is the point.
+vi.mock("./launchers/child-process.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./launchers/child-process.js")>();
+  return { ...actual, runChildProcess: vi.fn() };
 });
 vi.mock("./child-spawn.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./child-spawn.js")>();
@@ -43,7 +47,7 @@ vi.mock("./child-spawn.js", async (importOriginal) => {
     sweepKeeperOrphans: vi.fn(() => 0),
   };
 });
-import { runKeeperProcess as runKeeperProcessMock } from "./launchers/pi-process.js";
+import { runChildProcess as runChildProcessMock } from "./launchers/child-process.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const require = createRequire(import.meta.url);
@@ -241,7 +245,24 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  /** Run one role with the REAL defaultSpawnChild (runKeeperProcess mocked)
+  /** Split a real argv back into the surface the assertions talk about:
+   * fixed flags, instance assets, then the contract-driven tail. */
+  function splitArgv(argv: string[]) {
+    const assetAt = argv.findIndex((a) =>
+      ["--no-extensions", "--extension", "--skill"].includes(a),
+    );
+    const modelAt = argv.indexOf("--model");
+    const at = (flag: string): string => argv[argv.indexOf(flag) + 1] ?? "";
+    return {
+      spawnFlags: argv.slice(0, assetAt < 0 ? modelAt : assetAt),
+      extraArgs: assetAt < 0 ? [] : argv.slice(assetAt, modelAt),
+      model: at("--model"),
+      thinking: at("--thinking"),
+      systemPromptPath: at("--system-prompt"),
+    };
+  }
+
+  /** Run one role with the REAL defaultSpawnChild (the process runner mocked)
    * and return the surface the child would have been launched with. */
   async function captureSurface(role: string): Promise<SpawnSurface> {
     let captured: Record<string, unknown> | null = null;
@@ -251,11 +272,14 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
     let promptText = "";
     let tools: string[] = [];
     (
-      runKeeperProcessMock as unknown as ReturnType<typeof vi.fn>
+      runChildProcessMock as unknown as ReturnType<typeof vi.fn>
     ).mockImplementation(async (opts: Record<string, unknown>) => {
-      captured = opts;
+      captured = { ...opts, ...splitArgv(opts.args as string[]) };
       const scratchDir = String(opts.cwd);
-      promptText = fs.readFileSync(String(opts.systemPromptPath), "utf-8");
+      promptText = fs.readFileSync(
+        String((captured as Record<string, unknown>).systemPromptPath),
+        "utf-8",
+      );
       try {
         tools = fs
           .readdirSync(path.join(scratchDir, "tools"))

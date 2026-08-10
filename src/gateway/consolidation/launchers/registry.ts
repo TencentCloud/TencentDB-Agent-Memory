@@ -7,6 +7,7 @@
  */
 import { createPiLauncher } from "./pi.js";
 import { CLAUDE_LAUNCHER_ID, createClaudeLauncher } from "./claude.js";
+import { CODEX_LAUNCHER_ID, createCodexLauncher } from "./codex.js";
 import { PI_LAUNCHER_ID, type LauncherSettings } from "./pi-config.js";
 import type { Logger } from "../../../core/types.js";
 import type { LaunchOutcome, RoleLauncher } from "./types.js";
@@ -39,6 +40,7 @@ export function createLauncherRegistry(
   > = {
     [PI_LAUNCHER_ID]: createPiLauncher,
     [CLAUDE_LAUNCHER_ID]: createClaudeLauncher,
+    [CODEX_LAUNCHER_ID]: createCodexLauncher,
   };
   for (const [id, factory] of Object.entries(factories)) {
     const s = settings[id];
