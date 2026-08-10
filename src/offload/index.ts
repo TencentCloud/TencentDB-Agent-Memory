@@ -1039,10 +1039,12 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
         logger.debug?.(`[context-offload] <<< after_tool_call SKIP: no session manager (${Date.now() - _atcStart}ms)`);
         return;
       }
-      const getSessionMessages = api.runtime?.subagent?.getSessionMessages
-      ? (sessionKey: string, limit?: number) => api.runtime.subagent.getSessionMessages({ sessionKey, limit })
-      : undefined;
-      const afterToolCallHandler = createAfterToolCallHandler(getSessionMessages, _mgr, logger, getContextWindow, pCfg, backendClient as any);
+      const afterToolCallHandler = createAfterToolCallHandler(
+        _mgr, logger, getContextWindow, pCfg, backendClient as any,
+        // Official OpenClaw API replaces the dist-file patch for fetching
+        // session messages in after_tool_call (issue #851).
+        (api.runtime?.subagent?.getSessionMessages) as any,
+      );
       await afterToolCallHandler(event, ctx);
       const _handlerDone = Date.now();
       logger.debug?.(`[context-offload] after_tool_call handler done: ${_handlerDone - _atcStart}ms`);
@@ -2311,3 +2313,4 @@ export const _testExports = {
   simpleHash,
   OffloadContextEngine,
 };
+

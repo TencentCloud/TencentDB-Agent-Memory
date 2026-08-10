@@ -89,12 +89,12 @@ function _tryParseArgs(args: any): any {
 }
 
 export function createAfterToolCallHandler(
-  getSessionMessages: ((sessionKey: string, limit?: number) => Promise<any[] | undefined>) | undefined,
   stateManager: OffloadStateManager,
   logger: PluginLogger,
   getContextWindow: (() => number) | undefined,
   pluginConfig: Partial<PluginConfig> | undefined,
   backendClient?: BackendClient | null,
+  getSessionMessages?: (opts: { sessionKey: string; limit?: number }) => Promise<unknown[] | undefined>,
 ) {
   return async (event: any, ctx: any) => {
     // Skip internal memory-pipeline sessions
@@ -119,16 +119,16 @@ export function createAfterToolCallHandler(
     // See https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/851
     if (!hasMsgs && getSessionMessages && _sk) {
       try {
-        const sessionMessages = await getSessionMessages(_sk, 50);
-        if (sessionMessages && sessionMessages.length > 0) {
-          event.messages = sessionMessages;
+        const fetched = await getSessionMessages({ sessionKey: _sk, limit: 50 });
+        if (Array.isArray(fetched) && fetched.length > 0) {
+          event.messages = fetched;
           logger.debug?.(
             `[context-offload] after_tool_call recovered messages from getSessionMessages API ` +
-            `(len=${sessionMessages.length})`,
+            `(len=${fetched.length})`,
           );
         }
       } catch (err) {
-        logger.warn(`[context-offload] after_tool_call getSessionMessages failed: ${err}`);
+        logger.warn(`[context-offload] after_tool_call getSessionMessages failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -576,3 +576,4 @@ function _dumpMessagesAfterMmd(messages: any[], action: string, logger: PluginLo
   const offloadedCount = messages.filter((m: any) => m._offloaded).length;
   logger.debug?.(`[context-offload] POST-MMD-${action} (after_tool_call): ${messages.length} msgs, mmd=${mmdCount}, offloaded=${offloadedCount}`);
 }
+
