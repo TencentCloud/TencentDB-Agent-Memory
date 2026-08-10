@@ -24,14 +24,31 @@ export const DEFAULT_CLAUDE_FLAGS: readonly string[] = ["-p"];
 
 /** @see capabilities.ts. No `extension`/`skill`: claude has no equivalent of
  * pi's `--extension`/`--skill`. No `thinking`: the level is not a per-request
- * flag here. A role needing those is refused, not silently downgraded. */
-const CLAUDE_CAPABILITIES: ReadonlySet<string> = new Set([
-  "session",
-  "tool-subset",
-]);
+ * flag here.
+ *
+ * No `tool-subset` either, and that one is a RETRACTION: `--allowedTools`
+ * takes host tool names (`Bash`, `Edit`, `Read`), while a role's
+ * `tools_subset` names the python helpers it ships (`fetch_records.py`).
+ * Passing the latter as the former does not narrow anything — it hands the
+ * child a tool list it does not recognise. Until a portable→host mapping
+ * exists, a role that needs a tool subset is refused here rather than run
+ * with a set nobody checked (tz-06 L5). */
+const CLAUDE_CAPABILITIES: ReadonlySet<string> = new Set(["session"]);
 
-/** Session flags this launcher owns, for the same reason pi owns its own. */
-const OWNED = ["--session-id", "--resume", "--continue"];
+/** Session flags this launcher owns, for the same reason pi owns its own —
+ * plus the permission mode, which is not a preference: `-p` with the default
+ * mode cannot write, so the role would exit having produced no candidate.
+ * `acceptEdits` is the narrowest mode that lets it write its own run dir;
+ * confinement is the L6 bwrap path, not this flag. */
+const OWNED = [
+  "--session-id",
+  "--resume",
+  "--continue",
+  "--permission-mode",
+  "--dangerously-skip-permissions",
+];
+
+export const PERMISSION_MODE = "acceptEdits";
 
 export function claudeArgs(
   settings: LauncherSettings,
@@ -39,18 +56,16 @@ export function claudeArgs(
   sessionId: string,
   systemPrompt: string,
 ): string[] {
-  const tools = input.contract.toolsSubset;
   return [
     ...stripOwnedFlags(settings.flags ?? [...DEFAULT_CLAUDE_FLAGS], OWNED),
     "--session-id",
     sessionId,
+    "--permission-mode",
+    PERMISSION_MODE,
     "--model",
     input.contract.binding.model,
     "--system-prompt",
     systemPrompt,
-    ...(tools && tools.size > 0
-      ? ["--allowedTools", [...tools].join(",")]
-      : []),
     input.taskPrompt,
   ];
 }

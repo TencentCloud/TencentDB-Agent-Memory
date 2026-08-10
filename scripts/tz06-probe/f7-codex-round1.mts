@@ -55,7 +55,9 @@ const contract = {
   binding: { launcherId: "x", model: "test-model", thinking: "low" },
   assets: {},
   timeoutMs: 15_000,
-  toolsSubset: null,
+  // Роль объявляет свои python-хелперы — ровно тот вход, который раньше
+  // уезжал claude'у в --allowedTools как список тулов хоста.
+  toolsSubset: new Set(["fetch_records.py"]),
   requiresCapabilities: [],
 } as unknown as ResolvedRoleContract;
 
@@ -93,6 +95,15 @@ for (const [name, make] of [
       name === "claude" ? argv.includes("-p") : argv.includes("exec")
     }`,
   );
+  if (name === "claude") {
+    const at = argv.indexOf("--permission-mode");
+    console.log(
+      `  режим прав ребёнка: ${at < 0 ? "НЕ ЗАДАН (дефолт не даст записать кандидат)" : argv[at + 1]}`,
+    );
+    console.log(
+      `  имена python-файлов в --allowedTools: ${argv.includes("--allowedTools")}`,
+    );
+  }
   if (name === "codex") {
     const at = argv.indexOf("-s");
     console.log(

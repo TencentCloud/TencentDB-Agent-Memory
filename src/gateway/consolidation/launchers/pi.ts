@@ -18,7 +18,11 @@ import {
   stripOwnedFlags,
 } from "./pi-config.js";
 
-/** @see capabilities.ts — the role's vocabulary, not pi's flag names. */
+/** @see capabilities.ts — the role's vocabulary, not pi's flag names.
+ *
+ * `tool-subset` is claimed and delivered, just not through argv: the role's
+ * declared helpers are copied into `<scratch>/tools/` by copyKeeperTools, and
+ * the child sees exactly those files. That IS the subset for this host. */
 const PI_CAPABILITIES: ReadonlySet<string> = new Set([
   "session",
   "extension",
