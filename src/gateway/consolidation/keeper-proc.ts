@@ -40,6 +40,62 @@ export function parsePgrpFromStat(statLine: string): number | null {
   return Number.isFinite(pgrp) ? pgrp : null;
 }
 
+/** ppid (field 4) from a /proc/<pid>/stat line — same comm-aware split. */
+export function parsePpidFromStat(statLine: string): number | null {
+  const close = statLine.lastIndexOf(")");
+  if (close < 0) return null;
+  const fields = statLine
+    .slice(close + 1)
+    .trim()
+    .split(/\s+/);
+  const ppid = Number(fields[1]);
+  return Number.isFinite(ppid) ? ppid : null;
+}
+
+/**
+ * Every live descendant of `rootPid` by PARENT chain.
+ *
+ * The group walk alone is not enough: a descendant that calls `setsid()` gets
+ * a process group of its own, so it is invisible to `snapshotPgrp` and
+ * survives `kill -- -<pgid>` untouched. The parent chain still names it, and
+ * this must be read BEFORE the kill — orphans reparent to init on exit.
+ */
+export function snapshotTree(rootPid: number): number[] {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch {
+    return [];
+  }
+  const children = new Map<number, number[]>();
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    let ppid: number | null = null;
+    try {
+      ppid = parsePpidFromStat(fs.readFileSync(`/proc/${pid}/stat`, "utf-8"));
+    } catch {
+      continue;
+    }
+    if (ppid === null) continue;
+    const list = children.get(ppid);
+    if (list === undefined) children.set(ppid, [pid]);
+    else list.push(pid);
+  }
+  const out: number[] = [];
+  const queue = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  while (queue.length > 0) {
+    for (const kid of children.get(queue.shift()!) ?? []) {
+      if (seen.has(kid)) continue;
+      seen.add(kid);
+      out.push(kid);
+      queue.push(kid);
+    }
+  }
+  return out;
+}
+
 /** pgrp of a live pid via /proc/<pid>/stat; null when the pid is gone. */
 export function readPgrpOf(pid: number): number | null {
   try {
@@ -134,7 +190,11 @@ export function killChildGroup(
     return { killed: 0, survivors: [], method: "pid-reuse-guard" };
   }
 
-  const descendants = snapshotPgrp(pgid);
+  // Group AND parent chain: a `setsid()` descendant leaves the group and the
+  // group kill would never reach it.
+  const descendants = [
+    ...new Set([...snapshotPgrp(pgid), ...snapshotTree(pid)]),
+  ].filter((p) => p !== pid);
   const ok = killProcessGroup(pgid);
   if (!ok) {
     // Group kill failed (ESRCH) — fall back to per-pid SIGKILL of the
@@ -144,7 +204,14 @@ export function killChildGroup(
     return { killed, survivors: [], method: "snapshot-fallback" };
   }
 
-  const survivors = snapshotPgrp(pgid).filter((p) => p !== pid);
+  // Anything from the pre-kill snapshot that is still alive: escapees of the
+  // group get SIGKILLed by pid here.
+  const survivors = [
+    ...new Set([
+      ...snapshotPgrp(pgid).filter((p) => p !== pid),
+      ...descendants.filter((p) => readPgrpOf(p) !== null),
+    ]),
+  ];
   for (const p of survivors) killPid(p);
   return { killed: descendants.length + 1, survivors, method: "group-kill" };
 }

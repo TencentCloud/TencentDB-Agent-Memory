@@ -84,30 +84,44 @@ export function runChildProcess(
     let exited: { code: number | null; signal: string | null } | null = null;
     let spawnError: string | undefined;
 
-    // Pipe-drain LIVE: listeners attached immediately.
-    child.stdout!.on("data", (d: Buffer) => out.write(d));
-    child.stderr!.on("data", (d: Buffer) => err.write(d));
+    // Pipe-drain LIVE: listeners attached immediately. The pipe is PAUSED
+    // while the spool file is behind, so a child that outruns the disk backs
+    // up in the kernel pipe instead of in this process's heap.
+    const pump = (
+      src: NodeJS.ReadableStream,
+      spool: ReturnType<typeof createSpool>,
+    ): void => {
+      spool.onDrain(() => src.resume());
+      src.on("data", (d: Buffer) => {
+        spool.write(d);
+        if (spool.saturated()) src.pause();
+      });
+    };
+    pump(child.stdout!, out);
+    pump(child.stderr!, err);
 
     const settle = (): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (reapTimer !== undefined) clearTimeout(reapTimer);
-      out.close();
-      err.close();
-      resolve({
-        exitCode: exited?.code ?? null,
-        signal: exited?.signal ?? (timedOut ? "SIGKILL" : null),
-        stdout: out.tail(),
-        stderr: err.tail(),
-        stdoutBytes: out.bytes(),
-        stderrBytes: err.bytes(),
-        stdoutFile: out.file,
-        stderrFile: err.file,
-        timedOut,
-        error: spawnError,
-        killed,
-      });
+      // The result carries the spool PATHS, so it must not be handed over
+      // until those files are complete on disk.
+      void Promise.all([out.close(), err.close()]).then(() =>
+        resolve({
+          exitCode: exited?.code ?? null,
+          signal: exited?.signal ?? (timedOut ? "SIGKILL" : null),
+          stdout: out.tail(),
+          stderr: err.tail(),
+          stdoutBytes: out.bytes(),
+          stderrBytes: err.bytes(),
+          stdoutFile: out.file,
+          stderrFile: err.file,
+          timedOut,
+          error: spawnError,
+          killed,
+        }),
+      );
     };
 
     const timer = setTimeout(() => {

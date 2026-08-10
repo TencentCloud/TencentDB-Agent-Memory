@@ -24,7 +24,14 @@ export interface Spool {
   bytes: () => number;
   /** Path of the full spool file, when one could be opened. */
   file: string | null;
-  close: () => void;
+  /** Resolves once the file is flushed and closed: the attempt row points at
+   * this path, so a caller that reads it before `finish` reads a partial
+   * file. */
+  close: () => Promise<void>;
+  /** True while the OS buffer is full — the caller should pause the pipe. */
+  saturated: () => boolean;
+  /** Fires once the stream has drained after `saturated` was true. */
+  onDrain: (fn: () => void) => void;
 }
 
 export function createSpool(cwd: string, name: string): Spool {
@@ -59,13 +66,29 @@ export function createSpool(cwd: string, name: string): Spool {
     }
   };
 
+  let full = false;
+  let drainFn: (() => void) | undefined;
+
   return {
     write: (chunk: Buffer) => {
       total += chunk.length;
-      stream?.write(chunk);
+      if (stream !== null && !stream.write(chunk)) {
+        // The write queue is above the high-water mark: keep pushing and the
+        // unflushed chunks pile up in memory, which is the 8 MB problem this
+        // module exists to prevent — only now on the disk side.
+        full = true;
+        stream.once("drain", () => {
+          full = false;
+          drainFn?.();
+        });
+      }
       chunks.push(chunk);
       held += chunk.length;
       trim();
+    },
+    saturated: () => full,
+    onDrain: (fn: () => void) => {
+      drainFn = fn;
     },
     tail: () => {
       const joined = Buffer.concat(chunks);
@@ -77,8 +100,19 @@ export function createSpool(cwd: string, name: string): Spool {
     get file() {
       return file;
     },
-    close: () => {
-      stream?.end();
-    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        if (stream === null) {
+          resolve();
+          return;
+        }
+        const s = stream;
+        // Bounded: an unwritable disk must not wedge the run either.
+        const t = setTimeout(resolve, 2000);
+        s.end(() => {
+          clearTimeout(t);
+          resolve();
+        });
+      }),
   } as Spool;
 }
