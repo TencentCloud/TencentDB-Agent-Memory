@@ -12,6 +12,7 @@ import { resolveRoleContract } from "./role-contract.js";
 import { runRole } from "./run-role.js";
 import { mkFailedSummary } from "./summary.js";
 import { createRun } from "../control-plane/run-repo.js";
+import { resolveCriticPackage } from "./critic-bootstrap.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 import type { RunSummary } from "./types.js";
@@ -50,6 +51,29 @@ export async function executeRunForRole(
   const contract = resolution.contract;
   for (const w of contract.warnings) {
     ctx.logger.warn?.(`[role] ${opts.role}: ${w}`);
+  }
+
+  // tz-09 Ф4a (criterion 6): an unusable critic stops the role BEFORE the
+  // first LaunchAttempt — in enforce. In shadow it is logged only, so the
+  // package can ship while no critic package exists yet.
+  const critic = resolveCriticPackage(ctx, contract);
+  if (!critic.ok) {
+    if (ctx.applyGateMode === "enforce") {
+      const startedAt = new Date(ctx.now()).toISOString();
+      const summary = mkFailedSummary(
+        opts.role,
+        startedAt,
+        opts.reason,
+        opts.dryRun,
+      );
+      summary.status = "disabled";
+      summary.error = `role disabled: ${critic.reason}`;
+      ctx.logger.warn?.(
+        `[role] ${opts.role} disabled — ${critic.reason} (no run started)`,
+      );
+      return summary;
+    }
+    ctx.logger.warn?.(`[critic] SHADOW ${opts.role}: ${critic.reason}`);
   }
   // tz-09 Ф1: the Run row is created HERE — the one place that already holds
   // both the run id and the RESOLVED contract, so the contract snapshot is
