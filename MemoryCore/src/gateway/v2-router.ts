@@ -186,7 +186,7 @@ async function recordAudit(
   args: {
     record_id: string;
     layer: "L1" | "L2" | "L3";
-    action: "update" | "delete";
+    action: "create" | "update" | "delete";
     iso?: { teamId?: string; userId?: string; agentId?: string; sessionId?: string; taskId?: string };
     version: number;
     requestId: string;
@@ -1001,46 +1001,78 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
-  // Read existing record by primary key
-  const existing = await store.queryL1Records({ recordIds: [id] });
-  if (!existing || existing.length === 0) {
-    return errorEnvelope(404, `Atomic note not found: ${id}`, requestId);
-  }
-
-  const now = new Date().toISOString();
-  const record = existing[0];
-
-  // Build update: content is always overwritten; background (scene_name) only if provided.
-  // user_id / agent_id are preserved from the existing row — updates don't
-  // re-derive them. If the caller supplied an isolation triple that does NOT
-  // match the existing row, we treat it as a permission denial.
   const iso = deps.requestIsolation;
-  if (iso?.userId && record.user_id && record.user_id !== iso.userId) {
-    return errorEnvelope(403, `Atomic note ${id} belongs to a different user`, requestId);
+  const now = new Date().toISOString();
+
+  // Read existing record by primary key. `recordIds` is honored by the store
+  // (previously it was ignored, so the ownership check compared against the
+  // wrong row — the cause of the spurious 403 on fresh ids).
+  const existing = await store.queryL1Records({ recordIds: [id] });
+  const record = existing && existing.length > 0 ? existing[0] : undefined;
+
+  let updatedVersion: number;
+  let action: "create" | "update";
+  let updated: MemoryRecord;
+
+  if (record) {
+    // Existing note → update. Content is always overwritten; background
+    // (scene_name) only if provided. user_id / agent_id are preserved from the
+    // existing row — updates don't re-derive them. If the caller supplied an
+    // isolation triple that does NOT match the existing row, we treat it as a
+    // permission denial.
+    if (iso?.userId && record.user_id && record.user_id !== iso.userId) {
+      return errorEnvelope(403, `Atomic note ${id} belongs to a different user`, requestId);
+    }
+    if (iso?.agentId && record.agent_id && record.agent_id !== iso.agentId) {
+      return errorEnvelope(403, `Atomic note ${id} belongs to a different agent`, requestId);
+    }
+    updatedVersion = (record.version ?? 0) + 1;
+    action = "update";
+    updated = {
+      id,
+      content,
+      type: record.type as any,
+      priority: record.priority ?? 50,
+      scene_name: background !== undefined ? background : (record.scene_name ?? ""),
+      source_message_ids: [],
+      metadata: parseMetadataJson(record.metadata_json),
+      timestamps: record.timestamp_str ? [record.timestamp_str] : [],
+      createdAt: record.created_time,
+      updatedAt: now,
+      version: updatedVersion,
+      sessionKey: record.session_key ?? "",
+      sessionId: record.session_id ?? iso?.sessionId ?? "",
+      taskId: record.task_id ?? iso?.taskId,
+      teamId: record.team_id ?? iso?.teamId,
+      userId: record.user_id ?? iso?.userId,
+      agentId: record.agent_id ?? iso?.agentId,
+    };
+  } else {
+    // Fresh note → create (upsert semantics, matches the SDK's set-by-id
+    // intent). New notes start at v1 and are owned by the caller's resolved
+    // isolation identity.
+    updatedVersion = 1;
+    action = "create";
+    updated = {
+      id,
+      content,
+      type: "episodic",
+      priority: 50,
+      scene_name: background ?? "",
+      source_message_ids: [],
+      metadata: {},
+      timestamps: [now],
+      createdAt: now,
+      updatedAt: now,
+      version: updatedVersion,
+      sessionKey: iso?.sessionId ?? "",
+      sessionId: iso?.sessionId ?? "",
+      taskId: iso?.taskId,
+      teamId: iso?.teamId,
+      userId: iso?.userId,
+      agentId: iso?.agentId,
+    };
   }
-  if (iso?.agentId && record.agent_id && record.agent_id !== iso.agentId) {
-    return errorEnvelope(403, `Atomic note ${id} belongs to a different agent`, requestId);
-  }
-  const updatedVersion = (record.version ?? 0) + 1;
-  const updated: MemoryRecord = {
-    id,
-    content,
-    type: record.type as any,
-    priority: record.priority ?? 50,
-    scene_name: background !== undefined ? background : (record.scene_name ?? ""),
-    source_message_ids: [],
-    metadata: parseMetadataJson(record.metadata_json),
-    timestamps: record.timestamp_str ? [record.timestamp_str] : [],
-    createdAt: record.created_time,
-    updatedAt: now,
-    version: updatedVersion,
-    sessionKey: record.session_key ?? "",
-    sessionId: record.session_id ?? iso?.sessionId ?? "",
-    taskId: record.task_id ?? iso?.taskId,
-    teamId: record.team_id ?? iso?.teamId,
-    userId: record.user_id ?? iso?.userId,
-    agentId: record.agent_id ?? iso?.agentId,
-  };
 
   const embedding = deps.getEmbedding();
   let emb: Float32Array | undefined;
@@ -1048,11 +1080,11 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
 
   await store.upsertL1(updated, emb);
 
-  // 审计：L1 update — 用外部请求的 IdFields 而非 record 原值（per user 决策）
+  // 审计：L1 写入（create/update）— 用外部请求的 IdFields 而非 record 原值（per user 决策）
   await recordAudit(store, {
     record_id: id,
     layer: "L1",
-    action: "update",
+    action,
     iso,
     version: updatedVersion,
     requestId,

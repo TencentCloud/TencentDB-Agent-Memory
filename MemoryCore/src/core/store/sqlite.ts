@@ -1690,10 +1690,12 @@ export class VectorStore implements IMemoryStore {
   }
 
   /**
-   * Query L1 records with optional session and time filters.
+   * Query L1 records with optional session, time, recordIds and isolation filters.
    *
    * Uses the composite index `idx_l1_session_updated(session_id, updated_time)`
    * for efficient filtering. All timestamps are compared as UTC ISO 8601 strings.
+   * `recordIds` is applied in memory (like the isolation dimensions) so callers
+   * can do primary-key lookups without relying on the session/time branch.
    *
    * **Fault-tolerant**: returns an empty array on any error (degraded mode, DB issues).
    */
@@ -1741,9 +1743,16 @@ export class VectorStore implements IMemoryStore {
       if (filter?.userId !== undefined) rows = rows.filter((r) => r.user_id === filter.userId);
       if (filter?.agentId !== undefined) rows = rows.filter((r) => r.agent_id === filter.agentId);
       if (taskId !== undefined) rows = rows.filter((r) => r.task_id === taskId);
+      // Primary-key lookup: when recordIds is supplied, only those records may
+      // be returned (previously ignored — the bug caused /atomic/update to see
+      // the first row of the store instead of the target record).
+      if (filter?.recordIds && filter.recordIds.length > 0) {
+        const idSet = new Set(filter.recordIds);
+        rows = rows.filter((r) => idSet.has(r.record_id));
+      }
 
       this.logger?.info(
-        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
+        `${TAG} [L1-query] filter={sessionKey=${sessionKey ?? "(all)"}, sessionId=${sessionId ?? "(all)"}, teamId=${filter?.teamId ?? "(all)"}, userId=${filter?.userId ?? "(all)"}, agentId=${filter?.agentId ?? "(all)"}, taskId=${taskId ?? "(all)"}, recordIds=${filter?.recordIds?.length ?? 0}, updatedAfter=${updatedAfter ?? "(none)"}}, ` +
         `returned ${rows.length} record(s)`,
       );
       return rows;
