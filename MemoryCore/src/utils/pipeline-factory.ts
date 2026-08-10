@@ -571,6 +571,18 @@ export function createL1Runner(opts: {
           `${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"}: ${group.messages.length} messages`,
         );
 
+        // 可选钩子必须失败安全：解析显示名只是 prompt 增强，任何异常都不能中断提取主流程。
+        let userDisplayName: string | undefined;
+        if (resolveUserDisplayName) {
+          try {
+            userDisplayName = await resolveUserDisplayName(group.userId);
+          } catch (err) {
+            logger.debug?.(
+              `${TAG} [l1] resolveUserDisplayName failed for ${group.userId}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
         const l1Result = await extractL1Memories({
           messages: group.messages,
           sessionKey,
@@ -579,7 +591,7 @@ export function createL1Runner(opts: {
           teamId: group.teamId,
           userId: group.userId,
           agentId: group.agentId,
-          userDisplayName: resolveUserDisplayName ? await resolveUserDisplayName(group.userId) : undefined,
+          userDisplayName,
           baseDir: pluginDataDir,
           config,
           options: {
