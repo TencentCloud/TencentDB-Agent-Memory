@@ -11,7 +11,9 @@
 import { resolveRoleContract } from "./role-contract.js";
 import { runRole } from "./run-role.js";
 import { mkFailedSummary } from "./summary.js";
+import { createRun } from "../control-plane/run-repo.js";
 import type { OrchestratorContext } from "./context.js";
+import type { ResolvedRoleContract } from "./role-contract-types.js";
 import type { RunSummary } from "./types.js";
 
 export interface ExecuteRunOpts {
@@ -49,5 +51,41 @@ export async function executeRunForRole(
   for (const w of contract.warnings) {
     ctx.logger.warn?.(`[role] ${opts.role}: ${w}`);
   }
+  // tz-09 Ф1: the Run row is created HERE — the one place that already holds
+  // both the run id and the RESOLVED contract, so the contract snapshot is
+  // pinned before anything can be spawned. A role that failed to resolve
+  // (above) never gets a Run: it never runs.
+  openRunRecord(ctx, opts, contract);
   return runRole(ctx, { ...opts, contract });
+}
+
+function openRunRecord(
+  ctx: OrchestratorContext,
+  opts: ExecuteRunOpts,
+  contract: ResolvedRoleContract,
+): void {
+  if (opts.dryRun) return;
+  try {
+    createRun(
+      ctx.dataDir,
+      {
+        runId: opts.runId,
+        roleId: opts.role,
+        contractHash: contract.contractHash,
+        contractJson: JSON.stringify(contract),
+        binding: JSON.stringify(contract.binding),
+        scratchPath: contract.assets.scratchRoot ?? ctx.scratchRoot,
+        reason: opts.reason,
+      },
+      new Date(ctx.now()).toISOString(),
+    );
+  } catch (err) {
+    // The control plane is diagnostics + protocol state, not the run itself:
+    // a broken db must not stop consolidation before the gates depend on it
+    // (Ф6 flips that — a run without a record then cannot apply).
+    ctx.logger.warn?.(
+      `[run] control-plane record failed for ${opts.role}/${opts.runId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }

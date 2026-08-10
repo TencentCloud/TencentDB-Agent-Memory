@@ -14,11 +14,44 @@ import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import { mkFailedSummary } from "./summary.js";
 import { runFreshTailSingleBatch } from "./run-strategy-fresh-tail.js";
 import { runBoundedFullStoreChunked } from "./run-strategy-chunked.js";
+import { readRun } from "../control-plane/run-repo.js";
+import type { RunPassport } from "../control-plane/run-types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import type { RunRoleOpts, StrategyInput } from "./run-strategy-types.js";
 
 export type { RunRoleOpts };
+
+/** Write `<scratch>/run.json`. Best-effort: the database row is the truth,
+ * this copy only lets a reader tie an artefact to its run. */
+function writeRunPassport(
+  ctx: OrchestratorContext,
+  opts: RunRoleOpts,
+  runScratch: string,
+): void {
+  try {
+    const row = readRun(ctx.dataDir, opts.runId);
+    if (row === null) return;
+    const passport: RunPassport = {
+      runId: row.runId,
+      fence: row.fence,
+      owner: row.leaseOwner ?? "",
+      role: row.roleId,
+      copyOf: "control-plane.db",
+    };
+    fs.mkdirSync(runScratch, { recursive: true });
+    fs.writeFileSync(
+      path.join(runScratch, "run.json"),
+      JSON.stringify(passport, null, 2),
+      "utf-8",
+    );
+  } catch (err) {
+    ctx.logger.warn?.(
+      `[run] passport write failed for ${opts.runId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
 
 export async function runRole(
   ctx: OrchestratorContext,
@@ -39,6 +72,11 @@ export async function runRole(
   );
 
   try {
+    // tz-09 Ф1: the run passport — a COPY of the control-plane row that the
+    // child's scratch dir carries, so an artefact can be matched back to the
+    // run (and, from Ф2, to its fence) without trusting the child.
+    if (!opts.dryRun) writeRunPassport(ctx, opts, runScratch);
+
     const cp = (await ctx.checkpoint.read()) as {
       l0Cursor: string;
       lastRunAt: string | null;
