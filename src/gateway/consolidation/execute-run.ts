@@ -1,16 +1,15 @@
 /**
  * Contract-driven run entry (tz-01 B1/B2).
  *
- * One place resolves the role contract for a run and hands it to the batching
- * strategy the contract NAMES. The role name is never compared against a
+ * One place resolves the role contract for a run and hands it to `runRole`,
+ * which executes the batching strategy the contract NAMES. The role name is never compared against a
  * literal — that was `orchestrator.ts:143` and `handle-from-ctx.ts:29`.
  *
  * A role that does not resolve does not run: the summary comes back as
  * `disabled` carrying the reason (`fail-closed-role`).
  */
 import { resolveRoleContract } from "./role-contract.js";
-import { executeRunDay } from "./day-runner.js";
-import { executeRunNight } from "./night-runner.js";
+import { runRole } from "./run-role.js";
 import { mkFailedSummary } from "./summary.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
@@ -50,8 +49,5 @@ export async function executeRunForRole(
   for (const w of contract.warnings) {
     ctx.logger.warn?.(`[role] ${opts.role}: ${w}`);
   }
-  const args = { ...opts, contract };
-  return contract.batching.strategy === "bounded-full-store-chunked"
-    ? executeRunNight(ctx, args)
-    : executeRunDay(ctx, args);
+  return runRole(ctx, { ...opts, contract });
 }
