@@ -23,6 +23,7 @@ import { buildSessionInfo } from "../registrar.js";
 import { injectSessionContextWithToggles } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
+import { listAccessibleAgentsForTeam } from "../accessible-agents.js";
 
 import { buildFormResponse, FormData } from "./form.js";
 import {
@@ -91,9 +92,7 @@ async function fetchTeamsAndAgents(
   const teamResults = await Promise.all(
     teamsRaw.map(async (t) => {
       const [agentsRaw, tasksRaw] = await Promise.all([
-        // Agents are scoped to (team, owner) — each user only sees the agents
-        // they created within the team. Tasks remain team-wide (unchanged).
-        metadataClient.listAgents(t.team_id, userId),
+        listAccessibleAgentsForTeam(metadataClient, t.team_id, userId),
         metadataClient.listTasks(t.team_id),
       ]);
       const tasks = tasksRaw.map((tk) => ({
