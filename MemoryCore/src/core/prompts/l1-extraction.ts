@@ -371,8 +371,23 @@ metadata 字段说明：
 
 请严格按上述 JSON 数组格式输出，不要输出任何额外的 Markdown 代码块修饰符（如 \`\`\`json）或解释文本。`;
 
-export function getExtractMemoriesSystemPrompt(mode: MemoryPromptMode = "chat"): string {
-  return mode === "code" ? EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT : EXTRACT_MEMORIES_SYSTEM_PROMPT;
+export function getExtractMemoriesSystemPrompt(mode: MemoryPromptMode = "chat", userDisplayName?: string): string {
+  if (mode === "code") {
+    // work_memory 是团队多用户场景，无单一"用户（姓名）"模板，不需要注入显示名。
+    return EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT;
+  }
+  if (userDisplayName) {
+    // 把模板中的姓名占位符替换为权威显示名，并在开头声明，禁止模型猜测/改写字形。
+    const base = EXTRACT_MEMORIES_SYSTEM_PROMPT
+      .replaceAll("用户（姓名）", `用户（${userDisplayName}）`)
+      .replaceAll("[姓名]", userDisplayName);
+    return `当前用户显示名：${userDisplayName}。所有涉及用户的记忆必须统一逐字使用该显示名，不得从消息内容中推断、改写或缩写。\n\n${base}`;
+  }
+  // 未提供显示名：禁止模型从消息猜测姓名/职业/身份标签，或保留第一人称。
+  const base = EXTRACT_MEMORIES_SYSTEM_PROMPT
+    .replaceAll("用户（[姓名]）", "用户")
+    .replaceAll("用户（姓名）", "用户");
+  return `未提供当前用户的显示名。提取涉及用户的记忆时，主体称呼一律使用「用户」；严禁从消息文本中推断、编造用户的姓名、职业或身份标签，严禁直接保留用户消息中的第一人称（如「我」）。\n\n${base}`;
 }
 
 // ============================

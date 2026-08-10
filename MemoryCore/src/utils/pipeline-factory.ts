@@ -372,6 +372,11 @@ export function createL1Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
+  /**
+   * 可选：按 user_id 解析用户显示名（gateway 模式注入，查 metadata users）。
+   * 解析结果注入 L1 extraction prompt；未提供时沿用旧行为（prompt 兜底规则）。
+   */
+  resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
 }): (params: { sessionKey: string }) => Promise<{
   processedCount: number;
   storedCount: number;
@@ -381,7 +386,7 @@ export function createL1Runner(opts: {
   hasFullBacklog: boolean;
   profileScopes: string[];
 }> {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage } = opts;
+  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage, resolveUserDisplayName } = opts;
   const config = openclawConfig as Record<string, unknown> | undefined;
 
   return async ({ sessionKey }) => {
@@ -574,6 +579,7 @@ export function createL1Runner(opts: {
           teamId: group.teamId,
           userId: group.userId,
           agentId: group.agentId,
+          userDisplayName: resolveUserDisplayName ? await resolveUserDisplayName(group.userId) : undefined,
           baseDir: pluginDataDir,
           config,
           options: {

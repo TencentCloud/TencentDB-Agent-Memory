@@ -137,6 +137,13 @@ export interface TdaiCoreOptions {
    * （零耦合：OpenClaw 无 MetadataService 场景仍可安全构造）。
    */
   skillAssetHooks?: SkillAssetHooks;
+  /**
+   * 可选：按 user_id 解析用户显示名（如查 metadata users 的 display name）。
+   * 解析结果注入 L1 extraction prompt（issue #936：prompt 强制「用户（姓名）」但
+   * 从未注入姓名，模型只能猜测/编造称呼）。与 skillAssetHooks 同模式：不注入
+   * （undefined）→ L1 提取不带显示名、走 prompt 兜底规则，保持既有行为。
+   */
+  resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
 }
 
 // ============================
@@ -189,6 +196,8 @@ export class TdaiCore {
    * 见 `SkillAssetHooks` 的 doc。undefined = 不挂钩子（既有 standalone 老行为）。
    */
   private skillAssetHooks?: SkillAssetHooks;
+  /** 可选：按 user_id 解析用户显示名（gateway 注入，见 TdaiCoreOptions）。 */
+  private resolveUserDisplayName?: (userId: string) => Promise<string | undefined>;
   /**
    * B1 fix: in-flight guard for `ensureSkillModuleWired()`. The original guard
    * was a sync `if (this.skillCore) return`, but assignment to `skillCore`
@@ -231,6 +240,7 @@ export class TdaiCore {
     this.instanceId = opts.instanceId;
     this.storage = opts.storage;
     this.skillAssetHooks = opts.skillAssetHooks;
+    this.resolveUserDisplayName = opts.resolveUserDisplayName;
   }
 
   // ============================
@@ -735,6 +745,7 @@ export class TdaiCore {
       getInstanceId: () => this.instanceId,
       llmRunner: l1LlmRunner,
       storage: this.storage,
+      resolveUserDisplayName: this.resolveUserDisplayName,
     }));
 
     // Persister
@@ -1072,6 +1083,7 @@ export class TdaiCore {
       getInstanceId: () => this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      resolveUserDisplayName: this.resolveUserDisplayName,
     });
     const result = await runner({ sessionKey, msg: [], bg_msg: [] });
 
