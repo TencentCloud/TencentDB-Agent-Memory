@@ -86,6 +86,12 @@ export async function preApply(
     diff.text,
     "utf-8",
   );
+  // Nothing but THIS attempt's role may leave a candidate here — the same
+  // rule critic-launch.ts applies to critic.json. Today runScratch carries the
+  // runId so a leftover is not reachable; the guard is what keeps it that way.
+  await fs.promises.rm(path.join(args.scratchDir, "diff.json"), {
+    force: true,
+  });
   await copyKeeperTools(ctx, args.scratchDir, contract.toolsSubset);
 
   if (args.dryRun) {
