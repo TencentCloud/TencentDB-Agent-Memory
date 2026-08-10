@@ -28,13 +28,13 @@ import {
 import { checkManifest } from "./apply-executor/manifest.js";
 import { runApplyGate } from "./apply-executor/gate.js";
 import { resolveRunPolicy } from "./apply-executor/run-policy.js";
-import { countOps, createOpJournal } from "./apply-executor/op-journal.js";
-import { applyMerges } from "./apply-executor/apply-ops-merge.js";
-import { applyRewritesRecords } from "./apply-executor/apply-ops-record.js";
+import { applyMutations } from "./apply-executor/mutate.js";
+import { withStoreApplyLock } from "./apply-executor/store-lock.js";
 import {
-  applyDeletes,
-  applyRewrites,
-} from "./apply-executor/apply-ops-rewrite.js";
+  enterApplying,
+  journalFor,
+  leaveApplying,
+} from "./apply-executor/run-hooks.js";
 import { syncSceneIndex } from "./apply-executor/apply-route.js";
 import { verifyCounts } from "./apply-executor/verify-counts.js";
 import {
@@ -116,28 +116,18 @@ export class ApplyExecutor {
       // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
       // ONLY call site — a second one would be a way past it.
       runApplyGate(this.deps, parsed.diff, scoped);
-      // 3. Trust-boundary manifest recheck — before any mutation.
-      checkManifest(this.deps, parsed);
-      // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes →
-      // files. tz-09 Ф5: each one journals prepared/applied, so a crash in
-      // the middle leaves a record of exactly how far the apply got. The
-      // canonical opIndex order IS this call order (control-plane/oplog.ts).
-      const onOp = this.journalFor(parsed.diff, scoped);
-      await applyMerges(this.deps, parsed.diff.merge, result, onOp);
-      await applyRewritesRecords(
-        this.deps,
-        parsed.diff.rewriteRecord,
-        result,
-        onOp,
-      );
-      await applyDeletes(this.deps, parsed.diff.deleteL1, result, onOp);
-      await applyRewrites(
-        this.deps,
-        parsed.diff.rewriteBlock,
-        parsed.diff.rewritePersona,
-        result,
-        onOp,
-      );
+      // 3-4. Critical section (tz-09 Ф7): the manifest recheck and every
+      // mutation run under ONE store-wide lock. The baseline is only worth
+      // rechecking while nobody else can write between the check and the
+      // first mutation. Inside it, the run passes through the single door
+      // into `applying`, so two handlers of the same run cannot both mutate.
+      const onOp = journalFor(this.deps, parsed.diff, scoped);
+      await withStoreApplyLock(this.deps.dataDir, async () => {
+        checkManifest(this.deps, parsed);
+        enterApplying(this.deps, scoped);
+        await applyMutations(this.deps, parsed.diff, result, onOp);
+        leaveApplying(this.deps, scoped);
+      });
 
       // 5. Scene index rebuild after file rewrites.
       result.sceneIndexSynced = await syncSceneIndex(this.deps);
@@ -177,22 +167,5 @@ export class ApplyExecutor {
       // Unexpected — propagate to the HTTP layer (500 with raw message).
       throw err;
     }
-  }
-
-  /** A journal when the caller named a run, a no-op otherwise: a direct
-   * apply (the pre-tz-09 call sites) has nothing to reconcile against. */
-  private journalFor(diff: ApplyDiff, run: RunContext | undefined) {
-    if (run?.runId === undefined || run.candidateDigest === undefined) {
-      return undefined;
-    }
-    return createOpJournal(
-      {
-        dataDir: this.deps.dataDir,
-        runId: run.runId,
-        candidateDigest: run.candidateDigest,
-        now: () => Date.now(),
-      },
-      countOps(diff),
-    );
   }
 }

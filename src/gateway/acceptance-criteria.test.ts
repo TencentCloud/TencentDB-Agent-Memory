@@ -519,18 +519,38 @@ describe("tz-09 criterion 4 — apply() has no path around the gate", () => {
     const idx = (needle: string): number =>
       lines.findIndex((l) => l.includes(needle));
     const gateAt = idx("runApplyGate(");
-    // Every mutation entry point must come AFTER the gate line.
+    // The mutations live behind ONE entry point (apply-executor/mutate.ts),
+    // and that entry point is reached only after the gate line.
+    const mutateCalls = lines.filter((l) => l.includes("applyMutations("));
+    expect(mutateCalls).toHaveLength(1);
+    expect(idx("applyMutations(")).toBeGreaterThan(gateAt);
+
+    // No second way in: the individual mutation functions are not reachable
+    // from the shim at all, so nothing can run them before the gate.
     for (const mutation of [
       "applyMerges(",
       "applyRewritesRecords(",
       "applyDeletes(",
       "applyRewrites(",
     ]) {
-      const at = idx(mutation);
-      expect(at, `${mutation} must appear after the gate`).toBeGreaterThan(
-        gateAt,
+      expect(idx(mutation), `${mutation} must not be called in the shim`).toBe(
+        -1,
       );
     }
+
+    // …and every mutation the executor performs happens inside that one
+    // entry point, in the canonical journal order.
+    const mutateLines = codeOnly(
+      readRepo("src/gateway/apply-executor/mutate.ts"),
+    );
+    const order = [
+      "applyMerges(",
+      "applyRewritesRecords(",
+      "applyDeletes(",
+      "applyRewrites(",
+    ].map((needle) => mutateLines.findIndex((l) => l.includes(needle)));
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
   it("the gate module is the ONLY caller of assertOpsSubset in the apply path", () => {
