@@ -34,17 +34,21 @@ export const LAUNCHER_OWNED_FLAGS: readonly string[] = [
   "--session-id",
 ];
 
-/** Drop launcher-owned flags (and the value of those that take one). */
-export function stripOwnedFlags(flags: readonly string[]): string[] {
+/** Drop launcher-owned flags (and the value of those that take one). Each
+ * host owns its OWN session flags, so the list is a parameter. */
+export function stripOwnedFlags(
+  flags: readonly string[],
+  owned: readonly string[] = LAUNCHER_OWNED_FLAGS,
+): string[] {
   const kept: string[] = [];
   for (let i = 0; i < flags.length; i += 1) {
     const flag = flags[i]!;
-    if (!LAUNCHER_OWNED_FLAGS.includes(flag)) {
+    if (!owned.includes(flag)) {
       kept.push(flag);
       continue;
     }
-    // `--no-session` is a switch; the rest carry a value that goes with them.
-    if (flag !== "--no-session") i += 1;
+    // A `--no-*` switch carries nothing; the rest take a value with them.
+    if (!flag.startsWith("--no-")) i += 1;
   }
   return kept;
 }
@@ -55,15 +59,13 @@ export interface LauncherSettings {
 }
 
 /** `memory.consolidation.launchers.<id>` — the new home. */
+const launcherSettingsSchema = z.strictObject({
+  binary: z.string().min(1).optional(),
+  flags: z.array(z.string()).optional(),
+});
+
 export const launchersSchema = z
-  .strictObject({
-    [PI_LAUNCHER_ID]: z
-      .strictObject({
-        binary: z.string().min(1).optional(),
-        flags: z.array(z.string()).optional(),
-      })
-      .optional(),
-  })
+  .record(z.string().min(1), launcherSettingsSchema)
   .optional();
 
 /**
@@ -109,17 +111,26 @@ export function readLauncherConfig(
   if (legacyBinary !== undefined) deprecated.push("piBinary");
   if (legacyFlags !== undefined) deprecated.push("spawnFlags");
 
-  return {
-    settings: {
-      [PI_LAUNCHER_ID]: {
-        binary: expandHome(
-          str(pi, "binary") ?? legacyBinary ?? DEFAULT_PI_BINARY,
-        ),
-        flags: strArray(pi, "flags") ?? legacyFlags ?? [...DEFAULT_PI_FLAGS],
-      },
+  const settings: Record<string, LauncherSettings> = {
+    [PI_LAUNCHER_ID]: {
+      binary: expandHome(
+        str(pi, "binary") ?? legacyBinary ?? DEFAULT_PI_BINARY,
+      ),
+      flags: strArray(pi, "flags") ?? legacyFlags ?? [...DEFAULT_PI_FLAGS],
     },
-    deprecated,
   };
+  // Any OTHER launcher the operator configured. Defaults for a host nobody
+  // asked for would be a host silently available — the registry decides what
+  // it can build, this only reports what was written down.
+  for (const [id, raw] of Object.entries(group ?? {})) {
+    if (id === PI_LAUNCHER_ID) continue;
+    const cfg = raw as Raw;
+    settings[id] = {
+      binary: expandHome(str(cfg, "binary") ?? id),
+      flags: strArray(cfg, "flags") ?? [],
+    };
+  }
+  return { settings, deprecated };
 }
 
 /** One line for the startup log; empty when nothing legacy was used. */

@@ -19,7 +19,7 @@ export type CriticBootstrap =
   { ok: true; contract: ResolvedRoleContract } | { ok: false; reason: string };
 
 /** Launchers this build can actually run. tz-06 widens it. */
-const SUPPORTED_LAUNCHERS = new Set(["pi"]);
+const SUPPORTED_LAUNCHERS = new Set(["pi", "claude"]);
 
 export function resolveCriticPackage(
   ctx: OrchestratorContext,

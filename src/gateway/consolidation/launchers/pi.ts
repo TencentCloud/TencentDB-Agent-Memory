@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runKeeperProcess } from "./pi-process.js";
+import { classifyLaunchError } from "./spawn-errors.js";
 import { killChildGroup } from "../child-spawn.js";
 import type { Logger } from "../../../core/types.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
@@ -26,7 +27,6 @@ const PI_CAPABILITIES: ReadonlySet<string> = new Set([
 ]);
 import type {
   HostRunResult,
-  LaunchError,
   LaunchInput,
   LaunchOutcome,
   RoleLauncher,
@@ -44,18 +44,6 @@ export function piAssetArgs(contract: ResolvedRoleContract): string[] {
     args.push("--skill", contract.assets.skillPath);
   }
   return args;
-}
-
-/** ENOENT/EACCES from the spawn are the host refusing, not the role failing —
- * they travel as a typed error on the result (criterion 10, closed in Ф4). */
-function classifySpawnError(message: string): LaunchError | undefined {
-  if (message.includes("ENOENT")) {
-    return { kind: "binary-not-found", message };
-  }
-  if (message.includes("EACCES") || message.includes("EPERM")) {
-    return { kind: "permission-denied", message };
-  }
-  return undefined;
 }
 
 export function createPiLauncher(
@@ -120,7 +108,7 @@ export function createPiLauncher(
         stderr: res.stderr,
         error: res.error,
         launchError:
-          res.error === undefined ? undefined : classifySpawnError(res.error),
+          res.error === undefined ? undefined : classifyLaunchError(res.error),
       }));
 
       return {

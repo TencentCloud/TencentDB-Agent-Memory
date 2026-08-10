@@ -26,11 +26,11 @@ export type BatchingStrategy =
 /**
  * Instance-level execution binding (§3.4): launcher, provider and model are
  * fixed for the role and pinned into the run. There is no "pick one for me"
- * default. `launcherId` is legacy-versioned here: today only pi exists, the
- * host swap is tz-06.
+ * default. `launcherId` names the host (tz-06): existing bindings say "pi"
+ * and stay valid — the union only grows.
  */
 export interface ExecutionBinding {
-  launcherId: "pi";
+  launcherId: "pi" | "claude" | "codex";
   provider: string;
   model: string;
   thinking: string;

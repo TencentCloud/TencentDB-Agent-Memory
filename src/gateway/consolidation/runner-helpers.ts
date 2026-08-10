@@ -13,6 +13,7 @@ import {
   type RunContext,
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
+import { checkCapabilities } from "./launchers/capabilities.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type {
   LaunchInput,
@@ -72,6 +73,17 @@ async function launchSafely(
   launcher: RoleLauncher,
   input: LaunchInput,
 ): Promise<LaunchOutcome> {
+  // L5 gate HERE, not in the registry: `ctx.launcherFor` is a seam anyone can
+  // hand a raw launcher through, and a gate that a caller can walk around is
+  // not a gate. This is the one place every launch passes.
+  const incompatible = checkCapabilities(
+    launcher.id,
+    // A contract pinned into a run BEFORE this field existed has no list —
+    // that is "requires nothing", not a crash on replay.
+    input.contract.requiresCapabilities ?? [],
+    launcher.capabilities,
+  );
+  if (incompatible !== null) return { ok: false, error: incompatible };
   try {
     return await launcher.launch(input);
   } catch (err) {

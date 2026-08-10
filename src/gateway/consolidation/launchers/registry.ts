@@ -6,27 +6,10 @@
  * place where an unknown id becomes a typed refusal instead of a crash.
  */
 import { createPiLauncher } from "./pi.js";
+import { CLAUDE_LAUNCHER_ID, createClaudeLauncher } from "./claude.js";
 import { PI_LAUNCHER_ID, type LauncherSettings } from "./pi-config.js";
 import type { Logger } from "../../../core/types.js";
-import { checkCapabilities } from "./capabilities.js";
-import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
-
-/** The capability check belongs to every launcher, so it lives ONCE here
- * rather than in each implementation, where the third one would forget it. */
-function withCapabilityGate(inner: RoleLauncher): RoleLauncher {
-  return {
-    id: inner.id,
-    capabilities: inner.capabilities,
-    launch: async (input: LaunchInput): Promise<LaunchOutcome> => {
-      const error = checkCapabilities(
-        inner.id,
-        input.contract.requiresCapabilities,
-        inner.capabilities,
-      );
-      return error === null ? inner.launch(input) : { ok: false, error };
-    },
-  };
-}
+import type { LaunchOutcome, RoleLauncher } from "./types.js";
 
 /** A launcher that refuses everything, so an unknown binding surfaces as an
  * `invalid-binding` LaunchError on the run instead of throwing at wiring time
@@ -50,16 +33,17 @@ export function createLauncherRegistry(
   logger: Logger,
 ): (launcherId: string) => RoleLauncher {
   const built = new Map<string, RoleLauncher>();
-  const piSettings = settings[PI_LAUNCHER_ID];
-  if (piSettings) {
-    built.set(PI_LAUNCHER_ID, createPiLauncher(piSettings, logger));
-  }
-  return (launcherId: string) => {
-    const launcher = built.get(launcherId);
-    // An unregistered id is a BINDING error; gating it on capabilities would
-    // report "host-incompatible" for a host that does not exist here at all.
-    return launcher === undefined
-      ? refusingLauncher(launcherId)
-      : withCapabilityGate(launcher);
+  const factories: Record<
+    string,
+    (s: LauncherSettings, l: Logger) => RoleLauncher
+  > = {
+    [PI_LAUNCHER_ID]: createPiLauncher,
+    [CLAUDE_LAUNCHER_ID]: createClaudeLauncher,
   };
+  for (const [id, factory] of Object.entries(factories)) {
+    const s = settings[id];
+    if (s) built.set(id, factory(s, logger));
+  }
+  return (launcherId: string) =>
+    built.get(launcherId) ?? refusingLauncher(launcherId);
 }
