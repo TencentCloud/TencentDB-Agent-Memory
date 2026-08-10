@@ -95,6 +95,16 @@ export async function runRole(
     } catch {
       // best-effort
     }
+    // Count this failure too: an unexpected error (broken checkpoint, db
+    // trouble) is exactly the kind of breakage that would otherwise re-spawn
+    // a sub-session on every tick, unbounded by the retry budget.
+    if (!opts.dryRun) {
+      try {
+        await stampRoleRun(ctx, summary);
+      } catch {
+        // best-effort: the state that failed the run may also be unwritable
+      }
+    }
     return summary;
   } finally {
     ctx.childrenRef.value.delete(opts.runId);
