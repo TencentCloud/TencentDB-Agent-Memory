@@ -115,6 +115,8 @@ auth:
 sessionInit:
   enabled: $(bool $PROXY_ENABLE_SESSION_INIT)
   maxRetries: 3
+  # 不建 Task 时的兜底（PROXY_DEFAULT_TASK_ID 可覆盖）：Task 列表多一个「本次不关联任务」虚拟条目
+  defaultTaskId: "${PROXY_DEFAULT_TASK_ID:-default}"
   injectAgentContext: true
   injectTaskContext: true
   headerAutoSelect:
@@ -131,6 +133,9 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  # 注入给 Agent 的 <tdai_memory_tools>/<skill_tools> 里嵌的 base URL。
+  # 必须填客户端可达地址；不填会 fallback 到容器内网 IP（客户端连接超时）。
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL:-http://127.0.0.1:8096}"
   injectors:
     - skill
     - knowledge

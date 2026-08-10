@@ -263,10 +263,11 @@ function extractApiKey(c: Context): string {
  */
 function hasValidThinkingSignature(block: Record<string, unknown>): boolean {
   const sig = block.signature;
-  if (typeof sig !== "string" || sig.length < 40) return false;
+  if (typeof sig !== "string" || sig.length === 0) return false;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sig)) {
-    return false;
+    return true;
   }
+  if (sig.length < 40) return false;
   return /^[A-Za-z0-9+/=]+$/.test(sig);
 }
 
@@ -1139,6 +1140,23 @@ export async function handleAnthropicMessages(
     : config.upstream.apiKey;
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
+  try {
+    const _ub = upstreamBody as Record<string, any>;
+    if (_ub.thinking && Array.isArray(_ub.messages)) {
+      if (_ub.thinking?.type === "adaptive") {
+        _ub.thinking = { type: "enabled", budget_tokens: 16000 };
+      }
+      for (const _m of _ub.messages) {
+        if (_m?.role === "assistant" && Array.isArray(_m.content)) {
+          const _hasTool = _m.content.some((b: any) => b?.type === "tool_use");
+          const _hasThk = _m.content.some((b: any) => b?.type === "thinking" || b?.type === "redacted_thinking");
+          if (_hasTool && !_hasThk) {
+            _m.content.unshift({ type: "thinking", thinking: "" });
+          }
+        }
+      }
+    }
+  } catch (e) {}
   if (sanitizedCount > 0) {
     pipe.info(
       "FORWARD",
