@@ -1,14 +1,20 @@
 /**
- * Role config schema (wave tdai-memory-factory-2026-08-03). Strict 21-field
- * RoleConfigFile + zod-less validator (manual type checks; avoids adding a
- * zod dep for a shape that's already in a single owner file).
+ * Role config schema (wave tdai-memory-factory-2026-08-03; tz-01 B4).
  *
- * The list is a KEY WHITELIST, not a presence list: an unknown key fails the
- * load, a known key may be absent and take the schema default.
+ * 19 required fields + 2 optional (`runtime`, `retry_budget`) = a 21-key
+ * whitelist. Zod-less: one table of per-field predicates, used by both
+ * entry points, so "is this value valid" is stated exactly once.
+ *
+ *   validateRoleConfig  — legacy boolean-ish gate: valid config or null.
+ *   inspectRoleConfig   — same rules, but distinguishes WHY a file failed:
+ *                         invalid (unknown key / wrong type) vs partial
+ *                         (known keys, all well-typed, some missing). tz-01
+ *                         needs that split: invalid is fail-closed, partial
+ *                         is what the LegacyRoleAdapter is allowed to fill.
  */
 import type { ApplyOp } from "./role-paths.js";
 
-/** Strict 21-field role config. Unknown keys → load returns null. */
+/** Strict 21-key role config. Unknown keys → load returns null. */
 export interface RoleConfigFile {
   name?: string;
   model?: string;
@@ -43,8 +49,79 @@ export interface RoleConfigFile {
   };
 }
 
-/** 21 known field names for the strict schema (whitelist of allowed keys). */
-export const REQUIRED_ROLE_FIELDS = [
+/** Schema default for `retry_budget` (tz-01 B4: the default lives here, and
+ * it is finite). One retry after the first attempt. */
+export const DEFAULT_RETRY_BUDGET = 2;
+
+/** Upper bound: a contract asking for more attempts than this is a typo, not
+ * a policy — the run would hold the per-role gate for hours. */
+export const MAX_RETRY_BUDGET = 20;
+
+export const ROLE_SCOPES = [
+  "full_store",
+  "fresh_tail",
+  "over_limit_only",
+] as const;
+export const ROLE_TRIGGERS = [
+  "schedule",
+  "threshold",
+  "both",
+  "manual_only",
+] as const;
+const RUNTIME_KEYS = ["extension_path", "skill_path", "scratch_root"] as const;
+
+export function isApplyOp(v: unknown): v is ApplyOp {
+  return (
+    v === "deleteL1" ||
+    v === "merge" ||
+    v === "rewriteBlock" ||
+    v === "rewriteRecord" ||
+    v === "rewritePersona"
+  );
+}
+
+const isStr = (v: unknown): boolean => typeof v === "string";
+const isNum = (v: unknown): boolean => typeof v === "number";
+const isBool = (v: unknown): boolean => typeof v === "boolean";
+const isRec = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/** Per-field validity, stated once. A field passes or the file is invalid. */
+const FIELD_CHECKS: Record<string, (v: unknown) => boolean> = {
+  name: isStr,
+  model: isStr,
+  prompt_file: isStr,
+  thinking: isStr,
+  enabled: isBool,
+  idsOnly: isBool,
+  fail_on_missing_prompt: isBool,
+  timeout_min: isNum,
+  diff_cap: isNum,
+  diff_byte_cap: isNum,
+  max_run_ms: isNum,
+  scope: (v) => ROLE_SCOPES.includes(v as (typeof ROLE_SCOPES)[number]),
+  trigger: (v) => ROLE_TRIGGERS.includes(v as (typeof ROLE_TRIGGERS)[number]),
+  schedule: (v) => v === null || isStr(v),
+  threshold: (v) => v === null || isNum(v),
+  critic_role: (v) => v === null || isStr(v),
+  ops_subset: (v) => Array.isArray(v) && v.every(isApplyOp),
+  tools_subset: (v) => Array.isArray(v) && v.every(isStr),
+  caps: (v) => isRec(v) && isNum(v.delete_per_run) && isNum(v.rewrite_per_run),
+  retry_budget: (v) =>
+    typeof v === "number" &&
+    Number.isInteger(v) &&
+    v >= 1 &&
+    v <= MAX_RETRY_BUDGET,
+  runtime: (v) =>
+    isRec(v) &&
+    Object.entries(v).every(
+      ([k, x]) =>
+        RUNTIME_KEYS.includes(k as (typeof RUNTIME_KEYS)[number]) && isStr(x),
+    ),
+};
+
+/** The 19 fields a complete contract must carry. */
+export const REQUIRED_PRESENT_FIELDS = [
   "name",
   "model",
   "prompt_file",
@@ -64,90 +141,44 @@ export const REQUIRED_ROLE_FIELDS = [
   "max_run_ms",
   "fail_on_missing_prompt",
   "critic_role",
+] as const;
+
+/** 21 known field names (whitelist of allowed keys: 19 required + 2 optional). */
+export const REQUIRED_ROLE_FIELDS = [
+  ...REQUIRED_PRESENT_FIELDS,
   "runtime",
   "retry_budget",
 ] as const;
 
-/** Schema default for `retry_budget` (tz-01 B4: the default lives here, and
- * it is finite). One retry after the first attempt. */
-export const DEFAULT_RETRY_BUDGET = 2;
+export type RoleConfigInspection =
+  | { kind: "valid"; config: RoleConfigFile }
+  | { kind: "partial"; config: RoleConfigFile; missing: string[] }
+  | { kind: "invalid"; reason: string };
 
-/** Upper bound: a contract asking for more attempts than this is a typo, not
- * a policy — the run would hold the per-role gate for hours. */
-export const MAX_RETRY_BUDGET = 20;
-
-export function isApplyOp(v: unknown): v is ApplyOp {
-  return (
-    v === "deleteL1" ||
-    v === "merge" ||
-    v === "rewriteBlock" ||
-    v === "rewriteRecord" ||
-    v === "rewritePersona"
-  );
+/**
+ * Inspect a parsed JSON object against the schema. Unknown key or wrong type
+ * → `invalid` with a human reason; every present key well-typed but some of
+ * the 19 required ones absent → `partial`; otherwise `valid`.
+ */
+export function inspectRoleConfig(parsed: unknown): RoleConfigInspection {
+  if (!isRec(parsed)) return { kind: "invalid", reason: "not a JSON object" };
+  for (const key of Object.keys(parsed)) {
+    if (key === "_comment") continue;
+    const check = FIELD_CHECKS[key];
+    if (!check) return { kind: "invalid", reason: `unknown field "${key}"` };
+    if (!check(parsed[key])) {
+      return { kind: "invalid", reason: `field "${key}" has an invalid value` };
+    }
+  }
+  const missing = REQUIRED_PRESENT_FIELDS.filter((f) => !(f in parsed));
+  const config = parsed as unknown as RoleConfigFile;
+  return missing.length === 0
+    ? { kind: "valid", config }
+    : { kind: "partial", config, missing: [...missing] };
 }
 
-/** Validate a parsed JSON object against the strict 21-field schema. */
+/** Validate a parsed JSON object against the strict schema (null on failure). */
 export function validateRoleConfig(parsed: unknown): RoleConfigFile | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    return null;
-  const obj = parsed as Record<string, unknown>;
-  for (const key of Object.keys(obj)) {
-    if (
-      !REQUIRED_ROLE_FIELDS.includes(
-        key as (typeof REQUIRED_ROLE_FIELDS)[number],
-      )
-    ) {
-      // Unknown key → fail (strict schema). _comment is allowed.
-      if (key !== "_comment") return null;
-    }
-  }
-  if (!Array.isArray(obj.ops_subset)) return null;
-  for (const op of obj.ops_subset) if (!isApplyOp(op)) return null;
-  if (!Array.isArray(obj.tools_subset)) return null;
-  for (const t of obj.tools_subset) if (typeof t !== "string") return null;
-  if (!obj.caps || typeof obj.caps !== "object") return null;
-  const caps = obj.caps as Record<string, unknown>;
-  if (typeof caps.delete_per_run !== "number") return null;
-  if (typeof caps.rewrite_per_run !== "number") return null;
-  if (typeof obj.max_run_ms !== "number") return null;
-  if (typeof obj.idsOnly !== "boolean") return null;
-  if (typeof obj.timeout_min !== "number") return null;
-  if (
-    !["full_store", "fresh_tail", "over_limit_only"].includes(
-      obj.scope as string,
-    )
-  )
-    return null;
-  if (
-    !["schedule", "threshold", "both", "manual_only"].includes(
-      obj.trigger as string,
-    )
-  )
-    return null;
-  if (obj.schedule !== null && typeof obj.schedule !== "string") return null;
-  if (obj.threshold !== null && typeof obj.threshold !== "number") return null;
-  if (typeof obj.fail_on_missing_prompt !== "boolean") return null;
-  if (typeof obj.name !== "string") return null;
-  if (typeof obj.model !== "string") return null;
-  if (typeof obj.prompt_file !== "string") return null;
-  if (typeof obj.enabled !== "boolean") return null;
-  if (typeof obj.thinking !== "string") return null;
-  if (typeof obj.diff_cap !== "number") return null;
-  if (typeof obj.diff_byte_cap !== "number") return null;
-  if (obj.critic_role !== null && typeof obj.critic_role !== "string")
-    return null;
-  if (obj.retry_budget !== undefined) {
-    const rb = obj.retry_budget;
-    if (typeof rb !== "number" || !Number.isInteger(rb)) return null;
-    if (rb < 1 || rb > MAX_RETRY_BUDGET) return null;
-  }
-  if (obj.runtime !== undefined) {
-    const rt = obj.runtime as Record<string, unknown>;
-    for (const k of Object.keys(rt)) {
-      if (!["extension_path", "skill_path", "scratch_root"].includes(k))
-        return null;
-      if (typeof rt[k] !== "string") return null;
-    }
-  }
-  return obj as unknown as RoleConfigFile;
+  const res = inspectRoleConfig(parsed);
+  return res.kind === "valid" ? res.config : null;
 }
