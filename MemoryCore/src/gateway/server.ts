@@ -875,6 +875,7 @@ export class TdaiGateway {
         getStore: () => this.core.getVectorStore(),
         getEmbedding: () => this.core.getEmbeddingService(),
         getStorage: () => this.core.getStorage(),
+        dataBaseDir: this.config.data.baseDir,
         deployMode: this.config.deployMode,
         // Inject pipeline introspection deps for /v2/pipeline/status (standalone-only).
         // Both can be undefined in legacy standalone (no stateBackend configured) —
