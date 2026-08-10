@@ -89,6 +89,23 @@ function acquireRole(self: TriggerHandle, role: string): (() => void) | null {
       return null;
     }
     releaseFile = lock.release;
+    // A run slower than one ttl must not have its lock expire underneath it:
+    // renewal is what keeps "stale" meaning "the owner is gone" rather than
+    // "the owner is slow" (Codex major #9).
+    const ttl = resolution.contract.policy.maxRunMs;
+    const beat = setInterval(
+      () => {
+        if (!lock.renew(self.now())) clearInterval(beat);
+      },
+      Math.max(1_000, Math.floor(ttl / 3)),
+    );
+    beat.unref?.();
+    const stopBeat = (): void => clearInterval(beat);
+    const releaseLock = lock.release;
+    releaseFile = () => {
+      stopBeat();
+      releaseLock();
+    };
   } catch (err) {
     // Unusable lock dir: degrade to in-process locking, never crash.
     self.logger.warn?.(

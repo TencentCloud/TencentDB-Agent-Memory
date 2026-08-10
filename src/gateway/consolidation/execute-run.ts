@@ -82,7 +82,50 @@ export async function executeRunForRole(
   // pinned before anything can be spawned. A role that failed to resolve
   // (above) never gets a Run: it never runs.
   openRunRecord(ctx, opts, contract);
-  return runRole(ctx, { ...opts, contract });
+  // The lease is refreshed while the run is alive. Without renewal a run
+  // slower than its own TTL has its lease expire under it, and the next
+  // process may legitimately take over a run that is still working —
+  // "stealable while healthy" (tz-09 P3).
+  const renew = startLeaseRenewal(ctx, opts, contract);
+  try {
+    return await runRole(ctx, { ...opts, contract });
+  } finally {
+    clearInterval(renew);
+  }
+}
+
+/** Refresh the run lease every third of its TTL. Re-claiming your OWN lease
+ * does not bump the fence (lease.ts), so this never invalidates the artefacts
+ * the run has already produced. */
+function startLeaseRenewal(
+  ctx: OrchestratorContext,
+  opts: ExecuteRunOpts,
+  contract: ResolvedRoleContract,
+): NodeJS.Timeout {
+  const ttlMs = leaseTtlMs(contract);
+  const timer = setInterval(
+    () => {
+      try {
+        claimRun(ctx.dataDir, opts.runId, runOwnerId(ctx.ownerPid), {
+          nowMs: ctx.now(),
+          ttlMs,
+        });
+      } catch {
+        // Best-effort: a control plane that is briefly unavailable must not
+        // take the run down with it.
+      }
+    },
+    Math.max(1_000, Math.floor(ttlMs / 3)),
+  );
+  timer.unref?.();
+  return timer;
+}
+
+/** The role's OWN bound on a run, which is what the per-role file lock already
+ * uses (`policy.maxRunMs`). `timeoutMs` is the CHILD's budget — a run is more
+ * than its child, so a lease sized by it expires during the apply that follows. */
+function leaseTtlMs(contract: ResolvedRoleContract): number {
+  return Math.max(contract.policy.maxRunMs, contract.timeoutMs, 60_000);
 }
 
 /** `policy.opsSubset` is a Set, and a plain JSON.stringify turns a Set into
@@ -119,7 +162,7 @@ function openRunRecord(
     // against 1 forever — a gate that cannot refuse anything.
     const claim = claimRun(ctx.dataDir, opts.runId, runOwnerId(ctx.ownerPid), {
       nowMs: ctx.now(),
-      ttlMs: Math.max(contract.timeoutMs, 60_000),
+      ttlMs: leaseTtlMs(contract),
       state: "running",
     });
     if (!claim.ok) {

@@ -37,6 +37,9 @@ export interface RoleLockInfo {
 
 export interface RoleLock {
   path: string;
+  /** Push the deadline out while this handle still owns the file. Returns
+   * false once someone else does — the caller has lost the lock. */
+  renew: (atMs?: number) => boolean;
   info: RoleLockInfo;
   /** Idempotent; removes the file only while it still holds OUR token. */
   release: () => void;
@@ -118,6 +121,23 @@ export function acquireRoleLock(
   const mk = (): RoleLock => ({
     path: file,
     info,
+    renew: (atMs?: number) => {
+      // Rewrite the deadline in place, and only while WE still hold the file:
+      // a lock that outlived its ttl is fair game for takeover, so a run that
+      // legitimately runs longer than one ttl has to keep saying so.
+      const held = readLock(file);
+      if (held === null || held.token !== info.token) return false;
+      const at = atMs ?? Date.now();
+      info.expiresAt = new Date(at + Math.max(1, opts.ttlMs)).toISOString();
+      try {
+        const tmp = `${file}.${process.pid}.${randomUUID()}.renew`;
+        fs.writeFileSync(tmp, JSON.stringify(info), "utf-8");
+        fs.renameSync(tmp, file);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     release: () => {
       const held = readLock(file);
       if (held !== null && held.token === info.token) {
