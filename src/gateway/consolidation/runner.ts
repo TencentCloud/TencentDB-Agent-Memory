@@ -12,6 +12,7 @@
 import { manifestShaMap } from "./diff-builder.js";
 import { preApply } from "./runner-stages.js";
 import { recordApplyResult } from "./apply-batch.js";
+import { runCriticStage, digestOf } from "./critic-stage.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
 
@@ -40,6 +41,21 @@ export async function runBatch(
   try {
     const pre = await preApply(ctx, args, result);
     if (!pre.ok || !pre.baseline || pre.rawDiff === undefined) return result;
+
+    // tz-09 Ф4b: the critic decides BEFORE apply. Fail-closed in enforce —
+    // no verdict is a refusal, never a default-approve.
+    const review = await runCriticStage(ctx, {
+      runId: args.runId,
+      scratchDir: args.scratchDir,
+      role: args.contract,
+      candidate: pre.rawDiff,
+      inputDigest: digestOf(result.diffText ?? ""),
+    });
+    if (!review.ok) {
+      result.error = `critic gate refused apply: ${review.reason ?? "no verdict"}`;
+      result.status = "failed";
+      return result;
+    }
 
     const applyResult = await ctx.applyDiff(
       {
