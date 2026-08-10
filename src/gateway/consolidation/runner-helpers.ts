@@ -14,6 +14,7 @@ import {
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
 import { checkCapabilities } from "./launchers/capabilities.js";
+import { isolationRefusal } from "./launchers/isolation.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type {
   LaunchInput,
@@ -84,6 +85,10 @@ async function launchSafely(
     launcher.capabilities,
   );
   if (incompatible !== null) return { ok: false, error: incompatible };
+  // L6: a role that asks to be confined is refused until the gate opens —
+  // launching it unconfined "for now" is the outcome the gate exists to stop.
+  const unconfinable = isolationRefusal(input.contract, launcher);
+  if (unconfinable !== null) return { ok: false, error: unconfinable };
   try {
     return await launcher.launch(input);
   } catch (err) {

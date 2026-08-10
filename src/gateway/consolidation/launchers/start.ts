@@ -12,6 +12,7 @@ import { runChildProcess } from "./child-process.js";
 import { killChildGroup } from "../child-spawn.js";
 import { ATTEMPTS_DIR } from "./pi-config.js";
 import { classifyLaunchError } from "./spawn-errors.js";
+import { confineArgv } from "./isolation.js";
 import type { Logger } from "../../../core/types.js";
 import type { HostRunResult, LaunchInput, LaunchOutcome } from "./types.js";
 
@@ -34,11 +35,17 @@ export interface StartOptions {
 
 export function startHosted(opts: StartOptions): LaunchOutcome {
   let cancel: (() => void) | undefined;
+  // Past the L6 gate (runner-helpers), a role with a profile runs CONFINED —
+  // the wrapper is applied here so no launcher can forget it.
+  const cmd =
+    (opts.input.contract.binding.isolationProfileRef ?? null) === null
+      ? { binary: opts.binary, args: opts.args }
+      : confineArgv(opts.input.cwd, opts.binary, opts.args);
   // The handle is returned WITHOUT awaiting the run: a caller that cannot
   // cancel until the child is done has no cancel at all.
   const completion: Promise<HostRunResult> = runChildProcess({
-    binary: opts.binary,
-    args: opts.args,
+    binary: cmd.binary,
+    args: cmd.args,
     cwd: opts.input.cwd,
     env: opts.env,
     timeoutMs: opts.input.contract.timeoutMs,
