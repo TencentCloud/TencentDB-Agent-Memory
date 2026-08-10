@@ -26,7 +26,6 @@ function createMockLogger() {
 
 function createMockStateManager(overrides: Partial<OffloadStateManager> = {}): OffloadStateManager {
   const mgr = new OffloadStateManager();
-  // Override getLastSessionKey to return a test key
   Object.defineProperty(mgr, "getLastSessionKey", {
     value: () => overrides.getLastSessionKey?.() ?? "agent:main:test-session",
     configurable: true,
@@ -57,6 +56,28 @@ function createMockCtx(): any {
   return {};
 }
 
+/**
+ * Create a handler using the new signature (getSessionMessages as 6th param):
+ *   createAfterToolCallHandler(
+ *     stateManager, logger, getContextWindow, pluginConfig, backendClient,
+ *     getSessionMessages?,  // 6th param
+ *   )
+ */
+function createHandler(
+  getSessionMessages: ((opts: { sessionKey: string; limit?: number }) => Promise<unknown[] | undefined>) | undefined,
+  stateManager?: OffloadStateManager,
+  logger?: ReturnType<typeof createMockLogger>,
+) {
+  return createAfterToolCallHandler(
+    stateManager ?? createMockStateManager(),
+    logger ?? createMockLogger(),
+    undefined, // getContextWindow
+    undefined, // pluginConfig
+    null,      // backendClient
+    getSessionMessages,
+  );
+}
+
 // ── Tests: createAfterToolCallHandler ────────────────────────────────────────
 
 describe("createAfterToolCallHandler getSessionMessages integration", () => {
@@ -65,21 +86,15 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
     ]);
-    const stateManager = createMockStateManager();
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
 
-    expect(getSessionMessages).toHaveBeenCalledWith("agent:main:test-session", 50);
+    expect(getSessionMessages).toHaveBeenCalledWith({
+      sessionKey: "agent:main:test-session",
+      limit: 50,
+    });
     expect(event.messages).toBeDefined();
     expect(Array.isArray(event.messages)).toBe(true);
     expect(event.messages).toHaveLength(2);
@@ -89,16 +104,7 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
     const getSessionMessages = vi.fn(async () => [
       { role: "user", content: "should not be used" },
     ]);
-    const stateManager = createMockStateManager();
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages);
 
     const existingMessages = [{ role: "user", content: "existing" }];
     const event = createMockEvent({ messages: existingMessages });
@@ -111,16 +117,7 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
   });
 
   it("does not fetch when getSessionMessages is undefined", async () => {
-    const stateManager = createMockStateManager();
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      undefined, // getSessionMessages not available
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(undefined);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -133,16 +130,8 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
     const getSessionMessages = vi.fn(async () => {
       throw new Error("API unavailable");
     });
-    const stateManager = createMockStateManager();
     const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages, undefined, logger);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -158,17 +147,9 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
   it("does not fetch when session key is unknown (no _sk)", async () => {
     const getSessionMessages = vi.fn(async () => []);
     const stateManager = createMockStateManager({
-      getLastSessionKey: () => null, // No session key
+      getLastSessionKey: () => null,
     });
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages, stateManager);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -182,15 +163,7 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
     const stateManager = createMockStateManager({
       getLastSessionKey: () => "memory-l1-task-session-12345",
     });
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages, stateManager);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -201,16 +174,7 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
 
   it("handles getSessionMessages returning empty array", async () => {
     const getSessionMessages = vi.fn(async () => []);
-    const stateManager = createMockStateManager();
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -222,16 +186,7 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
 
   it("handles getSessionMessages returning undefined", async () => {
     const getSessionMessages = vi.fn(async () => undefined);
-    const stateManager = createMockStateManager();
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages);
 
     const event = createMockEvent({ messages: undefined });
     await handler(event, createMockCtx());
@@ -240,40 +195,35 @@ describe("createAfterToolCallHandler getSessionMessages integration", () => {
     expect(event.messages).toBeUndefined();
   });
 
-  it("does not fetch when ctx provides sessionKey but stateManager does not", async () => {
+  it("uses ctx.sessionKey when stateManager.getLastSessionKey() returns null", async () => {
     const getSessionMessages = vi.fn(async () => []);
     const stateManager = createMockStateManager({
       getLastSessionKey: () => null,
     });
-    const logger = createMockLogger();
-    const handler = createAfterToolCallHandler(
-      getSessionMessages,
-      stateManager,
-      logger,
-      undefined,
-      undefined,
-      null,
-    );
+    const handler = createHandler(getSessionMessages, stateManager);
 
-    // ctx has sessionKey, but stateManager.getLastSessionKey() is null
     const event = createMockEvent({ messages: undefined });
     const ctx = { sessionKey: "agent:main:ctx-session" };
     await handler(event, ctx);
 
-    // getSessionMessages should use ctx.sessionKey as fallback
-    expect(getSessionMessages).toHaveBeenCalledWith("agent:main:ctx-session", 50);
+    // The handler uses _sk = stateManager.getLastSessionKey() ?? ctx?.sessionKey
+    // When stateManager returns null, ctx.sessionKey is used
+    expect(getSessionMessages).toHaveBeenCalledWith({
+      sessionKey: "agent:main:ctx-session",
+      limit: 50,
+    });
   });
 });
 
 // ── Tests: getSessionMessages wiring in registerOffload ──────────────────────
 
 describe("getSessionMessages wiring in registerOffload", () => {
-  it("wraps api.runtime.subagent.getSessionMessages correctly", async () => {
+  it("passes the raw api.runtime.subagent.getSessionMessages when available", () => {
     // Simulate the wiring in index.ts:
-    //   const getSessionMessages = api.runtime?.subagent?.getSessionMessages
-    //     ? (sessionKey: string, limit?: number) => api.runtime.subagent.getSessionMessages({ sessionKey, limit })
-    //     : undefined;
-
+    //   createAfterToolCallHandler(
+    //     _mgr, logger, getContextWindow, pCfg, backendClient as any,
+    //     (api.runtime?.subagent?.getSessionMessages) as any,
+    //   );
     const apiGetSessionMessages = vi.fn(async () => [
       { role: "user", content: "wired" },
     ]);
@@ -286,38 +236,31 @@ describe("getSessionMessages wiring in registerOffload", () => {
       },
     };
 
-    const getSessionMessages = api.runtime?.subagent?.getSessionMessages
-      ? (sessionKey: string, limit?: number) =>
-          api.runtime.subagent.getSessionMessages({ sessionKey, limit })
-      : undefined;
+    const getSessionMessages = (api as any).runtime?.subagent?.getSessionMessages as
+      | ((opts: { sessionKey: string; limit?: number }) => Promise<unknown[]>)
+      | undefined;
 
     expect(getSessionMessages).toBeDefined();
-    const result = await getSessionMessages!("agent:main:test", 50);
-    expect(apiGetSessionMessages).toHaveBeenCalledWith({
-      sessionKey: "agent:main:test",
-      limit: 50,
-    });
-    expect(result).toHaveLength(1);
+    // The raw API is passed directly, not wrapped
+    expect(getSessionMessages).toBe(apiGetSessionMessages);
   });
 
-  it("returns undefined when api.runtime.subagent is not available", () => {
+  it("passes undefined when api.runtime.subagent is not available", () => {
     const api = { runtime: {} };
 
-    const getSessionMessages = (api as any).runtime?.subagent?.getSessionMessages
-      ? (sessionKey: string, limit?: number) =>
-          (api as any).runtime.subagent.getSessionMessages({ sessionKey, limit })
-      : undefined;
+    const getSessionMessages = (api as any).runtime?.subagent?.getSessionMessages as
+      | ((opts: { sessionKey: string; limit?: number }) => Promise<unknown[]>)
+      | undefined;
 
     expect(getSessionMessages).toBeUndefined();
   });
 
-  it("returns undefined when api.runtime is not available", () => {
+  it("passes undefined when api.runtime is not available", () => {
     const api = {};
 
-    const getSessionMessages = (api as any).runtime?.subagent?.getSessionMessages
-      ? (sessionKey: string, limit?: number) =>
-          (api as any).runtime.subagent.getSessionMessages({ sessionKey, limit })
-      : undefined;
+    const getSessionMessages = (api as any).runtime?.subagent?.getSessionMessages as
+      | ((opts: { sessionKey: string; limit?: number }) => Promise<unknown[]>)
+      | undefined;
 
     expect(getSessionMessages).toBeUndefined();
   });
