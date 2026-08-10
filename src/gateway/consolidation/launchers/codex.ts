@@ -33,10 +33,14 @@ export const DEFAULT_CODEX_FLAGS: readonly string[] = [
 ];
 
 /** @see capabilities.ts. `isolation` is real here (`-s`), `session` is the
- * CODEX_HOME below. No extension/skill/thinking: codex has no equivalent. */
+ * CODEX_HOME below, and `tool-subset` is the host-agnostic one: only the
+ * role's declared helpers are copied into `<scratch>/tools/`
+ * (keeper-tools.ts:81). No extension/skill/thinking: codex has no
+ * equivalent. */
 const CODEX_CAPABILITIES: ReadonlySet<string> = new Set([
   "session",
   "isolation",
+  "tool-subset",
 ]);
 
 /** Owned by the launcher: the session, the working root and the sandbox mode

@@ -33,14 +33,17 @@ export const DEFAULT_CLAUDE_FLAGS: readonly string[] = ["-p"];
  * pi's `--extension`/`--skill`. No `thinking`: the level is not a per-request
  * flag here.
  *
- * No `tool-subset` either, and that one is a RETRACTION: `--allowedTools`
- * takes host tool names (`Bash`, `Edit`, `Read`), while a role's
- * `tools_subset` names the python helpers it ships (`fetch_records.py`).
- * Passing the latter as the former does not narrow anything — it hands the
- * child a tool list it does not recognise. Until a portable→host mapping
- * exists, a role that needs a tool subset is refused here rather than run
- * with a set nobody checked (tz-06 L5). */
-const CLAUDE_CAPABILITIES: ReadonlySet<string> = new Set(["session"]);
+ * `tool-subset` IS provided, for the same reason pi provides it and not
+ * through argv: `copyKeeperTools` (keeper-tools.ts:81) puts only the role's
+ * declared helpers into `<scratch>/tools/`, so the child of ANY host sees
+ * exactly that subset. An earlier round of this file retracted the capability
+ * by reasoning about `--allowedTools`, which is the wrong mechanism — that
+ * flag names host tools (`Bash`, `Read`), not the role's helpers, and it is
+ * not what enforces the subset. */
+const CLAUDE_CAPABILITIES: ReadonlySet<string> = new Set([
+  "session",
+  "tool-subset",
+]);
 
 /** Session flags this launcher owns, for the same reason pi owns its own —
  * plus the permission mode, which is not a preference: `-p` with the default

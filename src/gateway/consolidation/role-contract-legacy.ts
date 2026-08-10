@@ -51,6 +51,28 @@ export interface AdaptInput {
  * Build the resolved contract. `missing` drives the warnings: a complete
  * contract produces none, which is what `source: "contract"` means.
  */
+/**
+ * What the role actually NEEDS, not only what it remembered to declare.
+ *
+ * `requires_capabilities` is opt-in, and no live role.json carries it — so a
+ * role that ships an extension, a skill dir or an explicit thinking level
+ * declared nothing, every host looked compatible, and a host without those
+ * knobs ran the role STRIPPED and exited 0. That is the "худший исход" the
+ * package's S5 names: a silent degraded launch instead of a refusal.
+ *
+ * Only EXPLICIT intent counts. `thinking` always resolves to a value because
+ * the instance config has a default, and treating that default as a
+ * requirement would make every host that lacks the knob refuse every role —
+ * a gate that refuses everything protects nothing.
+ */
+function derivedCapabilities(cfg: RoleConfigFile): string[] {
+  const need = new Set<string>(cfg.requires_capabilities ?? []);
+  if (cfg.runtime?.extension_path) need.add("extension");
+  if (cfg.runtime?.skill_path) need.add("skill");
+  if (cfg.thinking !== undefined) need.add("thinking");
+  return [...need].sort();
+}
+
 export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
   const { role, cfg, legacy } = input;
   const warnings: string[] = [];
@@ -139,7 +161,7 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       typeof cfg.timeout_min === "number" && cfg.timeout_min > 0
         ? cfg.timeout_min * 60_000
         : legacy.timeoutMs,
-    requiresCapabilities: [...(cfg.requires_capabilities ?? [])].sort(),
+    requiresCapabilities: derivedCapabilities(cfg),
     binding,
     assets: {
       extensionPath: cfg.runtime?.extension_path ?? null,
