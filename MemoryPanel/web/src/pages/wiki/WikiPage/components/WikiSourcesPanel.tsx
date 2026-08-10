@@ -1002,6 +1002,11 @@ export default function WikiSourcesPanel() {
   if (subView === 'detail') {
     const source = sources.find((s) => s.wiki_id === selectedWikiId);
     const wikiName = source?.name ?? '';
+    // During pending/processing the backend gates page/search endpoints on ready,
+    // so pages.length reads 0 — but wiki/get keeps an accurate page_count. Show the
+    // preserved count greyed out instead of a scary zero.
+    const isProcessing = source?.status === 'pending' || source?.status === 'processing';
+    const preservedCount = source?.page_count ?? pages.length;
 
     return (
       <div className="_wiki-detail-root">
@@ -1019,7 +1024,13 @@ export default function WikiSourcesPanel() {
                 <BooksIcon size={18} />
                 <span className="_wiki-detail-title">{wikiName}</span>
                 {source && <WikiStatusBadge status={source.status} />}
-                <Text theme="label">{t('wiki.detail.pages', { count: pages.length })}</Text>
+                {isProcessing ? (
+                  <Text theme="label" className="_wiki-processing">
+                    {t('wiki.detail.pagesPreserved', { count: preservedCount })}
+                  </Text>
+                ) : (
+                  <Text theme="label">{t('wiki.detail.pages', { count: pages.length })}</Text>
+                )}
               </div>
               <div className="_wiki-detail-header-actions">
                 <Button
@@ -1169,14 +1180,35 @@ export default function WikiSourcesPanel() {
         >
           <TabPanel id="overview">
             <div className="_wiki-detail-overview">
-              <div className="_wiki-detail-overview-stats">
-                <MetricsBoard title={t('wiki.detail.overview.totalPages')} value={pages.length} />
-                <MetricsBoard title={t('wiki.detail.overview.pageTypes')} value={types.length} />
-                <MetricsBoard title={t('wiki.detail.overview.edges')} value={edgeCount} />
+              <div
+                className={`_wiki-detail-overview-stats${isProcessing ? ' _wiki-processing' : ''}`}
+              >
+                <MetricsBoard
+                  title={t('wiki.detail.overview.totalPages')}
+                  value={isProcessing ? preservedCount : pages.length}
+                />
+                <MetricsBoard
+                  title={t('wiki.detail.overview.pageTypes')}
+                  value={isProcessing ? '—' : types.length}
+                />
+                <MetricsBoard
+                  title={t('wiki.detail.overview.edges')}
+                  value={isProcessing ? '—' : edgeCount}
+                />
               </div>
+              {isProcessing && (
+                <Alert type="info" className="_wiki-detail-overview-processing-hint">
+                  {t('wiki.detail.processingHint')}
+                </Alert>
+              )}
               <Card bordered>
                 <Card.Body title={t('wiki.detail.overview.typeDist')}>
-                  {types.length === 0 ? (
+                  {isProcessing ? (
+                    <StatusTip
+                      status="loading"
+                      emptyText={t('wiki.detail.pagesPaused', { count: preservedCount })}
+                    />
+                  ) : types.length === 0 ? (
                     <StatusTip status="empty" emptyText={t('wiki.detail.overview.emptyPages')} />
                   ) : (
                     <div className="_wiki-detail-type-dist">
@@ -1213,7 +1245,12 @@ export default function WikiSourcesPanel() {
               </Card>
               <Card bordered>
                 <Card.Body title={t('wiki.detail.overview.pageList')}>
-                  {pages.length === 0 ? (
+                  {isProcessing ? (
+                    <StatusTip
+                      status="loading"
+                      emptyText={t('wiki.detail.pagesPaused', { count: preservedCount })}
+                    />
+                  ) : pages.length === 0 ? (
                     <StatusTip status="empty" emptyText={t('wiki.detail.overview.emptyPageList')} />
                   ) : (
                     <div className="_wiki-detail-overview-grid">
@@ -1271,6 +1308,8 @@ export default function WikiSourcesPanel() {
               metadata={metadata}
               wikiId={selectedWikiId}
               rawRefreshKey={rawRefreshKey}
+              processing={isProcessing}
+              preservedCount={preservedCount}
               onReadPage={handleReadPage}
               onDeletePage={handleDeletePage}
               onDeleteRaw={handleDeleteRaw}
@@ -1347,6 +1386,11 @@ export default function WikiSourcesPanel() {
               )}
               {!searching && searchResults.length === 0 && searchQuery && (
                 <StatusTip status="empty" emptyText={t('wiki.detail.search.empty')} />
+              )}
+              {!searching && isProcessing && searchResults.length === 0 && (
+                <Alert type="info" className="_wiki-detail-search-paused">
+                  {t('wiki.detail.searchPaused')}
+                </Alert>
               )}
             </div>
           </TabPanel>
@@ -1986,6 +2030,8 @@ function PagesTabContent({
   metadata,
   wikiId,
   rawRefreshKey,
+  processing,
+  preservedCount,
   onReadPage,
   onReadRaw,
   onDeletePage,
@@ -2003,6 +2049,10 @@ function PagesTabContent({
   metadata: Record<string, string> | null;
   wikiId: string;
   rawRefreshKey: number;
+  /** Wiki is ingesting → page/ls is gated on ready, so the list reads empty. */
+  processing?: boolean;
+  /** Accurate page count from wiki/get, shown instead of a scary 0. */
+  preservedCount?: number;
   onReadPage: (p: WikiPage) => void;
   onReadRaw: (filename: string) => void;
   onDeletePage: (p: WikiPage) => Promise<void> | void;
@@ -2039,7 +2089,13 @@ function PagesTabContent({
           ))}
         </div>
         <div className="_wiki-detail-page-list">
-          {pages.map((page) => {
+          {processing && pages.length === 0 ? (
+            <StatusTip
+              status="loading"
+              emptyText={t('wiki.detail.pagesPaused', { count: preservedCount ?? 0 })}
+            />
+          ) : (
+            pages.map((page) => {
             const active =
               selectedPage &&
               ((selectedPage as any).id || selectedPage.path) === ((page as any).id || page.path);
@@ -2065,7 +2121,8 @@ function PagesTabContent({
                 </Button>
               </div>
             );
-          })}
+            })
+          )}
         </div>
         <RawFilesSection
           wikiId={wikiId}

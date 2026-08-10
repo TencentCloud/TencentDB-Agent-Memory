@@ -852,3 +852,18 @@
     justify-content: flex-start;
   }
 }
+
+/* ── Processing ("nothing lost") indicators ────────────────────────────── */
+/* Grey out counts while the wiki is ingesting (page/search endpoints are
+   gated on ready, so live-derived numbers read 0 until the rebuild ends). */
+._wiki-processing {
+  opacity: 0.55;
+}
+
+._wiki-detail-overview-processing-hint {
+  margin-bottom: 12px;
+}
+
+._wiki-detail-search-paused {
+  margin-top: 12px;
+}
