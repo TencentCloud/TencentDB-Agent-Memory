@@ -19,12 +19,14 @@ import {
 import { atomicWrite } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
+import type { OnOp } from "./op-journal.js";
 
 /** Deletes with stale-re-check. */
 export async function applyDeletes(
   deps: ApplyExecutorDeps,
   ops: Array<{ id: string; updatedAt: string }> | undefined,
   result: ApplyResult,
+  onOp?: OnOp,
 ): Promise<void> {
   if (!ops || ops.length === 0) return;
   const rows = await fetchMetaRows(
@@ -48,6 +50,7 @@ export async function applyDeletes(
     toDelete.push(op.id);
   }
 
+  toDelete.forEach((id, i) => onOp?.("deleteL1", i, id, "prepared"));
   if (toDelete.length > 0 && deps.vectorStore) {
     const ok = await deps.vectorStore.deleteL1Batch(toDelete);
     if (!ok) {
@@ -56,6 +59,7 @@ export async function applyDeletes(
       );
     }
   }
+  toDelete.forEach((id, i) => onOp?.("deleteL1", i, id, "applied"));
   result.applied.deletes.push(...toDelete);
 }
 
@@ -65,6 +69,7 @@ export async function applyRewrites(
   blocks: Array<{ path: string; content: string }> | undefined,
   persona: string | undefined,
   result: ApplyResult,
+  onOp?: OnOp,
 ): Promise<void> {
   const targets: Array<{ relPath: string; content: string }> = [];
   for (const op of blocks ?? [])
@@ -72,7 +77,10 @@ export async function applyRewrites(
   if (persona !== undefined)
     targets.push({ relPath: "persona.md", content: persona });
 
-  for (const target of targets) {
+  for (const [i, target] of targets.entries()) {
+    const isPersona = persona !== undefined && i === targets.length - 1;
+    const opType = isPersona ? "rewritePersona" : "rewriteBlock";
+    const localIndex = isPersona ? 0 : i;
     const resolved = resolveWithinDataDir(deps.dataDir, target.relPath);
     if (!resolved) {
       throw new ApplyRuntimeError(
@@ -91,6 +99,7 @@ export async function applyRewrites(
       continue;
     }
 
+    onOp?.(opType, localIndex, target.relPath, "prepared");
     try {
       if (current !== null) {
         await writeBackup(deps.dataDir, target.relPath, current);
@@ -101,6 +110,7 @@ export async function applyRewrites(
         `rewrite "${target.relPath}" failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    onOp?.(opType, localIndex, target.relPath, "applied");
     result.applied.rewrites.push(target.relPath);
     deps.logger.info?.(
       `[memory/apply] rewrote ${target.relPath} (${target.content.length} chars)`,

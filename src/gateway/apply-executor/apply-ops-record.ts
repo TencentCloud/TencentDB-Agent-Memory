@@ -15,12 +15,14 @@ import { writeProvenanceRecord } from "./apply-provenance.js";
 import { parseMetadata } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
+import type { OnOp } from "./op-journal.js";
 import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 
 export async function applyRewritesRecords(
   deps: ApplyExecutorDeps,
   ops: Array<{ id: string; updatedAt: string; content: string }> | undefined,
   result: ApplyResult,
+  onOp?: OnOp,
 ): Promise<void> {
   if (!ops || ops.length === 0) return;
   const { logger, dataDir } = deps;
@@ -29,7 +31,7 @@ export async function applyRewritesRecords(
     dataDir,
     ops.map((o) => o.id),
   );
-  for (const op of ops) {
+  for (const [i, op] of ops.entries()) {
     const row = rows.get(op.id);
     if (!row) {
       // Record gone → already applied / deleted elsewhere → skip (heal path).
@@ -58,6 +60,7 @@ export async function applyRewritesRecords(
       scope: row.scope === "project" ? "project" : undefined,
     };
 
+    onOp?.("rewriteRecord", i, op.id, "prepared");
     await writeProvenanceRecord(deps, {
       row,
       memory,
@@ -67,6 +70,7 @@ export async function applyRewritesRecords(
       label: `rewriteRecord "${op.id}"`,
     });
 
+    onOp?.("rewriteRecord", i, op.id, "applied");
     result.applied.rewrites.push(op.id);
     logger.info?.(
       `[memory/apply] rewrote record ${op.id} (${op.content.length} chars)`,

@@ -27,6 +27,7 @@ import {
 } from "./apply-executor/validate.js";
 import { checkManifest } from "./apply-executor/manifest.js";
 import { runApplyGate } from "./apply-executor/gate.js";
+import { countOps, createOpJournal } from "./apply-executor/op-journal.js";
 import { applyMerges } from "./apply-executor/apply-ops-merge.js";
 import { applyRewritesRecords } from "./apply-executor/apply-ops-record.js";
 import {
@@ -43,6 +44,7 @@ import { hasApplied } from "./apply-executor/apply-route-helpers.js";
 import { EMPTY_RESULT, type ApplyResult } from "./apply-executor/types.js";
 import type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
 import type { RunContext } from "./apply-executor/run-context.js";
+import type { ApplyDiff } from "./apply-executor/schemas.js";
 import {
   ApplyRuntimeError,
   ApplyValidationError,
@@ -107,15 +109,25 @@ export class ApplyExecutor {
       runApplyGate(this.deps, parsed.diff, run);
       // 3. Trust-boundary manifest recheck — before any mutation.
       checkManifest(this.deps, parsed);
-      // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes → files.
-      await applyMerges(this.deps, parsed.diff.merge, result);
-      await applyRewritesRecords(this.deps, parsed.diff.rewriteRecord, result);
-      await applyDeletes(this.deps, parsed.diff.deleteL1, result);
+      // 4. Mutations: writes (merge) → records (rewriteRecord) → deletes →
+      // files. tz-09 Ф5: each one journals prepared/applied, so a crash in
+      // the middle leaves a record of exactly how far the apply got. The
+      // canonical opIndex order IS this call order (control-plane/oplog.ts).
+      const onOp = this.journalFor(parsed.diff, run);
+      await applyMerges(this.deps, parsed.diff.merge, result, onOp);
+      await applyRewritesRecords(
+        this.deps,
+        parsed.diff.rewriteRecord,
+        result,
+        onOp,
+      );
+      await applyDeletes(this.deps, parsed.diff.deleteL1, result, onOp);
       await applyRewrites(
         this.deps,
         parsed.diff.rewriteBlock,
         parsed.diff.rewritePersona,
         result,
+        onOp,
       );
 
       // 5. Scene index rebuild after file rewrites.
@@ -156,5 +168,22 @@ export class ApplyExecutor {
       // Unexpected — propagate to the HTTP layer (500 with raw message).
       throw err;
     }
+  }
+
+  /** A journal when the caller named a run, a no-op otherwise: a direct
+   * apply (the pre-tz-09 call sites) has nothing to reconcile against. */
+  private journalFor(diff: ApplyDiff, run: RunContext | undefined) {
+    if (run?.runId === undefined || run.candidateDigest === undefined) {
+      return undefined;
+    }
+    return createOpJournal(
+      {
+        dataDir: this.deps.dataDir,
+        runId: run.runId,
+        candidateDigest: run.candidateDigest,
+        now: () => Date.now(),
+      },
+      countOps(diff),
+    );
   }
 }

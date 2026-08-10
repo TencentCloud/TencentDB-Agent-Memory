@@ -13,6 +13,7 @@ import { writeProvenanceRecord } from "./apply-provenance.js";
 import { parseMetadata } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
+import type { OnOp } from "./op-journal.js";
 import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 
 export async function applyMerges(
@@ -20,11 +21,12 @@ export async function applyMerges(
   ops:
     Array<{ cluster: string[]; target: string; content: string }> | undefined,
   result: ApplyResult,
+  onOp?: OnOp,
 ): Promise<void> {
   if (!ops || ops.length === 0) return;
   const { logger, dataDir, vectorStore } = deps;
 
-  for (const op of ops) {
+  for (const [i, op] of ops.entries()) {
     const rows = await fetchMetaRows(dataDir, [op.target, ...op.cluster]);
     const targetRow = rows.get(op.target);
     const membersPresent = op.cluster.some(
@@ -54,6 +56,7 @@ export async function applyMerges(
       scope: targetRow.scope === "project" ? "project" : undefined,
     };
 
+    onOp?.("merge", i, op.target, "prepared");
     await writeProvenanceRecord(deps, {
       row: targetRow,
       memory,
@@ -72,6 +75,7 @@ export async function applyMerges(
         );
       }
     }
+    onOp?.("merge", i, op.target, "applied");
     result.applied.merges.push(op.target);
     logger.info?.(
       `[memory/apply] merged ${op.cluster.length} records into ${op.target}`,

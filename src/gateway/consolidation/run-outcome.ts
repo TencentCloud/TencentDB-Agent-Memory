@@ -11,6 +11,7 @@
  * a stale workset becomes `failed` (a NEW run is the reaction, not a retry).
  */
 import { updateRun } from "../control-plane/run-repo.js";
+import { reconcileRun } from "../control-plane/reconcile.js";
 import {
   classifyFailure,
   reactionFor,
@@ -76,6 +77,20 @@ export function finalizeRunOutcome(
       `[run] ${summary.role}/${input.runId} failed: class=${cls} ` +
         `reaction=${reaction.reaction} terminal=${reaction.terminalForRun}`,
     );
+    if (cls === "partial-apply") {
+      // Read the store back immediately: an apply that aborted after every
+      // journalled op had already landed is complete, not partial (Ф5/P8).
+      const report = reconcileRun(ctx.dataDir, input.runId, nowIso);
+      ctx.logger.warn?.(
+        `[run] ${input.runId} reconcile: ${report.verified}/${report.total} ` +
+          `verified resolved=${report.resolved}` +
+          (report.unresolved.length === 0
+            ? ""
+            : ` unresolved=${report.unresolved
+                .map((u) => `${u.opIndex}:${u.detail}`)
+                .join("; ")}`),
+      );
+    }
     return cls;
   } catch (err) {
     ctx.logger.warn?.(

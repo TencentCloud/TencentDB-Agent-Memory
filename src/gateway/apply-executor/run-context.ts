@@ -19,6 +19,10 @@ export type GateMode = "shadow" | "enforce";
 
 export interface RunContext {
   runId?: string;
+  /** Digest of the candidate being applied — half of the operation id, so a
+   * replay of a DIFFERENT candidate can never collide with this run's
+   * journal (tz-09 Ф5). */
+  candidateDigest?: string;
   /** Ops this role may perform. Absent → no ops gate (pre-tz-09). */
   opsSubset?: ReadonlySet<ApplyOp>;
   /** Mechanical per-run budgets. Absent → no caps gate. */
