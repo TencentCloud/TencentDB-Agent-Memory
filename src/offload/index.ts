@@ -2258,19 +2258,16 @@ class OffloadContextEngine {
     const logger = this._logger;
     logger.debug?.(`[context-offload] >>> CE.afterTurn CALLED: sessionKey=${_params?.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = _params?._offloadManager;
-    if (!stateManager && _params?.sessionKey && !isInternalMemorySession(_params.sessionKey)) {
-      try {
-        const entry = this._sessions.get(_params.sessionKey);
-        stateManager = entry?.manager;
-      } catch { /* ignore */ }
-    }
-    // Also try sessionTarget?.sessionKey or sessionId when sessionKey is missing
     if (!stateManager) {
+      // OpenClaw's afterTurn hook may pass sessionId (or sessionTarget.sessionKey)
+      // without a top-level sessionKey — fall back so per-turn L1 flush still runs
+      // (issue #878).
       const effectiveSessionKey = _params?.sessionKey ?? _params?.sessionTarget?.sessionKey ?? _params?.sessionId ?? _params?.key;
       if (effectiveSessionKey && !isInternalMemorySession(effectiveSessionKey)) {
         try {
           const entry = this._sessions.get(effectiveSessionKey);
           stateManager = entry?.manager;
+          if (stateManager) _params!._offloadManager = stateManager; // cache
         } catch { /* ignore */ }
       }
     }
@@ -2322,3 +2319,4 @@ export const _testExports = {
   simpleHash,
   OffloadContextEngine,
 };
+
