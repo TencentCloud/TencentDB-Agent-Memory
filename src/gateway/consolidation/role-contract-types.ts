@@ -118,9 +118,4 @@ export interface RoleLegacyDefaults {
   };
 }
 
-/** Host-side launch parameters (binary + fixed flags). They are NOT part of
- * the portable contract; tz-06 moves them into a launcher module. */
-export interface LauncherDefaults {
-  piBinary: string;
-  spawnFlags: string[];
-}
+

@@ -13,8 +13,8 @@ describe("wave config schema (P1)", () => {
     // consolidation
     expect(cfg.consolidation.enabled).toBe(false);
     expect(cfg.consolidation.model).toBe("opencode-go/deepseek-v4-flash");
-    expect(cfg.consolidation.piBinary).toBe("pi");
-    expect(cfg.consolidation.spawnFlags).toEqual([
+    expect(cfg.consolidation.launchers.pi!.binary).toBe("pi");
+    expect(cfg.consolidation.launchers.pi!.flags).toEqual([
       "-p",
       "--no-context-files",
       "--no-session",
@@ -118,14 +118,39 @@ describe("wave config schema (P1)", () => {
     ).toThrow(/memory\.consolidation.*bogusNight/);
   });
 
-  it("expands a leading ~ in piBinary and probe.corpusPath", () => {
+  it("expands a leading ~ in the launcher binary and probe.corpusPath", () => {
     const cfg = parseConfig({
-      consolidation: { piBinary: "~/bin/pi" },
+      consolidation: { launchers: { pi: { binary: "~/bin/pi" } } },
       probe: { corpusPath: "~/probe.json" },
     });
     const home = process.env.HOME ?? os.homedir();
-    expect(cfg.consolidation.piBinary).toBe(`${home}/bin/pi`);
+    expect(cfg.consolidation.launchers.pi!.binary).toBe(`${home}/bin/pi`);
     expect(cfg.probe.corpusPath).toBe(`${home}/probe.json`);
+  });
+
+  // tz-06 Ф1: the keys moved into the launcher's own section. They are still
+  // ACCEPTED where they were, because the schema is strict and an operator
+  // config that still names them must not turn into a startup error.
+  it("legacy piBinary/spawnFlags still parse, into the launcher section", () => {
+    const cfg = parseConfig({
+      consolidation: { piBinary: "/opt/pi", spawnFlags: ["-p", "--x"] },
+    });
+    expect(cfg.consolidation.launchers.pi!.binary).toBe("/opt/pi");
+    expect(cfg.consolidation.launchers.pi!.flags).toEqual(["-p", "--x"]);
+    expect(cfg.consolidation.deprecatedLauncherKeys).toEqual([
+      "piBinary",
+      "spawnFlags",
+    ]);
+  });
+
+  it("the launcher section wins over the legacy keys", () => {
+    const cfg = parseConfig({
+      consolidation: {
+        piBinary: "/opt/old",
+        launchers: { pi: { binary: "/opt/new" } },
+      },
+    });
+    expect(cfg.consolidation.launchers.pi!.binary).toBe("/opt/new");
   });
 
   it("fails loud on an unknown key inside consolidation", () => {

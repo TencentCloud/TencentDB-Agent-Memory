@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseConfig } from "../../config.js";
-import { buildRoleDefaults, buildLauncherDefaults } from "../role-defaults.js";
+import { buildRoleDefaults } from "../role-defaults.js";
 import {
   ConsolidationOrchestrator,
   type RunSummary,
@@ -30,8 +30,8 @@ import { createRequire } from "node:module";
 // without spawning a real pi sub-session. Tests that pass an explicit
 // `spawn` override are unaffected; tests using defaultSpawnChild without a
 // real run (start()/getLastRun()) never reach the spawner.
-vi.mock("./keeper-run.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./keeper-run.js")>();
+vi.mock("./launchers/pi-process.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./launchers/pi-process.js")>();
   return {
     ...actual,
     runKeeperProcess: vi.fn(),
@@ -48,7 +48,7 @@ vi.mock("./child-spawn.js", async (importOriginal) => {
     sweepKeeperOrphans: vi.fn(() => 0),
   };
 });
-import { runKeeperProcess as runKeeperProcessMock } from "./keeper-run.js";
+import { runKeeperProcess as runKeeperProcessMock } from "./launchers/pi-process.js";
 import { killChildGroup as killChildGroupMock } from "./child-spawn.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -129,7 +129,7 @@ function roleOpts(cfg: GatewayConfig) {
   return {
     enabled: c.enabled,
     roleDefaults: buildRoleDefaults(c),
-    launcher: buildLauncherDefaults(c),
+    launchers: c.launchers,
   };
 }
 

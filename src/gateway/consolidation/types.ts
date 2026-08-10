@@ -14,6 +14,7 @@
  */
 
 import type { GatewayConfig } from "../config.js";
+import type { LauncherSettings } from "./launchers/pi-config.js";
 import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
@@ -22,7 +23,6 @@ import type { ChildRunResult } from "./child-spawn.js";
 import type { RunContext } from "../apply-executor.js";
 import type { ProbeResult } from "../probe.js";
 import type {
-  LauncherDefaults,
   ResolvedRoleContract,
   RoleLegacyDefaults,
 } from "./role-contract-types.js";
@@ -105,7 +105,8 @@ export interface OrchestratorOptions {
    * Built by the composition root so no module under consolidation/ reads
    * `config.memory.consolidation.*` for a role parameter (tz-01 criterion 7). */
   roleDefaults: RoleLegacyDefaults;
-  launcher: LauncherDefaults;
+  /** Per-launcher host settings, keyed by launcherId (tz-06 Ф1). */
+  launchers: Record<string, LauncherSettings>;
   /** Consolidation master switch (`memory.consolidation.enabled`), resolved
    * by the caller so the read does not live on the role path. */
   enabled: boolean;

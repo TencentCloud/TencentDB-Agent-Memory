@@ -41,7 +41,8 @@ export interface RoleConfigFile {
    * "retry forever". */
   retry_budget?: number;
   /** Optional per-role spawn wiring (forked task-cycle path б): extension to
-   * load via --extension, skill dir via --skill, scratch root override. */
+   * extension bundle, skill dir, scratch root override — the launcher turns
+   * them into host arguments. */
   runtime?: {
     extension_path?: string;
     skill_path?: string;

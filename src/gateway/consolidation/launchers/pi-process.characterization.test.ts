@@ -16,8 +16,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runKeeperProcess } from "./keeper-run.js";
-import type { Logger } from "../../core/types.js";
+import { runKeeperProcess } from "./pi-process.js";
+import type { Logger } from "../../../core/types.js";
 
 const silent: Logger = {
   debug: () => undefined,

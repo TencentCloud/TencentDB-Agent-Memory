@@ -7,15 +7,12 @@
 
 import { writeDashboard, writeDigest } from "../reports.js";
 import { runRecallProbe } from "../probe.js";
-import type { ChildProcess } from "node:child_process";
-import { runKeeperProcess } from "./keeper-run.js";
-import { killChildGroup } from "./child-spawn.js";
 import {
   ApplyExecutor,
   type ApplyResult,
   type RunContext,
 } from "../apply-executor.js";
-import { buildRoleSpawnArgs } from "./role-spawn-args.js";
+import type { ChildRunResult } from "./launchers/pi-process.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary, SpawnChildContext } from "./types.js";
 
@@ -61,35 +58,50 @@ export async function runPostRunSteps(
   );
 }
 
-/** Default child spawner: launches with the model, thinking level, timeout
- * and assets of the RESOLVED CONTRACT (tz-01 B5 — the global config no longer
- * decides these), and registers the kill handle on `ctx.childrenRef`. */
+/** Default child spawner: goes through the RoleLauncher port (tz-06 Ф1), so
+ * nothing here knows a binary name or a host flag. Model, thinking level,
+ * timeout and assets still come from the RESOLVED CONTRACT (tz-01 B5). */
 export async function defaultSpawnChild(
   ctx: OrchestratorContext,
   childCtx: SpawnChildContext,
-): ReturnType<typeof runKeeperProcess> {
-  const contract = childCtx.contract;
-  // Forked task-cycle wiring (path б): the contract's instance assets become
-  // --extension / --skill CLI args. Legacy roles: no extra args.
-  const extraArgs = buildRoleSpawnArgs(contract);
-  return runKeeperProcess({
-    piBinary: ctx.launcher.piBinary,
-    spawnFlags: ctx.launcher.spawnFlags,
-    extraArgs,
-    model: contract.binding.model,
-    thinking: contract.binding.thinking,
-    systemPromptPath: childCtx.promptPath,
-    taskPrompt: childCtx.taskPrompt,
+): Promise<ChildRunResult> {
+  const launcher = ctx.launcherFor(childCtx.contract.binding.launcherId);
+  const outcome = await launcher.launch({
+    runId: childCtx.runId,
     cwd: childCtx.cwd,
+    promptPath: childCtx.promptPath,
+    taskPrompt: childCtx.taskPrompt,
     env: childCtx.env,
-    timeoutMs: contract.timeoutMs,
-    logger: ctx.logger,
-    onChild: (child: ChildProcess) => {
-      ctx.childrenRef.value.set(childCtx.runId, {
-        kill: () => killChildGroup(child, ctx.logger),
-      });
+    contract: childCtx.contract,
+    onSpawn: (kill) => {
+      ctx.childrenRef.value.set(childCtx.runId, { kill });
     },
   });
+
+  if (!outcome.ok) {
+    // A typed LaunchError is the host refusing, not the role failing — it
+    // travels as a run error, never as a rejected promise (criterion 10).
+    return {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      error: `${outcome.error.kind}: ${outcome.error.message}`,
+      killed: null,
+    };
+  }
+
+  const res = await outcome.handle.completion;
+  return {
+    exitCode: res.exitCode,
+    signal: res.signal,
+    stdout: res.stdout,
+    stderr: res.stderr,
+    timedOut: res.status === "timed_out",
+    error: res.error,
+    killed: null,
+  };
 }
 
 /** Default applier: instantiate ApplyExecutor and call apply(body).

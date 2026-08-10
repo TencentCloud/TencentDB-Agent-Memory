@@ -23,6 +23,7 @@ import {
 } from "./triggers.js";
 import { handleFromCtx } from "./handle-from-ctx.js";
 import { executeRunForRole } from "./execute-run.js";
+import { createLauncherRegistry } from "./launchers/registry.js";
 import { defaultSpawnChild, defaultApplyDiff } from "./runner-helpers.js";
 import { resolveRoleDir } from "../role-files.js";
 import { resolveKeeperToolsDir as resolveKeeperToolsDirHelper } from "./keeper-tools.js";
@@ -63,7 +64,7 @@ export class ConsolidationOrchestrator {
       roleDefaults: opts.roleDefaults,
       applyGateMode: opts.applyGateMode ?? "shadow",
       applyRunRepo: opts.applyRunRepo ?? false,
-      launcher: opts.launcher,
+      launcherFor: createLauncherRegistry(opts.launchers, opts.logger),
       dataDir: opts.dataDir,
       scratchRoot: opts.scratchRoot,
       logger: opts.logger,

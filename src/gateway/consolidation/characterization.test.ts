@@ -26,13 +26,13 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { parseConfig } from "../../config.js";
 import { ConsolidationOrchestrator } from "./orchestrator.js";
-import { buildRoleDefaults, buildLauncherDefaults } from "../role-defaults.js";
+import { buildRoleDefaults } from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import { createRequire } from "node:module";
 
-vi.mock("./keeper-run.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./keeper-run.js")>();
+vi.mock("./launchers/pi-process.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./launchers/pi-process.js")>();
   return { ...actual, runKeeperProcess: vi.fn() };
 });
 vi.mock("./child-spawn.js", async (importOriginal) => {
@@ -43,7 +43,7 @@ vi.mock("./child-spawn.js", async (importOriginal) => {
     sweepKeeperOrphans: vi.fn(() => 0),
   };
 });
-import { runKeeperProcess as runKeeperProcessMock } from "./keeper-run.js";
+import { runKeeperProcess as runKeeperProcessMock } from "./launchers/pi-process.js";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const require = createRequire(import.meta.url);
@@ -303,7 +303,7 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
       config,
       enabled: config.memory.consolidation.enabled,
       roleDefaults: buildRoleDefaults(config.memory.consolidation),
-      launcher: buildLauncherDefaults(config.memory.consolidation),
+      launchers: config.memory.consolidation.launchers,
       dataDir,
       scratchRoot,
       logger: silentLogger,

@@ -8,13 +8,13 @@
 
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
+import type { RoleLauncher } from "./launchers/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import { ConsolidationCheckpoint } from "./checkpoint.js";
 import { RoleGate } from "./role-gate.js";
 import type { RunSummary, SpawnChildFn, ApplyDiffFn } from "./types.js";
 import type {
-  LauncherDefaults,
   RoleLegacyDefaults,
 } from "./role-contract-types.js";
 
@@ -33,9 +33,9 @@ export interface OrchestratorContext {
   /** tz-09 Ф6: require a control-plane Run for every apply. Composition-root
    * value from `memory.consolidation.applyRunRepo`. */
   applyRunRepo: boolean;
-  /** Host launch parameters (binary + fixed flags); tz-06 owns their move
-   * into a launcher module. */
-  launcher: LauncherDefaults;
+  /** tz-06 Ф1: the host substitution point. The binding names a launcher and
+   * this resolves it; nothing outside `launchers/` knows what a host needs. */
+  launcherFor: (launcherId: string) => RoleLauncher;
   dataDir: string;
   scratchRoot: string;
   logger: Logger;

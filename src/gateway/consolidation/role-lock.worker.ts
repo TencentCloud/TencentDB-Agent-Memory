@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseConfig } from "../../config.js";
 import { ConsolidationOrchestrator } from "./orchestrator.js";
-import { buildRoleDefaults, buildLauncherDefaults } from "../role-defaults.js";
+import { buildRoleDefaults } from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
 
 const [dataDir, roleDir, role, barrier] = process.argv.slice(2);
@@ -57,7 +57,7 @@ const orch = new ConsolidationOrchestrator({
   config,
   enabled: true,
   roleDefaults: buildRoleDefaults(memory.consolidation),
-  launcher: buildLauncherDefaults(memory.consolidation),
+  launchers: memory.consolidation.launchers,
   dataDir,
   scratchRoot: path.join(dataDir, "scratch"),
   logger: silent,

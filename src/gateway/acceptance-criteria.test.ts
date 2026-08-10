@@ -305,9 +305,11 @@ describe("criterion 18 — behavioral values are configurable, not hardcoded", (
   it("parseConfig({}) exposes those defaults through the config object", () => {
     const cfg = parseConfig({});
     expect(cfg.consolidation.model).toBe("opencode-go/deepseek-v4-flash");
-    expect(cfg.consolidation.piBinary).toBeTruthy();
-    expect(cfg.consolidation.spawnFlags).toContain("--no-context-files");
-    expect(cfg.consolidation.spawnFlags).not.toContain("--no-skills");
+    expect(cfg.consolidation.launchers.pi!.binary).toBeTruthy();
+    expect(cfg.consolidation.launchers.pi!.flags).toContain(
+      "--no-context-files",
+    );
+    expect(cfg.consolidation.launchers.pi!.flags).not.toContain("--no-skills");
     expect(cfg.consolidation.thinking).toBe("low");
     expect(cfg.consolidation.diffCap).toBe(20);
     expect(cfg.consolidation.diffByteCap).toBe(8 * 1024);
@@ -379,9 +381,9 @@ describe("criterion 20 — negative INVARIANT checks (static)", () => {
   });
 
   it("no --no-skills in the spawn module (skills/subagents stay available to the child)", () => {
-    // spawnKeeper (with spawnFlags) lives in keeper-run.ts; child-spawn.ts is
+    // The spawn (with its flags) lives in the pi launcher (tz-06 Ф1); child-spawn.ts is
     // the env+re-export shim. Check both for the banned literal.
-    const run = readRepo("src/gateway/consolidation/keeper-run.ts");
+    const run = readRepo("src/gateway/consolidation/launchers/pi-process.ts");
     expect(run.includes('"--no-skills"')).toBe(false);
     expect(run).toContain("spawnFlags"); // flags come from config, not a literal list
     const shim = readRepo("src/gateway/consolidation/child-spawn.ts");

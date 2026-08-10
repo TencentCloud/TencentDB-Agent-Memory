@@ -10,6 +10,12 @@
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
 import { z } from "zod";
+import {
+  launchersSchema,
+  legacyLauncherKeys,
+  readLauncherConfig,
+  type LauncherSettings,
+} from "./gateway/consolidation/launchers/pi-config.js";
 
 // ============================
 // Type definitions
@@ -142,11 +148,14 @@ export interface ConsolidationConfig {
   enabled: boolean;
   /** LLM model for the pi sub-session, format "provider/model" (default: opencode-go/deepseek-v4-flash). */
   model: string;
-  /** Path to the pi binary used to spawn memory-keeper sub-sessions. */
-  piBinary: string;
-  /** Fixed spawn flags (NOT including --model/--thinking/--system-prompt which are appended by the orchestrator). */
-  spawnFlags: string[];
-  /** `--thinking <level>` passed to the pi sub-session (e.g. "low"). */
+  /** Per-launcher host settings, keyed by launcherId. The binary name and the
+   * fixed flags belong to the launcher (tz-06 `no-host-hardcode`), so this
+   * config never spells out a host-specific key. */
+  launchers: Record<string, LauncherSettings>;
+  /** Legacy top-level keys seen while parsing — logged once at startup. */
+  deprecatedLauncherKeys: string[];
+  /** Thinking level for the sub-session (e.g. "low"); the launcher maps it
+   * onto whatever the host calls it. */
   thinking: string;
   /** Sub-session timeout in milliseconds (default: 600000 = 10 min). */
   timeoutMs: number;
@@ -534,6 +543,9 @@ export function parseConfig(
   // deliberately NOT strict — legacy scoreThreshold/maxResults/strategy stay
   // valid (INVARIANT nogo-recall-knobs).
   const consolidationGroup = obj(c, "consolidation");
+  // Host launch settings are read by the launcher's own module (tz-06 Ф1):
+  // this file must not name a binary or a host flag.
+  const launcherConfig = readLauncherConfig(consolidationGroup, expandHome);
   const nightRunGroup = obj(c, "nightRun");
   const cleanupGroup = obj(c, "cleanup");
   const probeGroup = obj(c, "probe");
@@ -758,12 +770,8 @@ export function parseConfig(
       enabled: bool(consolidationGroup, "enabled") ?? false,
       model:
         str(consolidationGroup, "model") ?? "opencode-go/deepseek-v4-flash",
-      piBinary: expandHome(str(consolidationGroup, "piBinary") ?? "pi"),
-      spawnFlags: strArray(consolidationGroup, "spawnFlags") ?? [
-        "-p",
-        "--no-context-files",
-        "--no-session",
-      ],
+      launchers: launcherConfig.settings,
+      deprecatedLauncherKeys: launcherConfig.deprecated,
       thinking: str(consolidationGroup, "thinking") ?? "low",
       timeoutMs: num(consolidationGroup, "timeoutMs") ?? 600_000,
       diffCap: num(consolidationGroup, "diffCap") ?? 20,
@@ -1010,8 +1018,8 @@ function normalizeOffloadRetentionDays(value: number): number {
 const consolidationSchema = z.strictObject({
   enabled: z.boolean().optional(),
   model: z.string().min(1).optional(),
-  piBinary: z.string().min(1).optional(),
-  spawnFlags: z.array(z.string()).optional(),
+  ...legacyLauncherKeys,
+  launchers: launchersSchema,
   thinking: z.string().optional(),
   timeoutMs: z.number().positive().optional(),
   diffCap: z.number().int().positive().optional(),
@@ -1089,7 +1097,7 @@ function validateStrictSection(
   }
 }
 
-/** Expand a leading `~/` path to $HOME (used for piBinary / probe.corpusPath). */
+/** Expand a leading `~/` path to $HOME (launcher binaries, probe.corpusPath). */
 function expandHome(p: string): string {
   if (!p.startsWith("~/")) return p;
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";

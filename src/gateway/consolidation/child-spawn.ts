@@ -3,13 +3,9 @@
  * -02, P6). Spawn + run-wrapper of the pi sub-session ("пчёлка").
  *
  * Spawn contract (ТЗ §5.1):
- *   spawn(pi, ["-p","--no-context-files","--no-session","--model",<model>,
- *              "--thinking",<level>,"--system-prompt",<sess-prompt>,<задание>],
- *         { cwd: <scratch-dir>, env: <whitelist>, stdio: pipe, detached: true })
- *   — WITHOUT --no-skills (the child needs skills/subagents for task-simple);
- *   cwd = scratch dir OUTSIDE the memory tree; stdout/stderr data listeners
- *   attach immediately (live pipe drain — a stalled >64KB pipe deadlocks the
- *   child); --thinking output lands on stderr (stdout = errors/report only).
+ *   the host call shape lives in launchers/ (tz-06 `no-host-hardcode`);
+ *   here only the env whitelist and the group kill remain. Thinking output
+ *   lands on stderr (stdout = errors/report only).
  *
  * Env whitelist is EXPLICIT and exhaustive: PATH, HOME, PI_MEMORY_KEEPER=1,
  * PI_MEMORY_KEEPER_RUN=<uuid>, TDAI_GATEWAY_URL. Auth keys and the loopback
@@ -46,8 +42,8 @@ export {
   sweepKeeperOrphans,
   type OrphanCandidate,
 } from "./keeper-sweep.js";
-export type { ChildRunResult } from "./keeper-run.js";
-export type { RunKeeperOptions } from "./keeper-run.js";
+export type { ChildRunResult } from "./launchers/pi-process.js";
+export type { RunKeeperOptions } from "./launchers/pi-process.js";
 
 export interface ChildEnvDeps {
   home: string;

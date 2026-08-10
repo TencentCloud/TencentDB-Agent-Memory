@@ -4,9 +4,9 @@
  * to avoid a child-spawn ↔ keeper-run import cycle.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import type { Logger } from "../../core/types.js";
-import { killChildGroup } from "./keeper-proc.js";
-import type { KillOutcome } from "./keeper-proc.js";
+import type { Logger } from "../../../core/types.js";
+import { killChildGroup } from "../keeper-proc.js";
+import type { KillOutcome } from "../keeper-proc.js";
 
 export interface SpawnKeeperOptions {
   piBinary: string;

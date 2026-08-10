@@ -12,7 +12,6 @@
  */
 import type { ConsolidationConfig } from "../config.js";
 import type {
-  LauncherDefaults,
   RoleLegacyDefaults,
 } from "./consolidation/role-contract-types.js";
 
@@ -35,11 +34,4 @@ export function buildRoleDefaults(
       maxRunMs: cfg.night.maxRunMs,
     },
   };
-}
-
-/** Host launch parameters. tz-06 moves these into a per-host launcher. */
-export function buildLauncherDefaults(
-  cfg: ConsolidationConfig,
-): LauncherDefaults {
-  return { piBinary: cfg.piBinary, spawnFlags: cfg.spawnFlags };
 }

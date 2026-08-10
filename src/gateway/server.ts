@@ -71,7 +71,7 @@ import {
   type MemoryToolsContext,
 } from "./memory-tools.js";
 import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
-import { buildRoleDefaults, buildLauncherDefaults } from "./role-defaults.js";
+import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
@@ -181,7 +181,7 @@ export class TdaiGateway {
       roleDefaults: buildRoleDefaults(consolidationCfg),
       applyGateMode: consolidationCfg.applyGateMode,
       applyRunRepo: consolidationCfg.applyRunRepo,
-      launcher: buildLauncherDefaults(consolidationCfg),
+      launchers: consolidationCfg.launchers,
       dataDir: this.config.data.baseDir,
       scratchRoot: nodePath.join(
         nodePath.dirname(this.config.data.baseDir),
