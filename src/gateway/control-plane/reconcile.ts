@@ -23,6 +23,11 @@ export interface ReconcileReport {
   verified: number;
   /** Ops whose postcondition does NOT hold — the run stays parked. */
   unresolved: PostconditionResult[];
+  /** Target keys of operations the candidate planned but never attempted.
+   * They are not failures: nothing was written for them, so there is nothing
+   * to verify — but they are the difference between "this apply is complete"
+   * and "this apply stopped early", which is what an operator needs. */
+  notAttempted: string[];
   resolved: boolean;
 }
 
@@ -33,7 +38,11 @@ export function reconcileRun(
   runId: string,
   nowIso: string,
 ): ReconcileReport {
-  const ops = listOps(dataDir, runId);
+  const all = listOps(dataDir, runId);
+  const notAttempted = all
+    .filter((op) => op.state === "planned")
+    .map((op) => op.targetKey);
+  const ops = all.filter((op) => op.state !== "planned");
   const unresolved: PostconditionResult[] = [];
   let verified = 0;
 
@@ -58,5 +67,12 @@ export function reconcileRun(
     // the oplog as the record of what actually landed.
     updateRun(dataDir, runId, { state: "failed", finishedAt: nowIso }, nowIso);
   }
-  return { runId, total: ops.length, verified, unresolved, resolved };
+  return {
+    runId,
+    total: ops.length,
+    verified,
+    unresolved,
+    notAttempted,
+    resolved,
+  };
 }

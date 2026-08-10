@@ -212,10 +212,17 @@ describe("apply outcome and journal fidelity (tz-09)", () => {
     expect(res.status).toBe("applied");
     expect(res.skipped.deletes).toEqual(["m_gone"]);
     const ops = listOps(dataDir, "r-index");
-    expect(ops).toHaveLength(1);
+    // Both operations are journalled — the plan is written before the first
+    // mutation — but only the one that ran left `applied`.
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({
+      opIndex: 0,
+      targetKey: "m_gone",
+      state: "planned",
+    });
     // Position in the REQUEST (1), not in the compacted list (0).
-    expect(ops[0]?.opIndex).toBe(1);
-    expect(ops[0]?.targetKey).toBe("m_keep");
+    expect(ops[1]).toMatchObject({ opIndex: 1, targetKey: "m_keep" });
+    expect(ops[1]?.state).not.toBe("planned");
   });
 
   it("verification compares content, so a target that merely exists is not verified", async () => {

@@ -10,6 +10,7 @@ import {
   countOps,
   createOpJournal,
   digestOf,
+  recordPlan,
   type OnOp,
 } from "./op-journal.js";
 import { ApplyValidationError } from "./errors.js";
@@ -80,13 +81,14 @@ export function journalFor(
   run: RunContext | undefined,
 ): OnOp | undefined {
   if (run?.runId === undefined) return undefined;
-  return createOpJournal(
-    {
-      dataDir: deps.dataDir,
-      runId: run.runId,
-      candidateDigest: run.candidateDigest ?? digestOf(JSON.stringify(diff)),
-      now: () => Date.now(),
-    },
-    countOps(diff),
-  );
+  const journalDeps = {
+    dataDir: deps.dataDir,
+    runId: run.runId,
+    candidateDigest: run.candidateDigest ?? digestOf(JSON.stringify(diff)),
+    now: () => Date.now(),
+  };
+  // The whole plan lands BEFORE the first mutation, so a crash halfway leaves
+  // a record of the operations that never started (tz-09 Ф5, P8).
+  recordPlan(journalDeps, diff);
+  return createOpJournal(journalDeps, countOps(diff));
 }

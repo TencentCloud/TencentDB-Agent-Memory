@@ -55,6 +55,51 @@ export interface JournalDeps {
   now: () => number;
 }
 
+/** Every operation of a diff, in canonical order, as (type, localIndex, key).
+ * The key is the RAW one from the candidate; the attempt overwrites it with
+ * the resolved path where the two differ (recordOp keeps the non-empty one). */
+function planOf(diff: ApplyDiff): Array<[OpType, number, string]> {
+  const plan: Array<[OpType, number, string]> = [];
+  (diff.merge ?? []).forEach((op, i) => plan.push(["merge", i, op.target]));
+  (diff.rewriteRecord ?? []).forEach((op, i) =>
+    plan.push(["rewriteRecord", i, op.id]),
+  );
+  (diff.deleteL1 ?? []).forEach((op, i) => plan.push(["deleteL1", i, op.id]));
+  (diff.rewriteBlock ?? []).forEach((op, i) =>
+    plan.push(["rewriteBlock", i, op.path]),
+  );
+  if (diff.rewritePersona !== undefined) {
+    plan.push(["rewritePersona", 0, "persona.md"]);
+  }
+  return plan;
+}
+
+/**
+ * Write the WHOLE plan before the first mutation.
+ *
+ * `prepared` used to be the first trace an operation left, so a crash between
+ * operations 2 and 3 left nothing saying operation 3 was ever supposed to
+ * happen — and reconciliation walks rows, so it could not see the difference.
+ */
+export function recordPlan(deps: JournalDeps, diff: ApplyDiff): void {
+  const counts = countOps(diff);
+  const nowIso = new Date(deps.now()).toISOString();
+  for (const [opType, localIndex, targetKey] of planOf(diff)) {
+    recordOp(
+      deps.dataDir,
+      {
+        runId: deps.runId,
+        candidateDigest: deps.candidateDigest,
+        opIndex: opIndexBase(counts, opType) + localIndex,
+        opType,
+        state: "planned",
+        targetKey,
+      },
+      nowIso,
+    );
+  }
+}
+
 /** A journal bound to one run + one candidate. */
 export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
   const bases = new Map<OpType, number>();
