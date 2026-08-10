@@ -11,6 +11,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRun, updateRun } from "../control-plane/run-repo.js";
+import { claimRun } from "../control-plane/lease.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import { resolveRunPolicy } from "./run-policy.js";
 import { digestOf } from "./op-journal.js";
 import { ApplyValidationError } from "./errors.js";
@@ -210,5 +212,56 @@ describe("run policy (tz-09 Ф6)", () => {
       candidate,
     );
     expect(scoped?.candidateDigest).toBe(digestOf(JSON.stringify(candidate)));
+  });
+
+  // Codex gate r2, MAJOR: a takeover moves the owner and the fence but leaves
+  // the state at `reviewed`, so the state-only door let the dispossessed
+  // process through.
+  it("a run whose lease was taken over cannot apply in enforce", () => {
+    const candidate = { rewriteBlock: [] };
+    seedApproved("r9", candidate);
+    claimRun(dir, "r9", "otherhost:999999", {
+      nowMs: Date.parse(NOW),
+      ttlMs: 60_000,
+      force: true,
+    });
+    expect(() =>
+      resolveRunPolicy(
+        depsWith(true),
+        { runId: "r9", gateMode: "enforce" },
+        candidate,
+      ),
+    ).toThrow(/leased to otherhost:999999/);
+  });
+
+  it("the same takeover only warns in shadow", () => {
+    const candidate = { rewriteBlock: [] };
+    seedApproved("r10", candidate);
+    claimRun(dir, "r10", "otherhost:999999", {
+      nowMs: Date.parse(NOW),
+      ttlMs: 60_000,
+      force: true,
+    });
+    expect(
+      resolveRunPolicy(depsWith(true), { runId: "r10" }, candidate),
+    ).toBeDefined();
+    expect(warns.join("\n")).toMatch(/lease gate SHADOW/);
+  });
+
+  it("this process holding the lease applies normally", () => {
+    const candidate = { rewriteBlock: [] };
+    seedApproved("r11", candidate);
+    claimRun(dir, "r11", runOwnerId(process.pid), {
+      nowMs: Date.parse(NOW),
+      ttlMs: 60_000,
+      force: true,
+    });
+    expect(
+      resolveRunPolicy(
+        depsWith(true),
+        { runId: "r11", gateMode: "enforce" },
+        candidate,
+      ),
+    ).toBeDefined();
   });
 });

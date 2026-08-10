@@ -12,6 +12,7 @@
  * keep working untouched.
  */
 import { readRun } from "../control-plane/run-repo.js";
+import { runOwnerId } from "../control-plane/owner.js";
 import { ApplyValidationError } from "./errors.js";
 import { digestOf } from "./op-journal.js";
 import type { ApplyOp } from "./schemas.js";
@@ -100,6 +101,41 @@ function assertApprovedCandidate(
   }
 }
 
+/**
+ * The lease half of the gate: only the process that still HOLDS the run may
+ * apply it.
+ *
+ * `beginApplying` decides on state alone, and a taken-over run keeps its
+ * state — the takeover bumps the fence and the owner, not `reviewed`. So the
+ * dispossessed process passed the door and mutated the store under a lease it
+ * had already lost. Ingestion checks this (artifact-fence.ts); between
+ * ingestion and apply the lease can still move, which is why the door needs
+ * the same check.
+ *
+ * The owner is always this process (orchestrator.ts:80 leases as
+ * `process.pid`, and the HTTP apply route runs in the same gateway), so no
+ * fence has to be threaded through the caller to ask the question.
+ * A run with no owner at all is the un-leased/pre-Ф1 path and stays allowed.
+ */
+function assertLeaseHeld(
+  deps: ApplyExecutorDeps,
+  row: RunRow,
+  enforce: boolean,
+): void {
+  const me = runOwnerId(process.pid);
+  if (row.leaseOwner === null || row.leaseOwner === me) return;
+  const why =
+    `run "${row.runId}" is leased to ${row.leaseOwner}, not ${me} ` +
+    `(fence ${row.fence})`;
+  if (!enforce) {
+    deps.logger.warn?.(
+      `[memory/apply] lease gate SHADOW (would refuse in enforce): ${why}`,
+    );
+    return;
+  }
+  throw new ApplyValidationError(`apply refused: ${why}`);
+}
+
 export function resolveRunPolicy(
   deps: ApplyExecutorDeps,
   run: RunContext | undefined,
@@ -124,6 +160,7 @@ export function resolveRunPolicy(
     );
   }
   const enforce = (run.gateMode ?? "shadow") === "enforce";
+  assertLeaseHeld(deps, row, enforce);
   assertApprovedCandidate(deps, row, candidate, enforce);
 
   const snapshot = policyFromSnapshot(row.contractJson);
