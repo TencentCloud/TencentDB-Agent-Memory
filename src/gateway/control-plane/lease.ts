@@ -35,7 +35,7 @@ export function claimRun(
   dataDir: string,
   runId: string,
   owner: string,
-  opts: { nowMs: number; ttlMs: number; state?: RunState },
+  opts: { nowMs: number; ttlMs: number; state?: RunState; force?: boolean },
 ): ClaimResult {
   const db = openControlPlane(dataDir);
   try {
@@ -54,7 +54,11 @@ export function claimRun(
       return { ok: false, reason: `run is ${before.state}`, row: before };
     }
 
+    // `force` is for the one case the TTL cannot express: the owner is a
+    // process that is provably dead (see ownerIsGone), so its unexpired lease
+    // is a lie. Everything else still has to wait the lease out.
     const takeover =
+      opts.force !== true &&
       before.leaseOwner !== null &&
       before.leaseOwner !== owner &&
       (before.leaseExpiresAt ?? 0) > opts.nowMs;
@@ -67,11 +71,16 @@ export function claimRun(
     const bump =
       before.leaseOwner !== null && before.leaseOwner !== owner ? 1 : 0;
     const nowIso = new Date(opts.nowMs).toISOString();
+    // The forced branch names the dead owner we observed rather than dropping
+    // the predicate: two processes recovering the same run still race on one
+    // conditional UPDATE, and the second one loses.
+    const forcedOwner = opts.force === true ? before.leaseOwner : null;
     db.prepare(
       `UPDATE runs SET leaseOwner = ?, leaseExpiresAt = ?, fence = fence + ?,
          state = ?, updatedAt = ?
        WHERE runId = ?
-         AND (leaseOwner IS NULL OR leaseOwner = ? OR leaseExpiresAt <= ?)
+         AND (leaseOwner IS NULL OR leaseOwner = ? OR leaseExpiresAt <= ?
+              OR (? IS NOT NULL AND leaseOwner = ?))
          AND state != 'applying'`,
     ).run(
       owner,
@@ -82,6 +91,8 @@ export function claimRun(
       runId,
       owner,
       opts.nowMs,
+      forcedOwner,
+      forcedOwner,
     );
 
     const after = read(db, runId);

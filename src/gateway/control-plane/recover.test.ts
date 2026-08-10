@@ -101,6 +101,63 @@ describe("orphan run recovery (tz-09 Ф2)", () => {
     expect(readRun(dir, "r-mine")?.state).toBe("running");
   });
 
+  it("recovers a crash whose lease has NOT expired yet, if the pid is dead", () => {
+    // The realistic case: production ttl is max(role timeout, 60s), so a run
+    // that died seconds ago still carries a lease valid for tens of minutes.
+    const iso = new Date(NOW).toISOString();
+    createRun(
+      dir,
+      {
+        runId: "r-fresh",
+        roleId: "memory-keeper",
+        contractHash: "h",
+        contractJson: "{}",
+        binding: "{}",
+      },
+      iso,
+    );
+    claimRun(dir, "r-fresh", `${os.hostname()}:999999`, {
+      nowMs: NOW - 5_000,
+      ttlMs: 30 * 60_000,
+      state: "running",
+    });
+    const fenceBefore = readRun(dir, "r-fresh")?.fence ?? 0;
+
+    const recovered = recoverOrphanRuns(dir, ME, { nowMs: NOW, ttlMs: 60_000 });
+
+    expect(recovered).toHaveLength(1);
+    const row = readRun(dir, "r-fresh");
+    expect(row?.state).toBe("failed");
+    expect(row?.fence).toBeGreaterThan(fenceBefore);
+    expect(checkArtifactFence(dir, "r-fresh", fenceBefore).ok).toBe(false);
+  });
+
+  it("leaves a run held by a LIVE process alone and reports nothing", () => {
+    const iso = new Date(NOW).toISOString();
+    createRun(
+      dir,
+      {
+        runId: "r-live",
+        roleId: "memory-keeper",
+        contractHash: "h",
+        contractJson: "{}",
+        binding: "{}",
+      },
+      iso,
+    );
+    // This test's own pid: alive by construction.
+    claimRun(dir, "r-live", `${os.hostname()}:${process.pid}`, {
+      nowMs: NOW,
+      ttlMs: 30 * 60_000,
+      state: "running",
+    });
+
+    expect(recoverOrphanRuns(dir, ME, { nowMs: NOW, ttlMs: 60_000 })).toEqual(
+      [],
+    );
+    expect(readRun(dir, "r-live")?.state).toBe("running");
+  });
+
   it("a finished run cannot ingest an artefact even at a matching fence", () => {
     orphan("r-done", "running");
     recoverOrphanRuns(dir, ME, { nowMs: NOW, ttlMs: 60_000 });

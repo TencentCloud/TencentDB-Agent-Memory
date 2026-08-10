@@ -12,6 +12,7 @@
  * stale artefact is ACCEPTED, which is the pre-fix state.
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
 import { TdaiGateway } from "../../src/gateway/server.js";
@@ -48,11 +49,13 @@ for (const [runId, state] of [
     },
     now,
   );
-  // A process that is gone held the lease — that is what a takeover has to
-  // wrest away, and what makes the fence move.
-  claimRun(dataDir, runId, "dead-host:999999", {
-    nowMs: Date.now() - 3_600_000,
-    ttlMs: 1,
+  // A process on THIS host that is gone held the lease, claimed 5s ago with
+  // the production ttl (max(role timeout, 60s)) — so the lease has NOT
+  // expired. This is the ordinary crash-and-restart-at-once shape: only the
+  // dead pid, not the clock, can tell recovery that the owner is gone.
+  claimRun(dataDir, runId, `${os.hostname()}:999999`, {
+    nowMs: Date.now() - 5_000,
+    ttlMs: 30 * 60_000,
   });
   updateRun(dataDir, runId, { state }, now);
 }

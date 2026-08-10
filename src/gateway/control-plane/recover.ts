@@ -15,6 +15,7 @@
  */
 import { openControlPlane } from "./db.js";
 import { claimRun } from "./lease.js";
+import { ownerIsGone } from "./owner.js";
 import { updateRun } from "./run-repo.js";
 import type { RunRow, RunState } from "./run-types.js";
 
@@ -59,13 +60,23 @@ export function recoverOrphanRuns(
   const recovered: RecoveredRun[] = [];
   for (const row of liveRuns(dataDir)) {
     if (row.leaseOwner === owner) continue;
-    const claim = claimRun(dataDir, row.runId, owner, opts);
+    // A crash does not expire the lease: the TTL is the role timeout, so the
+    // ordinary "died and restarted at once" case still shows an unexpired
+    // lease held by a pid that is gone. Only a dead LOCAL pid is forced.
+    const claim = claimRun(dataDir, row.runId, owner, {
+      ...opts,
+      force: ownerIsGone(row.leaseOwner),
+    });
     if (!claim.ok) {
+      const to = claim.row?.state ?? row.state;
       // `applying` → claimRun already parked it as needs-reconciliation.
+      // Anything else was refused (a live owner still holds it): nothing was
+      // recovered, so do not report it as if something had been.
+      if (to === row.state) continue;
       recovered.push({
         runId: row.runId,
         from: row.state,
-        to: claim.row?.state ?? row.state,
+        to,
         fence: claim.row?.fence ?? row.fence,
         reason: claim.reason,
       });
