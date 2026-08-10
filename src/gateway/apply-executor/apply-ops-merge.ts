@@ -13,7 +13,7 @@ import { writeProvenanceRecord } from "./apply-provenance.js";
 import { parseMetadata } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
-import type { OnOp } from "./op-journal.js";
+import { digestOf, type OnOp } from "./op-journal.js";
 import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 
 export async function applyMerges(
@@ -56,7 +56,8 @@ export async function applyMerges(
       scope: targetRow.scope === "project" ? "project" : undefined,
     };
 
-    onOp?.("merge", i, op.target, "prepared");
+    const digest = digestOf(op.content);
+    onOp?.("merge", i, op.target, "prepared", digest);
     await writeProvenanceRecord(deps, {
       row: targetRow,
       memory,
@@ -75,7 +76,7 @@ export async function applyMerges(
         );
       }
     }
-    onOp?.("merge", i, op.target, "applied");
+    onOp?.("merge", i, op.target, "applied", digest);
     result.applied.merges.push(op.target);
     logger.info?.(
       `[memory/apply] merged ${op.cluster.length} records into ${op.target}`,

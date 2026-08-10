@@ -15,7 +15,7 @@ import { writeProvenanceRecord } from "./apply-provenance.js";
 import { parseMetadata } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
-import type { OnOp } from "./op-journal.js";
+import { digestOf, type OnOp } from "./op-journal.js";
 import type { ExtractedMemory } from "../../core/record/l1-writer.js";
 
 export async function applyRewritesRecords(
@@ -60,7 +60,8 @@ export async function applyRewritesRecords(
       scope: row.scope === "project" ? "project" : undefined,
     };
 
-    onOp?.("rewriteRecord", i, op.id, "prepared");
+    const digest = digestOf(op.content);
+    onOp?.("rewriteRecord", i, op.id, "prepared", digest);
     await writeProvenanceRecord(deps, {
       row,
       memory,
@@ -70,7 +71,7 @@ export async function applyRewritesRecords(
       label: `rewriteRecord "${op.id}"`,
     });
 
-    onOp?.("rewriteRecord", i, op.id, "applied");
+    onOp?.("rewriteRecord", i, op.id, "applied", digest);
     result.applied.rewrites.push(op.id);
     logger.info?.(
       `[memory/apply] rewrote record ${op.id} (${op.content.length} chars)`,

@@ -6,6 +6,7 @@
  * the control plane: the callback is either a real journal (a run with an id)
  * or a no-op (a direct apply, as in the 37 existing call sites).
  */
+import { createHash } from "node:crypto";
 import {
   opIndexBase,
   recordOp,
@@ -23,7 +24,16 @@ export type OnOp = (
   localIndex: number,
   targetKey: string,
   phase: OpPhase,
+  /** Digest of the content this operation WRITES. Reconciliation compares it
+   * against what the store holds now, so "the target exists" is never mistaken
+   * for "the operation landed". Deletes have none. */
+  payloadDigest?: string,
 ) => void;
+
+/** The one hash the journal and the postconditions share. */
+export function digestOf(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 
 export function countOps(diff: ApplyDiff): OpCounts {
   return {
@@ -45,7 +55,7 @@ export interface JournalDeps {
 /** A journal bound to one run + one candidate. */
 export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
   const bases = new Map<OpType, number>();
-  return (opType, localIndex, targetKey, phase) => {
+  return (opType, localIndex, targetKey, phase, payloadDigest) => {
     let base = bases.get(opType);
     if (base === undefined) {
       base = opIndexBase(counts, opType);
@@ -60,6 +70,7 @@ export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
         opType,
         state: phase,
         targetKey,
+        payloadDigest,
       },
       new Date(deps.now()).toISOString(),
     );

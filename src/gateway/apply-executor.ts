@@ -100,6 +100,9 @@ export class ApplyExecutor {
    */
   async apply(rawBody: unknown, run?: RunContext): Promise<ApplyResult> {
     const result = EMPTY_RESULT();
+    // Visible to the catch path: whatever happens, the run must not be left
+    // sitting in `applying` (tz-09 Ф7 — a wedged run has no way out).
+    let scopedForFinish: RunContext | undefined;
     try {
       // 1. zod validation (strict, readable errors) — before any mutation.
       const parsed = parseRequest(rawBody);
@@ -115,6 +118,7 @@ export class ApplyExecutor {
       );
       // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
       // ONLY call site — a second one would be a way past it.
+      scopedForFinish = scoped;
       runApplyGate(this.deps, parsed.diff, scoped);
       // 3-4. Critical section (tz-09 Ф7): the manifest recheck and every
       // mutation run under ONE store-wide lock. The baseline is only worth
@@ -126,7 +130,6 @@ export class ApplyExecutor {
         checkManifest(this.deps, parsed);
         enterApplying(this.deps, scoped);
         await applyMutations(this.deps, parsed.diff, result, onOp);
-        leaveApplying(this.deps, scoped);
       });
 
       // 5. Scene index rebuild after file rewrites.
@@ -137,7 +140,7 @@ export class ApplyExecutor {
         result.ok = false;
         result.error =
           "syncSceneIndex failed (files applied; scene_index.json rebuilds on the next /memory/validate)";
-        return result;
+        return this.finish(result, scoped);
       }
 
       // 6. Post-apply vec-vs-meta count check.
@@ -150,7 +153,7 @@ export class ApplyExecutor {
         result.statusCode = 500;
         result.ok = false;
       }
-      return result;
+      return this.finish(result, scoped);
     } catch (err) {
       if (
         err instanceof ApplyValidationError ||
@@ -162,10 +165,24 @@ export class ApplyExecutor {
         result.partial = hasApplied(result);
         result.status = "aborted";
         result.statusCode = err.statusCode;
-        return result;
+        return this.finish(result, scopedForFinish);
       }
       // Unexpected — propagate to the HTTP layer (500 with raw message).
       throw err;
     }
+  }
+
+  /** One exit for every path: the Run leaves `applying` for the state its
+   * outcome earned. Skipping this on a failure would wedge the run — takeover
+   * from `applying` is forbidden (P5) and the door refuses every later apply. */
+  private finish(
+    result: ApplyResult,
+    run: RunContext | undefined,
+  ): ApplyResult {
+    leaveApplying(this.deps, run, {
+      ok: result.ok,
+      mutated: hasApplied(result),
+    });
+    return result;
   }
 }

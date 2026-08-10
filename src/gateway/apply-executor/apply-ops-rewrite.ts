@@ -19,7 +19,7 @@ import {
 import { atomicWrite } from "./apply-route-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { ApplyResult } from "./types.js";
-import type { OnOp } from "./op-journal.js";
+import { digestOf, type OnOp } from "./op-journal.js";
 
 /** Deletes with stale-re-check. */
 export async function applyDeletes(
@@ -34,8 +34,11 @@ export async function applyDeletes(
     ops.map((o) => o.id),
   );
 
-  const toDelete: string[] = [];
-  for (const op of ops) {
+  // The op index is the position in the REQUEST, not in the compacted list:
+  // a skipped id would otherwise shift every later operationId onto the wrong
+  // target, and the journal is only useful while its ids mean one thing.
+  const toDelete: Array<{ id: string; index: number }> = [];
+  for (const [index, op] of ops.entries()) {
     const row = rows.get(op.id);
     if (!row) {
       result.skipped.deletes.push(op.id);
@@ -47,20 +50,21 @@ export async function applyDeletes(
           `(diff updatedAt "${op.updatedAt}", current "${row.updated_time}") — aborting to protect fresh data`,
       );
     }
-    toDelete.push(op.id);
+    toDelete.push({ id: op.id, index });
   }
 
-  toDelete.forEach((id, i) => onOp?.("deleteL1", i, id, "prepared"));
-  if (toDelete.length > 0 && deps.vectorStore) {
-    const ok = await deps.vectorStore.deleteL1Batch(toDelete);
+  const ids = toDelete.map((d) => d.id);
+  for (const d of toDelete) onOp?.("deleteL1", d.index, d.id, "prepared");
+  if (ids.length > 0 && deps.vectorStore) {
+    const ok = await deps.vectorStore.deleteL1Batch(ids);
     if (!ok) {
       throw new ApplyRuntimeError(
-        `deleteL1Batch failed for [${toDelete.join(", ")}]`,
+        `deleteL1Batch failed for [${ids.join(", ")}]`,
       );
     }
   }
-  toDelete.forEach((id, i) => onOp?.("deleteL1", i, id, "applied"));
-  result.applied.deletes.push(...toDelete);
+  for (const d of toDelete) onOp?.("deleteL1", d.index, d.id, "applied");
+  result.applied.deletes.push(...ids);
 }
 
 /** Rewrite scene/persona atomically (tmp + rename) with a backup. */
@@ -99,7 +103,8 @@ export async function applyRewrites(
       continue;
     }
 
-    onOp?.(opType, localIndex, target.relPath, "prepared");
+    const digest = digestOf(target.content);
+    onOp?.(opType, localIndex, target.relPath, "prepared", digest);
     try {
       if (current !== null) {
         await writeBackup(deps.dataDir, target.relPath, current);
@@ -110,7 +115,7 @@ export async function applyRewrites(
         `rewrite "${target.relPath}" failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    onOp?.(opType, localIndex, target.relPath, "applied");
+    onOp?.(opType, localIndex, target.relPath, "applied", digest);
     result.applied.rewrites.push(target.relPath);
     deps.logger.info?.(
       `[memory/apply] rewrote ${target.relPath} (${target.content.length} chars)`,

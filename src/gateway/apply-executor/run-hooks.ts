@@ -6,7 +6,12 @@
  * transition — just the mutations.
  */
 import { beginApplying, finishApplying } from "../control-plane/applying.js";
-import { countOps, createOpJournal, type OnOp } from "./op-journal.js";
+import {
+  countOps,
+  createOpJournal,
+  digestOf,
+  type OnOp,
+} from "./op-journal.js";
 import { ApplyValidationError } from "./errors.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
 import type { RunContext } from "./run-context.js";
@@ -35,33 +40,42 @@ export function enterApplying(
   }
 }
 
-/** Leave `applying` once the mutations returned. A failure deliberately does
- * NOT leave it: a run stuck in `applying` is the signal that the store may be
- * half-written, and the reaction to that is reconciliation (P5). */
+/** Leave `applying` for the state the OUTCOME earned — called on every exit
+ * path, including the failing ones. Leaving a run in `applying` would wedge
+ * it forever: takeover from `applying` is forbidden (P5) and the door refuses
+ * every later apply, so nothing could ever resolve it. A run that mutated and
+ * then failed is parked for reconciliation; one that never mutated failed
+ * outright. */
 export function leaveApplying(
   deps: ApplyExecutorDeps,
   run: RunContext | undefined,
+  outcome: { ok: boolean; mutated: boolean },
 ): void {
   const runId = scopedRunId(deps, run);
   if (runId === undefined) return;
-  finishApplying(deps.dataDir, runId, "applied", new Date().toISOString());
+  const state = outcome.ok
+    ? "applied"
+    : outcome.mutated
+      ? "needs-reconciliation"
+      : "failed";
+  finishApplying(deps.dataDir, runId, state, new Date().toISOString());
 }
 
-/** A journal when the caller named a run AND a candidate; a direct apply has
- * nothing to reconcile against. */
+/** A journal whenever the caller named a run; a direct apply has nothing to
+ * reconcile against. The candidate digest falls back to the candidate ITSELF,
+ * so a caller that names a run but no digest (the HTTP path) still gets a
+ * journal instead of silently getting none. */
 export function journalFor(
   deps: ApplyExecutorDeps,
   diff: ApplyDiff,
   run: RunContext | undefined,
 ): OnOp | undefined {
-  if (run?.runId === undefined || run.candidateDigest === undefined) {
-    return undefined;
-  }
+  if (run?.runId === undefined) return undefined;
   return createOpJournal(
     {
       dataDir: deps.dataDir,
       runId: run.runId,
-      candidateDigest: run.candidateDigest,
+      candidateDigest: run.candidateDigest ?? digestOf(JSON.stringify(diff)),
       now: () => Date.now(),
     },
     countOps(diff),

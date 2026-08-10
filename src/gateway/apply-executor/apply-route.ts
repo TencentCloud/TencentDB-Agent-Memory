@@ -92,7 +92,14 @@ export async function handleMemoryApply(
   try {
     result = await executor.apply(
       body,
-      typeof runId === "string" ? { runId } : undefined,
+      typeof runId === "string"
+        ? {
+            runId,
+            // Without this the HTTP path would always run in shadow while the
+            // operator believes the gate is armed (tz-09 Ф3).
+            gateMode: ctx.config.memory?.consolidation?.applyGateMode,
+          }
+        : undefined,
     );
   } catch (err) {
     ctx.logger.error?.(
