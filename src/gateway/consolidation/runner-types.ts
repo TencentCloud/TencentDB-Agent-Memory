@@ -45,4 +45,7 @@ export interface RunBatchResult {
   diffText?: string;
   error?: string;
   status?: string;
+  /** Apply mutated the store and then aborted (tz-09 Ф2b): the difference
+   * between "nothing happened, retry" and "reconcile before anything else". */
+  partial?: boolean;
 }

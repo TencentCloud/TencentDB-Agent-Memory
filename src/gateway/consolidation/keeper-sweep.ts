@@ -96,7 +96,9 @@ export function sweepKeeperOrphans(
   myOwnerPid: number | null = null,
 ): number {
   const candidates = scanKeeperProcesses();
-  logger.debug?.(`[keeper] orphan sweep: ${candidates.length} candidate(s), ${activeRunUuids?.size ?? 0} active run(s)`);
+  logger.debug?.(
+    `[keeper] orphan sweep: ${candidates.length} candidate(s), ${activeRunUuids?.size ?? 0} active run(s)`,
+  );
   let killed = 0;
   for (const c of candidates) {
     if (activeRunUuids !== null && activeRunUuids.size > 0) {

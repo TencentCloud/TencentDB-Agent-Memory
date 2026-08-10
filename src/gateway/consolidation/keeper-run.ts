@@ -134,7 +134,9 @@ export function runKeeperProcess(
 
     child.on("error", (err: Error) => settle(null, null, err.message));
     child.on("exit", (code, sig) => {
-      opts.logger.debug?.(`[keeper] exited pid=${child.pid} code=${code} signal=${sig} timedOut=${timedOut}`);
+      opts.logger.debug?.(
+        `[keeper] exited pid=${child.pid} code=${code} signal=${sig} timedOut=${timedOut}`,
+      );
       settle(code, sig);
     });
   });

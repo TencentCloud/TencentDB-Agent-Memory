@@ -47,7 +47,7 @@ export async function runFreshTailSingleBatch(
   if (batchRes.error) {
     summary.error = batchRes.error;
     summary.status = (batchRes.status as RunSummary["status"]) ?? "failed";
-    return { diffText: batchRes.diffText };
+    return { diffText: batchRes.diffText, partial: batchRes.partial };
   }
   // Applied or empty/heal-skip — both advance past the fresh tail.
   if (summary.error === undefined) summary.status = "ok";

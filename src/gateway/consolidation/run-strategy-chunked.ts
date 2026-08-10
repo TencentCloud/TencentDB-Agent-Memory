@@ -38,12 +38,14 @@ export async function runBoundedFullStoreChunked(
 
   summary.recordsPresented = res.presentedTotal;
   if (summary.error === undefined) summary.status = "ok";
-  if (!res.anyApplied) return { diffText: res.dryRunDiffText };
+  if (!res.anyApplied)
+    return { diffText: res.dryRunDiffText, partial: res.partial };
   // Anchored cursor: max slice-time of the applied chunks BEFORE the first
   // skip-merge. null → the anchor is the PREVIOUS cursor (a skip in chunk 1
   // never advances; the ops re-present next run).
   return {
     diffText: res.dryRunDiffText,
     advance: { anchor: res.anchoredCursor ?? cp.l0Cursor },
+    partial: res.partial,
   };
 }

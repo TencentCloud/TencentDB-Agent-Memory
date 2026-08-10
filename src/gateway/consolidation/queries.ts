@@ -93,7 +93,10 @@ export async function stampRoleRun(
   summary: RunSummary,
 ): Promise<void> {
   await ctx.checkpoint.update((d) => {
-    d.roles[summary.role] = roleProgressAfterRun(d.roles[summary.role], summary);
+    d.roles[summary.role] = roleProgressAfterRun(
+      d.roles[summary.role],
+      summary,
+    );
   });
 }
 
@@ -119,6 +122,9 @@ export async function advanceCheckpoint(
     d.lastRunAt = summary.finishedAt;
     if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
     d.l0Count += newL0;
-    d.roles[summary.role] = roleProgressAfterRun(d.roles[summary.role], summary);
+    d.roles[summary.role] = roleProgressAfterRun(
+      d.roles[summary.role],
+      summary,
+    );
   });
 }

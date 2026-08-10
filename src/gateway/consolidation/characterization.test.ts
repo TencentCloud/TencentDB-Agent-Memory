@@ -26,10 +26,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { parseConfig } from "../../config.js";
 import { ConsolidationOrchestrator } from "./orchestrator.js";
-import {
-  buildRoleDefaults,
-  buildLauncherDefaults,
-} from "../role-defaults.js";
+import { buildRoleDefaults, buildLauncherDefaults } from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import { createRequire } from "node:module";

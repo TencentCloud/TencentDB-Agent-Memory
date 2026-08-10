@@ -27,5 +27,6 @@ export function recordApplyResult(
     : applyResult.status === "aborted"
       ? "aborted"
       : "failed";
+  result.partial = applyResult.partial;
   if (applyResult.error) result.error = applyResult.error;
 }

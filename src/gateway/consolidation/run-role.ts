@@ -15,6 +15,7 @@ import { mkFailedSummary } from "./summary.js";
 import { runFreshTailSingleBatch } from "./run-strategy-fresh-tail.js";
 import { runBoundedFullStoreChunked } from "./run-strategy-chunked.js";
 import { readRun } from "../control-plane/run-repo.js";
+import { finalizeRunOutcome } from "./run-outcome.js";
 import type { RunPassport } from "../control-plane/run-types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
@@ -122,6 +123,13 @@ export async function runRole(
       // that count is what bounds the retries (contract retry_budget).
       await stampRoleRun(ctx, summary);
     }
+    // tz-09 Ф2b: the failure CLASS decides what happens next, and it is
+    // written where the next dispatch can see it — not just into the report.
+    finalizeRunOutcome(
+      ctx,
+      { runId: opts.runId, dryRun: opts.dryRun, partial: outcome.partial },
+      summary,
+    );
     await writeReport(ctx, summary);
     return summary;
   } catch (err) {
@@ -142,6 +150,7 @@ export async function runRole(
       } catch {
         // best-effort: the state that failed the run may also be unwritable
       }
+      finalizeRunOutcome(ctx, { runId: opts.runId }, summary);
     }
     return summary;
   } finally {

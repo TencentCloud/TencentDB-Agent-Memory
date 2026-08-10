@@ -21,7 +21,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
-export const CONSOLIDATION_CHECKPOINT_FILENAME = "consolidation_checkpoint.json";
+export const CONSOLIDATION_CHECKPOINT_FILENAME =
+  "consolidation_checkpoint.json";
 
 /** Per-role progress recorded after each successful run. */
 export interface RoleProgress {
@@ -72,10 +73,15 @@ const fileLocks = new Map<string, Promise<void>>();
  * Serialize async critical sections per file path. Multiple instances sharing
  * the same path automatically share the same lock.
  */
-async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+async function withFileLock<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const prev = fileLocks.get(filePath) ?? Promise.resolve();
   let release!: () => void;
-  const gate = new Promise<void>((r) => { release = r; });
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   fileLocks.set(filePath, gate);
 
   await prev;
@@ -97,7 +103,11 @@ export class ConsolidationCheckpoint {
   private readonly filePath: string;
 
   constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, ".metadata", CONSOLIDATION_CHECKPOINT_FILENAME);
+    this.filePath = path.join(
+      dataDir,
+      ".metadata",
+      CONSOLIDATION_CHECKPOINT_FILENAME,
+    );
   }
 
   /** Absolute path of the checkpoint file (for diagnostics/tests). */
@@ -120,7 +130,9 @@ export class ConsolidationCheckpoint {
    * result is persisted atomically. Always used for updates so concurrent
    * runs cannot clobber each other's progress.
    */
-  async update(mutate: (data: ConsolidationCheckpointData) => void): Promise<ConsolidationCheckpointData> {
+  async update(
+    mutate: (data: ConsolidationCheckpointData) => void,
+  ): Promise<ConsolidationCheckpointData> {
     return withFileLock(this.filePath, async () => {
       const data = await this.readRaw();
       mutate(data);
@@ -140,8 +152,14 @@ export class ConsolidationCheckpoint {
       return {
         lastRunAt: typeof parsed.lastRunAt === "string" ? parsed.lastRunAt : "",
         l0Cursor: typeof parsed.l0Cursor === "string" ? parsed.l0Cursor : "",
-        l0Count: typeof parsed.l0Count === "number" && Number.isFinite(parsed.l0Count) ? parsed.l0Count : 0,
-        roles: parsed.roles && typeof parsed.roles === "object" ? (parsed.roles as Record<string, RoleProgress>) : {},
+        l0Count:
+          typeof parsed.l0Count === "number" && Number.isFinite(parsed.l0Count)
+            ? parsed.l0Count
+            : 0,
+        roles:
+          parsed.roles && typeof parsed.roles === "object"
+            ? (parsed.roles as Record<string, RoleProgress>)
+            : {},
       };
     } catch {
       // Missing or malformed file — fresh start (same posture as CheckpointManager).

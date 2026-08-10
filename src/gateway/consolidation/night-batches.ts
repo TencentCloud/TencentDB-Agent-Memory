@@ -13,6 +13,8 @@ import type { ResolvedRoleContract } from "./role-contract-types.js";
 
 export interface NightBatchResult {
   anyApplied: boolean;
+  /** A batch mutated and then aborted (tz-09 Ф2b). */
+  partial?: boolean;
   dryRunDiffText: string | undefined;
   anchoredCursor: string | null;
   skipMergeSeen: boolean;
@@ -41,6 +43,7 @@ export async function runNightBatches(
   // (tz-01 `contract-drives-execution`), not from the global night config.
   const { caps, maxRunMs } = opts.contract.policy;
   let anyApplied = false;
+  let partial: boolean | undefined;
   let dryRunDiffText: string | undefined;
   let anchoredCursor: string | null = null;
   let skipMergeSeen = false;
@@ -87,6 +90,7 @@ export async function runNightBatches(
       batchRes,
       ctx.now() - opts.startedMs > maxRunMs,
     );
+    if (step.partial !== undefined) partial = step.partial;
     if (step.exit) break;
     if (step.continueDryRun) continue;
     anyApplied = anyApplied || step.anyApplied;
@@ -101,6 +105,7 @@ export async function runNightBatches(
 
   return {
     anyApplied,
+    partial,
     dryRunDiffText,
     anchoredCursor,
     skipMergeSeen,

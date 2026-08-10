@@ -20,6 +20,8 @@ export interface StepResult {
   anchoredCursor?: string | null;
   /** Stop the loop on the FIRST target-missing merge (the night anchor). */
   skipMergeSeen: boolean;
+  /** Apply mutated and then aborted in THIS batch (tz-09 Ф2b). */
+  partial?: boolean;
 }
 
 export function stepBatch(
@@ -29,16 +31,32 @@ export function stepBatch(
 ): StepResult {
   if (exceededMaxRunMs) {
     summary.status = "failed";
-    return { exit: true, continueDryRun: false, anyApplied: false, skipMergeSeen: false };
+    return {
+      exit: true,
+      continueDryRun: false,
+      anyApplied: false,
+      skipMergeSeen: false,
+    };
   }
   if (batchRes.error) {
     summary.error = batchRes.error;
     summary.status = (batchRes.status as RunSummary["status"]) ?? "failed";
-    return { exit: true, continueDryRun: false, anyApplied: false, skipMergeSeen: false };
+    return {
+      exit: true,
+      continueDryRun: false,
+      anyApplied: false,
+      skipMergeSeen: false,
+      partial: batchRes.partial,
+    };
   }
   if (batchRes.status === "dry-run") {
     summary.status = "dry-run";
-    return { exit: false, continueDryRun: true, anyApplied: false, skipMergeSeen: false };
+    return {
+      exit: false,
+      continueDryRun: true,
+      anyApplied: false,
+      skipMergeSeen: false,
+    };
   }
   const anyApplied =
     batchRes.applied.merges.length +
@@ -49,12 +67,30 @@ export function stepBatch(
   if (batchRes.skippedMergesMissingTarget.length > 0) {
     // FIRST target-missing merge anchors the advance: the cursor stops at
     // the last APPLIED chunk BEFORE this one. The loop STOPS here.
-    return { exit: false, continueDryRun: false, anyApplied, skipMergeSeen: true };
+    return {
+      exit: false,
+      continueDryRun: false,
+      anyApplied,
+      skipMergeSeen: true,
+    };
   }
-  const anchoredCursor = batchRes.status === "ok" ? batchRes.sliceTime : undefined;
+  const anchoredCursor =
+    batchRes.status === "ok" ? batchRes.sliceTime : undefined;
   if (batchRes.status !== "ok" && batchRes.status !== "dry-run") {
     summary.status = (batchRes.status as RunSummary["status"]) ?? "failed";
-    return { exit: true, continueDryRun: false, anyApplied, anchoredCursor, skipMergeSeen: false };
+    return {
+      exit: true,
+      continueDryRun: false,
+      anyApplied,
+      anchoredCursor,
+      skipMergeSeen: false,
+    };
   }
-  return { exit: false, continueDryRun: false, anyApplied, anchoredCursor, skipMergeSeen: false };
+  return {
+    exit: false,
+    continueDryRun: false,
+    anyApplied,
+    anchoredCursor,
+    skipMergeSeen: false,
+  };
 }

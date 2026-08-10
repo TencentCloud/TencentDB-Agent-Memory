@@ -34,4 +34,7 @@ export interface StrategyOutcome {
   /** Present only when the cursor may move. `anchor: undefined` means "past
    * the fresh tail"; a string pins the advance to that slice-time. */
   advance?: { anchor: string | undefined };
+  /** Apply mutated the store and then aborted (tz-09 Ф2b) — decides between
+   * "retry" and "reconcile". */
+  partial?: boolean;
 }

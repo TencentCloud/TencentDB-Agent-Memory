@@ -9,7 +9,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ConsolidationCheckpoint, type ConsolidationCheckpointData } from "./checkpoint.js";
+import {
+  ConsolidationCheckpoint,
+  type ConsolidationCheckpointData,
+} from "./checkpoint.js";
 
 function scratchDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "tdai-cp-"));
@@ -65,13 +68,20 @@ describe("ConsolidationCheckpoint (P6)", () => {
     const cp = new ConsolidationCheckpoint(dataDir);
     expect(path.basename(cp.file)).toBe("consolidation_checkpoint.json");
     // CheckpointManager's recall checkpoint is a different file.
-    expect(cp.file).toContain(path.join(".metadata", "consolidation_checkpoint.json"));
+    expect(cp.file).toContain(
+      path.join(".metadata", "consolidation_checkpoint.json"),
+    );
     expect(cp.file).not.toContain("recall_checkpoint");
   });
 
   it("corrupt or missing file recovers to defaults", async () => {
     const cp = new ConsolidationCheckpoint(dataDir);
-    await cp.write({ lastRunAt: "2026-08-02T00:00:00Z", l0Cursor: "", l0Count: 9, roles: {} });
+    await cp.write({
+      lastRunAt: "2026-08-02T00:00:00Z",
+      l0Cursor: "",
+      l0Count: 9,
+      roles: {},
+    });
     fs.writeFileSync(cp.file, "{ not json", "utf-8");
     const read = await cp.read();
     expect(read.lastRunAt).toBe("");
@@ -102,9 +112,16 @@ describe("ConsolidationCheckpoint (P6)", () => {
 
   it("writes are atomic — no .tmp leftovers after a write", async () => {
     const cp = new ConsolidationCheckpoint(dataDir);
-    await cp.write({ lastRunAt: "2026-08-02T00:00:00Z", l0Cursor: "", l0Count: 1, roles: {} });
+    await cp.write({
+      lastRunAt: "2026-08-02T00:00:00Z",
+      l0Cursor: "",
+      l0Count: 1,
+      roles: {},
+    });
     const dir = path.dirname(cp.file);
-    const leftovers = fs.readdirSync(dir).filter((f) => f.includes("consolidation_checkpoint.json.tmp"));
+    const leftovers = fs
+      .readdirSync(dir)
+      .filter((f) => f.includes("consolidation_checkpoint.json.tmp"));
     expect(leftovers).toEqual([]);
   });
 });
