@@ -8,7 +8,25 @@
 import { createPiLauncher } from "./pi.js";
 import { PI_LAUNCHER_ID, type LauncherSettings } from "./pi-config.js";
 import type { Logger } from "../../../core/types.js";
-import type { LaunchOutcome, RoleLauncher } from "./types.js";
+import { checkCapabilities } from "./capabilities.js";
+import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
+
+/** The capability check belongs to every launcher, so it lives ONCE here
+ * rather than in each implementation, where the third one would forget it. */
+function withCapabilityGate(inner: RoleLauncher): RoleLauncher {
+  return {
+    id: inner.id,
+    capabilities: inner.capabilities,
+    launch: async (input: LaunchInput): Promise<LaunchOutcome> => {
+      const error = checkCapabilities(
+        inner.id,
+        input.contract.requiresCapabilities,
+        inner.capabilities,
+      );
+      return error === null ? inner.launch(input) : { ok: false, error };
+    },
+  };
+}
 
 /** A launcher that refuses everything, so an unknown binding surfaces as an
  * `invalid-binding` LaunchError on the run instead of throwing at wiring time
@@ -16,6 +34,7 @@ import type { LaunchOutcome, RoleLauncher } from "./types.js";
 function refusingLauncher(id: string): RoleLauncher {
   return {
     id,
+    capabilities: new Set<string>(),
     launch: async (): Promise<LaunchOutcome> => ({
       ok: false,
       error: {
@@ -35,6 +54,12 @@ export function createLauncherRegistry(
   if (piSettings) {
     built.set(PI_LAUNCHER_ID, createPiLauncher(piSettings, logger));
   }
-  return (launcherId: string) =>
-    built.get(launcherId) ?? refusingLauncher(launcherId);
+  return (launcherId: string) => {
+    const launcher = built.get(launcherId);
+    // An unregistered id is a BINDING error; gating it on capabilities would
+    // report "host-incompatible" for a host that does not exist here at all.
+    return launcher === undefined
+      ? refusingLauncher(launcherId)
+      : withCapabilityGate(launcher);
+  };
 }

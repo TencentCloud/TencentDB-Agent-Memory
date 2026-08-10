@@ -80,6 +80,9 @@ export interface ResolvedRoleContract {
    * leaving the role with no tools. An empty SET means "declared none". */
   toolsSubset: ReadonlySet<string> | null;
   timeoutMs: number;
+  /** Host capabilities the role requires (tz-06 L5). Empty means "anything
+   * that can run a prompt" — a refusal must be DECLARED, not inferred. */
+  requiresCapabilities: readonly string[];
   binding: ExecutionBinding;
   assets: {
     extensionPath: string | null;

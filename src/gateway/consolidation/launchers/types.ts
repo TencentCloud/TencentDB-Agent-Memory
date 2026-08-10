@@ -17,7 +17,10 @@ export type LaunchErrorKind =
   | "permission-denied"
   | "host-incompatible"
   | "invalid-binding"
-  | "isolation-unavailable";
+  | "isolation-unavailable"
+  /** Not a declared refusal: the launcher itself threw. Kept in the same
+   * union so the service boundary has exactly one error shape to record. */
+  | "internal-launcher";
 
 export interface LaunchError {
   kind: LaunchErrorKind;
@@ -74,5 +77,8 @@ export type LaunchOutcome =
 export interface RoleLauncher {
   /** Matches `ExecutionBinding.launcherId`. */
   readonly id: string;
+  /** What this host can actually do (tz-06 L5). Checked against the role's
+   * `requiresCapabilities` BEFORE the process exists — see capabilities.ts. */
+  readonly capabilities: ReadonlySet<string>;
   launch(input: LaunchInput): Promise<LaunchOutcome>;
 }

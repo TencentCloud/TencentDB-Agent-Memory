@@ -15,6 +15,15 @@ import type { Logger } from "../../../core/types.js";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
 import type { LauncherSettings } from "./pi-config.js";
 import { ATTEMPTS_DIR, PI_LAUNCHER_ID, stripOwnedFlags } from "./pi-config.js";
+
+/** @see capabilities.ts — the role's vocabulary, not pi's flag names. */
+const PI_CAPABILITIES: ReadonlySet<string> = new Set([
+  "session",
+  "extension",
+  "skill",
+  "thinking",
+  "tool-subset",
+]);
 import type {
   HostRunResult,
   LaunchError,
@@ -55,6 +64,9 @@ export function createPiLauncher(
 ): RoleLauncher {
   return {
     id: PI_LAUNCHER_ID,
+    // pi has all of these today; `isolation` is deliberately absent until Ф6
+    // gives it a real profile — claiming it now would make L6 unfalsifiable.
+    capabilities: PI_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
       const { contract } = input;
       let cancel: (() => void) | undefined;

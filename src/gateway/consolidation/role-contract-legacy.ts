@@ -139,6 +139,7 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       typeof cfg.timeout_min === "number" && cfg.timeout_min > 0
         ? cfg.timeout_min * 60_000
         : legacy.timeoutMs,
+    requiresCapabilities: [...(cfg.requires_capabilities ?? [])].sort(),
     binding,
     assets: {
       extensionPath: cfg.runtime?.extension_path ?? null,
@@ -170,6 +171,7 @@ export function hashContract(c: ResolvedRoleContract): string {
     promptText: c.prompt.text,
     toolsSubset: c.toolsSubset ? [...c.toolsSubset].sort() : null,
     timeoutMs: c.timeoutMs,
+    requiresCapabilities: c.requiresCapabilities,
     binding: c.binding,
     assets: c.assets,
   };

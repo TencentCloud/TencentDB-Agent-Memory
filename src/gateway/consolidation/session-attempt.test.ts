@@ -85,7 +85,7 @@ describe("tz-06 Ф3 — sessionRef on the attempt row", () => {
     expect(detail.exitCode).toBe(7);
   });
 
-  it("a host that refuses leaves the attempt without a session", async () => {
+  it("a host that refuses records the typed kind on the attempt", async () => {
     const attemptId = recordAttempt(
       dir,
       "r1",
@@ -104,7 +104,7 @@ describe("tz-06 Ф3 — sessionRef on the attempt row", () => {
 
     expect(res.error).toContain("binary-not-found");
     const [row] = listAttempts(dir, "r1");
-    expect(row?.outcome).toBeNull();
-    expect(row?.detail).toBeNull();
+    expect(row?.outcome).toBe("binary-not-found");
+    expect(JSON.parse(row?.detail ?? "{}").message).toBe("ENOENT");
   });
 });

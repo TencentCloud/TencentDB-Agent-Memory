@@ -14,6 +14,11 @@ import {
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
+import type {
+  LaunchInput,
+  LaunchOutcome,
+  RoleLauncher,
+} from "./launchers/types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary, SpawnChildContext } from "./types.js";
 
@@ -59,6 +64,26 @@ export async function runPostRunSteps(
   );
 }
 
+/** A launcher that THROWS is a bug in the launcher, not a failed run — but
+ * the service promise still must not reject (criterion 10). The unexpected
+ * error gets its own class, distinct from every declared LaunchError kind. */
+async function launchSafely(
+  ctx: OrchestratorContext,
+  launcher: RoleLauncher,
+  input: LaunchInput,
+): Promise<LaunchOutcome> {
+  try {
+    return await launcher.launch(input);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ctx.logger.error?.(`[launcher] ${launcher.id} threw: ${message}`);
+    return {
+      ok: false,
+      error: { kind: "internal-launcher", message },
+    };
+  }
+}
+
 /** Default child spawner: goes through the RoleLauncher port (tz-06 Ф1), so
  * nothing here knows a binary name or a host flag. Model, thinking level,
  * timeout and assets still come from the RESOLVED CONTRACT (tz-01 B5). */
@@ -67,7 +92,7 @@ export async function defaultSpawnChild(
   childCtx: SpawnChildContext,
 ): Promise<ChildRunResult> {
   const launcher = ctx.launcherFor(childCtx.contract.binding.launcherId);
-  const outcome = await launcher.launch({
+  const outcome = await launchSafely(ctx, launcher, {
     runId: childCtx.runId,
     attemptId: childCtx.attemptId,
     cwd: childCtx.cwd,
@@ -82,7 +107,18 @@ export async function defaultSpawnChild(
 
   if (!outcome.ok) {
     // A typed LaunchError is the host refusing, not the role failing — it
-    // travels as a run error, never as a rejected promise (criterion 10).
+    // travels as a run error, never as a rejected promise (criterion 10), and
+    // it lands on the preallocated Attempt so the refusal is auditable.
+    finishAttempt(
+      ctx.dataDir,
+      childCtx.attemptId,
+      outcome.error.kind,
+      JSON.stringify({
+        launcherId: launcher.id,
+        message: outcome.error.message,
+      }),
+      new Date(ctx.now()).toISOString(),
+    );
     return {
       exitCode: null,
       signal: null,
@@ -108,16 +144,21 @@ export async function defaultSpawnChild(
   );
 
   const res = await outcome.handle.completion;
+  // A host that only fails once the process exists (ENOENT, EACCES) still
+  // failed to LAUNCH — criterion 10 wants that kind on the row, not the
+  // generic "failed" every bad role also gets.
+  const kind = res.launchError?.kind;
   // Terminal outcome on the SAME row: "launched" is where it started, not
   // how it ended, and a row frozen at "launched" reads as a wedged attempt.
   finishAttempt(
     ctx.dataDir,
     childCtx.attemptId,
-    res.status,
+    kind ?? res.status,
     JSON.stringify({
       sessionRef: outcome.handle.sessionRef,
       launcherId: launcher.id,
       exitCode: res.exitCode,
+      ...(kind === undefined ? {} : { message: res.launchError!.message }),
     }),
     new Date(ctx.now()).toISOString(),
   );
@@ -127,7 +168,7 @@ export async function defaultSpawnChild(
     stdout: res.stdout,
     stderr: res.stderr,
     timedOut: res.status === "timed_out",
-    error: res.error,
+    error: kind === undefined ? res.error : `${kind}: ${res.error}`,
     killed: null,
   };
 }

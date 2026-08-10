@@ -43,6 +43,10 @@ export interface RoleConfigFile {
   /** Optional per-role spawn wiring (forked task-cycle path б): extension to
    * extension bundle, skill dir, scratch root override — the launcher turns
    * them into host arguments. */
+  /** Host capabilities the role cannot work without (tz-06 L5). A host that
+   * lacks one is refused as `host-incompatible` — never silently launched
+   * with a reduced set of tools. */
+  requires_capabilities?: ReadonlyArray<string>;
   runtime?: {
     extension_path?: string;
     skill_path?: string;
@@ -107,6 +111,7 @@ const FIELD_CHECKS: Record<string, (v: unknown) => boolean> = {
   critic_role: (v) => v === null || isStr(v),
   ops_subset: (v) => Array.isArray(v) && v.every(isApplyOp),
   tools_subset: (v) => Array.isArray(v) && v.every(isStr),
+  requires_capabilities: (v) => Array.isArray(v) && v.every(isStr),
   caps: (v) => isRec(v) && isNum(v.delete_per_run) && isNum(v.rewrite_per_run),
   retry_budget: (v) =>
     typeof v === "number" &&
@@ -144,11 +149,12 @@ export const REQUIRED_PRESENT_FIELDS = [
   "critic_role",
 ] as const;
 
-/** 21 known field names (whitelist of allowed keys: 19 required + 2 optional). */
+/** Whitelist of allowed keys: the 19 required ones plus the optional. */
 export const REQUIRED_ROLE_FIELDS = [
   ...REQUIRED_PRESENT_FIELDS,
   "runtime",
   "retry_budget",
+  "requires_capabilities",
 ] as const;
 
 export type RoleConfigInspection =
