@@ -30,7 +30,9 @@ function refusingLauncher(id: string): RoleLauncher {
 }
 
 export function createLauncherRegistry(
-  settings: Record<string, LauncherSettings>,
+  // Absent settings must yield a registry that REFUSES, not a constructor that
+  // throws: a launcher problem is a run error, never a dead gateway.
+  settings: Record<string, LauncherSettings> | undefined,
   logger: Logger,
 ): (launcherId: string) => RoleLauncher {
   const built = new Map<string, RoleLauncher>();
@@ -43,7 +45,7 @@ export function createLauncherRegistry(
     [CODEX_LAUNCHER_ID]: createCodexLauncher,
   };
   for (const [id, factory] of Object.entries(factories)) {
-    const s = settings[id];
+    const s = settings?.[id];
     if (s) built.set(id, factory(s, logger));
   }
   return (launcherId: string) =>
