@@ -24,6 +24,7 @@ import { copyKeeperTools } from "./keeper-tools.js";
 import { truncate } from "./chunk.js";
 import { checkCaps } from "./check-caps.js";
 import { readScratchDiff } from "./scratch-diff.js";
+import { rejectStaleArtifact } from "./artifact-fence.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
 
@@ -124,6 +125,16 @@ export async function preApply(
   const raw = await readScratchDiff(args.scratchDir);
   if (raw.error) {
     result.error = raw.error;
+    result.status = "failed";
+    return { ok: false };
+  }
+
+  // tz-09 Ф2: the candidate is INGESTED here, so this is where the fence is
+  // worth something. A child of an attempt that was taken over (or a run that
+  // was cancelled) still writes its diff.json — the reader refuses it.
+  const fenceError = rejectStaleArtifact(ctx, args.runId, args.scratchDir);
+  if (fenceError !== null) {
+    result.error = fenceError;
     result.status = "failed";
     return { ok: false };
   }
