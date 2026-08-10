@@ -16,6 +16,17 @@ export interface DueRole {
   reason: string;
 }
 
+/** Pre-tz-01 dispatch: one schedule and one threshold for two named roles.
+ * Present only while `memory.consolidation.contractDispatch` is false — the
+ * documented rollback path. The names are CONFIG VALUES supplied by the
+ * caller, never literals in this module. */
+export interface LegacyDispatch {
+  schedule: string;
+  threshold: number;
+  scheduleRole: string;
+  thresholdRole: string;
+}
+
 export interface DispatchInput {
   contracts: readonly RoleResolution[];
   /** `checkpoint.roles` — per-role state, keyed by role name. */
@@ -27,6 +38,8 @@ export interface DispatchInput {
   source: "start" | "tick";
   /** Called once per skipped role so a silent no-run is impossible. */
   onSkip?: (role: string, why: string) => void;
+  /** Rollback mode; when set, the roles' own dispatch blocks are ignored. */
+  legacy?: LegacyDispatch;
 }
 
 /** Per-role `lastRunAt` from the checkpoint (null = never ran). */
@@ -42,6 +55,7 @@ export function lastRunAtOf(
 
 export function computeDueRoles(input: DispatchInput): DueRole[] {
   const due: DueRole[] = [];
+  const legacy = input.legacy;
   for (const res of input.contracts) {
     if (!res.ok) {
       input.onSkip?.(res.role, res.reason);
@@ -52,7 +66,18 @@ export function computeDueRoles(input: DispatchInput): DueRole[] {
       input.onSkip?.(c.role, "enabled=false");
       continue;
     }
-    const { trigger, schedule, threshold } = c.dispatch;
+    const { trigger, schedule, threshold } = legacy
+      ? {
+          trigger:
+            c.role === legacy.scheduleRole
+              ? ("schedule" as const)
+              : c.role === legacy.thresholdRole
+                ? ("threshold" as const)
+                : ("manual_only" as const),
+          schedule: legacy.schedule,
+          threshold: legacy.threshold,
+        }
+      : c.dispatch;
     const bySchedule = trigger === "schedule" || trigger === "both";
     const byThreshold = trigger === "threshold" || trigger === "both";
 

@@ -157,6 +157,15 @@ export interface ConsolidationConfig {
   /** Sub-session kill policy on timeout (default: "group-kill"). */
   killPolicy: "group-kill" | "sweep" | "systemd-scope";
   /**
+   * Dispatch source (default: true). true — each role decides when it runs
+   * from its own contract (`dispatch.trigger/schedule/threshold`); false —
+   * the pre-tz-01 behaviour: one schedule and one threshold from
+   * `memory.nightRun`, firing `nightRun.scheduleRole` / `thresholdRole`.
+   * The flag covers DISPATCH only: the batching strategy always comes from
+   * the contract (a name-based branch in the code is what tz-01 removes).
+   */
+  contractDispatch: boolean;
+  /**
    * Night-run parameters (`memory.consolidation.night`). The night-run
    * TRIGGER (schedule/threshold/timezone) lives in `memory.nightRun`;
    * the run PARAMETERS live here. Split is deliberate — one source per
@@ -191,6 +200,10 @@ export interface NightRunConfig {
   threshold: number;
   /** Timezone for `schedule`: "system" (default) or an IANA name / UTC offset. */
   timezone: string;
+  /** Role the legacy (contractDispatch=false) schedule fires (default "night-keeper"). */
+  scheduleRole: string;
+  /** Role the legacy (contractDispatch=false) threshold fires (default "memory-keeper"). */
+  thresholdRole: string;
 }
 
 /** Workspace cleanup settings (`memory.cleanup`). */
@@ -712,9 +725,11 @@ export function parseConfig(
         persona: num(typeWeightsGroup, "persona") ?? 1.0,
         episodic: num(typeWeightsGroup, "episodic") ?? 1.0,
       },
-      crossProject: validateCrossProject(str(recallGroup, "crossProject")) ?? "hidden",
+      crossProject:
+        validateCrossProject(str(recallGroup, "crossProject")) ?? "hidden",
       crossProjectDecay: num(recallGroup, "crossProjectDecay") ?? 0.5,
-      defaultCrossProjectMultiplier: num(recallGroup, "defaultCrossProjectMultiplier") ?? 0.5,
+      defaultCrossProjectMultiplier:
+        num(recallGroup, "defaultCrossProjectMultiplier") ?? 0.5,
       projectMap: ((): Record<string, number> => {
         const raw = obj(recallGroup, "projectMap");
         if (!raw || typeof raw !== "object") return {};
@@ -744,6 +759,7 @@ export function parseConfig(
           consolidationGroup,
           "killPolicy",
         ) as ConsolidationConfig["killPolicy"]) ?? "group-kill",
+      contractDispatch: bool(consolidationGroup, "contractDispatch") ?? true,
       // Night-run parameters (trigger lives in memory.nightRun; run params here).
       night: (() => {
         const nightGroup = obj(consolidationGroup, "night");
@@ -762,6 +778,8 @@ export function parseConfig(
       schedule: normalizeCleanTime(str(nightRunGroup, "schedule")) ?? "06:00",
       threshold: num(nightRunGroup, "threshold") ?? 50,
       timezone: str(nightRunGroup, "timezone") ?? "system",
+      scheduleRole: str(nightRunGroup, "scheduleRole") ?? "night-keeper",
+      thresholdRole: str(nightRunGroup, "thresholdRole") ?? "memory-keeper",
     },
     cleanup: {
       enabled: bool(cleanupGroup, "enabled") ?? true,
@@ -981,6 +999,7 @@ const consolidationSchema = z.strictObject({
   diffCap: z.number().int().positive().optional(),
   diffByteCap: z.number().int().positive().optional(),
   killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
+  contractDispatch: z.boolean().optional(),
   night: z
     .strictObject({
       diffCap: z.number().int().positive().optional(),
@@ -1001,6 +1020,8 @@ const nightRunSchema = z.strictObject({
     .optional(),
   threshold: z.number().int().positive().optional(),
   timezone: z.string().optional(),
+  scheduleRole: z.string().optional(),
+  thresholdRole: z.string().optional(),
 });
 
 const cleanupSchema = z.strictObject({

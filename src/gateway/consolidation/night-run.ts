@@ -18,6 +18,7 @@
  */
 
 import { computeDueRoles } from "./dispatcher.js";
+import type { LegacyDispatch } from "./dispatcher.js";
 import type { RoleResolution } from "./role-contract-types.js";
 import type { Logger } from "../../core/types.js";
 
@@ -42,6 +43,9 @@ export interface NightRunDeps {
     runType?: string,
   ) => Promise<{ accepted: boolean; status: string }>;
   logger: Logger;
+  /** Rollback (`memory.consolidation.contractDispatch: false`): dispatch by
+   * the single global schedule/threshold instead of the role contracts. */
+  legacyDispatch?: LegacyDispatch;
   /** Optional deferred-retry hook: when a threshold run is refused because
    * another run holds the per-role gate, the timer asks the caller to retry
    * after it finishes (no data loss). */
@@ -99,6 +103,7 @@ export class NightRunTimer {
         newL0: await this.deps.countNewL0(),
         source,
         onSkip: (role, why) => this.logSkip(role, why),
+        legacy: this.deps.legacyDispatch,
       });
 
       for (const { role, reason } of due) {
@@ -125,7 +130,9 @@ export class NightRunTimer {
   private logSkip(role: string, why: string): void {
     if (this.loggedSkips.has(role)) return;
     this.loggedSkips.add(role);
-    this.deps.logger.info?.(`[night-run] role ${role} not dispatchable: ${why}`);
+    this.deps.logger.info?.(
+      `[night-run] role ${role} not dispatchable: ${why}`,
+    );
   }
 }
 

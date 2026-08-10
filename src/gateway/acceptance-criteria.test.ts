@@ -388,3 +388,90 @@ function walkTs(dir: string): string[] {
   }
   return out;
 }
+
+// ============================
+// tz-01 criteria 7-8 — the contract is the ONLY source of role parameters
+// ============================
+
+/** `*.ts` only: consolidation/ also holds `*.bak-*` snapshots of old files. */
+function roleSourceFiles(): Array<{ rel: string; src: string }> {
+  const consolidationDir = path.join(REPO_ROOT, "src/gateway/consolidation");
+  const files = walkTs(consolidationDir)
+    .map((f) => `src/gateway/consolidation/${f}`)
+    .concat(
+      fs
+        .readdirSync(path.join(REPO_ROOT, "src/gateway"))
+        .filter((f) => f.startsWith("role-") && f.endsWith(".ts"))
+        .map((f) => `src/gateway/${f}`),
+    )
+    .filter((rel) => !rel.endsWith(".test.ts"));
+  return files.map((rel) => ({ rel, src: readRepo(rel) }));
+}
+
+/** Drop comments and string literals: a doc line or a warning message may
+ * NAME the global config; only an actual read counts. */
+function codeOnly(src: string): string[] {
+  const out: string[] = [];
+  let inBlock = false;
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (inBlock) {
+      if (line.includes("*/")) inBlock = false;
+      continue;
+    }
+    if (line.startsWith("/*")) {
+      if (!line.includes("*/")) inBlock = true;
+      continue;
+    }
+    if (line.startsWith("//") || line.startsWith("*")) continue;
+    out.push(raw.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '""'));
+  }
+  return out;
+}
+
+describe("tz-01 criterion 7 — no global config read on the role path", () => {
+  it("no module under consolidation/ or role-*.ts reads config.memory.consolidation/nightRun", () => {
+    const offenders: string[] = [];
+    for (const { rel, src } of roleSourceFiles()) {
+      codeOnly(src).forEach((line, i) => {
+        if (
+          line.includes("config.memory.consolidation.") ||
+          line.includes("config.memory.nightRun.")
+        )
+          offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    // Role parameters arrive as a resolved contract (+ the legacy snapshot
+    // built at the composition root); the global config is read in
+    // src/config.ts and server.ts only.
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("tz-01 criterion 8 — no name-based dispatch", () => {
+  const ROLE_NAMES = ["night-keeper", "memory-keeper", "dedup-daily"];
+
+  it("consolidation modules never branch on a role name", () => {
+    const offenders: string[] = [];
+    for (const { rel, src } of roleSourceFiles()) {
+      if (!rel.startsWith("src/gateway/consolidation/")) continue;
+      src.split("\n").forEach((line, i) => {
+        if (!ROLE_NAMES.some((n) => line.includes(`"${n}"`))) return;
+        // A default role NAME (registration, `?? "memory-keeper"`) is allowed;
+        // a role name inside a condition is the dispatch tz-01 removes.
+        const isBranch =
+          /\bif\s*\(/.test(line) ||
+          line.includes("===") ||
+          line.includes("!==") ||
+          /(^|[^?])\?($|[^?.])/.test(line.replace(/\?\?/g, ""));
+        if (isBranch) offenders.push(`${rel}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("the default role name is a registration default, not a branch", () => {
+    const orchestrator = readRepo("src/gateway/consolidation/orchestrator.ts");
+    expect(orchestrator).toContain('opts.roleName ?? "memory-keeper"');
+  });
+});

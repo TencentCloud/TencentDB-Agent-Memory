@@ -71,10 +71,7 @@ import {
   type MemoryToolsContext,
 } from "./memory-tools.js";
 import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
-import {
-  buildRoleDefaults,
-  buildLauncherDefaults,
-} from "./role-defaults.js";
+import { buildRoleDefaults, buildLauncherDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
@@ -201,8 +198,19 @@ export class TdaiGateway {
       // memory.nightRun.schedule/threshold (tz-01 B6): those stay only as the
       // legacy snapshot the adapter falls back to.
       listRoleContracts: () =>
-        listRoleContracts(resolveRoleDir(), buildRoleDefaults(consolidationCfg)),
+        listRoleContracts(
+          resolveRoleDir(),
+          buildRoleDefaults(consolidationCfg),
+        ),
       readCheckpoint: () => this.orchestrator.readCheckpoint(),
+      legacyDispatch: consolidationCfg.contractDispatch
+        ? undefined
+        : {
+            schedule: this.config.memory.nightRun.schedule,
+            threshold: this.config.memory.nightRun.threshold,
+            scheduleRole: this.config.memory.nightRun.scheduleRole,
+            thresholdRole: this.config.memory.nightRun.thresholdRole,
+          },
       countNewL0: async () => {
         const cp = await this.orchestrator.readCheckpoint();
         return countNewL0Since(
@@ -421,7 +429,9 @@ export class TdaiGateway {
         const t0 = performance.now();
         this.logger.debug?.("[route] POST /memory/apply start");
         await this.handleMemoryApply(req, res);
-        this.logger.info(`[route] POST /memory/apply done in ${(performance.now() - t0).toFixed(0)}ms`);
+        this.logger.info(
+          `[route] POST /memory/apply done in ${(performance.now() - t0).toFixed(0)}ms`,
+        );
         return;
       }
       if (method === "POST" && pathname === "/memory/run") {
@@ -430,7 +440,9 @@ export class TdaiGateway {
         const dry = url.searchParams.get("dry");
         this.logger.debug?.(`[route] POST /memory/run start dry=${dry ?? "0"}`);
         await this.handleMemoryRun(req, res, url);
-        this.logger.info(`[route] POST /memory/run done in ${(performance.now() - t0).toFixed(0)}ms`);
+        this.logger.info(
+          `[route] POST /memory/run done in ${(performance.now() - t0).toFixed(0)}ms`,
+        );
         return;
       }
 
@@ -441,7 +453,9 @@ export class TdaiGateway {
         const t0 = performance.now();
         this.logger.debug?.("[route] POST /memory/feedback start");
         await this.handleMemoryFeedback(req, res);
-        this.logger.info(`[route] POST /memory/feedback done in ${(performance.now() - t0).toFixed(0)}ms`);
+        this.logger.info(
+          `[route] POST /memory/feedback done in ${(performance.now() - t0).toFixed(0)}ms`,
+        );
         return;
       }
 
@@ -452,7 +466,9 @@ export class TdaiGateway {
         const t0 = performance.now();
         this.logger.debug?.("[route] POST /memory/note start");
         await this.handleMemoryNote(req, res);
-        this.logger.info(`[route] POST /memory/note done in ${(performance.now() - t0).toFixed(0)}ms`);
+        this.logger.info(
+          `[route] POST /memory/note done in ${(performance.now() - t0).toFixed(0)}ms`,
+        );
         return;
       }
 
