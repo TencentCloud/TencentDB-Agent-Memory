@@ -17,7 +17,8 @@
     "directory": "adapters/opencode"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
   },
   "files": [
     "src",

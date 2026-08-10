@@ -31,8 +31,27 @@ export function createOpenCodeMemoryHooks({
   memory,
   log,
 }: HookDependencies): Hooks {
-  const pendingQueries = new Map<string, string>();
+  const pendingRecalls = new Map<string, { query: string; context?: Promise<string> }>();
   const capturedTurns = new Set<string>();
+
+  async function recallContext(sessionId: string, query: string): Promise<string> {
+    try {
+      const recalled = await memory.recall(query);
+      const context = formatRecall(recalled, config.maxContextChars);
+      if (recalled.warnings.length > 0) {
+        await log("warn", "TencentDB Agent Memory recall completed with warnings", {
+          warnings: recalled.warnings,
+        });
+      }
+      return context ?? "";
+    } catch (error) {
+      await log("warn", "TencentDB Agent Memory recall failed; continuing without memory", {
+        error: compactError(error),
+        sessionId,
+      });
+      return "";
+    }
+  }
 
   async function captureSession(sessionId: string): Promise<void> {
     try {
@@ -64,29 +83,16 @@ export function createOpenCodeMemoryHooks({
     "chat.message": async (input, output) => {
       if (!config.recallEnabled) return;
       const query = textFromParts(output.parts as Array<Record<string, unknown>>);
-      if (query) pendingQueries.set(input.sessionID, query);
+      if (query) pendingRecalls.set(input.sessionID, { query });
     },
 
     "experimental.chat.system.transform": async (input, output) => {
       if (!config.recallEnabled || !input.sessionID) return;
-      const query = pendingQueries.get(input.sessionID);
-      if (!query) return;
-      pendingQueries.delete(input.sessionID);
-      try {
-        const recalled = await memory.recall(query);
-        const context = formatRecall(recalled, config.maxContextChars);
-        if (context) output.system.push(context);
-        if (recalled.warnings.length > 0) {
-          await log("warn", "TencentDB Agent Memory recall completed with warnings", {
-            warnings: recalled.warnings,
-          });
-        }
-      } catch (error) {
-        await log("warn", "TencentDB Agent Memory recall failed; continuing without memory", {
-          error: compactError(error),
-          sessionId: input.sessionID,
-        });
-      }
+      const pending = pendingRecalls.get(input.sessionID);
+      if (!pending) return;
+      pending.context ??= recallContext(input.sessionID, pending.query);
+      const context = await pending.context;
+      if (context) output.system.push(context);
     },
 
     event: async ({ event }) => {

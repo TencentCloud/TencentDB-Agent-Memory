@@ -27,24 +27,23 @@
 
 ## 从当前仓库安装
 
-适配器发布前，请克隆本仓库，并在 OpenCode 全局配置目录安装适配器路径：
+适配器发布前，请克隆本仓库，并通过 OpenCode 安装本地包：
 
 ```bash
-mkdir -p ~/.config/opencode
-cd ~/.config/opencode
-npm install /path/to/TencentDB-Agent-Memory/adapters/opencode
+opencode plugin "file:/path/to/TencentDB-Agent-Memory/adapters/opencode" --global
 ```
 
-在 `~/.config/opencode/opencode.json` 中添加插件：
+该命令会把本地包加入 OpenCode 的全局 `opencode.json`。等价的手动配置为：
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["tencentdb-agent-memory-opencode-adapter"]
+  "plugin": ["file:/path/to/TencentDB-Agent-Memory/adapters/opencode"]
 }
 ```
 
-OpenCode 启动时会使用 Bun 安装 npm 插件。修改插件列表后请重启 OpenCode。
+请使用绝对路径，并在修改插件列表后重启 OpenCode。适配器发布后，可改用
+`tencentdb-agent-memory-opencode-adapter` 包名。
 
 ## 配置
 

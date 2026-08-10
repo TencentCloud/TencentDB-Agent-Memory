@@ -65,21 +65,28 @@ function setup() {
 }
 
 describe("OpenCode memory hooks", () => {
-  it("recalls from the user message and injects bounded system context", async () => {
+  it("reuses recall context across title and main model transforms", async () => {
     const { hooks, memory } = setup();
     await hooks["chat.message"]!(
       { sessionID: "s1" },
       { message: {} as never, parts: [{ type: "text", text: "How should I test this?" }] as never },
     );
-    const output = { system: [] as string[] };
+    const titleOutput = { system: [] as string[] };
+    const mainOutput = { system: [] as string[] };
 
     await hooks["experimental.chat.system.transform"]!(
       { sessionID: "s1", model: {} as never },
-      output,
+      titleOutput,
+    );
+    await hooks["experimental.chat.system.transform"]!(
+      { sessionID: "s1", model: {} as never },
+      mainOutput,
     );
 
     expect(memory.recall).toHaveBeenCalledWith("How should I test this?");
-    expect(output.system[0]).toContain("Prefer tests");
+    expect(memory.recall).toHaveBeenCalledTimes(1);
+    expect(titleOutput.system[0]).toContain("Prefer tests");
+    expect(mainOutput.system[0]).toContain("Prefer tests");
   });
 
   it("captures a completed turn only once across repeated idle events", async () => {

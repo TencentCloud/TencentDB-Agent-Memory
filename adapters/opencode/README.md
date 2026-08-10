@@ -28,25 +28,23 @@ an OpenCode session becomes idle.
 
 ## Install from this repository
 
-Until the adapter is published, clone the repository and install the adapter path in OpenCode's
-global config directory:
+Until the adapter is published, clone the repository and install its local package with OpenCode:
 
 ```bash
-mkdir -p ~/.config/opencode
-cd ~/.config/opencode
-npm install /path/to/TencentDB-Agent-Memory/adapters/opencode
+opencode plugin "file:/path/to/TencentDB-Agent-Memory/adapters/opencode" --global
 ```
 
-Add the package to `~/.config/opencode/opencode.json`:
+This adds the local package to OpenCode's global `opencode.json`. The equivalent manual entry is:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["tencentdb-agent-memory-opencode-adapter"]
+  "plugin": ["file:/path/to/TencentDB-Agent-Memory/adapters/opencode"]
 }
 ```
 
-OpenCode installs npm plugins with Bun at startup. Restart OpenCode after changing the plugin list.
+Use an absolute path and restart OpenCode after changing the plugin list. Once the adapter is
+published, the configuration can use `tencentdb-agent-memory-opencode-adapter` instead.
 
 ## Configure
 
