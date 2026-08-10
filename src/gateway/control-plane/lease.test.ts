@@ -122,6 +122,20 @@ describe("control-plane lease + fence (tz-09 Ф2)", () => {
     expect(readRun(dir, "r1")?.state).toBe("cancelled");
   });
 
+  // P5 belongs to the function, not to its callers: cancelling a run that is
+  // mid-apply would discard the apply's real outcome and race finishApplying.
+  it("cancel refuses a run that is applying and parks it instead", () => {
+    claimRun(dir, "r1", "owner-a", { nowMs: T0, ttlMs: TTL, state: "running" });
+    updateRun(dir, "r1", { state: "applying" }, new Date(T0).toISOString());
+
+    expect(cancelRun(dir, "r1", T0 + 100)).toBe(false);
+
+    const row = readRun(dir, "r1");
+    expect(row?.state).toBe("needs-reconciliation");
+    // No fence bump: nothing changed hands, the apply still owns its outcome.
+    expect(row?.fence).toBe(1);
+  });
+
   it("an unknown run never yields a valid artefact", () => {
     const check = checkArtifactFence(dir, "nope", 1);
     expect(check.ok).toBe(false);

@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { openReadonlySqlite } from "../http-utils.js";
-import type { OpRow } from "./oplog.js";
+import { extraKeysOf, type OpRow } from "./oplog.js";
 
 export interface PostconditionResult {
   operationId: string;
@@ -102,7 +102,33 @@ export function checkPostcondition(
             : `record "${op.targetKey}" still present`,
       };
     }
-    case "merge":
+    case "merge": {
+      const current = recordContent(dataDir, op.targetKey);
+      if (current === null) {
+        return { ...base, holds: false, detail: "store unreadable" };
+      }
+      const target = matches(
+        current,
+        op.payloadDigest,
+        `merge target "${op.targetKey}"`,
+      );
+      if (!target.holds) return { ...base, ...target };
+      // A merge has TWO effects: the target carries the merged content AND the
+      // cluster members are gone. Checking only the target verifies half the
+      // operation, and a crash inside deleteL1Batch would read as resolved.
+      const survivors = extraKeysOf(op).filter((id) => {
+        const member = recordContent(dataDir, id);
+        return member !== undefined;
+      });
+      if (survivors.length > 0) {
+        return {
+          ...base,
+          holds: false,
+          detail: `merge target "${op.targetKey}" written, but member(s) still present: ${survivors.join(", ")}`,
+        };
+      }
+      return { ...base, ...target };
+    }
     case "rewriteRecord": {
       const current = recordContent(dataDir, op.targetKey);
       if (current === null) {

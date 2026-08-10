@@ -57,7 +57,11 @@ export async function applyMerges(
     };
 
     const digest = digestOf(op.content);
-    onOp?.("merge", i, op.target, "prepared", digest);
+    // The members are journalled WITH the merge, not as separate ops: they are
+    // the second half of this one operation's effect, and reconciliation has to
+    // see a half-done merge as unresolved rather than verified.
+    const members = op.cluster.filter((m) => m !== op.target);
+    onOp?.("merge", i, op.target, "prepared", digest, members);
     await writeProvenanceRecord(deps, {
       row: targetRow,
       memory,
@@ -67,7 +71,6 @@ export async function applyMerges(
       label: `merge target "${op.target}"`,
     });
 
-    const members = op.cluster.filter((m) => m !== op.target);
     if (members.length > 0 && vectorStore) {
       const ok = await vectorStore.deleteL1Batch(members);
       if (!ok) {
@@ -76,7 +79,7 @@ export async function applyMerges(
         );
       }
     }
-    onOp?.("merge", i, op.target, "applied", digest);
+    onOp?.("merge", i, op.target, "applied", digest, members);
     result.applied.merges.push(op.target);
     logger.info?.(
       `[memory/apply] merged ${op.cluster.length} records into ${op.target}`,

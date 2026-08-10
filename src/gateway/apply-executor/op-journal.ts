@@ -28,6 +28,9 @@ export type OnOp = (
    * against what the store holds now, so "the target exists" is never mistaken
    * for "the operation landed". Deletes have none. */
   payloadDigest?: string,
+  /** Other keys the SAME operation must affect — the members a merge deletes.
+   * They are part of its postcondition, not separate operations. */
+  extraKeys?: string[],
 ) => void;
 
 /** The one hash the journal and the postconditions share. */
@@ -55,7 +58,7 @@ export interface JournalDeps {
 /** A journal bound to one run + one candidate. */
 export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
   const bases = new Map<OpType, number>();
-  return (opType, localIndex, targetKey, phase, payloadDigest) => {
+  return (opType, localIndex, targetKey, phase, payloadDigest, extraKeys) => {
     let base = bases.get(opType);
     if (base === undefined) {
       base = opIndexBase(counts, opType);
@@ -71,6 +74,7 @@ export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
         state: phase,
         targetKey,
         payloadDigest,
+        extraKeys,
       },
       new Date(deps.now()).toISOString(),
     );

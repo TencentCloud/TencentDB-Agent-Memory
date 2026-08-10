@@ -140,6 +140,14 @@ export function cancelRun(
   try {
     const before = read(db, runId);
     if (before === null || before.state === "applied") return false;
+    if (before.state === "applying") {
+      // Same P5 rule as claimRun: mutations may be halfway through the store,
+      // so cancelling would discard the apply's real outcome (and race with
+      // finishApplying, which is conditioned on this very state). The
+      // invariant belongs to the function, not to every future caller.
+      markNeedsReconciliation(db, runId, nowMs);
+      return false;
+    }
     db.prepare(
       `UPDATE runs SET state = 'cancelled', fence = fence + 1, leaseOwner = NULL,
          leaseExpiresAt = NULL, updatedAt = ?, finishedAt = ?

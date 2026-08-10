@@ -62,9 +62,17 @@ const SCHEMA: readonly string[] = [
      state TEXT NOT NULL,
      targetKey TEXT NOT NULL DEFAULT '',
      payloadDigest TEXT NOT NULL DEFAULT '',
+     extraKeys TEXT NOT NULL DEFAULT '',
      updatedAt TEXT NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS oplog_run_idx ON oplog (runId, opIndex)`,
+];
+
+/** Columns added after a table shipped. `CREATE TABLE IF NOT EXISTS` does
+ * nothing to an existing table, so an additive column needs its own ALTER —
+ * which fails harmlessly once the column is there. */
+const ADDITIONS: readonly string[] = [
+  `ALTER TABLE oplog ADD COLUMN extraKeys TEXT NOT NULL DEFAULT ''`,
 ];
 
 export function controlPlanePath(dataDir: string): string {
@@ -77,5 +85,12 @@ export function openControlPlane(dataDir: string): WritableSqlite {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = openWritableSqlite(file);
   for (const stmt of SCHEMA) db.prepare(stmt).run();
+  for (const stmt of ADDITIONS) {
+    try {
+      db.prepare(stmt).run();
+    } catch {
+      // duplicate column — the table already carries it
+    }
+  }
   return db;
 }
