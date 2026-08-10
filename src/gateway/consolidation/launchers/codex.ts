@@ -15,7 +15,7 @@ import path from "node:path";
 import { stripOwnedFlags } from "./pi-config.js";
 import {
   attemptSessionDir,
-  linkIdentity,
+  provideIdentity,
   readSystemPrompt,
   startHosted,
 } from "./start.js";
@@ -76,8 +76,11 @@ export function operatorCodexHome(): string {
 }
 
 /** Auth and config for the attempt's private CODEX_HOME. */
-export function linkCodexIdentity(sessionDir: string, logger: Logger): void {
-  linkIdentity(
+export function provideCodexIdentity(
+  sessionDir: string,
+  logger: Logger,
+): () => void {
+  return provideIdentity(
     sessionDir,
     operatorCodexHome(),
     ["auth.json", "config.toml"],
@@ -98,11 +101,14 @@ export function createCodexLauncher(
       // CODEX_HOME is BOTH the auth/config home and the session store. Pointing
       // it at an empty per-attempt dir took the credentials away with the
       // isolation — the child would have had nowhere to authenticate from. The
-      // attempt dir stays writable and gets read-only links to the operator's
-      // auth and config.
-      linkCodexIdentity(sessionRef, logger);
+      // attempt dir stays writable and gets its own copies of the operator's
+      // auth and config, dropped when the attempt settles.
+      const dropIdentity = provideCodexIdentity(sessionRef, logger);
       const prompt = readSystemPrompt(input);
-      if (!prompt.ok) return prompt.outcome;
+      if (!prompt.ok) {
+        dropIdentity();
+        return prompt.outcome;
+      }
 
       return startHosted({
         binary: settings.binary,
@@ -117,6 +123,7 @@ export function createCodexLauncher(
         sessionRef,
         input,
         logger,
+        onSettled: dropIdentity,
       });
     },
   };

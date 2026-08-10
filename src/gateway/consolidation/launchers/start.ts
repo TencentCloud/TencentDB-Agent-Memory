@@ -31,35 +31,65 @@ export function attemptSessionDir(input: LaunchInput): string {
 }
 
 /**
- * Link (never copy) identity files from the operator's host home into the
- * attempt's private one.
+ * Give the attempt its own COPY of the identity files from the operator's
+ * host home.
  *
  * Every host here locates its credentials through the same env var that also
  * names the session store, so pointing that var at a fresh per-attempt dir
- * takes the login away along with the isolation. A COPY would be a second
- * secret on disk with its own lifetime; a symlink expires with the attempt.
+ * takes the login away along with the isolation — the child has to find a
+ * credential inside its own writable workspace.
+ *
+ * This used to be a symlink, and that was wrong: the target of a symlink
+ * inside a writable dir is writable too, so the child could overwrite the
+ * OPERATOR's real `.credentials.json` through it (probe
+ * scripts/tz06-probe/f11-secret-escape.mts: "секрет ПЕРЕЗАПИСАН ребёнком:
+ * true"). A copy costs a second secret on disk, which is why it is 0600 and
+ * why the returned cleanup unlinks it when the attempt settles — a child that
+ * clobbers it now clobbers only its own.
+ *
+ * Reading it remains possible, and is not a defect: the child cannot
+ * authenticate without it.
  *
  * Best-effort: a host without credentials fails loudly by itself, and that is
  * a run error, not a launch one.
+ *
+ * @returns a cleanup that removes the copies. Idempotent.
  */
-export function linkIdentity(
+export function provideIdentity(
   sessionDir: string,
   home: string,
   names: readonly string[],
   logger: Logger,
   tag: string,
-): void {
+): () => void {
+  const copied: string[] = [];
   for (const name of names) {
     const src = path.join(home, name);
     const dst = path.join(sessionDir, name);
     try {
-      if (fs.existsSync(src) && !fs.existsSync(dst)) fs.symlinkSync(src, dst);
+      if (!fs.existsSync(src) || fs.existsSync(dst)) continue;
+      fs.copyFileSync(src, dst);
+      fs.chmodSync(dst, 0o600);
+      copied.push(dst);
     } catch (err) {
       logger.debug?.(
-        `[${tag}] could not link ${name}: ${err instanceof Error ? err.message : String(err)}`,
+        `[${tag}] could not provide ${name}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
+  return () => {
+    for (const dst of copied) {
+      try {
+        fs.rmSync(dst, { force: true });
+      } catch (err) {
+        logger.debug?.(
+          `[${tag}] could not drop ${path.basename(dst)}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  };
 }
 
 export interface StartOptions {
@@ -70,6 +100,9 @@ export interface StartOptions {
   sessionRef: string;
   input: LaunchInput;
   logger: Logger;
+  /** Runs once the attempt is terminal — where the identity copies are
+   * dropped, so no launcher has to own that lifetime itself. */
+  onSettled?: () => void;
 }
 
 export function startHosted(opts: StartOptions): LaunchOutcome {
@@ -120,7 +153,7 @@ export function startHosted(opts: StartOptions): LaunchOutcome {
     error: res.error,
     launchError:
       res.error === undefined ? undefined : classifyLaunchError(res.error),
-  }));
+  })).finally(() => opts.onSettled?.());
 
   return {
     ok: true,

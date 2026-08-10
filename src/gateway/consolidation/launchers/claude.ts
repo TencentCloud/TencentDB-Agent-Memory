@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { stripOwnedFlags } from "./pi-config.js";
 import {
   attemptSessionDir,
-  linkIdentity,
+  provideIdentity,
   readSystemPrompt,
   startHosted,
 } from "./start.js";
@@ -82,13 +82,16 @@ export function operatorClaudeHome(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
 }
 
-/** Only the credential file. `settings.json` is deliberately NOT linked: it
+/** Only the credential file. `settings.json` is deliberately NOT provided: it
  * carries the operator's hooks and permissions, and a role session is not the
- * place to replay them. Verified against the real binary — with the link the
- * child answers, without it claude prints "Not logged in · Please run /login"
- * and exits 0, so the role would produce no candidate and no error. */
-export function linkClaudeIdentity(sessionDir: string, logger: Logger): void {
-  linkIdentity(
+ * place to replay them. Verified against the real binary — with the credential
+ * the child answers, without it claude prints "Not logged in · Please run
+ * /login" and exits 0, so the role would produce no candidate and no error. */
+export function provideClaudeIdentity(
+  sessionDir: string,
+  logger: Logger,
+): () => void {
+  return provideIdentity(
     sessionDir,
     operatorClaudeHome(),
     [".credentials.json"],
@@ -108,9 +111,12 @@ export function createClaudeLauncher(
       const sessionRef = attemptSessionDir(input);
       // CLAUDE_CONFIG_DIR is BOTH the transcript store and where the login
       // lives, so an empty per-attempt dir means an unauthenticated child.
-      linkClaudeIdentity(sessionRef, logger);
+      const dropIdentity = provideClaudeIdentity(sessionRef, logger);
       const prompt = readSystemPrompt(input);
-      if (!prompt.ok) return prompt.outcome;
+      if (!prompt.ok) {
+        dropIdentity();
+        return prompt.outcome;
+      }
 
       return startHosted({
         binary: settings.binary,
@@ -121,6 +127,7 @@ export function createClaudeLauncher(
         sessionRef,
         input,
         logger,
+        onSettled: dropIdentity,
       });
     },
   };
