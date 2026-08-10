@@ -1,0 +1,19 @@
+# Ontology — project-level term normalization for search
+#
+# Define canonical terms and their aliases. When a user (or Agent) searches
+# for any alias, the search engine automatically expands the query to include
+# all synonyms in the group, improving recall for vocabulary mismatch.
+#
+# Format:
+#   terms:
+#     <canonical_term>:
+#       aliases: [alias1, alias2, ...]
+#
+# Example:
+#   terms:
+#     search_index:
+#       aliases: [BM25 cache, retrieval cache, inverted index]
+#     authentication:
+#       aliases: [auth, permission check]
+
+terms: {}

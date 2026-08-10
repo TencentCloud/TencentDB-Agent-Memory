@@ -1,0 +1,92 @@
+{
+  "Team-Agent-Memory": {
+    "components": [],
+    "children": {
+      "memory_core": {
+        "components": [],
+        "children": {
+          "memory_core_gateway": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_core": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_metadata": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_offload": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_offload_server": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_adapters": {
+            "components": [],
+            "children": {}
+          },
+          "memory_core_utils": {
+            "components": [],
+            "children": {}
+          }
+        }
+      },
+      "memory_knowledge": {
+        "components": [],
+        "children": {
+          "memory_knowledge_src": {
+            "components": [],
+            "children": {}
+          }
+        }
+      },
+      "memory_proxy": {
+        "components": [],
+        "children": {
+          "memory_proxy_routes": {
+            "components": [],
+            "children": {}
+          },
+          "memory_proxy_injection": {
+            "components": [],
+            "children": {}
+          },
+          "memory_proxy_session": {
+            "components": [],
+            "children": {}
+          },
+          "memory_proxy_handlers": {
+            "components": [],
+            "children": {}
+          }
+        }
+      },
+      "memory_panel": {
+        "components": [],
+        "children": {
+          "memory_panel_web": {
+            "components": [],
+            "children": {}
+          }
+        }
+      },
+      "sdk": {
+        "components": [],
+        "children": {
+          "sdk_typescript": {
+            "components": [],
+            "children": {}
+          },
+          "sdk_python": {
+            "components": [],
+            "children": {}
+          }
+        }
+      }
+    }
+  }
+}

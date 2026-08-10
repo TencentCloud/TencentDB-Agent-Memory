@@ -1,0 +1,191 @@
+---
+# ── 项目定位 ─────────────────────────────────────────────────────────────
+# 用一两句话描述项目的目标和定位，会注入到所有文档生成 prompt 中。
+# 留空则不注入。拷贝到项目后建议填写。
+purpose: "TencentDB Agent Memory（腾讯开源的 Agent 记忆平台）：为 AI Agent 提供长期记忆与团队知识沉淀能力。核心由
+  MemoryCore（记忆存储与检索核心）、MemoryKnowledge（知识库/领域建模）、MemoryProxy（代理网关）、MemoryPanel（可视化管理面板）及多语言
+  SDK 组成，基于 TypeScript 与 Python 实现，支持多 Agent 协作下的共享记忆与团队化工作流。"
+
+# ── 文档类型 ─────────────────────────────────────────────────────────────
+# analyze_repo / get_prompt 的 doc_type 参数从此处取值。
+# 每种类型定义 module（叶/父模块文档 prompt hint）和 overview（总览文档 prompt hint，可选）。
+# 可自由增删类型，prompt_server 会自动识别。
+doc_types:
+  default: design
+  types:
+    api:
+      module: "Focus on API documentation: endpoints, parameters, return types, and
+        usage examples."
+    architecture:
+      module: "Focus on architecture documentation: system design, component relationships,
+        and data flow."
+      overview: "Focus on system-level architecture: show how modules relate, data
+        flows between components, and the overall layered design. Include a high-level
+        Mermaid architecture diagram."
+    user-guide:
+      module: "Focus on user guide documentation: how to use features, step-by-step
+        tutorials."
+    developer:
+      module: "Focus on developer documentation: code structure, contribution guidelines,
+        and implementation details."
+    business:
+      module: "Focus on business logic documentation: describe business workflows,
+        processing pipelines, state transitions, and domain rules. Emphasize WHAT
+        the system does for users and WHY, trace end-to-end business scenarios through
+        the code, and document domain-specific terminology. De-emphasize infrastructure
+        and deployment details."
+    design:
+      module: "Generate technical design documentation optimized for AI comprehension.
+        For each module, describe in depth: (1) module responsibilities and boundaries,
+        (2) detailed implementation logic and business rules, (3) data flow within
+        and through the module, (4) interface contracts — inputs, outputs, and side
+        effects, (5) internal layered design and component collaboration patterns,
+        (6) relationships and dependencies with other modules, (7) constraints, assumptions,
+        and edge cases. Use precise technical language. Include Mermaid diagrams for
+        complex flows and interactions. Do not limit documentation length — let the
+        content depth match the module's complexity."
+      overview: "Focus on system-level architecture: show how modules relate to each
+        other, data flows between components, overall layered design, and key architectural
+        decisions. Provide a high-level view that helps readers understand the system's
+        structural blueprint. Include Mermaid diagrams for the architecture overview."
+
+# ── 文档规范 ─────────────────────────────────────────────────────────────
+conventions:
+  # 文档文件匹配模式，lint 和索引扫描时只处理匹配此 glob 的文件
+  file_pattern: "*.md"
+  # 模块间交叉引用的链接格式模板。
+  # {module_name} 会被替换为实际模块名，生成如 [引擎核心](引擎核心.md) 的相对链接
+  cross_reference_format: "[[{module_name}]]({{module_name}}.md)"
+  # 是否要求每个叶模块文档至少包含一个 Mermaid 架构图。
+  # true 时 get_prompt 会在系统提示中强调此要求，lint 也会检查
+  mermaid_required: true
+  # 叶模块文档的最小行数。低于此值时 lint 报 warning（内容可能过于简略）
+  min_leaf_doc_lines: 200
+  # 父模块/总览文档的最大行数。超过此值时 lint 报 warning（建议拆分子模块）
+  max_overview_doc_lines: 1000
+  # 是否在 write_doc_file 后自动注入「相关模块」交叉链接章节。
+  # 基于模块树的依赖关系计算 "Depends on" / "Used by" 链接
+  auto_crosslink: true
+  # 是否强制 OKF（Open Knowledge Format）v0.2 frontmatter。
+  # true 时每个 .md 文件必须以 YAML frontmatter 开头，包含 type/title/description/tags 字段，
+  # 以及 v0.2 溯源/生命周期字段（generated/status/stale_after）
+  okf_frontmatter: true
+  # 遵循的 OKF 规范版本，写入 wiki/index.md 的 okf_version 字段（§12）
+  okf_version: "0.2"
+  # 知识保鲜期（天）。write_doc_file / ingest_note 据此计算 stale_after 日期，
+  # 过期后 lint 的 okf_conformance 检查会提示复核（§5.5）
+  default_stale_days: 90
+  # 全局默认标签列表，会自动追加到每个文档的 frontmatter tags 中。
+  # 例如 [project-x, v2] 会让所有文档带上这些标签，便于跨项目检索
+  okf_tags: []
+  module_naming: kebab-case
+# ── 必需章节 ─────────────────────────────────────────────────────────────
+# 叶模块文档必须包含的章节列表。get_prompt 会将其注入系统提示，
+# lint 的 coverage 检查会验证这些章节是否存在。
+required_sections:
+- title: Architecture Overview      # 架构总览，描述模块整体设计
+  mermaid_diagram: true             # 此章节必须包含至少一个 Mermaid 图
+- title: Component Responsibilities    # 组件职责，逐一说明各组件的功能
+- title: Cross-References           # 交叉引用，列出与其他模块的依赖关系
+
+# ── 文档维度 ─────────────────────────────────────────────────────────────
+# 文档应覆盖的关注维度。get_prompt 会提示 LLM 从这些角度描述模块，
+# 确保文档不只是代码翻译，还包含设计决策和上下文。
+documentation_dimensions:
+- architecture_decisions      # 架构决策：为什么选择这种设计，有哪些权衡
+- api_contracts               # API 契约：公开接口的输入输出、错误码、版本兼容
+- data_model_changes          # 数据模型变更：核心数据结构的演进历史和迁移策略
+- dependency_rationale        # 依赖理由：为什么引入某个外部依赖，替代方案是什么
+
+# ── 增量更新策略 ─────────────────────────────────────────────────────────
+update_policy:
+  # 代码变更时的更新策略：
+  #   update_affected — 只更新受影响的模块（默认，推荐）
+  #   full_regen      — 全量重新生成所有文档
+  #   skip            — 不自动更新，仅标记过时
+  on_code_change: update_affected
+  # 增量更新时是否保留文档中已有的架构决策描述（不被新代码覆盖）。
+  # true 时 edit_doc_file 只更新变更部分，保留人工撰写的设计说明
+  preserve_decisions: true
+  # 子模块更新后是否级联刷新父模块总览和 overview.md。
+  # true 确保总览文档始终反映最新子模块状态
+  cascade_to_overview: true
+
+# ── Lint 检查配置 ────────────────────────────────────────────────────────
+lint:
+  # 「未文档化组件」检查的阈值：当一个模块中未文档化的组件数量超过此值时，
+  # lint 报 warning。设大一些可减少噪音，设小则更严格
+  high_impact_threshold: 5
+
+# ── LLM Wiki 知识层配置 ──────────────────────────────────────────────────
+# 以下配置控制 Wiki 结构化布局、页面类型路由和知识提取行为。
+# 修改后重新 analyze_repo 即可生效；已有项目的 schema.yaml 增量合并时保留用户自定义值。
+
+# 页面类型路由表：每种类型对应 wiki/ 下的一个子目录。
+# 可自定义 directory（输出目录）、description（描述，会注入到 LLM 提示词）、required_sections（必需章节）。
+# 新增类型时，在 schema.yaml 中添加即可，page_router.py 会自动识别。
+page_types:
+  module:
+    directory: wiki/modules
+    description: 代码模块文档，描述一个功能模块的架构、组件和依赖
+    required_sections:
+    - Architecture Overview
+    - Component Responsibilities
+    - Cross-References
+  entity:
+    directory: wiki/entities
+    description: 关键类、接口、数据模型、API 端点的独立文档
+    required_sections:
+    - 职责描述
+    - 公开 API
+    - 使用示例
+    - 依赖关系
+  concept:
+    directory: wiki/concepts
+    description: 设计模式、架构理念、领域概念的文档
+    required_sections:
+    - 概念定义
+    - 适用场景
+    - 在本项目中的应用
+  source:
+    directory: wiki/sources
+    description: 第三方文档（SDK/API/框架文档）的摘要
+    required_sections:
+    - 文档概述
+    - 关键 API/概念
+    - 与本项目相关的部分
+  comparison:
+    directory: wiki/comparisons
+    description: 方案对比、技术选型分析
+    required_sections:
+    - 背景与目标
+    - 候选方案
+    - 对比分析
+    - 结论与决策
+  query:
+    directory: wiki/queries
+    description: 方案设计决策记录，包含推理过程和权衡
+    required_sections:
+    - 问题描述
+    - 调研过程
+    - 方案权衡
+    - 决策结论
+
+# 提取粒度：控制 extraction_scan 提示词扫描源码时提取实体/概念的密度。
+#   focused    — 3-7 个关键项，适合小型项目或快速概览
+#   standard   — 适度提取，默认值
+#   exhaustive — 全面提取，适合大型项目的深度文档化
+extraction_granularity: exhaustive
+
+# Wiki 链接语法：启用后，文档后处理会将标识符替换为 [[slug|display]] 格式。
+wiki_link_syntax: false
+generated_at: '2026-08-06T11:23:06.623753'
+project:
+  name: Team-Agent-Memory
+  languages:
+  - python
+  - typescript
+  total_components: 6237
+version: 1
+export:
+  html: false

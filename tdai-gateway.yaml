@@ -1,0 +1,50 @@
+# ============================================================
+# TDAI Gateway — Standalone 单机版配置 (deployed to 172.53.4.202)
+# ============================================================
+deployMode: standalone
+stateBackend: "local"
+
+server:
+  port: 8420
+  host: "0.0.0.0"   # 对外监听，便于从宿主机/外部访问
+
+data:
+  baseDir: "~/.memory-tencentdb/memory-tdai"
+
+# ── LLM (必填，Key 通过环境变量 TDAI_LLM_API_KEY 注入) ──
+llm:
+  baseUrl: "https://api.openai.com/v1"
+  apiKey: "${TDAI_LLM_API_KEY}"
+  model: "gpt-4o"
+  maxTokens: 4096
+  timeoutMs: 120000
+
+memory:
+  capture:
+    enabled: true
+  extraction:
+    enabled: true
+    enableDedup: true
+    maxMemoriesPerSession: 20
+  persona:
+    triggerEveryN: 50
+    maxScenes: 15
+  pipeline:
+    everyNConversations: 5
+    enableWarmup: true
+    l1IdleTimeoutSeconds: 600
+    l2DelayAfterL1Seconds: 90
+    l2MinIntervalSeconds: 900
+    l2MaxIntervalSeconds: 3600
+  recall:
+    enabled: true
+    maxResults: 5
+    scoreThreshold: 0.3
+    strategy: "hybrid"
+    timeoutMs: 5000
+  storeBackend: "sqlite"
+  embedding:
+    provider: "none"   # 默认关闭向量搜索，仅 BM25
+  bm25:
+    enabled: true
+    language: "zh"

@@ -1,0 +1,9 @@
+{
+  "knowledge": {
+    "name": "knowledge",
+    "ports": [],
+    "depends_on": [],
+    "env_vars": {},
+    "source": "docker-compose"
+  }
+}

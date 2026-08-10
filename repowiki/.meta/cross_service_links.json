@@ -1,0 +1,41 @@
+[
+  {
+    "route_key": "__route__GET__/health",
+    "protocol": "http",
+    "method": "GET",
+    "path": "/health",
+    "client_repo": "MemoryCore",
+    "client_component_id": "MemoryCore\\src\\core\\store\\bm25-client.ts::if",
+    "client_function": "if",
+    "server_repo": "knowledge",
+    "server_component_id": "MemoryKnowledge\\src\\routes\\health.ts::createHealthRoutes",
+    "server_function": "createHealthRoutes",
+    "confidence": 1.0
+  },
+  {
+    "route_key": "__route__GET__/health",
+    "protocol": "http",
+    "method": "GET",
+    "path": "/health",
+    "client_repo": "MemoryCore",
+    "client_component_id": "MemoryCore\\src\\core\\store\\bm25-client.ts::if",
+    "client_function": "if",
+    "server_repo": "MemoryPanel",
+    "server_component_id": "MemoryPanel\\src\\panel\\http\\routes\\meta\\instances.ts::registerHealthRoutes",
+    "server_function": "registerHealthRoutes",
+    "confidence": 1.0
+  },
+  {
+    "route_key": "__route__GET__/health",
+    "protocol": "http",
+    "method": "GET",
+    "path": "/health",
+    "client_repo": "MemoryCore",
+    "client_component_id": "MemoryCore\\src\\core\\store\\bm25-client.ts::if",
+    "client_function": "if",
+    "server_repo": "MemoryProxy",
+    "server_component_id": "MemoryProxy\\src\\server.ts::if",
+    "server_function": "if",
+    "confidence": 1.0
+  }
+]
