@@ -223,7 +223,11 @@ function main(): void {
         project_id_before:
           row.project_id === null ? null : String(row.project_id),
         scope_after: scope,
-        project_id_after: projectId,
+        // What the UPDATE below actually writes: a global record keeps the
+        // project it was captured in, so claiming "" here would be a lie in
+        // the one file the operator reads to understand the run.
+        project_id_after:
+          scope === "project" ? projectId : String(row.project_id ?? ""),
       } satisfies JournalLine),
     );
     fs.writeFileSync(journalPath, `${lines.join("\n")}\n`, "utf-8");
@@ -251,6 +255,18 @@ function rollback(
   db: ReturnType<typeof openWritableSqlite>,
   journalPath: string,
 ): void {
+  if (!fs.existsSync(journalPath)) {
+    // Almost always a journal that was already rolled back: say so, instead of
+    // an ENOENT stack over a path that does exist under another name.
+    const retired = `${journalPath}${ROLLED_BACK_SUFFIX}`;
+    console.error(
+      fs.existsSync(retired)
+        ? `[scope-migration] журнал уже откатан ранее: ${retired}`
+        : `[scope-migration] журнала нет по этому пути: ${journalPath}`,
+    );
+    process.exitCode = 2;
+    return;
+  }
   const raw = fs.readFileSync(journalPath, "utf-8");
   const update = db.prepare(
     "UPDATE l1_records SET scope = ?, project_id = ? WHERE record_id = ?",
