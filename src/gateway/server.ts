@@ -166,9 +166,12 @@ export class TdaiGateway {
     // Consolidation orchestrator + night-run timer (P6/P7). Created here so
     // stop()/shutdown can always kill an in-flight keeper child group. Store
     // accessors are lazy — the vector store initializes in core.initialize().
-    // Scratch root is a SIBLING of dataDir, OUTSIDE the memory tree (ТЗ §5.1:
-    // cwd = scratch-dir вне дерева памяти) — a relative-path escape from the
-    // child cwd (../persona.md) cannot reach real memory files.
+    // Scratch root comes from the instance config (tz-02 критерий 2) — the
+    // spawn side below and the cleanup sweep further down must name the SAME
+    // directory, so neither of them derives it. Its default is a SIBLING of
+    // dataDir, OUTSIDE the memory tree (ТЗ §5.1: cwd = scratch-dir вне дерева
+    // памяти) — a relative-path escape from the child cwd (../persona.md)
+    // cannot reach real memory files.
     const gatewayUrl = `http://${this.config.server.host}:${this.config.server.port}`;
     // Composition root of the role path (tz-01 criterion 7): the global
     // consolidation knobs are read HERE, once, and handed to the orchestrator
@@ -188,10 +191,7 @@ export class TdaiGateway {
       applyRunRepo: consolidationCfg.applyRunRepo,
       launchers: consolidationCfg.launchers,
       dataDir: this.config.data.baseDir,
-      scratchRoot: nodePath.join(
-        nodePath.dirname(this.config.data.baseDir),
-        "tdai-memory-keeper",
-      ),
+      scratchRoot: this.config.data.scratchRoot,
       logger: this.logger,
       gatewayUrl,
       vectorStore: () => this.core.getVectorStore(),
@@ -259,10 +259,7 @@ export class TdaiGateway {
       run: () =>
         runCleanup({
           dataDir: this.config.data.baseDir,
-          scratchRoot: nodePath.join(
-            nodePath.dirname(this.config.data.baseDir),
-            "tdai-memory-keeper",
-          ),
+          scratchRoot: this.config.data.scratchRoot,
           home: process.env.HOME ?? "/tmp",
           config: this.config.memory.cleanup,
           now: () => Date.now(),

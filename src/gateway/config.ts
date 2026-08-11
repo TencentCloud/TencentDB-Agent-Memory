@@ -62,6 +62,19 @@ export interface GatewayConfig {
   data: {
     /** Base directory for TDAI data storage. */
     baseDir: string;
+    /**
+     * Root of the per-run scratch dirs — cwd of every consolidation child
+     * (tz-02 критерий 2). Resolved HERE, once: the spawn side and the cleanup
+     * sweep must name the SAME directory, and two hardcodes of the same
+     * expression are two chances for them to disagree.
+     *
+     * Default: a sibling of baseDir, deliberately OUTSIDE the memory tree —
+     * a relative-path escape from the child cwd (../persona.md) must not
+     * reach real memory files.
+     *
+     * env: `TDAI_SCRATCH_ROOT`; yaml: `data.scratchRoot`.
+     */
+    scratchRoot: string;
   };
   llm: StandaloneLLMConfig;
   /** Parsed memory-tdai plugin config (recall, capture, extraction, pipeline, etc.). */
@@ -73,6 +86,11 @@ export interface GatewayConfig {
     /** "debug" enables DEBUG lines (same as TDAI_DEV=1); "info" hides them. */
     level?: "debug" | "info";
   };
+}
+
+/** The scratch root a bare baseDir implies — a SIBLING of the memory tree. */
+function defaultScratchRoot(baseDir: string): string {
+  return path.join(path.dirname(baseDir), "tdai-memory-keeper");
 }
 
 // ============================
@@ -131,6 +149,11 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
+  const explicitScratchRoot = env("TDAI_SCRATCH_ROOT") ?? str(dataConfig, "scratchRoot");
+  const rawScratchRoot = explicitScratchRoot ?? defaultScratchRoot(baseDir);
+  const scratchRoot = rawScratchRoot.startsWith("~/")
+    ? path.join(home, rawScratchRoot.slice(2))
+    : rawScratchRoot;
 
   // LLM config
   const llmConfig = obj(fileConfig, "llm");
@@ -158,7 +181,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir },
+    data: { baseDir, scratchRoot },
     llm,
     memory,
     logging,
@@ -168,11 +191,22 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // (frequently used by e2e tests) don't accidentally drop sibling fields
   // such as `corsOrigins` introduced after they were written.
   if (!overrides) return base;
+  // A patch that moves baseDir and says nothing about scratchRoot has to move
+  // the derived default WITH it: keeping the sibling of the ORIGINAL baseDir
+  // would send an e2e run's scratch into the operator's real home tree.
+  const patchedData = { ...base.data, ...(overrides.data ?? {}) };
+  if (
+    overrides.data?.baseDir !== undefined &&
+    overrides.data.scratchRoot === undefined &&
+    explicitScratchRoot === undefined
+  ) {
+    patchedData.scratchRoot = defaultScratchRoot(patchedData.baseDir);
+  }
   return {
     ...base,
     ...overrides,
     server: { ...base.server, ...(overrides.server ?? {}) },
-    data: { ...base.data, ...(overrides.data ?? {}) },
+    data: patchedData,
     llm: { ...base.llm, ...(overrides.llm ?? {}) },
     logging: { ...base.logging, ...(overrides.logging ?? {}) },
   };
