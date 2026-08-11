@@ -71,6 +71,10 @@ export function cursorGte(a: L0Cursor, b: L0Cursor): boolean {
  * Day: anchoredCursor omitted → cursor = current maxL0RecordedAt().
  * Night: anchoredCursor = max slice-time of applied chunks BEFORE the
  *   first skip-merge (anchored advance, plan #9).
+ *
+ * `prevCursor` is the snapshot this run started from. It is DIAGNOSTIC only —
+ * the monotonicity guard reads the live value inside the mutation, because a
+ * snapshot cannot see what another run wrote while this one was working.
  */
 export async function advanceCheckpoint(
   ctx: OrchestratorContext,
@@ -87,7 +91,14 @@ export async function advanceCheckpoint(
   );
   await ctx.checkpoint.update((d) => {
     d.lastRunAt = summary.finishedAt;
-    if (cursor.recordedAt && cursorGte(cursor, prevCursor)) {
+    // The guard compares against the LIVE cursor, not against the snapshot
+    // this run took when it started. Two runs overlap in real life — a night
+    // run that started earlier finishes later with a smaller anchor, and
+    // against its own stale snapshot that anchor looks like progress. The
+    // cursor is monotone: max(live, candidate), never "whatever the last
+    // writer happened to hold".
+    const live = cursorOfCheckpoint(d);
+    if (cursor.recordedAt && cursorGte(cursor, live)) {
       d.l0Cursor = cursor.recordedAt;
       d.l0CursorId = cursor.recordId;
     }
