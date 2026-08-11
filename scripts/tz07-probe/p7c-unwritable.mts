@@ -27,7 +27,11 @@ import {
   resetTdaiRootCacheForTests,
   resolveUnderRoot,
 } from "../../src/gateway/tdai-root.js";
-import { createDevLogger, flushLogs } from "../../src/utils/dev-logger.js";
+import {
+  createDevLogger,
+  flushLogs,
+  resolveLogFile,
+} from "../../src/utils/dev-logger.js";
 import { readScratchDiff } from "../../src/gateway/consolidation/scratch-diff.js";
 import type { Logger } from "../../src/core/types.js";
 import { must, finish } from "./assert.mts";
@@ -93,6 +97,17 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
 
   // --- Полный цикл -----------------------------------------------------------
   const failures: string[] = [];
+  /**
+   * Два шага цикла пишут через best-effort-код, который глотает EACCES
+   * (scratch-diff.ts и dev-logger). Для них «не бросило» ничего не значит —
+   * судить можно только по тому, ГДЕ файл оказался. Раунд 6: без этой проверки
+   * ноги «лог» и «метаданные» были декорацией, и S5 держался на одной ноге.
+   */
+  const landed = (file: string): void => {
+    if (!fs.existsSync(file)) {
+      throw new Error(`файл не появился под новым корнем (${file})`);
+    }
+  };
   const step = async (name: string, fn: () => unknown): Promise<void> => {
     try {
       await fn();
@@ -126,6 +141,7 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
     });
     logger.info("цикл пошёл");
     await flushLogs();
+    landed(resolveLogFile(resolveUnderRoot(root, "logs")));
   });
 
   // 4. Метаданные: путь битого результата (тот самый лог из scratch-diff).
@@ -137,7 +153,8 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
       "{ битый",
       "utf-8",
     );
-    await readScratchDiff(scratch, root, "run-1");
+    await readScratchDiff(scratch, LEGACY_WRITE ? legacyRoot : root, "run-1");
+    landed(resolveUnderRoot(root, ".metadata", "diff-malformed.log"));
   });
 
   // 5. Уборка.

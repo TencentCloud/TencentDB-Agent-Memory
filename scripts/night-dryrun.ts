@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadGatewayConfig } from "../src/gateway/config.js";
 import { ConsolidationOrchestrator } from "../src/gateway/consolidation/orchestrator.js";
+import { buildRoleDefaults } from "../src/gateway/role-defaults.js";
 import type { Logger } from "../src/core/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,14 +31,20 @@ async function main(): Promise<void> {
   const config = loadGatewayConfig();
   const dataDir = config.data.baseDir;
   const gatewayUrl = `http://${config.server.host}:${config.server.port}`;
-  const scratchRoot = path.join(path.dirname(dataDir), "tdai-memory-keeper");
+  // Корень scratch резолвит конфиг — второй вывод той же формулы
+  // разъезжается с гейтвеем при заданном TDAI_SCRATCH_ROOT.
+  const scratchRoot = config.data.scratchRoot;
 
   console.log(`dataDir: ${dataDir}`);
   console.log(`scratchRoot: ${scratchRoot}`);
   console.log(`gatewayUrl: ${gatewayUrl}`);
 
+  const consolidationCfg = config.memory.consolidation;
   const orch = new ConsolidationOrchestrator({
     config,
+    enabled: consolidationCfg.enabled,
+    roleDefaults: buildRoleDefaults(consolidationCfg),
+    launchers: consolidationCfg.launchers,
     dataDir,
     scratchRoot,
     logger,

@@ -92,7 +92,24 @@ export interface WritableSqlite {
      * "wrote the value it already had". */
     run(...params: unknown[]): { changes?: number | bigint };
   };
+  exec(sql: string): void;
   close(): void;
+}
+
+/**
+ * Two concurrent writers are the DESIGNED case here: the control plane is
+ * opened per call and closed again, from every gateway process on the same
+ * dataDir. Without these two pragmas SQLite defaults to rollback journal and a
+ * ZERO busy timeout, so the second process fails instantly with "database is
+ * locked" — a run that dies mid-flight, not a run that waits. Reproduced by
+ * role-lock.cross-process.test.ts: two workers, two roles, ~1 in 5 runs lost
+ * at recordAttempt (attempt-repo.ts:22). Same posture as VectorStore
+ * (sqlite.ts:497).
+ */
+function tuneForConcurrency(db: WritableSqlite): WritableSqlite {
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
+  return db;
 }
 
 export function openWritableSqlite(dbPath: string): WritableSqlite {
@@ -100,12 +117,16 @@ export function openWritableSqlite(dbPath: string): WritableSqlite {
     const { Database } = require("bun:sqlite") as {
       Database: new (p: string) => unknown;
     };
-    return new Database(dbPath) as unknown as WritableSqlite;
+    return tuneForConcurrency(
+      new Database(dbPath) as unknown as WritableSqlite,
+    );
   }
   const { DatabaseSync } = require("node:sqlite") as {
     DatabaseSync: new (p: string) => unknown;
   };
-  return new DatabaseSync(dbPath) as unknown as WritableSqlite;
+  return tuneForConcurrency(
+    new DatabaseSync(dbPath) as unknown as WritableSqlite,
+  );
 }
 
 /**

@@ -13,5 +13,13 @@
   // replaced (not merged) by `extends`, so they have to be named again or the
   // optional deps they stub (node-llama-cpp, openclaw/plugin-sdk) come back as
   // TS2307.
-  "include": ["scripts/**/*.mts", "src/**/*.d.ts"]
+  //
+  // index.ts is deliberately NOT here, and this is a stated limitation, not an
+  // oversight: it imports src/offload, a legacy subtree no typecheck config
+  // covers (25 pre-existing errors — implicit any from the SDK stubs plus
+  // uninitialised fields). Bringing it in is its own task. The one thing this
+  // gate would have watched there — allowLegacyFallback on the injected
+  // openclaw root, index.ts:254 — is covered by the openclaw test, which fails
+  // if that root stops inheriting.
+  "include": ["scripts/**/*.mts", "scripts/*.ts", "src/**/*.d.ts"]
 }
