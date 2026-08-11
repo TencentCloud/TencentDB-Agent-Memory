@@ -10,7 +10,9 @@
  *   FALSIFY=no-marker    — игнорировать отметку идемпотентности.
  *   FALSIFY=advance-first — двигать курсор до проверки состояния прогона.
  *   FALSIFY=skip-stamp   — не ставить отметку роли на заблокированном пути.
+ *   FALSIFY=keep-claim   — не возвращать притязание после упавшей финализации.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { finalizeCheckpointAfterRun } from "../../src/gateway/consolidation/checkpoint-gate.js";
 import { advanceCheckpoint } from "../../src/gateway/consolidation/checkpoint-advance.js";
@@ -205,6 +207,72 @@ async function main(): Promise<void> {
   must(
     "но роль отмечена — иначе повтор каждый тик",
     keeper !== undefined && keeper.lastRunAt === NOW,
+  );
+
+  // --- 5. Упавшая финализация ВОЗВРАЩАЕТ притязание -------------------------
+  // Иначе отметка переживает работу, ради которой была взята, и продвижение
+  // этого прогона теряется навсегда (например, лок чекпойнта истёк по таймауту
+  // после kill -9 держателя).
+  makeRun("run-boom", "applied");
+  const boomCtx = {
+    ...ctx,
+    checkpoint: {
+      update: () => {
+        throw new Error("checkpoint lock still held — simulated");
+      },
+      read: () => cp.read(),
+    },
+  } as unknown as OrchestratorContext;
+  let threw = false;
+  try {
+    await finalizeCheckpointAfterRun({
+      ctx: boomCtx,
+      runId: "run-boom",
+      advance: { anchor: { recordedAt: T2, recordId: "r2" } },
+      cursor: EMPTY_L0_CURSOR,
+      newL0: 1,
+      summary: summaryOf("memory-keeper", true),
+    });
+  } catch {
+    threw = true;
+  }
+  const markAfterBoom =
+    FALSIFY === "keep-claim"
+      ? "2026-01-01T00:00:00.000Z" // старое поведение: отметка осталась
+      : checkpointFinalizedAt(sandbox.dataDir, "run-boom");
+  console.log(
+    `  упавшая финализация: бросила=${threw}, отметка после="${markAfterBoom}"`,
+  );
+  must(
+    "притязание возвращено, следующая попытка сможет продвинуть курсор",
+    threw && markAfterBoom === "",
+  );
+
+  // --- 6. Сломанный control-plane не превращает прогон в ошибку -------------
+  // Конвенция run-outcome.ts: control-plane — это состояние, а не сам прогон.
+  const cpDb = path.join(sandbox.dataDir, ".metadata", "control-plane.db");
+  fs.writeFileSync(cpDb, "не база данных", "utf-8");
+  let brokeRun = false;
+  const cursorBefore = (await cp.read()).l0Cursor;
+  try {
+    await finalizeCheckpointAfterRun({
+      ctx,
+      runId: "run-applied",
+      advance: { anchor: { recordedAt: T2, recordId: "r2" } },
+      cursor: EMPTY_L0_CURSOR,
+      newL0: 1,
+      summary: summaryOf("memory-keeper", true),
+    });
+  } catch {
+    brokeRun = true;
+  }
+  const cursorAfter = (await cp.read()).l0Cursor;
+  console.log(
+    `  сломанный control-plane: прогон упал=${brokeRun}, курсор "${cursorBefore}" → "${cursorAfter}"`,
+  );
+  must(
+    "сломанный control-plane держит курсор, но прогон не падает",
+    !brokeRun && cursorAfter === cursorBefore,
   );
 
   finish();

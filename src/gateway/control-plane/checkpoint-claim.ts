@@ -39,6 +39,31 @@ export function claimCheckpointFinalization(
   }
 }
 
+/**
+ * Give the claim back after the finalization itself failed. Without this the
+ * marker would outlive the work it was taken for and the run's advance would
+ * be lost for good — the claim fences duplicates, it is not a record that the
+ * cursor moved. Best-effort: the same broken db that failed the work may fail
+ * this too, and the loud failure is the one that already happened.
+ */
+export function releaseCheckpointFinalization(
+  dataDir: string,
+  runId: string,
+): void {
+  try {
+    const db = openControlPlane(dataDir);
+    try {
+      db.prepare(
+        "UPDATE runs SET checkpointFinalizedAt = NULL WHERE runId = ?",
+      ).run(runId);
+    } finally {
+      db.close();
+    }
+  } catch {
+    // best-effort
+  }
+}
+
 /** When this run's checkpoint was finalized ("" = never / unknown run). */
 export function checkpointFinalizedAt(dataDir: string, runId: string): string {
   const db = openControlPlane(dataDir);
