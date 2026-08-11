@@ -245,9 +245,14 @@ This makes documents and code part of memory as well — but they remain availab
 
 ## Benchmark
 
-| Benchmark | Without TencentDB Agent Memory | With it enabled | Relative improvement |
-| :--- | :---: | :---: | :---: |
-| **PersonaMem** | 48% | **76%** | **+59%** |
+| Memory capability | Benchmark | OpenClaw success | With TencentDB Agent Memory | Relative Δ | OpenClaw tokens | With TencentDB Agent Memory | Relative Δ |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Short-term** | WideSearch | 33% | **50%** | **+51.52%** | 221.31M | **85.64M** | **−61.38%** |
+| **Short-term** | SWE-bench | 58.4% | **64.2%** | **+9.93%** | 3474.1M | **2375.4M** | **−31.63%** |
+| **Short-term** | AA-LCR | 44.0% | **47.5%** | **+7.95%** | 112.0M | **77.3M** | **−30.98%** |
+| **Long-term** | PersonaMem | 48% | **76%** | **+59%** | — | — | — |
+
+These results are measured over continuous long-horizon sessions rather than isolated turns. Token totals are rounded for display; the SWE-bench percentage is aligned with the displayed before/after totals (`(3474.1M − 2375.4M) / 3474.1M = 31.63%`).
 
 PersonaMem tests whether an Agent can correctly understand and apply user information after extended interactions.
 
