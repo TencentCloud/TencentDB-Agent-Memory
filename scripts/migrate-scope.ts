@@ -17,6 +17,7 @@
  *   npx tsx scripts/migrate-scope.ts                          # dry run, live root
  *   npx tsx scripts/migrate-scope.ts --db /path/vectors.db    # dry run, given db
  *   npx tsx scripts/migrate-scope.ts --apply --default-scope global
+ *   npx tsx scripts/migrate-scope.ts --apply --default-scope project --project-id /repo/x
  *   npx tsx scripts/migrate-scope.ts --rollback <journal.jsonl>
  */
 import fs from "node:fs";
@@ -29,6 +30,7 @@ interface Args {
   dataDir?: string;
   apply: boolean;
   defaultScope?: string;
+  projectId?: string;
   rollback?: string;
 }
 
@@ -42,6 +44,7 @@ function parseArgs(argv: string[]): Args {
     else if (flag === "--data-dir") ((args.dataDir = value), (i += 1));
     else if (flag === "--default-scope")
       ((args.defaultScope = value), (i += 1));
+    else if (flag === "--project-id") ((args.projectId = value), (i += 1));
     else if (flag === "--rollback") ((args.rollback = value), (i += 1));
   }
   return args;
@@ -52,6 +55,8 @@ interface JournalLine {
   scope_before: string | null;
   project_id_before: string | null;
   scope_after: string;
+  /** Written since the `project` scope carries an id; absent in older journals. */
+  project_id_after?: string;
 }
 
 /** Records the migration would touch: no scope, or an empty one. */
@@ -68,7 +73,17 @@ function journalDir(dataDir: string): string {
   return path.join(dataDir, ".metadata", "scope-migration");
 }
 
-/** Every record id any previous run already touched. */
+/**
+ * Suffix a rolled-back journal carries.
+ *
+ * `alreadyMigrated` only reads `.jsonl`, so renaming is what makes a rollback
+ * actually undo the run: the ids stop counting as done and `--apply` migrates
+ * them again. Renaming rather than deleting, because the file is also the only
+ * record that the run ever happened.
+ */
+const ROLLED_BACK_SUFFIX = ".rolledback";
+
+/** Every record id any previous run already touched and did not roll back. */
 function alreadyMigrated(dataDir: string): Set<string> {
   const done = new Set<string>();
   let files: string[];
@@ -176,6 +191,19 @@ function main(): void {
       process.exitCode = 2;
       return;
     }
+    // scope=project without a project id is worse than no migration at all:
+    // `passesScope` drops such a record in hidden AND in strict, so choosing
+    // `project` from the report would quietly delete every legacy memory from
+    // recall in every mode. The two columns move together or not at all.
+    const projectId = args.projectId ?? "";
+    if (scope === "project" && !projectId) {
+      console.error(
+        "[scope-migration] --default-scope project требует --project-id <id>: " +
+          "запись со scope=project и пустым project_id не видна ни в одном режиме",
+      );
+      process.exitCode = 2;
+      return;
+    }
     if (candidates.length === 0) {
       console.log("[scope-migration] нечего мигрировать — повторный прогон.");
       return;
@@ -195,15 +223,23 @@ function main(): void {
         project_id_before:
           row.project_id === null ? null : String(row.project_id),
         scope_after: scope,
+        project_id_after: projectId,
       } satisfies JournalLine),
     );
     fs.writeFileSync(journalPath, `${lines.join("\n")}\n`, "utf-8");
     console.log(`[scope-migration] журнал отката: ${journalPath}`);
 
     const update = db.prepare(
-      "UPDATE l1_records SET scope = ? WHERE record_id = ?",
+      "UPDATE l1_records SET scope = ?, project_id = ? WHERE record_id = ?",
     );
-    for (const row of candidates) update.run(scope, String(row.record_id));
+    for (const row of candidates)
+      update.run(
+        scope,
+        // A global record keeps whatever project it was captured in; only the
+        // `project` scope is a statement about ownership.
+        scope === "project" ? projectId : String(row.project_id ?? ""),
+        String(row.record_id),
+      );
     console.log(`[scope-migration] обновлено записей: ${candidates.length}`);
   } finally {
     db.close();
@@ -217,17 +253,26 @@ function rollback(
 ): void {
   const raw = fs.readFileSync(journalPath, "utf-8");
   const update = db.prepare(
-    "UPDATE l1_records SET scope = ? WHERE record_id = ?",
+    "UPDATE l1_records SET scope = ?, project_id = ? WHERE record_id = ?",
   );
   let restored = 0;
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     const entry = JSON.parse(line) as JournalLine;
-    update.run(entry.scope_before, entry.record_id);
+    // project_id goes back too: the migration may have written it, so restoring
+    // scope alone would leave the record half rolled back.
+    update.run(entry.scope_before, entry.project_id_before, entry.record_id);
     restored += 1;
   }
+  // Undoing the run means undoing its claim on those ids, otherwise the next
+  // --apply reports "нечего мигрировать" over records that need migrating.
+  const retired = `${journalPath}${ROLLED_BACK_SUFFIX}`;
+  fs.renameSync(journalPath, retired);
   console.log(
     `[scope-migration] откат по журналу ${journalPath}: ${restored} записей`,
+  );
+  console.log(
+    `[scope-migration] журнал помечен откатанным: ${retired} — эти записи снова доступны для --apply`,
   );
 }
 

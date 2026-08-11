@@ -239,9 +239,105 @@ must(
     refusedTcvdb.out.includes("миграция на месте невозможна"),
 );
 
+// scope=project без project_id — запись, невидимая НИ В ОДНОМ режиме
+// (passesScope роняет её и в hidden, и в strict). Скрипт обязан отказаться,
+// а не «мигрировать» память в небытие.
+let refusedProject = false;
+try {
+  run("--apply", "--default-scope", "project");
+} catch {
+  refusedProject = true;
+}
+must(
+  "--default-scope project без --project-id отказывается работать",
+  refusedProject,
+);
+
 run("--rollback", journalPath);
 console.log(`  scope после отката: ${scopes()}`);
 must("откат по журналу вернул прежние значения", scopes() === before);
+
+// Откат обязан быть НАСТОЯЩИМ откатом: журнал перестаёт держать свои
+// record_id занятыми, иначе повторный --apply отвечает «нечего мигрировать»
+// над записями, которые ровно сейчас нуждаются в миграции.
+must(
+  "журнал помечен откатанным, а не остался считаться выполненным",
+  !fs.existsSync(journalPath) && fs.existsSync(`${journalPath}.rolledback`),
+);
+const afterRollbackApply = run("--apply", "--default-scope", "global");
+console.log(`  scope после повторного apply: ${scopes()}`);
+must(
+  "после отката --apply снова мигрирует те же записи",
+  afterRollbackApply.includes("обновлено записей: 3"),
+);
+must(
+  "и данные снова приведены к выбранному значению",
+  scopes() === before.replace(/=\(null\)/g, "=global"),
+);
+
+// Второй откат возвращает всё как было — сцена чистая для следующей ноги.
+const journals2 = fs
+  .readdirSync(path.join(dir, ".metadata", "scope-migration"))
+  .filter((f) => f.endsWith(".jsonl"));
+run(
+  "--rollback",
+  path.join(dir, ".metadata", "scope-migration", journals2[0]!),
+);
+
+// Теперь то же самое, но с project: атрибут scope без владельца бессмыслен,
+// поэтому оба столбца обязаны ехать вместе.
+const projectOut = run(
+  "--apply",
+  "--default-scope",
+  "project",
+  "--project-id",
+  "/repo/own",
+);
+const projectRows = (() => {
+  const raw = new DatabaseSync(dbPath);
+  const rows = raw
+    .prepare(
+      "SELECT record_id, COALESCE(scope,'') AS scope, COALESCE(project_id,'') AS project_id FROM l1_records WHERE record_id IN ('r3','r4','r5') ORDER BY record_id",
+    )
+    .all() as Array<Record<string, unknown>>;
+  raw.close();
+  return rows;
+})();
+console.log(
+  `  после apply --default-scope project: ${JSON.stringify(projectRows)}`,
+);
+must(
+  "apply с project проставил и scope, и project_id",
+  projectOut.includes("обновлено записей: 3") &&
+    projectRows.every(
+      (r) => r.scope === "project" && r.project_id === "/repo/own",
+    ),
+);
+
+const journals3 = fs
+  .readdirSync(path.join(dir, ".metadata", "scope-migration"))
+  .filter((f) => f.endsWith(".jsonl"));
+run(
+  "--rollback",
+  path.join(dir, ".metadata", "scope-migration", journals3[0]!),
+);
+const restored = (() => {
+  const raw = new DatabaseSync(dbPath);
+  const rows = raw
+    .prepare(
+      "SELECT record_id, COALESCE(project_id,'') AS project_id FROM l1_records WHERE record_id IN ('r3','r4','r5')",
+    )
+    .all() as Array<Record<string, unknown>>;
+  raw.close();
+  return rows;
+})();
+console.log(
+  `  после второго отката: ${scopes()} | project_id ${JSON.stringify(restored)}`,
+);
+must(
+  "откат вернул и scope, и project_id",
+  scopes() === before && restored.every((r) => r.project_id === ""),
+);
 
 fs.rmSync(dir, { recursive: true, force: true });
 fs.rmSync(home, { recursive: true, force: true });
