@@ -222,12 +222,12 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
         "timestamp_str TEXT, created_time TEXT, updated_time TEXT, metadata_json TEXT)",
     );
     db.exec(
-      "CREATE TABLE l0_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, " +
+      "CREATE TABLE l0_conversations (record_id TEXT PRIMARY KEY, role TEXT, " +
         "content TEXT, recorded_at TEXT)",
     );
     db.prepare(
-      "INSERT INTO l0_conversations (role, content, recorded_at) VALUES (?, ?, ?)",
-    ).run("user", "w", "2026-08-05T00:00:00Z");
+      "INSERT INTO l0_conversations (record_id, role, content, recorded_at) VALUES (?, ?, ?, ?)",
+    ).run("l0_1", "user", "w", "2026-08-05T00:00:00Z");
     db.prepare(
       "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) " +
         "VALUES (?, ?, ?, ?, ?, ?)",

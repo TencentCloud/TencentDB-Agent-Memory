@@ -91,23 +91,50 @@ describe("L0 cursor counting (P6/P7)", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("counts recorded_at >= cursor, excludes empty recorded_at", () => {
+  it("an id-less cursor keeps the old inclusive boundary", () => {
     // b, c have recorded_at >= 03:00; d has an empty recorded_at (excluded).
-    expect(countNewL0Since(dbPath, "2026-08-02T03:00:00.000Z")).toBe(2);
-    expect(countNewL0Since(dbPath, "2026-08-02T00:00:00.000Z")).toBe(3);
-    expect(countNewL0Since(dbPath, "2026-08-03T00:00:00.000Z")).toBe(0);
+    const at = (recordedAt: string) => ({ recordedAt, recordId: "" });
+    expect(countNewL0Since(dbPath, at("2026-08-02T03:00:00.000Z"))).toBe(2);
+    expect(countNewL0Since(dbPath, at("2026-08-02T00:00:00.000Z"))).toBe(3);
+    expect(countNewL0Since(dbPath, at("2026-08-03T00:00:00.000Z"))).toBe(0);
+  });
+
+  it("a full cursor pair excludes the boundary row itself", () => {
+    // The row that PRODUCED the cursor is processed, so only c is new.
+    expect(
+      countNewL0Since(dbPath, {
+        recordedAt: "2026-08-02T03:00:00.000Z",
+        recordId: "b",
+      }),
+    ).toBe(1);
+    // A partner sharing the timestamp but sorting after the cursor is new.
+    expect(
+      countNewL0Since(dbPath, {
+        recordedAt: "2026-08-02T03:00:00.000Z",
+        recordId: "a",
+      }),
+    ).toBe(2);
   });
 
   it("counts nothing on a fresh cursor and returns null on a missing DB", () => {
-    expect(countNewL0Since(dbPath, "")).toBe(3);
+    expect(countNewL0Since(dbPath, { recordedAt: "", recordId: "" })).toBe(3);
     expect(
-      countNewL0Since(path.join(tmp, "nope.db"), "2026-08-02T03:00:00.000Z"),
+      countNewL0Since(path.join(tmp, "nope.db"), {
+        recordedAt: "2026-08-02T03:00:00.000Z",
+        recordId: "",
+      }),
     ).toBeNull();
   });
 
-  it("maxL0RecordedAt returns the newest recorded_at", () => {
-    expect(maxL0RecordedAt(dbPath)).toBe("2026-08-02T04:00:00.000Z");
-    expect(maxL0RecordedAt(path.join(tmp, "nope.db"))).toBe("");
+  it("maxL0RecordedAt returns the newest row as a pair", () => {
+    expect(maxL0RecordedAt(dbPath)).toEqual({
+      recordedAt: "2026-08-02T04:00:00.000Z",
+      recordId: "c",
+    });
+    expect(maxL0RecordedAt(path.join(tmp, "nope.db"))).toEqual({
+      recordedAt: "",
+      recordId: "",
+    });
   });
 });
 

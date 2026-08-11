@@ -2,7 +2,8 @@
  * Diff builder for the consolidation orchestrator (wave tdai-memory-subagents
  * -2026-08-02, P6). Two responsibilities:
 
- * 1. Cursor L0 counting (§5.7): `l0_conversations.recorded_at >= checkpoint`
+ * 1. Cursor L0 counting (§5.7): l0_conversations rows strictly AFTER the
+ *    checkpoint PAIR (recorded_at, record_id)
  *    over idx_l0_recorded; empty recorded_at rows do NOT count (only
  *    undercount). Pure COUNT queries — never loads rows.
  * 2. Diff section assembly (§5.4) with a DOUBLE cap: `diffByteCap` (default
@@ -97,23 +98,57 @@ export interface DiffBuilderOptions {
 // ============================
 
 /**
- * Cursor count: L0 messages with `recorded_at != '' AND recorded_at >= cursor`
- * (uses idx_l0_recorded). Returns null when the DB is unavailable — callers
- * treat null as "unknown" (undercount is impossible; only an undercount is
- * acceptable per ТЗ — a failed count must never look like zero).
+ * Where the last run stopped: a timestamp AND the row that carried it.
+ * `recordId: ""` means "the id is unknown" (a pre-tz-03a checkpoint, an anchor
+ * from an older version) and degrades to the timestamp-only comparison.
+ */
+export interface L0Cursor {
+  recordedAt: string;
+  recordId: string;
+}
+
+export const EMPTY_L0_CURSOR: L0Cursor = { recordedAt: "", recordId: "" };
+
+/** The checkpoint's two cursor fields as one pair — the single place that
+ * knows they belong together (run path, night anchor fallback, /status). */
+export function cursorOfCheckpoint(cp: {
+  l0Cursor: string;
+  l0CursorId: string;
+}): L0Cursor {
+  return { recordedAt: cp.l0Cursor, recordId: cp.l0CursorId };
+}
+
+/**
+ * Cursor count: L0 messages strictly AFTER the cursor pair. Returns null when
+ * the DB is unavailable — callers treat null as "unknown" (undercount is
+ * impossible; only an undercount is acceptable per ТЗ — a failed count must
+ * never look like zero).
+ *
+ * The predicate is composite because the timestamp alone is not unique: with
+ * `>=` the boundary row is counted by every run forever, with a bare `>` the
+ * partner of a pair split by the batch cap is lost for good. An unknown
+ * `recordId` keeps the old inclusive behaviour — re-reading is recoverable,
+ * losing a row is not.
  */
 export function countNewL0Since(
   dbPath: string,
-  cursorIso: string,
+  cursor: L0Cursor,
 ): number | null {
   try {
     const db = openReadonlySqlite(dbPath);
     try {
-      const row = db
-        .prepare(
-          "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND recorded_at >= ?",
-        )
-        .get(cursorIso) as { c: number } | null;
+      const sql =
+        cursor.recordId === ""
+          ? "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND recorded_at >= ?"
+          : "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND " +
+            "(recorded_at > ? OR (recorded_at = ? AND record_id > ?))";
+      const row = (
+        cursor.recordId === ""
+          ? db.prepare(sql).get(cursor.recordedAt)
+          : db
+              .prepare(sql)
+              .get(cursor.recordedAt, cursor.recordedAt, cursor.recordId)
+      ) as { c: number } | null;
       return row?.c ?? 0;
     } finally {
       db.close();
@@ -123,20 +158,34 @@ export function countNewL0Since(
   }
 }
 
-/** Max `recorded_at` across l0_conversations ("" when no rows / DB down). */
-export function maxL0RecordedAt(dbPath: string): string {
+/**
+ * Newest L0 row as a cursor pair (empty pair when no rows / DB down).
+ * The tie on the max timestamp is broken by `record_id DESC` so two runs over
+ * the same store always pick the same row — an arbitrary pick would make runs
+ * and probes irreproducible.
+ */
+export function maxL0RecordedAt(dbPath: string): L0Cursor {
   try {
     const db = openReadonlySqlite(dbPath);
     try {
       const row = db
-        .prepare("SELECT MAX(recorded_at) AS m FROM l0_conversations")
-        .get() as { m: string | null } | null;
-      return typeof row?.m === "string" && row.m ? row.m : "";
+        .prepare(
+          "SELECT recorded_at, record_id FROM l0_conversations " +
+            "WHERE recorded_at != '' ORDER BY recorded_at DESC, record_id DESC LIMIT 1",
+        )
+        .get() as { recorded_at?: string; record_id?: string } | null;
+      if (typeof row?.recorded_at !== "string" || !row.recorded_at) {
+        return { ...EMPTY_L0_CURSOR };
+      }
+      return {
+        recordedAt: row.recorded_at,
+        recordId: typeof row.record_id === "string" ? row.record_id : "",
+      };
     } finally {
       db.close();
     }
   } catch {
-    return "";
+    return { ...EMPTY_L0_CURSOR };
   }
 }
 

@@ -89,12 +89,14 @@ export class ConsolidationOrchestrator {
   /** Snapshot of the consolidation checkpoint (night-run threshold needs it). */
   readCheckpoint(): Promise<{
     l0Cursor: string;
+    l0CursorId: string;
     lastRunAt: string | null;
     l0Count: number;
     roles: Record<string, unknown>;
   }> {
     return this.ctx.checkpoint.read() as Promise<{
       l0Cursor: string;
+      l0CursorId: string;
       lastRunAt: string | null;
       l0Count: number;
       roles: Record<string, unknown>;

@@ -9,6 +9,7 @@
 
 import type { RunSummary } from "./types.js";
 import type { RunBatchResult } from "./runner-types.js";
+import type { L0Cursor } from "./diff-builder.js";
 
 export interface StepResult {
   /** Set `summary.status = "failed"` and break the loop. */
@@ -17,7 +18,7 @@ export interface StepResult {
   continueDryRun: boolean;
   anyApplied: boolean;
   /** New anchored cursor (only set on the apply-ok path). */
-  anchoredCursor?: string | null;
+  anchoredCursor?: L0Cursor | null;
   /** Stop the loop on the FIRST target-missing merge (the night anchor). */
   skipMergeSeen: boolean;
   /** Apply mutated and then aborted in THIS batch (tz-09 Ф2b). */

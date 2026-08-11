@@ -7,7 +7,7 @@
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 import type { RunSummary } from "./types.js";
-import type { BlockMeta } from "./diff-builder.js";
+import type { BlockMeta, L0Cursor } from "./diff-builder.js";
 
 export interface RunRoleOpts {
   reason: string;
@@ -22,7 +22,7 @@ export interface StrategyInput {
   opts: RunRoleOpts;
   /** Scratch dir of THIS run (already resolved from the contract assets). */
   runScratch: string;
-  cp: { l0Cursor: string; lastRunAt: string | null };
+  cp: { l0Cursor: string; l0CursorId: string; lastRunAt: string | null };
   blocks: BlockMeta[];
   summary: RunSummary;
   startedMs: number;
@@ -33,7 +33,7 @@ export interface StrategyOutcome {
   diffText?: string;
   /** Present only when the cursor may move. `anchor: undefined` means "past
    * the fresh tail"; a string pins the advance to that slice-time. */
-  advance?: { anchor: string | undefined };
+  advance?: { anchor: L0Cursor | undefined };
   /** Apply mutated the store and then aborted (tz-09 Ф2b) — decides between
    * "retry" and "reconcile". */
   partial?: boolean;

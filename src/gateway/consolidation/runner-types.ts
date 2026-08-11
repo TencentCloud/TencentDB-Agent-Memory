@@ -4,13 +4,13 @@
  * Split from runner.ts to keep that file ≤150 lines.
  */
 
-import type { RecordEntry } from "./diff-builder.js";
+import type { L0Cursor, RecordEntry } from "./diff-builder.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 
 export interface RunBatchArgs {
   records: RecordEntry[];
   overLimit: Array<{ path: string; kind: string; size: number; limit: number }>;
-  cp: { l0Cursor: string; lastRunAt: string | null };
+  cp: { l0Cursor: string; l0CursorId: string; lastRunAt: string | null };
   runId: string;
   role: string;
   dryRun: boolean;
@@ -24,7 +24,7 @@ export interface RunBatchArgs {
 
 export interface RunBatchResult {
   presented: number;
-  sliceTime: string | null;
+  sliceTime: L0Cursor | null;
   applied: { merges: string[]; deletes: string[]; rewrites: string[] };
   skipped: { merges: string[]; deletes: string[]; rewrites: string[] };
   /** Merge ops skipped because the TARGET is missing (cross-batch partner

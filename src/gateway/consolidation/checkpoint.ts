@@ -50,6 +50,17 @@ export interface ConsolidationCheckpointData {
   lastRunAt: string;
   /** ISO cursor: max l0_conversations.recorded_at at the last run ("" = none). */
   l0Cursor: string;
+  /**
+   * Second half of the cursor: the `record_id` of the row that produced
+   * `l0Cursor` ("" = unknown). 83% of the live rows share their timestamp with
+   * a neighbour, so a timestamp alone cannot say where the last run stopped:
+   * `>=` re-reads the boundary row forever, `>` drops the partner of a pair
+   * split by the batch cap. The pair is unique (`record_id TEXT PRIMARY KEY`)
+   * and therefore orders strictly. Additive: a checkpoint written before
+   * tz-03a has no such key, reads back as "" and falls back to the old
+   * timestamp-only behaviour.
+   */
+  l0CursorId: string;
   /** Cumulative L0 messages processed up to the last run. */
   l0Count: number;
   /** Per-role progress. */
@@ -59,6 +70,7 @@ export interface ConsolidationCheckpointData {
 const DEFAULT_CHECKPOINT: ConsolidationCheckpointData = {
   lastRunAt: "",
   l0Cursor: "",
+  l0CursorId: "",
   l0Count: 0,
   roles: {},
 };
@@ -152,6 +164,8 @@ export class ConsolidationCheckpoint {
       return {
         lastRunAt: typeof parsed.lastRunAt === "string" ? parsed.lastRunAt : "",
         l0Cursor: typeof parsed.l0Cursor === "string" ? parsed.l0Cursor : "",
+        l0CursorId:
+          typeof parsed.l0CursorId === "string" ? parsed.l0CursorId : "",
         l0Count:
           typeof parsed.l0Count === "number" && Number.isFinite(parsed.l0Count)
             ? parsed.l0Count

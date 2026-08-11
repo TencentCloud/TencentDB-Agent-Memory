@@ -990,11 +990,11 @@ describe("ConsolidationOrchestrator (P6)", () => {
           "session_key TEXT, session_id TEXT, timestamp_str TEXT, created_time TEXT, updated_time TEXT, metadata_json TEXT)",
       );
       db.exec(
-        "CREATE TABLE l0_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, recorded_at TEXT)",
+        "CREATE TABLE l0_conversations (record_id TEXT PRIMARY KEY, role TEXT, content TEXT, recorded_at TEXT)",
       );
       db.prepare(
-        "INSERT INTO l0_conversations (role, content, recorded_at) VALUES (?, ?, ?)",
-      ).run("user", "w", l0Max);
+        "INSERT INTO l0_conversations (record_id, role, content, recorded_at) VALUES (?, ?, ?, ?)",
+      ).run("l0_1", "user", "w", l0Max);
       for (let i = 0; i < n; i++) {
         db.prepare(
           "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, ?, ?)",

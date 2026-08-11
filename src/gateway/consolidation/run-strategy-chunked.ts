@@ -10,6 +10,7 @@
  * (residual budget, not 2×cap).
  */
 import { queryRecentRecords } from "./queries.js";
+import { cursorOfCheckpoint } from "./diff-builder.js";
 import { chunkRecords } from "./chunk.js";
 import { runNightBatches } from "./night-batches.js";
 import type { StrategyInput, StrategyOutcome } from "./run-strategy-types.js";
@@ -45,7 +46,11 @@ export async function runBoundedFullStoreChunked(
   // never advances; the ops re-present next run).
   return {
     diffText: res.dryRunDiffText,
-    advance: { anchor: res.anchoredCursor ?? cp.l0Cursor },
+    // Fallback leg: a skip-merge in the very first chunk means nothing moved,
+    // so the anchor IS the previous cursor — pair included. Dropping the id
+    // here would push the cursor BACK along its second coordinate and re-read
+    // rows this run already processed.
+    advance: { anchor: res.anchoredCursor ?? cursorOfCheckpoint(cp) },
     partial: res.partial,
   };
 }

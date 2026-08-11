@@ -13,7 +13,11 @@ import {
   advanceCheckpoint,
   stampRoleRun,
 } from "./checkpoint-advance.js";
-import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
+import {
+  collectBlockMeta,
+  countNewL0Since,
+  cursorOfCheckpoint,
+} from "./diff-builder.js";
 import { mkFailedSummary } from "./summary.js";
 import { runFreshTailSingleBatch } from "./run-strategy-fresh-tail.js";
 import { runBoundedFullStoreChunked } from "./run-strategy-chunked.js";
@@ -83,10 +87,12 @@ export async function runRole(
 
     const cp = (await ctx.checkpoint.read()) as {
       l0Cursor: string;
+      l0CursorId: string;
       lastRunAt: string | null;
     };
+    const cursor = cursorOfCheckpoint(cp);
     const dbPath = path.join(ctx.dataDir, "vectors.db");
-    const newL0 = countNewL0Since(dbPath, cp.l0Cursor) ?? 0;
+    const newL0 = countNewL0Since(dbPath, cursor) ?? 0;
     summary.newL0 = newL0;
 
     const blocks = collectBlockMeta(ctx.dataDir);
@@ -114,7 +120,7 @@ export async function runRole(
     if (outcome.advance) {
       await advanceCheckpoint(
         ctx,
-        cp.l0Cursor,
+        cursor,
         newL0,
         summary,
         outcome.advance.anchor,

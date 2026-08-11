@@ -8,7 +8,7 @@
  */
 
 import path from "node:path";
-import { maxL0RecordedAt } from "./diff-builder.js";
+import { maxL0RecordedAt, type L0Cursor } from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import type { RoleProgress } from "./checkpoint.js";
@@ -52,6 +52,16 @@ export async function stampRoleRun(
 }
 
 /**
+ * Order two cursor pairs. An unknown `recordId` ("") sorts before every real
+ * id at the same timestamp, which is what makes a legacy cursor behave exactly
+ * as it did when it was only a timestamp.
+ */
+export function cursorGte(a: L0Cursor, b: L0Cursor): boolean {
+  if (a.recordedAt !== b.recordedAt) return a.recordedAt >= b.recordedAt;
+  return a.recordId >= b.recordId;
+}
+
+/**
  * Advance the consolidation checkpoint.
  * Day: anchoredCursor omitted → cursor = current maxL0RecordedAt().
  * Night: anchoredCursor = max slice-time of applied chunks BEFORE the
@@ -59,19 +69,23 @@ export async function stampRoleRun(
  */
 export async function advanceCheckpoint(
   ctx: OrchestratorContext,
-  prevCursor: string,
+  prevCursor: L0Cursor,
   newL0: number,
   summary: RunSummary,
-  anchoredCursor?: string,
+  anchoredCursor?: L0Cursor,
 ): Promise<void> {
-  const cursor = (anchoredCursor ??
-    maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db")))!;
+  const cursor =
+    anchoredCursor ?? maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db"));
   ctx.logger.debug?.(
-    `[checkpoint] advance role=${summary.role} prev=${prevCursor} new=${cursor} newL0=${newL0} status=${summary.status}`,
+    `[checkpoint] advance role=${summary.role} prev=${prevCursor.recordedAt}/${prevCursor.recordId} ` +
+      `new=${cursor.recordedAt}/${cursor.recordId} newL0=${newL0} status=${summary.status}`,
   );
   await ctx.checkpoint.update((d) => {
     d.lastRunAt = summary.finishedAt;
-    if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
+    if (cursor.recordedAt && cursorGte(cursor, prevCursor)) {
+      d.l0Cursor = cursor.recordedAt;
+      d.l0CursorId = cursor.recordId;
+    }
     d.l0Count += newL0;
     d.roles[summary.role] = roleProgressAfterRun(
       d.roles[summary.role],

@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { advanceCheckpoint } from "../../src/gateway/consolidation/checkpoint-advance.js";
+import { EMPTY_L0_CURSOR } from "../../src/gateway/consolidation/diff-builder.js";
 import { ConsolidationCheckpoint } from "../../src/gateway/consolidation/checkpoint.js";
 import { openWritableSqlite } from "../../src/gateway/http-utils.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
@@ -71,9 +72,9 @@ async function main(): Promise<void> {
   const ctx = ctxOf(sandbox.dataDir);
 
   // --- Замер 1: повтор того же прогона задваивает счётчик ------------------
-  await advanceCheckpoint(ctx, "", 3, summaryOf("memory-keeper"));
+  await advanceCheckpoint(ctx, EMPTY_L0_CURSOR, 3, summaryOf("memory-keeper"));
   const afterFirst = (await ctx.checkpoint.read()).l0Count;
-  await advanceCheckpoint(ctx, "", 3, summaryOf("memory-keeper"));
+  await advanceCheckpoint(ctx, EMPTY_L0_CURSOR, 3, summaryOf("memory-keeper"));
   const afterRetry = (await ctx.checkpoint.read()).l0Count;
   console.log(`  l0Count: первый прогон ${afterFirst}, повтор ${afterRetry}`);
   must(
@@ -85,10 +86,24 @@ async function main(): Promise<void> {
   fs.rmSync(ctx.checkpoint.file, { force: true });
   const fresh = ctxOf(sandbox.dataDir);
   // day: anchor не передан → курсор = max(recorded_at) = T2
-  await advanceCheckpoint(fresh, "", 3, summaryOf("memory-keeper"));
+  await advanceCheckpoint(
+    fresh,
+    EMPTY_L0_CURSOR,
+    3,
+    summaryOf("memory-keeper"),
+  );
   const dayCursor = (await fresh.checkpoint.read()).l0Cursor;
   // night: стартовал раньше, его снимок prevCursor = "", anchor = T1 < T2
-  await advanceCheckpoint(fresh, "", 1, summaryOf("night-keeper"), T1);
+  await advanceCheckpoint(
+    fresh,
+    EMPTY_L0_CURSOR,
+    1,
+    summaryOf("night-keeper"),
+    {
+      recordedAt: T1,
+      recordId: "r1",
+    },
+  );
   const nightCursor = (await fresh.checkpoint.read()).l0Cursor;
   console.log(`  курсор: после day ${dayCursor}, после night ${nightCursor}`);
   must(

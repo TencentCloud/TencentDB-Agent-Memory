@@ -6,7 +6,7 @@
 import path from "node:path";
 import { runBatch } from "./runner.js";
 import { stepBatch } from "./night-loop-step.js";
-import type { BlockMeta, RecordEntry } from "./diff-builder.js";
+import type { BlockMeta, L0Cursor, RecordEntry } from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
@@ -16,7 +16,7 @@ export interface NightBatchResult {
   /** A batch mutated and then aborted (tz-09 Ф2b). */
   partial?: boolean;
   dryRunDiffText: string | undefined;
-  anchoredCursor: string | null;
+  anchoredCursor: L0Cursor | null;
   skipMergeSeen: boolean;
   presentedTotal: number;
   remainingDeleteCap: number;
@@ -34,7 +34,7 @@ export async function runNightBatches(
     runScratch: string;
     batches: RecordEntry[][];
     blocks: BlockMeta[];
-    cp: { l0Cursor: string; lastRunAt: string | null };
+    cp: { l0Cursor: string; l0CursorId: string; lastRunAt: string | null };
     summary: RunSummary;
     startedMs: number;
   },
@@ -45,7 +45,7 @@ export async function runNightBatches(
   let anyApplied = false;
   let partial: boolean | undefined;
   let dryRunDiffText: string | undefined;
-  let anchoredCursor: string | null = null;
+  let anchoredCursor: L0Cursor | null = null;
   let skipMergeSeen = false;
   let remainingDeleteCap = caps.deletePerRun;
   let remainingRewriteCap = caps.rewritePerRun;

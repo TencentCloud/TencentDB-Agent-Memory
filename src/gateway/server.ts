@@ -74,7 +74,10 @@ import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
 import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
-import { countNewL0Since } from "./consolidation/diff-builder.js";
+import {
+  countNewL0Since,
+  cursorOfCheckpoint,
+} from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDirForRead } from "./role-files.js";
 import { allowLegacyFallback, resolveUnderRoot } from "./tdai-root.js";
 import { hostTaskRoots } from "./consolidation/launchers/auth-root.js";
@@ -237,9 +240,13 @@ export class TdaiGateway {
           },
       countNewL0: async () => {
         const cp = await this.orchestrator.readCheckpoint();
+        // Same composite predicate as the run path (run-role.ts): a status
+        // that counted by bare timestamp would disagree with the run on every
+        // row sitting exactly on the boundary — the common case, not the rare
+        // one.
         return countNewL0Since(
           nodePath.join(this.config.data.baseDir, "vectors.db"),
-          cp.l0Cursor,
+          cursorOfCheckpoint(cp),
         );
       },
       trigger: async (reason: string, runType?: string) =>

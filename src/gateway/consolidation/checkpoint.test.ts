@@ -45,6 +45,7 @@ describe("ConsolidationCheckpoint (P6)", () => {
     const snapshot: ConsolidationCheckpointData = {
       lastRunAt: "2026-08-02T03:00:00.000Z",
       l0Cursor: "2026-08-02T02:59:59.000Z",
+      l0CursorId: "l0_42",
       l0Count: 1234,
       roles: {
         "memory-keeper": {
