@@ -276,6 +276,16 @@ function rejectScratchRoot(
       return `holds memory data (${name})`;
     }
   }
+  // ...and a root that IS a piece of the tree passes everything above: it is
+  // not the data dir, does not contain it, and its own children are slug dirs
+  // or record files. Same four names `resolveDataDirRelative` enforces for
+  // configured paths, applied to the first segment under dataDir, so anything
+  // nested deeper is refused too.
+  if (resolved.startsWith(dataRoot + path.sep)) {
+    const first = path.relative(dataRoot, resolved).split(path.sep)[0] ?? "";
+    if (MEMORY_ENTRIES.includes(first))
+      return `is inside memory data (${first})`;
+  }
   return null;
 }
 

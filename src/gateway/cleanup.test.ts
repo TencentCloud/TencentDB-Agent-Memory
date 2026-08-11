@@ -315,23 +315,42 @@ describe("runCleanup", () => {
   it("refuses a role scratch root that is (or holds) the memory tree", () => {
     const old = new Date(Date.now() - 3 * 24 * 3_600_000);
     fs.mkdirSync(path.join(dataDir, "runs"), { recursive: true });
-    fs.utimesSync(path.join(dataDir, "scene_blocks"), old, old);
-    fs.utimesSync(path.join(dataDir, "records"), old, old);
+    for (const rel of [
+      "scene_blocks",
+      "scene_blocks/_global",
+      "records",
+      "records/2026-08-01.jsonl",
+    ]) {
+      fs.utimesSync(path.join(dataDir, rel), old, old);
+    }
 
     const stats = runCleanup(
       makeDeps({
         paths: [],
         intervalHours: 1,
-        extraScratchRoots: [dataDir, tmp, path.join(dataDir, "runs")],
+        extraScratchRoots: [
+          dataDir,
+          tmp,
+          // A PIECE of the tree passes every other check: not the data dir,
+          // does not contain it, and its own children are slug dirs.
+          path.join(dataDir, "scene_blocks"),
+          path.join(dataDir, "records"),
+          path.join(dataDir, "runs"),
+        ],
       }) as never,
     );
 
-    expect(fs.existsSync(path.join(dataDir, "scene_blocks"))).toBe(true);
-    expect(fs.existsSync(path.join(dataDir, "records"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
     // Refused WITH a reason — a silent skip would look like "nothing to do".
     expect(stats.errors.join("\n")).toMatch(/is the data dir itself/);
     expect(stats.errors.join("\n")).toMatch(/contains the data dir/);
+    expect(stats.errors.join("\n")).toMatch(/is inside memory data/);
     // ...and the legitimate per-role root under it is still swept.
     expect(stats.scanned).toContain(path.join(dataDir, "runs"));
   });
