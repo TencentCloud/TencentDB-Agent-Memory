@@ -164,8 +164,16 @@ export async function syncSceneIndexAllProjects(
   }
 }
 
-/** Rebuild one project's index from the .md files on disk. */
-async function syncSceneIndexBySlug(
+/**
+ * Rebuild one project's index from the .md files on disk.
+ *
+ * Exported because the apply path rebuilds exactly these files for exactly
+ * these slugs. It used to keep its own copy of this loop, which quietly made
+ * it a SECOND writer of the index with different rules — it read the carrier
+ * fields off the model-writable front-matter, so one apply erased the chain
+ * of every block whose front-matter copy was missing. One writer, one rule.
+ */
+export async function syncSceneIndexBySlug(
   dataDir: string,
   slug: string,
 ): Promise<SceneIndexEntry[]> {
