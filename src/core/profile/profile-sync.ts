@@ -1,11 +1,27 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
+import type {
+  IMemoryStore,
+  ProfileRecord,
+  ProfileSyncRecord,
+} from "../store/types.js";
 import { syncSceneIndexAllProjects } from "../scene/scene-index.js";
 import { stripSceneNavigation } from "../scene/scene-navigation.js";
 import { sceneBlocksRoot } from "../scene/scene-paths.js";
 import type { Logger } from "../types.js";
+import { notifyCommitted } from "../record/commit-port.js";
+
+/** One announcement for a wholesale replacement of the scene tree (tz-03b). */
+function notifySceneTreeReplaced(): void {
+  notifyCommitted({
+    carrier: "scene",
+    kind: "update",
+    affected: 0,
+    source: "profile-sync",
+    at: new Date().toISOString(),
+  });
+}
 
 const PROFILE_SCOPE = "global";
 
@@ -21,7 +37,11 @@ export interface ProfileBaseline {
   createdAtMs: number;
 }
 
-export function buildProfileStableId(scope: string, type: "l2" | "l3", filename: string): string {
+export function buildProfileStableId(
+  scope: string,
+  type: "l2" | "l3",
+  filename: string,
+): string {
   const hash = createHash("sha256")
     .update(`${scope}\u0000${type}\u0000${filename}`)
     .digest("hex");
@@ -32,7 +52,9 @@ function md5(text: string): string {
   return createHash("md5").update(text).digest("hex");
 }
 
-async function statTimes(filePath: string): Promise<{ createdAtMs: number; updatedAtMs: number }> {
+async function statTimes(
+  filePath: string,
+): Promise<{ createdAtMs: number; updatedAtMs: number }> {
   try {
     const stat = await fs.stat(filePath);
     return {
@@ -45,7 +67,9 @@ async function statTimes(filePath: string): Promise<{ createdAtMs: number; updat
   }
 }
 
-export async function listLocalProfiles(dataDir: string): Promise<ProfileRecord[]> {
+export async function listLocalProfiles(
+  dataDir: string,
+): Promise<ProfileRecord[]> {
   const profiles: ProfileRecord[] = [];
   const blocksRoot = sceneBlocksRoot(dataDir);
 
@@ -133,7 +157,9 @@ export async function pullProfilesToLocal(
         await fs.writeFile(target, record.content, "utf-8");
         if (md5(record.content) !== record.contentMd5) {
           await fs.rm(target, { force: true });
-          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`);
+          logger.debug?.(
+            `[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`,
+          );
         }
         continue;
       }
@@ -143,7 +169,9 @@ export async function pullProfilesToLocal(
         await fs.writeFile(path.join(tempDir, "persona.md"), body, "utf-8");
         if (md5(body) !== record.contentMd5) {
           await fs.rm(path.join(tempDir, "persona.md"), { force: true });
-          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`);
+          logger.debug?.(
+            `[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`,
+          );
         }
       }
     }
@@ -157,11 +185,19 @@ export async function pullProfilesToLocal(
       if (isRenameRaceError(err)) {
         // Another concurrent pull already wrote scene_blocks — ours is redundant.
         // Both pulls fetched the same remote snapshot, so the other result is equivalent.
-        logger.debug?.(`[memory-tdai][profile-sync] scene_blocks rename lost race (${(err as NodeJS.ErrnoException).code}), using existing`);
+        logger.debug?.(
+          `[memory-tdai][profile-sync] scene_blocks rename lost race (${(err as NodeJS.ErrnoException).code}), using existing`,
+        );
+        // tz-03b: the tree still changed under us — the winner's tree is the
+        // one on disk now, and the counter has to be recomputed either way.
+        notifySceneTreeReplaced();
         return baseline;
       }
       throw err;
     }
+    // tz-03b: a pull replaces the WHOLE scene carrier (rm -r + rename), so
+    // this is a mutation no per-file hook could ever see.
+    notifySceneTreeReplaced();
 
     const tempPersonaPath = path.join(tempDir, "persona.md");
     const localPersonaPath = path.join(dataDir, "persona.md");
@@ -172,7 +208,9 @@ export async function pullProfilesToLocal(
         await fs.rename(tempPersonaPath, localPersonaPath);
       } catch (err) {
         if (!isRenameRaceError(err)) throw err;
-        logger.debug?.(`[memory-tdai][profile-sync] persona.md rename lost race, using existing`);
+        logger.debug?.(
+          `[memory-tdai][profile-sync] persona.md rename lost race, using existing`,
+        );
       }
     } catch (err) {
       // No temp persona file → remove local persona (remote has none)
@@ -184,7 +222,9 @@ export async function pullProfilesToLocal(
     }
 
     await syncSceneIndexAllProjects(dataDir);
-    logger.debug?.(`[memory-tdai][profile-sync] Pulled ${records.length} profile(s) to local cache`);
+    logger.debug?.(
+      `[memory-tdai][profile-sync] Pulled ${records.length} profile(s) to local cache`,
+    );
     return baseline;
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -201,7 +241,11 @@ export async function syncLocalProfilesToStore(
   const localIds = new Set(localProfiles.map((profile) => profile.id));
 
   const syncRecords: ProfileSyncRecord[] = localProfiles
-    .filter((profile) => baselineMap.get(profile.id)?.contentMd5 !== profile.contentMd5 || !baselineMap.has(profile.id))
+    .filter(
+      (profile) =>
+        baselineMap.get(profile.id)?.contentMd5 !== profile.contentMd5 ||
+        !baselineMap.has(profile.id),
+    )
     .map((profile) => ({
       ...profile,
       baselineVersion: baselineMap.get(profile.id)?.version,
@@ -209,13 +253,17 @@ export async function syncLocalProfilesToStore(
 
   if (syncRecords.length > 0 && store.syncProfiles) {
     await store.syncProfiles(syncRecords);
-    logger.info(`[memory-tdai][profile-sync] Synced ${syncRecords.length} changed profile(s)`);
+    logger.info(
+      `[memory-tdai][profile-sync] Synced ${syncRecords.length} changed profile(s)`,
+    );
   }
 
   const deletedIds = [...baselineMap.keys()].filter((id) => !localIds.has(id));
   if (deletedIds.length > 0 && store.deleteProfiles) {
     await store.deleteProfiles(deletedIds);
-    logger.info(`[memory-tdai][profile-sync] Deleted ${deletedIds.length} stale profile(s)`);
+    logger.info(
+      `[memory-tdai][profile-sync] Deleted ${deletedIds.length} stale profile(s)`,
+    );
   }
 }
 

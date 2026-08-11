@@ -31,6 +31,7 @@ import { normalizeSceneFilenames } from "./filename-normalizer.js";
 import { buildSceneExtractionPrompt } from "../prompts/scene-extraction.js";
 import { report } from "../report/reporter.js";
 import type { LLMRunner, Logger } from "../types.js";
+import { notifyCommitted } from "../record/commit-port.js";
 
 const TAG = "[memory-tdai] [extractor]";
 
@@ -69,7 +70,9 @@ export interface SceneExtractorOptions {
  * - Block: [PERSONA_UPDATE_REQUEST]reason: xxx[/PERSONA_UPDATE_REQUEST]
  * - Inline: PERSONA_UPDATE_REQUEST: xxx
  */
-export function parsePersonaUpdateSignal(text: string): { reason: string } | null {
+export function parsePersonaUpdateSignal(
+  text: string,
+): { reason: string } | null {
   // Block format: [PERSONA_UPDATE_REQUEST]...[/PERSONA_UPDATE_REQUEST]
   const blockMatch = text.match(
     /\[PERSONA_UPDATE_REQUEST\]\s*(?:reason:\s*)?(.+?)\s*\[\/PERSONA_UPDATE_REQUEST\]/s,
@@ -77,9 +80,7 @@ export function parsePersonaUpdateSignal(text: string): { reason: string } | nul
   if (blockMatch) return { reason: blockMatch[1]!.trim() };
 
   // Inline format: PERSONA_UPDATE_REQUEST: reason text
-  const inlineMatch = text.match(
-    /PERSONA_UPDATE_REQUEST:\s*(.+?)(?:\n|$)/,
-  );
+  const inlineMatch = text.match(/PERSONA_UPDATE_REQUEST:\s*(.+?)(?:\n|$)/);
   if (inlineMatch) return { reason: inlineMatch[1]!.trim() };
 
   return null;
@@ -105,14 +106,18 @@ export class SceneExtractor {
     this.instanceId = opts.instanceId;
 
     // Use injected LLMRunner if available, otherwise fall back to CleanContextRunner
-    this.runner = opts.llmRunner ?? new CleanContextRunner({
-      config: opts.config,
-      modelRef: opts.model,
-      enableTools: true,
-      logger: opts.logger,
-    });
+    this.runner =
+      opts.llmRunner ??
+      new CleanContextRunner({
+        config: opts.config,
+        modelRef: opts.model,
+        enableTools: true,
+        logger: opts.logger,
+      });
 
-    this.logger?.debug?.(`${TAG} Created: dataDir=${opts.dataDir}, model=${opts.model ?? "(default)"}, maxScenes=${this.maxScenes}, timeout=${this.timeoutMs}ms`);
+    this.logger?.debug?.(
+      `${TAG} Created: dataDir=${opts.dataDir}, model=${opts.model ?? "(default)"}, maxScenes=${this.maxScenes}, timeout=${this.timeoutMs}ms`,
+    );
   }
 
   /**
@@ -121,7 +126,9 @@ export class SceneExtractor {
    * @param memories - Array of raw memory records from the API
    * @returns Extraction result with count and success flag
    */
-  async extract(memories: Array<{ content: string; created_at: string; id?: string }>): Promise<ExtractionResult> {
+  async extract(
+    memories: Array<{ content: string; created_at: string; id?: string }>,
+  ): Promise<ExtractionResult> {
     const extractStartMs = Date.now();
     this.logger?.info(`${TAG} extract() start: ${memories.length} memories`);
 
@@ -144,13 +151,22 @@ export class SceneExtractor {
     const bm = new BackupManager(path.join(this.dataDir, ".backup"));
     // Flat name on purpose — the category is a single directory name under .backup/.
     const backupCategory = `scene_blocks_${projectSlug(this.projectId)}`;
-    await bm.backupDirectory(blocksDir, backupCategory, `offset${cp.total_processed}`, this.sceneBackupCount);
-    this.logger?.debug?.(`${TAG} extract() backup phase: ${Date.now() - backupStartMs}ms`);
+    await bm.backupDirectory(
+      blocksDir,
+      backupCategory,
+      `offset${cp.total_processed}`,
+      this.sceneBackupCount,
+    );
+    this.logger?.debug?.(
+      `${TAG} extract() backup phase: ${Date.now() - backupStartMs}ms`,
+    );
 
     // Phase 2: Load scene index
     const indexStartMs = Date.now();
     const index = await readSceneIndex(this.dataDir, this.projectId);
-    this.logger?.debug?.(`${TAG} extract() scene index loaded: ${index.length} entries (${Date.now() - indexStartMs}ms)`);
+    this.logger?.debug?.(
+      `${TAG} extract() scene index loaded: ${index.length} entries (${Date.now() - indexStartMs}ms)`,
+    );
 
     // Build scene summaries for the prompt (relative filenames only)
     const { summaries: sceneSummaries, filenames: existingSceneFiles } =
@@ -161,13 +177,19 @@ export class SceneExtractor {
     const sceneCount = index.length;
     if (sceneCount >= this.maxScenes) {
       sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，已达到或超过 ${this.maxScenes} 个上限！\n**你必须先执行 MERGE 操作**，将最相似的 2-4 个场景合并为 1 个，然后再处理新记忆。\n参考合并对象：热度最低或主题高度重叠的场景。`;
-      this.logger?.warn(`${TAG} extract() scene count at limit: ${sceneCount}/${this.maxScenes}`);
+      this.logger?.warn(
+        `${TAG} extract() scene count at limit: ${sceneCount}/${this.maxScenes}`,
+      );
     } else if (sceneCount === this.maxScenes - 1) {
       sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，距离上限只差 1 个！\n本次处理**只能 UPDATE 现有场景，不能 CREATE 新场景**。`;
-      this.logger?.warn(`${TAG} extract() scene count near limit (CREATE blocked): ${sceneCount}/${this.maxScenes}`);
+      this.logger?.warn(
+        `${TAG} extract() scene count near limit (CREATE blocked): ${sceneCount}/${this.maxScenes}`,
+      );
     } else if (sceneCount >= this.maxScenes - 3) {
       sceneCountWarning = `当前场景数量为 **${sceneCount} 个**，建议优先考虑 UPDATE 或主动 MERGE 相似场景。`;
-      this.logger?.debug?.(`${TAG} extract() scene count approaching limit: ${sceneCount}/${this.maxScenes}`);
+      this.logger?.debug?.(
+        `${TAG} extract() scene count approaching limit: ${sceneCount}/${this.maxScenes}`,
+      );
     }
 
     // Snapshot scene index + content before LLM — used later to diff created/updated/deleted
@@ -176,10 +198,15 @@ export class SceneExtractor {
     const preExtractContent = new Map<string, string>();
     for (const e of index) {
       try {
-        const raw = await fs.readFile(path.join(blocksDir, e.filename), "utf-8");
+        const raw = await fs.readFile(
+          path.join(blocksDir, e.filename),
+          "utf-8",
+        );
         const block = parseSceneBlock(raw, e.filename);
         preExtractContent.set(e.filename, block.content);
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
     }
 
     // Phase 3: Build prompt
@@ -204,42 +231,61 @@ export class SceneExtractor {
       existingSceneFiles,
       maxScenes: this.maxScenes,
     });
-    this.logger?.debug?.(`${TAG} extract() prompt built: ${userPrompt.length} chars (${Date.now() - promptStartMs}ms)`);
+    this.logger?.debug?.(
+      `${TAG} extract() prompt built: ${userPrompt.length} chars (${Date.now() - promptStartMs}ms)`,
+    );
 
     // Phase 4: Run LLM agent (sandboxed to scene_blocks/)
     let llmOutput = "";
     let llmDurationMs = 0;
     try {
-      this.logger?.debug?.(`${TAG} extract() starting LLM runner (timeout=${this.timeoutMs}ms, maxTokens=model default)...`);
+      this.logger?.debug?.(
+        `${TAG} extract() starting LLM runner (timeout=${this.timeoutMs}ms, maxTokens=model default)...`,
+      );
       const runnerStartMs = Date.now();
-      llmOutput = await this.runner.run({
-        systemPrompt,
-        prompt: userPrompt,
-        taskId: `scene-extract-${Date.now()}`,
-        timeoutMs: this.timeoutMs,
-        // maxTokens omitted → core uses the resolved model's maxTokens from catalog
-        workspaceDir: blocksDir,
-      }) ?? "";
+      llmOutput =
+        (await this.runner.run({
+          systemPrompt,
+          prompt: userPrompt,
+          taskId: `scene-extract-${Date.now()}`,
+          timeoutMs: this.timeoutMs,
+          // maxTokens omitted → core uses the resolved model's maxTokens from catalog
+          workspaceDir: blocksDir,
+        })) ?? "";
       llmDurationMs = Date.now() - runnerStartMs;
-      this.logger?.debug?.(`${TAG} extract() LLM runner completed: ${llmDurationMs}ms`);
+      this.logger?.debug?.(
+        `${TAG} extract() LLM runner completed: ${llmDurationMs}ms`,
+      );
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const totalMs = Date.now() - extractStartMs;
-      this.logger?.error(`${TAG} extract() LLM runner failed after ${totalMs}ms: ${errMsg}`);
+      this.logger?.error(
+        `${TAG} extract() LLM runner failed after ${totalMs}ms: ${errMsg}`,
+      );
 
       // Restore scene_blocks/ from the Phase 1 backup so partial LLM writes
       // (or a wiped sandbox) don't leak into the next recall cycle.
       // Fail-soft: a restore failure must never mask the original LLM error.
       try {
-        const result = await bm.restoreLatestDirectory(backupCategory, blocksDir);
+        const result = await bm.restoreLatestDirectory(
+          backupCategory,
+          blocksDir,
+        );
         if (result.restored) {
-          this.logger?.warn(`${TAG} extract() restored scene_blocks/ from backup: ${result.from}`);
+          this.logger?.warn(
+            `${TAG} extract() restored scene_blocks/ from backup: ${result.from}`,
+          );
         } else {
-          this.logger?.debug?.(`${TAG} extract() no scene_blocks backup to restore from (first run or empty)`);
+          this.logger?.debug?.(
+            `${TAG} extract() no scene_blocks backup to restore from (first run or empty)`,
+          );
         }
       } catch (restoreErr) {
-        const rMsg = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
-        this.logger?.warn(`${TAG} extract() restore failed (non-fatal, original LLM error preserved): ${rMsg}`);
+        const rMsg =
+          restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        this.logger?.warn(
+          `${TAG} extract() restore failed (non-fatal, original LLM error preserved): ${rMsg}`,
+        );
       }
 
       return { memoriesProcessed: 0, success: false, error: errMsg };
@@ -259,7 +305,9 @@ export class SceneExtractor {
     const cleanupStartMs = Date.now();
     let cleanedCount = 0;
     try {
-      const allFiles = (await fs.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
+      const allFiles = (await fs.readdir(blocksDir)).filter((f) =>
+        f.endsWith(".md"),
+      );
       for (const file of allFiles) {
         const filePath = path.join(blocksDir, file);
         const raw = await fs.readFile(filePath, "utf-8");
@@ -267,22 +315,30 @@ export class SceneExtractor {
           // Empty file or [DELETED] marker — soft-delete
           await fs.unlink(filePath);
           cleanedCount++;
-          this.logger?.debug?.(`${TAG} extract() removed soft-deleted file: ${file}`);
+          this.logger?.debug?.(
+            `${TAG} extract() removed soft-deleted file: ${file}`,
+          );
         } else {
           // Check if file has only META header but no actual content
           const block = parseSceneBlock(raw, file);
           if (!block.content || block.content.trim().length === 0) {
             await fs.unlink(filePath);
             cleanedCount++;
-            this.logger?.debug?.(`${TAG} extract() removed META-only file (no content): ${file}`);
+            this.logger?.debug?.(
+              `${TAG} extract() removed META-only file (no content): ${file}`,
+            );
           }
         }
       }
     } catch (cleanupErr) {
       // Non-fatal — log and continue to index sync
-      this.logger?.warn(`${TAG} extract() soft-delete cleanup error: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
+      this.logger?.warn(
+        `${TAG} extract() soft-delete cleanup error: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+      );
     }
-    this.logger?.debug?.(`${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files (${Date.now() - cleanupStartMs}ms)`);
+    this.logger?.debug?.(
+      `${TAG} extract() soft-delete cleanup: removed ${cleanedCount} empty files (${Date.now() - cleanupStartMs}ms)`,
+    );
 
     // Phase 5b: Normalize filenames (defensive — LLM occasionally produces names
     // with spaces / punctuation despite the prompt forbidding them, e.g.
@@ -308,13 +364,17 @@ export class SceneExtractor {
     } catch (normErr) {
       // Non-fatal — log and continue. Index sync below will simply pick up
       // whatever names are present on disk.
-      this.logger?.warn(`${TAG} extract() filename normalization error: ${normErr instanceof Error ? normErr.message : String(normErr)}`);
+      this.logger?.warn(
+        `${TAG} extract() filename normalization error: ${normErr instanceof Error ? normErr.message : String(normErr)}`,
+      );
     }
 
     // Phase 6: Sync scene index (rebuilds from remaining non-empty files)
     const syncStartMs = Date.now();
     await syncSceneIndex(this.dataDir, this.projectId);
-    this.logger?.debug?.(`${TAG} extract() scene index synced: ${Date.now() - syncStartMs}ms`);
+    this.logger?.debug?.(
+      `${TAG} extract() scene index synced: ${Date.now() - syncStartMs}ms`,
+    );
 
     // Phase 7 (removed): scene navigation is no longer baked into persona.md.
     // persona.md is one global file while scene blocks are per-project, so a
@@ -327,17 +387,26 @@ export class SceneExtractor {
       const signal = parsePersonaUpdateSignal(llmOutput);
       if (signal) {
         await cpManager.setPersonaUpdateRequest(signal.reason);
-        this.logger?.debug?.(`${TAG} extract() persona update requested by LLM: ${signal.reason}`);
+        this.logger?.debug?.(
+          `${TAG} extract() persona update requested by LLM: ${signal.reason}`,
+        );
       }
     }
 
     const totalMs = Date.now() - extractStartMs;
-    this.logger?.info(`${TAG} extract() completed: ${memories.length} memories processed in ${totalMs}ms`);
+    this.logger?.info(
+      `${TAG} extract() completed: ${memories.length} memories processed in ${totalMs}ms`,
+    );
 
     // ── l2_extraction metric ──
     if (this.instanceId && this.logger) {
       // Read updated scene index to report final state + diff against pre-extract snapshot
-      let resultScenes: Array<{ title: string; summary: string; content: string; status: "created" | "updated" }> = [];
+      let resultScenes: Array<{
+        title: string;
+        summary: string;
+        content: string;
+        status: "created" | "updated";
+      }> = [];
       let scenesCreated = 0;
       let scenesUpdated = 0;
       let scenesDeleted = 0;
@@ -354,7 +423,9 @@ export class SceneExtractor {
             const raw = await fs.readFile(blockPath, "utf-8");
             const block = parseSceneBlock(raw, e.filename);
             content = block.content;
-          } catch { /* file read failure is non-fatal */ }
+          } catch {
+            /* file read failure is non-fatal */
+          }
 
           if (oldSummary === undefined) {
             // New scene
@@ -386,7 +457,9 @@ export class SceneExtractor {
             scenesDeleted++;
           }
         }
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
 
       report("l2_extraction", {
         inputMemoryCount: memories.length,
@@ -402,6 +475,17 @@ export class SceneExtractor {
       });
     }
 
+    // tz-03b: the scene carrier's commit point. The blocks themselves are
+    // written by the sandboxed LLM (workspaceDir above), so no single write
+    // can be intercepted — the end of extract() is the first moment the tree
+    // is settled, soft-deletes included.
+    notifyCommitted({
+      carrier: "scene",
+      kind: "update",
+      affected: memories.length,
+      source: "scene-extract",
+      at: new Date().toISOString(),
+    });
     return { memoriesProcessed: memories.length, success: true };
   }
 
@@ -412,9 +496,10 @@ export class SceneExtractor {
    * Includes a capacity counter at the top (e.g. "当前场景总数：5 / 15")
    * so the LLM can immediately see how close it is to the limit.
    */
-  private buildSceneSummaries(
-    index: SceneIndexEntry[],
-  ): { summaries: string; filenames: string[] } {
+  private buildSceneSummaries(index: SceneIndexEntry[]): {
+    summaries: string;
+    filenames: string[];
+  } {
     if (index.length === 0) return { summaries: "", filenames: [] };
 
     const lines: string[] = [];
@@ -433,7 +518,6 @@ export class SceneExtractor {
     }
     return { summaries: lines.join("\n"), filenames };
   }
-
 }
 
 function formatTimestamp(d: Date): string {

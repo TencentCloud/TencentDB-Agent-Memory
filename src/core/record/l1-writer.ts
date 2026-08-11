@@ -23,6 +23,7 @@ import type { IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 import { formatLocalDate } from "../../utils/time.js";
+import { notifyCommitted } from "./commit-port.js";
 
 // ============================
 // Types
@@ -313,6 +314,18 @@ export async function writeMemory(params: {
       logger?.debug?.(
         `${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`,
       );
+      // tz-03b: the L1 creation path outside apply — most records reach the
+      // store through here, so a counter that missed it would drift on the
+      // most common write of all.
+      if (upsertOk) {
+        notifyCommitted({
+          carrier: "l1",
+          kind: "upsert",
+          affected: 1,
+          source: "write-memory",
+          at: new Date().toISOString(),
+        });
+      }
     } catch (err) {
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(

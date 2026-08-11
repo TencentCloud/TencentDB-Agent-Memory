@@ -21,8 +21,14 @@
 
 import type http from "node:http";
 import path from "node:path";
-import { parseJsonBody, sendJson, sendError, openWritableSqlite } from "./http-utils.js";
+import {
+  parseJsonBody,
+  sendJson,
+  sendError,
+  openWritableSqlite,
+} from "./http-utils.js";
 import type { Logger } from "../core/types.js";
+import { notifyCommitted } from "../core/record/commit-port.js";
 
 // ============================
 // Limits (safety nets, ТЗ §5.17)
@@ -60,17 +66,21 @@ export function matchFeedbackKeys(
 }
 
 /** Validate a raw feedback body. Returns an error string or null when valid. */
-export function validateFeedbackBody(body: unknown): { keys: string[] } | string {
+export function validateFeedbackBody(
+  body: unknown,
+): { keys: string[] } | string {
   if (!body || typeof body !== "object") return "body must be a JSON object";
   const rawKeys = (body as { keys?: unknown }).keys;
   if (!Array.isArray(rawKeys)) return "missing required field: keys (string[])";
-  if (rawKeys.length > FEEDBACK_MAX_KEYS) return `too many keys (max ${FEEDBACK_MAX_KEYS})`;
+  if (rawKeys.length > FEEDBACK_MAX_KEYS)
+    return `too many keys (max ${FEEDBACK_MAX_KEYS})`;
   const keys: string[] = [];
   for (const k of rawKeys) {
     if (typeof k !== "string") return "keys must be an array of strings";
     const trimmed = k.trim();
     if (trimmed.length === 0) continue;
-    if (trimmed.length > FEEDBACK_MAX_KEY_CHARS) return `key too long (max ${FEEDBACK_MAX_KEY_CHARS} chars)`;
+    if (trimmed.length > FEEDBACK_MAX_KEY_CHARS)
+      return `key too long (max ${FEEDBACK_MAX_KEY_CHARS} chars)`;
     keys.push(trimmed);
   }
   return { keys };
@@ -99,14 +109,18 @@ export function bumpFeedbackPriorities(
   if (keys.length === 0) return { matched: 0, bumped: 0 };
   const db = openWritableSqlite(dbPath);
   try {
-    const rows = db.prepare("SELECT record_id, content FROM l1_records").all() as Array<{
+    const rows = db
+      .prepare("SELECT record_id, content FROM l1_records")
+      .all() as Array<{
       record_id: string;
       content: string;
     }>;
     const matchedIds = matchFeedbackKeys(rows, keys);
     if (matchedIds.length === 0) return { matched: 0, bumped: 0 };
 
-    const update = db.prepare("UPDATE l1_records SET priority = priority + ? WHERE record_id = ?");
+    const update = db.prepare(
+      "UPDATE l1_records SET priority = priority + ? WHERE record_id = ?",
+    );
     let bumped = 0;
     for (const id of matchedIds) {
       for (let i = 0; i < capPerRecord; i++) {
@@ -114,6 +128,17 @@ export function bumpFeedbackPriorities(
       }
       bumped++;
     }
+    // tz-03b: the only direct SQL mutation of l1_records outside the store.
+    // It changes no row COUNT, but the port is about mutations, not about
+    // arithmetic — leaving it out would make "all mutations pass through one
+    // point" false for the one path that proves it.
+    notifyCommitted({
+      carrier: "l1",
+      kind: "update",
+      affected: bumped,
+      source: "feedback",
+      at: new Date().toISOString(),
+    });
     return { matched: matchedIds.length, bumped };
   } finally {
     db.close();
@@ -140,7 +165,10 @@ export async function handleMemoryFeedback(
   res: http.ServerResponse,
 ): Promise<void> {
   const contentType = req.headers["content-type"];
-  if (typeof contentType !== "string" || !contentType.toLowerCase().startsWith("application/json")) {
+  if (
+    typeof contentType !== "string" ||
+    !contentType.toLowerCase().startsWith("application/json")
+  ) {
     sendError(res, 415, "Content-Type must be application/json");
     return;
   }
@@ -160,7 +188,10 @@ export async function handleMemoryFeedback(
   }
 
   try {
-    const result = bumpFeedbackPriorities(path.join(ctx.dataDir, "vectors.db"), validated.keys);
+    const result = bumpFeedbackPriorities(
+      path.join(ctx.dataDir, "vectors.db"),
+      validated.keys,
+    );
     sendJson(res, 200, {
       received: validated.keys.length,
       matched: result.matched,

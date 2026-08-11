@@ -47,6 +47,7 @@ import { EMPTY_RESULT, type ApplyResult } from "./apply-executor/types.js";
 import type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
 import type { RunContext } from "./apply-executor/run-context.js";
 import type { ApplyDiff } from "./apply-executor/schemas.js";
+import { notifyCommitted } from "../core/record/commit-port.js";
 import {
   ApplyRuntimeError,
   ApplyValidationError,
@@ -199,11 +200,23 @@ export class ApplyExecutor {
     run: RunContext | undefined,
     entered: boolean,
   ): ApplyResult {
-    leaveApplying(this.deps, run, {
-      ok: result.ok,
-      mutated: hasApplied(result),
-      entered,
-    });
+    const mutated = hasApplied(result);
+    leaveApplying(this.deps, run, { ok: result.ok, mutated, entered });
+    // tz-03b: announced from the ONE exit, not from the success path — an
+    // aborted apply mutated the store just as really as a successful one, and
+    // the counters have to see it.
+    if (mutated) {
+      notifyCommitted({
+        carrier: "l1",
+        kind: "update",
+        affected:
+          result.applied.merges.length +
+          result.applied.deletes.length +
+          result.applied.rewrites.length,
+        source: "apply",
+        at: new Date().toISOString(),
+      });
+    }
     return result;
   }
 }

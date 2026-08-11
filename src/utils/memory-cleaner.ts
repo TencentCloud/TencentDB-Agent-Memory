@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { notifyCommitted } from "../core/record/commit-port.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -72,7 +73,9 @@ export class LocalMemoryCleaner {
 
     const retentionDays = this.opts.retentionDays;
     if (!(retentionDays > 0)) {
-      this.opts.logger?.debug?.(`${TAG} Skip run: invalid retentionDays=${retentionDays}`);
+      this.opts.logger?.debug?.(
+        `${TAG} Skip run: invalid retentionDays=${retentionDays}`,
+      );
       return;
     }
 
@@ -82,7 +85,9 @@ export class LocalMemoryCleaner {
     try {
       cutoffMs = computeCutoffMsByLocalDay(nowMs, retentionDays);
     } catch (err) {
-      this.opts.logger?.error(`${TAG} ${err instanceof Error ? err.message : String(err)}`);
+      this.opts.logger?.error(
+        `${TAG} ${err instanceof Error ? err.message : String(err)}`,
+      );
       return;
     }
     const targetDirs = [
@@ -113,8 +118,16 @@ export class LocalMemoryCleaner {
       // ── Pre-delete: count totals and decide whether to proceed ──
       let totalL0 = 0;
       let totalL1 = 0;
-      try { totalL0 = await vectorStore.countL0(); } catch { /* non-fatal */ }
-      try { totalL1 = await vectorStore.countL1(); } catch { /* non-fatal */ }
+      try {
+        totalL0 = await vectorStore.countL0();
+      } catch {
+        /* non-fatal */
+      }
+      try {
+        totalL1 = await vectorStore.countL1();
+      } catch {
+        /* non-fatal */
+      }
 
       this.opts.logger?.info(
         `${TAG} [Pre-delete] cutoffIso=${cutoffIso}, retentionDays=${retentionDays}, totalL0=${totalL0}, totalL1=${totalL1}`,
@@ -163,6 +176,15 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+        // tz-03b: TTL is the path that makes a counter go DOWN — the one an
+        // accumulating counter could never follow.
+        notifyCommitted({
+          carrier: "l1",
+          kind: "delete",
+          affected: removedL1 + removedL0,
+          source: "cleaner",
+          at: new Date().toISOString(),
+        });
       }
 
       // ── Post-delete: audit summary ──
@@ -173,8 +195,20 @@ export class LocalMemoryCleaner {
         event: "cleaner_summary",
         cutoffIso,
         retentionDays,
-        l0: { total: totalL0, expired: removedL0, remaining: remainingL0, skipped: skippedL0, failed: failedL0DbCleanup > 0 },
-        l1: { total: totalL1, expired: removedL1, remaining: remainingL1, skipped: skippedL1, failed: failedL1DbCleanup > 0 },
+        l0: {
+          total: totalL0,
+          expired: removedL0,
+          remaining: remainingL0,
+          skipped: skippedL0,
+          failed: failedL0DbCleanup > 0,
+        },
+        l1: {
+          total: totalL1,
+          expired: removedL1,
+          remaining: remainingL1,
+          skipped: skippedL1,
+          failed: failedL1DbCleanup > 0,
+        },
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
@@ -183,7 +217,6 @@ export class LocalMemoryCleaner {
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
-
   }
 
   private scheduleNext(): void {
@@ -217,7 +250,9 @@ export class LocalMemoryCleaner {
     try {
       await this.runOnce();
     } catch (err) {
-      this.opts.logger?.error(`${TAG} Cleanup failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      this.opts.logger?.error(
+        `${TAG} Cleanup failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+      );
     } finally {
       if (!this.destroyed) {
         this.scheduleNext();
@@ -225,7 +260,10 @@ export class LocalMemoryCleaner {
     }
   }
 
-  private async cleanDirectory(dirPath: string, cutoffMs: number): Promise<CleanupStats> {
+  private async cleanDirectory(
+    dirPath: string,
+    cutoffMs: number,
+  ): Promise<CleanupStats> {
     const stats: CleanupStats = {
       scannedFiles: 0,
       changedFiles: 0,
@@ -237,7 +275,6 @@ export class LocalMemoryCleaner {
     try {
       entries = await fs.readdir(dirPath, { withFileTypes: true });
     } catch {
-
       this.opts.logger?.debug?.(`${TAG} Directory not found, skip: ${dirPath}`);
       return stats;
     }
@@ -262,7 +299,9 @@ export class LocalMemoryCleaner {
         try {
           await fs.unlink(filePath);
           stats.changedFiles += 1;
-          this.opts.logger?.info(`${TAG} Removed expired file by name: ${filePath}`);
+          this.opts.logger?.info(
+            `${TAG} Removed expired file by name: ${filePath}`,
+          );
         } catch (err) {
           stats.deleteFailedFiles += 1;
           this.opts.logger?.warn(
@@ -270,7 +309,9 @@ export class LocalMemoryCleaner {
           );
         }
       } else {
-        this.opts.logger?.debug?.(`${TAG} Keep shard file by name: ${filePath}`);
+        this.opts.logger?.debug?.(
+          `${TAG} Keep shard file by name: ${filePath}`,
+        );
       }
     }
 
@@ -285,7 +326,6 @@ function isJsonLikeFile(name: string): boolean {
 function extractShardDateFromFileName(
   fileName: string,
 ): { year: number; month: number; day: number } | undefined {
-
   // Supported format: YYYY-MM-DD.jsonl | YYYY-MM-DD.json
   const m = /^(\d{4})-(\d{2})-(\d{2})\.(?:jsonl|json)$/.exec(fileName);
   if (!m) return undefined;
@@ -294,7 +334,11 @@ function extractShardDateFromFileName(
   const month = Number(m[2]);
   const day = Number(m[3]);
 
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day)
+  ) {
     return undefined;
   }
 
@@ -304,9 +348,9 @@ function extractShardDateFromFileName(
 
   const probe = new Date(year, month - 1, day);
   if (
-    probe.getFullYear() !== year
-    || probe.getMonth() !== month - 1
-    || probe.getDate() !== day
+    probe.getFullYear() !== year ||
+    probe.getMonth() !== month - 1 ||
+    probe.getDate() !== day
   ) {
     return undefined;
   }
@@ -329,7 +373,10 @@ function formatUtcOffset(offsetMinutes: number): string {
   return `${sign}${hh}:${mm}`;
 }
 
-function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number {
+function computeCutoffMsByLocalDay(
+  nowMs: number,
+  retentionDays: number,
+): number {
   // 自然日策略，保留"今天 + 往前 retentionDays-1 天"
   // 删除阈值为 keepStart 当天 00:00:00.000（配置时区）
   const now = new Date(nowMs);
@@ -340,7 +387,7 @@ function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number
   if (cutoffMs >= nowMs) {
     throw new Error(
       `cutoff sanity failed: cutoff (${cutoffMs}) >= now (${nowMs}), ` +
-      `possible clock skew or invalid retentionDays=${retentionDays}`,
+        `possible clock skew or invalid retentionDays=${retentionDays}`,
     );
   }
   // Sanity check: gap between now and cutoff must be at least 24h
@@ -348,7 +395,7 @@ function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number
   if (nowMs - cutoffMs < MIN_GAP_MS) {
     throw new Error(
       `cutoff sanity failed: gap ${nowMs - cutoffMs}ms < 24h, ` +
-      `retentionDays=${retentionDays}, possible clock skew`,
+        `retentionDays=${retentionDays}, possible clock skew`,
     );
   }
 
@@ -356,7 +403,6 @@ function computeCutoffMsByLocalDay(nowMs: number, retentionDays: number): number
 }
 
 function buildTodayRunTime(cleanTime: string, nowMs: number): number {
-
   const [hRaw, mRaw] = cleanTime.split(":");
   const hour = Number(hRaw);
   const minute = Number(mRaw);
@@ -367,7 +413,6 @@ function buildTodayRunTime(cleanTime: string, nowMs: number): number {
 }
 
 function nextRunAt(cleanTime: string, nowMs: number): number {
-
   const [hRaw, mRaw] = cleanTime.split(":");
   const hour = Number(hRaw);
   const minute = Number(mRaw);
