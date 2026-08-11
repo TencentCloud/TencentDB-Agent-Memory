@@ -268,7 +268,10 @@ export interface IMemoryStore {
 
   // ── L1 Write ─────────────────────────────────────────────
 
-  upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
+  upsertL1(
+    record: MemoryRecord,
+    embedding?: Float32Array,
+  ): MaybePromise<boolean>;
   deleteL1(recordId: string): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[]): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;
@@ -277,37 +280,70 @@ export interface IMemoryStore {
 
   countL1(): MaybePromise<number>;
   queryL1Records(filter?: L1QueryFilter): MaybePromise<L1RecordRow[]>;
-  getAllL1Texts(): MaybePromise<Array<{ record_id: string; content: string; updated_time: string }>>;
+  getAllL1Texts(): MaybePromise<
+    Array<{ record_id: string; content: string; updated_time: string }>
+  >;
 
   // ── L1 Search ────────────────────────────────────────────
 
-  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, projectId?: string, mode?: ScopeMode): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number, projectId?: string, mode?: ScopeMode): MaybePromise<L1FtsResult[]>;
+  searchL1Vector(
+    queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+    projectId?: string,
+    mode?: ScopeMode,
+  ): MaybePromise<L1SearchResult[]>;
+  searchL1Fts(
+    ftsQuery: string,
+    limit?: number,
+    projectId?: string,
+    mode?: ScopeMode,
+  ): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;
     sparseVector?: Array<[number, number]>;
     topK?: number;
+    /** Scope filtering, applied store-side (tz-05 Ф4b). */
+    projectId?: string;
+    mode?: ScopeMode;
   }): MaybePromise<L1SearchResult[]>;
 
   // ── L0 Write ─────────────────────────────────────────────
 
   upsertL0(record: L0Record, embedding?: Float32Array): MaybePromise<boolean>;
   /** Update only the vector embedding for an existing L0 record (sqlite background path). */
-  updateL0Embedding?(recordId: string, embedding: Float32Array): MaybePromise<boolean>;
+  updateL0Embedding?(
+    recordId: string,
+    embedding: Float32Array,
+  ): MaybePromise<boolean>;
   deleteL0(recordId: string): MaybePromise<boolean>;
   deleteL0Expired(cutoffIso: string): MaybePromise<number>;
 
   // ── L0 Read ──────────────────────────────────────────────
 
   countL0(): MaybePromise<number>;
-  queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0QueryRow[]>;
-  queryL0GroupedBySessionId(sessionKey: string, afterRecordedAtMs?: number, limit?: number): MaybePromise<L0SessionGroup[]>;
-  getAllL0Texts(): MaybePromise<Array<{ record_id: string; message_text: string; recorded_at: string }>>;
+  queryL0ForL1(
+    sessionKey: string,
+    afterRecordedAtMs?: number,
+    limit?: number,
+  ): MaybePromise<L0QueryRow[]>;
+  queryL0GroupedBySessionId(
+    sessionKey: string,
+    afterRecordedAtMs?: number,
+    limit?: number,
+  ): MaybePromise<L0SessionGroup[]>;
+  getAllL0Texts(): MaybePromise<
+    Array<{ record_id: string; message_text: string; recorded_at: string }>
+  >;
 
   // ── L0 Search ────────────────────────────────────────────
 
-  searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L0SearchResult[]>;
+  searchL0Vector(
+    queryEmbedding: Float32Array,
+    topK?: number,
+    queryText?: string,
+  ): MaybePromise<L0SearchResult[]>;
   searchL0Fts(ftsQuery: string, limit?: number): MaybePromise<L0FtsResult[]>;
 
   pullProfiles?(): Promise<ProfileRecord[]>;

@@ -192,3 +192,97 @@ describe("declared degradations", () => {
     }
   });
 });
+
+/**
+ * tz-05 Ф4b/Ф6 — scope and provenance have to survive the round trip on BOTH
+ * backends, and the check has to be able to fail. The store turns every error
+ * into an empty array, so "read nothing" is the shape both a working empty
+ * collection and a rejected filter take: every assertion below therefore pairs
+ * a non-empty read-back with an empty rejection journal.
+ */
+describe("scope and provenance on both backends", () => {
+  const OWN = "/repo/own";
+  const OTHER = "/repo/other";
+  const TEXT = "scoped provenance carrier sentinel";
+  /** Only the three records this block seeded — earlier tests share the prefix. */
+  const MINE = ["own", "other", "global"];
+  const mine = (name: string, id: string): boolean =>
+    MINE.some((k) => id === `${name}-${k}`);
+
+  const CHAIN = {
+    source: "user-input",
+    createdAt: "2026-08-12T00:00:00.000Z",
+    chain: [
+      { role: "extractor", action: "store", at: "2026-08-12T00:00:00.000Z" },
+    ],
+  };
+
+  function scoped(id: string, scope: string, projectId: string): MemoryRecord {
+    return {
+      ...record(id, "2026-08-12T00:00:00.000Z"),
+      content: TEXT,
+      scope,
+      projectId,
+      metadata: { _tdai_provenance: CHAIN },
+    } as MemoryRecord;
+  }
+
+  beforeAll(async () => {
+    for (const [name, store] of [
+      ["sqlite", sqlite],
+      ["tcvdb", tcvdb],
+    ] as const) {
+      await store.upsertL1(scoped(`${name}-own`, "project", OWN));
+      await store.upsertL1(scoped(`${name}-other`, "project", OTHER));
+      await store.upsertL1(scoped(`${name}-global`, "global", OTHER));
+    }
+  });
+
+  it.each(bothBackends())(
+    "%s round-trips scope, project_id and the chain",
+    async (name, get) => {
+      const hits = (
+        await get().searchL1Fts("sentinel", 20, OWN, "hidden")
+      ).filter((h) => mine(name, h.record_id));
+      expect([name, fake.rejectedFilters]).toEqual([name, []]);
+      expect([name, hits.length > 0]).toEqual([name, true]);
+      const own = hits.find((h) => h.record_id === `${name}-own`);
+      expect([name, own?.scope]).toEqual([name, "project"]);
+      expect([name, own?.project_id]).toEqual([name, OWN]);
+      expect([
+        name,
+        JSON.parse(own?.metadata_json ?? "{}")._tdai_provenance,
+      ]).toEqual([name, CHAIN]);
+    },
+  );
+
+  it.each(bothBackends())(
+    "%s hides another project's record and keeps global",
+    async (name, get) => {
+      const visible = (await get().searchL1Fts("sentinel", 20, OWN, "hidden"))
+        .map((h) => h.record_id)
+        .filter((id) => mine(name, id))
+        .sort();
+      expect([name, fake.rejectedFilters]).toEqual([name, []]);
+      expect([name, visible]).toEqual([
+        name,
+        [`${name}-global`, `${name}-own`],
+      ]);
+    },
+  );
+
+  it.each(bothBackends())(
+    "%s returns every project in decay mode",
+    async (name, get) => {
+      const visible = (await get().searchL1Fts("sentinel", 20, OWN, "decay"))
+        .map((h) => h.record_id)
+        .filter((id) => mine(name, id))
+        .sort();
+      expect([name, fake.rejectedFilters]).toEqual([name, []]);
+      expect([name, visible]).toEqual([
+        name,
+        [`${name}-global`, `${name}-other`, `${name}-own`],
+      ]);
+    },
+  );
+});
