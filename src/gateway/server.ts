@@ -73,6 +73,8 @@ import {
 import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
 import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
+import { createCounterObserver } from "./consolidation/layer-counters.js";
+import { setCommitObserver } from "../core/record/commit-port.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import {
   countNewL0Since,
@@ -323,6 +325,21 @@ export class TdaiGateway {
 
     // Initialize core
     await this.core.initialize();
+
+    // tz-03b: the commit port gets its one subscriber here, after the store
+    // exists. Without this call every notifyCommitted() is a no-op and the
+    // counters never move — which is exactly the package's rollback path.
+    const vectorStore = this.core.getVectorStore();
+    if (vectorStore) {
+      setCommitObserver(
+        createCounterObserver(
+          this.config.data.baseDir,
+          vectorStore,
+          this.logger,
+        ),
+        this.logger,
+      );
+    }
 
     // Consolidation: restore checkpoint, sweep stale keepers, catch-up check.
     await this.orchestrator.start();

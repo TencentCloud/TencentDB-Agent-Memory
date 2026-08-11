@@ -71,6 +71,10 @@ export interface ConsolidationCheckpointData {
    * without a word.
    */
   l0Count: number;
+  /** L1 rows in the store, recomputed from fact (tz-03b, layer-counters.ts). */
+  l1Count?: number;
+  /** Scene block files across all slugs, recomputed from fact (tz-03b). */
+  sceneCount?: number;
   /** Per-role progress. */
   roles: Record<string, RoleProgress>;
 }
@@ -187,6 +191,14 @@ export class ConsolidationCheckpoint {
           typeof parsed.l0Count === "number" && Number.isFinite(parsed.l0Count)
             ? parsed.l0Count
             : 0,
+        ...(typeof parsed.l1Count === "number" &&
+        Number.isFinite(parsed.l1Count)
+          ? { l1Count: parsed.l1Count }
+          : {}),
+        ...(typeof parsed.sceneCount === "number" &&
+        Number.isFinite(parsed.sceneCount)
+          ? { sceneCount: parsed.sceneCount }
+          : {}),
         roles:
           parsed.roles && typeof parsed.roles === "object"
             ? (parsed.roles as Record<string, RoleProgress>)
