@@ -44,6 +44,7 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import { allowLegacyFallback } from "./src/gateway/tdai-root.js";
 
 const TAG = "[memory-tdai]";
 
@@ -248,6 +249,9 @@ export default function register(api: OpenClawPluginApi) {
   const openclawStateDir = resolveOpenClawStateDir((api.runtime as any)?.state);
   const pluginDataDir = path.join(openclawStateDir, "memory-tdai");
   initDataDirectories(pluginDataDir);
+  // tz-07 H2: the host injects this root, so it never equals the standalone
+  // default — declare it, or an existing install silently loses its roles.
+  allowLegacyFallback(pluginDataDir);
   api.logger.debug?.(`${TAG} Data dir: ${pluginDataDir} (all subdirectories initialized)`);
 
   // ============================

@@ -17,6 +17,22 @@ const LEGACY_ROOT_SEGMENTS = [".pi", "agent-memory", "tdai"];
 
 let cachedDefault: string | null = null;
 let deprecationWarned = false;
+const legacyAllowed = new Set<string>();
+
+/**
+ * Declare a root as belonging to a real install, so it may inherit the
+ * pre-tz-07 location (H2). Called once by each composition root — the gateway
+ * with `config.data.baseDir`, the plugin with the host-injected data dir.
+ *
+ * Opt-in rather than "any root", because keying the fallback on HOME alone let
+ * every sandbox, test and second instance read the host install's roles. Opt-in
+ * rather than "the default root only", because the openclaw data dir is
+ * injected by the host and never equals the default — that install would have
+ * silently lost its roles on upgrade.
+ */
+export function allowLegacyFallback(root: string): void {
+  legacyAllowed.add(root);
+}
 
 function expandTilde(p: string): string {
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
@@ -43,6 +59,7 @@ export function defaultTdaiRoot(): string {
 export function resetTdaiRootCacheForTests(): void {
   cachedDefault = null;
   deprecationWarned = false;
+  legacyAllowed.clear();
 }
 
 /** The only way to build a path under the root. */
@@ -61,11 +78,8 @@ export function resolveUnderRoot(root: string, ...segments: string[]): string {
 export function legacyReadPath(root: string, ...segments: string[]): string {
   const fresh = resolveUnderRoot(root, ...segments);
   if (fs.existsSync(fresh)) return fresh;
-  // Only the install being upgraded may inherit the old location. Keying the
-  // fallback on HOME alone let ANY explicit root — a sandbox, a test, a second
-  // instance — silently read the host install's roles: the same split, in the
-  // other direction.
-  if (root !== defaultTdaiRoot()) return fresh;
+  // Only a declared install root may inherit the old location.
+  if (root !== defaultTdaiRoot() && !legacyAllowed.has(root)) return fresh;
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? os.homedir();
   const legacy = path.join(home, ...LEGACY_ROOT_SEGMENTS, ...segments);
   if (!fs.existsSync(legacy)) return fresh;

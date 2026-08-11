@@ -76,7 +76,7 @@ import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDirForRead } from "./role-files.js";
-import { resolveUnderRoot } from "./tdai-root.js";
+import { allowLegacyFallback, resolveUnderRoot } from "./tdai-root.js";
 import { hostTaskRoots } from "./consolidation/launchers/auth-root.js";
 import {
   listRoleContracts,
@@ -139,6 +139,9 @@ export class TdaiGateway {
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
+    // tz-07 H2: this is a real install, so it may still read roles/prompts
+    // left at the pre-tz-07 location. Writes always go to the new root.
+    allowLegacyFallback(this.config.data.baseDir);
     // Dev logger: file sink from config.logging.file, debug from yaml level
     // OR TDAI_DEV=1 (env wins — see dev-logger.isDevMode).
     this.logger = createDevLogger({

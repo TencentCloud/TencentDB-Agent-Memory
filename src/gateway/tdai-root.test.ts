@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  allowLegacyFallback,
   defaultTdaiRoot,
   legacyReadPath,
   resolveUnderRoot,
@@ -105,6 +106,26 @@ describe("legacyReadPath", () => {
 });
 
 describe("legacyReadPath — the fallback belongs to ONE install", () => {
+  it("a DECLARED install root inherits them — the openclaw upgrade path", () => {
+    // Under openclaw the data dir is injected by the host and never equals the
+    // standalone default, so a default-only rule made an existing install lose
+    // its roles on upgrade. Found by hand while the impl gate was running.
+    const host = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-oc-"));
+    process.env.HOME = host;
+    delete process.env.TDAI_DATA_DIR;
+    resetTdaiRootCacheForTests();
+    const legacy = path.join(host, ".pi", "agent-memory", "tdai", "roles");
+    fs.mkdirSync(legacy, { recursive: true });
+    const injected = path.join(host, ".openclaw", "memory-tdai");
+
+    expect(legacyReadPath(injected, "roles")).toBe(
+      path.join(injected, "roles"),
+    );
+    allowLegacyFallback(injected);
+    expect(legacyReadPath(injected, "roles")).toBe(legacy);
+    fs.rmSync(host, { recursive: true, force: true });
+  });
+
   it("an unrelated explicit root never inherits the host install's roles", () => {
     // Regression (found by role-files.test.ts during tz-07 Ф2): keying the
     // fallback on HOME alone made every sandbox, test and second instance read
