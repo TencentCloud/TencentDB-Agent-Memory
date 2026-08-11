@@ -16,6 +16,7 @@ import { BackupManager } from "../../utils/backup.js";
 import { escapeXmlTags } from "../../utils/sanitize.js";
 import { report } from "../report/reporter.js";
 import type { LLMRunner, Logger } from "../types.js";
+import { notifyCommitted } from "../record/commit-port.js";
 
 const TAG = "[memory-tdai] [persona]";
 
@@ -46,13 +47,17 @@ export class PersonaGenerator {
     this.backupCount = opts.backupCount ?? 3;
     this.instanceId = opts.instanceId;
     // Use injected LLMRunner if available, otherwise fall back to CleanContextRunner
-    this.runner = opts.llmRunner ?? new CleanContextRunner({
-      config: opts.config,
-      modelRef: opts.model,
-      enableTools: true,
-      logger: opts.logger,
-    });
-    this.logger?.debug?.(`${TAG} Generator created: model=${opts.model ?? "(default)"}, dataDir=${opts.dataDir}`);
+    this.runner =
+      opts.llmRunner ??
+      new CleanContextRunner({
+        config: opts.config,
+        modelRef: opts.model,
+        enableTools: true,
+        logger: opts.logger,
+      });
+    this.logger?.debug?.(
+      `${TAG} Generator created: model=${opts.model ?? "(default)"}, dataDir=${opts.dataDir}`,
+    );
   }
 
   /**
@@ -60,11 +65,15 @@ export class PersonaGenerator {
    */
   async generateLocalPersona(triggerReason?: string): Promise<boolean> {
     const startMs = Date.now();
-    this.logger?.debug?.(`${TAG} Starting generation: reason="${triggerReason ?? "none"}"`);
+    this.logger?.debug?.(
+      `${TAG} Starting generation: reason="${triggerReason ?? "none"}"`,
+    );
 
     const cpManager = new CheckpointManager(this.dataDir);
     const cp = await cpManager.read();
-    this.logger?.debug?.(`${TAG} Checkpoint: total_processed=${cp.total_processed}, last_persona_at=${cp.last_persona_at}`);
+    this.logger?.debug?.(
+      `${TAG} Checkpoint: total_processed=${cp.total_processed}, last_persona_at=${cp.last_persona_at}`,
+    );
 
     const personaPath = path.join(this.dataDir, "persona.md");
 
@@ -73,7 +82,9 @@ export class PersonaGenerator {
     try {
       const raw = await fs.readFile(personaPath, "utf-8");
       existingPersona = stripSceneNavigation(raw).trim() || undefined;
-      this.logger?.debug?.(`${TAG} Existing persona: ${existingPersona ? `${existingPersona.length} chars` : "empty"}`);
+      this.logger?.debug?.(
+        `${TAG} Existing persona: ${existingPersona ? `${existingPersona.length} chars` : "empty"}`,
+      );
     } catch {
       this.logger?.debug?.(`${TAG} No existing persona file`);
     }
@@ -82,7 +93,9 @@ export class PersonaGenerator {
     // The persona describes the user, not a project, so it is the one consumer
     // that deliberately reads across the per-project scene directories.
     const projectIndexes = await readAllSceneIndexes(this.dataDir);
-    const index = projectIndexes.flatMap((p) => p.entries.map((e) => ({ ...e, slug: p.slug })));
+    const index = projectIndexes.flatMap((p) =>
+      p.entries.map((e) => ({ ...e, slug: p.slug })),
+    );
     const changedScenes = index.filter((e) => {
       if (!cp.last_persona_time) return true;
       const updatedMs = new Date(e.updated).getTime();
@@ -91,30 +104,41 @@ export class PersonaGenerator {
       if (Number.isNaN(updatedMs) || Number.isNaN(personaMs)) return true;
       return updatedMs > personaMs;
     });
-    this.logger?.debug?.(`${TAG} Scene index: ${index.length} total, ${changedScenes.length} changed since last persona`);
+    this.logger?.debug?.(
+      `${TAG} Scene index: ${index.length} total, ${changedScenes.length} changed since last persona`,
+    );
 
     // 3. Read changed scene contents (full raw content including META, matching Python reference)
     const blocksRoot = sceneBlocksRoot(this.dataDir);
     const changedSceneContents: string[] = [];
     for (const entry of changedScenes) {
       try {
-        const raw = await fs.readFile(path.join(blocksRoot, entry.slug, entry.filename), "utf-8");
+        const raw = await fs.readFile(
+          path.join(blocksRoot, entry.slug, entry.filename),
+          "utf-8",
+        );
         changedSceneContents.push(
           `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${raw}\n\`\`\``,
         );
       } catch {
-        this.logger?.warn(`${TAG} Could not read scene block: ${entry.filename}`);
+        this.logger?.warn(
+          `${TAG} Could not read scene block: ${entry.filename}`,
+        );
       }
     }
 
     if (changedSceneContents.length === 0 && existingPersona) {
-      this.logger?.debug?.(`${TAG} No scene changes and persona exists, skipping generation`);
+      this.logger?.debug?.(
+        `${TAG} No scene changes and persona exists, skipping generation`,
+      );
       return false;
     }
 
     // 4. Determine mode
     const mode = existingPersona ? "incremental" : "first";
-    this.logger?.debug?.(`${TAG} Generation mode: ${mode}, ${changedSceneContents.length} scene blocks to process`);
+    this.logger?.debug?.(
+      `${TAG} Generation mode: ${mode}, ${changedSceneContents.length} scene blocks to process`,
+    );
 
     // 5. Build changed scenes section with guidance (matching Python reference format)
     let changedScenesContent: string;
@@ -140,16 +164,27 @@ export class PersonaGenerator {
       existingPersona,
       triggerInfo: triggerReason,
       personaFilePath: personaPath,
-      checkpointPath: path.join(this.dataDir, ".metadata", "recall_checkpoint.json"),
+      checkpointPath: path.join(
+        this.dataDir,
+        ".metadata",
+        "recall_checkpoint.json",
+      ),
     });
 
     // 7. Backup before LLM run (LLM writes persona.md via tools)
     const bm = new BackupManager(path.join(this.dataDir, ".backup"));
-    await bm.backupFile(personaPath, "persona", `offset${cp.total_processed}`, this.backupCount);
+    await bm.backupFile(
+      personaPath,
+      "persona",
+      `offset${cp.total_processed}`,
+      this.backupCount,
+    );
 
     // 8. Run LLM agent (sandboxed to dataDir, tools enabled — LLM writes persona.md directly)
     try {
-      this.logger?.debug?.(`${TAG} Calling LLM for persona generation (timeout=180s, tools=enabled, workspaceDir=${this.dataDir})...`);
+      this.logger?.debug?.(
+        `${TAG} Calling LLM for persona generation (timeout=180s, tools=enabled, workspaceDir=${this.dataDir})...`,
+      );
       await this.runner.run({
         systemPrompt,
         prompt: userPrompt,
@@ -161,7 +196,9 @@ export class PersonaGenerator {
       this.logger?.debug?.(`${TAG} LLM runner completed`);
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
-      this.logger?.error(`${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+      this.logger?.error(
+        `${TAG} Persona generation failed after ${elapsedMs}ms: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
+      );
       return false;
     }
 
@@ -171,7 +208,9 @@ export class PersonaGenerator {
       personaText = await fs.readFile(personaPath, "utf-8");
     } catch {
       // LLM failed to write persona.md — treat as failure
-      this.logger?.error(`${TAG} LLM did not write persona.md — file not found after runner completed`);
+      this.logger?.error(
+        `${TAG} LLM did not write persona.md — file not found after runner completed`,
+      );
       return false;
     }
 
@@ -189,8 +228,21 @@ export class PersonaGenerator {
     const finalContent = personaText;
     await fs.writeFile(personaPath, finalContent, "utf-8");
 
+    // tz-05: the L3 carrier's commit point. persona.md keeps no front-matter
+    // (it is hashed into the apply manifest and injected verbatim), so the
+    // attributes land in the sidecar the observer writes.
+    notifyCommitted({
+      carrier: "profile",
+      kind: "update",
+      affected: 1,
+      source: "persona-generation",
+      at: new Date().toISOString(),
+    });
+
     const elapsedMs = Date.now() - startMs;
-    this.logger?.info(`${TAG} Persona written (${finalContent.length} chars) in ${elapsedMs}ms`);
+    this.logger?.info(
+      `${TAG} Persona written (${finalContent.length} chars) in ${elapsedMs}ms`,
+    );
 
     // ── l3_persona_generation metric ──
     if (this.instanceId && this.logger) {

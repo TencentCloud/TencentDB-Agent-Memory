@@ -1,0 +1,183 @@
+/**
+ * tz-05 Ф5 — the L2 and L3 carriers write scope and provenance, and read them
+ * back. The write goes through the tz-03b commit point, not a private path:
+ * the test installs the composed observer and then only announces mutations,
+ * exactly as the gateway does (server.ts:336).
+ */
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  notifyCommitted,
+  setCommitObserver,
+  type MemoryCommitObserver,
+} from "../record/commit-port.js";
+import { withProvenance } from "../record/provenance-observer.js";
+import { readSceneIndex } from "./scene-index.js";
+import { parseSceneBlock } from "./scene-format.js";
+import { sceneBlocksDir } from "./scene-paths.js";
+import { readProfileAttributes } from "../profile/profile-provenance.js";
+import { MAX_CHAIN } from "../record/provenance.js";
+
+const PROJECT = "/repo/alpha";
+const OTHER = "/repo/beta";
+
+let dir: string;
+let commits: number;
+
+/** The inner observer stands in for the counters: composition, not replacement. */
+const inner: MemoryCommitObserver = {
+  onCommitted: () => {
+    commits += 1;
+  },
+};
+
+async function writeBlock(projectId: string, filename: string): Promise<void> {
+  const d = sceneBlocksDir(dir, projectId);
+  await fsp.mkdir(d, { recursive: true });
+  await fsp.writeFile(
+    path.join(d, filename),
+    [
+      "-----META-START-----",
+      "created: 2026-07-01T00:00:00Z",
+      "updated: 2026-07-02T00:00:00Z",
+      `summary: ${filename} summary`,
+      "heat: 3",
+      "-----META-END-----",
+      "",
+      `# ${filename}`,
+      "",
+      "body",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+}
+
+/** Announce a scene mutation and wait for the observer to finish stamping. */
+async function commitScene(
+  projectId?: string,
+  source = "scene-extract",
+): Promise<void> {
+  const before = commits;
+  notifyCommitted({
+    carrier: "scene",
+    kind: "update",
+    affected: 1,
+    source,
+    at: new Date().toISOString(),
+    ...(projectId ? { projectId } : {}),
+  });
+  // notifyCommitted never awaits (commit-port.ts:47) — the inner observer
+  // running is the signal that the stamping before it is done.
+  for (let i = 0; i < 200 && commits === before; i += 1) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  expect(commits).toBe(before + 1);
+}
+
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "carrier-prov-"));
+  commits = 0;
+  setCommitObserver(withProvenance(inner, dir));
+});
+
+afterEach(() => {
+  setCommitObserver(undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe("L2 carrier", () => {
+  it("stamps scope, project_id and a chain into the block and the index", async () => {
+    await writeBlock(PROJECT, "deploy.md");
+    await commitScene(PROJECT);
+
+    const raw = await fsp.readFile(
+      path.join(sceneBlocksDir(dir, PROJECT), "deploy.md"),
+      "utf-8",
+    );
+    const block = parseSceneBlock(raw, "deploy.md");
+    expect(block.meta.scope).toBe("project");
+    expect(block.meta.project_id).toBe(PROJECT);
+    expect(block.meta.provenance?.source).toBe("role-run");
+    expect(block.meta.provenance?.chain).toHaveLength(1);
+    // The stamp must not eat the block: summary and body survive verbatim.
+    expect(block.meta.summary).toBe("deploy.md summary");
+    expect(block.content).toContain("body");
+
+    const entry = (await readSceneIndex(dir, PROJECT))[0];
+    expect(entry?.scope).toBe("project");
+    expect(entry?.project_id).toBe(PROJECT);
+    expect(entry?.provenance?.chain).toHaveLength(1);
+    // The index is resynced AFTER the stamp, so its digest matches the bytes.
+    const { blockDigest } = await import("./scene-index.js");
+    expect(entry?.digest).toBe(blockDigest(raw));
+  });
+
+  it("touches only the project that was announced", async () => {
+    await writeBlock(PROJECT, "a.md");
+    await writeBlock(OTHER, "b.md");
+    await commitScene(PROJECT);
+
+    const mine = (await readSceneIndex(dir, PROJECT))[0];
+    const theirs = parseSceneBlock(
+      await fsp.readFile(
+        path.join(sceneBlocksDir(dir, OTHER), "b.md"),
+        "utf-8",
+      ),
+      "b.md",
+    );
+    expect(mine?.project_id).toBe(PROJECT);
+    expect(theirs.meta.scope).toBeUndefined();
+    expect(theirs.meta.provenance).toBeUndefined();
+  });
+
+  it("stamps every project when the mutation named none, as an import", async () => {
+    await writeBlock(PROJECT, "a.md");
+    await writeBlock(OTHER, "b.md");
+    await commitScene(undefined, "profile-sync");
+
+    for (const p of [PROJECT, OTHER]) {
+      const entry = (await readSceneIndex(dir, p))[0];
+      expect([p, entry?.provenance?.source]).toEqual([p, "import"]);
+      // A wholesale replacement cannot know whose blocks these are, so it must
+      // not invent a project id for them.
+      expect([p, entry?.project_id]).toEqual([p, ""]);
+    }
+  });
+
+  it("appends to the chain and collapses past the cap", async () => {
+    await writeBlock(PROJECT, "a.md");
+    for (let i = 0; i < MAX_CHAIN + 3; i += 1) await commitScene(PROJECT);
+
+    const entry = (await readSceneIndex(dir, PROJECT))[0];
+    expect(entry?.provenance?.chain).toHaveLength(MAX_CHAIN);
+    const first = entry?.provenance?.chain[0] as { collapsed?: number };
+    expect(first.collapsed).toBe(MAX_CHAIN + 3 - (MAX_CHAIN - 1));
+  });
+});
+
+describe("L3 carrier", () => {
+  it("records the profile's scope and chain beside persona.md", async () => {
+    const before = commits;
+    notifyCommitted({
+      carrier: "profile",
+      kind: "update",
+      affected: 1,
+      source: "persona-generation",
+      at: new Date().toISOString(),
+    });
+    for (let i = 0; i < 200 && commits === before; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+
+    const attrs = await readProfileAttributes(dir, "persona.md");
+    expect(attrs?.scope).toBe("global");
+    expect(attrs?.provenance?.chain).toHaveLength(1);
+    expect(attrs?.provenance?.source).toBe("role-run");
+    // persona.md itself is untouched — the apply manifest hashes it.
+    expect(fs.existsSync(path.join(dir, "persona.md"))).toBe(false);
+  });
+});

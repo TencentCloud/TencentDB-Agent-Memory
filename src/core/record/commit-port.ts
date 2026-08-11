@@ -9,7 +9,7 @@
  * `affected` is for the log line, never for arithmetic. A counter that added
  * up `affected` would be the increment counter this package exists to remove.
  */
-export type MemoryCarrier = "l1" | "scene";
+export type MemoryCarrier = "l1" | "scene" | "profile";
 
 export interface MemoryMutation {
   carrier: MemoryCarrier;
@@ -19,6 +19,12 @@ export interface MemoryMutation {
   /** Who mutated: "apply" | "write-memory" | "cleaner" | "feedback" | … */
   source: string;
   at: string;
+  /**
+   * Which project the mutation belongs to, when the mutator knows (tz-05).
+   * The scene slug is a one-way hash, so provenance stamping cannot recover it
+   * from disk — absent means "the whole tree moved", not "the global project".
+   */
+  projectId?: string;
 }
 
 export interface MemoryCommitObserver {

@@ -74,6 +74,7 @@ import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
 import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { createCounterObserver } from "./consolidation/layer-counters.js";
+import { withProvenance } from "../core/record/provenance-observer.js";
 import { setCommitObserver } from "../core/record/commit-port.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import {
@@ -332,10 +333,17 @@ export class TdaiGateway {
     // The store is passed as a SUPPLIER: a degraded init leaves it undefined
     // here, and the mutating routes stay open — the scene counter needs no
     // store at all, and l1Count starts moving as soon as one exists.
+    // tz-05: provenance composes with the counters instead of claiming a
+    // second slot — it stamps the carriers first, then the counters recompute
+    // from the already-stamped tree.
     setCommitObserver(
-      createCounterObserver(
+      withProvenance(
+        createCounterObserver(
+          this.config.data.baseDir,
+          () => this.core.getVectorStore(),
+          this.logger,
+        ),
         this.config.data.baseDir,
-        () => this.core.getVectorStore(),
         this.logger,
       ),
       this.logger,

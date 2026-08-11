@@ -61,7 +61,10 @@ describe("scene project separation", () => {
       "utf-8",
     );
     expect(await readSceneIndex(dir, A)).toEqual([
-      { filename: "alpha-deploy.md", summary: "alpha-deploy summary", heat: 3, created: "2026-07-01T00:00:00Z", updated: "2026-07-02T00:00:00Z", digest: blockDigest(onDisk) },
+      // scope/project_id are empty here on purpose: this block was never
+      // stamped (tz-05 Ф5 stamps at the commit point), and the reader must
+      // report "unknown" rather than invent a scope.
+      { filename: "alpha-deploy.md", summary: "alpha-deploy summary", heat: 3, created: "2026-07-01T00:00:00Z", updated: "2026-07-02T00:00:00Z", digest: blockDigest(onDisk), scope: "", project_id: "" },
     ]);
     expect((await readSceneIndex(dir, B)).map((e) => e.filename)).toEqual(["beta-frontend.md"]);
   });

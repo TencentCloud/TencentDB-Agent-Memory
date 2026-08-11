@@ -54,6 +54,14 @@ export async function syncSceneIndexPerProject(
           created: block.meta.created,
           updated: block.meta.updated,
           digest: sceneIndex.blockDigest(raw),
+          // tz-05: the apply path rebuilds the index from the committed tree,
+          // so it has to copy the same carrier fields the normal sync does —
+          // otherwise an apply silently erases scope from every entry.
+          scope: block.meta.scope ?? "",
+          project_id: block.meta.project_id ?? "",
+          ...(block.meta.provenance
+            ? { provenance: block.meta.provenance }
+            : {}),
         });
       } catch {
         // Deleted between readdir and readFile — skip it, keep the rest.

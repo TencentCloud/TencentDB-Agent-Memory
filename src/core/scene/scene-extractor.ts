@@ -298,6 +298,7 @@ export class SceneExtractor {
         affected: 0,
         source: "scene-extract-restore",
         at: new Date().toISOString(),
+        projectId: this.projectId,
       });
       return { memoriesProcessed: 0, success: false, error: errMsg };
     }
@@ -496,6 +497,7 @@ export class SceneExtractor {
       affected: memories.length,
       source: "scene-extract",
       at: new Date().toISOString(),
+      projectId: this.projectId,
     });
     return { memoriesProcessed: memories.length, success: true };
   }

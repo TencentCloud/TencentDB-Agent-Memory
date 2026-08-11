@@ -6,7 +6,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSceneBlock } from "./scene-format.js";
-import { sceneBlocksDir, sceneBlocksRoot, sceneIndexPath, projectSlug } from "./scene-paths.js";
+import {
+  PROVENANCE_KEY,
+  readProvenance,
+  type Provenance,
+} from "../record/provenance.js";
+import {
+  sceneBlocksDir,
+  sceneBlocksRoot,
+  sceneIndexPath,
+  projectSlug,
+} from "./scene-paths.js";
 
 export interface SceneIndexEntry {
   filename: string;
@@ -25,6 +35,12 @@ export interface SceneIndexEntry {
    * "unknown", never "matches".
    */
   digest: string;
+  /** tz-05 scope attribute, copied from the block's front-matter. Empty when
+   * the block predates the package — absence is "unknown", never "global". */
+  scope: string;
+  project_id: string;
+  /** Undefined when the block carries no chain. */
+  provenance?: Provenance;
 }
 
 /** The digest of one scene block. One definition, both writers. */
@@ -38,7 +54,10 @@ export function blockDigest(raw: string): string {
  * The index is written exclusively by syncSceneIndex() (engineering side).
  * The LLM is sandboxed to scene_blocks/ and cannot access this file.
  */
-export async function readSceneIndex(dataDir: string, projectId?: string): Promise<SceneIndexEntry[]> {
+export async function readSceneIndex(
+  dataDir: string,
+  projectId?: string,
+): Promise<SceneIndexEntry[]> {
   const indexPath = sceneIndexPath(dataDir, projectId);
   try {
     const raw = await fs.readFile(indexPath, "utf-8");
@@ -62,6 +81,15 @@ export async function readSceneIndex(dataDir: string, projectId?: string): Promi
         // the entry field by field, so a field nobody lists is dropped on
         // the way out no matter what the writer put in.
         digest: typeof item.digest === "string" ? item.digest : "",
+        scope: typeof item.scope === "string" ? item.scope : "",
+        project_id: typeof item.project_id === "string" ? item.project_id : "",
+        // Same whitelist discipline: rebuilt through the reader that validates
+        // the chain, so a hand-edited index cannot smuggle a bad shape in.
+        ...(readProvenance({ [PROVENANCE_KEY]: item.provenance })
+          ? {
+              provenance: readProvenance({ [PROVENANCE_KEY]: item.provenance }),
+            }
+          : {}),
       });
     }
     return entries;
@@ -73,7 +101,10 @@ export async function readSceneIndex(dataDir: string, projectId?: string): Promi
 /**
  * Rebuild scene index by scanning all .md files in the scene_blocks directory.
  */
-export async function syncSceneIndex(dataDir: string, projectId?: string): Promise<SceneIndexEntry[]> {
+export async function syncSceneIndex(
+  dataDir: string,
+  projectId?: string,
+): Promise<SceneIndexEntry[]> {
   return syncSceneIndexBySlug(dataDir, projectSlug(projectId));
 }
 
@@ -87,10 +118,14 @@ export interface ProjectSceneIndex {
  * Read every project's index. Only L3 persona generation needs this — it
  * describes the user across projects; recall never crosses the project line.
  */
-export async function readAllSceneIndexes(dataDir: string): Promise<ProjectSceneIndex[]> {
+export async function readAllSceneIndexes(
+  dataDir: string,
+): Promise<ProjectSceneIndex[]> {
   let slugs: string[];
   try {
-    slugs = (await fs.readdir(sceneBlocksRoot(dataDir), { withFileTypes: true }))
+    slugs = (
+      await fs.readdir(sceneBlocksRoot(dataDir), { withFileTypes: true })
+    )
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
@@ -111,10 +146,14 @@ export async function readAllSceneIndexes(dataDir: string): Promise<ProjectScene
  * Rebuild every project's index from disk. Used after a profile pull replaces
  * the whole scene_blocks tree, where per-project ids are not known any more.
  */
-export async function syncSceneIndexAllProjects(dataDir: string): Promise<void> {
+export async function syncSceneIndexAllProjects(
+  dataDir: string,
+): Promise<void> {
   let slugs: string[];
   try {
-    slugs = (await fs.readdir(sceneBlocksRoot(dataDir), { withFileTypes: true }))
+    slugs = (
+      await fs.readdir(sceneBlocksRoot(dataDir), { withFileTypes: true })
+    )
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
@@ -126,7 +165,10 @@ export async function syncSceneIndexAllProjects(dataDir: string): Promise<void> 
 }
 
 /** Rebuild one project's index from the .md files on disk. */
-async function syncSceneIndexBySlug(dataDir: string, slug: string): Promise<SceneIndexEntry[]> {
+async function syncSceneIndexBySlug(
+  dataDir: string,
+  slug: string,
+): Promise<SceneIndexEntry[]> {
   const blocksDir = path.join(sceneBlocksRoot(dataDir), slug);
   let files: string[];
   try {
@@ -147,6 +189,9 @@ async function syncSceneIndexBySlug(dataDir: string, slug: string): Promise<Scen
         created: block.meta.created,
         updated: block.meta.updated,
         digest: blockDigest(raw),
+        scope: block.meta.scope ?? "",
+        project_id: block.meta.project_id ?? "",
+        ...(block.meta.provenance ? { provenance: block.meta.provenance } : {}),
       });
     } catch {
       // File may have been deleted between readdir and readFile (e.g. by concurrent
@@ -155,19 +200,34 @@ async function syncSceneIndexBySlug(dataDir: string, slug: string): Promise<Scen
     }
   }
 
-  const indexPath = path.join(dataDir, ".metadata", "scene_index", `${slug}.json`);
+  const indexPath = path.join(
+    dataDir,
+    ".metadata",
+    "scene_index",
+    `${slug}.json`,
+  );
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
   await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
   return entries;
 }
 
 /** Same as readSceneIndex, but keyed by an on-disk slug instead of a project id. */
-export async function readSceneIndexBySlug(dataDir: string, slug: string): Promise<SceneIndexEntry[]> {
-  const indexPath = path.join(dataDir, ".metadata", "scene_index", `${slug}.json`);
+export async function readSceneIndexBySlug(
+  dataDir: string,
+  slug: string,
+): Promise<SceneIndexEntry[]> {
+  const indexPath = path.join(
+    dataDir,
+    ".metadata",
+    "scene_index",
+    `${slug}.json`,
+  );
   try {
     const raw = await fs.readFile(indexPath, "utf-8");
     const parsed = JSON.parse(raw) as SceneIndexEntry[];
-    return Array.isArray(parsed) ? parsed.filter((e) => e && typeof e.filename === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((e) => e && typeof e.filename === "string")
+      : [];
   } catch {
     return [];
   }
