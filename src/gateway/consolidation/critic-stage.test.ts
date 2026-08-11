@@ -190,7 +190,7 @@ describe("critic stage gate (tz-09 Ф4b)", () => {
   it("no verdict at all → refused (absence is never a default-approve)", async () => {
     const res = await stage(ctxFor(null, "enforce"));
     expect(res.ok).toBe(false);
-    expect(res.reason).toMatch(/produced no critic.json/);
+    expect(res.reason).toMatch(/produced no out\/critic\.json/);
   });
 
   it("unparseable verdict → refused", async () => {

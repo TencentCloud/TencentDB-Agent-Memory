@@ -22,7 +22,7 @@ export const DEFAULT_ROLE_PROMPT = `Ты — memory-keeper «пчёлка» си
    подготовь слияния и удаления (удаляются только подтверждённые дубли с тем же смыслом).
 2. Переразмеренные файлы (size > limit, лимиты механические): scene-блоки ≤ 1500 символов,
    persona.md ≤ 2000 символов. Контент переразмеренных файлов получай через GET /memory/blocks
-   (в диффе — только metadata), новые версии пиши ТОЛЬКО в diff.json.
+   (в диффе — только metadata), новые версии пиши ТОЛЬКО в out/result.json.
 3. Перед записью persona/сцен выполни task-simple цикл (кристалл → план → критик → импл)
    на scratch-копиях. Реальные записи в память идут ТОЛЬКО через POST /memory/apply со стороны
    гейтвея — ты никогда не пишешь файлы памяти напрямую.
@@ -44,7 +44,7 @@ export const DEFAULT_ROLE_PROMPT = `Ты — memory-keeper «пчёлка» си
   /memory/blocks, /memory/validate — auth-free на loopback).
 - Метаданные scene-блоков: сохраняй META-frontmatter (-----META-START-----/-----META-END-----),
   bump updated, сохраняй created/heat.
-- Результат — ТОЛЬКО файл diff.json в текущем каталоге (scratch). В stdout — только ошибки/отчёт.`;
+- Результат — ТОЛЬКО файл out/result.json в текущем каталоге (scratch). В stdout — только ошибки/отчёт.`;
 
 export const DEFAULT_TASK_PROMPT = `Выполни консолидацию памяти по диффу из системного промта.
 
@@ -54,7 +54,7 @@ export const DEFAULT_TASK_PROMPT = `Выполни консолидацию па
    (пагинация: since/project/type; лимит ~20 за запрос). Составь операции слияния/удаления.
 3. Для переразмеренных файлов: получи контент через GET \${TDAI_GATEWAY_URL}/memory/blocks?path=...,
    перепиши в пределах лимитов (scene ≤ 1500, persona ≤ 2000 символов).
-4. Запиши результат в diff.json в текущем каталоге (scratch) — контракт:
+4. Запиши результат в out/result.json в текущем каталоге (scratch) — контракт:
    {
      "deleteL1":     [{ "id": "m_x", "updatedAt": "<updated_time из диффа>" }],
      "merge":        [{ "cluster": ["m_a","m_b"], "target": "m_a", "content": "объединённый текст" }],
@@ -62,7 +62,7 @@ export const DEFAULT_TASK_PROMPT = `Выполни консолидацию па
      "rewritePersona": "persona body (≤2000)"
    }
    Пустые секции опускай. id бери ТОЛЬКО из диффа (presented ids).
-5. stdout: только отчёт об ошибках/сводка. Успешный diff.json — достаточный результат.
+5. stdout: только отчёт об ошибках/сводка. Успешный out/result.json — достаточный результат.
 
 Инструменты (уже в scratch/tools/):
 - python3 tools/fetch_dups.py --ids m_1,m_2   — подтверждение дублей (GET /memory/duplicates);

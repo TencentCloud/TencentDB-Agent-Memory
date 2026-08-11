@@ -4,7 +4,7 @@
  * Before this, nothing in the pipeline ever wrote a verdict, so a fail-closed
  * critic gate would have disabled every run. The critic is spawned like any
  * other role, into the SAME scratch dir as the candidate it reviews, and is
- * expected to leave `<scratch>/critic.json`.
+ * expected to leave `<scratch>/out/critic.json` (§3.5).
  *
  * The attempt is recorded as a CriticAttempt on the Run, so a bad verdict can
  * be retried over the same candidate (P9) instead of regenerating it.
@@ -13,10 +13,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildChildEnv } from "./child-spawn.js";
 import { finishAttempt, recordAttempt } from "../control-plane/attempt-repo.js";
+import {
+  CRITIC_REL,
+  RESULT_REL,
+  ensureAttemptLayout,
+} from "./attempt-layout.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 
-export const CRITIC_VERDICT_FILE = "critic.json";
+/** §3.5 keeps the verdict with the other outputs, not in the attempt root. */
+export const CRITIC_VERDICT_FILE = CRITIC_REL;
 
 export interface CriticLaunchArgs {
   runId: string;
@@ -34,7 +40,7 @@ export interface CriticLaunchResult {
 }
 
 const TASK_PROMPT =
-  "Review the candidate diff in ./diff.json against the presented input. " +
+  `Review the candidate diff in ./${RESULT_REL} against the presented input. ` +
   `Write your verdict as JSON to ./${CRITIC_VERDICT_FILE} with the fields ` +
   "{verdict: 'approve'|'reject', candidateDigest, reasons: string[]}.";
 
@@ -44,6 +50,7 @@ export async function launchCritic(
 ): Promise<CriticLaunchResult> {
   const startedAt = new Date(ctx.now()).toISOString();
   const attemptId = recordAttempt(ctx.dataDir, args.runId, "critic", startedAt);
+  await ensureAttemptLayout(args.scratchDir);
   const verdictPath = path.join(args.scratchDir, CRITIC_VERDICT_FILE);
   // A verdict left by a previous attempt must never be mistaken for this
   // one's — the whole point of the gate is that SOME critic ran now.

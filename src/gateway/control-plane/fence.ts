@@ -2,7 +2,7 @@
  * Artefact fence check (tz-09 Ф2).
  *
  * The fence is only worth anything where an artefact is INGESTED: the child
- * writes `<scratch>/diff.json` and `<scratch>/critic.json` whether or not it
+ * writes `<scratch>/out/result.json` and `<scratch>/out/critic.json` whether or not it
  * still owns the run, so the reader — not the writer — must refuse the ones
  * that belong to a run that has moved on.
  */

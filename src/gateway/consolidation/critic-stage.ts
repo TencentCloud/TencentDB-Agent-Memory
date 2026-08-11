@@ -22,7 +22,7 @@ export interface CriticStageArgs {
   runId: string;
   scratchDir: string;
   role: ResolvedRoleContract;
-  /** The candidate as parsed from <scratch>/diff.json. */
+  /** The candidate as parsed from <scratch>/out/result.json. */
   candidate: unknown;
   /** Digest of the input the candidate was produced from. */
   inputDigest: string;

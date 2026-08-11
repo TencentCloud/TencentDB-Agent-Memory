@@ -89,7 +89,7 @@ describe("memory-role skills parity (canon = runtime)", () => {
       path.join(SKILLS_SRC, "memory-keeper", "SKILL.md"),
       "utf-8",
     );
-    for (const marker of ["1500", "2000", "META", "GET", "diff.json"]) {
+    for (const marker of ["1500", "2000", "META", "GET", "out/result.json"]) {
       expect(night, `night-keeper missing base marker "${marker}"`).toContain(
         marker,
       );

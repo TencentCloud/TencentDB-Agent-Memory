@@ -221,10 +221,10 @@ describe("criterion 9 — memory-keeper role prompt mandates the task-simple cyc
     expect(prompt).toContain("НЕ пиши в `~/.pi/agent/tasks/`");
   });
 
-  it("states the mechanical limits (scene 1500 / persona 2000) and the diff.json contract", () => {
+  it("states the mechanical limits (scene 1500 / persona 2000) and the out/result.json contract", () => {
     expect(prompt).toContain("≤ 1500 символов");
     expect(prompt).toContain("≤ 2000 символов");
-    expect(prompt).toContain("diff.json");
+    expect(prompt).toContain("out/result.json");
     expect(flat).toContain(
       "ТОЛЬКО через POST /memory/apply со стороны гейтвея",
     );

@@ -1,5 +1,5 @@
 /**
- * Read + parse the role's <scratch>/diff.json.
+ * Read + parse the role's result (<scratch>/out/result.json, §3.5).
  *
  * Split from runner-stages.ts (≤150 lines). On malformed JSON, appends a
  * best-effort observability line to ~/.pi/agent-memory/tdai/.metadata/
@@ -8,6 +8,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { resolveResultPath } from "./attempt-layout.js";
 
 export type ScratchDiffResult =
   { value: unknown; error?: undefined } | { value: null; error: string };
@@ -16,7 +17,10 @@ export async function readScratchDiff(
   scratchDir: string,
   runId?: string,
 ): Promise<ScratchDiffResult> {
-  const diffPath = path.join(scratchDir, "diff.json");
+  // tz-02 критерий 4a: the new place wins; `diff.json` answers only when the
+  // new one is absent, so a role package still carrying the old instruction
+  // keeps working through the rollback window.
+  const { path: diffPath } = resolveResultPath(scratchDir);
   try {
     const raw = await fs.promises.readFile(diffPath, "utf-8");
     return { value: JSON.parse(raw) };
@@ -44,7 +48,7 @@ export async function readScratchDiff(
     }
     return {
       value: null,
-      error: `diff.json missing or malformed in scratch (${diffPath}): ${err instanceof Error ? err.message : String(err)}`,
+      error: `result missing or malformed in scratch (${diffPath}): ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

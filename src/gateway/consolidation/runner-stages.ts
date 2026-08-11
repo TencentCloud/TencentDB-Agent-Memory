@@ -1,7 +1,7 @@
 /**
  * Pre-apply stages of the run-batch pipeline.
  *
- * Diff build → prompt write → tools copy → spawn → parse diff.json →
+ * Diff build → prompt write → tools copy → spawn → parse out/result.json →
  * mechanical caps check. Pure orchestration — no mutations, no apply.
  *
  * Split from runner.ts to keep that file ≤150 lines.
@@ -26,6 +26,13 @@ import { checkCaps } from "./check-caps.js";
 import { recordAttempt } from "../control-plane/attempt-repo.js";
 import { readScratchDiff } from "./scratch-diff.js";
 import { rejectStaleArtifact } from "./artifact-fence.js";
+import {
+  ensureAttemptLayout,
+  writeWorkset,
+  LEGACY_RESULT_REL,
+  PRESENTED_REL,
+  RESULT_REL,
+} from "./attempt-layout.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
 
@@ -68,6 +75,7 @@ export async function preApply(
   result.diffText = diff.text;
 
   await fs.promises.mkdir(args.scratchDir, { recursive: true });
+  await ensureAttemptLayout(args.scratchDir);
   const promptPath = path.join(args.scratchDir, "memory-keeper-prompt.md");
   await fs.promises.writeFile(
     promptPath,
@@ -77,22 +85,37 @@ export async function preApply(
   // The presented diff on disk (forked task-cycle path б), for a role or
   // critic that wants the input as a file rather than as prompt text.
   //
-  // NOT `diff.json`: that is the file the role is contractually required to
-  // WRITE. Sharing one path made the input indistinguishable from the output —
+  // NOT the result path: that is the file the role is contractually required
+  // to WRITE. Sharing one path made the input indistinguishable from the output —
   // a role that produced nothing left our own markdown behind, and the reader
   // parsed it and reported "malformed JSON" instead of "no candidate". The
   // live instance logged 335 such lines into .metadata/diff-malformed.log.
   await fs.promises.writeFile(
-    path.join(args.scratchDir, "presented-diff.md"),
+    path.join(args.scratchDir, PRESENTED_REL),
     diff.text,
     "utf-8",
   );
+  // The same input in machine-readable form (§3.5 `input/workset.json`): what
+  // the attempt was GIVEN, next to what it produced. Without it a kept attempt
+  // dir can be replayed only by re-deriving the input from the cursor, which
+  // no longer returns the same records once the store has moved on.
+  await writeWorkset(args.scratchDir, {
+    runId: args.runId,
+    role: args.role,
+    presentedRecordIds: diff.presentedRecordIds,
+    cursor: args.cp.l0Cursor,
+    generatedAt: new Date(ctx.now()).toISOString(),
+    presentedDiffPath: PRESENTED_REL,
+  });
   // Nothing but THIS attempt's role may leave a candidate here — the same
   // rule critic-launch.ts applies to critic.json. Today runScratch carries the
   // runId so a leftover is not reachable; the guard is what keeps it that way.
-  await fs.promises.rm(path.join(args.scratchDir, "diff.json"), {
-    force: true,
-  });
+  // BOTH result paths: the reader falls back to the retired one, so a stale
+  // `diff.json` left by an earlier attempt would be read as this attempt's
+  // candidate the moment the role writes nothing.
+  for (const rel of [RESULT_REL, LEGACY_RESULT_REL]) {
+    await fs.promises.rm(path.join(args.scratchDir, rel), { force: true });
+  }
   await copyKeeperTools(ctx, args.scratchDir, contract.toolsSubset);
 
   if (args.dryRun) {
@@ -143,7 +166,7 @@ export async function preApply(
     result.status = "failed";
     return { ok: false };
   }
-  // tz-06 L7 / критерий 9: a role that died still leaves its diff.json behind.
+  // tz-06 L7 / критерий 9: a role that died still leaves its result behind.
   // "The process failed" is not "the result is ready", so a non-zero (or
   // signalled) exit forbids parse/apply no matter how valid the file looks.
   if (childResult.exitCode !== 0) {
@@ -163,7 +186,7 @@ export async function preApply(
 
   // tz-09 Ф2: the candidate is INGESTED here, so this is where the fence is
   // worth something. A child of an attempt that was taken over (or a run that
-  // was cancelled) still writes its diff.json — the reader refuses it.
+  // was cancelled) still writes its result — the reader refuses it.
   const fenceError = rejectStaleArtifact(ctx, args.runId, args.scratchDir);
   if (fenceError !== null) {
     result.error = fenceError;

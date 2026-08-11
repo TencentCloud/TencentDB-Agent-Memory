@@ -4,7 +4,7 @@
  * Runs against a scratch dataDir; the pi sub-session is MOCKED (a fake
  * spawner writes diff.json directly — a real pi session is never launched).
  * Covers: run pipeline (spawn → diff.json → apply → report → checkpoint),
- * single-flight, missing diff.json, spawn failure, dry-run, disabled mode,
+ * single-flight, missing result, spawn failure, dry-run, disabled mode,
  * /status lastRun and env-whitelist delivery.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -375,7 +375,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
     expect(orch.isRunning).toBe(false);
   });
 
-  it("missing diff.json → failed run, apply never invoked (no partial apply)", async () => {
+  it("missing result → failed run, apply never invoked (no partial apply)", async () => {
     const spawn = vi.fn(async (): Promise<ChildRunResult> => {
       return {
         exitCode: 0,
@@ -391,7 +391,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
 
     const summary = await orch.runNow({ reason: "test" });
     expect(summary.status).toBe("failed");
-    expect(summary.error).toMatch(/diff\.json missing or malformed/);
+    expect(summary.error).toMatch(/result missing or malformed/);
     expect(apply).not.toHaveBeenCalled();
     // Failed run must NOT advance the checkpoint (idempotent retry).
     const cp = await orch.readCheckpoint();

@@ -278,6 +278,9 @@ describe("critic launch — the verdict producer (tz-09 Ф4a)", () => {
   });
 
   it("a verdict left by a PREVIOUS attempt is never reused", async () => {
+    fs.mkdirSync(path.dirname(path.join(scratch, CRITIC_VERDICT_FILE)), {
+      recursive: true,
+    });
     fs.writeFileSync(
       path.join(scratch, CRITIC_VERDICT_FILE),
       JSON.stringify({ verdict: "approve", candidateDigest: "stale" }),
@@ -297,7 +300,7 @@ describe("critic launch — the verdict producer (tz-09 Ф4a)", () => {
       candidateDigest: "abc",
     });
     expect(res.ok).toBe(false);
-    expect(res.error).toMatch(/produced no critic.json/);
+    expect(res.error).toMatch(/produced no out\/critic\.json/);
   });
 
   it("a timed-out critic yields no verdict and records the outcome", async () => {

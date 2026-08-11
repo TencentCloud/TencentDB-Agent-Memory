@@ -11,7 +11,7 @@
   META-frontmatter `-----META-START-----`/`-----META-END-----`).
 - `persona.md`: **≤ 2000 символов**.
 - После подготовки любой записи/перезаписи выполни **механический чек размера**
-  (длина строки/файла). Значение выше лимита в diff.json не попадает — перепиши
+  (длина строки/файла). Значение выше лимита в out/result.json не попадает — перепиши
   или урежь так, чтобы чек прошёл.
 - META-frontmatter сцен сохраняй: `created`/`heat` не трогай, `updated` — bump на
   момент перезаписи, `summary` — обнови по содержанию.
@@ -48,7 +48,7 @@
 
 ## Формат отчёта (контракт мутаций)
 
-Результат — ТОЛЬКО файл `diff.json` в текущем каталоге (scratch). В stdout —
+Результат — ТОЛЬКО файл `out/result.json` в текущем каталоге (scratch). В stdout —
 только ошибки/сводка, не дифф. Схема:
 
 ```json
@@ -61,7 +61,7 @@
 ```
 
 - Пустые секции опускай. `id` бери ТОЛЬКО из диффа (presented ids).
-- После записи diff.json сделай механический чек: каждый `rewriteBlock.content` ≤
+- После записи out/result.json сделай механический чек: каждый `rewriteBlock.content` ≤
   1500 символов, `rewritePersona` ≤ 2000 символов, каждый `content` в merge —
   осмысленный объединённый текст.
 
@@ -74,18 +74,18 @@
 
 ## Завершение (graceful exit — иначе hard kill)
 
-После записи `diff.json` (схема выше) и вывода сводки в stdout
+После записи `out/result.json` (схема выше) и вывода сводки в stdout
 ("Консолидация выполнена") **немедленно верни final answer** — не открывай
 новых subagent-сессий (`task`, `mcp_task_*`, `/task`), не делай HTTP-запросов,
 не запускай файловых watcher'ов и MCP-соединений. Каждый открытый handle
 держит event loop child-процесса → child не exits → через `timeout_min`
 (30 мин) прилетит `kill -KILL -- -<pgid>` (см. `child-spawn.ts:killChildGroup`)
 → orchestrator вернёт `status: "failed"` без apply (`runBatch` после
-`childResult.timedOut` выходит ДО `applyDiff`) → `diff.json` **не будет
+`childResult.timedOut` выходит ДО `applyDiff`) → `out/result.json` **не будет
 применён** и зависнет до следующего threshold-deferred триггера.
 
 Контрольный чек перед final answer:
-- `diff.json` существует в cwd, валиден по схеме (≤1500/≤2000/≤600 где применимо).
+- `out/result.json` существует в cwd, валиден по схеме (≤1500/≤2000/≤600 где применимо).
 - Сводка в stdout — одна строка, не блок, не длинный transcript.
 - Никаких pending HTTP / subagent / file-watcher / MCP-соединений.
 

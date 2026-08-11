@@ -1,17 +1,16 @@
 /**
- * tz-02 (баг из ревью кристалла): роль читает ВХОД по пути, который SKILL.md
- * ей называет, а гейтвей этот путь перед спавном удаляет.
+ * tz-02 критерий 4 (S4): после прогона каталог попытки разложен по §3.5 —
+ * `run.json`, `input/workset.json`, `out/result.json`, `out/critic.json`.
  *
- * `runner-stages.ts:86` пишет вход в `presented-diff.md`, `:93` сносит
- * `diff.json` (чтобы вход нельзя было спутать с выходом), а три keeper-скилла
- * говорили роли «гейтвей записывает его в <cwd>/diff.json… Читай оттуда».
+ * Раскладка нужна не ради порядка: без `input/workset.json` разобрать прогон
+ * постфактум нечем — вход восстанавливается только пересчётом от курсора, а
+ * тот уже вернёт другие записи. Вердикт критика в `out/` рядом с результатом,
+ * а не в корне, по той же причине: вход, выход и служебное не должны лежать
+ * вперемешку.
  *
- * Проба гоняет РЕАЛЬНЫЙ orchestrator (стаб — только сам ребёнок) и в роли
- * делает ровно то, что велит SKILL.md: достаёт имя файла из живого текста
- * скилла и пытается прочитать его в cwd.
- *
- * ФАЛЬСИФИКАЦИЯ: FALSIFY=old-path — читать `diff.json`, как говорил скилл до
- * фикса. Проба обязана покраснеть: файла нет.
+ * ФАЛЬСИФИКАЦИЯ: FALSIFY=old-layout — роль пишет результат по снятому пути
+ * `diff.json`. Прогон при этом проходит (fallback жив), но `out/result.json`
+ * не появляется, и «все четыре файла §3.5 на месте» обязано стать false.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -21,27 +20,25 @@ import { parseConfig } from "../../src/config.js";
 import { ConsolidationOrchestrator } from "../../src/gateway/consolidation/orchestrator.js";
 import { CRITIC_VERDICT_FILE } from "../../src/gateway/consolidation/critic-launch.js";
 import { digestOf } from "../../src/gateway/consolidation/critic-stage.js";
-import { RESULT_REL } from "../../src/gateway/consolidation/attempt-layout.js";
+import {
+  CRITIC_REL,
+  LEGACY_RESULT_REL,
+  RESULT_REL,
+  WORKSET_REL,
+} from "../../src/gateway/consolidation/attempt-layout.js";
 import type { Logger } from "../../src/core/types.js";
 
-const OLD_PATH = process.env.FALSIFY === "old-path";
-const APPROVE = true;
-
-/** Имя входного файла — из ЖИВОГО текста скилла, не из моей памяти. */
-const SKILL = "src/core/prompts/skills/memory-keeper/SKILL.md";
-const line = fs
-  .readFileSync(SKILL, "utf-8")
-  .split("\n")
-  .find((l) => l.includes("гейтвей записывает его в"));
-const named = OLD_PATH
-  ? "diff.json"
-  : (/<cwd>\/([^`*\s]+)/.exec(line ?? "")?.[1] ?? "<не нашёл>");
-let roleSaw: string | null = null;
+const OLD_LAYOUT = process.env.FALSIFY === "old-layout";
 const DIMS = 4;
+
+let attemptDir: string | null = null;
+/** Снимок раскладки СНУТРИ прогона: безусловное удаление scratch после
+ * не-dry-run прогона (`day-runner.ts:119`) снимает Ф5, не эта проба. */
+let snapshot: string[] = [];
 const logger: Logger = {
   debug: () => undefined,
   info: () => undefined,
-  warn: (m: string) => console.log(`  WARN ${m}`),
+  warn: () => undefined,
   error: (m: string) => console.log(`  ERROR ${m}`),
 };
 
@@ -50,7 +47,6 @@ const dataDir = sbx.dataDir;
 const scratchRoot = path.join(sbx.home, "scratch");
 fs.mkdirSync(scratchRoot, { recursive: true });
 
-// --- a role package the resolver accepts, with a critic role beside it ---
 const roleJson = (name: string, over: Record<string, unknown> = {}) => ({
   name,
   model: "opencode-go/deepseek-v4-flash",
@@ -88,7 +84,6 @@ for (const [name, over] of [
   fs.writeFileSync(path.join(d, "prompt.md"), `${name} prompt`, "utf-8");
 }
 
-// --- a store with one record the role will delete ---
 const store = new VectorStore(path.join(dataDir, "vectors.db"), DIMS, logger);
 store.init();
 const v = new Float32Array(DIMS);
@@ -112,6 +107,9 @@ store.upsertL1(
   } as never,
   v,
 );
+
+let legacyPresent = false;
+const LAYOUT = ["run.json", WORKSET_REL, RESULT_REL, CRITIC_REL];
 
 const CANDIDATE = {
   deleteL1: [{ id: "e2e_1", updatedAt: "2026-08-01T00:00:00Z" }],
@@ -140,51 +138,56 @@ const orchestrator = new ConsolidationOrchestrator({
       startWarmup: () => undefined,
       close: async () => undefined,
     }) as never,
-  // The ONLY stub: the child that would otherwise be a real sub-session.
+  // Единственная заглушка — сам ребёнок.
   spawnChild: async (c: { role: string; cwd: string }) => {
     const dir = c.cwd;
-    fs.mkdirSync(dir, { recursive: true });
+    attemptDir = dir;
     if (c.role === "memory-keeper") {
-      // Роль делает ровно то, что ей велит SKILL.md.
-      const input = path.join(dir, named);
-      roleSaw = fs.existsSync(input)
-        ? fs.readFileSync(input, "utf-8").slice(0, 60)
-        : null;
       fs.writeFileSync(
-        path.join(dir, RESULT_REL),
+        path.join(dir, OLD_LAYOUT ? LEGACY_RESULT_REL : RESULT_REL),
         JSON.stringify(CANDIDATE),
         "utf-8",
       );
     } else {
+      fs.mkdirSync(path.dirname(path.join(dir, CRITIC_VERDICT_FILE)), {
+        recursive: true,
+      });
       fs.writeFileSync(
         path.join(dir, CRITIC_VERDICT_FILE),
         JSON.stringify({
-          verdict: APPROVE ? "approve" : "reject",
+          verdict: "approve",
           candidateDigest: digestOf(CANDIDATE),
-          reasons: [APPROVE ? "looks fine" : "probe rejection"],
+          reasons: ["probe"],
         }),
         "utf-8",
       );
+      // Критик — последний ребёнок прогона: всё, что раскладка обещает, уже
+      // на диске.
+      snapshot = LAYOUT.filter((rel) => fs.existsSync(path.join(dir, rel)));
+      legacyPresent = fs.existsSync(path.join(dir, LEGACY_RESULT_REL));
     }
     return { exitCode: 0, timedOut: false, stdout: "", stderr: "" };
   },
 } as never);
 
 console.log(`FALSIFY=${process.env.FALSIFY ?? "(нет)"}`);
-console.log(`SKILL.md называет входом: ${named}`);
 
 const summary = await orchestrator.executeRun({
   reason: "probe",
   role: "memory-keeper",
 });
-
 console.log(
   `run summary: status=${summary.status} error=${summary.error ?? "-"}`,
 );
+
+console.log(`каталог попытки: ${attemptDir ?? "(не создан)"}`);
+for (const rel of LAYOUT) {
+  console.log(`  ${rel}: ${snapshot.includes(rel) ? "есть" : "НЕТ"}`);
+}
 console.log(
-  `роль нашла вход по этому пути: ${roleSaw !== null} (должно быть true)`,
+  `все четыре файла §3.5 на месте: ${snapshot.length === LAYOUT.length} (должно быть true)`,
 );
-console.log(`первые 60 байт входа: ${JSON.stringify(roleSaw)}`);
+console.log(`результат по снятому пути: ${legacyPresent} (должно быть false)`);
 
 store.close();
 sbx.cleanup();

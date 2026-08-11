@@ -50,7 +50,7 @@ const CODEX_CAPABILITIES: ReadonlySet<string> = new Set([
  * `-s` is NOT the L6 confinement (that is bwrap, isolation.ts) — it is what
  * the child's own shell tool may touch, and it must permit writing the run
  * directory. codex exec defaults to `read-only`, under which the role exits 0
- * having written no `diff.json` at all: a silent "no candidate" on every run.
+ * having written no result file at all: a silent "no candidate" on every run.
  * The standalone `codex sandbox` subcommand is the broken one here; this flag
  * is a different mechanism and is required. */
 const OWNED = ["-C", "--cd", "--ephemeral", "-s", "--sandbox"];

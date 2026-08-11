@@ -185,7 +185,7 @@ describe("role-files", () => {
     expect(content).toContain("1500");
     expect(content).toContain("2000");
     expect(content).toContain("task-simple");
-    expect(content).toContain("diff.json");
+    expect(content).toContain("out/result.json");
     // Task-dir override: crystal/plan land in <scratch-dir>/tasks/, not the
     // hardcoded ~/.pi/agent/tasks (SKILL.md:29 has no env override).
     expect(content).toContain("<scratch-dir>/tasks/");

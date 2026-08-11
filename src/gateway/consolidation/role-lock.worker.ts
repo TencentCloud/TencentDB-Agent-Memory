@@ -17,6 +17,7 @@ import { parseConfig } from "../../config.js";
 import { ConsolidationOrchestrator } from "./orchestrator.js";
 import { buildRoleDefaults } from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
+import { RESULT_REL } from "./attempt-layout.js";
 
 const [dataDir, roleDir, role, barrier] = process.argv.slice(2);
 
@@ -77,7 +78,7 @@ const orch = new ConsolidationOrchestrator({
     fs.writeFileSync(`${barrier}.${role}.ready`, String(process.pid), "utf-8");
     while (fs.existsSync(barrier)) await sleep(20);
     await fs.promises.writeFile(
-      path.join(ctx.scratchDir, "diff.json"),
+      path.join(ctx.scratchDir, RESULT_REL),
       JSON.stringify({}),
       "utf-8",
     );
