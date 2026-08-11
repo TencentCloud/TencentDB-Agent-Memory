@@ -8,7 +8,8 @@
  *   - `lastRunAt` — ISO timestamp of the last successful consolidation run
  *   - `l0Cursor`  — ISO cursor: max `l0_conversations.recorded_at` seen at the
  *                   last run (cursor query over idx_l0_recorded, §5.7)
- *   - `l0Count`   — cumulative L0 messages processed at the last run
+ *   - `l0Count`   — L0 rows no later than the cursor, RECOMPUTED at each
+ *                   finalization (it falls after a TTL sweep, by design)
  *   - `roles`     — per-role progress (memory-keeper etc.)
  *
  * Concurrency: own per-file async lock (same pattern as CheckpointManager but
@@ -61,7 +62,13 @@ export interface ConsolidationCheckpointData {
    * timestamp-only behaviour.
    */
   l0CursorId: string;
-  /** Cumulative L0 messages processed up to the last run. */
+  /**
+   * Saved L0 rows with a non-empty `recorded_at` no later than the cursor
+   * PAIR — recomputed from the store at every finalization (ТЗ A2/A2a), not
+   * accumulated. It therefore FALLS after a TTL sweep, which is the point:
+   * the old cumulative value could only grow and drifted away from the store
+   * without a word.
+   */
   l0Count: number;
   /** Per-role progress. */
   roles: Record<string, RoleProgress>;

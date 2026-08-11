@@ -159,6 +159,44 @@ export function countNewL0Since(
 }
 
 /**
+ * The other half of `countNewL0Since`: rows AT OR BEFORE the cursor pair —
+ * "saved L0 rows with a non-empty recorded_at no later than the cursor"
+ * (ТЗ A2/A2a). The two predicates are deliberately complementary: every row
+ * with a non-empty `recorded_at` belongs to exactly one of them, which is the
+ * invariant that makes the recomputed counter trustworthy.
+ *
+ * Buying the same complement with a bare `recorded_at <= cursor` (the literal
+ * A2 wording) would break on a split pair — the partner would read as
+ * processed by timestamp and as new by the composite predicate at the same
+ * time, exactly the self-contradicting checkpoint A2 was written to forbid.
+ */
+export function countL0UpTo(dbPath: string, cursor: L0Cursor): number | null {
+  if (!cursor.recordedAt) return 0;
+  try {
+    const db = openReadonlySqlite(dbPath);
+    try {
+      const sql =
+        cursor.recordId === ""
+          ? "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?"
+          : "SELECT COUNT(*) AS c FROM l0_conversations WHERE recorded_at != '' AND " +
+            "(recorded_at < ? OR (recorded_at = ? AND record_id <= ?))";
+      const row = (
+        cursor.recordId === ""
+          ? db.prepare(sql).get(cursor.recordedAt)
+          : db
+              .prepare(sql)
+              .get(cursor.recordedAt, cursor.recordedAt, cursor.recordId)
+      ) as { c: number } | null;
+      return row?.c ?? 0;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Newest L0 row as a cursor pair (empty pair when no rows / DB down).
  * The tie on the max timestamp is broken by `record_id DESC` so two runs over
  * the same store always pick the same row — an arbitrary pick would make runs

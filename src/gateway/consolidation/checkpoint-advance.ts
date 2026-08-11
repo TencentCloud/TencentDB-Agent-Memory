@@ -8,7 +8,12 @@
  */
 
 import path from "node:path";
-import { maxL0RecordedAt, type L0Cursor } from "./diff-builder.js";
+import {
+  countL0UpTo,
+  cursorOfCheckpoint,
+  maxL0RecordedAt,
+  type L0Cursor,
+} from "./diff-builder.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 import type { RoleProgress } from "./checkpoint.js";
@@ -74,8 +79,8 @@ export async function advanceCheckpoint(
   summary: RunSummary,
   anchoredCursor?: L0Cursor,
 ): Promise<void> {
-  const cursor =
-    anchoredCursor ?? maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db"));
+  const dbPath = path.join(ctx.dataDir, "vectors.db");
+  const cursor = anchoredCursor ?? maxL0RecordedAt(dbPath);
   ctx.logger.debug?.(
     `[checkpoint] advance role=${summary.role} prev=${prevCursor.recordedAt}/${prevCursor.recordId} ` +
       `new=${cursor.recordedAt}/${cursor.recordId} newL0=${newL0} status=${summary.status}`,
@@ -86,7 +91,15 @@ export async function advanceCheckpoint(
       d.l0Cursor = cursor.recordedAt;
       d.l0CursorId = cursor.recordId;
     }
-    d.l0Count += newL0;
+    // A2: the counter is RECOMPUTED from the store against the cursor that was
+    // just written — not incremented. `+=` cannot shrink, so it drifted away
+    // from the store silently on every TTL sweep, and it double-counted a run
+    // that finalized twice. Counting inside the same locked mutation is what
+    // keeps the pair (cursor, count) internally consistent: a count taken for
+    // a cursor that was then rejected describes a checkpoint that never
+    // existed. A failed count (null) leaves the previous value — an undercount
+    // is acceptable, a zero that looks like fact is not.
+    d.l0Count = countL0UpTo(dbPath, cursorOfCheckpoint(d)) ?? d.l0Count;
     d.roles[summary.role] = roleProgressAfterRun(
       d.roles[summary.role],
       summary,
