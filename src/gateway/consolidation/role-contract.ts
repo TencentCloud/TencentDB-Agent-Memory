@@ -17,7 +17,7 @@ import path from "node:path";
 import { inspectRoleConfig } from "../role-schema.js";
 import { adaptRoleContract } from "./role-contract-legacy.js";
 import { resolveRolePrompt } from "./role-contract-prompt.js";
-import { resolveRoleDir } from "../role-files.js";
+import { resolveRoleDirForRead } from "../role-files.js";
 import type {
   ResolvedRoleContract,
   RoleLegacyDefaults,
@@ -230,7 +230,7 @@ export function listRoleContracts(
  */
 export function roleScratchRoots(
   legacy: RoleLegacyDefaults,
-  roleDir: string = resolveRoleDir(),
+  roleDir: string = resolveRoleDirForRead(),
 ): string[] {
   const roots = new Set<string>();
   for (const res of listRoleContracts(roleDir, legacy)) {

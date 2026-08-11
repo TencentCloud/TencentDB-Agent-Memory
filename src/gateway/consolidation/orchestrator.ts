@@ -25,7 +25,7 @@ import { handleFromCtx } from "./handle-from-ctx.js";
 import { executeRunForRole } from "./execute-run.js";
 import { createLauncherRegistry } from "./launchers/registry.js";
 import { defaultSpawnChild, defaultApplyDiff } from "./runner-helpers.js";
-import { resolveRoleDir } from "../role-files.js";
+import { resolveRoleDirForRead } from "../role-files.js";
 import { resolveKeeperToolsDir as resolveKeeperToolsDirHelper } from "./keeper-tools.js";
 import type {
   OrchestratorOptions,
@@ -76,7 +76,7 @@ export class ConsolidationOrchestrator {
       applyDiff:
         opts.applyDiff ?? ((b, run) => defaultApplyDiff(this.ctx, b, run)),
       roleName: opts.roleName ?? "memory-keeper",
-      roleDir: opts.roleDir ?? resolveRoleDir(opts.dataDir),
+      roleDir: opts.roleDir ?? resolveRoleDirForRead(opts.dataDir),
       ownerPid: process.pid,
       checkpoint: new ConsolidationCheckpoint(opts.dataDir),
       gate: new RoleGate(),

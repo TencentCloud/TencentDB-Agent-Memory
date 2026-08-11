@@ -8,6 +8,7 @@ export type { ApplyOp } from "./role-paths.js";
 export {
   ROLE_DIR_NAME,
   resolveRoleDir,
+  resolveRoleDirForRead,
   resolveLegacyRoleDir,
   resolvePerRoleDir,
 } from "./role-paths.js";

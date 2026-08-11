@@ -8,7 +8,7 @@ import path from "node:path";
 import {
   resolveLegacyRoleDir,
   resolvePerRoleDir,
-  resolveRoleDir,
+  resolveRoleDirForRead,
 } from "./role-paths.js";
 import { defaultTdaiRoot } from "./tdai-root.js";
 import { validateRoleConfig, type RoleConfigFile } from "./role-schema.js";
@@ -88,7 +88,7 @@ export interface RoleListing {
 
 /** Discover all roles under `roles/`. */
 export function listRoles(root: string = defaultTdaiRoot()): RoleListing[] {
-  const rolesDir = resolveRoleDir(root);
+  const rolesDir = resolveRoleDirForRead(root);
   let entries: string[];
   try {
     entries = fs.readdirSync(rolesDir);

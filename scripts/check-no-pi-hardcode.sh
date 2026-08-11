@@ -17,6 +17,9 @@ cd "$(dirname "$0")/.." || exit 2
 # a hole, and a hole with one entry is auditable.
 ALLOWLIST="src/gateway/tdai-root.ts"
 # Only these may CALL the fallback; everything else must resolve under the root.
+# role-paths is the only consumer, and inside it only the *ForRead resolvers
+# may call the fallback — a writer that resolves through it would put writes
+# into the pre-tz-07 tree (found by the S5 probe).
 LEGACY_CALLERS="src/gateway/tdai-root.ts src/gateway/role-paths.ts"
 
 status=0

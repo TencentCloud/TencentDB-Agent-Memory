@@ -75,7 +75,7 @@ import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
-import { listRoles, resolveRoleDir } from "./role-files.js";
+import { listRoles, resolveRoleDirForRead } from "./role-files.js";
 import { resolveUnderRoot } from "./tdai-root.js";
 import { hostTaskRoots } from "./consolidation/launchers/auth-root.js";
 import {
@@ -216,7 +216,7 @@ export class TdaiGateway {
       // legacy snapshot the adapter falls back to.
       listRoleContracts: () =>
         listRoleContracts(
-          resolveRoleDir(this.config.data.baseDir),
+          resolveRoleDirForRead(this.config.data.baseDir),
           buildRoleDefaults(consolidationCfg),
         ),
       readCheckpoint: () => this.orchestrator.readCheckpoint(),
@@ -276,7 +276,7 @@ export class TdaiGateway {
           // are edited on disk while the gateway runs.
           extraScratchRoots: roleScratchRoots(
             buildRoleDefaults(consolidationCfg),
-            resolveRoleDir(this.config.data.baseDir),
+            resolveRoleDirForRead(this.config.data.baseDir),
           ),
           // tz-07 H3/Q2: the host's own task tree is the host's business, so
           // the caller resolves it per launcher and cleanup stays

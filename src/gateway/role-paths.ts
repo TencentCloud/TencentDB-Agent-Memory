@@ -10,7 +10,11 @@
  * window). Canonical: `<root>/roles/<name>/{role.json,prompt.md}`.
  */
 import path from "node:path";
-import { defaultTdaiRoot, legacyReadPath } from "./tdai-root.js";
+import {
+  defaultTdaiRoot,
+  legacyReadPath,
+  resolveUnderRoot,
+} from "./tdai-root.js";
 
 /** Apply op whitelist keys (mirror apply-executor.ts ApplyOp keys). */
 export type ApplyOp =
@@ -29,12 +33,24 @@ export const ROLE_DIR_NAME = LEGACY_ROLE_DIR_NAME;
 /** Canonical per-role directory under `<root>/roles/<name>/`. */
 const ROLES_PARENT_DIR_NAME = "roles";
 
-/** Canonical parent dir: `<root>/roles/` (pre-tz-07 location still readable). */
+/**
+ * Canonical parent dir: `<root>/roles/`. WRITE-SAFE — always the new root.
+ *
+ * Found by the S5 probe (tz-07 Ф7): this resolver has both readers and
+ * writers, so returning the pre-tz-07 location from here sent WRITES into it,
+ * which is precisely what the read-only fallback promises not to do. Readers
+ * that want the old location must ask for it (`resolveRoleDirForRead`).
+ */
 export function resolveRoleDir(root: string = defaultTdaiRoot()): string {
+  return resolveUnderRoot(root, ROLES_PARENT_DIR_NAME);
+}
+
+/** Same dir, but falling back to the pre-tz-07 location. READ ONLY. */
+export function resolveRoleDirForRead(root: string = defaultTdaiRoot()): string {
   return legacyReadPath(root, ROLES_PARENT_DIR_NAME);
 }
 
-/** Legacy flat dir: `<root>/memory-keeper/`. */
+/** Legacy flat dir: `<root>/memory-keeper/`. Read path only by nature. */
 export function resolveLegacyRoleDir(root: string = defaultTdaiRoot()): string {
   return legacyReadPath(root, LEGACY_ROLE_DIR_NAME);
 }
@@ -44,5 +60,5 @@ export function resolvePerRoleDir(
   roleName: string,
   root: string = defaultTdaiRoot(),
 ): string {
-  return path.join(resolveRoleDir(root), roleName);
+  return path.join(resolveRoleDirForRead(root), roleName);
 }
