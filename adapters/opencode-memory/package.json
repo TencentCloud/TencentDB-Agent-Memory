@@ -1,0 +1,16 @@
+{
+  "name": "opencode-memory-tencentdb",
+  "version": "0.1.0",
+  "description": "OpenCode adapter for TencentDB Agent Memory — persistent memory for every agent session",
+  "type": "module",
+  "main": "src/index.js",
+  "files": ["src"],
+  "scripts": {
+    "lint": "eslint src"
+  },
+  "keywords": ["opencode", "memory", "tencentdb", "agent", "plugin"],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  }
+}
