@@ -9,10 +9,20 @@
  * `project_id` is stamped rather than derived because the on-disk slug is a
  * one-way hash (`scene-paths.ts:33`): the directory name cannot give the
  * project back, so whoever mutates has to say who they were.
+ *
+ * A4b ("the key belongs to the core, nothing on the input path may write it")
+ * holds here the same way it holds for L1 — but NOT through the front-matter,
+ * which lives inside the LLM's sandbox and is therefore model-writable. The
+ * truth is the scene index (`.metadata/scene_index/<slug>.json`, outside the
+ * sandbox root): the previous chain is read from there, the new one is written
+ * there, and `syncSceneIndexBySlug` refuses to take these fields off disk. The
+ * front-matter keeps a human-readable copy, and a model editing it changes
+ * exactly nothing — the next stamp overwrites the copy from the index.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatSceneBlock, parseSceneBlock } from "./scene-format.js";
+import { readSceneIndexBySlug, type CarrierAttributes } from "./scene-index.js";
 import { sceneBlocksRoot, GLOBAL_SCENE_SLUG } from "./scene-paths.js";
 import {
   appendStep,
@@ -41,41 +51,45 @@ export async function stampSceneSlug(
   slug: string,
   stamp: SceneStamp,
   now: string = new Date().toISOString(),
-): Promise<number> {
+): Promise<Map<string, CarrierAttributes>> {
   const dir = path.join(sceneBlocksRoot(dataDir), slug);
+  const stamped = new Map<string, CarrierAttributes>();
   let files: string[];
   try {
     files = (await fs.readdir(dir)).filter((f) => f.endsWith(".md"));
   } catch {
-    return 0;
+    return stamped;
   }
 
-  let stamped = 0;
+  // Previous state comes from the index, never from the block: the block is
+  // model-writable, so reading the chain back from it would let a model
+  // rewrite its own history by editing one file.
+  const carried = new Map(
+    (await readSceneIndexBySlug(dataDir, slug)).map((e) => [e.filename, e]),
+  );
+
   for (const file of files) {
     const full = path.join(dir, file);
     try {
       const raw = await fs.readFile(full, "utf-8");
       const block = parseSceneBlock(raw, file);
-      const previous: Provenance | undefined = block.meta.provenance;
+      const known = carried.get(file);
+      const previous: Provenance | undefined = known?.provenance;
       const next = appendStep(
         previous,
         { role: stamp.role, action: stamp.action, at: now },
         stamp.source,
         now,
       );
-      const scoped = scopeFor(
-        slug,
-        stamp,
-        block.meta.scope,
-        block.meta.project_id,
-      );
+      const scoped = scopeFor(slug, stamp, known?.scope, known?.project_id);
       const meta = {
         ...block.meta,
         ...scoped,
         provenance: next,
       };
+      // The file gets a copy for humans; the index gets the truth (caller).
       await fs.writeFile(full, formatSceneBlock(meta, block.content), "utf-8");
-      stamped += 1;
+      stamped.set(file, { ...scoped, provenance: next });
     } catch {
       // Deleted between readdir and write, or unreadable — skip it; the next
       // mutation stamps it, and the index still reports what is on disk.
@@ -90,7 +104,8 @@ export async function stampAllSceneSlugs(
   dataDir: string,
   stamp: SceneStamp,
   now?: string,
-): Promise<number> {
+): Promise<Map<string, Map<string, CarrierAttributes>>> {
+  const bySlug = new Map<string, Map<string, CarrierAttributes>>();
   let slugs: string[];
   try {
     slugs = (
@@ -99,12 +114,12 @@ export async function stampAllSceneSlugs(
       .filter((d) => d.isDirectory())
       .map((d) => d.name);
   } catch {
-    return 0;
+    return bySlug;
   }
-  let total = 0;
-  for (const slug of slugs)
-    total += await stampSceneSlug(dataDir, slug, stamp, now);
-  return total;
+  for (const slug of slugs) {
+    bySlug.set(slug, await stampSceneSlug(dataDir, slug, stamp, now));
+  }
+  return bySlug;
 }
 
 /**

@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openWritableSqlite } from "../src/gateway/http-utils.js";
+import { loadGatewayConfig } from "../src/gateway/config.js";
 
 interface Args {
   db?: string;
@@ -99,18 +100,25 @@ function main(): void {
 
   // Resolving through the gateway's own loader, not defaultTdaiRoot(): a
   // yaml-relocated install would otherwise silently migrate an empty DB.
-  let dataDir = args.dataDir;
-  if (!dataDir) {
-    if (args.db) dataDir = path.dirname(args.db);
-    else {
-      const { loadGatewayConfig } = require("../src/gateway/config.js") as {
-        loadGatewayConfig: () => { data: { baseDir: string } };
-      };
-      dataDir = loadGatewayConfig().data.baseDir;
-    }
-  }
+  // Static import, not require(): this file IS the ESM entry point, and a
+  // require() here crashed the documented no-arg run outright. The backend
+  // always comes from the config — it decides whether an in-place migration
+  // is possible at all, and no flag can override that truthfully.
+  const gateway = loadGatewayConfig();
+  const backend = gateway.memory.storeBackend;
+  const dataDir =
+    args.dataDir ?? (args.db ? path.dirname(args.db) : gateway.data.baseDir);
   const dbPath = args.db ?? path.join(dataDir, "vectors.db");
   console.log(`[scope-migration] db: ${dbPath}`);
+  if (!fs.existsSync(dbPath)) {
+    // A missing DB is an addressing mistake, not a crash: the resolved root is
+    // the thing worth printing, since that is what the user got wrong.
+    console.error(
+      `[scope-migration] базы нет по этому пути — проверь корень (data.baseDir / TDAI_DATA_DIR) или передай --db`,
+    );
+    process.exitCode = 2;
+    return;
+  }
   console.log(`[scope-migration] journal dir: ${journalDir(dataDir)}`);
 
   const db = openWritableSqlite(dbPath);
@@ -143,6 +151,20 @@ function main(): void {
           "Для запуска: --apply --default-scope <global|project> " +
           "(значение выбирается по распределению выше, а не заранее).",
       );
+      return;
+    }
+
+    // The TCVDB carrier cannot be migrated in place: its documents predate the
+    // fields AND the collection predates their filter indexes, and TCVDB can
+    // add neither. The procedure is the one the store warns about at startup.
+    if (backend === "tcvdb") {
+      console.error(
+        "[scope-migration] бэкенд tcvdb: миграция на месте невозможна. " +
+          "Порядок: выгрузить коллекцию, удалить её, перезапустить плагин " +
+          "(коллекция пересоздастся с filter-индексами на scope/project_id), " +
+          "залить документы обратно. До этого режим strict на tcvdb включать нельзя.",
+      );
+      process.exitCode = 2;
       return;
     }
 

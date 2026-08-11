@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import type { MemoryRecord } from "../../src/core/record/l1-writer.js";
@@ -167,9 +167,83 @@ must(
   journal.every((j) => j.scope_before === null && j.scope_after === "global"),
 );
 
+// Путь БЕЗ --db: корень резолвится конфигом. Именно он падал с
+// `require is not defined in ES module scope`, потому что ни одна нога пробы
+// его не трогала — все ходили через --db.
+function runResolved(
+  env: Record<string, string>,
+  ...args: string[]
+): {
+  out: string;
+  code: number;
+} {
+  const res = spawnSync("npx", ["tsx", "scripts/migrate-scope.ts", ...args], {
+    cwd: process.cwd(),
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  });
+  return {
+    out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
+    code: res.status ?? -1,
+  };
+}
+
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "tz05-e5-home-"));
+const resolvedDataDir = path.join(home, ".pi", "agent-memory", "tdai");
+fs.mkdirSync(resolvedDataDir, { recursive: true });
+fs.copyFileSync(dbPath, path.join(resolvedDataDir, "vectors.db"));
+const resolved = runResolved({ HOME: home, TDAI_DATA_DIR: resolvedDataDir });
+console.log("  --- прогон без --db (корень из конфига) ---");
+for (const line of resolved.out.trim().split("\n")) console.log(`  ${line}`);
+must(
+  "прогон без --db не падает и печатает распределение",
+  resolved.code === 0 && resolved.out.includes("распределение записей"),
+);
+must(
+  "и он смотрит в корень, выданный конфигом, а не в чужой",
+  resolved.out.includes(resolvedDataDir),
+);
+
+// Бэкенд tcvdb: миграция на месте невозможна, скрипт обязан отказаться и
+// назвать процедуру, а не молча «мигрировать» пустую sqlite-базу рядом.
+const tcvdbHome = fs.mkdtempSync(path.join(os.tmpdir(), "tz05-e5-tcvdb-"));
+const tcvdbDataDir = path.join(tcvdbHome, ".pi", "agent-memory", "tdai");
+fs.mkdirSync(tcvdbDataDir, { recursive: true });
+fs.copyFileSync(dbPath, path.join(tcvdbDataDir, "vectors.db"));
+fs.writeFileSync(
+  path.join(tcvdbHome, "tdai-gateway.yaml"),
+  [
+    "data:",
+    `  baseDir: ${tcvdbDataDir}`,
+    "memory:",
+    "  storeBackend: tcvdb",
+    "",
+  ].join("\n"),
+  "utf-8",
+);
+const refusedTcvdb = runResolved(
+  {
+    HOME: tcvdbHome,
+    TDAI_GATEWAY_CONFIG: path.join(tcvdbHome, "tdai-gateway.yaml"),
+  },
+  "--apply",
+  "--default-scope",
+  "global",
+);
+console.log("  --- прогон на конфиге с бэкендом tcvdb ---");
+for (const line of refusedTcvdb.out.trim().split("\n"))
+  console.log(`  ${line}`);
+must(
+  "на бэкенде tcvdb --apply отказывается и называет процедуру пересоздания",
+  refusedTcvdb.code !== 0 &&
+    refusedTcvdb.out.includes("миграция на месте невозможна"),
+);
+
 run("--rollback", journalPath);
 console.log(`  scope после отката: ${scopes()}`);
 must("откат по журналу вернул прежние значения", scopes() === before);
 
 fs.rmSync(dir, { recursive: true, force: true });
+fs.rmSync(home, { recursive: true, force: true });
+fs.rmSync(tcvdbHome, { recursive: true, force: true });
 finish();

@@ -12,6 +12,7 @@ import { projectSlug } from "../scene/scene-paths.js";
 import {
   syncSceneIndexAllProjects,
   syncSceneIndex,
+  writeCarrierAttributes,
 } from "../scene/scene-index.js";
 import {
   stampAllSceneSlugs,
@@ -84,21 +85,29 @@ async function stamp(
     source: sourceOf(m.source),
     ...(m.projectId ? { projectId: m.projectId } : {}),
   };
+  // Order is load-bearing: the stamp rewrites the blocks, the sync recomputes
+  // digests from the rewritten bytes AND carries the old carrier fields
+  // forward, and only then are the new fields written into the index — which
+  // is the L2 truth (scene-index.ts). Writing them before the sync would let
+  // the sync carry the OLD values back over the fresh stamp.
   if (m.projectId) {
-    const n = await stampSceneSlug(
-      dataDir,
-      projectSlug(m.projectId),
-      stampSpec,
-    );
+    const slug = projectSlug(m.projectId);
+    const stamped = await stampSceneSlug(dataDir, slug, stampSpec);
     await syncSceneIndex(dataDir, m.projectId);
+    await writeCarrierAttributes(dataDir, slug, stamped);
     logger?.debug?.(
-      `[provenance] ${n} scene block(s) stamped for ${m.projectId}`,
+      `[provenance] ${stamped.size} scene block(s) stamped for ${m.projectId}`,
     );
     return;
   }
-  const n = await stampAllSceneSlugs(dataDir, stampSpec);
+  const bySlug = await stampAllSceneSlugs(dataDir, stampSpec);
   await syncSceneIndexAllProjects(dataDir);
+  let total = 0;
+  for (const [slug, stamped] of bySlug) {
+    await writeCarrierAttributes(dataDir, slug, stamped);
+    total += stamped.size;
+  }
   logger?.debug?.(
-    `[provenance] ${n} scene block(s) stamped across all projects`,
+    `[provenance] ${total} scene block(s) stamped across all projects`,
   );
 }

@@ -177,11 +177,24 @@ async function syncSceneIndexBySlug(
     files = [];
   }
 
+  // The carrier fields are read from the PREVIOUS index, not from the file.
+  // Scene blocks live inside the extraction LLM's sandbox, so their
+  // front-matter is model-writable; this file is not (it sits in .metadata/,
+  // outside the sandbox root — scene-index.ts:38). Trusting the front-matter
+  // here would let a model forge or erase a record's provenance simply by
+  // editing its own block, which is exactly what A4b forbids. The block keeps
+  // a human-readable copy; the index is the truth, and only `stampSceneSlug`
+  // (engineering side, off the commit port) may move it.
+  const carried = new Map(
+    (await readSceneIndexBySlug(dataDir, slug)).map((e) => [e.filename, e]),
+  );
+
   const entries: SceneIndexEntry[] = [];
   for (const file of files) {
     try {
       const raw = await fs.readFile(path.join(blocksDir, file), "utf-8");
       const block = parseSceneBlock(raw, file);
+      const previous = carried.get(file);
       entries.push({
         filename: file,
         summary: block.meta.summary,
@@ -189,9 +202,20 @@ async function syncSceneIndexBySlug(
         created: block.meta.created,
         updated: block.meta.updated,
         digest: blockDigest(raw),
-        scope: block.meta.scope ?? "",
-        project_id: block.meta.project_id ?? "",
-        ...(block.meta.provenance ? { provenance: block.meta.provenance } : {}),
+        // A block the index has never seen contributes what it claims: a
+        // freshly written file has no prior truth to defend, and the next
+        // stamp overwrites it anyway.
+        scope: previous ? previous.scope : (block.meta.scope ?? ""),
+        project_id: previous
+          ? previous.project_id
+          : (block.meta.project_id ?? ""),
+        ...(previous
+          ? previous.provenance
+            ? { provenance: previous.provenance }
+            : {}
+          : block.meta.provenance
+            ? { provenance: block.meta.provenance }
+            : {}),
       });
     } catch {
       // File may have been deleted between readdir and readFile (e.g. by concurrent
@@ -234,3 +258,42 @@ export async function readSceneIndexBySlug(
 }
 
 export { projectSlug };
+
+/**
+ * Write the carrier attributes of one project's blocks into the index.
+ *
+ * The index is the L2 truth (see `syncSceneIndexBySlug`), so this is the ONLY
+ * way scope and provenance move — and it is called from the stamping path,
+ * which runs off the commit port. Entries the map does not mention keep what
+ * they had; a filename the index does not have is ignored, because an index
+ * entry without a file behind it is a lie the next sync would remove anyway.
+ */
+export async function writeCarrierAttributes(
+  dataDir: string,
+  slug: string,
+  attributes: Map<string, CarrierAttributes>,
+): Promise<void> {
+  if (attributes.size === 0) return;
+  const entries = await readSceneIndexBySlug(dataDir, slug);
+  for (const entry of entries) {
+    const next = attributes.get(entry.filename);
+    if (!next) continue;
+    entry.scope = next.scope ?? "";
+    entry.project_id = next.project_id ?? "";
+    if (next.provenance) entry.provenance = next.provenance;
+  }
+  const indexPath = path.join(
+    dataDir,
+    ".metadata",
+    "scene_index",
+    `${slug}.json`,
+  );
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+}
+
+export interface CarrierAttributes {
+  scope?: string;
+  project_id?: string;
+  provenance?: Provenance;
+}
