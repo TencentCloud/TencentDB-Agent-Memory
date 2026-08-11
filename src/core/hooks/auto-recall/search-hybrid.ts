@@ -9,6 +9,7 @@ import { passesScope } from "./scope.js";
 import { scopeDecayMultiplier, type ScopeDecayConfig } from "./scope-decay.js";
 import { formatMemoryLine, recordToFormatable, vectorResultToFormatable } from "./format.js";
 import { buildFtsQuery } from "../../store/sqlite.js";
+import type { ScopeMode } from "./scope.js";
 
 const RRF_K = 60;
 
@@ -24,7 +25,7 @@ export async function searchHybrid(
   projectId = "",
   typeWeights?: TypeWeights,
   scopeDecayCfg?: ScopeDecayConfig,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): Promise<SearchResult> {
   const candidateK = maxResults * (projectId ? 6 : 3);
   const [keywordResult, embeddingResult] = await Promise.all([
@@ -84,7 +85,7 @@ async function runKeywordPart(
   projectId: string,
   logger?: Logger,
   _scopeDecayCfg?: ScopeDecayConfig,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): Promise<{ records: ScoredRecord[]; ms: number }> {
   const tStart = performance.now();
   try {
@@ -126,7 +127,7 @@ async function runEmbeddingPart(
   projectId: string,
   logger?: Logger,
   _scopeDecayCfg?: ScopeDecayConfig,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): Promise<{ results: L1SearchResult[]; ms: number }> {
   const tStart = performance.now();
   try {

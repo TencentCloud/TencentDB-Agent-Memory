@@ -32,6 +32,7 @@ import type {
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import type { ScopeMode } from "../hooks/auto-recall/scope.js";
 
 // ============================
 // Config & Constants
@@ -638,7 +639,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
   // through searchL1HybridAsync so cross-project decay can be honored. The
   // IMemoryStore interface (types.ts:283) declares them optional; impl is
   // currently assignable but the params are unused.
-  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string, _projectId?: string, _mode?: "hidden" | "decay"): Promise<L1SearchResult[]> {
+  async searchL1Vector(_queryEmbedding: Float32Array, topK?: number, queryText?: string, _projectId?: string, _mode?: ScopeMode): Promise<L1SearchResult[]> {
     // TCVDB uses server-side embedding — delegate to hybrid search with text
     if (queryText) {
       return this.searchL1HybridAsync({ queryText, topK });
@@ -650,7 +651,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // TODO: add projectId and mode params to the impl signature and thread them
   // through searchL1HybridAsync. See searchL1Vector above.
-  async searchL1Fts(ftsQuery: string, limit?: number, _projectId?: string, _mode?: "hidden" | "decay"): Promise<L1FtsResult[]> {
+  async searchL1Fts(ftsQuery: string, limit?: number, _projectId?: string, _mode?: ScopeMode): Promise<L1FtsResult[]> {
     // TCVDB has no pure FTS — use hybrid search with sparse-only path
     // The ftsQuery is raw text, use it as queryText for hybrid
     if (!ftsQuery) return [];

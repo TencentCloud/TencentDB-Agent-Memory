@@ -7,6 +7,7 @@ import { TAG, type TypeWeights } from "./types.js";
 import { applyTypeWeights, passesScope } from "./scope.js";
 import { scopeDecayMultiplier, type ScopeDecayConfig } from "./scope-decay.js";
 import { formatMemoryLine, vectorResultToFormatable } from "./format.js";
+import type { ScopeMode } from "./scope.js";
 
 export async function searchByEmbedding(
   userText: string,
@@ -19,7 +20,7 @@ export async function searchByEmbedding(
   projectId = "",
   typeWeights?: TypeWeights,
   scopeDecayCfg?: ScopeDecayConfig,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): Promise<string[]> {
   logger?.debug?.(`${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`);
   const queryEmbedding = await embeddingService.embed(userText, embeddingCallOpts);

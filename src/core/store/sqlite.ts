@@ -34,6 +34,7 @@ import type {
   L0FtsResult,
 } from "./types.js";
 import type { Logger } from "../types.js";
+import type { ScopeMode } from "../hooks/auto-recall/scope.js";
 
 // ============================
 // Types
@@ -926,7 +927,12 @@ export class VectorStore implements IMemoryStore {
         FROM l1_fts
         JOIN l1_records r ON r.record_id = l1_fts.record_id
         WHERE l1_fts MATCH ?1
-          AND (?2 = '' OR ?2 = '__decay_all__' OR COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2)
+          AND (
+            ?2 = '' OR ?2 = '__decay_all__'
+            OR (?4 = 'hidden' AND (COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2))
+            OR (?4 = 'strict' AND (COALESCE(r.scope, '') = 'global'
+                                   OR (COALESCE(r.scope, '') = 'project' AND r.project_id = ?2)))
+          )
         ORDER BY rank ASC
         LIMIT ?3
       `);
@@ -1241,7 +1247,7 @@ export class VectorStore implements IMemoryStore {
     topK = 5,
     _queryText?: string,
     projectId = "",
-    mode: "hidden" | "decay" = "hidden",
+    mode: ScopeMode = "hidden",
   ): VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
@@ -1323,6 +1329,9 @@ export class VectorStore implements IMemoryStore {
         // mode the strict project_id equality is skipped; the JS-side
         // scopeDecayMultiplier applies the soft penalty (see search-embedding.ts).
         if (mode === "hidden" && projectId && meta.scope === "project" && meta.project_id !== projectId) continue;
+        // strict additionally refuses a record that never said it was global.
+        if (mode === "strict" && projectId &&
+            !(meta.scope === "global" || (meta.scope === "project" && meta.project_id === projectId))) continue;
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -2475,13 +2484,13 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20, projectId = "", mode: "hidden" | "decay" = "hidden"): FtsSearchResult[] {
+  searchL1Fts(ftsQuery: string, limit = 20, projectId = "", mode: ScopeMode = "hidden"): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
       // In decay mode, the scope WHERE is rewritten to admit all rows; the
       // JS-side scopeDecayMultiplier applies the soft penalty.
       const scopeParam = mode === "decay" ? "__decay_all__" : projectId;
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, scopeParam, limit) as Array<{
+      const rows = this.stmtL1FtsSearch.all(ftsQuery, scopeParam, limit, mode) as Array<{
         record_id: string;
         content: string;
         type: string;

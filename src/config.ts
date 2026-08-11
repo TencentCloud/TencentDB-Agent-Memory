@@ -10,6 +10,7 @@
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
 import { z } from "zod";
+import type { ScopeMode } from "./core/hooks/auto-recall/scope.js";
 import {
   launchersSchema,
   legacyLauncherKeys,
@@ -118,7 +119,16 @@ export interface RecallConfig {
    *   the record and the query project (see scope-decay.ts). The effective
    *   per-record gate becomes `cosine * decayMultiplier >= scoreThreshold`.
    */
-  crossProject: "hidden" | "decay";
+  crossProject: ScopeMode;
+  /**
+   * How a record with no `scope` is treated (tz-05 критерий 5, откат ТЗ :147).
+   * - "legacy" (default): it passes as global — today's behaviour, and the way
+   *   back if the attribute filter turns out wrong.
+   * - "attribute": it does not. Only flip this once the scope migration has
+   *   run, or legacy records simply vanish from project recall.
+   * Ignored in `crossProject: decay`, where nothing is filtered at all.
+   */
+  scopeFilter: "legacy" | "attribute";
   /** Steepness of the prefix-depth decay (default: 0.5). */
   crossProjectDecay: number;
   /** Multiplier when both the projectMap and the prefix-depth miss (default: 0.5). */
@@ -762,6 +772,8 @@ export function parseConfig(
       },
       crossProject:
         validateCrossProject(str(recallGroup, "crossProject")) ?? "hidden",
+      scopeFilter:
+        str(recallGroup, "scopeFilter") === "attribute" ? "attribute" : "legacy",
       crossProjectDecay: num(recallGroup, "crossProjectDecay") ?? 0.5,
       defaultCrossProjectMultiplier:
         num(recallGroup, "defaultCrossProjectMultiplier") ?? 0.5,

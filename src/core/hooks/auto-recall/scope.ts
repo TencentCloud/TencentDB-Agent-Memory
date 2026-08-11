@@ -18,6 +18,23 @@ import type { IMemoryStore } from "../../store/types.js";
 import type { Logger } from "../../types.js";
 
 /**
+ * How project visibility is decided, and the single knob that travels from the
+ * config to every store call (tz-05 Ф4):
+ *
+ * - `hidden` — today's behaviour: a record only hides when it is explicitly
+ *   tagged to a DIFFERENT project. Unset scope passes as global. This is the
+ *   rollback path (ТЗ tz-05 :147) and stays the default until the scope
+ *   migration has actually run.
+ * - `strict` — the same, except an unset scope no longer passes for global.
+ * - `decay` — no filtering at all; cross-project records are downweighted
+ *   later by `scope-decay.ts`. This is the deployed mode.
+ *
+ * Three implementations must agree: this function, the SQL predicate in
+ * `sqlite.ts`, and the TCVDB filter expression.
+ */
+export type ScopeMode = "hidden" | "decay" | "strict";
+
+/**
  * Single source of truth for project-scoped visibility. Mirrored verbatim
  * by the SQL filter in `sqlite.ts` — the two must stay literally equivalent.
  * Only records explicitly tagged to a *different* project are hidden.
@@ -29,10 +46,15 @@ import type { Logger } from "../../types.js";
 export function passesScope(
   r: { scope?: string; project_id?: string },
   projectId?: string,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): boolean {
   if (mode === "decay") return true;       // multiplier handles it downstream
   if (!projectId) return true;            // filter disabled
+  if (mode === "strict") {
+    // A record must SAY it is global to be treated as global. Unset scope is
+    // unknown provenance, not permission (tz-05 критерий 5).
+    return r.scope === "global" || (r.scope === "project" && r.project_id === projectId);
+  }
   if (r.scope !== "project") return true; // global / unset / legacy
   return r.project_id === projectId;
 }

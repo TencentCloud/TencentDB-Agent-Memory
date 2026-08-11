@@ -7,6 +7,7 @@ import { TAG } from "./types.js";
 import { passesScope } from "./scope.js";
 import { scopeDecayMultiplier, type ScopeDecayConfig } from "./scope-decay.js";
 import { ftsResultToFormatable, formatMemoryLine } from "./format.js";
+import type { ScopeMode } from "./scope.js";
 
 export async function searchByKeyword(
   userText: string,
@@ -17,7 +18,7 @@ export async function searchByKeyword(
   vectorStore?: IMemoryStore,
   projectId = "",
   scopeDecayCfg?: ScopeDecayConfig,
-  mode: "hidden" | "decay" = "hidden",
+  mode: ScopeMode = "hidden",
 ): Promise<string[]> {
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);

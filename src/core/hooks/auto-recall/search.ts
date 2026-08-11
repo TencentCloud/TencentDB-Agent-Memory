@@ -19,7 +19,7 @@ import { TAG, type RecallStrategy, type SearchResult, type TypeWeights } from ".
 import { searchByKeyword } from "./search-keyword.js";
 import { searchByEmbedding } from "./search-embedding.js";
 import { searchHybrid } from "./search-hybrid.js";
-import { passesScope } from "./scope.js";
+import { passesScope, type ScopeMode } from "./scope.js";
 import type { ScopeDecayConfig } from "./scope-decay.js";
 
 const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
@@ -46,7 +46,14 @@ export async function searchMemories(
   const maxResults = cfg.recall.maxResults ?? 5;
   const threshold = cfg.recall.scoreThreshold ?? 0.2;
   const typeWeights = cfg.recall.typeWeights;
-  const mode = cfg.recall.crossProject ?? "hidden";
+  // One knob reaches every implementation of the predicate: JS here, the SQL
+  // mirror in sqlite.ts, and the TCVDB filter. `scopeFilter` only sharpens the
+  // filtering mode — in `decay` nothing is filtered, so it does not apply.
+  const crossProject = cfg.recall.crossProject ?? "hidden";
+  const mode: ScopeMode =
+    crossProject === "decay" ? "decay"
+    : cfg.recall.scopeFilter === "attribute" ? "strict"
+    : "hidden";
   const scopeDecayCfg: ScopeDecayConfig = {
     crossProjectDecay: cfg.recall.crossProjectDecay,
     defaultCrossProjectMultiplier: cfg.recall.defaultCrossProjectMultiplier,

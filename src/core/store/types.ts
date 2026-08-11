@@ -18,6 +18,7 @@
 import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type { Logger } from "../types.js";
+import type { ScopeMode } from "../hooks/auto-recall/scope.js";
 
 // Re-export so consumers can import everything from types.ts
 export type { MemoryRecord, EmbeddingProviderInfo };
@@ -280,8 +281,8 @@ export interface IMemoryStore {
 
   // ── L1 Search ────────────────────────────────────────────
 
-  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, projectId?: string, mode?: "hidden" | "decay"): MaybePromise<L1SearchResult[]>;
-  searchL1Fts(ftsQuery: string, limit?: number, projectId?: string, mode?: "hidden" | "decay"): MaybePromise<L1FtsResult[]>;
+  searchL1Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, projectId?: string, mode?: ScopeMode): MaybePromise<L1SearchResult[]>;
+  searchL1Fts(ftsQuery: string, limit?: number, projectId?: string, mode?: ScopeMode): MaybePromise<L1FtsResult[]>;
   searchL1Hybrid?(params: {
     query?: string;
     queryEmbedding?: Float32Array;
