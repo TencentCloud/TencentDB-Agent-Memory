@@ -19,7 +19,8 @@
     "src/gateway/**/*.ts",
     "src/config.ts",
     "src/core/**/*.ts",
-    "src/utils/**/*.ts"
+    "src/utils/**/*.ts",
+    "src/consumer/**/*.ts"
   ],
   "exclude": ["dist", "node_modules", "src/**/*.test.ts", "src/**/*.spec.ts"]
 }
