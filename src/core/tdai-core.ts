@@ -279,7 +279,16 @@ export class TdaiCore {
       scheduler: this.scheduler,
       originalUserText: turn.userText,
       originalUserMessageCount: turn.originalUserMessageCount,
-      pluginStartTimestamp: turn.startedAt ?? Date.now(),
+      // NOT `?? Date.now()`. This is a COLD-START FLOOR: on a session with no
+      // cursor yet, l0-recorder keeps only messages with `timestamp > floor`.
+      // Capture runs at the END of a turn, so "now" is at or after the moment
+      // the turn's own messages were stamped — a floor of `Date.now()` filters
+      // out the very turn being committed. It also never recovers: nothing
+      // recorded means no cursor persisted, so the next turn invents the same
+      // floor again and the session stays permanently empty.
+      // A caller that does not say when its turn started gets NO floor: the
+      // messages it handed over are the turn it wants recorded.
+      pluginStartTimestamp: turn.startedAt,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
       bgTaskRegistry: this.bgTasks,
