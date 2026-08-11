@@ -14,6 +14,8 @@
  *   FALSIFY=replace-metadata — вызывающий не передаёт `previousMetadata`, ровно
  *     как до Ф2. Цепочка перестаёт расти, и нога про три шага краснеет: это и
  *     есть тот баг, ради которого Ф2 меняла всех троих вызывающих одним диффом.
+ *   FALSIFY=rename-drops-entry — записи индекса не переезжают вместе с
+ *     переименованными файлами. Нога про нормализацию краснеет.
  *   FALSIFY=apply-trusts-front-matter — вместо настоящей перестройки берётся
  *     копия старого цикла из `scene-index-fallback.ts`, читавшая scope и
  *     provenance из блока. Нога про apply краснеет.
@@ -32,9 +34,11 @@ import {
 import {
   blockDigest,
   readSceneIndexBySlug,
+  renameIndexEntries,
   syncSceneIndexBySlug,
   writeCarrierAttributes,
 } from "../../src/core/scene/scene-index.js";
+import { normalizeSceneFilenames } from "../../src/core/scene/filename-normalizer.js";
 import { parseSceneBlock } from "../../src/core/scene/scene-format.js";
 import { syncSceneIndexPerProject } from "../../src/gateway/apply-executor/scene-index-fallback.js";
 import type { ApplyExecutorDeps } from "../../src/gateway/apply-executor/apply-executor-deps.js";
@@ -272,6 +276,48 @@ must(
 must(
   "при этом содержимое, которым блок владеет по праву, всё ещё едет",
   entry?.summary === "deploy notes",
+);
+
+// --- Нога L2: нормализация имени файла ----------------------------------
+// Индекс ключуется по имени файла, а имя пишет модель. Нормализатор
+// переименовывает блок ПЕРЕД перестройкой индекса на каждой экстракции
+// (scene-extractor.ts, фаза 5b), и до фикса перестройка встречала незнакомый
+// файл и брала его поля из front-matter: обычное переименование стирало
+// цепочку, а подделанная копия — доезжала.
+const SLOPPY = "Daily Rhythm.md";
+fs.renameSync(path.join(blocksDir, "deploy.md"), path.join(blocksDir, SLOPPY));
+await syncSceneIndexBySlug(dir, SLUG);
+await writeCarrierAttributes(
+  dir,
+  SLUG,
+  new Map([
+    [
+      SLOPPY,
+      { scope: "project", project_id: "/repo/alpha", provenance: TRUE_CHAIN },
+    ],
+  ]),
+);
+
+const norm = await normalizeSceneFilenames(blocksDir);
+// Фальсификация: записи индекса не переезжают вместе с файлами.
+if (FALSIFY !== "rename-drops-entry")
+  await renameIndexEntries(dir, SLUG, norm.renames);
+await syncSceneIndexBySlug(dir, SLUG);
+
+const renamed = (await readSceneIndexBySlug(dir, SLUG))[0];
+console.log(
+  `  переименование ${JSON.stringify(norm.renames)} → индекс: filename=${renamed?.filename} scope=${renamed?.scope} chain=${JSON.stringify(renamed?.provenance?.chain)}`,
+);
+must("нормализатор действительно переименовал блок", norm.renamed === 1);
+must(
+  "запись индекса переехала на новое имя",
+  renamed?.filename === "Daily-Rhythm.md",
+);
+must(
+  "и переименование не стёрло ни scope, ни цепочку",
+  renamed?.scope === "project" &&
+    renamed?.project_id === "/repo/alpha" &&
+    JSON.stringify(renamed?.provenance) === JSON.stringify(TRUE_CHAIN),
 );
 
 store.close();
