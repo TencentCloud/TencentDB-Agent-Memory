@@ -292,6 +292,36 @@ describe("scope and provenance on both backends", () => {
       ]);
     },
   );
+
+  // The batch path is not a shortcut for the same write: it is the route the
+  // sqlite→tcvdb migration takes, and the route migrate-scope.ts prescribes for
+  // reaching strict on TCVDB at all. It used to build its own document literal,
+  // which never learned about scope.
+  it.each(bothBackends())(
+    "%s writes the same attributes through the batch path",
+    async (name, get) => {
+      const store = get();
+      const batched = scoped(`${name}-batch-own`, "project", OWN);
+      const upsertBatch = (
+        store as unknown as {
+          upsertL1Batch?: (r: MemoryRecord[]) => Promise<number>;
+        }
+      ).upsertL1Batch;
+      if (!upsertBatch) return; // sqlite has no batch API — nothing to diverge.
+      expect([name, await upsertBatch.call(store, [batched])]).toEqual([
+        name,
+        1,
+      ]);
+
+      const strict = await store.searchL1Fts("sentinel", 20, OWN, "strict");
+      const hit = strict.find((h) => h.record_id === `${name}-batch-own`);
+      expect([name, fake.rejectedFilters]).toEqual([name, []]);
+      // strict is the mode the migration exists to reach: a document the batch
+      // wrote without scope would be invisible here.
+      expect([name, hit?.scope]).toEqual([name, "project"]);
+      expect([name, hit?.project_id]).toEqual([name, OWN]);
+    },
+  );
 });
 
 /**

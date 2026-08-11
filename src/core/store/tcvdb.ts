@@ -591,10 +591,15 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
-  private async _upsertL1Async(record: MemoryRecord): Promise<void> {
-    await this._ensureInit();
-    if (this.degraded) return;
-
+  /**
+   * The document one L1 record becomes.
+   *
+   * Single and batch upsert used to build this literal separately, and the
+   * batch copy never learned about scope — so the very route the tcvdb
+   * migration prescribes (export, recreate, re-import) wrote documents with no
+   * scope at all, which the strict filter matches never (tz-05).
+   */
+  private _l1Doc(record: MemoryRecord): Record<string, unknown> {
     const tsStr = record.timestamps[0] ?? "";
     const tsStart =
       record.timestamps.length > 0
@@ -633,8 +638,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
         doc.sparse_vector = sparse[0];
       }
     }
+    return doc;
+  }
 
-    await this.client.upsert(this.l1Collection, [doc]);
+  private async _upsertL1Async(record: MemoryRecord): Promise<void> {
+    await this._ensureInit();
+    if (this.degraded) return;
+    await this.client.upsert(this.l1Collection, [this._l1Doc(record)]);
   }
 
   /**
@@ -647,42 +657,7 @@ export class TcvdbMemoryStore implements IMemoryStore {
       await this._ensureInit();
       if (this.degraded) return 0;
 
-      const docs = records.map((record) => {
-        const tsStr = record.timestamps[0] ?? "";
-        const tsStart =
-          record.timestamps.length > 0
-            ? record.timestamps.reduce((a, b) => (a < b ? a : b))
-            : tsStr;
-        const tsEnd =
-          record.timestamps.length > 0
-            ? record.timestamps.reduce((a, b) => (a > b ? a : b))
-            : tsStr;
-
-        const doc: Record<string, unknown> = {
-          id: record.id,
-          text: record.content,
-          type: record.type,
-          priority: record.priority,
-          scene_name: record.scene_name,
-          agent_id: extractAgentId(record.sessionKey),
-          session_key: record.sessionKey,
-          session_id: record.sessionId,
-          timestamp_str: tsStr,
-          timestamp_start: tsStart,
-          timestamp_end: tsEnd,
-          created_time_ms: isoToEpochMs(record.createdAt),
-          updated_time_ms: isoToEpochMs(record.updatedAt),
-          metadata_json: JSON.stringify(record.metadata),
-        };
-
-        if (this.bm25Encoder) {
-          const sparse = this.bm25Encoder.encodeTexts([record.content]);
-          if (sparse.length > 0 && sparse[0].length > 0) {
-            doc.sparse_vector = sparse[0];
-          }
-        }
-        return doc;
-      });
+      const docs = records.map((record) => this._l1Doc(record));
 
       await this.client.upsert(this.l1Collection, docs);
       return records.length;

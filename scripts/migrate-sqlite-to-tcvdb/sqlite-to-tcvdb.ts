@@ -4,17 +4,24 @@ import { parseArgs } from "node:util";
 import type { MemoryRecord } from "../../src/core/record/l1-writer.js";
 import { listLocalProfiles } from "../../src/core/profile/profile-sync.js";
 import { createBM25Encoder } from "../../src/core/store/bm25-local.js";
-import { VectorStore, type L0RecordRow, type L1RecordRow } from "../../src/core/store/sqlite.js";
+import {
+  VectorStore,
+  type L0RecordRow,
+  type L1RecordRow,
+} from "../../src/core/store/sqlite.js";
 import { TcvdbMemoryStore } from "../../src/core/store/tcvdb.js";
-import type { L0Record, ProfileRecord, ProfileSyncRecord, StoreInitResult } from "../../src/core/store/types.js";
+import type {
+  L0Record,
+  ProfileRecord,
+  ProfileSyncRecord,
+  StoreInitResult,
+} from "../../src/core/store/types.js";
 import { readManifest } from "../../src/utils/manifest.js";
 import {
   rewriteMigrationManifest as rewriteMigrationManifestDefault,
   type RewriteMigrationManifestResult,
 } from "./manifest-write.js";
-import {
-  writeMigrationPluginConfig as writeMigrationPluginConfigDefault,
-} from "./config-write.js";
+import { writeMigrationPluginConfig as writeMigrationPluginConfigDefault } from "./config-write.js";
 
 export const DEFAULT_MIGRATION_PLUGIN_ID = "memory-tencentdb";
 export const ALL_MIGRATION_LAYERS = ["l0", "l1", "l2", "l3"] as const;
@@ -114,8 +121,14 @@ export interface MigrationTargetStore {
   init(providerInfo?: unknown): Promise<StoreInitResult> | StoreInitResult;
   isDegraded(): boolean;
   close(): void;
-  upsertL1(record: MemoryRecord, embedding?: Float32Array): Promise<boolean> | boolean;
-  upsertL0(record: L0Record, embedding?: Float32Array): Promise<boolean> | boolean;
+  upsertL1(
+    record: MemoryRecord,
+    embedding?: Float32Array,
+  ): Promise<boolean> | boolean;
+  upsertL0(
+    record: L0Record,
+    embedding?: Float32Array,
+  ): Promise<boolean> | boolean;
   upsertL1Batch?(records: MemoryRecord[]): Promise<number>;
   upsertL0Batch?(records: L0Record[]): Promise<number>;
   countL1(): Promise<number> | number;
@@ -125,7 +138,9 @@ export interface MigrationTargetStore {
 }
 
 export interface RunMigrationCliDeps {
-  createTargetStore?: (options: ResolvedMigrationCliOptions) => MigrationTargetStore;
+  createTargetStore?: (
+    options: ResolvedMigrationCliOptions,
+  ) => MigrationTargetStore;
   writeMigrationPluginConfig?: typeof writeMigrationPluginConfigDefault;
   rewriteMigrationManifest?: (params: {
     dataDir: string;
@@ -136,7 +151,10 @@ export interface RunMigrationCliDeps {
   verifyDelayMs?: number;
 }
 
-function getRequiredString(values: Record<string, string | boolean | undefined>, key: string): string {
+function getRequiredString(
+  values: Record<string, string | boolean | undefined>,
+  key: string,
+): string {
   const value = values[key];
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`Missing required option --${key}`);
@@ -144,7 +162,10 @@ function getRequiredString(values: Record<string, string | boolean | undefined>,
   return value.trim();
 }
 
-function getOptionalString(values: Record<string, string | boolean | undefined>, key: string): string | undefined {
+function getOptionalString(
+  values: Record<string, string | boolean | undefined>,
+  key: string,
+): string | undefined {
   const value = values[key];
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -160,23 +181,31 @@ function resolveBooleanOption(
   return typeof value === "boolean" ? value : defaultValue;
 }
 
-function resolveTcvdbApiKey(values: Record<string, string | boolean | undefined>): string {
+function resolveTcvdbApiKey(
+  values: Record<string, string | boolean | undefined>,
+): string {
   const directApiKey = getOptionalString(values, "tcvdb-api-key");
   const apiKeyEnvName = getOptionalString(values, "tcvdb-api-key-env");
 
   if (directApiKey && apiKeyEnvName) {
-    throw new Error("Provide either --tcvdb-api-key or --tcvdb-api-key-env, not both");
+    throw new Error(
+      "Provide either --tcvdb-api-key or --tcvdb-api-key-env, not both",
+    );
   }
   if (directApiKey) {
     return directApiKey;
   }
   if (!apiKeyEnvName) {
-    throw new Error("Missing required TCVDB API key input: use --tcvdb-api-key or --tcvdb-api-key-env");
+    throw new Error(
+      "Missing required TCVDB API key input: use --tcvdb-api-key or --tcvdb-api-key-env",
+    );
   }
 
   const envValue = process.env[apiKeyEnvName]?.trim();
   if (!envValue) {
-    throw new Error(`Environment variable ${apiKeyEnvName} is empty or not set`);
+    throw new Error(
+      `Environment variable ${apiKeyEnvName} is empty or not set`,
+    );
   }
   return envValue;
 }
@@ -195,7 +224,8 @@ function parseLayers(rawLayers: string | undefined): MigrationLayer[] {
 
   const uniqueLayers = [...new Set(values)];
   const invalid = uniqueLayers.filter(
-    (layer): layer is string => !ALL_MIGRATION_LAYERS.includes(layer as MigrationLayer),
+    (layer): layer is string =>
+      !ALL_MIGRATION_LAYERS.includes(layer as MigrationLayer),
   );
   if (invalid.length > 0) {
     throw new Error(`Unsupported layer(s): ${invalid.join(", ")}`);
@@ -225,7 +255,9 @@ function parseTimeout(rawValue: string | undefined): number {
  * Build a "nothing to migrate" summary — used when source data dir or sqlite
  * file doesn't exist (e.g. fresh deployment that hasn't captured any data yet).
  */
-function buildEmptySummary(options: ResolvedMigrationCliOptions): MigrationPreflightSummary {
+function buildEmptySummary(
+  options: ResolvedMigrationCliOptions,
+): MigrationPreflightSummary {
   return {
     pluginId: options.pluginId,
     dryRun: options.dryRun,
@@ -263,15 +295,23 @@ function buildEmptySummary(options: ResolvedMigrationCliOptions): MigrationPrefl
   };
 }
 
-async function ensureReadablePath(filePath: string, label: string): Promise<void> {
+async function ensureReadablePath(
+  filePath: string,
+  label: string,
+): Promise<void> {
   try {
     await fs.access(filePath);
   } catch {
-    throw new Error(`${label} does not exist or is not accessible: ${filePath}`);
+    throw new Error(
+      `${label} does not exist or is not accessible: ${filePath}`,
+    );
   }
 }
 
-async function ensureReadableDirectory(dirPath: string, label: string): Promise<void> {
+async function ensureReadableDirectory(
+  dirPath: string,
+  label: string,
+): Promise<void> {
   const stat = await fs.stat(dirPath).catch(() => null);
   if (!stat?.isDirectory()) {
     throw new Error(`${label} is not a directory: ${dirPath}`);
@@ -291,12 +331,23 @@ function safeParseMetadata(raw: string): Record<string, unknown> {
 }
 
 function compactTimestamps(row: L1RecordRow): string[] {
-  return [...new Set([row.timestamp_str, row.timestamp_start, row.timestamp_end].filter(Boolean))];
+  return [
+    ...new Set(
+      [row.timestamp_str, row.timestamp_start, row.timestamp_end].filter(
+        Boolean,
+      ),
+    ),
+  ];
 }
 
 function mapL1RowToMemoryRecord(row: L1RecordRow): MemoryRecord {
   const timestamps = compactTimestamps(row);
-  const fallbackIso = row.updated_time || row.created_time || row.timestamp_end || row.timestamp_str || new Date(0).toISOString();
+  const fallbackIso =
+    row.updated_time ||
+    row.created_time ||
+    row.timestamp_end ||
+    row.timestamp_str ||
+    new Date(0).toISOString();
   return {
     id: row.record_id,
     content: row.content,
@@ -310,6 +361,14 @@ function mapL1RowToMemoryRecord(row: L1RecordRow): MemoryRecord {
     updatedAt: row.updated_time || row.created_time || fallbackIso,
     sessionKey: row.session_key || "",
     sessionId: row.session_id || "",
+    // tz-05: scope travels with the record. A row written before the column
+    // existed says nothing, and stays silent here — the target's writer then
+    // stamps its own default, which is the same choice migrate-scope.ts makes
+    // explicit with --default-scope.
+    ...(row.scope === "global" || row.scope === "project"
+      ? { scope: row.scope }
+      : {}),
+    projectId: row.project_id || "",
   };
 }
 
@@ -325,13 +384,13 @@ function mapL0RowToRecord(row: L0RecordRow): L0Record {
   };
 }
 
-function createTargetStoreDefault(options: ResolvedMigrationCliOptions): MigrationTargetStore {
-  const bm25Encoder = createBM25Encoder(
-    {
-      enabled: options.bm25Enabled,
-      language: options.bm25Language,
-    },
-  );
+function createTargetStoreDefault(
+  options: ResolvedMigrationCliOptions,
+): MigrationTargetStore {
+  const bm25Encoder = createBM25Encoder({
+    enabled: options.bm25Enabled,
+    language: options.bm25Language,
+  });
 
   return new TcvdbMemoryStore({
     url: options.tcvdb.url,
@@ -354,7 +413,9 @@ async function ensureTargetIsEmpty(
   const [existingL1, existingL0, existingProfiles] = await Promise.all([
     Promise.resolve(targetStore.countL1()),
     Promise.resolve(targetStore.countL0()),
-    targetStore.pullProfiles ? targetStore.pullProfiles().then((records) => records.length) : Promise.resolve(0),
+    targetStore.pullProfiles
+      ? targetStore.pullProfiles().then((records) => records.length)
+      : Promise.resolve(0),
   ]);
 
   if (existingL1 > 0 || existingL0 > 0 || existingProfiles > 0) {
@@ -364,7 +425,11 @@ async function ensureTargetIsEmpty(
   }
 }
 
-async function migrateL1Records(sourceStore: VectorStore, targetStore: MigrationTargetStore, pageSize: number): Promise<number> {
+async function migrateL1Records(
+  sourceStore: VectorStore,
+  targetStore: MigrationTargetStore,
+  pageSize: number,
+): Promise<number> {
   let migrated = 0;
   let cursor = "";
   const useBatch = typeof targetStore.upsertL1Batch === "function";
@@ -379,7 +444,9 @@ async function migrateL1Records(sourceStore: VectorStore, targetStore: Migration
     if (useBatch) {
       const count = await targetStore.upsertL1Batch!(records);
       if (count === 0) {
-        throw new Error(`Failed to batch migrate L1 records (cursor=${cursor}, page=${rows.length})`);
+        throw new Error(
+          `Failed to batch migrate L1 records (cursor=${cursor}, page=${rows.length})`,
+        );
       }
     } else {
       for (const record of records) {
@@ -399,7 +466,11 @@ async function migrateL1Records(sourceStore: VectorStore, targetStore: Migration
   return migrated;
 }
 
-async function migrateL0Records(sourceStore: VectorStore, targetStore: MigrationTargetStore, pageSize: number): Promise<number> {
+async function migrateL0Records(
+  sourceStore: VectorStore,
+  targetStore: MigrationTargetStore,
+  pageSize: number,
+): Promise<number> {
   let migrated = 0;
   let cursor = "";
   const useBatch = typeof targetStore.upsertL0Batch === "function";
@@ -414,7 +485,9 @@ async function migrateL0Records(sourceStore: VectorStore, targetStore: Migration
     if (useBatch) {
       const count = await targetStore.upsertL0Batch!(records);
       if (count === 0) {
-        throw new Error(`Failed to batch migrate L0 records (cursor=${cursor}, page=${rows.length})`);
+        throw new Error(
+          `Failed to batch migrate L0 records (cursor=${cursor}, page=${rows.length})`,
+        );
       }
     } else {
       for (const record of records) {
@@ -466,16 +539,24 @@ async function verifyMigratedCounts(
   const [l1Count, l0Count, profileCount] = await Promise.all([
     Promise.resolve(targetStore.countL1()),
     Promise.resolve(targetStore.countL0()),
-    targetStore.pullProfiles ? targetStore.pullProfiles().then((records) => records.length) : Promise.resolve(0),
+    targetStore.pullProfiles
+      ? targetStore.pullProfiles().then((records) => records.length)
+      : Promise.resolve(0),
   ]);
 
-  log(`校验结果: L1=${l1Count}/${summary.source.l1Count}, L0=${l0Count}/${summary.source.l0Count}, Profiles=${profileCount}/${summary.source.profileCount}`);
+  log(
+    `校验结果: L1=${l1Count}/${summary.source.l1Count}, L0=${l0Count}/${summary.source.l0Count}, Profiles=${profileCount}/${summary.source.profileCount}`,
+  );
 
   if (l1Count !== summary.source.l1Count) {
-    throw new Error(`L1 count verification failed: source=${summary.source.l1Count}, target=${l1Count}`);
+    throw new Error(
+      `L1 count verification failed: source=${summary.source.l1Count}, target=${l1Count}`,
+    );
   }
   if (l0Count !== summary.source.l0Count) {
-    throw new Error(`L0 count verification failed: source=${summary.source.l0Count}, target=${l0Count}`);
+    throw new Error(
+      `L0 count verification failed: source=${summary.source.l0Count}, target=${l0Count}`,
+    );
   }
   if (profileCount !== summary.source.profileCount) {
     throw new Error(
@@ -493,7 +574,11 @@ async function writeSummaryJson(
 ): Promise<void> {
   if (!summaryJsonPath) return;
   await fs.mkdir(path.dirname(summaryJsonPath), { recursive: true });
-  await fs.writeFile(summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf-8");
+  await fs.writeFile(
+    summaryJsonPath,
+    `${JSON.stringify(summary, null, 2)}\n`,
+    "utf-8",
+  );
 }
 
 function printUsageAndExit(): never {
@@ -561,7 +646,9 @@ Examples:
   process.exit(0);
 }
 
-export function resolveMigrationCliOptions(argv: string[]): ResolvedMigrationCliOptions {
+export function resolveMigrationCliOptions(
+  argv: string[],
+): ResolvedMigrationCliOptions {
   const { values } = parseArgs({
     args: argv,
     strict: true,
@@ -601,28 +688,40 @@ export function resolveMigrationCliOptions(argv: string[]): ResolvedMigrationCli
     printUsageAndExit();
   }
 
-  const pluginDataDir = path.resolve(getRequiredString(values, "plugin-data-dir"));
+  const pluginDataDir = path.resolve(
+    getRequiredString(values, "plugin-data-dir"),
+  );
   const sqlitePath = path.resolve(
-    getOptionalString(values, "sqlite-path") ?? path.join(pluginDataDir, "vectors.db"),
+    getOptionalString(values, "sqlite-path") ??
+      path.join(pluginDataDir, "vectors.db"),
   );
   const summaryJsonPath = getOptionalString(values, "summary-json-path");
 
   return {
     pluginDataDir,
     sqlitePath,
-    openclawConfigPath: path.resolve(getRequiredString(values, "openclaw-config-path")),
-    pluginId: getOptionalString(values, "plugin-id") ?? DEFAULT_MIGRATION_PLUGIN_ID,
+    openclawConfigPath: path.resolve(
+      getRequiredString(values, "openclaw-config-path"),
+    ),
+    pluginId:
+      getOptionalString(values, "plugin-id") ?? DEFAULT_MIGRATION_PLUGIN_ID,
     layers: parseLayers(getOptionalString(values, "layers")),
     applyConfig: resolveBooleanOption(values, "apply-config", true),
     configBackup: resolveBooleanOption(values, "config-backup", true),
     rewriteManifest: resolveBooleanOption(values, "rewrite-manifest", true),
-    failIfTargetNonempty: resolveBooleanOption(values, "fail-if-target-nonempty", true),
+    failIfTargetNonempty: resolveBooleanOption(
+      values,
+      "fail-if-target-nonempty",
+      true,
+    ),
     verifyCounts: resolveBooleanOption(values, "verify-counts", true),
     dryRun: resolveBooleanOption(values, "dry-run", false),
     yes: resolveBooleanOption(values, "yes", false),
     bm25Enabled: resolveBooleanOption(values, "bm25-enabled", true),
     bm25Language: parseBm25Language(getOptionalString(values, "bm25-language")),
-    summaryJsonPath: summaryJsonPath ? path.resolve(summaryJsonPath) : undefined,
+    summaryJsonPath: summaryJsonPath
+      ? path.resolve(summaryJsonPath)
+      : undefined,
     jobId: getOptionalString(values, "job-id"),
     tcvdb: {
       url: getRequiredString(values, "tcvdb-url"),
@@ -643,12 +742,18 @@ export async function collectMigrationPreflight(
   // ── 优雅处理"数据目录 / sqlite 不存在"的场景 ──
   // 如果源数据路径不存在（全新部署、尚未有任何 capture），不报错——
   // 返回"全零"summary，让调用方判断是否跳过迁移。
-  const dirExists = await fs.stat(options.pluginDataDir).then(s => s.isDirectory()).catch(() => false);
+  const dirExists = await fs
+    .stat(options.pluginDataDir)
+    .then((s) => s.isDirectory())
+    .catch(() => false);
   if (!dirExists) {
     log(`plugin data directory 不存在，无需迁移: ${options.pluginDataDir}`);
     return buildEmptySummary(options);
   }
-  const sqliteExists = await fs.access(options.sqlitePath).then(() => true).catch(() => false);
+  const sqliteExists = await fs
+    .access(options.sqlitePath)
+    .then(() => true)
+    .catch(() => false);
   if (!sqliteExists) {
     log(`sqlite database 不存在，无需迁移: ${options.sqlitePath}`);
     return buildEmptySummary(options);
@@ -659,7 +764,9 @@ export async function collectMigrationPreflight(
   const initResult = store.init();
   if (store.isDegraded()) {
     store.close();
-    throw new Error(`Failed to open sqlite store for migration preflight: ${initResult.reason ?? "unknown error"}`);
+    throw new Error(
+      `Failed to open sqlite store for migration preflight: ${initResult.reason ?? "unknown error"}`,
+    );
   }
 
   try {
@@ -715,10 +822,15 @@ export async function runMigrationCli(
   const options = resolveMigrationCliOptions(argv);
   log("开始预检...");
   const summary = await collectMigrationPreflight(options);
-  log(`预检完成: 源数据 L1=${summary.source.l1Count}, L0=${summary.source.l0Count}, Profiles=${summary.source.profileCount}`);
+  log(
+    `预检完成: 源数据 L1=${summary.source.l1Count}, L0=${summary.source.l0Count}, Profiles=${summary.source.profileCount}`,
+  );
   log(`目标: ${summary.target.url} / ${summary.target.database}`);
 
-  const hasSourceData = summary.source.l0Count > 0 || summary.source.l1Count > 0 || summary.source.profileCount > 0;
+  const hasSourceData =
+    summary.source.l0Count > 0 ||
+    summary.source.l1Count > 0 ||
+    summary.source.profileCount > 0;
 
   if (!hasSourceData) {
     log("源数据为空，跳过数据迁移。");
@@ -731,9 +843,11 @@ export async function runMigrationCli(
   }
 
   const createTargetStore = deps.createTargetStore ?? createTargetStoreDefault;
-  const writeMigrationPluginConfig = deps.writeMigrationPluginConfig ?? writeMigrationPluginConfigDefault;
-  const rewriteMigrationManifest = deps.rewriteMigrationManifest ?? (async (params) =>
-    await rewriteMigrationManifestDefault(params));
+  const writeMigrationPluginConfig =
+    deps.writeMigrationPluginConfig ?? writeMigrationPluginConfigDefault;
+  const rewriteMigrationManifest =
+    deps.rewriteMigrationManifest ??
+    (async (params) => await rewriteMigrationManifestDefault(params));
 
   const migration = {
     l1Migrated: 0,
@@ -753,7 +867,9 @@ export async function runMigrationCli(
     const sourceInitResult = sourceStore.init();
     if (sourceStore.isDegraded()) {
       sourceStore.close();
-      throw new Error(`Failed to reopen sqlite source store: ${sourceInitResult.reason ?? "unknown error"}`);
+      throw new Error(
+        `Failed to reopen sqlite source store: ${sourceInitResult.reason ?? "unknown error"}`,
+      );
     }
 
     log("初始化目标库...");
@@ -762,7 +878,9 @@ export async function runMigrationCli(
     try {
       await Promise.resolve(targetStore.init());
       if (targetStore.isDegraded()) {
-        throw new Error("Target store entered degraded mode during initialization");
+        throw new Error(
+          "Target store entered degraded mode during initialization",
+        );
       }
 
       await ensureTargetIsEmpty(options, targetStore);
@@ -770,11 +888,16 @@ export async function runMigrationCli(
       const pageSize = DEFAULT_MIGRATION_PAGE_SIZE;
       log(`分页大小: ${pageSize} 条/批`);
 
-      migration.l1Migrated = options.layers.includes("l1") ? await migrateL1Records(sourceStore, targetStore, pageSize) : 0;
-      migration.l0Migrated = options.layers.includes("l0") ? await migrateL0Records(sourceStore, targetStore, pageSize) : 0;
-      migration.profileMigrated = options.layers.includes("l2") || options.layers.includes("l3")
-        ? await migrateProfiles(options.pluginDataDir, targetStore)
+      migration.l1Migrated = options.layers.includes("l1")
+        ? await migrateL1Records(sourceStore, targetStore, pageSize)
         : 0;
+      migration.l0Migrated = options.layers.includes("l0")
+        ? await migrateL0Records(sourceStore, targetStore, pageSize)
+        : 0;
+      migration.profileMigrated =
+        options.layers.includes("l2") || options.layers.includes("l3")
+          ? await migrateProfiles(options.pluginDataDir, targetStore)
+          : 0;
 
       const verifyDelayMs = deps.verifyDelayMs ?? 10_000;
 
@@ -783,7 +906,9 @@ export async function runMigrationCli(
         : {
             l1Count: await Promise.resolve(targetStore.countL1()),
             l0Count: await Promise.resolve(targetStore.countL0()),
-            profileCount: targetStore.pullProfiles ? (await targetStore.pullProfiles()).length : 0,
+            profileCount: targetStore.pullProfiles
+              ? (await targetStore.pullProfiles()).length
+              : 0,
           };
 
       migration.targetL1Count = verifiedCounts.l1Count;
@@ -826,9 +951,12 @@ export async function runMigrationCli(
       tcvdbDatabase: options.tcvdb.database,
       tcvdbAlias: options.tcvdb.alias || undefined,
     });
-    migration.manifestWritten = manifestResult.created || manifestResult.updated;
+    migration.manifestWritten =
+      manifestResult.created || manifestResult.updated;
     migration.manifestBackupPath = manifestResult.backupPath;
-    log(`Manifest ${manifestResult.created ? "创建" : "更新"}完成${manifestResult.backupPath ? `，备份: ${manifestResult.backupPath}` : ""}`);
+    log(
+      `Manifest ${manifestResult.created ? "创建" : "更新"}完成${manifestResult.backupPath ? `，备份: ${manifestResult.backupPath}` : ""}`,
+    );
   }
 
   summary.migration = {
