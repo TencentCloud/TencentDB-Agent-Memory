@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **FTS5 查询输入净化** ([#160](https://github.com/Tencent/TencentDB-Agent-Memory/issues/160))：`buildFtsQuery()` 在 jieba 与 fallback 分词路径统一执行 NFKC 归一化、FTS5 语法剥离和安全 token 白名单过滤，防止 `AND` / `OR` / `NOT` / `NEAR` 等用户输入改变 MATCH 查询语义。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
