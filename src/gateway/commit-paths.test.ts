@@ -103,7 +103,7 @@ describe("scene extraction failure path", () => {
     const extractor = new SceneExtractor({
       dataDir: dir,
       config: {},
-      runner: {
+      llmRunner: {
         run: () => Promise.reject(new Error("LLM unavailable")),
       } as never,
     });
