@@ -30,6 +30,7 @@ import { buildRoleDefaults } from "../role-defaults.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
 import { createRequire } from "node:module";
+import { RESULT_REL } from "./attempt-layout.js";
 
 // tz-06 Ф5b: every host now goes through ONE process runner, so the surface
 // is captured as the child's real argv instead of pi's pre-split option bag.
@@ -289,7 +290,7 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
         tools = [];
       }
       await fs.promises.writeFile(
-        path.join(scratchDir, "diff.json"),
+        path.join(scratchDir, RESULT_REL),
         JSON.stringify({}),
         "utf-8",
       );
@@ -398,6 +399,27 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
       "fetch_dups.py",
       "fetch_records.py",
     ]);
+  });
+
+  // tz-02 критерий 6: the model on the L2 path comes from the resolved
+  // instance binding. The global config below names a DIFFERENT model on
+  // purpose — if anything still read it, this is where it would show.
+  it("model from binding — the role's model reaches the spawn, not the global one", async () => {
+    fs.writeFileSync(
+      path.join(roleDir, "memory-keeper", "role.json"),
+      JSON.stringify({
+        ...ROLE_FIXTURES["memory-keeper"],
+        model: "probe/only-in-the-role",
+        runtime: {
+          extension_path: path.join(tmp, "ext", "memory-keeper", "index.ts"),
+          skill_path: path.join(tmp, "skills", "memory-keeper", "SKILL.md"),
+          scratch_root: path.join(tmp, "runs", "memory-keeper"),
+        },
+      }),
+      "utf-8",
+    );
+    const s = await captureSurface("memory-keeper");
+    expect(s.model).toBe("probe/only-in-the-role");
   });
 
   it("night-keeper spawn surface is stable", async () => {
