@@ -2,18 +2,16 @@
  * Read L1 records + advance the consolidation checkpoint.
  *
  * queryRecentRecords: fresh-tail sweep (day) or full-store sweep (night).
- * advanceCheckpoint: cursor update + per-role stat rollup.
  *
- * Split from runner.ts to keep that file ≤150 lines.
+ * Split from runner.ts to keep that file ≤150 lines; the checkpoint advance
+ * itself moved on to checkpoint-advance.ts for the same reason (tz-03a).
  */
 
 import path from "node:path";
 import { openReadonlySqlite } from "../http-utils.js";
-import { maxL0RecordedAt, type RecordEntry } from "./diff-builder.js";
+import { type RecordEntry } from "./diff-builder.js";
 import { NIGHT_SWEEP_LIMIT } from "./types.js";
 import type { OrchestratorContext } from "./context.js";
-import type { RunSummary } from "./types.js";
-import type { RoleProgress } from "./checkpoint.js";
 
 /** Fresh L1 records (updated/created >= cursor), oldest-first, capped. */
 export function queryRecentRecords(
@@ -60,71 +58,4 @@ export function queryRecentRecords(
   } catch {
     return [];
   }
-}
-
-/**
- * Stamp `roles[<role>].lastRunAt` for a run that did NOT advance the cursor
- * (an empty sweep, a refused apply). The dispatcher's per-role `ranToday`
- * asks "did this role run today", not "did it move the cursor" — without the
- * stamp a scheduled role with nothing to do would re-fire every tick.
- */
-/** The per-role progress record after a run. A FAILED run keeps the previous
- * `lastRunAt` (it did not run successfully, so the dispatcher must retry) but
- * counts the failure, which is what bounds those retries. */
-export function roleProgressAfterRun(
-  prev: RoleProgress | undefined,
-  summary: RunSummary,
-): RoleProgress {
-  const ok = summary.status === "ok";
-  return {
-    lastRunAt: ok ? summary.finishedAt : (prev?.lastRunAt ?? ""),
-    recordsProcessed: summary.recordsPresented,
-    overLimitBlocks: summary.overLimitBlocks,
-    merges: ok ? summary.applied.merges.length : (prev?.merges ?? 0),
-    rewrites: ok ? summary.applied.rewrites.length : (prev?.rewrites ?? 0),
-    errors: ok ? 0 : 1,
-    consecutiveFailures: ok ? 0 : (prev?.consecutiveFailures ?? 0) + 1,
-    lastFailureAt: ok ? undefined : summary.finishedAt,
-  };
-}
-
-export async function stampRoleRun(
-  ctx: OrchestratorContext,
-  summary: RunSummary,
-): Promise<void> {
-  await ctx.checkpoint.update((d) => {
-    d.roles[summary.role] = roleProgressAfterRun(
-      d.roles[summary.role],
-      summary,
-    );
-  });
-}
-
-/**
- * Advance the consolidation checkpoint.
- * Day: anchoredCursor omitted → cursor = current maxL0RecordedAt().
- * Night: anchoredCursor = max slice-time of applied chunks BEFORE the
- *   first skip-merge (anchored advance, plan #9).
- */
-export async function advanceCheckpoint(
-  ctx: OrchestratorContext,
-  prevCursor: string,
-  newL0: number,
-  summary: RunSummary,
-  anchoredCursor?: string,
-): Promise<void> {
-  const cursor = (anchoredCursor ??
-    maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db")))!;
-  ctx.logger.debug?.(
-    `[checkpoint] advance role=${summary.role} prev=${prevCursor} new=${cursor} newL0=${newL0} status=${summary.status}`,
-  );
-  await ctx.checkpoint.update((d) => {
-    d.lastRunAt = summary.finishedAt;
-    if (cursor && cursor >= prevCursor) d.l0Cursor = cursor;
-    d.l0Count += newL0;
-    d.roles[summary.role] = roleProgressAfterRun(
-      d.roles[summary.role],
-      summary,
-    );
-  });
 }

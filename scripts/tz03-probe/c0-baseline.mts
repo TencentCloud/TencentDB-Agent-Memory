@@ -15,7 +15,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { advanceCheckpoint } from "../../src/gateway/consolidation/queries.js";
+import { advanceCheckpoint } from "../../src/gateway/consolidation/checkpoint-advance.js";
 import { ConsolidationCheckpoint } from "../../src/gateway/consolidation/checkpoint.js";
 import { openWritableSqlite } from "../../src/gateway/http-utils.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";

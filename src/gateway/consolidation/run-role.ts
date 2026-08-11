@@ -9,7 +9,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeReport } from "./reports.js";
-import { advanceCheckpoint, stampRoleRun } from "./queries.js";
+import {
+  advanceCheckpoint,
+  stampRoleRun,
+} from "./checkpoint-advance.js";
 import { collectBlockMeta, countNewL0Since } from "./diff-builder.js";
 import { mkFailedSummary } from "./summary.js";
 import { runFreshTailSingleBatch } from "./run-strategy-fresh-tail.js";
