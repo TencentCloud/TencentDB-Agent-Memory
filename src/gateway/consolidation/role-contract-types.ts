@@ -88,6 +88,9 @@ export interface ResolvedRoleContract {
     extensionPath: string | null;
     skillPath: string | null;
     scratchRoot: string | null;
+    /** True → the attempt dir outlives the run and is deleted by retention
+     * (tz-02 критерий 4): an unconditional wipe leaves nothing to inspect. */
+    keepScratch: boolean;
   };
 }
 

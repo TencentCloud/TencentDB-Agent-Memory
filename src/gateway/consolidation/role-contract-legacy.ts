@@ -170,6 +170,7 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       extensionPath: cfg.runtime?.extension_path ?? null,
       skillPath: cfg.runtime?.skill_path ?? null,
       scratchRoot: cfg.runtime?.scratch_root ?? null,
+      keepScratch: cfg.runtime?.keep_scratch ?? false,
     },
   };
   contract.contractHash = hashContract(contract);

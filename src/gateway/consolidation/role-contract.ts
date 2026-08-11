@@ -17,6 +17,7 @@ import path from "node:path";
 import { inspectRoleConfig } from "../role-schema.js";
 import { adaptRoleContract } from "./role-contract-legacy.js";
 import { resolveRolePrompt } from "./role-contract-prompt.js";
+import { resolveRoleDir } from "../role-files.js";
 import type {
   ResolvedRoleContract,
   RoleLegacyDefaults,
@@ -220,6 +221,24 @@ export function listRoleContracts(
     out.push(resolveRoleContract(name, roleDir, legacy));
   }
   return out;
+}
+
+/**
+ * Every scratch root the roles on disk declare (tz-02 Ф5). Cleanup needs them
+ * because `keep_scratch` leaves attempt dirs behind and a role's own root is
+ * not under the instance root — nothing else would ever sweep it.
+ */
+export function roleScratchRoots(
+  legacy: RoleLegacyDefaults,
+  roleDir: string = resolveRoleDir(),
+): string[] {
+  const roots = new Set<string>();
+  for (const res of listRoleContracts(roleDir, legacy)) {
+    if (res.ok && res.contract.assets.scratchRoot !== null) {
+      roots.add(res.contract.assets.scratchRoot);
+    }
+  }
+  return [...roots];
 }
 
 export type { ResolvedRoleContract, RoleResolution, RoleLegacyDefaults };

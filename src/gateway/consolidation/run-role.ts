@@ -155,7 +155,11 @@ export async function runRole(
     return summary;
   } finally {
     ctx.childrenRef.value.delete(opts.runId);
-    if (!opts.dryRun) {
+    // `keep_scratch` hands the attempt dir to retention instead of deleting it
+    // here (tz-02 критерий 4). Deleting it unconditionally is what made a run
+    // impossible to take apart afterwards: by the time anyone looked, the
+    // input, the candidate and the verdict were gone.
+    if (!opts.dryRun && !opts.contract.assets.keepScratch) {
       try {
         await fs.promises.rm(runScratch, { recursive: true, force: true });
       } catch {

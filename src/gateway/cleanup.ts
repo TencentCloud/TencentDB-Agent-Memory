@@ -57,7 +57,10 @@ export function sanitizeCwdToken(raw: string): string | null {
  */
 export function sanitizeAbsoluteCwdToken(raw: string): string | null {
   if (!raw) return null;
-  const segments = raw.replace(/^[/\\]+/, "").split(/[\\/]+/).filter((s) => s.length > 0);
+  const segments = raw
+    .replace(/^[/\\]+/, "")
+    .split(/[\\/]+/)
+    .filter((s) => s.length > 0);
   if (segments.length === 0) return null;
   return segments.map((s) => s.replace(/[^A-Za-z0-9_-]/g, "-")).join("-");
 }
@@ -69,7 +72,10 @@ export function sanitizeAbsoluteCwdToken(raw: string): string | null {
  * gateway constructed — sanitized the same way pi does — and the output always
  * lands under `~/.pi/agent/tasks/`.
  */
-export function tasksSubtreeForScratch(opts: { home: string; cwd: string }): string | null {
+export function tasksSubtreeForScratch(opts: {
+  home: string;
+  cwd: string;
+}): string | null {
   const token = sanitizeAbsoluteCwdToken(path.resolve(opts.cwd));
   if (!token) return null;
   return path.join(opts.home, ".pi", "agent", "tasks", `--${token}--`);
@@ -99,6 +105,13 @@ export interface CleanupDeps {
   dataDir: string;
   /** Scratch root OUTSIDE the memory tree (sibling of dataDir). */
   scratchRoot: string;
+  /**
+   * Extra roots a role brought with it (`runtime.scratch_root`), tz-02 Ф5.
+   * Without them a role with its own root is never swept: `keep_scratch` makes
+   * attempt dirs survive the run, and the only thing that deletes them after
+   * that is this pass.
+   */
+  extraScratchRoots?: readonly string[];
   home: string;
   /** Parsed memory.cleanup config. */
   config: { enabled: boolean; intervalHours: number; paths: string[] };
@@ -132,7 +145,12 @@ function isStale(mtimeMs: number, nowMs: number, maxAgeMs: number): boolean {
  * (fail-open; the timer must not crash the gateway over a cleanup hiccup).
  */
 export function runCleanup(deps: CleanupDeps): CleanupStats {
-  const stats: CleanupStats = { removedFiles: 0, removedDirs: 0, errors: [], scanned: [] };
+  const stats: CleanupStats = {
+    removedFiles: 0,
+    removedDirs: 0,
+    errors: [],
+    scanned: [],
+  };
   if (!deps.config.enabled) return stats;
   const nowMs = deps.now();
   const maxAge = maxAgeMsFor(deps.config);
@@ -141,7 +159,9 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
   for (const rel of deps.config.paths) {
     const resolved = resolveDataDirRelative(deps.dataDir, rel);
     if (!resolved) {
-      stats.errors.push(`cleanup: configured path "${rel}" rejected (not dataDir-relative)`);
+      stats.errors.push(
+        `cleanup: configured path "${rel}" rejected (not dataDir-relative)`,
+      );
       continue;
     }
     stats.scanned.push(resolved);
@@ -153,18 +173,25 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
   stats.scanned.push(backupDir);
   ageCleanDir(backupDir, nowMs, maxAge, stats);
 
-  // 3. Stale run scratch dirs under scratchRoot (crash leftovers).
-  stats.scanned.push(deps.scratchRoot);
-  ageCleanDir(deps.scratchRoot, nowMs, maxAge, stats);
+  // 3. Stale run scratch dirs by age, in EVERY root a run could have used.
+  const roots = [
+    ...new Set([deps.scratchRoot, ...(deps.extraScratchRoots ?? [])]),
+  ];
+  for (const root of roots) {
+    stats.scanned.push(root);
+    ageCleanDir(root, nowMs, maxAge, stats);
+  }
 
   // 4. Tasks subtrees derived from scratch dirs (exact) + marker sweep.
-  const scratchRoots: string[] = [deps.scratchRoot];
-  try {
-    for (const entry of fs.readdirSync(deps.scratchRoot)) {
-      scratchRoots.push(path.join(deps.scratchRoot, entry));
+  const scratchRoots: string[] = [...roots];
+  for (const root of roots) {
+    try {
+      for (const entry of fs.readdirSync(root)) {
+        scratchRoots.push(path.join(root, entry));
+      }
+    } catch {
+      // root missing — nothing to derive.
     }
-  } catch {
-    // scratchRoot missing — nothing to derive.
   }
   const exactSubtrees = new Set<string>();
   for (const cwd of scratchRoots) {
@@ -173,10 +200,12 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
   }
   // Marker sweep: dirs whose name contains the scratch marker (covers a
   // sanitizer mismatch between this module and pi's internal one).
-  const marker = path.basename(deps.scratchRoot).replace(/[^A-Za-z0-9_-]/g, "-");
+  const markers = roots.map((r) =>
+    path.basename(r).replace(/[^A-Za-z0-9_-]/g, "-"),
+  );
   const targets = new Set<string>(exactSubtrees);
   for (const p of listTaskSubtrees(deps.home)) {
-    if (path.basename(p).includes(marker)) targets.add(p);
+    if (markers.some((m) => path.basename(p).includes(m))) targets.add(p);
   }
   for (const target of targets) {
     stats.scanned.push(target);
@@ -186,7 +215,7 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
   if (stats.removedFiles > 0 || stats.removedDirs > 0) {
     deps.logger.info?.(
       `[memory-cleanup] removed ${stats.removedFiles} file(s), ${stats.removedDirs} dir(s)` +
-      (stats.errors.length > 0 ? `; errors: ${stats.errors.length}` : ""),
+        (stats.errors.length > 0 ? `; errors: ${stats.errors.length}` : ""),
     );
   }
   return stats;
@@ -198,7 +227,8 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
  * scene_blocks / persona.md) — cleanup must never touch memory data.
  */
 function resolveDataDirRelative(dataDir: string, rel: string): string | null {
-  if (!rel || rel.startsWith("/") || rel.startsWith("~") || rel.includes("..")) return null;
+  if (!rel || rel.startsWith("/") || rel.startsWith("~") || rel.includes(".."))
+    return null;
   const dataRoot = path.resolve(dataDir);
   const resolved = path.resolve(dataRoot, rel);
   // Root sweep guard: a path resolving to dataDir itself ('.', './', the
@@ -207,14 +237,24 @@ function resolveDataDirRelative(dataDir: string, rel: string): string | null {
   if (resolved === dataRoot) return null;
   if (!resolved.startsWith(dataRoot + path.sep)) return null;
   const base = path.basename(resolved);
-  if (base === "records" || base === "vectors.db" || base === "scene_blocks" || base === "persona.md") {
+  if (
+    base === "records" ||
+    base === "vectors.db" ||
+    base === "scene_blocks" ||
+    base === "persona.md"
+  ) {
     return null;
   }
   return resolved;
 }
 
 /** Remove entries (files + dirs) under `dir` older than maxAge. */
-function ageCleanDir(dir: string, nowMs: number, maxAge: number, stats: CleanupStats): void {
+function ageCleanDir(
+  dir: string,
+  nowMs: number,
+  maxAge: number,
+  stats: CleanupStats,
+): void {
   let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -234,7 +274,9 @@ function ageCleanDir(dir: string, nowMs: number, maxAge: number, stats: CleanupS
         }
       }
     } catch (err) {
-      stats.errors.push(`cleanup stat/remove failed for ${full}: ${err instanceof Error ? err.message : String(err)}`);
+      stats.errors.push(
+        `cleanup stat/remove failed for ${full}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }
@@ -245,7 +287,9 @@ function removeDirTree(dir: string, stats: CleanupStats): void {
     fs.rmSync(dir, { recursive: true, force: true });
     stats.removedDirs++;
   } catch (err) {
-    stats.errors.push(`cleanup rm failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+    stats.errors.push(
+      `cleanup rm failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

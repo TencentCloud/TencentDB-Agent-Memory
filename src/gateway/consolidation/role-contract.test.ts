@@ -92,6 +92,22 @@ describe("role-contract resolver (tz-01 B1)", () => {
     }
   }
 
+  it("keep_scratch reaches the contract, and defaults to false (tz-02 Ф5)", () => {
+    // The whitelist under `runtime` is silent: a key it does not know makes
+    // the WHOLE role.json invalid, so the field has to be declared in the
+    // schema, not only read where it is used.
+    writeRole("keeper", fullContract({ runtime: { keep_scratch: true } }), {
+      "role-a.md": "P",
+    });
+    writeRole("wiper", fullContract(), { "role-a.md": "P" });
+    const kept = resolveRoleContract("keeper", roleDir, LEGACY);
+    const wiped = resolveRoleContract("wiper", roleDir, LEGACY);
+    expect(kept.ok && kept.contract.assets.keepScratch).toBe(true);
+    // Default false: the unconditional wipe stays the behaviour nobody opted
+    // out of.
+    expect(wiped.ok && wiped.contract.assets.keepScratch).toBe(false);
+  });
+
   it("a complete contract is used verbatim — nothing inferred (criterion 4)", () => {
     writeRole("role-a", fullContract(), { "role-a.md": "PROMPT-A" });
     const res = resolveRoleContract("role-a", roleDir, LEGACY);

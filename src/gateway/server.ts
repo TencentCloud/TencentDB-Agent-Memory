@@ -76,7 +76,10 @@ import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
-import { listRoleContracts } from "./consolidation/role-contract.js";
+import {
+  listRoleContracts,
+  roleScratchRoots,
+} from "./consolidation/role-contract.js";
 import { deprecationNotice } from "./consolidation/launchers/pi-config.js";
 import { CleanupTimer, runCleanup } from "./cleanup.js";
 import { listRecentRuns } from "./control-plane/run-repo.js";
@@ -260,6 +263,14 @@ export class TdaiGateway {
         runCleanup({
           dataDir: this.config.data.baseDir,
           scratchRoot: this.config.data.scratchRoot,
+          // Per-role roots (tz-02 Ф5): with `keep_scratch` an attempt dir
+          // outlives its run, so this pass is the only thing that ever deletes
+          // it — and a role with its own `runtime.scratch_root` is not under
+          // the instance root at all. Read at each pass, not at boot: roles
+          // are edited on disk while the gateway runs.
+          extraScratchRoots: roleScratchRoots(
+            buildRoleDefaults(consolidationCfg),
+          ),
           home: process.env.HOME ?? "/tmp",
           config: this.config.memory.cleanup,
           now: () => Date.now(),

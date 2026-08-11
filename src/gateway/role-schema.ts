@@ -51,6 +51,9 @@ export interface RoleConfigFile {
     extension_path?: string;
     skill_path?: string;
     scratch_root?: string;
+    /** Keep the attempt dir after the run — retention deletes it, not the
+     * runner. Default false: the wipe stays the behaviour nobody opted out of. */
+    keep_scratch?: boolean;
   };
 }
 
@@ -73,7 +76,15 @@ export const ROLE_TRIGGERS = [
   "both",
   "manual_only",
 ] as const;
-const RUNTIME_KEYS = ["extension_path", "skill_path", "scratch_root"] as const;
+/** Per-key types under `runtime`. A key missing from this table is dropped by
+ * the whitelist below — silently, which is why `keep_scratch` has to be added
+ * HERE and not only where it is consumed (tz-02 критерий 4). */
+const RUNTIME_KEY_CHECKS: Record<string, (v: unknown) => boolean> = {
+  extension_path: (v) => isStr(v),
+  skill_path: (v) => isStr(v),
+  scratch_root: (v) => isStr(v),
+  keep_scratch: (v) => isBool(v),
+};
 
 export function isApplyOp(v: unknown): v is ApplyOp {
   return (
@@ -120,10 +131,7 @@ const FIELD_CHECKS: Record<string, (v: unknown) => boolean> = {
     v <= MAX_RETRY_BUDGET,
   runtime: (v) =>
     isRec(v) &&
-    Object.entries(v).every(
-      ([k, x]) =>
-        RUNTIME_KEYS.includes(k as (typeof RUNTIME_KEYS)[number]) && isStr(x),
-    ),
+    Object.entries(v).every(([k, x]) => RUNTIME_KEY_CHECKS[k]?.(x) ?? false),
 };
 
 /** The 19 fields a complete contract must carry. */
