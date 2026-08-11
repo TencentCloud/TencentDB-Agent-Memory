@@ -23,7 +23,11 @@ import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
 import { BackupManager } from "../../utils/backup.js";
-import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
+import {
+  readSceneIndex,
+  renameIndexEntries,
+  syncSceneIndex,
+} from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
 import { sceneBlocksDir, projectSlug } from "../scene/scene-paths.js";
 import { parseSceneBlock } from "../scene/scene-format.js";
@@ -364,6 +368,14 @@ export class SceneExtractor {
     const normStartMs = Date.now();
     try {
       const normResult = await normalizeSceneFilenames(blocksDir, this.logger);
+      // The index is keyed by filename, so the entries have to move with the
+      // files — otherwise the rebuild below meets a block it has never seen
+      // and, by design, gives it no scope and no chain (scene-index.ts:213).
+      await renameIndexEntries(
+        this.dataDir,
+        projectSlug(this.projectId),
+        normResult.renames,
+      );
       if (normResult.renamed > 0) {
         this.logger?.info(
           `${TAG} extract() filename normalization: renamed ${normResult.renamed}, skipped ${normResult.skipped} (${Date.now() - normStartMs}ms)`,

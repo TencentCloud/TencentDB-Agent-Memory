@@ -251,4 +251,35 @@ describe("a model editing its own block", () => {
     expect(block.meta.project_id).toBe(PROJECT);
     expect(block.meta.provenance?.chain).toHaveLength(3);
   });
+
+  it("a block renamed by the normalizer keeps its scope and its chain", async () => {
+    // The index is keyed by filename, and the extractor renames blocks whose
+    // name the model wrote sloppily — on EVERY extraction. Before the entries
+    // learned to move with the files, that rename alone erased the block's
+    // scope and its whole chain, and the model picks the filenames.
+    await writeBlock(PROJECT, "Daily Rhythm.md");
+    await commitScene(PROJECT);
+    expect(
+      (await readSceneIndex(dir, PROJECT))[0]?.provenance?.chain,
+    ).toHaveLength(1);
+
+    const { SceneExtractor } = await import("./scene-extractor.js");
+    const extractor = new SceneExtractor({
+      dataDir: dir,
+      config: {},
+      projectId: PROJECT,
+      // The run leaves the tree as it is: the rename is what this test is about.
+      llmRunner: { run: () => Promise.resolve("done") } as never,
+    });
+    const result = await extractor.extract([
+      { content: "нечто", created_at: "2026-08-01T00:00:00.000Z" },
+    ]);
+    expect(result.success).toBe(true);
+
+    const entries = await readSceneIndex(dir, PROJECT);
+    expect(entries.map((e) => e.filename)).toEqual(["Daily-Rhythm.md"]);
+    expect(entries[0]?.scope).toBe("project");
+    expect(entries[0]?.project_id).toBe(PROJECT);
+    expect(entries[0]?.provenance?.chain).toHaveLength(1);
+  });
 });

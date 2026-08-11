@@ -210,20 +210,17 @@ export async function syncSceneIndexBySlug(
         created: block.meta.created,
         updated: block.meta.updated,
         digest: blockDigest(raw),
-        // A block the index has never seen contributes what it claims: a
-        // freshly written file has no prior truth to defend, and the next
-        // stamp overwrites it anyway.
-        scope: previous ? previous.scope : (block.meta.scope ?? ""),
-        project_id: previous
-          ? previous.project_id
-          : (block.meta.project_id ?? ""),
-        ...(previous
-          ? previous.provenance
-            ? { provenance: previous.provenance }
-            : {}
-          : block.meta.provenance
-            ? { provenance: block.meta.provenance }
-            : {}),
+        // A block the index has never seen contributes NOTHING here — not even
+        // what it claims. A new block is written by the same model that writes
+        // the front-matter, so "the index has no entry yet" is a state the
+        // model can produce at will (write a new file, or rename an old one),
+        // and any fallback to the copy is a forgery route. It stays blank until
+        // `stampSceneSlug` fills it in off the commit port — and a rename moves
+        // the old entry across first (`renameIndexEntries`), so nothing that
+        // had a chain arrives here without one.
+        scope: previous?.scope ?? "",
+        project_id: previous?.project_id ?? "",
+        ...(previous?.provenance ? { provenance: previous.provenance } : {}),
       });
     } catch {
       // File may have been deleted between readdir and readFile (e.g. by concurrent
@@ -298,6 +295,52 @@ export async function writeCarrierAttributes(
   );
   await fs.mkdir(path.dirname(indexPath), { recursive: true });
   await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
+}
+
+/**
+ * Move index entries whose file was renamed on disk.
+ *
+ * The index is keyed by filename, so a rename makes the rebuild see a file it
+ * has never heard of — and since the rebuild deliberately trusts nothing a new
+ * file claims, the block would arrive with its scope and its whole chain gone.
+ * The normalizer renames blocks on every extraction (filename-normalizer.ts),
+ * so this is ordinary data loss, not an edge case; and the model picks the
+ * filenames, so it would also be a way to shed a chain on demand.
+ *
+ * Call this BETWEEN the rename and the rebuild, with the normalizer's own
+ * audit list. Unknown `from` names are skipped; a `to` the index already holds
+ * is left alone, because that entry belongs to a file that still exists.
+ */
+export async function renameIndexEntries(
+  dataDir: string,
+  slug: string,
+  renames: ReadonlyArray<{ from: string; to: string }>,
+): Promise<void> {
+  if (renames.length === 0) return;
+  const entries = await readSceneIndexBySlug(dataDir, slug);
+  const byName = new Map(entries.map((e) => [e.filename, e]));
+  let moved = 0;
+  for (const { from, to } of renames) {
+    const entry = byName.get(from);
+    if (!entry || byName.has(to)) continue;
+    byName.delete(from);
+    entry.filename = to;
+    byName.set(to, entry);
+    moved += 1;
+  }
+  if (moved === 0) return;
+  const indexPath = path.join(
+    dataDir,
+    ".metadata",
+    "scene_index",
+    `${slug}.json`,
+  );
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  await fs.writeFile(
+    indexPath,
+    JSON.stringify([...byName.values()], null, 2),
+    "utf-8",
+  );
 }
 
 export interface CarrierAttributes {
