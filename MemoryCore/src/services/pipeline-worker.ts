@@ -366,13 +366,35 @@ export class PipelineWorker {
         delay = Math.min(delay * 3, 5000);
       }
       if (!acquired) {
-        this.logger?.warn?.(`${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, dropping task`);
-        // CR-1 fix: ACK to prevent stale recovery from re-claiming this message in an
-        // infinite loop. Without it, XPENDING keeps returning this msgId every
-        // pendingRecoveryIntervalMs, exhausting worker slots.
+        // Issue #549: dropping an L1 drain task breaks the self-enqueue drain
+        // chain (the next batch only exists because the previous one enqueued
+        // it), silently stalling extraction. Re-enqueue with a bounded retry
+        // budget; dead-letter once exhausted. Non-drain tasks keep the old
+        // ACK-and-drop behavior (their timers re-trigger).
+        const prevRetry = ((task.data as Record<string, unknown>)?.retryCount ?? 0) as number;
+        const isL1Drain = task.type === "L1" && task.id.startsWith("L1-drain");
+        const retryCount = isL1Drain ? prevRetry + 1 : prevRetry;
         const msgId = (task as any)._msgId;
-        if (msgId) {
-          try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+
+        if (isL1Drain && retryCount <= this.config.maxRetries) {
+          if (msgId) { try { await this.backend.ackTask(msgId); } catch { /* best effort */ } }
+          await this.reEnqueue(task, retryCount);
+          this.metrics.tasksRetried++;
+          this.logger?.warn?.(
+            `${TAG} L1 drain lock conflict — re-enqueued (retry ${retryCount}/${this.config.maxRetries}): ${lockKey}`,
+          );
+        } else if (isL1Drain) {
+          if (msgId) { try { await this.backend.ackTask(msgId); } catch { /* best effort */ } }
+          await this.moveToDeadLetter(task, "L1 drain lock conflict after retry budget exhausted", retryCount);
+          this.logger?.warn?.(
+            `${TAG} L1 drain lock conflict — dead-lettered after ${retryCount} retries: ${lockKey}`,
+          );
+        } else {
+          // CR-1 fix: ACK to prevent stale recovery from re-claiming this
+          // message in an infinite loop.
+          if (msgId) {
+            try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+          }
         }
         releasePermitOnce();
         return;
