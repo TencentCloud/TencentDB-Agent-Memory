@@ -9,13 +9,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveResultPath } from "./attempt-layout.js";
-import { defaultTdaiRoot, resolveUnderRoot } from "../tdai-root.js";
+import { resolveUnderRoot } from "../tdai-root.js";
 
 export type ScratchDiffResult =
   { value: unknown; error?: undefined } | { value: null; error: string };
 
+/**
+ * @param root the gateway's data root. REQUIRED, and deliberately not
+ * defaulted to `defaultTdaiRoot()`: that resolver does not see yaml
+ * `data.baseDir`, so a default here would silently split the metadata log off
+ * from the root the run actually writes to (tz-07 критерий 2).
+ */
 export async function readScratchDiff(
   scratchDir: string,
+  root: string,
   runId?: string,
 ): Promise<ScratchDiffResult> {
   // tz-02 критерий 4a: the new place wins; `diff.json` answers only when the
@@ -41,11 +48,7 @@ export async function readScratchDiff(
       // tz-07 H1: the observability log follows the data root, not the host's
       // home. The old `HOME ?? "/root"` default sent it to /root under an
       // empty HOME — a path a sandboxed run must never write to.
-      const logPath = resolveUnderRoot(
-        defaultTdaiRoot(),
-        ".metadata",
-        "diff-malformed.log",
-      );
+      const logPath = resolveUnderRoot(root, ".metadata", "diff-malformed.log");
       await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
       await fs.promises.appendFile(logPath, line, { flag: "a" });
     } catch {

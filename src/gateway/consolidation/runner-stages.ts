@@ -177,7 +177,7 @@ export async function preApply(
     return { ok: false };
   }
 
-  const raw = await readScratchDiff(args.scratchDir);
+  const raw = await readScratchDiff(args.scratchDir, ctx.dataDir);
   if (raw.error) {
     result.error = raw.error;
     result.status = "failed";
