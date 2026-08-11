@@ -122,6 +122,12 @@ export interface CleanupDeps {
   hostTaskRoots?: readonly string[];
   /** Host home. Still needed by rejectScratchRoot's "is the home dir" guard. */
   home: string;
+  /**
+   * How long a role session survives (tz-07 H5). Longer than the incident
+   * window on purpose (R3): a session deleted before anyone can read it is the
+   * failure this setting exists to prevent. Default 14 days.
+   */
+  sessionRetentionHours?: number;
   /** Parsed memory.cleanup config. */
   config: { enabled: boolean; intervalHours: number; paths: string[] };
   /** Injectable clock (tests use a fixed one). */
@@ -197,9 +203,34 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
     );
     return false;
   });
+  // tz-07 H5 (the debt tz-06 left when it dropped --no-session): role sessions
+  // outlive the general sweep, by their OWN longer retention.
+  //
+  // One expiry per level, deliberately: everything non-session inside an
+  // attempt dies at intervalHours as before, while the session dir — and the
+  // attempt as its container — lives until sessionRetentionHours.
+  //
+  // `keep_scratch` (tz-02) DELAYS deletion to that point rather than exempting
+  // the dir. The spec's literal "keep_scratch takes precedence" would mean
+  // cleanup never deletes a kept dir at all — run-role.ts only skips the
+  // immediate post-run wipe, and this pass is the only thing that deletes it
+  // afterwards — i.e. unbounded growth exactly where H5 exists to stop it.
+  const sessionMaxAge = maxAgeMsFor({
+    intervalHours: deps.sessionRetentionHours ?? 24 * 14,
+  });
+  const keepSession = (p: string): boolean => {
+    if (path.basename(p) !== "session") return false;
+    const parts = p.split(path.sep);
+    if (parts[parts.length - 3] !== "attempts") return false;
+    try {
+      return !isStale(fs.statSync(p).mtimeMs, nowMs, sessionMaxAge);
+    } catch {
+      return false;
+    }
+  };
   for (const root of roots) {
     stats.scanned.push(root);
-    ageCleanDir(root, nowMs, maxAge, stats);
+    ageCleanDir(root, nowMs, maxAge, stats, keepSession);
   }
 
   // 4. Tasks subtrees derived from scratch dirs (exact) + marker sweep.
@@ -336,6 +367,7 @@ function ageCleanDir(
   nowMs: number,
   maxAge: number,
   stats: CleanupStats,
+  preserve?: (p: string) => boolean,
 ): void {
   let entries: Array<{ name: string; isDirectory(): boolean }>;
   try {
@@ -349,7 +381,7 @@ function ageCleanDir(
       const stat = fs.statSync(full);
       if (isStale(stat.mtimeMs, nowMs, maxAge)) {
         if (entry.isDirectory()) {
-          removeDirTree(full, stats);
+          removeDirTree(full, stats, preserve);
         } else {
           fs.rmSync(full, { force: true });
           stats.removedFiles++;
@@ -364,15 +396,60 @@ function ageCleanDir(
 }
 
 /** Remove a directory tree (recursive). Failure → collected, not thrown. */
-function removeDirTree(dir: string, stats: CleanupStats): void {
+function removeDirTree(
+  dir: string,
+  stats: CleanupStats,
+  preserve?: (p: string) => boolean,
+): void {
   try {
-    fs.rmSync(dir, { recursive: true, force: true });
+    if (preserve === undefined) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      stats.removedDirs++;
+      return;
+    }
+    // tz-07 H5: a stale run dir is otherwise removed WHOLE, and the session
+    // lives three levels down (<run>/attempts/<id>/session) — so it would die
+    // with the run long before sessionRetentionHours ever applied, leaving the
+    // setting with nothing to violate. Walk instead, and stop at any ancestor
+    // of something preserved. Nothing is stranded: once retention expires
+    // nothing is preserved and the next pass takes the dir whole.
+    if (!removeDirTreeExcept(dir, preserve)) return;
     stats.removedDirs++;
   } catch (err) {
     stats.errors.push(
       `cleanup rm failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/** Remove `dir` unless something under it is preserved. Returns true if the
+ * directory itself was removed. */
+function removeDirTreeExcept(
+  dir: string,
+  preserve: (p: string) => boolean,
+): boolean {
+  if (preserve(dir)) return false;
+  let entries: Array<{ name: string; isDirectory(): boolean }>;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  }
+  let keptSomething = false;
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!removeDirTreeExcept(full, preserve)) keptSomething = true;
+    } else if (preserve(full)) {
+      keptSomething = true;
+    } else {
+      fs.rmSync(full, { force: true });
+    }
+  }
+  if (keptSomething) return false;
+  fs.rmSync(dir, { recursive: true, force: true });
+  return true;
 }
 
 // ============================

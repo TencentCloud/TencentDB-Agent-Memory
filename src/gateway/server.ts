@@ -282,6 +282,7 @@ export class TdaiGateway {
           // the caller resolves it per launcher and cleanup stays
           // launcher-agnostic. claude/codex contribute nothing — their
           // per-attempt artifacts already live under scratch.
+          sessionRetentionHours: consolidationCfg.sessionRetentionHours,
           hostTaskRoots: hostTaskRoots(
             Object.keys(consolidationCfg.launchers ?? {}),
           ),

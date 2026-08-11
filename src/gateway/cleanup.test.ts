@@ -393,6 +393,37 @@ describe("runCleanup", () => {
     expect(fs.existsSync(oldLog)).toBe(true);
   });
 
+  it("a role session outlives the run dir until its own retention expires", () => {
+    // tz-07 H5 — the debt tz-06 left behind. Falsification: drop the preserve
+    // predicate from ageCleanDir and the session dies with the run, which is
+    // exactly the state this package exists to fix.
+    const session = path.join(
+      scratchRoot,
+      "run-old",
+      "attempts",
+      "a1",
+      "session",
+    );
+    fs.mkdirSync(session, { recursive: true });
+    fs.writeFileSync(path.join(session, "transcript.jsonl"), "{}\n");
+    const old = new Date(Date.now() - 48 * 3_600_000);
+    for (const p of [
+      path.join(session, "transcript.jsonl"),
+      session,
+      path.join(scratchRoot, "run-old", "attempts", "a1"),
+      path.join(scratchRoot, "run-old", "attempts"),
+      path.join(scratchRoot, "run-old"),
+    ]) {
+      fs.utimesSync(p, old, old);
+    }
+
+    runCleanup({ ...makeDeps(), sessionRetentionHours: 9999 });
+    expect(fs.existsSync(session)).toBe(true);
+
+    runCleanup({ ...makeDeps(), sessionRetentionHours: 1 });
+    expect(fs.existsSync(session)).toBe(false);
+  });
+
   it("listTaskSubtrees finds only --<name>-- dirs", () => {
     fs.mkdirSync(path.join(home, ".pi", "agent", "tasks", "--abc--"), {
       recursive: true,

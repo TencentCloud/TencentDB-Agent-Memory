@@ -182,6 +182,15 @@ export interface ConsolidationConfig {
    */
   applyGateMode: "shadow" | "enforce";
   /**
+   * How long a role session survives cleanup (tz-07 H5).
+   *
+   * Paired with tz-06 dropping `--no-session`: sessions now persist, so
+   * something has to bound them. Default 14 days — longer than any incident
+   * window, because a session deleted before it can be read is the failure
+   * this bound exists to prevent (R3).
+   */
+  sessionRetentionHours: number;
+  /**
    * Require a control-plane Run for every apply (tz-09 Ф6, criterion 1).
    * true — an apply without a live `runId` is refused before any mutation and
    * the ops/caps policy is read from the Run's pinned contract snapshot, not
@@ -786,6 +795,8 @@ export function parseConfig(
       applyGateMode:
         (str(consolidationGroup, "applyGateMode") as
           "shadow" | "enforce" | undefined) ?? "shadow",
+      sessionRetentionHours:
+        num(consolidationGroup, "sessionRetentionHours") ?? 24 * 14,
       // Night-run parameters (trigger lives in memory.nightRun; run params here).
       night: (() => {
         const nightGroup = obj(consolidationGroup, "night");
@@ -1027,6 +1038,7 @@ const consolidationSchema = z.strictObject({
   killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
   contractDispatch: z.boolean().optional(),
   applyGateMode: z.enum(["shadow", "enforce"]).optional(),
+  sessionRetentionHours: z.number().positive().optional(),
   applyRunRepo: z.boolean().optional(),
   night: z
     .strictObject({
