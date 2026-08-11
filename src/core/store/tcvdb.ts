@@ -98,11 +98,20 @@ export function scopeFilterExpression(
   projectId: string,
   mode: ScopeMode,
 ): string | undefined {
-  if (mode === "decay" || !projectId) return undefined;
+  // `hidden` deliberately emits NO filter. A document written before this
+  // package has neither field, and TCVDB has no way to say "field missing", so
+  // any predicate over `scope` drops those documents entirely — measured: a
+  // pre-tz-05 document returned 0 hits in hidden mode where before Ф4b it
+  // returned 1. The JS `passesScope` that every recall path already applies
+  // (search.ts) lets exactly those records through, which is the legacy
+  // behaviour this mode is named after.
+  //
+  // `strict` is the post-migration mode behind `scopeFilter: "attribute"`: it
+  // is only correct once every record carries the attribute, and dropping a
+  // record that still does not is precisely what it is for.
+  if (mode !== "strict" || !projectId) return undefined;
   const quoted = JSON.stringify(projectId);
-  return mode === "strict"
-    ? `scope = "global" or (scope = "project" and project_id = ${quoted})`
-    : `project_id = ${quoted} or scope != "project"`;
+  return `scope = "global" or (scope = "project" and project_id = ${quoted})`;
 }
 
 /** All L0 output fields returned by query/search. */

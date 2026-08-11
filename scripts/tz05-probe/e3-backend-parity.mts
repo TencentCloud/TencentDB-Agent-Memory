@@ -21,6 +21,7 @@ import { VectorStore } from "../../src/core/store/sqlite.js";
 import { TcvdbMemoryStore } from "../../src/core/store/tcvdb.js";
 import { startTcvdbFake } from "../../src/core/store/tcvdb-fake.js";
 import { PROVENANCE_KEY } from "../../src/core/record/provenance.js";
+import { passesScope } from "../../src/core/hooks/auto-recall/scope.js";
 import type { IMemoryStore } from "../../src/core/store/types.js";
 import type { MemoryRecord } from "../../src/core/record/l1-writer.js";
 import { must, finish } from "../tz07-probe/assert.mts";
@@ -93,8 +94,14 @@ async function visible(
   store: IMemoryStore,
   mode: "hidden" | "strict",
 ): Promise<string[]> {
+  // Продуктовый путь recall — фильтр стора И JS-предикат (search.ts). В
+  // hidden TCVDB намеренно не шлёт фильтр: предикат по scope выкинул бы все
+  // документы, написанные до этого пакета (замер: 0 попаданий вместо 1).
   const hits = await store.searchL1Fts("sentinel", 20, OWN, mode);
-  return hits.map((h) => h.record_id).sort();
+  return hits
+    .filter((h) => passesScope(h, OWN, mode))
+    .map((h) => h.record_id)
+    .sort();
 }
 
 const sqliteHidden = await visible(sqlite, "hidden");

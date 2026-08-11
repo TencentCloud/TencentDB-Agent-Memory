@@ -22,8 +22,10 @@ import path from "node:path";
 import { VectorStore } from "./sqlite.js";
 import { TcvdbMemoryStore } from "./tcvdb.js";
 import { startTcvdbFake, type TcvdbFake } from "./tcvdb-fake.js";
+import { request } from "undici";
 import type { IMemoryStore } from "./types.js";
 import type { MemoryRecord } from "../record/l1-writer.js";
+import { passesScope } from "../hooks/auto-recall/scope.js";
 
 /**
  * Known, deliberate differences between the backends. Each one is asserted
@@ -259,7 +261,12 @@ describe("scope and provenance on both backends", () => {
   it.each(bothBackends())(
     "%s hides another project's record and keeps global",
     async (name, get) => {
+      // Recall is the store filter THEN the JS predicate (search.ts), so the
+      // parity that matters is of the pair: in `hidden` the TCVDB store
+      // deliberately emits no filter, because a predicate over `scope` would
+      // drop every document written before this package.
       const visible = (await get().searchL1Fts("sentinel", 20, OWN, "hidden"))
+        .filter((h) => passesScope(h, OWN, "hidden"))
         .map((h) => h.record_id)
         .filter((id) => mine(name, id))
         .sort();
@@ -285,4 +292,50 @@ describe("scope and provenance on both backends", () => {
       ]);
     },
   );
+});
+
+/**
+ * A document written before tz-05 has no `scope` and no `project_id` at all.
+ * TCVDB cannot express "field missing", so ANY predicate over those fields
+ * drops such a document — which would make every pre-existing memory
+ * unreachable the moment this package shipped. The default mode therefore
+ * filters nothing store-side and leans on the JS predicate.
+ */
+describe("a document older than the scope attribute", () => {
+  it("stays visible on TCVDB in the default mode", async () => {
+    const legacyFake = await startTcvdbFake();
+    const store = new TcvdbMemoryStore({
+      url: legacyFake.url,
+      username: "u",
+      apiKey: "k",
+      database: "legacydb",
+      embeddingModel: "m",
+      timeout: 5000,
+    });
+    await store.init();
+    // Written through the raw API on purpose: the store's own upsert would
+    // add the fields, and then there would be nothing to test.
+    await request(`${legacyFake.url}/document/upsert`, {
+      method: "POST",
+      body: JSON.stringify({
+        database: "legacydb",
+        collection: "legacydb_l1_memories",
+        documents: [
+          { id: "old", text: "legacy record", type: "episodic", priority: 50 },
+        ],
+      }),
+    });
+
+    const hidden = await store.searchL1Fts("legacy", 10, "/repo/own", "hidden");
+    expect(hidden.map((h) => h.record_id)).toEqual(["old"]);
+    expect(passesScope(hidden[0]!, "/repo/own", "hidden")).toBe(true);
+    // strict is the post-migration mode: dropping a record that still has no
+    // attribute is exactly its job.
+    const strict = await store.searchL1Fts("legacy", 10, "/repo/own", "strict");
+    expect(strict).toEqual([]);
+    expect(legacyFake.rejectedFilters).toEqual([]);
+
+    store.close();
+    await legacyFake.close();
+  });
 });
