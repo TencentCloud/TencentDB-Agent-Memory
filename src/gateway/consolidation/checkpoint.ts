@@ -21,6 +21,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { withCheckpointLock } from "./checkpoint-lock.js";
 
 export const CONSOLIDATION_CHECKPOINT_FILENAME =
   "consolidation_checkpoint.json";
@@ -120,8 +121,10 @@ async function withFileLock<T>(
 
 export class ConsolidationCheckpoint {
   private readonly filePath: string;
+  private readonly dataDir: string;
 
   constructor(dataDir: string) {
+    this.dataDir = dataDir;
     this.filePath = path.join(
       dataDir,
       ".metadata",
@@ -152,12 +155,19 @@ export class ConsolidationCheckpoint {
   async update(
     mutate: (data: ConsolidationCheckpointData) => void,
   ): Promise<ConsolidationCheckpointData> {
-    return withFileLock(this.filePath, async () => {
-      const data = await this.readRaw();
-      mutate(data);
-      await this.writeRaw(data);
-      return data;
-    });
+    // Two locks, two different scopes. The hard-link lock keeps OTHER
+    // PROCESSES out (the map below is per-process, so without it two gateways
+    // both read their own snapshot and both rename over each other — one run
+    // simply disappears). The map then keeps this process's own concurrent
+    // updates ordered, without touching the filesystem for each of them.
+    return withCheckpointLock(this.dataDir, () =>
+      withFileLock(this.filePath, async () => {
+        const data = await this.readRaw();
+        mutate(data);
+        await this.writeRaw(data);
+        return data;
+      }),
+    );
   }
 
   // ============================
