@@ -17,11 +17,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  allowLegacyFallback,
   defaultTdaiRoot,
   legacyReadPath,
   resolveUnderRoot,
   resetTdaiRootCacheForTests,
 } from "../../src/gateway/tdai-root.js";
+import { must, finish } from "./assert.mts";
 
 const NO_CACHE = process.env.FALSIFY === "no-cache";
 const N = 50;
@@ -48,9 +50,9 @@ const allUnderArg = fromArg.every((p) => p.startsWith(explicit + path.sep));
 const allUnderEnv = fromEnv.every((p) => p.startsWith(viaEnv + path.sep));
 const disjoint = fromArg.every((p, i) => p !== fromEnv[i]);
 
-console.log(`шесть путей под явным корнем: ${allUnderArg} (должно быть true)`);
-console.log(`шесть путей под env-корнем:   ${allUnderEnv} (должно быть true)`);
-console.log(`деревья различны:             ${disjoint} (должно быть true)`);
+must("шесть путей под явным корнем", allUnderArg);
+must("шесть путей под env-корнем", allUnderEnv);
+must("деревья различны", disjoint);
 
 // --- 2. Цена резолва --------------------------------------------------------
 // Мерить надо ветку, в которой I/O ЕСТЬ: при заданном TDAI_DATA_DIR резолвер
@@ -91,24 +93,26 @@ console.log(
     ? `  ожидание при снятой мемоизации: ${N * perOne} (кэша нет)`
     : `  ожидание при мемоизации: ${perOne}`,
 );
-console.log(
-  `кэш держит: ${statCalls === perOne} (должно быть true без FALSIFY)`,
-);
+must("кэш держит (без FALSIFY)", statCalls === perOne);
 
 // --- 3. Legacy — только на чтение ------------------------------------------
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "tz07-home-"));
 process.env.HOME = home;
 const legacyRoles = path.join(home, ".pi", "agent-memory", "tdai", "roles");
 fs.mkdirSync(legacyRoles, { recursive: true });
+// Fallback теперь opt-in: объявляем корень установкой, иначе нога проверяет
+// не правило, а его отсутствие.
+allowLegacyFallback(explicit);
 const readBack = legacyReadPath(explicit, "roles");
 const missing = legacyReadPath(explicit, "nothing-here");
-console.log(
-  `чтение уходит в legacy:       ${readBack === legacyRoles} (должно быть true)`,
-);
-console.log(
-  `отсутствующее — под НОВЫМ корнем: ${missing === path.join(explicit, "nothing-here")} (должно быть true)`,
+must("чтение уходит в legacy", readBack === legacyRoles);
+must(
+  "отсутствующее — под НОВЫМ корнем",
+  missing === path.join(explicit, "nothing-here"),
 );
 
 for (const d of [explicit, viaEnv, home]) {
   fs.rmSync(d, { recursive: true, force: true });
 }
+
+finish();

@@ -21,6 +21,7 @@ import { resolveRoleDir } from "../../src/gateway/role-paths.js";
 import { resolveUnderRoot } from "../../src/gateway/tdai-root.js";
 import { resolveLogFile } from "../../src/utils/dev-logger.js";
 import { hostTaskRoots } from "../../src/gateway/consolidation/launchers/auth-root.js";
+import { must, finish } from "./assert.mts";
 
 const MISSED = process.env.FALSIFY === "one-site-missed";
 
@@ -65,6 +66,7 @@ for (const [name, p] of sites) {
 }
 
 console.log(`под новым корнем: ${underNew}/${sites.length}`);
+must("все шесть видов данных под новым корнем", underNew === sites.length);
 if (strays.length > 0) console.log(`промахнулись: ${strays.join("; ")}`);
 
 // Старый корень обязан остаться пустым — S1: успех «по новому пути» ничего не
@@ -72,12 +74,14 @@ if (strays.length > 0) console.log(`промахнулись: ${strays.join("; "
 const legacyLeftovers = fs.existsSync(legacyRoot)
   ? fs.readdirSync(legacyRoot)
   : [];
-console.log(
-  `под СТАРЫМ корнем ничего не появилось: ${legacyLeftovers.length === 0} (должно быть true)` +
-    (legacyLeftovers.length ? ` — ${legacyLeftovers.join(", ")}` : ""),
+must(
+  `под СТАРЫМ корнем ничего не появилось${legacyLeftovers.length ? ` (там: ${legacyLeftovers.join(", ")})` : ""}`,
+  legacyLeftovers.length === 0,
 );
 
 // inspectable-run: корень задач хоста — тоже не под памятью.
 console.log(`корни задач хоста (pi): ${hostTaskRoots(["pi"]).join(", ")}`);
 
 fs.rmSync(home, { recursive: true, force: true });
+
+finish();

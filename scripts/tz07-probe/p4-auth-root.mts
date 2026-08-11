@@ -18,6 +18,7 @@ import {
   hostTaskRootFor,
   hostTaskRoots,
 } from "../../src/gateway/consolidation/launchers/auth-root.js";
+import { must, finish } from "./assert.mts";
 
 const SINGLE = process.env.FALSIFY === "single-root";
 const IDS = ["pi", "claude", "codex"];
@@ -35,26 +36,28 @@ for (const [i, id] of IDS.entries()) {
 }
 const distinct = new Set(roots).size === IDS.length;
 const nonPiDiffers = roots[1] !== roots[0] && roots[2] !== roots[0];
-console.log(`все различны:            ${distinct} (должно быть true)`);
-console.log(`у не-pi путь отличается: ${nonPiDiffers} (должно быть true)`);
+must("все различны", distinct);
+must("у не-pi путь отличается", nonPiDiffers);
 
 // Переменная окружения перебивает дефолт — иначе H3 не переключаем.
 process.env.CODEX_HOME = path.join(os.tmpdir(), "tz07-codex-home");
 const overridden = SINGLE ? home : authRootFor("codex");
-console.log(
-  `CODEX_HOME перебивает дефолт: ${overridden === path.join(os.tmpdir(), "tz07-codex-home")} (должно быть true)`,
+must(
+  "CODEX_HOME перебивает дефолт",
+  overridden === path.join(os.tmpdir(), "tz07-codex-home"),
 );
 
 // Q2: корень задач есть только у pi.
 const taskRoots = SINGLE
   ? IDS.map((id) => path.join(authRootFor(id), ".pi", "agent", "tasks"))
   : hostTaskRoots(IDS);
-console.log(`корней задач на три хоста: ${taskRoots.length} (должно быть 1)`);
+must("корней задач на три хоста ровно один", taskRoots.length === 1);
 console.log(`  ${taskRoots.join("\n  ")}`);
-console.log(
-  `claude/codex не дают корня: ${
-    SINGLE
-      ? false
-      : hostTaskRootFor("claude") === null && hostTaskRootFor("codex") === null
-  } (должно быть true)`,
+must(
+  "claude/codex не дают корня",
+  SINGLE
+    ? false
+    : hostTaskRootFor("claude") === null && hostTaskRootFor("codex") === null,
 );
+
+finish();

@@ -12,10 +12,11 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-# The fallback cannot be built without naming the old location, so exactly one
-# file is allowed to hold the literal. Kept to one on purpose: an allowlist is
-# a hole, and a hole with one entry is auditable.
+# The fallback cannot be built without naming the old location, so exactly two
+# LINES are allowed to hold the literal — not a whole file, which would let any
+# future path slip in under the same exemption.
 ALLOWLIST="src/gateway/tdai-root.ts"
+ALLOWED_LINES=2
 # Only these may CALL the fallback; everything else must resolve under the root.
 # role-paths is the only consumer, and inside it only the *ForRead resolvers
 # may call the fallback — a writer that resolves through it would put writes
@@ -24,12 +25,21 @@ LEGACY_CALLERS="src/gateway/tdai-root.ts src/gateway/role-paths.ts"
 
 status=0
 
-hits=$(grep -rnE '\.pi/agent|pi-auditor-sessions|"\.pi"' src/ --include='*.ts' \
-  | grep -vE '^src/gateway/consolidation/launchers/|\.test\.ts' \
-  | grep -vE "^${ALLOWLIST}:" || true)
+raw=$(grep -rnE '\.pi/agent|pi-auditor-sessions|"\.pi"' src/ --include='*.ts' \
+  | grep -vE '^src/gateway/consolidation/launchers/|\.test\.ts' || true)
+hits=$(echo "$raw" | grep -vE "^${ALLOWLIST}:" | grep -v '^$' || true)
 if [ -n "$hits" ]; then
   echo "FAIL rule 1: hardcoded host path outside launchers/ (tz-07 criterion 1)"
   echo "$hits"
+  status=1
+fi
+
+# The exemption is bounded by COUNT too: the allowlisted file may hold exactly
+# the two lines the fallback needs, so a third one cannot hide behind it.
+allowed=$(echo "$raw" | grep -cE "^${ALLOWLIST}:" || true)
+if [ "$allowed" -ne "$ALLOWED_LINES" ]; then
+  echo "FAIL rule 1: ${ALLOWLIST} holds $allowed exempt lines, expected ${ALLOWED_LINES}"
+  echo "$raw" | grep -E "^${ALLOWLIST}:"
   status=1
 fi
 

@@ -203,34 +203,49 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
     );
     return false;
   });
-  // tz-07 H5 (the debt tz-06 left when it dropped --no-session): role sessions
-  // outlive the general sweep, by their OWN longer retention.
+  // tz-07 H5 (the debt tz-06 left when it dropped --no-session): a role run
+  // outlives the general sweep, by its OWN longer retention.
   //
-  // One expiry per level, deliberately: everything non-session inside an
-  // attempt dies at intervalHours as before, while the session dir — and the
-  // attempt as its container — lives until sessionRetentionHours.
+  // The unit preserved is the ATTEMPT DIR, not just `session/`: the
+  // `inspectable-run` invariant says "сессия И АРТЕФАКТЫ прогона ... живут до
+  // истечения retention", and a transcript whose result.json and diffs were
+  // swept at intervalHours is not an inspectable run.
   //
-  // `keep_scratch` (tz-02) DELAYS deletion to that point rather than exempting
-  // the dir. The spec's literal "keep_scratch takes precedence" would mean
-  // cleanup never deletes a kept dir at all — run-role.ts only skips the
-  // immediate post-run wipe, and this pass is the only thing that deletes it
-  // afterwards — i.e. unbounded growth exactly where H5 exists to stop it.
-  const sessionMaxAge = maxAgeMsFor({
+  // Relation to `keep_scratch` (tz-02), stated precisely because the spec's
+  // literal R3 reading is unimplementable: keep_scratch decides only whether
+  // run-role.ts wipes the dir IMMEDIATELY after the run. Once the dir
+  // survives that, deletion is governed here, uniformly, by retention — this
+  // pass being the only later deleter. A literal "keep_scratch takes
+  // precedence" would mean nothing ever deletes a kept dir: unbounded growth
+  // exactly where H5 exists to stop it.
+  const attemptMaxAge = maxAgeMsFor({
     intervalHours: deps.sessionRetentionHours ?? 24 * 14,
   });
-  const keepSession = (p: string): boolean => {
-    if (path.basename(p) !== "session") return false;
+  // Decided ONCE per attempt dir, before the walk mutates anything: removing
+  // `out/` bumps the attempt dir's mtime to now, and a predicate re-stat'ing
+  // it afterwards would then call a just-expired attempt fresh and preserve
+  // half of it. Found by the p6 probe, which showed the session surviving a
+  // 1-hour retention.
+  const attemptVerdict = new Map<string, boolean>();
+  const keepAttempt = (p: string): boolean => {
     const parts = p.split(path.sep);
-    if (parts[parts.length - 3] !== "attempts") return false;
+    const marker = parts.lastIndexOf("attempts");
+    if (marker < 0 || marker + 1 >= parts.length) return false;
+    const attemptDir = parts.slice(0, marker + 2).join(path.sep);
+    const decided = attemptVerdict.get(attemptDir);
+    if (decided !== undefined) return decided;
+    let keep = false;
     try {
-      return !isStale(fs.statSync(p).mtimeMs, nowMs, sessionMaxAge);
+      keep = !isStale(fs.statSync(attemptDir).mtimeMs, nowMs, attemptMaxAge);
     } catch {
-      return false;
+      keep = false;
     }
+    attemptVerdict.set(attemptDir, keep);
+    return keep;
   };
   for (const root of roots) {
     stats.scanned.push(root);
-    ageCleanDir(root, nowMs, maxAge, stats, keepSession);
+    ageCleanDir(root, nowMs, maxAge, stats, keepAttempt);
   }
 
   // 4. Tasks subtrees derived from scratch dirs (exact) + marker sweep.

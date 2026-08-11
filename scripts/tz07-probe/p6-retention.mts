@@ -86,9 +86,11 @@ async function leg(sessionRetentionHours: number): Promise<void> {
   });
 
   const sessionAlive = fs.existsSync(session);
-  const outGone = !fs.existsSync(outFile);
+  // inspectable-run: артефакты прогона обязаны жить столько же, сколько сессия,
+  // иначе транскрипт без result.json — это не «разбираемый прогон».
+  const artefactsAlive = fs.existsSync(outFile);
   console.log(
-    `retention=${String(sessionRetentionHours).padStart(5)}ч → сессия жива: ${String(sessionAlive).padEnd(5)} | несессионное удалено: ${outGone} | removedDirs=${stats.removedDirs} errors=${stats.errors.length}`,
+    `retention=${String(sessionRetentionHours).padStart(5)}ч → сессия жива: ${String(sessionAlive).padEnd(5)} | артефакты живы: ${String(artefactsAlive).padEnd(5)} | removedDirs=${stats.removedDirs} errors=${stats.errors.length}`,
   );
   fs.rmSync(home, { recursive: true, force: true });
 }
@@ -99,5 +101,5 @@ await leg(1);
 // Заведомо длинный: обязана выжить, и вместе с ней — каталог-контейнер.
 await leg(9999);
 console.log(
-  "ожидание: первая строка — сессия жива false, вторая — true; иначе retention не читается",
+  "ожидание: первая строка — всё false, вторая — всё true; иначе retention не читается",
 );

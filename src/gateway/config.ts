@@ -63,6 +63,15 @@ export interface GatewayConfig {
     /** Base directory for TDAI data storage. */
     baseDir: string;
     /**
+     * True when nothing named the root — no TDAI_DATA_DIR, no yaml
+     * `data.baseDir`, no override. Only such an install may inherit the
+     * pre-tz-07 location (tz-07 H2, criterion 3: "дефолт БЕЗ явного корня
+     * работает по прежним путям"). An explicit root is a deliberate
+     * relocation — and it is also what every sandbox and test uses, which is
+     * how the operator's real roles leaked into them.
+     */
+    baseDirIsDefault: boolean;
+    /**
      * Root of the per-run scratch dirs — cwd of every consolidation child
      * (tz-02 критерий 2). Resolved HERE, once: the spawn side and the cleanup
      * sweep must name the SAME directory, and two hardcodes of the same
@@ -146,7 +155,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   // Data config (expand leading ~ to $HOME so Node.js fs/path can resolve it)
   const dataConfig = obj(fileConfig, "data");
-  const rawBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir") ?? resolveDefaultDataDir();
+  const explicitBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir");
+  const rawBaseDir = explicitBaseDir ?? resolveDefaultDataDir();
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
   const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
   const explicitScratchRoot = env("TDAI_SCRATCH_ROOT") ?? str(dataConfig, "scratchRoot");
@@ -181,7 +191,11 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
-    data: { baseDir, scratchRoot },
+    data: {
+      baseDir,
+      baseDirIsDefault: explicitBaseDir === undefined,
+      scratchRoot,
+    },
     llm,
     memory,
     logging,
@@ -201,6 +215,12 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     explicitScratchRoot === undefined
   ) {
     patchedData.scratchRoot = defaultScratchRoot(patchedData.baseDir);
+  }
+  // An override names the root as surely as the env does — tests and sandboxes
+  // come through here, and treating them as "the default install" is exactly
+  // how they inherited the operator's roles (tz-07 H2).
+  if (overrides.data?.baseDir !== undefined) {
+    patchedData.baseDirIsDefault = false;
   }
   return {
     ...base,

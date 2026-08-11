@@ -30,6 +30,7 @@ import {
   loadRoleConfig,
   loadRolePrompt,
 } from "../../src/gateway/role-files.js";
+import { must, finish } from "./assert.mts";
 
 const WRITABLE_LEGACY = process.env.FALSIFY === "writable-legacy";
 const ROLE = "memory-keeper";
@@ -136,11 +137,13 @@ fs.writeFileSync(target, "НОВЫЙ ПРОМПТ\n", "utf-8");
 const v = target.startsWith(root + path.sep);
 const g = hashTree(legacyRoot) === before;
 
-console.log(`(а) прочитано со старого пути:      ${a} (должно быть true)`);
-console.log(`(б) deprecation в stderr:           ${b} (должно быть true)`);
-console.log(`(в) запись легла под новый корень:  ${v} (должно быть true)`);
-console.log(`(г) старый каталог не изменился:    ${g} (должно быть true)`);
+must("(а) прочитано со старого пути", a);
+must("(б) deprecation в stderr", b);
+must("(в) запись легла под новый корень", v);
+must("(г) старый каталог не изменился", g);
 console.log(`   писали в: ${target}`);
 console.log(`дефолтный корень резолвится в: ${defaultTdaiRoot()}`);
 
 fs.rmSync(home, { recursive: true, force: true });
+
+finish();

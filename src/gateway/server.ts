@@ -139,9 +139,13 @@ export class TdaiGateway {
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
-    // tz-07 H2: this is a real install, so it may still read roles/prompts
-    // left at the pre-tz-07 location. Writes always go to the new root.
-    allowLegacyFallback(this.config.data.baseDir);
+    // tz-07 H2, criterion 3: ONLY a default-rooted install may still read
+    // roles/prompts left at the pre-tz-07 location. An explicit root is a
+    // deliberate relocation — and it is what every sandbox and test uses, so
+    // declaring those too let them read the operator's real install.
+    if (this.config.data.baseDirIsDefault) {
+      allowLegacyFallback(this.config.data.baseDir);
+    }
     // Dev logger: file sink from config.logging.file, debug from yaml level
     // OR TDAI_DEV=1 (env wins — see dev-logger.isDevMode).
     this.logger = createDevLogger({

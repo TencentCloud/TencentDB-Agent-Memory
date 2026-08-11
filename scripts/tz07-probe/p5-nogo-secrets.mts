@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildChildEnv } from "../../src/gateway/consolidation/child-spawn.js";
 import { authRootFor } from "../../src/gateway/consolidation/launchers/auth-root.js";
+import { must, finish } from "./assert.mts";
 
 const LEAK = process.env.FALSIFY === "leak-key";
 
@@ -88,9 +89,11 @@ for (const id of ["pi", "claude", "codex"]) {
   );
 }
 
-console.log(`ни одно значение не совпало: ${!anyLeak} (должно быть true)`);
+must("ни одно значение env не совпало с секретом", !anyLeak);
 console.log(
   `состав env под claude: ${Object.keys(childEnvFor("claude")).sort().join(", ")}`,
 );
 
 fs.rmSync(home, { recursive: true, force: true });
+
+finish();

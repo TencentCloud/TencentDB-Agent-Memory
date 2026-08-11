@@ -20,6 +20,7 @@ import {
   resetTdaiRootCacheForTests,
   resolveUnderRoot,
 } from "../../src/gateway/tdai-root.js";
+import { must, finish } from "./assert.mts";
 
 const IGNORE_ARG = process.env.FALSIFY === "ignore-arg";
 
@@ -57,7 +58,9 @@ const c = layout(path.join(home, "other-root"), "explicit-other"); // ДРУГО
 console.log(`  дефолт:              ${a}`);
 console.log(`  явно, то же значение: ${b}`);
 console.log(`  явно, ДРУГОЙ корень:  ${c}`);
-console.log(`совпали до файла (S2):        ${a === b} (должно быть true)`);
-console.log(`другой корень даёт другое:    ${c !== a} (должно быть true)`);
+must("совпали до файла (S2)", a === b);
+must("другой корень даёт другое дерево", c !== a);
 
 fs.rmSync(home, { recursive: true, force: true });
+
+finish();
