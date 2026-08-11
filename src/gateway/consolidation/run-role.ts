@@ -9,10 +9,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { writeReport } from "./reports.js";
-import {
-  advanceCheckpoint,
-  stampRoleRun,
-} from "./checkpoint-advance.js";
+import { stampRoleRun } from "./checkpoint-advance.js";
+import { finalizeCheckpointAfterRun } from "./checkpoint-gate.js";
 import {
   collectBlockMeta,
   countNewL0Since,
@@ -117,28 +115,29 @@ export async function runRole(
       await writeReport(ctx, summary, outcome.diffText);
       return summary;
     }
-    if (outcome.advance) {
-      await advanceCheckpoint(
-        ctx,
-        cursor,
-        newL0,
-        summary,
-        outcome.advance.anchor,
-      );
-    } else {
-      // A successful run that moved no cursor still counts as "ran today",
-      // otherwise a scheduled no-op repeats every tick. A FAILED run does not
-      // touch lastRunAt — it stays retryable — but its failure IS counted, and
-      // that count is what bounds the retries (contract retry_budget).
-      await stampRoleRun(ctx, summary);
-    }
     // tz-09 Ф2b: the failure CLASS decides what happens next, and it is
     // written where the next dispatch can see it — not just into the report.
+    // tz-03a: this now runs BEFORE the checkpoint, because the checkpoint gate
+    // asks the control plane whether the apply completed. In the old order the
+    // cursor moved first and the run's state was written afterwards, so the
+    // gate would have read the state of the PREVIOUS attempt.
     finalizeRunOutcome(
       ctx,
       { runId: opts.runId, dryRun: opts.dryRun, partial: outcome.partial },
       summary,
     );
+    // A successful run that moved no cursor still counts as "ran today",
+    // otherwise a scheduled no-op repeats every tick. A FAILED run does not
+    // touch lastRunAt — it stays retryable — but its failure IS counted, and
+    // that count is what bounds the retries (contract retry_budget).
+    await finalizeCheckpointAfterRun({
+      ctx,
+      runId: opts.runId,
+      advance: outcome.advance,
+      cursor,
+      newL0,
+      summary,
+    });
     await writeReport(ctx, summary);
     return summary;
   } catch (err) {

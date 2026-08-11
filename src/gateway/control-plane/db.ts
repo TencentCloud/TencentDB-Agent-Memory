@@ -73,6 +73,10 @@ const SCHEMA: readonly string[] = [
  * which fails harmlessly once the column is there. */
 const ADDITIONS: readonly string[] = [
   `ALTER TABLE oplog ADD COLUMN extraKeys TEXT NOT NULL DEFAULT ''`,
+  // tz-03a: which run already finalized the checkpoint. Nullable on purpose —
+  // every run that predates the column reads as "not finalized", which is the
+  // safe direction: at worst one recount, never a silent double count.
+  `ALTER TABLE runs ADD COLUMN checkpointFinalizedAt TEXT`,
 ];
 
 export function controlPlanePath(dataDir: string): string {
