@@ -658,3 +658,28 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+
+/* ── 记忆删除按钮 ── */
+._memory-detail-del-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 3px 6px;
+  border: none;
+  background: rgba(0, 0, 0, 0.06);
+  color: #6b7280;
+  line-height: 16px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 1;
+}
+._memory-detail-del-btn:hover {
+  color: #d54941;
+  background: rgba(213, 73, 65, 0.12);
+  opacity: 1;
+}
+._memory-detail-del-btn--atomic {
+  flex-shrink: 0;
+}

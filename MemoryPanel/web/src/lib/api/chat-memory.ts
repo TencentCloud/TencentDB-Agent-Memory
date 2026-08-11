@@ -113,4 +113,14 @@ export const chatMemoryApi = {
     chatMemoryCall<{ imported: boolean; block_id: string; session_id: string; accepted_count: number }>('import', {
       team_id: teamId, agent_id: agentId, messages, session_id: sessionId,
     }),
+
+  /** 删除记忆内容：L0 消息 / L1 原子记忆 / L2 场景（面板手动清理） */
+  deleteMemory: (
+    blockId: string,
+    layer: 'L0' | 'L1' | 'L2',
+    target: { message_ids?: string[]; ids?: string[]; path?: string },
+  ) =>
+    chatMemoryCall<{ deleted_count: number }>('delete', {
+      block_id: blockId, layer, ...target,
+    }),
 };

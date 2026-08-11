@@ -604,6 +604,8 @@ export const enUS = {
   'memory.notify.scopeFailed': 'Failed to toggle visibility',
   'memory.notify.loadFailed': 'Failed to load memory blocks',
   'memory.notify.layerFailed': 'Failed to load layer data',
+  'memory.notify.deleted': 'Deleted {{count}} memory item(s)',
+  'memory.notify.deleteFailed': 'Delete failed',
   'memory.notify.l2Failed': 'Failed to load L2 content',
   'memory.confirm.private':
     'After setting to private, other Agents will no longer be able to use this memory',
@@ -614,6 +616,8 @@ export const enUS = {
   'memory.detail.uploadedBy': 'Uploaded: {{user}}',
   'memory.detail.updated': 'Updated: {{time}}',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
+  'memory.detail.deleteItem': 'Delete this memory item',
+  'memory.detail.deleteConfirm': 'Delete this memory item? This cannot be undone.',
   'memory.detail.loadMore': 'Load earlier messages',
   'memory.detail.allLoaded': 'All messages loaded',
   'memory.detail.pageInfo': 'Page {{page}} / {{total}} · {{current}} of {{total2}} items',

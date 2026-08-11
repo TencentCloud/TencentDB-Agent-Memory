@@ -1061,6 +1061,157 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       );
     }
   });
+
+  // ── 记忆删除：L0 消息 / L1 原子记忆 / L2 场景（面板手动清理） ────────────
+  // body: { block_id, layer: 'L0'|'L1'|'L2', message_ids?: string[], ids?: string[], path?: string }
+  // ACL 与 /layer 一致（owner / team-shared / borrowed 三态可删）。
+  api.post('/chat-memory/delete', validatePanelMetaHeaders(deps), async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const blockId = requiredBlockId(body);
+    const layerRaw = typeof body?.layer === 'string' ? body.layer.toUpperCase() : '';
+    const messageIds = Array.isArray(body?.message_ids)
+      ? (body.message_ids as unknown[]).filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const ids = Array.isArray(body?.ids)
+      ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const path = typeof body?.path === 'string' ? body.path.trim() : undefined;
+
+    if (!blockId) return respondControlError(c, 400, 'MISSING_BLOCK_ID');
+    if (!['L0', 'L1', 'L2'].includes(layerRaw)) return respondControlError(c, 400, 'INVALID_LAYER');
+    const layer = layerRaw as 'L0' | 'L1' | 'L2';
+    if (layer === 'L0' && (!messageIds || messageIds.length === 0))
+      return respondControlError(c, 400, 'MISSING_MESSAGE_IDS');
+    if (layer === 'L1' && (!ids || ids.length === 0))
+      return respondControlError(c, 400, 'MISSING_IDS');
+    if (layer === 'L2' && !path)
+      return respondControlError(c, 400, 'MISSING_PATH');
+
+    const parsed = parseChatMemoryAssetId(blockId);
+    if (!parsed) return respondControlError(c, 400, 'UNSUPPORTED_ASSET');
+
+    const meUserId = await resolveCallerUserId(deps, ctx);
+    if (!meUserId) return respondControlError(c, 401, 'INVALID_USER_KEY');
+
+    // ── ACL：与 /layer 一致，防越权删除 ──
+    const assetEnv = await deps.metaKernel.invoke('asset/get', { asset_id: blockId }, ctx);
+    if (assetEnv.code === 404 || (assetEnv.code === 0 && !assetEnv.data)) {
+      return respondControlError(c, 404, 'BLOCK_NOT_FOUND');
+    }
+    if (assetEnv.code !== 0) return respondEnvelope(c, assetEnv);
+    const asset = assetEnv.data as AssetRaw;
+    if (asset.asset_type !== 'chat_memory') return respondControlError(c, 400, 'NOT_CHAT_MEMORY');
+
+    const isOwner = asset.owner_user_id === meUserId;
+    let isTeamShared = false;
+    if (asset.visibility === 'team') {
+      isTeamShared = await isTeamMember(deps, ctx, asset.team_id, meUserId);
+    }
+    let isBorrowed = false;
+    if (!isOwner && !isTeamShared) {
+      try {
+        const myAgentsEnv = await deps.metaKernel.invoke(
+          'agent/list',
+          { team_id: asset.team_id, status: 'active' },
+          ctx,
+        );
+        if (myAgentsEnv.code === 0) {
+          const myAgents = extractListItems<AgentRaw>(myAgentsEnv).filter(
+            (a) => a.owner_user_id === meUserId,
+          );
+          for (const a of myAgents) {
+            const bindEnv = await deps.metaKernel.invoke(
+              'agent-fixed-asset/list',
+              { agent_id: a.agent_id },
+              ctx,
+            );
+            if (bindEnv.code !== 0) continue;
+            const bindings = extractListItems<FixedAssetRaw>(bindEnv);
+            if (bindings.some((b) => b.asset_id === blockId)) {
+              isBorrowed = true;
+              break;
+            }
+          }
+        }
+      } catch { /* fallthrough → deny */ }
+    }
+    if (!isOwner && !isTeamShared && !isBorrowed) {
+      return respondControlError(c, 403, 'ASSET_NOT_ACCESSIBLE');
+    }
+
+    const ownerUserId = asset.owner_user_id;
+    const cred = toKernelCredentials(ctx, { timeoutMs: 15_000 });
+    const idFields: Record<string, unknown> = {
+      team_id: parsed.teamId,
+      agent_id: parsed.agentId,
+      user_id: ownerUserId,
+    };
+
+    let deletedCount = 0;
+    try {
+      if (layer === 'L0') {
+        // v3 严格 isolation：conversation/delete 必须带 session_id。
+        // 面板聚合视图跨 session 展示，先按 message_ids 反查所属 session，
+        // 再按 session 分组删除，否则内核匹配不到消息（deleted_count=0）。
+        const qEnv = await deps.kernelHttp.postEnvelope<{
+          messages?: Array<Record<string, unknown>>;
+          total?: number;
+        }>(
+          '/v3/conversation/query',
+          { team_id: parsed.teamId, agent_id: parsed.agentId, user_id: ownerUserId, limit: 100, offset: 0 },
+          cred,
+        );
+        if (qEnv.code !== 0) return respondEnvelope(c, qEnv);
+        const bySession = new Map<string, string[]>();
+        for (const m of qEnv.data?.messages ?? []) {
+          if (!messageIds!.includes(String(m.id))) continue;
+          const sid = typeof m.session_id === 'string' ? m.session_id : '';
+          if (!sid) continue;
+          const arr = bySession.get(sid) ?? [];
+          arr.push(String(m.id));
+          bySession.set(sid, arr);
+        }
+        if (bySession.size === 0) {
+          return respondEnvelope(c, okEnvelope(c, { deleted_count: 0 }));
+        }
+        for (const [sid, mids] of bySession) {
+          const env = await deps.kernelHttp.postEnvelope<{ deleted_count?: number }>(
+            '/v3/conversation/delete',
+            {
+              team_id: parsed.teamId,
+              agent_id: parsed.agentId,
+              user_id: ownerUserId,
+              session_id: sid,
+              message_ids: mids,
+            },
+            cred,
+          );
+          if (env.code !== 0) return respondEnvelope(c, env);
+          deletedCount += env.data?.deleted_count ?? 0;
+        }
+      } else if (layer === 'L1') {
+        const env = await deps.kernelHttp.postEnvelope<{ deleted_count?: number }>(
+          '/v3/atomic/delete',
+          { ...idFields, ids },
+          cred,
+        );
+        if (env.code !== 0) return respondEnvelope(c, env);
+        deletedCount = env.data?.deleted_count ?? 0;
+      } else {
+        const env = await deps.kernelHttp.postEnvelope<{ removed?: boolean }>(
+          '/v3/scenario/rm',
+          { ...idFields, path },
+          cred,
+        );
+        if (env.code !== 0) return respondEnvelope(c, env);
+        deletedCount = 1;
+      }
+    } catch (err) {
+      return respondControlError(c, 500, `DELETE_ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return respondEnvelope(c, okEnvelope(c, { deleted_count: deletedCount }));
+  });
 }
 
 /**

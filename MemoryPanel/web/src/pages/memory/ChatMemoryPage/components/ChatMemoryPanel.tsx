@@ -71,6 +71,7 @@ export default function ChatMemoryPanel(
   >({});
   const [layerLoading, setLayerLoading] = useState(false);
   const [layerItemLoadingId, setLayerItemLoadingId] = useState<string | null>(null);
+  const [layerRefresh, setLayerRefresh] = useState(0);
   const [showImport, setShowImport] = useState(false);
   const [showAllocate, setShowAllocate] = useState(false);
   const [scopeTab, setScopeTab] = useState<ScopeTab>('team');
@@ -239,6 +240,32 @@ export default function ChatMemoryPanel(
     });
   }, [selected?.id]);
 
+  const handleDeleteItem = useCallback(
+    async (delLayer: 'L0' | 'L1' | 'L2', id: string, path?: string) => {
+      if (!selected?.id) return;
+      try {
+        const target =
+          delLayer === 'L0'
+            ? { message_ids: [id] }
+            : delLayer === 'L1'
+              ? { ids: [id] }
+              : { path: path || id };
+        const res = await chatMemoryApi.deleteMemory(selected.id, delLayer, target);
+        tea.notify.success(
+          t('memory.notify.deleted', { count: res?.deleted_count ?? 1 }),
+        );
+        setLayerPages((prev) => ({
+          ...prev,
+          [selected.id]: { ...(prev[selected.id] ?? {}), [delLayer]: 0 },
+        }));
+        setLayerRefresh((v) => v + 1);
+      } catch (e: any) {
+        tea.notify.error(e?.message || t('memory.notify.deleteFailed'));
+      }
+    },
+    [selected?.id, t],
+  );
+
   useEffect(() => {
     if (!selected?.id) {
       setLayerLoading(false);
@@ -275,7 +302,7 @@ export default function ChatMemoryPanel(
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, layer, layerPage, pageSize, t]);
+  }, [selected?.id, layer, layerPage, pageSize, t, layerRefresh]);
 
   const handleLayerPageChange = useCallback(
     (nextPage: number) => {
@@ -650,6 +677,7 @@ export default function ChatMemoryPanel(
                 layerItemLoadingId={layerItemLoadingId}
                 onL0LoadMore={handleL0LoadMore}
                 l0MoreLoading={l0MoreLoading}
+                onDeleteItem={handleDeleteItem}
               />
             )
           }
