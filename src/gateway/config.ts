@@ -237,7 +237,7 @@ function resolveConfigPath(): string | null {
   return null;
 }
 
-function resolveDefaultDataDir(): string {
+export function resolveDefaultDataDir(): string {
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
 
   // New canonical location: everything related to standalone/Hermes-mode TDAI
