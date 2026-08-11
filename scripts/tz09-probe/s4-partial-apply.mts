@@ -174,7 +174,9 @@ const next = claimRun(dataDir, RUN, "next-dispatch", {
   nowMs: Date.now(),
   ttlMs: 60_000,
 });
-console.log(`next dispatch: ok=${next.ok} reason=${next.reason ?? "-"}`);
+console.log(
+  `next dispatch: ok=${next.ok} reason=${next.ok ? "-" : next.reason}`,
+);
 
 store.close();
 sbx.cleanup();

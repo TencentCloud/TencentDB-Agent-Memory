@@ -82,6 +82,9 @@ const resolved = resolveRoleContract("keeper", roleDir, {
   thinking: "low",
 } as never);
 if (!resolved.ok) throw new Error(`keeper did not resolve: ${resolved.reason}`);
+// Держим сам контракт: сужение по resolved.ok не переживает границу
+// функции ниже, а `as never` там скрыл бы протухание сигнатуры.
+const keeperContract = resolved.contract;
 
 const CANDIDATE = { rewriteBlock: [] };
 
@@ -155,7 +158,7 @@ async function attempt(mode: "enforce" | "shadow"): Promise<void> {
     reason: "probe",
     runId: `run-${mode}`,
     role: "keeper",
-    contract: resolved.contract,
+    contract: keeperContract,
     scratchDir: scratch,
     cp: { l0Cursor: "", lastRunAt: null },
     records: [],

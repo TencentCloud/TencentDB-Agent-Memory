@@ -66,7 +66,6 @@ resetTdaiRootCacheForTests();
 
 const realExists = fs.existsSync;
 let statCalls = 0;
-// @ts-expect-error — считаем обращения через тот же объект модуля fs.
 fs.existsSync = (p: fs.PathLike) => {
   statCalls += 1;
   return realExists(p);
@@ -83,7 +82,6 @@ for (let i = 0; i < N; i += 1) {
   if (NO_CACHE) resetTdaiRootCacheForTests();
   defaultTdaiRoot();
 }
-// @ts-expect-error — вернуть как было.
 fs.existsSync = realExists;
 
 console.log(`цена одного резолва:           ${perOne}`);

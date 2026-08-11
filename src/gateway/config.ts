@@ -116,8 +116,22 @@ function defaultScratchRoot(baseDir: string): string {
  * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
  * 4. Pure environment-variable config (no file)
  */
+/**
+ * A patch, not a whole config: the merge below is one level deep on purpose, so
+ * `{ data: { baseDir } }` is a legal override. `Partial<GatewayConfig>` claimed
+ * otherwise — it demanded every sibling of a group being patched, which is why
+ * probes and e2e callers reached for `as never` and stopped typechecking.
+ */
+export type GatewayConfigOverrides = Omit<
+  Partial<GatewayConfig>,
+  "server" | "data"
+> & {
+  server?: Partial<GatewayConfig["server"]>;
+  data?: Partial<GatewayConfig["data"]>;
+};
+
 export function loadGatewayConfig(
-  overrides?: Partial<GatewayConfig>,
+  overrides?: GatewayConfigOverrides,
 ): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
 

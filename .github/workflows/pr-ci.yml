@@ -46,6 +46,24 @@ jobs:
       - name: No hardcoded host paths, read-only legacy fallback
         run: bash scripts/check-no-pi-hardcode.sh
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('package.json') }}
+
+      # tz-07 round 5: nothing typechecked the probes, so a changed signature
+      # left four call sites stale — a runId sat in the root slot and the probe
+      # kept exiting 0. The probes ARE the product evidence; they get a gate.
+      - name: Typecheck source and probes
+        run: |
+          npx tsc -p tsconfig.check.json --noEmit
+          npx tsc -p tsconfig.probes.json --noEmit
+
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
     name: Pack

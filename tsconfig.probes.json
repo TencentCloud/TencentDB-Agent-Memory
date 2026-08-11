@@ -1,0 +1,17 @@
+{
+  // Probes were typechecked by NOTHING until tz-07 round 5: tsconfig.check.json
+  // sees only src/, so a changed signature left four probe call sites stale and
+  // silently wrong (a runId landed in the root slot and wrote ./run-1/). They
+  // run under tsx, hence allowImportingTsExtensions for the `./assert.mts`
+  // imports.
+  "extends": "./tsconfig.check.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  // The ambient module declarations live under src/gateway; `include` is
+  // replaced (not merged) by `extends`, so they have to be named again or the
+  // optional deps they stub (node-llama-cpp, openclaw/plugin-sdk) come back as
+  // TS2307.
+  "include": ["scripts/**/*.mts", "src/**/*.d.ts"]
+}

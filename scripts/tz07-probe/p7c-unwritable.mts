@@ -137,7 +137,7 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
       "{ битый",
       "utf-8",
     );
-    await readScratchDiff(scratch, "run-1");
+    await readScratchDiff(scratch, root, "run-1");
   });
 
   // 5. Уборка.

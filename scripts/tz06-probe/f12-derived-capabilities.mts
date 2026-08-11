@@ -53,7 +53,7 @@ const contract = adaptRoleContract({
   } as never,
   promptPath: null,
   promptText: null,
-  source: "legacy",
+  source: "legacy-absent",
 });
 
 const required = DECLARED_ONLY
@@ -131,7 +131,7 @@ const plain = adaptRoleContract({
   } as never,
   promptPath: null,
   promptText: null,
-  source: "legacy",
+  source: "legacy-absent",
 });
 console.log(
   `роль без ассетов требует: ${JSON.stringify(plain.requiresCapabilities)}; ` +

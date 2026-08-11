@@ -39,7 +39,7 @@ console.log(
 );
 
 // Ребёнок не написал ничего — ровно живой случай.
-const parsed = await readScratchDiff(scratch, "s9");
+const parsed = await readScratchDiff(scratch, scratch, "s9");
 console.log(`распознано как кандидат: ${parsed.error === undefined}`);
 console.log(`error=${parsed.error ?? "-"}`);
 

@@ -104,7 +104,7 @@ for (const id of HOSTS) {
     contract: contract(id),
   } as never);
 
-  const parsed = await readScratchDiff(cwd);
+  const parsed = await readScratchDiff(cwd, root);
   const digest =
     parsed.error === undefined
       ? createHash("sha256")

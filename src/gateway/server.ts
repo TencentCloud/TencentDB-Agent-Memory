@@ -20,7 +20,7 @@ import { TdaiCore } from "../core/tdai-core.js";
 import { createDevLogger, isDevMode } from "../utils/dev-logger.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
-import type { GatewayConfig } from "./config.js";
+import type { GatewayConfig, GatewayConfigOverrides } from "./config.js";
 import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import type {
@@ -137,7 +137,7 @@ export class TdaiGateway {
   private lastError: StatusResponse["lastError"] = null;
   private totalsStale = true;
 
-  constructor(configOverrides?: Partial<GatewayConfig>) {
+  constructor(configOverrides?: GatewayConfigOverrides) {
     this.config = loadGatewayConfig(configOverrides);
     // tz-07 H2, criterion 3: ONLY a default-rooted install may still read
     // roles/prompts left at the pre-tz-07 location. An explicit root is a

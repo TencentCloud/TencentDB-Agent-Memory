@@ -118,14 +118,12 @@ const before = hashTree(legacyRoot);
 // --- (а) и (б) --------------------------------------------------------------
 const stderrLines: string[] = [];
 const realWrite = process.stderr.write.bind(process.stderr);
-// @ts-expect-error — перехват на время чтения.
 process.stderr.write = (chunk: string | Uint8Array): boolean => {
   stderrLines.push(String(chunk));
   return true;
 };
 const cfg = loadRoleConfig(ROLE, root);
 const prompt = loadRolePrompt(ROLE, root);
-// @ts-expect-error — вернуть как было.
 process.stderr.write = realWrite;
 
 const a = cfg?.name === ROLE && prompt === "СТАРЫЙ ПРОМПТ\n";

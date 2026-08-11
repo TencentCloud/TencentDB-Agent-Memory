@@ -123,7 +123,7 @@ async function runUnder(launcherId: "pi" | "claude") {
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root },
     contract: contract(launcherId),
   } as never);
-  const parsed = await readScratchDiff(cwd);
+  const parsed = await readScratchDiff(cwd, root);
   return { cwd, res, parsed };
 }
 
