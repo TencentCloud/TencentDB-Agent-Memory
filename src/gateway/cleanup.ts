@@ -7,7 +7,7 @@
  *   - `dataDir/.backup` (apply-*.bak) by age;
  *   - stale run scratch dirs under scratchRoot (the P6 orchestrator removes
  *     its own run dir in `finally`; this catches crash leftovers) by age;
- *   - the deterministic tasks subtree `~/.pi/agent/tasks/--<sanitized-cwd>--/`
+ *   - the deterministic tasks subtree `<hostTaskRoot>/--<sanitized-cwd>--/`
  *     derived from the scratch cwd (SKILL.md:29 hardcodes that path from the
  *     sub-session's cwd = scratch; if the P9 task-simple prompt-override fails,
  *     cleanup removes the droppings post-factum) — exact derived path plus a
@@ -31,10 +31,10 @@ import type { Logger } from "../core/types.js";
 // ============================
 
 /**
- * Sanitize a RELATIVE cwd into the token used by `~/.pi/agent/tasks/--<token>--/`
+ * Sanitize a RELATIVE cwd into the token used by `<hostTaskRoot>/--<token>--/`
  * (task-simple SKILL.md:29 derives it from the child's cwd). REJECTS absolute
  * paths, `~` and `..` traversal — the derived tasks path must never escape
- * `~/.pi/agent/tasks/`. Slashes become dashes; every other non [A-Za-z0-9_-]
+ * the host task root. Slashes become dashes; every other non [A-Za-z0-9_-]
  * char becomes a dash. Returns null on any rejected input (caller skips).
  */
 export function sanitizeCwdToken(raw: string): string | null {

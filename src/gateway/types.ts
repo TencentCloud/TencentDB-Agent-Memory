@@ -240,7 +240,7 @@ export interface SeedResponse {
  * Contains the token file PATH — never the token itself (INVARIANT nogo-secrets).
  */
 export interface MemoryInfoResponse {
-  /** Resolved gateway data dir (~/.pi/agent-memory/tdai). */
+  /** Resolved gateway data dir (the tz-07 root). */
   dataDir: string;
   /** Absolute path of the loopback token file (sibling of dataDir). */
   tokenPath: string;

@@ -59,7 +59,8 @@ export interface ChildEnvDeps {
  * Build the child environment — an EXPLICIT whitelist. Nothing else is copied
  * from process.env: auth keys, loopback token and provider secrets never reach
  * the sub-session (INVARIANT nogo-secrets). The provider key the child's model
- * needs is read by opencode-go itself from ~/.pi/agent/auth.json via HOME.
+ * needs is read by the executor itself from its auth-root (tz-07 H3,
+ * launchers/auth-root.ts), never handed through this env.
  */
 export function buildChildEnv(deps: ChildEnvDeps): Record<string, string> {
   const env: Record<string, string> = {

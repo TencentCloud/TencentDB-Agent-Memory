@@ -123,7 +123,7 @@ export class TdaiGateway {
 
   // ============================
   // Diagnostic counters and last-event snapshots for /status
-  // (added 2026-07-24; see plan ~/.pi/agent/tasks/--home-penis--/2026-07-24/033000-tdai-memory-health.plan.md)
+  // (added 2026-07-24; see the tdai-memory-health plan of that day)
   // ============================
   private counterRecalls = 0;
   private counterCaptures = 0;

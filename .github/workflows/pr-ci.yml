@@ -32,6 +32,20 @@ jobs:
         if: steps.cache-deps.outputs.cache-hit != 'true'
         run: npm install --ignore-scripts
 
+  # ── 1b. Guards (tz-07 criterion 1) ──────────────────────────
+  # CI runs no tests at all, so a vitest guard alone would never execute here.
+  # The script is the single source of the regexp — this job and the vitest
+  # guard call the same file.
+  guards:
+    name: Guards
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No hardcoded host paths, read-only legacy fallback
+        run: bash scripts/check-no-pi-hardcode.sh
+
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
     name: Pack

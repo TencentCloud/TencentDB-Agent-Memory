@@ -20,13 +20,13 @@ export type ApplyOp =
   | "rewriteRecord"
   | "rewritePersona";
 
-/** Legacy flat path under `~/.pi/agent-memory/tdai/memory-keeper/`. */
+/** Legacy flat path under `<root>/memory-keeper/`. */
 const LEGACY_ROLE_DIR_NAME = "memory-keeper";
 
 /** Backward-compat export (pre-split role-files.ts). */
 export const ROLE_DIR_NAME = LEGACY_ROLE_DIR_NAME;
 
-/** Canonical per-role directory under `~/.pi/agent-memory/tdai/roles/<name>/`. */
+/** Canonical per-role directory under `<root>/roles/<name>/`. */
 const ROLES_PARENT_DIR_NAME = "roles";
 
 /** Canonical parent dir: `<root>/roles/` (pre-tz-07 location still readable). */

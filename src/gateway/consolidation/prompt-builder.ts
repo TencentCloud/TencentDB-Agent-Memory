@@ -3,7 +3,7 @@
  *
  * P9 owns the final role file; these defaults keep B3 self-contained.
  * loadRolePrompt reads the role file at runtime (auditors pattern under
- * ~/.pi/agent-memory/tdai/memory-keeper/<role>.md); the fail-open
+ * <root>/memory-keeper/<role>.md); the fail-open
  * DEFAULT_ROLE_PROMPT runs when no role file is present (day keeper only;
  * night-keeper is fail-loud).
  */
