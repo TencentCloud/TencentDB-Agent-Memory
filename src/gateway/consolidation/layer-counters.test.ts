@@ -87,6 +87,29 @@ describe("layer counters", () => {
     expect(cp.sceneCount).toBe(1);
   });
 
+  it("without a store keeps l1Count and still counts scenes (degraded gateway)", async () => {
+    store.rows = 8;
+    await recomputeCounters(dataDir, store);
+    writeBlock("_global/a.md");
+    await recomputeCounters(dataDir, undefined);
+    const cp = await new ConsolidationCheckpoint(dataDir).read();
+    expect(cp.l1Count).toBe(8); // not overwritten with a lie
+    expect(cp.sceneCount).toBe(1);
+  });
+
+  it("takes the store from a supplier, so a late store still counts", async () => {
+    let live: typeof store | undefined = undefined;
+    const observer = createCounterObserver(dataDir, () => live);
+    await observer.onCommitted(mutation);
+    expect((await new ConsolidationCheckpoint(dataDir).read()).l1Count).toBe(
+      undefined,
+    );
+    live = store;
+    store.rows = 6;
+    await observer.onCommitted(mutation);
+    expect((await new ConsolidationCheckpoint(dataDir).read()).l1Count).toBe(6);
+  });
+
   it("leaves the cursor fields of tz-03a untouched", async () => {
     const cp = new ConsolidationCheckpoint(dataDir);
     await cp.update((d) => {

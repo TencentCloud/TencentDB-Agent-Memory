@@ -72,18 +72,25 @@ export async function countScenes(dataDir: string): Promise<number> {
   return total;
 }
 
-/** Recompute both counters from fact and store them in the checkpoint. */
+/**
+ * Recompute both counters from fact and store them in the checkpoint.
+ *
+ * `store` may be absent: a degraded gateway (store init failed) still serves
+ * the mutating routes, so the scene counter — a filesystem carrier that needs
+ * no backend — must keep working, and l1Count keeps its previous value instead
+ * of being overwritten with a lie.
+ */
 export async function recomputeCounters(
   dataDir: string,
-  store: CountableStore,
-): Promise<{ l1Count: number; sceneCount: number }> {
-  const l1 = await countL1(store);
+  store: CountableStore | undefined,
+): Promise<{ l1Count: number | undefined; sceneCount: number }> {
+  const l1 = store === undefined ? undefined : await countL1(store);
   const scenes = await countScenes(dataDir);
   // The same locked update tz-03a uses for the cursor: the hard-link lock
   // keeps other processes out, so a concurrent finalization cannot lose this
   // write (ТЗ criterion 3a).
   await new ConsolidationCheckpoint(dataDir).update((d) => {
-    d.l1Count = l1;
+    if (l1 !== undefined) d.l1Count = l1;
     d.sceneCount = scenes;
   });
   return { l1Count: l1, sceneCount: scenes };
@@ -96,15 +103,20 @@ export async function recomputeCounters(
  */
 export function createCounterObserver(
   dataDir: string,
-  store: CountableStore,
+  store: CountableStore | (() => CountableStore | undefined),
   logger?: CounterLogger,
 ): MemoryCommitObserver {
+  // A supplier, not a snapshot: the gateway subscribes at start(), and the
+  // store may be missing then (degraded init) or replaced later. Capturing it
+  // once would silently stop the counters for the life of the process.
+  const resolve =
+    typeof store === "function" ? store : (): CountableStore => store;
   return {
     async onCommitted(m: MemoryMutation): Promise<void> {
-      const counts = await recomputeCounters(dataDir, store);
+      const counts = await recomputeCounters(dataDir, resolve());
       logger?.debug?.(
         `[counters] ${m.source} ${m.kind} ${m.carrier} (${m.affected}) → ` +
-          `l1=${counts.l1Count} scenes=${counts.sceneCount}`,
+          `l1=${counts.l1Count ?? "(no store)"} scenes=${counts.sceneCount}`,
       );
     },
   };

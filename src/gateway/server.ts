@@ -329,17 +329,17 @@ export class TdaiGateway {
     // tz-03b: the commit port gets its one subscriber here, after the store
     // exists. Without this call every notifyCommitted() is a no-op and the
     // counters never move — which is exactly the package's rollback path.
-    const vectorStore = this.core.getVectorStore();
-    if (vectorStore) {
-      setCommitObserver(
-        createCounterObserver(
-          this.config.data.baseDir,
-          vectorStore,
-          this.logger,
-        ),
+    // The store is passed as a SUPPLIER: a degraded init leaves it undefined
+    // here, and the mutating routes stay open — the scene counter needs no
+    // store at all, and l1Count starts moving as soon as one exists.
+    setCommitObserver(
+      createCounterObserver(
+        this.config.data.baseDir,
+        () => this.core.getVectorStore(),
         this.logger,
-      );
-    }
+      ),
+      this.logger,
+    );
 
     // Consolidation: restore checkpoint, sweep stale keepers, catch-up check.
     await this.orchestrator.start();
