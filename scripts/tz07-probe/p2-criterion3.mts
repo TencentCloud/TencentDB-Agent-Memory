@@ -21,6 +21,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
+  allowLegacyFallback,
   defaultTdaiRoot,
   legacyReadPath,
   resetTdaiRootCacheForTests,
@@ -40,6 +41,10 @@ const root = path.join(home, "new-root");
 process.env.HOME = home;
 process.env.TDAI_DATA_DIR = root;
 resetTdaiRootCacheForTests();
+// Это РЕАЛЬНАЯ установка, а не песочница: композиционный корень объявляет
+// её, как это делает server.ts/index.ts. Без объявления fallback не даётся —
+// в том и смысл правила.
+allowLegacyFallback(root);
 
 console.log(`FALSIFY=${process.env.FALSIFY ?? "(нет)"}`);
 console.log(`старый корень: ${path.join(home, ".pi/agent-memory/tdai")}`);

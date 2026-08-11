@@ -78,8 +78,13 @@ export function resolveUnderRoot(root: string, ...segments: string[]): string {
 export function legacyReadPath(root: string, ...segments: string[]): string {
   const fresh = resolveUnderRoot(root, ...segments);
   if (fs.existsSync(fresh)) return fresh;
-  // Only a declared install root may inherit the old location.
-  if (root !== defaultTdaiRoot() && !legacyAllowed.has(root)) return fresh;
+  // Only a DECLARED install root may inherit the old location. Deliberately
+  // not "or the default root": defaultTdaiRoot() resolves TDAI_DATA_DIR first,
+  // so an env-named root — an explicit root by criterion 3's own words —
+  // would re-enter through that door and a sandbox would read the operator's
+  // roles again. The composition roots (server.ts, index.ts) are the only
+  // declarers; rollback is to unset the var, not to widen this rule.
+  if (!legacyAllowed.has(root)) return fresh;
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? os.homedir();
   const legacy = path.join(home, ...LEGACY_ROOT_SEGMENTS, ...segments);
   if (!fs.existsSync(legacy)) return fresh;

@@ -77,10 +77,11 @@ describe("legacyReadPath", () => {
   it("falls back to ~/.pi only for reading, and says so once", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-home-"));
     process.env.HOME = home;
-    // The fallback belongs to the install being upgraded — so the root under
-    // test must BE the default root.
-    process.env.TDAI_DATA_DIR = dir;
+    // The fallback belongs to a DECLARED install root. Being the default root
+    // is no longer enough: defaultTdaiRoot() resolves TDAI_DATA_DIR first, so
+    // that door let an env-named sandbox read the operator's roles.
     resetTdaiRootCacheForTests();
+    allowLegacyFallback(dir);
     const legacy = path.join(home, ".pi", "agent-memory", "tdai", "roles");
     fs.mkdirSync(legacy, { recursive: true });
     const writes: string[] = [];

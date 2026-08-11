@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { runCleanup } from "../../src/gateway/cleanup.js";
 import type { Logger } from "../../src/core/types.js";
+import { must, finish } from "./assert.mts";
 
 const silent: Logger = {
   debug: () => undefined,
@@ -92,6 +93,18 @@ async function leg(sessionRetentionHours: number): Promise<void> {
   console.log(
     `retention=${String(sessionRetentionHours).padStart(5)}ч → сессия жива: ${String(sessionAlive).padEnd(5)} | артефакты живы: ${String(artefactsAlive).padEnd(5)} | removedDirs=${stats.removedDirs} errors=${stats.errors.length}`,
   );
+  // Обе ноги — машинно проверяемые: короткий retention обязан снести и сессию,
+  // и артефакты, длинный — сохранить оба. Печать без проверки делала бы
+  // критерий 6 отчётом для человека, а не чеком.
+  const short = sessionRetentionHours < 24;
+  must(
+    `retention=${sessionRetentionHours}ч: сессия ${short ? "удалена" : "жива"}`,
+    short ? !sessionAlive : sessionAlive,
+  );
+  must(
+    `retention=${sessionRetentionHours}ч: артефакты ${short ? "удалены" : "живы"}`,
+    short ? !artefactsAlive : artefactsAlive,
+  );
   fs.rmSync(home, { recursive: true, force: true });
 }
 
@@ -103,3 +116,5 @@ await leg(9999);
 console.log(
   "ожидание: первая строка — всё false, вторая — всё true; иначе retention не читается",
 );
+
+finish();

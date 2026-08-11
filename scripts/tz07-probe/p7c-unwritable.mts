@@ -30,6 +30,7 @@ import {
 import { createDevLogger, flushLogs } from "../../src/utils/dev-logger.js";
 import { readScratchDiff } from "../../src/gateway/consolidation/scratch-diff.js";
 import type { Logger } from "../../src/core/types.js";
+import { must, finish } from "./assert.mts";
 
 const LEGACY_WRITE = process.env.FALSIFY === "legacy-write";
 
@@ -82,9 +83,7 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
   } catch {
     lockHolds = true;
   }
-  console.log(
-    `[${branch}] запись в старый корень падает: ${lockHolds} (должно быть true)`,
-  );
+  must(`[${branch}] запись в старый корень падает`, lockHolds);
   if (!lockHolds) {
     console.log(`[${branch}] ЗАМОК НЕ ЗАПЕРТ — дальше мерить нечего`);
     fs.chmodSync(piRoot, 0o755);
@@ -155,10 +154,8 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
     }),
   );
 
-  console.log(
-    `[${branch}] цикл без отказов доступа: ${failures.length === 0} (должно быть true)` +
-      (failures.length ? `\n  ${failures.join("\n  ")}` : ""),
-  );
+  if (failures.length > 0) console.log(`  ${failures.join("\n  ")}`);
+  must(`[${branch}] цикл без отказов доступа`, failures.length === 0);
 
   fs.chmodSync(piRoot, 0o755);
   fs.chmodSync(path.join(home, ".pi", "agent-memory"), 0o755);
@@ -175,3 +172,5 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
 console.log(`FALSIFY=${process.env.FALSIFY ?? "(нет)"}`);
 await cycle("standalone");
 await cycle("openclaw");
+
+finish();
