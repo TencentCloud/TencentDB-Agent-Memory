@@ -156,6 +156,11 @@ export function migrate(_db: Db, raw: Database.Database): void {
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
+  // 私有仓库认证列（token/ssh 凭据）
+  addColumnIfMissing(raw, "knowledge_code_graph", "auth_method", "TEXT NOT NULL DEFAULT 'none'");
+  addColumnIfMissing(raw, "knowledge_code_graph", "access_token", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "token_username", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "ssh_private_key", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");
   // service_id on audit tables is nullable → safe to add to existing dev DBs.

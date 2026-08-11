@@ -383,8 +383,20 @@ export const zhCN = {
   'code.register.gitUrlExtra': '注册后将自动 clone 并建立代码索引。',
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.branch': '分支',
+  'code.register.authMethod': '认证方式',
+  'code.register.authNone': '无需认证（公开仓库）',
+  'code.register.authToken': 'Access Token',
+  'code.register.authSsh': 'SSH Key',
+  'code.register.accessToken': 'Access Token',
+  'code.register.accessTokenExtra': 'GitHub 只需填写 token；Gitee 需额外填写用户名。',
+  'code.register.accessTokenPlaceholder': 'GitHub PAT 或 Gitee 私人令牌，无需特定前缀',
+  'code.register.tokenUsername': '用户名',
+  'code.register.tokenUsernamePlaceholder': 'Gitee 私有仓库需填真实用户名',
+  'code.register.sshKey': 'SSH 私钥',
+  'code.register.sshKeyExtra': '粘贴私钥原文（含 BEGIN/END 行）；建议使用只读 deploy key。',
+  'code.register.tokenRequired': 'Access Token 不能为空',
   'code.register.sshWarning':
-    '当前版本不支持 SSH 格式的仓库地址，请改用 HTTPS 格式（如 https://gitlab.example.com/namespace/repo.git）。',
+    'SSH 格式地址需在“认证方式”中选择 SSH Key 并粘贴私钥。',
   'code.register.urlError':
     '请输入合法的 HTTP(S) Git 仓库地址，且必须以 .git 结尾（如 https://gitlab.example.com/namespace/repo.git），不能含空格。',
   'code.register.invalidUrl':

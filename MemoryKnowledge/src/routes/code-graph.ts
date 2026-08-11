@@ -35,6 +35,31 @@ export interface CodeGraphRouteDeps {
   publicBaseUrl: string;
 }
 
+const AUTH_METHODS = ["none", "token", "ssh"] as const;
+type AuthMethod = (typeof AUTH_METHODS)[number];
+
+/**
+ * 剥离 repo_url 中的 userinfo（https://user:token@host/... → https://host/...）。
+ * 返回干净 URL 与提取的凭据；非 http(s) 形式（如 git@ 的 SSH URL）原样返回。
+ */
+function sanitizeRepoUrl(raw: string): {
+  url: string;
+  extractedToken?: string;
+  extractedUsername?: string;
+} {
+  try {
+    const u = new URL(raw);
+    if (!u.username && !u.password) return { url: raw };
+    const extractedToken = u.password || undefined;
+    const extractedUsername = u.username || undefined;
+    u.username = "";
+    u.password = "";
+    return { url: u.toString(), extractedToken, extractedUsername };
+  } catch {
+    return { url: raw };
+  }
+}
+
 // ───────────────────────── Query Specs ─────────────────────────
 
 type FieldRule =
@@ -190,12 +215,46 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
+    // ── 私有仓库认证（auth_method: none | token | ssh）──
+    const authMethodRaw = body.auth_method;
+    let authMethod: AuthMethod =
+      authMethodRaw === undefined || authMethodRaw === null
+        ? "none"
+        : (String(authMethodRaw) as AuthMethod);
+    if (!AUTH_METHODS.includes(authMethod as AuthMethod)) {
+      return c.json(wrapError(400, `auth_method must be one of ${AUTH_METHODS.join("/")}`), 400);
+    }
+    let accessToken = typeof body.access_token === "string" && body.access_token ? body.access_token : undefined;
+    let tokenUsername =
+      typeof body.token_username === "string" && body.token_username ? body.token_username : undefined;
+    const sshPrivateKey =
+      typeof body.ssh_private_key === "string" && body.ssh_private_key ? body.ssh_private_key : undefined;
+
+    // URL 净化：剥离 userinfo，password 提升为 access_token（URL 内嵌优先于 body 字段）。
+    // 防调用方把 token 拼进 repo_url 导致落库/详情回显泄漏。
+    const { url: cleanRepoUrl, extractedToken, extractedUsername } = sanitizeRepoUrl(repoUrl);
+    if (extractedToken) {
+      accessToken = extractedToken;
+      tokenUsername = tokenUsername ?? extractedUsername;
+      if (authMethod === "none") authMethod = "token";
+    }
+    if (authMethod === "token" && !accessToken) {
+      return c.json(wrapError(400, "access_token is required for auth_method=token"), 400);
+    }
+    if (authMethod === "ssh" && !sshPrivateKey) {
+      return c.json(wrapError(400, "ssh_private_key is required for auth_method=ssh"), 400);
+    }
+
     const { row, existed } = cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
-      repo_url: repoUrl,
+      repo_url: cleanRepoUrl,
       branch,
       repo_name: repoName,
+      auth_method: authMethod,
+      access_token: accessToken,
+      token_username: tokenUsername,
+      ssh_private_key: sshPrivateKey,
       owner_user_id: idFields.user_id,
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
