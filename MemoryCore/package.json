@@ -43,8 +43,7 @@
     "smoke:skill:router": "tsx scripts/smoke-skill/smoke-skill-router.ts",
     "smoke:skill:inject": "tsx scripts/smoke-skill/smoke-skill-inject.ts",
     "smoke:skill:all": "tsx scripts/smoke-skill/smoke-skill-all.ts",
-    "import:opik": "tsx scripts/import-opik-to-memory-core/index.ts",
-    "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true"
+    "import:opik": "tsx scripts/import-opik-to-memory-core/index.ts"
   },
   "files": [
     "dist/",
@@ -62,7 +61,6 @@
     "scripts/install-openclaw-plugin.sh",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
-    "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
     "openclaw-plugin/",
