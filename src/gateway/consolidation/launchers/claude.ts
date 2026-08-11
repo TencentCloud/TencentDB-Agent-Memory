@@ -24,6 +24,7 @@ import {
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
+import { authRootFor } from "./auth-root.js";
 
 export const CLAUDE_LAUNCHER_ID = "claude";
 export const DEFAULT_CLAUDE_BINARY = "claude";
@@ -82,7 +83,8 @@ export function claudeArgs(
 
 /** The operator's real claude home — where `.credentials.json` lives. */
 export function operatorClaudeHome(): string {
-  return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  // tz-07 H3: one declared place per host, not a literal per launcher.
+  return authRootFor(CLAUDE_LAUNCHER_ID);
 }
 
 /** Only the credential file. `settings.json` is deliberately NOT provided: it

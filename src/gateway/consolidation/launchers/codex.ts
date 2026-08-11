@@ -23,6 +23,7 @@ import {
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
+import { authRootFor } from "./auth-root.js";
 
 export const CODEX_LAUNCHER_ID = "codex";
 export const DEFAULT_CODEX_BINARY = "codex";
@@ -77,7 +78,8 @@ export function codexArgs(
 
 /** The operator's real codex home — where auth.json and config.toml live. */
 export function operatorCodexHome(): string {
-  return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+  // tz-07 H3: one declared place per host, not a literal per launcher.
+  return authRootFor(CODEX_LAUNCHER_ID);
 }
 
 /** Auth and config for the attempt's private CODEX_HOME. */

@@ -77,6 +77,7 @@ import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
 import { resolveUnderRoot } from "./tdai-root.js";
+import { hostTaskRoots } from "./consolidation/launchers/auth-root.js";
 import {
   listRoleContracts,
   roleScratchRoots,
@@ -276,6 +277,13 @@ export class TdaiGateway {
           extraScratchRoots: roleScratchRoots(
             buildRoleDefaults(consolidationCfg),
             resolveRoleDir(this.config.data.baseDir),
+          ),
+          // tz-07 H3/Q2: the host's own task tree is the host's business, so
+          // the caller resolves it per launcher and cleanup stays
+          // launcher-agnostic. claude/codex contribute nothing — their
+          // per-attempt artifacts already live under scratch.
+          hostTaskRoots: hostTaskRoots(
+            Object.keys(consolidationCfg.launchers ?? {}),
           ),
           home: process.env.HOME ?? "/tmp",
           config: this.config.memory.cleanup,

@@ -59,10 +59,10 @@ describe("cleanup sanitizer", () => {
     );
   });
 
-  it("tasksSubtreeForScratch derives the deterministic ~/.pi/agent/tasks/--<token>--/ path", () => {
+  it("tasksSubtreeForScratch derives the deterministic <tasksRoot>/--<token>--/ path", () => {
     const home = "/home/testuser";
     const subtree = tasksSubtreeForScratch({
-      home,
+      tasksRoot: path.join(home, ".pi", "agent", "tasks"),
       cwd: path.join(
         home,
         ".pi",
@@ -130,6 +130,8 @@ describe("runCleanup", () => {
       dataDir,
       scratchRoot,
       extraScratchRoots: overrides.extraScratchRoots,
+      // tz-07 H3/Q2: the host's task tree is supplied by the caller now.
+      hostTaskRoots: [path.join(home, ".pi", "agent", "tasks")],
       home,
       config: {
         enabled: true,
@@ -227,7 +229,10 @@ describe("runCleanup", () => {
     // (child cwd = scratchRoot/<runId>).
     const childCwd = path.join(scratchRoot, "run-abc");
     fs.mkdirSync(childCwd, { recursive: true });
-    const derived = tasksSubtreeForScratch({ home, cwd: childCwd });
+    const derived = tasksSubtreeForScratch({
+      tasksRoot: path.join(home, ".pi", "agent", "tasks"),
+      cwd: childCwd,
+    });
     expect(derived).not.toBeNull();
     fs.mkdirSync(path.join(derived!, "2026-08-02"), { recursive: true });
     fs.writeFileSync(path.join(derived!, "2026-08-02", "120000-x.md"), "");
@@ -396,7 +401,7 @@ describe("runCleanup", () => {
       path.join(home, ".pi", "agent", "tasks", "not-a-subtree"),
       "x",
     );
-    const dirs = listTaskSubtrees(home);
+    const dirs = listTaskSubtrees(path.join(home, ".pi", "agent", "tasks"));
     expect(dirs).toEqual([path.join(home, ".pi", "agent", "tasks", "--abc--")]);
   });
 });

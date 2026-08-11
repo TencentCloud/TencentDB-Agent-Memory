@@ -67,23 +67,25 @@ export function sanitizeAbsoluteCwdToken(raw: string): string | null {
 
 /**
  * Deterministic tasks subtree for a scratch cwd:
- * `~/.pi/agent/tasks/--<sanitized-cwd>--/` (SKILL.md:29 hardcodes that path
+ * `<hostTaskRoot>/--<sanitized-cwd>--/` (SKILL.md:29 hardcodes that layout
  * from the sub-session's cwd). The cwd is the absolute scratch path the
- * gateway constructed — sanitized the same way pi does — and the output always
- * lands under `~/.pi/agent/tasks/`.
+ * gateway constructed — sanitized the same way the host does.
+ *
+ * tz-07 H3/Q2: the root is the HOST's, not memory's — cleanup is handed the
+ * roots (`CleanupDeps.hostTaskRoots`) and never derives them, so a host
+ * without a task tree is an empty list rather than a branch in here.
  */
 export function tasksSubtreeForScratch(opts: {
-  home: string;
+  tasksRoot: string;
   cwd: string;
 }): string | null {
   const token = sanitizeAbsoluteCwdToken(path.resolve(opts.cwd));
   if (!token) return null;
-  return path.join(opts.home, ".pi", "agent", "tasks", `--${token}--`);
+  return path.join(opts.tasksRoot, `--${token}--`);
 }
 
-/** All `--<name>--` dirs under ~/.pi/agent/tasks/. */
-export function listTaskSubtrees(home: string): string[] {
-  const tasksRoot = path.join(home, ".pi", "agent", "tasks");
+/** All `--<name>--` dirs under a host's tasks root. */
+export function listTaskSubtrees(tasksRoot: string): string[] {
   let entries: string[];
   try {
     entries = fs.readdirSync(tasksRoot);
@@ -112,6 +114,13 @@ export interface CleanupDeps {
    * that is this pass.
    */
   extraScratchRoots?: readonly string[];
+  /**
+   * Task trees the HOST spools per sub-session (tz-07 H3/Q2). Computed by the
+   * caller from the configured launchers — pi has one, claude/codex do not, so
+   * "no-op for this host" arrives here as an empty list.
+   */
+  hostTaskRoots?: readonly string[];
+  /** Host home. Still needed by rejectScratchRoot's "is the home dir" guard. */
   home: string;
   /** Parsed memory.cleanup config. */
   config: { enabled: boolean; intervalHours: number; paths: string[] };
@@ -204,10 +213,13 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
       // root missing — nothing to derive.
     }
   }
+  const taskRoots = deps.hostTaskRoots ?? [];
   const exactSubtrees = new Set<string>();
-  for (const cwd of scratchRoots) {
-    const subtree = tasksSubtreeForScratch({ home: deps.home, cwd });
-    if (subtree) exactSubtrees.add(subtree);
+  for (const tasksRoot of taskRoots) {
+    for (const cwd of scratchRoots) {
+      const subtree = tasksSubtreeForScratch({ tasksRoot, cwd });
+      if (subtree) exactSubtrees.add(subtree);
+    }
   }
   // Marker sweep: dirs whose name contains the scratch marker (covers a
   // sanitizer mismatch between this module and pi's internal one). Bounded to
@@ -219,8 +231,10 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
     .basename(deps.scratchRoot)
     .replace(/[^A-Za-z0-9_-]/g, "-");
   const targets = new Set<string>(exactSubtrees);
-  for (const p of listTaskSubtrees(deps.home)) {
-    if (path.basename(p).includes(marker)) targets.add(p);
+  for (const tasksRoot of taskRoots) {
+    for (const p of listTaskSubtrees(tasksRoot)) {
+      if (path.basename(p).includes(marker)) targets.add(p);
+    }
   }
   for (const target of targets) {
     stats.scanned.push(target);
