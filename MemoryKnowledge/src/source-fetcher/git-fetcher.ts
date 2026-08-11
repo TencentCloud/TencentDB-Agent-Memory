@@ -12,6 +12,7 @@
 
 import simpleGit, { CleanOptions, ResetMode } from "simple-git";
 import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
+import { normalizeSparsePaths } from "./sparse-paths.js";
 
 /**
  * 内网 / 环回 / link-local 地址黑名单（标准网段）：
@@ -71,32 +72,49 @@ export class GitSourceFetcher implements ISourceFetcher {
     }
   }
 
-  async fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  async fetch(sourceUrl: string, branch: string, localPath: string, sparsePaths?: string[]): Promise<FetchResult> {
     this.validate(sourceUrl);
+    const paths = normalizeSparsePaths(sparsePaths ?? []);
+    const cloneOptions: Record<string, string | number | null> = {
+      "--depth": 1,
+      "--branch": branch,
+    };
+    if (paths.length > 0) {
+      cloneOptions["--filter"] = "blob:none";
+      cloneOptions["--sparse"] = null;
+    }
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
     // （加固版 git 会拒绝该配置：需 allowUnsafeHooksPath）。
-    await simpleGit().clone(sourceUrl, localPath, {
-      "--depth": 1,
-      "--branch": branch,
-    });
+    await simpleGit().clone(sourceUrl, localPath, cloneOptions);
+    if (paths.length > 0) {
+      await this.applySparsePaths(localPath, paths);
+    }
     const version = await this.headCommit(localPath);
     return { localPath, version, sourceType: "git" };
   }
 
-  async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  async sync(sourceUrl: string, branch: string, localPath: string, sparsePaths?: string[]): Promise<FetchResult> {
     this.validate(sourceUrl);
+    const paths = normalizeSparsePaths(sparsePaths ?? []);
     const git = simpleGit(localPath);
     await git.fetch("origin", branch, { "--depth": 1 });
     await git.reset(ResetMode.HARD, [`origin/${branch}`]);
     // Bug 修复（方案 A）：clean 排除 .codegraph/，否则会删掉 codegraph 的索引库，
     // 导致增量 sync 永远失败、每次回退到全量 clone。
     await git.clean(CleanOptions.FORCE + CleanOptions.RECURSIVE, ["-e", ".codegraph"]);
+    if (paths.length > 0) {
+      await this.applySparsePaths(localPath, paths);
+    }
     const version = await this.headCommit(localPath);
     return { localPath, version, sourceType: "git" };
   }
 
   // ── 内部 helper ──
+
+  private async applySparsePaths(localPath: string, paths: string[]): Promise<void> {
+    await simpleGit(localPath).raw(["sparse-checkout", "set", "--cone", ...paths]);
+  }
 
   private async headCommit(localPath: string): Promise<string | null> {
     try {

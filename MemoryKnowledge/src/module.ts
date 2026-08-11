@@ -111,7 +111,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
+    const { dir, repoUrl, branch, sparsePaths, codeGraphId, setInternalStatus } = ctx;
 
     // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
     const fetcher = fetcherRegistry.resolve(repoUrl);
@@ -123,7 +123,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
+        const res = await fetcher.sync(repoUrl, branch, dir, sparsePaths);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -145,7 +145,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (!didIncrementalSync) {
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
+      const res = await fetcher.fetch(repoUrl, branch, dir, sparsePaths);
       version = res.version;
 
       setInternalStatus("indexing");
