@@ -253,11 +253,21 @@ function rejectScratchRoot(
   root: string,
 ): string | null {
   if (!root || !path.isAbsolute(root)) return "not an absolute path";
-  const resolved = path.resolve(root);
-  const dataRoot = path.resolve(dataDir);
+  // Через realpath, а не resolve: `path.resolve` не разворачивает симлинки,
+  // поэтому корень-симлинк на РОДИТЕЛЯ dataDir проходил все строковые
+  // сравнения и уносил всё дерево памяти вместе с ним.
+  const real = (p: string): string => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const resolved = real(root);
+  const dataRoot = real(dataDir);
   if (resolved === dataRoot) return "is the data dir itself";
   if (dataRoot.startsWith(resolved + path.sep)) return "contains the data dir";
-  if (resolved === path.resolve(home)) return "is the home dir";
+  if (resolved === real(home)) return "is the home dir";
   if (resolved === path.parse(resolved).root) return "is the filesystem root";
   // Cheapest reliable signal for "someone pointed this at a memory tree":
   // a scratch root never holds these.

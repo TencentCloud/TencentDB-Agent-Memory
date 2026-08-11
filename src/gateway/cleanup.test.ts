@@ -336,6 +336,28 @@ describe("runCleanup", () => {
     expect(stats.scanned).toContain(path.join(dataDir, "runs"));
   });
 
+  // path.resolve does not follow symlinks, so a root that merely POINTS at the
+  // memory tree (or at a parent of it) passed every string comparison and swept
+  // the whole thing. The validator resolves through realpath now.
+  it("refuses a symlinked root that points above the memory tree", () => {
+    const old = new Date(Date.now() - 3 * 24 * 3_600_000);
+    fs.utimesSync(dataDir, old, old);
+    const link = path.join(tmp, "role-root-link");
+    fs.symlinkSync(tmp, link); // -> parent of dataDir
+
+    const stats = runCleanup(
+      makeDeps({
+        paths: [],
+        intervalHours: 1,
+        extraScratchRoots: [link],
+      }) as never,
+    );
+
+    expect(fs.existsSync(dataDir)).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
+    expect(stats.errors.join("\n")).toMatch(/contains the data dir/);
+  });
+
   it("disabled cleanup is a no-op", () => {
     const oldLog = path.join(dataDir, "logs", "old.json");
     fs.writeFileSync(oldLog, "{}");
