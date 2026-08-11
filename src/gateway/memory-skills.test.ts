@@ -18,28 +18,33 @@ const REPO_ROOT = path.resolve(
 const SKILLS_SRC = path.join(REPO_ROOT, "src", "core", "prompts", "skills");
 // Runtime copies now live in tdai (forked task-cycle per-role skills); the
 // repo canonical is the single source, synced by scripts/sync-memory-skills.sh.
-const SKILLS_DST = path.join(
-  os.homedir(),
-  ".pi",
-  "agent-memory",
-  "tdai",
-  "skills",
-);
-const ROLE_SRC = path.join(
-  REPO_ROOT,
-  "src",
-  "core",
-  "prompts",
-  "night-keeper.md",
-);
-const ROLE_DST = path.join(
-  os.homedir(),
-  ".pi",
-  "agent-memory",
-  "tdai",
-  "memory-keeper",
-  "night-keeper.md",
-);
+const TDAI = path.join(os.homedir(), ".pi", "agent-memory", "tdai");
+const SKILLS_DST = path.join(TDAI, "skills");
+const prompt = (name: string) =>
+  path.join(REPO_ROOT, "src", "core", "prompts", name);
+
+/** [canonical, live] — must stay in step with ROLE_FILES in the sync script. */
+const ROLE_FILES: [string, string][] = [
+  [
+    prompt("night-keeper.md"),
+    path.join(TDAI, "memory-keeper", "night-keeper.md"),
+  ],
+  [
+    prompt("memory-keeper.md"),
+    path.join(TDAI, "memory-keeper", "memory-keeper.md"),
+  ],
+  [
+    prompt("night-keeper.md"),
+    path.join(TDAI, "roles", "night-keeper", "prompt.md"),
+  ],
+];
+
+/** Live prompts with no repo canonical — guarded, not synced. */
+const GUARDED_FILES = [
+  path.join(TDAI, "roles", "memory-keeper", "prompt.md"),
+  path.join(TDAI, "roles", "dedup-daily", "prompt.md"),
+  path.join(TDAI, "roles", "dedup-daily-critic", "prompt.md"),
+];
 
 const SKILL_NAMES = [
   "memory-keeper",
@@ -70,14 +75,32 @@ describe("memory-role skills parity (canon = runtime)", () => {
         path.join(SKILLS_DST, name, "SKILL.md"),
         "utf-8",
       );
-      expect(runtime, `~/.pi/agent-memory/tdai/skills/${name}/SKILL.md parity`).toBe(canon);
+      expect(
+        runtime,
+        `~/.pi/agent-memory/tdai/skills/${name}/SKILL.md parity`,
+      ).toBe(canon);
     }
   });
 
-  it("night-keeper role file parity (canon = runtime)", () => {
-    const canon = fs.readFileSync(ROLE_SRC, "utf-8");
-    const runtime = fs.readFileSync(ROLE_DST, "utf-8");
-    expect(runtime).toBe(canon);
+  it("live role prompts parity (canon = the file the gateway reads at spawn)", () => {
+    for (const [src, dst] of ROLE_FILES) {
+      expect(fs.readFileSync(dst, "utf-8"), `${dst} parity`).toBe(
+        fs.readFileSync(src, "utf-8"),
+      );
+    }
+  });
+
+  it("guarded live prompts never name the retired result path diff.json", () => {
+    for (const file of GUARDED_FILES) {
+      const stale = fs
+        .readFileSync(file, "utf-8")
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes("diff.json") && !line.includes("снятое место входа"),
+        );
+      expect(stale, `${file} names diff.json as the role result`).toEqual([]);
+    }
   });
 
   it("night-keeper skill derives base memory-keeper criteria (single source)", () => {
