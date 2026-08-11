@@ -40,6 +40,12 @@ export async function writeProvenanceRecord(
     written = await writeMemory({
       memory,
       decision,
+      // `memory.metadata` here is the TARGET record's metadata, read straight
+      // from metadata_json by the caller — that is the chain, and it must
+      // arrive as previous state rather than as incoming content, which
+      // writeMemory now strips provenance from.
+      previousMetadata: memory.metadata,
+      provenance: { role: label, action, source: "role-run" },
       baseDir: deps.dataDir,
       sessionKey: row.session_key,
       sessionId: row.session_id,

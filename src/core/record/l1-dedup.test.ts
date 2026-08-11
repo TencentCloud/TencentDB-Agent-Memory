@@ -17,6 +17,8 @@ import { VectorStore } from "../store/sqlite.js";
 import type { EmbeddingService, Logger } from "../types.js";
 import { batchDedup, NEAR_DUP_SCORE } from "./l1-dedup.js";
 import type { ExtractedMemory, MemoryRecord } from "./l1-writer.js";
+import { applyDecisions } from "./l1-extraction-store.js";
+import { PROVENANCE_KEY, readProvenance } from "./provenance.js";
 
 const DIMS = 64;
 
@@ -142,7 +144,7 @@ describe("l1 near-dup deterministic dedup", () => {
       cosine(embedText(EXISTING_TEXT), embedText(RESTATED_TEXT)),
     ).toBeGreaterThanOrEqual(NEAR_DUP_SCORE);
 
-    const decisions = await batchDedup({
+    const { decisions } = await batchDedup({
       memories: [newMem("m_new", RESTATED_TEXT)],
       config: {},
       logger: silentLogger,
@@ -166,7 +168,7 @@ describe("l1 near-dup deterministic dedup", () => {
       cosine(embedText(EXISTING_TEXT), embedText(DIFFERENT_TEXT)),
     ).toBeLessThan(NEAR_DUP_SCORE);
 
-    const decisions = await batchDedup({
+    const { decisions } = await batchDedup({
       memories: [newMem("m_new2", DIFFERENT_TEXT)],
       config: {},
       logger: silentLogger,
@@ -187,7 +189,7 @@ describe("l1 near-dup deterministic dedup", () => {
       embedText(EXISTING_TEXT),
     );
 
-    const decisions = await batchDedup({
+    const { decisions } = await batchDedup({
       memories: [newMem("m_new3", RESTATED_TEXT)],
       config: {},
       logger: silentLogger,
@@ -211,7 +213,7 @@ describe("l1 near-dup deterministic dedup", () => {
       embedText(DIFFERENT_TEXT),
     );
 
-    const decisions = await batchDedup({
+    const { decisions } = await batchDedup({
       memories: [
         newMem("m_new4", RESTATED_TEXT), // near-dup of m_existing4 → forced update
         newMem("m_new5", UNRELATED_TEXT), // unrelated to both existing → store
@@ -232,5 +234,148 @@ describe("l1 near-dup deterministic dedup", () => {
 
   it("NEAR_DUP_SCORE constant is exported and >= 0.85", () => {
     expect(NEAR_DUP_SCORE).toBeGreaterThanOrEqual(0.85);
+  });
+});
+
+/**
+ * tz-05 Ф2 (критерии 3a, 3b): the provenance chain has to survive the ORDINARY
+ * path — a near-dup update from a normal extraction — not just the rare apply.
+ * The vector recall leg is the one that used to drop it: it built candidates
+ * with `metadata: {}` while the FTS leg parsed `metadata_json`.
+ */
+describe("provenance survives a near-dup update", () => {
+  let tmp: string;
+  let store: VectorStore;
+
+  beforeEach(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "l1-prov-"));
+    store = new VectorStore(path.join(tmp, "vectors.db"), DIMS, silentLogger);
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const firstStep = {
+    role: "extractor",
+    action: "store",
+    at: "2026-08-01T00:00:00.000Z",
+  };
+
+  async function seedWithChain(id: string, text: string): Promise<void> {
+    const record = existingRecord(id, text);
+    record.metadata = {
+      [PROVENANCE_KEY]: {
+        source: "user-input",
+        createdAt: firstStep.at,
+        chain: [firstStep],
+      },
+    } as MemoryRecord["metadata"];
+    await store.upsertL1(record, embedText(text));
+  }
+
+  async function chainOfStored(): Promise<unknown[]> {
+    const rows = await store.queryL1Records();
+    const withChain = rows
+      .map((row) => readProvenance(JSON.parse(row.metadata_json || "{}")))
+      .filter((provenance) => provenance !== undefined);
+    expect(withChain).toHaveLength(1);
+    return withChain[0]!.chain;
+  }
+
+  it("keeps the earlier step when the vector leg forces an update", async () => {
+    await seedWithChain("m_chain", EXISTING_TEXT);
+    const memory = newMem("m_new_chain", RESTATED_TEXT);
+
+    const { decisions, previousMetadata } = await batchDedup({
+      memories: [memory],
+      config: {},
+      logger: silentLogger,
+      vectorStore: store,
+      embeddingService: fakeEmbedding,
+      projectId: PROJECT,
+    });
+    expect(decisions[0].action).toBe("update");
+    // The candidate itself must carry the chain — this is the leg that lost it.
+    expect(readProvenance(previousMetadata.get("m_chain"))?.chain).toEqual([
+      firstStep,
+    ]);
+
+    await applyDecisions({
+      memoriesWithIds: [memory],
+      decisions,
+      previousMetadata,
+      baseDir: tmp,
+      sessionKey: "test",
+      projectId: PROJECT,
+      logger: silentLogger,
+      vectorStore: store,
+      embeddingService: fakeEmbedding,
+    });
+
+    const chain = await chainOfStored();
+    expect(chain).toHaveLength(2);
+    expect(chain[0]).toEqual(firstStep);
+    expect((chain[1] as { action: string }).action).toBe("update");
+  });
+
+  it("carries candidate metadata on the FTS leg too", async () => {
+    await seedWithChain("m_chain_fts", EXISTING_TEXT);
+
+    const { previousMetadata } = await batchDedup({
+      memories: [newMem("m_new_fts", RESTATED_TEXT)],
+      config: {},
+      logger: silentLogger,
+      vectorStore: store,
+      // No embedding service → Tier 2 FTS keyword recall.
+      projectId: PROJECT,
+    });
+
+    expect(readProvenance(previousMetadata.get("m_chain_fts"))?.chain).toEqual([
+      firstStep,
+    ]);
+  });
+
+  it("a forged incoming chain does not replace the server-side one", async () => {
+    await seedWithChain("m_chain_forged", EXISTING_TEXT);
+    const memory = newMem("m_new_forged", RESTATED_TEXT);
+    memory.metadata = {
+      [PROVENANCE_KEY]: {
+        source: "manual",
+        createdAt: "1970-01-01T00:00:00.000Z",
+        chain: [],
+      },
+    } as ExtractedMemory["metadata"];
+
+    const { decisions, previousMetadata } = await batchDedup({
+      memories: [memory],
+      config: {},
+      logger: silentLogger,
+      vectorStore: store,
+      embeddingService: fakeEmbedding,
+      projectId: PROJECT,
+    });
+
+    await applyDecisions({
+      memoriesWithIds: [memory],
+      decisions,
+      previousMetadata,
+      baseDir: tmp,
+      sessionKey: "test",
+      projectId: PROJECT,
+      logger: silentLogger,
+      vectorStore: store,
+      embeddingService: fakeEmbedding,
+    });
+
+    const rows = await store.queryL1Records();
+    const provenance = readProvenance(
+      JSON.parse(rows[0]!.metadata_json || "{}"),
+    );
+    expect(provenance?.source).toBe("user-input");
+    expect(provenance?.createdAt).toBe(firstStep.at);
+    expect(provenance?.chain[0]).toEqual(firstStep);
   });
 });

@@ -3,7 +3,11 @@
  * Split from l1-extractor.ts.
  */
 import { writeMemory } from "./l1-writer.js";
-import type { ExtractedMemory, MemoryRecord, DedupDecision } from "./l1-writer.js";
+import type {
+  ExtractedMemory,
+  MemoryRecord,
+  DedupDecision,
+} from "./l1-writer.js";
 import type { IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import { report } from "../report/reporter.js";
@@ -17,6 +21,9 @@ const TAG = "[memory-tdai][l1-extractor]";
 export async function applyDecisions(params: {
   memoriesWithIds: Array<ExtractedMemory & { record_id: string }>;
   decisions: DedupDecision[];
+  /** Candidate metadata by record_id, from `batchDedup` — carries the chain the
+   * update paths must merge into (tz-05 Ф2). */
+  previousMetadata?: Map<string, unknown>;
   baseDir: string;
   sessionKey: string;
   sessionId?: string;
@@ -25,7 +32,18 @@ export async function applyDecisions(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
 }): Promise<MemoryRecord[]> {
-  const { memoriesWithIds, decisions, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService } = params;
+  const {
+    memoriesWithIds,
+    decisions,
+    previousMetadata,
+    baseDir,
+    sessionKey,
+    sessionId,
+    projectId,
+    logger,
+    vectorStore,
+    embeddingService,
+  } = params;
   const storedRecords: MemoryRecord[] = [];
 
   // Build a map from record_id → decision
@@ -45,6 +63,16 @@ export async function applyDecisions(params: {
       const record = await writeMemory({
         memory: memoryWithId,
         decision,
+        // An update/merge replaces a real record: its chain comes from the
+        // dedup candidate, since nothing here can read a record by id.
+        previousMetadata: decision.target_ids
+          .map((id) => previousMetadata?.get(id))
+          .find((metadata) => metadata !== undefined),
+        provenance: {
+          role: "extractor",
+          action: decision.action,
+          source: "user-input",
+        },
         baseDir,
         sessionKey,
         sessionId,
@@ -91,6 +119,12 @@ export async function storeAllDirectly(
           action: "store",
           target_ids: [],
         },
+        // A fresh record replaces nothing — the chain starts here.
+        provenance: {
+          role: "extractor",
+          action: "store",
+          source: "user-input",
+        },
         baseDir,
         sessionKey,
         sessionId,
@@ -124,7 +158,15 @@ export function reportExtractionMetric(params: {
   storedRecords: MemoryRecord[];
   durationMs: number;
 }): void {
-  const { instanceId, logger, sessionKey, inputMessageCount, extractedCount, storedRecords, durationMs } = params;
+  const {
+    instanceId,
+    logger,
+    sessionKey,
+    inputMessageCount,
+    extractedCount,
+    storedRecords,
+    durationMs,
+  } = params;
   const memoriesByType: Record<string, number> = {};
   for (const r of storedRecords) {
     memoriesByType[r.type] = (memoriesByType[r.type] ?? 0) + 1;

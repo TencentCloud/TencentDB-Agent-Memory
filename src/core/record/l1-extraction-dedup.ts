@@ -32,7 +32,9 @@ export interface RunDedupOrStoreParams {
  * Run batch conflict detection (when enabled) then store; on dedup failure,
  * store everything directly. Returns stored records.
  */
-export async function runDedupOrStore(params: RunDedupOrStoreParams): Promise<MemoryRecord[]> {
+export async function runDedupOrStore(
+  params: RunDedupOrStoreParams,
+): Promise<MemoryRecord[]> {
   const {
     memoriesWithIds,
     enableDedup,
@@ -52,7 +54,7 @@ export async function runDedupOrStore(params: RunDedupOrStoreParams): Promise<Me
 
   if (enableDedup) {
     try {
-      const decisions = await batchDedup({
+      const { decisions, previousMetadata } = await batchDedup({
         memories: memoriesWithIds,
         config,
         logger,
@@ -68,6 +70,7 @@ export async function runDedupOrStore(params: RunDedupOrStoreParams): Promise<Me
       return await applyDecisions({
         memoriesWithIds,
         decisions,
+        previousMetadata,
         baseDir,
         sessionKey,
         sessionId,
@@ -77,10 +80,30 @@ export async function runDedupOrStore(params: RunDedupOrStoreParams): Promise<Me
         embeddingService,
       });
     } catch (err) {
-      logger?.warn?.(`${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`);
-      return storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService);
+      logger?.warn?.(
+        `${TAG} Batch dedup failed, storing all as new: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return storeAllDirectly(
+        memoriesWithIds,
+        baseDir,
+        sessionKey,
+        sessionId,
+        projectId,
+        logger,
+        vectorStore,
+        embeddingService,
+      );
     }
   }
 
-  return storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, projectId, logger, vectorStore, embeddingService);
+  return storeAllDirectly(
+    memoriesWithIds,
+    baseDir,
+    sessionKey,
+    sessionId,
+    projectId,
+    logger,
+    vectorStore,
+    embeddingService,
+  );
 }

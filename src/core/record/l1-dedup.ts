@@ -11,8 +11,17 @@
  * 2. Batch LLM judgment on all new memories + their candidate pools (single call)
  */
 
-import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType, MemoryScope } from "./l1-writer.js";
-import { CONFLICT_DETECTION_SYSTEM_PROMPT, formatBatchConflictPrompt } from "../prompts/l1-dedup.js";
+import type {
+  ExtractedMemory,
+  MemoryRecord,
+  DedupDecision,
+  MemoryType,
+  MemoryScope,
+} from "./l1-writer.js";
+import {
+  CONFLICT_DETECTION_SYSTEM_PROMPT,
+  formatBatchConflictPrompt,
+} from "../prompts/l1-dedup.js";
 import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse } from "../../utils/sanitize.js";
@@ -59,25 +68,82 @@ export const NEAR_DUP_SCORE = 0.88;
  * @param conflictRecallTopK - Top-K candidates to recall per new memory (default: 5)
  * @returns Array of dedup decisions, one per new memory
  */
+export interface BatchDedupResult {
+  decisions: DedupDecision[];
+  /**
+   * Metadata of every candidate that was recalled, by record_id. The update
+   * paths need it to keep the record's provenance chain: nothing downstream can
+   * read a record by id (`IMemoryStore` has no such method), so the chain has to
+   * travel with the decision that targets it (tz-05 Ф2).
+   */
+  previousMetadata: Map<string, unknown>;
+}
+
+/** `metadata_json` as an object; anything unparseable reads as empty. */
+function parseMetadataJson(raw: string | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function batchDedup(params: {
   memories: Array<ExtractedMemory & { record_id: string }>;
   config: unknown;
   logger?: Logger;
   model?: string;
-  /** Vector store for cosine similarity candidate recall */
   vectorStore?: IMemoryStore;
-  /** Embedding service for computing query vectors */
   embeddingService?: EmbeddingService;
-  /** Top-K candidates per new memory (default: 5) */
   conflictRecallTopK?: number;
-  /** Override embedding timeout for capture-path calls (milliseconds) */
   embeddingTimeoutMs?: number;
-  /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
-  /** Current project id — scopes candidate recall so merges cannot cross projects. */
   projectId?: string;
-}): Promise<DedupDecision[]> {
-  const { memories, config, logger, model, vectorStore, embeddingService, llmRunner } = params;
+}): Promise<BatchDedupResult> {
+  const seen: CandidateMatch[] = [];
+  const decisions = await decideBatch(params, seen);
+  const previousMetadata = new Map<string, unknown>();
+  for (const match of seen) {
+    for (const candidate of match.candidates)
+      previousMetadata.set(candidate.id, candidate.metadata);
+  }
+  return { decisions, previousMetadata };
+}
+
+async function decideBatch(
+  params: {
+    memories: Array<ExtractedMemory & { record_id: string }>;
+    config: unknown;
+    logger?: Logger;
+    model?: string;
+    /** Vector store for cosine similarity candidate recall */
+    vectorStore?: IMemoryStore;
+    /** Embedding service for computing query vectors */
+    embeddingService?: EmbeddingService;
+    /** Top-K candidates per new memory (default: 5) */
+    conflictRecallTopK?: number;
+    /** Override embedding timeout for capture-path calls (milliseconds) */
+    embeddingTimeoutMs?: number;
+    /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
+    llmRunner?: LLMRunner;
+    /** Current project id — scopes candidate recall so merges cannot cross projects. */
+    projectId?: string;
+  },
+  seen: CandidateMatch[],
+): Promise<DedupDecision[]> {
+  const {
+    memories,
+    config,
+    logger,
+    model,
+    vectorStore,
+    embeddingService,
+    llmRunner,
+  } = params;
   const projectId = params.projectId ?? "";
   const topK = params.conflictRecallTopK ?? 5;
 
@@ -98,7 +164,9 @@ export async function batchDedup(params: {
 
   // Fast path: no recall capability at all → skip dedup
   if (!hasVectorData && !hasFts) {
-    logger?.debug?.(`${TAG} No vector data and no FTS available, skipping conflict detection for ${memories.length} memories`);
+    logger?.debug?.(
+      `${TAG} No vector data and no FTS available, skipping conflict detection for ${memories.length} memories`,
+    );
     return storeAll();
   }
 
@@ -114,34 +182,64 @@ export async function batchDedup(params: {
     // === Tier 1: Vector recall mode ===
     logger?.debug?.(`${TAG} Using vector recall mode (topK=${topK})`);
     try {
-      matches = await findCandidatesByVector(memories, vectorStore!, embeddingService, topK, logger, params.embeddingTimeoutMs, projectId);
+      matches = await findCandidatesByVector(
+        memories,
+        vectorStore!,
+        embeddingService,
+        topK,
+        logger,
+        params.embeddingTimeoutMs,
+        projectId,
+      );
     } catch (err) {
       logger?.warn?.(
         `${TAG} Vector recall failed, falling back to FTS keyword: ${err instanceof Error ? err.message : String(err)}`,
       );
       // Degrade to FTS keyword recall
       if (hasFts) {
-        matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
+        matches = await findCandidatesByFts(
+          memories,
+          vectorStore!,
+          logger,
+          projectId,
+        );
       } else {
-        logger?.debug?.(`${TAG} FTS not available either, skipping conflict detection`);
+        logger?.debug?.(
+          `${TAG} FTS not available either, skipping conflict detection`,
+        );
         return storeAll();
       }
     }
   } else if (hasFts) {
     // === Tier 2: FTS keyword recall ===
-    logger?.debug?.(`${TAG} Using FTS keyword recall mode (no embedding service or no vector data)`);
-    matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
+    logger?.debug?.(
+      `${TAG} Using FTS keyword recall mode (no embedding service or no vector data)`,
+    );
+    matches = await findCandidatesByFts(
+      memories,
+      vectorStore!,
+      logger,
+      projectId,
+    );
   } else {
     // Shouldn't reach here given the fast-path check above, but be defensive
-    logger?.debug?.(`${TAG} No usable recall path, skipping conflict detection`);
+    logger?.debug?.(
+      `${TAG} No usable recall path, skipping conflict detection`,
+    );
     return storeAll();
   }
+
+  // Publish the recalled candidates to the caller: their metadata carries the
+  // provenance chain that the update paths must merge into (tz-05 Ф2).
+  seen.push(...matches);
 
   // Check if any memory has candidates
   const hasAnyCandidates = matches.some((m) => m.candidates.length > 0);
 
   if (!hasAnyCandidates) {
-    logger?.debug?.(`${TAG} No similar records found for any memory, all will be stored`);
+    logger?.debug?.(
+      `${TAG} No similar records found for any memory, all will be stored`,
+    );
     return storeAll();
   }
 
@@ -172,7 +270,14 @@ export async function batchDedup(params: {
   }
 
   // Phase 2b: Batch LLM judgment for the rest
-  const llmDecisions = await runLlmJudgment(llmMatches, memories, config, logger, model, llmRunner);
+  const llmDecisions = await runLlmJudgment(
+    llmMatches,
+    memories,
+    config,
+    logger,
+    model,
+    llmRunner,
+  );
 
   // Merge: forced updates take precedence; LLM decisions for the others.
   const forcedMap = new Map(forced.map((m) => [m.newMemory.record_id, m]));
@@ -204,7 +309,9 @@ async function runLlmJudgment(
   model: string | undefined,
   llmRunner?: LLMRunner,
 ): Promise<DedupDecision[]> {
-  logger?.debug?.(`${TAG} Running batch conflict detection for ${memories.length} memories`);
+  logger?.debug?.(
+    `${TAG} Running batch conflict detection for ${memories.length} memories`,
+  );
 
   try {
     const userPrompt = formatBatchConflictPrompt(matches);
@@ -290,7 +397,10 @@ async function findCandidatesByVector(
 
   // Batch-compute embeddings for all new memories
   const texts = memories.map((m) => m.content);
-  const embeddings = await embeddingService.embedBatch(texts, embeddingTimeoutMs ? { timeoutMs: embeddingTimeoutMs } : undefined);
+  const embeddings = await embeddingService.embedBatch(
+    texts,
+    embeddingTimeoutMs ? { timeoutMs: embeddingTimeoutMs } : undefined,
+  );
 
   const matches: CandidateMatch[] = [];
 
@@ -299,7 +409,12 @@ async function findCandidatesByVector(
     const queryVec = embeddings[i];
 
     // Vector search top-K (request extra to account for self-batch filtering)
-    const searchResults = await vectorStore.searchL1Vector(queryVec, topK + memories.length, mem.content, projectId);
+    const searchResults = await vectorStore.searchL1Vector(
+      queryVec,
+      topK + memories.length,
+      mem.content,
+      projectId,
+    );
 
     // Exclude records from current batch, convert to MemoryRecord format.
     // Keep the raw search result (with score) to detect deterministic near-dups.
@@ -314,7 +429,10 @@ async function findCandidatesByVector(
       priority: r.priority,
       scene_name: r.scene_name,
       source_message_ids: [],
-      metadata: {},
+      // Vector candidates used to arrive with empty metadata while the FTS path
+      // parsed it — so a near-dup found by vector silently dropped the record's
+      // provenance chain on update (tz-05 R2a).
+      metadata: parseMetadataJson(r.metadata_json),
       timestamps: [r.timestamp_str].filter(Boolean),
       createdAt: "",
       updatedAt: "",
@@ -327,7 +445,9 @@ async function findCandidatesByVector(
     // task descriptions from piling up as new rows at every flush).
     const top = rawFiltered[0];
     const nearDupTarget =
-      top && top.score >= NEAR_DUP_SCORE && top.type === mem.type ? top.record_id : undefined;
+      top && top.score >= NEAR_DUP_SCORE && top.type === mem.type
+        ? top.record_id
+        : undefined;
 
     matches.push({ newMemory: mem, candidates, nearDupTarget });
   }
@@ -369,7 +489,7 @@ async function findCandidatesByFts(
           priority: r.priority,
           scene_name: r.scene_name,
           source_message_ids: [],
-          metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
+          metadata: parseMetadataJson(r.metadata_json),
           timestamps: [r.timestamp_str].filter(Boolean),
           createdAt: "",
           updatedAt: "",
@@ -382,7 +502,9 @@ async function findCandidatesByFts(
     }
   }
 
-  _logger?.debug?.(`${TAG} FTS keyword recall: ${matches.map((m) => `${m.newMemory.record_id}→${m.candidates.length}`).join(", ")}`);
+  _logger?.debug?.(
+    `${TAG} FTS keyword recall: ${matches.map((m) => `${m.newMemory.record_id}→${m.candidates.length}`).join(", ")}`,
+  );
   return matches;
 }
 
@@ -406,13 +528,17 @@ function parseBatchResult(
     // Strip markdown code block wrappers
     let cleaned = raw.trim();
     if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "");
+      cleaned = cleaned
+        .replace(/^```(?:json)?\s*\n?/, "")
+        .replace(/\n?```\s*$/, "");
     }
 
     // Extract JSON array
     const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
     if (!arrayMatch) {
-      logger?.warn?.(`${TAG} No JSON array found in conflict detection response`);
+      logger?.warn?.(
+        `${TAG} No JSON array found in conflict detection response`,
+      );
       return fallbackStoreAll(memories);
     }
 
@@ -442,17 +568,27 @@ function parseBatchResult(
       const action = String(d.action ?? "store");
 
       if (!validActions.includes(action)) {
-        logger?.warn?.(`${TAG} Invalid action "${action}" for record ${recordId}, defaulting to store`);
+        logger?.warn?.(
+          `${TAG} Invalid action "${action}" for record ${recordId}, defaulting to store`,
+        );
       }
 
       decisions.push({
         record_id: recordId,
-        action: validActions.includes(action) ? (action as DedupDecision["action"]) : "store",
+        action: validActions.includes(action)
+          ? (action as DedupDecision["action"])
+          : "store",
         target_ids: Array.isArray(d.target_ids) ? d.target_ids.map(String) : [],
-        merged_content: typeof d.merged_content === "string" ? d.merged_content : undefined,
-        merged_type: VALID_TYPES.includes(d.merged_type as MemoryType) ? (d.merged_type as MemoryType) : undefined,
-        merged_priority: typeof d.merged_priority === "number" ? d.merged_priority : undefined,
-        merged_timestamps: Array.isArray(d.merged_timestamps) ? d.merged_timestamps.map(String) : undefined,
+        merged_content:
+          typeof d.merged_content === "string" ? d.merged_content : undefined,
+        merged_type: VALID_TYPES.includes(d.merged_type as MemoryType)
+          ? (d.merged_type as MemoryType)
+          : undefined,
+        merged_priority:
+          typeof d.merged_priority === "number" ? d.merged_priority : undefined,
+        merged_timestamps: Array.isArray(d.merged_timestamps)
+          ? d.merged_timestamps.map(String)
+          : undefined,
       });
     }
 
@@ -460,7 +596,9 @@ function parseBatchResult(
     const decidedIds = new Set(decisions.map((d) => d.record_id));
     for (const mem of memories) {
       if (!decidedIds.has(mem.record_id)) {
-        logger?.debug?.(`${TAG} No decision for record ${mem.record_id}, defaulting to store`);
+        logger?.debug?.(
+          `${TAG} No decision for record ${mem.record_id}, defaulting to store`,
+        );
         decisions.push({
           record_id: mem.record_id,
           action: "store",
@@ -471,7 +609,9 @@ function parseBatchResult(
 
     return decisions;
   } catch (err) {
-    logger?.warn?.(`${TAG} Failed to parse conflict detection result: ${err instanceof Error ? err.message : String(err)}`);
+    logger?.warn?.(
+      `${TAG} Failed to parse conflict detection result: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return fallbackStoreAll(memories);
   }
 }
@@ -479,7 +619,9 @@ function parseBatchResult(
 /**
  * Fallback: store all memories when parsing fails.
  */
-function fallbackStoreAll(memories: Array<ExtractedMemory & { record_id: string }>): DedupDecision[] {
+function fallbackStoreAll(
+  memories: Array<ExtractedMemory & { record_id: string }>,
+): DedupDecision[] {
   return memories.map((m) => ({
     record_id: m.record_id,
     action: "store" as const,

@@ -24,6 +24,7 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 import { formatLocalDate } from "../../utils/time.js";
 import { notifyCommitted } from "./commit-port.js";
+import { mergeMetadata, type ProvenanceSource } from "./provenance.js";
 
 // ============================
 // Types
@@ -184,6 +185,15 @@ export async function writeMemory(params: {
    * cleanup-staleness and date anchoring). When set, it wins over `now`.
    */
   createdAtOverride?: string;
+  /**
+   * Metadata of the record being replaced, when this write updates or merges an
+   * existing one. It carries the provenance chain: `metadata` on the incoming
+   * memory comes from model output and is content only, so without this the
+   * chain would be overwritten on every ordinary near-dup update (tz-05 A4b).
+   */
+  previousMetadata?: unknown;
+  /** Who is writing and what they are doing — one provenance step (tz-05 A3). */
+  provenance?: { role: string; action: string; source: ProvenanceSource };
 }): Promise<MemoryRecord | null> {
   const {
     memory,
@@ -196,6 +206,8 @@ export async function writeMemory(params: {
     vectorStore,
     embeddingService,
     createdAtOverride,
+    previousMetadata,
+    provenance,
   } = params;
 
   if (decision.action === "skip") {
@@ -233,7 +245,20 @@ export async function writeMemory(params: {
     priority: finalPriority,
     scene_name: memory.scene_name,
     source_message_ids: memory.source_message_ids,
-    metadata: memory.metadata,
+    // Never `memory.metadata` outright: that field is model output, and writing
+    // it as-is both discards the previous record's provenance and lets a forged
+    // chain in through the front door (tz-05 A4b, R2a).
+    metadata: mergeMetadata(
+      memory.metadata,
+      previousMetadata,
+      {
+        role: provenance?.role ?? "unknown",
+        action: provenance?.action ?? decision.action,
+        at: now,
+      },
+      provenance?.source ?? "user-input",
+      now,
+    ) as MemoryRecord["metadata"],
     timestamps: finalTimestamps,
     createdAt: createdAtOverride ?? now,
     updatedAt: now,
