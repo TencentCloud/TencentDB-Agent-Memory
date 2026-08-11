@@ -14,6 +14,7 @@ import { createL2Runner } from "../../utils/pipeline-factory/l2-runner.js";
 import { createL3Runner } from "../../utils/pipeline-factory/l3-runner.js";
 import { ApplyExecutor } from "../apply-executor.js";
 import { VectorStore } from "../../core/store/sqlite.js";
+import { ensureL2L3Local } from "../../core/profile/profile-sync.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import type { Logger } from "../../core/types.js";
 
@@ -140,5 +141,45 @@ describe("S1b — two rewritePersona runs leave one version, not a mix", () => {
     // ...and the loser was refused on the SHIFTED BASELINE, not on a timeout.
     const refused = [a, b].find((r) => r.status !== "applied");
     expect(refused?.error ?? "").toMatch(/manifest drift/i);
+  });
+});
+
+describe("A1c — the plugin's startup profile pull is gated too", () => {
+  // Found while removing dead code: index.ts:286 pulled remote profiles at
+  // startup with no gate, and that pull does `rm -rf scene_blocks` + rename
+  // (profile-sync.ts:151). A block the memory-keeper had just written through
+  // /memory/apply, and the remote store had not seen yet, was deleted on the
+  // next start — a second writer of the scene tree, around the inline gate.
+  //
+  // Falsification: drop `&& !isConsolidationEnabled(cfg)` at index.ts:286 and
+  // the local-only block below disappears.
+  it("pullProfilesToLocal replaces the whole tree — so it must stay behind the gate", async () => {
+    const blocks = path.join(dir, "scene_blocks", "project-a");
+    fs.mkdirSync(blocks, { recursive: true });
+    fs.writeFileSync(path.join(blocks, "local-only.md"), "keeper wrote me\n");
+
+    const content = "from the store\n";
+    await ensureL2L3Local(
+      dir,
+      {
+        pullProfiles: async () => [
+          {
+            id: "project-a/from-store.md",
+            type: "l2" as const,
+            filename: "project-a/from-store.md",
+            content,
+            contentMd5: createHash("md5").update(content).digest("hex"),
+            version: 1,
+            createdAtMs: 0,
+          },
+        ],
+      } as never,
+      silent,
+    );
+
+    // This is what the pull DOES — the gate is the only thing standing between
+    // it and a keeper-written block.
+    expect(fs.existsSync(path.join(blocks, "local-only.md"))).toBe(false);
+    expect(fs.readdirSync(blocks)).toEqual(["from-store.md"]);
   });
 });

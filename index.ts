@@ -32,7 +32,7 @@ import {
 import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
-import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
+import { initDataDirectories, resetStores, isConsolidationEnabled } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
@@ -275,9 +275,15 @@ export default function register(api: OpenClawPluginApi) {
     // Keep cleaner's SQLite handle updated after store init
     memoryCleaner?.setVectorStore(core.getVectorStore());
 
-    // Pull L2/L3 profiles if remote store supports it
+    // Pull L2/L3 profiles if remote store supports it.
+    //
+    // Under the P5 single-writer gate this pull must NOT run: it does
+    // `rm -rf scene_blocks` + rename (profile-sync.ts:151), so a block the
+    // memory-keeper wrote through /memory/apply and the remote store has not
+    // seen yet is deleted at the next startup. The inline L2/L3 runners are
+    // already gated; this was the one path around them.
     const vs = core.getVectorStore();
-    if (vs?.pullProfiles) {
+    if (vs?.pullProfiles && !isConsolidationEnabled(cfg)) {
       ensureL2L3Local(pluginDataDir, vs, api.logger).catch((err) => {
         api.logger.warn(`${TAG} Startup L2/L3 pull failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       });

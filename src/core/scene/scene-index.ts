@@ -71,19 +71,6 @@ export async function readSceneIndex(dataDir: string, projectId?: string): Promi
 }
 
 /**
- * Write the scene index to disk.
- */
-export async function writeSceneIndex(
-  dataDir: string,
-  entries: SceneIndexEntry[],
-  projectId?: string,
-): Promise<void> {
-  const indexPath = sceneIndexPath(dataDir, projectId);
-  await fs.mkdir(path.dirname(indexPath), { recursive: true });
-  await fs.writeFile(indexPath, JSON.stringify(entries, null, 2), "utf-8");
-}
-
-/**
  * Rebuild scene index by scanning all .md files in the scene_blocks directory.
  */
 export async function syncSceneIndex(dataDir: string, projectId?: string): Promise<SceneIndexEntry[]> {
