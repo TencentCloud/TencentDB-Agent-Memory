@@ -15,6 +15,90 @@ import fs from "node:fs";
 import path from "node:path";
 import { countL0UpTo, countNewL0Since } from "./diff-builder.js";
 import { CONSOLIDATION_CHECKPOINT_FILENAME } from "./checkpoint.js";
+import { sceneBlocksRoot } from "../../core/scene/scene-paths.js";
+import { openReadonlySqlite } from "../http-utils.js";
+
+/**
+ * The named consumer of `l1Count`/`sceneCount` (tz-03b, the same A2e rule).
+ * Stored value against a live recount, so a drift is visible without a test.
+ *
+ * The live L1 recount reads the sqlite file directly and degrades to "n/a"
+ * elsewhere — this is a local dashboard, not the counting path. The counter
+ * ITSELF goes through `store.countL1()` (layer-counters.ts), which is what
+ * keeps `backend-parity`.
+ */
+export function layerCountersSection(dataDir: string): string[] {
+  const lines = ["## Layer counters", ""];
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(
+      fs.readFileSync(
+        path.join(dataDir, ".metadata", CONSOLIDATION_CHECKPOINT_FILENAME),
+        "utf-8",
+      ),
+    ) as Record<string, unknown>;
+  } catch {
+    lines.push("n/a (no consolidation checkpoint yet)", "");
+    return lines;
+  }
+
+  lines.push(
+    counterLine("l1Count", parsed.l1Count, liveL1(dataDir)),
+    counterLine("sceneCount", parsed.sceneCount, liveScenes(dataDir)),
+    "",
+  );
+  return lines;
+}
+
+function counterLine(
+  name: string,
+  storedRaw: unknown,
+  live: number | null,
+): string {
+  if (typeof storedRaw !== "number") {
+    return `- ${name}: not recorded yet (the next mutation fills it in)`;
+  }
+  if (live === null) return `- ${name}: ${storedRaw} (live count n/a)`;
+  return (
+    `- ${name}: ${storedRaw}` +
+    (live === storedRaw
+      ? " (matches the carrier)"
+      : ` — **live count is ${live}**, the stored value drifted`)
+  );
+}
+
+function liveL1(dataDir: string): number | null {
+  try {
+    const db = openReadonlySqlite(path.join(dataDir, "vectors.db"));
+    try {
+      const row = db.prepare("SELECT COUNT(*) AS c FROM l1_records").get() as
+        { c: number } | undefined;
+      return row?.c ?? null;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+function liveScenes(dataDir: string): number | null {
+  const root = sceneBlocksRoot(dataDir);
+  try {
+    let total = 0;
+    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+      if (e.isFile() && e.name.endsWith(".md")) total += 1;
+      else if (e.isDirectory()) {
+        total += fs
+          .readdirSync(path.join(root, e.name))
+          .filter((b) => b.endsWith(".md")).length;
+      }
+    }
+    return total;
+  } catch {
+    return null;
+  }
+}
 
 export function l0CursorSection(dataDir: string): string[] {
   const lines = ["## L0 cursor", ""];
