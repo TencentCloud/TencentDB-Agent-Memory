@@ -96,3 +96,21 @@ describe("commit paths", () => {
     expect(seen).toEqual([]);
   });
 });
+
+describe("scene extraction failure path", () => {
+  it("announces the carrier after a failed LLM run restored the tree", async () => {
+    const { SceneExtractor } = await import("../core/scene/scene-extractor.js");
+    const extractor = new SceneExtractor({
+      dataDir: dir,
+      config: {},
+      runner: {
+        run: () => Promise.reject(new Error("LLM unavailable")),
+      } as never,
+    });
+    const result = await extractor.extract([
+      { content: "нечто", created_at: "2026-08-01T00:00:00.000Z" },
+    ]);
+    expect(result.success).toBe(false);
+    expect(seen.map((m) => m.source)).toContain("scene-extract-restore");
+  });
+});

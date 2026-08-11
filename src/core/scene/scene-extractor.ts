@@ -288,6 +288,17 @@ export class SceneExtractor {
         );
       }
 
+      // tz-03b: a failed run still moved the carrier — the LLM may have left
+      // partial writes, and the restore above wipes and refills the whole
+      // directory. Announced on the failure path too, or the counter would
+      // sit on the pre-run tree until some unrelated mutation came along.
+      notifyCommitted({
+        carrier: "scene",
+        kind: "update",
+        affected: 0,
+        source: "scene-extract-restore",
+        at: new Date().toISOString(),
+      });
       return { memoriesProcessed: 0, success: false, error: errMsg };
     }
 
