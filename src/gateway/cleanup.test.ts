@@ -46,21 +46,39 @@ describe("cleanup sanitizer", () => {
 
   it("sanitizes relative cwd into the tasks-dir token (pi pattern)", () => {
     expect(sanitizeCwdToken("home/penis")).toBe("home-penis");
-    expect(sanitizeCwdToken("home/penis/projects/eleishkina")).toBe("home-penis-projects-eleishkina");
-    expect(sanitizeCwdToken(".pi/agent-memory/tdai-memory-keeper")).toBe("-pi-agent-memory-tdai-memory-keeper");
+    expect(sanitizeCwdToken("home/penis/projects/eleishkina")).toBe(
+      "home-penis-projects-eleishkina",
+    );
+    expect(sanitizeCwdToken(".pi/agent-memory/tdai-memory-keeper")).toBe(
+      "-pi-agent-memory-tdai-memory-keeper",
+    );
     // Absolute-path variant mirrors pi's behavior on real cwds.
     expect(sanitizeAbsoluteCwdToken("/home/penis")).toBe("home-penis");
-    expect(sanitizeAbsoluteCwdToken("/home/penis/projects/mininotion")).toBe("home-penis-projects-mininotion");
+    expect(sanitizeAbsoluteCwdToken("/home/penis/projects/mininotion")).toBe(
+      "home-penis-projects-mininotion",
+    );
   });
 
   it("tasksSubtreeForScratch derives the deterministic ~/.pi/agent/tasks/--<token>--/ path", () => {
     const home = "/home/testuser";
     const subtree = tasksSubtreeForScratch({
       home,
-      cwd: path.join(home, ".pi", "agent-memory", "tdai-memory-keeper", "run-1"),
+      cwd: path.join(
+        home,
+        ".pi",
+        "agent-memory",
+        "tdai-memory-keeper",
+        "run-1",
+      ),
     });
     expect(subtree).toBe(
-      path.join(home, ".pi", "agent", "tasks", "--home-testuser--pi-agent-memory-tdai-memory-keeper-run-1--"),
+      path.join(
+        home,
+        ".pi",
+        "agent",
+        "tasks",
+        "--home-testuser--pi-agent-memory-tdai-memory-keeper-run-1--",
+      ),
     );
   });
 });
@@ -79,24 +97,39 @@ describe("runCleanup", () => {
     fs.mkdirSync(path.join(dataDir, "logs"), { recursive: true });
     fs.mkdirSync(path.join(dataDir, ".backup"), { recursive: true });
     fs.mkdirSync(path.join(dataDir, "records"), { recursive: true });
-    fs.mkdirSync(path.join(dataDir, "scene_blocks", "_global"), { recursive: true });
+    fs.mkdirSync(path.join(dataDir, "scene_blocks", "_global"), {
+      recursive: true,
+    });
     fs.mkdirSync(scratchRoot, { recursive: true });
     fs.mkdirSync(path.join(home, ".pi", "agent", "tasks"), { recursive: true });
     // Memory data that MUST survive.
-    fs.writeFileSync(path.join(dataDir, "records", "2026-08-01.jsonl"), '{"k":1}\n');
+    fs.writeFileSync(
+      path.join(dataDir, "records", "2026-08-01.jsonl"),
+      '{"k":1}\n',
+    );
     fs.writeFileSync(path.join(dataDir, "vectors.db"), "not-a-real-db");
     fs.writeFileSync(path.join(dataDir, "persona.md"), "# persona");
-    fs.writeFileSync(path.join(dataDir, "scene_blocks", "_global", "ok.md"), "# scene");
+    fs.writeFileSync(
+      path.join(dataDir, "scene_blocks", "_global", "ok.md"),
+      "# scene",
+    );
   });
 
   afterEach(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  function makeDeps(overrides: { paths?: string[]; intervalHours?: number } = {}) {
+  function makeDeps(
+    overrides: {
+      paths?: string[];
+      intervalHours?: number;
+      extraScratchRoots?: string[];
+    } = {},
+  ) {
     return {
       dataDir,
       scratchRoot,
+      extraScratchRoots: overrides.extraScratchRoots,
       home,
       config: {
         enabled: true,
@@ -112,7 +145,11 @@ describe("runCleanup", () => {
     // Old artifacts (2 days — older than the 24h maxAge).
     const oldLog = path.join(dataDir, "logs", "memory-keeper-old.json");
     const oldDiff = path.join(dataDir, "logs", "memory-keeper-old.diff.md");
-    const oldBackup = path.join(dataDir, ".backup", "apply-2026-07-01-ok.md.bak");
+    const oldBackup = path.join(
+      dataDir,
+      ".backup",
+      "apply-2026-07-01-ok.md.bak",
+    );
     fs.writeFileSync(oldLog, "{}");
     fs.writeFileSync(oldDiff, "## diff");
     fs.writeFileSync(oldBackup, "content");
@@ -132,10 +169,14 @@ describe("runCleanup", () => {
     expect(fs.existsSync(freshLog)).toBe(true);
 
     // Memory data untouched.
-    expect(fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "persona.md"))).toBe(true);
-    expect(fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md")),
+    ).toBe(true);
     expect(stats.errors).toEqual([]);
   });
 
@@ -157,10 +198,16 @@ describe("runCleanup", () => {
   it("dry-run scratch dirs (retained with tools/, preserved by the orchestrator) are age-swept too", () => {
     // A dry-run run leaves scratch/<runId>/ with tools/ behind for inspection;
     // retention must be bounded by the same age sweep (maxAge = intervalHours).
-    const dryRunScratch = path.join(scratchRoot, "dry-2026-08-02T12-00-00-000Z");
+    const dryRunScratch = path.join(
+      scratchRoot,
+      "dry-2026-08-02T12-00-00-000Z",
+    );
     fs.mkdirSync(path.join(dryRunScratch, "tools"), { recursive: true });
     fs.writeFileSync(path.join(dryRunScratch, "tools", "fetch_dups.py"), "x");
-    fs.writeFileSync(path.join(dryRunScratch, "memory-keeper-prompt.md"), "# diff");
+    fs.writeFileSync(
+      path.join(dryRunScratch, "memory-keeper-prompt.md"),
+      "# diff",
+    );
     ageByDays(dryRunScratch, 3);
     ageByDays(path.join(dryRunScratch, "tools"), 3);
     ageByDays(path.join(dryRunScratch, "tools", "fetch_dups.py"), 3);
@@ -169,7 +216,9 @@ describe("runCleanup", () => {
 
     expect(fs.existsSync(dryRunScratch)).toBe(false);
     // Memory data untouched.
-    expect(fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
   });
 
@@ -184,31 +233,55 @@ describe("runCleanup", () => {
     fs.writeFileSync(path.join(derived!, "2026-08-02", "120000-x.md"), "");
     // Marker-sweep target: a sanitizer-mismatched dir name containing the
     // scratch marker (basename of scratchRoot → "scratch-root").
-    const markerDir = path.join(home, ".pi", "agent", "tasks", "--home-test-scratch-root-zzz--");
+    const markerDir = path.join(
+      home,
+      ".pi",
+      "agent",
+      "tasks",
+      "--home-test-scratch-root-zzz--",
+    );
     fs.mkdirSync(markerDir, { recursive: true });
     fs.writeFileSync(path.join(markerDir, "junk.md"), "x");
     // Unrelated user task dir — must survive.
     const userTasks = path.join(home, ".pi", "agent", "tasks", "--home-test--");
     fs.mkdirSync(path.join(userTasks, "2026-08-02"), { recursive: true });
-    fs.writeFileSync(path.join(userTasks, "2026-08-02", "real-task.md"), "important");
+    fs.writeFileSync(
+      path.join(userTasks, "2026-08-02", "real-task.md"),
+      "important",
+    );
 
     const stats = runCleanup(makeDeps());
 
     expect(fs.existsSync(derived!)).toBe(false);
     expect(fs.existsSync(markerDir)).toBe(false);
-    expect(fs.existsSync(path.join(userTasks, "2026-08-02", "real-task.md"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(userTasks, "2026-08-02", "real-task.md")),
+    ).toBe(true);
     expect(stats.errors).toEqual([]);
   });
 
   it("rejects non-dataDir-relative configured paths and protected memory paths", () => {
     const stats = runCleanup(
-      makeDeps({ paths: ["/etc", "../outside", "records", "vectors.db", "scene_blocks", "persona.md"] }),
+      makeDeps({
+        paths: [
+          "/etc",
+          "../outside",
+          "records",
+          "vectors.db",
+          "scene_blocks",
+          "persona.md",
+        ],
+      }),
     );
     expect(stats.errors.some((e) => e.includes("rejected"))).toBe(true);
     // The protected paths were rejected BEFORE removal — memory data intact.
-    expect(fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "records", "2026-08-01.jsonl")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
-    expect(fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "persona.md"))).toBe(true);
   });
 
@@ -224,25 +297,64 @@ describe("runCleanup", () => {
 
     // Both variants rejected as non-dataDir-relative → error recorded, no sweep.
     expect(stats.errors.some((e) => e.includes("rejected"))).toBe(true);
-    expect(stats.scanned.some((p) => path.resolve(p) === path.resolve(dataDir))).toBe(false);
+    expect(
+      stats.scanned.some((p) => path.resolve(p) === path.resolve(dataDir)),
+    ).toBe(false);
     expect(fs.existsSync(recordFile)).toBe(true);
     expect(fs.existsSync(vecDb)).toBe(true);
     expect(fs.existsSync(path.join(dataDir, "persona.md"))).toBe(true);
-    expect(fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(dataDir, "scene_blocks", "_global", "ok.md")),
+    ).toBe(true);
     expect(fs.existsSync(dataDir)).toBe(true);
+  });
+
+  // A role writes its own runtime.scratch_root and the schema only checks that
+  // it is a string, so this recursive delete takes its target from role.json.
+  // Refuse the roots that could reach memory data instead of sweeping them.
+  it("refuses a role scratch root that is (or holds) the memory tree", () => {
+    const old = new Date(Date.now() - 3 * 24 * 3_600_000);
+    fs.mkdirSync(path.join(dataDir, "runs"), { recursive: true });
+    fs.utimesSync(path.join(dataDir, "scene_blocks"), old, old);
+    fs.utimesSync(path.join(dataDir, "records"), old, old);
+
+    const stats = runCleanup(
+      makeDeps({
+        paths: [],
+        intervalHours: 1,
+        extraScratchRoots: [dataDir, tmp, path.join(dataDir, "runs")],
+      }) as never,
+    );
+
+    expect(fs.existsSync(path.join(dataDir, "scene_blocks"))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "records"))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, "vectors.db"))).toBe(true);
+    // Refused WITH a reason — a silent skip would look like "nothing to do".
+    expect(stats.errors.join("\n")).toMatch(/is the data dir itself/);
+    expect(stats.errors.join("\n")).toMatch(/contains the data dir/);
+    // ...and the legitimate per-role root under it is still swept.
+    expect(stats.scanned).toContain(path.join(dataDir, "runs"));
   });
 
   it("disabled cleanup is a no-op", () => {
     const oldLog = path.join(dataDir, "logs", "old.json");
     fs.writeFileSync(oldLog, "{}");
     ageByDays(oldLog, 5);
-    runCleanup({ ...makeDeps(), config: { enabled: false, intervalHours: 24, paths: ["logs"] } });
+    runCleanup({
+      ...makeDeps(),
+      config: { enabled: false, intervalHours: 24, paths: ["logs"] },
+    });
     expect(fs.existsSync(oldLog)).toBe(true);
   });
 
   it("listTaskSubtrees finds only --<name>-- dirs", () => {
-    fs.mkdirSync(path.join(home, ".pi", "agent", "tasks", "--abc--"), { recursive: true });
-    fs.writeFileSync(path.join(home, ".pi", "agent", "tasks", "not-a-subtree"), "x");
+    fs.mkdirSync(path.join(home, ".pi", "agent", "tasks", "--abc--"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(home, ".pi", "agent", "tasks", "not-a-subtree"),
+      "x",
+    );
     const dirs = listTaskSubtrees(home);
     expect(dirs).toEqual([path.join(home, ".pi", "agent", "tasks", "--abc--")]);
   });
@@ -254,7 +366,15 @@ describe("CleanupTimer", () => {
     const t1 = new CleanupTimer({
       enabled: false,
       intervalHours: 24,
-      run: () => { runs.push("x"); return { removedFiles: 0, removedDirs: 0, errors: [], scanned: [] } as CleanupStats; },
+      run: () => {
+        runs.push("x");
+        return {
+          removedFiles: 0,
+          removedDirs: 0,
+          errors: [],
+          scanned: [],
+        } as CleanupStats;
+      },
       now: () => Date.now(),
       logger: silentLogger,
     });
@@ -265,17 +385,27 @@ describe("CleanupTimer", () => {
     const t2 = new CleanupTimer({
       enabled: true,
       intervalHours: 24,
-      run: () => { runs.push("y"); return { removedFiles: 0, removedDirs: 0, errors: [], scanned: [] } as CleanupStats; },
+      run: () => {
+        runs.push("y");
+        return {
+          removedFiles: 0,
+          removedDirs: 0,
+          errors: [],
+          scanned: [],
+        } as CleanupStats;
+      },
       now: () => Date.now(),
       logger: silentLogger,
     });
     t2.start();
     // Immediate first pass is async — let the microtask queue settle.
-    return new Promise<void>((resolve) => setTimeout(() => {
-      expect(runs).toContain("y");
-      t2.stop();
-      expect(t2.isRunning).toBe(false);
-      resolve();
-    }, 30));
+    return new Promise<void>((resolve) =>
+      setTimeout(() => {
+        expect(runs).toContain("y");
+        t2.stop();
+        expect(t2.isRunning).toBe(false);
+        resolve();
+      }, 30),
+    );
   });
 });

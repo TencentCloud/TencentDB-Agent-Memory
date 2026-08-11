@@ -96,12 +96,10 @@ const apply = (body: string, withBaseline: boolean) =>
 
 console.log(`FALSIFY=${MODE || "(нет)"}`);
 
-const started = Date.now();
 const [first, second] = await Promise.all([
   apply("ПРАВКА-1", true),
   apply("ПРАВКА-2", MODE !== "no-recheck"),
 ]);
-const elapsed = Date.now() - started;
 
 const outcomes = [first, second];
 const applied = outcomes.filter((r) => r.status === "applied").length;
@@ -133,10 +131,37 @@ if (MODE === "tiny-timeout") {
 }
 
 console.log(`применилось прогонов: ${applied} из 2 (должно быть 1)`);
-console.log(
-  `второй прогон дождался лока: ${elapsed > 0 && applied >= 1} (должно быть true)`,
-);
 for (const e of refusals) console.log(`  отказ: ${e.slice(0, 110)}`);
+// Отдельный замер ОЖИДАНИЯ: держим лок известное время и смотрим, сколько
+// провисел apply. «Прошло больше нуля» не измеряет ничего — ждать надо ровно
+// столько, сколько держали.
+const HOLD_MS = 700;
+let waitedMs = 0;
+await withStoreApplyLock(dataDir, async () => {
+  const t0 = Date.now();
+  // Свежая базовая линия: этот apply обязан ДОЙТИ до лока, а не отсеяться
+  // раньше на покрытии или на дрейфе — иначе замер меряет отказ, не ожидание.
+  const fresh = { [REL]: sha() };
+  const pending = executor
+    .apply({
+      diff: { rewriteBlock: [{ path: REL, content: block("ПРАВКА-3") }] },
+      manifest: { baseline: fresh },
+      context: { presentedRecordIds: [] },
+    })
+    .then(() => {
+      waitedMs = Date.now() - t0;
+    });
+  await new Promise((r) => setTimeout(r, HOLD_MS));
+  // Отпускаем лок выходом из этой функции; ждём apply уже снаружи.
+  void pending;
+  await Promise.resolve();
+});
+await new Promise((r) => setTimeout(r, 300));
+console.log(
+  `apply прождал держателя ${waitedMs} мс из ${HOLD_MS} — ` +
+    `дождался лока, а не прошёл мимо: ${waitedMs >= HOLD_MS} (должно быть true)`,
+);
+
 console.log(
   `отказ по сдвинувшейся базовой линии: ${refusals.some(isDrift)} (должно быть true)`,
 );

@@ -11,10 +11,15 @@
  * Ф1 убирает эту возможность тем, что пересборка идёт ВНУТРИ
  * `withStoreApplyLock`: чужая правка не может встать между снимком и записью.
  *
+ * Наблюдение идёт по ДАЙДЖЕСТУ (Ф2), а не по списку имён: оба файла лежат на
+ * диске ещё до правок, поэтому любая пересборка перечислит оба имени — что бы
+ * ни случилось с локом. Устаревшая пересборка видна только тем, что запись
+ * индекса описывает ПРЕЖНИЕ байты файла.
+ *
  * ФАЛЬСИФИКАЦИЯ: FALSIFY=sync-outside-lock — проба сама воспроизводит
  * ДО-Ф1-порядок: снимает состояние каталога до второй правки и записывает
- * индекс из этого снимка после неё. Вторая правка обязана пропасть из
- * индекса, иначе наблюдение ничего не измеряет.
+ * индекс из этого снимка после неё. Дайджест записи обязан разъехаться с
+ * файлом, иначе наблюдение ничего не измеряет.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +27,7 @@ import { makeSandbox } from "../tz09-probe/sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { parseSceneBlock } from "../../src/core/scene/scene-format.js";
+import * as sceneIndex from "../../src/core/scene/scene-index.js";
 import { createHash } from "node:crypto";
 import type { EmbeddingService } from "../../src/core/store/embedding.js";
 import type { Logger } from "../../src/core/types.js";
@@ -105,15 +111,16 @@ const staleSnapshot = fs
       fs.readFileSync(path.join(blocksDir, f), "utf-8"),
       f,
     ).meta;
+    const raw = fs.readFileSync(path.join(blocksDir, f), "utf-8");
     return {
       filename: f,
       summary: meta.summary,
       heat: meta.heat,
       created: meta.created,
       updated: meta.updated,
+      digest: sceneIndex.blockDigest(raw),
     };
-  })
-  .filter((e) => e.filename !== "scene-b.md");
+  });
 
 const [r1, r2] = await Promise.all([
   rewrite("scene-a.md", "ПРАВКА-A"),
@@ -136,20 +143,27 @@ if (OUTSIDE) {
 
 const entries = JSON.parse(fs.readFileSync(indexPath, "utf-8")) as Array<{
   filename: string;
+  digest?: string;
 }>;
-const names = entries.map((e) => e.filename).sort();
-console.log(`записи индекса: ${JSON.stringify(names)}`);
 console.log(
-  `в индексе обе правки: ` +
-    `${names.includes("scene-a.md") && names.includes("scene-b.md")} ` +
-    `(должно быть true)`,
+  `записи индекса: ${JSON.stringify(entries.map((e) => e.filename).sort())}`,
 );
+
+// Имена ничего не доказывают — оба файла существовали до правок. Доказывает
+// совпадение дайджеста записи с БАЙТАМИ файла: устаревшая пересборка описывает
+// прежнее содержимое под тем же именем.
+let allFresh = true;
 for (const name of ["scene-a.md", "scene-b.md"]) {
   const body = fs.readFileSync(path.join(blocksDir, name), "utf-8");
+  const entry = entries.find((e) => e.filename === name);
+  const fresh = (entry?.digest ?? "") === sceneIndex.blockDigest(body);
+  allFresh &&= fresh;
   console.log(
-    `  файл ${name} на диске: ${body.includes("ПРАВКА") ? "правлен" : "исходный"}`,
+    `  ${name}: на диске ${body.includes("ПРАВКА") ? "правлен" : "исходный"}, ` +
+      `дайджест записи совпал с файлом: ${fresh}`,
   );
 }
+console.log(`в индексе обе правки: ${allFresh} (должно быть true)`);
 
 store.close();
 sbx.cleanup();

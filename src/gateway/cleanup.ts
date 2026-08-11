@@ -174,9 +174,20 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
   ageCleanDir(backupDir, nowMs, maxAge, stats);
 
   // 3. Stale run scratch dirs by age, in EVERY root a run could have used.
+  // A role names its own root in role.json and the schema only checks that it
+  // is a STRING — an unvalidated root would hand this recursive delete a path
+  // of the role author's choosing. Validate before sweeping.
   const roots = [
     ...new Set([deps.scratchRoot, ...(deps.extraScratchRoots ?? [])]),
-  ];
+  ].filter((root) => {
+    const why = rejectScratchRoot(deps.dataDir, deps.home, root);
+    if (why === null) return true;
+    stats.errors.push(`cleanup: scratch root "${root}" rejected (${why})`);
+    deps.logger.warn?.(
+      `[memory-cleanup] scratch root refused: ${root} — ${why}`,
+    );
+    return false;
+  });
   for (const root of roots) {
     stats.scanned.push(root);
     ageCleanDir(root, nowMs, maxAge, stats);
@@ -199,13 +210,17 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
     if (subtree) exactSubtrees.add(subtree);
   }
   // Marker sweep: dirs whose name contains the scratch marker (covers a
-  // sanitizer mismatch between this module and pi's internal one).
-  const markers = roots.map((r) =>
-    path.basename(r).replace(/[^A-Za-z0-9_-]/g, "-"),
-  );
+  // sanitizer mismatch between this module and pi's internal one). Bounded to
+  // the INSTANCE root on purpose — a per-role basename like "memory-keeper" is
+  // a much shorter substring than "tdai-memory-keeper" and would start
+  // matching task subtrees that have nothing to do with this instance. Those
+  // roots still get their exact derived subtree above.
+  const marker = path
+    .basename(deps.scratchRoot)
+    .replace(/[^A-Za-z0-9_-]/g, "-");
   const targets = new Set<string>(exactSubtrees);
   for (const p of listTaskSubtrees(deps.home)) {
-    if (markers.some((m) => path.basename(p).includes(m))) targets.add(p);
+    if (path.basename(p).includes(marker)) targets.add(p);
   }
   for (const target of targets) {
     stats.scanned.push(target);
@@ -219,6 +234,39 @@ export function runCleanup(deps: CleanupDeps): CleanupStats {
     );
   }
   return stats;
+}
+
+/** Names that mark a directory as the memory tree itself, not a scratch root. */
+const MEMORY_ENTRIES = ["records", "vectors.db", "scene_blocks", "persona.md"];
+
+/**
+ * @returns null when the root may be swept, else WHY it may not.
+ *
+ * Every check here answers one question: could this recursive delete reach
+ * memory data or the operator's tree? A root that IS the data dir, contains
+ * it, or simply looks like a memory tree is refused — the role author writes
+ * that string, and the schema only asks for a string.
+ */
+function rejectScratchRoot(
+  dataDir: string,
+  home: string,
+  root: string,
+): string | null {
+  if (!root || !path.isAbsolute(root)) return "not an absolute path";
+  const resolved = path.resolve(root);
+  const dataRoot = path.resolve(dataDir);
+  if (resolved === dataRoot) return "is the data dir itself";
+  if (dataRoot.startsWith(resolved + path.sep)) return "contains the data dir";
+  if (resolved === path.resolve(home)) return "is the home dir";
+  if (resolved === path.parse(resolved).root) return "is the filesystem root";
+  // Cheapest reliable signal for "someone pointed this at a memory tree":
+  // a scratch root never holds these.
+  for (const name of MEMORY_ENTRIES) {
+    if (fs.existsSync(path.join(resolved, name))) {
+      return `holds memory data (${name})`;
+    }
+  }
+  return null;
 }
 
 /**
