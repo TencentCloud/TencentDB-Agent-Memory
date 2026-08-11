@@ -61,6 +61,11 @@ export function resolveUnderRoot(root: string, ...segments: string[]): string {
 export function legacyReadPath(root: string, ...segments: string[]): string {
   const fresh = resolveUnderRoot(root, ...segments);
   if (fs.existsSync(fresh)) return fresh;
+  // Only the install being upgraded may inherit the old location. Keying the
+  // fallback on HOME alone let ANY explicit root — a sandbox, a test, a second
+  // instance — silently read the host install's roles: the same split, in the
+  // other direction.
+  if (root !== defaultTdaiRoot()) return fresh;
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? os.homedir();
   const legacy = path.join(home, ...LEGACY_ROOT_SEGMENTS, ...segments);
   if (!fs.existsSync(legacy)) return fresh;

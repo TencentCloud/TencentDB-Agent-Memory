@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { defaultTdaiRoot, resolveUnderRoot } from "../gateway/tdai-root.js";
 import type { Logger } from "../core/types.js";
 
 // 50 MB: debug bursts (recall candidates etc.) can fill 5 MB in minutes;
@@ -25,7 +26,7 @@ const pendingWrites = new Set<Promise<void>>();
 export interface DevLoggerOptions {
   /** Prefix for every line, e.g. "[tdai-gateway]". */
   tag?: string;
-  /** Directory for gateway-dev.log (default: ~/.pi/agent-memory/tdai/logs). */
+  /** Directory for gateway-dev.log (default: `<root>/logs`, tz-07 H1). */
   logDir?: string;
   /** Full log file path — overrides logDir (default: <logDir>/gateway-dev.log). */
   logFile?: string;
@@ -43,7 +44,9 @@ export function resolveLogFile(logDir?: string, logFile?: string): string {
   if (logFile) {
     return logFile.startsWith("~") ? path.join(os.homedir(), logFile.slice(2)) : logFile;
   }
-  const dir = logDir ?? "~/.pi/agent-memory/tdai/logs";
+  // tz-07 H1: no legacy fallback for logs on purpose — logs are WRITTEN, and
+  // the fallback is read-only. Old logs stay where they are.
+  const dir = logDir ?? resolveUnderRoot(defaultTdaiRoot(), "logs");
   const expanded = dir.startsWith("~")
     ? path.join(os.homedir(), dir.slice(2))
     : dir;

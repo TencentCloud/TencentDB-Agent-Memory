@@ -55,7 +55,7 @@ describe("role-files", () => {
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-role-"));
-    roleDir = resolveRoleDir(tmp); // tmp/.pi/agent-memory/tdai/roles
+    roleDir = resolveRoleDir(tmp); // <root>/roles (tz-07 H1)
     fs.mkdirSync(roleDir, { recursive: true });
   });
 
@@ -63,10 +63,11 @@ describe("role-files", () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("resolveRoleDir points at ~/.pi/agent-memory/tdai/roles", () => {
-    expect(resolveRoleDir("/home/x")).toBe(
-      "/home/x/.pi/agent-memory/tdai/roles",
-    );
+  it("resolveRoleDir hangs off the ROOT it is given, not off a home dir", () => {
+    // tz-07 H1. The legacy location answers only when the new one is absent
+    // AND the old one exists (see tdai-root.test.ts) — /home/x has neither,
+    // so the new layout is what comes back.
+    expect(resolveRoleDir("/home/x")).toBe("/home/x/roles");
   });
 
   it("parses role.json (model, timeout, enabled) and role.md", () => {

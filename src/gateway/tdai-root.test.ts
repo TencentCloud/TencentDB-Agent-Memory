@@ -76,6 +76,10 @@ describe("legacyReadPath", () => {
   it("falls back to ~/.pi only for reading, and says so once", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-home-"));
     process.env.HOME = home;
+    // The fallback belongs to the install being upgraded — so the root under
+    // test must BE the default root.
+    process.env.TDAI_DATA_DIR = dir;
+    resetTdaiRootCacheForTests();
     const legacy = path.join(home, ".pi", "agent-memory", "tdai", "roles");
     fs.mkdirSync(legacy, { recursive: true });
     const writes: string[] = [];
@@ -97,5 +101,24 @@ describe("legacyReadPath", () => {
   it("returns the NEW path when neither exists — writes never land in legacy", () => {
     process.env.HOME = dir;
     expect(legacyReadPath(dir, "roles")).toBe(path.join(dir, "roles"));
+  });
+});
+
+describe("legacyReadPath — the fallback belongs to ONE install", () => {
+  it("an unrelated explicit root never inherits the host install's roles", () => {
+    // Regression (found by role-files.test.ts during tz-07 Ф2): keying the
+    // fallback on HOME alone made every sandbox, test and second instance read
+    // the host's ~/.pi roles — the R1 split running backwards.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-host-"));
+    process.env.HOME = home;
+    process.env.TDAI_DATA_DIR = path.join(home, "the-default-root");
+    resetTdaiRootCacheForTests();
+    fs.mkdirSync(path.join(home, ".pi", "agent-memory", "tdai", "roles"), {
+      recursive: true,
+    });
+
+    const other = path.join(dir, "another-instance");
+    expect(legacyReadPath(other, "roles")).toBe(path.join(other, "roles"));
+    fs.rmSync(home, { recursive: true, force: true });
   });
 });

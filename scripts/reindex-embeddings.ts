@@ -10,14 +10,17 @@
 //
 // Env:
 //   EMBED_URL (default http://127.0.0.1:8421/embeddings)
-//   DB_PATH   (default ~/.pi/agent-memory/tdai/vectors.db)
+//   DB_PATH   (default <root>/vectors.db)
 //   LOG_EVERY (default 50)
 
-import path from "node:path";
-import { homedir } from "node:os";
+import {
+  defaultTdaiRoot,
+  resolveUnderRoot,
+} from "../src/gateway/tdai-root.js";
 
 const EMBED_URL = process.env.EMBED_URL ?? "http://127.0.0.1:8421/embeddings";
-const DB_PATH = process.env.DB_PATH ?? path.join(homedir(), ".pi/agent-memory/tdai/vectors.db");
+const DB_PATH =
+  process.env.DB_PATH ?? resolveUnderRoot(defaultTdaiRoot(), "vectors.db");
 const LOG_EVERY = Number(process.env.LOG_EVERY ?? 50);
 
 function log(msg: string): void {

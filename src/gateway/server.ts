@@ -76,6 +76,7 @@ import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import { countNewL0Since } from "./consolidation/diff-builder.js";
 import { listRoles, resolveRoleDir } from "./role-files.js";
+import { resolveUnderRoot } from "./tdai-root.js";
 import {
   listRoleContracts,
   roleScratchRoots,
@@ -143,6 +144,10 @@ export class TdaiGateway {
       tag: TAG,
       dev: this.config.logging.level === "debug" || isDevMode(),
       logFile: this.config.logging.file,
+      // tz-07 H1: without this, an unset logging.file resolves logs from the
+      // DEFAULT root while everything else follows baseDir — a split (R1)
+      // that no probe setting TDAI_DATA_DIR could ever see.
+      logDir: resolveUnderRoot(this.config.data.baseDir, "logs"),
     });
     this.tokenManager = new LoopbackTokenManager(
       this.config.data.baseDir,
@@ -210,7 +215,7 @@ export class TdaiGateway {
       // legacy snapshot the adapter falls back to.
       listRoleContracts: () =>
         listRoleContracts(
-          resolveRoleDir(),
+          resolveRoleDir(this.config.data.baseDir),
           buildRoleDefaults(consolidationCfg),
         ),
       readCheckpoint: () => this.orchestrator.readCheckpoint(),
@@ -270,6 +275,7 @@ export class TdaiGateway {
           // are edited on disk while the gateway runs.
           extraScratchRoots: roleScratchRoots(
             buildRoleDefaults(consolidationCfg),
+            resolveRoleDir(this.config.data.baseDir),
           ),
           home: process.env.HOME ?? "/tmp",
           config: this.config.memory.cleanup,
@@ -875,7 +881,7 @@ export class TdaiGateway {
         inFlight: this.orchestrator.isRunning,
         lastRun: this.orchestrator.getLastRun(),
       },
-      roles: listRoles(),
+      roles: listRoles(this.config.data.baseDir),
       reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
       runs: this.recentRuns(),
     };

@@ -76,7 +76,7 @@ export class ConsolidationOrchestrator {
       applyDiff:
         opts.applyDiff ?? ((b, run) => defaultApplyDiff(this.ctx, b, run)),
       roleName: opts.roleName ?? "memory-keeper",
-      roleDir: opts.roleDir ?? resolveRoleDir(),
+      roleDir: opts.roleDir ?? resolveRoleDir(opts.dataDir),
       ownerPid: process.pid,
       checkpoint: new ConsolidationCheckpoint(opts.dataDir),
       gate: new RoleGate(),

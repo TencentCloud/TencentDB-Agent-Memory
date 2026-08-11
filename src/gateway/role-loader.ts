@@ -4,21 +4,21 @@
  * falls back to legacy `memory-keeper/<name>.{json,md}` with a WARN log.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   resolveLegacyRoleDir,
   resolvePerRoleDir,
   resolveRoleDir,
 } from "./role-paths.js";
+import { defaultTdaiRoot } from "./tdai-root.js";
 import { validateRoleConfig, type RoleConfigFile } from "./role-schema.js";
 
 /** Read + validate `roles/<name>/role.json` (or legacy fallback). */
 export function loadRoleConfig(
   roleName: string,
-  home: string = os.homedir(),
+  root: string = defaultTdaiRoot(),
 ): RoleConfigFile | null {
-  const canon = path.join(resolvePerRoleDir(roleName, home), "role.json");
+  const canon = path.join(resolvePerRoleDir(roleName, root), "role.json");
   if (fs.existsSync(canon)) {
     try {
       const raw = fs.readFileSync(canon, "utf-8");
@@ -27,7 +27,7 @@ export function loadRoleConfig(
       return null;
     }
   }
-  const legacy = path.join(resolveLegacyRoleDir(home), `${roleName}.json`);
+  const legacy = path.join(resolveLegacyRoleDir(root), `${roleName}.json`);
   if (fs.existsSync(legacy)) {
     process.stderr.write(
       `[role-files] WARN: role "${roleName}" loaded from legacy path ${legacy}; ` +
@@ -40,9 +40,9 @@ export function loadRoleConfig(
       return null;
     }
   }
-  // Bare flat `home/<role>.json` — test/legacy compat (orchestrator tests
+  // Bare flat `<root>/<role>.json` — test/legacy compat (orchestrator tests
   // inject a custom roleDir and write `<role>.json` straight into it).
-  const bare = path.join(home, `${roleName}.json`);
+  const bare = path.join(root, `${roleName}.json`);
   if (fs.existsSync(bare)) {
     try {
       const raw = fs.readFileSync(bare, "utf-8");
@@ -57,18 +57,18 @@ export function loadRoleConfig(
 /** Read the `roles/<name>/prompt.md` (or legacy fallback). */
 export function loadRolePrompt(
   roleName: string,
-  home: string = os.homedir(),
+  root: string = defaultTdaiRoot(),
 ): string | null {
-  const canon = path.join(resolvePerRoleDir(roleName, home), "prompt.md");
+  const canon = path.join(resolvePerRoleDir(roleName, root), "prompt.md");
   if (fs.existsSync(canon)) {
     try { return fs.readFileSync(canon, "utf-8"); } catch { return null; }
   }
-  const legacy = path.join(resolveLegacyRoleDir(home), `${roleName}.md`);
+  const legacy = path.join(resolveLegacyRoleDir(root), `${roleName}.md`);
   if (fs.existsSync(legacy)) {
     try { return fs.readFileSync(legacy, "utf-8"); } catch { return null; }
   }
-  // Bare flat `home/<role>.md` — test/legacy compat (same as .json above).
-  const bare = path.join(home, `${roleName}.md`);
+  // Bare flat `<root>/<role>.md` — test/legacy compat (same as .json above).
+  const bare = path.join(root, `${roleName}.md`);
   if (fs.existsSync(bare)) {
     try { return fs.readFileSync(bare, "utf-8"); } catch { return null; }
   }
@@ -87,8 +87,8 @@ export interface RoleListing {
 }
 
 /** Discover all roles under `roles/`. */
-export function listRoles(home: string = os.homedir()): RoleListing[] {
-  const rolesDir = resolveRoleDir(home);
+export function listRoles(root: string = defaultTdaiRoot()): RoleListing[] {
+  const rolesDir = resolveRoleDir(root);
   let entries: string[];
   try {
     entries = fs.readdirSync(rolesDir);
@@ -102,12 +102,12 @@ export function listRoles(home: string = os.homedir()): RoleListing[] {
     let isDir = false;
     try { isDir = fs.statSync(perRoleDir).isDirectory(); } catch { continue; }
     if (!isDir) continue;
-    const cfg = loadRoleConfig(name, home);
+    const cfg = loadRoleConfig(name, root);
     out.push({
       name,
       enabled: cfg?.enabled ?? false,
       model: cfg?.model ?? null,
-      hasPrompt: loadRolePrompt(name, home) !== null,
+      hasPrompt: loadRolePrompt(name, root) !== null,
       scope: cfg?.scope ?? null,
       trigger: cfg?.trigger ?? null,
       criticRole: cfg?.critic_role ?? null,

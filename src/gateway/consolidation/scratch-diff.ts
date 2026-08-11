@@ -2,13 +2,14 @@
  * Read + parse the role's result (<scratch>/out/result.json, §3.5).
  *
  * Split from runner-stages.ts (≤150 lines). On malformed JSON, appends a
- * best-effort observability line to ~/.pi/agent-memory/tdai/.metadata/
- * diff-malformed.log — never throws from the catch (must not mask the
- * original parse error surfaced to the orchestrator).
+ * best-effort observability line to `<root>/.metadata/diff-malformed.log` —
+ * never throws from the catch (must not mask the original parse error
+ * surfaced to the orchestrator).
  */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveResultPath } from "./attempt-layout.js";
+import { defaultTdaiRoot, resolveUnderRoot } from "../tdai-root.js";
 
 export type ScratchDiffResult =
   { value: unknown; error?: undefined } | { value: null; error: string };
@@ -37,9 +38,13 @@ export async function readScratchDiff(
       const size = Buffer.byteLength(raw, "utf-8");
       const ts = new Date().toISOString();
       const line = `[${ts}] runId=${runId ?? "?"} path=${diffPath} size=${size} head=${JSON.stringify(head)} error=${err instanceof Error ? err.message : String(err)}\n`;
-      const logPath = path.join(
-        process.env.HOME ?? "/root",
-        ".pi/agent-memory/tdai/.metadata/diff-malformed.log",
+      // tz-07 H1: the observability log follows the data root, not the host's
+      // home. The old `HOME ?? "/root"` default sent it to /root under an
+      // empty HOME — a path a sandboxed run must never write to.
+      const logPath = resolveUnderRoot(
+        defaultTdaiRoot(),
+        ".metadata",
+        "diff-malformed.log",
       );
       await fs.promises.mkdir(path.dirname(logPath), { recursive: true });
       await fs.promises.appendFile(logPath, line, { flag: "a" });
