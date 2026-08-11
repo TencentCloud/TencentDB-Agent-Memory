@@ -64,7 +64,8 @@ export interface GatewayConfig {
     baseDir: string;
     /**
      * True when nothing named the root — no TDAI_DATA_DIR, no yaml
-     * `data.baseDir`, no override. Only such an install may inherit the
+     * `data.baseDir`, no MEMORY_TENCENTDB_ROOT, no override. Only such an
+     * install may inherit the
      * pre-tz-07 location (tz-07 H2, criterion 3: "дефолт БЕЗ явного корня
      * работает по прежним путям"). An explicit root is a deliberate
      * relocation — and it is also what every sandbox and test uses, which is
@@ -115,7 +116,9 @@ function defaultScratchRoot(baseDir: string): string {
  * 3. `<dataDir>/tdai-gateway.yaml` or `<dataDir>/tdai-gateway.json`
  * 4. Pure environment-variable config (no file)
  */
-export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
+export function loadGatewayConfig(
+  overrides?: Partial<GatewayConfig>,
+): GatewayConfig {
   let fileConfig: Record<string, unknown> = {};
 
   // Try to load config file
@@ -126,14 +129,15 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
       if (configPath.endsWith(".json")) {
         fileConfig = JSON.parse(raw);
       } else {
-      // Full YAML support (arbitrary nesting, anchors, lists, multi-line).
+        // Full YAML support (arbitrary nesting, anchors, lists, multi-line).
         // We still postprocess ${VAR} env-var interpolation on string leaves
         // below so existing configs that relied on the previous simple parser
         // keep working.
         const parsed = YAML.parse(raw);
-        fileConfig = (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-          ? parsed as Record<string, unknown>
-          : {};
+        fileConfig =
+          parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {};
       }
       fileConfig = expandEnvVars(fileConfig) as Record<string, unknown>;
     } catch {
@@ -144,7 +148,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // Server config
   const serverConfig = obj(fileConfig, "server");
   const port = envInt("TDAI_GATEWAY_PORT") ?? num(serverConfig, "port") ?? 8420;
-  const host = env("TDAI_GATEWAY_HOST") ?? str(serverConfig, "host") ?? "127.0.0.1";
+  const host =
+    env("TDAI_GATEWAY_HOST") ?? str(serverConfig, "host") ?? "127.0.0.1";
 
   // Optional auth / CORS — both default to "disabled" so existing setups keep
   // working unchanged. When unset the gateway behaves exactly like before this
@@ -157,9 +162,20 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const dataConfig = obj(fileConfig, "data");
   const explicitBaseDir = env("TDAI_DATA_DIR") ?? str(dataConfig, "baseDir");
   const rawBaseDir = explicitBaseDir ?? resolveDefaultDataDir();
+  // MEMORY_TENCENTDB_ROOT moves the root too, one level up — so an install that
+  // sets it is NOT default-rooted either, and must not inherit ~/.pi. Deliberate:
+  // the documented installer exports TDAI_DATA_DIR from it anyway
+  // (scripts/memory-tencentdb-ctl.sh:48), so the only rung this changes is a
+  // hand-set container var, and unsetting it restores the inheritance.
+  const rootNamedByEnv =
+    explicitBaseDir !== undefined ||
+    getEnv("MEMORY_TENCENTDB_ROOT") !== undefined;
   const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
-  const baseDir = rawBaseDir.startsWith("~/") ? path.join(home, rawBaseDir.slice(2)) : rawBaseDir;
-  const explicitScratchRoot = env("TDAI_SCRATCH_ROOT") ?? str(dataConfig, "scratchRoot");
+  const baseDir = rawBaseDir.startsWith("~/")
+    ? path.join(home, rawBaseDir.slice(2))
+    : rawBaseDir;
+  const explicitScratchRoot =
+    env("TDAI_SCRATCH_ROOT") ?? str(dataConfig, "scratchRoot");
   const rawScratchRoot = explicitScratchRoot ?? defaultScratchRoot(baseDir);
   const scratchRoot = rawScratchRoot.startsWith("~/")
     ? path.join(home, rawScratchRoot.slice(2))
@@ -168,32 +184,41 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   // LLM config
   const llmConfig = obj(fileConfig, "llm");
   const llm: StandaloneLLMConfig = {
-    baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
+    baseUrl:
+      env("TDAI_LLM_BASE_URL") ??
+      str(llmConfig, "baseUrl") ??
+      "https://api.openai.com/v1",
     apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
-    maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
-    timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    maxTokens:
+      envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
+    timeoutMs:
+      envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
     disableThinking: normalizeDisableThinking(
-      envBoolOrStr("TDAI_LLM_DISABLE_THINKING") ?? boolOrStr(llmConfig, "disableThinking")
+      envBoolOrStr("TDAI_LLM_DISABLE_THINKING") ??
+        boolOrStr(llmConfig, "disableThinking"),
     ),
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)
   const memoryRaw = obj(fileConfig, "memory");
-  const memory = parseMemoryConfig(memoryRaw as Record<string, unknown> | undefined);
+  const memory = parseMemoryConfig(
+    memoryRaw as Record<string, unknown> | undefined,
+  );
 
   // Logging config (dev-mode file sink + level). Env TDAI_DEV=1 wins over yaml.
   const loggingConfig = obj(fileConfig, "logging");
   const logging = {
     file: str(loggingConfig, "file"),
-    level: (str(loggingConfig, "level") === "debug" ? "debug" : "info") as "debug" | "info",
+    level: (str(loggingConfig, "level") === "debug" ? "debug" : "info") as
+      "debug" | "info",
   };
 
   const base: GatewayConfig = {
     server: { port, host, apiKey, corsOrigins },
     data: {
       baseDir,
-      baseDirIsDefault: explicitBaseDir === undefined,
+      baseDirIsDefault: !rootNamedByEnv,
       scratchRoot,
     },
     llm,
@@ -269,7 +294,8 @@ export function resolveDefaultDataDir(): string {
   // Note: this only governs the standalone/Hermes fallback. Under the openclaw
   // host the plugin data dir is decided by `resolveStateDir() + "memory-tdai"`
   // (typically ~/.openclaw/memory-tdai/) which is intentionally NOT changed.
-  const root = getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
+  const root =
+    getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
   const newDefault = path.join(root, "memory-tdai");
 
   // Backward compatibility: if the new location does not yet exist but the
@@ -283,7 +309,7 @@ export function resolveDefaultDataDir(): string {
         // Stderr-only deprecation hint; doesn't pollute structured logs.
         process.stderr.write(
           `[tdai-gateway] DEPRECATED: using legacy data dir ${legacy}; ` +
-          `move it to ${newDefault} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
+            `move it to ${newDefault} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
         );
         return legacy;
       }
@@ -322,7 +348,10 @@ function envBoolOrStr(key: string): boolean | string | undefined {
 }
 
 /** Read a field that may be boolean or string from a config object. */
-function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+function boolOrStr(
+  src: Record<string, unknown>,
+  key: string,
+): boolean | string | undefined {
   const v = src[key];
   if (typeof v === "boolean") return v;
   if (typeof v === "string" && v.trim()) return v.trim();
@@ -331,7 +360,9 @@ function boolOrStr(src: Record<string, unknown>, key: string): boolean | string 
 
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = c[key];
-  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
 }
 
 function str(src: Record<string, unknown>, key: string): string | undefined {
@@ -363,16 +394,24 @@ function resolveCorsOrigins(serverConfig: Record<string, unknown>): string[] {
   //    "I want CORS off" even when the env var leaks in from the shell.
   const raw = serverConfig["corsOrigins"];
   if (Array.isArray(raw)) {
-    return raw.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map(s => s.trim());
+    return raw
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim());
   }
   if (typeof raw === "string" && raw.trim()) {
-    return raw.split(",").map(s => s.trim()).filter(Boolean);
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
 
   // 2. Fall back to env. Empty string from env is treated as "not set".
   const envValue = env("TDAI_CORS_ORIGINS");
   if (!envValue) return [];
-  return envValue.split(",").map(s => s.trim()).filter(Boolean);
+  return envValue
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /**
