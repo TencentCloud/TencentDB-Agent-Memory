@@ -583,9 +583,9 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 ## Star 趋势
 
 <p align="center">
-  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/stargazers"><img src="https://img.shields.io/github/stars/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub stars" /></a>
-  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/network/members"><img src="https://img.shields.io/github/forks/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub forks" /></a>
-  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/watchers"><img src="https://img.shields.io/github/watchers/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub watchers" /></a>
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
 </p>
 
 ---
