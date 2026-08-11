@@ -18,6 +18,7 @@ import type { Logger } from "../core/types.js";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { openReadonlySqlite } from "./http-utils.js";
+import { l0CursorSection } from "./consolidation/checkpoint-report.js";
 import {
   findDuplicateClusters,
   collectBlockStats,
@@ -245,6 +246,9 @@ export function buildDashboardMarkdown(
   );
 
   lines.push(probeSection(probe));
+
+  // tz-03a A2e: the cursor and its counter finally have a reader.
+  lines.push(...l0CursorSection(dataDir));
 
   lines.push("## Last runs", "");
   const runs = readLastRuns(dataDir, 5);
