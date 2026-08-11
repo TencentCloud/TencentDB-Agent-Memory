@@ -53,6 +53,7 @@ export async function syncSceneIndexPerProject(
           heat: block.meta.heat,
           created: block.meta.created,
           updated: block.meta.updated,
+          digest: sceneIndex.blockDigest(raw),
         });
       } catch {
         // Deleted between readdir and readFile — skip it, keep the rest.

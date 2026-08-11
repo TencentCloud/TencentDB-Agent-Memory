@@ -7,7 +7,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { syncSceneIndex, readSceneIndex, readAllSceneIndexes } from "./scene-index.js";
+import { blockDigest, syncSceneIndex, readSceneIndex, readAllSceneIndexes } from "./scene-index.js";
 import { generateSceneNavigation } from "./scene-navigation.js";
 import { sceneBlocksDir, projectSlug, GLOBAL_SCENE_SLUG } from "./scene-paths.js";
 
@@ -53,8 +53,15 @@ describe("scene project separation", () => {
     await syncSceneIndex(dir, A);
     await syncSceneIndex(dir, B);
 
+    // The digest is asserted against the FILE, not against a literal: an
+    // index entry is only useful if it agrees with the bytes on disk
+    // (tz-02 критерий 1d).
+    const onDisk = await fsp.readFile(
+      path.join(sceneBlocksDir(dir, A), "alpha-deploy.md"),
+      "utf-8",
+    );
     expect(await readSceneIndex(dir, A)).toEqual([
-      { filename: "alpha-deploy.md", summary: "alpha-deploy summary", heat: 3, created: "2026-07-01T00:00:00Z", updated: "2026-07-02T00:00:00Z" },
+      { filename: "alpha-deploy.md", summary: "alpha-deploy summary", heat: 3, created: "2026-07-01T00:00:00Z", updated: "2026-07-02T00:00:00Z", digest: blockDigest(onDisk) },
     ]);
     expect((await readSceneIndex(dir, B)).map((e) => e.filename)).toEqual(["beta-frontend.md"]);
   });

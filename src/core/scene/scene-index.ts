@@ -2,6 +2,7 @@
  * Scene Index: maintains a JSON index of all scene blocks for quick lookup.
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseSceneBlock } from "./scene-format.js";
@@ -13,6 +14,22 @@ export interface SceneIndexEntry {
   heat: number;
   created: string;
   updated: string;
+  /**
+   * sha256 of the block's bytes as they were when this entry was written
+   * (tz-02 критерий 1d).
+   *
+   * Without it "the file and the index agree by digest" is not an operational
+   * check at all: the entry carried only metadata parsed OUT of the file, so
+   * an index written from a stale snapshot looked exactly like a fresh one.
+   * Empty string for an entry written before this field existed — absence is
+   * "unknown", never "matches".
+   */
+  digest: string;
+}
+
+/** The digest of one scene block. One definition, both writers. */
+export function blockDigest(raw: string): string {
+  return createHash("sha256").update(raw, "utf-8").digest("hex");
 }
 
 /**
@@ -41,6 +58,10 @@ export async function readSceneIndex(dataDir: string, projectId?: string): Promi
         heat: typeof item.heat === "number" ? item.heat : 0,
         created: typeof item.created === "string" ? item.created : "",
         updated: typeof item.updated === "string" ? item.updated : "",
+        // The whitelist is why this line has to exist: the reader rebuilds
+        // the entry field by field, so a field nobody lists is dropped on
+        // the way out no matter what the writer put in.
+        digest: typeof item.digest === "string" ? item.digest : "",
       });
     }
     return entries;
@@ -138,6 +159,7 @@ async function syncSceneIndexBySlug(dataDir: string, slug: string): Promise<Scen
         heat: block.meta.heat,
         created: block.meta.created,
         updated: block.meta.updated,
+        digest: blockDigest(raw),
       });
     } catch {
       // File may have been deleted between readdir and readFile (e.g. by concurrent
