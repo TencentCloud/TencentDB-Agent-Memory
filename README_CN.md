@@ -524,13 +524,11 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 ## Star 趋势
 
-<a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Tencent/TencentDB-Agent-Memory&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Tencent/TencentDB-Agent-Memory&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Tencent/TencentDB-Agent-Memory&type=Date" />
- </picture>
-</a>
+<p align="center">
+  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/stargazers"><img src="https://img.shields.io/github/stars/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub stars" /></a>
+  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/network/members"><img src="https://img.shields.io/github/forks/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub forks" /></a>
+  <a href="https://github.com/Yuntong8888/TencentDB-Agent-Memory/watchers"><img src="https://img.shields.io/github/watchers/Yuntong8888/TencentDB-Agent-Memory?style=for-the-badge&logo=github&color=006eff" alt="GitHub watchers" /></a>
+</p>
 
 ---
 
