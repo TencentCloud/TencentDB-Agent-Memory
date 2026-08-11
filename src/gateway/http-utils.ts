@@ -107,8 +107,22 @@ export interface WritableSqlite {
  * (sqlite.ts:497).
  */
 function tuneForConcurrency(db: WritableSqlite): WritableSqlite {
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+  } catch (err) {
+    db.close(); // иначе handle течёт: конструктор уже отработал
+    throw err;
+  }
+  try {
+    db.exec("PRAGMA journal_mode = WAL");
+  } catch {
+    // КОНВЕРСИЯ журнала (delete → WAL) требует эксклюзивной блокировки и НЕ
+    // идёт через busy handler: при соседе с открытой транзакцией она падает
+    // мгновенно, сколько бы ни стоял busy_timeout. Раньше открытие такой базы
+    // не бросало никогда — превращать это в отказ нельзя. База остаётся в
+    // старом журнале, busy_timeout выше уже стоит, а конверсия случится при
+    // первом же открытии без соседа. Новые базы рождаются в WAL сразу.
+  }
   return db;
 }
 

@@ -35,6 +35,28 @@ import {
 import { readScratchDiff } from "../../src/gateway/consolidation/scratch-diff.js";
 import type { Logger } from "../../src/core/types.js";
 import { must, finish } from "./assert.mts";
+import { createHash } from "node:crypto";
+
+/** Хэш дерева: путь + размер + mtime каждого файла, рекурсивно. */
+function treeHash(dir: string): string {
+  const h = createHash("sha256");
+  const walk = (d: string): void => {
+    for (const e of fs
+      .readdirSync(d, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        h.update(`d:${p}`);
+        walk(p);
+      } else {
+        const st = fs.statSync(p);
+        h.update(`f:${p}:${st.size}:${st.mtimeMs}`);
+      }
+    }
+  };
+  walk(dir);
+  return h.digest("hex").slice(0, 16);
+}
 
 const LEGACY_WRITE = process.env.FALSIFY === "legacy-write";
 
@@ -59,6 +81,16 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
     "utf-8",
   );
   fs.mkdirSync(root, { recursive: true });
+  // Уборке нужно, ЧТО удалять, иначе её нога зелена по бездействию: под замком
+  // ей просто не за что взяться. Устаревший прогон кладём в оба дерева.
+  const stale = Date.now() / 1000 - 30 * 24 * 3600;
+  for (const base of [root, legacyRoot]) {
+    const old = path.join(base, "scratch", "run-old");
+    fs.mkdirSync(old, { recursive: true });
+    fs.writeFileSync(path.join(old, "diff.json"), "{}", "utf-8");
+    fs.utimesSync(path.join(old, "diff.json"), stale, stale);
+    fs.utimesSync(old, stale, stale);
+  }
 
   // Ветка standalone задаёт корень через env; openclaw — только явной
   // передачей, как это делает host-adapter с инжектированным pluginDataDir.
@@ -77,6 +109,10 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
   );
   fs.chmodSync(path.join(legacyRoot, "roles", "memory-keeper"), 0o555);
   fs.chmodSync(path.join(legacyRoot, "roles"), 0o555);
+  // Замок накрывает и scratch: иначе уборка сносит старый прогон, и премисса
+  // «старый корень нельзя писать» держится только на половине дерева.
+  fs.chmodSync(path.join(legacyRoot, "scratch", "run-old"), 0o555);
+  fs.chmodSync(path.join(legacyRoot, "scratch"), 0o555);
   fs.chmodSync(legacyRoot, 0o555);
   fs.chmodSync(path.join(home, ".pi", "agent-memory"), 0o555);
   fs.chmodSync(piRoot, 0o555);
@@ -96,6 +132,9 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
   }
 
   // --- Полный цикл -----------------------------------------------------------
+  // Снимок СТАРОГО дерева: замок доказывает, что запись падает, а хэш — что
+  // ни один шаг не изменил там ни байта (S5 целиком, а не только отказы).
+  const before = treeHash(legacyRoot);
   const failures: string[] = [];
   /**
    * Два шага цикла пишут через best-effort-код, который глотает EACCES
@@ -157,26 +196,37 @@ async function cycle(branch: "standalone" | "openclaw"): Promise<void> {
     landed(resolveUnderRoot(root, ".metadata", "diff-malformed.log"));
   });
 
-  // 5. Уборка.
-  await step("уборка", () =>
-    runCleanup({
-      dataDir: root,
-      scratchRoot: path.join(root, "scratch"),
+  // 5. Уборка. runCleanup НЕ бросает: EACCES складывается в stats.errors, —
+  // поэтому судить о ней по «не бросило» было той же декорацией, что и ноги 3-4
+  // (раунд 7). Судим по возвращаемому значению.
+  await step("уборка", async () => {
+    const stats = await runCleanup({
+      dataDir: LEGACY_WRITE ? legacyRoot : root,
+      scratchRoot: path.join(LEGACY_WRITE ? legacyRoot : root, "scratch"),
       hostTaskRoots: [],
       home,
       sessionRetentionHours: 336,
       config: { enabled: true, intervalHours: 24, paths: [] },
       now: () => Date.now(),
       logger: silent,
-    }),
-  );
+    });
+    if (stats.errors.length > 0) {
+      throw new Error(`уборка отчиталась об отказах: ${stats.errors[0]}`);
+    }
+  });
 
   if (failures.length > 0) console.log(`  ${failures.join("\n  ")}`);
   must(`[${branch}] цикл без отказов доступа`, failures.length === 0);
+  must(
+    `[${branch}] старое дерево не изменилось`,
+    treeHash(legacyRoot) === before,
+  );
 
   fs.chmodSync(piRoot, 0o755);
   fs.chmodSync(path.join(home, ".pi", "agent-memory"), 0o755);
   fs.chmodSync(legacyRoot, 0o755);
+  fs.chmodSync(path.join(legacyRoot, "scratch"), 0o755);
+  fs.chmodSync(path.join(legacyRoot, "scratch", "run-old"), 0o755);
   fs.chmodSync(path.join(legacyRoot, "roles"), 0o755);
   fs.chmodSync(path.join(legacyRoot, "roles", "memory-keeper"), 0o755);
   fs.chmodSync(
