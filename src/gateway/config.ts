@@ -286,8 +286,16 @@ function resolveConfigPath(): string | null {
     if (fs.existsSync(p)) return p;
   }
 
-  // 3. Default data dir
-  const dataDir = resolveDefaultDataDir();
+  // 3. The data dir — the ENV-named one when there is one. Reading the default
+  // location here made a relocated install's own config invisible to the loader
+  // that relocated it (tz-07 H2: one switchable root, and the config lives
+  // under it). The yaml's `data.baseDir` cannot take part: this runs to FIND
+  // that yaml, so honouring it would be circular. Env only.
+  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+  const rawDataDir = getEnv("TDAI_DATA_DIR") ?? resolveDefaultDataDir();
+  const dataDir = rawDataDir.startsWith("~/")
+    ? path.join(home, rawDataDir.slice(2))
+    : rawDataDir;
   for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
     const p = path.join(dataDir, name);
     if (fs.existsSync(p)) return p;
