@@ -1,20 +1,23 @@
 /**
- * CodeBuddy Session Init Form — `ask_followup_question` tool_call.
+ * CodeBuddy Session Init Form — `AskUserQuestion` tool_call.
  *
- * CodeBuddy 渲染可点击按钮的 form：
- *   - Tool name: `ask_followup_question`
- *   - Options: 平铺字符串列表，无数量限制
+ * CodeBuddy CLI（@tencent-ai/codebuddy-code）内置的交互提问工具是
+ * `AskUserQuestion`（与 Claude Code 同名），参数格式为
+ * `{ questions: [{ question, header, options: [{label, description}], multiSelect }] }`。
+ * 早期版本误用 `ask_followup_question`（CodeBuddy IDE 插件工具名），CLI 工具集
+ * 中不存在该工具，导致表单无法弹出（"Tool does not exist in the current tool set"）。
+ *
+ *   - Tool name: `AskUserQuestion`
+ *   - Options: `{ label, description }` 结构体
  *   - Protocols: OpenAI (`/v1/chat/completions`) + Anthropic (`/v1/messages`)
  *   - ID prefix: `call_session_init_` (OpenAI) / `toolu_session_init_` (Anthropic)
- *
- * 不含任何 Claude Code 逻辑。
  */
 
 import type { TeamOption } from "../types.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-export const TOOL_NAME = "ask_followup_question";
+export const TOOL_NAME = "AskUserQuestion";
 export const TOOLCALL_PREFIXES = ["call_session_init_", "toolu_session_init_"] as const;
 
 export const TEAM_FORM_TITLE = "会话初始化 — 选择 Team";
@@ -62,81 +65,84 @@ export interface FormData {
 
 // ── Form Builder ───────────────────────────────────────────────────────────────
 
-function buildFollowupQuestionArgs(data: FormData): { title: string; questions: string } {
+interface CBAskOption {
+  label: string;
+  description: string;
+}
+
+interface CBAskQuestion {
+  question: string;
+  header: string;
+  options: CBAskOption[];
+  multiSelect: boolean;
+}
+
+function buildFollowupQuestionArgs(data: FormData): { questions: CBAskQuestion[] } {
   const { teams, stage, selectedTeamId, retry } = data;
 
-  const title = retry
-    ? "⚠️ " + RETRY_FORM_TITLE
-    : stage === "asset_confirm"
-      ? ASSET_CONFIRM_FORM_TITLE
-      : stage === "team"
-        ? TEAM_FORM_TITLE
-        : AGENT_TASK_FORM_TITLE;
-
-  const questions: Array<{
-    id: string;
-    question: string;
-    options: string[];
-    multiSelect: boolean;
-  }> = [];
+  const titlePrefix = retry ? "⚠️ " : "";
+  const questions: CBAskQuestion[] = [];
 
   if (stage === "asset_confirm") {
     questions.push({
-      id: "asset_confirm",
-      question: "本次对话是否要关联团队资产？",
-      options: [ASSET_CONFIRM_YES, ASSET_CONFIRM_NO],
+      question: titlePrefix + ASSET_CONFIRM_FORM_TITLE + "：本次对话是否要关联团队资产？",
+      header: "关联资产",
+      options: [
+        { label: ASSET_CONFIRM_YES, description: "选择 Team / Agent / Task，注入团队上下文" },
+        { label: ASSET_CONFIRM_NO, description: "本次不注入任何内容，直接放行" },
+      ],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { questions };
   }
 
   if (stage === "team") {
     questions.push({
-      id: "team",
-      question: "请选择本次会话所属的 Team：",
-      options: [
-        ...teams.map((t) => `${t.team_name} (${t.team_id.slice(-8)})`),
-      ],
+      question: titlePrefix + TEAM_FORM_TITLE + "：请选择本次会话所属的 Team：",
+      header: "Team",
+      options: teams.map((t) => ({
+        label: `${t.team_name} (${t.team_id.slice(-8)})`,
+        description: "",
+      })),
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { questions };
   }
 
   // stage === "agent_task"
   const team = teams.find((t) => t.team_id === selectedTeamId) ?? teams[0];
-  if (!team) return { title, questions: JSON.stringify(questions) };
+  if (!team) return { questions };
 
   if (team.agents.length > 0) {
-    const agentLabelOptions = [
-      ...team.agents.map((a) => `${a.agent_name} (${a.agent_id.slice(-8)})`),
-    ];
     questions.push({
-      id: "agent",
-      question: `请选择「${team.team_name}」下要使用的 Agent：`,
-      options: agentLabelOptions,
+      question: titlePrefix + AGENT_TASK_FORM_TITLE + `：请选择「${team.team_name}」下要使用的 Agent：`,
+      header: "Agent",
+      options: team.agents.map((a) => ({
+        label: `${a.agent_name} (${a.agent_id.slice(-8)})`,
+        description: a.description ?? "",
+      })),
       multiSelect: false,
     });
   }
 
-  const taskOptions: string[] = [];
+  const taskOptions: CBAskOption[] = [];
   for (const tk of team.tasks) {
     // 虚拟兜底条目（isDefault）不拼 id 后缀，反正只有一个不会重名歧义。
-    if (tk.isDefault) {
-      taskOptions.push(tk.task_name);
-    } else {
-      taskOptions.push(`${tk.task_name} (${tk.task_id.slice(-8)})`);
-    }
+    taskOptions.push({
+      label: tk.isDefault ? tk.task_name : `${tk.task_name} (${tk.task_id.slice(-8)})`,
+      description: "",
+    });
   }
   if (taskOptions.length > 0) {
     questions.push({
-      id: "task",
-      question: `请选择「${team.team_name}」下关联的任务：`,
+      question: titlePrefix + AGENT_TASK_FORM_TITLE + `：请选择「${team.team_name}」下关联的任务：`,
+      header: "Task",
       options: taskOptions,
       multiSelect: false,
     });
   }
 
-  return { title, questions: JSON.stringify(questions) };
+  return { questions };
 }
 
 /**
@@ -174,7 +180,7 @@ function buildOpenAINonStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { questions: CBAskQuestion[] },
 ): Response {
   return new Response(JSON.stringify({
     id,
@@ -208,7 +214,7 @@ function buildOpenAIStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { questions: CBAskQuestion[] },
 ): Response {
   const encoder = new TextEncoder();
   const argsStr = JSON.stringify(args);
@@ -274,7 +280,7 @@ function buildAnthropicNonStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { questions: CBAskQuestion[] },
 ): Response {
   return new Response(JSON.stringify({
     id: msgId,
@@ -299,7 +305,7 @@ function buildAnthropicStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { questions: CBAskQuestion[] },
 ): Response {
   const encoder = new TextEncoder();
   const inputJson = JSON.stringify(args);

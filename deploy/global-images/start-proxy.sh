@@ -84,6 +84,12 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  # Per-Agent 覆盖：CodeBuddy 走 OpenAI 协议，需单独指定 OpenAI 兼容端点，
+  # 否则 /chat/completions 会被拼到 Anthropic 端点（/anthropic）返回 404。
+  agents:
+    codebuddy:
+      url: "${PROXY_UPSTREAM_URL_CODEBUDDY:-${PROXY_UPSTREAM_URL}}"
+      apiKey: "${PROXY_UPSTREAM_API_KEY_CODEBUDDY:-${PROXY_UPSTREAM_API_KEY}}"
 
 log:
   file: ""
@@ -146,10 +152,14 @@ redis:
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
+# --dns 223.5.5.5 / 119.29.29.29：绕过宿主机 Clash fake-ip（198.18.x.x）污染，
+# 否则容器内解析 api.deepseek.com 得到不可路由的 fake-ip，FORWARD 阶段 fetch failed。
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
+  --dns 223.5.5.5 \
+  --dns 119.29.29.29 \
   -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
   "$PROXY_IMAGE" >/dev/null

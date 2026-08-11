@@ -22,14 +22,141 @@ import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./for
 const SKIP_RE = /跳过|不关联|skip/i;
 export const BYPASS_MARKER = "__bypass__" as const;
 
+// ── JSON 解析 helpers（CodeBuddy CLI AskUserQuestion 回写格式）──────────────
+// CodeBuddy CLI 的 AskUserQuestion tool_result 与 Claude Code 同源，回写为
+// `role: "tool"` 消息的 JSON：`{ answers: { "q": "label" } }` 或
+// multi_question_result envelope：
+//   { result: { type: "multi_question_result", questions: [{id, answer}], answers: {...} } }
+
+/** 从 tool 消息 JSON 中提取所有答案（按出现顺序）。非 JSON 返回空数组。 */
+function extractJsonAnswers(content: string): string[] {
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed === "string") return [parsed.trim()].filter(Boolean);
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const out: string[] = [];
+
+    // AskUserQuestion: { answers: { "q": "label" } }
+    const answers = parsed.answers as Record<string, unknown> | undefined;
+    if (answers && typeof answers === "object") {
+      for (const val of Object.values(answers)) {
+        if (typeof val === "string" && val.trim()) out.push(val.trim());
+      }
+    }
+
+    // multi_question_result envelope
+    const mqr = (parsed.result ?? parsed) as Record<string, unknown> | undefined;
+    if (mqr && mqr.type === "multi_question_result" && Array.isArray(mqr.questions)) {
+      for (const q of mqr.questions) {
+        if (!q || typeof q !== "object") continue;
+        const qo = q as Record<string, unknown>;
+        const cand = qo.answer ?? qo.answers ?? qo.selected ?? qo.selectedOption ?? qo.value;
+        if (typeof cand === "string" && cand.trim()) out.push(cand.trim());
+        else if (Array.isArray(cand)) {
+          const f = cand.find((x) => typeof x === "string" && x.trim());
+          if (typeof f === "string") out.push(f.trim());
+        }
+      }
+      const mqrAnswers = mqr.answers as Record<string, unknown> | undefined;
+      if (mqrAnswers && typeof mqrAnswers === "object") {
+        for (const val of Object.values(mqrAnswers)) {
+          if (typeof val === "string" && val.trim()) out.push(val.trim());
+        }
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** 提取第一个答案（单 question 场景：asset_confirm / team 阶段）。 */
+function extractFirstAnswer(content: string): string | null {
+  const arr = extractJsonAnswers(content);
+  if (arr.length > 0) return arr[0];
+
+  // CodeBuddy 文本回写（实测格式）：
+  //   " · 问题文案 → 答案"（可能多行，取第一个含 → 的行）
+  const line = content.split("\n").map((l) => l.trim()).find((l) => l.includes("→"));
+  if (line) {
+    const idx = line.lastIndexOf("→");
+    const ans = line.slice(idx + 1).trim();
+    return ans || null;
+  }
+  return null;
+}
+
+/** 按 id 区分 agent / task 答案（agent_task 多 question 场景）。 */
+function extractAgentTaskFromJson(content: string): { agentText: string | null; taskText: string | null } {
+  let agentText: string | null = null;
+  let taskText: string | null = null;
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error("not object"); // 落入下方文本格式解析
+    }
+
+    // AskUserQuestion: { answers: { "q": "label" } } — 第一个=agent，第二个=task
+    if (parsed.answers && typeof parsed.answers === "object") {
+      const vals = Object.values(parsed.answers).filter(
+        (v) => typeof v === "string" && v.trim().length > 0,
+      ) as string[];
+      if (vals[0]) agentText = vals[0].trim();
+      if (vals[1]) taskText = vals[1].trim();
+    }
+
+    // multi_question_result envelope — 按 question id 区分
+    const mqr = (parsed.result ?? parsed) as Record<string, unknown> | undefined;
+    if (mqr && mqr.type === "multi_question_result" && Array.isArray(mqr.questions)) {
+      for (const q of mqr.questions) {
+        if (!q || typeof q !== "object") continue;
+        const qo = q as Record<string, unknown>;
+        const id = typeof qo.id === "string" ? qo.id.toLowerCase() : "";
+        const cand = qo.answer ?? qo.answers ?? qo.selected ?? qo.selectedOption ?? qo.value;
+        let val: string | null = null;
+        if (typeof cand === "string") val = cand.trim() || null;
+        else if (Array.isArray(cand)) {
+          const f = cand.find((x) => typeof x === "string" && x.trim());
+          if (typeof f === "string") val = f.trim();
+        }
+        if (!val) continue;
+        if (id === "agent" && !agentText) agentText = val;
+        else if (id === "task" && !taskText) taskText = val;
+      }
+    }
+    if (agentText || taskText) return { agentText, taskText };
+    throw new Error("no agent/task found"); // 落入下方文本格式解析
+  } catch {
+    // ── CodeBuddy 文本回写（实测格式，非 JSON）──────────────────────────
+    //   " · 问题文案 → 答案\n · 问题文案 → 答案"
+    // 按行取 "→" 后的答案：第一个=agent，第二个=task（与表单问题顺序一致）
+    const answers: string[] = [];
+    for (const line of content.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      const idx = t.lastIndexOf("→");
+      if (idx >= 0) {
+        const ans = t.slice(idx + 1).trim();
+        if (ans) answers.push(ans);
+      }
+    }
+    if (answers.length >= 2) return { agentText: answers[0], taskText: answers[1] };
+    if (answers.length === 1) return { agentText: answers[0], taskText: null };
+    const raw = content.trim();
+    return { agentText: raw || null, taskText: null };
+  }
+}
+
 /**
  * 从用户答复中提取 asset_confirm 选择。
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
  */
 export function extractAssetConfirm(content: string): boolean | null {
-  // XML parsing
+  // XML parsing (旧格式)
   const xml = parseQuestionAnswerXml(content);
-  const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
+  // JSON parsing（AskUserQuestion / multi_question_result 回写）
+  const jsonAnswer = extractFirstAnswer(content);
+  const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? jsonAnswer ?? content;
 
   if (answer.includes(ASSET_CONFIRM_YES) || /是.*关联|关联.*是|确认.*关联/i.test(answer)) {
     return true;
@@ -117,6 +244,9 @@ export function extractTeamFromOptionText(
   const xml = parseQuestionAnswerXml(content);
   if (xml) {
     teamText = xml.teamAnswer ?? null;
+  } else {
+    // JSON parsing: AskUserQuestion tool_result（单 question，第一个答案即 team）
+    teamText = extractFirstAnswer(content);
   }
 
   // 检测"本次不关联"→ bypass
@@ -231,6 +361,11 @@ export function extractFromOptionText(
   if (xml) {
     agentText = xml.agentAnswer ?? null;
     taskText = xml.taskAnswer ?? null;
+  } else {
+    // JSON parsing: AskUserQuestion tool_result（agent_task 多 question，按 id 区分）
+    const jr = extractAgentTaskFromJson(content);
+    agentText = jr.agentText;
+    taskText = jr.taskText;
   }
 
   // 检测 Agent 选了"本次不关联"→ bypass

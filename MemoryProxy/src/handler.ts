@@ -244,6 +244,26 @@ function buildUpstreamBody(
   if (target.bodyOverrides) {
     upstreamBody = { ...body, ...target.bodyOverrides };
   }
+  // ── OpenAI 协议 thinking 兼容（DeepSeek reasoning 模型）──────────────────
+  // DeepSeek 的 reasoning 模式要求：含 tool_calls 的 assistant 历史消息必须
+  // 带 reasoning_content（thinking 回传），否则上游 400
+  // "The reasoning_content in the thinking mode must be passed back to the API"。
+  // CodeBuddy CLI（OpenAI 协议 /chat/completions）走此路径；Claude Code 的
+  // Anthropic 路径由 patch-proxy-thinking.sh 处理。
+  try {
+    const _ub = upstreamBody as Record<string, unknown>;
+    if (Array.isArray(_ub.messages)) {
+      for (const _m of _ub.messages) {
+        if (_m && typeof _m === "object" && (_m as Record<string, unknown>).role === "assistant") {
+          const _am = _m as Record<string, unknown>;
+          const _hasTool = Array.isArray(_am.tool_calls) && (_am.tool_calls as unknown[]).length > 0;
+          if (_hasTool && typeof _am.reasoning_content === "undefined") {
+            _am.reasoning_content = "";
+          }
+        }
+      }
+    }
+  } catch { /* non-fatal */ }
   return upstreamBody;
 }
 
