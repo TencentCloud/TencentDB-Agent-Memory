@@ -29,12 +29,31 @@ import type {
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
 
+/** 私有仓库认证配置（token 经 URL 注入；ssh 经 GIT_SSH_COMMAND 注入）。 */
+export interface CodeGraphAuth {
+  /** 与 source-fetcher FetchOptions.authMethod 同名字段，透传给 fetcher 时零映射。 */
+  authMethod: "none" | "token" | "ssh";
+  accessToken?: string;
+  tokenUsername?: string;
+  sshPrivateKey?: string;
+}
+
+/**
+ * 脱敏 URL 中的凭据（https://user:token@ → https://***@）。
+ * git 自带密码 redact 不覆盖 curl 层错误，sync_error 落库/回调前必须过此函数。
+ */
+export function redactCredentials(s: string): string {
+  return s.replace(/https?:\/\/[^@\s/]+@/gi, "https://***@");
+}
+
 export interface CodeGraphBuildContext {
   codeGraphId: string;
   serviceId: string;
   teamId: string;
   repoUrl: string;
   branch: string;
+  /** 私有仓库认证配置（公开仓库为 undefined）。 */
+  auth?: CodeGraphAuth;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
@@ -88,6 +107,10 @@ export interface CreateCodeGraphParams {
   repo_url: string;
   branch: string;
   repo_name?: string;
+  auth_method?: string;
+  access_token?: string | null;
+  token_username?: string | null;
+  ssh_private_key?: string | null;
   owner_user_id?: string;
   user_id?: string;
   agent_id?: string;
@@ -268,8 +291,26 @@ export class CodeGraphService {
 
   private enqueueBuild(row: CodeGraphRow): void {
     this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
+      this.runBuild(
+        row.service_id,
+        row.code_graph_id,
+        row.team_id,
+        row.repo_url,
+        row.branch,
+        this.authOf(row),
+      ),
     );
+  }
+
+  /** 从行上的凭据列构造 worker 认证配置（auth_method=none/空 → undefined）。 */
+  private authOf(row: CodeGraphRow): CodeGraphAuth | undefined {
+    if (!row.auth_method || row.auth_method === "none") return undefined;
+    return {
+      authMethod: row.auth_method as CodeGraphAuth["authMethod"],
+      accessToken: row.access_token ?? undefined,
+      tokenUsername: row.token_username ?? undefined,
+      sshPrivateKey: row.ssh_private_key ?? undefined,
+    };
   }
 
   private async runBuild(
@@ -278,6 +319,7 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
+    auth?: CodeGraphAuth,
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
@@ -296,6 +338,7 @@ export class CodeGraphService {
         teamId,
         repoUrl,
         branch,
+        auth,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
@@ -322,7 +365,9 @@ export class CodeGraphService {
       // Auto-generate summary + callback TMC
       await this.onBuildComplete(synced, "ready", null, result.stats ?? null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      // 脱敏：git 报错可能含带凭据 URL，落库/API 返回/TMC 回调前统一替换。
+      const msg = redactCredentials(rawMsg);
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
       if (this.isDeleted(serviceId, codeGraphId)) {
         this.finishCancelled(serviceId, teamId, codeGraphId);

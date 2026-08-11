@@ -17,6 +17,18 @@ export interface FetchResult {
   sourceType: SourceType;
 }
 
+/** 私有仓库认证配置（GitSourceFetcher 消费；公开仓库可不传）。 */
+export interface FetchOptions {
+  /** none=公开仓库；token=access_token 经 URL 注入；ssh=私钥经 GIT_SSH_COMMAND 注入。 */
+  authMethod?: "none" | "token" | "ssh";
+  /** authMethod=token 时必填；构造 https://{tokenUsername ?? "oauth2"}:{token}@host/... */
+  accessToken?: string;
+  /** Gitee 私有仓库需真实用户名；缺省 "oauth2"（GitHub/GitLab 适用）。 */
+  tokenUsername?: string;
+  /** authMethod=ssh 时必填：SSH 私钥原文，运行时写入临时文件(0600)注入。 */
+  sshPrivateKey?: string;
+}
+
 /**
  * 源码拉取器接口。实现者负责：
  *   1. 校验 sourceUrl 安全性（协议白名单、SSRF 等）
@@ -29,10 +41,10 @@ export interface FetchResult {
  */
 export interface ISourceFetcher {
   /** 首次拉取：把源码下载到 localPath。 */
-  fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  fetch(sourceUrl: string, branch: string, localPath: string, opts?: FetchOptions): Promise<FetchResult>;
 
   /** 增量同步：更新已存在的 localPath 到最新版本。 */
-  sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  sync(sourceUrl: string, branch: string, localPath: string, opts?: FetchOptions): Promise<FetchResult>;
 
   /** 校验 sourceUrl 是否合法（协议白名单 + SSRF 防护）。非法则 throw。 */
   validate(sourceUrl: string): void;

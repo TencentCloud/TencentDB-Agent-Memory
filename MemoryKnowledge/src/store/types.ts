@@ -34,6 +34,13 @@ export interface CodeGraphRow {
   repo_name: string;
   repo_url: string;
   branch: string;
+  /** 私有仓库认证方式：none=公开仓库；token=access_token URL 注入；ssh=私钥注入。 */
+  auth_method: string;
+  /** access_token（auth_method=token 时使用，Gitee 另需 token_username）。 */
+  access_token: string | null;
+  token_username: string | null;
+  /** SSH 私钥原文（auth_method=ssh 时使用）。 */
+  ssh_private_key: string | null;
   commit_hash: string | null;
   owner_user_id: string | null;
   user_id: string | null;
@@ -59,6 +66,10 @@ export interface CreateCodeGraphInput {
   repo_url: string;
   branch: string;
   repo_name?: string;
+  auth_method?: string;
+  access_token?: string | null;
+  token_username?: string | null;
+  ssh_private_key?: string | null;
   owner_user_id?: string;
   user_id?: string;
   agent_id?: string;
