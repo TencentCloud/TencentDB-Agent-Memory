@@ -198,6 +198,25 @@ describe("assembleContext: budget", () => {
     expect(envelope.budget.renderOverhead).toBeGreaterThan(0);
     expect(envelope.budget.tokenizerId).toBe("chars-cjk-v1");
   });
+
+  it("charges an item for the text it renders as, not for its bare content", () => {
+    const line = "[instruction] alpha — a rendered line with a prefix";
+    const envelope = assembleContext({
+      items: [item("a", "alpha")],
+      policy,
+      budget: { total: 1000, reservedForUser: 0 },
+      tokenizer,
+      render,
+      request,
+      costText: () => line,
+    });
+    // Without costText the item would cost estimateTokens("alpha") and the
+    // difference would silently hide inside renderOverhead.
+    expect(envelope.included[0]!.tokenCost).toBe(estimateTokens(line));
+    expect(envelope.included[0]!.tokenCost).toBeGreaterThan(
+      estimateTokens("alpha"),
+    );
+  });
 });
 
 describe("assembleContext: a broken tokenizer is visible, not silent", () => {

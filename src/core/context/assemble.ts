@@ -67,18 +67,19 @@ function compareItems(
 }
 
 /**
- * Cost one item, surviving a tokenizer that throws: a broken tokenizer must
- * show up as a diagnostic, never as a silently missing element (C10.5). The
- * fallback is the same estimate the default tokenizer uses, so the number is
- * reproducible rather than arbitrary.
+ * Cost one item on the text it actually contributes, surviving a tokenizer that
+ * throws: a broken tokenizer must show up as a diagnostic, never as a silently
+ * missing element (C10.5). The fallback is the same estimate the default
+ * tokenizer uses, so the number is reproducible rather than arbitrary.
  */
 function costOf(
   item: MemoryItem,
+  text: string,
   tokenizer: Tokenizer,
   diagnostics: RecallDiagnostic[],
 ): number {
   try {
-    return tokenizer.count(item.content);
+    return tokenizer.count(text);
   } catch (err) {
     diagnostics.push({
       stage: "tokenize",
@@ -86,7 +87,7 @@ function costOf(
       message: err instanceof Error ? err.message : String(err),
       itemId: item.memoryId,
     });
-    return estimateTokens(item.content);
+    return estimateTokens(text);
   }
 }
 
@@ -128,24 +129,27 @@ export function assembleContext(params: {
   tokenizer: Tokenizer;
   render: ContextRenderer;
   request: ContextRequest;
+  /**
+   * The text an item costs when included. Defaults to its content; a caller
+   * whose renderer wraps or prefixes an item passes that rendered text, so the
+   * item is charged for what really enters the prompt instead of leaving the
+   * difference to accumulate in `renderOverhead`.
+   */
+  costText?: (item: MemoryItem) => string;
 }): ContextEnvelope {
   const { items, policy, budget, tokenizer, render, request } = params;
   const diagnostics: RecallDiagnostic[] = [];
   const excluded: Array<{ item: MemoryItem; reason: string }> = [];
   const available = Math.max(0, budget.total - budget.reservedForUser);
 
-  const costed = items.map((item) => ({
-    ...item,
-    tokenCost: costOf(item, tokenizer, diagnostics),
-  }));
-  const ordered = [...costed].sort((a, b) =>
-    compareItems(a, b, policy.precedence),
-  );
-  const candidates =
-    policy.dedup === "exact"
-      ? dropDuplicates(ordered, diagnostics, excluded)
-      : ordered;
-
+  const candidates = selectCandidates({
+    items,
+    policy,
+    tokenizer,
+    costText: params.costText ?? ((item: MemoryItem) => item.content),
+    diagnostics,
+    excluded,
+  });
   const fitted = fitToBudget(candidates, available, diagnostics, excluded);
   const { included, segments, used } = evictUntilFits({
     included: fitted,
@@ -155,28 +159,70 @@ export function assembleContext(params: {
     diagnostics,
     excluded,
   });
-
-  const renderedContext = segments.map((s) => s.text).join("\n\n");
-  const itemCosts = included.reduce((sum, item) => sum + item.tokenCost, 0);
-  return {
-    schemaVersion: 1,
-    requestId: request.requestId,
-    sessionKey: request.sessionKey,
-    sessionId: request.sessionId,
-    projectId: request.projectId,
-    budget: {
-      total: budget.total,
-      used,
-      reservedForUser: budget.reservedForUser,
-      tokenizerId: tokenizer.id,
-      tokenizerVersion: tokenizer.version,
-      renderOverhead: used - itemCosts,
-    },
+  return buildEnvelope({
+    request,
+    budget,
+    tokenizer,
     included,
     excluded,
     diagnostics,
     segments,
-    renderedContext,
+    used,
+  });
+}
+
+/** Cost every item, put them in the one true order, then drop duplicates. */
+function selectCandidates(p: {
+  items: MemoryItem[];
+  policy: ContextAssemblerPolicy;
+  tokenizer: Tokenizer;
+  costText: (item: MemoryItem) => string;
+  diagnostics: RecallDiagnostic[];
+  excluded: Array<{ item: MemoryItem; reason: string }>;
+}): MemoryItem[] {
+  const costed = p.items.map((item) => ({
+    ...item,
+    tokenCost: costOf(item, p.costText(item), p.tokenizer, p.diagnostics),
+  }));
+  const ordered = [...costed].sort((a, b) =>
+    compareItems(a, b, p.policy.precedence),
+  );
+  return p.policy.dedup === "exact"
+    ? dropDuplicates(ordered, p.diagnostics, p.excluded)
+    : ordered;
+}
+
+/** Pack the finished assembly into the envelope the caller audits. */
+function buildEnvelope(p: {
+  request: ContextRequest;
+  budget: ContextBudget;
+  tokenizer: Tokenizer;
+  included: MemoryItem[];
+  excluded: Array<{ item: MemoryItem; reason: string }>;
+  diagnostics: RecallDiagnostic[];
+  segments: ContextSegment[];
+  used: number;
+}): ContextEnvelope {
+  const itemCosts = p.included.reduce((sum, item) => sum + item.tokenCost, 0);
+  return {
+    schemaVersion: 1,
+    requestId: p.request.requestId,
+    sessionKey: p.request.sessionKey,
+    sessionId: p.request.sessionId,
+    projectId: p.request.projectId,
+    budget: {
+      total: p.budget.total,
+      used: p.used,
+      reservedForUser: p.budget.reservedForUser,
+      tokenizerId: p.tokenizer.id,
+      tokenizerVersion: p.tokenizer.version,
+      renderOverhead: p.used - itemCosts,
+    },
+    included: p.included,
+    excluded: p.excluded,
+    diagnostics: p.diagnostics,
+    segments: p.segments,
+    renderedContext: p.segments.map((s) => s.text).join("\n\n"),
   };
 }
 

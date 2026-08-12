@@ -176,6 +176,10 @@ function projectContext(p: {
     },
     tokenizer: createCharTokenizer(),
     render: (included) => renderSegments(included, lineById),
+    // An L1 memory enters the prompt as its rendered line, not as its bare
+    // content: charging it for the line keeps the diagnostic honest and stops
+    // the prefix from hiding inside renderOverhead.
+    costText: (item) => lineById.get(item.memoryId) ?? item.content,
     // The recall entry point carries no session id today; the envelope says so
     // instead of inventing one.
     request: { requestId: randomUUID(), sessionKey: p.sessionKey, sessionId: "", projectId: p.projectId },
