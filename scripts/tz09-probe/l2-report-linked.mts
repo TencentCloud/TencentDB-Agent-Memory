@@ -266,6 +266,37 @@ must(
   noRow.includes(CHILD_STDERR),
 );
 
+// Лог-файл живёт там, где его назначил конфиг gateway (logging.file), а не
+// обязательно под dataDir: инструмент обязан читать тот же файл, иначе он
+// скажет «строк нет» и снова отправит гадать.
+const customLog = path.join(sbx.home, "custom-gateway.log");
+const taggedLine = `2026-08-12T00:00:00.000Z [tdai-gateway] [INFO] [run:${RUN.slice(0, 8)}] строка из конфигового файла`;
+fs.writeFileSync(customLog, `${taggedLine}\n`, "utf-8");
+const cfgPath = path.join(sbx.home, "tdai-gateway.yaml");
+fs.writeFileSync(
+  cfgPath,
+  ["data:", `  baseDir: ${dataDir}`, "logging:", `  file: ${customLog}`].join(
+    "\n",
+  ),
+  "utf-8",
+);
+const fromConfig = execFileSync(
+  "npx",
+  ["tsx", "scripts/tdai-run-log.mts", RUN.slice(0, 8), "--data-dir", dataDir],
+  {
+    encoding: "utf-8",
+    cwd: process.cwd(),
+    env: { ...process.env, TDAI_GATEWAY_CONFIG: cfgPath },
+  },
+);
+console.log(
+  `лог из конфига: ${fromConfig.includes("строка из конфигового файла") ? "прочитан" : "пропущен"}`,
+);
+must(
+  "инструмент читает лог-файл, назначенный конфигом",
+  fromConfig.includes("строка из конфигового файла"),
+);
+
 store.close();
 sbx.cleanup();
 finish();

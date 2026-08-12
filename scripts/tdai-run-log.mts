@@ -20,11 +20,15 @@ import path from "node:path";
 import os from "node:os";
 import { openReadonlySqlite } from "../src/gateway/http-utils.js";
 import { runTag } from "../src/utils/logger-tag.js";
+import { loadGatewayConfig } from "../src/gateway/config.js";
+import { resolveLogFile } from "../src/utils/dev-logger.js";
 
 interface Args {
   target: string;
   tail: number;
   dataDir: string;
+  /** Base log file; `.1`/`.2` are read next to it. */
+  logFile: string;
 }
 
 const DEFAULT_TAIL = 40;
@@ -33,6 +37,7 @@ function parseArgs(argv: string[]): Args {
   const rest: string[] = [];
   let tail = DEFAULT_TAIL;
   let dataDir = path.join(os.homedir(), ".pi", "agent-memory", "tdai");
+  let logFile = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--tail") {
@@ -42,14 +47,21 @@ function parseArgs(argv: string[]): Args {
         throw new Error(`--tail ждёт положительное целое, а получил "${raw}"`);
       }
     } else if (arg === "--data-dir") dataDir = argv[++i] ?? dataDir;
+    else if (arg === "--log-file") logFile = argv[++i] ?? logFile;
     else rest.push(arg);
   }
   if (rest.length === 0) {
     throw new Error(
-      "usage: tdai-run-log.mts <runId|last> [--tail N] [--data-dir DIR]",
+      "usage: tdai-run-log.mts <runId|last> [--tail N] [--data-dir DIR] " +
+        "[--log-file FILE]",
     );
   }
-  return { target: rest[0]!, tail, dataDir };
+  return {
+    target: rest[0]!,
+    tail,
+    dataDir,
+    logFile: logFile || logFileFor(dataDir),
+  };
 }
 
 interface RunRow {
@@ -65,6 +77,22 @@ interface RunRow {
   finishedAt: string | null;
   logPath: string;
   scratchPath: string;
+}
+
+/**
+ * Where the gateway actually writes: `logging.file` in the gateway config
+ * wins over the dataDir default, exactly as in dev-logger — a tool that
+ * scans the wrong file reports "no lines" and sends the reader guessing
+ * again.
+ */
+function logFileFor(dataDir: string): string {
+  try {
+    const cfg = loadGatewayConfig();
+    if (cfg.logging.file) return resolveLogFile(undefined, cfg.logging.file);
+  } catch {
+    // No readable config → the dataDir default below.
+  }
+  return path.join(dataDir, "logs", "gateway-dev.log");
 }
 
 /** The run row: the exact id, a unique prefix, or the newest one. */
@@ -136,12 +164,7 @@ function readReport(
 }
 
 /** Tagged lines from the gateway log and its rotated generations. */
-function readTaggedLines(
-  dataDir: string,
-  runId: string,
-  tail: number,
-): string[] {
-  const base = path.join(dataDir, "logs", "gateway-dev.log");
+function readTaggedLines(base: string, runId: string, tail: number): string[] {
   const tag = runTag(runId);
   const out: string[] = [];
   // Oldest generation first, so the tail is chronological.
@@ -215,9 +238,10 @@ function printByRunId(runId: string, args: Args, row: RunRow | null): void {
   }
 
   console.log(`=== ЛОГ (${runTag(runId)}, последние ${args.tail})`);
-  const lines = readTaggedLines(args.dataDir, runId, args.tail);
-  if (lines.length === 0) console.log("  (теговых строк нет)");
-  else for (const line of lines) console.log(`  ${line}`);
+  const lines = readTaggedLines(args.logFile, runId, args.tail);
+  if (lines.length === 0) {
+    console.log(`  (теговых строк нет; смотрел ${args.logFile}[.1][.2])`);
+  } else for (const line of lines) console.log(`  ${line}`);
 }
 
 function main(): number {
