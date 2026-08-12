@@ -89,6 +89,13 @@ export interface ContextEnvelope {
   included: MemoryItem[];
   excluded: Array<{ item: MemoryItem; reason: string }>;
   diagnostics: RecallDiagnostic[];
+  /**
+   * The blocks `renderedContext` was concatenated from, each naming the items
+   * behind it. This is the mechanism behind the `context-envelope-complete`
+   * invariant: a consumer traces a fragment to its item by reading this list,
+   * never by parsing the rendered string back apart.
+   */
+  segments: ContextSegment[];
   /** Exactly the string the caller will inject — nothing is added later. */
   renderedContext: string;
 }

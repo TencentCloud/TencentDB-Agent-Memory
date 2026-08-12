@@ -198,6 +198,7 @@ export function assembleContext(params: {
     included,
     excluded,
     diagnostics,
+    segments,
     renderedContext,
   };
 }
