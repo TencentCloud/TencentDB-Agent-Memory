@@ -1,22 +1,32 @@
 /**
- * tz-03a Ф0 — КОНТРОЛЬНЫЙ ЗАМЕР ДО ПРАВОК (ТЗ S2 :114, S3 :124).
+ * tz-03a — СТОРОЖ ДВУХ ПОЧИНЕННЫХ ДЕФЕКТОВ (ТЗ S2 :114, S3 :124).
  *
- * Эта проба устроена НАОБОРОТ остальных: её наблюдения — «дефект
- * воспроизводится». Сегодня она обязана быть ЗЕЛЁНОЙ, а после Ф2 и Ф3 —
- * КРАСНОЙ. Зелёная c0 после починки означает, что дефект жив.
+ * Историческая роль: до правок пакета проба была контрольным замером и
+ * утверждала, что дефекты ВОСПРОИЗВОДЯТСЯ. Дефекты починены в 03a, и
+ * инвертированное утверждение стало ложным навсегда — проба не охраняла
+ * ничего. Теперь она утверждает противоположное и краснеет при регрессии.
  *
- * Замер 1 (S2): повторная финализация того же прогона задваивает `l0Count`,
- * потому что `advanceCheckpoint` делает `d.l0Count += newL0` без отметки
- * «этот runId уже финализирован».
+ * Наблюдение 1 (S2): повторная финализация того же прогона НЕ задваивает
+ * `l0Count` — счётчик пересчитывается из стора по курсору, а не `+= newL0`.
  *
- * Замер 2 (S3): guard сравнивает курсор со СНИМКОМ старта (`prevCursor`), а не
- * с живым значением, поэтому прогон с меньшим anchor'ом откатывает курсор
- * назад.
+ * Наблюдение 2 (S3): прогон с меньшим anchor'ом НЕ откатывает курсор — guard
+ * сравнивает кандидата с ЖИВЫМ значением, а не со снимком старта.
+ *
+ * FALSIFY=old-advance — локально (без правки продукта) повторяет дофиксовую
+ * финализацию: `+=` вместо пересчёта и сравнение со снимком старта. Обе ноги
+ * обязаны стать ложными, exit 1.
  */
 import fs from "node:fs";
 import path from "node:path";
-import { advanceCheckpoint } from "../../src/gateway/consolidation/checkpoint-advance.js";
-import { EMPTY_L0_CURSOR } from "../../src/gateway/consolidation/diff-builder.js";
+import {
+  advanceCheckpoint,
+  cursorGte,
+} from "../../src/gateway/consolidation/checkpoint-advance.js";
+import {
+  EMPTY_L0_CURSOR,
+  maxL0RecordedAt,
+  type L0Cursor,
+} from "../../src/gateway/consolidation/diff-builder.js";
 import { ConsolidationCheckpoint } from "../../src/gateway/consolidation/checkpoint.js";
 import { openWritableSqlite } from "../../src/gateway/http-utils.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
@@ -67,48 +77,66 @@ function ctxOf(dataDir: string): OrchestratorContext {
   } as unknown as OrchestratorContext;
 }
 
+const FALSIFY = process.env.FALSIFY ?? "";
+
+/**
+ * Финализация прогона. Под `FALSIFY=old-advance` — локальная копия
+ * дофиксового поведения: счётчик наращивается на `newL0`, а монотонность
+ * курсора проверяется против СНИМКА старта, который у обоих прогонов пуст.
+ */
+async function finalize(
+  ctx: OrchestratorContext,
+  prevCursor: L0Cursor,
+  newL0: number,
+  role: string,
+  anchor?: L0Cursor,
+): Promise<void> {
+  if (FALSIFY === "old-advance") {
+    const cursor =
+      anchor ?? maxL0RecordedAt(path.join(ctx.dataDir, "vectors.db"));
+    await ctx.checkpoint.update((d) => {
+      if (cursor.recordedAt && cursorGte(cursor, prevCursor)) {
+        d.l0Cursor = cursor.recordedAt;
+        d.l0CursorId = cursor.recordId;
+      }
+      d.l0Count += newL0;
+    });
+    return;
+  }
+  await advanceCheckpoint(ctx, prevCursor, newL0, summaryOf(role), anchor);
+}
+
 async function main(): Promise<void> {
   seedStore(sandbox.dataDir);
   const ctx = ctxOf(sandbox.dataDir);
 
-  // --- Замер 1: повтор того же прогона задваивает счётчик ------------------
-  await advanceCheckpoint(ctx, EMPTY_L0_CURSOR, 3, summaryOf("memory-keeper"));
+  // --- Наблюдение 1: повтор того же прогона не задваивает счётчик ----------
+  await finalize(ctx, EMPTY_L0_CURSOR, 3, "memory-keeper");
   const afterFirst = (await ctx.checkpoint.read()).l0Count;
-  await advanceCheckpoint(ctx, EMPTY_L0_CURSOR, 3, summaryOf("memory-keeper"));
+  await finalize(ctx, EMPTY_L0_CURSOR, 3, "memory-keeper");
   const afterRetry = (await ctx.checkpoint.read()).l0Count;
   console.log(`  l0Count: первый прогон ${afterFirst}, повтор ${afterRetry}`);
   must(
-    "ДЕФЕКТ S2 воспроизведён: повтор того же прогона задваивает l0Count",
-    afterFirst === 3 && afterRetry === 6,
+    "S2 не воспроизводится: повтор того же прогона не задваивает l0Count",
+    afterFirst === 3 && afterRetry === 3,
   );
 
-  // --- Замер 2: меньший anchor откатывает курсор назад ---------------------
+  // --- Наблюдение 2: меньший anchor не откатывает курсор -------------------
   fs.rmSync(ctx.checkpoint.file, { force: true });
   const fresh = ctxOf(sandbox.dataDir);
   // day: anchor не передан → курсор = max(recorded_at) = T2
-  await advanceCheckpoint(
-    fresh,
-    EMPTY_L0_CURSOR,
-    3,
-    summaryOf("memory-keeper"),
-  );
+  await finalize(fresh, EMPTY_L0_CURSOR, 3, "memory-keeper");
   const dayCursor = (await fresh.checkpoint.read()).l0Cursor;
   // night: стартовал раньше, его снимок prevCursor = "", anchor = T1 < T2
-  await advanceCheckpoint(
-    fresh,
-    EMPTY_L0_CURSOR,
-    1,
-    summaryOf("night-keeper"),
-    {
-      recordedAt: T1,
-      recordId: "r1",
-    },
-  );
+  await finalize(fresh, EMPTY_L0_CURSOR, 1, "night-keeper", {
+    recordedAt: T1,
+    recordId: "r1",
+  });
   const nightCursor = (await fresh.checkpoint.read()).l0Cursor;
   console.log(`  курсор: после day ${dayCursor}, после night ${nightCursor}`);
   must(
-    "ДЕФЕКТ S3 воспроизведён: прогон с меньшим anchor откатил курсор назад",
-    dayCursor === T2 && nightCursor === T1,
+    "S3 не воспроизводится: прогон с меньшим anchor не откатил курсор назад",
+    dayCursor === T2 && nightCursor === T2,
   );
 
   finish();
