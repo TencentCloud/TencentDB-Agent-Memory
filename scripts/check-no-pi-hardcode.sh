@@ -17,6 +17,14 @@ cd "$(dirname "$0")/.." || exit 2
 # future path slip in under the same exemption.
 ALLOWLIST="src/gateway/tdai-root.ts"
 ALLOWED_LINES=2
+# tz-08 host descriptors tell a USER which file of THEIR host to paste a
+# registration into. That literal is documentation, never a path this code
+# resolves, opens or writes — so it is exempted on the same terms as the
+# fallback above: one named file, an exact line count, and (below) a hard
+# check that the file touches no filesystem at all. A descriptor that ever
+# started doing fs work would lose the exemption immediately.
+DOC_ALLOWLIST="src/consumer/hosts/pi.ts"
+DOC_ALLOWED_LINES=1
 # Only these may CALL the fallback; everything else must resolve under the root.
 # role-paths is the only consumer, and inside it only the *ForRead resolvers
 # may call the fallback — a writer that resolves through it would put writes
@@ -27,7 +35,7 @@ status=0
 
 raw=$(grep -rnE '\.pi/agent|pi-auditor-sessions|"\.pi"' src/ --include='*.ts' \
   | grep -vE '^src/gateway/consolidation/launchers/|\.test\.ts' || true)
-hits=$(echo "$raw" | grep -vE "^${ALLOWLIST}:" | grep -v '^$' || true)
+hits=$(echo "$raw" | grep -vE "^${ALLOWLIST}:|^${DOC_ALLOWLIST}:" | grep -v '^$' || true)
 if [ -n "$hits" ]; then
   echo "FAIL rule 1: hardcoded host path outside launchers/ (tz-07 criterion 1)"
   echo "$hits"
@@ -40,6 +48,22 @@ allowed=$(echo "$raw" | grep -cE "^${ALLOWLIST}:" || true)
 if [ "$allowed" -ne "$ALLOWED_LINES" ]; then
   echo "FAIL rule 1: ${ALLOWLIST} holds $allowed exempt lines, expected ${ALLOWED_LINES}"
   echo "$raw" | grep -E "^${ALLOWLIST}:"
+  status=1
+fi
+
+# Same bounding for the descriptor exemption: an exact line count, plus proof
+# that the file does no filesystem work — the exemption covers documentation,
+# not a second way to resolve a host path.
+doc_allowed=$(echo "$raw" | grep -cE "^${DOC_ALLOWLIST}:" || true)
+if [ "$doc_allowed" -ne "$DOC_ALLOWED_LINES" ]; then
+  echo "FAIL rule 1: ${DOC_ALLOWLIST} holds $doc_allowed exempt lines, expected ${DOC_ALLOWED_LINES}"
+  echo "$raw" | grep -E "^${DOC_ALLOWLIST}:"
+  status=1
+fi
+doc_fs=$(grep -nE "node:fs|\bfs\.|readFile|writeFile|path\.(join|resolve)" "${DOC_ALLOWLIST}" || true)
+if [ -n "$doc_fs" ]; then
+  echo "FAIL rule 1: ${DOC_ALLOWLIST} touches the filesystem; its path literal is documentation only"
+  echo "$doc_fs"
   status=1
 fi
 
