@@ -28,9 +28,10 @@ import {
   writeSandboxConfig,
 } from "./harness.mts";
 import {
-  describeHost,
+  describeAllHosts,
   resolveLauncherPath,
 } from "../../src/consumer/hosts/registry.js";
+import type { HostDescriptor } from "../../src/consumer/hosts/types.js";
 
 const FALSIFY = process.env.FALSIFY ?? "";
 const EMBED_DIM = 8;
@@ -63,15 +64,78 @@ async function boot(name: string, withEmbedding: boolean) {
 const hybrid = await boot("hybrid", true);
 const keyword = await boot("keyword", false);
 
-const lookup = describeHost("pi", {
+const descriptors = describeAllHosts({
   launcherPath: resolveLauncherPath(),
   gatewayUrl: hybrid.url,
 });
-if (!lookup.ok) throw new Error(lookup.message);
-const { descriptor } = lookup;
+
+interface Answer {
+  strategy: string;
+  total: number;
+}
+
+/** What the gateway itself answers, asked directly — the reference. */
+async function askDirectly(url: string): Promise<Answer> {
+  const raw = (await (
+    await fetch(`${url}/memory/search?query=${encodeURIComponent(QUERY)}`)
+  ).json()) as { strategy?: string; total?: number };
+  return { strategy: raw.strategy ?? "", total: raw.total ?? 0 };
+}
+
+/**
+ * The reference, once the corpus has stopped moving.
+ *
+ * Extraction runs after a note lands, so a memory can appear between the
+ * reference read and the wrapper read. Two consecutive identical answers mean
+ * the comparison is about the wrapper and not about that timing.
+ */
+async function settledDirect(url: string): Promise<Answer> {
+  let previous = await askDirectly(url);
+  await waitFor(`${url} corpus to settle`, async () => {
+    await new Promise((r) => setTimeout(r, 1000));
+    const current = await askDirectly(url);
+    const same =
+      current.total === previous.total &&
+      current.strategy === previous.strategy;
+    previous = current;
+    return same;
+  });
+  return previous;
+}
+
+/** Read through one host form, writing nothing. */
+async function readThrough(
+  url: string,
+  descriptor: HostDescriptor,
+): Promise<Answer> {
+  const host = await startHost(descriptor, { TDAI_GATEWAY_URL: url });
+  try {
+    const reply = await host.call("tools/call", {
+      name: "memory_search",
+      arguments: { query: QUERY, limit: 3 },
+    });
+    const answer = ((reply.result as { structuredContent?: Partial<Answer> })
+      .structuredContent ?? {}) as Partial<Answer>;
+    if (FALSIFY === "client-side-search") {
+      const raw = (await (
+        await fetch(`${url}/memory/search?query=${encodeURIComponent(QUERY)}`)
+      ).json()) as { results?: string };
+      const hits = (raw.results ?? "")
+        .split("\n")
+        .filter((line) => line.toLowerCase().includes(QUERY));
+      return { strategy: "local", total: hits.length };
+    }
+    return { strategy: answer.strategy ?? "", total: answer.total ?? 0 };
+  } finally {
+    host.stop();
+  }
+}
 
 /** Ask one gateway through a host started against that gateway. */
-async function ask(url: string): Promise<{ strategy: string; total: number }> {
+async function ask(
+  url: string,
+  descriptor: HostDescriptor = descriptors[0]!,
+): Promise<Answer> {
   const host = await startHost(descriptor, { TDAI_GATEWAY_URL: url });
   try {
     await host.call("tools/call", {
@@ -131,6 +195,22 @@ try {
     "эмбеддинги реально вызывались продуктовым путём",
     embeddings.calls() > 0,
   );
+
+  // …and the wrapper carries THAT answer, not one of its own: every host form
+  // is compared against what the gateway says when asked directly.
+  for (const gateway of [hybrid, keyword]) {
+    const direct = await settledDirect(gateway.url);
+    for (const descriptor of descriptors) {
+      const through = await readThrough(gateway.url, descriptor);
+      console.log(
+        `${descriptor.id} через обёртку ${JSON.stringify(through)} против прямого запроса ${JSON.stringify(direct)}`,
+      );
+      must(
+        `${descriptor.id}: ответ обёртки совпал с прямым запросом к gateway`,
+        through.strategy === direct.strategy && through.total === direct.total,
+      );
+    }
+  }
 } finally {
   await hybrid.stop();
   await keyword.stop();

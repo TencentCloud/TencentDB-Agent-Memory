@@ -121,10 +121,17 @@ try {
     });
   }
 
-  await host.call("tools/call", {
+  const noted = await host.call("tools/call", {
     name: "memory_note",
     arguments: { content: "Заметка под гейтом" },
   });
+  const written = (
+    noted.result as { structuredContent?: { l0_recorded?: number } }
+  ).structuredContent;
+  console.log("ответ memory_note:", JSON.stringify(noted.result));
+  // The header being present proves nothing if the gate rejected it anyway:
+  // a wrapper that sends a stale credential would look identical here.
+  must("запись с credential принята гейтом", written?.l0_recorded === 1);
 
   const reads = seen.filter((r) => r.path === "/memory/search");
   const writes = seen.filter((r) => r.path === "/memory/note");

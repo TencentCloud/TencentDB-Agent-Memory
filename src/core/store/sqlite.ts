@@ -336,6 +336,35 @@ const FTS_SCHEMA_VERSION = 3;
 const FTS_SCHEMA_META_KEY = "fts_schema_version";
 
 /**
+ * What an open found the FTS index to be.
+ *
+ * `unknown` is not `current`: a check that could not run says nothing about
+ * the index, and the schema marker must stay unwritten so the next open looks
+ * again.
+ */
+type FtsMigrationCheck = {
+  kind: "rebuild-needed" | "current" | "unknown";
+};
+
+/**
+ * Whether the schema marker may be written for what this open did.
+ *
+ * The marker means "the index was written by this build's segmentation", and
+ * only two things earn it: an index already at this version, or a rebuild that
+ * finished. A rebuild that failed leaves the tables dropped and empty, and a
+ * check that could not run says nothing at all — marking either would retire
+ * the repair and freeze a broken index in place.
+ */
+export function shouldWriteFtsMarker(
+  check: FtsMigrationCheck["kind"],
+  didRebuild: boolean,
+): boolean {
+  if (check === "current") return true;
+  if (check === "rebuild-needed") return didRebuild;
+  return false;
+}
+
+/**
  * Split text into index/query tokens, choosing the tokenizer per script.
  *
  * jieba is a CHINESE segmenter. Fed a Russian sentence it returns one token
@@ -1034,7 +1063,7 @@ export class VectorStore implements IMemoryStore {
       // text in `content` and raw text in `content_original` / `message_text_original`.
       // FTS5 virtual tables don't support ALTER TABLE ADD COLUMN, so we must
       // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
-      const needsFtsRebuild = this.migrateFtsTablesIfNeeded();
+      const migration = this.migrateFtsTablesIfNeeded();
 
       // L1 FTS5 virtual table (v2 schema)
       this.db.exec(`
@@ -1127,14 +1156,18 @@ export class VectorStore implements IMemoryStore {
         `${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v${FTS_SCHEMA_VERSION} — per-script segmentation]`,
       );
 
-      // Rebuild FTS index if the segmentation changed or tables were freshly
-      // created. The version is recorded either way: a fresh table is already
-      // written with the current segmentation, and without the marker every
-      // subsequent open would rebuild it again.
-      if (needsFtsRebuild) {
-        this.rebuildFtsIndex();
+      // Rebuild the FTS index when the segmentation changed or the tables were
+      // freshly created over existing data. The marker records what the index
+      // actually holds, so it is written only for an index this build wrote:
+      // a rebuild that failed (disk full, a locked database) leaves the tables
+      // dropped and empty, and a marker over that emptiness would tell every
+      // later open that there is nothing to repair. Leaving it unwritten costs
+      // one more rebuild attempt; writing it costs the index.
+      const didRebuild =
+        migration.kind === "rebuild-needed" && this.rebuildFtsIndex();
+      if (shouldWriteFtsMarker(migration.kind, didRebuild)) {
+        this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
       }
-      this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.ftsAvailable = false;
@@ -3066,10 +3099,10 @@ export class VectorStore implements IMemoryStore {
    * FTS5 virtual tables do NOT support `ALTER TABLE ADD COLUMN`, so the only
    * migration path is DROP + recreate + repopulate.
    *
-   * @returns `true` if migration was performed (= FTS index needs rebuilding).
+   * @returns what the index turned out to be — see `FtsMigrationCheck`.
    * @internal
    */
-  private migrateFtsTablesIfNeeded(): boolean {
+  private migrateFtsTablesIfNeeded(): FtsMigrationCheck {
     try {
       // Check if l1_fts exists at all
       const l1Exists = this.db
@@ -3083,7 +3116,9 @@ export class VectorStore implements IMemoryStore {
         const hasData = this.db
           .prepare("SELECT 1 FROM l1_records LIMIT 1")
           .get();
-        return !!hasData;
+        // Freshly created tables are already written by this build's
+        // segmentation; only pre-existing records need repopulating.
+        return hasData ? { kind: "rebuild-needed" } : { kind: "current" };
       }
 
       // Check if the v2 column `content_original` exists.
@@ -3103,13 +3138,14 @@ export class VectorStore implements IMemoryStore {
         // written rows cannot be repaired in place; the FTS tables are
         // derived from l1_records / l0_conversations, so a rebuild costs
         // time and nothing else.
-        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION) return false;
+        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION)
+          return { kind: "current" };
         this.logger?.info(
           `${TAG} Migrating FTS5 index to v${FTS_SCHEMA_VERSION} (per-script segmentation)`,
         );
         this.db.exec("DROP TABLE IF EXISTS l1_fts");
         this.db.exec("DROP TABLE IF EXISTS l0_fts");
-        return true;
+        return { kind: "rebuild-needed" };
       }
 
       // v1 → v2: drop both FTS tables (data will be repopulated by rebuildFtsIndex)
@@ -3118,12 +3154,14 @@ export class VectorStore implements IMemoryStore {
       );
       this.db.exec("DROP TABLE IF EXISTS l1_fts");
       this.db.exec("DROP TABLE IF EXISTS l0_fts");
-      return true;
+      return { kind: "rebuild-needed" };
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS migration check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
-      return false;
+      // What the index holds is now unknown, so nothing is claimed about it:
+      // marking it current would retire the repair that never ran.
+      return { kind: "unknown" };
     }
   }
 
@@ -3136,9 +3174,14 @@ export class VectorStore implements IMemoryStore {
    *  - Fresh table creation when existing data exists
    *
    * Safe to call multiple times (idempotent — clears FTS tables first).
+   *
+   * @returns `true` when the index was repopulated. A `false` here is what
+   * keeps the schema marker unwritten, so the next open tries again: the
+   * tables have already been dropped by then, and a marker over an empty
+   * index would freeze that emptiness in forever.
    */
-  rebuildFtsIndex(): void {
-    if (!this.ftsAvailable) return;
+  rebuildFtsIndex(): boolean {
+    if (!this.ftsAvailable) return false;
 
     try {
       this.logger?.info(
@@ -3241,10 +3284,12 @@ export class VectorStore implements IMemoryStore {
       this.logger?.info(
         `${TAG} FTS5 rebuild complete: L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
       );
+      return true;
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
+      return false;
     }
   }
 

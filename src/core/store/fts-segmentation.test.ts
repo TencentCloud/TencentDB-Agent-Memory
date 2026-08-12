@@ -20,6 +20,7 @@ import {
   VectorStore,
   buildFtsQuery,
   segmentForFts,
+  shouldWriteFtsMarker,
   tokenizeForFts,
 } from "./sqlite.js";
 import type { MemoryRecord } from "../record/l1-writer.js";
@@ -202,6 +203,36 @@ describe("repairing an index written by the old segmentation", () => {
     db.close();
     return row?.value;
   }
+
+  it("does not mark an index it could not rebuild", () => {
+    // The marker is the only thing that orders the repair, so it must follow
+    // what actually happened. A rebuild that failed leaves the FTS tables
+    // dropped and empty; a marker over that emptiness tells every later open
+    // there is nothing to repair, and the memory stays unsearchable forever.
+    expect(shouldWriteFtsMarker("current", false)).toBe(true);
+    expect(shouldWriteFtsMarker("rebuild-needed", true)).toBe(true);
+    expect(shouldWriteFtsMarker("rebuild-needed", false)).toBe(false);
+    // A check that could not run knows nothing about the index.
+    expect(shouldWriteFtsMarker("unknown", false)).toBe(false);
+    expect(shouldWriteFtsMarker("unknown", true)).toBe(false);
+  });
+
+  it("reports a rebuild it could not carry out", () => {
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+
+    // The source table disappearing mid-flight is the shape every real
+    // failure takes here (a full disk, a locked database): the rebuild has
+    // already cleared the FTS tables when it fails.
+    const other = new DatabaseSync(dbPath);
+    other.exec("ALTER TABLE l1_records RENAME TO l1_records_hidden");
+    expect(store.rebuildFtsIndex()).toBe(false);
+
+    other.exec("ALTER TABLE l1_records_hidden RENAME TO l1_records");
+    other.close();
+    expect(store.rebuildFtsIndex()).toBe(true);
+    expect(find("памяти")).toEqual(["m1"]);
+  });
 
   it("rebuilds once on open, then leaves the index alone", () => {
     store = open();
