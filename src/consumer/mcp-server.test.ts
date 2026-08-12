@@ -12,7 +12,11 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createMemoryMcpServer } from "./mcp-server.js";
+import {
+  createMemoryMcpServer,
+  renderRegistration,
+  UnknownHostError,
+} from "./mcp-server.js";
 import {
   parseHostId,
   resolveGatewayUrl,
@@ -150,5 +154,33 @@ describe("what the host tells the server", () => {
       "tdai-mcp-pi",
       "tdai-mcp-claude",
     ]);
+  });
+});
+
+describe("the registration a user pastes", () => {
+  it("names the host's own file and points at the real launcher", () => {
+    const claude = renderRegistration("claude", {});
+    expect(claude).toContain("~/.claude.json");
+    expect(claude).toContain("bin/tdai-memory-mcp.mjs");
+    expect(renderRegistration("codex", {})).toContain(
+      "[mcp_servers.tdai-memory]",
+    );
+    expect(renderRegistration("pi", {})).toContain("~/.pi/agent/mcp.json");
+  });
+
+  it("bakes in a gateway URL only when this environment names one", () => {
+    // A default install must keep following TDAI_GATEWAY_PORT instead of
+    // freezing today's loopback URL into a config file.
+    expect(renderRegistration("claude", {})).not.toContain("TDAI_GATEWAY_URL");
+    expect(
+      renderRegistration("claude", { TDAI_GATEWAY_URL: "http://gw:9000" }),
+    ).toContain("http://gw:9000");
+  });
+
+  it("refuses a host it has no registration for, naming the ones it has", () => {
+    expect(() => renderRegistration("emacs", {})).toThrow(UnknownHostError);
+    expect(() => renderRegistration("emacs", {})).toThrow(
+      /known hosts: pi, claude, codex/,
+    );
   });
 });

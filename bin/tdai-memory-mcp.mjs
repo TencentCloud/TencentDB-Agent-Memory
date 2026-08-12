@@ -23,6 +23,13 @@ if (!fs.existsSync(entryScript)) {
 
 const { main } = await import(entryScript);
 main(process.argv.slice(2), process.env).catch((err) => {
+  // A host we have no registration for is bad input, not a crash: the user is
+  // reading this in a terminal while setting the server up, and a stack trace
+  // buries the one line that tells them which hosts they can name.
+  if (err instanceof Error && err.name === "UnknownHostError") {
+    console.error(`tdai-memory-mcp: ${err.message}`);
+    process.exit(2);
+  }
   console.error(
     `tdai-memory-mcp: failed to start: ${err instanceof Error ? err.stack : String(err)}`,
   );

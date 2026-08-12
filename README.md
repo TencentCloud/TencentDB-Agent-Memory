@@ -352,6 +352,46 @@ curl http://127.0.0.1:8420/health
 ---
 
 
+## 🧩 Use the memory from any MCP host (Claude Code, Codex, pi)
+
+The gateway is the memory; a session reaches it through one stdio-MCP server that
+ships with this package. The hosts differ only in the file they write the
+registration into — the two tools, `memory_search` and `memory_note`, are the
+same everywhere.
+
+```bash
+npm run build                      # produces dist/mcp-server.mjs
+node ./bin/tdai-memory-mcp.mjs --host claude --print-registration
+```
+
+The command prints the block to paste, and where it goes:
+
+| Host | Config file | Registration format |
+| :--- | :--- | :--- |
+| `claude` | `~/.claude.json` | JSON `mcpServers` entry (`"type": "stdio"`) |
+| `codex` | `~/.codex/config.toml` | TOML `[mcp_servers.tdai-memory]` |
+| `pi` | `~/.pi/agent/mcp.json` | JSON `mcpServers` entry with `lifecycle: lazy` |
+
+Point it at a non-default gateway by exporting `TDAI_GATEWAY_URL` (or
+`TDAI_GATEWAY_PORT`) before printing — the URL is then baked into the snippet.
+Without it the snippet stays URL-free and the server resolves the gateway at
+run time, so a changed port keeps working. A host id this build has no
+registration for is refused by name:
+
+```bash
+node ./bin/tdai-memory-mcp.mjs --host emacs --print-registration
+# tdai-memory-mcp: no consumer registration for host "emacs" — known hosts: pi, claude, codex
+```
+
+Reading is auth-free on loopback; writing goes through the gateway's write gate,
+and the server reads that credential itself from the path `GET /memory/info`
+reports. An unreachable or rebuilding memory arrives at the host as an error
+carrying its kind — never as an empty result.
+
+
+---
+
+
 ## 🔒 Gateway Security (optional)
 
 The Hermes Gateway listens on `:8420` and exposes capture / search / recall HTTP endpoints. Two opt-in switches let you turn it from "open localhost sidecar" into "authenticated network service". **Both default to off so existing deployments keep working unchanged.**

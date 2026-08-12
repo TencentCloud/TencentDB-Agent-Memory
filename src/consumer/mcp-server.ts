@@ -16,6 +16,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createMemoryConsumer } from "./client.js";
+import {
+  describeHost,
+  KNOWN_HOSTS,
+  resolveLauncherPath,
+} from "./hosts/registry.js";
 import { createWriteTokenReader } from "./token.js";
 import {
   parseHostId,
@@ -136,6 +141,41 @@ export function createMemoryMcpServer(
   return server;
 }
 
+/** Raised when a host cannot be registered — input, so it is reported, not thrown at. */
+export class UnknownHostError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnknownHostError";
+  }
+}
+
+/**
+ * The block a user pastes into their host's config, and where it goes.
+ *
+ * The gateway URL is baked in only when this environment names one: a default
+ * local install must not freeze `127.0.0.1:8420` into a config file that then
+ * stops following `TDAI_GATEWAY_PORT`.
+ *
+ * @throws UnknownHostError when the host has no registration in this build.
+ */
+export function renderRegistration(
+  hostId: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const explicitUrl = env.TDAI_GATEWAY_URL?.trim() || env.TDAI_GATEWAY?.trim();
+  const lookup = describeHost(hostId, {
+    launcherPath: resolveLauncherPath(),
+    ...(explicitUrl ? { gatewayUrl: resolveGatewayUrl(env) } : {}),
+  });
+  if (!lookup.ok) throw new UnknownHostError(lookup.message);
+  const { descriptor } = lookup;
+  return [
+    `# ${descriptor.id}: add this to ${descriptor.configPath}`,
+    descriptor.registration(),
+    "",
+  ].join("\n");
+}
+
 /** Wire the server to this process's stdio and serve until the host closes it. */
 export async function main(
   argv: readonly string[],
@@ -143,6 +183,23 @@ export async function main(
 ): Promise<void> {
   const baseUrl = resolveGatewayUrl(env);
   const hostId = parseHostId(argv);
+
+  // Setup, not serving: stdout is still free, and the process must not go on
+  // to speak JSON-RPC at a terminal the user is reading.
+  if (argv.includes("--print-registration")) {
+    process.stdout.write(renderRegistration(hostId, env));
+    return;
+  }
+  // An id this build has no registration for still serves — the tools do not
+  // depend on it — but it is said out loud, because it also names the session
+  // the host's notes are recorded under and a typo would silently split them.
+  if (!KNOWN_HOSTS.includes(hostId)) {
+    logger.warn(
+      `[tdai-memory-mcp] unknown host "${hostId}" — known hosts: ${KNOWN_HOSTS.join(", ")}; ` +
+        `notes will be recorded under session ${sessionKeyFor(hostId)}`,
+    );
+  }
+
   const consumer = createMemoryConsumer({
     baseUrl,
     writeToken: createWriteTokenReader({ baseUrl, logger }),
