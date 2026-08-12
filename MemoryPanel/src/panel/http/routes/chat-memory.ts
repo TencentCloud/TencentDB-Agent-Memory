@@ -37,6 +37,30 @@ import { toKernelCredentials, type MetaCallContext } from '../../kernel/types.js
 import type { MetaEnvelope } from '../../kernel/envelope.js';
 import { MAX_IMPORTED_AGENTS } from '../../domain/chat-memory-governance.js';
 import { newExternalAssetId } from '../../domain/asset-id.js';
+import {
+  buildIdempotencyKey,
+  readIdempotency,
+  writeIdempotency,
+  emitDeleteAudit,
+  newAuditEventId,
+} from './chat-memory-delete-v2.js';
+
+// ── 946-C Delete V2 响应类型（§7） ─────────────────────────────────────────
+type DeleteStatus = 'deleted' | 'already_deleted' | 'not_found' | 'forbidden' | 'failed';
+
+interface DeleteItemResult {
+  layer: 'L0' | 'L1' | 'L2';
+  id: string;
+  status: DeleteStatus;
+  errorCode?: string;
+}
+
+interface DeleteMemoryResponse {
+  requestId: string;
+  results: DeleteItemResult[];
+  deletedCount: number;
+  failedCount: number;
+}
 
 // ── 内核 raw 类型（只列本文件用到的字段，避免依赖 SDK） ────────────
 interface AssetRaw {
@@ -1060,6 +1084,279 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         `LAYER_FETCH_ERROR: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  });
+
+  // ── 记忆删除 V2：L0 消息 / L1 原子记忆 / L2 场景（面板手动清理） ──────────
+  // 946-C（docs/946spec.md §4–§9）：
+  //   - 授权：仅 asset owner 可删；team-shared / borrowed 只读，不可删（fail-closed）。
+  //     （面板层无「显式 delete grant」概念，最小安全实现 = 仅 owner。）
+  //   - actor/owner 分离：审计记录 actor(me) 与 owner(asset.owner)，不混淆。
+  //   - L0 反查：游标深翻替代 limit=100（老消息不再确定性删除失败）。
+  //   - 响应：per-item DeleteItemResult + deletedCount + failedCount。
+  //   - 幂等：面板层 idempotency_key 内存缓存（10min TTL）。
+  //   - L2：内核 removed=false 不得报成功。
+  api.post('/chat-memory/delete', validatePanelMetaHeaders(deps), async (c) => {
+    const ctx = buildCtx(c);
+    const body = await readJson(c);
+    const blockId = requiredBlockId(body);
+    const layerRaw = typeof body?.layer === 'string' ? body.layer.toUpperCase() : '';
+    const messageIds = Array.isArray(body?.message_ids)
+      ? (body.message_ids as unknown[]).filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const ids = Array.isArray(body?.ids)
+      ? (body.ids as unknown[]).filter((x): x is string => typeof x === 'string')
+      : undefined;
+    const path = typeof body?.path === 'string' ? body.path.trim() : undefined;
+    const idempotencyKey =
+      typeof body?.idempotency_key === 'string' && body.idempotency_key.trim()
+        ? body.idempotency_key.trim()
+        : undefined;
+
+    if (!blockId) return respondControlError(c, 400, 'MISSING_BLOCK_ID');
+    if (!['L0', 'L1', 'L2'].includes(layerRaw)) return respondControlError(c, 400, 'INVALID_LAYER');
+    const layer = layerRaw as 'L0' | 'L1' | 'L2';
+    if (layer === 'L0' && (!messageIds || messageIds.length === 0))
+      return respondControlError(c, 400, 'MISSING_MESSAGE_IDS');
+    if (layer === 'L1' && (!ids || ids.length === 0))
+      return respondControlError(c, 400, 'MISSING_IDS');
+    if (layer === 'L2' && !path)
+      return respondControlError(c, 400, 'MISSING_PATH');
+
+    const parsed = parseChatMemoryAssetId(blockId);
+    if (!parsed) return respondControlError(c, 400, 'UNSUPPORTED_ASSET');
+
+    const meUserId = await resolveCallerUserId(deps, ctx);
+    if (!meUserId) return respondControlError(c, 401, 'INVALID_USER_KEY');
+
+    // ── 授权：仅 owner（§4.1）────────────────────────────────────────────
+    const assetEnv = await deps.metaKernel.invoke('asset/get', { asset_id: blockId }, ctx);
+    if (assetEnv.code === 404 || (assetEnv.code === 0 && !assetEnv.data)) {
+      return respondControlError(c, 404, 'BLOCK_NOT_FOUND');
+    }
+    if (assetEnv.code !== 0) return respondEnvelope(c, assetEnv);
+    const asset = assetEnv.data as AssetRaw;
+    if (asset.asset_type !== 'chat_memory') return respondControlError(c, 400, 'NOT_CHAT_MEMORY');
+
+    const ownerUserId = asset.owner_user_id;
+    const isOwner = ownerUserId === meUserId;
+    if (!isOwner) {
+      // 非 owner（team-shared / borrowed / 其它）一律拒绝。fail-closed。
+      emitDeleteAudit(deps.logger, {
+        eventId: newAuditEventId(c.get('reqId') ?? ''),
+        requestId: c.get('reqId') ?? '',
+        actorUserId: meUserId,
+        actorTeamId: ctx.instanceId,
+        ownerUserId,
+        assetId: blockId,
+        layer,
+        authorizationDecisionId: 'panel-owner-only',
+        result: 'denied',
+        itemCount: 0,
+        createdAt: new Date().toISOString(),
+      });
+      return respondControlError(c, 403, 'MEMORY_DELETE_FORBIDDEN');
+    }
+
+    // ── 幂等（§8）──────────────────────────────────────────────────────────
+    const opType = `delete:${layer}`;
+    const idemKey = idempotencyKey
+      ? buildIdempotencyKey(meUserId, blockId, opType, idempotencyKey)
+      : undefined;
+    if (idemKey) {
+      const replayed = readIdempotency(idemKey);
+      if (replayed !== undefined) {
+        return respondEnvelope(c, okEnvelope(c, replayed));
+      }
+    }
+
+    const cred = toKernelCredentials(ctx, { timeoutMs: 15_000 });
+    const idFields: Record<string, unknown> = {
+      team_id: parsed.teamId,
+      agent_id: parsed.agentId,
+      user_id: ownerUserId,
+    };
+
+    let results: DeleteItemResult[] = [];
+    let deletedCount = 0;
+    let failedCount = 0;
+    let opFailed = false;
+    try {
+      if (layer === 'L0') {
+        // 反查 message_id → session_id。游标深翻：offset 逐页推进直到覆盖全部
+        // 目标 id 或翻完为止（替代旧 limit=100 单页，解决老消息确定性删除失败）。
+        const pageSize = 100;
+        const targetSet = new Set(messageIds!);
+        const bySession = new Map<string, string[]>();
+        let scanned = 0;
+        for (let offset = 0; ; offset += pageSize) {
+          const qEnv = await deps.kernelHttp.postEnvelope<{
+            messages?: Array<Record<string, unknown>>;
+            total?: number;
+          }>(
+            '/v3/conversation/query',
+            {
+              team_id: parsed.teamId,
+              agent_id: parsed.agentId,
+              user_id: ownerUserId,
+              limit: pageSize,
+              offset,
+            },
+            cred,
+          );
+          if (qEnv.code !== 0) {
+            // 反查失败 → 整批标记 failed（fail-closed，不误报成功）
+            results = messageIds!.map((mid) => ({
+              layer: 'L0' as const,
+              id: mid,
+              status: 'failed' as const,
+              errorCode: String(qEnv.code),
+            }));
+            failedCount = results.length;
+            opFailed = true;
+            break;
+          }
+          const page = qEnv.data?.messages ?? [];
+          scanned += page.length;
+          for (const m of page) {
+            const mid = String(m.id);
+            if (!targetSet.has(mid)) continue;
+            const sid = typeof m.session_id === 'string' ? m.session_id : '';
+            if (!sid) continue;
+            const arr = bySession.get(sid) ?? [];
+            arr.push(mid);
+            bySession.set(sid, arr);
+          }
+          // 已找到全部目标 id → 提前结束
+          const foundCount = [...bySession.values()].reduce((a, v) => a + v.length, 0);
+          if (foundCount >= targetSet.size) break;
+          // 翻完（页数不足或 total 已尽）→ 结束
+          const total = typeof qEnv.data?.total === 'number' ? qEnv.data.total : scanned;
+          if (scanned >= total || page.length === 0) break;
+          // 安全上限：最多翻 50 页（5000 条），避免异常时无限循环
+          if (offset + pageSize >= 5000) break;
+        }
+
+        // 未反查到所属 session 的消息 → not_found
+        const foundIds = new Set([...bySession.values()].flat());
+        for (const mid of messageIds!) {
+          if (!foundIds.has(mid)) {
+            results.push({ layer: 'L0', id: mid, status: 'not_found' });
+          }
+        }
+
+        // 按 session 分组删除，per-item 结果
+        for (const [sid, mids] of bySession) {
+          const env = await deps.kernelHttp.postEnvelope<{ deleted_count?: number }>(
+            '/v3/conversation/delete',
+            {
+              team_id: parsed.teamId,
+              agent_id: parsed.agentId,
+              user_id: ownerUserId,
+              session_id: sid,
+              message_ids: mids,
+            },
+            cred,
+          );
+          if (env.code !== 0) {
+            for (const mid of mids) {
+              results.push({ layer: 'L0', id: mid, status: 'failed', errorCode: String(env.code) });
+              failedCount += 1;
+            }
+            continue;
+          }
+          // 内核按 id 删除时返回的是「实际删除数」，无法逐条区分；
+          // 保守映射：该批全部标记 deleted（内核成功执行，幂等删除无副作用）。
+          for (const mid of mids) {
+            results.push({ layer: 'L0', id: mid, status: 'deleted' });
+            deletedCount += 1;
+          }
+        }
+      } else if (layer === 'L1') {
+        const env = await deps.kernelHttp.postEnvelope<{ deleted_count?: number }>(
+          '/v3/atomic/delete',
+          { ...idFields, ids },
+          cred,
+        );
+        if (env.code !== 0) {
+          results = ids!.map((id) => ({
+            layer: 'L1' as const,
+            id,
+            status: 'failed' as const,
+            errorCode: String(env.code),
+          }));
+          failedCount = results.length;
+          opFailed = true;
+        } else {
+          // 内核 deleteL1 返回 count；无法逐条区分已存在/成功 → 全部按 deleted 上报
+          // （幂等语义：已删除的重复删除内核返回 count=0，但不会报错）。
+          const n = env.data?.deleted_count ?? 0;
+          for (const id of ids!) {
+            const ok = n > 0;
+            results.push({ layer: 'L1', id, status: ok ? 'deleted' : 'not_found' });
+            if (ok) deletedCount += 1;
+            else failedCount += 0; // not_found 不算 failed
+          }
+        }
+      } else {
+        // L2：内核 /v3/scenario/rm 返回 removed 布尔。removed=false 不得报成功（§9）。
+        const env = await deps.kernelHttp.postEnvelope<{ removed?: boolean }>(
+          '/v3/scenario/rm',
+          { ...idFields, path },
+          cred,
+        );
+        if (env.code !== 0) {
+          results = [{ layer: 'L2', id: path!, status: 'failed', errorCode: String(env.code) }];
+          failedCount = 1;
+          opFailed = true;
+        } else {
+          const removed = env.data?.removed === true;
+          results = [{ layer: 'L2', id: path!, status: removed ? 'deleted' : 'not_found' }];
+          if (removed) deletedCount = 1;
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 已删除部分保留，未处理的剩余标记 failed
+      if (results.length === 0) {
+        results = (
+          layer === 'L0' ? messageIds! : layer === 'L1' ? ids! : [path!]
+        ).map((id) => ({ layer, id, status: 'failed' as const, errorCode: 'DELETE_ERROR' }));
+        failedCount = results.length;
+      }
+      opFailed = true;
+      deps.logger.error(`[chat-memory-delete] error request=${c.get('reqId') ?? ''} ${msg}`);
+    }
+
+    const response = {
+      requestId: c.get('reqId') ?? '',
+      results,
+      deletedCount,
+      failedCount,
+    } satisfies DeleteMemoryResponse;
+
+    // 写幂等（仅当提供了 idempotency_key）
+    if (idemKey) writeIdempotency(idemKey, response);
+
+    // 审计（§13）
+    const totalItems = results.length;
+    emitDeleteAudit(deps.logger, {
+      eventId: newAuditEventId(c.get('reqId') ?? ''),
+      requestId: c.get('reqId') ?? '',
+      actorUserId: meUserId,
+      actorTeamId: ctx.instanceId,
+      ownerUserId,
+      assetId: blockId,
+      layer,
+      authorizationDecisionId: 'panel-owner-only',
+      result:
+        opFailed || failedCount === totalItems ? 'failed'
+        : failedCount > 0 ? 'partial'
+        : 'deleted',
+      itemCount: totalItems,
+      createdAt: new Date().toISOString(),
+    });
+
+    return respondEnvelope(c, okEnvelope(c, response));
   });
 }
 

@@ -80,7 +80,7 @@ if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "tdai-memory-core";
   warn "建议先 ./start-memory-core.sh 再来这里，或直接 ./start-all.sh"
 fi
 
-pull_image "$MEMORY_HUB_IMAGE"
+ensure_fork_image "MEMORY_HUB_IMAGE" "build-memory-hub-fork.sh"
 rm_container_if_exists "$CONTAINER"
 
 # 内部 knowledge 通过 upstream memory 调 LLM 走 custom 模式，直接指向 MEMORY_LLM_*

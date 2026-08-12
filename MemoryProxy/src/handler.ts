@@ -50,6 +50,8 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
+import { normalizeOpenAiForward } from "./reasoning/openai-forward.js";
+import { MISSING_REASONING_CONTEXT } from "./reasoning/adapter.js";
 
 /**
  * Build a per-request TdaiClient. `spaceId` (extracted from the request path
@@ -996,7 +998,45 @@ export async function handleChatCompletions(
 
   // ── Build upstream request ───────────────────────────────────────────────
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
-  const upstreamBody = buildUpstreamBody(body, target);
+  let upstreamBody = buildUpstreamBody(body, target);
+
+  // ── 946-A：capability-driven reasoning 规范化（OpenAI 协议）────────────────
+  // 原来在 buildUpstreamBody 里对所有 provider 静默补 reasoning_content=""
+  // （docs/946spec.md §16 禁止）。现改为：按 provider+model 判定策略——
+  // 仅 DeepSeek reasoning 模型（preserve-or-empty 策略）补空字段；
+  // 其它 provider 完全透传，不做任何注入、也不拒绝转发。
+  {
+    const providerHint = modelId.toLowerCase().includes("deepseek")
+      ? "deepseek"
+      : target.url.includes("deepseek")
+        ? "deepseek"
+        : "openai";
+    const norm = normalizeOpenAiForward(upstreamBody, providerHint, modelId);
+    if (norm.blocked) {
+      // 防御：若未来引入 fail-closed 的 provider，缺失 reasoning 时拒绝转发。
+      pipe.error(
+        "REASONING",
+        `provider=${providerHint} requires reasoning_content round-trip but history is missing → refusing to forward (${MISSING_REASONING_CONTEXT})`,
+      );
+      return c.json(
+        {
+          error: {
+            message: "MISSING_REASONING_CONTEXT: provider requires reasoning state for tool-call history that is not present",
+            type: "invalid_request_error",
+          },
+        },
+        400,
+      );
+    }
+    if (norm.changed) {
+      pipe.info(
+        "REASONING",
+        `provider=${providerHint} backfilled missing reasoning_content on tool-call history (policy: preserve-or-empty)`,
+      );
+      upstreamBody = norm.body;
+    }
+  }
+
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
   // default upstream (never the alternate route), so its apiKey must be applied

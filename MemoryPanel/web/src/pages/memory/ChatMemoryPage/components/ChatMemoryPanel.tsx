@@ -71,6 +71,7 @@ export default function ChatMemoryPanel(
   >({});
   const [layerLoading, setLayerLoading] = useState(false);
   const [layerItemLoadingId, setLayerItemLoadingId] = useState<string | null>(null);
+  const [layerRefresh, setLayerRefresh] = useState(0);
   const [showImport, setShowImport] = useState(false);
   const [showAllocate, setShowAllocate] = useState(false);
   const [scopeTab, setScopeTab] = useState<ScopeTab>('team');
@@ -239,6 +240,41 @@ export default function ChatMemoryPanel(
     });
   }, [selected?.id]);
 
+  const handleDeleteItem = useCallback(
+    async (delLayer: 'L0' | 'L1' | 'L2', id: string, path?: string) => {
+      if (!selected?.id) return;
+      try {
+        const target =
+          delLayer === 'L0'
+            ? { message_ids: [id] }
+            : delLayer === 'L1'
+              ? { ids: [id] }
+              : { path: path || id };
+        // 946-C：面板层幂等键（每目标生成一次），超时重试不会重复删除。
+        const idemKey = `del-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const res = await chatMemoryApi.deleteMemory(selected.id, delLayer, target, idemKey);
+        // per-item 结果：有失败才提示；全部 not_found 按已删除语义处理（幂等）。
+        const failed = res?.results?.filter((r) => r.status === 'failed') ?? [];
+        const forbidden = res?.results?.filter((r) => r.status === 'forbidden') ?? [];
+        if (failed.length > 0) {
+          tea.notify.error(t('memory.notify.deleteFailed'));
+        } else if (forbidden.length > 0) {
+          tea.notify.error(t('memory.notify.deleteForbidden'));
+        } else {
+          tea.notify.success(t('memory.notify.deleted', { count: res?.deletedCount ?? 0 }));
+        }
+        setLayerPages((prev) => ({
+          ...prev,
+          [selected.id]: { ...(prev[selected.id] ?? {}), [delLayer]: 0 },
+        }));
+        setLayerRefresh((v) => v + 1);
+      } catch (e: any) {
+        tea.notify.error(e?.message || t('memory.notify.deleteFailed'));
+      }
+    },
+    [selected?.id, t],
+  );
+
   useEffect(() => {
     if (!selected?.id) {
       setLayerLoading(false);
@@ -275,7 +311,7 @@ export default function ChatMemoryPanel(
     return () => {
       cancelled = true;
     };
-  }, [selected?.id, layer, layerPage, pageSize, t]);
+  }, [selected?.id, layer, layerPage, pageSize, t, layerRefresh]);
 
   const handleLayerPageChange = useCallback(
     (nextPage: number) => {
@@ -650,6 +686,7 @@ export default function ChatMemoryPanel(
                 layerItemLoadingId={layerItemLoadingId}
                 onL0LoadMore={handleL0LoadMore}
                 l0MoreLoading={l0MoreLoading}
+                onDeleteItem={handleDeleteItem}
               />
             )
           }

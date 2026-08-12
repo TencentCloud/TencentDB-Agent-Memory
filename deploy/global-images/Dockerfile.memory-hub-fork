@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+# ──────────────────────────────────────────────────────────────────────
+# Dockerfile.memory-hub-fork — memory-hub 固化镜像（fork 专用）
+#
+# 目的：把本 fork 对官方镜像 `agentmemory/memory-hub:latest` 的改动固化进
+# 镜像层，重建容器后无需任何额外操作。当前 fork 改动集中在 MemoryPanel：
+#   - 聊天记忆删除（chat-memory-delete-v2 后端路由 + 前端删除按钮）
+# 与 proxy 不同，memory-hub 跑的是**编译产物**（panel/dist 后端 +
+# web/dist 前端，入口 /usr/local/bin/start-combined.sh），所以固化方式是
+# 覆盖编译产物，而不是源码。构建前必须先本地编译：
+#   cd MemoryPanel && npm run build                 # 后端 tsc → dist/
+#   cd MemoryPanel/web && npm run build             # 前端 vite → web/dist/
+#
+# 构建（由 build-memory-hub-fork.sh 执行，上下文为临时目录）：
+#   docker build -f Dockerfile.memory-hub-fork -t agentmemory/memory-hub:fork <ctx>
+#
+# 用法：.env 里 MEMORY_HUB_IMAGE=agentmemory/memory-hub:fork，重跑 start-all.sh。
+# ──────────────────────────────────────────────────────────────────────
+FROM agentmemory/memory-hub:latest
+
+# 覆盖 panel 后端编译产物（含 fork 新增路由）
+COPY panel-dist/ /app/panel/dist/
+
+# 覆盖 web 前端编译产物（含 fork 新增删除按钮）
+COPY web-dist/ /app/panel/web/dist/

@@ -40,7 +40,7 @@ if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "tdai-memory-hub"; 
   warn "memory-hub 容器未运行，proxy 的 sessionInit control plane 不可达。"
 fi
 
-pull_image "$PROXY_IMAGE"
+ensure_proxy_image "$PROXY_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
 # proxy 只从 YAML 读上游 URL / API key（不认 PROXY_UPSTREAM_URL 环境变量），
@@ -84,6 +84,12 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  # Per-Agent 覆盖：CodeBuddy 走 OpenAI 协议，需单独指定 OpenAI 兼容端点，
+  # 否则 /chat/completions 会被拼到 Anthropic 端点（/anthropic）返回 404。
+  agents:
+    codebuddy:
+      url: "${PROXY_UPSTREAM_URL_CODEBUDDY:-${PROXY_UPSTREAM_URL}}"
+      apiKey: "${PROXY_UPSTREAM_API_KEY_CODEBUDDY:-${PROXY_UPSTREAM_API_KEY}}"
 
 log:
   file: ""
@@ -115,6 +121,8 @@ auth:
 sessionInit:
   enabled: $(bool $PROXY_ENABLE_SESSION_INIT)
   maxRetries: 3
+  # 不建 Task 时的兜底（PROXY_DEFAULT_TASK_ID 可覆盖）：Task 列表多一个「本次不关联任务」虚拟条目
+  defaultTaskId: "${PROXY_DEFAULT_TASK_ID:-default}"
   injectAgentContext: true
   injectTaskContext: true
   headerAutoSelect:
@@ -131,6 +139,9 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  # 注入给 Agent 的 <tdai_memory_tools>/<skill_tools> 里嵌的 base URL。
+  # 必须填客户端可达地址；不填会 fallback 到容器内网 IP（客户端连接超时）。
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL:-http://127.0.0.1:8096}"
   injectors:
     - skill
     - knowledge
@@ -141,10 +152,14 @@ redis:
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
+# --dns 223.5.5.5 / 119.29.29.29：绕过宿主机 Clash fake-ip（198.18.x.x）污染，
+# 否则容器内解析 api.deepseek.com 得到不可路由的 fake-ip，FORWARD 阶段 fetch failed。
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
+  --dns 223.5.5.5 \
+  --dns 119.29.29.29 \
   -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
   "$PROXY_IMAGE" >/dev/null

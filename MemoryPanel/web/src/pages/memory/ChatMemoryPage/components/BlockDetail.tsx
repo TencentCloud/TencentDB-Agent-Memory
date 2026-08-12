@@ -4,14 +4,16 @@ import { type MemoryLayer, type MemoryBlock, type AtomicItem } from './types';
 import { useLayers } from './constants';
 import { getLayerCount, stripAtMention, extractRole, formatDisplayTime } from './utils';
 import { MarkdownView } from '@/components/MarkdownView';
-import { AppIcon, UsergroupIcon, ChevronDownIcon } from 'tea-icons-react';
+import { AppIcon, UsergroupIcon, ChevronDownIcon, DeleteIcon } from 'tea-icons-react';
 
-export function BlockDetail({ block, layer, onLayerChange, agentLabel, layerPage, layerPageSize, layerLoading, onLayerPageChange, onLayerItemLoad, layerItemLoadingId, onL0LoadMore, l0MoreLoading }: {
+export function BlockDetail({ block, layer, onLayerChange, agentLabel, layerPage, layerPageSize, layerLoading, onLayerPageChange, onLayerItemLoad, layerItemLoadingId, onL0LoadMore, l0MoreLoading, onDeleteItem }: {
   block: MemoryBlock; layer: MemoryLayer; onLayerChange: (l: MemoryLayer) => void; agentLabel: (id?: string) => string;
   layerPage: number; layerPageSize: number; layerLoading: boolean; onLayerPageChange: (page: number) => void;
   onLayerItemLoad?: (itemId: string) => void; layerItemLoadingId?: string | null;
   /** L0 加载更多（追加更早的对话）；未传则不展示加载入口 */
   onL0LoadMore?: () => void; l0MoreLoading?: boolean;
+  /** 删除单条记忆（L0 消息 / L1 原子 / L2 场景）；未传则不展示删除入口 */
+  onDeleteItem?: (layer: 'L0' | 'L1' | 'L2', id: string, path?: string) => void;
 }) {
   const { t } = useTranslation();
   const LAYERS = useLayers();
@@ -164,6 +166,19 @@ export function BlockDetail({ block, layer, onLayerChange, agentLabel, layerPage
                         {time && (
                           <span className="_memory-detail-l0-time" title={msg.created_at}>{time}</span>
                         )}
+                        {onDeleteItem && msg.id && (
+                          <button
+                            type="button"
+                            className="_memory-detail-del-btn"
+                            title={t('memory.detail.deleteItem')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (window.confirm(t('memory.detail.deleteConfirm'))) onDeleteItem('L0', msg.id);
+                            }}
+                          >
+                            <DeleteIcon size={14} />
+                          </button>
+                        )}
                       </div>
                       <pre className="_memory-detail-l0-body">{cleanBody}</pre>
                     </div>
@@ -176,7 +191,7 @@ export function BlockDetail({ block, layer, onLayerChange, agentLabel, layerPage
             <div className="_memory-detail-empty">{t('memory.detail.noL0')}</div>
           )
         ) : (
-          <AtomicList layer={layer} items={block.layers[layer]} onLoadItem={onLayerItemLoad} loadingItemId={layerItemLoadingId} />
+          <AtomicList layer={layer} items={block.layers[layer]} onLoadItem={onLayerItemLoad} loadingItemId={layerItemLoadingId} onDelete={onDeleteItem ? (id, path) => onDeleteItem(layer as 'L1' | 'L2', id, path) : undefined} />
         )}
         {showPager && (
           <div className="_memory-detail-pager">
@@ -192,7 +207,7 @@ export function BlockDetail({ block, layer, onLayerChange, agentLabel, layerPage
   );
 }
 
-function AtomicList({ layer, items, onLoadItem, loadingItemId }: { layer: MemoryLayer; items: AtomicItem[]; onLoadItem?: (itemId: string) => void; loadingItemId?: string | null; }) {
+function AtomicList({ layer, items, onLoadItem, loadingItemId, onDelete }: { layer: MemoryLayer; items: AtomicItem[]; onLoadItem?: (itemId: string) => void; loadingItemId?: string | null; onDelete?: (id: string, path?: string) => void; }) {
   const { t } = useTranslation();
   const LAYERS = useLayers();
   const meta = LAYERS.find((l) => l.id === layer)!;
@@ -211,6 +226,19 @@ function AtomicList({ layer, items, onLoadItem, loadingItemId }: { layer: Memory
             <span className={`_memory-detail-atomic-layer _memory-detail-atomic-layer--${meta.tone}`}>{layer}</span>
             <span className="_memory-detail-atomic-title" title={it.title}>{it.title}</span>
             <span className="_memory-detail-atomic-head-right">
+              {onDelete && (layer === 'L1' || layer === 'L2') && (
+                <button
+                  type="button"
+                  className="_memory-detail-del-btn _memory-detail-del-btn--atomic"
+                  title={t('memory.detail.deleteItem')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(t('memory.detail.deleteConfirm'))) onDelete(it.id, layer === 'L2' ? it.id : undefined);
+                  }}
+                >
+                  <DeleteIcon size={14} />
+                </button>
+              )}
               {loading && <span className="_memory-detail-atomic-loading">{t('memory.detail.loading')}</span>}
               {time && <span className="_memory-detail-atomic-time" title={it.created_at}>{time}</span>}
               {isL2 && (

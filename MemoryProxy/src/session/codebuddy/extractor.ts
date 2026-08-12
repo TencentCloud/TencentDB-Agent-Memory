@@ -16,20 +16,167 @@
 
 import type { SessionInitData, TeamOption } from "../types.js";
 import { SKIP_LABEL, PATH_SEP, ASSET_CONFIRM_YES, ASSET_CONFIRM_NO } from "./form.js";
+import { parseFormResult, resolveQuestionId, QUESTION_IDS, type ParsedFormResult } from "./adapter.js";
 
 // ── Markers ────────────────────────────────────────────────────────────────────
 
 const SKIP_RE = /跳过|不关联|skip/i;
 export const BYPASS_MARKER = "__bypass__" as const;
 
+// ── JSON 解析 helpers（CodeBuddy CLI AskUserQuestion 回写格式）──────────────
+// CodeBuddy CLI 的 AskUserQuestion tool_result 与 Claude Code 同源，回写为
+// `role: "tool"` 消息的 JSON：`{ answers: { "q": "label" } }` 或
+// multi_question_result envelope：
+//   { result: { type: "multi_question_result", questions: [{id, answer}], answers: {...} } }
+
+/** 从 tool 消息 JSON 中提取所有答案（按 question 语义顺序）。非 JSON 返回空数组。 */
+function extractJsonAnswers(content: string): string[] {
+  const typed = parseFormResult(content);
+  if (typed.kind === "recognized") {
+    const out: string[] = [];
+    // 按稳定 question id 语义顺序输出：asset_confirm → team → agent → task
+    for (const qid of [QUESTION_IDS.assetConfirm, QUESTION_IDS.team, QUESTION_IDS.agent, QUESTION_IDS.task]) {
+      const vals = typed.answers[qid];
+      if (vals && vals.length > 0) out.push(...vals);
+    }
+    // 顺序兜底（AskUserQuestion 无 id 的 answers 对象）
+    const ordered = typed.answers["_ordered"];
+    if (ordered && ordered.length > 0) out.push(...ordered);
+    return out;
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed === "string") return [parsed.trim()].filter(Boolean);
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const out: string[] = [];
+
+    // multi_question_result envelope
+    const mqr = (parsed.result ?? parsed) as Record<string, unknown> | undefined;
+    if (mqr && mqr.type === "multi_question_result" && Array.isArray(mqr.questions)) {
+      for (const q of mqr.questions) {
+        if (!q || typeof q !== "object") continue;
+        const qo = q as Record<string, unknown>;
+        const cand = qo.answer ?? qo.answers ?? qo.selected ?? qo.selectedOption ?? qo.value;
+        if (typeof cand === "string" && cand.trim()) out.push(cand.trim());
+        else if (Array.isArray(cand)) {
+          const f = cand.find((x) => typeof x === "string" && x.trim());
+          if (typeof f === "string") out.push(f.trim());
+        }
+      }
+      const mqrAnswers = mqr.answers as Record<string, unknown> | undefined;
+      if (mqrAnswers && typeof mqrAnswers === "object") {
+        for (const val of Object.values(mqrAnswers)) {
+          if (typeof val === "string" && val.trim()) out.push(val.trim());
+        }
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** 提取第一个答案（单 question 场景：asset_confirm / team 阶段）。 */
+function extractFirstAnswer(content: string): string | null {
+  const arr = extractJsonAnswers(content);
+  if (arr.length > 0) return arr[0];
+
+  // CodeBuddy 文本回写（实测格式）：
+  //   " · 问题文案 → 答案"（可能多行，取第一个含 → 的行）
+  const line = content.split("\n").map((l) => l.trim()).find((l) => l.includes("→"));
+  if (line) {
+    const idx = line.lastIndexOf("→");
+    const ans = line.slice(idx + 1).trim();
+    return ans || null;
+  }
+  return null;
+}
+
+/** 按稳定 question id 区分 agent / task 答案（agent_task 多 question 场景）。 */
+function extractAgentTaskFromJson(content: string): { agentText: string | null; taskText: string | null } {
+  let agentText: string | null = null;
+  let taskText: string | null = null;
+
+  // ── 首选：类型化解析（按稳定 question id，不依赖对象/数组顺序）──
+  const typed = parseFormResult(content);
+  if (typed.kind === "recognized") {
+    const agent = typed.answers[QUESTION_IDS.agent];
+    const task = typed.answers[QUESTION_IDS.task];
+    if (agent && agent.length > 0) agentText = agent[0];
+    if (task && task.length > 0) taskText = task[0];
+    if (agentText || taskText) return { agentText, taskText };
+  }
+
+  try {
+    const parsed = JSON.parse(content);
+    if (typeof parsed !== "object" || parsed === null) {
+      throw new Error("not object"); // 落入下方文本格式解析
+    }
+
+    // multi_question_result envelope — 按 question id 区分
+    const mqr = (parsed.result ?? parsed) as Record<string, unknown> | undefined;
+    if (mqr && mqr.type === "multi_question_result" && Array.isArray(mqr.questions)) {
+      for (const q of mqr.questions) {
+        if (!q || typeof q !== "object") continue;
+        const qo = q as Record<string, unknown>;
+        const qid = resolveQuestionId(qo);
+        const cand = qo.answer ?? qo.answers ?? qo.selected ?? qo.selectedOption ?? qo.value;
+        let val: string | null = null;
+        if (typeof cand === "string") val = cand.trim() || null;
+        else if (Array.isArray(cand)) {
+          const f = cand.find((x) => typeof x === "string" && x.trim());
+          if (typeof f === "string") val = f.trim();
+        }
+        if (!val) continue;
+        if (qid === QUESTION_IDS.agent && !agentText) agentText = val;
+        else if (qid === QUESTION_IDS.task && !taskText) taskText = val;
+      }
+    }
+    if (agentText || taskText) return { agentText, taskText };
+    throw new Error("no agent/task found"); // 落入下方文本格式解析
+  } catch {
+    // ── CodeBuddy 文本回写（实测格式，非 JSON）──────────────────────────
+    //   " · 问题文案 → 答案\n · 问题文案 → 答案"
+    // 按行取 "→" 后的答案：第一个=agent，第二个=task（与表单问题顺序一致）。
+    // 文本格式没有稳定 id，顺序是唯一信号；这是旧协议兜底，新协议应走 JSON。
+    const answers: string[] = [];
+    for (const line of content.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      const idx = t.lastIndexOf("→");
+      if (idx >= 0) {
+        const ans = t.slice(idx + 1).trim();
+        if (ans) answers.push(ans);
+      }
+    }
+    if (answers.length >= 2) return { agentText: answers[0], taskText: answers[1] };
+    if (answers.length === 1) return { agentText: answers[0], taskText: null };
+    const raw = content.trim();
+    return { agentText: raw || null, taskText: null };
+  }
+}
+
 /**
  * 从用户答复中提取 asset_confirm 选择。
  * 返回 true=是（关联资产），false=否（bypass），null=未识别。
  */
 export function extractAssetConfirm(content: string): boolean | null {
-  // XML parsing
+  // XML parsing (旧格式)
   const xml = parseQuestionAnswerXml(content);
-  const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? content;
+  // JSON parsing：先按稳定 question id 取 asset_confirm 答案，再退回任意答案
+  const typed = parseFormResult(content);
+  let jsonAnswer: string | null = null;
+  if (typed.kind === "recognized") {
+    const assetVals = typed.answers[QUESTION_IDS.assetConfirm];
+    if (assetVals && assetVals.length > 0) {
+      jsonAnswer = assetVals[0];
+    } else {
+      const ordered = typed.answers["_ordered"];
+      if (ordered && ordered.length > 0) jsonAnswer = ordered[0];
+    }
+  }
+  const answer = xml?.teamAnswer ?? xml?.agentAnswer ?? xml?.taskAnswer ?? jsonAnswer ?? content;
 
   if (answer.includes(ASSET_CONFIRM_YES) || /是.*关联|关联.*是|确认.*关联/i.test(answer)) {
     return true;
@@ -117,6 +264,19 @@ export function extractTeamFromOptionText(
   const xml = parseQuestionAnswerXml(content);
   if (xml) {
     teamText = xml.teamAnswer ?? null;
+  } else {
+    // JSON parsing: 优先按稳定 question id 取 team，再退回顺序语义（单 question 场景）
+    const typed = parseFormResult(content);
+    if (typed.kind === "recognized") {
+      const teamVals = typed.answers[QUESTION_IDS.team];
+      if (teamVals && teamVals.length > 0) {
+        teamText = teamVals[0];
+      } else {
+        const ordered = typed.answers["_ordered"];
+        if (ordered && ordered.length > 0) teamText = ordered[0];
+      }
+    }
+    if (!teamText) teamText = extractFirstAnswer(content);
   }
 
   // 检测"本次不关联"→ bypass
@@ -231,6 +391,11 @@ export function extractFromOptionText(
   if (xml) {
     agentText = xml.agentAnswer ?? null;
     taskText = xml.taskAnswer ?? null;
+  } else {
+    // JSON parsing: AskUserQuestion tool_result（agent_task 多 question，按 id 区分）
+    const jr = extractAgentTaskFromJson(content);
+    agentText = jr.agentText;
+    taskText = jr.taskText;
   }
 
   // 检测 Agent 选了"本次不关联"→ bypass

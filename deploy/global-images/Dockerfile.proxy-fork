@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+# ──────────────────────────────────────────────────────────────────────
+# Dockerfile.proxy-fork — 固化镜像（fork 专用）
+#
+# 目的：把本 fork 对官方镜像 `agentmemory/memory-proxy:latest` 的全部
+# 热补丁固化进镜像层，重建容器后无需再打补丁（替代 patch-*.sh）：
+#   1. CodeBuddy CLI 表单兼容（session/codebuddy/form.ts → AskUserQuestion）
+#   2. OpenAI 协议 thinking 兼容（handler.ts + reasoning/* → reasoning_content 回填）
+#   3. Anthropic 协议 thinking 兼容（anthropicHandler.ts + reasoning/* → adaptive→enabled）
+#
+# 方式：官方镜像 + COPY 本地整个 MemoryProxy/src 覆盖 /app/src。
+# 本地 src 与容器内 src 完全同源（已核对：容器 141 个文件全部存在于本地），
+# 覆盖不会丢失官方独有文件；运行时用 tsx 直接执行 TS，无需预编译。
+#
+# 构建（由 build-proxy-fork.sh 执行，上下文为临时目录，仅含 src/）：
+#   docker build -f Dockerfile.proxy-fork -t agentmemory/memory-proxy:fork <ctx>
+#
+# 用法：.env 里 PROXY_IMAGE=agentmemory/memory-proxy:fork，重跑 start-proxy.sh。
+# ──────────────────────────────────────────────────────────────────────
+FROM agentmemory/memory-proxy:latest
+
+# 本地 fork src 整体覆盖（含全部 CLI/thinking 修复）
+COPY src/ /app/src/
+
+# 清理不应出现在运行镜像中的备份/测试产物
+RUN rm -f /app/src/anthropicHandler.ts.bak-401fix && \
+    rm -rf /app/src/reasoning/__tests__ /app/src/session/codebuddy/__tests__ 2>/dev/null || true
