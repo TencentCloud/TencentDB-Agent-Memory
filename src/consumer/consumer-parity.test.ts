@@ -23,6 +23,7 @@ import { execFileSync } from "node:child_process";
 import {
   REPO_ROOT,
   freePort,
+  DEFAULT_EXTRACTION,
   startFakeLlm,
   startGateway,
   startHost,
@@ -66,6 +67,7 @@ let hosts: McpHost[];
 let token: string;
 
 const QUERY = "потребитель памяти";
+const NOTE_MARKER = `парити-${Date.now()}`;
 
 beforeAll(async () => {
   ensureBuild();
@@ -73,7 +75,28 @@ beforeAll(async () => {
   const dataDir = path.join(home, "memory", "tdai");
   fs.mkdirSync(dataDir, { recursive: true });
 
-  llm = await startFakeLlm();
+  // The extraction echoes the marker of whatever note it is given, so "the
+  // note came back" is about THAT note: with a fixed extraction the seeded
+  // memory answers the query and the leg passes without the note existing.
+  llm = await startFakeLlm((requestBody: string) =>
+    requestBody.includes(NOTE_MARKER)
+      ? [
+          {
+            scene_name: "Заметка потребителя",
+            message_ids: ["1"],
+            memories: [
+              {
+                content: `Пользователь оставил заметку через обёртку: ${NOTE_MARKER}`,
+                type: "episodic",
+                scope: "project",
+                priority: 60,
+                source_message_ids: ["1"],
+              },
+            ],
+          },
+        ]
+      : DEFAULT_EXTRACTION,
+  );
   const port = await freePort();
   const configPath = writeSandboxConfig(path.join(home, "gateway.yaml"), {
     dataDir,
@@ -171,7 +194,7 @@ describe("consumer-parity", () => {
   });
 
   it("writes a note through the wrapper once, and finds it again", async () => {
-    const marker = `парити-${Date.now()}`;
+    const marker = NOTE_MARKER;
     const reply = await hosts[0]!.call("tools/call", {
       name: "memory_note",
       arguments: { content: `Заметка потребителя: ${marker}` },
@@ -191,11 +214,11 @@ describe("consumer-parity", () => {
         .split(marker).length - 1;
     expect(occurrences).toBe(1);
 
-    // …and it becomes findable through the ordinary extraction path.
+    // …and THIS note becomes findable through the ordinary extraction path,
+    // on a host other than the one that wrote it.
     await waitFor("the note to reach L1 and become searchable", async () => {
-      const answer = await searchThrough(hosts[1]!, "потребител");
-      const text = JSON.stringify(answer);
-      return !text.includes("No matching memories") && text.includes("total");
+      const answer = await searchThrough(hosts[1]!, marker);
+      return JSON.stringify(answer).includes(marker);
     });
     expect(llm.calls()).toBeGreaterThan(0);
   });

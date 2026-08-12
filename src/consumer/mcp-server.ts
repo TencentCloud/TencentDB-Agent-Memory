@@ -167,9 +167,7 @@ export function renderRegistration(
   // that printed the snippet, so anything this environment says about where
   // the gateway is has to travel INSIDE the snippet — the port included.
   const namesGateway = Boolean(
-    env.TDAI_GATEWAY_URL?.trim() ||
-    env.TDAI_GATEWAY?.trim() ||
-    env.TDAI_GATEWAY_PORT?.trim(),
+    env.TDAI_GATEWAY_URL?.trim() || env.TDAI_GATEWAY_PORT?.trim(),
   );
   const lookup = describeHost(hostId, {
     launcherPath: resolveLauncherPath(),
@@ -189,7 +187,7 @@ export async function main(
   argv: readonly string[],
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const baseUrl = resolveGatewayUrl(env);
+  const baseUrl = resolveGatewayUrl(env, argv);
   const hostId = parseHostId(argv);
 
   // Setup, not serving: stdout is still free, and the process must not go on

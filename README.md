@@ -373,10 +373,12 @@ The command prints the block to paste, and where it goes:
 | `pi` | `~/.pi/agent/mcp.json` | JSON `mcpServers` entry with `lifecycle: lazy` |
 
 Point it at a non-default gateway by exporting `TDAI_GATEWAY_URL` (or
-`TDAI_GATEWAY_PORT`) before printing — the URL is then baked into the snippet.
-Without it the snippet stays URL-free and the server resolves the gateway at
-run time, so a changed port keeps working. A host id this build has no
-registration for is refused by name:
+`TDAI_GATEWAY_PORT`) before printing — the address is then written into the
+snippet as `--gateway <url>`, on every host, because a command line is the one
+thing all three config formats can express and forwarding environment is each
+host's own business. Without it the snippet stays address-free and the server
+resolves the gateway at run time, so a changed port keeps working. A host id
+this build has no registration for is refused by name:
 
 ```bash
 node ./bin/tdai-memory-mcp.mjs --host emacs --print-registration

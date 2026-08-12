@@ -1,7 +1,8 @@
 /**
  * Claude Code — registers MCP servers in `~/.claude.json` under `mcpServers`,
- * with an explicit `"type": "stdio"`. It does not export the gateway itself,
- * so the URL is baked into the registration's env.
+ * with an explicit `"type": "stdio"`. The gateway address, when the caller
+ * names one, rides on the command line: every host config can express args,
+ * and one mechanism for all three beats three ways of saying the same thing.
  */
 import {
   MCP_SERVER_NAME,
@@ -10,10 +11,13 @@ import {
 } from "./types.js";
 
 export function claudeHost(ctx: HostContext): HostDescriptor {
-  const args = [ctx.launcherPath, "--host", "claude"];
-  const env: Record<string, string> = ctx.gatewayUrl
-    ? { TDAI_GATEWAY_URL: ctx.gatewayUrl }
-    : {};
+  const args = [
+    ctx.launcherPath,
+    "--host",
+    "claude",
+    ...(ctx.gatewayUrl ? ["--gateway", ctx.gatewayUrl] : []),
+  ];
+  const env: Record<string, string> = {};
   return {
     id: "claude",
     configPath: "~/.claude.json",

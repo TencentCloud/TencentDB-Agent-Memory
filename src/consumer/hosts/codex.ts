@@ -14,10 +14,13 @@ const tomlArray = (values: readonly string[]): string =>
   `[${values.map((v) => JSON.stringify(v)).join(", ")}]`;
 
 export function codexHost(ctx: HostContext): HostDescriptor {
-  const args = [ctx.launcherPath, "--host", "codex"];
-  const env: Record<string, string> = ctx.gatewayUrl
-    ? { TDAI_GATEWAY_URL: ctx.gatewayUrl }
-    : {};
+  const args = [
+    ctx.launcherPath,
+    "--host",
+    "codex",
+    ...(ctx.gatewayUrl ? ["--gateway", ctx.gatewayUrl] : []),
+  ];
+  const env: Record<string, string> = {};
   return {
     id: "codex",
     configPath: "~/.codex/config.toml",
@@ -25,18 +28,11 @@ export function codexHost(ctx: HostContext): HostDescriptor {
     args,
     env,
     registration: () => {
-      const lines = [
+      return [
         `[mcp_servers.${MCP_SERVER_NAME}]`,
         `command = "node"`,
         `args = ${tomlArray(args)}`,
-      ];
-      if (ctx.gatewayUrl) {
-        lines.push(
-          `[mcp_servers.${MCP_SERVER_NAME}.env]`,
-          `TDAI_GATEWAY_URL = ${JSON.stringify(ctx.gatewayUrl)}`,
-        );
-      }
-      return lines.join("\n");
+      ].join("\n");
     },
   };
 }

@@ -14,16 +14,30 @@ export const DEFAULT_HOST_ID = "pi";
 /**
  * Where the gateway is.
  *
- * `TDAI_GATEWAY_URL` is what the Claude/Codex registrations set; `TDAI_GATEWAY`
- * is what the pi extension already exports. Neither present means the ordinary
- * local case — the loopback gateway on its documented port, which stays in
- * step with `TDAI_GATEWAY_PORT` rather than being frozen into a URL literal.
+ * A registration carries the address in `--gateway` because that is the one
+ * thing every host config can express — a JSON `mcpServers` entry, a TOML
+ * block and pi's own file all write down a command line, while passing
+ * environment through is each host's own business. `TDAI_GATEWAY_URL` still
+ * wins over the default for the host that exports it itself (the pi
+ * extension does), and neither present means the ordinary local case: the
+ * loopback gateway on its documented port, which stays in step with
+ * `TDAI_GATEWAY_PORT` instead of being frozen into a URL literal.
  */
-export function resolveGatewayUrl(env: NodeJS.ProcessEnv): string {
-  const explicit = env.TDAI_GATEWAY_URL?.trim() || env.TDAI_GATEWAY?.trim();
+export function resolveGatewayUrl(
+  env: NodeJS.ProcessEnv,
+  argv: readonly string[] = [],
+): string {
+  const explicit = parseFlag(argv, "--gateway") ?? env.TDAI_GATEWAY_URL?.trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const port = Number.parseInt(env.TDAI_GATEWAY_PORT ?? "", 10);
   return `http://127.0.0.1:${Number.isInteger(port) && port > 0 ? port : DEFAULT_GATEWAY_PORT}`;
+}
+
+/** The value of `--name value`, or undefined when the flag carries none. */
+function parseFlag(argv: readonly string[], name: string): string | undefined {
+  const at = argv.indexOf(name);
+  const value = at >= 0 ? argv[at + 1]?.trim() : undefined;
+  return value && !value.startsWith("--") ? value : undefined;
 }
 
 /**
@@ -34,9 +48,7 @@ export function resolveGatewayUrl(env: NodeJS.ProcessEnv): string {
  * registers the server without flags.
  */
 export function parseHostId(argv: readonly string[]): string {
-  const at = argv.indexOf("--host");
-  const value = at >= 0 ? argv[at + 1]?.trim() : undefined;
-  return value && !value.startsWith("--") ? value : DEFAULT_HOST_ID;
+  return parseFlag(argv, "--host") ?? DEFAULT_HOST_ID;
 }
 
 /** Session a host's notes are recorded under. */

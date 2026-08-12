@@ -65,10 +65,18 @@ async function boot(name: string, withEmbedding: boolean) {
 const hybrid = await boot("hybrid", true);
 const keyword = await boot("keyword", false);
 
-const descriptors = describeAllHosts({
-  launcherPath: resolveLauncherPath(),
-  gatewayUrl: hybrid.url,
-});
+const launcherPath = resolveLauncherPath();
+
+/**
+ * The three host forms, each registered against ONE gateway.
+ *
+ * The registration carries the address in `--gateway`, and that flag is what
+ * the server obeys — so a host meant for another gateway has to be described
+ * for that gateway, not handed a different URL through the environment.
+ */
+function hostsFor(gatewayUrl: string): HostDescriptor[] {
+  return describeAllHosts({ launcherPath, gatewayUrl });
+}
 
 interface Answer {
   strategy: string;
@@ -109,7 +117,7 @@ async function readThrough(
   url: string,
   descriptor: HostDescriptor,
 ): Promise<Answer> {
-  const host = await startHost(descriptor, { TDAI_GATEWAY_URL: url });
+  const host = await startHost(descriptor);
   try {
     const reply = await host.call("tools/call", {
       name: "memory_search",
@@ -135,9 +143,9 @@ async function readThrough(
 /** Ask one gateway through a host started against that gateway. */
 async function ask(
   url: string,
-  descriptor: HostDescriptor = descriptors[0]!,
+  descriptor: HostDescriptor = hostsFor(url)[0]!,
 ): Promise<Answer> {
-  const host = await startHost(descriptor, { TDAI_GATEWAY_URL: url });
+  const host = await startHost(descriptor);
   try {
     await host.call("tools/call", {
       name: "memory_note",
@@ -201,7 +209,7 @@ try {
   // is compared against what the gateway says when asked directly.
   for (const gateway of [hybrid, keyword]) {
     const direct = await settledDirect(gateway.url);
-    for (const descriptor of descriptors) {
+    for (const descriptor of hostsFor(gateway.url)) {
       const through = await readThrough(gateway.url, descriptor);
       console.log(
         `${descriptor.id} через обёртку ${JSON.stringify(through)} против прямого запроса ${JSON.stringify(direct)}`,

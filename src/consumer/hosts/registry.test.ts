@@ -66,11 +66,14 @@ describe("host registry", () => {
     expect(pi!.env).toEqual({});
     expect(pi!.registration()).toContain("lifecycle");
     expect(claude!.registration()).toContain(`"type": "stdio"`);
-    expect(claude!.env).toEqual({ TDAI_GATEWAY_URL: ctx.gatewayUrl });
+    // Every host is told where the gateway is the same way — on the command
+    // line, the one thing all three config formats can express.
+    for (const host of [pi!, claude!, codex!])
+      expect(host.args).toContain(ctx.gatewayUrl);
 
     // codex: TOML, not JSON.
     expect(codex!.registration()).toContain(`[mcp_servers.${MCP_SERVER_NAME}]`);
-    expect(codex!.registration()).toContain(`TDAI_GATEWAY_URL = `);
+    expect(codex!.registration()).toContain(`args = [`);
     expect(() => JSON.parse(codex!.registration())).toThrow();
   });
 

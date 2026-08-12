@@ -297,33 +297,14 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
- * Build an FTS5 MATCH query from raw text.
+ * Han runs — and ONLY Han.
  *
- * When `@node-rs/jieba` is available, uses jieba's search-engine mode
- * (`cutForSearch`) for accurate Chinese word segmentation, producing
- * much better recall than the previous regex-only approach.
- *
- * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
- * jieba is not installed.
- *
- * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
- * matching *any* token is returned.  BM25 naturally ranks documents that
- * match more tokens higher, so precision is preserved while recall is
- * significantly improved — especially for longer queries and when running
- * in FTS-only fallback mode (no embedding available).
- *
- * Example (with jieba):
- *   "用户喜欢编程和TypeScript" → '"用户" OR "喜欢" OR "编程" OR "TypeScript"'
- * Example (fallback):
- *   "旅行计划 API" → '"旅行计划" OR "API"'
+ * jieba is a CHINESE segmenter. Kana and Hangul used to be routed to it too,
+ * and it cut them one CODEPOINT at a time: a Korean query for a word nobody
+ * wrote matched documents exactly the way a Russian one did. They go to the
+ * platform's own word breaker instead.
  */
-/**
- * Scripts jieba understands. Everything else it treats as characters.
- *
- * CJK ideographs, kana and Hangul. A run of these goes to jieba; a run of
- * anything else is split on word boundaries instead.
- */
-const CJK_RUN = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]+/gu;
+const HAN_RUN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/gu;
 
 /**
  * Segmentation version the FTS content was written with.
@@ -384,11 +365,11 @@ export function segmentForFts(raw: string): string[] {
   const tokens: string[] = [];
 
   let last = 0;
-  CJK_RUN.lastIndex = 0;
+  HAN_RUN.lastIndex = 0;
   for (
-    let match = CJK_RUN.exec(raw);
+    let match = HAN_RUN.exec(raw);
     match !== null;
-    match = CJK_RUN.exec(raw)
+    match = HAN_RUN.exec(raw)
   ) {
     pushWords(tokens, raw.slice(last, match.index));
     // cutForSearch splits long words further ("北京烤鸭" → 北京, 烤鸭, 北京烤鸭),
@@ -404,9 +385,28 @@ export function segmentForFts(raw: string): string[] {
     .filter((t) => t && /[\p{L}\p{N}]/u.test(t) && !ZH_STOP_WORDS.has(t));
 }
 
-/** Append Unicode word tokens of a non-CJK run. */
+/** Word breaker for everything outside Han, built once. */
+const WORD_SEGMENTER =
+  typeof Intl?.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "word" })
+    : undefined;
+
+/**
+ * Append the word tokens of a non-Han run.
+ *
+ * `Intl.Segmenter` knows the scripts that write no spaces between words — kana
+ * above all — and gives the same answer a character-class split gives for the
+ * scripts that do. Without it those scripts arrive as one token per run:
+ * sound, but findable only by an exact whole-run query.
+ */
 function pushWords(into: string[], run: string): void {
-  if (run) into.push(...(run.match(/[\p{L}\p{N}_]+/gu) ?? []));
+  if (!run) return;
+  if (!WORD_SEGMENTER) {
+    into.push(...(run.match(/[\p{L}\p{N}_]+/gu) ?? []));
+    return;
+  }
+  for (const piece of WORD_SEGMENTER.segment(run))
+    if (piece.isWordLike) into.push(piece.segment);
 }
 
 /**
@@ -3286,10 +3286,16 @@ export class VectorStore implements IMemoryStore {
         }
       }
 
-      this.logger?.info(
-        `${TAG} FTS5 rebuild complete: L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
+      const complete = l1Count === l1Rows.length && l0Count === l0Rows.length;
+      this.logger?.[complete ? "info" : "warn"](
+        `${TAG} FTS5 rebuild ${complete ? "complete" : "INCOMPLETE"}: ` +
+          `L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
       );
-      return true;
+      // Rows are skipped one by one on error, so a "finished" rebuild can
+      // still have holes in it. An index missing rows is not this version's
+      // index: leaving the marker unwritten costs one more rebuild attempt,
+      // claiming it costs the rows.
+      return complete;
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,

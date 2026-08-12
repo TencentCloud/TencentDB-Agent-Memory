@@ -118,6 +118,29 @@ describe("segmentation per script", () => {
     expect(tokens.every((t) => t.length > 0)).toBe(true);
   });
 
+  it("keeps words whole in the other scripts jieba has no dictionary for", () => {
+    // Korean writes spaces; Japanese does not. Both used to go to jieba,
+    // which returned one token per codepoint, so a Korean query for a word
+    // nobody wrote matched documents the same way a Russian one did.
+    expect(segmentForFts("한국어 문서입니다")).toEqual([
+      "한국어",
+      "문서입니다",
+    ]);
+    expect(segmentForFts("日本語のテストです")).toContain("テスト");
+    expect(buildFtsQuery("어사고")).toBe('"어사고"');
+  });
+
+  it("does not find a Korean word nobody wrote", () => {
+    store = open();
+    store.upsertL1(mem("m1", "한국어 문서입니다"), vec());
+    store.upsertL1(mem("m2", "고양이 사진 저장"), vec());
+
+    expect(find("문서입니다")).toEqual(["m1"]);
+    expect(find("고양이")).toEqual(["m2"]);
+    // Three syllables borrowed from three different words.
+    expect(find("어사고")).toEqual([]);
+  });
+
   it("handles a mixed sentence without shattering either half", () => {
     expect(segmentForFts("Пользователь любит 编程 и TypeScript")).toEqual([
       "Пользователь",

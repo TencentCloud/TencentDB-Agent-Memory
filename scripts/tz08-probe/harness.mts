@@ -19,8 +19,8 @@ export const REPO_ROOT = path.resolve(
   "../..",
 );
 
-/** One extraction the fake model always returns, whatever it is asked. */
-const EXTRACTION = [
+/** The extraction the fake model returns when the caller asks for nothing else. */
+export const DEFAULT_EXTRACTION = [
   {
     scene_name: "Проверка потребителя памяти",
     message_ids: ["1"],
@@ -44,9 +44,16 @@ export interface FakeLlm {
   close: () => Promise<void>;
 }
 
-/** OpenAI-compatible endpoint returning a fixed, parseable extraction. */
+/**
+ * OpenAI-compatible endpoint returning a parseable extraction.
+ *
+ * `answer` may be a function of the request body, which is what lets a probe
+ * make the extraction carry the very note it just wrote: an extraction that is
+ * the same for every input would be found by any query and would prove nothing
+ * about the write under test.
+ */
 export async function startFakeLlm(
-  answer: unknown = EXTRACTION,
+  answer: unknown | ((requestBody: string) => unknown) = DEFAULT_EXTRACTION,
 ): Promise<FakeLlm> {
   let calls = 0;
   const server = http.createServer((req, res) => {
@@ -54,6 +61,10 @@ export async function startFakeLlm(
     req.on("data", (c) => (body += c));
     req.on("end", () => {
       calls += 1;
+      const answered =
+        typeof answer === "function"
+          ? (answer as (b: string) => unknown)(body)
+          : answer;
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
@@ -64,7 +75,7 @@ export async function startFakeLlm(
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: JSON.stringify(answer) },
+              message: { role: "assistant", content: JSON.stringify(answered) },
               finish_reason: "stop",
             },
           ],
@@ -170,6 +181,14 @@ export function writeSandboxConfig(
     "    model: fake-model",
     "  extraction:",
     "    enabled: true",
+    // Every note must reach L1 on its own. The product default doubles the
+    // trigger threshold after each run (warm-up) and otherwise waits out a
+    // 600 s idle timer — a probe would then either wait ten minutes or, worse,
+    // pass on a memory some EARLIER note produced.
+    "  pipeline:",
+    "    everyNConversations: 1",
+    "    enableWarmup: false",
+    "    l1IdleTimeoutSeconds: 2",
     ...embedding,
     "",
   ].join("\n");

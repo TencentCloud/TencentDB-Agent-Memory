@@ -126,16 +126,23 @@ describe("the MCP surface every host gets", () => {
 });
 
 describe("what the host tells the server", () => {
-  it("prefers an explicit gateway URL, then the pi variable, then the port", () => {
+  it("prefers the registered flag, then the exported URL, then the port", () => {
     expect([
+      // The flag wins: it is what a registration writes down, and whatever
+      // environment a host happens to pass on must not override it.
+      resolveGatewayUrl({ TDAI_GATEWAY_URL: "http://env:9000" }, [
+        "--gateway",
+        "http://flag:9500/",
+      ]),
       resolveGatewayUrl({ TDAI_GATEWAY_URL: "http://gw:9000/" }),
-      resolveGatewayUrl({ TDAI_GATEWAY: "http://pi-gw:9100" }),
       resolveGatewayUrl({ TDAI_GATEWAY_PORT: "9200" }),
+      resolveGatewayUrl({}, ["--gateway"]),
       resolveGatewayUrl({}),
     ]).toEqual([
+      "http://flag:9500",
       "http://gw:9000",
-      "http://pi-gw:9100",
       "http://127.0.0.1:9200",
+      "http://127.0.0.1:8420",
       "http://127.0.0.1:8420",
     ]);
   });
@@ -177,9 +184,13 @@ describe("the registration a user pastes", () => {
     ).toContain("http://gw:9000");
     // A port names the gateway just as much as a URL does, and the host starts
     // the server from its config file, never from the shell that printed this.
-    expect(
-      renderRegistration("claude", { TDAI_GATEWAY_PORT: "9999" }),
-    ).toContain("http://127.0.0.1:9999");
+    // …on every host, including the one that passes no --host flag: whether a
+    // host forwards environment to the servers it starts is its own business.
+    for (const host of ["claude", "codex", "pi"]) {
+      expect(renderRegistration(host, { TDAI_GATEWAY_PORT: "9999" })).toContain(
+        "http://127.0.0.1:9999",
+      );
+    }
   });
 
   it("refuses a host it has no registration for, naming the ones it has", () => {
