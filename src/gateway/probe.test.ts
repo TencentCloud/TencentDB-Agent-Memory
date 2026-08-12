@@ -24,7 +24,13 @@ import { parseConfig } from "../config.js";
  */
 function hit(
   content: string,
-  extra: { id?: string; projectId?: string; scope?: string; raw?: number; final?: number } = {},
+  extra: {
+    id?: string;
+    projectId?: string;
+    scope?: string;
+    raw?: number;
+    final?: number;
+  } = {},
 ): RecallItem {
   const raw = extra.raw ?? 1;
   return {
@@ -34,13 +40,21 @@ function hit(
     content,
     formatable: { type: "episodic", content },
     scope: { userId: null, projectId: extra.projectId, scope: extra.scope },
-    provenance: { sourceIds: [], producer: "test", createdAt: "", updatedAt: "", status: "unknown" },
+    provenance: {
+      sourceIds: [],
+      producer: "test",
+      createdAt: "",
+      updatedAt: "",
+      status: "unknown",
+    },
     score: { raw, final: extra.final ?? raw, reasons: [] },
   };
 }
 
 /** Wrap plain contents into the search-result shape the probe expects. */
-const found = (...contents: string[]) => ({ items: contents.map((c) => hit(c)) });
+const found = (...contents: string[]) => ({
+  items: contents.map((c) => hit(c)),
+});
 
 function tempCorpus(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-probe-"));
@@ -239,8 +253,19 @@ describe("computeProbeResults: foreign-project leakage (tz-10a)", () => {
   it("counts a foreign negative in the top-k as leakage and names the item", async () => {
     const search = async (_q: string, projectId: string) => ({
       items: [
-        hit("deploy with rsync", { id: "own", projectId, scope: "project", raw: 0.9 }),
-        hit("deploy with kubectl", { id: "alien", projectId: "/home/u/other", scope: "project", raw: 0.8, final: 0.4 }),
+        hit("deploy with rsync", {
+          id: "own",
+          projectId,
+          scope: "project",
+          raw: 0.9,
+        }),
+        hit("deploy with kubectl", {
+          id: "alien",
+          projectId: "/home/u/other",
+          scope: "project",
+          raw: 0.8,
+          final: 0.4,
+        }),
       ],
     });
     const r = await computeProbeResults(corpus, 3, search);
@@ -265,7 +290,15 @@ describe("computeProbeResults: foreign-project leakage (tz-10a)", () => {
   it("a query without project context is a separate baseline, not leakage data", async () => {
     const search = async () => found("deploy with kubectl");
     const r = await computeProbeResults(
-      { queries: [{ id: "q-plain", query: "deploy steps", expected: ["deploy with rsync"] }] },
+      {
+        queries: [
+          {
+            id: "q-plain",
+            query: "deploy steps",
+            expected: ["deploy with rsync"],
+          },
+        ],
+      },
       3,
       search,
     );
@@ -298,7 +331,13 @@ describe("loadProbeCorpus: project fields (tz-10a)", () => {
     const file = tempCorpus(
       JSON.stringify({
         queries: [
-          { id: "q1", query: "a", expected: ["x"], projectId: "/p", foreignExpected: ["y", " "] },
+          {
+            id: "q1",
+            query: "a",
+            expected: ["x"],
+            projectId: "/p",
+            foreignExpected: ["y", " "],
+          },
           { id: "q2", query: "b", expected: ["z"] },
         ],
       }),
@@ -316,7 +355,9 @@ describe("loadProbeCorpus: project fields (tz-10a)", () => {
 });
 
 describe("tz-04 C2: precision and recall have their own denominators", () => {
-  const ids = (...list: string[]) => ({ items: list.map((id) => hit(`content ${id}`, { id })) });
+  const ids = (...list: string[]) => ({
+    items: list.map((id) => hit(`content ${id}`, { id })),
+  });
 
   it("counts a repeated id once, and neither metric can exceed 1", () => {
     expect(hitsAtK([{ memoryId: "a" }, { memoryId: "a" }], ["a"], 5)).toBe(1);
@@ -426,7 +467,39 @@ describe("tz-04: the measurer retrieves its own window", () => {
   });
 
   it("leaves a config that already retrieves enough alone", () => {
-    const cfg = parseConfig({ recall: { maxResults: 20 }, probe: { topK: 10 } });
+    const cfg = parseConfig({
+      recall: { maxResults: 20 },
+      probe: { topK: 10 },
+    });
     expect(measuringConfig(cfg)).toBe(cfg);
+  });
+});
+
+describe("tz-04: the metric cut-offs do not depend on probe.topK", () => {
+  it("scores @10 even when the configured window is 3", async () => {
+    const corpus: ProbeCorpus = {
+      queries: [
+        {
+          id: "q",
+          query: "a",
+          expected: ["content r8"],
+          expectedRecordIds: ["r8"],
+        },
+      ],
+    };
+    // The answer sits at rank 8: inside @10, outside a topK=3 window.
+    const items = Array.from({ length: 12 }, (_, i) =>
+      hit(`content r${i}`, { id: `r${i}` }),
+    );
+    const r = await computeProbeResults(corpus, 3, async () => ({ items }));
+    expect(r.metrics.recallAt10).toBe(1);
+    expect(r.metrics.recallAt5).toBe(0);
+    // The legacy per-query view stays on the configured window.
+    expect(r.evaluated[0]!.top).toHaveLength(3);
+  });
+
+  it("widens the retrieval window to the deepest cut-off", () => {
+    const cfg = parseConfig({ recall: { maxResults: 5 }, probe: { topK: 3 } });
+    expect(measuringConfig(cfg).recall.maxResults).toBe(10);
   });
 });

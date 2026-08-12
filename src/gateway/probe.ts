@@ -66,6 +66,14 @@ export interface ProbeQuery {
 /** The six strata of tz-04 C1: type × scope relation. */
 export type StratumKey = `${NonNullable<ProbeQuery["expectedType"]>}/${NonNullable<ProbeQuery["scopeRelation"]>}`;
 
+/**
+ * The deepest cut-off the metrics are defined at (tz-04 C2 asks for @5 and
+ * @10). Retrieval must reach at least this far no matter how `probe.topK` is
+ * configured, or `recallAt10` silently reports recall@topK under a name that
+ * says 10.
+ */
+export const METRIC_CUTOFF_MAX = 10;
+
 /** The four metrics tz-04 C2 asks for, at both cut-offs. */
 export interface ProbeMetrics {
   precisionAt5: number;
@@ -371,7 +379,7 @@ export async function computeProbeResults(
     let items: RecallItem[] = [];
     try {
       const result = await search(q.query, projectId);
-      items = (result.items ?? []).slice(0, k);
+      items = (result.items ?? []).slice(0, Math.max(k, METRIC_CUTOFF_MAX));
       for (const d of result.diagnostics ?? []) diagnostics.push(d);
     } catch (err) {
       // A single query failing is a probe failure for that query — count 0
@@ -383,7 +391,9 @@ export async function computeProbeResults(
       });
     }
 
-    const probeItems = items.map((item) => toProbeItem(item, q));
+    // The legacy aggregate (precision@k / top1 / leakage) is defined on the
+    // configured window; the tz-04 metrics are defined on their own cut-offs.
+    const probeItems = items.slice(0, k).map((item) => toProbeItem(item, q));
     const top = probeItems.map((i) => i.content);
     const hits = probeItems.filter((i) => i.relevant).length;
     const foreignHits = probeItems.filter((i) => i.foreign).length;
@@ -492,8 +502,11 @@ async function searchViaRecall(
  */
 export function measuringConfig(cfg: MemoryTdaiConfig): MemoryTdaiConfig {
   const maxResults = cfg.recall.maxResults ?? 5;
-  return cfg.probe.topK > maxResults
-    ? { ...cfg, recall: { ...cfg.recall, maxResults: cfg.probe.topK } }
+  // At least METRIC_CUTOFF_MAX, even when `probe.topK` is smaller: a gateway
+  // configured with topK=3 must still report a real @10.
+  const window = Math.max(cfg.probe.topK, METRIC_CUTOFF_MAX);
+  return window > maxResults
+    ? { ...cfg, recall: { ...cfg.recall, maxResults: window } }
     : cfg;
 }
 
