@@ -550,10 +550,13 @@ describe("reindex-in-progress route gate (P8)", () => {
         session_key: "s-gate",
       });
       expect(recall.status).toBe(200);
-      expect(await recall.json()).toEqual({
+      // The gate answers with an empty context, but it is still a recall event
+      // and carries its id (tz-04 C4).
+      expect(await recall.json()).toMatchObject({
         context: "",
         strategy: "gated",
         memory_count: 0,
+        recall_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
       });
 
       const memories = await post("/search/memories", { query: "anything" });
@@ -773,6 +776,37 @@ describe("memory tools + feedback routes (P10, integration)", () => {
     expect(body.matched).toBe(1);
     expect(body.bumped).toBe(1);
     expect(readPriority("fb-target")).toBe(41); // 40 + 1 (positive, capped)
+  });
+
+  it("POST /memory/feedback links the feedback to the recall it came from", async () => {
+    const recall = await postJson("/recall", {
+      query: "feedback target content",
+      session_key: "s-link",
+    });
+    expect(recall.status).toBe(200);
+    const recallId = (await recall.json()).recall_id as string;
+    expect(recallId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const linked = await postJson(
+      "/memory/feedback",
+      { keys: ["Feedback target content"], recall_id: recallId },
+      { "x-memory-token": token },
+    );
+    expect(linked.status).toBe(200);
+    expect((await linked.json()).linkedTo).toMatchObject({
+      recallId,
+      sessionKey: "s-link",
+    });
+
+    // An unknown id is reported as unlinked, never as an error: feedback must
+    // survive a gateway restart that forgot the event.
+    const unknown = await postJson(
+      "/memory/feedback",
+      { keys: ["Feedback target content"], recall_id: "no-such-event" },
+      { "x-memory-token": token },
+    );
+    expect(unknown.status).toBe(200);
+    expect((await unknown.json()).linkedTo).toBeNull();
   });
 
   it("POST /memory/feedback with invalid body → 400", async () => {

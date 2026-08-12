@@ -75,7 +75,11 @@ import {
   handleMemoryNote,
   type MemoryToolsContext,
 } from "./memory-tools.js";
-import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
+import {
+  handleMemoryFeedback,
+  type FeedbackRouteContext,
+  type RecallEventSummary,
+} from "./feedback.js";
 import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { createCounterObserver } from "./consolidation/layer-counters.js";
@@ -98,10 +102,12 @@ import { CleanupTimer, runCleanup } from "./cleanup.js";
 import { listRecentRuns } from "./control-plane/run-repo.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
+/** How many recall events stay linkable by `recall_id` (tz-04 C4). */
+const RECENT_RECALLS_MAX = 200;
 
 // ============================
 // Dev logger (for standalone gateway): console + file sink; debug only in dev mode.
@@ -144,6 +150,11 @@ export class TdaiGateway {
   private counterSeeds = 0;
   private counterErrors = 0;
   private lastRecall: StatusResponse["lastRecall"] = null;
+  /**
+   * Recent recall events by id (tz-04 C4). Bounded and in-memory on purpose:
+   * this links a feedback to the turn it came from, it is not an audit log.
+   */
+  private readonly recentRecalls = new Map<string, RecallEventSummary>();
   private lastCapture: StatusResponse["lastCapture"] = null;
   private lastError: StatusResponse["lastError"] = null;
   private totalsStale = true;
@@ -799,6 +810,7 @@ export class TdaiGateway {
     const feedbackCtx: FeedbackRouteContext = {
       dataDir: this.config.data.baseDir,
       logger: this.logger,
+      findRecallEvent: (recallId) => this.recentRecalls.get(recallId),
     };
     return await handleMemoryFeedback(feedbackCtx, req, res);
   }
@@ -1004,6 +1016,25 @@ export class TdaiGateway {
     }
   }
 
+  /**
+   * Register a recall event and return its id. The map is capped by dropping
+   * the oldest entry — a long-running gateway must not grow a map per turn.
+   */
+  private rememberRecall(sessionKey: string, count: number): string {
+    const event: RecallEventSummary = {
+      recallId: randomUUID(),
+      at: new Date().toISOString(),
+      sessionKey,
+      count,
+    };
+    this.recentRecalls.set(event.recallId, event);
+    if (this.recentRecalls.size > RECENT_RECALLS_MAX) {
+      const oldest = this.recentRecalls.keys().next().value;
+      if (oldest !== undefined) this.recentRecalls.delete(oldest);
+    }
+    return event.recallId;
+  }
+
   private async handleRecall(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -1025,6 +1056,10 @@ export class TdaiGateway {
         context: "",
         strategy: "gated",
         memory_count: 0,
+        // The gate answered instead of the pipeline, so this id names a real
+        // recall event that returned nothing — feedback on it is still
+        // meaningful ("I asked and got nothing").
+        recall_id: this.rememberRecall(body.session_key, 0),
       } satisfies RecallResponse);
       return;
     }
@@ -1047,8 +1082,13 @@ export class TdaiGateway {
     const q = body.query;
     const truncated = q.length > 256 ? q.slice(0, 253) + "..." : q;
     const qhash = createHash("sha256").update(q).digest("hex").slice(0, 16);
+    const recallId = this.rememberRecall(
+      body.session_key,
+      result.recalledL1Memories?.length ?? 0,
+    );
     this.lastRecall = {
       at: new Date().toISOString(),
+      recallId,
       query: truncated,
       queryHash: qhash,
       sessionKey: body.session_key,
@@ -1062,6 +1102,7 @@ export class TdaiGateway {
         .join("\n\n"),
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
+      recall_id: recallId,
     };
     sendJson(res, 200, response);
   }

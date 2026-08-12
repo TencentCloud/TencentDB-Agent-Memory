@@ -149,9 +149,19 @@ export function bumpFeedbackPriorities(
 // Route handler
 // ============================
 
+/** What the gateway remembers about one recall event (tz-04 C4). */
+export interface RecallEventSummary {
+  recallId: string;
+  at: string;
+  sessionKey: string;
+  count: number;
+}
+
 export interface FeedbackRouteContext {
   dataDir: string;
   logger: Logger;
+  /** Recent recall events, for linking a feedback to the one it came from. */
+  findRecallEvent?: (recallId: string) => RecallEventSummary | undefined;
 }
 
 /**
@@ -187,16 +197,31 @@ export async function handleMemoryFeedback(
     return;
   }
 
+  // The link is reported, never required: a client that sends no id (or an id
+  // the gateway has already forgotten) gets exactly the old behaviour.
+  const recallId = (body as { recall_id?: unknown }).recall_id;
+  const linkedTo =
+    typeof recallId === "string" && recallId
+      ? (ctx.findRecallEvent?.(recallId) ?? null)
+      : null;
+
   try {
     const result = bumpFeedbackPriorities(
       path.join(ctx.dataDir, "vectors.db"),
       validated.keys,
     );
+    if (typeof recallId === "string" && recallId) {
+      ctx.logger.info?.(
+        `[memory/feedback] recall_id=${recallId} linked=${linkedTo ? "yes" : "unknown"} ` +
+          `matched=${result.matched} bumped=${result.bumped}`,
+      );
+    }
     sendJson(res, 200, {
       received: validated.keys.length,
       matched: result.matched,
       bumped: result.bumped,
       capPerRecord: FEEDBACK_CAP_PER_RECORD,
+      linkedTo,
     });
   } catch (err) {
     ctx.logger.warn(

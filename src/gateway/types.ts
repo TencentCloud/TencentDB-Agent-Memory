@@ -64,6 +64,8 @@ export interface StatusResponse {
   };
   lastRecall: {
     at: string;
+    /** Same id the response carried, so a feedback can be traced back here. */
+    recallId: string;
     query: string;
     queryHash: string;
     sessionKey: string;
@@ -128,6 +130,13 @@ export interface RecallResponse {
   context: string;
   strategy?: string;
   memory_count?: number;
+  /**
+   * Identifier of THIS recall event (tz-04 C4). `POST /memory/feedback` may
+   * send it back, which is what turns "someone liked some memory" into
+   * "this recall produced a useful answer". Optional: a client that predates
+   * the field keeps working, and the gated branch has no event to point at.
+   */
+  recall_id?: string;
 }
 
 // ============================
