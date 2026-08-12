@@ -608,10 +608,12 @@ function pushWords(into: string[], run: string): void {
  *
  * Russian, and every other inflected language here, changes the END of a word:
  * "потребитель" is written "потребителя" in the corpus, and an exact-token
- * query would miss it. FTS5 prefix queries (`"tok"*`) recover that. Below this
- * length a prefix is not a word stem but a letter or two, and `"и"*` would
- * match nearly every document — which is the very failure this schema bump
- * exists to end.
+ * query for the nominative would miss it. FTS5 prefix queries (`"tok"*`)
+ * recover that — but the query itself must be the stem: searching
+ * "потребител"* finds "потребителя", while "потребитель"* would need the
+ * corpus to CONTINUE past the inflected form. Below this length a prefix is
+ * not a word stem but a letter or two, and `"и"*` would match nearly every
+ * document — which is the very failure this schema bump exists to end.
  */
 const FTS_PREFIX_MIN_TOKEN_LENGTH = 4;
 

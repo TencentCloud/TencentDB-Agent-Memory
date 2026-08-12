@@ -41,7 +41,7 @@ import { describeAllHosts, resolveLauncherPath } from "./hosts/registry.js";
  */
 function ensureBuild(): void {
   const built = path.join(REPO_ROOT, "dist", "mcp-server.mjs");
-  const newestSource = ["src/consumer", "index.ts"]
+  const newestSource = ["src/consumer", "src/gateway", "src/utils", "index.ts"]
     .flatMap((rel) => walk(path.join(REPO_ROOT, rel)))
     .reduce((max, file) => Math.max(max, fs.statSync(file).mtimeMs), 0);
   if (fs.existsSync(built) && fs.statSync(built).mtimeMs >= newestSource)

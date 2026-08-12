@@ -376,8 +376,12 @@ Point it at a non-default gateway by exporting `TDAI_GATEWAY_URL` (or
 `TDAI_GATEWAY_PORT`) before printing — the address is then written into the
 snippet as `--gateway <url>`, on every host, because a command line is the one
 thing all three config formats can express and forwarding environment is each
-host's own business. Without it the snippet stays address-free and the server
-resolves the gateway at run time, so a changed port keeps working. A host id
+host's own business. A `tdai-gateway.yaml` in the current directory counts
+as a non-default address too, so running the command from the repo checkout
+(where one lives) bakes the port into the snippet. To get an address-free
+snippet, run from a directory that has no such file and leave the environment
+variables unset — the server then resolves the gateway at run time, so a
+changed port keeps working. A host id
 this build has no registration for is refused by name:
 
 ```bash
