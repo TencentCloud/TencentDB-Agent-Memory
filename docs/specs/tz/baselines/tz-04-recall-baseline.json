@@ -1,0 +1,62 @@
+{
+  "status": "ok",
+  "queries": 120,
+  "topK": 10,
+  "precisionAtK": 0.7,
+  "top1HitRate": 0.5666666666666667,
+  "leakageRate": null,
+  "metrics": {
+    "precisionAt5": 0.13166666666666646,
+    "precisionAt10": 0.06999999999999988,
+    "recallAt5": 0.6583333333333333,
+    "recallAt10": 0.7
+  },
+  "strata": {
+    "instruction/own": {
+      "precisionAt5": 0.10999999999999999,
+      "precisionAt10": 0.06,
+      "recallAt5": 0.55,
+      "recallAt10": 0.6,
+      "queries": 20
+    },
+    "instruction/foreign": {
+      "precisionAt5": 0.09999999999999999,
+      "precisionAt10": 0.049999999999999996,
+      "recallAt5": 0.5,
+      "recallAt10": 0.5,
+      "queries": 20
+    },
+    "persona/own": {
+      "precisionAt5": 0.15000000000000002,
+      "precisionAt10": 0.07500000000000001,
+      "recallAt5": 0.75,
+      "recallAt10": 0.75,
+      "queries": 20
+    },
+    "persona/foreign": {
+      "precisionAt5": 0.10999999999999999,
+      "precisionAt10": 0.065,
+      "recallAt5": 0.55,
+      "recallAt10": 0.65,
+      "queries": 20
+    },
+    "episodic/own": {
+      "precisionAt5": 0.17000000000000004,
+      "precisionAt10": 0.09000000000000002,
+      "recallAt5": 0.85,
+      "recallAt10": 0.9,
+      "queries": 20
+    },
+    "episodic/foreign": {
+      "precisionAt5": 0.15000000000000002,
+      "precisionAt10": 0.08000000000000002,
+      "recallAt5": 0.75,
+      "recallAt10": 0.8,
+      "queries": 20
+    }
+  },
+  "scoringVersion": "strategy=embedding threshold=0.2 maxResults=10 crossProject=decay crossProjectDecay=0.5 defaultCrossProjectMultiplier=0.5 typeWeights=episodic=1,instruction=1,persona=1",
+  "at": "2026-08-12T21:26:25.745Z",
+  "diagnostics": [],
+  "corpusHash": "2faeb2a0df2f0ad7"
+}

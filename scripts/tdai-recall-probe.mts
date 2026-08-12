@@ -20,6 +20,7 @@
  *     [--data-dir DIR] [--corpus FILE] [--strategy keyword|embedding|hybrid] \
  *     [--threshold N] [--top-k N] [--out FILE] [--compare BASELINE] [--allow-live]
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadGatewayConfig } from "../src/gateway/config.js";
@@ -138,6 +139,12 @@ function printReport(result: ProbeResult, baseline: ProbeResult | null): void {
   if (baseline) {
     console.log(`baseline: ${metricsLine(baseline.metrics)}`);
     console.log(`дельта:   ${deltaLine(result.metrics, baseline.metrics)}`);
+    const baselineHash = (baseline as { corpusHash?: string }).corpusHash;
+    if (baselineHash && baselineHash !== corpusHash) {
+      console.log(
+        `  ⚠ baseline снимали на другом корпусе (sha256:${baselineHash})`,
+      );
+    }
     if (baseline.scoringVersion !== result.scoringVersion) {
       console.log(`  (скоринг baseline отличался: ${baseline.scoringVersion})`);
     }
@@ -234,10 +241,20 @@ const result = await runRecallProbe({
 });
 store.close();
 
+const corpusFile = path.isAbsolute(cfg.probe.corpusPath)
+  ? cfg.probe.corpusPath
+  : path.join(dataDir, cfg.probe.corpusPath);
+// The corpus itself never leaves the machine (personal memory), so the baseline
+// carries its hash instead: two measurements are only comparable when the
+// questions were the same.
+const corpusHash = crypto
+  .createHash("sha256")
+  .update(fs.readFileSync(corpusFile))
+  .digest("hex")
+  .slice(0, 16);
+
 console.log(`стор:     ${dbPath}`);
-console.log(
-  `корпус:   ${path.isAbsolute(cfg.probe.corpusPath) ? cfg.probe.corpusPath : path.join(dataDir, cfg.probe.corpusPath)}`,
-);
+console.log(`корпус:   ${corpusFile} (sha256:${corpusHash})`);
 printReport(result, baseline);
 
 if (args.out) {
@@ -246,7 +263,7 @@ if (args.out) {
   const { evaluated: _evaluated, ...aggregate } = result;
   fs.writeFileSync(
     args.out,
-    `${JSON.stringify(aggregate, null, 2)}\n`,
+    `${JSON.stringify({ ...aggregate, corpusHash }, null, 2)}\n`,
     "utf-8",
   );
   console.log(`записано: ${args.out} (без содержимого записей)`);

@@ -56,3 +56,6 @@ node_modules
 # Pi local rules state
 .pi/
 .pi-loop.json.lock
+
+# Probe corpus is derived from personal memory — measurements only, never the questions (tz-04).
+probe-corpus.json
