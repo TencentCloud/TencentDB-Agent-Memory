@@ -155,13 +155,13 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     //   - 解绑操作：允许（清理脏 binding 的入口）
     // 若用 filter=true 会直接把已私密条目从 items 里剔除 → 使用者永远无法
     // 知晓/清理这些残留绑定；filter=false + 前端标记是"感知 + 可清理"的更好体验。
-    const listEnv = await deps.metaKernel.invoke(
-      'agent-fixed-asset/list-with-detail',
-      { agent_id: agentId, apply_visibility_filter: false, touch_usage: false },
-      ctx,
-    );
-    if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
-
+    //
+    // 分页注意：list-with-detail 默认 limit=20（DEFAULT_PAGINATION），排序
+    // priority DESC, created_at DESC。当 agent 绑定资产较多（skill/wiki/code_graph/
+    // chat_memory 混排）时，priority 较低的 chat_memory 绑定会被排到 20 名之外而
+    // 被整页截断 → 固定资产记忆 tab 丢失记忆块。这里做翻页聚合（对齐
+    // MetadataClient.getAgentFixedAssets 的 FA_PAGE_SIZE 循环模式），把该 agent 的
+    // 全部固定资产绑定拉回来再过滤，避免"拍上限"导致 skill 一多仍会丢。
     // list-with-detail 返回的 items（AgentAssetView）不带 owner_user_id
     interface FixedAssetDetailRaw {
       asset_id: string;
@@ -171,7 +171,26 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       visibility: string;
       created_at: string;
     }
-    const items = extractListItems<FixedAssetDetailRaw>(listEnv)
+    const FA_PAGE_SIZE = 100;
+    const FA_PAGE_HARD_LIMIT = 500;
+    const fixedAssets: FixedAssetDetailRaw[] = [];
+    let offset = 0;
+    while (true) {
+      const listEnv = await deps.metaKernel.invoke(
+        'agent-fixed-asset/list-with-detail',
+        { agent_id: agentId, apply_visibility_filter: false, touch_usage: false, limit: FA_PAGE_SIZE, offset },
+        ctx,
+      );
+      if (listEnv.code !== 0) return respondEnvelope(c, listEnv);
+      const data = listEnv.data as ListEnvelopeData<FixedAssetDetailRaw> | null;
+      const page = Array.isArray(data?.items) ? data.items : [];
+      fixedAssets.push(...page);
+      const total = typeof data?.total === 'number' ? data.total : fixedAssets.length;
+      offset += FA_PAGE_SIZE;
+      if (fixedAssets.length >= total || page.length === 0 || offset >= FA_PAGE_HARD_LIMIT) break;
+    }
+
+    const items = fixedAssets
       .filter((it) => it.asset_type === 'chat_memory')
       .filter((it) => it.status !== 'archived' && it.status !== 'deprecated' && it.status !== 'failed');
 
