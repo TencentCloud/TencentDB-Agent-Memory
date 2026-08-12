@@ -77,15 +77,27 @@ export interface GatewayConfigLocation {
   origin: GatewayConfigOrigin;
 }
 
-/** The config file this environment would load, with where it came from. */
-export function findGatewayConfig(): GatewayConfigLocation | null {
+/**
+ * The config file this environment would load, with where it came from.
+ *
+ * @param includeCwd whether a config in the CURRENT DIRECTORY counts. It does
+ *   for the server — a user starts it in the directory they mean — and it must
+ *   not for a client: a host starts the launcher in whatever directory it
+ *   likes, so a repo's own tdai-gateway.yaml would decide which memory that
+ *   session talks to.
+ */
+export function findGatewayConfig(
+  includeCwd: boolean,
+): GatewayConfigLocation | null {
   const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
   if (explicit && fs.existsSync(explicit))
     return { path: explicit, origin: "env" };
 
-  for (const name of CONFIG_FILENAMES) {
-    const inCwd = path.join(process.cwd(), name);
-    if (fs.existsSync(inCwd)) return { path: inCwd, origin: "cwd" };
+  if (includeCwd) {
+    for (const name of CONFIG_FILENAMES) {
+      const inCwd = path.join(process.cwd(), name);
+      if (fs.existsSync(inCwd)) return { path: inCwd, origin: "cwd" };
+    }
   }
 
   // The data dir — the ENV-named one when there is one. Reading the default
@@ -113,7 +125,7 @@ export function findGatewayConfig(): GatewayConfigLocation | null {
 
 /** The config file this environment would load, or null when there is none. */
 export function resolveGatewayConfigPath(): string | null {
-  return findGatewayConfig()?.path ?? null;
+  return findGatewayConfig(true)?.path ?? null;
 }
 
 /** `server.port` as written in the config file, if it is readable. */
@@ -137,9 +149,10 @@ export function readConfiguredPort(configPath: string | null): number | null {
 /**
  * Where a port came from, which decides whether it travels.
  *
- * `portable` means every process on this machine resolves the same port with
+ * `isPortable` means every process on this machine resolves the same port with
  * no environment and no particular directory — the data dir's own config, or
- * the default. Anything else is an answer only this shell can give.
+ * the default. Anything else is an answer only this shell can give, and a
+ * registration that a host will start elsewhere has to carry it in writing.
  */
 export interface GatewayPortSource {
   port: number;
@@ -157,7 +170,9 @@ export function resolveGatewayPortSource(): GatewayPortSource {
   if (Number.isInteger(fromEnv) && fromEnv > 0)
     return { port: fromEnv, isPortable: false };
 
-  const config = findGatewayConfig();
+  // No cwd: this answer is for a client, and a client is started somewhere it
+  // did not choose.
+  const config = findGatewayConfig(false);
   const configured = readConfiguredPort(config?.path ?? null);
   if (configured !== null)
     return { port: configured, isPortable: config?.origin === "data-dir" };

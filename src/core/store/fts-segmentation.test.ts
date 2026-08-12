@@ -178,6 +178,21 @@ describe("segmentation per script", () => {
     expect(segmentForFts("検索")).toEqual(["検索"]);
   });
 
+  it("keeps a one-character Chinese word that also lives inside a longer one", () => {
+    // 茶 is a word, and it is also the first half of 茶叶. Dropping the single
+    // characters a longer token contains has to mean "spelled out by one
+    // reading", not "seen inside some other word": a query for 茶 must still
+    // find the document that says 茶.
+    store = open();
+    store.upsertL1(mem("m1", "我喜欢茶和茶叶"), vec());
+    store.upsertL1(mem("m2", "水和水果都要买"), vec());
+
+    expect(find("茶")).toEqual(["m1"]);
+    expect(find("茶叶")).toEqual(["m1"]);
+    expect(find("水")).toEqual(["m2"]);
+    expect(find("水果")).toEqual(["m2"]);
+  });
+
   it("drops the lone kana particles that match everything", () => {
     const tokens = segmentForFts("日本語のテキストを検索する");
     expect(tokens).toContain("検索");
@@ -447,6 +462,37 @@ describe("repairing an index written by the old segmentation", () => {
     other.close();
     expect(store.rebuildFtsIndex()).toBe(true);
     expect(find("памяти")).toEqual(["m1"]);
+  });
+
+  it("searches the old index when another process holds the write lock", () => {
+    // Two gateways opening the same store is ordinary, and the measured
+    // rebuild on a real database (4.7 s) is close to sqlite's 5 s busy timeout.
+    // Treating "database is locked" like a missing fts5 build cost the whole
+    // process its keyword search — for its lifetime, even after the lock went.
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+    store.close();
+    store = undefined;
+
+    // The marker gone means the next open wants a rebuild; the lock means it
+    // cannot have one.
+    const holder = new DatabaseSync(dbPath);
+    holder.exec("DELETE FROM embedding_meta WHERE key = 'fts_schema_version'");
+    holder.exec("BEGIN IMMEDIATE");
+    holder.exec(
+      "INSERT INTO embedding_meta (key, value) VALUES ('probe', '1') " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    );
+    try {
+      store = open();
+      // The index it found is still searchable…
+      expect(find("памяти")).toEqual(["m1"]);
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+    // …and nothing was marked, so the rebuild still happens on a later open.
+    expect(schemaVersion()).toBeUndefined();
   });
 
   it("rebuilds once on open, then leaves the index alone", () => {

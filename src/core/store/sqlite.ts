@@ -343,6 +343,21 @@ function currentTokenizerId(): string {
 }
 
 /**
+ * Whether a failure is another process holding the write lock.
+ *
+ * It reads as an ordinary error, but it says nothing about the index: the
+ * tables are intact and someone else is already doing the work. Treating it
+ * like a broken fts5 build cost this process keyword search for its whole
+ * lifetime — two gateways opening the same store at once was enough.
+ */
+function isDatabaseLocked(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code.startsWith("SQLITE_BUSY")) return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("database is locked") || message.includes("busy");
+}
+
+/**
  * What an open found the FTS index to be.
  *
  * `unknown` is not `current`: a check that could not run says nothing about
@@ -353,6 +368,12 @@ type FtsMigrationCheck = {
   kind: "rebuild-needed" | "current" | "unknown";
   /** Whether the existing tables must go before new ones can be created. */
   dropFirst?: boolean;
+  /**
+   * Whether the tables themselves are wrong (missing, or of an older shape) —
+   * as opposed to merely holding text cut by an older segmentation. Only the
+   * first makes the index unusable, so only the first is worth losing FTS for.
+   */
+  shapeChanged?: boolean;
 };
 
 /**
@@ -426,6 +447,22 @@ export function segmentForFts(raw: string): string[] {
 }
 
 /**
+ * Positions of `run` that some multi-character token already covers.
+ *
+ * Used to tell a word from a spelling-out: a character a longer token of the
+ * same reading contains is that reading's way of writing part of a word.
+ */
+function coveredPositions(run: string, tokens: readonly string[]): Set<number> {
+  const covered = new Set<number>();
+  for (const token of tokens) {
+    if (token.length < 2) continue;
+    for (let at = run.indexOf(token); at >= 0; at = run.indexOf(token, at + 1))
+      for (let i = 0; i < token.length; i++) covered.add(at + i);
+  }
+  return covered;
+}
+
+/**
  * Append the tokens of a run of Han alone, as BOTH segmenters read it.
  *
  * A run of Han carries no mark of its language, and the two sides of FTS meet
@@ -435,22 +472,42 @@ export function segmentForFts(raw: string): string[] {
  * returns 情報 / 処 / 理技術 — a query that cannot find the document it came
  * from. So the run is cut both ways and both answers are kept: jieba's
  * `cutForSearch` also splits long words further ("北京烤鸭" → 北京, 烤鸭,
- * 北京烤鸭), and for Chinese the two agree anyway.
+ * 北京烤鸭), and for Chinese the two readings mostly agree anyway.
  *
- * What is NOT kept is a single character that some longer token of the same
- * run already contains: those are jieba spelling out a word it does not know
- * ("検索" → 検, 索), and as tokens they match every unrelated document that
- * happens to use the character. A single character that stands on its own —
- * a one-character Chinese word — has no such cover and stays.
+ * What is NOT kept is a single character that one of the readings covers with
+ * a longer token EVERYWHERE it occurs: that reading is spelling out a word the
+ * other one knows ("検索" → 検, 索; "编程" → 编, 程), and as tokens those
+ * characters match every unrelated document that happens to use them. A
+ * character that stands alone somewhere in the run — 茶 in "茶和茶叶" — is a
+ * word of its own and stays, or a query for it would find nothing.
  */
 function pushHanRun(into: string[], jieba: JiebaInstance, run: string): void {
-  const readings: string[] = [...jieba.cutForSearch(run, true)];
-  pushWords(readings, run);
-  for (const token of readings) {
-    const isSpelledOut =
-      token.length === 1 &&
-      readings.some((other) => other.length > 1 && other.includes(token));
-    if (!isSpelledOut) into.push(token);
+  const byJieba = [...jieba.cutForSearch(run, true)];
+  const byWordBreaker: string[] = [];
+  pushWords(byWordBreaker, run);
+  const covers = [
+    coveredPositions(run, byJieba),
+    coveredPositions(run, byWordBreaker),
+  ];
+
+  const seen = new Set<string>();
+  for (const token of [...byJieba, ...byWordBreaker]) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    if (token.length === 1) {
+      const positions: number[] = [];
+      for (
+        let at = run.indexOf(token);
+        at >= 0;
+        at = run.indexOf(token, at + 1)
+      )
+        positions.push(at);
+      const isSpelledOut = covers.some((covered) =>
+        positions.every((at) => covered.has(at)),
+      );
+      if (isSpelledOut) continue;
+    }
+    into.push(token);
   }
 }
 
@@ -1162,111 +1219,7 @@ export class VectorStore implements IMemoryStore {
       // FTS5 virtual tables don't support ALTER TABLE ADD COLUMN, so we must
       // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
       const migration = this.migrateFtsTablesIfNeeded();
-
-      // Everything that touches the index — the drop, the fresh tables, the
-      // refill — happens in ONE transaction. Without it a rebuild that fails
-      // halfway leaves both tables empty for the rest of the process: search
-      // answers "nothing found" over a memory that holds everything, and only
-      // the next open repairs it.
-      const rebuilding = migration.kind === "rebuild-needed";
-      if (rebuilding) this.db.exec("BEGIN IMMEDIATE");
-      try {
-        if (migration.dropFirst) {
-          this.db.exec("DROP TABLE IF EXISTS l1_fts");
-          this.db.exec("DROP TABLE IF EXISTS l0_fts");
-        }
-        this.createFtsTables();
-      } catch (err) {
-        if (rebuilding) {
-          try {
-            this.db.exec("ROLLBACK");
-          } catch {
-            // The failure already ended the transaction.
-          }
-        }
-        throw err;
-      }
-
-      // L1 FTS prepared statements
-      this.stmtL1FtsInsert = this.db.prepare(`
-        INSERT INTO l1_fts (content, content_original, record_id, type, priority, scene_name,
-          session_key, session_id, timestamp_str, timestamp_start, timestamp_end, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      this.stmtL1FtsDelete = this.db.prepare(
-        "DELETE FROM l1_fts WHERE record_id = ?",
-      );
-
-      // NOTE: l1_fts must NOT be aliased — MATCH and bm25() require the real
-      // table name (an alias fails at prepare() with "no such column: <alias>",
-      // and searchL1Fts swallows that error, silently killing keyword recall).
-      // Only l1_records gets an alias.
-      this.stmtL1FtsSearch = this.db.prepare(`
-        SELECT l1_fts.record_id, l1_fts.content_original AS content, l1_fts.type,
-               l1_fts.priority, l1_fts.scene_name, l1_fts.session_key, l1_fts.session_id,
-               l1_fts.timestamp_str, l1_fts.timestamp_start, l1_fts.timestamp_end,
-               l1_fts.metadata_json,
-               r.project_id, COALESCE(r.scope, '') AS scope,
-               bm25(l1_fts) AS rank
-        FROM l1_fts
-        JOIN l1_records r ON r.record_id = l1_fts.record_id
-        WHERE l1_fts MATCH ?1
-          AND (
-            ?2 = '' OR ?2 = '__decay_all__'
-            OR (?4 = 'hidden' AND (COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2))
-            OR (?4 = 'strict' AND (COALESCE(r.scope, '') = 'global'
-                                   OR (COALESCE(r.scope, '') = 'project' AND r.project_id = ?2)))
-          )
-        ORDER BY rank ASC
-        LIMIT ?3
-      `);
-
-      // L0 FTS prepared statements
-      this.stmtL0FtsInsert = this.db.prepare(`
-        INSERT INTO l0_fts (message_text, message_text_original, record_id, session_key, session_id, role, recorded_at, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      this.stmtL0FtsDelete = this.db.prepare(
-        "DELETE FROM l0_fts WHERE record_id = ?",
-      );
-
-      this.stmtL0FtsSearch = this.db.prepare(`
-        SELECT record_id, message_text_original AS message_text, session_key, session_id, role, recorded_at, timestamp,
-               bm25(l0_fts) AS rank
-        FROM l0_fts
-        WHERE l0_fts MATCH ?
-        ORDER BY rank ASC
-        LIMIT ?
-      `);
-
-      this.ftsAvailable = true;
-      this.logger?.debug?.(
-        `${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v${FTS_SCHEMA_VERSION} — per-script segmentation]`,
-      );
-
-      // Rebuild the FTS index when the segmentation changed or the tables were
-      // freshly created over existing data. The marker records what the index
-      // actually holds, so it is written only for an index this build wrote:
-      // a rebuild that failed (disk full, a locked database) leaves the tables
-      // dropped and empty, and a marker over that emptiness would tell every
-      // later open that there is nothing to repair. Leaving it unwritten costs
-      // one more rebuild attempt; writing it costs the index.
-      let didRebuild = false;
-      if (rebuilding) {
-        try {
-          didRebuild = this.rebuildFtsRows();
-          this.db.exec("COMMIT");
-        } catch (err) {
-          try {
-            this.db.exec("ROLLBACK");
-          } catch {
-            // The failure already ended the transaction.
-          }
-          throw err;
-        }
-      }
+      const didRebuild = this.openFtsTables(migration);
       if (shouldWriteFtsMarker(migration.kind, didRebuild)) {
         this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
         this.writeFtsTokenizer();
@@ -3272,7 +3225,7 @@ export class VectorStore implements IMemoryStore {
         // Nothing to migrate — but existing records still have to be indexed
         // into the tables init is about to create.
         return this.hasAnyRecords()
-          ? { kind: "rebuild-needed" }
+          ? { kind: "rebuild-needed", shapeChanged: true }
           : { kind: "current" };
       }
 
@@ -3282,7 +3235,11 @@ export class VectorStore implements IMemoryStore {
       // The drop itself is left to the caller, which does it inside the same
       // transaction as the refill — a check must not be able to empty the
       // index on its own.
-      return { kind: "rebuild-needed", dropFirst: true };
+      return {
+        kind: "rebuild-needed",
+        dropFirst: true,
+        shapeChanged: present.length !== 2 || stale.length > 0,
+      };
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS migration check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -3461,6 +3418,144 @@ export class VectorStore implements IMemoryStore {
     // index: leaving the marker unwritten costs one more rebuild attempt,
     // claiming it costs the rows.
     return complete;
+  }
+
+  /**
+   * Bring the FTS tables into the shape this build indexes with, and refill
+   * them when the segmentation they hold is not this one.
+   *
+   * The drop, the fresh tables, the statements and the refill are ONE
+   * transaction: without it a rebuild that fails halfway leaves both tables
+   * empty for the rest of the process — search answers "nothing found" over a
+   * memory that holds everything, and only the next open repairs it.
+   *
+   * @returns whether a rebuild ran to completion (the marker follows that).
+   * @throws when the index cannot be made usable at all; the caller degrades
+   *   to no FTS. A LOCKED database is not that case: the tables are left as
+   *   they are, still searchable, and the next open tries the rebuild again.
+   */
+  private openFtsTables(migration: FtsMigrationCheck): boolean {
+    const rebuilding = migration.kind === "rebuild-needed";
+    if (rebuilding && !this.beginFtsTransaction(migration)) {
+      // Another process holds the write lock — its own rebuild, most likely.
+      // The tables are usable, so this process searches the index it finds and
+      // leaves the repair to whoever can take the lock.
+      this.prepareFtsStatements();
+      this.ftsAvailable = true;
+      return false;
+    }
+
+    try {
+      if (migration.dropFirst) {
+        this.db.exec("DROP TABLE IF EXISTS l1_fts");
+        this.db.exec("DROP TABLE IF EXISTS l0_fts");
+      }
+      this.createFtsTables();
+      this.prepareFtsStatements();
+      this.ftsAvailable = true;
+      this.logger?.debug?.(
+        `${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v${FTS_SCHEMA_VERSION} — per-script segmentation]`,
+      );
+
+      if (!rebuilding) return false;
+      const didRebuild = this.rebuildFtsRows();
+      this.db.exec("COMMIT");
+      return didRebuild;
+    } catch (err) {
+      if (rebuilding) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // The failure already ended the transaction.
+        }
+      }
+      // A rollback restores the tables as they were. When their SHAPE was
+      // wrong that is still an index this build cannot write to, so the
+      // failure travels on; otherwise the old index is searched as it stands.
+      if (migration.shapeChanged || !isDatabaseLocked(err)) throw err;
+      this.logger?.warn(
+        `${TAG} FTS5 rebuild postponed — the database is locked; searching the existing index`,
+      );
+      this.prepareFtsStatements();
+      this.ftsAvailable = true;
+      return false;
+    }
+  }
+
+  /**
+   * Take the write lock for a rebuild.
+   *
+   * @returns false when another process holds it and the tables can be used as
+   *   they are; throws when they cannot.
+   */
+  private beginFtsTransaction(migration: FtsMigrationCheck): boolean {
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      return true;
+    } catch (err) {
+      if (migration.shapeChanged || !isDatabaseLocked(err)) throw err;
+      this.logger?.warn(
+        `${TAG} FTS5 rebuild postponed — the database is locked; searching the existing index`,
+      );
+      return false;
+    }
+  }
+
+  /** The statements every FTS read and write goes through. */
+  private prepareFtsStatements(): void {
+    // L1 FTS prepared statements
+    this.stmtL1FtsInsert = this.db.prepare(`
+        INSERT INTO l1_fts (content, content_original, record_id, type, priority, scene_name,
+          session_key, session_id, timestamp_str, timestamp_start, timestamp_end, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+    this.stmtL1FtsDelete = this.db.prepare(
+      "DELETE FROM l1_fts WHERE record_id = ?",
+    );
+
+    // NOTE: l1_fts must NOT be aliased — MATCH and bm25() require the real
+    // table name (an alias fails at prepare() with "no such column: <alias>",
+    // and searchL1Fts swallows that error, silently killing keyword recall).
+    // Only l1_records gets an alias.
+    this.stmtL1FtsSearch = this.db.prepare(`
+        SELECT l1_fts.record_id, l1_fts.content_original AS content, l1_fts.type,
+               l1_fts.priority, l1_fts.scene_name, l1_fts.session_key, l1_fts.session_id,
+               l1_fts.timestamp_str, l1_fts.timestamp_start, l1_fts.timestamp_end,
+               l1_fts.metadata_json,
+               r.project_id, COALESCE(r.scope, '') AS scope,
+               bm25(l1_fts) AS rank
+        FROM l1_fts
+        JOIN l1_records r ON r.record_id = l1_fts.record_id
+        WHERE l1_fts MATCH ?1
+          AND (
+            ?2 = '' OR ?2 = '__decay_all__'
+            OR (?4 = 'hidden' AND (COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2))
+            OR (?4 = 'strict' AND (COALESCE(r.scope, '') = 'global'
+                                   OR (COALESCE(r.scope, '') = 'project' AND r.project_id = ?2)))
+          )
+        ORDER BY rank ASC
+        LIMIT ?3
+      `);
+
+    // L0 FTS prepared statements
+    this.stmtL0FtsInsert = this.db.prepare(`
+        INSERT INTO l0_fts (message_text, message_text_original, record_id, session_key, session_id, role, recorded_at, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+    this.stmtL0FtsDelete = this.db.prepare(
+      "DELETE FROM l0_fts WHERE record_id = ?",
+    );
+
+    this.stmtL0FtsSearch = this.db.prepare(`
+        SELECT record_id, message_text_original AS message_text, session_key, session_id, role, recorded_at, timestamp,
+               bm25(l0_fts) AS rank
+        FROM l0_fts
+        WHERE l0_fts MATCH ?
+        ORDER BY rank ASC
+        LIMIT ?
+      `);
   }
 
   /** The two FTS tables, created only when they are not already there. */

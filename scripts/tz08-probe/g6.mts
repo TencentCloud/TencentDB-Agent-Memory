@@ -76,8 +76,8 @@ const launcherPath = resolveLauncherPath();
 
 /**
  * A session's environment: this machine's root, and NOT one TDAI_GATEWAY_*
- * variable. `cwd` is the sandbox because the repo's own tdai-gateway.yaml
- * would otherwise be found first and name a different port.
+ * variable. `cwd` is the sandbox to show it makes no difference — a client
+ * ignores a config in whatever directory a host happened to start it in.
  */
 const sessionEnv: Record<string, string | undefined> = {
   HOME: home,
@@ -161,22 +161,37 @@ try {
   );
 
   // ── An address the host could NOT resolve for itself ──
-  // The same gateway, found through a config in the printing shell's own
-  // directory. Nothing about that directory reaches the host, so the snippet
-  // has to carry the address — otherwise the pasted line falls back to the
-  // default port and answers from whatever gateway happens to run there.
+  // The same gateway, named to the printing shell through TDAI_GATEWAY_CONFIG.
+  // That variable does not reach the host, so the snippet has to carry the
+  // address — otherwise the pasted line falls back to the default port and
+  // answers from whatever gateway happens to run there.
   const projectDir = path.join(home, "project");
   fs.mkdirSync(projectDir, { recursive: true });
-  fs.copyFileSync(configPath, path.join(projectDir, "tdai-gateway.yaml"));
+  const namedConfig = path.join(projectDir, "tdai-gateway.yaml");
+  fs.copyFileSync(configPath, namedConfig);
 
+  const printEnv = { ...process.env, ...sessionEnv } as NodeJS.ProcessEnv;
   const printed = execFileSync(
     process.execPath,
     [launcherPath, "--host", "claude", "--print-registration"],
     {
       cwd: projectDir,
-      env: { ...process.env, ...sessionEnv } as NodeJS.ProcessEnv,
+      env: { ...printEnv, TDAI_GATEWAY_CONFIG: namedConfig },
       encoding: "utf-8",
     },
+  );
+
+  // …while the same config found only by being in the current directory is
+  // NOT an address: a host starts the launcher wherever it likes, and letting
+  // that directory decide would point a session at another memory.
+  const printedFromCwd = execFileSync(
+    process.execPath,
+    [launcherPath, "--host", "claude", "--print-registration"],
+    { cwd: projectDir, env: printEnv, encoding: "utf-8" },
+  );
+  must(
+    "конфиг в текущем каталоге адресом не считается",
+    !printedFromCwd.includes("--gateway"),
   );
   const snippet = JSON.parse(printed.slice(printed.indexOf("{"))) as {
     mcpServers: Record<string, { command: string; args: string[] }>;

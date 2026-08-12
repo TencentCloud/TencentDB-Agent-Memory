@@ -230,10 +230,9 @@ describe("the registration a user pastes", () => {
   });
 
   it("bakes in an address the host could not have found for itself", () => {
-    // A config in the printing shell's directory, or one named by
-    // TDAI_GATEWAY_CONFIG, resolves a port that NOTHING in the pasted snippet
-    // carries: the host starts the launcher from its own directory with its
-    // own environment and lands on 8420 — another gateway's memory, on a
+    // A config named by TDAI_GATEWAY_CONFIG resolves a port that NOTHING in the
+    // pasted snippet carries: the host starts the launcher with its own
+    // environment and would land on 8420 — another gateway's memory, on a
     // machine that runs a default one too.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-origin-"));
     const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-cwd-"));
@@ -251,10 +250,13 @@ describe("the registration a user pastes", () => {
         "http://127.0.0.1:9137",
       );
 
+      // A config in the CURRENT DIRECTORY is not an address at all here: a
+      // host starts the launcher wherever it likes, so honouring one would let
+      // the directory a session happens to run in decide which memory it talks
+      // to. Neither the snippet nor the running server may see it.
       vi.stubEnv("TDAI_GATEWAY_CONFIG", "");
-      expect(renderRegistration("claude", {})).toContain(
-        "http://127.0.0.1:9138",
-      );
+      expect(renderRegistration("claude", {})).not.toContain("--gateway");
+      expect(resolveGatewayUrl({})).toBe("http://127.0.0.1:8420");
 
       // The data dir's own config is the MACHINE's answer: the host resolves it
       // too, so the snippet stays free of an address that could go stale.
