@@ -108,6 +108,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager.js";
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import { captureCursorFloor } from "./capture-timing.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -1392,6 +1393,7 @@ export class TdaiGateway {
       ],
       sessionKey: body.session_key,
       sessionId: body.session_id,
+      startedAt: captureCursorFloor(body.messages),
     });
     const elapsed = Date.now() - startMs;
 
