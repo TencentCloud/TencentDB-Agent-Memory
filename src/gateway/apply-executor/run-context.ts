@@ -28,6 +28,15 @@ export interface RunContext {
   /** Mechanical per-run budgets. Absent → no caps gate. */
   caps?: { deletePerRun: number; rewritePerRun: number };
   gateMode?: GateMode;
+  /** Does THIS apply end the run? A role run applies once per batch, and the
+   * night loop runs several batches under one Run: closing the run on the
+   * first successful apply made every later batch's artefact refusable
+   * (`run is applied: artefact refused`, fence.ts:15) and threw away the work
+   * of the batches that had already landed. For a run driven by a role the
+   * closing state belongs to the run's own finalization (run-outcome.ts);
+   * a direct apply that names a run has nothing else to close it, so the
+   * default stays true. */
+  closesRun?: boolean;
 }
 
 export interface CapCounts {

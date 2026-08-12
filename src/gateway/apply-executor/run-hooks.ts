@@ -63,8 +63,14 @@ export function leaveApplying(
   if (!outcome.entered) return;
   const runId = scopedRunId(deps, run);
   if (runId === undefined) return;
+  // A successful apply that does not close the run leaves it WORKING: the
+  // next batch of the same run still has to be able to hand in its artefact,
+  // and `applied` is terminal (fence.ts:15 refuses artefacts of a run that is
+  // over). The run's own finalization writes the terminal state.
   const state = outcome.ok
-    ? "applied"
+    ? (run?.closesRun ?? true)
+      ? "applied"
+      : "running"
     : outcome.mutated
       ? "needs-reconciliation"
       : "failed";

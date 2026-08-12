@@ -73,6 +73,9 @@ export async function runBatch(
         opsSubset: args.contract.policy.opsSubset,
         caps: args.contract.policy.caps,
         gateMode: ctx.applyGateMode,
+        // The run is closed by finalizeRunOutcome when the WHOLE run ends —
+        // not by the first batch that applies (night-batches.ts runs several).
+        closesRun: false,
       },
     );
     recordApplyResult(result, applyResult);
