@@ -97,6 +97,15 @@ export interface RecallConfig {
   maxTotalRecallChars: number;
   /** Max characters of L3 persona injected per turn. 0 disables the limit. */
   maxPersonaChars: number;
+  /**
+   * Token budget for the WHOLE assembled context — memories, persona and scene
+   * navigation together (tz-10b). The default is sized from the worst case the
+   * char limits above allow (persona 6000 + memories 2000 + tools guide ≈300),
+   * so turning the assembler on does not change what gets injected today.
+   */
+  contextBudgetTokens: number;
+  /** Tokens held back for the user's own prompt; memory never spends them. */
+  reservedForUserTokens: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -779,6 +788,8 @@ export function parseConfig(
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 500,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 2000,
       maxPersonaChars: num(recallGroup, "maxPersonaChars") ?? 6000,
+      contextBudgetTokens: num(recallGroup, "contextBudgetTokens") ?? 12000,
+      reservedForUserTokens: num(recallGroup, "reservedForUserTokens") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.2,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,

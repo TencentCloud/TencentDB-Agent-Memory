@@ -46,6 +46,9 @@ describe("wave config schema (P1)", () => {
     expect(cfg.probe.topK).toBe(10);
     expect(cfg.probe.baselinePath).toBe("probe-baseline.json");
     // typeWeights — off by default (all 1.0)
+    // tz-10b context budget: sized so today's char limits fit whole
+    expect(cfg.recall.contextBudgetTokens).toBe(12000);
+    expect(cfg.recall.reservedForUserTokens).toBe(0);
     expect(cfg.recall.typeWeights).toEqual({
       instruction: 1,
       persona: 1,
