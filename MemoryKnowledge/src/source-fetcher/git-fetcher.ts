@@ -235,11 +235,14 @@ export class GitSourceFetcher implements ISourceFetcher {
     if (authMethod === "token" && opts?.accessToken) {
       const secretFile = join(dir, "secret");
       await writeFile(secretFile, opts.accessToken, { mode: 0o600 });
+      // username 写入独立文件（与 secret 同模式），askpass 脚本只 cat 文件、
+      // 绝不把用户可控值拼进 shell 脚本——防 token_username 命令注入。
+      const usernameFile = join(dir, "username");
+      await writeFile(usernameFile, `${opts.tokenUsername || "oauth2"}\n`, { mode: 0o600 });
       const askpass = join(dir, "askpass");
-      const username = opts.tokenUsername || "oauth2";
       await writeFile(
         askpass,
-        `#!/bin/sh\ncase "$1" in\n  *[Uu]sername*) printf '%s\\n' "${username}" ;;\n  *[Pp]assword*) cat "${secretFile}" ;;\n  *) exit 1 ;;\nesac\n`,
+        `#!/bin/sh\ncase "$1" in\n  *[Uu]sername*) cat "${usernameFile}" ;;\n  *[Pp]assword*) cat "${secretFile}" ;;\n  *) exit 1 ;;\nesac\n`,
         { mode: 0o700 },
       );
       return {

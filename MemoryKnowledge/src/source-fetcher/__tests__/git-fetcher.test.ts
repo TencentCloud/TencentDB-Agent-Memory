@@ -57,6 +57,28 @@ describe("GitSourceFetcher token auth (§8) — job material", () => {
     }
   });
 
+  it("token_username command injection is blocked (username via file, never inlined into askpass script)", async () => {
+    const fetcher = new GitSourceFetcher() as unknown as AnyFetcher;
+    const evil = '"; touch /tmp/pwned-askpass; #';
+    const job = await fetcher.prepareJob(
+      { protocol: "https", host: "github.com" },
+      { authMethod: "token", accessToken: SECRET, tokenUsername: evil },
+    );
+    try {
+      const askpass = await readFile(job.askpassPath!, "utf8");
+      // payload 绝不能拼进脚本（防命令注入）
+      expect(askpass).not.toContain(evil);
+      expect(askpass).not.toContain("touch");
+      expect(askpass).not.toContain("$(");
+      // username 在独立文件，脚本经 cat 输出
+      expect(askpass).toContain("username");
+      const usernameFile = await readFile(join(job.dir, "username"), "utf8");
+      expect(usernameFile.trim()).toBe(evil); // 原样保存，不执行
+    } finally {
+      await job.cleanup();
+    }
+  });
+
   it("job dir is created and removed after cleanup", async () => {
     const fetcher = new GitSourceFetcher() as unknown as AnyFetcher;
     const job = await fetcher.prepareJob(
@@ -66,8 +88,7 @@ describe("GitSourceFetcher token auth (§8) — job material", () => {
     const dir = job.dir;
     await expect(stat(dir)).resolves.toBeTruthy();
     await job.cleanup();
-    await expect(readdir(dir)).rejects.toThrow();
-  });
+    await expect(readdir(dir)).rejects.toThrow();  });
 });
 
 describe("GitSourceFetcher SSH host verification (§10)", () => {
