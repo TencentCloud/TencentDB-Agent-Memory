@@ -63,6 +63,11 @@ ENV NODE_ENV=production \
     LLM_TIMEOUT_MS=1200000 \
     KNOWLEDGE_DATA_DIR=/data/knowledge \
     KNOWLEDGE_DB_PATH=/data/knowledge/knowledge.db \
+    EVALUATION_BUNDLE_ENABLED=1 \
+    EVALUATION_BUNDLE_PATH=/app/evaluation/bundle/evaluation-view-bundle.json \
+    EVALUATION_BUNDLE_PIN_PATH=/app/evaluation/pin/evaluation-view-bundle.sha256 \
+    EVALUATION_BUNDLE_EXPECTED_SHA256=sha256:1a5083dedc77ecff1d37340661c133176b46528d152ee9e750fcc7571de84bc8 \
+    EVALUATION_BUNDLE_MAX_BYTES=10485760 \
     LOG_LEVEL=info \
     LOG_FORMAT=json
 
@@ -78,9 +83,21 @@ COPY --from=knowledge-builder /build/knowledge/package.json /app/knowledge/packa
 # Swagger UI 从这个路径读 openapi.yaml（src/server.ts）
 COPY --from=knowledge-builder /build/knowledge/openapi.yaml /app/knowledge/openapi.yaml
 
+# GLOBAL_SYNTHETIC Recorded E1 展示资产：原始 producer bytes + 独立 digest pin。
+COPY evaluation/bundle/evaluation-view-bundle.json /app/evaluation/bundle/evaluation-view-bundle.json
+COPY evaluation/pin/evaluation-view-bundle.sha256 /app/evaluation/pin/evaluation-view-bundle.sha256
+
 COPY start-combined.sh /usr/local/bin/start-combined.sh
+COPY verify-evaluation-assets.sh /usr/local/bin/verify-evaluation-assets.sh
 COPY README.md /app/README.md
-RUN chmod +x /usr/local/bin/start-combined.sh && mkdir -p /data/knowledge /app/panel/config
+RUN chmod 0555 /usr/local/bin/start-combined.sh /usr/local/bin/verify-evaluation-assets.sh \
+    && chmod 0444 /app/evaluation/bundle/evaluation-view-bundle.json /app/evaluation/pin/evaluation-view-bundle.sha256 \
+    && chmod 0555 /app/evaluation /app/evaluation/bundle /app/evaluation/pin \
+    && mkdir -p /data/knowledge /app/panel/config \
+    && chown -R node:node /data/knowledge /app/panel/config
+
+# 运行态不用 root；evaluation 资产由 root 持有且对运行用户不可写。
+USER node
 
 EXPOSE 8125 8424
 

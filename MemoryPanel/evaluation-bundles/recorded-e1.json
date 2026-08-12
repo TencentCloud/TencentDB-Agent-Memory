@@ -1,0 +1,101 @@
+{
+  "bundleVersion": "recorded-e1-demo-20260812",
+  "evaluations": [
+    {
+      "comparison": [
+        {
+          "armId": "K0P0",
+          "flowVariant": "P0",
+          "knowledgeVariant": "K0",
+          "recordedAccepted": false,
+          "sampleCount": 2
+        },
+        {
+          "armId": "K0P1",
+          "flowVariant": "P1",
+          "knowledgeVariant": "K0",
+          "recordedAccepted": false,
+          "sampleCount": 2
+        },
+        {
+          "armId": "K1P0",
+          "flowVariant": "P0",
+          "knowledgeVariant": "K1",
+          "recordedAccepted": true,
+          "sampleCount": 2
+        },
+        {
+          "armId": "K1P1",
+          "flowVariant": "P1",
+          "knowledgeVariant": "K1",
+          "recordedAccepted": true,
+          "sampleCount": 2
+        }
+      ],
+      "evaluationId": "catalog-contract-migration-recorded-e1",
+      "evidenceSummaries": [
+        "四臂结果来自可信合成控制器留下的 Recorded Fixture 投影，可用于验证展示契约。",
+        "本 Bundle 不携带运行级原始证据，也不证明知识卡实际进入运行上下文。"
+      ],
+      "generatedAt": "2026-08-12T00:00:00Z",
+      "knowledgeCards": [
+        {
+          "cardId": "contract-fact-demo",
+          "projectionType": "DISPLAY_ONLY",
+          "summary": "展示可被评测中心读取的白名单知识卡投影；未证明该卡实际暴露给任何运行。",
+          "tags": [
+            "契约",
+            "合成",
+            "展示投影"
+          ],
+          "title": "契约事实卡（合成展示）"
+        },
+        {
+          "cardId": "cross-repo-impact-demo",
+          "projectionType": "DISPLAY_ONLY",
+          "summary": "演示多仓影响说明的展示结构；不包含真实团队、用户或仓库敏感信息。",
+          "tags": [
+            "跨仓",
+            "合成",
+            "展示投影"
+          ],
+          "title": "跨仓影响卡（合成展示）"
+        }
+      ],
+      "limitations": [
+        "未运行真实 Agent，未调用 CatX。",
+        "未验证外部权威结果，E2 状态为 BLOCKED。",
+        "知识卡为 DISPLAY_ONLY 投影，runExposure 固定为 NOT_PROVEN。"
+      ],
+      "metrics": [
+        {
+          "name": "recorded_fixture_runs",
+          "unit": "runs",
+          "value": 8
+        },
+        {
+          "name": "recorded_complete_rate",
+          "unit": "ratio",
+          "value": 1
+        }
+      ],
+      "resultLabel": "INCONCLUSIVE",
+      "sampleCount": 8,
+      "semantics": {
+        "cardE1BindingHash": null,
+        "catxCalled": false,
+        "disclaimer": "合成控制器参考态，仅验证 Demo 契约与展示链路，不代表真实 Agent 收益、线上效果或平台能力",
+        "e2Status": "BLOCKED",
+        "evidenceLevel": "E1",
+        "externalAuthorityVerified": false,
+        "liveAgentExecuted": false,
+        "runExposure": "NOT_PROVEN"
+      },
+      "title": "目录契约迁移知识卡展示 Demo"
+    }
+  ],
+  "generatedAt": "2026-08-12T00:00:00Z",
+  "schemaVersion": "1.0.0",
+  "sourceMode": "RECORDED_FIXTURE",
+  "tenantScope": "GLOBAL_SYNTHETIC"
+}

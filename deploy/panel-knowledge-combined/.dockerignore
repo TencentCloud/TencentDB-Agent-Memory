@@ -23,6 +23,7 @@ knowledge/docs/
 # ── 测试脚本：含内部环境硬编码路径，非 runtime 必需 ──
 panel/tests/
 panel/e2e-*.sh
+panel/evaluation-bundles/
 knowledge/__tests__/
 knowledge/bin/e2e-*.sh
 
@@ -47,3 +48,10 @@ knowledge/bin/e2e-*.sh
 **/*.swo
 **/.iwiki
 **/.codebuddy
+
+# Evaluation 仅允许 build.sh 复制到以下两个精确路径；避免夹带其他材料。
+evaluation/*
+!evaluation/bundle/
+!evaluation/bundle/evaluation-view-bundle.json
+!evaluation/pin/
+!evaluation/pin/evaluation-view-bundle.sha256

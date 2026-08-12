@@ -32,6 +32,10 @@ CTX_DIR="${CTX_DIR:-$WORKSPACE_ROOT/panel-knowledge-builder}"
 KEEP_CTX="${KEEP_CTX:-0}"
 PREPARE_ONLY="${PREPARE_ONLY:-0}"
 PLATFORM="${PLATFORM:-linux/amd64}"
+EVALUATION_BUNDLE_DIR="${EVALUATION_BUNDLE_DIR:-$TMC_DIR/evaluation-bundles}"
+EVALUATION_BUNDLE_PATH="${EVALUATION_BUNDLE_PATH:-$EVALUATION_BUNDLE_DIR/recorded-e1.json}"
+EVALUATION_BUNDLE_PIN_PATH="${EVALUATION_BUNDLE_PIN_PATH:-$EVALUATION_BUNDLE_DIR/recorded-e1.sha256}"
+EVALUATION_BUNDLE_MAX_BYTES="${EVALUATION_BUNDLE_MAX_BYTES:-10485760}"
 
 err() { echo "[build-combined] error: $*" >&2; exit 1; }
 
@@ -41,6 +45,27 @@ err() { echo "[build-combined] error: $*" >&2; exit 1; }
   || err "MemoryKnowledge 不在 $KNOWLEDGE_DIR（设 KNOWLEDGE_DIR=<path> 指定）"
 [[ -f "$SCRIPT_DIR/Dockerfile" ]] || err "Dockerfile 不在 $SCRIPT_DIR"
 [[ -f "$SCRIPT_DIR/start-combined.sh" ]] || err "start-combined.sh 不在 $SCRIPT_DIR"
+[[ -f "$SCRIPT_DIR/verify-evaluation-assets.sh" ]] || err "verify-evaluation-assets.sh 不在 $SCRIPT_DIR"
+
+verify_regular_asset() {
+  local file="$1" label="$2" max_bytes="$3"
+  [[ -f "$file" && ! -L "$file" ]] || err "$label 必须是非 symlink regular file: $file"
+  local size
+  size=$(wc -c < "$file" | tr -d ' ')
+  [[ "$size" =~ ^[0-9]+$ && "$size" -le "$max_bytes" ]] || err "$label 超过大小门禁: $size > $max_bytes"
+}
+
+verify_regular_asset "$EVALUATION_BUNDLE_PATH" "evaluation bundle" "$EVALUATION_BUNDLE_MAX_BYTES"
+verify_regular_asset "$EVALUATION_BUNDLE_PIN_PATH" "evaluation pin" 256
+EXPECTED_PIN=$(tr -d '\r\n' < "$EVALUATION_BUNDLE_PIN_PATH")
+[[ "$EXPECTED_PIN" =~ ^sha256:[a-f0-9]{64}$ ]] || err "evaluation pin 格式无效"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_HEX=$(sha256sum "$EVALUATION_BUNDLE_PATH" | awk '{print $1}')
+else
+  ACTUAL_HEX=$(shasum -a 256 "$EVALUATION_BUNDLE_PATH" | awk '{print $1}')
+fi
+[[ "sha256:$ACTUAL_HEX" == "$EXPECTED_PIN" ]] || err "evaluation bundle 与外部 pin 不一致"
+EVALUATION_BUNDLE_EXPECTED_SHA256="$EXPECTED_PIN"
 
 echo "[build-combined] panel  (MemoryPanel): $TMC_DIR"
 echo "[build-combined] knowledge:            $KNOWLEDGE_DIR"
@@ -82,6 +107,7 @@ rsync -a --delete \
   --exclude pnpm-lock.yaml \
   --exclude pnpm-workspace.yaml \
   --exclude vitest.config.ts \
+  --exclude evaluation-bundles/ \
   "$TMC_DIR"/ "$CTX_DIR/panel"/
 
 # rsync knowledge（builder stage 编译需要 src/ + package*.json + tsconfig.json + tsdown.config.ts，
@@ -112,10 +138,26 @@ rsync -a --delete \
 # 拷 Dockerfile + start-combined.sh + .dockerignore + README（rsync 已过滤敏感文件，.dockerignore 作兜底）
 cp "$SCRIPT_DIR/Dockerfile" "$CTX_DIR"/
 cp "$SCRIPT_DIR/start-combined.sh" "$CTX_DIR"/
+cp "$SCRIPT_DIR/verify-evaluation-assets.sh" "$CTX_DIR"/
 cp "$SCRIPT_DIR/README.md" "$CTX_DIR"/
 if [[ -f "$SCRIPT_DIR/.dockerignore" ]]; then
   cp "$SCRIPT_DIR/.dockerignore" "$CTX_DIR"/
 fi
+
+# Evaluation 资产是 producer 原始 bytes 的只读副本；不解析、不重序列化。
+mkdir -p "$CTX_DIR/evaluation/bundle" "$CTX_DIR/evaluation/pin"
+cp "$EVALUATION_BUNDLE_PATH" "$CTX_DIR/evaluation/bundle/evaluation-view-bundle.json"
+cp "$EVALUATION_BUNDLE_PIN_PATH" "$CTX_DIR/evaluation/pin/evaluation-view-bundle.sha256"
+chmod 0444 "$CTX_DIR/evaluation/bundle/evaluation-view-bundle.json" "$CTX_DIR/evaluation/pin/evaluation-view-bundle.sha256"
+EVALUATION_BUNDLE_PATH="$CTX_DIR/evaluation/bundle/evaluation-view-bundle.json" \
+EVALUATION_BUNDLE_PIN_PATH="$CTX_DIR/evaluation/pin/evaluation-view-bundle.sha256" \
+EVALUATION_BUNDLE_EXPECTED_SHA256="$EVALUATION_BUNDLE_EXPECTED_SHA256" \
+  bash "$SCRIPT_DIR/verify-evaluation-assets.sh"
+
+# 镜像 metadata 冻结运行时 authority；runtime 不从同目录 sidecar 获取信任。
+sed "s|sha256:1a5083dedc77ecff1d37340661c133176b46528d152ee9e750fcc7571de84bc8|${EVALUATION_BUNDLE_EXPECTED_SHA256}|g" \
+  "$CTX_DIR/Dockerfile" > "$CTX_DIR/.Dockerfile.evaluation.tmp"
+mv "$CTX_DIR/.Dockerfile.evaluation.tmp" "$CTX_DIR/Dockerfile"
 
 if [[ "$PREPARE_ONLY" == "1" ]]; then
   echo ""
