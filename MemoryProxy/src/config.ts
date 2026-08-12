@@ -425,6 +425,14 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       endpoint: yaml.tdai?.endpoint ?? DEFAULT_CONFIG.tdai.endpoint,
       apiKey: yaml.tdai?.apiKey ?? DEFAULT_CONFIG.tdai.apiKey,
       serviceId: yaml.tdai?.serviceId ?? DEFAULT_CONFIG.tdai.serviceId,
+      anonymous: yaml.tdai?.anonymous
+        ? {
+            enabled: yaml.tdai.anonymous.enabled ?? false,
+            teamId: yaml.tdai.anonymous.teamId ?? "default",
+            agentId: yaml.tdai.anonymous.agentId ?? "codebuddy",
+            userId: yaml.tdai.anonymous.userId ?? "anonymous",
+          }
+        : null,
       memory: {
         enabled: yaml.tdai?.memory?.enabled ?? DEFAULT_CONFIG.tdai.memory.enabled,
         inject: yaml.tdai?.memory?.inject ?? DEFAULT_CONFIG.tdai.memory.inject,
