@@ -37,6 +37,17 @@ export interface OpenAIEmbeddingConfig {
    * unknown `dimensions` parameters with HTTP 400; set this to `false` for those.
    */
   sendDimensions?: boolean;
+  /**
+   * Whether to send the `input_type` field ("query" for a search, "passage"
+   * for something being stored).
+   *
+   * Off by default: OpenAI and llama.cpp-style servers have no such field.
+   * It is not cosmetic for the models that do have one — measured against
+   * `nvidia/nemotron-3-embed-1b`, a corpus embedded WITHOUT it collapses
+   * towards a single hub vector (top-1 recall 3/7 on a mixed ru/en corpus,
+   * margins ~0.00); with the field present the same corpus recalls 7/7.
+   */
+  sendInputType?: boolean;
   /** Local proxy URL (only for provider="qclaw") — requests are forwarded through this proxy with Remote-URL header */
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). */
@@ -63,9 +74,25 @@ export interface EmbeddingProviderInfo {
   model: string;
 }
 
+/**
+ * Which side of the search a text is on.
+ *
+ * Asymmetric models embed a question and the answer it should find into
+ * different regions, and only match the two when told which is which.
+ */
+export type EmbeddingInputType = "query" | "passage";
+
 export interface EmbeddingCallOptions {
   /** Override the default timeout for this call (milliseconds). */
   timeoutMs?: number;
+  /**
+   * Whether this text is a search or something being stored.
+   *
+   * Defaults to `"passage"`: a mislabelled query costs one search, while a
+   * mislabelled passage is written into the index and costs every search that
+   * should have found it, until the next reindex.
+   */
+  inputType?: EmbeddingInputType;
 }
 
 export interface EmbeddingService {
@@ -372,6 +399,8 @@ const MAX_BATCH_SIZE = 256;
 const MAX_RETRIES = 3;
 /** Default timeout per API call in milliseconds */
 const DEFAULT_API_TIMEOUT_MS = 10_000;
+/** What an unlabelled text is taken to be — see `EmbeddingCallOptions.inputType`. */
+const DEFAULT_INPUT_TYPE: EmbeddingInputType = "passage";
 
 /**
  * Custom error class for embedding API errors that carries HTTP status code.
@@ -503,6 +532,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly model: string;
   private readonly dims: number;
   private readonly sendDimensions: boolean;
+  private readonly sendInputType: boolean;
   private readonly providerName: string;
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
@@ -527,6 +557,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.model = config.model;
     this.dims = config.dimensions;
     this.sendDimensions = config.sendDimensions ?? true;
+    this.sendInputType = config.sendInputType ?? false;
     this.providerName = config.provider || "openai";
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
@@ -570,13 +601,13 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options);
   }
 
   /**
@@ -591,13 +622,16 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     return text.slice(0, this.maxInputChars);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+  private async _callApi(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]> {
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
     };
     if (this.sendDimensions) {
       body.dimensions = this.dims;
+    }
+    if (this.sendInputType) {
+      body.input_type = options?.inputType ?? DEFAULT_INPUT_TYPE;
     }
 
     // Determine fetch URL and headers based on proxy mode.
@@ -618,7 +652,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       fetchUrl,
       headers,
       body,
-      timeoutMs: timeoutOverride ?? this.timeoutMs,
+      timeoutMs: options?.timeoutMs ?? this.timeoutMs,
     })) as OpenAIEmbeddingResponse;
 
     if (!json.data || !Array.isArray(json.data)) {
@@ -722,25 +756,23 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
-    // ZeroEntropy rejects requests without `input_type`. We default to
-    // "query" because the recall hot path is the only caller of embed()
-    // that returns a Float32Array; capture-side batches eventually feed
-    // the same vector store, and ZeroEntropy's symmetry between "query"
-    // and "document" makes a single type safe across both directions.
+  private async _callApi(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]> {
+    // ZeroEntropy rejects requests without `input_type`, and it calls the
+    // stored side "document" where the rest of the world says "passage" —
+    // the only place the two vocabularies differ.
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
-      input_type: "query",
+      input_type: (options?.inputType ?? DEFAULT_INPUT_TYPE) === "query" ? "query" : "document",
     };
     if (this.sendDimensions) {
       // ZeroEntropy's docs list `dimensions` as optional. For zembed-1 the
@@ -761,7 +793,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
       fetchUrl,
       headers,
       body,
-      timeoutMs: timeoutOverride ?? this.timeoutMs,
+      timeoutMs: options?.timeoutMs ?? this.timeoutMs,
     })) as ZeroEntropyEmbeddingResponse;
 
     if (!json.results || !Array.isArray(json.results)) {

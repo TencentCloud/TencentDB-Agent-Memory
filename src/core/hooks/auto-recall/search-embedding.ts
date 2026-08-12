@@ -23,7 +23,7 @@ export async function searchByEmbedding(
   mode: ScopeMode = "hidden",
 ): Promise<string[]> {
   logger?.debug?.(`${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`);
-  const queryEmbedding = await embeddingService.embed(userText, embeddingCallOpts);
+  const queryEmbedding = await embeddingService.embed(userText, { ...embeddingCallOpts, inputType: "query" });
   logger?.debug?.(
     `${TAG} [embedding-search] Query embedding OK: dims=${queryEmbedding.length}, ` +
     `norm=${Math.sqrt(Array.from(queryEmbedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}, ` +

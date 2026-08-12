@@ -99,6 +99,7 @@ export function createStoreBundle(
           model: config.embedding.model,
           dimensions: config.embedding.dimensions,
           sendDimensions: config.embedding.sendDimensions,
+          sendInputType: config.embedding.sendInputType,
           maxInputChars: config.embedding.maxInputChars,
         }, logger);
       }

@@ -132,7 +132,7 @@ async function runEmbeddingPart(
   const tStart = performance.now();
   try {
     logger?.debug?.(`${TAG} [hybrid-embedding] Generating query embedding...`);
-    const queryEmbedding = await embeddingService.embed(userText, embeddingCallOpts);
+    const queryEmbedding = await embeddingService.embed(userText, { ...embeddingCallOpts, inputType: "query" });
     logger?.debug?.(`${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}, mode=${mode}...`);
     const results = (await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText, projectId, mode))
       .filter((r) => passesScope(r, projectId, mode));

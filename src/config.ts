@@ -295,6 +295,13 @@ export interface EmbeddingConfig {
    * (e.g. BGE-M3, which returns HTTP 400 "does not support matryoshka representation").
    */
   sendDimensions: boolean;
+  /**
+   * Whether to send the `input_type` field ("query" when searching, "passage"
+   * when storing). Default false — OpenAI and llama.cpp servers have no such
+   * field. Asymmetric models (NVIDIA nemotron, ZeroEntropy) need it: without
+   * it their vectors collapse towards one hub and recall falls apart.
+   */
+  sendInputType: boolean;
   /** Top-K candidates to recall during conflict detection (default: 5) */
   conflictRecallTopK: number;
   /** Proxy URL for qclaw provider — when provider="qclaw", requests are forwarded through this local proxy */
@@ -850,6 +857,7 @@ export function parseConfig(
       model: str(embeddingGroup, "model") ?? defaultModel,
       dimensions: num(embeddingGroup, "dimensions") ?? defaultDimensions,
       sendDimensions: bool(embeddingGroup, "sendDimensions") ?? true,
+      sendInputType: bool(embeddingGroup, "sendInputType") ?? false,
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,
