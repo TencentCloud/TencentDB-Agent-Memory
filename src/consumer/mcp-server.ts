@@ -168,13 +168,14 @@ export function renderRegistration(
   // A host starts this server from its own config file, not from the shell
   // that printed the snippet — another directory, another environment. So an
   // address only THIS shell can resolve (a flag, TDAI_GATEWAY_URL or _PORT, a
-  // config named by TDAI_GATEWAY_CONFIG, a tdai-gateway.yaml in the current
-  // directory) has to travel INSIDE the snippet, or the pasted line serves a
-  // gateway the user never named — on a machine running a default one too,
-  // another memory answers and the next note lands in it. What the MACHINE
-  // answers — the data dir's own config, or the default — is left out, so a
-  // later change of port is picked up instead of frozen into a config file.
-  const address = resolveGatewayAddress(env, argv);
+  // config named by TDAI_GATEWAY_CONFIG, a relocation variable, or a
+  // tdai-gateway.yaml in the current directory, which the GATEWAY honours when
+  // a user starts it there) has to travel INSIDE the snippet, or the pasted
+  // line serves a gateway the user never named — on a machine running a
+  // default one too, another memory answers and the next note lands in it.
+  // What the MACHINE answers — the data dir's own config, or the default — is
+  // left out, so a later change of port is picked up instead of frozen in.
+  const address = resolveGatewayAddress(env, argv, true);
   const lookup = describeHost(hostId, {
     launcherPath: resolveLauncherPath(),
     ...(address.isPortable ? {} : { gatewayUrl: address.url }),

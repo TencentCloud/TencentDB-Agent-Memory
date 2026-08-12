@@ -250,12 +250,16 @@ describe("the registration a user pastes", () => {
         "http://127.0.0.1:9137",
       );
 
-      // A config in the CURRENT DIRECTORY is not an address at all here: a
-      // host starts the launcher wherever it likes, so honouring one would let
-      // the directory a session happens to run in decide which memory it talks
-      // to. Neither the snippet nor the running server may see it.
+      // A config in the CURRENT DIRECTORY cuts both ways. The GATEWAY honours
+      // one (a user starting a server in a directory means that directory), so
+      // a shell standing there is talking to that gateway and the snippet must
+      // freeze its address. The RUNNING server must not: a host starts the
+      // launcher wherever it likes, and letting that directory decide would
+      // point the session at another memory.
       vi.stubEnv("TDAI_GATEWAY_CONFIG", "");
-      expect(renderRegistration("claude", {})).not.toContain("--gateway");
+      expect(renderRegistration("claude", {})).toContain(
+        "http://127.0.0.1:9138",
+      );
       expect(resolveGatewayUrl({})).toBe("http://127.0.0.1:8420");
 
       cwd.mockReturnValue(dir); // no config in the current directory…

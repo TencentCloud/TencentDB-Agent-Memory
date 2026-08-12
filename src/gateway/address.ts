@@ -191,15 +191,25 @@ export function resolveGatewayPort(): number {
   return resolveGatewayPortSource().port;
 }
 
-/** The same port, with whether another process would resolve it unaided. */
-export function resolveGatewayPortSource(): GatewayPortSource {
+/**
+ * The same port, with whether another process would resolve it unaided.
+ *
+ * @param includeCwd whether a config in the current directory takes part.
+ *   A RUNNING client says false: it is started in a directory it did not
+ *   choose, and letting that directory decide would point the session at
+ *   another memory. The registration PRINTER says true: the gateway itself
+ *   honours a cwd config (`resolveGatewayConfigPath`), so a shell standing in
+ *   that directory really is talking to that gateway — and the address has to
+ *   be written into the snippet, because the directory does not travel.
+ */
+export function resolveGatewayPortSource(
+  includeCwd = false,
+): GatewayPortSource {
   const fromEnv = Number.parseInt(envValue("TDAI_GATEWAY_PORT") ?? "", 10);
   if (Number.isInteger(fromEnv) && fromEnv > 0)
     return { port: fromEnv, isPortable: false };
 
-  // No cwd: this answer is for a client, and a client is started somewhere it
-  // did not choose.
-  const config = findGatewayConfig(false);
+  const config = findGatewayConfig(includeCwd);
   const configured = readConfiguredPort(config?.path ?? null);
   if (configured !== null)
     return { port: configured, isPortable: config?.origin === "data-dir" };

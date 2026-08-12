@@ -36,13 +36,20 @@ export function resolveGatewayUrl(
  *
  * A registration is started by the host, from the host's own directory and
  * environment — so an address this shell found through `TDAI_GATEWAY_CONFIG`,
- * a config in the current directory, or any environment variable is one the
- * host cannot find again. `isPortable` marks the addresses that survive the
- * paste; everything else has to be written into the snippet.
+ * a relocation variable, or (when `includeCwd`) a config in the current
+ * directory is one the host cannot find again. `isPortable` marks the
+ * addresses that survive the paste; everything else has to be written into
+ * the snippet.
+ *
+ * @param includeCwd true only for the PRINTER. The gateway honours a config in
+ *   the current directory, so a shell standing there is talking to THAT
+ *   gateway and the snippet must freeze its address; a running client must
+ *   never let its working directory choose a memory.
  */
 export function resolveGatewayAddress(
   env: NodeJS.ProcessEnv,
   argv: readonly string[] = [],
+  includeCwd = false,
 ): { url: string; isPortable: boolean } {
   const explicit = parseFlag(argv, "--gateway") ?? env.TDAI_GATEWAY_URL?.trim();
   if (explicit) return { url: explicit.replace(/\/+$/, ""), isPortable: false };
@@ -53,7 +60,7 @@ export function resolveGatewayAddress(
   // Guessing the default here would send a configured install's sessions to a
   // gateway on 8420: nothing answers, or on a machine that runs a default one
   // too, the WRONG memory answers and the next note lands in it.
-  const source = resolveGatewayPortSource();
+  const source = resolveGatewayPortSource(includeCwd);
   return {
     url: `http://127.0.0.1:${source.port}`,
     isPortable: source.isPortable,

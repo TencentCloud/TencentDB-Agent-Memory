@@ -174,8 +174,29 @@ describe("segmentation per script", () => {
     expect(find("情報処理技術")).toEqual(["m1"]);
     expect(find("基礎")).toEqual(["m1"]);
     // …and the single characters jieba spells an unknown word out into are not
-    // tokens of their own: "検" must not drag in every document using it.
-    expect(segmentForFts("検索")).toEqual(["検索"]);
+    // asked for: "検" as a QUERY token would drag in every document using it.
+    // The index keeps them (a document is cheap to over-describe); the query
+    // is the side that narrows.
+    expect(segmentForFts("検索", "query")).toEqual(["検索"]);
+    expect(segmentForFts("検索", "index")).toContain("検索");
+  });
+
+  it("indexes wider than it asks: a one-character word stays findable", () => {
+    // Dropping "spelled out" single characters on the INDEX side lost real
+    // words: the word breaker reads 喝茶 as one word, so 茶 vanished from the
+    // index while a query for 茶 still asked for it. The index now keeps every
+    // reading; only the query narrows, which cannot lose a document.
+    store = open();
+    store.upsertL1(mem("m1", "我喜欢喝茶和咖啡"), vec());
+    store.upsertL1(mem("m2", "日本語のテキストを検索する"), vec());
+
+    expect(find("茶")).toEqual(["m1"]);
+    expect(find("咖啡")).toEqual(["m1"]);
+    expect(segmentForFts("我喜欢喝茶和咖啡", "index")).toContain("茶");
+    // …and the query side still refuses the characters of a word it does not
+    // know, so a Japanese search does not drag in unrelated documents.
+    expect(find("検索")).toEqual(["m2"]);
+    expect(buildFtsQuery("検索")).toBe('"検索"');
   });
 
   it("keeps a one-character Chinese word that also lives inside a longer one", () => {
@@ -229,13 +250,9 @@ describe("segmentation per script", () => {
   });
 
   it("handles a mixed sentence without shattering either half", () => {
-    expect(segmentForFts("Пользователь любит 编程 и TypeScript")).toEqual([
-      "Пользователь",
-      "любит",
-      "编程",
-      "и",
-      "TypeScript",
-    ]);
+    expect(
+      segmentForFts("Пользователь любит 编程 и TypeScript", "query"),
+    ).toEqual(["Пользователь", "любит", "编程", "и", "TypeScript"]);
   });
 
   it("asks for whole words, not letters", () => {
@@ -487,12 +504,20 @@ describe("repairing an index written by the old segmentation", () => {
       store = open();
       // The index it found is still searchable…
       expect(find("памяти")).toEqual(["m1"]);
+      // …but it was written by another segmentation, so a query built by this
+      // one can quietly find less than is there. Read routes must call that
+      // "rebuilding", never "nothing found" (ТЗ R2/S4).
+      expect(store.isReindexing()).toBe(true);
     } finally {
       holder.exec("ROLLBACK");
       holder.close();
     }
-    // …and nothing was marked, so the rebuild still happens on a later open.
-    expect(schemaVersion()).toBeUndefined();
+
+    // Once the lock is gone the FIRST caller repairs the index instead of
+    // waiting for the next start, and stops reporting a rebuild.
+    expect(store!.isReindexing()).toBe(false);
+    expect(schemaVersion()).toBe("4");
+    expect(find("памяти")).toEqual(["m1"]);
   });
 
   it("rebuilds an index written by a NEWER build instead of stamping over it", () => {

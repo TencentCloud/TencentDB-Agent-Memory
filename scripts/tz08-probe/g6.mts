@@ -208,11 +208,11 @@ try {
       printedRelocated.includes(gateway.url),
   );
 
-  // …while a config found only by being in the CURRENT DIRECTORY is not an
-  // address at all: a host starts the launcher wherever it likes. Printed
-  // without any relocation variable, the machine's own answer (HOME → data
-  // dir) wins and the decoy in the current directory is ignored — in the
-  // snippet AND at run time.
+  // A config in the CURRENT DIRECTORY cuts both ways. The GATEWAY honours one,
+  // so a shell standing in that directory is talking to THAT gateway and the
+  // snippet has to freeze its address — the directory does not travel. But a
+  // RUNNING server must never let its working directory choose a memory: the
+  // host starts the launcher wherever it likes.
   const homeEnv = { ...printEnv, MEMORY_TENCENTDB_ROOT: undefined };
   const printedFromCwd = execFileSync(
     process.execPath,
@@ -220,20 +220,18 @@ try {
     { cwd: projectDir, env: homeEnv as NodeJS.ProcessEnv, encoding: "utf-8" },
   );
   must(
-    "конфиг в текущем каталоге адресом не считается",
-    !printedFromCwd.includes("--gateway"),
+    "конфиг в текущем каталоге попадает в снипет — каталог не переезжает с ним",
+    printedFromCwd.includes(`127.0.0.1:${decoyPort}`),
   );
 
-  const cwdSnippet = JSON.parse(
-    printedFromCwd.slice(printedFromCwd.indexOf("{")),
-  ) as { mcpServers: Record<string, { command: string; args: string[] }> };
-  const cwdPasted = cwdSnippet.mcpServers["tdai-memory"]!;
+  // …and the launcher started WITHOUT that address ignores the directory it
+  // happens to run in: the machine's own answer (HOME → data dir) wins.
   const cwdHost = await startHost(
     {
       id: "claude-cwd",
       configPath: "~/.claude.json",
-      command: cwdPasted.command,
-      args: cwdPasted.args,
+      command: process.execPath,
+      args: [launcherPath, "--host", "claude"],
       env: {},
       registration: () => printedFromCwd,
     },

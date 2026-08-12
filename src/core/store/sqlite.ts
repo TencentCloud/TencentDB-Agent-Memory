@@ -414,7 +414,9 @@ export function shouldWriteFtsMarker(
  * everything else is split on Unicode word characters, which is what those
  * scripts actually need.
  */
-export function segmentForFts(raw: string): string[] {
+export type FtsSide = "index" | "query";
+
+export function segmentForFts(raw: string, side: FtsSide = "index"): string[] {
   const jieba = getJieba();
   const tokens: string[] = [];
 
@@ -431,7 +433,8 @@ export function segmentForFts(raw: string): string[] {
     // word breaker does. A run of Han alone goes to jieba, where cutForSearch
     // also splits long words further ("北京烤鸭" → 北京, 烤鸭, 北京烤鸭), so the
     // index holds the same sub-words a query will ask for.
-    if (jieba && !KANA_CHAR.test(run)) pushHanRun(tokens, jieba, run);
+    if (jieba && !KANA_CHAR.test(run))
+      pushHanRun(tokens, jieba, run, side === "query");
     else pushWords(tokens, run);
     last = match.index + run.length;
   }
@@ -486,34 +489,53 @@ function coveredPositions(run: string, tokens: readonly string[]): Set<number> {
  * character that stands alone somewhere in the run — 茶 in "茶和茶叶" — is a
  * word of its own and stays, or a query for it would find nothing.
  */
-function pushHanRun(into: string[], jieba: JiebaInstance, run: string): void {
+function pushHanRun(
+  into: string[],
+  jieba: JiebaInstance,
+  run: string,
+  dropSpelledOut: boolean,
+): void {
   const byJieba = [...jieba.cutForSearch(run, true)];
   const byWordBreaker: string[] = [];
   pushWords(byWordBreaker, run);
-  const covers = [
-    coveredPositions(run, byJieba),
-    coveredPositions(run, byWordBreaker),
-  ];
+  const covers = dropSpelledOut
+    ? [coveredPositions(run, byJieba), coveredPositions(run, byWordBreaker)]
+    : [];
 
   const seen = new Set<string>();
   for (const token of [...byJieba, ...byWordBreaker]) {
     if (seen.has(token)) continue;
     seen.add(token);
-    if (token.length === 1) {
-      const positions: number[] = [];
-      for (
-        let at = run.indexOf(token);
-        at >= 0;
-        at = run.indexOf(token, at + 1)
-      )
-        positions.push(at);
-      const isSpelledOut = covers.some((covered) =>
-        positions.every((at) => covered.has(at)),
-      );
-      if (isSpelledOut) continue;
-    }
+    if (token.length === 1 && isSpelledOut(run, token, covers)) continue;
     into.push(token);
   }
+
+  // The INDEX also keeps every character of the run on its own. A word both
+  // segmenters read as whole ("喝茶" — to drink tea) otherwise hides its parts:
+  // a search for 茶 found no document that says 喝茶, because neither reading
+  // ever emitted 茶. Characters are what a one-character query asks for, and
+  // in Han they are morphemes, not letters. The QUERY side does not take them
+  // (that is what `dropSpelledOut` decides), so this widens what can be found
+  // without widening what is asked for.
+  if (dropSpelledOut) return;
+  for (const char of run) {
+    if (seen.has(char)) continue;
+    seen.add(char);
+    into.push(char);
+  }
+}
+
+/** Whether one reading covers this character everywhere it occurs in the run. */
+function isSpelledOut(
+  run: string,
+  token: string,
+  covers: readonly Set<number>[],
+): boolean {
+  if (covers.length === 0) return false;
+  const positions: number[] = [];
+  for (let at = run.indexOf(token); at >= 0; at = run.indexOf(token, at + 1))
+    positions.push(at);
+  return covers.some((covered) => positions.every((at) => covered.has(at)));
 }
 
 /** Word breaker for everything outside Han, built once. */
@@ -598,7 +620,7 @@ function prefersPrefix(token: string): boolean {
  */
 export function buildFtsQuery(raw: string): string | null {
   // Deduplicate — cutForSearch produces sub-words that repeat.
-  const tokens = [...new Set(segmentForFts(raw))];
+  const tokens = [...new Set(segmentForFts(raw, "query"))];
   if (tokens.length === 0) return null;
   return tokens
     .map((token) => {
@@ -623,7 +645,7 @@ export function buildFtsQuery(raw: string): string | null {
  * word breaker's, because the run carries kana).
  */
 export function tokenizeForFts(raw: string): string {
-  return segmentForFts(raw).join(" ");
+  return segmentForFts(raw, "index").join(" ");
 }
 
 /**
@@ -754,6 +776,16 @@ export class VectorStore implements IMemoryStore {
 
   // FTS5 tables availability flag (created best-effort — may be false if fts5 is not compiled in)
   private ftsAvailable = false;
+
+  /**
+   * A rebuild this open could not take the lock for.
+   *
+   * The index is searchable but holds text cut by ANOTHER segmentation, so a
+   * query built by this one quietly finds less than is there — which reads
+   * exactly like an empty memory. `isReindexing()` reports it, and read
+   * routes answer "rebuilding" instead of "nothing found" (ТЗ R2/S4).
+   */
+  private ftsRebuildPending = false;
 
   // Prepared statements — FTS5 L1 (initialized in init())
   private stmtL1FtsInsert!: StatementSync;
@@ -2637,11 +2669,31 @@ export class VectorStore implements IMemoryStore {
    * @param onProgress  Optional callback for progress reporting.
    */
   /**
-   * True while a full reindexAll is in flight — read routes fail OPEN with an
-   * empty result (reindex-in-progress gate, ТЗ §5.6).
+   * True while the index is not one this build can be trusted to query.
+   *
+   * That is a full reindexAll in flight (the ТЗ §5.6 gate), or a segmentation
+   * rebuild a lock postponed at open. In both cases read routes answer
+   * "rebuilding" rather than an empty result: a session told "memory holds
+   * nothing" writes down what it already knows, and that is how duplicates
+   * are born (ТЗ R2/S4).
+   *
+   * Not a pure read: a postponed rebuild is retried here, so the FIRST search
+   * after the other process lets go of the lock repairs the index instead of
+   * waiting for the next start.
    */
   isReindexing(): boolean {
-    return reindexInProgress;
+    if (reindexInProgress) return true;
+    if (!this.ftsRebuildPending) return false;
+    if (this.rebuildFtsIndex()) {
+      this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
+      this.writeFtsTokenizer();
+      this.ftsRebuildPending = false;
+      this.logger?.info(
+        `${TAG} FTS5 rebuild that was postponed by a lock has completed`,
+      );
+      return false;
+    }
+    return true;
   }
 
   async reindexAll(
@@ -3469,6 +3521,7 @@ export class VectorStore implements IMemoryStore {
       // leaves the repair to whoever can take the lock.
       this.prepareFtsStatements();
       this.ftsAvailable = true;
+      this.ftsRebuildPending = true;
       return false;
     }
 
@@ -3505,6 +3558,7 @@ export class VectorStore implements IMemoryStore {
       );
       this.prepareFtsStatements();
       this.ftsAvailable = true;
+      this.ftsRebuildPending = true;
       return false;
     }
   }
