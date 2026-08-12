@@ -364,6 +364,10 @@ creditReport:
 #   cacheRead     — 缓存命中读取 token（prompt_cache_hit_tokens / cache_read_input_tokens）
 #   cacheWrite5m  — 缓存写入 5 分钟 TTL（cache_creation.ephemeral_5m_input_tokens）
 #   cacheWrite1h  — 缓存写入 1 小时 TTL（cache_creation_input_tokens 非 ephemeral 部分）
+#   requiresReasoningContent — DeepSeek thinking 模式专用标记（可选，默认 false）。
+#     仅对标记 true 的模型，proxy 转发前会为缺失 reasoning_content 的 assistant
+#     消息补空串（否则 DeepSeek thinking 模式因历史消息缺字段返回 400）。
+#     非 DeepSeek 上游请勿开启，避免给请求注入未知字段。
 creditPricing:
   models:
     - name: "your-endpoint-id"         # 上游下发的 endpoint id / 模型别名，示例：Claude Sonnet
@@ -381,6 +385,7 @@ creditPricing:
       cacheRead: 0.0038
       cacheWrite5m: 0.4500
       cacheWrite1h: 0.4500
+      requiresReasoningContent: true   # DeepSeek thinking 模式：转发前为缺失 reasoning_content 的 assistant 消息补空串
 
     - name: "deepseek-v4-flash"        # DeepSeek V4 Flash
       modelName: "DeepSeek V4 Flash"
@@ -389,6 +394,7 @@ creditPricing:
       cacheRead: 0.0030
       cacheWrite5m: 0.1500
       cacheWrite1h: 0.1500
+      requiresReasoningContent: true   # DeepSeek thinking 模式：转发前为缺失 reasoning_content 的 assistant 消息补空串
 
 
 # ── 上下文注入（injection pipeline） ─────────────────────────────────────────

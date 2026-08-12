@@ -372,6 +372,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         cacheRead: m.cacheRead ?? 0,
         cacheWrite5m: m.cacheWrite5m ?? 0,
         cacheWrite1h: m.cacheWrite1h ?? 0,
+        // DeepSeek thinking 模型标记——仅对该模型启用 reasoning_content 补丁，
+        // 避免影响非 DeepSeek 上游（缺省 false，等同原行为）。
+        requiresReasoningContent: m.requiresReasoningContent === true,
       })).filter((m) => m.name !== ""),
     },
     injection: {

@@ -636,6 +636,14 @@ export interface CreditPricingEntry {
   cacheWrite5m: number;
   /** Cache write with 1-hour TTL (standard cache creation). */
   cacheWrite1h: number;
+  /**
+   * DeepSeek thinking 模式标记。仅当为 true 时，proxy 会在转发前为缺失
+   * `reasoning_content` 字段的 assistant 消息补空串（否则 DeepSeek thinking
+   * 模式会因历史消息缺少该字段返回 400）。
+   *
+   * 默认缺省（false）——非 DeepSeek thinking 上游不会受影响，转发请求保持原样。
+   */
+  requiresReasoningContent?: boolean;
 }
 
 /** Credit pricing configuration section. */
