@@ -43,6 +43,8 @@ export const enUS = {
   'header.profile.role.reviewer': 'Reviewer',
   'header.profile.close': 'Close',
   'header.brand': 'Memory Hub',
+  'header.theme.dark': 'Switch to dark mode',
+  'header.theme.light': 'Switch to light mode',
 
   // ===== TeamSwitcher =====
   'teamSwitcher.selectTeam': 'Select Team',
