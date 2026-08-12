@@ -11,21 +11,42 @@ import { timingSafeEqual } from "node:crypto";
 import { createRequire } from "node:module";
 import type { GatewayErrorResponse } from "./types.js";
 
-/** Parse a JSON request body. Rejects with an Error on malformed JSON. */
-export async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+/** Read the whole request body as UTF-8 text. */
+async function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf-8");
-        resolve(JSON.parse(body) as T);
-      } catch (err) {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     req.on("error", reject);
   });
+}
+
+/** Parse a JSON request body. Rejects with an Error on malformed JSON. */
+export async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
+  const body = await readBody(req);
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error("Invalid JSON body");
+  }
+}
+
+/**
+ * Same, for routes whose body is optional: an empty body yields null instead
+ * of an error. Needed where a route grew a body AFTER callers already existed
+ * (POST /memory/run) — an empty POST must keep meaning "defaults", while a
+ * non-empty malformed body must still be refused.
+ */
+export async function parseJsonBodyOptional<T>(
+  req: http.IncomingMessage,
+): Promise<T | null> {
+  const body = (await readBody(req)).trim();
+  if (body === "") return null;
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error("Invalid JSON body");
+  }
 }
 
 export function sendJson(

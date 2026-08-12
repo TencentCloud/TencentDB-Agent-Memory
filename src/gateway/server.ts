@@ -49,6 +49,7 @@ import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
 import {
   parseJsonBody,
+  parseJsonBodyOptional,
   sendJson,
   sendError,
   safeEqual,
@@ -693,14 +694,45 @@ export class TdaiGateway {
     url: URL,
   ): Promise<void> {
     const dryRun = url.searchParams.get("dry") === "1";
+    let body: { role?: unknown } | null;
+    try {
+      body = await parseJsonBodyOptional<{ role?: unknown }>(req);
+    } catch {
+      sendError(res, 400, "Invalid JSON body");
+      return;
+    }
+    // A named role must be honoured or refused — never silently swapped for
+    // the default one: the caller would get a Run for another role and no
+    // sign that its parameter was dropped.
+    const requested = body?.role;
+    if (requested !== undefined && typeof requested !== "string") {
+      sendError(res, 400, "role must be a string");
+      return;
+    }
+    if (requested !== undefined) {
+      // The registry /status shows is the one a run may name.
+      const known = listRoles(this.config.data.baseDir).find(
+        (r) => r.name === requested,
+      );
+      if (!known) {
+        sendError(res, 400, `unknown role "${requested}"`);
+        return;
+      }
+      if (!known.enabled) {
+        sendError(res, 409, `role "${requested}" is disabled`);
+        return;
+      }
+    }
     const result = await this.orchestrator.trigger({
       reason: "manual",
       dryRun,
+      runType: requested,
     });
     sendJson(res, 202, {
       accepted: result.accepted,
       status: result.status,
       dryRun,
+      role: requested ?? null,
       reason: result.reason,
       runId: result.runId ?? null,
     });
