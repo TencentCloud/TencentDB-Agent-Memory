@@ -22,6 +22,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   REPO_ROOT,
+  freePort,
   startFakeLlm,
   startGateway,
   startHost,
@@ -73,7 +74,7 @@ beforeAll(async () => {
   fs.mkdirSync(dataDir, { recursive: true });
 
   llm = await startFakeLlm();
-  const port = 29_300 + Math.floor(Math.random() * 200);
+  const port = await freePort();
   const configPath = writeSandboxConfig(path.join(home, "gateway.yaml"), {
     dataDir,
     port,

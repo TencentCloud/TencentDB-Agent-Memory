@@ -53,6 +53,18 @@ function mem(id: string, content: string): MemoryRecord {
   };
 }
 
+function l0(id: string, messageText: string) {
+  return {
+    id,
+    sessionKey: "fts-test",
+    sessionId: "fts-test",
+    role: "user",
+    messageText,
+    recordedAt: new Date().toISOString(),
+    timestamp: Date.now(),
+  };
+}
+
 let dir: string;
 let dbPath: string;
 let store: VectorStore | undefined;
@@ -193,6 +205,25 @@ describe("repairing an index written by the old segmentation", () => {
     return row.n;
   }
 
+  /** The state a build without fts5, or a crash before the rebuild, leaves. */
+  function dropFtsTablesAndVersion(): void {
+    const db = new DatabaseSync(dbPath);
+    db.exec("DROP TABLE IF EXISTS l1_fts");
+    db.exec("DROP TABLE IF EXISTS l0_fts");
+    db.exec("DELETE FROM embedding_meta WHERE key = 'fts_schema_version'");
+    db.close();
+  }
+
+  function ftsRowCounts(): { l1: number; l0: number } {
+    const db = new DatabaseSync(dbPath);
+    const count = (table: string): number =>
+      (db.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number })
+        .n;
+    const counts = { l1: count("l1_fts"), l0: count("l0_fts") };
+    db.close();
+    return counts;
+  }
+
   function schemaVersion(): string | undefined {
     const db = new DatabaseSync(dbPath);
     const row = db
@@ -215,6 +246,46 @@ describe("repairing an index written by the old segmentation", () => {
     // A check that could not run knows nothing about the index.
     expect(shouldWriteFtsMarker("unknown", false)).toBe(false);
     expect(shouldWriteFtsMarker("unknown", true)).toBe(false);
+  });
+
+  it("rebuilds a conversation-only database, which has no L1 rows at all", () => {
+    // Extraction disabled or no model configured: l1_records stays empty while
+    // /capture and /memory/note keep filling l0_conversations. Looking at L1
+    // alone would call that "nothing to rebuild" and mark the index current,
+    // leaving conversation search dead for good.
+    store = open();
+    store.upsertL0(
+      l0("c1", "Пользователь спрашивал про границу памяти"),
+      undefined,
+    );
+    store.close();
+
+    dropFtsTablesAndVersion();
+
+    store = open();
+    expect(schemaVersion()).toBe("3");
+    const hits = store.searchL0Fts(buildFtsQuery("памяти")!, 10);
+    expect(hits.map((r) => r.record_id)).toEqual(["c1"]);
+  });
+
+  it("repairs one FTS table that went missing while the other stayed", () => {
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+    store.upsertL0(l0("c1", "Пользователь спрашивал про отпуск"), undefined);
+    store.close();
+
+    const db = new DatabaseSync(dbPath);
+    db.exec("DROP TABLE l0_fts");
+    db.close();
+
+    // l1_fts is present and marked current, so a check that looks only at it
+    // would skip the repair and l0_fts would stay empty forever.
+    store = open();
+    expect(ftsRowCounts()).toEqual({ l1: 1, l0: 1 });
+    expect(
+      store.searchL0Fts(buildFtsQuery("отпуск")!, 10).map((r) => r.record_id),
+    ).toEqual(["c1"]);
+    expect(find("памяти")).toEqual(["m1"]);
   });
 
   it("reports a rebuild it could not carry out", () => {

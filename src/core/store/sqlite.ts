@@ -3104,18 +3104,23 @@ export class VectorStore implements IMemoryStore {
    */
   private migrateFtsTablesIfNeeded(): FtsMigrationCheck {
     try {
-      // Check if l1_fts exists at all
-      const l1Exists = this.db
-        .prepare(
-          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='l1_fts'",
-        )
-        .get();
-      if (!l1Exists) {
-        // Fresh install — tables will be created with v2 schema.
-        // Still need rebuild if there's existing data in l1_records.
-        const hasData = this.db
-          .prepare("SELECT 1 FROM l1_records LIMIT 1")
-          .get();
+      // BOTH tables are the index. A database that has only ever recorded
+      // conversations — extraction disabled, or no model configured — has an
+      // empty l1_records and a full l0_conversations, and looking at L1 alone
+      // would call that "nothing to rebuild" and mark it done, leaving
+      // conversation search dead for good.
+      const missing = ["l1_fts", "l0_fts"].filter(
+        (table) =>
+          !this.db
+            .prepare(
+              "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            )
+            .get(table),
+      );
+      if (missing.length > 0) {
+        const hasData = ["l1_records", "l0_conversations"].some((table) =>
+          this.db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get(),
+        );
         // Freshly created tables are already written by this build's
         // segmentation; only pre-existing records need repopulating.
         return hasData ? { kind: "rebuild-needed" } : { kind: "current" };

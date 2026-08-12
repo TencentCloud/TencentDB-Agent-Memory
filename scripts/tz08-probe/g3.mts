@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { must, finish } from "../tz07-probe/assert.mts";
 import {
+  freePort,
   startFakeLlm,
   startGateway,
   startHost,
@@ -38,7 +39,7 @@ const dataDir = path.join(home, "memory", "tdai");
 fs.mkdirSync(dataDir, { recursive: true });
 
 const llm = await startFakeLlm();
-const port = 29_600 + Math.floor(Math.random() * 90);
+const port = await freePort();
 const gateway = await startGateway({
   home,
   dataDir,

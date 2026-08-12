@@ -152,9 +152,10 @@ export class UnknownHostError extends Error {
 /**
  * The block a user pastes into their host's config, and where it goes.
  *
- * The gateway URL is baked in only when this environment names one: a default
- * local install must not freeze `127.0.0.1:8420` into a config file that then
- * stops following `TDAI_GATEWAY_PORT`.
+ * The gateway URL is baked in only when this environment names one — a URL or
+ * a port. A default local install gets a snippet without one, so it keeps
+ * resolving the gateway at run time instead of freezing today's address into
+ * a config file.
  *
  * @throws UnknownHostError when the host has no registration in this build.
  */
@@ -162,10 +163,17 @@ export function renderRegistration(
   hostId: string,
   env: NodeJS.ProcessEnv,
 ): string {
-  const explicitUrl = env.TDAI_GATEWAY_URL?.trim() || env.TDAI_GATEWAY?.trim();
+  // A host starts this server from its own config file, not from the shell
+  // that printed the snippet, so anything this environment says about where
+  // the gateway is has to travel INSIDE the snippet — the port included.
+  const namesGateway = Boolean(
+    env.TDAI_GATEWAY_URL?.trim() ||
+    env.TDAI_GATEWAY?.trim() ||
+    env.TDAI_GATEWAY_PORT?.trim(),
+  );
   const lookup = describeHost(hostId, {
     launcherPath: resolveLauncherPath(),
-    ...(explicitUrl ? { gatewayUrl: resolveGatewayUrl(env) } : {}),
+    ...(namesGateway ? { gatewayUrl: resolveGatewayUrl(env) } : {}),
   });
   if (!lookup.ok) throw new UnknownHostError(lookup.message);
   const { descriptor } = lookup;

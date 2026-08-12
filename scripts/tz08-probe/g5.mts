@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { must, finish } from "../tz07-probe/assert.mts";
 import {
+  freePort,
   startFakeEmbeddings,
   startFakeLlm,
   startGateway,
@@ -45,7 +46,7 @@ const embeddings = await startFakeEmbeddings(EMBED_DIM);
 async function boot(name: string, withEmbedding: boolean) {
   const dataDir = path.join(home, name, "memory", "tdai");
   fs.mkdirSync(dataDir, { recursive: true });
-  const port = 29_800 + Math.floor(Math.random() * 90);
+  const port = await freePort();
   return startGateway({
     home: path.join(home, name),
     dataDir,

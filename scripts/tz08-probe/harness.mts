@@ -177,6 +177,21 @@ export function writeSandboxConfig(
   return configPath;
 }
 
+/**
+ * A free loopback port, taken by binding one and letting go.
+ *
+ * Random ports out of a small range collide: two gateways in one probe drew
+ * from the same 90 numbers, and the second then bound nothing while the first
+ * answered both of them.
+ */
+export async function freePort(): Promise<number> {
+  const probe = http.createServer();
+  await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+  const { port } = probe.address() as { port: number };
+  await new Promise<void>((r) => probe.close(() => r()));
+  return port;
+}
+
 export interface Gateway {
   port: number;
   url: string;
@@ -206,13 +221,36 @@ export async function startGateway(opts: {
   let log = "";
   proc.stdout?.on("data", (b: Buffer) => (log += b.toString()));
   proc.stderr?.on("data", (b: Buffer) => (log += b.toString()));
+  // A gateway that died — a port already taken, a bad config — must not be
+  // waited for: something ELSE may be answering on that port, and the probe
+  // would then quietly observe the wrong process.
+  let exited: number | null = null;
+  proc.on("exit", (code) => (exited = code ?? 0));
 
   const url = `http://127.0.0.1:${opts.port}`;
   const deadline = Date.now() + 90_000;
   for (;;) {
+    if (exited !== null) {
+      throw new Error(
+        `gateway exited with code ${exited} before answering /status:\n${log}`,
+      );
+    }
     try {
-      if ((await fetch(`${url}/status`)).ok) break;
-    } catch {
+      const status = await fetch(`${url}/status`);
+      if (status.ok) {
+        // …and it is OUR gateway answering. A port can be held by another
+        // process (an earlier run, a second gateway in the same probe), and a
+        // probe that reads a stranger's memory proves nothing about this one.
+        const body = (await status.json()) as { dataPath?: string };
+        if (path.resolve(body.dataPath ?? "") === path.resolve(opts.dataDir))
+          break;
+        proc.kill();
+        throw new Error(
+          `port ${opts.port} is served by a gateway over ${body.dataPath}, not ${opts.dataDir}`,
+        );
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("port ")) throw err;
       // not up yet
     }
     if (Date.now() > deadline) {

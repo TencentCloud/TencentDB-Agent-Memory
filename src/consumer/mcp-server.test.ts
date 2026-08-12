@@ -169,12 +169,17 @@ describe("the registration a user pastes", () => {
   });
 
   it("bakes in a gateway URL only when this environment names one", () => {
-    // A default install must keep following TDAI_GATEWAY_PORT instead of
-    // freezing today's loopback URL into a config file.
+    // A default install gets no URL, so it keeps resolving the gateway at run
+    // time instead of freezing today's loopback address into a config file.
     expect(renderRegistration("claude", {})).not.toContain("TDAI_GATEWAY_URL");
     expect(
       renderRegistration("claude", { TDAI_GATEWAY_URL: "http://gw:9000" }),
     ).toContain("http://gw:9000");
+    // A port names the gateway just as much as a URL does, and the host starts
+    // the server from its config file, never from the shell that printed this.
+    expect(
+      renderRegistration("claude", { TDAI_GATEWAY_PORT: "9999" }),
+    ).toContain("http://127.0.0.1:9999");
   });
 
   it("refuses a host it has no registration for, naming the ones it has", () => {
