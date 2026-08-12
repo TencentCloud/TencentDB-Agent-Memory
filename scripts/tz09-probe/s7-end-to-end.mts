@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { parseConfig } from "../../src/config.js";
 import { ConsolidationOrchestrator } from "../../src/gateway/consolidation/orchestrator.js";
@@ -155,7 +156,8 @@ const orchestrator = new ConsolidationOrchestrator({
 } as never);
 
 console.log(`critic verdict=${APPROVE ? "approve" : "reject"}`);
-console.log(`records before: ${store.countL1()}`);
+const before = store.countL1();
+console.log(`records before: ${before}`);
 
 const summary = await orchestrator.executeRun({
   reason: "probe",
@@ -165,20 +167,27 @@ const summary = await orchestrator.executeRun({
 console.log(
   `run summary: status=${summary.status} error=${summary.error ?? "-"}`,
 );
-console.log(`records after:  ${store.countL1()}`);
+const after = store.countL1();
+console.log(`records after:  ${after}`);
 
 const [row] = listRecentRuns(dataDir, 1);
 console.log(
   `run row: state=${row?.state} fence=${row?.fence} owner=${row?.leaseOwner ?? "-"} ` +
     `errorClass=${row?.errorClass ?? "-"}`,
 );
-console.log(
-  `oplog: ${JSON.stringify(
-    listOps(dataDir, row?.runId ?? "").map(
-      (o) => `${o.opIndex}:${o.opType}/${o.state}`,
-    ),
-  )}`,
+const ops = listOps(dataDir, row?.runId ?? "").map(
+  (o) => `${o.opIndex}:${o.opType}/${o.state}`,
+);
+console.log(`oplog: ${JSON.stringify(ops)}`);
+
+must("сквозной прогон дошёл до применения", summary.status === "ok");
+must("одобренный кандидат лёг на стор", after === before - 1);
+must("Run завершён как applied под своей лизой", row?.state === "applied");
+must(
+  "операция записана в журнал как применённая",
+  ops.length === 1 && ops[0] === "0:deleteL1/applied",
 );
 
 store.close();
 sbx.cleanup();
+finish();

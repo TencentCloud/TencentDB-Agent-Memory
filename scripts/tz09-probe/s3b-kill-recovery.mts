@@ -7,14 +7,15 @@
  * and could never refuse anything. Here a real gateway boots twice on the same
  * dataDir with runs left behind by a "dead" process.
  *
- * Falsification is done from outside: stub out the recoverOrphanRuns call in
- * consolidation/triggers.ts and re-run — the runs stay live at fence 1 and the
- * stale artefact is ACCEPTED, which is the pre-fix state.
+ * FALSIFY=no-recovery — the same two orphans, but the gateway never boots, so
+ * recovery never runs. That is the pre-fix state exactly: both runs stay live
+ * at fence 1 and the artefact of the dead child is ACCEPTED.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { TdaiGateway } from "../../src/gateway/server.js";
 import { parseConfig } from "../../src/config.js";
 import {
@@ -70,14 +71,16 @@ console.log(
     .join(" ")}`,
 );
 
-const port = 29_800 + Math.floor(Math.random() * 150);
-const gateway = new TdaiGateway({
-  data: { baseDir: dataDir },
-  server: { port, host: "127.0.0.1", corsOrigins: [] },
-  memory: parseConfig({}),
-});
-await gateway.start();
-await gateway.stop();
+if (process.env.FALSIFY !== "no-recovery") {
+  const port = 29_800 + Math.floor(Math.random() * 150);
+  const gateway = new TdaiGateway({
+    data: { baseDir: dataDir },
+    server: { port, host: "127.0.0.1", corsOrigins: [] },
+    memory: parseConfig({}),
+  });
+  await gateway.start();
+  await gateway.stop();
+}
 
 const after = [
   readRun(dataDir, "run-running"),
@@ -89,7 +92,17 @@ console.log(
     .join(" ")}`,
 );
 
+must(
+  "осиротевший running снят рестартом и его fence поднят",
+  after[0]?.state === "failed" && (after[0]?.fence ?? 0) > (before[0]?.fence ?? 0),
+);
+must(
+  "осиротевший applying припаркован в needs-reconciliation, а не перезапущен",
+  after[1]?.state === "needs-reconciliation",
+);
+
 // The artefact the dead child left behind carries the OLD fence.
+let refused = 0;
 for (const r of before) {
   if (r === null) continue;
   const check = checkArtifactFence(dataDir, r.runId, r.fence);
@@ -97,6 +110,9 @@ for (const r of before) {
     `  stale artefact of ${r.runId} (fence ${r.fence}): ` +
       `${check.ok ? "ACCEPTED" : `REFUSED — ${check.reason}`}`,
   );
+  if (!check.ok) refused += 1;
 }
+must("артефакты обоих мёртвых прогонов отвергнуты", refused === 2);
 
 sbx.cleanup();
+finish();

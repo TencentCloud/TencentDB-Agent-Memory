@@ -2,9 +2,14 @@
  * tz-09 S5 live scenario: the four points a crash can land on, each recovered
  * by reading the store back — and recovery repeated is a no-op.
  *
- * Every case prints the record count before and after reconciliation: the
+ * Every case checks the record count before and after reconciliation: the
  * reconciler must never change it. What may change is the RUN's state, and
  * only when every journalled operation is accounted for.
+ *
+ * FALSIFY=trust-journal — reconciles the same runs WITHOUT reading the store,
+ * trusting the journal's own words (a row that says `prepared` counted as
+ * done). The `prepared` case then resolves and the run leaves the parked
+ * state, which is the whole failure mode reconciliation exists to prevent.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +21,11 @@ import {
   updateRun,
 } from "../../src/gateway/control-plane/run-repo.js";
 import { listOps, recordOp } from "../../src/gateway/control-plane/oplog.js";
-import { reconcileRun } from "../../src/gateway/control-plane/reconcile.js";
+import {
+  reconcileRun,
+  type ReconcileReport,
+} from "../../src/gateway/control-plane/reconcile.js";
+import { must, finish } from "../tz07-probe/assert.mts";
 import type { Logger } from "../../src/core/types.js";
 
 const DIMS = 4;
@@ -66,6 +75,31 @@ function seedRecord(): string {
 
 type CrashPoint = "before-journal" | "prepared" | "applied" | "verified";
 
+/** Reconciliation that believes the journal instead of the store — the shape
+ * this package replaced. A `prepared` row means "announced", not "done", so
+ * counting it as verified declares a half-finished apply complete. */
+function reconcileByJournal(runId: string, nowIso: string): ReconcileReport {
+  const ops = listOps(dataDir, runId).filter((o) => o.state !== "planned");
+  const resolved = ops.length > 0;
+  if (resolved) {
+    updateRun(dataDir, runId, { state: "failed", finishedAt: nowIso }, nowIso);
+  }
+  return {
+    runId,
+    total: ops.length,
+    verified: ops.length,
+    unresolved: [],
+    notAttempted: [],
+    resolved,
+  };
+}
+
+const reconcile =
+  process.env.FALSIFY === "trust-journal" ? reconcileByJournal : (
+    runId: string,
+    nowIso: string,
+  ): ReconcileReport => reconcileRun(dataDir, runId, nowIso);
+
 function scenario(point: CrashPoint): void {
   const runId = `run-${point}`;
   const target = seedRecord();
@@ -107,9 +141,9 @@ function scenario(point: CrashPoint): void {
   if (point === "verified") journal("verified");
 
   const before = store.countL1();
-  const first = reconcileRun(dataDir, runId, now);
+  const first = reconcile(runId, now);
   const mid = store.countL1();
-  const second = reconcileRun(dataDir, runId, now);
+  const second = reconcile(runId, now);
   const after = store.countL1();
 
   console.log(
@@ -118,6 +152,23 @@ function scenario(point: CrashPoint): void {
       `state=${readRun(dataDir, runId)?.state} ` +
       `replay(no-op)=${second.verified === first.verified && second.total === first.total && after === mid} ` +
       `ops=${listOps(dataDir, runId).length}`,
+  );
+
+  must(
+    `${point}: реконсилиация не трогает стор`,
+    before === mid && mid === after,
+  );
+  must(
+    `${point}: повтор реконсилиации — no-op`,
+    second.verified === first.verified && second.total === first.total,
+  );
+  // Незавершённая операция читается из СТОРА: `prepared` значит «объявлена»,
+  // а не «сделана», поэтому такой Run обязан остаться припаркованным.
+  const parked = readRun(dataDir, runId)?.state === "needs-reconciliation";
+  const storeSaysDone = point === "applied" || point === "verified";
+  must(
+    `${point}: состояние Run решается стором (${storeSaysDone ? "снят с парковки" : "остался припаркован"})`,
+    storeSaysDone ? !parked && first.resolved : parked && !first.resolved,
   );
 }
 
@@ -132,3 +183,4 @@ for (const point of [
 
 store.close();
 sbx.cleanup();
+finish();

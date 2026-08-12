@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
@@ -168,7 +169,12 @@ try {
 }
 console.log(`apply threw: ${applyError}`);
 // 2 records left = the target was rewritten but the member was never removed.
-console.log(`records after: ${store.countL1()}`);
+const after = store.countL1();
+console.log(`records after: ${after}`);
+must(
+  "merge применён наполовину: таргет переписан, член остался в сторе",
+  after === 2,
+);
 
 if (KEEP_MEMBERS) {
   // Pre-fix journal shape: the merge row with no member keys at all.
@@ -193,7 +199,26 @@ console.log(
 );
 for (const u of report.unresolved)
   console.log(`  unresolved ${u.opIndex}: ${u.detail}`);
-console.log(`run state after reconcile: ${readRun(dataDir, RUN)?.state}`);
+must(
+  "недоделанный merge не резолвится, и незакрытый член назван",
+  report.resolved === false &&
+    report.unresolved.some((u) => u.detail.includes("s8_member")),
+);
+
+// Реконсилиация НИЧЕГО не чинит в сторе (reconcile.ts:9) — она сообщает
+// правду. Правда здесь: стор изменён и не доведён, а такой Run по ТЗ S4
+// (:135) обязан быть припаркован в needs-reconciliation.
+const state = readRun(dataDir, RUN)?.state;
+console.log(`run state after reconcile: ${state}`);
+must(
+  "Run после частичного merge припаркован в needs-reconciliation",
+  state === "needs-reconciliation",
+);
+must(
+  "реконсилиация ничего не переписала в сторе",
+  store.countL1() === after,
+);
 
 store.close();
 sbx.cleanup();
+finish();

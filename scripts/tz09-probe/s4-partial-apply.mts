@@ -5,10 +5,16 @@
  * The `prepared` row is the operation the process died inside: the mutation
  * was announced and never returned, which is precisely the state that must
  * NOT be resolvable by reading the journal alone.
+ *
+ * FALSIFY=mutated-false — finalizes the same run with the partial flag OFF,
+ * which is what the pre-fix `mutated` computation produced: the run lands in
+ * `failed`, the next dispatch is free to pick it up, and the fact that the
+ * store was already mutated is lost. ТЗ S4 (:135) forbids exactly that.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
@@ -134,6 +140,10 @@ const res = await executor.apply(
 console.log(
   `apply: status=${res.status} partial=${res.partial} records after: ${store.countL1()}`,
 );
+must(
+  "apply смутировал стор и оборвался — это частичное применение",
+  res.partial === true && store.countL1() === 2,
+);
 
 // The operation the process died inside: announced, never returned.
 recordOp(
@@ -154,7 +164,9 @@ const ctx = {
   logger,
   now: () => Date.now(),
 } as unknown as OrchestratorContext;
-const cls = finalizeRunOutcome(ctx, { runId: RUN, partial: res.partial }, {
+const partialFlag =
+  process.env.FALSIFY === "mutated-false" ? false : res.partial;
+const cls = finalizeRunOutcome(ctx, { runId: RUN, partial: partialFlag }, {
   role: "memory-keeper",
   status: "failed",
   error: res.error,
@@ -166,8 +178,13 @@ const counts = ops.reduce<Record<string, number>>((acc, o) => {
   acc[o.state] = (acc[o.state] ?? 0) + 1;
   return acc;
 }, {});
-console.log(
-  `class=${cls} run.state=${readRun(dataDir, RUN)?.state} journal=${JSON.stringify(counts)}`,
+const state = readRun(dataDir, RUN)?.state;
+console.log(`class=${cls} run.state=${state} journal=${JSON.stringify(counts)}`);
+must("частичное применение классифицировано как partial-apply", cls === "partial-apply");
+must("Run припаркован в needs-reconciliation", state === "needs-reconciliation");
+must(
+  "журнал перечисляет и подтверждённые, и незавершённые операции",
+  (counts.verified ?? 0) >= 1 && (counts.prepared ?? 0) >= 1,
 );
 
 const next = claimRun(dataDir, RUN, "next-dispatch", {
@@ -177,6 +194,8 @@ const next = claimRun(dataDir, RUN, "next-dispatch", {
 console.log(
   `next dispatch: ok=${next.ok} reason=${next.ok ? "-" : next.reason}`,
 );
+must("следующий запуск роли заблокирован до реконсилиации", next.ok === false);
 
 store.close();
 sbx.cleanup();
+finish();

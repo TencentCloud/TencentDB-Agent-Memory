@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { readScratchDiff } from "../../src/gateway/consolidation/scratch-diff.js";
+import { must, finish } from "../tz07-probe/assert.mts";
 
 const OLD = process.env.FALSIFY === "1";
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "tz09-s9-"));
@@ -40,7 +41,21 @@ console.log(
 
 // Ребёнок не написал ничего — ровно живой случай.
 const parsed = await readScratchDiff(scratch, scratch, "s9");
-console.log(`распознано как кандидат: ${parsed.error === undefined}`);
 console.log(`error=${parsed.error ?? "-"}`);
 
+const logPath = path.join(scratch, ".metadata", "diff-malformed.log");
+const logged = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8") : "";
+console.log(`diff-malformed.log: ${logged.trim() || "(пусто)"}`);
+
+must("молчащая роль не даёт кандидата", parsed.error !== undefined);
+must(
+  "отказ читается как «ответа нет» (ENOENT), а не как «роль дала мусор»",
+  (parsed.error ?? "").includes("ENOENT"),
+);
+must(
+  "предъявленный вход не разобран как выход: его нет в diff-malformed.log",
+  !logged.includes("Текущий дифф"),
+);
+
 fs.rmSync(scratch, { recursive: true, force: true });
+finish();
