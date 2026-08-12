@@ -106,7 +106,10 @@ export class LocalStateBackend implements IStateBackend {
 
     const delay = Math.max(0, fireAtMs - Date.now());
     const handle = this.onTimerExpired
-      ? setTimeout(() => { this.timers.delete(key); this.onTimerExpired!({ member, fireAtMs }); }, delay)
+      ? setTimeout(() => {
+          this.timers.delete(key);
+          this.onTimerExpired!({ instanceId, member, fireAtMs });
+        }, delay)
       : undefined;
     if (handle) handle.unref();
     this.timers.set(key, { member, fireAtMs, handle });
