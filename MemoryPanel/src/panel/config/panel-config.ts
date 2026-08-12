@@ -14,6 +14,13 @@ function envInt(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function envPositiveInt(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n > 0 ? n : fallback;
+}
+
 export interface PanelConfig {
   server: { host: string; port: number };
   metadataInstancesConfig: string;
@@ -29,6 +36,15 @@ export interface PanelConfig {
   knowledgeLlmBinding: {
     sync: boolean;
     proxyBaseUrl: string;
+  };
+  /** 只读 Recorded E1 展示 bundle。关闭或失效时仅 evaluation 路由降级。 */
+  evaluation: {
+    enabled: boolean;
+    mode: 'bundled';
+    bundlePath: string;
+    /** 服务端/镜像 metadata 冻结的外部摘要；不得从 bundle 同目录 sidecar 读取。 */
+    expectedSha256: string;
+    maxBytes: number;
   };
 }
 
@@ -61,6 +77,13 @@ export function loadPanelConfig(): PanelConfig {
     knowledgeLlmBinding: {
       sync: envBool('KNOWLEDGE_LLM_BINDING_SYNC', true),
       proxyBaseUrl: env('KNOWLEDGE_LLM_PROXY_BASE_URL', 'http://127.0.0.1:8096'),
+    },
+    evaluation: {
+      enabled: envBool('EVALUATION_BUNDLE_ENABLED', false),
+      mode: 'bundled',
+      bundlePath: env('EVALUATION_BUNDLE_PATH', './evaluation-bundles/recorded-e1.json'),
+      expectedSha256: env('EVALUATION_BUNDLE_EXPECTED_SHA256', ''),
+      maxBytes: envPositiveInt('EVALUATION_BUNDLE_MAX_BYTES', 10 * 1024 * 1024),
     },
   };
 }

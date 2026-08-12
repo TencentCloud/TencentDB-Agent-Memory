@@ -14,6 +14,7 @@ import {
   CodeIcon,
   ToolsIcon,
   ChatIcon,
+  ChartBarIcon,
 } from 'tea-icons-react';
 
 export type PageId =
@@ -22,6 +23,7 @@ export type PageId =
   | 'code'
   | 'skills'
   | 'chat_memory'
+  | 'evaluation'
   | 'team_members'
   | 'team_agents'
   | 'api_keys';
@@ -48,6 +50,7 @@ export function usePageMeta(): Record<PageId, PageMeta> {
     code:            { id: 'code',            label: t('menu.code'), desc: t('menu.desc.code'), group: t('menu.group.assets'), order: 3 },
     skills:          { id: 'skills',          label: t('menu.skills'), desc: t('menu.desc.skills'), group: t('menu.group.assets'), order: 4 },
     chat_memory:     { id: 'chat_memory',     label: t('menu.chat_memory'), desc: t('menu.desc.chat_memory'), group: t('menu.group.assets'), order: 5 },
+    evaluation:      { id: 'evaluation',      label: t('menu.evaluation'), desc: t('menu.desc.evaluation'), group: t('menu.group.assets'), order: 6 },
     team_members:    { id: 'team_members',    label: t('menu.team_members'), desc: t('menu.desc.team_members'), group: t('menu.group.organization'), order: 0 },
     team_agents:     { id: 'team_agents',     label: t('menu.team_agents'), desc: t('menu.desc.team_agents'), group: t('menu.group.organization'), order: 1 },
     api_keys:        { id: 'api_keys',        label: t('menu.api_keys'), desc: t('menu.desc.api_keys'), group: t('menu.group.organization'), order: 2 },
@@ -67,6 +70,7 @@ export const ITEM_ICON: Record<PageId, JSX.Element> = {
   code: <CodeIcon size={16} />,
   skills: <ToolsIcon size={16} />,
   chat_memory: <ChatIcon size={16} />,
+  evaluation: <ChartBarIcon size={16} />,
 };
 
 /** 分组图标（工作台 / 组织与权限 / 资产管理） */

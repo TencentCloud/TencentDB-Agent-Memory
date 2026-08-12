@@ -4,6 +4,17 @@ set -euo pipefail
 # 先确保 config 目录存在，避免用户 bind-mount 文件时父目录缺失被当成目录挂载。
 mkdir -p /app/panel/config "${KNOWLEDGE_DATA_DIR:-/data/knowledge}" "$(dirname "${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}")"
 
+# 只做可观测预检，不把 evaluation 资产故障升级为全局启动故障；adapter 在真实 ACL 后返回 503。
+if EVALUATION_BUNDLE_PATH="${EVALUATION_BUNDLE_PATH:-/app/evaluation/bundle/evaluation-view-bundle.json}" \
+   EVALUATION_BUNDLE_PIN_PATH="${EVALUATION_BUNDLE_PIN_PATH:-/app/evaluation/pin/evaluation-view-bundle.sha256}" \
+   EVALUATION_BUNDLE_EXPECTED_SHA256="${EVALUATION_BUNDLE_EXPECTED_SHA256:-}" \
+   EVALUATION_BUNDLE_MAX_BYTES="${EVALUATION_BUNDLE_MAX_BYTES:-10485760}" \
+   /usr/local/bin/verify-evaluation-assets.sh >/dev/null 2>&1; then
+  echo "[start-combined] Recorded E1 evaluation assets verified"
+else
+  echo "[start-combined] evaluation assets degraded; evaluation routes will fail closed without affecting health" >&2
+fi
+
 # 用户可通过挂载 /app/panel/config/metadata-instances.json 提供多实例配置；
 # 此时 REMOTE_INSTANCE_* env 不再必需，脚本也不会覆盖该文件。
 INSTANCES_FILE="/app/panel/config/metadata-instances.json"
@@ -129,6 +140,11 @@ KNOWLEDGE_LLM_BINDING_SYNC="${SYNC_ENV}" \
 KNOWLEDGE_LLM_PROXY_BASE_URL="${PROXY_BASE_URL}" \
 LOG_LEVEL="${LOG_LEVEL:-info}" \
 LOG_FORMAT="${LOG_FORMAT:-json}" \
+EVALUATION_BUNDLE_ENABLED="${EVALUATION_BUNDLE_ENABLED:-1}" \
+EVALUATION_BUNDLE_PATH="${EVALUATION_BUNDLE_PATH:-/app/evaluation/bundle/evaluation-view-bundle.json}" \
+EVALUATION_BUNDLE_PIN_PATH="${EVALUATION_BUNDLE_PIN_PATH:-/app/evaluation/pin/evaluation-view-bundle.sha256}" \
+EVALUATION_BUNDLE_EXPECTED_SHA256="${EVALUATION_BUNDLE_EXPECTED_SHA256:-}" \
+EVALUATION_BUNDLE_MAX_BYTES="${EVALUATION_BUNDLE_MAX_BYTES:-10485760}" \
 node dist/index.js 2>&1 \
   | tee -a "$PANEL_LOG" &
 PANEL_PID=$!

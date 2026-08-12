@@ -12,6 +12,8 @@ import type { Logger } from './infra/logger.js';
 import type { KnowledgeClientPort } from './kernel/ports/knowledge-client-port.js';
 import { HttpKnowledgeClient } from './kernel/adapters/http-knowledge-client.js';
 import { KnowledgeTaskRegistry } from './state/knowledge-task-registry.js';
+import type { EvaluationReadPort } from './kernel/ports/evaluation-read-port.js';
+import { BundledEvaluationAdapter } from './kernel/adapters/bundled-evaluation-adapter.js';
 
 export interface PanelDeps {
   config: PanelConfig;
@@ -24,6 +26,7 @@ export interface PanelDeps {
   skillKernel: SkillKernelPort;
   /** Knowledge 抽取任务内存态：create 时 stash owner key，callback ready 时取出注册 meta asset。 */
   knowledgeTaskRegistry: KnowledgeTaskRegistry;
+  evaluationRead: EvaluationReadPort;
 }
 
 export function buildPanelDeps(config: PanelConfig): PanelDeps {
@@ -43,7 +46,8 @@ export function buildPanelDeps(config: PanelConfig): PanelDeps {
     });
   const skillKernel = new FetchSkillKernelAdapter(kernelHttp, config.metadataRemoteTimeoutMs);
   const knowledgeTaskRegistry = new KnowledgeTaskRegistry();
-  return { config, logger, instanceRegistry, kernelHttp, metaKernel, knowledgeClientFactory, skillKernel, knowledgeTaskRegistry };
+  const evaluationRead = new BundledEvaluationAdapter(config.evaluation);
+  return { config, logger, instanceRegistry, kernelHttp, metaKernel, knowledgeClientFactory, skillKernel, knowledgeTaskRegistry, evaluationRead };
 }
 
 export type { InstanceEntry };

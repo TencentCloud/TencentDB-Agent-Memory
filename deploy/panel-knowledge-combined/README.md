@@ -80,6 +80,22 @@ docker run -d --name memory-hub \
 
 ## 可选配置
 
+### 知识卡评测中心（Recorded E1 Demo）
+
+镜像默认 COPY `GLOBAL_SYNTHETIC` 合成 Bundle，并在启动时校验 producer 原始字节的独立 SHA-256 pin。该页面只展示 Recorded E1 Fixture，知识卡均为 `DISPLAY_ONLY`；`runExposure=NOT_PROVEN`，不表示真实 Agent 执行、线上收益或 E2 通过。
+
+可使用两份只读挂载覆盖默认资产（必须成对更新），并把构建期验证得到的新摘要显式设为运行时权威：
+
+```bash
+-v /path/evaluation-view-bundle.json:/app/evaluation/bundle/evaluation-view-bundle.json:ro \
+-v /path/evaluation-view-bundle.sha256:/app/evaluation/pin/evaluation-view-bundle.sha256:ro \
+-e EVALUATION_BUNDLE_EXPECTED_SHA256=sha256:<new-bundle-64hex>
+```
+
+运行时摘要权威来自镜像 metadata / 服务端环境变量 `EVALUATION_BUNDLE_EXPECTED_SHA256=sha256:<64hex>`，而不是与 Bundle 同目录、可能被一起替换的 sidecar。sidecar 只作为 producer/构建期输入；运行时 Bundle 即使与 sidecar 同时被替换，仍会因不匹配固定期望摘要而 fail-closed。
+
+可选环境变量：`EVALUATION_BUNDLE_ENABLED`、`EVALUATION_BUNDLE_PATH`、`EVALUATION_BUNDLE_EXPECTED_SHA256`、`EVALUATION_BUNDLE_MAX_BYTES`。资产缺失或摘要不一致时，仅 `/api/v1/evaluation/*` 返回 503，Panel/Knowledge 健康检查和其他功能继续可用。
+
 以下配置都有镜像内置默认值，不传也能正常工作。按需覆盖即可。
 
 ### LLM 配置
