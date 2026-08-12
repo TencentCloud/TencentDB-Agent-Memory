@@ -274,10 +274,17 @@ printReport(result, baseline);
 if (args.out) {
   // Only the aggregate leaves the machine: `evaluated` carries the retrieved
   // CONTENT of personal memory, and this file is meant to be committable.
-  const { evaluated: _evaluated, ...aggregate } = result;
+  // Diagnostics are folded into counts for the same reason they are not
+  // printed in full — one line per query says nothing a total does not.
+  const { evaluated: _evaluated, diagnostics, ...aggregate } = result;
+  const diagnosticCounts: Record<string, number> = {};
+  for (const d of diagnostics) {
+    const key = `${d.stage}:${d.code}`;
+    diagnosticCounts[key] = (diagnosticCounts[key] ?? 0) + 1;
+  }
   fs.writeFileSync(
     args.out,
-    `${JSON.stringify({ ...aggregate, corpusHash }, null, 2)}\n`,
+    `${JSON.stringify({ ...aggregate, diagnosticCounts, corpusHash }, null, 2)}\n`,
     "utf-8",
   );
   console.log(`записано: ${args.out} (без содержимого записей)`);

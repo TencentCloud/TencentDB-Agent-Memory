@@ -56,7 +56,7 @@
     }
   },
   "scoringVersion": "strategy=embedding threshold=0.2 maxResults=10 crossProject=decay crossProjectDecay=0.5 defaultCrossProjectMultiplier=0.5 typeWeights=episodic=1,instruction=1,persona=1",
-  "at": "2026-08-12T21:26:25.745Z",
-  "diagnostics": [],
+  "at": "2026-08-12T21:42:21.776Z",
+  "diagnosticCounts": {},
   "corpusHash": "2faeb2a0df2f0ad7"
 }
