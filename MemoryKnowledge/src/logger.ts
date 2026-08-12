@@ -25,11 +25,14 @@ function format(level: Level, tag: string, msg: string, data?: unknown) {
 
 export function createLogger(tag: string) {
   return {
+    // All log levels go to stderr: the MCP stdio transport reads the protocol
+    // from stdout, so any diagnostic line written there would corrupt the
+    // JSON-RPC stream (see issue #766).
     debug(msg: string, data?: unknown) {
-      if (shouldLog("debug")) console.log(format("debug", tag, msg, data));
+      if (shouldLog("debug")) process.stderr.write(format("debug", tag, msg, data) + "\n");
     },
     info(msg: string, data?: unknown) {
-      if (shouldLog("info")) console.log(format("info", tag, msg, data));
+      if (shouldLog("info")) process.stderr.write(format("info", tag, msg, data) + "\n");
     },
     warn(msg: string, data?: unknown) {
       if (shouldLog("warn")) console.warn(format("warn", tag, msg, data));

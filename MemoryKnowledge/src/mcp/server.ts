@@ -5,10 +5,13 @@
  * the server forwards the request to the Hono HTTP API via callApi().
  *
  * Usage:
- *   KNOWLEDGE_API_URL=http://localhost:8421 node dist/mcp/server.js
+ *   KNOWLEDGE_API_URL=http://localhost:8421 \
+ *   KNOWLEDGE_SERVICE_ID=<tenant-id> \
+ *   node dist/mcp/server.js
  *
  * The agent connects via stdio; the server translates tool calls to HTTP
- * requests against the knowledge service.
+ * requests against the knowledge service. `KNOWLEDGE_SERVICE_ID` is sent as
+ * the `x-tdai-service-id` header, which every /v3 endpoint requires.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -93,10 +96,11 @@ export function createMcpServer(httpOpts: HttpClientOptions): Server {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const baseUrl = process.env.KNOWLEDGE_API_URL || "http://localhost:8421";
   const token = process.env.KNOWLEDGE_API_TOKEN;
+  const serviceId = process.env.KNOWLEDGE_SERVICE_ID;
 
   log.info(`MCP server starting, API URL: ${baseUrl}`);
 
-  const server = createMcpServer({ baseUrl, token });
+  const server = createMcpServer({ baseUrl, token, serviceId });
   const transport = new StdioServerTransport();
 
   server.connect(transport).then(() => {

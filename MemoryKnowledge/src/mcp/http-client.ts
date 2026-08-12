@@ -14,6 +14,12 @@ export interface HttpClientOptions {
   baseUrl: string;
   /** Optional bearer token for auth. */
   token?: string;
+  /**
+   * Tenant identity (`service_id`). Every /v3 endpoint requires the
+   * `x-tdai-service-id` header (missing/malformed → 400), so the MCP server
+   * must send it to be able to call its own knowledge API.
+   */
+  serviceId?: string;
 }
 
 export interface ApiResponse {
@@ -36,6 +42,7 @@ export async function callApi(
   const url = `${opts.baseUrl.replace(/\/$/, "")}/v3${endpoint}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+  if (opts.serviceId) headers["x-tdai-service-id"] = opts.serviceId;
 
   log.debug(`POST ${url}`);
 
