@@ -979,6 +979,7 @@ export class TdaiGateway {
         fence: r.fence,
         startedAt: r.createdAt,
         errorClass: r.errorClass,
+        logPath: r.logPath,
       }));
     } catch {
       return [];

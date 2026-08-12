@@ -76,6 +76,7 @@ export async function runRole(
     opts.reason,
     opts.dryRun,
   );
+  summary.runId = opts.runId;
 
   try {
     // tz-09 Ф1: the run passport — a COPY of the control-plane row that the

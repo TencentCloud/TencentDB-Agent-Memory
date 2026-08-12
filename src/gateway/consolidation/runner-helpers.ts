@@ -15,6 +15,7 @@ import {
 import { finishAttempt } from "../control-plane/attempt-repo.js";
 import { checkCapabilities, unusedBinding } from "./launchers/capabilities.js";
 import { isolationRefusal } from "./launchers/isolation.js";
+import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
 import type {
   LaunchInput,
@@ -234,7 +235,12 @@ export async function defaultApplyDiff(
 ): Promise<ApplyResult> {
   const executor = new ApplyExecutor({
     dataDir: ctx.dataDir,
-    logger: ctx.logger,
+    // `ctx.applyDiff` is bound to the orchestrator's ctx, so a run-scoped
+    // copy of the context never reaches here — the tag comes from the run
+    // the apply names instead.
+    logger: run?.runId
+      ? taggedLogger(ctx.logger, runTag(run.runId))
+      : ctx.logger,
     vectorStore: ctx.vectorStore?.(),
     embeddingService: ctx.embeddingService?.(),
     runRepo: ctx.applyRunRepo,

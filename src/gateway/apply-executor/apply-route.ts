@@ -11,6 +11,7 @@
 
 import type http from "node:http";
 import { parseJsonBody, sendJson, sendError } from "../http-utils.js";
+import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import type { TdaiCore } from "../../core/tdai-core.js";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../../core/types.js";
@@ -75,24 +76,30 @@ export async function handleMemoryApply(
     return;
   }
 
+  const bodyRunId = (body as { runId?: unknown } | null)?.runId;
+
   // Lazy import to avoid cycle: apply-executor.ts (shim) exports ApplyExecutor.
   const { ApplyExecutor } = await import("../apply-executor.js");
   const executor = new ApplyExecutor({
     dataDir: ctx.config.data.baseDir,
-    logger: ctx.logger,
+    // The sub-session applies over HTTP, where the server logger has no idea
+    // which run it is serving — the run the body names supplies the tag.
+    logger:
+      typeof bodyRunId === "string"
+        ? taggedLogger(ctx.logger, runTag(bodyRunId))
+        : ctx.logger,
     vectorStore: ctx.core.getVectorStore(),
     embeddingService: ctx.core.getEmbeddingService(),
     runRepo: ctx.config.memory?.consolidation?.applyRunRepo === true,
   });
-  const runId = (body as { runId?: unknown } | null)?.runId;
 
   let result: ApplyResult;
   try {
     result = await executor.apply(
       body,
-      typeof runId === "string"
+      typeof bodyRunId === "string"
         ? {
-            runId,
+            runId: bodyRunId,
             // Without this the HTTP path would always run in shadow while the
             // operator believes the gate is armed (tz-09 Ф3).
             gateMode: ctx.config.memory?.consolidation?.applyGateMode,

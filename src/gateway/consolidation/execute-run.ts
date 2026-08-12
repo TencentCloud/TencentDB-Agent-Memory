@@ -15,6 +15,7 @@ import { createRun } from "../control-plane/run-repo.js";
 import { claimRun } from "../control-plane/lease.js";
 import { runOwnerId } from "../control-plane/owner.js";
 import { resolveCriticPackage } from "./critic-bootstrap.js";
+import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 import type { RunSummary } from "./types.js";
@@ -51,8 +52,15 @@ export async function executeRunForRole(
     return summary;
   }
   const contract = resolution.contract;
+  // From here on every line belongs to THIS run. Tagging the context logger
+  // once is what lets `gateway-dev.log` be read per run: the strategies, the
+  // checkpoint gate and the report all log through `ctx.logger`.
+  const runCtx: OrchestratorContext = {
+    ...ctx,
+    logger: taggedLogger(ctx.logger, runTag(opts.runId)),
+  };
   for (const w of contract.warnings) {
-    ctx.logger.warn?.(`[role] ${opts.role}: ${w}`);
+    runCtx.logger.warn?.(`[role] ${opts.role}: ${w}`);
   }
 
   // tz-09 Ф4a (criterion 6): an unusable critic stops the role BEFORE the
@@ -75,20 +83,20 @@ export async function executeRunForRole(
       );
       return summary;
     }
-    ctx.logger.warn?.(`[critic] SHADOW ${opts.role}: ${critic.reason}`);
+    runCtx.logger.warn?.(`[critic] SHADOW ${opts.role}: ${critic.reason}`);
   }
   // tz-09 Ф1: the Run row is created HERE — the one place that already holds
   // both the run id and the RESOLVED contract, so the contract snapshot is
   // pinned before anything can be spawned. A role that failed to resolve
   // (above) never gets a Run: it never runs.
-  openRunRecord(ctx, opts, contract);
+  openRunRecord(runCtx, opts, contract);
   // The lease is refreshed while the run is alive. Without renewal a run
   // slower than its own TTL has its lease expire under it, and the next
   // process may legitimately take over a run that is still working —
   // "stealable while healthy" (tz-09 P3).
-  const renew = startLeaseRenewal(ctx, opts, contract);
+  const renew = startLeaseRenewal(runCtx, opts, contract);
   try {
-    return await runRole(ctx, { ...opts, contract });
+    return await runRole(runCtx, { ...opts, contract });
   } finally {
     clearInterval(renew);
   }

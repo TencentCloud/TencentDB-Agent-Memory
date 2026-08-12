@@ -8,10 +8,38 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runPostRunSteps } from "./runner-helpers.js";
+import { updateRun } from "../control-plane/run-repo.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary } from "./types.js";
 
-/** Write dataDir/logs/<role>-<ts>.json (+ optional .diff.md sidecar). */
+/**
+ * Record the report path on the Run row, so "what happened in run X" starts
+ * from the control plane instead of a guess. Fail-open: a dry run has no Run
+ * row (updateRun returns false) and a broken control plane must not take the
+ * report down with it.
+ */
+function linkReportToRun(
+  ctx: OrchestratorContext,
+  summary: RunSummary,
+  file: string,
+): void {
+  if (summary.runId === undefined || summary.dryRun) return;
+  try {
+    updateRun(
+      ctx.dataDir,
+      summary.runId,
+      { logPath: file },
+      new Date(ctx.now()).toISOString(),
+    );
+  } catch (err) {
+    ctx.logger.warn?.(
+      `[run] report link failed for ${summary.runId}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Write dataDir/logs/<role>-<ts>[-<runId8>].json (+ optional .diff.md). */
 export async function writeReport(
   ctx: OrchestratorContext,
   summary: RunSummary,
@@ -37,15 +65,22 @@ export async function writeReport(
   const logsDir = path.join(ctx.dataDir, "logs");
   await fs.promises.mkdir(logsDir, { recursive: true });
   const ts = summary.startedAt.replace(/[:.]/g, "-");
-  const file = path.join(logsDir, `${summary.role}-${ts}.json`);
+  // The run id goes into the NAME (and stays flat under logs/): a report is
+  // then reachable from a control-plane row and back, while cleanup.ts, which
+  // only ages top-level entries, keeps working.
+  const stem = `${summary.role}-${ts}${
+    summary.runId ? `-${summary.runId.slice(0, 8)}` : ""
+  }`;
+  const file = path.join(logsDir, `${stem}.json`);
   await fs.promises.writeFile(file, JSON.stringify(summary, null, 2), "utf-8");
   if (diffText !== undefined) {
     await fs.promises.writeFile(
-      path.join(logsDir, `${summary.role}-${ts}.diff.md`),
+      path.join(logsDir, `${stem}.diff.md`),
       diffText,
       "utf-8",
     );
   }
+  linkReportToRun(ctx, summary, file);
   ctx.lastRunRef.value = summary;
   ctx.logger.info?.(
     `[memory-keeper] run ${summary.status} (${summary.reason}): newL0=${summary.newL0}, ` +

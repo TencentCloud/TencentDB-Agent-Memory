@@ -36,6 +36,9 @@ export interface ChildSummary {
 
 export interface RunSummary {
   role: string;
+  /** The Run this report belongs to. Optional: reports written before the
+   * control plane existed (and dry runs, which open no Run) have none. */
+  runId?: string;
   status: "ok" | "failed" | "aborted" | "dry-run" | "disabled";
   startedAt: string;
   finishedAt: string;

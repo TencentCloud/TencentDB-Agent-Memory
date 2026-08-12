@@ -139,13 +139,14 @@ export function readLastRuns(
   const logsDir = path.join(dataDir, "logs");
   let files: string[];
   try {
-    // Reports are named `<role>-<ISO ts>.json`, so a plain name sort orders by
+    // Reports are named `<role>-<ISO ts>[-<runId8>].json`, so a plain name
+    // sort orders by
     // ROLE first and only then by time: with many `memory-keeper-*` files a
     // lexicographically smaller role prefix could never reach the last N.
     // Sort by the timestamp in the name (the ISO form is monotonic as text);
     // a name without one sorts last, by name.
     const tsOf = (f: string): string =>
-      /-(\d{4}-\d{2}-\d{2}T[\d-]+Z)\.json$/.exec(f)?.[1] ?? "";
+      /-(\d{4}-\d{2}-\d{2}T[\d-]+Z)(?:-[0-9a-f]+)?\.json$/.exec(f)?.[1] ?? "";
     files = fs
       .readdirSync(logsDir)
       .filter((f) => f.endsWith(".json"))

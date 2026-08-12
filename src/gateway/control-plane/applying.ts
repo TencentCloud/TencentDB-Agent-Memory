@@ -56,7 +56,14 @@ export function beginApplying(
   }
 }
 
-/** Leave `applying` for a terminal state after the mutations returned. */
+/**
+ * Leave `applying` for the state the apply earned.
+ *
+ * `finishedAt` is stamped only when that state ENDS the run. A multi-batch
+ * run returns to `running` between batches, and stamping it there marked a
+ * working run as finished — a reader (and /status) then saw a run that had
+ * both a finish time and more work coming.
+ */
 export function finishApplying(
   dataDir: string,
   runId: string,
@@ -64,11 +71,13 @@ export function finishApplying(
   nowIso: string,
 ): void {
   const db = openControlPlane(dataDir);
+  const finished = state !== "running";
   try {
     db.prepare(
-      `UPDATE runs SET state = ?, updatedAt = ?, finishedAt = ?
+      `UPDATE runs SET state = ?, updatedAt = ?,
+         finishedAt = CASE WHEN ? THEN ? ELSE finishedAt END
        WHERE runId = ? AND state = 'applying'`,
-    ).run(state, nowIso, nowIso, runId);
+    ).run(state, nowIso, finished ? 1 : 0, nowIso, runId);
   } finally {
     db.close();
   }

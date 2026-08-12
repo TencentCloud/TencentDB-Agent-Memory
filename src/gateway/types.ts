@@ -101,6 +101,8 @@ export interface StatusResponse {
     fence: number;
     startedAt: string;
     errorClass: string | null;
+    /** Report file of the run, "" while it has not been written yet. */
+    logPath: string;
   }>;
 }
 

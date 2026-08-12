@@ -257,8 +257,17 @@ console.log(
   `итог: status=${summary.status} error=${summary.error ?? "-"} ` +
     `rewrites=${JSON.stringify(summary.applied.rewrites)} anyApplied=${res.anyApplied}`,
 );
+const midRun = readRun(dataDir, RUN);
 console.log(
-  `состояние Run между батчами и до финализации: ${readRun(dataDir, RUN)?.state}`,
+  `состояние Run между батчами и до финализации: ${midRun?.state}, ` +
+    `finishedAt=${midRun?.finishedAt ?? "(нет)"}`,
+);
+// Живой дефект: apply батча закрывал `applying` штампом finishedAt даже
+// когда возвращал прогон в `running` — работающий прогон выглядел
+// законченным (у ночного night-keeper на боевом это и наблюдалось).
+must(
+  "работающий между батчами прогон не помечен как законченный",
+  ONE_BATCH || (midRun?.finishedAt ?? null) === null,
 );
 
 // Закрывает Run финализация ПРОГОНА — ровно как в run-role.ts:161.

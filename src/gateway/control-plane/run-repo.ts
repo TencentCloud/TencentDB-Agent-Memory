@@ -86,6 +86,8 @@ export interface RunPatch {
   criticReceipt?: string;
   applyReceipt?: string;
   finishedAt?: string;
+  /** Absolute path of the run report — written once the report exists. */
+  logPath?: string;
 }
 
 /**
