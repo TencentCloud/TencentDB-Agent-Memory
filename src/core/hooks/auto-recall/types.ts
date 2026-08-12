@@ -85,7 +85,14 @@ export interface RecallItem {
 }
 
 /** Where a recall diagnostic came from (tz-10 C10.5). */
-export type RecallDiagnosticStage = "repo" | "scope" | "strategy" | "budget" | "render";
+export type RecallDiagnosticStage =
+  | "repo"
+  | "scope"
+  | "strategy"
+  | "tokenize"
+  | "dedup"
+  | "budget"
+  | "render";
 
 /**
  * One machine-readable note about the recall path. A failure that produces a
