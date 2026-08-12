@@ -14,6 +14,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { makeSandbox } from "./sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
@@ -269,6 +270,7 @@ must(
 // Лог-файл живёт там, где его назначил конфиг gateway (logging.file), а не
 // обязательно под dataDir: инструмент обязан читать тот же файл, иначе он
 // скажет «строк нет» и снова отправит гадать.
+const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), "tz-log-home-"));
 const customLog = path.join(sbx.home, "custom-gateway.log");
 const taggedLine = `2026-08-12T00:00:00.000Z [tdai-gateway] [INFO] [run:${RUN.slice(0, 8)}] строка из конфигового файла`;
 fs.writeFileSync(customLog, `${taggedLine}\n`, "utf-8");
@@ -280,23 +282,36 @@ fs.writeFileSync(
   ),
   "utf-8",
 );
-const fromConfig = execFileSync(
-  "npx",
-  ["tsx", "scripts/tdai-run-log.mts", RUN.slice(0, 8), "--data-dir", dataDir],
-  {
-    encoding: "utf-8",
-    cwd: process.cwd(),
-    env: { ...process.env, TDAI_GATEWAY_CONFIG: cfgPath },
-  },
-);
+let fromConfig = "";
+try {
+  fromConfig = execFileSync(
+    "npx",
+    // БЕЗ --data-dir: и дерево, и лог-файл берутся из конфига gateway.
+    ["tsx", "scripts/tdai-run-log.mts", RUN.slice(0, 8)],
+    {
+      encoding: "utf-8",
+      cwd: process.cwd(),
+      // HOME уводится в пустой каталог: дефолт ~/.pi/... там ничего не найдёт,
+      // и единственный источник дерева — конфиг gateway.
+      env: { ...process.env, HOME: emptyHome, TDAI_GATEWAY_CONFIG: cfgPath },
+    },
+  );
+} catch (err) {
+  // Дофиксовый ридер уходил в ~/.pi и падал — это и есть ложная нога.
+  console.log(
+    `команда отказала: ${err instanceof Error ? err.message : String(err)}`,
+  );
+}
 console.log(
   `лог из конфига: ${fromConfig.includes("строка из конфигового файла") ? "прочитан" : "пропущен"}`,
 );
 must(
-  "инструмент читает лог-файл, назначенный конфигом",
-  fromConfig.includes("строка из конфигового файла"),
+  "без --data-dir инструмент берёт дерево и лог-файл из конфига gateway",
+  fromConfig.includes("строка из конфигового файла") &&
+    fromConfig.includes(CHILD_STDERR),
 );
 
 store.close();
+fs.rmSync(emptyHome, { recursive: true, force: true });
 sbx.cleanup();
 finish();

@@ -36,7 +36,9 @@ const DEFAULT_TAIL = 40;
 function parseArgs(argv: string[]): Args {
   const rest: string[] = [];
   let tail = DEFAULT_TAIL;
-  let dataDir = path.join(os.homedir(), ".pi", "agent-memory", "tdai");
+  // Тот же источник истины, что у gateway: TDAI_DATA_DIR / yaml / дефолт.
+  // Хардкод ~/.pi читал бы чужое дерево на нестандартной установке.
+  let dataDir = defaultDataDir();
   let logFile = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
@@ -85,6 +87,15 @@ interface RunRow {
  * scans the wrong file reports "no lines" and sends the reader guessing
  * again.
  */
+/** dataDir так, как его видит сам gateway. */
+function defaultDataDir(): string {
+  try {
+    return loadGatewayConfig().data.baseDir;
+  } catch {
+    return path.join(os.homedir(), ".pi", "agent-memory", "tdai");
+  }
+}
+
 function logFileFor(dataDir: string): string {
   try {
     const cfg = loadGatewayConfig();
@@ -276,6 +287,8 @@ function main(): number {
     `  отчёт        : ${row.logPath === "" ? "(не записан)" : row.logPath}`,
   );
   console.log(`  scratch      : ${row.scratchPath}`);
+  // Из какого дерева всё это прочитано — иначе смесь двух установок молчит.
+  console.log(`  dataDir      : ${args.dataDir}`);
 
   printByRunId(row.runId, args, row);
   return 0;
