@@ -5,21 +5,14 @@
  *   Mirrored verbatim by the SQL filter in `sqlite.ts`.
  * - `applyTypeWeights` — multiply each item's score by its type weight
  *   BEFORE top-K selection (ТЗ §5.15). All weights 1.0 = feature off.
- * - `filterByScope` — the same predicate applied to a candidate list, with a
+ * - `filterByScope` — the same predicate over a candidate list, with a
  *   diagnostic per rejected row (tz-10 C10.5).
  * - `searchMemoriesWithDetails` — thin wrapper around `searchMemories` that
  *   surfaces the structured items for metric reporting.
  */
 
 import { searchMemories } from "./search.js";
-import type {
-  RecallDiagnostic,
-  RecallItem,
-  RecallStrategy,
-  RecalledMemory,
-  SearchTiming,
-  TypeWeights,
-} from "./types.js";
+import type { RecallDiagnostic, RecallItem, RecallStrategy, RecalledMemory, SearchTiming, TypeWeights } from "./types.js";
 import type { MemoryTdaiConfig } from "../../../config.js";
 import type { EmbeddingService } from "../../store/embedding.js";
 import type { IMemoryStore } from "../../store/types.js";
@@ -56,29 +49,24 @@ export function passesScope(
   projectId?: string,
   mode: ScopeMode = "hidden",
 ): boolean {
-  if (mode === "decay") return true; // multiplier handles it downstream
-  if (!projectId) return true; // filter disabled
+  if (mode === "decay") return true;       // multiplier handles it downstream
+  if (!projectId) return true;            // filter disabled
   if (mode === "strict") {
     // A record must SAY it is global to be treated as global. Unset scope is
     // unknown provenance, not permission (tz-05 критерий 5).
-    return (
-      r.scope === "global" ||
-      (r.scope === "project" && r.project_id === projectId)
-    );
+    return r.scope === "global" || (r.scope === "project" && r.project_id === projectId);
   }
   if (r.scope !== "project") return true; // global / unset / legacy
   return r.project_id === projectId;
 }
 
 /**
- * Drop the candidates `passesScope` refuses, recording one diagnostic per
- * drop. An exclusion without a reason is exactly what the invariant
+ * Drop the candidates `passesScope` refuses, recording one diagnostic per drop.
+ * An exclusion without a reason is exactly what the invariant
  * `project-recall-measurable` (tz-10) forbids: leakage that nobody can count
  * looks the same as no leakage at all.
  */
-export function filterByScope<
-  T extends { record_id: string; scope?: string; project_id?: string },
->(
+export function filterByScope<T extends { record_id: string; scope?: string; project_id?: string }>(
   candidates: T[],
   projectId: string,
   mode: ScopeMode,
@@ -114,12 +102,7 @@ export function applyTypeWeights<T extends { score: number; type?: string }>(
   weights: TypeWeights,
 ): T[] {
   if (!weights) return items;
-  if (
-    weights.instruction === 1 &&
-    weights.persona === 1 &&
-    weights.episodic === 1
-  )
-    return items;
+  if (weights.instruction === 1 && weights.persona === 1 && weights.episodic === 1) return items;
   const weightOf = (type: string | undefined): number => {
     if (type === "instruction") return weights.instruction;
     if (type === "persona") return weights.persona;
@@ -138,9 +121,9 @@ export function applyTypeWeights<T extends { score: number; type?: string }>(
  * real recall pipeline (strategy + typeWeights) end-to-end.
  *
  * Until tz-10a this wrapper re-parsed its own rendered lines with a regex and
- * handed every caller `score: 0` and no record id. The items now come from
- * the strategy that found them, so `RecalledMemory.score` is the real final
- * score (tz-10 C10.3).
+ * handed every caller `score: 0` and no record id. The items now come from the
+ * strategy that found them, so `RecalledMemory.score` is the real final score
+ * (tz-10 C10.3).
  */
 export async function searchMemoriesWithDetails(
   userText: string,
@@ -158,16 +141,7 @@ export async function searchMemoriesWithDetails(
   timing: SearchTiming;
   diagnostics: RecallDiagnostic[];
 }> {
-  const result = await searchMemories(
-    userText,
-    pluginDataDir,
-    cfg,
-    logger,
-    strategy,
-    vectorStore,
-    embeddingService,
-    projectId,
-  );
+  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService, projectId);
   return {
     lines: result.lines,
     items: result.items,
@@ -179,9 +153,5 @@ export async function searchMemoriesWithDetails(
 
 /** Legacy metric shape (`RecalledMemory`) projected from a structured item. */
 export function itemToRecalledMemory(item: RecallItem): RecalledMemory {
-  return {
-    content: item.content,
-    score: item.score.final,
-    type: item.formatable.type,
-  };
+  return { content: item.content, score: item.score.final, type: item.formatable.type };
 }

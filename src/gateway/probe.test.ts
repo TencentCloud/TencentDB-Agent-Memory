@@ -20,13 +20,7 @@ import type { RecallItem } from "../core/hooks/auto-recall.js";
  */
 function hit(
   content: string,
-  extra: {
-    id?: string;
-    projectId?: string;
-    scope?: string;
-    raw?: number;
-    final?: number;
-  } = {},
+  extra: { id?: string; projectId?: string; scope?: string; raw?: number; final?: number } = {},
 ): RecallItem {
   const raw = extra.raw ?? 1;
   return {
@@ -36,21 +30,13 @@ function hit(
     content,
     formatable: { type: "episodic", content },
     scope: { userId: null, projectId: extra.projectId, scope: extra.scope },
-    provenance: {
-      sourceIds: [],
-      producer: "test",
-      createdAt: "",
-      updatedAt: "",
-      status: "unknown",
-    },
+    provenance: { sourceIds: [], producer: "test", createdAt: "", updatedAt: "", status: "unknown" },
     score: { raw, final: extra.final ?? raw, reasons: [] },
   };
 }
 
 /** Wrap plain contents into the search-result shape the probe expects. */
-const found = (...contents: string[]) => ({
-  items: contents.map((c) => hit(c)),
-});
+const found = (...contents: string[]) => ({ items: contents.map((c) => hit(c)) });
 
 function tempCorpus(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-probe-"));
@@ -249,19 +235,8 @@ describe("computeProbeResults: foreign-project leakage (tz-10a)", () => {
   it("counts a foreign negative in the top-k as leakage and names the item", async () => {
     const search = async (_q: string, projectId: string) => ({
       items: [
-        hit("deploy with rsync", {
-          id: "own",
-          projectId,
-          scope: "project",
-          raw: 0.9,
-        }),
-        hit("deploy with kubectl", {
-          id: "alien",
-          projectId: "/home/u/other",
-          scope: "project",
-          raw: 0.8,
-          final: 0.4,
-        }),
+        hit("deploy with rsync", { id: "own", projectId, scope: "project", raw: 0.9 }),
+        hit("deploy with kubectl", { id: "alien", projectId: "/home/u/other", scope: "project", raw: 0.8, final: 0.4 }),
       ],
     });
     const r = await computeProbeResults(corpus, 3, search);
@@ -286,15 +261,7 @@ describe("computeProbeResults: foreign-project leakage (tz-10a)", () => {
   it("a query without project context is a separate baseline, not leakage data", async () => {
     const search = async () => found("deploy with kubectl");
     const r = await computeProbeResults(
-      {
-        queries: [
-          {
-            id: "q-plain",
-            query: "deploy steps",
-            expected: ["deploy with rsync"],
-          },
-        ],
-      },
+      { queries: [{ id: "q-plain", query: "deploy steps", expected: ["deploy with rsync"] }] },
       3,
       search,
     );
@@ -327,13 +294,7 @@ describe("loadProbeCorpus: project fields (tz-10a)", () => {
     const file = tempCorpus(
       JSON.stringify({
         queries: [
-          {
-            id: "q1",
-            query: "a",
-            expected: ["x"],
-            projectId: "/p",
-            foreignExpected: ["y", " "],
-          },
+          { id: "q1", query: "a", expected: ["x"], projectId: "/p", foreignExpected: ["y", " "] },
           { id: "q2", query: "b", expected: ["z"] },
         ],
       }),

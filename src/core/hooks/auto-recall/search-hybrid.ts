@@ -1,23 +1,10 @@
 /** Strategy: Hybrid (Keyword + Embedding in parallel, RRF merge with k=60). */
 
-import type {
-  EmbeddingCallOptions,
-  EmbeddingService,
-} from "../../store/embedding.js";
+import type { EmbeddingCallOptions, EmbeddingService } from "../../store/embedding.js";
 import type { MemoryRecord } from "../../record/l1-reader.js";
-import type {
-  L1FtsResult,
-  L1SearchResult,
-  IMemoryStore,
-} from "../../store/types.js";
+import type { L1FtsResult, L1SearchResult, IMemoryStore } from "../../store/types.js";
 import type { Logger } from "../../types.js";
-import {
-  TAG,
-  type RecallDiagnostic,
-  type RecallItem,
-  type StrategyResult,
-  type TypeWeights,
-} from "./types.js";
+import { TAG, type RecallDiagnostic, type RecallItem, type SearchTiming, type StrategyResult, type TypeWeights } from "./types.js";
 import { filterByScope } from "./scope.js";
 import { scopeDecayMultiplier, type ScopeDecayConfig } from "./scope-decay.js";
 import { recordToItem, vectorResultToItem, withScore } from "./item.js";
@@ -39,48 +26,16 @@ export async function searchHybrid(
   typeWeights?: TypeWeights,
   scopeDecayCfg?: ScopeDecayConfig,
   mode: ScopeMode = "hidden",
-): Promise<
-  StrategyResult & {
-    timing: {
-      ftsMs: number;
-      embeddingMs: number;
-      ftsHits: number;
-      embeddingHits: number;
-    };
-  }
-> {
+): Promise<StrategyResult & { timing: SearchTiming }> {
   const diagnostics: RecallDiagnostic[] = [];
   const candidateK = maxResults * (projectId ? 6 : 3);
   const [keywordResult, embeddingResult] = await Promise.all([
-    runKeywordPart(
-      userText,
-      vectorStore,
-      candidateK,
-      projectId,
-      mode,
-      diagnostics,
-      logger,
-    ),
-    runEmbeddingPart(
-      userText,
-      vectorStore,
-      embeddingService,
-      candidateK,
-      embeddingCallOpts,
-      projectId,
-      mode,
-      diagnostics,
-      logger,
-    ),
+    runKeywordPart(userText, vectorStore, candidateK, projectId, mode, diagnostics, logger),
+    runEmbeddingPart(userText, vectorStore, embeddingService, candidateK, embeddingCallOpts, projectId, mode, diagnostics, logger),
   ]);
   const keywordResults = keywordResult.records;
   const embeddingResults = embeddingResult.results;
-  const timing = {
-    ftsMs: keywordResult.ms,
-    embeddingMs: embeddingResult.ms,
-    ftsHits: keywordResults.length,
-    embeddingHits: embeddingResults.length,
-  };
+  const timing = { ftsMs: keywordResult.ms, embeddingMs: embeddingResult.ms, ftsHits: keywordResults.length, embeddingHits: embeddingResults.length };
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
     return { items: [], diagnostics, timing };
@@ -95,16 +50,7 @@ export async function searchHybrid(
     // The FTS row's own `scope`/`project_id` travel with the item: a
     // MemoryRecord has no room for them, and dropping them here is what let a
     // keyword-only foreign-project hit escape the decay entirely (tz-10a Ф2b).
-    else
-      mergedMap.set(id, {
-        rrfScore,
-        item: recordToItem(
-          r.record,
-          zeroScore(),
-          { scope: r.row.scope, project_id: r.row.project_id },
-          "l1-hybrid-rrf",
-        ),
-      });
+    else mergedMap.set(id, { rrfScore, item: recordToItem(r.record, zeroScore(), { scope: r.row.scope, project_id: r.row.project_id }, "l1-hybrid-rrf") });
   }
   for (let rank = 0; rank < embeddingResults.length; rank++) {
     const r = embeddingResults[rank]!;
@@ -112,35 +58,23 @@ export async function searchHybrid(
     const rrfScore = 1 / (RRF_K + rank + 1);
     const existing = mergedMap.get(id);
     if (existing) existing.rrfScore += rrfScore;
-    else
-      mergedMap.set(id, {
-        rrfScore,
-        item: vectorResultToItem(r, zeroScore(), "l1-hybrid-rrf"),
-      });
+    else mergedMap.set(id, { rrfScore, item: vectorResultToItem(r, zeroScore(), "l1-hybrid-rrf") });
   }
   // Type rerank (improvement #2): multiply fused RRF score by type weight, re-sort BEFORE top-K.
   // Hybrid cross-project semantics: multiplier applies to RRF (1/(60+rank+1)), not cosine.
   // RRF and cosine live on different scales; the multiplier is a soft signal here.
   const entries = [...mergedMap.values()].map(({ rrfScore, item }) => {
     const weight = typeWeightOf(item.formatable.type, typeWeights);
-    const decay = scopeDecayMultiplier(
-      { scope: item.scope.scope, project_id: item.scope.projectId },
-      projectId,
-      scopeDecayCfg,
-    );
+    const decay = scopeDecayMultiplier({ scope: item.scope.scope, project_id: item.scope.projectId }, projectId, scopeDecayCfg);
     return withScore(item, {
       raw: rrfScore,
       final: rrfScore * weight * decay,
       reasons: ["rrf", `decay:${decay}`, `type-weight:${weight}`],
     });
   });
-  const sorted = entries
-    .sort((a, b) => b.score.final - a.score.final)
-    .slice(0, maxResults);
+  const sorted = entries.sort((a, b) => b.score.final - a.score.final).slice(0, maxResults);
   if (sorted.length > 0) {
-    logger?.debug?.(
-      `${TAG} Hybrid search found ${sorted.length} results (keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
-    );
+    logger?.debug?.(`${TAG} Hybrid search found ${sorted.length} results (keyword=${keywordResults.length}, embedding=${embeddingResults.length})`);
     return { items: sorted, diagnostics, timing };
   }
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
@@ -178,38 +112,16 @@ async function runKeywordPart(
     if (vectorStore.isFtsAvailable()) {
       const ftsQuery = buildFtsQuery(userText);
       if (ftsQuery) {
-        const ftsResults = filterByScope(
-          await vectorStore.searchL1Fts(ftsQuery, candidateK, projectId, mode),
-          projectId,
-          mode,
-          diagnostics,
-        );
+        const ftsResults = filterByScope(await vectorStore.searchL1Fts(ftsQuery, candidateK, projectId, mode), projectId, mode, diagnostics);
         if (ftsResults.length > 0) {
-          logger?.debug?.(
-            `${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`,
-          );
+          logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
           const records = ftsResults.map((r): KeywordHit => ({
             record: {
-              id: r.record_id,
-              content: r.content,
-              type: r.type as MemoryRecord["type"],
-              priority: r.priority,
-              scene_name: r.scene_name,
-              source_message_ids: [],
-              metadata: r.metadata_json
-                ? (() => {
-                    try {
-                      return JSON.parse(r.metadata_json);
-                    } catch {
-                      return {};
-                    }
-                  })()
-                : {},
-              timestamps: [r.timestamp_str].filter(Boolean),
-              createdAt: "",
-              updatedAt: "",
-              sessionKey: r.session_key,
-              sessionId: r.session_id,
+              id: r.record_id, content: r.content, type: r.type as MemoryRecord["type"],
+              priority: r.priority, scene_name: r.scene_name, source_message_ids: [],
+              metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
+              timestamps: [r.timestamp_str].filter(Boolean), createdAt: "", updatedAt: "",
+              sessionKey: r.session_key, sessionId: r.session_id,
             },
             row: r,
           }));
@@ -217,9 +129,7 @@ async function runKeywordPart(
         }
       }
     }
-    logger?.debug?.(
-      `${TAG} [hybrid-keyword] FTS5 unavailable or no results, skipping keyword part`,
-    );
+    logger?.debug?.(`${TAG} [hybrid-keyword] FTS5 unavailable or no results, skipping keyword part`);
     return { records: [], ms: performance.now() - tStart };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -243,25 +153,9 @@ async function runEmbeddingPart(
   const tStart = performance.now();
   try {
     logger?.debug?.(`${TAG} [hybrid-embedding] Generating query embedding...`);
-    const queryEmbedding = await embeddingService.embed(userText, {
-      ...embeddingCallOpts,
-      inputType: "query",
-    });
-    logger?.debug?.(
-      `${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}, mode=${mode}...`,
-    );
-    const results = filterByScope(
-      await vectorStore.searchL1Vector(
-        queryEmbedding,
-        candidateK,
-        userText,
-        projectId,
-        mode,
-      ),
-      projectId,
-      mode,
-      diagnostics,
-    );
+    const queryEmbedding = await embeddingService.embed(userText, { ...embeddingCallOpts, inputType: "query" });
+    logger?.debug?.(`${TAG} [hybrid-embedding] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}, mode=${mode}...`);
+    const results = filterByScope(await vectorStore.searchL1Vector(queryEmbedding, candidateK, userText, projectId, mode), projectId, mode, diagnostics);
     logger?.debug?.(
       `${TAG} [hybrid-embedding] Got ${results.length} candidates`,
     );

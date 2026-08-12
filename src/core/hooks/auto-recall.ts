@@ -27,20 +27,5 @@
  *   - Filters by `passesScope` when `projectId` is provided.
  */
 
-export {
-  performAutoRecall,
-  applyRecallBudget,
-  applyTypeWeights,
-  filterByScope,
-  itemToRecalledMemory,
-  passesScope,
-  renderItems,
-  searchMemoriesWithDetails,
-  RECALL_ITEM_SCHEMA_VERSION,
-} from "./auto-recall/index.js";
-export type {
-  RecallResult,
-  RecalledMemory,
-  RecallItem,
-  RecallDiagnostic,
-} from "./auto-recall/index.js";
+export { performAutoRecall, applyRecallBudget, applyTypeWeights, filterByScope, itemToRecalledMemory, passesScope, renderItems, searchMemoriesWithDetails, RECALL_ITEM_SCHEMA_VERSION } from "./auto-recall/index.js";
+export type { RecallResult, RecalledMemory, RecallItem, RecallDiagnostic } from "./auto-recall/index.js";

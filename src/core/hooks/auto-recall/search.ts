@@ -30,14 +30,14 @@ import {
 import { searchByKeyword } from "./search-keyword.js";
 import { searchByEmbedding } from "./search-embedding.js";
 import { searchHybrid } from "./search-hybrid.js";
-import { renderItems, vectorResultToItem } from "./item.js";
 import { filterByScope, type ScopeMode } from "./scope.js";
+import { renderItems, vectorResultToItem } from "./item.js";
 import type { ScopeDecayConfig } from "./scope-decay.js";
 
 /**
- * A fresh empty result per call. It used to be one shared module-level
- * object; now that a result carries diagnostics, sharing it would let one
- * call's failure show up in another's.
+ * A fresh empty result per call. It used to be one shared module-level object;
+ * now that a result carries diagnostics, sharing it would let one call's
+ * failure show up in another's.
  */
 function emptyResult(diagnostics: RecallDiagnostic[] = []): SearchResult {
   return {
@@ -46,6 +46,15 @@ function emptyResult(diagnostics: RecallDiagnostic[] = []): SearchResult {
     timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 },
     diagnostics,
   };
+}
+
+/** Render the items once and pack the result the callers expect. */
+function finish(
+  items: RecallItem[],
+  diagnostics: RecallDiagnostic[],
+  timing: SearchTiming,
+): SearchResult {
+  return { lines: renderItems(items), items, timing, diagnostics };
 }
 
 export async function searchMemories(
@@ -176,9 +185,9 @@ export async function searchMemories(
     // Hybrid: short-circuit to single store-side call when supported.
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      // Both backends now filter store-side; the JS scope leg stays for a
-      // store that ignores the params (the three implementations are pinned
-      // to one table in scope-sync.test.ts).
+      // Both backends now filter store-side; the JS scope leg stays for a store
+      // that ignores the params (the three implementations are pinned to one
+      // table in scope-sync.test.ts).
       const results = filterByScope(
         await vectorStore.searchL1Hybrid!({
           query: cleanText,
@@ -197,11 +206,7 @@ export async function searchMemories(
       // The store already ranked and (in decay mode) downweighted these rows,
       // so the score it returned IS the final one — no second multiplier here.
       const items = results.map((r) =>
-        vectorResultToItem(r, {
-          raw: r.score,
-          final: r.score,
-          reasons: ["native-hybrid"],
-        }),
+        vectorResultToItem(r, { raw: r.score, final: r.score, reasons: ["native-hybrid"] }),
       );
       return finish(items, diagnostics, {
         ftsMs: 0,
@@ -224,11 +229,7 @@ export async function searchMemories(
       scopeDecayCfg,
       mode,
     );
-    return finish(
-      hybrid.items,
-      [...diagnostics, ...hybrid.diagnostics],
-      hybrid.timing,
-    );
+    return finish(hybrid.items, [...diagnostics, ...hybrid.diagnostics], hybrid.timing);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger?.warn?.(
@@ -238,22 +239,7 @@ export async function searchMemories(
     // caller can now tell a broken store from an empty memory (tz-10 C10.5).
     return emptyResult([
       ...diagnostics,
-      {
-        stage: "repo",
-        code: "search-failed",
-        message: `strategy=${effectiveStrategy}: ${message}`,
-      },
+      { stage: "repo", code: "search-failed", message: `strategy=${effectiveStrategy}: ${message}` },
     ]);
   }
 }
-
-/** Render the items once and pack the result the callers expect. */
-function finish(
-  items: RecallItem[],
-  diagnostics: RecallDiagnostic[],
-  timing: SearchTiming,
-): SearchResult {
-  return { lines: renderItems(items), items, timing, diagnostics };
-}
-
-// passesScope imported at the top of the file (alongside other strategy imports).

@@ -8,48 +8,24 @@ import type { RecallItem } from "./auto-recall.js";
 import type { MemoryTdaiConfig } from "../../config.js";
 
 /** The budget works on rendered items; these tests only care about the line. */
-function rendered(lines: string[]): Array<{ item: RecallItem; line: string }> {
-  return lines.map((line, i) => ({
-    item: { memoryId: `m${i}` } as RecallItem,
+function budgetedLines(lines: string[], recall: MemoryTdaiConfig["recall"]): string[] {
+  const rendered = lines.map((line, i) => ({
+    item: { memoryId: `m${i}`, score: { raw: 1, final: 1, reasons: [] } } as RecallItem,
     line,
   }));
-}
-
-function budgetedLines(
-  lines: string[],
-  recall: MemoryTdaiConfig["recall"],
-): string[] {
-  return applyRecallBudget(rendered(lines), recall).kept.map((r) => r.line);
+  return applyRecallBudget(rendered, recall).kept.map((r) => r.line);
 }
 
 function cfg(maxPersonaChars: number): MemoryTdaiConfig {
   return {
-    recall: {
-      enabled: true,
-      maxResults: 3,
-      maxCharsPerMemory: 500,
-      maxTotalRecallChars: 2000,
-      maxPersonaChars,
-      scoreThreshold: 0.3,
-      strategy: "keyword",
-      timeoutMs: 5000,
-    },
+    recall: { enabled: true, maxResults: 3, maxCharsPerMemory: 500, maxTotalRecallChars: 2000, maxPersonaChars, scoreThreshold: 0.3, strategy: "keyword", timeoutMs: 5000 },
   } as MemoryTdaiConfig;
 }
 
-async function recallPersona(
-  maxPersonaChars: number,
-  personaChars: number,
-): Promise<string> {
+async function recallPersona(maxPersonaChars: number, personaChars: number): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-persona-"));
   fs.writeFileSync(path.join(dir, "persona.md"), "ы".repeat(personaChars));
-  const r = await performAutoRecall({
-    userText: "",
-    actorId: "u",
-    sessionKey: "cc-t",
-    cfg: cfg(maxPersonaChars),
-    pluginDataDir: dir,
-  });
+  const r = await performAutoRecall({ userText: "", actorId: "u", sessionKey: "cc-t", cfg: cfg(maxPersonaChars), pluginDataDir: dir });
   fs.rmSync(dir, { recursive: true, force: true });
   return r?.recalledL3Persona ?? "";
 }
@@ -72,10 +48,7 @@ describe("persona budget", () => {
 
 describe("recall budget", () => {
   const budget = (max: number, total: number) =>
-    ({
-      maxCharsPerMemory: max,
-      maxTotalRecallChars: total,
-    }) as MemoryTdaiConfig["recall"];
+    ({ maxCharsPerMemory: max, maxTotalRecallChars: total } as MemoryTdaiConfig["recall"]);
 
   it("truncates a single oversized memory line", () => {
     const [line] = budgetedLines(["a".repeat(900)], budget(500, 2000));
@@ -84,10 +57,7 @@ describe("recall budget", () => {
   });
 
   it("keeps the total under budget and drops what no longer fits", () => {
-    const out = budgetedLines(
-      ["a".repeat(400), "b".repeat(400), "c".repeat(400)],
-      budget(500, 850),
-    );
+    const out = budgetedLines(["a".repeat(400), "b".repeat(400), "c".repeat(400)], budget(500, 850));
     expect(out.join("\n").length).toBeLessThanOrEqual(850);
     expect(out[out.length - 1].length).toBeLessThan(400);
   });

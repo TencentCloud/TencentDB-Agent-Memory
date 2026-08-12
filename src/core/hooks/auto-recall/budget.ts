@@ -5,21 +5,14 @@
 
 import type { MemoryTdaiConfig } from "../../../config.js";
 import type { Logger } from "../../types.js";
-import {
-  MIN_TRUNCATED_RECALL_LINE_CHARS,
-  RECALL_LINE_SEPARATOR,
-  RECALL_TRUNCATION_SUFFIX,
-  TAG,
-  type RecallDiagnostic,
-  type RecallItem,
-} from "./types.js";
+import { MIN_TRUNCATED_RECALL_LINE_CHARS, RECALL_LINE_SEPARATOR, RECALL_TRUNCATION_SUFFIX, TAG, type RecallDiagnostic, type RecallItem } from "./types.js";
 
 /**
- * A rendered item: the structured element next to the line it produced.
- * The budget cuts the LINE (the suffix `(活动时间: …)` is appended after the
- * content, so truncating the content would leave the ellipsis mid-line and
- * blow the cap), while the item travels along so the caller keeps identity
- * and score for whatever survived (tz-10 C10.3).
+ * A rendered item: the structured element next to the line it produced. The
+ * budget cuts the LINE (the `(活动时间: …)` suffix is appended AFTER the content,
+ * so truncating the content would leave the ellipsis mid-line and blow the
+ * cap), while the item rides along so the caller keeps identity and score for
+ * whatever survived (tz-10 C10.3).
  */
 export interface RenderedItem {
   item: RecallItem;
@@ -28,7 +21,7 @@ export interface RenderedItem {
 
 /**
  * Apply per-memory and total recall budgets. Returns the surviving rendered
- * items plus a diagnostic per truncation/drop.
+ * items plus one diagnostic per truncation/drop.
  * - `maxCharsPerMemory`: cap each line's length
  * - `maxTotalRecallChars`: cap the joined output length
  * Both default to "no limit" if undefined / non-positive.
@@ -41,8 +34,7 @@ export function applyRecallBudget(
   const lines = rendered.map((r) => r.line);
   const maxCharsPerMemory = normalizeBudgetLimit(recall.maxCharsPerMemory);
   const maxTotalRecallChars = normalizeBudgetLimit(recall.maxTotalRecallChars);
-  if (!maxCharsPerMemory && !maxTotalRecallChars)
-    return { kept: rendered, diagnostics: [] };
+  if (!maxCharsPerMemory && !maxTotalRecallChars) return { kept: rendered, diagnostics: [] };
 
   const diagnostics: RecallDiagnostic[] = [];
   const keptItems: RecallItem[] = [];
@@ -51,12 +43,19 @@ export function applyRecallBudget(
   let truncatedCount = 0;
   let droppedCount = 0;
 
+  /** Keep one line, recording the truncation on the item and in diagnostics. */
   const keep = (index: number, line: string, wasTruncated: boolean): void => {
     const item = rendered[index]!.item;
     budgeted.push(line);
-    keptItems.push(item);
-    if (!wasTruncated) return;
+    if (!wasTruncated) {
+      keptItems.push(item);
+      return;
+    }
     truncatedCount++;
+    keptItems.push({
+      ...item,
+      score: { ...item.score, reasons: [...item.score.reasons, "budget:truncated"] },
+    });
     diagnostics.push({
       stage: "budget",
       code: "truncated",
@@ -64,6 +63,7 @@ export function applyRecallBudget(
       itemId: item.memoryId,
     });
   };
+  /** Everything from `from` onwards did not fit — say so per item. */
   const drop = (from: number): void => {
     droppedCount += lines.length - from;
     for (let j = from; j < rendered.length; j++) {
@@ -78,16 +78,13 @@ export function applyRecallBudget(
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const perMemoryBounded = maxCharsPerMemory
-      ? truncateRecallLine(line, maxCharsPerMemory)
-      : line;
+    const perMemoryBounded = maxCharsPerMemory ? truncateRecallLine(line, maxCharsPerMemory) : line;
     let wasTruncated = perMemoryBounded !== line;
     if (!maxTotalRecallChars) {
       keep(i, perMemoryBounded, wasTruncated);
       continue;
     }
-    const separatorChars =
-      budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
+    const separatorChars = budgeted.length > 0 ? RECALL_LINE_SEPARATOR.length : 0;
     const remainingChars = maxTotalRecallChars - usedChars - separatorChars;
     if (remainingChars <= 0) {
       drop(i);
@@ -96,10 +93,7 @@ export function applyRecallBudget(
     if (perMemoryBounded.length > remainingChars) {
       const canFit = remainingChars >= MIN_TRUNCATED_RECALL_LINE_CHARS;
       if (canFit) {
-        const totalBounded = truncateRecallLine(
-          perMemoryBounded,
-          remainingChars,
-        );
+        const totalBounded = truncateRecallLine(perMemoryBounded, remainingChars);
         usedChars += separatorChars + totalBounded.length;
         wasTruncated ||= totalBounded !== perMemoryBounded;
         keep(i, totalBounded, wasTruncated);
@@ -114,12 +108,11 @@ export function applyRecallBudget(
   if (truncatedCount > 0 || droppedCount > 0) {
     logger?.debug?.(
       `${TAG} Recall budget applied: input=${lines.length}, output=${budgeted.length}, ` +
-        `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
-        `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
+      `truncated=${truncatedCount}, dropped=${droppedCount}, ` +
+      `maxCharsPerMemory=${recall.maxCharsPerMemory}, maxTotalRecallChars=${recall.maxTotalRecallChars}`,
     );
   }
-  const kept = budgeted.map((line, i) => ({ item: keptItems[i]!, line }));
-  return { kept, diagnostics };
+  return { kept: budgeted.map((line, i) => ({ item: keptItems[i]!, line })), diagnostics };
 }
 
 function normalizeBudgetLimit(value: number | undefined): number | undefined {
@@ -133,10 +126,6 @@ function truncateRecallLine(line: string, maxChars: number): string {
   // character to U+FFFD when the line is UTF-8 encoded for the request).
   const cps = Array.from(line);
   if (cps.length <= maxChars) return line;
-  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length)
-    return cps.slice(0, maxChars).join("");
-  return `${cps
-    .slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length)
-    .join("")
-    .trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
+  if (maxChars <= RECALL_TRUNCATION_SUFFIX.length) return cps.slice(0, maxChars).join("");
+  return `${cps.slice(0, maxChars - RECALL_TRUNCATION_SUFFIX.length).join("").trimEnd()}${RECALL_TRUNCATION_SUFFIX}`;
 }

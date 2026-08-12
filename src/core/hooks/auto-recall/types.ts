@@ -7,8 +7,7 @@ import type { MemoryRecord } from "../../record/l1-reader.js";
 import type { L1SearchResult } from "../../store/types.js";
 
 export const TAG = "[memory-tdai] [recall]";
-export const RECALL_TRUNCATION_SUFFIX =
-  "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
+export const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 export const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 export const RECALL_LINE_SEPARATOR = "\n";
 
@@ -46,13 +45,13 @@ export interface RecalledMemory {
 export const RECALL_ITEM_SCHEMA_VERSION = 1;
 
 /**
- * Structured recall element — what the strategies actually found, before it
- * is rendered for the prompt (tz-10 C10.3). The rendered line is a projection
- * of `formatable`, never the other way round: parsing a line back into fields
- * is what lost ids and scores before tz-10a.
+ * Structured recall element — what the strategies actually found, before it is
+ * rendered for the prompt (tz-10 C10.3). The rendered line is a projection of
+ * `formatable`, never the other way round: parsing a line back into fields is
+ * what lost ids and scores before tz-10a.
  *
- * tz-10b's `MemoryItem` = `RecallItem & { tokenCost: number }` — the budget
- * and tokenizer belong to the assembler, not to the search path.
+ * tz-10b's `MemoryItem` = `RecallItem & { tokenCost: number }` — the budget and
+ * the tokenizer belong to the assembler, not to the search path.
  */
 export interface RecallItem {
   schemaVersion: typeof RECALL_ITEM_SCHEMA_VERSION;
@@ -86,13 +85,12 @@ export interface RecallItem {
 }
 
 /** Where a recall diagnostic came from (tz-10 C10.5). */
-export type RecallDiagnosticStage =
-  "repo" | "scope" | "strategy" | "budget" | "render";
+export type RecallDiagnosticStage = "repo" | "scope" | "strategy" | "budget" | "render";
 
 /**
  * One machine-readable note about the recall path. A failure that produces a
- * diagnostic is NOT the same as "no memories" — that conflation is exactly
- * what tz-10 C10.5 forbids.
+ * diagnostic is NOT the same as "no memories" — that conflation is exactly what
+ * tz-10 C10.5 forbids.
  */
 export interface RecallDiagnostic {
   stage: RecallDiagnosticStage;
@@ -159,7 +157,6 @@ export interface StrategyResult {
 /** Search strategy (config-driven). */
 export type RecallStrategy = "keyword" | "embedding" | "hybrid";
 /** Used for L2/L3 type-rerank. */
-export type TypeWeights =
-  { instruction: number; persona: number; episodic: number } | undefined;
+export type TypeWeights = { instruction: number; persona: number; episodic: number } | undefined;
 // Re-export to keep external API stable when callers only have access to ./types.ts.
 export type { L1SearchResult };
