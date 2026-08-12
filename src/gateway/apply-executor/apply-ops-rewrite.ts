@@ -56,12 +56,21 @@ export async function applyDeletes(
   const ids = toDelete.map((d) => d.id);
   for (const d of toDelete) onOp?.("deleteL1", d.index, d.id, "prepared");
   if (ids.length > 0 && deps.vectorStore) {
-    const ok = await deps.vectorStore.deleteL1Batch(ids);
+    let ok: boolean;
+    try {
+      ok = await deps.vectorStore.deleteL1Batch(ids);
+    } catch (err) {
+      // A batch that THREW may have deleted part of itself — unlike a batch
+      // that returned false, which reports "nothing was deleted".
+      result.storeTouched = true;
+      throw err;
+    }
     if (!ok) {
       throw new ApplyRuntimeError(
         `deleteL1Batch failed for [${ids.join(", ")}]`,
       );
     }
+    result.storeTouched = true;
   }
   for (const d of toDelete) onOp?.("deleteL1", d.index, d.id, "applied");
   result.applied.deletes.push(...ids);
@@ -110,7 +119,11 @@ export async function applyRewrites(
         await writeBackup(deps.dataDir, target.relPath, current);
       }
       await atomicWrite(resolved, target.content);
+      result.storeTouched = true;
     } catch (err) {
+      // The rename is atomic, but a failure inside it leaves the carrier in an
+      // unknown state — that is reconciliation's question, not this catch's.
+      result.storeTouched = true;
       throw new ApplyRuntimeError(
         `rewrite "${target.relPath}" failed: ${err instanceof Error ? err.message : String(err)}`,
       );

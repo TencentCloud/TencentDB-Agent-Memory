@@ -42,7 +42,7 @@ import {
   fetchMetaRows,
   resolveWithinDataDir,
 } from "./apply-executor/apply-helpers.js";
-import { hasApplied } from "./apply-executor/apply-route-helpers.js";
+import { hasMutated } from "./apply-executor/apply-route-helpers.js";
 import { EMPTY_RESULT, type ApplyResult } from "./apply-executor/types.js";
 import type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
 import type { RunContext } from "./apply-executor/run-context.js";
@@ -176,7 +176,7 @@ export class ApplyExecutor {
         err instanceof ApplyRuntimeError
       ) {
         result.error = err.message;
-        result.partial = hasApplied(result);
+        result.partial = hasMutated(result);
         result.status = "aborted";
         result.statusCode = err.statusCode;
         return this.finish(result, scopedForFinish, entered);
@@ -186,7 +186,7 @@ export class ApplyExecutor {
       // SQLITE_BUSY out of deleteL1Batch, say) would otherwise wedge it as
       // surely as a typed one, and it is exactly the case where the store may
       // be half-written.
-      result.partial = hasApplied(result);
+      result.partial = hasMutated(result);
       this.finish(result, scopedForFinish, entered);
       throw err;
     }
@@ -200,7 +200,7 @@ export class ApplyExecutor {
     run: RunContext | undefined,
     entered: boolean,
   ): ApplyResult {
-    const mutated = hasApplied(result);
+    const mutated = hasMutated(result);
     leaveApplying(this.deps, run, { ok: result.ok, mutated, entered });
     // tz-03b: announced from the ONE exit, not from the success path — an
     // aborted apply mutated the store just as really as a successful one, and

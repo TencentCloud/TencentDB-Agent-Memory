@@ -70,6 +70,9 @@ export async function applyMerges(
       stableId: op.target,
       label: `merge target "${op.target}"`,
     });
+    // The target is written. Whatever happens to the members now, this apply
+    // has mutated the store and its run may not be reported as a clean failure.
+    result.storeTouched = true;
 
     if (members.length > 0 && vectorStore) {
       const ok = await vectorStore.deleteL1Batch(members);

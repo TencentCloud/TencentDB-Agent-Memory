@@ -29,6 +29,15 @@ export interface ApplyResult {
   status: "applied" | "aborted" | "failed";
   /** True when ≥ 1 mutation was applied before an abort (heal re-run needed). */
   partial: boolean;
+  /** True once a write has REACHED the store, even if the operation that owns
+   * it never completed. A merge whose target was rewritten and whose member
+   * deletion then threw never reaches `applied`, so judging "did this apply
+   * mutate?" by the applied lists alone calls a half-written store a clean
+   * failure. It is not clean, and only reconciliation can say how far it got
+   * (tz-09 S4 :135). A call that reported failure WITHOUT writing (deleteL1Batch
+   * returning false, writeMemory returning null) does not set it: nothing
+   * reached the store, and there is nothing to reconcile. */
+  storeTouched: boolean;
   /** HTTP status for aborted/failed results (400 validation · 409 drift/stale · 500 runtime). */
   statusCode?: number;
   error?: string;
@@ -80,6 +89,7 @@ export const EMPTY_RESULT = (): ApplyResult => ({
   ok: false,
   status: "aborted",
   partial: false,
+  storeTouched: false,
   applied: { merges: [], deletes: [], rewrites: [] },
   skipped: { merges: [], deletes: [], rewrites: [] },
   skippedMergesMissingTarget: [],

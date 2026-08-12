@@ -4,6 +4,8 @@
  * parseMetadata: tolerate malformed JSON in metadata_json (fall back to {}).
  * atomicWrite: tmp file in the same directory + rename (atomic on POSIX).
  * hasApplied: true when the ApplyResult already mutates ≥ 1 row.
+ * hasMutated: true when the store may be half-written — the question the Run
+ *   state depends on, which is wider than "an operation completed".
  *
  * Pure / no `this` — testable in isolation.
  */
@@ -30,6 +32,12 @@ export function hasApplied(result: ApplyResult): boolean {
     result.applied.deletes.length > 0 ||
     result.applied.rewrites.length > 0
   );
+}
+
+/** Did this apply touch the store at all? An operation that was announced and
+ * then threw counts: it is exactly the case the applied lists cannot see. */
+export function hasMutated(result: ApplyResult): boolean {
+  return result.storeTouched || hasApplied(result);
 }
 
 /** Atomic write: tmp file in the same directory + rename. */

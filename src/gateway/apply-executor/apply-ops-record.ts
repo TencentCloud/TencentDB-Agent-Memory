@@ -70,6 +70,7 @@ export async function applyRewritesRecords(
       stableId: op.id,
       label: `rewriteRecord "${op.id}"`,
     });
+    result.storeTouched = true;
 
     onOp?.("rewriteRecord", i, op.id, "applied", digest);
     result.applied.rewrites.push(op.id);
