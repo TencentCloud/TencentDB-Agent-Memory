@@ -485,6 +485,19 @@ async function searchViaRecall(
 }
 
 /**
+ * The config the MEASURER runs with: the retrieval window is widened to
+ * `probe.topK`. With the live `recall.maxResults` (5) the pipeline would hand
+ * back five candidates and `@10` could never exceed 0.5 — a measurement
+ * artefact, not a recall property. The live config is copied, never mutated.
+ */
+export function measuringConfig(cfg: MemoryTdaiConfig): MemoryTdaiConfig {
+  const maxResults = cfg.recall.maxResults ?? 5;
+  return cfg.probe.topK > maxResults
+    ? { ...cfg, recall: { ...cfg.recall, maxResults: cfg.probe.topK } }
+    : cfg;
+}
+
+/**
  * Run the probe end-to-end (corpus load + real recall search + precision).
  * Fail-open: skipped (not failed) when the corpus is missing/unusable or the
  * recall resources are unavailable.
@@ -540,11 +553,18 @@ export async function runRecallProbe(opts: {
     };
   }
 
+  const measuringCfg = measuringConfig(cfg);
   const search =
     opts.search ??
     ((query: string, projectId: string) =>
-      searchViaRecall(query, projectId, { dataDir, cfg, logger, vectorStore, embeddingService }));
+      searchViaRecall(query, projectId, {
+        dataDir,
+        cfg: measuringCfg,
+        logger,
+        vectorStore,
+        embeddingService,
+      }));
   return computeProbeResults(corpus, cfg.probe.topK, search, {
-    scoringVersion: scoringVersionOf(cfg),
+    scoringVersion: scoringVersionOf(measuringCfg),
   });
 }

@@ -12,9 +12,11 @@ import {
   hitsAtK,
   metricsFor,
   isRelevant,
+  measuringConfig,
   type ProbeCorpus,
 } from "./probe.js";
 import type { RecallItem } from "../core/hooks/auto-recall.js";
+import { parseConfig } from "../config.js";
 
 /**
  * A retrieved item as the recall pipeline would hand it over. Only the fields
@@ -412,5 +414,19 @@ describe("tz-04 C2: precision and recall have their own denominators", () => {
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
+  });
+});
+
+describe("tz-04: the measurer retrieves its own window", () => {
+  it("widens maxResults up to probe.topK without touching the live config", () => {
+    const cfg = parseConfig({ recall: { maxResults: 5 }, probe: { topK: 10 } });
+    const measuring = measuringConfig(cfg);
+    expect(measuring.recall.maxResults).toBe(10);
+    expect(cfg.recall.maxResults).toBe(5);
+  });
+
+  it("leaves a config that already retrieves enough alone", () => {
+    const cfg = parseConfig({ recall: { maxResults: 20 }, probe: { topK: 10 } });
+    expect(measuringConfig(cfg)).toBe(cfg);
   });
 });

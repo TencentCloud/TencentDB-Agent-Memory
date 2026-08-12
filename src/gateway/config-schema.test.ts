@@ -43,7 +43,8 @@ describe("wave config schema (P1)", () => {
     // probe
     expect(cfg.probe.corpusPath).toBe("probe-corpus.json");
     expect(cfg.probe.precisionTarget).toBe(0.9);
-    expect(cfg.probe.topK).toBe(3);
+    expect(cfg.probe.topK).toBe(10);
+    expect(cfg.probe.baselinePath).toBe("probe-baseline.json");
     // typeWeights — off by default (all 1.0)
     expect(cfg.recall.typeWeights).toEqual({
       instruction: 1,

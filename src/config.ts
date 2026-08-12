@@ -270,8 +270,18 @@ export interface ProbeConfig {
   corpusPath: string;
   /** Minimum precision@k the probe must reach (0..1, default: 0.9). */
   precisionTarget: number;
-  /** Top-k used by the probe (default: 3). */
+  /**
+   * Top-k the MEASURER retrieves (default: 10). This is not a recall setting:
+   * tz-04 C2 asks for metrics at @5 and @10, so a smaller window would make
+   * `@10` structurally unreachable. Live recall keeps `recall.maxResults`.
+   */
   topK: number;
+  /**
+   * Where the reference baseline lives (relative paths resolve against
+   * dataDir). A measurement without something to compare against is a number,
+   * not a signal (tz-04 C3).
+   */
+  baselinePath: string;
 }
 
 /** Embedding service configuration for vector search. */
@@ -847,7 +857,10 @@ export function parseConfig(
         str(probeGroup, "corpusPath") ?? "probe-corpus.json",
       ),
       precisionTarget: num(probeGroup, "precisionTarget") ?? 0.9,
-      topK: num(probeGroup, "topK") ?? 3,
+      topK: num(probeGroup, "topK") ?? 10,
+      baselinePath: expandHome(
+        str(probeGroup, "baselinePath") ?? "probe-baseline.json",
+      ),
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -1094,6 +1107,7 @@ const probeSchema = z.strictObject({
   corpusPath: z.string().optional(),
   precisionTarget: z.number().min(0).max(1).optional(),
   topK: z.number().int().positive().optional(),
+  baselinePath: z.string().optional(),
 });
 
 const typeWeightsSchema = z.strictObject({
