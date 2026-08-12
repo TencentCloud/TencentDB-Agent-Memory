@@ -45,12 +45,24 @@ export interface CaptureTurn {
   sessionId: string;
   user: string;
   assistant: string;
+  skillMessages: SkillCaptureMessage[];
   capturedAtMs: number;
+}
+
+export type SkillCaptureRole = "user" | "assistant" | "tool_call" | "tool_result" | "system";
+
+export interface SkillCaptureMessage {
+  role: SkillCaptureRole;
+  content: string;
+  tool_name?: string;
+  tool_call_id?: string;
+  timestamp?: number | string;
 }
 
 export interface MemoryClientLike {
   recall(query: string, signal?: AbortSignal): Promise<RecallBundle>;
-  captureTurn(turn: CaptureTurn, signal?: AbortSignal): Promise<void>;
+  captureConversation(turn: CaptureTurn, signal?: AbortSignal): Promise<void>;
+  captureSkill(turn: CaptureTurn, signal?: AbortSignal): Promise<void>;
   searchAtomic(query: string, limit: number, signal?: AbortSignal): Promise<AtomicMemory[]>;
   searchConversation(
     query: string,
@@ -237,7 +249,7 @@ export class TdaiMemoryClient implements MemoryClientLike {
     return bundle;
   }
 
-  async captureTurn(turn: CaptureTurn, signal?: AbortSignal): Promise<void> {
+  async captureConversation(turn: CaptureTurn, signal?: AbortSignal): Promise<void> {
     const assistantTime = new Date(turn.capturedAtMs).toISOString();
     const userTime = new Date(Math.max(0, turn.capturedAtMs - 1)).toISOString();
     await this.post(
@@ -257,6 +269,18 @@ export class TdaiMemoryClient implements MemoryClientLike {
             timestamp: assistantTime,
           },
         ],
+      },
+      signal,
+    );
+  }
+
+  async captureSkill(turn: CaptureTurn, signal?: AbortSignal): Promise<void> {
+    await this.post(
+      "/v3/skill/conversation/add",
+      {
+        ...this.isolation(),
+        session_id: turn.sessionId,
+        messages: turn.skillMessages,
       },
       signal,
     );

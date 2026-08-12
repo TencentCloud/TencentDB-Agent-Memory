@@ -10,6 +10,7 @@ export interface PiMemoryConfig {
   recallLimit: number;
   scenarioLimit: number;
   maxContextChars: number;
+  maxCaptureChars: number;
   includeCore: boolean;
   includeScenarios: boolean;
   allowInsecureHttp: boolean;
@@ -83,6 +84,7 @@ export function loadConfig(env: Environment = process.env): ConfigResult {
   const recallLimit = readInteger(env, "TDAI_PI_RECALL_LIMIT", 5, 1, 20, errors);
   const scenarioLimit = readInteger(env, "TDAI_PI_SCENARIO_LIMIT", 3, 0, 20, errors);
   const maxContextChars = readInteger(env, "TDAI_PI_MAX_CONTEXT_CHARS", 8_000, 500, 50_000, errors);
+  const maxCaptureChars = readInteger(env, "TDAI_PI_MAX_CAPTURE_CHARS", 12_000, 500, 100_000, errors);
 
   if (errors.length > 0) return { ok: false, errors };
 
@@ -100,6 +102,7 @@ export function loadConfig(env: Environment = process.env): ConfigResult {
       recallLimit,
       scenarioLimit,
       maxContextChars,
+      maxCaptureChars,
       includeCore: readBoolean(env.TDAI_PI_INCLUDE_CORE, true),
       includeScenarios: readBoolean(env.TDAI_PI_INCLUDE_SCENARIOS, true),
       allowInsecureHttp,

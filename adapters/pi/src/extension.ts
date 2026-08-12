@@ -7,9 +7,9 @@ import {
   type CaptureTurn,
   type MemoryClientLike,
 } from "./client.js";
+import { buildCaptureTurn, hasCompletedAssistant } from "./capture.js";
 import { loadConfig, type PiMemoryConfig } from "./config.js";
 import {
-  extractFinalAssistantText,
   formatAtomicResults,
   formatConversationResults,
   formatRecallContext,
@@ -22,6 +22,17 @@ export interface ExtensionDependencies {
 }
 
 const CAPTURE_ENTRY_TYPE = "tdai-memory-captured";
+const CAPTURE_MARKER_VERSION = 2;
+
+interface CaptureStatus {
+  l0: boolean;
+  skill: boolean;
+}
+
+interface PendingCapture {
+  turn: CaptureTurn;
+  status: CaptureStatus;
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -58,45 +69,82 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
 
     const config = loaded.value;
     const client = clientFactory(config);
-    const pending: CaptureTurn[] = [];
-    const captured = new Set<string>();
+    const pending = new Map<string, PendingCapture>();
+    const captured = new Map<string, CaptureStatus>();
     const capturedOrder: string[] = [];
-    let activePrompt: string | undefined;
+    const activePrompts: string[] = [];
+    let settledCandidate: unknown[] = [];
+    let flushing: Promise<void> | undefined;
 
-    const rememberCaptured = (key: string): void => {
-      captured.add(key);
-      capturedOrder.push(key);
+    const rememberCaptured = (key: string, status: Partial<CaptureStatus>): CaptureStatus => {
+      const merged = {
+        l0: captured.get(key)?.l0 === true || status.l0 === true,
+        skill: captured.get(key)?.skill === true || status.skill === true,
+      };
+      captured.set(key, merged);
+      if (!capturedOrder.includes(key)) capturedOrder.push(key);
       if (capturedOrder.length > 512) {
         const oldest = capturedOrder.shift();
         if (oldest) captured.delete(oldest);
       }
+      return merged;
+    };
+
+    const persistStatus = (key: string, status: CaptureStatus, turn: CaptureTurn): void => {
+      try {
+        pi.appendEntry(CAPTURE_ENTRY_TYPE, {
+          version: CAPTURE_MARKER_VERSION,
+          key,
+          l0: status.l0,
+          skill: status.skill,
+          turn,
+        });
+      } catch (error) {
+        logger.warn("[tdai-memory] could not persist capture marker: " + messageOf(error));
+      }
+    };
+
+    const doFlush = async (ctx: ExtensionContext): Promise<void> => {
+      for (const [key, item] of pending) {
+        const status = rememberCaptured(key, item.status);
+        if (!status.l0) {
+          try {
+            await client.captureConversation(item.turn, ctx.signal);
+            status.l0 = true;
+            rememberCaptured(key, status);
+            persistStatus(key, status, item.turn);
+          } catch (error) {
+            setStatus(ctx, "memory: partial");
+            logger.warn("[tdai-memory] L0 capture failed: " + messageOf(error));
+          }
+        }
+
+        if (!status.skill) {
+          try {
+            await client.captureSkill(item.turn, ctx.signal);
+            status.skill = true;
+            rememberCaptured(key, status);
+            persistStatus(key, status, item.turn);
+          } catch (error) {
+            setStatus(ctx, status.l0 ? "memory: partial" : "memory: offline");
+            logger.warn("[tdai-memory] Skill capture failed: " + messageOf(error));
+          }
+        }
+
+        item.status = status;
+        if (status.l0 && status.skill) {
+          pending.delete(key);
+          setStatus(ctx, "memory: synced");
+        }
+      }
     };
 
     const flushPending = async (ctx: ExtensionContext): Promise<void> => {
-      while (pending.length > 0) {
-        const turn = pending[0];
-        if (!turn) break;
-        const key = turnKey(turn);
-        if (captured.has(key)) {
-          pending.shift();
-          continue;
-        }
-        try {
-          await client.captureTurn(turn, ctx.signal);
-          rememberCaptured(key);
-          pending.shift();
-          try {
-            pi.appendEntry(CAPTURE_ENTRY_TYPE, { key });
-          } catch (error) {
-            logger.warn("[tdai-memory] could not persist capture marker: " + messageOf(error));
-          }
-          setStatus(ctx, "memory: synced");
-        } catch (error) {
-          setStatus(ctx, "memory: offline");
-          logger.warn("[tdai-memory] capture failed: " + messageOf(error));
-          break;
-        }
-      }
+      if (flushing) return flushing;
+      flushing = doFlush(ctx).finally(() => {
+        flushing = undefined;
+      });
+      return flushing;
     };
 
     pi.on("session_start", async (_event, ctx) => {
@@ -104,14 +152,34 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         if (entry.type !== "custom" || entry.customType !== CAPTURE_ENTRY_TYPE) continue;
         const data = entry.data;
         if (data && typeof data === "object" && typeof (data as { key?: unknown }).key === "string") {
-          rememberCaptured((data as { key: string }).key);
+          const marker = data as {
+            key: string;
+            version?: unknown;
+            l0?: unknown;
+            skill?: unknown;
+            turn?: unknown;
+          };
+          const status = rememberCaptured(
+            marker.key,
+            marker.version === CAPTURE_MARKER_VERSION
+              ? { l0: marker.l0 === true, skill: marker.skill === true }
+              : { l0: true, skill: false },
+          );
+          if (
+            marker.version === CAPTURE_MARKER_VERSION &&
+            marker.turn &&
+            typeof marker.turn === "object" &&
+            (!status.l0 || !status.skill)
+          ) {
+            pending.set(marker.key, { turn: marker.turn as CaptureTurn, status });
+          }
         }
       }
       setStatus(ctx, "memory: on");
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
-      activePrompt = event.prompt;
+      if (event.prompt.trim()) activePrompts.push(event.prompt);
       if (!event.prompt.trim()) return;
       try {
         const recalled = await client.recall(event.prompt, ctx.signal);
@@ -127,25 +195,35 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     });
 
     pi.on("agent_end", async (event, ctx) => {
-      if (!activePrompt) return;
-      const assistant = extractFinalAssistantText(event.messages);
-      if (!assistant) return;
-      pending.push({
-        sessionId: sessionId(ctx),
-        user: activePrompt,
-        assistant,
-        capturedAtMs: Date.now(),
-      });
-      activePrompt = undefined;
+      if (activePrompts.length === 0 || !hasCompletedAssistant(event.messages)) return;
+      settledCandidate.push(...event.messages);
     });
 
     pi.on("agent_settled", async (_event, ctx) => {
-      activePrompt = undefined;
+      if (activePrompts.length > 0) {
+        const turn = buildCaptureTurn(
+          sessionId(ctx),
+          activePrompts.join("\n\n--- queued follow-up ---\n\n"),
+          settledCandidate,
+          config.maxCaptureChars,
+        );
+        if (turn) {
+          const key = turnKey(turn);
+          const status = captured.get(key) ?? { l0: false, skill: false };
+          if (!status.l0 || !status.skill) {
+            pending.set(key, { turn, status });
+            persistStatus(key, status, turn);
+          }
+        }
+      }
+      activePrompts.length = 0;
+      settledCandidate = [];
       await flushPending(ctx);
     });
 
     pi.on("session_shutdown", async (_event, ctx) => {
-      activePrompt = undefined;
+      activePrompts.length = 0;
+      settledCandidate = [];
       await flushPending(ctx);
     });
 
