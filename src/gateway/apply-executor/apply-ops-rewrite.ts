@@ -114,19 +114,29 @@ export async function applyRewrites(
 
     const digest = digestOf(target.content);
     onOp?.(opType, localIndex, target.relPath, "prepared", digest);
+    const failed = (err: unknown): ApplyRuntimeError =>
+      new ApplyRuntimeError(
+        `rewrite "${target.relPath}" failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     try {
+      // The backup is written BEFORE the carrier and under its own catch: a
+      // backup that fails leaves the carrier untouched, and marking the store
+      // as mutated there would park a run that changed nothing.
       if (current !== null) {
         await writeBackup(deps.dataDir, target.relPath, current);
       }
+    } catch (err) {
+      throw failed(err);
+    }
+    try {
       await atomicWrite(resolved, target.content);
       result.storeTouched = true;
     } catch (err) {
-      // The rename is atomic, but a failure inside it leaves the carrier in an
-      // unknown state — that is reconciliation's question, not this catch's.
+      // The rename itself is atomic, but a failure inside the sequence leaves
+      // the carrier in an unknown state — reconciliation's question, not this
+      // catch's.
       result.storeTouched = true;
-      throw new ApplyRuntimeError(
-        `rewrite "${target.relPath}" failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      throw failed(err);
     }
     onOp?.(opType, localIndex, target.relPath, "applied", digest);
     result.applied.rewrites.push(target.relPath);

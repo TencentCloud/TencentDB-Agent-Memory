@@ -3,7 +3,7 @@
  *
  * parseMetadata: tolerate malformed JSON in metadata_json (fall back to {}).
  * atomicWrite: tmp file in the same directory + rename (atomic on POSIX).
- * hasApplied: true when the ApplyResult already mutates ≥ 1 row.
+ * hasApplied: true when ≥ 1 operation COMPLETED (it is in an applied list).
  * hasMutated: true when the store may be half-written — the question the Run
  *   state depends on, which is wider than "an operation completed".
  *
