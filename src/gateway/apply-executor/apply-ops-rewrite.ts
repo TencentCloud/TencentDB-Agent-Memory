@@ -129,13 +129,14 @@ export async function applyRewrites(
       throw failed(err);
     }
     try {
-      await atomicWrite(resolved, target.content);
-      result.storeTouched = true;
+      // The flag is set when the RENAME starts, not when the write is
+      // attempted: an EACCES on the tmp file leaves the carrier untouched and
+      // must stay a retryable failure, while a rename that dies halfway is
+      // reconciliation's question.
+      await atomicWrite(resolved, target.content, () => {
+        result.storeTouched = true;
+      });
     } catch (err) {
-      // The rename itself is atomic, but a failure inside the sequence leaves
-      // the carrier in an unknown state — reconciliation's question, not this
-      // catch's.
-      result.storeTouched = true;
       throw failed(err);
     }
     onOp?.(opType, localIndex, target.relPath, "applied", digest);

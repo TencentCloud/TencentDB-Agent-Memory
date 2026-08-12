@@ -181,16 +181,9 @@ const ctx = {
   logger,
   now: () => Date.now(),
 } as unknown as OrchestratorContext;
-/** The flag the Run state is decided by. Under falsification it is computed
- * the pre-fix way — from the applied lists — instead of from "was the store
- * touched at all". */
-const partialOf = (r: { partial: boolean; applied: ApplyResult["applied"] }) =>
-  process.env.FALSIFY === "mutated-false"
-    ? hasApplied(r as ApplyResult)
-    : r.partial;
-
-const partialFlag = partialOf(res);
-const cls = finalizeRunOutcome(ctx, { runId: RUN, partial: partialFlag }, {
+// Первая половина — merge, который ДОШЁЛ до applied: тут старое и новое
+// правило совпадают, поэтому рычаг на неё не действует и не притворяется.
+const cls = finalizeRunOutcome(ctx, { runId: RUN, partial: res.partial }, {
   role: "memory-keeper",
   status: "failed",
   error: res.error,
