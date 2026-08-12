@@ -151,6 +151,21 @@ function withReindexSingleFlight<T>(fn: () => Promise<T>): Promise<T> {
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
 
 /**
+ * Texts per embedding call during a full reindex.
+ *
+ * Env `TDAI_REINDEX_EMBED_BATCH` overrides it — a provider with a smaller
+ * per-request cap needs a smaller number, and a local model gains nothing
+ * from a large one. 64 keeps a batch's worth of vectors (64 x dims floats)
+ * small enough to hold while the rows are written one transaction at a time.
+ */
+const REINDEX_EMBED_BATCH_DEFAULT = 64;
+
+function reindexEmbedBatchSize(): number {
+  const raw = Number.parseInt(getEnv("TDAI_REINDEX_EMBED_BATCH") ?? "", 10);
+  return Number.isInteger(raw) && raw > 0 ? raw : REINDEX_EMBED_BATCH_DEFAULT;
+}
+
+/**
  * How often a postponed rebuild is retried, in milliseconds.
  *
  * The retry runs on read paths, so it must be rare enough to cost nothing in
@@ -2754,6 +2769,7 @@ export class VectorStore implements IMemoryStore {
   async reindexAll(
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
+    embedBatchFn?: (texts: string[]) => Promise<Float32Array[]>,
   ): Promise<{ l1Count: number; l0Count: number }> {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded)
@@ -2770,7 +2786,7 @@ export class VectorStore implements IMemoryStore {
     return withReindexSingleFlight(async () => {
       reindexInProgress = true;
       try {
-        return await this.reindexAllInner(embedFn, onProgress);
+        return await this.reindexAllInner(embedFn, onProgress, embedBatchFn);
       } finally {
         reindexInProgress = false;
       }
@@ -2780,73 +2796,50 @@ export class VectorStore implements IMemoryStore {
   private async reindexAllInner(
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
+    embedBatchFn?: (texts: string[]) => Promise<Float32Array[]>,
   ): Promise<{ l1Count: number; l0Count: number }> {
+    const embedMany =
+      embedBatchFn ??
+      // No batch call offered: one text per request, as before.
+      (async (texts: string[]) => {
+        const out: Float32Array[] = [];
+        for (const text of texts) out.push(await embedFn(text));
+        return out;
+      });
     try {
-      // ── Re-embed L1 ──
       const l1Rows = this.getAllL1Texts();
-      let l1Done = 0;
-      for (const { record_id, content, updated_time } of l1Rows) {
-        try {
-          const embedding = await embedFn(content);
-          // Wrap delete+insert in a transaction to prevent orphan vectors
-          this.db.exec("BEGIN");
-          try {
-            this.stmtDeleteVec!.run(record_id);
-            this.stmtInsertVec!.run(
-              record_id,
-              Buffer.from(embedding.buffer),
-              updated_time,
-            );
-            this.db.exec("COMMIT");
-          } catch (txErr) {
-            try {
-              this.db.exec("ROLLBACK");
-            } catch {
-              /* ignore */
-            }
-            throw txErr;
-          }
-        } catch (err) {
-          this.logger?.warn?.(
-            `${TAG} reindex L1 skip ${record_id}: ${err instanceof Error ? err.message : String(err)}`,
+      const l1Done = await this.reindexLayer({
+        rows: l1Rows,
+        layer: "L1",
+        textOf: (row) => row.content,
+        writeVec: (row, embedding) => {
+          this.stmtDeleteVec!.run(row.record_id);
+          this.stmtInsertVec!.run(
+            row.record_id,
+            Buffer.from(embedding.buffer),
+            row.updated_time,
           );
-        }
-        l1Done++;
-        onProgress?.(l1Done, l1Rows.length, "L1");
-      }
+        },
+        embedMany,
+        onProgress,
+      });
 
-      // ── Re-embed L0 ──
       const l0Rows = this.getAllL0Texts();
-      let l0Done = 0;
-      for (const { record_id, message_text, recorded_at } of l0Rows) {
-        try {
-          const embedding = await embedFn(message_text);
-          // Wrap delete+insert in a transaction to prevent orphan vectors
-          this.db.exec("BEGIN");
-          try {
-            this.stmtL0DeleteVec!.run(record_id);
-            this.stmtL0InsertVec!.run(
-              record_id,
-              Buffer.from(embedding.buffer),
-              recorded_at,
-            );
-            this.db.exec("COMMIT");
-          } catch (txErr) {
-            try {
-              this.db.exec("ROLLBACK");
-            } catch {
-              /* ignore */
-            }
-            throw txErr;
-          }
-        } catch (err) {
-          this.logger?.warn?.(
-            `${TAG} reindex L0 skip ${record_id}: ${err instanceof Error ? err.message : String(err)}`,
+      const l0Done = await this.reindexLayer({
+        rows: l0Rows,
+        layer: "L0",
+        textOf: (row) => row.message_text,
+        writeVec: (row, embedding) => {
+          this.stmtL0DeleteVec!.run(row.record_id);
+          this.stmtL0InsertVec!.run(
+            row.record_id,
+            Buffer.from(embedding.buffer),
+            row.recorded_at,
           );
-        }
-        l0Done++;
-        onProgress?.(l0Done, l0Rows.length, "L0");
-      }
+        },
+        embedMany,
+        onProgress,
+      });
 
       this.logger?.info(
         `${TAG} Reindex complete: L1=${l1Done}/${l1Rows.length}, L0=${l0Done}/${l0Rows.length}`,
@@ -2859,6 +2852,71 @@ export class VectorStore implements IMemoryStore {
       );
       return { l1Count: 0, l0Count: 0 };
     }
+  }
+
+  /**
+   * Re-embed one layer, `REINDEX_EMBED_BATCH` texts per embedding call.
+   *
+   * The batch is what makes a remote provider usable at all: measured against
+   * nvidia/nemotron-3-embed-1b, one text per request runs at ~3 texts/s while
+   * 256 texts per request runs at ~35 — the difference between hours and
+   * minutes on a memory this size. Each vector is still written in its own
+   * transaction, so a failure costs the rows it touched and nothing else.
+   *
+   * Fault-tolerant per batch and per row: a failed embedding call skips its
+   * batch with a warning, exactly as a failed single embed did before.
+   */
+  private async reindexLayer<T extends { record_id: string }>(params: {
+    rows: T[];
+    layer: "L1" | "L0";
+    textOf: (row: T) => string;
+    writeVec: (row: T, embedding: Float32Array) => void;
+    embedMany: (texts: string[]) => Promise<Float32Array[]>;
+    onProgress?: (done: number, total: number, layer: "L1" | "L0") => void;
+  }): Promise<number> {
+    const { rows, layer, textOf, writeVec, embedMany, onProgress } = params;
+    const batchSize = reindexEmbedBatchSize();
+    let done = 0;
+    for (let from = 0; from < rows.length; from += batchSize) {
+      const batch = rows.slice(from, from + batchSize);
+      let embeddings: Float32Array[] = [];
+      try {
+        embeddings = await embedMany(batch.map(textOf));
+      } catch (err) {
+        this.logger?.warn?.(
+          `${TAG} reindex ${layer} skip ${batch.length} rows from ${batch[0]?.record_id}: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+        done += batch.length;
+        onProgress?.(done, rows.length, layer);
+        continue;
+      }
+      for (let i = 0; i < batch.length; i++) {
+        const row = batch[i];
+        try {
+          // Wrap delete+insert in a transaction to prevent orphan vectors
+          this.db.exec("BEGIN");
+          try {
+            writeVec(row, embeddings[i]);
+            this.db.exec("COMMIT");
+          } catch (txErr) {
+            try {
+              this.db.exec("ROLLBACK");
+            } catch {
+              /* ignore */
+            }
+            throw txErr;
+          }
+        } catch (err) {
+          this.logger?.warn?.(
+            `${TAG} reindex ${layer} skip ${row.record_id}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        done++;
+        onProgress?.(done, rows.length, layer);
+      }
+    }
+    return done;
   }
 
   /**

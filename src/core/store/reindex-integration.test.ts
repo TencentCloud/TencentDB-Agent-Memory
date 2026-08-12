@@ -12,7 +12,7 @@
  *     (#274 regression), count-check, KNN-sanity on the installed package;
  *   - backup-snapshot evidence for the pre-upgrade snapshot.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -216,6 +216,56 @@ describe("P8 reindex integration", () => {
     const second = await store.reindexAll(async (t) => Promise.resolve(fakeVec(t.length)));
     expect(store.isReindexing()).toBe(false);
     expect(second.l1Count + second.l0Count).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reindexAll embeds in batches when the caller offers a batch call", async () => {
+    // Two batches' worth of rows, so a batch boundary is actually crossed.
+    for (let i = 0; i < 5; i++) {
+      store.upsertL1(l1Record(longId(100 + i), `запись номер ${i}`), fakeVec(i));
+    }
+    vi.stubEnv("TDAI_REINDEX_EMBED_BATCH", "2");
+    const batches: number[] = [];
+    const singles: string[] = [];
+    const result = await store.reindexAll(
+      async (text) => {
+        singles.push(text);
+        return fakeVec(text.length);
+      },
+      undefined,
+      async (texts) => {
+        batches.push(texts.length);
+        return texts.map((t) => fakeVec(t.length));
+      },
+    );
+    vi.unstubAllEnvs();
+
+    expect(result.l1Count).toBe(5);
+    expect(singles).toEqual([]); // the batch call replaced the per-text one
+    expect(batches).toEqual([2, 2, 1]); // the knob decided the batch size
+    expect(store.consistencyCheck().missingIds).toEqual([]);
+  });
+
+  it("a failed batch skips only its own rows", async () => {
+    for (let i = 0; i < 4; i++) {
+      store.upsertL1(l1Record(longId(200 + i), `строка ${i}`), fakeVec(i));
+    }
+    vi.stubEnv("TDAI_REINDEX_EMBED_BATCH", "2");
+    let call = 0;
+    const result = await store.reindexAll(
+      async (t) => fakeVec(t.length),
+      undefined,
+      async (texts) => {
+        if (call++ === 0) throw new Error("provider down for this batch");
+        return texts.map((t) => fakeVec(t.length));
+      },
+    );
+    vi.unstubAllEnvs();
+
+    // The failure did not end the layer: later batches still ran, every row is
+    // accounted for, and no row was left without a vector.
+    expect(call).toBe(2);
+    expect(result.l1Count).toBe(4);
+    expect(store.consistencyCheck().missingIds).toEqual([]);
   });
 });
 

@@ -355,6 +355,12 @@ export interface IMemoryStore {
   reindexAll(
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
+    /**
+     * Embed a whole batch in one call. Optional: without it every text goes
+     * on its own, which is what a local model wants and what a remote one
+     * cannot afford (~3 texts/s versus ~35 measured against NVIDIA).
+     */
+    embedBatchFn?: (texts: string[]) => Promise<Float32Array[]>,
   ): Promise<{ l1Count: number; l0Count: number }>;
 
   // ── Consistency (wave tdai-memory-subagents-2026-08-02, P4 apply-executor) ──
