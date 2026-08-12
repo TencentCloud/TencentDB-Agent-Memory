@@ -21,7 +21,7 @@ Add a deliberately thin OpenAI/Codex Plugin distribution layer for TencentDB Age
 
 ### Non-goals
 
-This PR does **not** implement or copy Memory Core, MemoryProxy, a Gateway SDK/client, an MCP protocol server, lifecycle hooks, a session watcher, or the v2.0.1 Codex IDE Plan-mode adapter. It does not add a fabricated ChatGPT `.app.json` registration.
+The Plugin itself contains no Memory Core, MemoryProxy, Gateway client, MCP protocol implementation, lifecycle hooks, session watcher, or v2.0.1 Codex IDE Plan-mode adapter. The only lower-layer code in this PR is a mechanical v2 port of #603's reviewed Gateway client and MCP executable so the package is runnable on the current branch. It does not add a fabricated ChatGPT `.app.json` registration.
 
 ### Overlap and dependency analysis
 
