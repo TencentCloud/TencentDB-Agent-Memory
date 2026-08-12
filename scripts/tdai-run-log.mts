@@ -35,8 +35,13 @@ function parseArgs(argv: string[]): Args {
   let dataDir = path.join(os.homedir(), ".pi", "agent-memory", "tdai");
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg === "--tail") tail = Number(argv[++i] ?? DEFAULT_TAIL);
-    else if (arg === "--data-dir") dataDir = argv[++i] ?? dataDir;
+    if (arg === "--tail") {
+      const raw = argv[++i] ?? "";
+      tail = Number(raw);
+      if (!Number.isInteger(tail) || tail <= 0) {
+        throw new Error(`--tail ждёт положительное целое, а получил "${raw}"`);
+      }
+    } else if (arg === "--data-dir") dataDir = argv[++i] ?? dataDir;
     else rest.push(arg);
   }
   if (rest.length === 0) {
@@ -90,36 +95,43 @@ function findRun(dataDir: string, target: string): RunRow | null {
   }
 }
 
-/** Report next to the row. A run that died before its report has none. */
+/**
+ * The run's report. `logPath` is the fast path, but the logs dir is scanned
+ * for `-<runId8>.json` ALWAYS: a report written before the link existed — or
+ * a row whose logPath points at a file that has since been cleaned away —
+ * would otherwise be reported as missing while it sits on disk.
+ */
 function readReport(
   row: RunRow,
   dataDir: string,
-): Record<string, unknown> | null {
-  const candidates = [row.logPath].filter((p) => p !== "");
-  // Reports written before the link existed are found by the id in the name.
-  if (candidates.length === 0) {
-    const logsDir = path.join(dataDir, "logs");
-    try {
-      const short = row.runId.slice(0, 8);
-      for (const f of fs.readdirSync(logsDir)) {
-        if (f.endsWith(`-${short}.json`))
-          candidates.push(path.join(logsDir, f));
+): { report: Record<string, unknown> | null; tried: string[] } {
+  const candidates = row.logPath === "" ? [] : [row.logPath];
+  const logsDir = path.join(dataDir, "logs");
+  try {
+    const short = row.runId.slice(0, 8);
+    for (const f of fs.readdirSync(logsDir).sort()) {
+      const full = path.join(logsDir, f);
+      if (f.endsWith(`-${short}.json`) && !candidates.includes(full)) {
+        candidates.push(full);
       }
-    } catch {
-      // no logs dir yet
     }
+  } catch {
+    // no logs dir yet
   }
   for (const file of candidates) {
     try {
-      return JSON.parse(fs.readFileSync(file, "utf-8")) as Record<
-        string,
-        unknown
-      >;
+      return {
+        report: JSON.parse(fs.readFileSync(file, "utf-8")) as Record<
+          string,
+          unknown
+        >,
+        tried: candidates,
+      };
     } catch {
-      // unreadable / not written yet → fall through to the next candidate
+      // unreadable / half-written → try the next candidate
     }
   }
-  return null;
+  return { report: null, tried: candidates };
 }
 
 /** Tagged lines from the gateway log and its rotated generations. */
@@ -216,10 +228,13 @@ function main(): number {
   console.log(`  scratch      : ${row.scratchPath}`);
 
   console.log("=== ОТЧЁТ");
-  const report = readReport(row, args.dataDir);
-  if (report === null)
+  const { report, tried } = readReport(row, args.dataDir);
+  if (report !== null) printReport(report);
+  else if (tried.length === 0) {
     console.log("  (отчёта нет — прогон не дошёл до записи)");
-  else printReport(report);
+  } else {
+    console.log(`  (отчёт не читается: ${tried.join(", ")})`);
+  }
 
   console.log(`=== ЛОГ (${runTag(row.runId)}, последние ${args.tail})`);
   const lines = readTaggedLines(args.dataDir, row.runId, args.tail);

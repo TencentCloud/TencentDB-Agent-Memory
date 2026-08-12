@@ -199,6 +199,49 @@ must(
     out.includes(CHILD_STDERR),
 );
 
+// Ссылка протухла (отчёт пережил чистку, а путь в строке — нет): отчёт лежит
+// в logs/ под именем с runId, и команда обязана его найти, а не соврать, что
+// прогон до записи не дошёл.
+updateRun(
+  dataDir,
+  RUN,
+  { logPath: path.join(dataDir, "logs", "стёртый-путь.json") },
+  new Date().toISOString(),
+);
+const stale = execFileSync(
+  "npx",
+  ["tsx", "scripts/tdai-run-log.mts", RUN.slice(0, 8), "--data-dir", dataDir],
+  { encoding: "utf-8", cwd: process.cwd() },
+);
+console.log(
+  `при протухшей ссылке: ${stale.includes(CHILD_STDERR) ? "отчёт найден по имени" : "отчёт потерян"}`,
+);
+must(
+  "протухший logPath не прячет лежащий рядом отчёт",
+  stale.includes(CHILD_STDERR),
+);
+
+// Диагностический инструмент не имеет права молча съесть кривой аргумент.
+let tailRejected = false;
+try {
+  execFileSync(
+    "npx",
+    [
+      "tsx",
+      "scripts/tdai-run-log.mts",
+      "last",
+      "--tail",
+      "нет",
+      "--data-dir",
+      dataDir,
+    ],
+    { encoding: "utf-8", stdio: "pipe", cwd: process.cwd() },
+  );
+} catch {
+  tailRejected = true;
+}
+must("нечисловой --tail отвергнут", tailRejected);
+
 store.close();
 sbx.cleanup();
 finish();

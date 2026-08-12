@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import { resolveRoleDir } from "../role-files.js";
 import { recoverOrphanRuns } from "../control-plane/recover.js";
 import { runOwnerId } from "../control-plane/owner.js";
@@ -133,9 +134,10 @@ export async function trigger(
     return { accepted: false, status: "busy", reason: opts.reason };
   }
   const runId = randomUUID();
-  self.logger.debug?.(
-    `[trigger] start role=${role} runId=${runId} reason=${opts.reason}`,
-  );
+  // Tagged like every other line of this run: the trigger is the only record
+  // of WHY it started, and the cleanup line the only record that it let go.
+  const log = taggedLogger(self.logger, runTag(runId));
+  log.debug?.(`[trigger] start role=${role} reason=${opts.reason}`);
   self.activeRunUuid.value.add(runId);
   // Never reject: run failures are recorded in the report + lastRun.
   void self
@@ -143,11 +145,11 @@ export async function trigger(
     .finally(() => {
       self.activeRunUuid.value.delete(runId);
       self.children.value.delete(runId);
-      self.logger.debug?.(`[trigger] cleanup runId=${runId}`);
+      log.debug?.("[trigger] cleanup");
       release();
     })
     .catch((err: unknown) => {
-      self.logger.error?.(
+      log.error?.(
         `[memory-keeper] unexpected run error: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
