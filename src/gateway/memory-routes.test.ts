@@ -586,6 +586,41 @@ describe("reindex-in-progress route gate (P8)", () => {
     }
   });
 
+  it("a degraded store answers gated, and refuses a note instead of acking it", async () => {
+    // A store that cannot serve a row is not an empty memory. Saying "nothing
+    // found" is what makes a session write down what it already knows, and
+    // acking a note that never reaches l0_conversations loses it outright.
+    const degradedSpy = vi
+      .spyOn(store as unknown as { isDegraded(): boolean }, "isDegraded")
+      .mockReturnValue(true);
+    try {
+      const search = await fetch(`${baseUrl}/memory/search?query=anything`);
+      expect(search.status).toBe(200);
+      expect(await search.json()).toEqual({
+        results: "",
+        total: 0,
+        strategy: "gated",
+        gated: true,
+      });
+
+      // With a valid write token, so the refusal is the store's and not the gate's.
+      const info = (await (await fetch(`${baseUrl}/memory/info`)).json()) as {
+        tokenPath: string;
+      };
+      const note = await fetch(`${baseUrl}/memory/note`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-memory-token": fs.readFileSync(info.tokenPath, "utf-8").trim(),
+        },
+        body: JSON.stringify({ content: "не потеряй меня" }),
+      });
+      expect(note.status).toBe(503);
+    } finally {
+      degradedSpy.mockRestore();
+    }
+  });
+
   it("gate off (default): /status reports reindexInProgress=false and the routes reach the core", async () => {
     expect(store.isReindexing()).toBe(false);
     const status = await (await fetch(`${baseUrl}/status`)).json();

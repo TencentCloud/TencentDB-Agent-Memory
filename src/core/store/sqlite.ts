@@ -773,6 +773,18 @@ export class VectorStore implements IMemoryStore {
    */
   private degraded = false;
 
+  /**
+   * Set when the ONLY thing wrong at open was another process holding the
+   * write lock — a backup, a migration, a sibling gateway. That is a passing
+   * condition, not a broken install, so it must not cost this process its
+   * memory for the rest of its life: `isReindexing()` reports it (read routes
+   * answer "rebuilding", never "empty") and retries the open, spaced exactly
+   * like the postponed FTS rebuild.
+   */
+  private initRetryPending = false;
+  private lastInitRetry = 0;
+  private initProviderInfo?: EmbeddingProviderInfo;
+
   /** Tracks whether close() has been called to prevent double-close errors. */
   private closed = false;
 
@@ -889,6 +901,7 @@ export class VectorStore implements IMemoryStore {
    *   so the caller can schedule a full re-embed.
    */
   init(providerInfo?: EmbeddingProviderInfo): VectorStoreInitResult {
+    this.initProviderInfo = providerInfo;
     // Load sqlite-vec extension (same approach as root project's sqlite-vec.ts)
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -916,11 +929,18 @@ export class VectorStore implements IMemoryStore {
       return this.initSchema(providerInfo);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      this.degraded = true;
+      // A held write lock is temporary. Degrading is still right for now — the
+      // statements are not prepared, so nothing can be served — but the store
+      // says so out loud and tries again on the next read instead of serving
+      // an empty memory until someone restarts the gateway.
+      this.initRetryPending = isDatabaseLocked(err);
       this.logger?.error(
         `${TAG} Schema initialization failed: ${message}. ` +
-          `VectorStore entering degraded mode.`,
+          (this.initRetryPending
+            ? `The database is locked by another process — reads answer "rebuilding" and the open is retried.`
+            : `VectorStore entering degraded mode.`),
       );
-      this.degraded = true;
       return { needsReindex: false, reason: `schema init failed: ${message}` };
     }
   }
@@ -2727,8 +2747,42 @@ export class VectorStore implements IMemoryStore {
    */
   isReindexing(): boolean {
     if (reindexInProgress) return true;
+    if (this.initRetryPending) return !this.tryPostponedInit();
     if (!this.ftsRebuildPending) return false;
     return !this.tryPostponedFtsRebuild();
+  }
+
+  /**
+   * One cheap attempt at the open a lock refused.
+   *
+   * Probed with `PRAGMA busy_timeout = 0` and spaced by the same interval as
+   * the postponed rebuild, for the same reason: this runs on read paths, and
+   * waiting out the busy timeout there would stall every search.
+   *
+   * @returns whether the store is usable again.
+   */
+  private tryPostponedInit(): boolean {
+    const now = Date.now();
+    if (now - this.lastInitRetry < ftsRebuildRetryIntervalMs()) return false;
+    this.lastInitRetry = now;
+
+    try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      this.initSchema(this.initProviderInfo);
+    } catch (err) {
+      this.logger?.debug?.(
+        `${TAG} store open still refused: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    }
+    this.degraded = false;
+    this.initRetryPending = false;
+    this.logger?.info(
+      `${TAG} store open that was postponed by a lock has completed`,
+    );
+    return true;
   }
 
   /**

@@ -30,6 +30,22 @@ export interface MemoryToolsContext {
 }
 
 /**
+ * Can this gateway be trusted to answer "the memory holds nothing"?
+ *
+ * No, in three cases, and they are worth telling apart from an empty memory
+ * only in the log: a full reindex is running, the store is degraded (a locked
+ * or broken open — it serves no rows at all), or there is no store. A session
+ * told "nothing found" writes down what it already knows, and that is how
+ * duplicates are born (ТЗ D1e/R2/S4), so all three answer `gated` instead.
+ */
+function isMemoryUnreadable(ctx: MemoryToolsContext): boolean {
+  const store = ctx.core.getVectorStore();
+  if (!store) return true;
+  if (store.isDegraded?.() ?? false) return true;
+  return store.isReindexing?.() ?? false;
+}
+
+/**
  * GET /memory/search?query=&limit=&type=&scene= — auth-free loopback.
  * Reuses the same search the tdai_memory_search tool uses (executeMemorySearch
  * via TdaiCore). During a full reindex it returns an empty result (fail-open,
@@ -48,7 +64,7 @@ export async function handleMemorySearch(
   const limitRaw = parseInt(url.searchParams.get("limit") ?? "5", 10);
   const limit = Number.isFinite(limitRaw) ? Math.min(50, Math.max(1, limitRaw)) : 5;
 
-  if (ctx.core.getVectorStore()?.isReindexing?.() ?? false) {
+  if (isMemoryUnreadable(ctx)) {
     sendJson(res, 200, { results: "", total: 0, strategy: "gated", gated: true } satisfies MemorySearchRouteResponse);
     return;
   }
@@ -128,6 +144,14 @@ export async function handleMemoryNote(
   }
   const sessionKey = typeof body.session_key === "string" && body.session_key.trim() ? body.session_key.trim() : "pi-note";
   const projectId = typeof body.project_id === "string" ? body.project_id.slice(0, 512) : "";
+
+  // A degraded store takes the write and drops it: handleTurnCommitted still
+  // answers l0_recorded=1 while nothing reaches l0_conversations, so the host
+  // believes it has remembered something it has not. Refuse instead.
+  if (ctx.core.getVectorStore()?.isDegraded?.() ?? true) {
+    sendError(res, 503, "memory store is unavailable — the note was not recorded");
+    return;
+  }
 
   try {
     const result = await ctx.core.handleTurnCommitted({
