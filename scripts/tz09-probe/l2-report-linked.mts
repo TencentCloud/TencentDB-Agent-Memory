@@ -24,6 +24,7 @@ import {
   updateRun,
 } from "../../src/gateway/control-plane/run-repo.js";
 import { readLastRuns } from "../../src/gateway/reports.js";
+import { openWritableSqlite } from "../../src/gateway/http-utils.js";
 import { ConsolidationCheckpoint } from "../../src/gateway/consolidation/checkpoint.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
 import type { EmbeddingService } from "../../src/core/store/embedding.js";
@@ -241,6 +242,29 @@ try {
   tailRejected = true;
 }
 must("нечисловой --tail отвергнут", tailRejected);
+
+// Строки Run может не быть вовсе (прогон старше control-plane, ретенция
+// вымела его). Отчёт и лог адресуются по id — инструмент обязан их показать.
+const db = openWritableSqlite(
+  path.join(dataDir, ".metadata", "control-plane.db"),
+);
+try {
+  db.exec("DELETE FROM runs");
+} finally {
+  db.close();
+}
+const noRow = execFileSync(
+  "npx",
+  ["tsx", "scripts/tdai-run-log.mts", RUN.slice(0, 8), "--data-dir", dataDir],
+  { encoding: "utf-8", cwd: process.cwd() },
+);
+console.log(
+  `без строки Run: ${noRow.includes(CHILD_STDERR) ? "отчёт всё равно найден" : "отчёт потерян"}`,
+);
+must(
+  "отчёт читается по одному id, даже когда строки Run уже нет",
+  noRow.includes(CHILD_STDERR),
+);
 
 store.close();
 sbx.cleanup();

@@ -31,6 +31,9 @@ export async function executeRunForRole(
   ctx: OrchestratorContext,
   opts: ExecuteRunOpts,
 ): Promise<RunSummary> {
+  // Every line of this run carries its id — including the refusals below,
+  // which are the only trace a run that never started leaves behind.
+  const log = taggedLogger(ctx.logger, runTag(opts.runId));
   const resolution = resolveRoleContract(
     opts.role,
     ctx.roleDir,
@@ -46,7 +49,7 @@ export async function executeRunForRole(
     );
     summary.status = "disabled";
     summary.error = `role disabled: ${resolution.reason}`;
-    ctx.logger.warn?.(
+    log.warn?.(
       `[role] ${opts.role} disabled — ${resolution.reason} (run refused)`,
     );
     return summary;
@@ -55,10 +58,7 @@ export async function executeRunForRole(
   // From here on every line belongs to THIS run. Tagging the context logger
   // once is what lets `gateway-dev.log` be read per run: the strategies, the
   // checkpoint gate and the report all log through `ctx.logger`.
-  const runCtx: OrchestratorContext = {
-    ...ctx,
-    logger: taggedLogger(ctx.logger, runTag(opts.runId)),
-  };
+  const runCtx: OrchestratorContext = { ...ctx, logger: log };
   for (const w of contract.warnings) {
     runCtx.logger.warn?.(`[role] ${opts.role}: ${w}`);
   }
@@ -78,7 +78,7 @@ export async function executeRunForRole(
       );
       summary.status = "disabled";
       summary.error = `role disabled: ${critic.reason}`;
-      ctx.logger.warn?.(
+      log.warn?.(
         `[role] ${opts.role} disabled — ${critic.reason} (no run started)`,
       );
       return summary;

@@ -102,13 +102,14 @@ function findRun(dataDir: string, target: string): RunRow | null {
  * would otherwise be reported as missing while it sits on disk.
  */
 function readReport(
-  row: RunRow,
+  runId: string,
+  logPath: string,
   dataDir: string,
 ): { report: Record<string, unknown> | null; tried: string[] } {
-  const candidates = row.logPath === "" ? [] : [row.logPath];
+  const candidates = logPath === "" ? [] : [logPath];
   const logsDir = path.join(dataDir, "logs");
   try {
-    const short = row.runId.slice(0, 8);
+    const short = runId.slice(0, 8);
     for (const f of fs.readdirSync(logsDir).sort()) {
       const full = path.join(logsDir, f);
       if (f.endsWith(`-${short}.json`) && !candidates.includes(full)) {
@@ -202,12 +203,37 @@ function printReport(report: Record<string, unknown>): void {
   }
 }
 
+/** Отчёт + теговые строки: всё, что читается по одному только id. */
+function printByRunId(runId: string, args: Args, row: RunRow | null): void {
+  console.log("=== ОТЧЁТ");
+  const { report, tried } = readReport(runId, row?.logPath ?? "", args.dataDir);
+  if (report !== null) printReport(report);
+  else if (tried.length === 0) {
+    console.log("  (отчёта нет — прогон не дошёл до записи)");
+  } else {
+    console.log(`  (отчёт не читается: ${tried.join(", ")})`);
+  }
+
+  console.log(`=== ЛОГ (${runTag(runId)}, последние ${args.tail})`);
+  const lines = readTaggedLines(args.dataDir, runId, args.tail);
+  if (lines.length === 0) console.log("  (теговых строк нет)");
+  else for (const line of lines) console.log(`  ${line}`);
+}
+
 function main(): number {
   const args = parseArgs(process.argv.slice(2));
   const row = findRun(args.dataDir, args.target);
   if (row === null) {
-    console.error(`прогон не найден: ${args.target} (dataDir=${args.dataDir})`);
-    return 1;
+    // Строки может не быть — прогон старше control-plane или его вымела
+    // ретенция. Отчёт и лог всё ещё адресуются по id, и это ровно тот
+    // случай, ради которого инструмент писался.
+    if (args.target === "last") {
+      console.error(`в control-plane нет ни одного прогона (${args.dataDir})`);
+      return 1;
+    }
+    console.log(`=== ПРОГОН ${args.target} (строки в control-plane нет)`);
+    printByRunId(args.target, args, null);
+    return 0;
   }
 
   console.log(`=== ПРОГОН ${row.runId}`);
@@ -227,19 +253,7 @@ function main(): number {
   );
   console.log(`  scratch      : ${row.scratchPath}`);
 
-  console.log("=== ОТЧЁТ");
-  const { report, tried } = readReport(row, args.dataDir);
-  if (report !== null) printReport(report);
-  else if (tried.length === 0) {
-    console.log("  (отчёта нет — прогон не дошёл до записи)");
-  } else {
-    console.log(`  (отчёт не читается: ${tried.join(", ")})`);
-  }
-
-  console.log(`=== ЛОГ (${runTag(row.runId)}, последние ${args.tail})`);
-  const lines = readTaggedLines(args.dataDir, row.runId, args.tail);
-  if (lines.length === 0) console.log("  (теговых строк нет)");
-  else for (const line of lines) console.log(`  ${line}`);
+  printByRunId(row.runId, args, row);
   return 0;
 }
 
