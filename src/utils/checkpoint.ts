@@ -146,6 +146,28 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+export interface CheckpointRecalculateOptions {
+  /** Actual retained L0 row count from the active store. Falls back to local JSONL count when omitted. */
+  l0ConversationsCount?: number;
+  /** Actual retained L1 record count from the active store. Falls back to local JSONL count when omitted. */
+  totalMemoriesExtracted?: number;
+}
+
+export interface CheckpointRecalculateResult {
+  before: Pick<Checkpoint, "l0_conversations_count" | "total_memories_extracted" | "total_processed" | "memories_since_last_persona">;
+  after: Pick<Checkpoint, "l0_conversations_count" | "total_memories_extracted" | "total_processed" | "memories_since_last_persona">;
+  adjustedRunnerSessions: number;
+  adjustedPipelineSessions: number;
+}
+
+interface LocalDataSnapshot {
+  l0Count: number;
+  l1Count: number;
+  maxL0TimestampBySession: Map<string, number>;
+  maxL0RecordedAtMsBySession: Map<string, number>;
+  maxL1UpdatedAtBySession: Map<string, string>;
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -296,6 +318,95 @@ export class CheckpointManager {
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
+
+  /**
+   * Recalculate checkpoint counters from retained data.
+   *
+   * Local JSONL files are scanned as the fallback source of truth. Callers that
+   * have an initialized VectorStore should pass post-cleanup store counts via
+   * `options`, because SQLite/TCVDB contain exactly the rows used by recall.
+   *
+   * This intentionally corrects counters downward as well as upward. It also
+   * clamps per-session cursors when local retained data proves a cursor points
+   * beyond the newest available row, preventing stale checkpoint state from
+   * skipping retained records after manual pruning or cleanup.
+   */
+  async recalculate(options: CheckpointRecalculateOptions = {}): Promise<CheckpointRecalculateResult> {
+    const snapshot = await this.scanLocalData();
+
+    let result!: CheckpointRecalculateResult;
+    const cp = await this.mutate((cp) => {
+      const before = pickCounterSnapshot(cp);
+      const actualL0 = options.l0ConversationsCount ?? snapshot.l0Count;
+      const actualL1 = options.totalMemoriesExtracted ?? snapshot.l1Count;
+      const memoryDelta = actualL1 - cp.total_memories_extracted;
+
+      cp.l0_conversations_count = Math.max(0, actualL0);
+      cp.total_processed = Math.max(0, actualL0);
+      cp.total_memories_extracted = Math.max(0, actualL1);
+      cp.memories_since_last_persona = clampNonNegative(
+        cp.memories_since_last_persona + memoryDelta,
+        cp.total_memories_extracted,
+      );
+      cp.last_persona_at = Math.min(cp.last_persona_at, cp.total_processed);
+
+      let adjustedRunnerSessions = 0;
+      for (const [sessionKey, state] of Object.entries(cp.runner_states ?? {})) {
+        let adjusted = false;
+        const maxCaptured = snapshot.maxL0TimestampBySession.get(sessionKey);
+        if (maxCaptured !== undefined && state.last_captured_timestamp > maxCaptured) {
+          state.last_captured_timestamp = maxCaptured;
+          adjusted = true;
+        } else if (maxCaptured === undefined && state.last_captured_timestamp > 0) {
+          state.last_captured_timestamp = 0;
+          adjusted = true;
+        }
+
+        const maxL1Cursor = snapshot.maxL0RecordedAtMsBySession.get(sessionKey);
+        if (maxL1Cursor !== undefined && state.last_l1_cursor > maxL1Cursor) {
+          state.last_l1_cursor = maxL1Cursor;
+          adjusted = true;
+        } else if (maxL1Cursor === undefined && state.last_l1_cursor > 0) {
+          state.last_l1_cursor = 0;
+          adjusted = true;
+        }
+
+        if (adjusted) {
+          adjustedRunnerSessions++;
+        }
+      }
+
+      let adjustedPipelineSessions = 0;
+      for (const [sessionKey, state] of Object.entries(cp.pipeline_states ?? {})) {
+        const maxUpdatedAt = snapshot.maxL1UpdatedAtBySession.get(sessionKey);
+        if (maxUpdatedAt !== undefined && state.last_extraction_updated_time > maxUpdatedAt) {
+          state.last_extraction_updated_time = maxUpdatedAt;
+          adjustedPipelineSessions++;
+        } else if (maxUpdatedAt === undefined && state.last_extraction_updated_time) {
+          state.last_extraction_updated_time = "";
+          adjustedPipelineSessions++;
+        }
+      }
+
+      result = {
+        before,
+        after: pickCounterSnapshot(cp),
+        adjustedRunnerSessions,
+        adjustedPipelineSessions,
+      };
+    });
+
+    this.logger.info(
+      `[checkpoint] recalculate: ` +
+      `L0 ${result.before.l0_conversations_count}→${result.after.l0_conversations_count}, ` +
+      `L1 ${result.before.total_memories_extracted}→${result.after.total_memories_extracted}, ` +
+      `total_processed ${result.before.total_processed}→${result.after.total_processed}, ` +
+      `memories_since ${result.before.memories_since_last_persona}→${result.after.memories_since_last_persona}, ` +
+      `runnerAdjusted=${result.adjustedRunnerSessions}, pipelineAdjusted=${result.adjustedPipelineSessions}`,
+    );
+
+    return result;
+  }
 
   // ============================
   // Persona methods (L3)
@@ -485,4 +596,126 @@ export class CheckpointManager {
     });
   }
 
+  private async scanLocalData(): Promise<LocalDataSnapshot> {
+    const dataDir = path.dirname(path.dirname(this.filePath));
+    const snapshot: LocalDataSnapshot = {
+      l0Count: 0,
+      l1Count: 0,
+      maxL0TimestampBySession: new Map(),
+      maxL0RecordedAtMsBySession: new Map(),
+      maxL1UpdatedAtBySession: new Map(),
+    };
+
+    await scanJsonlDir(path.join(dataDir, "conversations"), (record) => {
+      const sessionKey = asNonEmptyString(record.sessionKey);
+      if (!sessionKey) return;
+
+      snapshot.l0Count += 1;
+
+      const timestamp = asFiniteNumber(record.timestamp);
+      if (timestamp !== undefined) {
+        setMaxNumber(snapshot.maxL0TimestampBySession, sessionKey, timestamp);
+      }
+
+      const recordedAtMs = asEpochMs(record.recordedAt);
+      if (recordedAtMs !== undefined) {
+        setMaxNumber(snapshot.maxL0RecordedAtMsBySession, sessionKey, recordedAtMs);
+      }
+    });
+
+    await scanJsonlDir(path.join(dataDir, "records"), (record) => {
+      const sessionKey = asNonEmptyString(record.sessionKey);
+      if (!sessionKey) return;
+
+      snapshot.l1Count += 1;
+
+      const updatedAt = asNonEmptyString(record.updatedAt) ?? asNonEmptyString(record.createdAt);
+      if (updatedAt) {
+        setMaxString(snapshot.maxL1UpdatedAtBySession, sessionKey, updatedAt);
+      }
+    });
+
+    return snapshot;
+  }
+
+}
+
+async function scanJsonlDir(dirPath: string, onRecord: (record: Record<string, unknown>) => void): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const files = entries
+    .filter((entry) => entry.isFile() && /^\d{4}-\d{2}-\d{2}\.(?:jsonl|json)$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+
+  for (const fileName of files) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(dirPath, fileName), "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          onRecord(parsed as Record<string, unknown>);
+        }
+      } catch {
+        // Ignore malformed JSONL lines, matching readers' fault-tolerant behavior.
+      }
+    }
+  }
+}
+
+function pickCounterSnapshot(
+  cp: Checkpoint,
+): CheckpointRecalculateResult["before"] {
+  return {
+    l0_conversations_count: cp.l0_conversations_count,
+    total_memories_extracted: cp.total_memories_extracted,
+    total_processed: cp.total_processed,
+    memories_since_last_persona: cp.memories_since_last_persona,
+  };
+}
+
+function clampNonNegative(value: number, max: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(value, Math.max(0, max)));
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asEpochMs(value: unknown): number | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function setMaxNumber(map: Map<string, number>, key: string, value: number): void {
+  const prev = map.get(key);
+  if (prev === undefined || value > prev) {
+    map.set(key, value);
+  }
+}
+
+function setMaxString(map: Map<string, string>, key: string, value: string): void {
+  const prev = map.get(key);
+  if (prev === undefined || value > prev) {
+    map.set(key, value);
+  }
 }
