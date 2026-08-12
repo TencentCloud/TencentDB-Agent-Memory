@@ -27,6 +27,7 @@ import { createRun } from "../../src/gateway/control-plane/run-repo.js";
 import { claimRun } from "../../src/gateway/control-plane/lease.js";
 import { runOwnerId } from "../../src/gateway/control-plane/owner.js";
 import { ConsolidationCheckpoint } from "../../src/gateway/consolidation/checkpoint.js";
+import { buildManifestBaseline } from "../../src/gateway/consolidation/diff-builder.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
 import type { EmbeddingService } from "../../src/core/store/embedding.js";
 import type { Logger } from "../../src/core/types.js";
@@ -246,7 +247,8 @@ const applyBody = {
   diff: {
     rewriteRecord: [{ id: "n_2", updatedAt: UPDATED, content: "HTTP TAGGED" }],
   },
-  manifest: { baseline: { n_2: UPDATED } },
+  // Манифест — как его строит боевой прогон, иначе apply отобьётся дрейфом.
+  manifest: { baseline: buildManifestBaseline(dataDir) },
   context: { presentedRecordIds: ["n_2"] },
 };
 const res = await fetch(`http://127.0.0.1:${PORT}/memory/apply`, {
@@ -254,8 +256,9 @@ const res = await fetch(`http://127.0.0.1:${PORT}/memory/apply`, {
   headers: { "x-memory-token": token, "content-type": "application/json" },
   body: JSON.stringify(applyBody),
 });
+const applyJson = (await res.json()) as { error?: string };
 console.log(
-  `нога B: POST /memory/apply -> ${res.status} ${JSON.stringify(await res.json()).slice(0, 200)}`,
+  `нога B: POST /memory/apply -> ${res.status} error=${applyJson.error ?? "-"}`,
 );
 await gateway.stop();
 await flushLogs();

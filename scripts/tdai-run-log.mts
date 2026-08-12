@@ -64,9 +64,11 @@ interface RunRow {
 
 /** The run row: the exact id, a unique prefix, or the newest one. */
 function findRun(dataDir: string, target: string): RunRow | null {
-  const db = openReadonlySqlite(
-    path.join(dataDir, ".metadata", "control-plane.db"),
-  );
+  const dbPath = path.join(dataDir, ".metadata", "control-plane.db");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`нет control-plane: ${dbPath} (проверь --data-dir)`);
+  }
+  const db = openReadonlySqlite(dbPath);
   try {
     const cols =
       "runId, roleId, state, fence, errorClass, leaseOwner, leaseExpiresAt, " +
@@ -226,4 +228,11 @@ function main(): number {
   return 0;
 }
 
-process.exitCode = main();
+// Catch-all at the entry: a diagnostic tool must SAY what is wrong (missing
+// control plane, wrong --data-dir, no argument), not hand back a raw stack.
+try {
+  process.exitCode = main();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+}
