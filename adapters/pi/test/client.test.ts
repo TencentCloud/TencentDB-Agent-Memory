@@ -60,6 +60,7 @@ function config(endpoint: string): PiMemoryConfig {
     recallLimit: 5,
     scenarioLimit: 3,
     maxContextChars: 8_000,
+    maxCaptureChars: 12_000,
     includeCore: true,
     includeScenarios: true,
     allowInsecureHttp: false,
@@ -80,10 +81,11 @@ describe("TdaiMemoryClient", () => {
     });
     const client = new TdaiMemoryClient(config(fixture.endpoint));
 
-    await client.captureTurn({
+    await client.captureConversation({
       sessionId: "pi:session-1",
       user: "Remember TypeScript",
       assistant: "I will.",
+      skillMessages: [],
       capturedAtMs: 1_800_000_000_000,
     });
 
@@ -105,6 +107,39 @@ describe("TdaiMemoryClient", () => {
       "Remember TypeScript",
       "I will.",
     ]);
+  });
+
+  it("captures tool-aware turns through the v3 Skill pipeline", async () => {
+    const fixture = await startServer((_request, response) => {
+      json(response, { code: 0, message: "ok", data: { status: "ok" } });
+    });
+    const client = new TdaiMemoryClient(config(fixture.endpoint));
+
+    await client.captureSkill({
+      sessionId: "pi:session-1",
+      user: "Run tests",
+      assistant: "All tests pass.",
+      capturedAtMs: 1_800_000_000_000,
+      skillMessages: [
+        { role: "user", content: "Run tests" },
+        { role: "tool_call", content: '{"command":"npm test"}', tool_name: "bash", tool_call_id: "call-1" },
+        { role: "tool_result", content: "ok", tool_name: "bash", tool_call_id: "call-1" },
+        { role: "assistant", content: "All tests pass." },
+      ],
+    });
+
+    expect(fixture.seen[0]?.path).toBe("/v3/skill/conversation/add");
+    expect(fixture.seen[0]?.body).toMatchObject({
+      team_id: "team-1",
+      agent_id: "agent-1",
+      user_id: "user-1",
+      task_id: "task-1",
+      session_id: "pi:session-1",
+    });
+    expect(fixture.seen[0]?.body.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "tool_call", tool_call_id: "call-1" }),
+      expect.objectContaining({ role: "tool_result", tool_call_id: "call-1" }),
+    ]));
   });
 
   it("recalls L1, L2, and L3 concurrently", async () => {

@@ -66,7 +66,8 @@ function client(overrides: Partial<MemoryClientLike> = {}): MemoryClientLike {
       core: null,
       warnings: [],
     }),
-    captureTurn: async () => undefined,
+    captureConversation: async () => undefined,
+    captureSkill: async () => undefined,
     searchAtomic: async (): Promise<AtomicMemory[]> => [],
     searchConversation: async (): Promise<ConversationMemory[]> => [],
     check: async () => 0,
@@ -86,7 +87,8 @@ function install(memoryClient: MemoryClientLike): FakePi {
 
 describe("Pi extension lifecycle", () => {
   it("injects bounded recall and captures the completed turn after settlement", async () => {
-    const captureTurn = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
     const pi = install(
       client({
         recall: async () => ({
@@ -95,7 +97,8 @@ describe("Pi extension lifecycle", () => {
           core: null,
           warnings: [],
         }),
-        captureTurn,
+        captureConversation,
+        captureSkill,
       }),
     );
 
@@ -119,9 +122,10 @@ describe("Pi extension lifecycle", () => {
     );
     await pi.handlers.get("agent_settled")?.({}, context);
 
-    expect(captureTurn).toHaveBeenCalledTimes(1);
-    expect(pi.entries).toHaveLength(1);
-    expect(captureTurn.mock.calls[0]?.[0]).toMatchObject({
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(1);
+    expect(pi.entries).toHaveLength(3);
+    expect(captureConversation.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "pi:session-1",
       user: "What style should I use?",
       assistant: "Use a concise style.",
@@ -129,8 +133,9 @@ describe("Pi extension lifecycle", () => {
   });
 
   it("deduplicates repeated delivery of the same completed turn", async () => {
-    const captureTurn = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
-    const pi = install(client({ captureTurn }));
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
     const run = async () => {
       await pi.handlers.get("before_agent_start")?.(
         { prompt: "same", systemPrompt: "base" },
@@ -154,12 +159,54 @@ describe("Pi extension lifecycle", () => {
     await run();
     await run();
 
-    expect(captureTurn).toHaveBeenCalledTimes(1);
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for settlement and captures only the final retry result", async () => {
+    const captureConversation = vi.fn(async (_turn: CaptureTurn) => undefined);
+    const pi = install(client({ captureConversation }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "fix it", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "error", content: [{ type: "text", text: "overflow" }] }] },
+      context,
+    );
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "fixed" }] }] },
+      context,
+    );
+    expect(captureConversation).not.toHaveBeenCalled();
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureConversation.mock.calls[0]?.[0].assistant).toBe("fixed");
+  });
+
+  it("retries only the failed capture pipeline", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi
+      .fn<MemoryClientLike["captureSkill"]>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "remember", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.(
+      { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] }] },
+      context,
+    );
+    await pi.handlers.get("agent_settled")?.({}, context);
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    expect(captureConversation).toHaveBeenCalledTimes(1);
+    expect(captureSkill).toHaveBeenCalledTimes(2);
   });
 
   it("restores successful capture markers from the Pi session", async () => {
-    const captureTurn = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
-    const pi = install(client({ captureTurn }));
+    const captureConversation = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const captureSkill = vi.fn(async (_turn: CaptureTurn, _signal?: AbortSignal) => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
     const restoredContext = {
       ...context,
       sessionManager: {
@@ -169,11 +216,14 @@ describe("Pi extension lifecycle", () => {
             type: "custom",
             customType: "tdai-memory-captured",
             data: {
+              version: 2,
               key: turnKey({
                 sessionId: "pi:session-1",
                 user: "same",
                 assistant: "same answer",
               }),
+              l0: true,
+              skill: true,
             },
           },
         ],
@@ -199,7 +249,41 @@ describe("Pi extension lifecycle", () => {
     );
     await pi.handlers.get("agent_settled")?.({}, restoredContext);
 
-    expect(captureTurn).not.toHaveBeenCalled();
+    expect(captureConversation).not.toHaveBeenCalled();
+    expect(captureSkill).not.toHaveBeenCalled();
+  });
+
+  it("restores an incomplete marker and compensates only its failed pipeline", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    const turn: CaptureTurn = {
+      sessionId: "pi:session-1",
+      user: "same",
+      assistant: "same answer",
+      skillMessages: [
+        { role: "user", content: "same" },
+        { role: "assistant", content: "same answer" },
+      ],
+      capturedAtMs: 1,
+    };
+    const restoredContext = {
+      ...context,
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getEntries: () => [{
+          type: "custom",
+          customType: "tdai-memory-captured",
+          data: { version: 2, key: turnKey(turn), l0: true, skill: false, turn },
+        }],
+      },
+    };
+
+    await pi.handlers.get("session_start")?.({}, restoredContext);
+    await pi.handlers.get("agent_settled")?.({}, restoredContext);
+
+    expect(captureConversation).not.toHaveBeenCalled();
+    expect(captureSkill).toHaveBeenCalledTimes(1);
   });
 
   it("fails open when recall and capture are unavailable", async () => {
@@ -208,7 +292,10 @@ describe("Pi extension lifecycle", () => {
         recall: async () => {
           throw new Error("offline");
         },
-        captureTurn: async () => {
+        captureConversation: async () => {
+          throw new Error("offline");
+        },
+        captureSkill: async () => {
           throw new Error("offline");
         },
       }),

@@ -22,6 +22,7 @@ describe("loadConfig", () => {
       recallLimit: 5,
       scenarioLimit: 3,
       maxContextChars: 8_000,
+      maxCaptureChars: 12_000,
       includeCore: true,
       includeScenarios: true,
     });
