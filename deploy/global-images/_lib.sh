@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# 避免 Windows 下 Git Bash 将 -v 挂载路径（特别是 :ro 后缀）翻译错误
+export MSYS_NO_PATHCONV=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 
@@ -77,6 +80,13 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# 可移植 curl 定位：Git Bash (Windows) 下 /usr/bin/curl 不存在，curl 在 PATH 里
+# （/c/Windows/system32/curl）。统一用 command -v 解析一次，避免硬编码路径。
+CURL="$(command -v curl || true)"
+if [[ -z "$CURL" ]]; then
+  die "找不到 curl 命令，请先安装（macOS/Linux 自带，Windows 用 Git Bash 自带或 system32）。"
+fi
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
@@ -85,6 +95,25 @@ pull_image() {
   [[ "${PULL:-0}" == "1" ]] || return 0
   info "拉取镜像 $image"
   $DOCKER pull "$image" || die "拉取 $image 失败。"
+}
+
+# fork 模式：确保 proxy 镜像可用（一键启动，无需手动跑 build-proxy-fork.sh / 热补丁）。
+# 判定：PROXY_FORK=1，或 PROXY_IMAGE 以 `:fork` 结尾。
+#   - 镜像已存在 → 直接复用（PROXY_REBUILD=1 / PULL=1 时强制重建）
+#   - 镜像不存在 → 自动调用 build-proxy-fork.sh 构建（官方镜像 + 本地 src 覆盖）
+# 非 fork 模式 → 走原始 pull_image 逻辑（拉官方镜像）。
+ensure_proxy_image() {
+  local image="$1"
+  if [[ "${PROXY_FORK:-0}" == "1" || "$image" == *":fork" ]]; then
+    if $DOCKER image inspect "$image" >/dev/null 2>&1 && [[ "${PROXY_REBUILD:-0}" != "1" && "${PULL:-0}" != "1" ]]; then
+      info "fork 镜像 $image 已存在，直接复用（PROXY_REBUILD=1 可强制重建）"
+      return 0
+    fi
+    info "构建 fork 镜像 $image（内置 CodeBuddy CLI + DeepSeek thinking 修复，无需热补丁）..."
+    PROXY_FORK_IMAGE="$image" bash "$SCRIPT_DIR/build-proxy-fork.sh"
+    return 0
+  fi
+  pull_image "$image"
 }
 
 # 幂等移除同名容器

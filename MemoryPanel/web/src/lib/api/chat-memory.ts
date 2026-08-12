@@ -114,13 +114,29 @@ export const chatMemoryApi = {
       team_id: teamId, agent_id: agentId, messages, session_id: sessionId,
     }),
 
-  /** 删除记忆内容：L0 消息 / L1 原子记忆 / L2 场景（面板手动清理） */
+  /** 删除记忆内容：L0 消息 / L1 原子记忆 / L2 场景（面板手动清理）
+   *  946-C：响应含 per-item 结果 + deletedCount/failedCount。可选 idempotency_key。 */
   deleteMemory: (
     blockId: string,
     layer: 'L0' | 'L1' | 'L2',
     target: { message_ids?: string[]; ids?: string[]; path?: string },
+    idempotencyKey?: string,
   ) =>
-    chatMemoryCall<{ deleted_count: number }>('delete', {
+    chatMemoryCall<DeleteMemoryResponse>('delete', {
       block_id: blockId, layer, ...target,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     }),
 };
+
+/** 946-C 删除响应：per-item 状态 + 汇总计数。 */
+export interface DeleteMemoryResponse {
+  requestId: string;
+  results: Array<{
+    layer: 'L0' | 'L1' | 'L2';
+    id: string;
+    status: 'deleted' | 'already_deleted' | 'not_found' | 'forbidden' | 'failed';
+    errorCode?: string;
+  }>;
+  deletedCount: number;
+  failedCount: number;
+}

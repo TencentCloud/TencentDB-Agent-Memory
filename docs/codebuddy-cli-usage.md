@@ -54,12 +54,18 @@ cd deploy/global-images
 # 1) AskUserQuestion 表单兼容：form.ts + extractor.ts 同步进容器
 bash patch-codebuddy-form.sh
 
-# 2) OpenAI 协议 thinking 兼容：handler.ts 同步进容器
+# 2) OpenAI 协议 thinking 兼容：handler.ts + reasoning/* 同步进容器
 bash patch-proxy-thinking-openai.sh
 ```
 
-每个脚本有幂等检测（检测到已含 `AskUserQuestion` / `reasoning_content` 即跳过），
+每个脚本有幂等检测（检测到已含 `AskUserQuestion` / 补丁已生效即跳过），
 会 `docker cp` 源码进容器并重启。**容器重建后补丁丢失**，需要重跑。
+
+> 说明：OpenAI thinking 补丁同步 `handler.ts`（回填写回 `upstreamBody`）、
+> `reasoning/adapter.ts` + `reasoning/openai-forward.ts`（模型匹配规则）。
+> DeepSeek thinking 家族模型（reasoner / r1 / **v4\* 如 deepseek-v4-flash** /
+> think 字样）在 tool_calls 历史消息缺 `reasoning_content` 时补空串回传；
+> 其它 provider 不做任何注入。
 
 > 验证补丁已生效：
 > ```bash

@@ -39,9 +39,19 @@ $EDITOR .env
 ./verify.sh
 # 不希望发外部请求（离线环境等）：./verify.sh --skip-llm
 
-# 4) 一键拉起三件套
+# 4) 一键拉起三件套（fork 默认：proxy 自动构建固化镜像，无需热补丁）
 ./start-all.sh
 ```
+
+> **fork 说明（必读）**：官方镜像 `agentmemory/memory-proxy:latest` 不含本 fork 的
+> CodeBuddy CLI 适配与 DeepSeek thinking 修复。本仓库 `.env` 默认
+> `PROXY_IMAGE=agentmemory/memory-proxy:fork`——`start-proxy.sh` 检测到 fork tag 后
+> **自动用本地 `MemoryProxy/src` 构建固化镜像**（无镜像则构建、有则复用），
+> 修复内置进镜像层，**无需手动跑 `build-proxy-fork.sh`、也无需任何热补丁**。
+> 本地 `src` 改动后想立即生效：`PROXY_REBUILD=1 ./start-all.sh`。
+> 想用官方原版镜像：`.env` 改 `PROXY_IMAGE=agentmemory/memory-proxy:latest`。
+> 手动构建仍可用 `./build-proxy-fork.sh`；旧的热补丁脚本（patch-*.sh）已退役。
+
 
 ## LLM 通路预检
 
@@ -205,3 +215,8 @@ gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串
 
 **Q: 如何在容器外访问宿主机上其它服务（Ollama、Langfuse 等）？**
 脚本已默认 `--add-host=host.docker.internal:host-gateway`。容器内用 `http://host.docker.internal:<port>` 即可。
+
+**Q: Windows 下跑 start-*.sh 报挂载路径被翻译错误（如 `-v ...:ro` 变成其他路径）？**
+Git Bash 会把 `/c/...` 之类的参数自动转成 Windows 路径，导致 `docker run -v` 的挂载参数错乱。
+修复：在 `deploy/global-images/_lib.sh` 顶部加 `export MSYS_NO_PATHCONV=1` 后再运行脚本
+（该修复为本地改动，未入库 —— 仓库内的 `_lib.sh` 不带此行，重新 clone/更新后需手动补上）。
