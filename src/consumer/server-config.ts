@@ -67,11 +67,44 @@ export function resolveGatewayAddress(
   };
 }
 
-/** The value of `--name value`, or undefined when the flag carries none. */
+/**
+ * Raised when a flag is written down but says nothing.
+ *
+ * Input, not a crash: the user is reading a terminal while setting the server
+ * up, and the launcher prints this as one line.
+ */
+export class InvalidFlagError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidFlagError";
+  }
+}
+
+/**
+ * The value of `--name value` or `--name=value`, or undefined when the flag is
+ * absent altogether.
+ *
+ * A flag that IS there and carries nothing is refused out loud. Silently
+ * falling back to the ambient answer is how `--gateway` in a hand-edited
+ * config sent a session to the machine's own memory instead of the one it
+ * named, and how a valueless `--host` filed another host's notes under `pi`.
+ *
+ * @throws InvalidFlagError when the flag is present without a value.
+ */
 function parseFlag(argv: readonly string[], name: string): string | undefined {
+  const joined = argv.find((arg) => arg.startsWith(`${name}=`));
+  if (joined !== undefined) {
+    const value = joined.slice(name.length + 1).trim();
+    if (!value) throw new InvalidFlagError(`${name}= needs a value`);
+    return value;
+  }
+
   const at = argv.indexOf(name);
-  const value = at >= 0 ? argv[at + 1]?.trim() : undefined;
-  return value && !value.startsWith("--") ? value : undefined;
+  if (at < 0) return undefined;
+  const value = argv[at + 1]?.trim();
+  if (!value || value.startsWith("--"))
+    throw new InvalidFlagError(`${name} needs a value`);
+  return value;
 }
 
 /**

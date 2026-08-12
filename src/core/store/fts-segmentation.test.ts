@@ -11,7 +11,7 @@
  * These tests pin both halves: segmentation per script, and the one-time
  * rebuild that repairs an index written by the old one.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -482,6 +482,9 @@ describe("repairing an index written by the old segmentation", () => {
   });
 
   it("searches the old index when another process holds the write lock", () => {
+    // The retry that repairs the index runs on read paths; in production it is
+    // spaced out, here it must be able to happen twice in a row.
+    vi.stubEnv("TDAI_FTS_REBUILD_RETRY_MS", "0");
     // Two gateways opening the same store is ordinary, and the measured
     // rebuild on a real database (4.7 s) is close to sqlite's 5 s busy timeout.
     // Treating "database is locked" like a missing fts5 build cost the whole
@@ -507,7 +510,15 @@ describe("repairing an index written by the old segmentation", () => {
       // …but it was written by another segmentation, so a query built by this
       // one can quietly find less than is there. Read routes must call that
       // "rebuilding", never "nothing found" (ТЗ R2/S4).
+      //
+      // And it must say so AT ONCE. This runs on every /memory/search and
+      // /status; with the ordinary busy timeout each of them parked five
+      // seconds waiting for the other process's lock, and the consumer's own
+      // 5 s timeout aborted just before the answer arrived — the one case the
+      // gate exists for was the one case a host could not see.
+      const startedAt = Date.now();
       expect(store.isReindexing()).toBe(true);
+      expect(Date.now() - startedAt).toBeLessThan(1000);
     } finally {
       holder.exec("ROLLBACK");
       holder.close();
@@ -518,6 +529,7 @@ describe("repairing an index written by the old segmentation", () => {
     expect(store!.isReindexing()).toBe(false);
     expect(schemaVersion()).toBe("4");
     expect(find("памяти")).toEqual(["m1"]);
+    vi.unstubAllEnvs();
   });
 
   it("rebuilds an index written by a NEWER build instead of stamping over it", () => {

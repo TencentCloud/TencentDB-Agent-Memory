@@ -177,6 +177,19 @@ function writingSpawn(diff: unknown) {
   });
 }
 
+/** Wait for a condition instead of guessing how long the machine needs. */
+async function waitUntil(
+  holds: () => boolean,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!holds()) {
+    if (Date.now() > deadline)
+      throw new Error("timed out waiting for a condition");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
 describe("ConsolidationOrchestrator (P6)", () => {
   let tmp: string;
   let dataDir: string;
@@ -1231,6 +1244,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
     // sub-session, but the kill handles ARE registered in childrenRef via the
     // real runner-helpers wiring (the point of the parallel-child-leak fix).
     const killed: string[] = [];
+    let spawnedChildren = 0;
     (
       runChildProcessMock as unknown as ReturnType<typeof vi.fn>
     ).mockImplementation(
@@ -1289,6 +1303,7 @@ describe("ConsolidationOrchestrator (P6)", () => {
         // onChild receives the spawned child; runner-helpers registers
         // { kill: () => killChildGroup(child, logger) } in childrenRef.
         opts.onChild?.({ pid: 99999 } as never);
+        spawnedChildren++;
         return gate.then(() => ({
           exitCode: 0,
           signal: null,
@@ -1329,11 +1344,14 @@ describe("ConsolidationOrchestrator (P6)", () => {
     );
     db.close();
 
-    // Two parallel runs of different roles, both held in flight.
+    // Two parallel runs of different roles, both held in flight. Waiting for
+    // the CHILDREN rather than for a fixed 20 ms: under a loaded machine that
+    // sleep sometimes ended before a run reached the spawner, and stop() then
+    // had nothing to kill — a red test about the machine, not about stop().
     const a = orch.runNow({ reason: "a" });
-    await new Promise((r) => setTimeout(r, 20));
+    await waitUntil(() => spawnedChildren >= 1);
     const b = orch.runNow({ reason: "b", runType: "night-keeper" });
-    await new Promise((r) => setTimeout(r, 20));
+    await waitUntil(() => spawnedChildren >= 2);
     expect(orch.isRunning).toBe(true);
 
     // stop() now goes through the launcher's cancelAndWait, which waits for

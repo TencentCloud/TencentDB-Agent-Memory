@@ -21,6 +21,7 @@ import {
   UnknownHostError,
 } from "./mcp-server.js";
 import {
+  InvalidFlagError,
   parseHostId,
   resolveGatewayUrl,
   sessionKeyFor,
@@ -139,15 +140,34 @@ describe("what the host tells the server", () => {
       ]),
       resolveGatewayUrl({ TDAI_GATEWAY_URL: "http://gw:9000/" }),
       resolveGatewayUrl({ TDAI_GATEWAY_PORT: "9200" }),
-      resolveGatewayUrl({}, ["--gateway"]),
+      // …and `--gateway=url`, the form a hand-edited config is likely to use.
+      resolveGatewayUrl({}, ["--gateway=http://flag:9600/"]),
       resolveGatewayUrl({}),
     ]).toEqual([
       "http://flag:9500",
       "http://gw:9000",
       "http://127.0.0.1:9200",
-      "http://127.0.0.1:8420",
+      "http://flag:9600",
       "http://127.0.0.1:8420",
     ]);
+  });
+
+  it("refuses a flag that is written down but says nothing", () => {
+    // Falling back to the ambient answer here is how `--gateway` in a
+    // hand-edited config sent a session to the machine's own memory instead of
+    // the one it named, and how a valueless `--host` filed another host's
+    // notes under pi. Both are input errors, so they are said out loud.
+    expect(() => resolveGatewayUrl({}, ["--gateway"])).toThrow(
+      InvalidFlagError,
+    );
+    expect(() => resolveGatewayUrl({}, ["--gateway="])).toThrow(
+      InvalidFlagError,
+    );
+    expect(() => parseHostId(["--host"])).toThrow(InvalidFlagError);
+    expect(() => parseHostId(["--host", "--print-registration"])).toThrow(
+      InvalidFlagError,
+    );
+    expect(parseHostId(["--host=codex"])).toBe("codex");
   });
 
   // A gateway that took its port from its own yaml used to be invisible to the
@@ -184,12 +204,10 @@ describe("what the host tells the server", () => {
   });
 
   it("reads the host id from argv and falls back to the host that passes none", () => {
-    expect([
-      parseHostId(["--host", "codex"]),
-      parseHostId(["--host"]),
-      parseHostId(["--host", "--other"]),
-      parseHostId([]),
-    ]).toEqual(["codex", "pi", "pi", "pi"]);
+    expect([parseHostId(["--host", "codex"]), parseHostId([])]).toEqual([
+      "codex",
+      "pi",
+    ]);
   });
 
   it("keeps each host's notes in its own session", () => {

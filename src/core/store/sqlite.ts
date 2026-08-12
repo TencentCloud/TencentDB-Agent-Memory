@@ -21,6 +21,7 @@
  */
 
 import { createRequire } from "node:module";
+import { getEnv } from "../../utils/env.js";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
@@ -140,12 +141,37 @@ function withReindexSingleFlight<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * How long a statement waits for another process's write lock.
+ *
+ * Named because a second place has to UNDO it: the postponed-rebuild retry
+ * must not park a request for five seconds just to learn that the lock is
+ * still held (`tryPostponedFtsRebuild`).
+ */
+const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
+/**
+ * How often a postponed rebuild is retried, in milliseconds.
+ *
+ * The retry runs on read paths, so it must be rare enough to cost nothing in
+ * the common case and frequent enough that a session repairs itself long
+ * before anyone restarts the gateway. Overridable because the right number
+ * depends on the install (one gateway or several, how long its rebuild takes)
+ * and because a test cannot wait half a minute to see the retry happen.
+ */
+const FTS_REBUILD_RETRY_DEFAULT_MS = 30_000;
+
+function ftsRebuildRetryIntervalMs(): number {
+  const raw = Number.parseInt(getEnv("TDAI_FTS_REBUILD_RETRY_MS") ?? "", 10);
+  return Number.isInteger(raw) && raw >= 0 ? raw : FTS_REBUILD_RETRY_DEFAULT_MS;
+}
+
 function isSqliteBusy(err: unknown): boolean {
   return err instanceof Error && /SQLITE_BUSY/.test(err.message);
 }
 
 /**
- * Retry a synchronous DB call on SQLITE_BUSY. WAL + busy_timeout=5000 already
+ * Retry a synchronous DB call on SQLITE_BUSY. WAL + the busy timeout already
  * retry inside SQLite; this is a belt-and-braces second layer for the long
  * reindex windows where a concurrent capture can hold the write lock.
  */
@@ -787,6 +813,9 @@ export class VectorStore implements IMemoryStore {
    */
   private ftsRebuildPending = false;
 
+  /** When the postponed rebuild was last attempted (0 = never). */
+  private lastFtsRebuildAttempt = 0;
+
   // Prepared statements — FTS5 L1 (initialized in init())
   private stmtL1FtsInsert!: StatementSync;
   private stmtL1FtsDelete!: StatementSync;
@@ -811,7 +840,7 @@ export class VectorStore implements IMemoryStore {
     this.db = openSqliteHandle(dbPath) as unknown as DatabaseSync;
 
     // Set busy timeout so concurrent processes retry instead of failing with SQLITE_BUSY
-    this.db.exec("PRAGMA busy_timeout = 5000");
+    this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
 
     // Enable WAL mode for better concurrent read performance
     this.db.exec("PRAGMA journal_mode = WAL");
@@ -2684,15 +2713,41 @@ export class VectorStore implements IMemoryStore {
   isReindexing(): boolean {
     if (reindexInProgress) return true;
     if (!this.ftsRebuildPending) return false;
-    if (this.rebuildFtsIndex()) {
-      this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
-      this.writeFtsTokenizer();
-      this.ftsRebuildPending = false;
-      this.logger?.info(
-        `${TAG} FTS5 rebuild that was postponed by a lock has completed`,
-      );
+    return !this.tryPostponedFtsRebuild();
+  }
+
+  /**
+   * One cheap attempt at the rebuild a lock postponed.
+   *
+   * Cheap on purpose: this runs on read paths (`/memory/search`, `/recall`,
+   * `/status`), and with the ordinary busy timeout every one of them would
+   * park FIVE SECONDS just to find out that the other process is still
+   * writing — a polling dashboard would serialise those stalls. So the lock is
+   * PROBED (timeout 0) and, when it is held, not probed again for a while.
+   *
+   * @returns whether the index is now this build's own.
+   */
+  private tryPostponedFtsRebuild(): boolean {
+    const now = Date.now();
+    if (now - this.lastFtsRebuildAttempt < ftsRebuildRetryIntervalMs())
       return false;
+    this.lastFtsRebuildAttempt = now;
+
+    let rebuilt = false;
+    try {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      rebuilt = this.rebuildFtsIndex();
+    } finally {
+      this.db.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
     }
+    if (!rebuilt) return false;
+
+    this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
+    this.writeFtsTokenizer();
+    this.ftsRebuildPending = false;
+    this.logger?.info(
+      `${TAG} FTS5 rebuild that was postponed by a lock has completed`,
+    );
     return true;
   }
 
