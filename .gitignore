@@ -55,3 +55,4 @@ node_modules
 
 # Pi local rules state
 .pi/
+.pi-loop.json.lock
