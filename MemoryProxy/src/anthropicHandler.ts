@@ -31,6 +31,7 @@ import {
   type ForwardTarget,
 } from "./guard-adapter.js";
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
+import { stripSessionInitArtifacts } from "./session/claude-code/form.js";
 import { writeRequestLog } from "./requestLog.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
@@ -1017,6 +1018,24 @@ export async function handleAnthropicMessages(
     }
   } else if (skipInjection) {
     console.log(`[injection-debug] skipping injection for kind=sidequery session=${sessionKey}`);
+  }
+
+  // ── Strip session-init form artifacts (forwarding boundary) ──────────────
+  // session_init 合成 form 消息（toolu_cc_session_init_* tool_use / tool_result）
+  // 不转发上游：上游在 extended-thinking 模式下校验 assistant 消息 thinking
+  // 签名的真实性，无签名的合成消息必然 400。此处兜底剥离，覆盖 initResult
+  // 未携带 messages 的路径（bypass / 未拦截 / fork / sidequery 带 form 历史），
+  // 与 init.ts 内 completeRegistration 路径的剥离保持一致。
+  {
+    const preStrip = (body.messages as Array<Record<string, unknown>> | undefined) ?? [];
+    const postStrip = stripSessionInitArtifacts(preStrip);
+    if (postStrip.length !== preStrip.length || postStrip.some((m, i) => m !== preStrip[i])) {
+      body = { ...body, messages: postStrip };
+      messages = postStrip;
+      console.log(
+        `[session-init:cc] session=${sessionKey} stripped ${preStrip.length - postStrip.length} init-artifact message(s) before forwarding`,
+      );
+    }
   }
 
   // ── Cost guard: resolve forward target (opaque — no routing logic here) ──

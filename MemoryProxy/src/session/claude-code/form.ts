@@ -48,6 +48,51 @@ export function isSessionInitToolCallId(id: string): boolean {
   return id.startsWith(TOOLCALL_PREFIX);
 }
 
+/**
+ * Strip session-init form artifacts from a message array before forwarding
+ * upstream. The proxy synthesizes an `AskUserQuestion` tool_use (id prefixed
+ * `toolu_cc_session_init_`) and the client echoes it back with a matching
+ * `tool_result`. Upstream providers in extended-thinking mode (DeepSeek)
+ * validate that every assistant tool_use carries a *real* server-signed
+ * `thinking` block, so these synthetic, signature-less blocks are rejected
+ * with 400. The init state machine consumes the answers before this point
+ * (extractAssetConfirm / extractFromOptionText / ...), so the artifacts are
+ * never needed upstream — strip them.
+ *
+ * Rules:
+ *   - assistant message whose content contains a session-init tool_use
+ *     → dropped entirely (the synthetic form response is exactly one block).
+ *   - user message whose content contains a `tool_result` referencing a
+ *     session-init tool_use id → those blocks removed; a message left with
+ *     empty content is dropped (real text blocks are preserved).
+ *   - anything else passes through unchanged (identity for untouched input).
+ */
+export function stripSessionInitArtifacts<T extends { role?: string; content?: unknown }>(messages: T[]): T[] {
+  const out: T[] = [];
+  for (const m of messages) {
+    if (m.role === "assistant" && Array.isArray(m.content)) {
+      const hasInitToolUse = (m.content as Array<{ type?: string; id?: unknown }>).some(
+        (b) => b?.type === "tool_use" && typeof b.id === "string" && isSessionInitToolCallId(b.id),
+      );
+      if (hasInitToolUse) continue; // synthetic form response — drop whole message
+    }
+    if (m.role === "user" && Array.isArray(m.content)) {
+      const kept = (m.content as Array<{ type?: string; tool_use_id?: unknown }>).filter(
+        (b) => !(b?.type === "tool_result" && typeof b.tool_use_id === "string" && isSessionInitToolCallId(b.tool_use_id)),
+      );
+      if (kept.length === (m.content as unknown[]).length) {
+        out.push(m); // no init tool_result — untouched
+      } else if (kept.length > 0) {
+        out.push({ ...m, content: kept }); // keep remaining blocks (real text)
+      }
+      // else: emptied by stripping — drop
+      continue;
+    }
+    out.push(m);
+  }
+  return out;
+}
+
 // ── Form Data ──────────────────────────────────────────────────────────────────
 
 export type FormStage = "asset_confirm" | "team" | "agent_select" | "agent_task" | "task_select";
