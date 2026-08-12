@@ -317,38 +317,104 @@ const ZH_STOP_WORDS = new Set([
  * Example (fallback):
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
-export function buildFtsQuery(raw: string): string | null {
+/**
+ * Scripts jieba understands. Everything else it treats as characters.
+ *
+ * CJK ideographs, kana and Hangul. A run of these goes to jieba; a run of
+ * anything else is split on word boundaries instead.
+ */
+const CJK_RUN = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]+/gu;
+
+/**
+ * Segmentation version the FTS content was written with.
+ *
+ * v1: raw text. v2: jieba on everything, which broke every non-CJK script.
+ * v3: per-script segmentation (`segmentForFts`). Bumping this makes an
+ * existing database drop and rebuild its FTS tables once, on open.
+ */
+const FTS_SCHEMA_VERSION = 3;
+const FTS_SCHEMA_META_KEY = "fts_schema_version";
+
+/**
+ * Split text into index/query tokens, choosing the tokenizer per script.
+ *
+ * jieba is a CHINESE segmenter. Fed a Russian sentence it returns one token
+ * per letter, and both sides of FTS used it on everything: documents were
+ * indexed as loose letters and queries became `"п" OR "о" OR "т" …`, so any
+ * Cyrillic query matched nearly any Cyrillic document and BM25 ranked noise.
+ * The same held for Greek, Hebrew, Armenian — every script jieba has no
+ * dictionary for.
+ *
+ * So the text is cut into CJK and non-CJK runs first. jieba segments the CJK
+ * runs (where it is right, and where whitespace carries no word boundaries);
+ * everything else is split on Unicode word characters, which is what those
+ * scripts actually need.
+ */
+export function segmentForFts(raw: string): string[] {
   const jieba = getJieba();
+  const tokens: string[] = [];
 
-  let tokens: string[];
-  if (jieba) {
-    // jieba cutForSearch: splits long words further for better recall
-    // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
-    tokens = jieba
-      .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
-    // Deduplicate (cutForSearch may produce duplicates for sub-words)
-    tokens = [...new Set(tokens)];
-  } else {
-    // Fallback: simple Unicode regex split
-    tokens =
-      raw
-        .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+  let last = 0;
+  CJK_RUN.lastIndex = 0;
+  for (
+    let match = CJK_RUN.exec(raw);
+    match !== null;
+    match = CJK_RUN.exec(raw)
+  ) {
+    pushWords(tokens, raw.slice(last, match.index));
+    // cutForSearch splits long words further ("北京烤鸭" → 北京, 烤鸭, 北京烤鸭),
+    // so the index holds the same sub-words a query will ask for.
+    if (jieba) tokens.push(...jieba.cutForSearch(match[0], true));
+    else pushWords(tokens, match[0]);
+    last = match.index + match[0].length;
   }
+  pushWords(tokens, raw.slice(last));
 
+  return tokens
+    .map((t) => t.trim())
+    .filter((t) => t && /[\p{L}\p{N}]/u.test(t) && !ZH_STOP_WORDS.has(t));
+}
+
+/** Append Unicode word tokens of a non-CJK run. */
+function pushWords(into: string[], run: string): void {
+  if (run) into.push(...(run.match(/[\p{L}\p{N}_]+/gu) ?? []));
+}
+
+/**
+ * Shortest query token that is allowed to match by prefix.
+ *
+ * Russian, and every other inflected language here, changes the END of a word:
+ * "потребитель" is written "потребителя" in the corpus, and an exact-token
+ * query would miss it. FTS5 prefix queries (`"tok"*`) recover that. Below this
+ * length a prefix is not a word stem but a letter or two, and `"и"*` would
+ * match nearly every document — which is the very failure this schema bump
+ * exists to end.
+ */
+const FTS_PREFIX_MIN_TOKEN_LENGTH = 4;
+
+/** Prefix matching is for alphabetic scripts; jieba already cuts CJK to words. */
+const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]/u;
+
+/**
+ * Build the FTS5 MATCH expression for a user query.
+ *
+ * Tokens are OR-ed, and long enough non-CJK tokens match by prefix so that an
+ * inflected form in the corpus is still found. A word nobody wrote still
+ * matches nothing: a prefix is a prefix, not a scatter of letters.
+ */
+export function buildFtsQuery(raw: string): string | null {
+  // Deduplicate — cutForSearch produces sub-words that repeat.
+  const tokens = [...new Set(segmentForFts(raw))];
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" OR ");
+  return tokens
+    .map((token) => {
+      const quoted = `"${token.replaceAll('"', "")}"`;
+      return token.length >= FTS_PREFIX_MIN_TOKEN_LENGTH &&
+        !CJK_CHAR.test(token)
+        ? `${quoted}*`
+        : quoted;
+    })
+    .join(" OR ");
 }
 
 /**
@@ -373,18 +439,12 @@ export function buildFtsQuery(raw: string): string | null {
  *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
  */
 export function tokenizeForFts(raw: string): string {
-  const jieba = getJieba();
-  if (!jieba) return raw;
+  if (!getJieba()) return raw;
 
-  // Use `cutForSearch` (search-engine mode) for indexing — it produces both
-  // full words AND their sub-word components. This ensures that query-side
-  // tokens (also produced by `cutForSearch` in `buildFtsQuery`) will always
-  // find a match in the index.
-  const tokens = jieba.cutForSearch(raw, true);
-
-  // Join with spaces so `unicode61` tokenizer can split them.
-  // Punctuation tokens are kept — unicode61 treats them as separators anyway.
-  return tokens.join(" ");
+  // Same segmentation as the query side (`segmentForFts`), so a token the
+  // query asks for is a token the index holds. Joined with spaces for the
+  // `unicode61` tokenizer to split on.
+  return segmentForFts(raw).join(" ");
 }
 
 /**
@@ -965,7 +1025,7 @@ export class VectorStore implements IMemoryStore {
     `);
 
     // ── FTS5 tables (best-effort — gracefully degrade if fts5 is not compiled in) ──
-    // Schema v2: `content` column stores jieba-segmented text (for indexing),
+    // Schema v2+: `content` column stores segmented text (for indexing),
     // `content_original` (UNINDEXED) stores the raw text (for display).
     // If old v1 tables exist (no content_original column), drop + recreate.
     try {
@@ -1064,13 +1124,17 @@ export class VectorStore implements IMemoryStore {
 
       this.ftsAvailable = true;
       this.logger?.debug?.(
-        `${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v2 — jieba segmented]`,
+        `${TAG} FTS5 tables initialized (l1_fts, l0_fts) [schema v${FTS_SCHEMA_VERSION} — per-script segmentation]`,
       );
 
-      // Rebuild FTS index if migrated from v1 or tables were freshly created
+      // Rebuild FTS index if the segmentation changed or tables were freshly
+      // created. The version is recorded either way: a fresh table is already
+      // written with the current segmentation, and without the marker every
+      // subsequent open would rebuild it again.
       if (needsFtsRebuild) {
         this.rebuildFtsIndex();
       }
+      this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.ftsAvailable = false;
@@ -1145,6 +1209,34 @@ export class VectorStore implements IMemoryStore {
   }
 
   // ── Embedding meta helpers ──────────────────────────────
+
+  /** Version of the segmentation the FTS content was written with. */
+  private readFtsSchemaVersion(): number {
+    try {
+      const row = this.db
+        .prepare("SELECT value FROM embedding_meta WHERE key = ?")
+        .get(FTS_SCHEMA_META_KEY) as { value: string } | undefined;
+      // No marker means the index predates versioning — i.e. v2 content.
+      return row ? Number.parseInt(row.value, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private writeFtsSchemaVersion(version: number): void {
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO embedding_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
+        .run(FTS_SCHEMA_META_KEY, String(version));
+    } catch (err) {
+      // Losing the marker only costs one extra rebuild on the next open.
+      this.logger?.warn(
+        `${TAG} Could not record FTS schema version: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   private readEmbeddingMeta(): EmbeddingMeta | null {
     try {
@@ -3002,12 +3094,27 @@ export class VectorStore implements IMemoryStore {
       const hasV2Col = cols.some((c) => c.name === "content_original");
 
       if (hasV2Col) {
-        return false; // Already v2 — no migration needed
+        // The SHAPE is current; the question is whether the CONTENT was
+        // written by the current segmentation. v2 applied jieba to every
+        // script, and for anything it has no dictionary for (Cyrillic, Greek,
+        // Hebrew…) jieba returns one token per LETTER — documents were
+        // indexed as loose letters, so a query for any Russian word matched
+        // nearly every Russian document and BM25 ranked noise. Already
+        // written rows cannot be repaired in place; the FTS tables are
+        // derived from l1_records / l0_conversations, so a rebuild costs
+        // time and nothing else.
+        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION) return false;
+        this.logger?.info(
+          `${TAG} Migrating FTS5 index to v${FTS_SCHEMA_VERSION} (per-script segmentation)`,
+        );
+        this.db.exec("DROP TABLE IF EXISTS l1_fts");
+        this.db.exec("DROP TABLE IF EXISTS l0_fts");
+        return true;
       }
 
       // v1 → v2: drop both FTS tables (data will be repopulated by rebuildFtsIndex)
       this.logger?.info(
-        `${TAG} Migrating FTS5 tables from v1 to v2 (jieba segmented)`,
+        `${TAG} Migrating FTS5 tables from v1 (raw text) to the segmented schema`,
       );
       this.db.exec("DROP TABLE IF EXISTS l1_fts");
       this.db.exec("DROP TABLE IF EXISTS l0_fts");
@@ -3022,10 +3129,10 @@ export class VectorStore implements IMemoryStore {
 
   /**
    * Rebuild the FTS5 index from scratch by reading all records from the
-   * metadata tables and re-inserting them with jieba-segmented text.
+   * metadata tables and re-inserting them with `segmentForFts()` text.
    *
    * Called automatically after:
-   *  - Schema migration from v1 to v2
+   *  - Any FTS schema migration (v1 → v2 → v3)
    *  - Fresh table creation when existing data exists
    *
    * Safe to call multiple times (idempotent — clears FTS tables first).
@@ -3035,7 +3142,7 @@ export class VectorStore implements IMemoryStore {
 
     try {
       this.logger?.info(
-        `${TAG} Rebuilding FTS5 index with jieba segmentation…`,
+        `${TAG} Rebuilding FTS5 index with per-script segmentation…`,
       );
 
       // ── Rebuild L1 FTS ──
