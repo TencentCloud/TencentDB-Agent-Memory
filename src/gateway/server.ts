@@ -17,7 +17,11 @@
 import http from "node:http";
 import { URL } from "node:url";
 import { TdaiCore } from "../core/tdai-core.js";
-import { createDevLogger, isDevMode } from "../utils/dev-logger.js";
+import {
+  createDevLogger,
+  isDevMode,
+  logFileUnderRoot,
+} from "../utils/dev-logger.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig, GatewayConfigOverrides } from "./config.js";
@@ -155,15 +159,29 @@ export class TdaiGateway {
     }
     // Dev logger: file sink from config.logging.file, debug from yaml level
     // OR TDAI_DEV=1 (env wins — see dev-logger.isDevMode).
+    // tz-07 H1: logDir follows baseDir, so an unset logging.file cannot resolve
+    // logs from the DEFAULT root while everything else follows the named one.
+    // A CONFIGURED absolute file is filtered the same way (logFileUnderRoot):
+    // the cwd config is read by every process started in this directory, and a
+    // named root must not write into somebody else's tree.
+    const logDir = resolveUnderRoot(this.config.data.baseDir, "logs");
+    const logChoice = logFileUnderRoot({
+      logDir,
+      configuredFile: this.config.logging.file,
+      rootIsDefault: this.config.data.baseDirIsDefault,
+    });
     this.logger = createDevLogger({
       tag: TAG,
       dev: this.config.logging.level === "debug" || isDevMode(),
-      logFile: this.config.logging.file,
-      // tz-07 H1: without this, an unset logging.file resolves logs from the
-      // DEFAULT root while everything else follows baseDir — a split (R1)
-      // that no probe setting TDAI_DATA_DIR could ever see.
-      logDir: resolveUnderRoot(this.config.data.baseDir, "logs"),
+      logFile: logChoice.file,
+      logDir,
     });
+    if (logChoice.refused !== null) {
+      this.logger.warn(
+        `${TAG} logging.file "${logChoice.refused}" is outside this install's ` +
+          `root — writing to ${logChoice.file} instead`,
+      );
+    }
     this.tokenManager = new LoopbackTokenManager(
       this.config.data.baseDir,
       this.logger,

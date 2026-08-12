@@ -62,6 +62,41 @@ export function resolveLogFile(logDir?: string, logFile?: string): string {
 }
 
 /**
+ * Where a gateway rooted at `logDir` may write.
+ *
+ * `logging.file` is usually an absolute path, and a config found in the CWD
+ * is read by EVERY process started from that directory — including tests and
+ * probes that name their own root. Those then wrote their lines into the
+ * operator's live log: the file that a run is read from filled up with lines
+ * from /tmp trees, which is exactly the guessing this log is supposed to end.
+ *
+ * So a named root keeps its logs: an absolute file outside `logDir` is
+ * honoured only by an install that named no root at all (`rootIsDefault`,
+ * same policy as the legacy role fallback). A relative file always resolves
+ * under `logDir` — cwd-relative logs belong to whoever happened to start the
+ * process, not to the install.
+ *
+ * @returns the file to write, and the path that was refused (for a warning).
+ */
+export function logFileUnderRoot(opts: {
+  logDir: string;
+  configuredFile: string | undefined;
+  rootIsDefault: boolean;
+}): { file: string; refused: string | null } {
+  const { logDir, rootIsDefault } = opts;
+  const configuredFile = opts.configuredFile ?? "";
+  if (configuredFile === "")
+    return { file: resolveLogFile(logDir), refused: null };
+  const resolved = resolveLogFile(logDir, configuredFile);
+  if (!path.isAbsolute(configuredFile) && !configuredFile.startsWith("~")) {
+    return { file: path.resolve(logDir, configuredFile), refused: null };
+  }
+  const inRoot = `${resolved}${path.sep}`.startsWith(`${logDir}${path.sep}`);
+  if (inRoot || rootIsDefault) return { file: resolved, refused: null };
+  return { file: resolveLogFile(logDir), refused: resolved };
+}
+
+/**
  * Rotate `file` → `.1` → `.2`, dropping the oldest. The previous behaviour
  * truncated the log to zero, so the history a run needed was gone the moment
  * the file crossed the threshold — and it crossed it on a busy day.
