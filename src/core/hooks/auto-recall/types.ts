@@ -7,7 +7,8 @@ import type { MemoryRecord } from "../../record/l1-reader.js";
 import type { L1SearchResult } from "../../store/types.js";
 
 export const TAG = "[memory-tdai] [recall]";
-export const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
+export const RECALL_TRUNCATION_SUFFIX =
+  "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 export const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 export const RECALL_LINE_SEPARATOR = "\n";
 
@@ -37,6 +38,69 @@ export interface RecalledMemory {
   type: string;
 }
 
+/**
+ * Version of the `RecallItem` projection (tz-10 C10.7). Bumped when the shape
+ * or the meaning of `provenance.status` changes, so a consumer can tell a
+ * pre-tz-05 projection from native scope/provenance data.
+ */
+export const RECALL_ITEM_SCHEMA_VERSION = 1;
+
+/**
+ * Structured recall element — what the strategies actually found, before it
+ * is rendered for the prompt (tz-10 C10.3). The rendered line is a projection
+ * of `formatable`, never the other way round: parsing a line back into fields
+ * is what lost ids and scores before tz-10a.
+ *
+ * tz-10b's `MemoryItem` = `RecallItem & { tokenCost: number }` — the budget
+ * and tokenizer belong to the assembler, not to the search path.
+ */
+export interface RecallItem {
+  schemaVersion: typeof RECALL_ITEM_SCHEMA_VERSION;
+  /** Store record id. Empty only when the backend does not expose one. */
+  memoryId: string;
+  kind: "l1";
+  content: string;
+  /** Everything the renderer needs — single source of the injected line. */
+  formatable: FormatableMemory;
+  scope: {
+    /** null until tz-05 gives records a real owner (C10.7). */
+    userId: string | null;
+    /** Project the record is tagged to; "" / undefined = untagged. */
+    projectId?: string;
+    /** 'global' | 'project' | undefined (legacy rows predate scoping). */
+    scope?: string;
+    sessionKey?: string;
+    sessionId?: string;
+  };
+  provenance: {
+    /** L0 messages behind the record; [] until tz-05 (C10.7). */
+    sourceIds: string[];
+    producer: string;
+    createdAt: string;
+    updatedAt: string;
+    /** "unknown" = projected without native provenance (pre-tz-05). */
+    status: "native" | "projected" | "unknown";
+  };
+  /** `raw` = score as the store returned it; `final` = after every multiplier. */
+  score: { raw: number; final: number; reasons: string[] };
+}
+
+/** Where a recall diagnostic came from (tz-10 C10.5). */
+export type RecallDiagnosticStage =
+  "repo" | "scope" | "strategy" | "budget" | "render";
+
+/**
+ * One machine-readable note about the recall path. A failure that produces a
+ * diagnostic is NOT the same as "no memories" — that conflation is exactly
+ * what tz-10 C10.5 forbids.
+ */
+export interface RecallDiagnostic {
+  stage: RecallDiagnosticStage;
+  code: string;
+  message: string;
+  itemId?: string;
+}
+
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
@@ -48,6 +112,8 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Effective search strategy used */
   recallStrategy?: string;
+  /** Why the result looks the way it does — repo/scope/budget notes (tz-10 C10.5). */
+  diagnostics?: RecallDiagnostic[];
 }
 
 /** Single source of truth for a memory that can be formatted for the LLM. */
@@ -77,13 +143,23 @@ export interface SearchTiming {
 }
 
 export interface SearchResult {
+  /** Rendered projection of `items`, in the same order. */
   lines: string[];
+  items: RecallItem[];
   timing: SearchTiming;
+  diagnostics: RecallDiagnostic[];
+}
+
+/** What one strategy leg returns: its hits plus why candidates were dropped. */
+export interface StrategyResult {
+  items: RecallItem[];
+  diagnostics: RecallDiagnostic[];
 }
 
 /** Search strategy (config-driven). */
 export type RecallStrategy = "keyword" | "embedding" | "hybrid";
 /** Used for L2/L3 type-rerank. */
-export type TypeWeights = { instruction: number; persona: number; episodic: number } | undefined;
+export type TypeWeights =
+  { instruction: number; persona: number; episodic: number } | undefined;
 // Re-export to keep external API stable when callers only have access to ./types.ts.
 export type { L1SearchResult };

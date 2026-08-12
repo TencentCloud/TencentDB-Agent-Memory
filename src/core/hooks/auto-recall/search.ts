@@ -20,20 +20,33 @@ import type { IMemoryStore } from "../../store/types.js";
 import type { Logger } from "../../types.js";
 import {
   TAG,
+  type RecallDiagnostic,
+  type RecallItem,
   type RecallStrategy,
   type SearchResult,
+  type SearchTiming,
   type TypeWeights,
 } from "./types.js";
 import { searchByKeyword } from "./search-keyword.js";
 import { searchByEmbedding } from "./search-embedding.js";
 import { searchHybrid } from "./search-hybrid.js";
-import { passesScope, type ScopeMode } from "./scope.js";
+import { renderItems, vectorResultToItem } from "./item.js";
+import { filterByScope, type ScopeMode } from "./scope.js";
 import type { ScopeDecayConfig } from "./scope-decay.js";
 
-const emptyResult: SearchResult = {
-  lines: [],
-  timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 },
-};
+/**
+ * A fresh empty result per call. It used to be one shared module-level
+ * object; now that a result carries diagnostics, sharing it would let one
+ * call's failure show up in another's.
+ */
+function emptyResult(diagnostics: RecallDiagnostic[] = []): SearchResult {
+  return {
+    lines: [],
+    items: [],
+    timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 },
+    diagnostics,
+  };
+}
 
 export async function searchMemories(
   userText: string,
@@ -50,7 +63,13 @@ export async function searchMemories(
     logger?.debug?.(
       `${TAG} Query too short for memory search (raw=${userText.length}, clean=${cleanText.length})`,
     );
-    return emptyResult;
+    return emptyResult([
+      {
+        stage: "strategy",
+        code: "query-too-short",
+        message: `raw=${userText.length}, clean=${cleanText.length}, min=2`,
+      },
+    ]);
   }
   if (cleanText.length !== userText.length) {
     logger?.debug?.(
@@ -85,6 +104,7 @@ export async function searchMemories(
       `maxResults=${maxResults}, threshold=${threshold}`,
   );
 
+  const diagnostics: RecallDiagnostic[] = [];
   let effectiveStrategy = strategy;
   if (
     (strategy === "embedding" || strategy === "hybrid") &&
@@ -93,6 +113,11 @@ export async function searchMemories(
     logger?.warn?.(
       `${TAG} Strategy "${strategy}" requested but EmbeddingService not available, falling back to keyword`,
     );
+    diagnostics.push({
+      stage: "strategy",
+      code: "embedding-unavailable",
+      message: `strategy "${strategy}" fell back to keyword: vectorStore=${vectorStore ? "ok" : "missing"}, embeddingService=${embeddingService ? "ok" : "missing"}`,
+    });
     effectiveStrategy = "keyword";
   }
   logger?.debug?.(
@@ -108,7 +133,7 @@ export async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(
+      const result = await searchByKeyword(
         cleanText,
         pluginDataDir,
         maxResults,
@@ -119,19 +144,16 @@ export async function searchMemories(
         scopeDecayCfg,
         mode,
       );
-      return {
-        lines,
-        timing: {
-          ftsMs: performance.now() - tFts,
-          embeddingMs: 0,
-          ftsHits: lines.length,
-          embeddingHits: 0,
-        },
-      };
+      return finish(result.items, [...diagnostics, ...result.diagnostics], {
+        ftsMs: performance.now() - tFts,
+        embeddingMs: 0,
+        ftsHits: result.items.length,
+        embeddingHits: 0,
+      });
     }
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(
+      const result = await searchByEmbedding(
         cleanText,
         maxResults,
         threshold,
@@ -144,50 +166,51 @@ export async function searchMemories(
         scopeDecayCfg,
         mode,
       );
-      return {
-        lines,
-        timing: {
-          ftsMs: 0,
-          embeddingMs: performance.now() - tEmb,
-          ftsHits: 0,
-          embeddingHits: lines.length,
-        },
-      };
+      return finish(result.items, [...diagnostics, ...result.diagnostics], {
+        ftsMs: 0,
+        embeddingMs: performance.now() - tEmb,
+        ftsHits: 0,
+        embeddingHits: result.items.length,
+      });
     }
     // Hybrid: short-circuit to single store-side call when supported.
     if (vectorStore?.getCapabilities().nativeHybridSearch) {
       const tNative = performance.now();
-      // Both backends now filter store-side; passesScope stays as the JS leg
-      // for a store that ignores the params (the three implementations are
-      // pinned to one table in scope-sync.test.ts).
-      const results = (
+      // Both backends now filter store-side; the JS scope leg stays for a
+      // store that ignores the params (the three implementations are pinned
+      // to one table in scope-sync.test.ts).
+      const results = filterByScope(
         await vectorStore.searchL1Hybrid!({
           query: cleanText,
           topK: maxResults,
           projectId,
           mode,
-        })
-      ).filter((r) => passesScope(r, projectId, mode));
+        }),
+        projectId,
+        mode,
+        diagnostics,
+      );
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(
         `${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms, mode=${mode}`,
       );
-      const { formatMemoryLine, vectorResultToFormatable } =
-        await import("./format.js");
-      const lines = results.map((r) =>
-        formatMemoryLine(vectorResultToFormatable(r)),
+      // The store already ranked and (in decay mode) downweighted these rows,
+      // so the score it returned IS the final one — no second multiplier here.
+      const items = results.map((r) =>
+        vectorResultToItem(r, {
+          raw: r.score,
+          final: r.score,
+          reasons: ["native-hybrid"],
+        }),
       );
-      return {
-        lines,
-        timing: {
-          ftsMs: 0,
-          embeddingMs: nativeMs,
-          ftsHits: 0,
-          embeddingHits: results.length,
-        },
-      };
+      return finish(items, diagnostics, {
+        ftsMs: 0,
+        embeddingMs: nativeMs,
+        ftsHits: 0,
+        embeddingHits: results.length,
+      });
     }
-    return await searchHybrid(
+    const hybrid = await searchHybrid(
       cleanText,
       pluginDataDir,
       maxResults,
@@ -201,12 +224,36 @@ export async function searchMemories(
       scopeDecayCfg,
       mode,
     );
-  } catch (err) {
-    logger?.warn?.(
-      `${TAG} Memory search failed (strategy=${effectiveStrategy}): ${err instanceof Error ? err.message : String(err)}`,
+    return finish(
+      hybrid.items,
+      [...diagnostics, ...hybrid.diagnostics],
+      hybrid.timing,
     );
-    return emptyResult;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger?.warn?.(
+      `${TAG} Memory search failed (strategy=${effectiveStrategy}): ${message}`,
+    );
+    // Fail-open stays: the pipeline is not blocked. What changes is that the
+    // caller can now tell a broken store from an empty memory (tz-10 C10.5).
+    return emptyResult([
+      ...diagnostics,
+      {
+        stage: "repo",
+        code: "search-failed",
+        message: `strategy=${effectiveStrategy}: ${message}`,
+      },
+    ]);
   }
+}
+
+/** Render the items once and pack the result the callers expect. */
+function finish(
+  items: RecallItem[],
+  diagnostics: RecallDiagnostic[],
+  timing: SearchTiming,
+): SearchResult {
+  return { lines: renderItems(items), items, timing, diagnostics };
 }
 
 // passesScope imported at the top of the file (alongside other strategy imports).

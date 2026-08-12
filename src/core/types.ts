@@ -209,6 +209,15 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Search strategy used. */
   recallStrategy?: string;
+  /** Machine-readable notes about the recall path (tz-10 C10.5): a failing
+   * store, a scope-filtered candidate or a budget drop is reported here
+   * instead of silently looking like "no memories". */
+  diagnostics?: Array<{
+    stage: string;
+    code: string;
+    message: string;
+    itemId?: string;
+  }>;
 }
 
 /** Result from a capture (sync_turn) operation. */
