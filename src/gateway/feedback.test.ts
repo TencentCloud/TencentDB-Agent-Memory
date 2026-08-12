@@ -19,14 +19,21 @@ const require = createRequire(import.meta.url);
 
 function openSqlite(dbPath: string): {
   exec(sql: string): void;
-  prepare(sql: string): { run(...params: unknown[]): void; get(...params: unknown[]): unknown };
+  prepare(sql: string): {
+    run(...params: unknown[]): void;
+    get(...params: unknown[]): unknown;
+  };
   close(): void;
 } {
   if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string) => unknown;
+    };
     return new Database(dbPath) as unknown as ReturnType<typeof openSqlite>;
   }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => unknown;
+  };
   return new DatabaseSync(dbPath) as unknown as ReturnType<typeof openSqlite>;
 }
 
@@ -46,7 +53,12 @@ beforeAll(() => {
   // record (< 80 chars), and a non-matching record.
   db.prepare(
     "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
-  ).run("m1", "Alpha cluster member one with a long enough prefix to be a full dedup key", "episodic", 50);
+  ).run(
+    "m1",
+    "Alpha cluster member one with a long enough prefix to be a full dedup key",
+    "episodic",
+    50,
+  );
   db.prepare(
     "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
   ).run("m2", "Beta cluster member two starting differently", "episodic", 50);
@@ -66,9 +78,9 @@ afterAll(() => {
 function priorityOf(recordId: string): number {
   const db = openSqlite(dbPath);
   try {
-    const row = db.prepare("SELECT priority FROM l1_records WHERE record_id = ?").get(recordId) as
-      | { priority: number }
-      | undefined;
+    const row = db
+      .prepare("SELECT priority FROM l1_records WHERE record_id = ?")
+      .get(recordId) as { priority: number } | undefined;
     return row?.priority ?? -1;
   } finally {
     db.close();
@@ -78,10 +90,16 @@ function priorityOf(recordId: string): number {
 describe("matchFeedbackKeys (pure)", () => {
   it("matches on trimmed content startsWith key", () => {
     const rows = [
-      { record_id: "a", content: "  Alpha cluster member one with a long enough prefix to be a full dedup key" },
+      {
+        record_id: "a",
+        content:
+          "  Alpha cluster member one with a long enough prefix to be a full dedup key",
+      },
       { record_id: "b", content: "short" },
     ];
-    const matched = matchFeedbackKeys(rows, ["Alpha cluster member one with a long enough prefix to be a full dedup key"]);
+    const matched = matchFeedbackKeys(rows, [
+      "Alpha cluster member one with a long enough prefix to be a full dedup key",
+    ]);
     expect(matched).toEqual(["a"]);
   });
 
@@ -118,13 +136,17 @@ describe("validateFeedbackBody", () => {
   });
 
   it("rejects over-long keys", () => {
-    expect(typeof validateFeedbackBody({ keys: ["x".repeat(300)] })).toBe("string");
+    expect(typeof validateFeedbackBody({ keys: ["x".repeat(300)] })).toBe(
+      "string",
+    );
   });
 });
 
 describe("bumpFeedbackPriorities (sqlite)", () => {
   it("bumps matched records, leaves unmatched untouched", () => {
-    const r = bumpFeedbackPriorities(dbPath, ["Alpha cluster member one with a long enough prefix to be a full dedup key"]);
+    const r = bumpFeedbackPriorities(dbPath, [
+      "Alpha cluster member one with a long enough prefix to be a full dedup key",
+    ]);
     expect(r.matched).toBe(1);
     expect(r.bumped).toBe(1);
     expect(priorityOf("m1")).toBe(51);
@@ -132,7 +154,9 @@ describe("bumpFeedbackPriorities (sqlite)", () => {
   });
 
   it("cluster bump: ANY member key matching bumps the member record", () => {
-    const r = bumpFeedbackPriorities(dbPath, ["Beta cluster member two starting differently"]);
+    const r = bumpFeedbackPriorities(dbPath, [
+      "Beta cluster member two starting differently",
+    ]);
     expect(r.bumped).toBe(1);
     expect(priorityOf("m2")).toBe(51);
   });

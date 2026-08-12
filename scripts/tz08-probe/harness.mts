@@ -14,6 +14,10 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { HostDescriptor } from "../../src/consumer/hosts/types.js";
 
+// One rule for "a port nobody holds": the suites that picked random numbers
+// out of narrow ranges collided with each other under parallel vitest.
+export { freePort } from "../../src/test-support/free-port.js";
+
 export const REPO_ROOT = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
   "../..",
@@ -194,21 +198,6 @@ export function writeSandboxConfig(
   ].join("\n");
   fs.writeFileSync(configPath, yaml, "utf-8");
   return configPath;
-}
-
-/**
- * A free loopback port, taken by binding one and letting go.
- *
- * Random ports out of a small range collide: two gateways in one probe drew
- * from the same 90 numbers, and the second then bound nothing while the first
- * answered both of them.
- */
-export async function freePort(): Promise<number> {
-  const probe = http.createServer();
-  await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
-  const { port } = probe.address() as { port: number };
-  await new Promise<void>((r) => probe.close(() => r()));
-  return port;
 }
 
 export interface Gateway {

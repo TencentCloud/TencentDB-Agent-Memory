@@ -168,7 +168,17 @@ try {
   const projectDir = path.join(home, "project");
   fs.mkdirSync(projectDir, { recursive: true });
   const namedConfig = path.join(projectDir, "tdai-gateway.yaml");
-  fs.copyFileSync(configPath, namedConfig);
+  // A DECOY: the same file, but naming a port nobody listens on. If the
+  // current directory were allowed to decide, the pasted line would find this
+  // one instead of the gateway the user was looking at.
+  const decoyPort = await freePort();
+  fs.writeFileSync(
+    namedConfig,
+    fs
+      .readFileSync(configPath, "utf-8")
+      .replace(`port: ${port}`, `port: ${decoyPort}`),
+    "utf-8",
+  );
 
   const printEnv = { ...process.env, ...sessionEnv } as NodeJS.ProcessEnv;
   const printed = execFileSync(
@@ -180,20 +190,90 @@ try {
       encoding: "utf-8",
     },
   );
+  must(
+    "конфиг, названный переменной, попадает в снипет",
+    printed.includes(`127.0.0.1:${decoyPort}`),
+  );
 
-  // …while the same config found only by being in the current directory is
-  // NOT an address: a host starts the launcher wherever it likes, and letting
-  // that directory decide would point a session at another memory.
+  // A relocation variable is the same kind of answer: MEMORY_TENCENTDB_ROOT
+  // moved this install, and a host started without it looks somewhere else.
+  const printedRelocated = execFileSync(
+    process.execPath,
+    [launcherPath, "--host", "claude", "--print-registration"],
+    { cwd: home, env: printEnv, encoding: "utf-8" },
+  );
+  must(
+    "перемещённая переменной установка отдаёт адрес в снипете",
+    printedRelocated.includes(`--gateway`) &&
+      printedRelocated.includes(gateway.url),
+  );
+
+  // …while a config found only by being in the CURRENT DIRECTORY is not an
+  // address at all: a host starts the launcher wherever it likes. Printed
+  // without any relocation variable, the machine's own answer (HOME → data
+  // dir) wins and the decoy in the current directory is ignored — in the
+  // snippet AND at run time.
+  const homeEnv = { ...printEnv, MEMORY_TENCENTDB_ROOT: undefined };
   const printedFromCwd = execFileSync(
     process.execPath,
     [launcherPath, "--host", "claude", "--print-registration"],
-    { cwd: projectDir, env: printEnv, encoding: "utf-8" },
+    { cwd: projectDir, env: homeEnv as NodeJS.ProcessEnv, encoding: "utf-8" },
   );
   must(
     "конфиг в текущем каталоге адресом не считается",
     !printedFromCwd.includes("--gateway"),
   );
-  const snippet = JSON.parse(printed.slice(printed.indexOf("{"))) as {
+
+  const cwdSnippet = JSON.parse(
+    printedFromCwd.slice(printedFromCwd.indexOf("{")),
+  ) as { mcpServers: Record<string, { command: string; args: string[] }> };
+  const cwdPasted = cwdSnippet.mcpServers["tdai-memory"]!;
+  const cwdHost = await startHost(
+    {
+      id: "claude-cwd",
+      configPath: "~/.claude.json",
+      command: cwdPasted.command,
+      args: cwdPasted.args,
+      env: {},
+      registration: () => printedFromCwd,
+    },
+    {
+      env: { ...sessionEnv, MEMORY_TENCENTDB_ROOT: undefined },
+      cwd: projectDir,
+    },
+  );
+  try {
+    const reply = await cwdHost.call("tools/call", {
+      name: "memory_search",
+      arguments: { query: MARKER, limit: 5 },
+    });
+    const structured = (
+      reply.result as { structuredContent?: { results?: string } }
+    ).structuredContent;
+    console.log(
+      `хост, запущенный в каталоге с чужим конфигом (порт ${decoyPort}), нашёл маркер:`,
+      (structured?.results ?? "").includes(MARKER),
+    );
+    must(
+      "каталог не решает, в какую память попадёт сессия",
+      (structured?.results ?? "").includes(MARKER),
+    );
+  } finally {
+    cwdHost.stop();
+  }
+
+  // The gateway's REAL config, named by the variable: the address the snippet
+  // carries then has to be the one the user is looking at.
+  const printedReal = execFileSync(
+    process.execPath,
+    [launcherPath, "--host", "claude", "--print-registration"],
+    {
+      cwd: projectDir,
+      env: { ...printEnv, TDAI_GATEWAY_CONFIG: configPath },
+      encoding: "utf-8",
+    },
+  );
+  const snippet = JSON.parse(printedReal.slice(printedReal.indexOf("{"))) as {
     mcpServers: Record<string, { command: string; args: string[] }>;
   };
   const pasted = snippet.mcpServers["tdai-memory"]!;
@@ -212,7 +292,7 @@ try {
       command: pasted.command,
       args: pasted.args,
       env: {},
-      registration: () => printed,
+      registration: () => printedReal,
     },
     { env: sessionEnv, cwd: home },
   );

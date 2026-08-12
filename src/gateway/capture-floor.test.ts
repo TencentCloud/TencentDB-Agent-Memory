@@ -15,6 +15,7 @@
  * where a client can stamp its own messages.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { freePort } from "../test-support/free-port.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,7 +30,7 @@ beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "capture-floor-"));
   const base = path.join(tmp, "tdai");
   fs.mkdirSync(base, { recursive: true });
-  const port = 29_900 + Math.floor(Math.random() * 90);
+  const port = await freePort();
   gateway = new TdaiGateway({
     data: { baseDir: base },
     server: { port, host: "127.0.0.1", corsOrigins: [] },

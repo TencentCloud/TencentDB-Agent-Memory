@@ -6,7 +6,12 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadProbeCorpus, computeProbeResults, isRelevant, type ProbeCorpus } from "./probe.js";
+import {
+  loadProbeCorpus,
+  computeProbeResults,
+  isRelevant,
+  type ProbeCorpus,
+} from "./probe.js";
 
 function tempCorpus(content: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-probe-"));
@@ -24,8 +29,16 @@ describe("loadProbeCorpus", () => {
     const file = tempCorpus(
       JSON.stringify({
         queries: [
-          { id: "q1", query: "what is the user's name?", expected: ["User name is Alice"] },
-          { id: "q2", query: "preferred editor?", expected: ["prefers vim", "uses neovim"] },
+          {
+            id: "q1",
+            query: "what is the user's name?",
+            expected: ["User name is Alice"],
+          },
+          {
+            id: "q2",
+            query: "preferred editor?",
+            expected: ["prefers vim", "uses neovim"],
+          },
         ],
       }),
     );
@@ -33,7 +46,10 @@ describe("loadProbeCorpus", () => {
       const corpus = loadProbeCorpus(file);
       expect(corpus).not.toBeNull();
       expect(corpus!.queries).toHaveLength(2);
-      expect(corpus!.queries[1]!.expected).toEqual(["prefers vim", "uses neovim"]);
+      expect(corpus!.queries[1]!.expected).toEqual([
+        "prefers vim",
+        "uses neovim",
+      ]);
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
@@ -78,7 +94,9 @@ describe("loadProbeCorpus", () => {
 
 describe("isRelevant", () => {
   it("matches on trimmed content containing an expected substring", () => {
-    expect(isRelevant("  User name is Alice.  ", ["User name is Alice"])).toBe(true);
+    expect(isRelevant("  User name is Alice.  ", ["User name is Alice"])).toBe(
+      true,
+    );
   });
   it("does not match when no expected substring is present", () => {
     expect(isRelevant("User name is Bob", ["User name is Alice"])).toBe(false);
@@ -115,7 +133,11 @@ describe("computeProbeResults (precision@k)", () => {
       { content: "unrelated result" },
       { content: "alpha found" }, // rank 2
     ];
-    const r = await computeProbeResults({ queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] }, 1, search);
+    const r = await computeProbeResults(
+      { queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] },
+      1,
+      search,
+    );
     expect(r.precisionAtK).toBe(0);
     expect(r.top1HitRate).toBe(0);
   });
@@ -126,7 +148,11 @@ describe("computeProbeResults (precision@k)", () => {
       { content: "irrelevant rank-1" },
       { content: "alpha found" }, // rank 2
     ];
-    const r = await computeProbeResults({ queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] }, 3, search);
+    const r = await computeProbeResults(
+      { queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] },
+      3,
+      search,
+    );
     expect(r.top1HitRate).toBe(0);
     expect(r.precisionAtK).toBe(1);
   });
@@ -136,15 +162,26 @@ describe("computeProbeResults (precision@k)", () => {
       { content: "alpha found" }, // rank 1
       { content: "irrelevant rank-2" },
     ];
-    const r = await computeProbeResults({ queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] }, 3, search);
+    const r = await computeProbeResults(
+      { queries: [{ id: "q1", query: "q1", expected: ["alpha"] }] },
+      3,
+      search,
+    );
     expect(r.top1HitRate).toBe(1);
     expect(r.precisionAtK).toBe(1);
   });
 
   it("denominator is min(topK, #expected)", async () => {
     // expected has 2 answers, both retrieved in top-3 → precision 1.0
-    const search = async () => [{ content: "gamma here" }, { content: "delta here" }];
-    const r = await computeProbeResults({ queries: [{ id: "q3", query: "q3", expected: ["gamma", "delta"] }] }, 3, search);
+    const search = async () => [
+      { content: "gamma here" },
+      { content: "delta here" },
+    ];
+    const r = await computeProbeResults(
+      { queries: [{ id: "q3", query: "q3", expected: ["gamma", "delta"] }] },
+      3,
+      search,
+    );
     expect(r.precisionAtK).toBe(1);
   });
 
@@ -159,7 +196,11 @@ describe("computeProbeResults (precision@k)", () => {
 
   it("records per-query evaluated results in rank order", async () => {
     const search = async () => [{ content: "a" }, { content: "b" }];
-    const r = await computeProbeResults({ queries: [{ id: "q9", query: "x", expected: ["a"] }] }, 3, search);
+    const r = await computeProbeResults(
+      { queries: [{ id: "q9", query: "x", expected: ["a"] }] },
+      3,
+      search,
+    );
     expect(r.evaluated[0]!.top).toEqual(["a", "b"]);
     expect(r.evaluated[0]!.hits).toBe(1);
   });

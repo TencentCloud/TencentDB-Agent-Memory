@@ -258,18 +258,30 @@ describe("the registration a user pastes", () => {
       expect(renderRegistration("claude", {})).not.toContain("--gateway");
       expect(resolveGatewayUrl({})).toBe("http://127.0.0.1:8420");
 
-      // The data dir's own config is the MACHINE's answer: the host resolves it
-      // too, so the snippet stays free of an address that could go stale.
-      cwd.mockReturnValue(dir); // no config here…
+      cwd.mockReturnValue(dir); // no config in the current directory…
       fs.rmSync(named);
-      vi.stubEnv("MEMORY_TENCENTDB_ROOT", dir);
-      const dataDir = path.join(dir, "memory-tdai");
+      const dataDir = path.join(dir, ".memory-tencentdb", "memory-tdai");
       fs.mkdirSync(dataDir, { recursive: true });
       fs.writeFileSync(
         path.join(dataDir, "tdai-gateway.yaml"),
         "server:\n  port: 9139\n",
       );
+
+      // A data dir a VARIABLE moved is this shell's answer: the host starts
+      // the launcher without that variable and lands somewhere else, so the
+      // address has to travel.
+      vi.stubEnv("MEMORY_TENCENTDB_ROOT", path.join(dir, ".memory-tencentdb"));
+      expect(renderRegistration("claude", {})).toContain(
+        "http://127.0.0.1:9139",
+      );
+
+      // The same config found where the machine itself looks — under HOME —
+      // is the MACHINE's answer: the host resolves it too, so the snippet
+      // stays free of an address that could go stale.
+      vi.stubEnv("MEMORY_TENCENTDB_ROOT", "");
+      vi.stubEnv("HOME", dir);
       expect(renderRegistration("claude", {})).not.toContain("--gateway");
+      expect(resolveGatewayUrl({})).toBe("http://127.0.0.1:9139");
       cwd.mockRestore();
     } finally {
       vi.unstubAllEnvs();

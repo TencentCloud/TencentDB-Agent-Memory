@@ -17,6 +17,7 @@
  * fresh worktree). Integration boots a real TdaiGateway on a scratch dir.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { freePort } from "../test-support/free-port.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -63,14 +64,14 @@ describe("criterion 2 — gateway restart → /status serves (P12 integration)",
   let port: number;
   let baseUrl: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tdai-restart-"));
     base = path.join(tmp, "tdai");
     fs.mkdirSync(path.join(base, "scene_blocks", "_global"), {
       recursive: true,
     });
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
-    port = 29_700 + Math.floor(Math.random() * 300);
+    port = await freePort();
     baseUrl = `http://127.0.0.1:${port}`;
   });
 

@@ -28,14 +28,23 @@ function openSqlite(dbPath: string): {
   close(): void;
 } {
   if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
-    const { Database } = require("bun:sqlite") as { Database: new (p: string) => unknown };
+    const { Database } = require("bun:sqlite") as {
+      Database: new (p: string) => unknown;
+    };
     return new Database(dbPath) as unknown as ReturnType<typeof openSqlite>;
   }
-  const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (p: string) => unknown };
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (p: string) => unknown;
+  };
   return new DatabaseSync(dbPath) as unknown as ReturnType<typeof openSqlite>;
 }
 
-const silentLogger = { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined };
+const silentLogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
 
 let tmp: string;
 let dataDir: string;
@@ -49,12 +58,24 @@ beforeAll(() => {
   fs.mkdirSync(logsDir, { recursive: true });
   fs.writeFileSync(
     path.join(logsDir, "memory-keeper-2026-08-02T00-00-00.000Z.json"),
-    JSON.stringify({ status: "ok", startedAt: "2026-08-02T00:00:00.000Z", elapsedMs: 1200, newL0: 3, applied: { deletes: ["d1"] } }),
+    JSON.stringify({
+      status: "ok",
+      startedAt: "2026-08-02T00:00:00.000Z",
+      elapsedMs: 1200,
+      newL0: 3,
+      applied: { deletes: ["d1"] },
+    }),
     "utf-8",
   );
   fs.writeFileSync(
     path.join(logsDir, "memory-keeper-2026-08-02T01-00-00.000Z.json"),
-    JSON.stringify({ status: "failed", startedAt: "2026-08-02T01:00:00.000Z", elapsedMs: 500, newL0: 0, error: "boom" }),
+    JSON.stringify({
+      status: "failed",
+      startedAt: "2026-08-02T01:00:00.000Z",
+      elapsedMs: 500,
+      newL0: 0,
+      error: "boom",
+    }),
     "utf-8",
   );
 
@@ -78,8 +99,17 @@ beforeAll(() => {
   // scene block within limits + one over
   const sceneDir = path.join(dataDir, "scene_blocks", "_global");
   fs.mkdirSync(sceneDir, { recursive: true });
-  fs.writeFileSync(path.join(sceneDir, "ok.md"), "-----META-START-----\nsummary: t\n-----META-END-----\n\nshort", "utf-8");
-  fs.writeFileSync(path.join(sceneDir, "big.md"), "-----META-START-----\nsummary: t\n-----META-END-----\n\n" + "x".repeat(1600), "utf-8");
+  fs.writeFileSync(
+    path.join(sceneDir, "ok.md"),
+    "-----META-START-----\nsummary: t\n-----META-END-----\n\nshort",
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(sceneDir, "big.md"),
+    "-----META-START-----\nsummary: t\n-----META-END-----\n\n" +
+      "x".repeat(1600),
+    "utf-8",
+  );
 });
 
 afterAll(() => {
@@ -114,7 +144,9 @@ describe("digest (#13)", () => {
   });
 
   it("digest path lives under .metadata", () => {
-    expect(digestPath(dataDir)).toBe(path.join(dataDir, ".metadata", "last-digest.json"));
+    expect(digestPath(dataDir)).toBe(
+      path.join(dataDir, ".metadata", "last-digest.json"),
+    );
   });
 });
 
@@ -133,7 +165,11 @@ describe("dashboard (#15)", () => {
   });
 
   it("buildDashboardMarkdown contains all sections", () => {
-    const md = buildDashboardMarkdown({ dataDir, logger: silentLogger, clustersSummary: "1 cluster(s), 2 member(s)" });
+    const md = buildDashboardMarkdown({
+      dataDir,
+      logger: silentLogger,
+      clustersSummary: "1 cluster(s), 2 member(s)",
+    });
     expect(md).toContain("# Memory health");
     expect(md).toContain("## L1 by type");
     expect(md).toContain("**instruction**: 1");
@@ -162,14 +198,24 @@ describe("dashboard (#15)", () => {
   });
 
   it("writeDashboard writes memory_health.md atomically", async () => {
-    const probe: ProbeResult = { status: "skipped", queries: 0, topK: 3, precisionAtK: null, top1HitRate: null, evaluated: [], reason: "no corpus" };
+    const probe: ProbeResult = {
+      status: "skipped",
+      queries: 0,
+      topK: 3,
+      precisionAtK: null,
+      top1HitRate: null,
+      evaluated: [],
+      reason: "no corpus",
+    };
     const file = await writeDashboard({ dataDir, logger: silentLogger, probe });
     expect(file).toBe(path.join(dataDir, "memory_health.md"));
     const md = fs.readFileSync(file!, "utf-8");
     expect(md).toContain("## Precision@k");
     expect(md).toContain("skipped (no corpus)");
     // no leftover temp files
-    const leftovers = fs.readdirSync(dataDir).filter((f) => f.includes(".tmp-"));
+    const leftovers = fs
+      .readdirSync(dataDir)
+      .filter((f) => f.includes(".tmp-"));
     expect(leftovers).toHaveLength(0);
   });
 });

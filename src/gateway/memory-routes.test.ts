@@ -4,6 +4,7 @@
  * plus the P2 write-gate contract on the reserved POST /memory/apply.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { freePort } from "../test-support/free-port.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -138,7 +139,7 @@ describe("memory read routes (P3, integration)", () => {
       "utf-8",
     );
 
-    port = 28_000 + Math.floor(Math.random() * 500);
+    port = await freePort();
     gateway = new TdaiGateway({
       data: { baseDir: base },
       server: { port, host: "127.0.0.1", corsOrigins: [] },
@@ -501,7 +502,7 @@ describe("reindex-in-progress route gate (P8)", () => {
       recursive: true,
     });
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
-    port = 28_500 + Math.floor(Math.random() * 500);
+    port = await freePort();
     gateway = new TdaiGateway({
       data: { baseDir: base },
       server: { port, host: "127.0.0.1", corsOrigins: [] },
@@ -613,7 +614,7 @@ describe("memory tools + feedback routes (P10, integration)", () => {
     base = path.join(tmp, "tdai");
     fs.mkdirSync(base, { recursive: true });
 
-    port = 29_000 + Math.floor(Math.random() * 500);
+    port = await freePort();
     gateway = new TdaiGateway({
       data: { baseDir: base },
       server: { port, host: "127.0.0.1", corsOrigins: [] },

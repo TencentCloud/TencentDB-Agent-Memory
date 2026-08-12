@@ -16,8 +16,20 @@ import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
 
+/**
+ * An environment variable that actually says something.
+ *
+ * An EMPTY variable is not an answer: `MEMORY_TENCENTDB_ROOT=""` in a shell
+ * profile used to resolve the data dir to the relative path "memory-tdai" —
+ * a different store per working directory, and no error anywhere.
+ */
+function envValue(name: string): string | undefined {
+  const raw = getEnv(name)?.trim();
+  return raw ? raw : undefined;
+}
+
 export function resolveDefaultDataDir(): string {
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
+  const home = envValue("HOME") ?? envValue("USERPROFILE") ?? "/tmp";
 
   // New canonical location: everything related to standalone/Hermes-mode TDAI
   // is collected under ~/.memory-tencentdb/ to avoid scattering top-level dirs
@@ -29,7 +41,7 @@ export function resolveDefaultDataDir(): string {
   // host the plugin data dir is decided by `resolveStateDir() + "memory-tdai"`
   // (typically ~/.openclaw/memory-tdai/) which is intentionally NOT changed.
   const root =
-    getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
+    envValue("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
   const newDefault = path.join(root, "memory-tdai");
 
   // Backward compatibility: if the new location does not yet exist but the
@@ -61,6 +73,15 @@ export const DEFAULT_GATEWAY_PORT = 8420;
 const CONFIG_FILENAMES = ["tdai-gateway.yaml", "tdai-gateway.json"] as const;
 
 /**
+ * Variables that move an install, and so make its address this shell's own.
+ *
+ * Kept in one list because forgetting one is invisible: the address still
+ * resolves, the registration still prints, and only a session started by a
+ * host without the variable quietly reads another memory.
+ */
+const RELOCATION_VARS = ["TDAI_DATA_DIR", "MEMORY_TENCENTDB_ROOT"] as const;
+
+/**
  * Where a config file was found, and therefore who else can find it.
  *
  * `env` and `cwd` are answers to THIS shell's question: another process, in
@@ -89,7 +110,7 @@ export interface GatewayConfigLocation {
 export function findGatewayConfig(
   includeCwd: boolean,
 ): GatewayConfigLocation | null {
-  const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
+  const explicit = envValue("TDAI_GATEWAY_CONFIG");
   if (explicit && fs.existsSync(explicit))
     return { path: explicit, origin: "env" };
 
@@ -105,8 +126,8 @@ export function findGatewayConfig(
   // that relocated it (tz-07 H2: one switchable root, and the config lives
   // under it). The yaml's `data.baseDir` cannot take part: this runs to FIND
   // that yaml, so honouring it would be circular. Env only.
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
-  const rawDataDir = getEnv("TDAI_DATA_DIR") ?? resolveDefaultDataDir();
+  const home = envValue("HOME") ?? envValue("USERPROFILE") ?? "/tmp";
+  const rawDataDir = envValue("TDAI_DATA_DIR") ?? resolveDefaultDataDir();
   const dataDir = rawDataDir.startsWith("~/")
     ? path.join(home, rawDataDir.slice(2))
     : rawDataDir;
@@ -115,8 +136,14 @@ export function findGatewayConfig(
     if (fs.existsSync(inDataDir))
       return {
         path: inDataDir,
-        // A data dir named by TDAI_DATA_DIR is this shell's answer too.
-        origin: getEnv("TDAI_DATA_DIR") ? "env" : "data-dir",
+        // A data dir a VARIABLE moved is this shell's answer, not the
+        // machine's: both TDAI_DATA_DIR and MEMORY_TENCENTDB_ROOT relocate the
+        // install, and neither reaches a host that starts the launcher from
+        // its own config file. HOME is not one of them — every process has it,
+        // with the same value.
+        origin: RELOCATION_VARS.some((name) => envValue(name))
+          ? "env"
+          : "data-dir",
       };
   }
 
@@ -166,7 +193,7 @@ export function resolveGatewayPort(): number {
 
 /** The same port, with whether another process would resolve it unaided. */
 export function resolveGatewayPortSource(): GatewayPortSource {
-  const fromEnv = Number.parseInt(getEnv("TDAI_GATEWAY_PORT") ?? "", 10);
+  const fromEnv = Number.parseInt(envValue("TDAI_GATEWAY_PORT") ?? "", 10);
   if (Number.isInteger(fromEnv) && fromEnv > 0)
     return { port: fromEnv, isPortable: false };
 

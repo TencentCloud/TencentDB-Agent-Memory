@@ -321,9 +321,9 @@ const KANA_CHAR = /[\u3040-\u309F\u30A0-\u30FF\u31F0-\u31FF]/u;
  *
  * v1: raw text. v2: jieba on everything, which broke every non-CJK script.
  * v3: per-script segmentation (`segmentForFts`). v4: Japanese — kana keeps its
- * run out of jieba's hands, lone particles are dropped, and a short Han run is
- * also kept whole. Bumping this makes an existing database drop and rebuild its
- * FTS tables once, on open.
+ * run out of jieba's hands, lone particles are dropped, and a Han run is read
+ * by both segmenters. CHANGING this in either direction makes an existing
+ * database drop and rebuild its FTS tables once, on open.
  */
 const FTS_SCHEMA_VERSION = 4;
 const FTS_SCHEMA_META_KEY = "fts_schema_version";
@@ -333,10 +333,15 @@ const FTS_TOKENIZER_META_KEY = "fts_tokenizer";
  * Which segmenters this runtime actually has.
  *
  * The version alone does not describe the index: the same code cuts text
- * differently when jieba is missing, or when Node was built with a small ICU
- * that cannot break Japanese. An index written by one and queried by the other
- * silently answers nothing, so the pair is recorded next to the version and a
- * change orders a rebuild.
+ * differently when jieba is missing, and differently again when the platform
+ * has no `Intl.Segmenter` at all and the regex fallback takes over. An index
+ * written by one and queried by the other silently answers nothing, so the
+ * pair is recorded next to the version and a change orders a rebuild.
+ *
+ * What it does NOT capture is WHICH dictionaries a present `Intl.Segmenter`
+ * carries — a small-ICU build reports `intl` and cuts Japanese differently.
+ * Naming that would take probing the breaker on a known phrase; until it does,
+ * `intl` means "there is one", not "it knows Japanese".
  */
 function currentTokenizerId(): string {
   return `jieba=${getJieba() ? "on" : "off"},words=${WORD_SEGMENTER ? "intl" : "regex"}`;
@@ -573,13 +578,6 @@ const HANGUL_CHAR = /[\uAC00-\uD7AF]/u;
  */
 const HAN_CHAR = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
 
-/**
- * Build the FTS5 MATCH expression for a user query.
- *
- * Tokens are OR-ed, and long enough non-CJK tokens match by prefix so that an
- * inflected form in the corpus is still found. A word nobody wrote still
- * matches nothing: a prefix is a prefix, not a scatter of letters.
- */
 /** Long enough to be a stem rather than a fragment, in this token's script. */
 function prefersPrefix(token: string): boolean {
   if (HAN_CHAR.test(token)) return false;
@@ -589,6 +587,15 @@ function prefersPrefix(token: string): boolean {
   return token.length >= floor;
 }
 
+/**
+ * Build the FTS5 MATCH expression for a user query.
+ *
+ * Tokens are OR-ed, and long enough non-CJK tokens match by prefix so that an
+ * inflected form in the corpus is still found. A word nobody wrote still
+ * matches nothing: a prefix is a prefix, not a scatter of letters.
+ *
+ * @returns the MATCH expression, or null when the text holds no word at all.
+ */
 export function buildFtsQuery(raw: string): string | null {
   // Deduplicate — cutForSearch produces sub-words that repeat.
   const tokens = [...new Set(segmentForFts(raw))];
@@ -604,30 +611,18 @@ export function buildFtsQuery(raw: string): string | null {
 /**
  * Tokenize text for FTS5 indexing (write-side).
  *
- * Uses jieba `cutForSearch()` (search-engine mode) to segment Chinese text,
- * then joins tokens with spaces. The resulting string is stored in the FTS5
- * `content` column so that `unicode61` tokenizer can split it into meaningful
- * words — including both full words and their sub-words.
+ * The SAME segmentation the query side uses (`segmentForFts`), joined with
+ * spaces for FTS5's `unicode61` tokenizer to split on — so every token the
+ * index holds is a token a query can ask for. There is no fallback to raw
+ * text: skipping segmentation when jieba is missing left the index holding
+ * whole runs while queries asked for pieces of them, and the search answered
+ * nothing without saying so.
  *
- * Using `cutForSearch` (instead of `cut`) ensures that the index contains
- * the same sub-word tokens that `buildFtsQuery()` produces on the query side.
- * For example, "人工智能" is indexed as "人工 智能 人工智能", so queries for
- * either the full term or sub-words will match.
- *
- * Falls back to the original text if jieba is unavailable.
- *
- * Example (with jieba):
- *   "用户五月去日本旅行" → "用户 五月 去 日本 旅行"
- *   "人工智能的分支"     → "人工 智能 人工智能 的 分支"
- * Example (fallback):
- *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
+ * Example: "人工智能的分支" → "人工 智能 人工智能 分支" (jieba's sub-words,
+ * with the stop word dropped); "日本語のテキスト" → "日本語 テキスト" (the
+ * word breaker's, because the run carries kana).
  */
 export function tokenizeForFts(raw: string): string {
-  // ALWAYS the same segmentation as the query side (`segmentForFts`), so a
-  // token the query asks for is a token the index holds. Skipping it when
-  // jieba is missing used to leave the index holding raw runs while the query
-  // asked for pieces of them — a search that answers nothing, silently.
-  // Joined with spaces for the `unicode61` tokenizer to split on.
   return segmentForFts(raw).join(" ");
 }
 
@@ -1855,6 +1850,19 @@ export class VectorStore implements IMemoryStore {
             )
             .run(cutoffIso);
         }
+        // Same as L0: the index keeps its own copy of the content. A JOIN on
+        // l1_records hides the orphan from THIS query, but the deleted text
+        // stays in the index file and any other reader still finds it.
+        if (this.ftsAvailable) {
+          this.db
+            .prepare(
+              `DELETE FROM l1_fts WHERE record_id IN (
+                 SELECT record_id FROM l1_records
+                 WHERE updated_time != '' AND updated_time < ?
+               )`,
+            )
+            .run(cutoffIso);
+        }
         this.db
           .prepare(
             "DELETE FROM l1_records WHERE updated_time != '' AND updated_time < ?",
@@ -2300,8 +2308,10 @@ export class VectorStore implements IMemoryStore {
   /**
    * TTL cleanup by recorded_at (ISO string) for L0 records.
    *
-   * Deletes expired rows from l0_conversations and matching vectors from l0_vec
-   * in a single transaction to guarantee consistency.
+   * Deletes expired rows from l0_conversations with their vectors (l0_vec) and
+   * their index rows (l0_fts) in a single transaction: a record that survives
+   * in the index is still searchable, so leaving one there would mean TTL
+   * deleted the record but not the text.
    */
   deleteL0Expired(cutoffIso: string): number {
     if (this.degraded) {
@@ -2338,6 +2348,19 @@ export class VectorStore implements IMemoryStore {
           this.db
             .prepare(
               "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
+            )
+            .run(cutoffIso);
+        }
+        // The FTS row holds a copy of the message text, so a record deleted
+        // here but left in the index is still findable — search would answer
+        // with text the store no longer has, and TTL would not be a deletion.
+        if (this.ftsAvailable) {
+          this.db
+            .prepare(
+              `DELETE FROM l0_fts WHERE record_id IN (
+                 SELECT record_id FROM l0_conversations
+                 WHERE recorded_at != '' AND recorded_at < ?
+               )`,
             )
             .run(cutoffIso);
         }
@@ -3205,7 +3228,11 @@ export class VectorStore implements IMemoryStore {
         // Already written rows cannot be repaired in place; the FTS tables are
         // derived from l1_records / l0_conversations, so a rebuild costs time
         // and nothing else.
-        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION) {
+        // Not `>=`: an index written by a NEWER build holds text this build
+        // does not cut the same way, and it would go on writing v4 rows into
+        // it while querying v4 — the asymmetry this marker exists to prevent.
+        // Any version but this one is rebuilt, then marked with this one.
+        if (this.readFtsSchemaVersion() === FTS_SCHEMA_VERSION) {
           const written = this.readFtsTokenizer();
           if (written === currentTokenizerId()) return { kind: "current" };
           this.logger?.info(

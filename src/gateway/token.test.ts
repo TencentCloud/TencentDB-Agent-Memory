@@ -8,7 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import { LoopbackTokenManager } from "./token.js";
 
-const quiet = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as never;
+const quiet = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+} as never;
 
 describe("LoopbackTokenManager (P2)", () => {
   let tmp: string;
@@ -45,7 +50,9 @@ describe("LoopbackTokenManager (P2)", () => {
     const again = new LoopbackTokenManager(dataDir, quiet).ensure();
     expect(again).toBe(first);
     // File content matches the in-memory token.
-    expect(fs.readFileSync(path.join(tmp, "tdai-gateway.token"), "utf-8").trim()).toBe(first);
+    expect(
+      fs.readFileSync(path.join(tmp, "tdai-gateway.token"), "utf-8").trim(),
+    ).toBe(first);
   });
 
   it("creates missing parent directories for dataDir", () => {

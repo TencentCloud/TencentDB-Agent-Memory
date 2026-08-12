@@ -495,6 +495,55 @@ describe("repairing an index written by the old segmentation", () => {
     expect(schemaVersion()).toBeUndefined();
   });
 
+  it("rebuilds an index written by a NEWER build instead of stamping over it", () => {
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+    store.close();
+    store = undefined;
+
+    // A newer build's index holds text cut some other way. Accepting it as
+    // "current" left this build querying v4 against v9 content — and stamping
+    // 4 over the marker told every later open there was nothing to repair.
+    const db = new DatabaseSync(dbPath);
+    db.prepare(
+      "INSERT INTO embedding_meta (key, value) VALUES ('fts_schema_version', '9') " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run();
+    db.exec("DELETE FROM l1_fts");
+    db.close();
+
+    store = open();
+    // The rebuild ran (the emptied table is full again) and only then was the
+    // marker written down to this build's version.
+    expect(ftsRowCounts().l1).toBe(1);
+    expect(schemaVersion()).toBe("4");
+    expect(find("памяти")).toEqual(["m1"]);
+  });
+
+  it("takes expired records out of the index, not just out of the store", () => {
+    store = open();
+    const old = {
+      ...l0("c1", "Пользователь спрашивал про отпуск в июле"),
+      recordedAt: "2020-01-01T00:00:00.000Z",
+    };
+    store.upsertL0(old, undefined);
+    store.upsertL0(
+      l0("c2", "Пользователь спрашивал про границу памяти"),
+      undefined,
+    );
+
+    expect(store.deleteL0Expired("2021-01-01T00:00:00.000Z")).toBe(1);
+    // The index keeps its own copy of the text: a purged record left there is
+    // still findable, so TTL would delete the record and not the text.
+    const hits = store
+      .searchL0Fts(buildFtsQuery("отпуск")!, 10)
+      .map((r) => r.record_id);
+    expect(hits).toEqual([]);
+    expect(
+      store.searchL0Fts(buildFtsQuery("памяти")!, 10).map((r) => r.record_id),
+    ).toEqual(["c2"]);
+  });
+
   it("rebuilds once on open, then leaves the index alone", () => {
     store = open();
     store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());

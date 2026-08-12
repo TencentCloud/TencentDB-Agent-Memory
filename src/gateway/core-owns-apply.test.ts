@@ -11,6 +11,7 @@
  * otherwise would be worse than recording it.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { freePort } from "../test-support/free-port.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,7 +52,7 @@ describe("tz-09 Ф8 — core owns apply", () => {
     fs.mkdirSync(path.join(base, "records"), { recursive: true });
     fs.writeFileSync(path.join(base, rel), `${META}\n\noriginal`, "utf-8");
 
-    const port = 29_050 + Math.floor(Math.random() * 300);
+    const port = await freePort();
     baseUrl = `http://127.0.0.1:${port}`;
     gateway = new TdaiGateway({
       data: { baseDir: base },
