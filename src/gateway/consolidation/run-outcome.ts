@@ -70,18 +70,20 @@ export function finalizeRunOutcome(
       timedOut: input.timedOut ?? summary.child?.timedOut,
     });
     const reaction = reactionFor(cls);
+    // The RUN is over either way. `terminalForRun: false` means the ROLE may
+    // try again (P9 §4.2) — and it does, as a NEW Run: execute-run.ts opens
+    // one per dispatch, and the retry budget is counted per role-day from the
+    // checkpoint (dispatcher.ts:94). Nothing ever re-enters this run, so
+    // leaving it `running` left it alive forever: on the live instance 78 of
+    // 86 runs ended up swept as `orphan-run` by a later gateway start, and a
+    // run whose child had already failed still looked in flight on /status.
     updateRun(
       ctx.dataDir,
       input.runId,
       {
         errorClass: cls,
-        state:
-          cls === "partial-apply"
-            ? "needs-reconciliation"
-            : reaction.terminalForRun
-              ? "failed"
-              : "running",
-        finishedAt: reaction.terminalForRun ? nowIso : undefined,
+        state: cls === "partial-apply" ? "needs-reconciliation" : "failed",
+        finishedAt: nowIso,
       },
       nowIso,
       guard,
