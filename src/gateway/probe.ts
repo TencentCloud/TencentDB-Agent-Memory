@@ -49,6 +49,34 @@ export interface ProbeQuery {
    * query. A hit on one of them is leakage, counted and reported per item.
    */
   foreignExpected?: string[];
+  /**
+   * Record ids that ARE the answer (tz-04 C1a/C2). Matching by id is what
+   * makes `precision@k` and `recall@k` mean what they say: a substring can
+   * match several retrieved rows and count one answer twice.
+   */
+  expectedRecordIds?: string[];
+  /** L1 type of the expected record — one axis of the strata (tz-04 C1). */
+  expectedType?: "instruction" | "persona" | "episodic";
+  /** Whether the answer lives in the query's own project or another one. */
+  scopeRelation?: "own" | "foreign";
+  /** Where the query text came from: the store's content or the owner. */
+  origin?: "store-derived" | "owner-task";
+}
+
+/** The six strata of tz-04 C1: type × scope relation. */
+export type StratumKey = `${NonNullable<ProbeQuery["expectedType"]>}/${NonNullable<ProbeQuery["scopeRelation"]>}`;
+
+/** The four metrics tz-04 C2 asks for, at both cut-offs. */
+export interface ProbeMetrics {
+  precisionAt5: number;
+  precisionAt10: number;
+  recallAt5: number;
+  recallAt10: number;
+}
+
+/** One stratum's metrics plus how many pairs stand behind them. */
+export interface ProbeStratum extends ProbeMetrics {
+  queries: number;
 }
 
 export interface ProbeCorpus {
@@ -83,6 +111,10 @@ export interface ProbeItem {
 /** Per-query probe outcome (ranked retrieval with item-level diagnostics). */
 export interface ProbePerQuery {
   id: string;
+  /** Stratum this query belongs to, "" when the entry carries no strata. */
+  stratum: StratumKey | "";
+  /** Metrics for this query alone (tz-04 C2). */
+  metrics: ProbeMetrics;
   /** Project context the query was asked with ("" = none). */
   projectId: string;
   /** Retrieved contents in rank order (up to topK). */
@@ -113,6 +145,17 @@ export interface ProbeResult {
    */
   leakageRate: number | null;
   evaluated: ProbePerQuery[];
+  /** Mean precision@5/@10 and recall@5/@10 over the corpus (tz-04 C2). */
+  metrics: ProbeMetrics;
+  /** The same four metrics per stratum — an aggregate hides a dead multiplier. */
+  strata: Partial<Record<StratumKey, ProbeStratum>>;
+  /**
+   * The scoring this measurement belongs to. A metric without it cannot be
+   * compared with a baseline: the number alone does not say what produced it.
+   */
+  scoringVersion: string;
+  /** When the run happened (ISO 8601). */
+  at: string;
   /** Recall-path notes collected while running the corpus (tz-10 C10.5). */
   diagnostics: RecallDiagnostic[];
   /** Skip/failure explanation (fail-open). */
@@ -141,6 +184,13 @@ function strings(value: unknown): string[] {
     : [];
 }
 
+/** The value when it is one of the allowed literals, else undefined. */
+function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === "string" && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined;
+}
+
 /**
  * Read + parse the probe corpus. Returns null on any failure (missing file,
  * malformed JSON, wrong shape) — the probe then reports `skipped`.
@@ -160,7 +210,17 @@ export function loadProbeCorpus(corpusPath: string): ProbeCorpus | null {
     const queries: ProbeQuery[] = [];
     for (const q of (parsed as { queries: unknown[] }).queries) {
       if (!q || typeof q !== "object") continue;
-      const qq = q as { id?: unknown; query?: unknown; expected?: unknown; projectId?: unknown; foreignExpected?: unknown };
+      const qq = q as {
+        id?: unknown;
+        query?: unknown;
+        expected?: unknown;
+        projectId?: unknown;
+        foreignExpected?: unknown;
+        expectedRecordIds?: unknown;
+        expectedType?: unknown;
+        scopeRelation?: unknown;
+        origin?: unknown;
+      };
       if (typeof qq.id !== "string" || typeof qq.query !== "string" || !qq.query.trim()) continue;
       const expected = strings(qq.expected);
       // A query with no positive answer is dropped: precision has no meaning
@@ -173,6 +233,10 @@ export function loadProbeCorpus(corpusPath: string): ProbeCorpus | null {
         expected,
         projectId: typeof qq.projectId === "string" ? qq.projectId : undefined,
         foreignExpected: strings(qq.foreignExpected),
+        expectedRecordIds: strings(qq.expectedRecordIds),
+        expectedType: oneOf(qq.expectedType, ["instruction", "persona", "episodic"] as const),
+        scopeRelation: oneOf(qq.scopeRelation, ["own", "foreign"] as const),
+        origin: oneOf(qq.origin, ["store-derived", "owner-task"] as const),
       });
     }
     return queries.length > 0 ? { queries } : null;
@@ -184,6 +248,90 @@ export function loadProbeCorpus(corpusPath: string): ProbeCorpus | null {
 // ============================
 // Precision computation (pure)
 // ============================
+
+/**
+ * Hits in the first `k` retrieved items: how many DISTINCT expected record ids
+ * came back. Counting ids (not substring matches) is the whole point of tz-04
+ * C2 — one retrieved row can contain several expected substrings, and one
+ * expected substring can appear in several rows.
+ */
+export function hitsAtK(
+  items: Array<{ memoryId: string }>,
+  expectedRecordIds: string[],
+  k: number,
+): number {
+  const expected = new Set(expectedRecordIds);
+  const seen = new Set<string>();
+  for (const item of items.slice(0, k)) {
+    if (expected.has(item.memoryId)) seen.add(item.memoryId);
+  }
+  return seen.size;
+}
+
+/**
+ * precision@k = hits/k, recall@k = hits/|expected| (tz-04 C2). `k` is the
+ * cut-off, NOT the number of rows actually returned: a short answer list must
+ * not earn a free 1.0. `|expected|` counts distinct ids, so a duplicated id in
+ * the corpus cannot deflate recall.
+ */
+export function metricsFor(
+  items: Array<{ memoryId: string }>,
+  expectedRecordIds: string[],
+): ProbeMetrics {
+  const expectedCount = new Set(expectedRecordIds).size;
+  const at = (k: number): { p: number; r: number } => {
+    const hits = hitsAtK(items, expectedRecordIds, k);
+    return { p: hits / k, r: expectedCount > 0 ? hits / expectedCount : 0 };
+  };
+  const five = at(5);
+  const ten = at(10);
+  return {
+    precisionAt5: five.p,
+    precisionAt10: ten.p,
+    recallAt5: five.r,
+    recallAt10: ten.r,
+  };
+}
+
+/** Mean of each metric over the queries; zero queries → all zeros. */
+export function meanMetrics(all: ProbeMetrics[]): ProbeMetrics {
+  const n = all.length;
+  const mean = (pick: (m: ProbeMetrics) => number): number =>
+    n === 0 ? 0 : all.reduce((sum, m) => sum + pick(m), 0) / n;
+  return {
+    precisionAt5: mean((m) => m.precisionAt5),
+    precisionAt10: mean((m) => m.precisionAt10),
+    recallAt5: mean((m) => m.recallAt5),
+    recallAt10: mean((m) => m.recallAt10),
+  };
+}
+
+/**
+ * A one-line fingerprint of the scoring that produced a measurement. Built from
+ * the ACTUAL config values, never hardcoded: a baseline number is meaningless
+ * without knowing which knobs stood behind it (tz-04 C2).
+ */
+export function scoringVersionOf(cfg: MemoryTdaiConfig): string {
+  const r = cfg.recall;
+  const weights = Object.entries(r.typeWeights ?? {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([type, weight]) => `${type}=${weight}`)
+    .join(",");
+  return [
+    `strategy=${r.strategy ?? "hybrid"}`,
+    `threshold=${r.scoreThreshold ?? 0.2}`,
+    `maxResults=${r.maxResults ?? 5}`,
+    `crossProject=${r.crossProject ?? "hidden"}`,
+    `crossProjectDecay=${r.crossProjectDecay ?? "-"}`,
+    `defaultCrossProjectMultiplier=${r.defaultCrossProjectMultiplier ?? "-"}`,
+    `typeWeights=${weights || "-"}`,
+  ].join(" ");
+}
+
+/** The stratum a corpus entry belongs to, or "" when it is not stratified. */
+export function stratumOf(q: ProbeQuery): StratumKey | "" {
+  return q.expectedType && q.scopeRelation ? `${q.expectedType}/${q.scopeRelation}` : "";
+}
 
 /** Is a retrieved content "the answer" for the expected list? */
 export function isRelevant(retrievedContent: string, expected: string[]): boolean {
@@ -204,13 +352,18 @@ export async function computeProbeResults(
   corpus: ProbeCorpus,
   topK: number,
   search: ProbeSearchFn,
+  meta: { scoringVersion?: string; at?: string } = {},
 ): Promise<ProbeResult> {
+  const scoringVersion = meta.scoringVersion ?? "unknown";
+  const at = meta.at ?? new Date().toISOString();
   const evaluated: ProbePerQuery[] = [];
   const diagnostics: RecallDiagnostic[] = [];
   let totalHits = 0;
   let top1Hits = 0;
   let leakageQueries = 0;
   let leakingQueries = 0;
+  const measured: ProbeMetrics[] = [];
+  const byStratum: Partial<Record<StratumKey, ProbeMetrics[]>> = {};
   const k = topK > 0 ? topK : 3;
 
   for (const q of corpus.queries) {
@@ -241,13 +394,28 @@ export async function computeProbeResults(
       leakageQueries += 1;
       if (foreignHits > 0) leakingQueries += 1;
     }
-    evaluated.push({ id: q.id, projectId, top, hits, items: probeItems, foreignHits });
+    // The id-based metrics only exist for entries carrying `expectedRecordIds`.
+    // A legacy substring-only entry gets zeros here and is excluded from the
+    // aggregate below — otherwise it would silently deflate every number.
+    const expectedIds = q.expectedRecordIds ?? [];
+    const metrics = metricsFor(items, expectedIds);
+    const stratum = stratumOf(q);
+    if (expectedIds.length > 0) {
+      measured.push(metrics);
+      if (stratum) (byStratum[stratum] ??= []).push(metrics);
+    }
+    evaluated.push({ id: q.id, stratum, metrics, projectId, top, hits, items: probeItems, foreignHits });
   }
 
   const queries = corpus.queries.length;
   const leakageRate = leakageQueries > 0 ? leakingQueries / leakageQueries : null;
+  const strata: Partial<Record<StratumKey, ProbeStratum>> = {};
+  for (const [key, all] of Object.entries(byStratum) as Array<[StratumKey, ProbeMetrics[]]>) {
+    strata[key] = { ...meanMetrics(all), queries: all.length };
+  }
+  const metrics = meanMetrics(measured);
   if (queries === 0) {
-    return { status: "skipped", queries: 0, topK: k, precisionAtK: null, top1HitRate: null, leakageRate, evaluated, diagnostics, reason: "empty corpus" };
+    return { status: "skipped", queries: 0, topK: k, precisionAtK: null, top1HitRate: null, leakageRate, evaluated, metrics, strata, scoringVersion, at, diagnostics, reason: "empty corpus" };
   }
 
   return {
@@ -258,6 +426,10 @@ export async function computeProbeResults(
     top1HitRate: top1Hits / queries,
     leakageRate,
     evaluated,
+    metrics,
+    strata,
+    scoringVersion,
+    at,
     diagnostics,
   };
 }
@@ -341,6 +513,10 @@ export async function runRecallProbe(opts: {
       top1HitRate: null,
       leakageRate: null,
       evaluated: [],
+      metrics: meanMetrics([]),
+      strata: {},
+      scoringVersion: scoringVersionOf(cfg),
+      at: new Date().toISOString(),
       diagnostics: [],
       reason: `probe corpus not found or unusable (${corpusPath})`,
     };
@@ -355,6 +531,10 @@ export async function runRecallProbe(opts: {
       top1HitRate: null,
       leakageRate: null,
       evaluated: [],
+      metrics: meanMetrics([]),
+      strata: {},
+      scoringVersion: scoringVersionOf(cfg),
+      at: new Date().toISOString(),
       diagnostics: [],
       reason: "vector store or embedding service unavailable",
     };
@@ -364,5 +544,7 @@ export async function runRecallProbe(opts: {
     opts.search ??
     ((query: string, projectId: string) =>
       searchViaRecall(query, projectId, { dataDir, cfg, logger, vectorStore, embeddingService }));
-  return computeProbeResults(corpus, cfg.probe.topK, search);
+  return computeProbeResults(corpus, cfg.probe.topK, search, {
+    scoringVersion: scoringVersionOf(cfg),
+  });
 }

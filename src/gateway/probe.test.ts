@@ -9,6 +9,8 @@ import path from "node:path";
 import {
   loadProbeCorpus,
   computeProbeResults,
+  hitsAtK,
+  metricsFor,
   isRelevant,
   type ProbeCorpus,
 } from "./probe.js";
@@ -305,6 +307,108 @@ describe("loadProbeCorpus: project fields (tz-10a)", () => {
       expect(corpus.queries[0]!.foreignExpected).toEqual(["y"]);
       expect(corpus.queries[1]!.projectId).toBeUndefined();
       expect(corpus.queries[1]!.foreignExpected).toEqual([]);
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+});
+
+describe("tz-04 C2: precision and recall have their own denominators", () => {
+  const ids = (...list: string[]) => ({ items: list.map((id) => hit(`content ${id}`, { id })) });
+
+  it("counts a repeated id once, and neither metric can exceed 1", () => {
+    expect(hitsAtK([{ memoryId: "a" }, { memoryId: "a" }], ["a"], 5)).toBe(1);
+    const m = metricsFor([{ memoryId: "a" }, { memoryId: "a" }], ["a", "a"]);
+    expect(m.recallAt5).toBe(1);
+    expect(m.precisionAt5).toBe(0.2);
+    for (const value of Object.values(m)) expect(value).toBeLessThanOrEqual(1);
+  });
+
+  it("precision@k divides by k, not by however many rows came back", () => {
+    // One perfect answer out of one returned row is NOT precision 1.0 at k=5.
+    const m = metricsFor([{ memoryId: "a" }], ["a"]);
+    expect(m.precisionAt5).toBeCloseTo(0.2);
+    expect(m.precisionAt10).toBeCloseTo(0.1);
+    expect(m.recallAt5).toBe(1);
+    expect(m.recallAt10).toBe(1);
+  });
+
+  it("recall@k divides by |expected| even when it exceeds k", () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({ memoryId: `r${i}` }));
+    const expected = ["r0", "r1", "r2", "r6", "r7", "r11"];
+    // @5 sees r0..r4 → 3 of 6 expected; @10 sees r0..r9 → 5 of 6 (r11 is out).
+    const m = metricsFor(items, expected);
+    expect(m.recallAt5).toBeCloseTo(0.5);
+    expect(m.recallAt10).toBeCloseTo(5 / 6);
+    expect(m.precisionAt5).toBeCloseTo(0.6);
+  });
+
+  it("aggregates per stratum and skips entries with no expectedRecordIds", async () => {
+    const corpus: ProbeCorpus = {
+      queries: [
+        {
+          id: "own",
+          query: "a",
+          expected: ["content r1"],
+          expectedRecordIds: ["r1"],
+          expectedType: "instruction",
+          scopeRelation: "own",
+        },
+        {
+          id: "foreign",
+          query: "b",
+          expected: ["content r9"],
+          expectedRecordIds: ["r9"],
+          expectedType: "instruction",
+          scopeRelation: "foreign",
+        },
+        // Legacy entry: substring-only, must not drag the aggregate to zero.
+        { id: "legacy", query: "c", expected: ["content r1"] },
+      ],
+    };
+    const r = await computeProbeResults(corpus, 10, async (q) =>
+      q === "b" ? ids("miss") : ids("r1"),
+    );
+    expect(r.strata["instruction/own"]).toEqual({
+      precisionAt5: 0.2,
+      precisionAt10: 0.1,
+      recallAt5: 1,
+      recallAt10: 1,
+      queries: 1,
+    });
+    expect(r.strata["instruction/foreign"]!.recallAt10).toBe(0);
+    expect(r.metrics.recallAt10).toBe(0.5);
+    expect(r.evaluated.find((e) => e.id === "legacy")!.stratum).toBe("");
+    expect(r.scoringVersion).toBe("unknown");
+    expect(Date.parse(r.at)).not.toBeNaN();
+  });
+
+  it("keeps the strata fields through the corpus loader", () => {
+    const file = tempCorpus(
+      JSON.stringify({
+        queries: [
+          {
+            id: "q1",
+            query: "a",
+            expected: ["x"],
+            expectedRecordIds: ["r1", " "],
+            expectedType: "persona",
+            scopeRelation: "foreign",
+            origin: "owner-task",
+          },
+          { id: "q2", query: "b", expected: ["z"], expectedType: "nonsense" },
+        ],
+      }),
+    );
+    try {
+      const corpus = loadProbeCorpus(file)!;
+      expect(corpus.queries[0]).toMatchObject({
+        expectedRecordIds: ["r1"],
+        expectedType: "persona",
+        scopeRelation: "foreign",
+        origin: "owner-task",
+      });
+      expect(corpus.queries[1]!.expectedType).toBeUndefined();
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
