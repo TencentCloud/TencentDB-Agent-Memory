@@ -81,12 +81,6 @@ interface RunRow {
   scratchPath: string;
 }
 
-/**
- * Where the gateway actually writes: `logging.file` in the gateway config
- * wins over the dataDir default, exactly as in dev-logger — a tool that
- * scans the wrong file reports "no lines" and sends the reader guessing
- * again.
- */
 /** dataDir так, как его видит сам gateway. */
 function defaultDataDir(): string {
   try {
@@ -96,6 +90,12 @@ function defaultDataDir(): string {
   }
 }
 
+/**
+ * Where the gateway actually writes: `logging.file` in the gateway config
+ * wins over the dataDir default, exactly as in dev-logger — a tool that
+ * scans the wrong file reports "no lines" and sends the reader guessing
+ * again.
+ */
 function logFileFor(dataDir: string): string {
   try {
     const cfg = loadGatewayConfig();
@@ -241,6 +241,10 @@ function printReport(report: Record<string, unknown>): void {
 function printByRunId(runId: string, args: Args, row: RunRow | null): void {
   console.log("=== ОТЧЁТ");
   const { report, tried } = readReport(runId, row?.logPath ?? "", args.dataDir);
+  // Без строки Run цель может быть коротким префиксом, а тег строится из
+  // ПЕРВЫХ ВОСЬМИ символов — берём полный id из тела отчёта, если он есть.
+  const fullId =
+    row?.runId ?? (typeof report?.runId === "string" ? report.runId : runId);
   if (report !== null) printReport(report);
   else if (tried.length === 0) {
     console.log("  (отчёта нет — прогон не дошёл до записи)");
@@ -248,8 +252,8 @@ function printByRunId(runId: string, args: Args, row: RunRow | null): void {
     console.log(`  (отчёт не читается: ${tried.join(", ")})`);
   }
 
-  console.log(`=== ЛОГ (${runTag(runId)}, последние ${args.tail})`);
-  const lines = readTaggedLines(args.logFile, runId, args.tail);
+  console.log(`=== ЛОГ (${runTag(fullId)}, последние ${args.tail})`);
+  const lines = readTaggedLines(args.logFile, fullId, args.tail);
   if (lines.length === 0) {
     console.log(`  (теговых строк нет; смотрел ${args.logFile}[.1][.2])`);
   } else for (const line of lines) console.log(`  ${line}`);
