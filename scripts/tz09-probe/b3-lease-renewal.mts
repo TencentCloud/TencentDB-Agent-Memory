@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { acquireRoleLock } from "../../src/gateway/consolidation/role-lock.js";
 import { createRun } from "../../src/gateway/control-plane/run-repo.js";
 import { claimRun } from "../../src/gateway/control-plane/lease.js";
@@ -62,9 +63,9 @@ await new Promise((r) => setTimeout(r, TTL * 3));
 clearInterval(beat);
 
 const stolenLock = acquireRoleLock(dataDir, "memory-keeper", { ttlMs: TTL });
-console.log(
-  `после 3×ttl роль-лок у другого процесса: ${stolenLock !== null} ` +
-    `(должно быть false)`,
+must(
+  "живой владелец не потерял роль-лок после 3×ttl",
+  stolenLock === null,
 );
 
 const takeover = claimRun(dataDir, RUN, "someone-else", {
@@ -72,10 +73,12 @@ const takeover = claimRun(dataDir, RUN, "someone-else", {
   ttlMs: TTL,
 });
 console.log(
-  `после 3×ttl лиза Run захвачена: ${takeover.ok} (должно быть false)` +
+  `  захват лизы: ok=${takeover.ok}` +
     (takeover.ok ? ` fence=${takeover.fence}` : ` — ${takeover.reason}`),
 );
+must("живой владелец не потерял лизу Run после 3×ttl", takeover.ok === false);
 
 lock.release();
 stolenLock?.release();
 sbx.cleanup();
+finish();

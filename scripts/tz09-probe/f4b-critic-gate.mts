@@ -5,10 +5,14 @@
  * otherwise perfectly applicable. The spy on applyDiff is what proves the
  * gate: apply must be called zero times in enforce, and once in shadow with
  * the identical inputs.
+ *
+ * FALSIFY=enforce-as-shadow — runs the FIRST attempt in shadow: apply is then
+ * called despite the negative verdict, and the enforce observation goes false.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { runBatch } from "../../src/gateway/consolidation/runner.js";
 import { resolveRoleContract } from "../../src/gateway/consolidation/role-contract.js";
 import { createRun } from "../../src/gateway/control-plane/run-repo.js";
@@ -88,11 +92,14 @@ const keeperContract = resolved.contract;
 
 const CANDIDATE = { rewriteBlock: [] };
 
-async function attempt(mode: "enforce" | "shadow"): Promise<void> {
+async function attempt(
+  mode: "enforce" | "shadow",
+  runId = `run-${mode}`,
+): Promise<number> {
   createRun(
     sbx.dataDir,
     {
-      runId: `run-${mode}`,
+      runId,
       roleId: "keeper",
       contractHash: "h",
       contractJson: "{}",
@@ -156,7 +163,7 @@ async function attempt(mode: "enforce" | "shadow"): Promise<void> {
 
   const res = await runBatch(ctx, {
     reason: "probe",
-    runId: `run-${mode}`,
+    runId,
     role: "keeper",
     contract: keeperContract,
     scratchDir: scratch,
@@ -172,10 +179,20 @@ async function attempt(mode: "enforce" | "shadow"): Promise<void> {
   console.log(
     `${mode}: applyCalls=${applyCalls} status=${res.status ?? "ok"} error=${res.error ?? "-"}`,
   );
+  return applyCalls;
 }
 
-await attempt("enforce");
+const gatedMode =
+  process.env.FALSIFY === "enforce-as-shadow" ? "shadow" : "enforce";
+const gatedCalls = await attempt(gatedMode, "run-gated");
+must("отрицательный вердикт критика не пустил apply", gatedCalls === 0);
+
 fs.rmSync(path.join(scratch, CRITIC_VERDICT_FILE), { force: true });
-await attempt("shadow");
+const shadowCalls = await attempt("shadow");
+must(
+  "контроль: в shadow тот же кандидат доходит до apply",
+  shadowCalls === 1,
+);
 
 sbx.cleanup();
+finish();

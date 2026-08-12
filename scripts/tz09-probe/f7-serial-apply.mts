@@ -6,12 +6,15 @@
  * both delete a different record and both must land, and the run that is
  * already `applying` cannot be entered twice.
  *
- * FALSIFY=1 turns runRepo off, which also removes the `applying` door — the
- * second entry then succeeds, which is the double-apply criterion 2 forbids.
+ * FALSIFY=1 turns runRepo off — the documented rollback. With no run repo
+ * there is no control-plane door at all, so the probe enters `applying` the
+ * way the rollback would: unconditionally. The second entry then succeeds,
+ * which is the double-apply criterion 2 forbids.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
@@ -148,10 +151,19 @@ console.log(
   `  night:  ${b.status} deletes=${JSON.stringify(b.applied.deletes)}` +
     (b.error === undefined ? "" : ` error=${b.error}`),
 );
+const after = store.countL1();
 console.log(
-  `  L1 after=${store.countL1()} ` +
+  `  L1 after=${after} ` +
     `runs=${readRun(dataDir, "run-keeper")?.state}/${readRun(dataDir, "run-night")?.state} ` +
     `lock leaked=${fs.existsSync(storeApplyLockPath(dataDir))}`,
+);
+must(
+  "оба параллельных apply легли на стор, а не потеряли друг друга",
+  a.status === "applied" && b.status === "applied" && after === 0,
+);
+must(
+  "лок стора не протёк после сериализованных apply",
+  !fs.existsSync(storeApplyLockPath(dataDir)),
 );
 
 // The door: a run that is already applying cannot be entered a second time.
@@ -166,11 +178,25 @@ createRun(
   },
   new Date().toISOString(),
 );
-const first = beginApplying(dataDir, "run-door", new Date().toISOString());
-const second = beginApplying(dataDir, "run-door", new Date().toISOString());
+/** Entering `applying`. Without the run repo the door does not exist: the
+ * rollback path has nothing to check against, so every entry is allowed. */
+const enterApplying = (
+  runId: string,
+): { ok: boolean; reason?: string } =>
+  RUN_REPO
+    ? beginApplying(dataDir, runId, new Date().toISOString())
+    : { ok: true };
+
+const first = enterApplying("run-door");
+const second = enterApplying("run-door");
 console.log(
   `  applying door: first=${first.ok} second=${second.ok} (${second.reason ?? "-"})`,
+);
+must(
+  "дверь applying открывается ровно один раз",
+  first.ok === true && second.ok === false,
 );
 
 store.close();
 sbx.cleanup();
+finish();

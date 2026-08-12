@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import {
@@ -128,6 +129,7 @@ const executor = new ApplyExecutor({
 });
 
 let thrown = "-";
+let applied = false;
 try {
   const res = await executor.apply(
     {
@@ -138,28 +140,41 @@ try {
     { runId: RUN, gateMode: "enforce" },
   );
   thrown = `${res.status}: ${res.error ?? "-"}`;
+  applied = res.status === "applied";
 } catch (err) {
   thrown = err instanceof Error ? err.message : String(err);
 }
 console.log(`FALSIFY=${process.env.FALSIFY ?? "(нет)"}`);
-console.log(`apply оборвался на второй операции — ${thrown}`);
+console.log(`  исход apply: ${thrown}`);
+must("apply оборвался на второй операции, а не отчитался успехом", !applied);
 
 const rows = listOps(dataDir, RUN).filter(
   (op) => !OLD_VIEW || op.state !== "planned",
 );
 console.log(
-  `в журнале операций: ${rows.length} из 3 — ` +
+  `  журнал: ${rows.length} из 3 — ` +
     JSON.stringify(rows.map((o) => `${o.opIndex}:${o.targetKey}/${o.state}`)),
 );
-console.log(
-  `третья операция (b_3) видна в журнале: ${rows.some((o) => o.targetKey === "b_3")}`,
+must("журнал держит весь план: 3 операции из 3", rows.length === 3);
+must(
+  "третья операция (b_3), которая не начиналась, видна в журнале",
+  rows.some((o) => o.targetKey === "b_3"),
 );
 
 const report = reconcileRun(dataDir, RUN, now());
 console.log(
-  `reconcile: verified=${report.verified}/${report.total} ` +
+  `  reconcile: verified=${report.verified}/${report.total} ` +
     `не начаты=${JSON.stringify(report.notAttempted)} resolved=${report.resolved}`,
+);
+must(
+  "reconcile отличает «не начата» от «не было в кандидате»: b_3 в notAttempted",
+  report.notAttempted.includes("b_3"),
+);
+must(
+  "reconcile подтвердил ровно применённую операцию",
+  report.verified === 1 && report.total === 1,
 );
 
 store.close();
 sbx.cleanup();
+finish();

@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { createRun } from "../../src/gateway/control-plane/run-repo.js";
 import { claimRun } from "../../src/gateway/control-plane/lease.js";
 import { runOwnerId } from "../../src/gateway/control-plane/owner.js";
@@ -48,7 +49,7 @@ const race = ["owner-a", "owner-b"].map((owner) =>
 const lines = race.map((r) => r.stdout.trim().split("\n").pop() ?? "");
 for (const l of lines) console.log(l);
 const winners = lines.filter((l) => l.includes("ok=true"));
-console.log(`winners=${winners.length} (must be 1)`);
+must("лизу получил ровно один из двух процессов", winners.length === 1);
 
 const ctx = {
   dataDir: sbx.dataDir,
@@ -94,10 +95,11 @@ if (process.env.FALSIFY !== "1") {
 
 // 4. Ingestion of the OLD artefact — the exact call preApply makes.
 const verdict = rejectStaleArtifact(ctx, RUN, scratch);
-console.log(
-  process.env.FALSIFY === "1"
-    ? `FALSIFY: no takeover -> ingestion=${verdict === null ? "ACCEPTED" : verdict}`
-    : `ingestion=${verdict === null ? "ACCEPTED" : verdict}`,
+console.log(`  ingestion=${verdict === null ? "ACCEPTED" : verdict}`);
+must(
+  "после захвата артефакт прежнего владельца отвергнут по fence",
+  verdict !== null,
 );
 
 sbx.cleanup();
+finish();

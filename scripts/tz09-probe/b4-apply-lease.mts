@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import {
@@ -184,11 +185,9 @@ const okStolen = await applyOnce(
   "lease_b",
   "otherhost:999999",
 );
-console.log(`A. своя лиза — apply прошёл: ${okOwned} (должно быть true)`);
-console.log(
-  `B. лиза перехвачена — стор изменён: ${okStolen} ` +
-    `(в enforce должно быть false, в shadow — true)`,
-);
+must("A. со своей лизой apply прошёл", okOwned);
+must("B. с перехваченной лизой стор не изменён", okStolen === false);
 
 store.close();
 sbx.cleanup();
+finish();

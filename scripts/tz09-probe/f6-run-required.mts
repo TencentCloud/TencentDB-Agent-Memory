@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
@@ -138,20 +139,26 @@ approve("run-blocks-only", "m_3");
 approve("run-may-delete", "m_4");
 
 console.log(`runRepo=${RUN_REPO}`);
-for (const [label, id, run] of [
-  ["no runId", "m_1", undefined],
-  ["cancelled run", "m_2", { runId: "run-cancelled" }],
+for (const [label, id, run, wantApplied] of [
+  ["без runId apply отклонён, стор не тронут", "m_1", undefined, false],
   [
-    "policy from snapshot (caller claims deleteL1)",
+    "apply по отменённому Run отклонён, стор не тронут",
+    "m_2",
+    { runId: "run-cancelled" },
+    false,
+  ],
+  [
+    "политика берётся из пиннутого контракта, а не от вызывающего",
     "m_3",
     {
       runId: "run-blocks-only",
       opsSubset: new Set(["deleteL1"] as const),
       gateMode: "enforce" as const,
     },
+    false,
   ],
   [
-    "control: snapshot allows deleteL1",
+    "контроль: контракт разрешает deleteL1 — apply проходит",
     "m_4",
     {
       runId: "run-may-delete",
@@ -159,15 +166,24 @@ for (const [label, id, run] of [
       opsSubset: new Set(["deleteL1"] as const),
       gateMode: "enforce" as const,
     },
+    true,
   ],
 ] as const) {
   const before = store.countL1();
   const res = await executor.apply(deleteBody(id), run as never);
+  const after = store.countL1();
   console.log(
-    `  ${label}: status=${res.status} L1 ${before}→${store.countL1()}` +
+    `  status=${res.status} L1 ${before}→${after}` +
       (res.error === undefined ? "" : ` error=${res.error}`),
+  );
+  must(
+    label,
+    wantApplied
+      ? res.status === "applied" && after === before - 1
+      : res.status === "aborted" && after === before,
   );
 }
 
 store.close();
 sbx.cleanup();
+finish();

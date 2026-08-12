@@ -6,11 +6,15 @@
  * The role policy comes from the contract, not from the payload.
  *
  * Falsification is built in: the shadow half IS the falsification — remove
- * the gate and enforce behaves exactly like it.
+ * the gate and enforce behaves exactly like it. FALSIFY=shadow-as-enforce
+ * runs the FIRST half in shadow too, so the refusal disappears and both legs
+ * of the enforce observation go false — the refusal comes from the gate mode
+ * and from nothing else.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import type { ApplyOp, RunContext } from "../../src/gateway/apply-executor.js";
@@ -86,13 +90,29 @@ const policy = (gateMode: RunContext["gateMode"]): RunContext => ({
   gateMode,
 });
 
-console.log(`records before: ${store.countL1()}`);
-const enforced = await executor.apply(candidate, policy("enforce"));
+const before = store.countL1();
+console.log(`records before: ${before}`);
+const firstMode =
+  process.env.FALSIFY === "shadow-as-enforce" ? "shadow" : "enforce";
+const enforced = await executor.apply(candidate, policy(firstMode));
+const afterEnforce = store.countL1();
 console.log(
-  `enforce -> status=${enforced.status} error=${enforced.error} records=${store.countL1()}`,
+  `${firstMode} -> status=${enforced.status} error=${enforced.error} records=${afterEnforce}`,
 );
+must(
+  "операция вне ops_subset отклонена гейтом",
+  enforced.status === "aborted",
+);
+must("отказ случился ДО мутации: счётчик записей не сдвинулся", afterEnforce === before);
+
 const shadowed = await executor.apply(candidate, policy("shadow"));
-console.log(`shadow  -> status=${shadowed.status} records=${store.countL1()}`);
+const afterShadow = store.countL1();
+console.log(`shadow  -> status=${shadowed.status} records=${afterShadow}`);
+must(
+  "контроль: в shadow та же операция проходит, значит сцена реальна",
+  afterShadow < before,
+);
 
 store.close();
 fs.rmSync(sbx.home, { recursive: true, force: true });
+finish();

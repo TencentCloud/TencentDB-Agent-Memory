@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { TdaiGateway } from "../../src/gateway/server.js";
 import { listRecentRuns } from "../../src/gateway/control-plane/run-repo.js";
 
@@ -52,27 +53,33 @@ const res = await fetch(`http://127.0.0.1:${PORT}/memory/run`, {
   body: "{}",
 });
 console.log(`POST /memory/run -> ${res.status}`);
+must("ручной запуск роли принят", res.status === 200 || res.status === 202);
 
-if (process.env.FALSIFY === "1") {
-  const early = listRecentRuns(sbx.dataDir)[0];
-  console.log(
-    `FALSIFY: read before the run ends -> state=${early?.state} errorClass=${early?.errorClass}`,
-  );
-} else {
+// FALSIFY=1 — прочитать строку СРАЗУ, не дожидаясь конца прогона: класса
+// ещё нет, значит он приходит от финализации, а не от дефолтов строки.
+let row = listRecentRuns(sbx.dataDir)[0];
+if (process.env.FALSIFY !== "1") {
   const deadline = Date.now() + 60_000;
-  let row = listRecentRuns(sbx.dataDir)[0];
   while (Date.now() < deadline && (row?.errorClass ?? null) === null) {
     await new Promise((r) => setTimeout(r, 500));
     row = listRecentRuns(sbx.dataDir)[0];
   }
-  console.log(
-    `run row -> state=${row?.state} errorClass=${row?.errorClass} finishedAt=${row?.finishedAt}`,
-  );
-  const status = (await (
-    await fetch(`http://127.0.0.1:${PORT}/status`)
-  ).json()) as { runs: Array<Record<string, unknown>> };
-  console.log(`GET /status runs[0] -> ${JSON.stringify(status.runs[0])}`);
 }
+console.log(
+  `run row -> state=${row?.state} errorClass=${row?.errorClass} finishedAt=${row?.finishedAt}`,
+);
+must("прогон записан в control-plane", row !== undefined);
+must("класс отказа лёг на строку Run", (row?.errorClass ?? null) !== null);
+
+const status = (await (
+  await fetch(`http://127.0.0.1:${PORT}/status`)
+).json()) as { runs: Array<Record<string, unknown>> };
+console.log(`GET /status runs[0] -> ${JSON.stringify(status.runs[0])}`);
+must(
+  "класс отказа виден снаружи, в GET /status",
+  status.runs[0]?.errorClass === (row?.errorClass ?? null),
+);
 
 await gateway.stop();
 sbx.cleanup();
+finish();

@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import { listOps } from "../../src/gateway/control-plane/oplog.js";
@@ -124,8 +125,18 @@ console.log(
   `apply: status=${res.status} partial=${res.partial} ` +
     `merged=${JSON.stringify(res.applied.merges)} L1 ${before}→${store.countL1()}`,
 );
+must(
+  "apply частичный: merge лёг, delete оборвался",
+  res.partial === true && res.applied.merges.length === 1,
+);
 
 const ops = listOps(dataDir, RUN_ID);
+must(
+  "частичный apply оставил журнал: обе операции с состояниями",
+  ops.length === 2 &&
+    ops[0]?.state === "applied" &&
+    ops[1]?.state === "planned",
+);
 console.log(
   `oplog rows: ${ops.length}` +
     ops
@@ -140,7 +151,14 @@ console.log(
       report.unresolved.map((u) => `${u.opIndex}:${u.detail}`),
     )}`,
 );
-console.log(`run state: ${readRun(dataDir, RUN_ID)?.state}`);
+must(
+  "reconcile читает стор и подтверждает применённую операцию",
+  report.total === 1 && report.verified === 1 && report.unresolved.length === 0,
+);
+const state = readRun(dataDir, RUN_ID)?.state;
+console.log(`run state: ${state}`);
+must("Run после reconcile не остался в applying", state !== "applying");
 
 store.close();
 sbx.cleanup();
+finish();

@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { TdaiGateway } from "../../src/gateway/server.js";
 import { parseConfig } from "../../src/config.js";
 import { VectorStore } from "../../src/core/store/sqlite.js";
@@ -138,17 +139,23 @@ const res = await fetch(`${baseUrl}/memory/apply`, {
 const body = (await res.json()) as { status?: string; error?: string };
 await gateway.stop();
 
+const after = countL1();
+const ops = listOps(dataDir, "run-http");
 console.log(`applyGateMode=${MODE}`);
 console.log(
   `  POST /memory/apply -> ${res.status} status=${body.status} ` +
-    `L1 ${before}→${countL1()}${body.error === undefined ? "" : ` error=${body.error}`}`,
+    `L1 ${before}→${after}${body.error === undefined ? "" : ` error=${body.error}`}`,
 );
 console.log(
   `  oplog rows for run-http: ${JSON.stringify(
-    listOps(dataDir, "run-http").map(
-      (o) => `${o.opIndex}:${o.opType}/${o.state}`,
-    ),
+    ops.map((o) => `${o.opIndex}:${o.opType}/${o.state}`),
   )}`,
 );
+must(
+  "HTTP-путь несёт режим гейта: enforce отказал и стор не тронут",
+  body.status === "aborted" && after === before,
+);
+must("отказ случился до журнала: ни одной операции", ops.length === 0);
 
 sbx.cleanup();
+finish();

@@ -19,6 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeSandbox } from "./sandbox.mts";
+import { must, finish } from "../tz07-probe/assert.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { ApplyExecutor } from "../../src/gateway/apply-executor.js";
 import {
@@ -161,21 +162,18 @@ const swapped = await executor.apply(bodyFor(swappedDiff), {
 });
 const afterSwap = contentOf("m_1");
 console.log(`режим гейта: ${MODE}`);
-console.log(`подменённый диф отвергнут: ${swapped.status === "aborted"}`);
 console.log(`  причина: ${swapped.error ?? "(нет)"}`);
-console.log(
-  `  содержимое в сторе не подменено: ${afterSwap !== "SWAPPED"} ` +
-    `(${afterSwap ?? "?"})`,
-);
+console.log(`  содержимое в сторе: ${afterSwap ?? "?"}`);
+must("подменённый диф отвергнут", swapped.status === "aborted");
+must("содержимое в сторе не подменено", afterSwap !== "SWAPPED");
 
 // Control: the approved bytes go through.
 const good = await executor.apply(bodyFor(approvedDiff), {
   runId: "run-1",
   gateMode: MODE,
 });
-console.log(
-  `одобренный кандидат применён: ${good.status === "applied"} (${good.status})`,
-);
+console.log(`  статус применения одобренного: ${good.status}`);
+must("одобренный кандидат применён", good.status === "applied");
 
 // ── #2: takeover, then the child deletes its passport.
 seedRun("run-2");
@@ -201,8 +199,9 @@ fs.writeFileSync(
   }),
   "utf-8",
 );
-console.log(
-  `до захвата артефакт принят: ${rejectStaleArtifact(ctx, "run-2", scratch) === null}`,
+must(
+  "до захвата артефакт принят",
+  rejectStaleArtifact(ctx, "run-2", scratch) === null,
 );
 claimRun(dataDir, "run-2", "someone-else", {
   nowMs: Date.now() + 120_000,
@@ -218,10 +217,8 @@ const fenceErr =
   FALSIFY === "passport-only"
     ? oldReject(scratch)
     : rejectStaleArtifact(ctx, "run-2", scratch);
-console.log(
-  `после захвата и удаления паспорта артефакт отвергнут: ${fenceErr !== null}`,
-);
 console.log(`  причина: ${fenceErr ?? "(принят)"}`);
+must("после захвата и удаления паспорта артефакт отвергнут", fenceErr !== null);
 
 // ── #3: a write from the owner that lost the lease.
 const stale = updateRun(
@@ -231,11 +228,12 @@ const stale = updateRun(
   now(),
   { owner: runOwnerId(process.pid) },
 );
-console.log(`запись состояния потерявшим лизу отвергнута: ${stale === false}`);
+must("запись состояния потерявшим лизу отвергнута", stale === false);
 const winner = updateRun(dataDir, "run-2", { state: "failed" }, now(), {
   owner: "someone-else",
 });
-console.log(`запись действующим владельцем прошла: ${winner === true}`);
+must("запись действующим владельцем прошла", winner === true);
 
 store.close();
 sbx.cleanup();
+finish();
