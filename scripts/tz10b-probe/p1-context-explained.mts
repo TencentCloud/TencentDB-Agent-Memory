@@ -116,11 +116,7 @@ let segments: ContextSegment[] = envelope.segments.filter(
 if (FALSIFY === "orphan-fragment") {
   const orphaned = assembleContext({
     items: envelope.included,
-    policy: {
-      precedence: DEFAULT_PRECEDENCE,
-      reservedForUser: 0,
-      dedup: "exact",
-    },
+    policy: { precedence: DEFAULT_PRECEDENCE, dedup: "exact" },
     budget: { total: cfg.recall.contextBudgetTokens, reservedForUser: 0 },
     tokenizer: createCharTokenizer(),
     render: (included: MemoryItem[]): ContextSegment[] => [

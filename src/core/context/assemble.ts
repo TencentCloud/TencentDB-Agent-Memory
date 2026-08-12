@@ -8,9 +8,9 @@
  * order always produce the same envelope (tz-10 acceptance 3 and 6).
  */
 
-import type { RecallDiagnostic } from "../hooks/auto-recall/types.js";
 import { estimateTokens } from "./tokenizer.js";
 import type {
+  RecallDiagnostic,
   ContextAssemblerPolicy,
   ContextEnvelope,
   ContextRenderer,
@@ -54,10 +54,15 @@ function compareItems(
     const index = precedence.indexOf(item.kind);
     return index === -1 ? precedence.length : index;
   };
+  // Content is the last tie-break, not the input position: a store that
+  // exposes no record id (tcvdb returns "") would otherwise leave two items
+  // ordered by however they arrived, and permutations would render different
+  // text under equal ids.
   return (
     rank(a) - rank(b) ||
     b.score.final - a.score.final ||
-    a.memoryId.localeCompare(b.memoryId)
+    a.memoryId.localeCompare(b.memoryId) ||
+    a.content.localeCompare(b.content)
   );
 }
 

@@ -100,11 +100,7 @@ const render = (included: MemoryItem[]): ContextSegment[] =>
 
 const envelope = assembleContext({
   items,
-  policy: {
-    precedence: DEFAULT_PRECEDENCE,
-    reservedForUser: 0,
-    dedup: "exact",
-  },
+  policy: { precedence: DEFAULT_PRECEDENCE, dedup: "exact" },
   budget: { total: 4000, reservedForUser: 0 },
   tokenizer,
   render,

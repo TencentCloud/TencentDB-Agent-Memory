@@ -20,7 +20,6 @@ const tokenizer = createCharTokenizer();
 
 const policy: ContextAssemblerPolicy = {
   precedence: DEFAULT_PRECEDENCE,
-  reservedForUser: 0,
   dedup: "exact",
 };
 

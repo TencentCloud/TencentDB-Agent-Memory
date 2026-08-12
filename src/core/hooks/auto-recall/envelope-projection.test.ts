@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { performAutoRecall } from "./recall.js";
 import { parseConfig } from "../../../config.js";
+import type { IMemoryStore, L1FtsResult } from "../../store/types.js";
 
 async function recallIn(dir: string, budgetTokens?: number) {
   return performAutoRecall({
@@ -39,7 +40,61 @@ function sandboxWithPersona(): string {
   return dir;
 }
 
+/** A store whose rows carry no record id — what TCVDB returns (tcvdb.ts:1509). */
+function storeWithoutRecordIds(contents: string[]): IMemoryStore {
+  const rows: L1FtsResult[] = contents.map((content) => ({
+    record_id: "",
+    content,
+    type: "instruction",
+    priority: 50,
+    scene_name: "s",
+    score: 0.9,
+    timestamp_str: "",
+    timestamp_start: "",
+    timestamp_end: "",
+    session_key: "cc-test",
+    session_id: "cc-test",
+    metadata_json: "{}",
+    project_id: "",
+    scope: "global",
+  }));
+  return {
+    isFtsAvailable: () => true,
+    searchL1Fts: async () => rows,
+  } as unknown as IMemoryStore;
+}
+
 describe("recall shell: text projects the envelope", () => {
+  it("keeps two id-less memories apart instead of collapsing them into one line", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tz10b-noid-"));
+    try {
+      const result = await performAutoRecall({
+        userText: "деплой",
+        actorId: "u",
+        sessionKey: "cc-test",
+        cfg: parseConfig({ recall: { strategy: "keyword" } }),
+        pluginDataDir: dir,
+        vectorStore: storeWithoutRecordIds([
+          "деплой идёт через rsync без --delete",
+          "деплой прода только после подтверждения",
+        ]),
+      });
+      const included = result!.envelope!.included.filter(
+        (i) => i.kind === "l1",
+      );
+      expect(included).toHaveLength(2);
+      // Distinct AND non-empty: an empty id is not an identity, and the
+      // envelope promises every included element can be named.
+      expect(new Set(included.map((i) => i.memoryId)).size).toBe(2);
+      expect(included.every((i) => i.memoryId.length > 0)).toBe(true);
+      for (const item of included) {
+        expect(result!.prependContext).toContain(item.content);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("carries persona as an item with a cost, and renders exactly renderedContext", async () => {
     const dir = sandboxWithPersona();
     try {

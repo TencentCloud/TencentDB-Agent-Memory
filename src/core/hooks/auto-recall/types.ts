@@ -3,8 +3,27 @@
  * auto-recall hook. No runtime code beyond the constant declarations.
  */
 
-import type { ContextEnvelope } from "../../context/types.js";
 import type { MemoryRecord } from "../../record/l1-reader.js";
+import type { ContextEnvelope } from "../../context/types.js";
+
+/**
+ * The item/diagnostic contracts live in the context domain — the assembler owns
+ * them, and search is one of their producers. Re-exported here so the recall
+ * path keeps importing them from where it always did, without the two modules
+ * importing each other.
+ */
+import type {
+  RecallDiagnostic,
+  RecallItem,
+} from "../../context/types.js";
+
+export {
+  RECALL_ITEM_SCHEMA_VERSION,
+  type FormatableMemory,
+  type RecallDiagnostic,
+  type RecallDiagnosticStage,
+  type RecallItem,
+} from "../../context/types.js";
 import type { L1SearchResult } from "../../store/types.js";
 
 export const TAG = "[memory-tdai] [recall]";
@@ -38,75 +57,6 @@ export interface RecalledMemory {
   type: string;
 }
 
-/**
- * Version of the `RecallItem` projection (tz-10 C10.7). Bumped when the shape
- * or the meaning of `provenance.status` changes, so a consumer can tell a
- * pre-tz-05 projection from native scope/provenance data.
- */
-export const RECALL_ITEM_SCHEMA_VERSION = 1;
-
-/**
- * Structured recall element — what the strategies actually found, before it is
- * rendered for the prompt (tz-10 C10.3). The rendered line is a projection of
- * `formatable`, never the other way round: parsing a line back into fields is
- * what lost ids and scores before tz-10a.
- *
- * tz-10b's `MemoryItem` = `RecallItem & { tokenCost: number }` — the budget and
- * the tokenizer belong to the assembler, not to the search path.
- */
-export interface RecallItem {
-  schemaVersion: typeof RECALL_ITEM_SCHEMA_VERSION;
-  /** Store record id. Empty only when the backend does not expose one. */
-  memoryId: string;
-  kind: "l1";
-  content: string;
-  /** Everything the renderer needs — single source of the injected line. */
-  formatable: FormatableMemory;
-  scope: {
-    /** null until tz-05 gives records a real owner (C10.7). */
-    userId: string | null;
-    /** Project the record is tagged to; "" / undefined = untagged. */
-    projectId?: string;
-    /** 'global' | 'project' | undefined (legacy rows predate scoping). */
-    scope?: string;
-    sessionKey?: string;
-    sessionId?: string;
-  };
-  provenance: {
-    /** L0 messages behind the record; [] until tz-05 (C10.7). */
-    sourceIds: string[];
-    producer: string;
-    createdAt: string;
-    updatedAt: string;
-    /** "unknown" = projected without native provenance (pre-tz-05). */
-    status: "native" | "projected" | "unknown";
-  };
-  /** `raw` = score as the store returned it; `final` = after every multiplier. */
-  score: { raw: number; final: number; reasons: string[] };
-}
-
-/** Where a recall diagnostic came from (tz-10 C10.5). */
-export type RecallDiagnosticStage =
-  | "repo"
-  | "scope"
-  | "strategy"
-  | "tokenize"
-  | "dedup"
-  | "budget"
-  | "render";
-
-/**
- * One machine-readable note about the recall path. A failure that produces a
- * diagnostic is NOT the same as "no memories" — that conflation is exactly what
- * tz-10 C10.5 forbids.
- */
-export interface RecallDiagnostic {
-  stage: RecallDiagnosticStage;
-  code: string;
-  message: string;
-  itemId?: string;
-}
-
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
   prependContext?: string;
@@ -126,19 +76,6 @@ export interface RecallResult {
    * was nothing to assemble.
    */
   envelope?: ContextEnvelope;
-}
-
-/** Single source of truth for a memory that can be formatted for the LLM. */
-export interface FormatableMemory {
-  type: string;
-  content: string;
-  scene_name?: string;
-  /** Activity time range start (段时间 start), may be empty */
-  activity_start_time?: string;
-  /** Activity time range end (段时间 end), may be empty */
-  activity_end_time?: string;
-  /** Activity point-in-time (点时间: when it happened), may be empty */
-  timestamp?: string;
 }
 
 export interface ScoredRecord {
