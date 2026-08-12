@@ -125,6 +125,19 @@ function deltaLine(now: ProbeMetrics, before: ProbeMetrics): string {
   );
 }
 
+/** Short content hash of a file, or null when it cannot be read. */
+function hashOfFile(file: string): string | null {
+  try {
+    return crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(file))
+      .digest("hex")
+      .slice(0, 16);
+  } catch {
+    return null;
+  }
+}
+
 /** Read a previous measurement to compare against; throws when unusable. */
 function loadBaseline(file: string): ProbeResult {
   const parsed = JSON.parse(
@@ -252,8 +265,20 @@ const configuredBaseline = path.isAbsolute(cfg.probe.baselinePath)
   : path.join(dataDir, cfg.probe.baselinePath);
 const baselineFile =
   args.compare || (fs.existsSync(configuredBaseline) ? configuredBaseline : "");
-const baseline = baselineFile ? loadBaseline(baselineFile) : null;
-if (baseline) console.log(`baseline: ${baselineFile}`);
+let baseline: ProbeResult | null = null;
+if (baselineFile) {
+  try {
+    baseline = loadBaseline(baselineFile);
+    console.log(`baseline: ${baselineFile}`);
+  } catch (err) {
+    // An explicit --compare is user intent and must fail loudly; a baseline
+    // picked up from the config is a convenience, and a stale file next to the
+    // corpus must not kill a run nobody asked to compare.
+    const reason = err instanceof Error ? err.message : String(err);
+    if (args.compare) throw err;
+    console.error(`baseline пропущен (${baselineFile}): ${reason}`);
+  }
+}
 
 const result = await runRecallProbe({
   dataDir,
@@ -268,15 +293,14 @@ const corpusFile = path.isAbsolute(cfg.probe.corpusPath)
   : path.join(dataDir, cfg.probe.corpusPath);
 // The corpus itself never leaves the machine (personal memory), so the baseline
 // carries its hash instead: two measurements are only comparable when the
-// questions were the same.
-const corpusHash = crypto
-  .createHash("sha256")
-  .update(fs.readFileSync(corpusFile))
-  .digest("hex")
-  .slice(0, 16);
+// questions were the same. A missing corpus is not an error here — the probe
+// already fail-opened to `skipped`, and the report says so.
+const corpusHash = hashOfFile(corpusFile);
 
 console.log(`стор:     ${dbPath}`);
-console.log(`корпус:   ${corpusFile} (sha256:${corpusHash})`);
+console.log(
+  `корпус:   ${corpusFile}${corpusHash ? ` (sha256:${corpusHash})` : " (не прочитан)"}`,
+);
 printReport(result, baseline);
 
 if (args.out) {
