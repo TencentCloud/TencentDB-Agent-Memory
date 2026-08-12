@@ -6,13 +6,15 @@
  */
 import { type ReactNode, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { isGlobalAdmin } from '@/services';
+import { useAuthStore } from '@/stores/auth';
 import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
 
-/** 资源管理页面守卫：admin 不可见 */
+/** 资源管理页面守卫：全局 admin（system_admin）不可见；team 内 admin 可正常访问 */
 export function ResourceGuard({ children }: { children: ReactNode }) {
-  const role = useCurrentRole();
+  const { auth } = useAuthStore();
   const navigate = useNavigate();
-  const blocked = role === 'admin';
+  const blocked = isGlobalAdmin(auth?.user ?? '', auth?.isAdmin);
 
   useEffect(() => {
     if (blocked) navigate('/', { replace: true });

@@ -9,6 +9,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/stores/auth';
+import { isGlobalAdmin } from '@/services';
 import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
 import { GlobalHeader } from '@/layouts/GlobalHeader';
 import { TabBar } from '@/layouts/TabBar';
@@ -99,12 +100,16 @@ export function ConsoleLayout() {
   );
 
   // ===== 基于 team role 的菜单过滤 =====
-  // admin 可访问所有页面（含资源管理）
-  // 「成员管理」项：reviewer 不可见
+  // 「资产管理」分组：仅全局 admin（system_admin）不可见；team admin 只是组织内的普通管理员，应可查看资源
+  // 「成员管理」项：member / reviewer 不可见
   const menuGroups = useMemo(() => {
+    const globalAdmin = isGlobalAdmin(auth?.user ?? '', auth?.isAdmin);
     const byGroup = new Map<string, typeof PAGE_META[PageId][]>();
 
     for (const meta of Object.values(PAGE_META)) {
+      // 全局 admin → 跳过「资产管理」分组下的项
+      if (globalAdmin && meta.group === '资产管理') continue;
+      // reviewer → 跳过「成员管理」（member 可见，但新建/删除成员/Team 按钮在组件内按角色收敛）
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
       const list = byGroup.get(meta.group) ?? [];
       list.push(meta);
@@ -118,7 +123,7 @@ export function ConsoleLayout() {
         title: g,
         items: byGroup.get(g)!.sort((a, b) => a.order - b.order),
       }));
-  }, [userRole, PAGE_META, t]);
+  }, [userRole, auth, PAGE_META, t]);
 
   const workbenchGroupTitle = t('menu.group.workbench');
   const pinnedGroup = menuGroups.find((g) => g.title === workbenchGroupTitle);
