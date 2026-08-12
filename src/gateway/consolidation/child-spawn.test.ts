@@ -146,11 +146,16 @@ describe("/proc stat parsing (pid-reuse-guard)", () => {
       detached: true,
       stdio: "ignore",
     });
-    // Wait for the marker to be visible in /proc (environ write is atomic on
-    // spawn; a short tick guards against the read racing the exec).
-    await new Promise((r) => setTimeout(r, 300));
-    const before = scanKeeperProcesses();
-    const mine = before.filter((c) => c.runUuid === foreignRun);
+    // Wait for the marker to be visible in /proc. A fixed tick is a race: the
+    // environ is written by exec, and under a loaded suite bash can take well
+    // over 300ms to get there — the scan then sees nothing and the test fails
+    // on a machine that is merely busy. Poll until it appears instead.
+    const deadline = Date.now() + 10_000;
+    let mine = scanKeeperProcesses().filter((c) => c.runUuid === foreignRun);
+    while (mine.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+      mine = scanKeeperProcesses().filter((c) => c.runUuid === foreignRun);
+    }
     expect(mine.length).toBeGreaterThanOrEqual(1);
 
     try {
