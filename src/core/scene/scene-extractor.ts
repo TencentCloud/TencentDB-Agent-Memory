@@ -4,15 +4,16 @@
  * Replaces the keyword-based SceneManager.processNewMemories() with an
  * LLM agent that autonomously reads/writes scene block files using tools.
  *
- * Security: The LLM is sandboxed — workspaceDir is set to scene_blocks/
- * so it can ONLY operate on .md scene files. System files (checkpoint,
- * scene_index, persona.md) are physically invisible to the LLM.
+ * Security: The LLM is sandboxed — workspaceDir is set to
+ * scene_blocks/<project>/ so it can ONLY operate on .md scene files of the
+ * project being extracted. System files (checkpoint, scene_index, persona.md)
+ * and every other project's blocks are physically invisible to the LLM.
  *
  * Flow:
  *   1. Backup + load scene index + build summaries
  *   2. Assemble extraction prompt with memories + scene context
- *   3. Run via CleanContextRunner (tools enabled, sandboxed to scene_blocks/)
- *   4. Cleanup: remove soft-deletes, sync index, update navigation
+ *   3. Run via CleanContextRunner (tools enabled, sandboxed to the project dir)
+ *   4. Cleanup: remove soft-deletes, sync index
  *   5. Parse LLM text output for out-of-band persona update signals
  */
 
@@ -24,8 +25,8 @@ import { CheckpointManager } from "../../utils/checkpoint.js";
 import { BackupManager } from "../../utils/backup.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import type { SceneIndexEntry } from "../scene/scene-index.js";
+import { sceneBlocksDir, projectSlug } from "../scene/scene-paths.js";
 import { parseSceneBlock } from "../scene/scene-format.js";
-import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { normalizeSceneFilenames } from "./filename-normalizer.js";
 import { buildSceneExtractionPrompt } from "../prompts/scene-extraction.js";
 import { report } from "../report/reporter.js";
@@ -43,6 +44,8 @@ export interface ExtractionResult {
 
 export interface SceneExtractorOptions {
   dataDir: string;
+  /** Project whose scenes this extractor owns. Scene blocks never cross projects. */
+  projectId?: string;
   config: unknown;
   model?: string;
   maxScenes?: number;
@@ -84,6 +87,7 @@ export function parsePersonaUpdateSignal(text: string): { reason: string } | nul
 
 export class SceneExtractor {
   private dataDir: string;
+  private projectId: string;
   private runner: LLMRunner;
   private maxScenes: number;
   private sceneBackupCount: number;
@@ -93,6 +97,7 @@ export class SceneExtractor {
 
   constructor(opts: SceneExtractorOptions) {
     this.dataDir = opts.dataDir;
+    this.projectId = opts.projectId ?? "";
     this.maxScenes = opts.maxScenes ?? 15;
     this.sceneBackupCount = opts.sceneBackupCount ?? 10;
     this.timeoutMs = opts.timeoutMs ?? 300_000; // 5 min — LLM may do multiple tool calls
@@ -125,11 +130,11 @@ export class SceneExtractor {
       return { memoriesProcessed: 0, success: true };
     }
 
-    const sceneBlocksDir = path.join(this.dataDir, "scene_blocks");
+    const blocksDir = sceneBlocksDir(this.dataDir, this.projectId);
     const metadataDir = path.join(this.dataDir, ".metadata");
 
     // Ensure directories exist
-    await fs.mkdir(sceneBlocksDir, { recursive: true });
+    await fs.mkdir(blocksDir, { recursive: true });
     await fs.mkdir(metadataDir, { recursive: true });
 
     // Phase 1: Backup
@@ -137,12 +142,14 @@ export class SceneExtractor {
     const cpManager = new CheckpointManager(this.dataDir);
     const cp = await cpManager.read();
     const bm = new BackupManager(path.join(this.dataDir, ".backup"));
-    await bm.backupDirectory(sceneBlocksDir, "scene_blocks", `offset${cp.total_processed}`, this.sceneBackupCount);
+    // Flat name on purpose — the category is a single directory name under .backup/.
+    const backupCategory = `scene_blocks_${projectSlug(this.projectId)}`;
+    await bm.backupDirectory(blocksDir, backupCategory, `offset${cp.total_processed}`, this.sceneBackupCount);
     this.logger?.debug?.(`${TAG} extract() backup phase: ${Date.now() - backupStartMs}ms`);
 
     // Phase 2: Load scene index
     const indexStartMs = Date.now();
-    const index = await readSceneIndex(this.dataDir);
+    const index = await readSceneIndex(this.dataDir, this.projectId);
     this.logger?.debug?.(`${TAG} extract() scene index loaded: ${index.length} entries (${Date.now() - indexStartMs}ms)`);
 
     // Build scene summaries for the prompt (relative filenames only)
@@ -169,7 +176,7 @@ export class SceneExtractor {
     const preExtractContent = new Map<string, string>();
     for (const e of index) {
       try {
-        const raw = await fs.readFile(path.join(sceneBlocksDir, e.filename), "utf-8");
+        const raw = await fs.readFile(path.join(blocksDir, e.filename), "utf-8");
         const block = parseSceneBlock(raw, e.filename);
         preExtractContent.set(e.filename, block.content);
       } catch { /* non-fatal */ }
@@ -211,7 +218,7 @@ export class SceneExtractor {
         taskId: `scene-extract-${Date.now()}`,
         timeoutMs: this.timeoutMs,
         // maxTokens omitted → core uses the resolved model's maxTokens from catalog
-        workspaceDir: sceneBlocksDir,
+        workspaceDir: blocksDir,
       }) ?? "";
       llmDurationMs = Date.now() - runnerStartMs;
       this.logger?.debug?.(`${TAG} extract() LLM runner completed: ${llmDurationMs}ms`);
@@ -224,7 +231,7 @@ export class SceneExtractor {
       // (or a wiped sandbox) don't leak into the next recall cycle.
       // Fail-soft: a restore failure must never mask the original LLM error.
       try {
-        const result = await bm.restoreLatestDirectory("scene_blocks", sceneBlocksDir);
+        const result = await bm.restoreLatestDirectory(backupCategory, blocksDir);
         if (result.restored) {
           this.logger?.warn(`${TAG} extract() restored scene_blocks/ from backup: ${result.from}`);
         } else {
@@ -252,9 +259,9 @@ export class SceneExtractor {
     const cleanupStartMs = Date.now();
     let cleanedCount = 0;
     try {
-      const allFiles = (await fs.readdir(sceneBlocksDir)).filter((f) => f.endsWith(".md"));
+      const allFiles = (await fs.readdir(blocksDir)).filter((f) => f.endsWith(".md"));
       for (const file of allFiles) {
-        const filePath = path.join(sceneBlocksDir, file);
+        const filePath = path.join(blocksDir, file);
         const raw = await fs.readFile(filePath, "utf-8");
         if (raw.trim().length === 0 || raw.trim() === "[DELETED]") {
           // Empty file or [DELETED] marker — soft-delete
@@ -288,7 +295,7 @@ export class SceneExtractor {
     // ever sees canonical filenames. Idempotent and safe to run repeatedly.
     const normStartMs = Date.now();
     try {
-      const normResult = await normalizeSceneFilenames(sceneBlocksDir, this.logger);
+      const normResult = await normalizeSceneFilenames(blocksDir, this.logger);
       if (normResult.renamed > 0) {
         this.logger?.info(
           `${TAG} extract() filename normalization: renamed ${normResult.renamed}, skipped ${normResult.skipped} (${Date.now() - normStartMs}ms)`,
@@ -306,18 +313,14 @@ export class SceneExtractor {
 
     // Phase 6: Sync scene index (rebuilds from remaining non-empty files)
     const syncStartMs = Date.now();
-    await syncSceneIndex(this.dataDir);
+    await syncSceneIndex(this.dataDir, this.projectId);
     this.logger?.debug?.(`${TAG} extract() scene index synced: ${Date.now() - syncStartMs}ms`);
 
-    // Phase 7: Update persona.md navigation (GAP-4 fix)
-    const navStartMs = Date.now();
-    try {
-      await this.updateSceneNavigation();
-      this.logger?.debug?.(`${TAG} extract() persona.md navigation updated: ${Date.now() - navStartMs}ms`);
-    } catch (navErr) {
-      // Non-fatal — log and continue
-      this.logger?.warn(`${TAG} extract() failed to update persona navigation: ${navErr instanceof Error ? navErr.message : String(navErr)}`);
-    }
+    // Phase 7 (removed): scene navigation is no longer baked into persona.md.
+    // persona.md is one global file while scene blocks are per-project, so a
+    // navigation section written here would expose every project's scenes to
+    // every project. Recall builds the navigation from the current project's
+    // index instead (auto-recall.ts).
 
     // Phase 8: Parse LLM output for out-of-band persona update signal
     if (llmOutput) {
@@ -339,7 +342,7 @@ export class SceneExtractor {
       let scenesUpdated = 0;
       let scenesDeleted = 0;
       try {
-        const finalIndex = await readSceneIndex(this.dataDir);
+        const finalIndex = await readSceneIndex(this.dataDir, this.projectId);
         const postFilenames = new Set<string>();
         for (const e of finalIndex) {
           postFilenames.add(e.filename);
@@ -347,7 +350,7 @@ export class SceneExtractor {
           // Read scene block content from disk
           let content = "";
           try {
-            const blockPath = path.join(sceneBlocksDir, e.filename);
+            const blockPath = path.join(blocksDir, e.filename);
             const raw = await fs.readFile(blockPath, "utf-8");
             const block = parseSceneBlock(raw, e.filename);
             content = block.content;
@@ -431,48 +434,6 @@ export class SceneExtractor {
     return { summaries: lines.join("\n"), filenames };
   }
 
-  /**
-   * Update the scene navigation section at the end of persona.md.
-   *
-   * Reads the current scene index, generates the navigation block, then
-   * strips any existing navigation from persona.md and appends the new one.
-   *
-   * IMPORTANT: If the persona body is empty (PersonaGenerator hasn't run yet),
-   * we skip writing to avoid creating a persona.md that only contains the
-   * scene navigation. PersonaGenerator.generate() will write the full
-   * persona + navigation when it runs.
-   */
-  private async updateSceneNavigation(): Promise<void> {
-    const personaPath = path.join(this.dataDir, "persona.md");
-    const index = await readSceneIndex(this.dataDir);
-    const nav = generateSceneNavigation(index);
-
-    let existing = "";
-    try {
-      existing = await fs.readFile(personaPath, "utf-8");
-    } catch {
-      // No persona file yet — PersonaGenerator will create it with navigation.
-      // Don't write a navigation-only file.
-      this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: no persona file yet, waiting for PersonaGenerator`);
-      return;
-    }
-
-    if (!existing.trim() && !nav) return;
-
-    const stripped = stripSceneNavigation(existing).trimEnd();
-
-    // If the persona body is empty (only navigation existed), don't overwrite
-    // with a navigation-only file. Let PersonaGenerator handle full generation.
-    if (!stripped) {
-      this.logger?.debug?.(`${TAG} updateSceneNavigation() skipped: persona body is empty, waiting for PersonaGenerator`);
-      return;
-    }
-
-    const updated = nav ? `${stripped}\n\n${nav}\n` : `${stripped}\n`;
-
-    // persona.md is at dataDir root, no subdir needed
-    await fs.writeFile(personaPath, updated, "utf-8");
-  }
 }
 
 function formatTimestamp(d: Date): string {

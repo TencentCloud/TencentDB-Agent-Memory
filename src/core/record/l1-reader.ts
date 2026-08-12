@@ -84,6 +84,7 @@ function rowToMemoryRecord(row: L1RecordRow): MemoryRecord {
     updatedAt: row.updated_time,
     sessionKey: row.session_key,
     sessionId: row.session_id,
+    projectId: row.project_id ?? "",
   };
 }
 

@@ -9,6 +9,7 @@
 
 import type { DisableThinkingStrategy } from "./utils/no-think-fetch.js";
 import { normalizeDisableThinking } from "./utils/no-think-fetch.js";
+import { z } from "zod";
 
 // ============================
 // Type definitions
@@ -87,12 +88,116 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /** Max characters of L3 persona injected per turn. 0 disables the limit. */
+  maxPersonaChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Per-type relevance multipliers applied AFTER cosine scoring, BEFORE top-K
+   * selection. All 1.0 = feature off (default — current behavior preserved).
+   * Enabled explicitly, e.g. instruction=1.2, persona=1.1, episodic=1.0.
+   * (wave tdai-memory-subagents-2026-08-02, improvement #2)
+   */
+  typeWeights: RecallTypeWeights;
+}
+
+/** Recall type weights (leaf under `memory.recall.typeWeights`). */
+export interface RecallTypeWeights {
+  instruction: number;
+  persona: number;
+  episodic: number;
+}
+
+/**
+ * Consolidation sub-agent settings (`memory.consolidation`).
+ * Orchestrates pi sub-session memory keepers ("пчёлки") for L1 dedup +
+ * scene/persona rewrite. All values are configurable so the operator can
+ * retune without a code change (ТЗ §6).
+ */
+export interface ConsolidationConfig {
+  /** Master switch — when false (default) the inline L1/L2/L3 pipeline runs as today. */
+  enabled: boolean;
+  /** LLM model for the pi sub-session, format "provider/model" (default: opencode-go/deepseek-v4-flash). */
+  model: string;
+  /** Path to the pi binary used to spawn memory-keeper sub-sessions. */
+  piBinary: string;
+  /** Fixed spawn flags (NOT including --model/--thinking/--system-prompt which are appended by the orchestrator). */
+  spawnFlags: string[];
+  /** `--thinking <level>` passed to the pi sub-session (e.g. "low"). */
+  thinking: string;
+  /** Sub-session timeout in milliseconds (default: 600000 = 10 min). */
+  timeoutMs: number;
+  /** Max diff entries embedded into the keeper system prompt (default: 20). */
+  diffCap: number;
+  /** Byte cap for the diff section embedded into the keeper system prompt (default: 8192 = 8 KB). */
+  diffByteCap: number;
+  /** Sub-session kill policy on timeout (default: "group-kill"). */
+  killPolicy: "group-kill" | "sweep" | "systemd-scope";
+  /**
+   * Night-run parameters (`memory.consolidation.night`). The night-run
+   * TRIGGER (schedule/threshold/timezone) lives in `memory.nightRun`;
+   * the run PARAMETERS live here. Split is deliberate — one source per
+   * concern, no diffCap/timeoutMs duplication across sections.
+   */
+  night: NightConsolidationConfig;
+}
+
+/** Night-run run parameters (`memory.consolidation.night`). */
+export interface NightConsolidationConfig {
+  /** Max diff entries per night batch (default: 200 — full-store sweep, not diffCap=5). */
+  diffCap: number;
+  /** Byte cap for a night batch diff section (default: 32768 = 32 KB). */
+  diffByteCap: number;
+  /** Per-batch sub-session timeout (default: 1800000 = 30 min). */
+  timeoutMs: number;
+  /** Records untouched for this many days become cleanup candidates (default: 30). */
+  cleanupPeriodDays: number;
+  /** Max deleteL1+merge-member ops per night run — mechanical gate, not a prompt (default: 50). */
+  deleteCapPerRun: number;
+  /** Max rewriteRecord ops per night run — rewrites are irreversible (default: 100). */
+  rewriteCapPerRun: number;
+  /** Overall night window (all batches, ms) — SerialGate must not be held forever (default: 5400000 = 90 min). */
+  maxRunMs: number;
+}
+
+/** Night-run trigger settings (`memory.nightRun`). */
+export interface NightRunConfig {
+  /** Local time (HH:MM) when the consolidation run is due (default: "06:00"). */
+  schedule: string;
+  /** Trigger a run when >= this many new L0 messages accumulated since the last run (default: 50). */
+  threshold: number;
+  /** Timezone for `schedule`: "system" (default) or an IANA name / UTC offset. */
+  timezone: string;
+}
+
+/** Workspace cleanup settings (`memory.cleanup`). */
+export interface CleanupConfig {
+  /** Enable periodic cleanup of run artifacts (default: true). */
+  enabled: boolean;
+  /** Cleanup interval in hours (default: 24). */
+  intervalHours: number;
+  /**
+   * Directories to clean, relative to dataDir: logs, diffs, reports, backups.
+   * Never records/vectors. Scratch is NOT listed here — since P6 the scratch
+   * root lives OUTSIDE the memory tree (sibling `tdai-memory-keeper/` next to
+   * dataDir, server.ts), per-run subdirs are removed by the orchestrator
+   * itself and stale roots are a P11a cleanup concern.
+   */
+  paths: string[];
+}
+
+/** Recall quality probe settings (`memory.probe`). */
+export interface ProbeConfig {
+  /** Path to the probe corpus JSON (fixed queries with known top-k). Relative paths resolve against dataDir. */
+  corpusPath: string;
+  /** Minimum precision@k the probe must reach (0..1, default: 0.9). */
+  precisionTarget: number;
+  /** Top-k used by the probe (default: 3). */
+  topK: number;
 }
 
 /** Embedding service configuration for vector search. */
@@ -322,6 +427,14 @@ export interface MemoryTdaiConfig {
    */
   llm: StandaloneLLMOverrideConfig;
   offload: OffloadConfig;
+  /** Consolidation sub-agent settings (`memory.consolidation`). Default: disabled. */
+  consolidation: ConsolidationConfig;
+  /** Night-run trigger settings (`memory.nightRun`). */
+  nightRun: NightRunConfig;
+  /** Workspace cleanup settings (`memory.cleanup`). */
+  cleanup: CleanupConfig;
+  /** Recall quality probe settings (`memory.probe`). */
+  probe: ProbeConfig;
 }
 
 // ============================
@@ -332,7 +445,9 @@ export interface MemoryTdaiConfig {
  * Parse plugin config from raw user input.
  * All fields have sensible defaults — minimal config is just {}.
  */
-export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTdaiConfig {
+export function parseConfig(
+  raw: Record<string, unknown> | undefined,
+): MemoryTdaiConfig {
   const c = raw ?? {};
 
   // --- Capture (L0) ---
@@ -340,7 +455,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Retention days validation (from capture.l0l1RetentionDays) ---
   const rawRetentionDays = num(captureGroup, "l0l1RetentionDays") ?? 0;
-  const allowAggressiveCleanup = bool(captureGroup, "allowAggressiveCleanup") ?? false;
+  const allowAggressiveCleanup =
+    bool(captureGroup, "allowAggressiveCleanup") ?? false;
 
   let retentionDays: number | undefined;
   if (rawRetentionDays <= 0) {
@@ -364,6 +480,32 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Recall ---
   const recallGroup = obj(c, "recall");
+
+  // --- New wave sections (tdai-memory-subagents-2026-08-02) ---
+  // Strict zod validation on NEW sections/leafs only: an unknown key inside
+  // `consolidation` / `nightRun` / `cleanup` / `probe` / `recall.typeWeights`
+  // is a fail-loud startup error (ТЗ §6). The parent `memory.recall` block is
+  // deliberately NOT strict — legacy scoreThreshold/maxResults/strategy stay
+  // valid (INVARIANT nogo-recall-knobs).
+  const consolidationGroup = obj(c, "consolidation");
+  const nightRunGroup = obj(c, "nightRun");
+  const cleanupGroup = obj(c, "cleanup");
+  const probeGroup = obj(c, "probe");
+  const typeWeightsGroup = obj(recallGroup, "typeWeights");
+
+  validateStrictSection(
+    "memory.consolidation",
+    consolidationGroup,
+    consolidationSchema,
+  );
+  validateStrictSection("memory.nightRun", nightRunGroup, nightRunSchema);
+  validateStrictSection("memory.cleanup", cleanupGroup, cleanupSchema);
+  validateStrictSection("memory.probe", probeGroup, probeSchema);
+  validateStrictSection(
+    "memory.recall.typeWeights",
+    typeWeightsGroup,
+    typeWeightsSchema,
+  );
 
   // --- Embedding ---
   const embeddingGroup = obj(c, "embedding");
@@ -403,7 +545,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     if (!embeddingBaseUrl) missingFields.push("baseUrl");
     if (!embeddingApiKey) missingFields.push("apiKey");
     if (!embeddingModelRaw) missingFields.push("model");
-    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0) missingFields.push("dimensions");
+    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0)
+      missingFields.push("dimensions");
 
     if (missingFields.length > 0) {
       const errorMsg =
@@ -421,7 +564,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     if (!embeddingApiKey) missingFields.push("apiKey");
     if (!embeddingBaseUrl) missingFields.push("baseUrl");
     if (!embeddingModelRaw) missingFields.push("model");
-    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0) missingFields.push("dimensions");
+    if (embeddingDimensionsRaw == null || embeddingDimensionsRaw <= 0)
+      missingFields.push("dimensions");
 
     if (missingFields.length > 0) {
       // Configuration error: disable embedding and log detailed error
@@ -443,18 +587,19 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   // This avoids creating vec0 tables with a placeholder dimension that would
   // mismatch if the user later enables a different-dimensional provider.
   const defaultDimensions =
-    embeddingProvider === "none" ? 0 :
-    embeddingDimensionsRaw ?? 0;
+    embeddingProvider === "none" ? 0 : (embeddingDimensionsRaw ?? 0);
   const defaultModel = embeddingProvider === "none" ? "" : embeddingModelRaw;
 
-  const cleanTime = normalizeCleanTime(str(captureGroup, "cleanTime")) ?? "03:00";
+  const cleanTime =
+    normalizeCleanTime(str(captureGroup, "cleanTime")) ?? "03:00";
 
   // --- BM25 (local @tencentdb-agent-memory/tcvdb-text encoder) ---
   const bm25Group = obj(c, "bm25");
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend =
+    storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
@@ -479,7 +624,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     mode: offloadMode,
     model: optStr(offloadGroup, "model"),
     temperature: num(offloadGroup, "temperature") ?? 0.2,
-    disableThinking: normalizeDisableThinking(boolOrStr(offloadGroup, "disableThinking")),
+    disableThinking: normalizeDisableThinking(
+      boolOrStr(offloadGroup, "disableThinking"),
+    ),
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
     dataDir: optStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
@@ -487,12 +634,15 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
     l2TimeoutSeconds: num(offloadGroup, "l2TimeoutSeconds") ?? 300,
     mildOffloadRatio: num(offloadGroup, "mildOffloadRatio") ?? 0.5,
-    aggressiveCompressRatio: num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
+    aggressiveCompressRatio:
+      num(offloadGroup, "aggressiveCompressRatio") ?? 0.85,
     mmdMaxTokenRatio: num(offloadGroup, "mmdMaxTokenRatio") ?? 0.2,
     backendUrl: optStr(offloadGroup, "backendUrl"),
     backendApiKey: optStr(offloadGroup, "backendApiKey"),
     backendTimeoutMs: num(offloadGroup, "backendTimeoutMs") ?? 120000,
-    offloadRetentionDays: normalizeOffloadRetentionDays(num(offloadGroup, "offloadRetentionDays") ?? 0),
+    offloadRetentionDays: normalizeOffloadRetentionDays(
+      num(offloadGroup, "offloadRetentionDays") ?? 0,
+    ),
     logMaxSizeMb: num(offloadGroup, "logMaxSizeMb") ?? 50,
     userId: optStr(offloadGroup, "userId"),
   };
@@ -508,7 +658,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     extraction: {
       enabled: bool(extractionGroup, "enabled") ?? true,
       enableDedup: bool(extractionGroup, "enableDedup") ?? true,
-      maxMemoriesPerSession: num(extractionGroup, "maxMemoriesPerSession") ?? 20,
+      maxMemoriesPerSession:
+        num(extractionGroup, "maxMemoriesPerSession") ?? 20,
       model: optStr(extractionGroup, "model"),
     },
     persona: {
@@ -525,16 +676,73 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       l2DelayAfterL1Seconds: num(pipelineGroup, "l2DelayAfterL1Seconds") ?? 10,
       l2MinIntervalSeconds: num(pipelineGroup, "l2MinIntervalSeconds") ?? 900,
       l2MaxIntervalSeconds: num(pipelineGroup, "l2MaxIntervalSeconds") ?? 3600,
-      sessionActiveWindowHours: num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
+      sessionActiveWindowHours:
+        num(pipelineGroup, "sessionActiveWindowHours") ?? 24,
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
       maxResults: num(recallGroup, "maxResults") ?? 5,
-      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
-      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 500,
+      maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 2000,
+      maxPersonaChars: num(recallGroup, "maxPersonaChars") ?? 6000,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      typeWeights: {
+        instruction: num(typeWeightsGroup, "instruction") ?? 1.0,
+        persona: num(typeWeightsGroup, "persona") ?? 1.0,
+        episodic: num(typeWeightsGroup, "episodic") ?? 1.0,
+      },
+    },
+    consolidation: {
+      enabled: bool(consolidationGroup, "enabled") ?? false,
+      model:
+        str(consolidationGroup, "model") ?? "opencode-go/deepseek-v4-flash",
+      piBinary: expandHome(str(consolidationGroup, "piBinary") ?? "pi"),
+      spawnFlags: strArray(consolidationGroup, "spawnFlags") ?? [
+        "-p",
+        "--no-context-files",
+        "--no-session",
+      ],
+      thinking: str(consolidationGroup, "thinking") ?? "low",
+      timeoutMs: num(consolidationGroup, "timeoutMs") ?? 600_000,
+      diffCap: num(consolidationGroup, "diffCap") ?? 20,
+      diffByteCap: num(consolidationGroup, "diffByteCap") ?? 8 * 1024,
+      killPolicy:
+        (str(
+          consolidationGroup,
+          "killPolicy",
+        ) as ConsolidationConfig["killPolicy"]) ?? "group-kill",
+      // Night-run parameters (trigger lives in memory.nightRun; run params here).
+      night: (() => {
+        const nightGroup = obj(consolidationGroup, "night");
+        return {
+          diffCap: num(nightGroup, "diffCap") ?? 200,
+          diffByteCap: num(nightGroup, "diffByteCap") ?? 32 * 1024,
+          timeoutMs: num(nightGroup, "timeoutMs") ?? 1_800_000,
+          cleanupPeriodDays: num(nightGroup, "cleanupPeriodDays") ?? 30,
+          deleteCapPerRun: num(nightGroup, "deleteCapPerRun") ?? 50,
+          rewriteCapPerRun: num(nightGroup, "rewriteCapPerRun") ?? 100,
+          maxRunMs: num(nightGroup, "maxRunMs") ?? 5_400_000,
+        };
+      })(),
+    },
+    nightRun: {
+      schedule: normalizeCleanTime(str(nightRunGroup, "schedule")) ?? "06:00",
+      threshold: num(nightRunGroup, "threshold") ?? 50,
+      timezone: str(nightRunGroup, "timezone") ?? "system",
+    },
+    cleanup: {
+      enabled: bool(cleanupGroup, "enabled") ?? true,
+      intervalHours: num(cleanupGroup, "intervalHours") ?? 24,
+      paths: strArray(cleanupGroup, "paths") ?? ["logs"],
+    },
+    probe: {
+      corpusPath: expandHome(
+        str(probeGroup, "corpusPath") ?? "probe-corpus.json",
+      ),
+      precisionTarget: num(probeGroup, "precisionTarget") ?? 0.9,
+      topK: num(probeGroup, "topK") ?? 3,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -566,7 +774,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
-      language: (str(bm25Group, "language") === "en" ? "en" : "zh") as "zh" | "en",
+      language: (str(bm25Group, "language") === "en" ? "en" : "zh") as
+        "zh" | "en",
     },
     memoryCleanup,
     report: {
@@ -582,7 +791,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
-        disableThinking: normalizeDisableThinking(boolOrStr(llmGroup, "disableThinking")),
+        disableThinking: normalizeDisableThinking(
+          boolOrStr(llmGroup, "disableThinking"),
+        ),
       };
     })(),
     offload,
@@ -596,7 +807,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 /** Get sub-object by key, or empty object if missing. */
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
   const v = c[key];
-  return v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
 }
 
 function str(src: Record<string, unknown>, key: string): string | undefined {
@@ -620,26 +833,41 @@ function bool(src: Record<string, unknown>, key: string): boolean | undefined {
 }
 
 /** Read a field that may be boolean or string. */
-function boolOrStr(src: Record<string, unknown>, key: string): boolean | string | undefined {
+function boolOrStr(
+  src: Record<string, unknown>,
+  key: string,
+): boolean | string | undefined {
   const v = src[key];
   if (typeof v === "boolean") return v;
   if (typeof v === "string" && v.trim()) return v.trim();
   return undefined;
 }
 
-function strArray(src: Record<string, unknown>, key: string): string[] | undefined {
+function strArray(
+  src: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
   const v = src[key];
   if (!Array.isArray(v)) return undefined;
-  return v.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  return v.filter(
+    (item): item is string =>
+      typeof item === "string" && item.trim().length > 0,
+  );
 }
 
-const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_STRATEGIES: RecallConfig["strategy"][] = [
+  "embedding",
+  "keyword",
+  "hybrid",
+];
 
 /**
  * Validate recall strategy against whitelist.
  * Returns the strategy if valid, undefined otherwise (caller falls back to default).
  */
-function validateStrategy(value: string | undefined): RecallConfig["strategy"] | undefined {
+function validateStrategy(
+  value: string | undefined,
+): RecallConfig["strategy"] | undefined {
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
@@ -690,4 +918,97 @@ function normalizeOffloadRetentionDays(value: number): number {
   if (value <= 0) return 0;
   if (value < 3) return 0;
   return value;
+}
+
+// ============================
+// New wave sections — strict zod schemas (fail-loud, ТЗ §6)
+// ============================
+
+/**
+ * Strict zod schemas for the wave sections (tdai-memory-subagents-2026-08-02).
+ * Every key is optional — an absent section yields defaults. An unknown key
+ * inside a section is a fail-loud startup error (z.strictObject).
+ */
+const consolidationSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  model: z.string().min(1).optional(),
+  piBinary: z.string().min(1).optional(),
+  spawnFlags: z.array(z.string()).optional(),
+  thinking: z.string().optional(),
+  timeoutMs: z.number().positive().optional(),
+  diffCap: z.number().int().positive().optional(),
+  diffByteCap: z.number().int().positive().optional(),
+  killPolicy: z.enum(["group-kill", "sweep", "systemd-scope"]).optional(),
+  night: z
+    .strictObject({
+      diffCap: z.number().int().positive().optional(),
+      diffByteCap: z.number().int().positive().optional(),
+      timeoutMs: z.number().positive().optional(),
+      cleanupPeriodDays: z.number().int().positive().optional(),
+      deleteCapPerRun: z.number().int().positive().optional(),
+      rewriteCapPerRun: z.number().int().positive().optional(),
+      maxRunMs: z.number().positive().optional(),
+    })
+    .optional(),
+});
+
+const nightRunSchema = z.strictObject({
+  schedule: z
+    .string()
+    .regex(/^([01]?\d|2[0-3]):[0-5]\d$/)
+    .optional(),
+  threshold: z.number().int().positive().optional(),
+  timezone: z.string().optional(),
+});
+
+const cleanupSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  intervalHours: z.number().positive().optional(),
+  paths: z.array(z.string()).optional(),
+});
+
+const probeSchema = z.strictObject({
+  corpusPath: z.string().optional(),
+  precisionTarget: z.number().min(0).max(1).optional(),
+  topK: z.number().int().positive().optional(),
+});
+
+const typeWeightsSchema = z.strictObject({
+  instruction: z.number().nonnegative().optional(),
+  persona: z.number().nonnegative().optional(),
+  episodic: z.number().nonnegative().optional(),
+});
+
+/**
+ * Validate a new-section config object against its strict schema.
+ * Throws on ANY invalid input (fail-loud) with a readable message listing
+ * the offending key(s). Empty `{}` (absent section) always passes.
+ */
+function validateStrictSection(
+  path: string,
+  value: Record<string, unknown>,
+  schema: z.ZodType,
+): void {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => {
+        if (issue.code === "unrecognized_keys") {
+          const keys =
+            "keys" in issue ? ((issue as { keys?: string[] }).keys ?? []) : [];
+          return `unknown key(s) [${keys.join(", ")}]`;
+        }
+        const at = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+        return `${at}: ${issue.message}`;
+      })
+      .join("; ");
+    throw new Error(`Config validation failed (${path}): ${details}`);
+  }
+}
+
+/** Expand a leading `~/` path to $HOME (used for piBinary / probe.corpusPath). */
+function expandHome(p: string): string {
+  if (!p.startsWith("~/")) return p;
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+  return `${home}${p.slice(1)}`;
 }

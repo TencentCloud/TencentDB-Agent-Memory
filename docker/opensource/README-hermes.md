@@ -89,7 +89,7 @@ docker exec -it hermes-memory hermes
 /opt/data/
 ├── tdai-memory/          # TDAI 记忆数据 (SQLite + 场景文件)
 │   ├── memories.sqlite   # L0/L1 数据
-│   ├── scene_blocks/     # L2 场景文件
+│   ├── scene_blocks/<项目>/  # L2 场景文件（按项目分目录）
 │   ├── persona.md        # L3 用户画像
 │   └── checkpoint.json   # Pipeline 状态
 ├── sessions/             # Hermes 会话记录

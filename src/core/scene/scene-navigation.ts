@@ -7,6 +7,7 @@
 
 import path from "node:path";
 import type { SceneIndexEntry } from "./scene-index.js";
+import { projectSlug, sceneBlocksDir } from "./scene-paths.js";
 
 const NAV_HEADER = "---\n## 🗺️ Scene Navigation (Scene Index)";
 
@@ -34,16 +35,17 @@ function heatEmoji(heat: number): string {
  * @param dataDir - Absolute path to the plugin data directory; when provided,
  *                  scene paths are rendered as absolute paths so the agent can
  *                  call read_file directly without path concatenation.
+ * @param projectId - Project the entries belong to; selects the block subdirectory.
  */
-export function generateSceneNavigation(entries: SceneIndexEntry[], dataDir?: string): string {
+export function generateSceneNavigation(entries: SceneIndexEntry[], dataDir?: string, projectId?: string): string {
   if (entries.length === 0) return "";
 
   const sorted = [...entries].sort((a, b) => b.heat - a.heat);
 
   const blocks = sorted.map((e) => {
     const scenePath = dataDir
-      ? path.join(dataDir, "scene_blocks", e.filename)
-      : `scene_blocks/${e.filename}`;
+      ? path.join(sceneBlocksDir(dataDir, projectId), e.filename)
+      : `scene_blocks/${projectSlug(projectId)}/${e.filename}`;
     const pathLine = `### Path: ${scenePath}`;
     const heatLine = `**热度**: ${e.heat}${heatEmoji(e.heat)}${e.updated ? ` | **更新**: ${e.updated}` : ""}`;
     const summaryLine = `Summary: ${e.summary}`;

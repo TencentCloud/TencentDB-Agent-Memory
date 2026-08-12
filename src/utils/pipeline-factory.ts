@@ -40,6 +40,28 @@ import type { Logger } from "../core/types.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
 
+/**
+ * Emit a warning at most once per distinct message (module-level memo — the
+ * same caching style as the store-init singleton in this module).
+ */
+const warnOnceEmitted = new Set<string>();
+function warnOnce(logger: PipelineLogger, message: string): void {
+  if (warnOnceEmitted.has(message)) return;
+  warnOnceEmitted.add(message);
+  logger.warn(`${TAG} ${message}`);
+}
+
+/**
+ * Single-writer gate (§5.8, P5): when memory.consolidation.enabled, the
+ * inline L2/L3 runners become no-ops — scene/persona writes are owned by the
+ * memory-keeper sub-session via /memory/apply. Seed with consolidation
+ * enabled therefore yields L1-only memory by construction (the no-op runners
+ * never reach scene/persona writers). Default enabled=false = current behaviour.
+ */
+function isConsolidationEnabled(cfg: MemoryTdaiConfig): boolean {
+  return cfg.consolidation?.enabled === true;
+}
+
 function supportsProfileSyncWrite(store?: IMemoryStore): boolean {
   return !!(store?.syncProfiles || store?.deleteProfiles);
 }
@@ -286,7 +308,7 @@ export function createL1Runner(opts: {
     );
 
     try {
-      let groups: Array<{ sessionId: string; messages: ConversationMessage[] }>;
+      let groups: Array<{ sessionId: string; projectId: string; messages: ConversationMessage[] }>;
       let maxRecordedAtMs = 0;
 
       if (vectorStore && !vectorStore.isDegraded()) {
@@ -296,6 +318,7 @@ export function createL1Runner(opts: {
         const dbGroups = await vectorStore.queryL0GroupedBySessionId(sessionKey, l1Cursor);
         groups = dbGroups.map((g) => ({
           sessionId: g.sessionId,
+          projectId: g.projectId ?? "",
           messages: g.messages.map((m) => ({
             id: m.id,
             role: m.role as "user" | "assistant",
@@ -321,6 +344,7 @@ export function createL1Runner(opts: {
         );
         groups = jsonlGroups.map((g) => ({
           sessionId: g.sessionId,
+          projectId: g.projectId ?? "",
           messages: g.messages,
         }));
         // Compute max recordedAtMs from JSONL groups
@@ -354,6 +378,7 @@ export function createL1Runner(opts: {
           messages: group.messages,
           sessionKey,
           sessionId: group.sessionId,
+          projectId: group.projectId,
           baseDir: pluginDataDir,
           config,
           options: {
@@ -434,6 +459,18 @@ export function createL2Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
 }): L2Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
+
+  // P5 single-writer gate: scene extraction is delegated to the memory-keeper
+  // sub-session (memory.consolidation.enabled) — no-op + warnOnce at activation.
+  if (isConsolidationEnabled(cfg)) {
+    warnOnce(
+      logger,
+      "[single-writer-gate] memory.consolidation.enabled=true: inline L2 scene extraction is a no-op " +
+        "(scene writes owned by the memory-keeper via POST /memory/apply)",
+    );
+    return async (_sessionKey: string, cursor?: string) => ({ skipped: true, latestCursor: cursor || undefined });
+  }
+
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
 
   return async (sessionKey: string, cursor?: string) => {
@@ -446,7 +483,7 @@ export function createL2Runner(opts: {
       return;
     }
 
-    let records: Array<{ content: string; created_at: string; id: string; updatedAt: string }>;
+    let records: Array<{ content: string; created_at: string; id: string; updatedAt: string; projectId: string }>;
 
     if (vectorStore?.pullProfiles && !vectorStore.isDegraded()) {
       profileBaseline = await pullProfilesToLocal(pluginDataDir, vectorStore, logger);
@@ -475,6 +512,7 @@ export function createL2Runner(opts: {
         created_at: r.createdAt,
         id: r.id,
         updatedAt: r.updatedAt,
+        projectId: r.projectId ?? "",
       }));
     } else {
       logger.debug?.(`${TAG} [L2] VectorStore unavailable, falling back to JSONL read (session=${sessionKey})`);
@@ -502,25 +540,18 @@ export function createL2Runner(opts: {
         created_at: r.createdAt,
         id: r.id,
         updatedAt: r.updatedAt,
+        projectId: r.projectId ?? "",
       }));
     }
 
-    const extractor = new SceneExtractor({
-      dataDir: pluginDataDir,
-      config: openclawConfig!,
-      model: cfg.persona.model,
-      maxScenes: cfg.persona.maxScenes,
-      sceneBackupCount: cfg.persona.sceneBackupCount,
-      logger,
-      instanceId,
-      llmRunner,
-    });
-
-    const memories = records.map((r) => ({
-      content: r.content,
-      created_at: r.created_at,
-      id: r.id,
-    }));
+    // Scene blocks are per project, so one batch is extracted once per project
+    // it touches — a session that spans projects never merges their scenes.
+    const byProject = new Map<string, typeof records>();
+    for (const r of records) {
+      const bucket = byProject.get(r.projectId);
+      if (bucket) bucket.push(r);
+      else byProject.set(r.projectId, [r]);
+    }
 
     const preCheckpoint = new CheckpointManager(pluginDataDir, logger);
     const preState = await preCheckpoint.read();
@@ -528,7 +559,35 @@ export function createL2Runner(opts: {
     const preMemoriesSince = preState.memories_since_last_persona;
     const preTotalProcessed = preState.total_processed;
 
-    const extractResult = await extractor.extract(memories);
+    let processed = 0;
+    for (const [projectId, projectRecords] of byProject) {
+      const extractor = new SceneExtractor({
+        dataDir: pluginDataDir,
+        projectId,
+        config: openclawConfig!,
+        model: cfg.persona.model,
+        maxScenes: cfg.persona.maxScenes,
+        sceneBackupCount: cfg.persona.sceneBackupCount,
+        logger,
+        instanceId,
+        llmRunner,
+      });
+
+      const memories = projectRecords.map((r) => ({
+        content: r.content,
+        created_at: r.created_at,
+        id: r.id,
+      }));
+
+      const result = await extractor.extract(memories);
+      if (result.success) {
+        processed += result.memoriesProcessed;
+      } else {
+        logger.warn(`${TAG} [L2] Extraction failed for project=${projectId || "(none)"}: ${result.error ?? "unknown"}`);
+      }
+    }
+
+    const extractResult = { success: true, memoriesProcessed: processed };
     if (extractResult.success && extractResult.memoriesProcessed > 0) {
       const checkpoint = new CheckpointManager(pluginDataDir, logger);
       const postState = await checkpoint.read();
@@ -591,6 +650,17 @@ export function createL3Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
 }): L3Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
+
+  // P5 single-writer gate: persona generation is delegated to the memory-keeper
+  // sub-session (memory.consolidation.enabled) — no-op + warnOnce at activation.
+  if (isConsolidationEnabled(cfg)) {
+    warnOnce(
+      logger,
+      "[single-writer-gate] memory.consolidation.enabled=true: inline L3 persona generation is a no-op " +
+        "(persona writes owned by the memory-keeper via POST /memory/apply)",
+    );
+    return async () => undefined;
+  }
 
   return async () => {
     const trigger = new PersonaTrigger({

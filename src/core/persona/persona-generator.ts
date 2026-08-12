@@ -8,8 +8,9 @@ import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
-import { readSceneIndex } from "../scene/scene-index.js";
-import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { readAllSceneIndexes } from "../scene/scene-index.js";
+import { stripSceneNavigation } from "../scene/scene-navigation.js";
+import { sceneBlocksRoot } from "../scene/scene-paths.js";
 import { buildPersonaPrompt } from "../prompts/persona-generation.js";
 import { BackupManager } from "../../utils/backup.js";
 import { escapeXmlTags } from "../../utils/sanitize.js";
@@ -77,8 +78,11 @@ export class PersonaGenerator {
       this.logger?.debug?.(`${TAG} No existing persona file`);
     }
 
-    // 2. Load scene index + identify changed scenes
-    const index = await readSceneIndex(this.dataDir);
+    // 2. Load every project's scene index + identify changed scenes.
+    // The persona describes the user, not a project, so it is the one consumer
+    // that deliberately reads across the per-project scene directories.
+    const projectIndexes = await readAllSceneIndexes(this.dataDir);
+    const index = projectIndexes.flatMap((p) => p.entries.map((e) => ({ ...e, slug: p.slug })));
     const changedScenes = index.filter((e) => {
       if (!cp.last_persona_time) return true;
       const updatedMs = new Date(e.updated).getTime();
@@ -90,11 +94,11 @@ export class PersonaGenerator {
     this.logger?.debug?.(`${TAG} Scene index: ${index.length} total, ${changedScenes.length} changed since last persona`);
 
     // 3. Read changed scene contents (full raw content including META, matching Python reference)
-    const blocksDir = path.join(this.dataDir, "scene_blocks");
+    const blocksRoot = sceneBlocksRoot(this.dataDir);
     const changedSceneContents: string[] = [];
     for (const entry of changedScenes) {
       try {
-        const raw = await fs.readFile(path.join(blocksDir, entry.filename), "utf-8");
+        const raw = await fs.readFile(path.join(blocksRoot, entry.slug, entry.filename), "utf-8");
         changedSceneContents.push(
           `### [${changedSceneContents.length + 1}] ${entry.filename}\n\n\`\`\`markdown\n${raw}\n\`\`\``,
         );
@@ -179,9 +183,10 @@ export class PersonaGenerator {
       return false;
     }
 
-    // 11. Append fresh scene navigation and write final content
-    const nav = generateSceneNavigation(index);
-    const finalContent = nav ? `${personaText}\n\n${nav}\n` : personaText;
+    // 11. Write the persona body only. Scene navigation is per-project and is
+    // built at recall time — baking it into this one global file would show
+    // every project's scenes to every project.
+    const finalContent = personaText;
     await fs.writeFile(personaPath, finalContent, "utf-8");
 
     const elapsedMs = Date.now() - startMs;

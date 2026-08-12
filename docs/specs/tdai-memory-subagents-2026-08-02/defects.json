@@ -1,0 +1,56 @@
+{
+ "defects": [
+  {
+   "id": "D-1",
+   "found_by": "auditor",
+   "packet": "B1",
+   "loc": "tdai-gateway.yaml (untracked)",
+   "rule": "nogo-secrets",
+   "spec_ref": "wave.md INVARIANT nogo-secrets",
+   "severity": "medium",
+   "status": "fixed",
+   "waiver": "",
+   "approved_by": "user (go: 2026-08-02)",
+   "note": "tdai-gateway.yaml добавлен в .gitignore (go/no-go юзера получен), git check-ignore подтверждает."
+  },
+  {
+   "id": "D-2",
+   "found_by": "auditor",
+   "packet": "B1",
+   "loc": "src/gateway/memory-routes.ts (/memory/duplicates)",
+   "rule": "drift-risk",
+   "spec_ref": "B4 packets (P8 l1-dedup)",
+   "severity": "medium",
+   "status": "fixed",
+   "waiver": "",
+   "approved_by": "",
+   "note": "B4-проверка (P8 executor, 2026-08-02): тело sameScope (4 логические строки) побайтово идентично memory-routes.ts:62-70 vs l1-dedup.ts:209-222 (worktree; committed HEAD sameScope НЕ содержит — экспорт из незакоммиченного I3/I4). Различие только в сигнатуре (inline-union \"global\" | \"project\" vs MemoryScope-алиас), export-модификаторе и комментарии — семантика НЕ дрейфует; P8 l1-dedup не трогал (non_goal). Закрыт как семантически-эквивалентный (НЕ байт-эквивалентный на уровне файла)."
+  },
+  {
+   "id": "D-3",
+   "found_by": "auditor",
+   "packet": "B2",
+   "loc": "src/core/prompts/l1-extraction.ts + l1-extractor.ts",
+   "rule": "nogo-l1-prompt",
+   "spec_ref": "wave.md INVARIANT nogo-l1-prompt",
+   "severity": "critical",
+   "status": "fixed",
+   "waiver": "",
+   "approved_by": "",
+   "note": "014808 фикс (判据-line, 2 exclusion, MAX_CONTENT_CHARS=600) ТОЛЬКО в незакоммиченном worktree; committed HEAD pre-fix. Follow-up: закоммитить 014808 дельту отдельным пакетом. FIXED: 014808 delta committed 1cbfa75, INVARIANT CHECK green on HEAD."
+  },
+  {
+   "id": "D-4",
+   "found_by": "auditor",
+   "packet": "B2",
+   "loc": "wave.md INVARIANT CHECKs",
+   "rule": "invariant-unenforced",
+   "spec_ref": "wave.md",
+   "severity": "critical",
+   "status": "fixed",
+   "waiver": "",
+   "approved_by": "",
+   "note": "v3: все 5 mechanized CHECK как негативные grep-bans против HEAD (не worktree), path-exact allowlist, per-artifact l1-prompt, pi-core [semantic]. 7 негативных зондов прошли. coverage-gate 6/6 green."
+  }
+ ]
+}

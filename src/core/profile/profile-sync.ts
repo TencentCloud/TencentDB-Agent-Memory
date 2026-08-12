@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
-import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
-import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
+import { syncSceneIndexAllProjects } from "../scene/scene-index.js";
+import { stripSceneNavigation } from "../scene/scene-navigation.js";
+import { sceneBlocksRoot } from "../scene/scene-paths.js";
 import type { Logger } from "../types.js";
 
 const PROFILE_SCOPE = "global";
@@ -44,31 +45,26 @@ async function statTimes(filePath: string): Promise<{ createdAtMs: number; updat
   }
 }
 
-async function refreshPersonaNavigation(dataDir: string): Promise<void> {
-  const personaPath = path.join(dataDir, "persona.md");
-  let body: string;
-  try {
-    body = stripSceneNavigation(await fs.readFile(personaPath, "utf-8")).trim();
-  } catch {
-    return;
-  }
-
-  if (!body) return;
-
-  const index = await readSceneIndex(dataDir);
-  const nav = generateSceneNavigation(index);
-  const finalContent = nav ? `${body}\n\n${nav}\n` : `${body}\n`;
-  await fs.writeFile(personaPath, finalContent, "utf-8");
-}
-
 export async function listLocalProfiles(dataDir: string): Promise<ProfileRecord[]> {
   const profiles: ProfileRecord[] = [];
-  const blocksDir = path.join(dataDir, "scene_blocks");
+  const blocksRoot = sceneBlocksRoot(dataDir);
 
   try {
-    const files = (await fs.readdir(blocksDir)).filter((file) => file.endsWith(".md")).sort();
+    // Blocks live in scene_blocks/<project-slug>/; the slug is part of the
+    // profile filename so a pull restores each block into its own project.
+    const slugs = (await fs.readdir(blocksRoot, { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+    const files: string[] = [];
+    for (const slug of slugs) {
+      const inSlug = (await fs.readdir(path.join(blocksRoot, slug)))
+        .filter((file) => file.endsWith(".md"))
+        .sort();
+      files.push(...inSlug.map((file) => `${slug}/${file}`));
+    }
     for (const filename of files) {
-      const filePath = path.join(blocksDir, filename);
+      const filePath = path.join(blocksRoot, filename);
       const content = await fs.readFile(filePath, "utf-8");
       const { createdAtMs, updatedAtMs } = await statTimes(filePath);
       profiles.push({
@@ -133,6 +129,7 @@ export async function pullProfilesToLocal(
 
       if (record.type === "l2") {
         const target = path.join(tempBlocksDir, record.filename);
+        await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.writeFile(target, record.content, "utf-8");
         if (md5(record.content) !== record.contentMd5) {
           await fs.rm(target, { force: true });
@@ -186,8 +183,7 @@ export async function pullProfilesToLocal(
       }
     }
 
-    await syncSceneIndex(dataDir);
-    await refreshPersonaNavigation(dataDir);
+    await syncSceneIndexAllProjects(dataDir);
     logger.debug?.(`[memory-tdai][profile-sync] Pulled ${records.length} profile(s) to local cache`);
     return baseline;
   } finally {

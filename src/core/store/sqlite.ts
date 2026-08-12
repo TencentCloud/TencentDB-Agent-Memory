@@ -11,7 +11,7 @@
  * 3. `l0_conversations` — relational metadata table (session_key, role, message text, timestamps)
  * 4. `l0_vec` — vec0 virtual table for cosine similarity search on individual messages
  *
- * Dependencies: Node.js built-in `node:sqlite` (Node 22+) + `sqlite-vec` (from root workspace).
+ * Dependencies: Built-in SQLite module (`node:sqlite` on Node 22+, `bun:sqlite` on Bun) + `sqlite-vec` (from root workspace).
  *
  * Design:
  * - All operations are synchronous (DatabaseSync API).
@@ -54,6 +54,10 @@ export interface VectorSearchResult {
   session_id: string;
   /** Raw metadata JSON string (e.g., contains activity_start_time / activity_end_time for episodic) */
   metadata_json: string;
+  /** Project this memory came from; '' when unknown. */
+  project_id?: string;
+  /** 'global' | 'project' | '' (legacy records predate scoping). */
+  scope?: string;
 }
 
 /** L0 single-message vector search result. */
@@ -109,6 +113,45 @@ export interface L1QueryFilter {
 
 const TAG = "[memory-tdai][sqlite]";
 
+// ── Full-reindex gate + single-flight (wave tdai-memory-subagents-2026-08-02, P8) ──
+// Module-level so every VectorStore instance (gateway core, apply executor,
+// readonly diagnostics) observes the same state — they share one vectors.db.
+// During a full reindexAll the store fails OPEN on vector reads (empty result,
+// not an error) and SKIPS vector dual-writes (meta rows still go through); the
+// post-reindex count reconciliation backfills the delta per-row
+// (reindexL1Records / reindexL0Records, ТЗ §5.6).
+let reindexInProgress = false;
+
+/** Serialize full reindexAll invocations (single-flight, ТЗ §5.6). */
+let reindexLock: Promise<void> = Promise.resolve();
+function withReindexSingleFlight<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = reindexLock;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  reindexLock = gate;
+  return prev.then(fn).finally(() => { release(); });
+}
+
+function isSqliteBusy(err: unknown): boolean {
+  return err instanceof Error && /SQLITE_BUSY/.test(err.message);
+}
+
+/**
+ * Retry a synchronous DB call on SQLITE_BUSY. WAL + busy_timeout=5000 already
+ * retry inside SQLite; this is a belt-and-braces second layer for the long
+ * reindex windows where a concurrent capture can hold the write lock.
+ */
+function runSqliteBusyRetry<T>(fn: () => T, attempts = 3): T {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return fn();
+    } catch (err) {
+      if (isSqliteBusy(err) && attempt < attempts) continue;
+      throw err;
+    }
+  }
+}
+
 /** Persisted metadata about the embedding provider used to generate stored vectors. */
 interface EmbeddingMeta {
   provider: string;
@@ -128,11 +171,44 @@ export interface VectorStoreInitResult {
   reason?: string;
 }
 
-// Use createRequire to load the experimental node:sqlite module
+// Use createRequire to load the SQLite built-in module (node:sqlite or bun:sqlite)
 const require = createRequire(import.meta.url);
 
-function requireNodeSqlite(): typeof import("node:sqlite") {
-  return require("node:sqlite") as typeof import("node:sqlite");
+/**
+ * Minimal structural shape of a synchronous SQLite handle that works across both
+ * supported runtimes:
+ *   - Node.js: built-in `node:sqlite` (DatabaseSync)
+ *   - Bun:     built-in `bun:sqlite` (Database)
+ *
+ * Both expose the same exec/prepare/run/all/get/close methods used by this store.
+ * `enableLoadExtension` is Node-only — Bun's Database loads extensions via
+ * `loadExtension()` directly, without an enable step.
+ */
+interface SqliteHandle {
+  exec(sql: string): unknown;
+  prepare(sql: string): {
+    run(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+    get(...params: unknown[]): unknown;
+  };
+  enableLoadExtension?(enabled: boolean): unknown;
+  loadExtension(path: string): unknown;
+  close(): unknown;
+}
+
+/**
+ * Open a SQLite database using whichever built-in module the current runtime
+ * provides. Bun loads the sqlite-vec extension via `db.loadExtension()` directly;
+ * Node requires `{ allowExtension: true }` at construction plus
+ * `db.enableLoadExtension(true)` before loading (see init()).
+ */
+function openSqliteHandle(path: string): SqliteHandle {
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
+    const { Database } = require("bun:sqlite");
+    return new Database(path) as unknown as SqliteHandle;
+  }
+  const { DatabaseSync } = require("node:sqlite");
+  return new DatabaseSync(path, { allowExtension: true }) as unknown as SqliteHandle;
 }
 
 // ============================
@@ -311,6 +387,10 @@ export interface FtsSearchResult {
   session_key: string;
   session_id: string;
   metadata_json: string;
+  /** Project this memory came from; '' when unknown. */
+  project_id?: string;
+  /** 'global' | 'project' | '' (legacy records predate scoping). */
+  scope?: string;
 }
 
 /** FTS5 search result for L0 records. */
@@ -361,6 +441,8 @@ export class VectorStore implements IMemoryStore {
   private stmtInsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtDeleteMeta!: StatementSync;
   private stmtGetMeta!: StatementSync;
+  /** Per-id content+updated_time lookup for incremental per-row reindex (P8). */
+  private stmtGetReindexMeta!: StatementSync;
   private stmtSearchVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtQueryBySessionId!: StatementSync;
   private stmtQueryBySessionIdSince!: StatementSync;
@@ -408,9 +490,8 @@ export class VectorStore implements IMemoryStore {
     this.dimensions = dimensions;
     this.logger = logger;
 
-    // Open database with extension support enabled
-    const { DatabaseSync: DbSync } = requireNodeSqlite();
-    this.db = new DbSync(dbPath, { allowExtension: true });
+    // Open database (node:sqlite under Node, bun:sqlite under Bun)
+    this.db = openSqliteHandle(dbPath) as unknown as DatabaseSync;
 
     // Set busy timeout so concurrent processes retry instead of failing with SQLITE_BUSY
     this.db.exec("PRAGMA busy_timeout = 5000");
@@ -452,7 +533,8 @@ export class VectorStore implements IMemoryStore {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const sqliteVec = require("sqlite-vec");
-      this.db.enableLoadExtension(true);
+      // Node needs enableLoadExtension(true) before loading; Bun loads directly.
+      this.db.enableLoadExtension?.(true);
       sqliteVec.load(this.db);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -575,8 +657,26 @@ export class VectorStore implements IMemoryStore {
       )
     `);
 
+    // Migration: per-project scoping columns (existing DBs pre-scope).
+    // MUST run after CREATE TABLE above (on a fresh DB the table would not exist
+    // yet and the try/catch would silently swallow the ALTER) and before any
+    // prepare() that reads these columns — otherwise prepare throws on an
+    // existing DB and the whole store falls into degraded mode.
+    for (const ddl of [
+      "ALTER TABLE l1_records ADD COLUMN project_id TEXT DEFAULT ''",
+      "ALTER TABLE l1_records ADD COLUMN scope TEXT DEFAULT 'global'",
+    ]) {
+      try {
+        this.db.exec(ddl);
+        this.logger?.debug?.(`${TAG} Migrated l1_records: ${ddl}`);
+      } catch {
+        // Column already exists — expected on non-first run
+      }
+    }
+
     // Indexes for common queries
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_type ON l1_records(type)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_scope_project ON l1_records(scope, project_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_session_key ON l1_records(session_key)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_session_id ON l1_records(session_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l1_scene ON l1_records(scene_name)");
@@ -605,8 +705,8 @@ export class VectorStore implements IMemoryStore {
       INSERT INTO l1_records (
         record_id, content, type, priority, scene_name, session_key, session_id,
         timestamp_str, timestamp_start, timestamp_end,
-        created_time, updated_time, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_time, updated_time, metadata_json, project_id, scope
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         content=excluded.content,
         type=excluded.type,
@@ -616,7 +716,9 @@ export class VectorStore implements IMemoryStore {
         timestamp_start=excluded.timestamp_start,
         timestamp_end=excluded.timestamp_end,
         updated_time=excluded.updated_time,
-        metadata_json=excluded.metadata_json
+        metadata_json=excluded.metadata_json,
+        project_id=excluded.project_id,
+        scope=excluded.scope
     `);
 
     if (this.dimensions > 0) {
@@ -627,9 +729,16 @@ export class VectorStore implements IMemoryStore {
 
     this.stmtGetMeta = this.db.prepare(`
       SELECT content, type, priority, scene_name, session_key, session_id,
-             timestamp_str, timestamp_start, timestamp_end, metadata_json
+             timestamp_str, timestamp_start, timestamp_end, metadata_json,
+             project_id, COALESCE(scope, '') AS scope
       FROM l1_records WHERE record_id = ?
     `);
+
+    // Per-id lookup for incremental per-row reindex (P8) — committed schema
+    // only (content + updated_time), so it works on both trees.
+    this.stmtGetReindexMeta = this.db.prepare(
+      "SELECT content, updated_time FROM l1_records WHERE record_id = ?",
+    );
 
     if (this.dimensions > 0) {
       this.stmtSearchVec = this.db.prepare(`
@@ -664,6 +773,15 @@ export class VectorStore implements IMemoryStore {
       // Column already exists — expected on non-first run
     }
 
+    // Migration: project_id must travel with L0 — L1 extraction is async and by
+    // then the originating cwd is long gone.
+    try {
+      this.db.exec("ALTER TABLE l0_conversations ADD COLUMN project_id TEXT DEFAULT ''");
+      this.logger?.debug?.(`${TAG} Migrated l0_conversations: added project_id column`);
+    } catch {
+      // Column already exists — expected on non-first run
+    }
+
     // Indexes for L0 queries
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_session ON l0_conversations(session_key)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_session_id ON l0_conversations(session_id)");
@@ -684,12 +802,13 @@ export class VectorStore implements IMemoryStore {
     // L0 prepared statements
     this.stmtL0UpsertMeta = this.db.prepare(`
       INSERT INTO l0_conversations (
-        record_id, session_key, session_id, role, message_text, recorded_at, timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        record_id, session_key, session_id, role, message_text, recorded_at, timestamp, project_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(record_id) DO UPDATE SET
         message_text=excluded.message_text,
         recorded_at=excluded.recorded_at,
-        timestamp=excluded.timestamp
+        timestamp=excluded.timestamp,
+        project_id=excluded.project_id
     `);
 
     if (this.dimensions > 0) {
@@ -699,7 +818,7 @@ export class VectorStore implements IMemoryStore {
     this.stmtL0DeleteMeta = this.db.prepare("DELETE FROM l0_conversations WHERE record_id = ?");
 
     this.stmtL0GetMeta = this.db.prepare(`
-      SELECT session_key, session_id, role, message_text, recorded_at, timestamp
+      SELECT session_key, session_id, role, message_text, recorded_at, timestamp, project_id
       FROM l0_conversations WHERE record_id = ?
     `);
 
@@ -717,7 +836,7 @@ export class VectorStore implements IMemoryStore {
     // Sort/filter by recorded_at (write time) instead of timestamp (conversation time)
     // because L1 cursor uses recorded_at semantics. ISO 8601 string comparison preserves time order.
     this.stmtL0QueryAll = this.db.prepare(`
-      SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp
+      SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp, project_id
       FROM l0_conversations
       WHERE session_key = ?
       ORDER BY recorded_at DESC
@@ -725,7 +844,7 @@ export class VectorStore implements IMemoryStore {
     `);
 
     this.stmtL0QueryAfter = this.db.prepare(`
-      SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp
+      SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp, project_id
       FROM l0_conversations
       WHERE session_key = ? AND recorded_at > ?
       ORDER BY recorded_at DESC
@@ -793,15 +912,23 @@ export class VectorStore implements IMemoryStore {
 
       this.stmtL1FtsDelete = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?");
 
+      // NOTE: l1_fts must NOT be aliased — MATCH and bm25() require the real
+      // table name (an alias fails at prepare() with "no such column: <alias>",
+      // and searchL1Fts swallows that error, silently killing keyword recall).
+      // Only l1_records gets an alias.
       this.stmtL1FtsSearch = this.db.prepare(`
-        SELECT record_id, content_original AS content, type, priority, scene_name,
-               session_key, session_id, timestamp_str, timestamp_start, timestamp_end,
-               metadata_json,
+        SELECT l1_fts.record_id, l1_fts.content_original AS content, l1_fts.type,
+               l1_fts.priority, l1_fts.scene_name, l1_fts.session_key, l1_fts.session_id,
+               l1_fts.timestamp_str, l1_fts.timestamp_start, l1_fts.timestamp_end,
+               l1_fts.metadata_json,
+               r.project_id, COALESCE(r.scope, '') AS scope,
                bm25(l1_fts) AS rank
         FROM l1_fts
-        WHERE l1_fts MATCH ?
+        JOIN l1_records r ON r.record_id = l1_fts.record_id
+        WHERE l1_fts MATCH ?1
+          AND (?2 = '' OR COALESCE(r.scope, '') <> 'project' OR r.project_id = ?2)
         ORDER BY rank ASC
-        LIMIT ?
+        LIMIT ?3
       `);
 
       // L0 FTS prepared statements
@@ -851,7 +978,7 @@ export class VectorStore implements IMemoryStore {
     // L1 query statements (for l1-reader)
     const l1QueryCols = `record_id, content, type, priority, scene_name, session_key, session_id,
       timestamp_str, timestamp_start, timestamp_end,
-      created_time, updated_time, metadata_json`;
+      created_time, updated_time, metadata_json, project_id`;
 
     this.stmtQueryBySessionId = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
@@ -1012,7 +1139,7 @@ export class VectorStore implements IMemoryStore {
           ? timestamps.reduce((a, b) => (a > b ? a : b))
           : tsStr;
 
-      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady;
+      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady || reindexInProgress;
 
       this.logger?.debug?.(
         `${TAG} [L1-upsert] START id=${recordId}, type=${record.type}, ` +
@@ -1041,6 +1168,8 @@ export class VectorStore implements IMemoryStore {
           record.createdAt,
           record.updatedAt,
           JSON.stringify(record.metadata),
+          record.projectId ?? "",
+          record.scope ?? "global",
         );
 
         if (!skipVec) {
@@ -1103,9 +1232,25 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns an empty array on any error (e.g. dimension
    * mismatch, corrupted DB) so callers can fall back to keyword search.
    */
-  searchL1Vector(queryEmbedding: Float32Array, topK = 5): VectorSearchResult[] {
+  // NOTE: `_queryText` is unused here but MUST keep its slot — the interface
+  // declares (emb, topK?, queryText?, projectId?) and callers already pass a
+  // query text third. Dropping it would slide projectId into that position and
+  // the scope filter would match nothing.
+  searchL1Vector(
+    queryEmbedding: Float32Array,
+    topK = 5,
+    _queryText?: string,
+    projectId = "",
+  ): VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
+      return [];
+    }
+    if (reindexInProgress) {
+      // reindex-in-progress gate (ТЗ §5.6): during a full reindex the vec0
+      // tables are being repopulated — fail OPEN with an empty result, never
+      // an error (/recall, /search/memories, /search/conversations).
+      this.logger?.debug?.(`${TAG} [L1-search] SKIPPED (reindex-in-progress, fail-open)`);
       return [];
     }
     try {
@@ -1116,8 +1261,12 @@ export class VectorStore implements IMemoryStore {
       // in KNN results.  A small buffer of 10 is sufficient for remnants.
       // NOTE: "AND distance IS NOT NULL" is NOT usable because vec0 does not
       // support that constraint — it causes an empty result set.
+      // ponytail: scope filtering happens AFTER the vec0 KNN, so a DB heavily
+      // skewed towards other projects can under-fill topK. Over-retrieving 3x
+      // covers it in practice; upgrade path is a pre-filtered rowid set if this
+      // ever measurably starves results.
       const ZERO_VEC_BUFFER = 10;
-      const retrieveCount = topK + ZERO_VEC_BUFFER;
+      const retrieveCount = (projectId ? topK * 3 : topK) + ZERO_VEC_BUFFER;
 
       this.logger?.debug?.(
         `${TAG} [L1-search] START topK=${topK}, retrieveCount=${retrieveCount}, ` +
@@ -1158,6 +1307,8 @@ export class VectorStore implements IMemoryStore {
               timestamp_start: string;
               timestamp_end: string;
               metadata_json: string;
+              project_id: string;
+              scope: string;
             }
           | undefined;
 
@@ -1165,6 +1316,10 @@ export class VectorStore implements IMemoryStore {
           this.logger?.warn(`${TAG} [L1-search] record_id=${record_id} has vector but NO metadata (orphan)`);
           continue;
         }
+
+        // Same predicate as passesScope() in auto-recall.ts — only records
+        // explicitly tagged to a different project are hidden.
+        if (projectId && meta.scope === "project" && meta.project_id !== projectId) continue;
 
         const score = 1.0 - distance;
         this.logger?.debug?.(
@@ -1185,6 +1340,8 @@ export class VectorStore implements IMemoryStore {
           session_key: meta.session_key,
           session_id: meta.session_id,
           metadata_json: meta.metadata_json,
+          project_id: meta.project_id ?? "",
+          scope: meta.scope ?? "",
         });
       }
 
@@ -1430,7 +1587,7 @@ export class VectorStore implements IMemoryStore {
       return false;
     }
     try {
-      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady;
+      const skipVec = !embedding || embedding.every(v => v === 0) || !this.vecTablesReady || reindexInProgress;
 
       this.logger?.debug?.(
         `${TAG} [L0-upsert] START id=${record.id}, session=${record.sessionKey}, role=${record.role}, ` +
@@ -1438,7 +1595,7 @@ export class VectorStore implements IMemoryStore {
         (embedding
           ? `, embeddingDims=${embedding.length}, ` +
             `embeddingNorm=${Math.sqrt(Array.from(embedding).reduce((s, v) => s + v * v, 0)).toFixed(4)}` +
-            `${skipVec ? " (ZERO VECTOR or vec tables not ready — vec write will be skipped)" : ""}`
+            `${skipVec ? " (ZERO VECTOR or vec tables not ready or reindex-in-progress — vec write will be skipped)" : ""}`
           : " (no embedding — metadata-only write)"),
       );
 
@@ -1452,6 +1609,7 @@ export class VectorStore implements IMemoryStore {
           record.messageText,
           record.recordedAt,
           record.timestamp,
+          record.projectId ?? "",
         );
 
         if (!skipVec) {
@@ -1518,6 +1676,13 @@ export class VectorStore implements IMemoryStore {
     if (this.degraded || !this.vecTablesReady) {
       return false;
     }
+    if (reindexInProgress) {
+      // skip-dual-write policy (ТЗ §5.6): L0 vector rows are NOT written into
+      // the vec0 table while a full reindex is repopulating it — the post-reindex
+      // count reconciliation backfills the delta per-row (reindexL0Records).
+      this.logger?.debug?.(`${TAG} [L0-update-embedding] SKIPPED (reindex-in-progress) for ${recordId}`);
+      return false;
+    }
     if (!embedding || embedding.every(v => v === 0)) {
       this.logger?.debug?.(`${TAG} [L0-update-embedding] Skipping zero vector for ${recordId}`);
       return false;
@@ -1557,6 +1722,11 @@ export class VectorStore implements IMemoryStore {
   searchL0Vector(queryEmbedding: Float32Array, topK = 5): L0VectorSearchResult[] {
     if (this.degraded || !this.vecTablesReady) {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
+      return [];
+    }
+    if (reindexInProgress) {
+      // reindex-in-progress gate (ТЗ §5.6): fail open with an empty result.
+      this.logger?.debug?.(`${TAG} [L0-search] SKIPPED (reindex-in-progress, fail-open)`);
       return [];
     }
     try {
@@ -1761,6 +1931,125 @@ export class VectorStore implements IMemoryStore {
   // ── Re-index operations ──────────────────────────────────
 
   /**
+   * vec-vs-meta consistency snapshot (wave tdai-memory-subagents-2026-08-02,
+   * P4 apply-executor post-apply count check).
+   *
+   * Both COUNTs and the id sets are read inside ONE transaction so the caller
+   * sees a single WAL snapshot — a non-transactional COUNT raced against a
+   * concurrent L1 dual-write produces a spurious mismatch (ТЗ §5.5/§5.6).
+   *
+   * Fault-tolerant: on degraded store or any DB failure returns
+   * `{ metaCount: 0, vecCount: null, orphanIds: [] }` — the caller must treat
+   * `vecCount === null` as "check not possible", NOT as a mismatch.
+   */
+  consistencyCheck(): {
+    metaCount: number;
+    vecCount: number | null;
+    orphanIds: string[];
+    /** meta∖vec — per-row backfill targets (P8 livelock-cap delta). */
+    missingIds: string[];
+    /** l0_vec logical rows (null when vec0 absent). */
+    l0VecCount: number | null;
+    /** l0_conversations∖l0_vec — L0 backfill targets (P8 window-skip heal). */
+    l0MissingIds: string[];
+  } {
+    if (this.degraded) return { metaCount: 0, vecCount: null, orphanIds: [], missingIds: [], l0VecCount: null, l0MissingIds: [] };
+    try {
+      this.db.exec("BEGIN");
+      try {
+        const metaCount =
+          (this.db.prepare("SELECT COUNT(*) AS c FROM l1_records").get() as { c: number } | null)?.c ?? 0;
+
+        let vecCount: number | null = null;
+        const vecIds = new Set<string>();
+        if (this.vecTablesReady) {
+          const rows = this.db.prepare("SELECT record_id FROM l1_vec").all() as Array<{ record_id: string }>;
+          for (const row of rows) vecIds.add(row.record_id);
+          vecCount = vecIds.size;
+        }
+
+        const metaRows = this.db.prepare("SELECT record_id FROM l1_records").all() as Array<{ record_id: string }>;
+        const metaIds = new Set<string>();
+        for (const row of metaRows) metaIds.add(row.record_id);
+
+        const orphanIds: string[] = [];
+        const missingIds: string[] = [];
+        for (const id of vecIds) {
+          if (!metaIds.has(id)) orphanIds.push(id);
+        }
+        for (const id of metaIds) {
+          if (!vecIds.has(id)) missingIds.push(id);
+        }
+
+        // L0 side (window-skip heal): l0_vec logical rows via the shadow table
+        // (queryable without the extension) vs l0_conversations meta.
+        let l0VecCount: number | null = null;
+        const l0VecIds = new Set<string>();
+        if (this.vecTablesReady) {
+          const l0VecRows = this.db.prepare("SELECT record_id FROM l0_vec").all() as Array<{ record_id: string }>;
+          for (const row of l0VecRows) l0VecIds.add(row.record_id);
+          l0VecCount = l0VecIds.size;
+        }
+        const l0MetaRows = this.db
+          .prepare("SELECT record_id FROM l0_conversations")
+          .all() as Array<{ record_id: string }>;
+        const l0MetaIds = new Set<string>();
+        for (const row of l0MetaRows) l0MetaIds.add(row.record_id);
+        const l0MissingIds: string[] = [];
+        for (const id of l0MetaIds) {
+          if (!l0VecIds.has(id)) l0MissingIds.push(id);
+        }
+
+        this.db.exec("COMMIT");
+        return { metaCount, vecCount, orphanIds, missingIds, l0VecCount, l0MissingIds };
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch { /* ignore rollback errors */ }
+        throw err;
+      }
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} consistencyCheck failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { metaCount: 0, vecCount: null, orphanIds: [], missingIds: [], l0VecCount: null, l0MissingIds: [] };
+    }
+  }
+
+  /**
+   * Delete stray l1_vec rows (record_id has no l1_records row) via the
+   * prepared per-id stmtDeleteVec in a single transaction (ТЗ §5.5 orphan
+   * purge — in-process reindexAll cannot remove orphans, sqlite.ts:1914).
+   *
+   * Fault-tolerant: no-op true when the list is empty or vec tables are
+   * absent; false (with a warn) when the transaction fails.
+   */
+  purgeOrphanVectors(orphanIds: string[]): boolean {
+    if (this.degraded || !this.vecTablesReady || orphanIds.length === 0) return true;
+    try {
+      this.db.exec("BEGIN");
+      try {
+        for (const id of orphanIds) {
+          this.stmtDeleteVec!.run(id);
+        }
+        this.db.exec("COMMIT");
+        this.logger?.info?.(`${TAG} Purged ${orphanIds.length} orphan l1_vec row(s)`);
+        return true;
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch { /* ignore rollback errors */ }
+        throw err;
+      }
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} purgeOrphanVectors failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * Get all L1 record texts for re-embedding.
    * Returns record_id → content pairs.
    */
@@ -1807,6 +2096,14 @@ export class VectorStore implements IMemoryStore {
    * @param embedFn  A function that converts text → Float32Array embedding.
    * @param onProgress  Optional callback for progress reporting.
    */
+  /**
+   * True while a full reindexAll is in flight — read routes fail OPEN with an
+   * empty result (reindex-in-progress gate, ТЗ §5.6).
+   */
+  isReindexing(): boolean {
+    return reindexInProgress;
+  }
+
   async reindexAll(
     embedFn: (text: string) => Promise<Float32Array>,
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
@@ -1816,6 +2113,24 @@ export class VectorStore implements IMemoryStore {
       return { l1Count: 0, l0Count: 0 };
     }
 
+    // Single-flight + reindex-in-progress flag (ТЗ §5.6): concurrent reindexAll
+    // calls serialize; during the run vector dual-writes are skipped and vector
+    // reads fail open. reindexAllInner writes via direct stmts (not upsertL1),
+    // so the flag never skips the reindex's own rows.
+    return withReindexSingleFlight(async () => {
+      reindexInProgress = true;
+      try {
+        return await this.reindexAllInner(embedFn, onProgress);
+      } finally {
+        reindexInProgress = false;
+      }
+    });
+  }
+
+  private async reindexAllInner(
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
+  ): Promise<{ l1Count: number; l0Count: number }> {
     try {
       // ── Re-embed L1 ──
       const l1Rows = this.getAllL1Texts();
@@ -1880,6 +2195,99 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
+  /**
+   * Incremental per-row L1 reindex (ТЗ §5.6): for each record_id, per-row
+   * `l1_vec` delete+insert (NOT a SQL UPDATE — vec0 has no UPDATE support) via
+   * the prepared stmtDeleteVec/stmtInsertVec, each in its own transaction with
+   * SQLITE_BUSY retry. Used for: backfill of the count-mismatch delta after the
+   * livelock cap, and content-rewrite re-embedding of specific records.
+   *
+   * Fault-tolerant per row (log + continue) — same posture as reindexAll.
+   */
+  async reindexL1Records(
+    ids: string[],
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ done: number; total: number }> {
+    if (this.degraded || !this.vecTablesReady || ids.length === 0) {
+      return { done: 0, total: ids.length };
+    }
+    let done = 0;
+    for (const id of ids) {
+      try {
+        const row = this.stmtGetReindexMeta.get(id) as { content: string; updated_time: string } | undefined;
+        if (row) {
+          const embedding = await embedFn(row.content);
+          runSqliteBusyRetry(() => {
+            this.db.exec("BEGIN");
+            try {
+              this.stmtDeleteVec!.run(id);
+              this.stmtInsertVec!.run(id, Buffer.from(embedding.buffer), row.updated_time);
+              this.db.exec("COMMIT");
+            } catch (txErr) {
+              try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+              throw txErr;
+            }
+          });
+        }
+      } catch (err) {
+        this.logger?.warn?.(
+          `${TAG} reindexL1Records skip ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      done++;
+      onProgress?.(done, ids.length);
+    }
+    this.logger?.info?.(`${TAG} reindexL1Records done: ${done}/${ids.length}`);
+    return { done, total: ids.length };
+  }
+
+  /**
+   * Incremental per-row L0 reindex (ТЗ §5.6 window-skip heal): per-row
+   * `l0_vec` delete+insert for l0_conversations ids whose vector is missing
+   * after a full reindex window (updateL0Embedding skips while the flag is
+   * set). recorded_at is taken from the metadata row.
+   */
+  async reindexL0Records(
+    ids: string[],
+    embedFn: (text: string) => Promise<Float32Array>,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ done: number; total: number }> {
+    if (this.degraded || !this.vecTablesReady || ids.length === 0) {
+      return { done: 0, total: ids.length };
+    }
+    let done = 0;
+    for (const id of ids) {
+      try {
+        const meta = this.stmtL0GetMeta.get(id) as
+          | { message_text: string; recorded_at: string }
+          | undefined;
+        if (meta) {
+          const embedding = await embedFn(meta.message_text);
+          runSqliteBusyRetry(() => {
+            this.db.exec("BEGIN");
+            try {
+              this.stmtL0DeleteVec!.run(id);
+              this.stmtL0InsertVec!.run(id, Buffer.from(embedding.buffer), meta.recorded_at);
+              this.db.exec("COMMIT");
+            } catch (txErr) {
+              try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+              throw txErr;
+            }
+          });
+        }
+      } catch (err) {
+        this.logger?.warn?.(
+          `${TAG} reindexL0Records skip ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      done++;
+      onProgress?.(done, ids.length);
+    }
+    this.logger?.info?.(`${TAG} reindexL0Records done: ${done}/${ids.length}`);
+    return { done, total: ids.length };
+  }
+
   // ── L0 query operations (for L1 runner) ──────────────────────────────────
 
   /**
@@ -1900,6 +2308,7 @@ export class VectorStore implements IMemoryStore {
     message_text: string;
     recorded_at: string;
     timestamp: number;
+    project_id: string;
   }> {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query] SKIPPED (degraded mode)`);
@@ -1930,6 +2339,7 @@ export class VectorStore implements IMemoryStore {
         message_text: r.message_text as string,
         recorded_at: (r.recorded_at as string) || "",
         timestamp: (r.timestamp as number) || 0,
+        project_id: (r.project_id as string) || "",
       })).reverse();
     } catch (err) {
       this.logger?.warn(
@@ -1950,7 +2360,7 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
-  ): Array<{ sessionId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> {
+  ): Array<{ sessionId: string; projectId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> {
     if (this.degraded) {
       this.logger?.warn(`${TAG} [L0-query-grouped] SKIPPED (degraded mode)`);
       return [];
@@ -1976,11 +2386,19 @@ export class VectorStore implements IMemoryStore {
         });
       }
 
+      // Project id is a property of the session, not of individual messages —
+      // take the first non-empty one seen for this session_id.
+      const projectBySid = new Map<string, string>();
+      for (const row of rows) {
+        const sid = row.session_id || "";
+        if (!projectBySid.get(sid) && row.project_id) projectBySid.set(sid, row.project_id);
+      }
+
       // Convert to array, sorted by earliest message timestamp
-      const groups: Array<{ sessionId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> = [];
+      const groups: Array<{ sessionId: string; projectId: string; messages: Array<{ id: string; role: string; content: string; timestamp: number; recordedAtMs: number }> }> = [];
       for (const [sessionId, messages] of groupMap) {
         if (messages.length > 0) {
-          groups.push({ sessionId, messages });
+          groups.push({ sessionId, projectId: projectBySid.get(sessionId) ?? "", messages });
         }
       }
       groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);
@@ -2054,10 +2472,10 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
+  searchL1Fts(ftsQuery: string, limit = 20, projectId = ""): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
     try {
-      const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
+      const rows = this.stmtL1FtsSearch.all(ftsQuery, projectId, limit) as Array<{
         record_id: string;
         content: string;
         type: string;
@@ -2069,6 +2487,8 @@ export class VectorStore implements IMemoryStore {
         timestamp_start: string;
         timestamp_end: string;
         metadata_json: string;
+        project_id: string;
+        scope: string;
         rank: number;
       }>;
 
@@ -2085,6 +2505,8 @@ export class VectorStore implements IMemoryStore {
         session_key: r.session_key,
         session_id: r.session_id,
         metadata_json: r.metadata_json,
+        project_id: r.project_id ?? "",
+        scope: r.scope ?? "",
       }));
     } catch (err) {
       this.logger?.warn(

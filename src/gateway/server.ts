@@ -16,7 +16,6 @@
 
 import http from "node:http";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -25,6 +24,7 @@ import { initDataDirectories } from "../utils/pipeline-factory.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import type {
   HealthResponse,
+  StatusResponse,
   RecallRequest,
   RecallResponse,
   CaptureRequest,
@@ -37,12 +37,47 @@ import type {
   SessionEndResponse,
   SeedRequest,
   SeedResponse,
-  GatewayErrorResponse,
 } from "./types.js";
 import type { Logger } from "../core/types.js";
-import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
+import {
+  validateAndNormalizeRaw,
+  fillTimestamps,
+  SeedValidationError,
+} from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import {
+  parseJsonBody,
+  sendJson,
+  sendError,
+  safeEqual,
+  openReadonlySqlite,
+} from "./http-utils.js";
+import { LoopbackTokenManager } from "./token.js";
+import { checkWriteAuth as isMemoryWriteAuthed } from "./write-auth.js";
+import {
+  handleMemoryInfo,
+  handleMemoryRecords,
+  handleMemoryDuplicates,
+  handleMemoryBlocks,
+  handleMemoryValidate,
+  type MemoryRoutesContext,
+} from "./memory-routes.js";
+import { handleMemoryApply, type ApplyRouteContext } from "./apply-executor.js";
+import {
+  handleMemorySearch,
+  handleMemoryNote,
+  type MemoryToolsContext,
+} from "./memory-tools.js";
+import { handleMemoryFeedback, type FeedbackRouteContext } from "./feedback.js";
+import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
+import { NightRunTimer } from "./consolidation/night-run.js";
+import { countNewL0Since } from "./consolidation/diff-builder.js";
+import { listRoles, resolveRoleDir } from "./role-files.js";
+import { CleanupTimer, runCleanup } from "./cleanup.js";
+import nodeFs from "node:fs";
+import nodePath from "node:path";
+import { createHash } from "node:crypto";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -61,55 +96,13 @@ function createConsoleLogger(): Logger {
 }
 
 // ============================
-// Request body parser
-// ============================
-
-async function parseJsonBody<T>(req: http.IncomingMessage): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
-    req.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf-8");
-        resolve(JSON.parse(body) as T);
-      } catch (err) {
-        reject(new Error("Invalid JSON body"));
-      }
-    });
-    req.on("error", reject);
-  });
-}
-
-function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
-  const json = JSON.stringify(body);
-  res.writeHead(status, {
-    "Content-Type": "application/json",
-    "Content-Length": Buffer.byteLength(json),
-  });
-  res.end(json);
-}
-
-function sendError(res: http.ServerResponse, status: number, message: string): void {
-  sendJson(res, status, { error: message } satisfies GatewayErrorResponse);
-}
-
-/**
- * Constant-time string equality for secrets.
- *
- * Returns `false` on any length mismatch (without comparing bytes), and uses
- * `crypto.timingSafeEqual` for the equal-length case so that an attacker
- * probing the API key cannot use response timing to learn a prefix match.
- */
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a, "utf-8");
-  const bb = Buffer.from(b, "utf-8");
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-// ============================
 // Gateway Server
 // ============================
+
+/** Clients are untrusted: accept a string, cap its length, everything else is "unknown project". */
+function sanitizeProjectId(raw: unknown): string {
+  return typeof raw === "string" ? raw.slice(0, 512) : "";
+}
 
 export class TdaiGateway {
   private config: GatewayConfig;
@@ -117,10 +110,38 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  /** Loopback memory token manager (write-gate credential for /memory/* routes). */
+  private tokenManager: LoopbackTokenManager;
+  /** Consolidation orchestrator (wave tdai-memory-subagents-2026-08-02, P6). */
+  private orchestrator: ConsolidationOrchestrator;
+  /** Night-run timer (P7): schedule + threshold + catch-up inside the gateway. */
+  private nightRun: NightRunTimer;
+  /** Workspace cleanup timer (P11a): age-based removal of run artifacts. */
+  private cleanupTimer: CleanupTimer;
+
+  // ============================
+  // Diagnostic counters and last-event snapshots for /status
+  // (added 2026-07-24; see plan ~/.pi/agent/tasks/--home-penis--/2026-07-24/033000-tdai-memory-health.plan.md)
+  // ============================
+  private counterRecalls = 0;
+  private counterCaptures = 0;
+  private counterSessionEnds = 0;
+  private counterSearchMemories = 0;
+  private counterSearchConversations = 0;
+  private counterSeeds = 0;
+  private counterErrors = 0;
+  private lastRecall: StatusResponse["lastRecall"] = null;
+  private lastCapture: StatusResponse["lastCapture"] = null;
+  private lastError: StatusResponse["lastError"] = null;
+  private totalsStale = true;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
     this.logger = createConsoleLogger();
+    this.tokenManager = new LoopbackTokenManager(
+      this.config.data.baseDir,
+      this.logger,
+    );
 
     // Create host adapter
     const adapter = new StandaloneHostAdapter({
@@ -134,7 +155,89 @@ export class TdaiGateway {
     this.core = new TdaiCore({
       hostAdapter: adapter,
       config: this.config.memory,
-      sessionFilter: new SessionFilter(this.config.memory.capture.excludeAgents),
+      sessionFilter: new SessionFilter(
+        this.config.memory.capture.excludeAgents,
+      ),
+    });
+
+    // Consolidation orchestrator + night-run timer (P6/P7). Created here so
+    // stop()/shutdown can always kill an in-flight keeper child group. Store
+    // accessors are lazy — the vector store initializes in core.initialize().
+    // Scratch root is a SIBLING of dataDir, OUTSIDE the memory tree (ТЗ §5.1:
+    // cwd = scratch-dir вне дерева памяти) — a relative-path escape from the
+    // child cwd (../persona.md) cannot reach real memory files.
+    const gatewayUrl = `http://${this.config.server.host}:${this.config.server.port}`;
+    this.orchestrator = new ConsolidationOrchestrator({
+      config: this.config,
+      dataDir: this.config.data.baseDir,
+      scratchRoot: nodePath.join(
+        nodePath.dirname(this.config.data.baseDir),
+        "tdai-memory-keeper",
+      ),
+      logger: this.logger,
+      gatewayUrl,
+      vectorStore: () => this.core.getVectorStore(),
+      embeddingService: () => this.core.getEmbeddingService(),
+    });
+    this.nightRun = new NightRunTimer({
+      enabled: this.config.memory.consolidation.enabled,
+      schedule: this.config.memory.nightRun.schedule,
+      threshold: this.config.memory.nightRun.threshold,
+      timezone: this.config.memory.timezone,
+      now: () => Date.now(),
+      tickIntervalMs: 60_000,
+      getLastRunAt: () => this.orchestrator.getLastRun()?.startedAt ?? null,
+      countNewL0: async () => {
+        const cp = await this.orchestrator.readCheckpoint();
+        return countNewL0Since(
+          nodePath.join(this.config.data.baseDir, "vectors.db"),
+          cp.l0Cursor,
+        );
+      },
+      trigger: async (reason: string, runType?: string) =>
+        this.orchestrator.trigger({ reason, runType }),
+      // Threshold refused while the night window holds the gate → re-arm the
+      // deferred day retry until it is ACCEPTED (the night window can hold the
+      // SerialGate up to maxRunMs=90min; a one-shot +5min retry would hit busy
+      // again and silently drop the crossing). Backoff: 5min → 10min → 20min.
+      onThresholdDeferred: () => {
+        let attempt = 0;
+        const delays = [5 * 60_000, 10 * 60_000, 20 * 60_000];
+        const arm = (): void => {
+          const delay = delays[Math.min(attempt, delays.length - 1)];
+          attempt += 1;
+          setTimeout(() => {
+            void this.orchestrator
+              .trigger({ reason: "threshold-deferred" })
+              .then((res) => {
+                if (!res.accepted && res.status === "busy") arm(); // night still holds gate
+              });
+          }, delay);
+        };
+        arm();
+      },
+      logger: this.logger,
+    });
+
+    // Workspace cleanup (P11a): run artifacts (logs/diffs/reports/backups/stale
+    // scratch + the child tasks subtree) on memory.cleanup.intervalHours.
+    this.cleanupTimer = new CleanupTimer({
+      enabled: this.config.memory.cleanup.enabled,
+      intervalHours: this.config.memory.cleanup.intervalHours,
+      run: () =>
+        runCleanup({
+          dataDir: this.config.data.baseDir,
+          scratchRoot: nodePath.join(
+            nodePath.dirname(this.config.data.baseDir),
+            "tdai-memory-keeper",
+          ),
+          home: process.env.HOME ?? "/tmp",
+          config: this.config.memory.cleanup,
+          now: () => Date.now(),
+          logger: this.logger,
+        }),
+      now: () => Date.now(),
+      logger: this.logger,
     });
   }
 
@@ -145,8 +248,17 @@ export class TdaiGateway {
     // Initialize data directories
     initDataDirectories(this.config.data.baseDir);
 
+    // Ensure the loopback token file exists (0600, outside dataDir) before
+    // serving — the pi extension discovers it via GET /memory/info.
+    this.tokenManager.ensure();
+
     // Initialize core
     await this.core.initialize();
+
+    // Consolidation: restore checkpoint, sweep stale keepers, catch-up check.
+    await this.orchestrator.start();
+    this.nightRun.start();
+    this.cleanupTimer.start();
 
     // Create HTTP server
     this.server = http.createServer((req, res) => this.handleRequest(req, res));
@@ -179,35 +291,36 @@ export class TdaiGateway {
   private logSecurityPosture(): void {
     const { host, apiKey, corsOrigins } = this.config.server;
     const authOn = !!apiKey;
-    const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+    const loopback =
+      host === "127.0.0.1" || host === "localhost" || host === "::1";
 
     this.logger.info(
       `Security posture: auth=${authOn ? "ENABLED (Bearer)" : "disabled"} ` +
-      `host=${host} cors=${corsOrigins.length === 0 ? "no-headers" : corsOrigins.includes("*") ? "wildcard(*)" : `allowlist(${corsOrigins.length})`}`
+        `host=${host} cors=${corsOrigins.length === 0 ? "no-headers" : corsOrigins.includes("*") ? "wildcard(*)" : `allowlist(${corsOrigins.length})`}`,
     );
 
     if (!authOn) {
       this.logger.warn(
         "TDAI_GATEWAY_API_KEY is NOT set — all routes except GET /health are " +
-        "open to anyone who can reach this port. This is the legacy default. " +
-        "Set TDAI_GATEWAY_API_KEY (or server.apiKey in tdai-gateway.yaml) and " +
-        "pass `Authorization: Bearer <key>` from clients before exposing the " +
-        "gateway beyond the loopback interface."
+          "open to anyone who can reach this port. This is the legacy default. " +
+          "Set TDAI_GATEWAY_API_KEY (or server.apiKey in tdai-gateway.yaml) and " +
+          "pass `Authorization: Bearer <key>` from clients before exposing the " +
+          "gateway beyond the loopback interface.",
       );
     }
     if (!loopback && !authOn) {
       this.logger.warn(
         `Gateway is bound to ${host} (non-loopback) WITHOUT an API key. ` +
-        "Every /capture, /search/conversations, /recall, /seed call from the " +
-        "network is currently unauthenticated. Bind to 127.0.0.1, or set " +
-        "TDAI_GATEWAY_API_KEY, before continuing."
+          "Every /capture, /search/conversations, /recall, /seed call from the " +
+          "network is currently unauthenticated. Bind to 127.0.0.1, or set " +
+          "TDAI_GATEWAY_API_KEY, before continuing.",
       );
     }
     if (corsOrigins.includes("*")) {
       this.logger.warn(
         "CORS allow-list contains '*' — every browser origin can call this " +
-        "gateway. Restrict server.corsOrigins to a concrete allow-list for any " +
-        "non-local deployment."
+          "gateway. Restrict server.corsOrigins to a concrete allow-list for any " +
+          "non-local deployment.",
       );
     }
   }
@@ -224,6 +337,10 @@ export class TdaiGateway {
       });
     }
 
+    this.nightRun.stop();
+    this.cleanupTimer.stop();
+    await this.orchestrator.stop();
+
     await this.core.destroy();
     this.logger.info("Gateway stopped");
   }
@@ -232,8 +349,14 @@ export class TdaiGateway {
   // Request router
   // ============================
 
-  private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  private async handleRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
 
@@ -252,6 +375,52 @@ export class TdaiGateway {
       // an unconditionally cheap probe.
       if (method === "GET" && pathname === "/health") {
         return this.handleHealth(res);
+      }
+
+      // GET /status — diagnostic snapshot including the last consolidation run
+      // (wave tdai-memory-subagents-2026-08-02, P6). Auth-free like /health.
+      if (method === "GET" && pathname === "/status") {
+        return this.serveStatus(res);
+      }
+
+      // GET /status is also auth-free (diagnostic; same posture as /health).
+      // Returns REDACTED lastError (≤ 120 chars) and category enum.
+      if (method === "GET" && pathname === "/status") {
+        return this.handleStatus(res);
+      }
+
+      // GET /memory/* — memory read routes + discovery, auth-free on loopback
+      // (same posture as /status). Read-only; never exposes secrets.
+      if (method === "GET" && pathname.startsWith("/memory/")) {
+        return await this.handleMemoryRead(req, res, pathname);
+      }
+
+      // Memory write routes — dedicated write-gate: EITHER `Authorization:
+      // Bearer <apiKey>` OR `x-memory-token` (alternative credentials, NOT
+      // stacked on top of checkAuth below). POST /memory/apply is implemented
+      // by the P4 ApplyExecutor (apply-executor.ts); POST /memory/run lands in
+      // the P6 orchestrator batch and stays reserved here.
+      if (method === "POST" && pathname === "/memory/apply") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryApply(req, res);
+      }
+      if (method === "POST" && pathname === "/memory/run") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return this.handleMemoryRun(req, res, url);
+      }
+
+      // Memory feedback loop (#4): the pi extension bumps recall priority with
+      // raw 80-char dedup keys. Write route (same gate as /memory/apply).
+      if (method === "POST" && pathname === "/memory/feedback") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryFeedback(req, res);
+      }
+
+      // Memory tools for the main agent (#12): POST /memory/note records an
+      // L0 note into L1 extraction. Write route (same gate).
+      if (method === "POST" && pathname === "/memory/note") {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
+        return await this.handleMemoryNote(req, res);
       }
 
       // All other routes go through the optional auth gate. When apiKey is
@@ -276,6 +445,7 @@ export class TdaiGateway {
           sendError(res, 404, `Not found: ${method} ${pathname}`);
       }
     } catch (err) {
+      this.recordError(`${method} ${pathname}`, err);
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(`Request error [${method} ${pathname}]: ${msg}`);
       sendError(res, 500, msg);
@@ -298,7 +468,10 @@ export class TdaiGateway {
    * Returns `false` (and writes 401) when the token is missing, malformed, or
    * does not match. Callers must short-circuit on `false`.
    */
-  private checkAuth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+  private checkAuth(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): boolean {
     const expected = this.config.server.apiKey;
     if (!expected) return true; // auth disabled — default behaviour
 
@@ -316,6 +489,194 @@ export class TdaiGateway {
   }
 
   /**
+   * Write-gate for memory mutation routes (wave tdai-memory-subagents-2026-08-02).
+   *
+   * Accepts EITHER `Authorization: Bearer <apiKey>` OR `x-memory-token` —
+   * alternative credentials, NOT stacked on top of checkAuth. The loopback
+   * token always exists (generated at startup), so memory write routes are
+   * never open even when no server.apiKey is configured. Constant-time
+   * compare; 401 on missing/mismatch.
+   */
+  private checkMemoryWriteAuth(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): boolean {
+    const token = this.tokenManager.ensure();
+    if (isMemoryWriteAuthed(req.headers, this.config.server.apiKey, token))
+      return true;
+    sendError(res, 401, "Unauthorized: missing or invalid memory token");
+    return false;
+  }
+
+  /**
+   * Auth-free loopback dispatch for GET /memory/* (read routes + discovery).
+   * Handlers live in memory-routes.ts; they only read the store and memory
+   * tree (INVARIANT nogo-records-rewrite) and never expose credentials.
+   */
+  private async handleMemoryRead(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    pathname: string,
+  ): Promise<void> {
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
+    const ctx: MemoryRoutesContext = {
+      core: this.core,
+      config: this.config,
+      tokenManager: this.tokenManager,
+      logger: this.logger,
+      version: VERSION,
+    };
+    switch (pathname) {
+      case "/memory/info":
+        return handleMemoryInfo(ctx, res);
+      case "/memory/records":
+        return await handleMemoryRecords(ctx, url, res);
+      case "/memory/duplicates":
+        return await handleMemoryDuplicates(ctx, url, res);
+      case "/memory/blocks":
+        return await handleMemoryBlocks(ctx, url, res);
+      case "/memory/validate":
+        return await handleMemoryValidate(ctx, url, res);
+      case "/memory/search":
+        return await this.handleMemorySearch(ctx, url, res);
+      default:
+        sendError(res, 404, `Not found: GET ${pathname}`);
+    }
+  }
+
+  /**
+   * POST /memory/apply — apply a memory-keeper diff through the ApplyExecutor
+   * (P4, apply-executor.ts). The write-gate already ran; this method only
+   * builds the route context and delegates. Content-Type enforcement and
+   * status mapping live in the handler.
+   */
+  private async handleMemoryApply(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const ctx: ApplyRouteContext = {
+      core: this.core,
+      config: this.config,
+      logger: this.logger,
+    };
+    return await handleMemoryApply(ctx, req, res);
+  }
+
+  /**
+   * POST /memory/run — manual consolidation trigger (P6). Asynchronous: 202 +
+   * status immediately; the run proceeds in the background under single-flight
+   * (timer / threshold / manual / catch-up never overlap). `?dry=1` → dry-run
+   * (builds the diff, touches nothing). Fail-open (критерий 21): answers 202
+   * with a status even when consolidation is disabled or a spawn would fail.
+   */
+  private async handleMemoryRun(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    const dryRun = url.searchParams.get("dry") === "1";
+    const result = await this.orchestrator.trigger({
+      reason: "manual",
+      dryRun,
+    });
+    sendJson(res, 202, {
+      accepted: result.accepted,
+      status: result.status,
+      dryRun,
+      reason: result.reason,
+      runId: result.runId ?? null,
+    });
+  }
+
+  /**
+   * GET /memory/search — memory_search tool for the main agent (#12).
+   * Auth-free loopback (same posture as /status). Reuses the tdai_memory_search
+   * machinery via TdaiCore.
+   */
+  private async handleMemorySearch(
+    ctx: MemoryRoutesContext,
+    url: URL,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const toolsCtx: MemoryToolsContext = {
+      core: this.core,
+      logger: this.logger,
+    };
+    return await handleMemorySearch(toolsCtx, url, res);
+  }
+
+  /**
+   * POST /memory/note — memory_note tool for the main agent (#12). Writes an
+   * L0 note through the existing capture path (write-gate already ran).
+   */
+  private async handleMemoryNote(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const toolsCtx: MemoryToolsContext = {
+      core: this.core,
+      logger: this.logger,
+    };
+    return await handleMemoryNote(toolsCtx, req, res);
+  }
+
+  /**
+   * POST /memory/feedback — agent feedback loop (#4). The write-gate already
+   * ran; the handler bumps L1 priorities for the received 80-char keys.
+   */
+  private async handleMemoryFeedback(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const feedbackCtx: FeedbackRouteContext = {
+      dataDir: this.config.data.baseDir,
+      logger: this.logger,
+    };
+    return await handleMemoryFeedback(feedbackCtx, req, res);
+  }
+
+  /**
+   * GET /status — auth-free diagnostic snapshot including the last
+   * consolidation run (P6/P7). Self-contained so it typechecks on the
+   * committed tree without the I3/I4 status additions; the operator merge can
+   * fold the `consolidation` block into a richer status later.
+   */
+  private serveStatus(res: http.ServerResponse): void {
+    const lastRun = this.orchestrator.getLastRun();
+    sendJson(res, 200, {
+      status:
+        this.core.getVectorStore() && this.core.getEmbeddingService()
+          ? "ok"
+          : "degraded",
+      version: VERSION,
+      uptimeSec: Math.floor((Date.now() - this.startTime) / 1000),
+      startedAt: new Date(this.startTime).toISOString(),
+      dataPath: this.config.data.baseDir,
+      consolidation: {
+        enabled: this.config.memory.consolidation.enabled,
+        checkpoint: this.orchestrator.checkpointFile,
+        inFlight: this.orchestrator.isRunning,
+        lastRun,
+      },
+      roles: listRoles(resolveRoleDir()),
+      reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
+    });
+  }
+
+  /**
+   * reindex-in-progress gate (ТЗ §5.6): true while a full reindex is running.
+   * The vector store fails OPEN (empty result) — the route-level check below
+   * covers the FTS/keyword fallback paths too, so /recall and the search
+   * routes return an empty result as a whole, never an error.
+   */
+  private reindexGateOn(): boolean {
+    return this.core.getVectorStore()?.isReindexing?.() ?? false;
+  }
+
+  /**
    * Echo `Access-Control-Allow-Origin` (and friends) only for whitelisted
    * origins. With no list configured we emit no CORS headers at all, which
    * makes the browser refuse the cross-origin request as desired.
@@ -323,7 +684,10 @@ export class TdaiGateway {
    * The single-entry list `["*"]` opts back into permissive CORS (development
    * use only; the startup log flags this loudly).
    */
-  private applyCorsHeaders(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private applyCorsHeaders(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
     const allow = this.config.server.corsOrigins ?? [];
     if (allow.length === 0) return; // strict default — no headers
 
@@ -334,7 +698,10 @@ export class TdaiGateway {
       // mirroring how the gateway behaved before this change.
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization",
+      );
       return;
     }
 
@@ -347,7 +714,10 @@ export class TdaiGateway {
     }
     res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization",
+    );
     res.setHeader("Vary", "Origin");
   }
 
@@ -368,7 +738,112 @@ export class TdaiGateway {
     sendJson(res, 200, response);
   }
 
-  private async handleRecall(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  /**
+   * Collect DB-level totals (l0 messages, l1 records, scene blocks).
+   * Uses bun:sqlite (gateway runs under bun per systemd unit).
+   * On any failure, sets totals.stale=true and returns last-known zeros;
+   * a DB-read failure does NOT flip overall service status — that is
+   * derived from vectorStore+embeddingService only.
+   */
+  private collectTotals(): StatusResponse["totals"] {
+    const sceneDir = nodePath.join(this.config.data.baseDir, "scene_blocks");
+    // Blocks are nested one level down per project (scene_blocks/<slug>/*.md).
+    const dbPath = nodePath.join(this.config.data.baseDir, "vectors.db");
+    let l0 = 0;
+    let l1 = 0;
+    let scene = 0;
+    let ok = true;
+    try {
+      const db = openReadonlySqlite(dbPath);
+      try {
+        const r0 = db
+          .prepare("SELECT count(*) AS c FROM l0_conversations")
+          .get() as { c: number } | null;
+        const r1 = db.prepare("SELECT count(*) AS c FROM l1_records").get() as {
+          c: number;
+        } | null;
+        l0 = r0?.c ?? 0;
+        l1 = r1?.c ?? 0;
+      } finally {
+        db.close();
+      }
+    } catch {
+      ok = false;
+    }
+    try {
+      scene = nodeFs
+        .readdirSync(sceneDir, { recursive: true })
+        .filter((f) => String(f).endsWith(".md")).length;
+    } catch {
+      ok = false;
+    }
+    this.totalsStale = !ok;
+    return { l0Messages: l0, l1Records: l1, sceneBlocks: scene, stale: !ok };
+  }
+
+  /**
+   * Record a routing/handler error in /status.lastError with category
+   * classification and ≤120-char message redaction.
+   */
+  private recordError(source: string, err: unknown): void {
+    this.counterErrors++;
+    const raw = err instanceof Error ? err.message : String(err);
+    const message = raw.length > 120 ? raw.slice(0, 117) + "..." : raw;
+    const category = /SeedValidation|invalid/i.test(raw)
+      ? "validation"
+      : /vec|store|sqlite|database/i.test(raw)
+        ? "store"
+        : /embed|llm|api/i.test(raw)
+          ? "embedding"
+          : "internal";
+    this.lastError = {
+      at: new Date().toISOString(),
+      source,
+      category,
+      message,
+    };
+  }
+
+  /**
+   * /status — diagnostic extension of /health with traffic counters and
+   * last-event snapshots. Lives on the same auth-free /status path;
+   * returns REDACTED lastError (≤ 120 chars) and category enum.
+   */
+  private handleStatus(res: http.ServerResponse): void {
+    // Collect totals FIRST; status is derived from vectorStore+embeddingService
+    // ONLY — totals.stale is an independent flag.
+    const totals = this.collectTotals();
+    const vectorOk = !!this.core.getVectorStore();
+    const embeddingOk = !!this.core.getEmbeddingService();
+    const response: StatusResponse = {
+      status: vectorOk && embeddingOk ? "ok" : "degraded",
+      version: VERSION,
+      uptimeSec: Math.floor((Date.now() - this.startTime) / 1000),
+      startedAt: new Date(this.startTime).toISOString(),
+      dataPath: this.config.data.baseDir,
+      vectorStore: vectorOk,
+      embeddingService: embeddingOk,
+      totals,
+      counters: {
+        recalls: this.counterRecalls,
+        captures: this.counterCaptures,
+        sessionEnds: this.counterSessionEnds,
+        searchMemories: this.counterSearchMemories,
+        searchConversations: this.counterSearchConversations,
+        seeds: this.counterSeeds,
+        errors: this.counterErrors,
+      },
+      lastRecall: this.lastRecall,
+      lastCapture: this.lastCapture,
+      lastError: this.lastError,
+    };
+    sendJson(res, 200, response);
+  }
+
+  private async handleRecall(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<RecallRequest>(req);
 
     if (!body.query || !body.session_key) {
@@ -376,42 +851,112 @@ export class TdaiGateway {
       return;
     }
 
+    // reindex-in-progress gate (ТЗ §5.6): during a full reindex return an
+    // EMPTY result, never an error (fail-open).
+    if (this.reindexGateOn()) {
+      this.logger.info?.(
+        "[tdai-gateway] /recall gate: full reindex in progress — returning empty (fail-open)",
+      );
+      sendJson(res, 200, {
+        context: "",
+        strategy: "gated",
+        memory_count: 0,
+      } satisfies RecallResponse);
+      return;
+    }
+
     const startMs = Date.now();
-    const result = await this.core.handleBeforeRecall(body.query, body.session_key);
+    const result = await this.core.handleBeforeRecall(
+      body.query,
+      body.session_key,
+      sanitizeProjectId(body.project_id),
+      body.include_persona !== false,
+    );
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(
+      `Recall completed in ${elapsed}ms: context=${result.appendSystemContext?.length ?? 0} chars`,
+    );
+
+    // /status snapshot — truncated query (≤256) + sha256[:16] hash for safe monitoring.
+    this.counterRecalls++;
+    const q = body.query;
+    const truncated = q.length > 256 ? q.slice(0, 253) + "..." : q;
+    const qhash = createHash("sha256").update(q).digest("hex").slice(0, 16);
+    this.lastRecall = {
+      at: new Date().toISOString(),
+      query: truncated,
+      queryHash: qhash,
+      sessionKey: body.session_key,
+      latencyMs: elapsed,
+      count: result.recalledL1Memories?.length ?? 0,
+    };
 
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context: [result.prependContext, result.appendSystemContext]
+        .filter(Boolean)
+        .join("\n\n"),
       strategy: result.recallStrategy,
       memory_count: result.recalledL1Memories?.length ?? 0,
     };
     sendJson(res, 200, response);
   }
 
-  private async handleCapture(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleCapture(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<CaptureRequest>(req);
 
     if (!body.user_content || !body.assistant_content || !body.session_key) {
-      sendError(res, 400, "Missing required fields: user_content, assistant_content, session_key");
+      sendError(
+        res,
+        400,
+        "Missing required fields: user_content, assistant_content, session_key",
+      );
       return;
     }
 
     const startMs = Date.now();
-    const result = await this.core.handleTurnCommitted({
-      userText: body.user_content,
-      assistantText: body.assistant_content,
-      messages: body.messages ?? [
-        { role: "user", content: body.user_content },
-        { role: "assistant", content: body.assistant_content },
-      ],
-      sessionKey: body.session_key,
-      sessionId: body.session_id,
-    });
+    let result;
+    try {
+      result = await this.core.handleTurnCommitted({
+        userText: body.user_content,
+        assistantText: body.assistant_content,
+        messages: body.messages ?? [
+          { role: "user", content: body.user_content },
+          { role: "assistant", content: body.assistant_content },
+        ],
+        sessionKey: body.session_key,
+        sessionId: body.session_id,
+        projectId: sanitizeProjectId(body.project_id),
+      });
+    } catch (err) {
+      this.recordError("POST /capture", err);
+      this.lastCapture = {
+        at: new Date().toISOString(),
+        sessionKey: body.session_key,
+        latencyMs: Date.now() - startMs,
+        status: "failed",
+      };
+      const msg = err instanceof Error ? err.message : String(err);
+      sendError(res, 500, msg);
+      return;
+    }
     const elapsed = Date.now() - startMs;
 
-    this.logger.info(`Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`);
+    this.logger.info(
+      `Capture completed in ${elapsed}ms: l0=${result.l0RecordedCount}`,
+    );
+
+    // /status snapshot — success path.
+    this.counterCaptures++;
+    this.lastCapture = {
+      at: new Date().toISOString(),
+      sessionKey: body.session_key,
+      latencyMs: elapsed,
+      status: "ok",
+    };
 
     const response: CaptureResponse = {
       l0_recorded: result.l0RecordedCount,
@@ -420,13 +965,31 @@ export class TdaiGateway {
     sendJson(res, 200, response);
   }
 
-  private async handleSearchMemories(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleSearchMemories(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<MemorySearchRequest>(req);
 
     if (!body.query) {
       sendError(res, 400, "Missing required field: query");
       return;
     }
+
+    // reindex-in-progress gate (ТЗ §5.6): empty result, not an error.
+    if (this.reindexGateOn()) {
+      this.logger.info?.(
+        "[tdai-gateway] /search/memories gate: full reindex in progress — returning empty (fail-open)",
+      );
+      sendJson(res, 200, {
+        results: "",
+        total: 0,
+        strategy: "gated",
+      } satisfies MemorySearchResponse);
+      return;
+    }
+
+    this.counterSearchMemories++;
 
     const result = await this.core.searchMemories({
       query: body.query,
@@ -443,13 +1006,30 @@ export class TdaiGateway {
     sendJson(res, 200, response);
   }
 
-  private async handleSearchConversations(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleSearchConversations(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<ConversationSearchRequest>(req);
 
     if (!body.query) {
       sendError(res, 400, "Missing required field: query");
       return;
     }
+
+    // reindex-in-progress gate (ТЗ §5.6): empty result, not an error.
+    if (this.reindexGateOn()) {
+      this.logger.info?.(
+        "[tdai-gateway] /search/conversations gate: full reindex in progress — returning empty (fail-open)",
+      );
+      sendJson(res, 200, {
+        results: "",
+        total: 0,
+      } satisfies ConversationSearchResponse);
+      return;
+    }
+
+    this.counterSearchConversations++;
 
     const result = await this.core.searchConversations({
       query: body.query,
@@ -464,7 +1044,10 @@ export class TdaiGateway {
     sendJson(res, 200, response);
   }
 
-  private async handleSessionEnd(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleSessionEnd(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<SessionEndRequest>(req);
 
     if (!body.session_key) {
@@ -474,11 +1057,16 @@ export class TdaiGateway {
 
     await this.core.handleSessionEnd(body.session_key);
 
+    this.counterSessionEnds++;
+
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
   }
 
-  private async handleSeed(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private async handleSeed(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
     const body = await parseJsonBody<SeedRequest>(req);
 
     if (!body.data) {
@@ -496,6 +1084,7 @@ export class TdaiGateway {
       });
     } catch (err) {
       if (err instanceof SeedValidationError) {
+        this.recordError("POST /seed", err);
         sendJson(res, 400, {
           error: err.message,
           validation_errors: err.errors,
@@ -507,7 +1096,7 @@ export class TdaiGateway {
 
     this.logger.info(
       `Seed request: ${input.sessions.length} session(s), ` +
-      `${input.totalRounds} round(s), ${input.totalMessages} message(s)`,
+        `${input.totalRounds} round(s), ${input.totalMessages} message(s)`,
     );
 
     // Resolve output directory: use gateway's data dir with a timestamped subfolder
@@ -537,9 +1126,18 @@ export class TdaiGateway {
       for (const key of Object.keys(body.config_override)) {
         const baseVal = pluginConfig[key];
         const overVal = body.config_override[key];
-        if (baseVal && typeof baseVal === "object" && !Array.isArray(baseVal) &&
-            overVal && typeof overVal === "object" && !Array.isArray(overVal)) {
-          pluginConfig[key] = { ...(baseVal as Record<string, unknown>), ...(overVal as Record<string, unknown>) };
+        if (
+          baseVal &&
+          typeof baseVal === "object" &&
+          !Array.isArray(baseVal) &&
+          overVal &&
+          typeof overVal === "object" &&
+          !Array.isArray(overVal)
+        ) {
+          pluginConfig[key] = {
+            ...(baseVal as Record<string, unknown>),
+            ...(overVal as Record<string, unknown>),
+          };
         } else {
           pluginConfig[key] = overVal;
         }
@@ -551,19 +1149,23 @@ export class TdaiGateway {
       outputDir,
       openclawConfig: {},
       pluginConfig,
-      logger: this.logger as import("../utils/pipeline-factory.js").PipelineLogger,
+      logger: this
+        .logger as import("../utils/pipeline-factory.js").PipelineLogger,
       onProgress: (progress: SeedProgress) => {
         this.logger.debug?.(
           `Seed progress: [${progress.currentRound}/${progress.totalRounds}] ` +
-          `session=${progress.sessionKey} stage=${progress.stage}`,
+            `session=${progress.sessionKey} stage=${progress.stage}`,
         );
       },
     });
 
     this.logger.info(
       `Seed complete: sessions=${summary.sessionsProcessed}, rounds=${summary.roundsProcessed}, ` +
-      `l0=${summary.l0RecordedCount}, duration=${(summary.durationMs / 1000).toFixed(1)}s`,
+        `l0=${summary.l0RecordedCount}, duration=${(summary.durationMs / 1000).toFixed(1)}s`,
     );
+
+    // /status snapshot — seed success.
+    this.counterSeeds++;
 
     const response: SeedResponse = {
       sessions_processed: summary.sessionsProcessed,
@@ -600,7 +1202,9 @@ async function main(): Promise<void> {
 }
 
 // Auto-start when run directly
-const isMain = process.argv[1]?.endsWith("server.ts") || process.argv[1]?.endsWith("server.js");
+const isMain =
+  process.argv[1]?.endsWith("server.ts") ||
+  process.argv[1]?.endsWith("server.js");
 if (isMain) {
   main().catch((err) => {
     console.error("Gateway startup failed:", err);

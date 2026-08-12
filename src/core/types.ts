@@ -189,6 +189,8 @@ export interface CompletedTurn {
    * polluted by prependContext injection.
    */
   originalUserMessageCount?: number;
+  /** Project this turn happened in (git-root of cwd); '' when unknown. */
+  projectId?: string;
 }
 
 // ============================

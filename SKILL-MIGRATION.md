@@ -84,7 +84,7 @@ ls -la ~/.openclaw/memory-tdai/
 echo "=== 迁移前数据统计 ==="
 wc -l ~/.openclaw/memory-tdai/conversations/*.jsonl 2>/dev/null || echo "无对话数据"
 wc -l ~/.openclaw/memory-tdai/records/*.jsonl 2>/dev/null || echo "无记录数据"
-ls ~/.openclaw/memory-tdai/scene_blocks/*.md 2>/dev/null | wc -l | xargs -I{} echo "场景块: {} 个"
+find ~/.openclaw/memory-tdai/scene_blocks -name '*.md' 2>/dev/null | wc -l | xargs -I{} echo "场景块: {} 个"
 wc -c ~/.openclaw/memory-tdai/persona.md 2>/dev/null || echo "无 persona"
 ```
 

@@ -90,11 +90,10 @@ export class PersonaTrigger {
   }
 
   private async hasSceneFiles(): Promise<boolean> {
-    const blocksDir = path.join(this.dataDir, "scene_blocks");
+    // Blocks live one level down, in scene_blocks/<project-slug>/.
     try {
-      const files = await fs.readdir(blocksDir);
-      const hasFiles = files.some((f) => f.endsWith(".md"));
-      return hasFiles;
+      const entries = await fs.readdir(path.join(this.dataDir, "scene_blocks"), { recursive: true });
+      return entries.some((f) => String(f).endsWith(".md"));
     } catch {
       return false;
     }

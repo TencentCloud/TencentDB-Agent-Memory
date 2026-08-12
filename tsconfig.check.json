@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/gateway/**/*.ts",
+    "src/config.ts",
+    "src/core/**/*.ts",
+    "src/utils/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules", "src/**/*.test.ts", "src/**/*.spec.ts"]
+}

@@ -11,7 +11,7 @@
  * 2. Batch LLM judgment on all new memories + their candidate pools (single call)
  */
 
-import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType } from "./l1-writer.js";
+import type { ExtractedMemory, MemoryRecord, DedupDecision, MemoryType, MemoryScope } from "./l1-writer.js";
 import { CONFLICT_DETECTION_SYSTEM_PROMPT, formatBatchConflictPrompt } from "../prompts/l1-dedup.js";
 import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
@@ -22,6 +22,17 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { LLMRunner, Logger } from "../types.js";
 
 const TAG = "[memory-tdai][l1-dedup]";
+
+/**
+ * Deterministic near-dup threshold: if the top-1 vector candidate for a new
+ * memory has cosine score >= NEAR_DUP_SCORE and the SAME type, it is almost
+ * certainly the same fact/task restated (e.g. "user continues developing X"
+ * at each flush). Such memories skip the LLM judgment and are forced to
+ * "update" against the top-1 candidate instead of being stored as new rows.
+ * Kept high on purpose: false positives would destroy distinct memories, so we
+ * only act on near-identical matches.
+ */
+export const NEAR_DUP_SCORE = 0.88;
 
 // ============================
 // Core function (batch mode)
@@ -63,8 +74,11 @@ export async function batchDedup(params: {
   embeddingTimeoutMs?: number;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
+  /** Current project id — scopes candidate recall so merges cannot cross projects. */
+  projectId?: string;
 }): Promise<DedupDecision[]> {
   const { memories, config, logger, model, vectorStore, embeddingService, llmRunner } = params;
+  const projectId = params.projectId ?? "";
   const topK = params.conflictRecallTopK ?? 5;
 
   if (memories.length === 0) {
@@ -100,14 +114,14 @@ export async function batchDedup(params: {
     // === Tier 1: Vector recall mode ===
     logger?.debug?.(`${TAG} Using vector recall mode (topK=${topK})`);
     try {
-      matches = await findCandidatesByVector(memories, vectorStore!, embeddingService, topK, logger, params.embeddingTimeoutMs);
+      matches = await findCandidatesByVector(memories, vectorStore!, embeddingService, topK, logger, params.embeddingTimeoutMs, projectId);
     } catch (err) {
       logger?.warn?.(
         `${TAG} Vector recall failed, falling back to FTS keyword: ${err instanceof Error ? err.message : String(err)}`,
       );
       // Degrade to FTS keyword recall
       if (hasFts) {
-        matches = await findCandidatesByFts(memories, vectorStore!, logger);
+        matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
       } else {
         logger?.debug?.(`${TAG} FTS not available either, skipping conflict detection`);
         return storeAll();
@@ -116,7 +130,7 @@ export async function batchDedup(params: {
   } else if (hasFts) {
     // === Tier 2: FTS keyword recall ===
     logger?.debug?.(`${TAG} Using FTS keyword recall mode (no embedding service or no vector data)`);
-    matches = await findCandidatesByFts(memories, vectorStore!, logger);
+    matches = await findCandidatesByFts(memories, vectorStore!, logger, projectId);
   } else {
     // Shouldn't reach here given the fast-path check above, but be defensive
     logger?.debug?.(`${TAG} No usable recall path, skipping conflict detection`);
@@ -131,8 +145,52 @@ export async function batchDedup(params: {
     return storeAll();
   }
 
-  // Phase 2: Batch LLM judgment
-  return runLlmJudgment(matches, memories, config, logger, model, llmRunner);
+  // Phase 2a: deterministic near-dups (score >= NEAR_DUP_SCORE, same type) are
+  // forced to "update" without burning an LLM call — a restated task description
+  // at every flush must not become a new row. These matches are excluded from
+  // the LLM batch; everything else still goes through judgment.
+  const forced = matches.filter((m) => m.nearDupTarget);
+  if (forced.length > 0) {
+    for (const m of forced) {
+      logger?.debug?.(
+        `${TAG} Near-dup (score>=${NEAR_DUP_SCORE}, same type): ${m.newMemory.record_id} → update ${m.nearDupTarget} (skipping LLM judgment)`,
+      );
+    }
+  }
+
+  const llmMatches = matches.filter((m) => !m.nearDupTarget);
+  if (llmMatches.length === 0) {
+    // All memories are deterministic near-dups → all update, no LLM call.
+    return forced.map((m) => ({
+      record_id: m.newMemory.record_id,
+      action: "update" as const,
+      target_ids: [m.nearDupTarget!],
+      merged_content: m.newMemory.content,
+      merged_type: m.newMemory.type,
+      merged_priority: m.newMemory.priority,
+    }));
+  }
+
+  // Phase 2b: Batch LLM judgment for the rest
+  const llmDecisions = await runLlmJudgment(llmMatches, memories, config, logger, model, llmRunner);
+
+  // Merge: forced updates take precedence; LLM decisions for the others.
+  const forcedMap = new Map(forced.map((m) => [m.newMemory.record_id, m]));
+  const decisions = llmDecisions.map((d) => {
+    const f = forcedMap.get(d.record_id);
+    if (f) {
+      return {
+        record_id: f.newMemory.record_id,
+        action: "update" as const,
+        target_ids: [f.nearDupTarget!],
+        merged_content: f.newMemory.content,
+        merged_type: f.newMemory.type,
+        merged_priority: f.newMemory.priority,
+      };
+    }
+    return d;
+  });
+  return decisions;
 }
 
 /**
@@ -196,6 +254,26 @@ async function runLlmJudgment(
 // ============================
 
 /**
+ * Merging across a scope boundary destroys data: a project memory merging into
+ * a global target rewrites that target as project-scoped, and the global memory
+ * silently disappears for every other project. Visibility alone does not protect
+ * against this (a global record is legitimately visible to every project), so
+ * candidates whose scope differs from the incoming memory are dropped outright —
+ * the LLM never sees them and returns "create" instead.
+ */
+export function sameScope(
+  candidate: { scope?: string; project_id?: string },
+  memoryScope: MemoryScope | undefined,
+  projectId: string,
+): boolean {
+  // Legacy records (no scope) and non-sqlite backends behave as before.
+  if (!candidate.scope) return true;
+  const wanted = memoryScope ?? "global";
+  if (candidate.scope !== wanted) return false;
+  return wanted !== "project" || candidate.project_id === projectId;
+}
+
+/**
  * Vector-based candidate recall (aligned with prototype):
  * batch-embed new memories → cosine search in VectorStore → exclude self-batch → return candidates.
  */
@@ -206,6 +284,7 @@ async function findCandidatesByVector(
   topK: number,
   logger?: Logger,
   embeddingTimeoutMs?: number,
+  projectId = "",
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
 
@@ -220,28 +299,37 @@ async function findCandidatesByVector(
     const queryVec = embeddings[i];
 
     // Vector search top-K (request extra to account for self-batch filtering)
-    const searchResults = await vectorStore.searchL1Vector(queryVec, topK + memories.length, mem.content);
+    const searchResults = await vectorStore.searchL1Vector(queryVec, topK + memories.length, mem.content, projectId);
 
-    // Exclude records from current batch, convert to MemoryRecord format
-    const candidates: MemoryRecord[] = searchResults
+    // Exclude records from current batch, convert to MemoryRecord format.
+    // Keep the raw search result (with score) to detect deterministic near-dups.
+    const rawFiltered = searchResults
       .filter((r) => !newRecordIds.has(r.record_id))
-      .slice(0, topK)
-      .map((r) => ({
-        id: r.record_id,
-        content: r.content,
-        type: r.type as MemoryRecord["type"],
-        priority: r.priority,
-        scene_name: r.scene_name,
-        source_message_ids: [],
-        metadata: {},
-        timestamps: [r.timestamp_str].filter(Boolean),
-        createdAt: "",
-        updatedAt: "",
-        sessionKey: r.session_key,
-        sessionId: r.session_id,
-      }));
+      .filter((r) => sameScope(r, mem.scope, projectId));
 
-    matches.push({ newMemory: mem, candidates });
+    const candidates: MemoryRecord[] = rawFiltered.slice(0, topK).map((r) => ({
+      id: r.record_id,
+      content: r.content,
+      type: r.type as MemoryRecord["type"],
+      priority: r.priority,
+      scene_name: r.scene_name,
+      source_message_ids: [],
+      metadata: {},
+      timestamps: [r.timestamp_str].filter(Boolean),
+      createdAt: "",
+      updatedAt: "",
+      sessionKey: r.session_key,
+      sessionId: r.session_id,
+    }));
+
+    // Deterministic near-dup: top-1 candidate with score >= NEAR_DUP_SCORE
+    // and same type → force update instead of LLM judgment (prevents restated
+    // task descriptions from piling up as new rows at every flush).
+    const top = rawFiltered[0];
+    const nearDupTarget =
+      top && top.score >= NEAR_DUP_SCORE && top.type === mem.type ? top.record_id : undefined;
+
+    matches.push({ newMemory: mem, candidates, nearDupTarget });
   }
 
   logger?.debug?.(
@@ -260,6 +348,7 @@ async function findCandidatesByFts(
   memories: Array<ExtractedMemory & { record_id: string }>,
   vectorStore: IMemoryStore,
   _logger?: Logger,
+  projectId = "",
 ): Promise<CandidateMatch[]> {
   const newRecordIds = new Set(memories.map((m) => m.record_id));
   const matches: CandidateMatch[] = [];
@@ -267,10 +356,11 @@ async function findCandidatesByFts(
   for (const mem of memories) {
     const ftsQuery = buildFtsQuery(mem.content);
     if (ftsQuery) {
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, 10);
+      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, 10, projectId);
       // Filter out records from the current batch
       const candidates: MemoryRecord[] = ftsResults
         .filter((r) => !newRecordIds.has(r.record_id))
+        .filter((r) => sameScope(r, mem.scope, projectId))
         .slice(0, 5)
         .map((r) => ({
           id: r.record_id,
