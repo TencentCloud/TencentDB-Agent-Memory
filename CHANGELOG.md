@@ -8,6 +8,14 @@
 
 ### ✨ 新功能
 
+- **修复 prompt 缓存命中率退化** ([#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120))：新增 3 项 `recall` 配置以优化 DeepSeek/MiMo 等 OpenAI-compatible provider 的前缀缓存命中率。
+  - **`recall.injectionMode`**：控制动态 L1 召回内容的注入位置。`"prepend"`（默认，向后兼容，注入到用户消息前缀）；`"append"`（通过 OpenClaw `appendContext` 注入到用户消息之后，不影响前缀缓存）。
+  - **`recall.showInjected`**：是否在持久化历史中保留 `<relevant-memories>` 标签。默认 `false`（缓存友好，减少上下文膨胀）；`true` 仅调试场景使用。
+  - **`recall.cacheDiagnostics`**：开启后可观察每轮的 prompt 前缀稳定性诊断日志（PrefixShape），帮助验证注入模式对缓存的影响。
+  - 稳定记忆上下文（persona / scene navigation / memory tools guide）现在同时映射到 OpenClaw 的 `prependSystemContext` 字段（CACHE_BOUNDARY 之前），使这些不变内容能够参与前缀缓存命中。
+  - **Markdown 格式 stripping**：`stripRecallFromUserMessage` 现在可以识别并清除被 markdown 代码块（fenced/inline/bold）包裹的 TencentDB 召回块，防止 LLM 以 markdown 格式返回召回内容时泄漏到持久化历史中。
+  - 新增 24 个测试覆盖 markdown stripping、16 个 recall-injection 测试、19 个 cache-diagnostics 测试。
+
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。

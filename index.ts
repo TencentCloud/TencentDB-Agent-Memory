@@ -34,6 +34,8 @@ import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
+import { stripRecallFromUserMessage, hasRecallInjection } from "./src/utils/recall-injection.js";
+import { CacheDiagnosticsTracker } from "./src/utils/cache-diagnostics.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
 
 // Core abstractions (host-neutral)
@@ -87,6 +89,13 @@ const pendingRecallCache = new Map<string, {
  * Entries are cleaned up in agent_end after use; stale entries swept alongside prompt cache.
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
+
+/**
+ * Per-session cache-diagnostics trackers.
+ * Created lazily when recall.cacheDiagnostics is enabled.
+ * Keyed by sessionKey — each conversation gets its own prefix-stability history.
+ */
+const cacheDiagTrackers = new Map<string, CacheDiagnosticsTracker>();
 
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
@@ -179,7 +188,7 @@ export default function register(api: OpenClawPluginApi) {
     api.logger.debug?.(
       `${TAG} Config parsed: ` +
       `capture=${cfg.capture.enabled}, ` +
-      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}), ` +
+      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}, injectionMode=${cfg.recall.injectionMode}, showInjected=${cfg.recall.showInjected}, cacheDiag=${cfg.recall.cacheDiagnostics}), ` +
       `extraction=${cfg.extraction.enabled}(dedup=${cfg.extraction.enableDedup}, maxMem=${cfg.extraction.maxMemoriesPerSession}), ` +
       `pipeline=(everyN=${cfg.pipeline.everyNConversations}, warmup=${cfg.pipeline.enableWarmup}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, l2DelayAfterL1=${cfg.pipeline.l2DelayAfterL1Seconds}s, l2Min=${cfg.pipeline.l2MinIntervalSeconds}s, l2Max=${cfg.pipeline.l2MaxIntervalSeconds}s, activeWindow=${cfg.pipeline.sessionActiveWindowHours}h), ` +
       `persona(triggerEvery=${cfg.persona.triggerEveryN}, backupCount=${cfg.persona.backupCount}, sceneBackupCount=${cfg.persona.sceneBackupCount}), ` +
@@ -584,17 +593,73 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        // Build OpenClaw hook return shape based on injectionMode.
+        // - Stable content (persona/scene/tools) → prependSystemContext (before CACHE_BOUNDARY, cached)
+        // - Dynamic content (L1 recall) → prependContext (default) or appendContext (cache-friendly)
+        const hookResult: Record<string, string> = {};
+
+        // Always route stable content to prependSystemContext when available.
+        // OpenClaw places prependSystemContext BEFORE the CACHE_BOUNDARY, so this
+        // content participates in prompt caching (Anthropic/OpenAI/DeepSeek prefix caches).
+        if (result?.appendSystemContext) {
+          hookResult.prependSystemContext = result.appendSystemContext;
+          // Keep appendSystemContext as fallback for older OpenClaw hosts that
+          // don't consume prependSystemContext (they ignore unknown fields).
+          hookResult.appendSystemContext = result.appendSystemContext;
+        }
+
+        // Route dynamic L1 recall based on injectionMode
+        if (cfg.recall.injectionMode === "append" && result?.prependContext) {
+          // append mode: dynamic recall goes after the user message via appendContext.
+          // This avoids changing the user prompt prefix → prefix-matching cache stable.
+          hookResult.appendContext = result.prependContext;
+        } else if (result?.prependContext) {
+          // prepend mode (default): dynamic recall prepended to user prompt.
+          hookResult.prependContext = result.prependContext;
+        }
+
+        // Cache diagnostics: track prefix stability across turns
+        if (cfg.recall.cacheDiagnostics && sessionKey) {
+          let tracker = cacheDiagTrackers.get(sessionKey);
+          if (!tracker) {
+            tracker = new CacheDiagnosticsTracker(api.logger);
+            cacheDiagTrackers.set(sessionKey, tracker);
+          }
+          const systemPrompt = (event as Record<string, unknown>).systemPrompt as string | undefined;
+          const userPrefix = result?.prependContext ?? "";
+          tracker.recordTurn({
+            systemPrompt: systemPrompt ?? "(unknown)",
+            toolSchemas: (event as Record<string, unknown>).tools,
+            userPrefix,
+          });
+          // Clean old trackers alongside prompt caches
+          if (cacheDiagTrackers.size > PROMPT_CACHE_MAX_SIZE) {
+            const entries = [...cacheDiagTrackers.entries()].sort(
+              (a, b) => b[1].getHitRate() - a[1].getHitRate(),
+            );
+            for (const [key] of entries.slice(PROMPT_CACHE_MAX_SIZE)) {
+              cacheDiagTrackers.delete(key);
+            }
+          }
+        }
+
+        const hasInjection = Object.keys(hookResult).length > 0;
+        if (hasInjection) {
+          const prependSystemLen = hookResult.prependSystemContext?.length ?? 0;
+          const prependLen = hookResult.prependContext?.length ?? 0;
+          const appendLen = hookResult.appendContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `prependSystemContext=${prependSystemLen} chars, ` +
+            `prependContext=${prependLen} chars, ` +
+            `appendContext=${appendLen} chars, ` +
+            `mode=${cfg.recall.injectionMode}`,
           );
-        } else {
-          api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
+          return hookResult;
         }
-        return result;
+
+        api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
+        return undefined;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -616,7 +681,11 @@ export default function register(api: OpenClawPluginApi) {
   // the session JSONL.  The current-turn LLM already saw the full prompt
   // (effectivePrompt lives in memory), but we don't want recall artifacts
   // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
+  //
+  // When recall.showInjected is true, the injected <relevant-memories> block is
+  // preserved in history (debugging/transparency use case). The default (false)
+  // keeps history clean and avoids context bloat that destabilizes prompt prefixes.
+  const BEFORE_MESSAGE_WRITE_TAG = "[memory-tdai] [before_message_write]";
   api.on("before_message_write", (event) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
@@ -624,29 +693,36 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    // Respect showInjected config: when enabled, preserve recall injection in history
+    if (cfg.recall.showInjected) {
+      if (hasRecallInjection(msg.content as string | Array<{ type: string; text?: string }>)) {
+        api.logger.debug?.(`${BEFORE_MESSAGE_WRITE_TAG} showInjected=true — preserving <relevant-memories> in history`);
+      }
+      return;
+    }
 
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
+    // Strip only TencentDB-generated recall blocks (with standard preamble).
+    // User-authored <relevant-memories> examples (without the preamble) are preserved.
+    const cleaned = stripRecallFromUserMessage(
+      msg.content as string | Array<{ type: string; text?: string }>,
+    );
+
+    if (cleaned === msg.content) return;
+
+    if (typeof msg.content === "string" && typeof cleaned === "string") {
+      api.logger.debug?.(
+        `${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`,
+      );
       return { message: { ...event.message, content: cleaned } as typeof event.message };
     }
 
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
+    if (Array.isArray(msg.content) && Array.isArray(cleaned)) {
+      const totalStripped = (msg.content as Array<{ text?: string }>).reduce(
+        (sum, p, i) => sum + (p.text?.length ?? 0) - ((cleaned[i] as { text?: string })?.text?.length ?? 0),
+        0,
+      );
       api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
+      return { message: { ...event.message, content: cleaned } as unknown as typeof event.message };
     }
   });
 
