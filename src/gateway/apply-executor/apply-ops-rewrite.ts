@@ -129,13 +129,12 @@ export async function applyRewrites(
       throw failed(err);
     }
     try {
-      // The flag is set when the RENAME starts, not when the write is
-      // attempted: an EACCES on the tmp file leaves the carrier untouched and
-      // must stay a retryable failure, while a rename that dies halfway is
-      // reconciliation's question.
-      await atomicWrite(resolved, target.content, () => {
-        result.storeTouched = true;
-      });
+      // Marked only once the write RETURNED: the rename is atomic within the
+      // directory, so a throw anywhere in atomicWrite (EACCES on the tmp file,
+      // EISDIR on the target) leaves the carrier untouched and must stay a
+      // retryable failure rather than park the run for reconciliation.
+      await atomicWrite(resolved, target.content);
+      result.storeTouched = true;
     } catch (err) {
       throw failed(err);
     }

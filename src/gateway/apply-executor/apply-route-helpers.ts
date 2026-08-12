@@ -43,16 +43,14 @@ export function hasMutated(result: ApplyResult): boolean {
 /**
  * Atomic write: tmp file in the same directory + rename.
  *
- * `onRenameStart` fires once the tmp file is on disk and the rename is about
- * to run — the first instant the CARRIER can change. Everything before it
- * (mkdir, the tmp write) fails without touching the target, so a caller that
- * marks its run as "the store was mutated" needs this seam to tell an EACCES
- * on the tmp file from a rename that died halfway.
+ * The rename is within one directory, so POSIX makes it atomic: it either
+ * happened or it did not. A caller asking "did the carrier change?" therefore
+ * has its answer in whether this function returned — no seam required, and a
+ * throw (EACCES on the tmp file, EISDIR on the target) means untouched.
  */
 export async function atomicWrite(
   targetPath: string,
   content: string,
-  onRenameStart?: () => void,
 ): Promise<void> {
   const dir = path.dirname(targetPath);
   await fs.promises.mkdir(dir, { recursive: true });
@@ -61,6 +59,5 @@ export async function atomicWrite(
     `.apply-tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   );
   await fs.promises.writeFile(tmpPath, content, "utf-8");
-  onRenameStart?.();
   await fs.promises.rename(tmpPath, targetPath);
 }

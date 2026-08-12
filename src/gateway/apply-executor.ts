@@ -10,7 +10,7 @@
  *   - apply-executor/apply-executor-deps.ts — ApplyExecutorDeps interface
  *   - apply-executor/apply-helpers.ts      — resolveWithinDataDir, fetchMetaRows, writeBackup
  *   - apply-executor/apply-provenance.ts   — writeProvenanceRecord (merge + rewriteRecord share)
- *   - apply-executor/apply-route-helpers.ts — parseMetadata, hasApplied, atomicWrite (pure)
+ *   - apply-executor/apply-route-helpers.ts — parseMetadata, hasApplied/hasMutated, atomicWrite (pure)
  *   - apply-executor/validate.ts           — parseRequest + validateSemantics + assertOpsSubset
  *   - apply-executor/manifest.ts           — checkManifest (trust-boundary recheck)
  *   - apply-executor/apply-ops-merge.ts    — applyMerges
