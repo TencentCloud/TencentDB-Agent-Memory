@@ -2,12 +2,12 @@
  * tz-04 C0 — what the meter actually reacts to, pinned BEFORE the baseline.
  *
  * A metric is only worth taking once the levers behind it are known to move
- * the answer. Each lever gets its own case, and one of them pins a fact rather
- * than a wish: on the default `hybrid` strategy `scoreThreshold` changes
- * NOTHING — `searchHybrid` takes the threshold and never applies it. Tuning
- * that knob on the deployed default would have looked like "no effect from
- * scoring", which is a measurement artefact, not a property of recall. Ф6 of
- * this package changes that; until then this test states the truth.
+ * the answer. Each lever gets its own case. The `hybrid` pair is the one that
+ * found a defect: `searchHybrid` accepted `scoreThreshold` and never applied
+ * it, so tuning that knob on the deployed default strategy changed literally
+ * nothing. Ф6 applies it to the cosine leg — where it means something — and
+ * NOT to the fused RRF score, which lives on another scale (1/(60+rank)).
+ * The keyword leg is deliberately unaffected: a BM25 hit is not a similarity.
  */
 import { describe, it, expect } from "vitest";
 import { parseConfig } from "../config.js";
@@ -47,9 +47,9 @@ function row(
  * A store that answers both legs with the same fixed rows and ignores the
  * store-side scope filter — the JS legs are what this test characterizes.
  */
-function fixedStore(rows: L1SearchResult[]): IMemoryStore {
+function fixedStore(rows: L1SearchResult[], ftsAvailable = true): IMemoryStore {
   return {
-    isFtsAvailable: () => true,
+    isFtsAvailable: () => ftsAvailable,
     searchL1Vector: async () => rows,
     searchL1Fts: async () => rows.map((r) => ({ ...r })),
     getCapabilities: () => ({ nativeHybridSearch: false }),
@@ -71,6 +71,7 @@ async function ids(
   overrides: Record<string, unknown>,
   strategy: "keyword" | "embedding" | "hybrid",
   projectId = OWN,
+  ftsAvailable = true,
 ): Promise<string[]> {
   const cfg = parseConfig({ recall: { strategy, ...overrides } });
   const result = await searchMemoriesWithDetails(
@@ -79,7 +80,7 @@ async function ids(
     cfg,
     undefined,
     strategy,
-    fixedStore(ROWS),
+    fixedStore(ROWS, ftsAvailable),
     fakeEmbedding,
     projectId,
   );
@@ -100,16 +101,31 @@ describe("tz-04 C0: the levers the meter is supposed to react to", () => {
     expect(strict).toEqual([]);
   });
 
-  it("scoreThreshold does NOT change the answer on hybrid (pinned defect, fixed in Ф6)", async () => {
+  it("scoreThreshold reaches the hybrid cosine leg (Ф6: it used to be ignored)", async () => {
+    // FTS off, so the only candidates are the ones the threshold applies to.
     const loose = await ids(
       { scoreThreshold: 0, crossProject: "decay" },
       "hybrid",
+      OWN,
+      false,
     );
     const strict = await ids(
       { scoreThreshold: 0.99, crossProject: "decay" },
       "hybrid",
+      OWN,
+      false,
     );
-    expect(strict).toEqual(loose);
+    expect(loose.length).toBeGreaterThan(0);
+    expect(strict).toEqual([]);
+  });
+
+  it("the hybrid keyword leg is not cut by the similarity threshold", async () => {
+    // A BM25 hit is not a cosine: an absurd threshold must not empty the
+    // keyword leg, or the fused ranking would silently become embedding-only.
+    const strict = await ids(
+      { scoreThreshold: 0.99, crossProject: "decay" },
+      "hybrid",
+    );
     expect(strict.length).toBeGreaterThan(0);
   });
 

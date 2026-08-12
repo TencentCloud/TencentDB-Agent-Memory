@@ -17,7 +17,7 @@ export async function searchHybrid(
   userText: string,
   _pluginDataDir: string,
   maxResults: number,
-  _threshold: number,
+  threshold: number,
   vectorStore: IMemoryStore,
   embeddingService: EmbeddingService,
   logger?: Logger,
@@ -34,7 +34,19 @@ export async function searchHybrid(
     runEmbeddingPart(userText, vectorStore, embeddingService, candidateK, embeddingCallOpts, projectId, mode, diagnostics, logger),
   ]);
   const keywordResults = keywordResult.records;
-  const embeddingResults = embeddingResult.results;
+  // The threshold belongs to the cosine leg and only to it: an RRF score is
+  // 1/(60+rank) and cutting it by a similarity threshold would drop everything.
+  // Before tz-04 the parameter was accepted and ignored, so on the deployed
+  // default strategy tuning `scoreThreshold` changed literally nothing.
+  const embeddingResults = embeddingResult.results.filter((r) => r.score >= threshold);
+  const cutByThreshold = embeddingResult.results.length - embeddingResults.length;
+  if (cutByThreshold > 0) {
+    diagnostics.push({
+      stage: "strategy",
+      code: "hybrid-threshold-cut",
+      message: `${cutByThreshold} embedding candidate(s) below scoreThreshold=${threshold}`,
+    });
+  }
   const timing = { ftsMs: keywordResult.ms, embeddingMs: embeddingResult.ms, ftsHits: keywordResults.length, embeddingHits: embeddingResults.length };
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
