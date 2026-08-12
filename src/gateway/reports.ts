@@ -43,6 +43,8 @@ export interface DigestData {
   rewrittenScenes: number;
   /** Probe precision@k (null when the probe was skipped/unavailable). */
   precisionAtK: number | null;
+  /** Foreign-project leakage rate (null when no project-scoped query ran). */
+  leakageRate?: number | null;
   elapsedMs: number;
   newL0: number;
   recordsPresented: number;
@@ -189,9 +191,10 @@ function probeSection(probe: ProbeResult | null | undefined): string {
   if (!probe) return "## Precision@k\n\nno probe result for this run\n";
   const p = probe.precisionAtK;
   const t = probe.top1HitRate;
+  const l = probe.leakageRate;
   const line =
     probe.status === "ok"
-      ? `- queries: ${probe.queries}\n- topK: ${probe.topK}\n- precision@k: ${p === null ? "n/a" : (p * 100).toFixed(1) + "%"}\n- top-1 hit rate: ${t === null ? "n/a" : (t * 100).toFixed(1) + "%"}`
+      ? `- queries: ${probe.queries}\n- topK: ${probe.topK}\n- precision@k: ${p === null ? "n/a" : (p * 100).toFixed(1) + "%"}\n- top-1 hit rate: ${t === null ? "n/a" : (t * 100).toFixed(1) + "%"}\n- foreign-project leakage: ${l === null || l === undefined ? "n/a (no project-scoped query)" : (l * 100).toFixed(1) + "%"}`
       : `- status: ${probe.status}${probe.reason ? ` (${probe.reason})` : ""}`;
   return `## Precision@k\n\n${line}\n`;
 }

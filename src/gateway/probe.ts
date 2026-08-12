@@ -26,6 +26,10 @@ import type { Logger } from "../core/types.js";
 import type { IMemoryStore } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { searchMemoriesWithDetails } from "../core/hooks/auto-recall.js";
+import type {
+  RecallDiagnostic,
+  RecallItem,
+} from "../core/hooks/auto-recall.js";
 
 // ============================
 // Types
@@ -37,19 +41,56 @@ export interface ProbeQuery {
   query: string;
   /** Known-good answers — non-empty substrings of record content. */
   expected: string[];
+  /**
+   * Project this query is asked from. Without it the query measures recall
+   * with no project context — a separate baseline that is never mixed into
+   * the leakage numbers (tz-10 C10.4).
+   */
+  projectId?: string;
+  /**
+   * Foreign-project negatives: contents that MUST NOT come back for this
+   * query. A hit on one of them is leakage, counted and reported per item.
+   */
+  foreignExpected?: string[];
 }
 
 export interface ProbeCorpus {
   queries: ProbeQuery[];
 }
 
-/** Per-query probe outcome (ranked retrieval, raw contents). */
+/** One retrieved item as the probe recorded it (tz-10 C10.4). */
+export interface ProbeItem {
+  memoryId: string;
+  content: string;
+  /** Project the record is tagged to ('' / undefined = untagged). */
+  projectId?: string;
+  /** 'global' | 'project' | undefined. */
+  scope?: string;
+  /** Score as the store returned it, before any multiplier. */
+  raw: number;
+  /** Score after decay / type weights — what the ranking used. */
+  final: number;
+  /** Why the final score is what it is (decay:*, type-weight:*, …). */
+  reasons: string[];
+  /** Matched one of the query's expected answers. */
+  relevant: boolean;
+  /** Matched a foreign-project negative — this is leakage. */
+  foreign: boolean;
+}
+
+/** Per-query probe outcome (ranked retrieval with item-level diagnostics). */
 export interface ProbePerQuery {
   id: string;
+  /** Project context the query was asked with ("" = none). */
+  projectId: string;
   /** Retrieved contents in rank order (up to topK). */
   top: string[];
   /** Number of expected answers present in the top-k retrieved set. */
   hits: number;
+  /** Retrieved items in rank order, with identity, scope and both scores. */
+  items: ProbeItem[];
+  /** How many foreign-project negatives made it into the top-k. */
+  foreignHits: number;
 }
 
 export interface ProbeResult {
@@ -62,17 +103,45 @@ export interface ProbeResult {
   precisionAtK: number | null;
   /** Fraction of queries whose rank-1 result was relevant; null when nothing evaluated. */
   top1HitRate: number | null;
+  /**
+   * Fraction of project-scoped queries that retrieved a foreign-project
+   * negative. `null` when the corpus has no query carrying BOTH a projectId
+   * and foreignExpected — a query asked without project context is a separate
+   * baseline and must not be averaged in (tz-10 C10.4 / S4).
+   */
+  leakageRate: number | null;
   evaluated: ProbePerQuery[];
+  /** Recall-path notes collected while running the corpus (tz-10 C10.5). */
+  diagnostics: RecallDiagnostic[];
   /** Skip/failure explanation (fail-open). */
   reason?: string;
 }
 
-/** Search abstraction injected for testability; returns ranked contents. */
-export type ProbeSearchFn = (query: string) => Promise<Array<{ content: string }>>;
+/**
+ * Search abstraction injected for testability; returns the ranked items the
+ * recall pipeline produced, plus whatever it wants to report about the run.
+ * The probe measures the real pipeline, so it takes the same project context
+ * a live turn would pass (tz-10 C10.4).
+ */
+export type ProbeSearchFn = (
+  query: string,
+  projectId: string,
+) => Promise<{ items: RecallItem[]; diagnostics?: RecallDiagnostic[] }>;
 
 // ============================
 // Corpus loading (fail-open)
 // ============================
+
+/** Non-empty trimmed strings out of an unknown JSON field. */
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+        .filter(
+          (e): e is string => typeof e === "string" && e.trim().length > 0,
+        )
+        .map((e) => e.trim())
+    : [];
+}
 
 /**
  * Read + parse the probe corpus. Returns null on any failure (missing file,
@@ -87,19 +156,41 @@ export function loadProbeCorpus(corpusPath: string): ProbeCorpus | null {
   }
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { queries?: unknown }).queries)) {
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      !Array.isArray((parsed as { queries?: unknown }).queries)
+    ) {
       return null;
     }
     const queries: ProbeQuery[] = [];
     for (const q of (parsed as { queries: unknown[] }).queries) {
       if (!q || typeof q !== "object") continue;
-      const qq = q as { id?: unknown; query?: unknown; expected?: unknown };
-      if (typeof qq.id !== "string" || typeof qq.query !== "string" || !qq.query.trim()) continue;
-      const expected = Array.isArray(qq.expected)
-        ? qq.expected.filter((e): e is string => typeof e === "string" && e.trim().length > 0).map((e) => e.trim())
-        : [];
+      const qq = q as {
+        id?: unknown;
+        query?: unknown;
+        expected?: unknown;
+        projectId?: unknown;
+        foreignExpected?: unknown;
+      };
+      if (
+        typeof qq.id !== "string" ||
+        typeof qq.query !== "string" ||
+        !qq.query.trim()
+      )
+        continue;
+      const expected = strings(qq.expected);
+      // A query with no positive answer is dropped: precision has no meaning
+      // for it. A pure foreign-negative entry therefore never enters the
+      // corpus — pair the negative with the positive it must not outrank.
       if (expected.length === 0) continue;
-      queries.push({ id: qq.id, query: qq.query, expected });
+      queries.push({
+        id: qq.id,
+        query: qq.query,
+        expected,
+        projectId: typeof qq.projectId === "string" ? qq.projectId : undefined,
+        foreignExpected: strings(qq.foreignExpected),
+      });
     }
     return queries.length > 0 ? { queries } : null;
   } catch {
@@ -112,15 +203,23 @@ export function loadProbeCorpus(corpusPath: string): ProbeCorpus | null {
 // ============================
 
 /** Is a retrieved content "the answer" for the expected list? */
-export function isRelevant(retrievedContent: string, expected: string[]): boolean {
+export function isRelevant(
+  retrievedContent: string,
+  expected: string[],
+): boolean {
   const haystack = retrievedContent.trim();
   if (!haystack) return false;
   return expected.some((e) => haystack.includes(e));
 }
 
 /**
- * Compute precision@k + top1 hit rate over a corpus using an injected search.
- * `topK` = retrieval window per query (cfg.probe.topK).
+ * Compute precision@k, top1 hit rate and foreign-project leakage over a
+ * corpus using an injected search. `topK` = retrieval window per query
+ * (cfg.probe.topK).
+ *
+ * Leakage is averaged only over queries that carry BOTH a projectId and
+ * foreign negatives: a query asked without project context measures something
+ * else and stays a separate baseline (tz-10 C10.4).
  */
 export async function computeProbeResults(
   corpus: ProbeCorpus,
@@ -128,30 +227,66 @@ export async function computeProbeResults(
   search: ProbeSearchFn,
 ): Promise<ProbeResult> {
   const evaluated: ProbePerQuery[] = [];
+  const diagnostics: RecallDiagnostic[] = [];
   let totalHits = 0;
   let top1Hits = 0;
+  let leakageQueries = 0;
+  let leakingQueries = 0;
   const k = topK > 0 ? topK : 3;
 
   for (const q of corpus.queries) {
-    let top: string[];
+    const projectId = q.projectId ?? "";
+    let items: RecallItem[] = [];
     try {
-      const results = (await search(q.query)) ?? [];
-      top = results.slice(0, k).map((r) => r.content);
-    } catch {
-      // A single query failing is a probe failure for that query — count 0 hits.
-      top = [];
+      const result = await search(q.query, projectId);
+      items = (result.items ?? []).slice(0, k);
+      for (const d of result.diagnostics ?? []) diagnostics.push(d);
+    } catch (err) {
+      // A single query failing is a probe failure for that query — count 0
+      // hits, but say so instead of pretending the memory was empty.
+      diagnostics.push({
+        stage: "repo",
+        code: "probe-query-failed",
+        message: `${q.id}: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
-    const relevant = top.filter((c) => isRelevant(c, q.expected));
-    const hits = relevant.length;
+
+    const probeItems = items.map((item) => toProbeItem(item, q));
+    const top = probeItems.map((i) => i.content);
+    const hits = probeItems.filter((i) => i.relevant).length;
+    const foreignHits = probeItems.filter((i) => i.foreign).length;
     const denom = Math.min(k, q.expected.length);
     totalHits += denom > 0 ? hits / denom : 0;
-    if (top.length > 0 && isRelevant(top[0], q.expected)) top1Hits += 1;
-    evaluated.push({ id: q.id, top, hits });
+    if (probeItems.length > 0 && probeItems[0]!.relevant) top1Hits += 1;
+    if (projectId && (q.foreignExpected?.length ?? 0) > 0) {
+      leakageQueries += 1;
+      if (foreignHits > 0) leakingQueries += 1;
+    }
+    evaluated.push({
+      id: q.id,
+      projectId,
+      top,
+      hits,
+      items: probeItems,
+      foreignHits,
+    });
   }
 
   const queries = corpus.queries.length;
+  const leakageRate =
+    leakageQueries > 0 ? leakingQueries / leakageQueries : null;
   if (queries === 0) {
-    return { status: "skipped", queries: 0, topK: k, precisionAtK: null, top1HitRate: null, evaluated, reason: "empty corpus" };
+    return {
+      status: "skipped",
+      queries: 0,
+      topK: k,
+      precisionAtK: null,
+      top1HitRate: null,
+      leakageRate,
+      evaluated,
+      diagnostics,
+      reason: "empty corpus",
+    };
   }
 
   return {
@@ -160,7 +295,24 @@ export async function computeProbeResults(
     topK: k,
     precisionAtK: totalHits / queries,
     top1HitRate: top1Hits / queries,
+    leakageRate,
     evaluated,
+    diagnostics,
+  };
+}
+
+/** Record what the pipeline returned, and how it relates to this query. */
+function toProbeItem(item: RecallItem, q: ProbeQuery): ProbeItem {
+  return {
+    memoryId: item.memoryId,
+    content: item.content,
+    projectId: item.scope.projectId,
+    scope: item.scope.scope,
+    raw: item.score.raw,
+    final: item.score.final,
+    reasons: item.score.reasons,
+    relevant: isRelevant(item.content, q.expected),
+    foreign: isRelevant(item.content, q.foreignExpected ?? []),
   };
 }
 
@@ -168,15 +320,24 @@ export async function computeProbeResults(
 // Real search (recall pipeline)
 // ============================
 
-/** Default search = the actual recall pipeline (strategy + typeWeights). */
+/**
+ * Default search = the actual recall pipeline (strategy + typeWeights), asked
+ * with the query's own project context. Passing no projectId (as this did
+ * before tz-10a) makes the probe blind to project isolation: every
+ * cross-project row looks equally allowed.
+ */
 async function searchViaRecall(
   query: string,
-  dataDir: string,
-  cfg: MemoryTdaiConfig,
-  logger: Logger | undefined,
-  vectorStore?: IMemoryStore,
-  embeddingService?: EmbeddingService,
-): Promise<Array<{ content: string }>> {
+  projectId: string,
+  deps: {
+    dataDir: string;
+    cfg: MemoryTdaiConfig;
+    logger?: Logger;
+    vectorStore?: IMemoryStore;
+    embeddingService?: EmbeddingService;
+  },
+): Promise<{ items: RecallItem[]; diagnostics: RecallDiagnostic[] }> {
+  const { dataDir, cfg, logger, vectorStore, embeddingService } = deps;
   const result = await searchMemoriesWithDetails(
     query,
     dataDir,
@@ -185,8 +346,9 @@ async function searchViaRecall(
     (cfg.recall.strategy ?? "hybrid") as "keyword" | "embedding" | "hybrid",
     vectorStore,
     embeddingService,
+    projectId,
   );
-  return result.memories;
+  return { items: result.items, diagnostics: result.diagnostics };
 }
 
 /**
@@ -216,7 +378,9 @@ export async function runRecallProbe(opts: {
       topK: cfg.probe.topK,
       precisionAtK: null,
       top1HitRate: null,
+      leakageRate: null,
       evaluated: [],
+      diagnostics: [],
       reason: `probe corpus not found or unusable (${corpusPath})`,
     };
   }
@@ -228,11 +392,22 @@ export async function runRecallProbe(opts: {
       topK: cfg.probe.topK,
       precisionAtK: null,
       top1HitRate: null,
+      leakageRate: null,
       evaluated: [],
+      diagnostics: [],
       reason: "vector store or embedding service unavailable",
     };
   }
 
-  const search = opts.search ?? ((query) => searchViaRecall(query, dataDir, cfg, logger, vectorStore, embeddingService));
+  const search =
+    opts.search ??
+    ((query: string, projectId: string) =>
+      searchViaRecall(query, projectId, {
+        dataDir,
+        cfg,
+        logger,
+        vectorStore,
+        embeddingService,
+      }));
   return computeProbeResults(corpus, cfg.probe.topK, search);
 }

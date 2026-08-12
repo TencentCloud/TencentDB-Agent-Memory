@@ -58,6 +58,7 @@ export async function runPostRunSteps(
         summary.applied.deletes.length + summary.applied.merges.length,
       rewrittenScenes: summary.applied.rewrites.length,
       precisionAtK: probe.precisionAtK,
+      leakageRate: probe.leakageRate,
       elapsedMs: summary.elapsedMs,
       newL0: summary.newL0,
       recordsPresented: summary.recordsPresented,
