@@ -30,6 +30,17 @@
 
 不动配置 = 行为完全不变。
 
+### 🐛 修复
+
+- **修复 cleanup 后 Checkpoint 计数器漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：
+  `CheckpointManager.recalibrate()` 增强：
+  - **Cursor rollback**：cleanup 删除旧的 L0 记录后，自动回退过期的 per-session `last_l1_cursor`，防止 L1 runner 重复处理已删除的数据。
+  - **JSONL recounting fallback**：当 vector store 不可用或 degraded 时，新增 `countJsonlL0Records()` / `countJsonlL1Records()` 辅助函数，直接扫描磁盘 JSONL 文件计数作为 fallback。
+  - API 重设计：`recalibrate(actualL0, actualL1)` → `recalibrate({ l0Count?, l1Count?, earliestValidL0Timestamp? })`，支持部分更新和 cursor rollback。
+  - 4-counter 矩阵：新增 `totalProcessedCount` 和 `memoriesSincePersonaCount` 修正，防止 cleanup 后 total_processed 虚高和 persona 误触发。
+  - before/after 快照：`RecalibrationResult` 返回修正前后的计数器值，支持审计日志。
+  - 测试：54 个测试覆盖单元、集成、并发安全、崩溃恢复、JSONL fallback 全路径（`checkpoint.test.ts` + `checkpoint.integration.test.ts` + `checkpoint.concurrent.test.ts` + `checkpoint.crash.test.ts` + `memory-cleaner.test.ts`）。
+
 ---
 
 ## [0.3.6] - 2026-05-27

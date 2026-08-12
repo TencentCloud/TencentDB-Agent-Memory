@@ -12,6 +12,10 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /** Optional post-cleanup callback invoked after each successful cleanup run
+   *  (e.g. to recalibrate checkpoint counters). Errors thrown by the callback
+   *  are caught and logged (non-fatal). */
+  onAfterCleanup?: () => void | Promise<void>;
 }
 
 interface CleanupStats {
@@ -183,6 +187,18 @@ export class LocalMemoryCleaner {
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
+
+    // Notify caller that cleanup completed (e.g. to recalibrate checkpoint counters)
+    if (this.opts.onAfterCleanup) {
+      try {
+        await this.opts.onAfterCleanup();
+      } catch (err) {
+        this.opts.logger?.warn(
+          `${TAG} onAfterCleanup callback failed (non-fatal): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
 
   }
 
