@@ -19,14 +19,21 @@ export interface FetchResult {
 
 /** 私有仓库认证配置（GitSourceFetcher 消费；公开仓库可不传）。 */
 export interface FetchOptions {
-  /** none=公开仓库；token=access_token 经 URL 注入；ssh=私钥经 GIT_SSH_COMMAND 注入。 */
+  /** none=公开仓库；token=经 GIT_ASKPASS 注入（URL 恒干净）；ssh=私钥经 GIT_SSH_COMMAND 注入。 */
   authMethod?: "none" | "token" | "ssh";
-  /** authMethod=token 时必填；构造 https://{tokenUsername ?? "oauth2"}:{token}@host/... */
+  /** authMethod=token 时必填：access token 原文（仅 worker 内存，绝不落库/URL/日志）。 */
   accessToken?: string;
-  /** Gitee 私有仓库需真实用户名；缺省 "oauth2"（GitHub/GitLab 适用）。 */
+  /** 用户名（Gitee 需真实用户名；GitHub/GitLab 省略时用 oauth2）。 */
   tokenUsername?: string;
-  /** authMethod=ssh 时必填：SSH 私钥原文，运行时写入临时文件(0600)注入。 */
+  /** authMethod=ssh 时必填：SSH 私钥 PEM 原文（写入 job 专属目录 0600，用完即删）。 */
   sshPrivateKey?: string;
+  /** 托管提供商（github/gitlab/gitea/generic）：用于内置 known_hosts 指纹选择与观测。 */
+  provider?: "github" | "gitlab" | "gitea" | "generic";
+  /** 管理员配置的 known_hosts 内容（追加到 job known_hosts；SSH 时生效）。 */
+  knownHosts?: string;
+  /** 资源限制（§15）：clone/fetch 超时（毫秒）。缺省读环境变量或内置默认。 */
+  cloneTimeoutMs?: number;
+  fetchTimeoutMs?: number;
 }
 
 /**

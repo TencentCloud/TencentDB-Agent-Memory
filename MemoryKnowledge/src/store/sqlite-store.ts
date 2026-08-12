@@ -99,6 +99,11 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
             accessToken: input.access_token ?? null,
             tokenUsername: input.token_username ?? null,
             sshPrivateKey: input.ssh_private_key ?? null,
+            credentialRef: input.credential_ref ?? null,
+            credentialVersion: input.credential_version ?? null,
+            credentialStatus: input.credential_ref ? "active" : null,
+            credentialFingerprint: input.credential_fingerprint ?? null,
+            credentialProvider: input.credential_provider ?? null,
             ownerUserId: input.owner_user_id ?? null,
             userId: input.user_id ?? null,
             agentId: input.agent_id ?? null,
@@ -217,6 +222,17 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
     if (patch.service_url !== undefined) set.serviceUrl = patch.service_url;
     if (patch.summary !== undefined) set.summary = patch.summary;
     if (patch.version !== undefined) set.version = patch.version;
+    if (patch.credential_ref !== undefined) set.credentialRef = patch.credential_ref;
+    if (patch.credential_version !== undefined) set.credentialVersion = patch.credential_version;
+    if (patch.credential_status !== undefined) set.credentialStatus = patch.credential_status;
+    if (patch.credential_fingerprint !== undefined) set.credentialFingerprint = patch.credential_fingerprint;
+    if (patch.credential_provider !== undefined) set.credentialProvider = patch.credential_provider;
+    if (patch.credential_last_validated_at !== undefined) set.credentialLastValidatedAt = patch.credential_last_validated_at;
+    if (patch.credential_last_auth_failure_at !== undefined) set.credentialLastAuthFailureAt = patch.credential_last_auth_failure_at;
+    // 明文列清空（949spec §5.1：迁移后新写入不留明文）
+    if (patch.access_token !== undefined) set.accessToken = patch.access_token;
+    if (patch.token_username !== undefined) set.tokenUsername = patch.token_username;
+    if (patch.ssh_private_key !== undefined) set.sshPrivateKey = patch.ssh_private_key;
 
     this.db
       .update(knowledgeCodeGraph)
@@ -609,6 +625,13 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       access_token: r.accessToken ?? null,
       token_username: r.tokenUsername ?? null,
       ssh_private_key: r.sshPrivateKey ?? null,
+      credential_ref: r.credentialRef ?? null,
+      credential_version: r.credentialVersion ?? null,
+      credential_status: r.credentialStatus ?? null,
+      credential_fingerprint: r.credentialFingerprint ?? null,
+      credential_provider: r.credentialProvider ?? null,
+      credential_last_validated_at: r.credentialLastValidatedAt ?? null,
+      credential_last_auth_failure_at: r.credentialLastAuthFailureAt ?? null,
       commit_hash: r.commitHash,
       owner_user_id: r.ownerUserId,
       user_id: r.userId,

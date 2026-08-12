@@ -27,37 +27,57 @@ import {
   type BatchDeleteResult,
 } from "../api-helpers.js";
 import type { CodeGraphInstancePool } from "../module.js";
+import type { SecretStore } from "../secrets/secret-store.js";
+import { canonicalizeGitUrl, GitUrlError, GIT_URL_ERROR } from "../source-fetcher/url-security.js";
+import { GitSourceFetcher, GitFetchError, FETCH_ERROR } from "../source-fetcher/git-fetcher.js";
+import type { FetchOptions } from "../source-fetcher/types.js";
 
 export interface CodeGraphRouteDeps {
   cgService: CodeGraphService;
   instancePool: CodeGraphInstancePool;
   /** Public base URL for service_url; should already include the API prefix (e.g. http://host:8421/v3). */
   publicBaseUrl: string;
+  /** 凭据存储（949spec §5.3）；未配置时 create 的凭据走 legacy 明文列（迁移期）。 */
+  secretStore?: SecretStore;
+  /** Git 连接测试器（§23）；缺省懒创建。 */
+  gitFetcher?: GitSourceFetcher;
 }
 
 const AUTH_METHODS = ["none", "token", "ssh"] as const;
 type AuthMethod = (typeof AUTH_METHODS)[number];
 
-/**
- * 剥离 repo_url 中的 userinfo（https://user:token@host/... → https://host/...）。
- * 返回干净 URL 与提取的凭据；非 http(s) 形式（如 git@ 的 SSH URL）原样返回。
- */
-function sanitizeRepoUrl(raw: string): {
-  url: string;
-  extractedToken?: string;
-  extractedUsername?: string;
-} {
-  try {
-    const u = new URL(raw);
-    if (!u.username && !u.password) return { url: raw };
-    const extractedToken = u.password || undefined;
-    const extractedUsername = u.username || undefined;
-    u.username = "";
-    u.password = "";
-    return { url: u.toString(), extractedToken, extractedUsername };
-  } catch {
-    return { url: raw };
+/** 稳定错误码映射（949spec §25）：source-fetcher / url-security 层错误码 → 客户端响应。 */
+function gitErrorToHttp(err: unknown): { status: 400 | 401 | 404 | 500 | 504; code: string } {
+  if (err instanceof GitUrlError) {
+    switch (err.code) {
+      case GIT_URL_ERROR.CREDENTIAL_IN_URL_NOT_ALLOWED:
+        return { status: 400, code: "CREDENTIAL_IN_URL_NOT_ALLOWED" };
+      case GIT_URL_ERROR.UNSUPPORTED_PROTOCOL:
+        return { status: 400, code: "UNSUPPORTED_PROTOCOL" };
+      case GIT_URL_ERROR.MALFORMED_URL:
+        return { status: 400, code: "MALFORMED_URL" };
+      case GIT_URL_ERROR.PRIVATE_ADDRESS_BLOCKED:
+        return { status: 400, code: "GIT_NETWORK_POLICY_BLOCKED" };
+      case GIT_URL_ERROR.DNS_RESOLUTION_BLOCKED:
+        return { status: 400, code: "GIT_DNS_RESOLUTION_BLOCKED" };
+      case GIT_URL_ERROR.DNS_RESOLUTION_FAILED:
+        return { status: 400, code: "GIT_DNS_RESOLUTION_BLOCKED" };
+      default:
+        return { status: 400, code: err.code };
+    }
   }
+  if (err instanceof GitFetchError) {
+    const map: Record<string, { status: 400 | 401 | 404 | 500 | 504; code: string }> = {
+      [FETCH_ERROR.GIT_SSH_HOST_UNTRUSTED]: { status: 400, code: "GIT_SSH_HOST_UNTRUSTED" },
+      [FETCH_ERROR.GIT_SSH_HOST_KEY_MISMATCH]: { status: 400, code: "GIT_SSH_HOST_KEY_MISMATCH" },
+      [FETCH_ERROR.GIT_AUTH_FAILED]: { status: 401, code: "GIT_AUTH_FAILED" },
+      [FETCH_ERROR.GIT_REPO_NOT_FOUND]: { status: 404, code: "GIT_REPO_NOT_FOUND" },
+      [FETCH_ERROR.GIT_CLONE_TIMEOUT]: { status: 504, code: "GIT_CLONE_TIMEOUT" },
+      [FETCH_ERROR.GIT_FETCH_TIMEOUT]: { status: 504, code: "GIT_CLONE_TIMEOUT" },
+    };
+    return map[err.code] ?? { status: 400, code: "GIT_FETCH_FAILED" };
+  }
+  return { status: 400, code: "GIT_FETCH_FAILED" };
 }
 
 // ───────────────────────── Query Specs ─────────────────────────
@@ -201,6 +221,30 @@ function buildToolParams(
 export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
   const app = new Hono();
   const { cgService, instancePool, publicBaseUrl } = deps;
+  const secretStore = deps.secretStore;
+  const gitFetcher = deps.gitFetcher ?? new GitSourceFetcher();
+
+  /** 由行 + SecretStore 解析出连接测试用的 FetchOptions（明文只存在于调用栈）。 */
+  async function resolveFetchOptionsForTest(
+    serviceId: string,
+    cgId: string,
+  ): Promise<FetchOptions> {
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) throw new Error("not found");
+    const method = row.auth_method as "none" | "token" | "ssh";
+    if (method === "none") return { authMethod: "none" };
+    if (!secretStore) throw new Error("SecretStore not configured");
+    if (!row.credential_ref) throw new Error("no credential bound");
+    const resolved = await secretStore.getSecret(row.credential_ref);
+    if (!resolved) throw new Error("credential not found or revoked");
+    return {
+      authMethod: resolved.authMethod === "ssh" ? "ssh" : "token",
+      accessToken: resolved.authMethod === "token" ? resolved.secret : undefined,
+      tokenUsername: resolved.username,
+      sshPrivateKey: resolved.authMethod === "ssh" ? resolved.secret : undefined,
+      provider: (row.credential_provider ?? undefined) as FetchOptions["provider"],
+    };
+  }
 
   // ═══════════════════ Management ═══════════════════
 
@@ -211,6 +255,16 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
 
     const repoUrl = body.repo_url;
     if (typeof repoUrl !== "string" || !repoUrl) return c.json(wrapError(400, "repo_url is required"), 400);
+
+    // §9/§18：URL 规范化 —— 拒绝 userinfo（CREDENTIAL_IN_URL_NOT_ALLOWED）、
+    // 控制字符/换行注入、http 明文、非法协议。repo_url 恒为干净 URL。
+    let cleanRepoUrl: string;
+    try {
+      cleanRepoUrl = canonicalizeGitUrl(repoUrl).url;
+    } catch (err) {
+      const { status, code } = gitErrorToHttp(err);
+      return c.json(wrapError(status, code), status);
+    }
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
@@ -224,37 +278,62 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (!AUTH_METHODS.includes(authMethod as AuthMethod)) {
       return c.json(wrapError(400, `auth_method must be one of ${AUTH_METHODS.join("/")}`), 400);
     }
-    let accessToken = typeof body.access_token === "string" && body.access_token ? body.access_token : undefined;
-    let tokenUsername =
+    const accessToken = typeof body.access_token === "string" && body.access_token ? body.access_token : undefined;
+    const tokenUsername =
       typeof body.token_username === "string" && body.token_username ? body.token_username : undefined;
     const sshPrivateKey =
       typeof body.ssh_private_key === "string" && body.ssh_private_key ? body.ssh_private_key : undefined;
+    const credentialRefRaw = typeof body.credential_ref === "string" && body.credential_ref ? body.credential_ref : undefined;
 
-    // URL 净化：剥离 userinfo，password 提升为 access_token（URL 内嵌优先于 body 字段）。
-    // 防调用方把 token 拼进 repo_url 导致落库/详情回显泄漏。
-    const { url: cleanRepoUrl, extractedToken, extractedUsername } = sanitizeRepoUrl(repoUrl);
-    if (extractedToken) {
-      accessToken = extractedToken;
-      tokenUsername = tokenUsername ?? extractedUsername;
-      if (authMethod === "none") authMethod = "token";
-    }
-    if (authMethod === "token" && !accessToken) {
-      return c.json(wrapError(400, "access_token is required for auth_method=token"), 400);
-    }
-    if (authMethod === "ssh" && !sshPrivateKey) {
-      return c.json(wrapError(400, "ssh_private_key is required for auth_method=ssh"), 400);
+    // §17 无效组合：auth=none 不得携带凭据材料。
+    if (authMethod === "none" && (accessToken || sshPrivateKey || credentialRefRaw)) {
+      return c.json(wrapError(400, "auth=none must not carry credential material"), 400);
     }
 
-    const { row, existed } = cgService.create({
+    // credential_ref 复用：校验存在性 + authMethod 匹配（§17 无效组合必须拒绝）。
+    let credentialVersion: number | null = null;
+    let credentialFingerprint: string | null = null;
+    const credentialProvider =
+      (typeof body.credential_provider === "string" ? body.credential_provider : null) ?? null;
+    if (credentialRefRaw) {
+      if (!deps.secretStore) {
+        return c.json(wrapError(400, "credential_ref provided but SecretStore is not configured"), 400);
+      }
+      const status = await deps.secretStore.getStatus(credentialRefRaw);
+      if (!status) {
+        return c.json(wrapError(404, "CREDENTIAL_REF_NOT_FOUND"), 404);
+      }
+      if (status.status === "revoked") {
+        return c.json(wrapError(400, "CREDENTIAL_REVOKED"), 400);
+      }
+      if (status.authMethod !== (authMethod === "token" ? "token" : "ssh")) {
+        return c.json(wrapError(400, "credential auth method mismatch"), 400);
+      }
+      credentialVersion = status.version;
+      credentialFingerprint = status.fingerprint ?? null;
+    }
+    if (!credentialRefRaw && (authMethod === "token" || authMethod === "ssh")) {
+      const missing = authMethod === "token" ? "access_token" : "ssh_private_key";
+      const provided = authMethod === "token" ? accessToken : sshPrivateKey;
+      if (!provided) {
+        return c.json(wrapError(400, `${missing} is required for auth_method=${authMethod} (or reuse credential_ref)`), 400);
+      }
+    }
+
+    const { row, existed } = await cgService.create({
       service_id: idFields.service_id,
       team_id: idFields.team_id,
       repo_url: cleanRepoUrl,
       branch,
       repo_name: repoName,
       auth_method: authMethod,
-      access_token: accessToken,
-      token_username: tokenUsername,
-      ssh_private_key: sshPrivateKey,
+      access_token: accessToken ?? null,
+      token_username: tokenUsername ?? null,
+      ssh_private_key: sshPrivateKey ?? null,
+      credential_ref: credentialRefRaw ?? null,
+      credential_version: credentialVersion,
+      credential_fingerprint: credentialFingerprint,
+      credential_provider: credentialProvider,
       owner_user_id: idFields.user_id,
       user_id: idFields.user_id,
       agent_id: idFields.agent_id,
@@ -373,6 +452,138 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       }
     }
     return c.json(wrapOk(result));
+  });
+
+  // ═══════════════════ Credential lifecycle (§19/§20/§22/§23) ═══════════════════
+
+  // PUT /credential — 设置/轮换凭据（§19 PUT /code-graphs/:id/credential；§20 rotation）。
+  // 不重建 code-graph 资产；新明文立即加密转入 SecretStore 产生新版本。
+  app.post("/credential/rotate", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    const cgId = body.code_graph_id;
+    if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
+
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) return c.json(wrapError(404, "code graph not found"), 404);
+    if (row.auth_method === "none") {
+      return c.json(wrapError(400, "code graph has no credential to rotate"), 400);
+    }
+    if (!secretStore) {
+      return c.json(wrapError(400, "SecretStore is not configured"), 400);
+    }
+    if (!row.credential_ref) {
+      return c.json(wrapError(400, "no credential_ref bound; migrate the row first"), 400);
+    }
+
+    const secret = typeof body.credential_secret === "string" && body.credential_secret
+      ? body.credential_secret
+      : undefined;
+    if (!secret) {
+      return c.json(wrapError(400, "credential_secret (new token or private key) is required"), 400);
+    }
+    const username = typeof body.token_username === "string" ? body.token_username : undefined;
+
+    try {
+      const ref = await secretStore.rotateSecret(row.credential_ref, { secret, username });
+      cgService.updateCredentialBinding(serviceId, cgId, {
+        credential_version: ref.credentialVersion,
+        credential_fingerprint: ref.fingerprint ?? null,
+        credential_status: "active",
+      });
+      return c.json(wrapOk({ code_graph_id: cgId, credential_ref: ref.credentialRef, credential_version: ref.credentialVersion }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json(wrapError(500, `credential rotation failed: ${msg.slice(0, 200)}`), 500);
+    }
+  });
+
+  // POST /credential/test — 连接测试（§23）：与真实 fetch 相同的安全路径执行 ls-remote。
+  app.post("/credential/test", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    const cgId = body.code_graph_id;
+    if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
+
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) return c.json(wrapError(404, "code graph not found"), 404);
+
+    let opts: FetchOptions;
+    try {
+      opts = await resolveFetchOptionsForTest(serviceId, cgId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return c.json(wrapError(400, msg.includes("revoked") ? "CREDENTIAL_REVOKED" : msg.slice(0, 200)), 400);
+    }
+
+    try {
+      await gitFetcher.testConnection(row.repo_url, opts);
+      await secretStore?.recordAuthResult(row.credential_ref ?? "", true);
+      cgService.updateCredentialBinding(serviceId, cgId, {
+        credential_last_validated_at: new Date().toISOString(),
+        credential_status: "active",
+      });
+      return c.json(wrapOk({ status: "SUCCESS", code_graph_id: cgId }));
+    } catch (err) {
+      await secretStore?.recordAuthResult(row.credential_ref ?? "", false);
+      cgService.updateCredentialBinding(serviceId, cgId, {
+        credential_last_auth_failure_at: new Date().toISOString(),
+        credential_status: "invalid",
+      });
+      const { status, code } = gitErrorToHttp(err);
+      return c.json(wrapError(status, code), status);
+    }
+  });
+
+  // DELETE /credential — 吊销绑定（§19 DELETE /code-graphs/:id/credential；§22 revocation）。
+  app.post("/credential/revoke", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    const cgId = body.code_graph_id;
+    if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
+
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) return c.json(wrapError(404, "code graph not found"), 404);
+    if (!secretStore || !row.credential_ref) {
+      return c.json(wrapError(400, "no credential_ref bound"), 400);
+    }
+    await secretStore.revokeSecret(row.credential_ref);
+    cgService.updateCredentialBinding(serviceId, cgId, { credential_status: "revoked" });
+    return c.json(wrapOk({ code_graph_id: cgId, status: "revoked" }));
+  });
+
+  // GET /credential/status — 凭据元数据（§19 可选端点；无明文）。
+  app.post("/credential/status", async (c) => {
+    const body = await c.req.json<Record<string, unknown>>();
+    const serviceId = c.req.header("x-tdai-service-id");
+    if (!isValidIdSegment(serviceId)) return c.json(wrapError(400, "x-tdai-service-id header is required"), 400);
+    const cgId = body.code_graph_id;
+    if (!isValidIdSegment(cgId)) return c.json(wrapError(400, "code_graph_id is required"), 400);
+
+    const row = cgService.getById(serviceId, cgId);
+    if (!row) return c.json(wrapError(404, "code graph not found"), 404);
+    if (!secretStore || !row.credential_ref) {
+      return c.json(wrapOk({ code_graph_id: cgId, bound: false }));
+    }
+    const status = await secretStore.getStatus(row.credential_ref);
+    if (!status) return c.json(wrapOk({ code_graph_id: cgId, bound: true, credential_ref: row.credential_ref, status: "missing" }));
+    return c.json(
+      wrapOk({
+        code_graph_id: cgId,
+        bound: true,
+        credential_ref: status.credentialRef,
+        credential_version: status.version,
+        status: status.status,
+        auth_method: status.authMethod,
+        fingerprint: status.fingerprint,
+        provider: status.provider,
+        last_validated_at: status.lastValidatedAt,
+        last_auth_failure_at: status.lastAuthFailureAt,
+      }),
+    );
   });
 
   // ═══════════════════ Query (8 codegraph tools, all id-only) ═══════════════════

@@ -72,6 +72,7 @@ export function createApp() {
     cgService: knowledgeModule.cgService,
     instancePool: knowledgeModule.instancePool,
     publicBaseUrl: config.publicBaseUrl,
+    secretStore: knowledgeModule.secretStore,
   }));
 
   // tools/list + tools/call — Agent self-discovery HTTP endpoints

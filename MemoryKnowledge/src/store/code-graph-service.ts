@@ -28,14 +28,19 @@ import type {
   CountOpts,
 } from "./types.js";
 import { BuildQueue } from "./build-queue.js";
+import type { SecretStore } from "../secrets/secret-store.js";
 
-/** 私有仓库认证配置（token 经 URL 注入；ssh 经 GIT_SSH_COMMAND 注入）。 */
+/** 私有仓库认证配置（worker 执行期使用；明文只存在于 worker 调用栈，绝不落库/队列/日志）。 */
 export interface CodeGraphAuth {
   /** 与 source-fetcher FetchOptions.authMethod 同名字段，透传给 fetcher 时零映射。 */
   authMethod: "none" | "token" | "ssh";
   accessToken?: string;
   tokenUsername?: string;
   sshPrivateKey?: string;
+  /** 凭据引用（审计/观测用；无明文）。 */
+  credentialRef?: string;
+  /** 托管提供商（known_hosts 选择/观测）。 */
+  provider?: "github" | "gitlab" | "gitea" | "generic";
 }
 
 /**
@@ -99,6 +104,11 @@ export interface CodeGraphServiceOptions {
    * 由 module.ts 装配时提供（封装 instancePool.delete + closeIndex）。
    */
   releaseInstance?: (codeGraphId: string) => void;
+  /**
+   * 凭据存储（949spec §5.3）。配置后 create 的凭据以引用方式落库，
+   * 执行期由 worker 解析明文（仅内存）；未配置时回退 legacy 明文列（迁移期）。
+   */
+  secretStore?: SecretStore;
 }
 
 export interface CreateCodeGraphParams {
@@ -111,6 +121,11 @@ export interface CreateCodeGraphParams {
   access_token?: string | null;
   token_username?: string | null;
   ssh_private_key?: string | null;
+  // 凭据引用（949spec §5.2）：优先使用；access_token/ssh_private_key 为迁移期兼容。
+  credential_ref?: string | null;
+  credential_version?: number | null;
+  credential_fingerprint?: string | null;
+  credential_provider?: string | null;
   owner_user_id?: string;
   user_id?: string;
   agent_id?: string;
@@ -126,6 +141,7 @@ export class CodeGraphService {
   private readonly logger?: CodeGraphServiceLogger;
   private readonly callbackConfig?: { tmcCallbackUrl: string };
   private readonly releaseInstance?: (codeGraphId: string) => void;
+  private readonly secretStore?: SecretStore;
   /**
    * In-flight delete 标记：delete 命中一个正在排队/执行的资源时置位，
    * worker 在检查点读取以决定中止。仅内存态（同 id 由 SerialQueue 串行 +
@@ -141,6 +157,7 @@ export class CodeGraphService {
     this.logger = opts.logger;
     this.callbackConfig = opts.callbackConfig;
     this.releaseInstance = opts.releaseInstance;
+    this.secretStore = opts.secretStore;
   }
 
   dirFor(serviceId: string, teamId: string, codeGraphId: string): string {
@@ -151,20 +168,98 @@ export class CodeGraphService {
    * 幂等创建并异步建图。
    * - 已存在（同 memory+team+repo+branch）→ 直接返回已有行，不重复建图。
    * - 新建 → 入库 pending + 后台建图。
+   *
+   * 凭据绑定（949spec §5.1/§5.2/§29 Phase 3 new-write-only）：
+   *   新写入优先 SecretStore —— 明文仅在首次创建时短暂存在于调用栈，立即加密转入
+   *   SecretStore，行上只落 credential_ref；随后清空 legacy 明文列。
+   *   未配置 SecretStore 时回退明文列（迁移期兼容）。
    */
-  create(params: CreateCodeGraphParams): { row: CodeGraphRow; existed: boolean } {
+  async create(params: CreateCodeGraphParams): Promise<{ row: CodeGraphRow; existed: boolean }> {
     const { row, existed } = this.store.createCodeGraph(params);
     if (!existed) {
-      this.audit(row, "create", `clone ${row.repo_url}@${row.branch}`, params.user_id);
-      this.enqueueBuild(row);
+      // 凭据绑定：拿到真实 code_graph_id 后创建 Secret（AAD 绑定资源上下文）。
+      await this.bindCredentials(row, params);
+      const bound = this.store.getCodeGraphById(row.service_id, row.code_graph_id) ?? row;
+      this.audit(bound, "create", `clone ${bound.repo_url}@${bound.branch}`, params.user_id);
+      this.enqueueBuild(bound);
+      return { row: bound, existed };
     }
     return { row, existed };
+  }
+
+  /**
+   * 凭据绑定（§5.2）：credential_ref 已给 → 直接绑定元数据；
+   * 明文已给且配置 SecretStore → createSecret 转引用 + 清明文列。
+   */
+  private async bindCredentials(row: CodeGraphRow, params: CreateCodeGraphParams): Promise<void> {
+    const needsAuth = params.auth_method === "token" || params.auth_method === "ssh";
+    if (!needsAuth) return;
+
+    if (params.credential_ref) {
+      this.store.updateCodeGraphStatus(row.service_id, row.code_graph_id, {
+        credential_ref: params.credential_ref,
+        credential_version: params.credential_version ?? null,
+        credential_status: "active",
+        credential_fingerprint: params.credential_fingerprint ?? null,
+        credential_provider: params.credential_provider ?? null,
+        // 有引用即不再保留明文（§5.1）
+        access_token: null,
+        token_username: null,
+        ssh_private_key: null,
+      });
+      return;
+    }
+
+    if (!this.secretStore) return; // 迁移期：明文列路径
+
+    const authMethod = params.auth_method as "token" | "ssh";
+    const secret = authMethod === "ssh" ? params.ssh_private_key : params.access_token;
+    if (!secret) return;
+
+    const ref = await this.secretStore.createSecret({
+      serviceId: row.service_id,
+      teamId: row.team_id,
+      codeGraphId: row.code_graph_id,
+      authMethod,
+      secret,
+      username: params.token_username ?? undefined,
+      provider: (params.credential_provider ?? undefined) as never,
+    });
+    this.store.updateCodeGraphStatus(row.service_id, row.code_graph_id, {
+      credential_ref: ref.credentialRef,
+      credential_version: ref.credentialVersion,
+      credential_status: "active",
+      credential_fingerprint: ref.fingerprint ?? null,
+      credential_provider: params.credential_provider ?? null,
+      // 明文已转入 SecretStore → 清空 legacy 列（§5.1：CodeGraph 表不含明文）
+      access_token: null,
+      token_username: null,
+      ssh_private_key: null,
+    });
   }
 
   /** Persist service_url for a code-graph. Returns updated row or null. */
   updateServiceUrl(serviceId: string, codeGraphId: string, serviceUrl: string): CodeGraphRow | null {
     this.store.updateCodeGraphStatus(serviceId, codeGraphId, { service_url: serviceUrl });
     return this.store.getCodeGraphById(serviceId, codeGraphId);
+  }
+
+  /**
+   * 更新凭据绑定元数据（§20 rotation/§22 revocation 后的引用状态透出）。
+   * 只写引用元数据，绝不接受明文。
+   */
+  updateCredentialBinding(
+    serviceId: string,
+    codeGraphId: string,
+    patch: {
+      credential_version?: number | null;
+      credential_status?: string | null;
+      credential_fingerprint?: string | null;
+      credential_last_validated_at?: string | null;
+      credential_last_auth_failure_at?: string | null;
+    },
+  ): void {
+    this.store.updateCodeGraphStatus(serviceId, codeGraphId, patch);
   }
 
   /** Update code-graph metadata (repo_name, summary). Returns updated row or null. */
@@ -297,19 +392,55 @@ export class CodeGraphService {
         row.team_id,
         row.repo_url,
         row.branch,
-        this.authOf(row),
       ),
     );
   }
 
-  /** 从行上的凭据列构造 worker 认证配置（auth_method=none/空 → undefined）。 */
-  private authOf(row: CodeGraphRow): CodeGraphAuth | undefined {
+  /**
+   * 执行期解析认证配置（949spec §7：明文只允许在执行时、worker 内、最短寿命存在）。
+   *   1. credential_ref 存在 → 从 SecretStore 解析（优先路径）；
+   *   2. 否则 legacy 明文列（迁移期兼容，Phase 2/3 过渡）；
+   *   3. auth_method=none → undefined（公开仓库）。
+   * 解析失败（凭据被吊销/删除/存储不可用）→ 抛错 → worker 置 failed（§22 fail closed）。
+   */
+  private async resolveAuth(row: CodeGraphRow): Promise<CodeGraphAuth | undefined> {
     if (!row.auth_method || row.auth_method === "none") return undefined;
+
+    if (row.credential_ref) {
+      if (!this.secretStore) {
+        throw new Error(`credential_ref ${row.credential_ref} present but SecretStore is not configured`);
+      }
+      const resolved = await this.secretStore.getSecret(row.credential_ref);
+      if (!resolved) {
+        throw new Error(`credential ${row.credential_ref} not found or revoked`);
+      }
+      const provider = (row.credential_provider ?? undefined) as
+        | "github" | "gitlab" | "gitea" | "generic" | undefined;
+      if (resolved.authMethod === "ssh") {
+        return {
+          authMethod: "ssh",
+          sshPrivateKey: resolved.secret,
+          credentialRef: resolved.credentialRef,
+          provider,
+        };
+      }
+      return {
+        authMethod: "token",
+        accessToken: resolved.secret,
+        tokenUsername: resolved.username,
+        credentialRef: resolved.credentialRef,
+        provider,
+      };
+    }
+
+    // 迁移期兼容路径（legacy 明文列）。
     return {
       authMethod: row.auth_method as CodeGraphAuth["authMethod"],
       accessToken: row.access_token ?? undefined,
       tokenUsername: row.token_username ?? undefined,
       sshPrivateKey: row.ssh_private_key ?? undefined,
+      provider: (row.credential_provider ?? undefined) as
+        | "github" | "gitlab" | "gitea" | "generic" | undefined,
     };
   }
 
@@ -319,7 +450,6 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
-    auth?: CodeGraphAuth,
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
@@ -332,6 +462,9 @@ export class CodeGraphService {
       sync_error: null,
     });
     try {
+      const row = this.store.getCodeGraphById(serviceId, codeGraphId);
+      // 执行期解析凭据（明文只存在于本 worker 调用栈；失败 fail-closed）。
+      const auth = row ? await this.resolveAuth(row) : undefined;
       const result = await this.worker({
         codeGraphId,
         serviceId,
