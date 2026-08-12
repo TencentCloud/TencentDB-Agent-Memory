@@ -1,0 +1,36 @@
+{
+  "name": "tdai-memory",
+  "version": "0.1.0",
+  "description": "Thin OpenAI and Codex packaging for TencentDB Agent Memory v2.",
+  "author": {
+    "name": "TencentDB Agent Memory contributors",
+    "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory"
+  },
+  "homepage": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+  "repository": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+  "license": "MIT",
+  "keywords": [
+    "tencentdb",
+    "agent-memory",
+    "codex",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "TencentDB Agent Memory",
+    "shortDescription": "Use official TencentDB memory tools from Codex.",
+    "longDescription": "Packages TencentDB Agent Memory instructions and delegates MCP calls to the official memory-tencentdb-mcp executable. It does not duplicate Memory Core, MemoryProxy, the Gateway SDK, or an MCP server.",
+    "developerName": "TencentDB Agent Memory contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Recall relevant TencentDB memory before answering.",
+      "Search earlier project conversations in TencentDB memory.",
+      "Check the TencentDB memory integration health."
+    ]
+  }
+}

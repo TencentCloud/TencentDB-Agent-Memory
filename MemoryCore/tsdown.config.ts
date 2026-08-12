@@ -10,17 +10,14 @@ function collectExternalDependencies(): string[] {
   ];
 }
 
-export default defineConfig({
-  entry: ["./index.ts"],
+const shared = {
   outDir: "./dist",
-  format: "esm",
-  platform: "node",
-  clean: true,
+  format: "esm" as const,
+  platform: "node" as const,
   fixedExtension: true,
-  dts: false,
   sourcemap: false,
   deps: {
-    neverBundle: (id) => {
+    neverBundle: (id: string) => {
       // openclaw SDK — always external
       if (id === "openclaw" || id.startsWith("openclaw/")) return true;
       // node: builtins
@@ -32,4 +29,25 @@ export default defineConfig({
       return false;
     },
   },
-});
+};
+
+export default defineConfig([
+  {
+    ...shared,
+    entry: { index: "./index.ts" },
+    clean: true,
+    dts: false,
+  },
+  {
+    ...shared,
+    entry: { "gateway-client": "./src/adapters/gateway-client/index.ts" },
+    clean: false,
+    dts: { sourcemap: false },
+  },
+  {
+    ...shared,
+    entry: { "memory-tencentdb-mcp": "./src/adapters/mcp/server.ts" },
+    clean: false,
+    dts: { sourcemap: false },
+  },
+]);
