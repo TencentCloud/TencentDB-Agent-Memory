@@ -315,6 +315,20 @@ const HAN_RUN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/gu;
  */
 const FTS_SCHEMA_VERSION = 3;
 const FTS_SCHEMA_META_KEY = "fts_schema_version";
+const FTS_TOKENIZER_META_KEY = "fts_tokenizer";
+
+/**
+ * Which segmenters this runtime actually has.
+ *
+ * The version alone does not describe the index: the same code cuts text
+ * differently when jieba is missing, or when Node was built with a small ICU
+ * that cannot break Japanese. An index written by one and queried by the other
+ * silently answers nothing, so the pair is recorded next to the version and a
+ * change orders a rebuild.
+ */
+function currentTokenizerId(): string {
+  return `jieba=${getJieba() ? "on" : "off"},words=${WORD_SEGMENTER ? "intl" : "regex"}`;
+}
 
 /**
  * What an open found the FTS index to be.
@@ -421,8 +435,31 @@ function pushWords(into: string[], run: string): void {
  */
 const FTS_PREFIX_MIN_TOKEN_LENGTH = 4;
 
-/** Prefix matching is for alphabetic scripts; jieba already cuts CJK to words. */
-const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]/u;
+/**
+ * The same floor for Hangul, counted in syllables.
+ *
+ * A Hangul syllable is a whole cluster of letters, so two of them are already
+ * a word ("문서" — document), while two Cyrillic letters are not. Korean is
+ * agglutinative and the corpus holds "문서입니다"; without this the stem query
+ * a reader would type finds nothing.
+ */
+const FTS_PREFIX_MIN_HANGUL_SYLLABLES = 2;
+
+/** Hangul syllables — segmented by word breaker, so their tokens are words. */
+const HANGUL_CHAR = /[\uAC00-\uD7AF]/u;
+
+/**
+ * Written as escapes, not as literal characters: the range this replaced ended
+ * up starting at U+8C48 (an ordinary ideograph that looks like the start of
+ * the compatibility block) and so swallowed Hangul, which is how Korean lost
+ * its prefixes without anyone seeing it in the source.
+ *
+ * The script a prefix query does not suit: jieba cuts Han to words of one or
+ * two characters, where a prefix is half a word rather than a stem. Hangul and
+ * kana DO get prefixes — they are segmented by word breaker, not by jieba, and
+ * Korean inflects at the end of the word exactly like Russian does.
+ */
+const HAN_CHAR = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u;
 
 /**
  * Build the FTS5 MATCH expression for a user query.
@@ -431,6 +468,15 @@ const CJK_CHAR = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]/u;
  * inflected form in the corpus is still found. A word nobody wrote still
  * matches nothing: a prefix is a prefix, not a scatter of letters.
  */
+/** Long enough to be a stem rather than a fragment, in this token's script. */
+function prefersPrefix(token: string): boolean {
+  if (HAN_CHAR.test(token)) return false;
+  const floor = HANGUL_CHAR.test(token)
+    ? FTS_PREFIX_MIN_HANGUL_SYLLABLES
+    : FTS_PREFIX_MIN_TOKEN_LENGTH;
+  return token.length >= floor;
+}
+
 export function buildFtsQuery(raw: string): string | null {
   // Deduplicate — cutForSearch produces sub-words that repeat.
   const tokens = [...new Set(segmentForFts(raw))];
@@ -438,10 +484,7 @@ export function buildFtsQuery(raw: string): string | null {
   return tokens
     .map((token) => {
       const quoted = `"${token.replaceAll('"', "")}"`;
-      return token.length >= FTS_PREFIX_MIN_TOKEN_LENGTH &&
-        !CJK_CHAR.test(token)
-        ? `${quoted}*`
-        : quoted;
+      return prefersPrefix(token) ? `${quoted}*` : quoted;
     })
     .join(" OR ");
 }
@@ -468,11 +511,11 @@ export function buildFtsQuery(raw: string): string | null {
  *   "用户五月去日本旅行" → "用户五月去日本旅行" (unchanged)
  */
 export function tokenizeForFts(raw: string): string {
-  if (!getJieba()) return raw;
-
-  // Same segmentation as the query side (`segmentForFts`), so a token the
-  // query asks for is a token the index holds. Joined with spaces for the
-  // `unicode61` tokenizer to split on.
+  // ALWAYS the same segmentation as the query side (`segmentForFts`), so a
+  // token the query asks for is a token the index holds. Skipping it when
+  // jieba is missing used to leave the index holding raw runs while the query
+  // asked for pieces of them — a search that answers nothing, silently.
+  // Joined with spaces for the `unicode61` tokenizer to split on.
   return segmentForFts(raw).join(" ");
 }
 
@@ -1167,6 +1210,7 @@ export class VectorStore implements IMemoryStore {
         migration.kind === "rebuild-needed" && this.rebuildFtsIndex();
       if (shouldWriteFtsMarker(migration.kind, didRebuild)) {
         this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
+        this.writeFtsTokenizer();
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1253,6 +1297,33 @@ export class VectorStore implements IMemoryStore {
       return row ? Number.parseInt(row.value, 10) || 0 : 0;
     } catch {
       return 0;
+    }
+  }
+
+  /** The tokenizer pair the FTS content was written with, if it was recorded. */
+  private readFtsTokenizer(): string {
+    try {
+      const row = this.db
+        .prepare("SELECT value FROM embedding_meta WHERE key = ?")
+        .get(FTS_TOKENIZER_META_KEY) as { value?: string } | undefined;
+      return row?.value ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  private writeFtsTokenizer(): void {
+    try {
+      this.db
+        .prepare(
+          "INSERT INTO embedding_meta (key, value) VALUES (?, ?) " +
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .run(FTS_TOKENIZER_META_KEY, currentTokenizerId());
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} could not record the FTS tokenizer (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -3104,59 +3175,51 @@ export class VectorStore implements IMemoryStore {
    */
   private migrateFtsTablesIfNeeded(): FtsMigrationCheck {
     try {
-      // BOTH tables are the index. A database that has only ever recorded
-      // conversations — extraction disabled, or no model configured — has an
-      // empty l1_records and a full l0_conversations, and looking at L1 alone
-      // would call that "nothing to rebuild" and mark it done, leaving
-      // conversation search dead for good.
-      const missing = ["l1_fts", "l0_fts"].filter(
-        (table) =>
-          !this.db
-            .prepare(
-              "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            )
-            .get(table),
+      // BOTH tables are the index, and each is judged on its own. A table of
+      // the old SHAPE cannot be repopulated at all — the insert names a column
+      // it does not have — so a stale one has to be dropped even when the
+      // other is merely absent, or init fails on every open from then on.
+      const present = ["l1_fts", "l0_fts"].filter((table) =>
+        this.tableExists(table),
       );
-      if (missing.length > 0) {
-        const hasData = ["l1_records", "l0_conversations"].some((table) =>
-          this.db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get(),
-        );
-        // Freshly created tables are already written by this build's
-        // segmentation; only pre-existing records need repopulating.
-        return hasData ? { kind: "rebuild-needed" } : { kind: "current" };
-      }
+      const stale = present.filter((table) => !this.hasCurrentFtsShape(table));
 
-      // Check if the v2 column `content_original` exists.
-      // FTS5 tables appear in pragma_table_info with their column names.
-      const cols = this.db
-        .prepare("SELECT name FROM pragma_table_info('l1_fts')")
-        .all() as Array<{ name: string }>;
-      const hasV2Col = cols.some((c) => c.name === "content_original");
-
-      if (hasV2Col) {
-        // The SHAPE is current; the question is whether the CONTENT was
-        // written by the current segmentation. v2 applied jieba to every
-        // script, and for anything it has no dictionary for (Cyrillic, Greek,
-        // Hebrew…) jieba returns one token per LETTER — documents were
-        // indexed as loose letters, so a query for any Russian word matched
-        // nearly every Russian document and BM25 ranked noise. Already
-        // written rows cannot be repaired in place; the FTS tables are
-        // derived from l1_records / l0_conversations, so a rebuild costs
-        // time and nothing else.
-        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION)
-          return { kind: "current" };
+      if (present.length === 2 && stale.length === 0) {
+        // The shape is current; the question is whether the CONTENT was
+        // written the way this build writes it. v2 applied jieba to every
+        // script, and for anything it has no dictionary for jieba returns one
+        // token per LETTER — documents were indexed as loose letters, so a
+        // query for any Russian word matched nearly every Russian document.
+        // Already written rows cannot be repaired in place; the FTS tables are
+        // derived from l1_records / l0_conversations, so a rebuild costs time
+        // and nothing else.
+        if (this.readFtsSchemaVersion() >= FTS_SCHEMA_VERSION) {
+          const written = this.readFtsTokenizer();
+          if (written === currentTokenizerId()) return { kind: "current" };
+          this.logger?.info(
+            `${TAG} FTS index was written by tokenizer "${written}", this runtime has ` +
+              `"${currentTokenizerId()}" — rebuilding so the two sides agree`,
+          );
+        } else {
+          this.logger?.info(
+            `${TAG} Migrating FTS5 index to v${FTS_SCHEMA_VERSION} (per-script segmentation)`,
+          );
+        }
+      } else if (stale.length > 0) {
         this.logger?.info(
-          `${TAG} Migrating FTS5 index to v${FTS_SCHEMA_VERSION} (per-script segmentation)`,
+          `${TAG} Migrating FTS5 tables of the old shape (${stale.join(", ")}) to the segmented schema`,
         );
-        this.db.exec("DROP TABLE IF EXISTS l1_fts");
-        this.db.exec("DROP TABLE IF EXISTS l0_fts");
-        return { kind: "rebuild-needed" };
+      } else if (present.length === 0) {
+        // Nothing to migrate — but existing records still have to be indexed
+        // into the tables init is about to create.
+        return this.hasAnyRecords()
+          ? { kind: "rebuild-needed" }
+          : { kind: "current" };
       }
 
-      // v1 → v2: drop both FTS tables (data will be repopulated by rebuildFtsIndex)
-      this.logger?.info(
-        `${TAG} Migrating FTS5 tables from v1 (raw text) to the segmented schema`,
-      );
+      // One table missing while the other is present, a stale shape, an older
+      // version, a different tokenizer: all repaired the same way, and both
+      // tables go together so the two halves never disagree about their age.
       this.db.exec("DROP TABLE IF EXISTS l1_fts");
       this.db.exec("DROP TABLE IF EXISTS l0_fts");
       return { kind: "rebuild-needed" };
@@ -3168,6 +3231,30 @@ export class VectorStore implements IMemoryStore {
       // marking it current would retire the repair that never ran.
       return { kind: "unknown" };
     }
+  }
+
+  /** @internal */
+  private tableExists(name: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+      .get(name);
+  }
+
+  /** Does this FTS table hold the raw-text column the current schema writes? */
+  private hasCurrentFtsShape(table: string): boolean {
+    const raw =
+      table === "l1_fts" ? "content_original" : "message_text_original";
+    const cols = this.db
+      .prepare(`SELECT name FROM pragma_table_info('${table}')`)
+      .all() as Array<{ name: string }>;
+    return cols.some((c) => c.name === raw);
+  }
+
+  /** Is there anything to index at all? Either layer counts. */
+  private hasAnyRecords(): boolean {
+    return ["l1_records", "l0_conversations"].some((table) =>
+      this.db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get(),
+    );
   }
 
   /**

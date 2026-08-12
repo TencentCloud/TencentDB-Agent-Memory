@@ -193,6 +193,19 @@ describe("the registration a user pastes", () => {
     }
   });
 
+  it("prints the gateway this very command line would serve", () => {
+    // The flag the user just typed must reach the snippet: printing a
+    // different address than the same argv would serve sends them off to a
+    // gateway they never named.
+    const printed = renderRegistration(
+      "claude",
+      { TDAI_GATEWAY_PORT: "9999" },
+      ["--gateway", "http://gw.example:9500"],
+    );
+    expect(printed).toContain("http://gw.example:9500");
+    expect(printed).not.toContain("9999");
+  });
+
   it("refuses a host it has no registration for, naming the ones it has", () => {
     expect(() => renderRegistration("emacs", {})).toThrow(UnknownHostError);
     expect(() => renderRegistration("emacs", {})).toThrow(

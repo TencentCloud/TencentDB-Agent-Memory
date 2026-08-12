@@ -162,16 +162,21 @@ export class UnknownHostError extends Error {
 export function renderRegistration(
   hostId: string,
   env: NodeJS.ProcessEnv,
+  argv: readonly string[] = [],
 ): string {
   // A host starts this server from its own config file, not from the shell
-  // that printed the snippet, so anything this environment says about where
-  // the gateway is has to travel INSIDE the snippet — the port included.
+  // that printed the snippet, so everything that says where the gateway is has
+  // to travel INSIDE the snippet: the flag just passed, and the port too. The
+  // printed address must be the one this same command line would serve, or the
+  // user pastes a config pointing somewhere they never named.
   const namesGateway = Boolean(
-    env.TDAI_GATEWAY_URL?.trim() || env.TDAI_GATEWAY_PORT?.trim(),
+    argv.includes("--gateway") ||
+    env.TDAI_GATEWAY_URL?.trim() ||
+    env.TDAI_GATEWAY_PORT?.trim(),
   );
   const lookup = describeHost(hostId, {
     launcherPath: resolveLauncherPath(),
-    ...(namesGateway ? { gatewayUrl: resolveGatewayUrl(env) } : {}),
+    ...(namesGateway ? { gatewayUrl: resolveGatewayUrl(env, argv) } : {}),
   });
   if (!lookup.ok) throw new UnknownHostError(lookup.message);
   const { descriptor } = lookup;
@@ -193,7 +198,7 @@ export async function main(
   // Setup, not serving: stdout is still free, and the process must not go on
   // to speak JSON-RPC at a terminal the user is reading.
   if (argv.includes("--print-registration")) {
-    process.stdout.write(renderRegistration(hostId, env));
+    process.stdout.write(renderRegistration(hostId, env, argv));
     return;
   }
   // An id this build has no registration for still serves — the tools do not

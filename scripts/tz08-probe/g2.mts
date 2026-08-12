@@ -68,9 +68,7 @@ const lookup = describeHost("claude", {
   gatewayUrl: gateway.url,
 });
 if (!lookup.ok) throw new Error(lookup.message);
-const host = await startHost(lookup.descriptor, {
-  TDAI_GATEWAY_URL: gateway.url,
-});
+const host = await startHost(lookup.descriptor);
 
 /** Every L0 line on disk, across whatever files the recorder made. */
 function conversationText(): string {

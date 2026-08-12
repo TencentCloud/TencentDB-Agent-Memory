@@ -50,7 +50,7 @@ const gateway = await startGateway({
 const ctx = { launcherPath: resolveLauncherPath(), gatewayUrl: gateway.url };
 const hosts: McpHost[] = [];
 for (const descriptor of describeAllHosts(ctx)) {
-  hosts.push(await startHost(descriptor, { TDAI_GATEWAY_URL: gateway.url }));
+  hosts.push(await startHost(descriptor));
 }
 
 async function search(hostIndex: number): Promise<string> {

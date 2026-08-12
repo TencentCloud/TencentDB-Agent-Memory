@@ -97,7 +97,7 @@ const lookup = describeHost("codex", {
   gatewayUrl: proxyUrl,
 });
 if (!lookup.ok) throw new Error(lookup.message);
-const host = await startHost(lookup.descriptor, { TDAI_GATEWAY_URL: proxyUrl });
+const host = await startHost(lookup.descriptor);
 
 try {
   if (FALSIFY === "token-on-read") {

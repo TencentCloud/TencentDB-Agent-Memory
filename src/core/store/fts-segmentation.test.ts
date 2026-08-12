@@ -17,6 +17,8 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  _resetJiebaForTest,
+  _setJiebaForTest,
   VectorStore,
   buildFtsQuery,
   segmentForFts,
@@ -127,7 +129,9 @@ describe("segmentation per script", () => {
       "문서입니다",
     ]);
     expect(segmentForFts("日本語のテストです")).toContain("テスト");
-    expect(buildFtsQuery("어사고")).toBe('"어사고"');
+    // Prefix or not, three syllables borrowed from three different words are
+    // still one token, not three — the corpus leg below is what pins the rest.
+    expect(buildFtsQuery("어사고")).toContain('"어사고"');
   });
 
   it("does not find a Korean word nobody wrote", () => {
@@ -135,10 +139,36 @@ describe("segmentation per script", () => {
     store.upsertL1(mem("m1", "한국어 문서입니다"), vec());
     store.upsertL1(mem("m2", "고양이 사진 저장"), vec());
 
+    expect(find("문서")).toEqual(["m1"]);
     expect(find("문서입니다")).toEqual(["m1"]);
     expect(find("고양이")).toEqual(["m2"]);
     // Three syllables borrowed from three different words.
     expect(find("어사고")).toEqual([]);
+  });
+
+  it("indexes the same way it queries even without jieba", () => {
+    // The index used to keep raw runs when jieba was missing while the query
+    // still asked for pieces of them: a search that answers nothing, quietly.
+    _setJiebaForTest(null);
+    try {
+      const text = "日本語のテストです";
+      expect(tokenizeForFts(text).split(" ")).toEqual(segmentForFts(text));
+      expect(tokenizeForFts(text)).toContain("テスト");
+    } finally {
+      _resetJiebaForTest();
+    }
+  });
+
+  it("offers prefixes to Korean, which inflects at the end like Russian", () => {
+    // Hangul and kana are cut by the word breaker, not by jieba, so their
+    // tokens are words and a prefix of one is a stem — unlike Han, where a
+    // "word" is a character or two and a prefix would be half of it.
+    expect(buildFtsQuery("문서입니다")).toBe('"문서입니다"*');
+    // Two syllables are already a word in Korean, where two Cyrillic letters
+    // are not — the stem a reader types has to reach the inflected form.
+    expect(buildFtsQuery("문서")).toBe('"문서"*');
+    expect(buildFtsQuery("на")).toBe('"на"');
+    expect(buildFtsQuery("用户喜欢编程")).not.toContain("*");
   });
 
   it("handles a mixed sentence without shattering either half", () => {
@@ -308,6 +338,47 @@ describe("repairing an index written by the old segmentation", () => {
     expect(
       store.searchL0Fts(buildFtsQuery("отпуск")!, 10).map((r) => r.record_id),
     ).toEqual(["c1"]);
+    expect(find("памяти")).toEqual(["m1"]);
+  });
+
+  it("repairs a table of the old shape even when the other one is gone", () => {
+    // The state a build without fts5, or an interrupted migration, leaves: an
+    // l1_fts of the v1 shape and no l0_fts. The insert names a column the old
+    // table does not have, so leaving it in place fails init on EVERY open —
+    // keyword search dead, and no marker to tell anyone why.
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+    store.close();
+
+    const db = new DatabaseSync(dbPath);
+    db.exec("DROP TABLE l1_fts");
+    db.exec("DROP TABLE l0_fts");
+    db.exec("CREATE VIRTUAL TABLE l1_fts USING fts5(content, record_id)");
+    db.exec("DELETE FROM embedding_meta WHERE key = 'fts_schema_version'");
+    db.close();
+
+    store = open();
+    expect(schemaVersion()).toBe("3");
+    expect(find("памяти")).toEqual(["m1"]);
+  });
+
+  it("rebuilds when the runtime's own segmenters have changed", () => {
+    store = open();
+    store.upsertL1(mem("m1", "Пользователь проверяет границу памяти"), vec());
+    store.close();
+
+    // An index written elsewhere — another Node build, a missing jieba — is
+    // not this runtime's index: the two sides would disagree on every word.
+    const db = new DatabaseSync(dbPath);
+    db.prepare(
+      "INSERT INTO embedding_meta (key, value) VALUES ('fts_tokenizer', 'jieba=off,words=regex') " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run();
+    db.exec("DELETE FROM l1_fts");
+    db.close();
+
+    store = open();
+    expect(ftsRowCounts().l1).toBe(1);
     expect(find("памяти")).toEqual(["m1"]);
   });
 

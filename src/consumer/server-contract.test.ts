@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { TdaiGateway } from "../gateway/server.js";
 import { parseConfig } from "../config.js";
+import { freePort } from "../../scripts/tz08-probe/harness.mts";
 
 let tmp: string;
 let baseUrl: string;
@@ -28,7 +29,7 @@ beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-contract-"));
   const base = path.join(tmp, "tdai");
   fs.mkdirSync(base, { recursive: true });
-  const port = 29_600 + Math.floor(Math.random() * 300);
+  const port = await freePort();
   gateway = new TdaiGateway({
     data: { baseDir: base },
     server: { port, host: "127.0.0.1", corsOrigins: [] },

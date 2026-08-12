@@ -15,8 +15,9 @@ export interface HostContext {
   /** Absolute path of `bin/tdai-memory-mcp.mjs`. */
   launcherPath: string;
   /**
-   * Gateway URL to bake into the registration. Omitted for a host that
-   * already exports it into the server's environment (pi).
+   * Gateway address to write into the registration, for every host alike.
+   * Omitted when the caller names none, and then the server resolves the
+   * gateway at run time instead of freezing today's address into a file.
    */
   gatewayUrl?: string;
 }

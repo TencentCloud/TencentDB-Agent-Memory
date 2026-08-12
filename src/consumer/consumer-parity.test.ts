@@ -116,8 +116,9 @@ beforeAll(async () => {
   const ctx = { launcherPath: resolveLauncherPath(), gatewayUrl: gateway.url };
   hosts = [];
   for (const descriptor of describeAllHosts(ctx)) {
-    // pi carries no gatewayUrl in its registration — its agent exports it.
-    hosts.push(await startHost(descriptor, { TDAI_GATEWAY_URL: gateway.url }));
+    // Started with no environment of our own: the registration carries the
+    // gateway, and a host that lost it must fail here rather than be rescued.
+    hosts.push(await startHost(descriptor));
   }
 
   // Seed the corpus BEFORE comparing answers. Three hosts agreeing on
