@@ -5,8 +5,9 @@
  * spawning a process: everything here is argv and env in, values out.
  */
 
-/** The gateway's own default (gateway/config.ts:164) — one number, one place. */
-export const DEFAULT_GATEWAY_PORT = 8420;
+import { resolveGatewayPort } from "../gateway/address.js";
+
+export { DEFAULT_GATEWAY_PORT } from "../gateway/address.js";
 
 /** Host id used when a host registers the server without naming itself. */
 export const DEFAULT_HOST_ID = "pi";
@@ -30,7 +31,12 @@ export function resolveGatewayUrl(
   const explicit = parseFlag(argv, "--gateway") ?? env.TDAI_GATEWAY_URL?.trim();
   if (explicit) return explicit.replace(/\/+$/, "");
   const port = Number.parseInt(env.TDAI_GATEWAY_PORT ?? "", 10);
-  return `http://127.0.0.1:${Number.isInteger(port) && port > 0 ? port : DEFAULT_GATEWAY_PORT}`;
+  if (Number.isInteger(port) && port > 0) return `http://127.0.0.1:${port}`;
+  // Nobody named an address, so ask the same question the gateway asks itself.
+  // Guessing the default here would send a configured install's sessions to a
+  // gateway on 8420: nothing answers, or on a machine that runs a default one
+  // too, the WRONG memory answers and the next note lands in it.
+  return `http://127.0.0.1:${resolveGatewayPort()}`;
 }
 
 /** The value of `--name value`, or undefined when the flag carries none. */

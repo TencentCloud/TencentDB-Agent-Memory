@@ -299,13 +299,36 @@ export interface McpHost {
   stop: () => void;
 }
 
+export interface HostOptions {
+  /**
+   * Overrides on top of the probe's own environment; an `undefined` value
+   * REMOVES the variable. A probe about discovery has to be able to take a
+   * variable away, not only add one.
+   */
+  env?: Record<string, string | undefined>;
+  /**
+   * Working directory. It matters: a gateway config in the current directory
+   * is part of how an address is resolved, and the repo has one.
+   */
+  cwd?: string;
+}
+
 /** Start one host EXACTLY as its descriptor says, and speak MCP to it. */
 export async function startHost(
   descriptor: HostDescriptor,
-  extraEnv: Record<string, string> = {},
+  opts: HostOptions = {},
 ): Promise<McpHost> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    ...descriptor.env,
+    ...opts.env,
+  };
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete env[key];
+  }
   const child = spawn(descriptor.command, [...descriptor.args], {
-    env: { ...process.env, ...descriptor.env, ...extraEnv },
+    env,
+    cwd: opts.cwd,
     stdio: ["pipe", "pipe", "pipe"],
   });
   const replies = new Map<number, Record<string, unknown>>();

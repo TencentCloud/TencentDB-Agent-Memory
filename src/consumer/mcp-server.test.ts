@@ -9,7 +9,10 @@
  * reach the host as an error with its kind intact. If it arrived as an empty
  * result, the session would conclude memory holds nothing (ТЗ R2/S4).
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
@@ -145,6 +148,39 @@ describe("what the host tells the server", () => {
       "http://127.0.0.1:8420",
       "http://127.0.0.1:8420",
     ]);
+  });
+
+  // A gateway that took its port from its own yaml used to be invisible to the
+  // consumer: the fallback knew only the env variable and 8420. On a machine
+  // that also runs a default gateway, that is not "unavailable" — it is the
+  // WRONG memory answering, and a note landing in it.
+  it("finds the gateway named by the config file when no env names one", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-port-"));
+    try {
+      const configured = path.join(dir, "tdai-gateway.yaml");
+      const portless = path.join(dir, "portless.yaml");
+      fs.writeFileSync(
+        configured,
+        "server:\n  port: 9137\n  host: 127.0.0.1\n",
+      );
+      fs.writeFileSync(portless, "server:\n  host: 127.0.0.1\n");
+
+      vi.stubEnv("TDAI_GATEWAY_CONFIG", configured);
+      const fromConfig = resolveGatewayUrl({});
+      vi.stubEnv("TDAI_GATEWAY_CONFIG", portless);
+      const noPort = resolveGatewayUrl({});
+      // The env still outranks the config: it is the more specific answer.
+      const fromEnv = resolveGatewayUrl({ TDAI_GATEWAY_PORT: "9200" });
+
+      expect([fromConfig, noPort, fromEnv]).toEqual([
+        "http://127.0.0.1:9137",
+        "http://127.0.0.1:8420",
+        "http://127.0.0.1:9200",
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reads the host id from argv and falls back to the host that passes none", () => {

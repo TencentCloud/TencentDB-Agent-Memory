@@ -12,6 +12,15 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { getEnv } from "../utils/env.js";
+import {
+  DEFAULT_GATEWAY_PORT,
+  resolveDefaultDataDir,
+  resolveGatewayConfigPath,
+} from "./address.js";
+
+// Re-exported: callers have imported the data dir from here since long before
+// the address rule was split out into its own client-safe module.
+export { resolveDefaultDataDir };
 import { parseConfig as parseMemoryConfig } from "../config.js";
 import type { MemoryTdaiConfig } from "../config.js";
 import { normalizeDisableThinking } from "../utils/no-think-fetch.js";
@@ -136,7 +145,7 @@ export function loadGatewayConfig(
   let fileConfig: Record<string, unknown> = {};
 
   // Try to load config file
-  const configPath = resolveConfigPath();
+  const configPath = resolveGatewayConfigPath();
   if (configPath) {
     try {
       const raw = fs.readFileSync(configPath, "utf-8");
@@ -161,7 +170,10 @@ export function loadGatewayConfig(
 
   // Server config
   const serverConfig = obj(fileConfig, "server");
-  const port = envInt("TDAI_GATEWAY_PORT") ?? num(serverConfig, "port") ?? 8420;
+  const port =
+    envInt("TDAI_GATEWAY_PORT") ??
+    num(serverConfig, "port") ??
+    DEFAULT_GATEWAY_PORT;
   const host =
     env("TDAI_GATEWAY_HOST") ?? str(serverConfig, "host") ?? "127.0.0.1";
 
@@ -274,74 +286,6 @@ export function loadGatewayConfig(
 // ============================
 // Helpers
 // ============================
-
-function resolveConfigPath(): string | null {
-  // 1. Explicit env var
-  const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
-
-  // 2. CWD
-  for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
-    const p = path.join(process.cwd(), name);
-    if (fs.existsSync(p)) return p;
-  }
-
-  // 3. The data dir — the ENV-named one when there is one. Reading the default
-  // location here made a relocated install's own config invisible to the loader
-  // that relocated it (tz-07 H2: one switchable root, and the config lives
-  // under it). The yaml's `data.baseDir` cannot take part: this runs to FIND
-  // that yaml, so honouring it would be circular. Env only.
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
-  const rawDataDir = getEnv("TDAI_DATA_DIR") ?? resolveDefaultDataDir();
-  const dataDir = rawDataDir.startsWith("~/")
-    ? path.join(home, rawDataDir.slice(2))
-    : rawDataDir;
-  for (const name of ["tdai-gateway.yaml", "tdai-gateway.json"]) {
-    const p = path.join(dataDir, name);
-    if (fs.existsSync(p)) return p;
-  }
-
-  return null;
-}
-
-export function resolveDefaultDataDir(): string {
-  const home = getEnv("HOME") ?? getEnv("USERPROFILE") ?? "/tmp";
-
-  // New canonical location: everything related to standalone/Hermes-mode TDAI
-  // is collected under ~/.memory-tencentdb/ to avoid scattering top-level dirs
-  // in $HOME. The Gateway data dir lives at:
-  //
-  //   ~/.memory-tencentdb/memory-tdai/
-  //
-  // Note: this only governs the standalone/Hermes fallback. Under the openclaw
-  // host the plugin data dir is decided by `resolveStateDir() + "memory-tdai"`
-  // (typically ~/.openclaw/memory-tdai/) which is intentionally NOT changed.
-  const root =
-    getEnv("MEMORY_TENCENTDB_ROOT") ?? path.join(home, ".memory-tencentdb");
-  const newDefault = path.join(root, "memory-tdai");
-
-  // Backward compatibility: if the new location does not yet exist but the
-  // legacy ~/memory-tdai still has data, keep using the legacy dir so existing
-  // users don't silently lose their memory store. The install script
-  // (install_hermes_memory_tencentdb.sh, Step 0) will migrate it on next run.
-  try {
-    if (!fs.existsSync(newDefault)) {
-      const legacy = path.join(home, "memory-tdai");
-      if (fs.existsSync(legacy)) {
-        // Stderr-only deprecation hint; doesn't pollute structured logs.
-        process.stderr.write(
-          `[tdai-gateway] DEPRECATED: using legacy data dir ${legacy}; ` +
-            `move it to ${newDefault} (or set TDAI_DATA_DIR / MEMORY_TENCENTDB_ROOT) to silence this warning.\n`,
-        );
-        return legacy;
-      }
-    }
-  } catch {
-    // existsSync should not throw, but guard anyway.
-  }
-
-  return newDefault;
-}
 
 function env(key: string): string | undefined {
   const v = getEnv(key)?.trim();
