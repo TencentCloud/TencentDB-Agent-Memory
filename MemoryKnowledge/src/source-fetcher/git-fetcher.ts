@@ -281,9 +281,17 @@ export class GitSourceFetcher implements ISourceFetcher {
    * token → GIT_ASKPASS；ssh → GIT_SSH_COMMAND；两者都叠加安全 env。
    */
   private authenticatedGit(job: JobMaterial, opts?: FetchOptions, timeoutMs?: number): ReturnType<typeof simpleGit> {
-    // simple-git 的 SimpleGitOptions 类型未暴露 timeout（3.36），运行时支持构造期注入。
+    // simple-git 3.36 的 SimpleGitOptions 类型未暴露 timeout/unsafe（运行时支持）：
+    //   - timeout 构造期注入（超时 kill 子进程，§15）
+    //   - unsafe.allowUnsafeAskPass=true：simple-git 默认用 blockUnsafeOperationsPlugin 拦截
+    //     GIT_ASKPASS（报 "Use of GIT_ASKPASS is not permitted..."），必须显式开启才能用
+    //     本模块自建的 job-local askpass（§8.2）。askpass 脚本由本模块生成、从 job 专属
+    //     secret 文件读凭据，非用户可控，显式开启是安全的。
     const git = simpleGit(
-      (timeoutMs ? { timeout: { block: timeoutMs, kill: true } } : {}) as unknown as Partial<SimpleGitOptions>,
+      {
+        ...(timeoutMs ? { timeout: { block: timeoutMs, kill: true } } : {}),
+        unsafe: { allowUnsafeAskPass: true },
+      } as unknown as Partial<SimpleGitOptions>,
     );
     let authed = git.env(job.env);
     if (job.askpassPath && opts?.authMethod === "token") {
