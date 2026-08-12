@@ -496,9 +496,10 @@ async function searchViaRecall(
 
 /**
  * The config the MEASURER runs with: the retrieval window is widened to
- * `probe.topK`. With the live `recall.maxResults` (5) the pipeline would hand
- * back five candidates and `@10` could never exceed 0.5 — a measurement
- * artefact, not a recall property. The live config is copied, never mutated.
+ * `max(probe.topK, METRIC_CUTOFF_MAX)`. With the live `recall.maxResults` (5)
+ * the pipeline would hand back five candidates and `@10` could never exceed
+ * 0.5 — a measurement artefact, not a recall property. The live config is
+ * copied, never mutated.
  */
 export function measuringConfig(cfg: MemoryTdaiConfig): MemoryTdaiConfig {
   const maxResults = cfg.recall.maxResults ?? 5;

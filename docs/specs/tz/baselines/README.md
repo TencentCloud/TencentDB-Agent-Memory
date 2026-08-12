@@ -57,6 +57,12 @@ owner's): `recall.strategy: hybrid`, `recall.scoreThreshold: 0.6`,
 R@10 unchanged at 0.650 — the gain is in the project that asked, not in
 leakage.
 
+Measurement caveat: the measurer retrieves ten candidates where live recall
+retrieves five, and `searchHybrid` sizes its candidate pool from that number.
+So the measured top-3 can be ordered slightly differently from the live
+pipeline's top-3. That is inherent to measuring @10 at all — the alternative is
+not measuring it.
+
 The code defaults stay as they are: `scoreThreshold` is shared by all
 strategies, and 0.6 is right for `hybrid` cosine candidates but destroys
 `embedding` (0.3 already costs 11 pp there). A per-strategy default is a

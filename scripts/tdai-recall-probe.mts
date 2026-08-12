@@ -245,7 +245,15 @@ store.init({
   model: embeddingConfig.model,
 });
 
-const baseline = args.compare ? loadBaseline(args.compare) : null;
+// `--compare` wins; otherwise the configured baseline is used when it exists.
+// A baseline path nobody reads is a setting that lies about being a setting.
+const configuredBaseline = path.isAbsolute(cfg.probe.baselinePath)
+  ? cfg.probe.baselinePath
+  : path.join(dataDir, cfg.probe.baselinePath);
+const baselineFile =
+  args.compare || (fs.existsSync(configuredBaseline) ? configuredBaseline : "");
+const baseline = baselineFile ? loadBaseline(baselineFile) : null;
+if (baseline) console.log(`baseline: ${baselineFile}`);
 
 const result = await runRecallProbe({
   dataDir,

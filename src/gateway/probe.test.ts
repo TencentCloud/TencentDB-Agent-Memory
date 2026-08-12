@@ -459,7 +459,7 @@ describe("tz-04 C2: precision and recall have their own denominators", () => {
 });
 
 describe("tz-04: the measurer retrieves its own window", () => {
-  it("widens maxResults up to probe.topK without touching the live config", () => {
+  it("widens maxResults to the retrieval window without touching the live config", () => {
     const cfg = parseConfig({ recall: { maxResults: 5 }, probe: { topK: 10 } });
     const measuring = measuringConfig(cfg);
     expect(measuring.recall.maxResults).toBe(10);
