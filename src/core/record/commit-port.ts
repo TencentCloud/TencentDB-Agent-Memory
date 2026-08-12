@@ -37,6 +37,13 @@ export interface CommitPortLogger {
 
 let observer: MemoryCommitObserver | undefined;
 let logger: CommitPortLogger | undefined;
+/**
+ * Bookkeeping already handed to the observer. Tracked so that shutdown can
+ * wait for it: the writes are asynchronous, and a process that exits between
+ * the mutation and the checkpoint write loses exactly the counter the port
+ * was announcing.
+ */
+const inFlight = new Set<Promise<void>>();
 
 /** Install the observer (or clear it with `undefined`). Without one the port
  * is a no-op, which is also the rollback path for this whole package. */
@@ -60,11 +67,25 @@ export function notifyCommitted(m: MemoryMutation): void {
   try {
     const result = observer.onCommitted(m);
     if (result instanceof Promise) {
-      result.catch((err: unknown) => report(m, err));
+      const tracked = result.catch((err: unknown) => report(m, err));
+      inFlight.add(tracked);
+      void tracked.finally(() => inFlight.delete(tracked));
     }
   } catch (err) {
     report(m, err);
   }
+}
+
+/**
+ * Wait for the bookkeeping already in flight, then return. Shutdown calls this:
+ * `notifyCommitted` deliberately does not await, so without a drain the last
+ * mutations of a run race the teardown — the observer writes into a directory
+ * that is being removed and the counter it carried is simply lost. The loop
+ * repeats because settling one write can queue the next; the tracked promises
+ * never reject (failures are already reported), so this never throws.
+ */
+export async function drainCommitObserver(): Promise<void> {
+  while (inFlight.size > 0) await Promise.all([...inFlight]);
 }
 
 function report(m: MemoryMutation, err: unknown): void {

@@ -84,7 +84,10 @@ import { buildRoleDefaults } from "./role-defaults.js";
 import { ConsolidationOrchestrator } from "./consolidation/orchestrator.js";
 import { createCounterObserver } from "./consolidation/layer-counters.js";
 import { withProvenance } from "../core/record/provenance-observer.js";
-import { setCommitObserver } from "../core/record/commit-port.js";
+import {
+  drainCommitObserver,
+  setCommitObserver,
+} from "../core/record/commit-port.js";
 import { NightRunTimer } from "./consolidation/night-run.js";
 import {
   countNewL0Since,
@@ -465,6 +468,10 @@ export class TdaiGateway {
     this.cleanupTimer.stop();
     await this.orchestrator.stop();
 
+    // The commit port never awaits its observer, so a mutation from the last
+    // request can still be writing its checkpoint here. Draining before the
+    // store closes is what keeps that counter instead of dropping it.
+    await drainCommitObserver();
     await this.core.destroy();
     this.logger.info("Gateway stopped");
   }
