@@ -145,6 +145,26 @@ describe("memory-tencentdb MCP server", () => {
     });
   });
 
+  it("lets legacy Gateways timestamp ordinary captures", async () => {
+    const gateway = mockGateway();
+    const client = await connectTestClient(gateway);
+
+    await client.callTool({
+      name: "memory_capture",
+      arguments: {
+        user_content: "user memory",
+        assistant_content: "assistant memory",
+      },
+    });
+
+    expect(gateway.capture).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [
+        { role: "user", content: "user memory" },
+        { role: "assistant", content: "assistant memory" },
+      ],
+    }));
+  });
+
   it("rejects extra or invalid tool arguments", async () => {
     const client = await connectTestClient(mockGateway());
     const result = await client.callTool({

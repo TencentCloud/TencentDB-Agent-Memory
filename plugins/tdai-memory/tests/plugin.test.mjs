@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { probe } from "../scripts/lib/health.mjs";
+import { executablePath, probe } from "../scripts/lib/health.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -125,6 +125,16 @@ test("health probe accepts the official Gateway health contract", async () => {
   });
   assert.equal(result.ok, true);
   assert.equal(result.body.version, "test");
+});
+
+test("health check resolves Windows commands through PATHEXT", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "tdai-plugin-test-"));
+  const fake = path.join(temporary, "node.cmd");
+  await writeFile(fake, "@echo off\r\n", "utf8");
+  assert.equal(await executablePath("node", temporary, {
+    platform: "win32",
+    pathExt: ".EXE;.CMD",
+  }), fake);
 });
 
 test("offline health check verifies the external executable without network", async () => {

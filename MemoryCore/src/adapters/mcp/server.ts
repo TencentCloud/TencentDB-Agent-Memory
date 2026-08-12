@@ -207,22 +207,26 @@ export function createMemoryMcpServer(
     },
     async (input) => {
       try {
-        const assistantTimestamp = input.assistant_timestamp_ms ?? Date.now();
-        const userTimestamp = input.user_timestamp_ms ?? assistantTimestamp - 1;
+        const messages = input.user_timestamp_ms !== undefined
+          ? [
+              { role: "user", content: input.user_content, timestamp: input.user_timestamp_ms },
+              {
+                role: "assistant",
+                content: input.assistant_content,
+                timestamp: input.assistant_timestamp_ms!,
+              },
+            ]
+          : [
+              { role: "user", content: input.user_content },
+              { role: "assistant", content: input.assistant_content },
+            ];
         return textResult(await client.capture({
           userContent: input.user_content,
           assistantContent: input.assistant_content,
           sessionKey: sessionKey(input, options.sessionKey),
           sessionId: input.session_id,
           userId: input.user_id,
-          messages: [
-            { role: "user", content: input.user_content, timestamp: userTimestamp },
-            {
-              role: "assistant",
-              content: input.assistant_content,
-              timestamp: assistantTimestamp,
-            },
-          ],
+          messages,
         }));
       } catch (error) {
         return toolError(error);
