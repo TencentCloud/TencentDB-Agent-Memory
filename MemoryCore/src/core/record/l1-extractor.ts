@@ -16,6 +16,7 @@ import type { ConversationMessage } from "../conversation/l0-recorder.js";
 import { formatExtractionPrompt, getExtractMemoriesSystemPrompt, type MemoryPromptMode } from "../prompts/l1-extraction.js";
 import { batchDedup } from "./l1-dedup.js";
 import { writeMemory, generateMemoryId } from "./l1-writer.js";
+import { buildDedupScopeFilter } from "../store/isolation.js";
 import type { ExtractedMemory, MemoryRecord, MemoryType, DedupDecision } from "./l1-writer.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse, shouldExtractL1 } from "../../utils/sanitize.js";
@@ -268,7 +269,15 @@ export async function extractL1Memories(params: {
         embeddingTimeoutMs: options.embeddingTimeoutMs,
         llmRunner: options.llmRunner,
         traceContext: { teamId, userId, agentId, sessionId },
-        ...(teamId || userId || agentId || sessionId || taskId ? { filter: { teamId, userId, agentId, sessionId, taskId } } : {}),
+        // Dedup recall detects same-fact conflicts across sessions/tasks by scope
+        // (team/user/agent) only, without sessionId/taskId — otherwise cross-session
+        // old memories would be filtered out by rowMatchesIsolation, so correction /
+        // duplicate scenes could not recall candidates and dedup would degrade to
+        // within the current session only.
+        // buildDedupScopeFilter always returns a non-empty filter (user/agent
+        // normalized to "default") to avoid the filter disappearing when all three
+        // scope fields are empty, which would cause cross-tenant recall.
+        filter: buildDedupScopeFilter(teamId, userId, agentId),
       });
       dedupLatencyMs = Date.now() - dedupStartMs;
 
