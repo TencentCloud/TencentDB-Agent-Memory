@@ -146,6 +146,32 @@ describe("segmentation per script", () => {
     expect(find("어사고")).toEqual([]);
   });
 
+  it("does not find a Japanese phrase nobody wrote", () => {
+    // The kanji islands of a Japanese sentence used to go to jieba, which has
+    // no Japanese dictionary and returned them one character at a time
+    // ("検索" → "検", "索"), while the kana particles between them survived as
+    // one-character tokens. "パンを食べる" — bread, eaten, in a corpus about
+    // neither — then matched both documents through "を" and "食".
+    store = open();
+    store.upsertL1(mem("m1", "日本語のテキストを検索する"), vec());
+    store.upsertL1(mem("m2", "猫の写真を保存した"), vec());
+
+    expect(find("パンを食べる")).toEqual([]);
+    expect(find("検索")).toEqual(["m1"]);
+    expect(find("日本語")).toEqual(["m1"]);
+    expect(find("写真")).toEqual(["m2"]);
+  });
+
+  it("drops the lone kana particles that match everything", () => {
+    const tokens = segmentForFts("日本語のテキストを検索する");
+    expect(tokens).toContain("検索");
+    expect(tokens).toContain("テキスト");
+    expect(tokens).not.toContain("の");
+    expect(tokens).not.toContain("を");
+    // …and a kanji word stays whole instead of becoming its own characters.
+    expect(tokens).not.toContain("検");
+  });
+
   it("indexes the same way it queries even without jieba", () => {
     // The index used to keep raw runs when jieba was missing while the query
     // still asked for pieces of them: a search that answers nothing, quietly.
@@ -316,7 +342,7 @@ describe("repairing an index written by the old segmentation", () => {
     dropFtsTablesAndVersion();
 
     store = open();
-    expect(schemaVersion()).toBe("3");
+    expect(schemaVersion()).toBe("4");
     const hits = store.searchL0Fts(buildFtsQuery("памяти")!, 10);
     expect(hits.map((r) => r.record_id)).toEqual(["c1"]);
   });
@@ -358,7 +384,7 @@ describe("repairing an index written by the old segmentation", () => {
     db.close();
 
     store = open();
-    expect(schemaVersion()).toBe("3");
+    expect(schemaVersion()).toBe("4");
     expect(find("памяти")).toEqual(["m1"]);
   });
 
@@ -410,7 +436,7 @@ describe("repairing an index written by the old segmentation", () => {
     expect(letterQueryHits()).toBe(1);
 
     store = open();
-    expect(schemaVersion()).toBe("3");
+    expect(schemaVersion()).toBe("4");
     expect(letterQueryHits()).toBe(0);
     expect(find("квазимодо")).toEqual([]);
     expect(find("памяти")).toEqual(["m1"]);

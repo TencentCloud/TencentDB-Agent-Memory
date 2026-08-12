@@ -62,7 +62,8 @@ describe("host registry", () => {
       };
       expect(parsed.mcpServers[MCP_SERVER_NAME]?.command).toBe("node");
     }
-    // pi is started by an agent that already exports the gateway.
+    // No host is handed anything through the environment: the address travels
+    // on the command line, where every config format can carry it.
     expect(pi!.env).toEqual({});
     expect(pi!.registration()).toContain("lifecycle");
     expect(claude!.registration()).toContain(`"type": "stdio"`);

@@ -297,23 +297,35 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
- * Han runs — and ONLY Han.
+ * Runs written without spaces: Han, kana, and the marks that bind them.
  *
- * jieba is a CHINESE segmenter. Kana and Hangul used to be routed to it too,
- * and it cut them one CODEPOINT at a time: a Korean query for a word nobody
- * wrote matched documents exactly the way a Russian one did. They go to the
- * platform's own word breaker instead.
+ * Kana is INSIDE the run on purpose. Japanese writes kanji and kana in one
+ * unbroken string ("日本語のテキストを検索する"), so a Han-only run cuts that
+ * sentence into kanji islands and hands each to jieba — a CHINESE segmenter
+ * with no Japanese dictionary, which returns them one codepoint at a time
+ * ("検索" → "検", "索"). The particles between them survived as one-character
+ * tokens, and a phrase nobody wrote ("パンを食べる") matched documents through
+ * "を" and "食". Which run goes to which segmenter is decided per run, below.
+ *
+ * Hangul is NOT here: Korean is written with spaces, so the ordinary word
+ * breaker already sees its boundaries.
  */
-const HAN_RUN = /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/gu;
+const CJK_RUN =
+  /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u309F\u30A0-\u30FF\u31F0-\u31FF\u30FC\u3005]+/gu;
+
+/** Kana — the mark that a run is Japanese and not Chinese. */
+const KANA_CHAR = /[\u3040-\u309F\u30A0-\u30FF\u31F0-\u31FF]/u;
 
 /**
  * Segmentation version the FTS content was written with.
  *
  * v1: raw text. v2: jieba on everything, which broke every non-CJK script.
- * v3: per-script segmentation (`segmentForFts`). Bumping this makes an
- * existing database drop and rebuild its FTS tables once, on open.
+ * v3: per-script segmentation (`segmentForFts`). v4: Japanese — kana keeps its
+ * run out of jieba's hands, lone particles are dropped, and a short Han run is
+ * also kept whole. Bumping this makes an existing database drop and rebuild its
+ * FTS tables once, on open.
  */
-const FTS_SCHEMA_VERSION = 3;
+const FTS_SCHEMA_VERSION = 4;
 const FTS_SCHEMA_META_KEY = "fts_schema_version";
 const FTS_TOKENIZER_META_KEY = "fts_tokenizer";
 
@@ -379,24 +391,70 @@ export function segmentForFts(raw: string): string[] {
   const tokens: string[] = [];
 
   let last = 0;
-  HAN_RUN.lastIndex = 0;
+  CJK_RUN.lastIndex = 0;
   for (
-    let match = HAN_RUN.exec(raw);
+    let match = CJK_RUN.exec(raw);
     match !== null;
-    match = HAN_RUN.exec(raw)
+    match = CJK_RUN.exec(raw)
   ) {
     pushWords(tokens, raw.slice(last, match.index));
-    // cutForSearch splits long words further ("北京烤鸭" → 北京, 烤鸭, 北京烤鸭),
-    // so the index holds the same sub-words a query will ask for.
-    if (jieba) tokens.push(...jieba.cutForSearch(match[0], true));
-    else pushWords(tokens, match[0]);
-    last = match.index + match[0].length;
+    const run = match[0];
+    // A run with kana in it is Japanese, and jieba does not know Japanese: the
+    // word breaker does. A run of Han alone goes to jieba, where cutForSearch
+    // also splits long words further ("北京烤鸭" → 北京, 烤鸭, 北京烤鸭), so the
+    // index holds the same sub-words a query will ask for.
+    if (jieba && !KANA_CHAR.test(run)) pushHanRun(tokens, jieba, run);
+    else pushWords(tokens, run);
+    last = match.index + run.length;
   }
   pushWords(tokens, raw.slice(last));
 
   return tokens
     .map((t) => t.trim())
-    .filter((t) => t && /[\p{L}\p{N}]/u.test(t) && !ZH_STOP_WORDS.has(t));
+    .filter(
+      (t) =>
+        t &&
+        /[\p{L}\p{N}]/u.test(t) &&
+        !ZH_STOP_WORDS.has(t) &&
+        // A lone kana is a Japanese particle ("を", "の"), not a word: as a
+        // token it matches nearly every Japanese document, which is the same
+        // noise this segmentation exists to end.
+        !(t.length === 1 && KANA_CHAR.test(t)),
+    );
+}
+
+/**
+ * Longest run of Han that is still one word rather than a sentence.
+ *
+ * Long enough for the compounds these languages build ("人工智能", "日本語"),
+ * short enough that a Chinese sentence never enters the index as a single
+ * token nobody would ever type.
+ */
+const HAN_WHOLE_RUN_MAX = 4;
+
+/**
+ * Append the tokens of a run of Han alone.
+ *
+ * jieba answers: `cutForSearch` also splits long words further ("北京烤鸭" →
+ * 北京, 烤鸭, 北京烤鸭), so the index holds the same sub-words a query will ask
+ * for. But a run of Han carries no mark of its language, and the two sides of
+ * FTS meet it in different company: "日本語" indexed from a Japanese sentence
+ * is ONE token (the sentence has kana, so the word breaker cut it), while the
+ * same word typed alone as a query reaches jieba, which reads it as Chinese and
+ * returns 日本 + 語 — a query that cannot find what it itself wrote.
+ *
+ * A short run is therefore also kept whole. It costs one token, it is a word in
+ * every reading, and it is what makes a Japanese query meet a Japanese index.
+ */
+function pushHanRun(into: string[], jieba: JiebaInstance, run: string): void {
+  const pieces = jieba.cutForSearch(run, true);
+  into.push(...pieces);
+  if (
+    run.length > 1 &&
+    run.length <= HAN_WHOLE_RUN_MAX &&
+    !pieces.includes(run)
+  )
+    into.push(run);
 }
 
 /** Word breaker for everything outside Han, built once. */
@@ -3275,25 +3333,24 @@ export class VectorStore implements IMemoryStore {
   rebuildFtsIndex(): boolean {
     if (!this.ftsAvailable) return false;
 
+    // One transaction for the whole rebuild. The tables are emptied first, so
+    // without it every reader between the DELETE and the last INSERT sees a
+    // memory that has forgotten everything, and a crash in the middle leaves it
+    // that way. Committing once also spares 18k separate autocommits.
+    let inTransaction = false;
     try {
       this.logger?.info(
         `${TAG} Rebuilding FTS5 index with per-script segmentation…`,
       );
+      this.db.exec("BEGIN IMMEDIATE");
+      inTransaction = true;
 
       // ── Rebuild L1 FTS ──
-      // Clear existing FTS data
       this.db.exec("DELETE FROM l1_fts");
 
-      // Read all L1 records from metadata table
-      const l1Rows = this.db
-        .prepare(
-          `
-          SELECT record_id, content, type, priority, scene_name,
-                 session_key, session_id, timestamp_str, timestamp_start, timestamp_end, metadata_json
-          FROM l1_records
-        `,
-        )
-        .all() as Array<{
+      // Streamed, not materialised: L0 alone is tens of MB of text on a real
+      // install, and `.all()` held every row of it in memory at once.
+      const l1 = this.reindexFtsRows<{
         record_id: string;
         content: string;
         type: string;
@@ -3305,11 +3362,13 @@ export class VectorStore implements IMemoryStore {
         timestamp_start: string;
         timestamp_end: string;
         metadata_json: string;
-      }>;
-
-      let l1Count = 0;
-      for (const r of l1Rows) {
-        try {
+      }>(
+        `SELECT record_id, content, type, priority, scene_name,
+                session_key, session_id, timestamp_str, timestamp_start,
+                timestamp_end, metadata_json
+         FROM l1_records`,
+        "L1",
+        (r) =>
           this.stmtL1FtsInsert.run(
             tokenizeForFts(r.content), // content — segmented
             r.content, // content_original — raw
@@ -3323,26 +3382,13 @@ export class VectorStore implements IMemoryStore {
             r.timestamp_start,
             r.timestamp_end,
             r.metadata_json,
-          );
-          l1Count++;
-        } catch (err) {
-          this.logger?.warn?.(
-            `${TAG} FTS rebuild skip L1 ${r.record_id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
+          ),
+      );
 
       // ── Rebuild L0 FTS ──
       this.db.exec("DELETE FROM l0_fts");
 
-      const l0Rows = this.db
-        .prepare(
-          `
-          SELECT record_id, message_text, session_key, session_id, role, recorded_at, timestamp
-          FROM l0_conversations
-        `,
-        )
-        .all() as Array<{
+      const l0 = this.reindexFtsRows<{
         record_id: string;
         message_text: string;
         session_key: string;
@@ -3350,11 +3396,12 @@ export class VectorStore implements IMemoryStore {
         role: string;
         recorded_at: string;
         timestamp: number;
-      }>;
-
-      let l0Count = 0;
-      for (const r of l0Rows) {
-        try {
+      }>(
+        `SELECT record_id, message_text, session_key, session_id, role,
+                recorded_at, timestamp
+         FROM l0_conversations`,
+        "L0",
+        (r) =>
           this.stmtL0FtsInsert.run(
             tokenizeForFts(r.message_text), // message_text — segmented
             r.message_text, // message_text_original — raw
@@ -3364,19 +3411,16 @@ export class VectorStore implements IMemoryStore {
             r.role,
             r.recorded_at,
             r.timestamp,
-          );
-          l0Count++;
-        } catch (err) {
-          this.logger?.warn?.(
-            `${TAG} FTS rebuild skip L0 ${r.record_id}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
+          ),
+      );
 
-      const complete = l1Count === l1Rows.length && l0Count === l0Rows.length;
+      this.db.exec("COMMIT");
+      inTransaction = false;
+
+      const complete = l1.indexed === l1.seen && l0.indexed === l0.seen;
       this.logger?.[complete ? "info" : "warn"](
         `${TAG} FTS5 rebuild ${complete ? "complete" : "INCOMPLETE"}: ` +
-          `L1=${l1Count}/${l1Rows.length}, L0=${l0Count}/${l0Rows.length}`,
+          `L1=${l1.indexed}/${l1.seen}, L0=${l0.indexed}/${l0.seen}`,
       );
       // Rows are skipped one by one on error, so a "finished" rebuild can
       // still have holes in it. An index missing rows is not this version's
@@ -3384,11 +3428,46 @@ export class VectorStore implements IMemoryStore {
       // claiming it costs the rows.
       return complete;
     } catch (err) {
+      if (inTransaction) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // Nothing left to undo — the failure already ended the transaction.
+        }
+      }
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
+  }
+
+  /**
+   * Feed every row of one source table into its FTS table, row by row.
+   *
+   * A row that cannot be indexed is skipped and counted, not thrown: one
+   * unreadable record must not cost the rebuild the other eighteen thousand.
+   * The caller compares the two counts to learn whether the index is whole.
+   */
+  private reindexFtsRows<T extends { record_id: string }>(
+    sql: string,
+    label: string,
+    insert: (row: T) => void,
+  ): { seen: number; indexed: number } {
+    let seen = 0;
+    let indexed = 0;
+    for (const row of this.db.prepare(sql).iterate() as Iterable<T>) {
+      seen++;
+      try {
+        insert(row);
+        indexed++;
+      } catch (err) {
+        this.logger?.warn?.(
+          `${TAG} FTS rebuild skip ${label} ${row.record_id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { seen, indexed };
   }
 
   // ============================
