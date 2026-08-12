@@ -1,0 +1,663 @@
+{
+  "status": "ok",
+  "queries": 120,
+  "topK": 10,
+  "precisionAtK": 0.7333333333333333,
+  "top1HitRate": 0.525,
+  "leakageRate": null,
+  "metrics": {
+    "precisionAt5": 0.1299999999999998,
+    "precisionAt10": 0.07333333333333321,
+    "recallAt5": 0.65,
+    "recallAt10": 0.7333333333333333
+  },
+  "strata": {
+    "instruction/own": {
+      "precisionAt5": 0.12,
+      "precisionAt10": 0.065,
+      "recallAt5": 0.6,
+      "recallAt10": 0.65,
+      "queries": 20
+    },
+    "instruction/foreign": {
+      "precisionAt5": 0.09999999999999999,
+      "precisionAt10": 0.05499999999999999,
+      "recallAt5": 0.5,
+      "recallAt10": 0.55,
+      "queries": 20
+    },
+    "persona/own": {
+      "precisionAt5": 0.16000000000000003,
+      "precisionAt10": 0.08500000000000002,
+      "recallAt5": 0.8,
+      "recallAt10": 0.85,
+      "queries": 20
+    },
+    "persona/foreign": {
+      "precisionAt5": 0.13,
+      "precisionAt10": 0.08000000000000002,
+      "recallAt5": 0.65,
+      "recallAt10": 0.8,
+      "queries": 20
+    },
+    "episodic/own": {
+      "precisionAt5": 0.17000000000000004,
+      "precisionAt10": 0.09500000000000003,
+      "recallAt5": 0.85,
+      "recallAt10": 0.95,
+      "queries": 20
+    },
+    "episodic/foreign": {
+      "precisionAt5": 0.09999999999999999,
+      "precisionAt10": 0.06,
+      "recallAt5": 0.5,
+      "recallAt10": 0.6,
+      "queries": 20
+    }
+  },
+  "scoringVersion": "strategy=hybrid threshold=0.6 maxResults=10 crossProject=decay crossProjectDecay=0.5 defaultCrossProjectMultiplier=0.3 typeWeights=episodic=1,instruction=1,persona=1",
+  "at": "2026-08-12T21:35:12.166Z",
+  "diagnostics": [
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "58 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "59 embedding candidate(s) below scoreThreshold=0.6"
+    },
+    {
+      "stage": "strategy",
+      "code": "hybrid-threshold-cut",
+      "message": "60 embedding candidate(s) below scoreThreshold=0.6"
+    }
+  ],
+  "corpusHash": "2faeb2a0df2f0ad7"
+}

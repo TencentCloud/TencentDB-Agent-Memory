@@ -18,7 +18,8 @@
  * Usage:
  *   npx tsx scripts/tdai-recall-probe.mts --db /tmp/copy/vectors.db \
  *     [--data-dir DIR] [--corpus FILE] [--strategy keyword|embedding|hybrid] \
- *     [--threshold N] [--top-k N] [--out FILE] [--compare BASELINE] [--allow-live]
+ *     [--threshold N] [--top-k N] [--cross-project-decay N] [--cross-multiplier N] \
+ *     [--out FILE] [--compare BASELINE] [--allow-live]
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -44,6 +45,8 @@ interface Args {
   corpus: string;
   strategy?: "keyword" | "embedding" | "hybrid";
   threshold?: number;
+  crossProjectDecay?: number;
+  crossMultiplier?: number;
   topK?: number;
   out: string;
   compare: string;
@@ -53,6 +56,7 @@ interface Args {
 const USAGE =
   "usage: tdai-recall-probe.mts [--db FILE] [--data-dir DIR] [--corpus FILE]\n" +
   "       [--strategy keyword|embedding|hybrid] [--threshold N] [--top-k N]\n" +
+  "       [--cross-project-decay N] [--cross-multiplier N]\n" +
   "       [--out FILE] [--compare BASELINE] [--allow-live]";
 
 function parseArgs(argv: string[]): Args {
@@ -80,6 +84,10 @@ function parseArgs(argv: string[]): Args {
     else if (arg === "--allow-live") args.allowLive = true;
     else if (arg === "--threshold")
       args.threshold = number(argv[++i], "--threshold");
+    else if (arg === "--cross-project-decay")
+      args.crossProjectDecay = number(argv[++i], "--cross-project-decay");
+    else if (arg === "--cross-multiplier")
+      args.crossMultiplier = number(argv[++i], "--cross-multiplier");
     else if (arg === "--top-k") args.topK = number(argv[++i], "--top-k");
     else if (arg === "--strategy") {
       const value = argv[++i] ?? "";
@@ -198,6 +206,12 @@ const cfg: MemoryTdaiConfig = {
     ...gatewayConfig.memory.recall,
     ...(args.strategy ? { strategy: args.strategy } : {}),
     ...(args.threshold !== undefined ? { scoreThreshold: args.threshold } : {}),
+    ...(args.crossProjectDecay !== undefined
+      ? { crossProjectDecay: args.crossProjectDecay }
+      : {}),
+    ...(args.crossMultiplier !== undefined
+      ? { defaultCrossProjectMultiplier: args.crossMultiplier }
+      : {}),
   },
   probe: {
     ...gatewayConfig.memory.probe,

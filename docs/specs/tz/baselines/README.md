@@ -25,3 +25,39 @@ per-metric delta against the baseline.
 change in this package. `precision@k` is bounded by `|expected| / k` — every
 pair has exactly one right answer, so 0.2 is the ceiling at @5 and 0.1 at @10.
 `recall@k` is the number to read.
+
+`tz-04-recall-tuned.json` — the same corpus after the Ф6 change, at the settings
+the sweep picked. Both files carry the same `corpusHash`, so they are
+comparable.
+
+## What the sweep found (2026-08-13, same corpus, R@10)
+
+| strategy | threshold | R@10 |
+|---|---|---|
+| embedding | 0 / 0.1 / 0.2 | 0.708 / 0.708 / 0.700 |
+| embedding | 0.3 | 0.592 |
+| hybrid | 0 (≡ pre-fix behaviour) | 0.700 |
+| hybrid | 0.2 / **0.6** / 0.7 / 0.8 | 0.717 / **0.767** / 0.767 / 0.758 |
+
+Before the Ф6 fix `hybrid` ignored the threshold entirely, so that whole column
+was one number. The default strategy could not be tuned at all.
+
+`defaultCrossProjectMultiplier` (hybrid, threshold 0.6), mean R@10 over strata:
+
+| multiplier | own | foreign |
+|---|---|---|
+| 1.0 (decay effectively off) | 0.750 | 0.750 |
+| 0.5 (current default) | 0.817 | 0.717 |
+| **0.3** / 0.1 (identical — the ranking is already fully separated) | **0.817** | **0.650** |
+
+**Recommendation for `tdai-gateway.yaml`** (not applied — the live config is the
+owner's): `recall.strategy: hybrid`, `recall.scoreThreshold: 0.6`,
+`recall.defaultCrossProjectMultiplier: 0.3`. Against the live
+`embedding`/`0.2`/`0.5` this is own-project R@10 0.750 → 0.817 with foreign
+R@10 unchanged at 0.650 — the gain is in the project that asked, not in
+leakage.
+
+The code defaults stay as they are: `scoreThreshold` is shared by all
+strategies, and 0.6 is right for `hybrid` cosine candidates but destroys
+`embedding` (0.3 already costs 11 pp there). A per-strategy default is a
+separate change with its own measurement.
