@@ -40,7 +40,7 @@ if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "tdai-memory-hub"; 
   warn "memory-hub 容器未运行，proxy 的 sessionInit control plane 不可达。"
 fi
 
-pull_image "$PROXY_IMAGE"
+ensure_proxy_image "$PROXY_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
 # proxy 只从 YAML 读上游 URL / API key（不认 PROXY_UPSTREAM_URL 环境变量），

@@ -606,6 +606,7 @@ export const enUS = {
   'memory.notify.layerFailed': 'Failed to load layer data',
   'memory.notify.deleted': 'Deleted {{count}} memory item(s)',
   'memory.notify.deleteFailed': 'Delete failed',
+  'memory.notify.deleteForbidden': 'No permission to delete this memory',
   'memory.notify.l2Failed': 'Failed to load L2 content',
   'memory.confirm.private':
     'After setting to private, other Agents will no longer be able to use this memory',

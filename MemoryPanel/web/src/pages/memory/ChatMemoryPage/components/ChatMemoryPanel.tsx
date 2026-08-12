@@ -250,10 +250,19 @@ export default function ChatMemoryPanel(
             : delLayer === 'L1'
               ? { ids: [id] }
               : { path: path || id };
-        const res = await chatMemoryApi.deleteMemory(selected.id, delLayer, target);
-        tea.notify.success(
-          t('memory.notify.deleted', { count: res?.deleted_count ?? 1 }),
-        );
+        // 946-C：面板层幂等键（每目标生成一次），超时重试不会重复删除。
+        const idemKey = `del-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        const res = await chatMemoryApi.deleteMemory(selected.id, delLayer, target, idemKey);
+        // per-item 结果：有失败才提示；全部 not_found 按已删除语义处理（幂等）。
+        const failed = res?.results?.filter((r) => r.status === 'failed') ?? [];
+        const forbidden = res?.results?.filter((r) => r.status === 'forbidden') ?? [];
+        if (failed.length > 0) {
+          tea.notify.error(t('memory.notify.deleteFailed'));
+        } else if (forbidden.length > 0) {
+          tea.notify.error(t('memory.notify.deleteForbidden'));
+        } else {
+          tea.notify.success(t('memory.notify.deleted', { count: res?.deletedCount ?? 0 }));
+        }
         setLayerPages((prev) => ({
           ...prev,
           [selected.id]: { ...(prev[selected.id] ?? {}), [delLayer]: 0 },

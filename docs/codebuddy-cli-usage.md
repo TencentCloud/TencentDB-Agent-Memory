@@ -43,29 +43,32 @@ PROXY_ENABLE_AUTH=1           # 用请求凭据解析真实 user_id（sessionIni
 > `start-proxy.sh` 会校验依赖：开 sessionInit 时若 auth 未开会自动补开，并打印
 > `(auth=true session-init=true)`。改完 `.env` 需重跑 `./start-proxy.sh` 重建容器生效。
 
-## 3. 镜像补丁（fork 特有，必须）
+## 3. fork 镜像（fork 特有，推荐方式）
 
-当前 `agentmemory/memory-proxy:latest` 镜像**不含**本 fork 的 CLI 适配代码（仍是
-`ask_followup_question` 旧工具名）。直接用最新代码打补丁：
+官方 `agentmemory/memory-proxy:latest` 镜像**不含**本 fork 的 CLI 适配代码（仍是
+`ask_followup_question` 旧工具名）。本仓库部署默认启用 **fork 模式**——`.env` 里
+`PROXY_IMAGE=agentmemory/memory-proxy:fork`：
 
-```bash
-cd deploy/global-images
+- `start-proxy.sh`（`_lib.sh` 的 `ensure_proxy_image()`）检测到 `:fork` tag 后，
+  **自动用本地 `MemoryProxy/src` 构建固化镜像**（无镜像则构建、有则复用），
+  CLI 适配 + thinking 修复内置进镜像层，**重建容器无需重打补丁**。
+- 本地 `src` 改动后想立即生效：`PROXY_REBUILD=1 ./start-all.sh`。
+- 想用官方原版镜像：`.env` 改回 `agentmemory/memory-proxy:latest`（无 fork 修复）。
 
-# 1) AskUserQuestion 表单兼容：form.ts + extractor.ts 同步进容器
-bash patch-codebuddy-form.sh
+> 说明：fork 镜像内置的 DeepSeek thinking 修复逻辑——
+> `handler.ts`（回填写回 `upstreamBody`）、`reasoning/adapter.ts` +
+> `reasoning/openai-forward.ts`（模型匹配规则）。DeepSeek thinking 家族模型
+> （reasoner / r1 / **v4\* 如 deepseek-v4-flash** / think 字样）在 tool_calls
+> 历史消息缺 `reasoning_content` 时补空串回传；其它 provider 不做任何注入。
 
-# 2) OpenAI 协议 thinking 兼容：handler.ts 同步进容器
-bash patch-proxy-thinking-openai.sh
-```
-
-每个脚本有幂等检测（检测到已含 `AskUserQuestion` / `reasoning_content` 即跳过），
-会 `docker cp` 源码进容器并重启。**容器重建后补丁丢失**，需要重跑。
-
-> 验证补丁已生效：
+> 验证 fork 修复已生效：
 > ```bash
 > docker exec tdai-proxy sh -c 'grep -n "TOOL_NAME" /app/src/session/codebuddy/form.ts'
 > # 应输出：export const TOOL_NAME = "AskUserQuestion";
 > ```
+
+> 旧的 patch-*.sh 热补丁脚本（patch-codebuddy-form.sh / patch-proxy-thinking-openai.sh /
+> patch-proxy-thinking.sh）已退役，仅作为历史参考保留；fork 模式下无需执行。
 
 ## 4. CLI 配置（核心）
 
@@ -183,8 +186,8 @@ docker logs tdai-proxy --since 10m | grep -E "session-init:cb|injection-debug"
 | 完全不弹窗，日志 `sessionInitEnabled=false` | config.yaml 里 `sessionInit.enabled: false` | `.env` 设 `PROXY_ENABLE_SESSION_INIT=1`，重跑 `start-proxy.sh` |
 | 弹窗查不到 team，日志 `userId=anonymous_xxx` | auth 未开或 API key 无效，身份回落匿名 | 开 `PROXY_ENABLE_AUTH=1`；确认 `CODEBUDDY_API_KEY` 是内核有效 user_key |
 | 弹窗查不到 team，日志 `team/list HTTP 401 invalid_user_key` | CLI 请求的 key 内核不认识 | 换 `.admin-key` 里的有效 key |
-| 弹窗没弹但表单工具报错（旧版本日志） | 镜像还是 `ask_followup_question` 旧代码 | 重跑 `patch-codebuddy-form.sh` |
-| 容器重建后弹窗又失效 | 补丁随容器丢失 | 重跑两个 patch 脚本 |
+| 弹窗没弹但表单工具报错 | 跑的是官方镜像（无 fork 修复），工具仍是 `ask_followup_question` | `.env` 确认 `PROXY_IMAGE=agentmemory/memory-proxy:fork`，重跑 `start-proxy.sh` |
+| 请求返回 400 `The reasoning_content in the thinking mode must be passed back` | 上游 DeepSeek thinking 模型要求 tool_calls 历史回传 `reasoning_content`，但代理未补空串 | 确认跑的是 fork 镜像（含 thinking 修复）；模型名需命中 `reason|r1|v4|think` 匹配规则 |
 | 请求返回 400 `model_not_found` | CLI 的 model 未命中 proxy 定价表 | 对齐 `CODEBUDDY_MODEL` 与 proxy 配置的上游模型名 |
 
 ### 排查顺序建议
@@ -206,5 +209,5 @@ docker logs tdai-proxy --since 10m | grep -E "session-init:cb|injection-debug"
 | AskUserQuestion 表单构造 | `MemoryProxy/src/session/codebuddy/form.ts` |
 | 表单回写解析（JSON / XML 双格式） | `MemoryProxy/src/session/codebuddy/extractor.ts` |
 | CodeBuddy 适配器（协议/身份识别） | `MemoryProxy/src/agent-adapters/codebuddy.ts` |
-| 镜像补丁脚本 | `deploy/global-images/patch-codebuddy-form.sh` |
-| OpenAI thinking 补丁脚本 | `deploy/global-images/patch-proxy-thinking-openai.sh` |
+| fork 固化镜像构建 | `deploy/global-images/Dockerfile.proxy-fork` + `build-proxy-fork.sh` |
+| fork 镜像自动构建/复用（启动时） | `deploy/global-images/_lib.sh` 的 `ensure_proxy_image()` |

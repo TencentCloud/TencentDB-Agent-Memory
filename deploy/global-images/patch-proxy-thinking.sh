@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # patch-proxy-thinking.sh
+# ⚠️ 已退役（2026-08-12）：本仓库部署默认 fork 模式（PROXY_IMAGE=...:fork），
+#    启动时自动用本地 MemoryProxy/src 构建固化镜像，修复内置进镜像层，
+#    无需本脚本。保留仅作历史参考 / 官方镜像临时救急用。
 # 修复 TencentDB-Agent-Memory proxy 与 DeepSeek 上游的 thinking 兼容问题：
 #   Claude Code 新版本发送 thinking:{type:"adaptive"}，DeepSeek 兼容层不识别，
 #   且 thinking 模式下要求 tool_use 消息必须带 thinking 块（否则 400
@@ -10,14 +13,21 @@
 #   2) 转发前把 thinking.type 从 "adaptive" 转为 "enabled"（budget_tokens=16000）
 #   3) 转发前给含 tool_use 的 assistant 消息自动补 thinking 块
 #
-# 用法：./patch-proxy-thinking.sh
+# 用法：ALLOW_UNSUPPORTED_HOTPATCH=1 ./patch-proxy-thinking.sh
 # 注意：容器重建（start-all.sh / start-proxy.sh）会从镜像重新创建容器，
 #       补丁会丢失，重建后重新执行本脚本即可。
+# 946-D：容器内热补丁是 UNSUPPORTED 的临时手段；生产环境禁止（见 guard-hotpatch.sh）。
 # 依赖：docker 命令可用；容器名 tdai-proxy。
 
 set -euo pipefail
 CONTAINER="${1:-tdai-proxy}"
 FILE=/app/src/anthropicHandler.ts
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 946-D guard：显式 ALLOW_UNSUPPORTED_HOTPATCH=1 + 生产环境拒绝 + unsupported warning
+# shellcheck source=./guard-hotpatch.sh
+source "$SCRIPT_DIR/guard-hotpatch.sh"
+hotpatch_check_guard
 
 if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
   echo "容器 $CONTAINER 未运行，请先启动 proxy"; exit 1
@@ -87,6 +97,8 @@ open('/tmp/anthropicHandler.post-patch.ts', 'w', encoding='utf-8').write(src)
 PYEOF
 
 docker cp /tmp/anthropicHandler.post-patch.ts "$CONTAINER:$FILE"
+hotpatch_record_change /tmp/anthropicHandler.post-patch.ts "$FILE"
 docker restart "$CONTAINER"
 echo "补丁已应用并重启容器 $CONTAINER。"
+echo "变更记录：$HOTPATCH_CHANGES_FILE"
 echo "验证：docker logs $CONTAINER --since 1m | grep -E 'error|ERROR'"

@@ -54,6 +54,7 @@ import {
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
+import { normalizeAnthropicForward } from "./reasoning/anthropic-forward.js";
 
 const SKIP_REQUEST_HEADERS = new Set([
   "host",
@@ -258,10 +259,13 @@ function extractApiKey(c: Context): string {
 }
 
 /**
- * Heuristically decide whether a `thinking` block carries a valid native
- * Anthropic/Bedrock signature.
+ * Heuristically decide whether a `thinking` block carries a preservable
+ * provider signature (Anthropic/Bedrock native signatures).
+ *
+ * 946-A §17：不解释签名形状作为有效性证明，只做「可保留性」保守判定。
+ * 语义更准确的命名 isPreservableProviderSignature（原 hasValidThinkingSignature）。
  */
-function hasValidThinkingSignature(block: Record<string, unknown>): boolean {
+function isPreservableProviderSignature(block: Record<string, unknown>): boolean {
   const sig = block.signature;
   if (typeof sig !== "string" || sig.length === 0) return false;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sig)) {
@@ -294,7 +298,7 @@ export function sanitizeThinkingBlocks(
       const b = block as Record<string, unknown>;
       const isThinking = b.type === "thinking" || b.type === "redacted_thinking";
       if (!isThinking) return true;
-      if (hasValidThinkingSignature(b)) return true;
+      if (isPreservableProviderSignature(b)) return true;
       removed += 1;
       msgChanged = true;
       return false;
@@ -1139,24 +1143,28 @@ export async function handleAnthropicMessages(
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
-  const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
-  try {
-    const _ub = upstreamBody as Record<string, any>;
-    if (_ub.thinking && Array.isArray(_ub.messages)) {
-      if (_ub.thinking?.type === "adaptive") {
-        _ub.thinking = { type: "enabled", budget_tokens: 16000 };
-      }
-      for (const _m of _ub.messages) {
-        if (_m?.role === "assistant" && Array.isArray(_m.content)) {
-          const _hasTool = _m.content.some((b: any) => b?.type === "tool_use");
-          const _hasThk = _m.content.some((b: any) => b?.type === "thinking" || b?.type === "redacted_thinking");
-          if (_hasTool && !_hasThk) {
-            _m.content.unshift({ type: "thinking", thinking: "" });
-          }
-        }
-      }
+  let { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
+
+  // ── 946-A：capability-driven thinking 规范化（Anthropic 协议）────────────────
+  // 原实现（含容器内 patch-proxy-thinking.sh）对所有 Anthropic 协议请求硬编码
+  // adaptive→enabled + 给 tool_use 消息补空 thinking 块。现改为 capability 判定：
+  //   - 上游是真 Claude（supportsAdaptiveThinking=true）→ 保留 adaptive，只补块；
+  //   - 上游是 DeepSeek 兼容层（false）→ adaptive 降级为 enabled + 补块
+  //     （fc8804d 修复的核心场景，降级逻辑见 normalizeAnthropicForward）。
+  {
+    const isClaudeUpstream =
+      modelId.toLowerCase().includes("claude") ||
+      target.url.includes("anthropic") ||
+      target.url.includes("claude");
+    const thinkingNorm = normalizeAnthropicForward(upstreamBody, "anthropic", isClaudeUpstream);
+    if (thinkingNorm.changed) {
+      pipe.info(
+        "REASONING",
+        `upstream=${isClaudeUpstream ? "claude" : "deepseek-compat"} normalized thinking (${thinkingNorm.body.thinking ? "adaptive→enabled/backfill" : "backfill"})`,
+      );
+      upstreamBody = thinkingNorm.body as typeof upstreamBody;
     }
-  } catch (e) {}
+  }
   if (sanitizedCount > 0) {
     pipe.info(
       "FORWARD",

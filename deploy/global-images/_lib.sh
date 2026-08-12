@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# 避免 Windows 下 Git Bash 将 -v 挂载路径（特别是 :ro 后缀）翻译错误
+export MSYS_NO_PATHCONV=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 
@@ -77,6 +80,13 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# 可移植 curl 定位：Git Bash (Windows) 下 /usr/bin/curl 不存在，curl 在 PATH 里
+# （/c/Windows/system32/curl）。统一用 command -v 解析一次，避免硬编码路径。
+CURL="$(command -v curl || true)"
+if [[ -z "$CURL" ]]; then
+  die "找不到 curl 命令，请先安装（macOS/Linux 自带，Windows 用 Git Bash 自带或 system32）。"
+fi
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
@@ -85,6 +95,46 @@ pull_image() {
   [[ "${PULL:-0}" == "1" ]] || return 0
   info "拉取镜像 $image"
   $DOCKER pull "$image" || die "拉取 $image 失败。"
+}
+
+# fork 模式：确保组件镜像可用（一键启动，无需手动跑 build-*-fork.sh / 热补丁）。
+# 判定：<COMP>_FORK=1，或镜像名以 `:fork` 结尾。
+#   - 镜像已存在 → 直接复用（<COMP>_REBUILD=1 / PULL=1 时强制重建）
+#   - 镜像不存在 → 自动调用对应的 build-*-fork.sh 构建
+# 非 fork 模式 → 走原始 pull_image 逻辑（拉官方镜像）。
+#
+# 用法：ensure_fork_image "<IMAGE_VAR_NAME>" "<BUILD_SCRIPT>"
+#   例：ensure_fork_image "PROXY_IMAGE" "build-proxy-fork.sh"
+#       ensure_fork_image "MEMORY_HUB_IMAGE" "build-memory-hub-fork.sh"
+# fork 开关变量：<VAR_NAME 前缀>_FORK（如 PROXY_FORK / MEMORY_HUB_FORK）、
+#                <前缀>_REBUILD（如 PROXY_REBUILD / MEMORY_HUB_REBUILD）。
+ensure_fork_image() {
+  local var_name="$1"
+  local build_script="$2"
+  local image="${!var_name:-}"
+  local prefix="${var_name%_IMAGE}"  # PROXY_IMAGE → PROXY, MEMORY_HUB_IMAGE → MEMORY_HUB
+
+  if [[ -z "$image" ]]; then
+    die "$var_name 未设置。"
+  fi
+
+  local fork_flag="${prefix}_FORK"
+  local rebuild_flag="${prefix}_REBUILD"
+  if [[ "${!fork_flag:-0}" == "1" || "$image" == *":fork" ]]; then
+    if docker image inspect "$image" >/dev/null 2>&1 && [[ "${!rebuild_flag:-0}" != "1" && "${PULL:-0}" != "1" ]]; then
+      info "fork 镜像 $image 已存在，直接复用（$rebuild_flag=1 可强制重建）"
+      return 0
+    fi
+    info "构建 fork 镜像 $image（本地改动内置，无需热补丁）..."
+    bash "$SCRIPT_DIR/$build_script"
+    return 0
+  fi
+  pull_image "$image"
+}
+
+# 兼容旧调用（proxy 专用），行为与 ensure_fork_image 一致。
+ensure_proxy_image() {
+  ensure_fork_image "PROXY_IMAGE" "build-proxy-fork.sh"
 }
 
 # 幂等移除同名容器

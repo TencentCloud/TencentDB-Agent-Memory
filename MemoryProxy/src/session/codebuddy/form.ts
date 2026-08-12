@@ -14,6 +14,7 @@
  */
 
 import type { TeamOption } from "../types.js";
+import { QUESTION_IDS, type QuestionId } from "./adapter.js";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ interface CBAskOption {
 }
 
 interface CBAskQuestion {
+  /** 稳定 question id（946-B §18.1）：显示 label 不作标识，解析按此 id 路由。 */
+  id: QuestionId;
   question: string;
   header: string;
   options: CBAskOption[];
@@ -85,6 +88,7 @@ function buildFollowupQuestionArgs(data: FormData): { questions: CBAskQuestion[]
 
   if (stage === "asset_confirm") {
     questions.push({
+      id: QUESTION_IDS.assetConfirm,
       question: titlePrefix + ASSET_CONFIRM_FORM_TITLE + "：本次对话是否要关联团队资产？",
       header: "关联资产",
       options: [
@@ -98,6 +102,7 @@ function buildFollowupQuestionArgs(data: FormData): { questions: CBAskQuestion[]
 
   if (stage === "team") {
     questions.push({
+      id: QUESTION_IDS.team,
       question: titlePrefix + TEAM_FORM_TITLE + "：请选择本次会话所属的 Team：",
       header: "Team",
       options: teams.map((t) => ({
@@ -115,6 +120,7 @@ function buildFollowupQuestionArgs(data: FormData): { questions: CBAskQuestion[]
 
   if (team.agents.length > 0) {
     questions.push({
+      id: QUESTION_IDS.agent,
       question: titlePrefix + AGENT_TASK_FORM_TITLE + `：请选择「${team.team_name}」下要使用的 Agent：`,
       header: "Agent",
       options: team.agents.map((a) => ({
@@ -135,6 +141,7 @@ function buildFollowupQuestionArgs(data: FormData): { questions: CBAskQuestion[]
   }
   if (taskOptions.length > 0) {
     questions.push({
+      id: QUESTION_IDS.task,
       question: titlePrefix + AGENT_TASK_FORM_TITLE + `：请选择「${team.team_name}」下关联的任务：`,
       header: "Task",
       options: taskOptions,
