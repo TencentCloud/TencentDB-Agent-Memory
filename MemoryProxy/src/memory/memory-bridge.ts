@@ -24,6 +24,7 @@ import type { Context } from "hono";
 import { extractBearerToken } from "../opik.js";
 import { apiKeyToKeyId } from "../opik.js";
 import { getSessionStore } from "../session/store.js";
+import { sessionKeyCandidates } from "../session/session-key.js";
 import { verifyUserKey, isAuthEnabled } from "../auth.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
@@ -103,13 +104,12 @@ function toIdFields(state: import("../session/types.js").SessionInitState | unde
  * Returns null on miss (caller decides whether to probe L2).
  */
 function loadSessionIdsL1(sessionKey: string): SessionIdFields | null {
-  let state = getSessionStore().get(sessionKey);
-  // 与 skill-bridge 对齐：尝试 codebuddy: / claude-code: 前缀兜底
-  if (!state && !sessionKey.includes(":")) {
-    state = getSessionStore().get(`codebuddy:${sessionKey}`)
-        ?? getSessionStore().get(`claude-code:${sessionKey}`);
+  for (const candidate of sessionKeyCandidates(sessionKey)) {
+    const state = getSessionStore().get(candidate);
+    const ids = toIdFields(state);
+    if (ids) return ids;
   }
-  return toIdFields(state);
+  return null;
 }
 
 /**
@@ -128,33 +128,26 @@ async function loadSessionIdsL2(
   spaceId: string,
   sessionKey: string,
 ): Promise<SessionIdFields | null> {
-  // 从 sessionKey 反解 agentSource + sessionId：
-  //   "claude-code:conv-abc"  → agentSource=claude-code, sessionId=conv-abc
-  //   "codebuddy:conv-abc"    → agentSource=codebuddy, sessionId=conv-abc
-  //   "conv-abc" (无前缀)      → agentSource=claude-code (默认), sessionId=conv-abc
-  let agentSource = "claude-code";
-  let sessionId = sessionKey;
-  const colonIdx = sessionKey.indexOf(":");
-  if (colonIdx >= 0) {
-    agentSource = sessionKey.slice(0, colonIdx);
-    sessionId = sessionKey.slice(colonIdx + 1);
-  }
-
   // 拿 userId：先 verify（如果 auth 关了就没法走 L2 fallthrough）
   if (!isAuthEnabled() || !apiKey) return null;
   const verifyResult = await verifyUserKey(apiKey, spaceId);
   if (verifyResult.rejected || !verifyResult.userId) return null;
   const userId = verifyResult.userId;
 
-  const identity = { userId, agentSource, sessionId, spaceId };
-  let recovered;
-  try {
-    recovered = await getSessionStore().getOrRecover(sessionKey, identity, {});
-  } catch (err) {
-    console.warn(`${TAG} L2 fallthrough error session=${sessionKey}: ${(err as Error).message}`);
-    return null;
+  for (const candidate of sessionKeyCandidates(sessionKey)) {
+    const colonIdx = candidate.indexOf(":");
+    const agentSource = colonIdx > 0 ? candidate.slice(0, colonIdx) : "claude-code";
+    const sessionId = colonIdx > 0 ? candidate.slice(colonIdx + 1) : candidate;
+    const identity = { userId, agentSource, sessionId, spaceId };
+    try {
+      const recovered = await getSessionStore().getOrRecover(candidate, identity, {});
+      const ids = toIdFields(recovered);
+      if (ids) return ids;
+    } catch (err) {
+      console.warn(`${TAG} L2 fallthrough error session=${candidate}: ${(err as Error).message}`);
+    }
   }
-  return toIdFields(recovered);
+  return null;
 }
 
 function envelope(code: number, message: string, httpStatus = 200): Response {

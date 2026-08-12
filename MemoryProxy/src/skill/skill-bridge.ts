@@ -22,6 +22,7 @@ import type { Redis } from "ioredis";
 import { extractBearerToken } from "../opik.js";
 import { apiKeyToKeyId } from "../opik.js";
 import { getSessionStore } from "../session/store.js";
+import { sessionKeyCandidates } from "../session/session-key.js";
 import { verifyUserKey, isAuthEnabled } from "../auth.js";
 // getSkillExtractTrigger / KvExtractStore 已随老链路一起删除。
 // 详见 handler-glue.ts 顶部注释 —— skill_extract 触发路径当前不可用,
@@ -242,10 +243,7 @@ function loadSessionIdsL1(sessionKey: string): SessionIdFields | null {
   // 会话 keyId 在 handler 层是 `${agentSource}:${sessionId}`；skill-bridge 拿到
   // 的通常是 bare sessionKey（外部 curl 不知道 agentSource）。原语义是先按
   // bare 命中，命中不到再按已知 agentSource 前缀试。
-  const candidates = sessionKey.includes(":")
-    ? [sessionKey]
-    : [sessionKey, `codebuddy:${sessionKey}`, `claude-code:${sessionKey}`];
-  for (const k of candidates) {
+  for (const k of sessionKeyCandidates(sessionKey)) {
     const s = getSessionStore().get(k);
     if (s) return stateToIdFields(s, k);
   }
@@ -268,10 +266,7 @@ async function loadSessionIdsL2(
   const userId = verifyResult.userId;
 
   // 与 L1 一样按前缀候选跑一遍
-  const candidates = sessionKey.includes(":")
-    ? [sessionKey]
-    : [sessionKey, `codebuddy:${sessionKey}`, `claude-code:${sessionKey}`];
-  for (const compositeKey of candidates) {
+  for (const compositeKey of sessionKeyCandidates(sessionKey)) {
     const colonIdx = compositeKey.indexOf(":");
     const agentSource = colonIdx > 0 ? compositeKey.slice(0, colonIdx) : "claude-code";
     const sessionId = colonIdx > 0 ? compositeKey.slice(colonIdx + 1) : compositeKey;
