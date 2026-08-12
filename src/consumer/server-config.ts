@@ -5,7 +5,7 @@
  * spawning a process: everything here is argv and env in, values out.
  */
 
-import { resolveGatewayPort } from "../gateway/address.js";
+import { resolveGatewayPortSource } from "../gateway/address.js";
 
 export { DEFAULT_GATEWAY_PORT } from "../gateway/address.js";
 
@@ -28,15 +28,36 @@ export function resolveGatewayUrl(
   env: NodeJS.ProcessEnv,
   argv: readonly string[] = [],
 ): string {
+  return resolveGatewayAddress(env, argv).url;
+}
+
+/**
+ * Where the gateway is, and whether a HOST would resolve the same address.
+ *
+ * A registration is started by the host, from the host's own directory and
+ * environment — so an address this shell found through `TDAI_GATEWAY_CONFIG`,
+ * a config in the current directory, or any environment variable is one the
+ * host cannot find again. `isPortable` marks the addresses that survive the
+ * paste; everything else has to be written into the snippet.
+ */
+export function resolveGatewayAddress(
+  env: NodeJS.ProcessEnv,
+  argv: readonly string[] = [],
+): { url: string; isPortable: boolean } {
   const explicit = parseFlag(argv, "--gateway") ?? env.TDAI_GATEWAY_URL?.trim();
-  if (explicit) return explicit.replace(/\/+$/, "");
+  if (explicit) return { url: explicit.replace(/\/+$/, ""), isPortable: false };
   const port = Number.parseInt(env.TDAI_GATEWAY_PORT ?? "", 10);
-  if (Number.isInteger(port) && port > 0) return `http://127.0.0.1:${port}`;
+  if (Number.isInteger(port) && port > 0)
+    return { url: `http://127.0.0.1:${port}`, isPortable: false };
   // Nobody named an address, so ask the same question the gateway asks itself.
   // Guessing the default here would send a configured install's sessions to a
   // gateway on 8420: nothing answers, or on a machine that runs a default one
   // too, the WRONG memory answers and the next note lands in it.
-  return `http://127.0.0.1:${resolveGatewayPort()}`;
+  const source = resolveGatewayPortSource();
+  return {
+    url: `http://127.0.0.1:${source.port}`,
+    isPortable: source.isPortable,
+  };
 }
 
 /** The value of `--name value`, or undefined when the flag carries none. */

@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { must, finish } from "../tz07-probe/assert.mts";
 import {
   freePort,
@@ -158,6 +159,67 @@ try {
     "маркер лежит в памяти именно настроенного gateway",
     (direct.results ?? "").includes(MARKER),
   );
+
+  // ── An address the host could NOT resolve for itself ──
+  // The same gateway, found through a config in the printing shell's own
+  // directory. Nothing about that directory reaches the host, so the snippet
+  // has to carry the address — otherwise the pasted line falls back to the
+  // default port and answers from whatever gateway happens to run there.
+  const projectDir = path.join(home, "project");
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.copyFileSync(configPath, path.join(projectDir, "tdai-gateway.yaml"));
+
+  const printed = execFileSync(
+    process.execPath,
+    [launcherPath, "--host", "claude", "--print-registration"],
+    {
+      cwd: projectDir,
+      env: { ...process.env, ...sessionEnv } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+    },
+  );
+  const snippet = JSON.parse(printed.slice(printed.indexOf("{"))) as {
+    mcpServers: Record<string, { command: string; args: string[] }>;
+  };
+  const pasted = snippet.mcpServers["tdai-memory"]!;
+  console.log("вставляемая строка:", pasted.command, pasted.args.join(" "));
+  must(
+    "снипет несёт адрес, который хост сам бы не нашёл",
+    pasted.args.includes("--gateway") && pasted.args.includes(gateway.url),
+  );
+
+  // …and that pasted line, run from ANOTHER directory with the same clean
+  // environment, still reaches the gateway the user was looking at.
+  const pastedHost = await startHost(
+    {
+      id: "claude-pasted",
+      configPath: "~/.claude.json",
+      command: pasted.command,
+      args: pasted.args,
+      env: {},
+      registration: () => printed,
+    },
+    { env: sessionEnv, cwd: home },
+  );
+  try {
+    const reply = await pastedHost.call("tools/call", {
+      name: "memory_search",
+      arguments: { query: MARKER, limit: 5 },
+    });
+    const structured = (
+      reply.result as { structuredContent?: { results?: string } }
+    ).structuredContent;
+    console.log(
+      "вставленная строка из другого каталога нашла:",
+      (structured?.results ?? "").includes(MARKER),
+    );
+    must(
+      "вставленная строка попала в тот же gateway",
+      (structured?.results ?? "").includes(MARKER),
+    );
+  } finally {
+    pastedHost.stop();
+  }
 } finally {
   await gateway.stop();
   await llm.close();

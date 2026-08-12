@@ -162,6 +162,22 @@ describe("segmentation per script", () => {
     expect(find("写真")).toEqual(["m2"]);
   });
 
+  it("finds a kanji compound typed on its own", () => {
+    // A run of Han carries no mark of its language. Indexed inside a Japanese
+    // sentence it is cut by the word breaker (情報処理 / 技術, because the
+    // sentence has kana); typed alone as a query it reaches jieba, which reads
+    // it as Chinese (情報 / 処 / 理技術) and found nothing it wrote itself.
+    store = open();
+    store.upsertL1(mem("m1", "情報処理技術の基礎を勉強しています"), vec());
+    store.upsertL1(mem("m2", "猫の写真を保存した"), vec());
+
+    expect(find("情報処理技術")).toEqual(["m1"]);
+    expect(find("基礎")).toEqual(["m1"]);
+    // …and the single characters jieba spells an unknown word out into are not
+    // tokens of their own: "検" must not drag in every document using it.
+    expect(segmentForFts("検索")).toEqual(["検索"]);
+  });
+
   it("drops the lone kana particles that match everything", () => {
     const tokens = segmentForFts("日本語のテキストを検索する");
     expect(tokens).toContain("検索");
@@ -418,8 +434,16 @@ describe("repairing an index written by the old segmentation", () => {
     const other = new DatabaseSync(dbPath);
     other.exec("ALTER TABLE l1_records RENAME TO l1_records_hidden");
     expect(store.rebuildFtsIndex()).toBe(false);
+    // …and it leaves the index it could not replace. The rebuild empties both
+    // tables before refilling them, so without one transaction a failure here
+    // costs the whole index until the next open: search would answer "nothing
+    // found" over a memory that holds everything.
+    expect(ftsRowCounts().l1).toBe(1);
 
     other.exec("ALTER TABLE l1_records_hidden RENAME TO l1_records");
+    // The surviving index is the real one, not a husk of rows: with the source
+    // table back, the same search answers without any rebuild at all.
+    expect(find("памяти")).toEqual(["m1"]);
     other.close();
     expect(store.rebuildFtsIndex()).toBe(true);
     expect(find("памяти")).toEqual(["m1"]);

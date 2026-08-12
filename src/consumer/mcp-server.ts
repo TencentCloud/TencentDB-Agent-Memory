@@ -24,6 +24,7 @@ import {
 import { createWriteTokenReader } from "./token.js";
 import {
   parseHostId,
+  resolveGatewayAddress,
   resolveGatewayUrl,
   sessionKeyFor,
 } from "./server-config.js";
@@ -152,10 +153,10 @@ export class UnknownHostError extends Error {
 /**
  * The block a user pastes into their host's config, and where it goes.
  *
- * The gateway URL is baked in only when this environment names one — a URL or
- * a port. A default local install gets a snippet without one, so it keeps
- * resolving the gateway at run time instead of freezing today's address into
- * a config file.
+ * The gateway URL is baked in only when the address would not survive the
+ * paste — see below. A default local install gets a snippet without one, so it
+ * keeps resolving the gateway at run time instead of freezing today's address
+ * into a config file.
  *
  * @throws UnknownHostError when the host has no registration in this build.
  */
@@ -165,18 +166,18 @@ export function renderRegistration(
   argv: readonly string[] = [],
 ): string {
   // A host starts this server from its own config file, not from the shell
-  // that printed the snippet, so everything that says where the gateway is has
-  // to travel INSIDE the snippet: the flag just passed, and the port too. The
-  // printed address must be the one this same command line would serve, or the
-  // user pastes a config pointing somewhere they never named.
-  const namesGateway = Boolean(
-    argv.includes("--gateway") ||
-    env.TDAI_GATEWAY_URL?.trim() ||
-    env.TDAI_GATEWAY_PORT?.trim(),
-  );
+  // that printed the snippet — another directory, another environment. So an
+  // address only THIS shell can resolve (a flag, TDAI_GATEWAY_URL or _PORT, a
+  // config named by TDAI_GATEWAY_CONFIG, a tdai-gateway.yaml in the current
+  // directory) has to travel INSIDE the snippet, or the pasted line serves a
+  // gateway the user never named — on a machine running a default one too,
+  // another memory answers and the next note lands in it. What the MACHINE
+  // answers — the data dir's own config, or the default — is left out, so a
+  // later change of port is picked up instead of frozen into a config file.
+  const address = resolveGatewayAddress(env, argv);
   const lookup = describeHost(hostId, {
     launcherPath: resolveLauncherPath(),
-    ...(namesGateway ? { gatewayUrl: resolveGatewayUrl(env, argv) } : {}),
+    ...(address.isPortable ? {} : { gatewayUrl: address.url }),
   });
   if (!lookup.ok) throw new UnknownHostError(lookup.message);
   const { descriptor } = lookup;

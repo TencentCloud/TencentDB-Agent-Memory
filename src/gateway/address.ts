@@ -60,14 +60,32 @@ export const DEFAULT_GATEWAY_PORT = 8420;
 
 const CONFIG_FILENAMES = ["tdai-gateway.yaml", "tdai-gateway.json"] as const;
 
-/** The config file this environment would load, or null when there is none. */
-export function resolveGatewayConfigPath(): string | null {
+/**
+ * Where a config file was found, and therefore who else can find it.
+ *
+ * `env` and `cwd` are answers to THIS shell's question: another process, in
+ * another directory, without that variable, resolves something else. `data-dir`
+ * is the machine's own answer — any process finds it. A registration a user
+ * pastes into a host config is started by that host, in its own directory and
+ * environment, so the difference decides whether the address has to travel
+ * inside the snippet.
+ */
+export type GatewayConfigOrigin = "env" | "cwd" | "data-dir";
+
+export interface GatewayConfigLocation {
+  path: string;
+  origin: GatewayConfigOrigin;
+}
+
+/** The config file this environment would load, with where it came from. */
+export function findGatewayConfig(): GatewayConfigLocation | null {
   const explicit = getEnv("TDAI_GATEWAY_CONFIG")?.trim();
-  if (explicit && fs.existsSync(explicit)) return explicit;
+  if (explicit && fs.existsSync(explicit))
+    return { path: explicit, origin: "env" };
 
   for (const name of CONFIG_FILENAMES) {
     const inCwd = path.join(process.cwd(), name);
-    if (fs.existsSync(inCwd)) return inCwd;
+    if (fs.existsSync(inCwd)) return { path: inCwd, origin: "cwd" };
   }
 
   // The data dir — the ENV-named one when there is one. Reading the default
@@ -82,10 +100,20 @@ export function resolveGatewayConfigPath(): string | null {
     : rawDataDir;
   for (const name of CONFIG_FILENAMES) {
     const inDataDir = path.join(dataDir, name);
-    if (fs.existsSync(inDataDir)) return inDataDir;
+    if (fs.existsSync(inDataDir))
+      return {
+        path: inDataDir,
+        // A data dir named by TDAI_DATA_DIR is this shell's answer too.
+        origin: getEnv("TDAI_DATA_DIR") ? "env" : "data-dir",
+      };
   }
 
   return null;
+}
+
+/** The config file this environment would load, or null when there is none. */
+export function resolveGatewayConfigPath(): string | null {
+  return findGatewayConfig()?.path ?? null;
 }
 
 /** `server.port` as written in the config file, if it is readable. */
@@ -106,9 +134,33 @@ export function readConfiguredPort(configPath: string | null): number | null {
   }
 }
 
+/**
+ * Where a port came from, which decides whether it travels.
+ *
+ * `portable` means every process on this machine resolves the same port with
+ * no environment and no particular directory — the data dir's own config, or
+ * the default. Anything else is an answer only this shell can give.
+ */
+export interface GatewayPortSource {
+  port: number;
+  isPortable: boolean;
+}
+
 /** The port this environment's gateway listens on: env, then config, then default. */
 export function resolveGatewayPort(): number {
+  return resolveGatewayPortSource().port;
+}
+
+/** The same port, with whether another process would resolve it unaided. */
+export function resolveGatewayPortSource(): GatewayPortSource {
   const fromEnv = Number.parseInt(getEnv("TDAI_GATEWAY_PORT") ?? "", 10);
-  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv;
-  return readConfiguredPort(resolveGatewayConfigPath()) ?? DEFAULT_GATEWAY_PORT;
+  if (Number.isInteger(fromEnv) && fromEnv > 0)
+    return { port: fromEnv, isPortable: false };
+
+  const config = findGatewayConfig();
+  const configured = readConfiguredPort(config?.path ?? null);
+  if (configured !== null)
+    return { port: configured, isPortable: config?.origin === "data-dir" };
+
+  return { port: DEFAULT_GATEWAY_PORT, isPortable: true };
 }

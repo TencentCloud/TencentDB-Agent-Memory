@@ -351,6 +351,8 @@ function currentTokenizerId(): string {
  */
 type FtsMigrationCheck = {
   kind: "rebuild-needed" | "current" | "unknown";
+  /** Whether the existing tables must go before new ones can be created. */
+  dropFirst?: boolean;
 };
 
 /**
@@ -424,37 +426,32 @@ export function segmentForFts(raw: string): string[] {
 }
 
 /**
- * Longest run of Han that is still one word rather than a sentence.
+ * Append the tokens of a run of Han alone, as BOTH segmenters read it.
  *
- * Long enough for the compounds these languages build ("人工智能", "日本語"),
- * short enough that a Chinese sentence never enters the index as a single
- * token nobody would ever type.
- */
-const HAN_WHOLE_RUN_MAX = 4;
-
-/**
- * Append the tokens of a run of Han alone.
+ * A run of Han carries no mark of its language, and the two sides of FTS meet
+ * it in different company. "情報処理技術" indexed from a Japanese sentence was
+ * cut by the word breaker (情報処理 / 技術, because the sentence has kana);
+ * typed alone as a query it reaches jieba, which reads it as Chinese and
+ * returns 情報 / 処 / 理技術 — a query that cannot find the document it came
+ * from. So the run is cut both ways and both answers are kept: jieba's
+ * `cutForSearch` also splits long words further ("北京烤鸭" → 北京, 烤鸭,
+ * 北京烤鸭), and for Chinese the two agree anyway.
  *
- * jieba answers: `cutForSearch` also splits long words further ("北京烤鸭" →
- * 北京, 烤鸭, 北京烤鸭), so the index holds the same sub-words a query will ask
- * for. But a run of Han carries no mark of its language, and the two sides of
- * FTS meet it in different company: "日本語" indexed from a Japanese sentence
- * is ONE token (the sentence has kana, so the word breaker cut it), while the
- * same word typed alone as a query reaches jieba, which reads it as Chinese and
- * returns 日本 + 語 — a query that cannot find what it itself wrote.
- *
- * A short run is therefore also kept whole. It costs one token, it is a word in
- * every reading, and it is what makes a Japanese query meet a Japanese index.
+ * What is NOT kept is a single character that some longer token of the same
+ * run already contains: those are jieba spelling out a word it does not know
+ * ("検索" → 検, 索), and as tokens they match every unrelated document that
+ * happens to use the character. A single character that stands on its own —
+ * a one-character Chinese word — has no such cover and stays.
  */
 function pushHanRun(into: string[], jieba: JiebaInstance, run: string): void {
-  const pieces = jieba.cutForSearch(run, true);
-  into.push(...pieces);
-  if (
-    run.length > 1 &&
-    run.length <= HAN_WHOLE_RUN_MAX &&
-    !pieces.includes(run)
-  )
-    into.push(run);
+  const readings: string[] = [...jieba.cutForSearch(run, true)];
+  pushWords(readings, run);
+  for (const token of readings) {
+    const isSpelledOut =
+      token.length === 1 &&
+      readings.some((other) => other.length > 1 && other.includes(token));
+    if (!isSpelledOut) into.push(token);
+  }
 }
 
 /** Word breaker for everything outside Han, built once. */
@@ -1166,37 +1163,29 @@ export class VectorStore implements IMemoryStore {
       // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
       const migration = this.migrateFtsTablesIfNeeded();
 
-      // L1 FTS5 virtual table (v2 schema)
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS l1_fts USING fts5(
-          content,
-          content_original UNINDEXED,
-          record_id UNINDEXED,
-          type UNINDEXED,
-          priority UNINDEXED,
-          scene_name UNINDEXED,
-          session_key UNINDEXED,
-          session_id UNINDEXED,
-          timestamp_str UNINDEXED,
-          timestamp_start UNINDEXED,
-          timestamp_end UNINDEXED,
-          metadata_json UNINDEXED
-        )
-      `);
-
-      // L0 FTS5 virtual table (v2 schema)
-      this.db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
-          message_text,
-          message_text_original UNINDEXED,
-          record_id UNINDEXED,
-          session_key UNINDEXED,
-          session_id UNINDEXED,
-          role UNINDEXED,
-          recorded_at UNINDEXED,
-          timestamp UNINDEXED
-        )
-      `);
+      // Everything that touches the index — the drop, the fresh tables, the
+      // refill — happens in ONE transaction. Without it a rebuild that fails
+      // halfway leaves both tables empty for the rest of the process: search
+      // answers "nothing found" over a memory that holds everything, and only
+      // the next open repairs it.
+      const rebuilding = migration.kind === "rebuild-needed";
+      if (rebuilding) this.db.exec("BEGIN IMMEDIATE");
+      try {
+        if (migration.dropFirst) {
+          this.db.exec("DROP TABLE IF EXISTS l1_fts");
+          this.db.exec("DROP TABLE IF EXISTS l0_fts");
+        }
+        this.createFtsTables();
+      } catch (err) {
+        if (rebuilding) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch {
+            // The failure already ended the transaction.
+          }
+        }
+        throw err;
+      }
 
       // L1 FTS prepared statements
       this.stmtL1FtsInsert = this.db.prepare(`
@@ -1264,8 +1253,20 @@ export class VectorStore implements IMemoryStore {
       // dropped and empty, and a marker over that emptiness would tell every
       // later open that there is nothing to repair. Leaving it unwritten costs
       // one more rebuild attempt; writing it costs the index.
-      const didRebuild =
-        migration.kind === "rebuild-needed" && this.rebuildFtsIndex();
+      let didRebuild = false;
+      if (rebuilding) {
+        try {
+          didRebuild = this.rebuildFtsRows();
+          this.db.exec("COMMIT");
+        } catch (err) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch {
+            // The failure already ended the transaction.
+          }
+          throw err;
+        }
+      }
       if (shouldWriteFtsMarker(migration.kind, didRebuild)) {
         this.writeFtsSchemaVersion(FTS_SCHEMA_VERSION);
         this.writeFtsTokenizer();
@@ -3278,9 +3279,10 @@ export class VectorStore implements IMemoryStore {
       // One table missing while the other is present, a stale shape, an older
       // version, a different tokenizer: all repaired the same way, and both
       // tables go together so the two halves never disagree about their age.
-      this.db.exec("DROP TABLE IF EXISTS l1_fts");
-      this.db.exec("DROP TABLE IF EXISTS l0_fts");
-      return { kind: "rebuild-needed" };
+      // The drop itself is left to the caller, which does it inside the same
+      // transaction as the refill — a check must not be able to empty the
+      // index on its own.
+      return { kind: "rebuild-needed", dropFirst: true };
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS migration check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -3336,110 +3338,164 @@ export class VectorStore implements IMemoryStore {
     // One transaction for the whole rebuild. The tables are emptied first, so
     // without it every reader between the DELETE and the last INSERT sees a
     // memory that has forgotten everything, and a crash in the middle leaves it
-    // that way. Committing once also spares 18k separate autocommits.
-    let inTransaction = false;
+    // that way. Committing once also spares 18k separate autocommits. `init`
+    // has a transaction of its own — the drop and the fresh tables belong in
+    // it too — and calls `rebuildFtsRows` directly.
     try {
-      this.logger?.info(
-        `${TAG} Rebuilding FTS5 index with per-script segmentation…`,
-      );
       this.db.exec("BEGIN IMMEDIATE");
-      inTransaction = true;
-
-      // ── Rebuild L1 FTS ──
-      this.db.exec("DELETE FROM l1_fts");
-
-      // Streamed, not materialised: L0 alone is tens of MB of text on a real
-      // install, and `.all()` held every row of it in memory at once.
-      const l1 = this.reindexFtsRows<{
-        record_id: string;
-        content: string;
-        type: string;
-        priority: number;
-        scene_name: string;
-        session_key: string;
-        session_id: string;
-        timestamp_str: string;
-        timestamp_start: string;
-        timestamp_end: string;
-        metadata_json: string;
-      }>(
-        `SELECT record_id, content, type, priority, scene_name,
-                session_key, session_id, timestamp_str, timestamp_start,
-                timestamp_end, metadata_json
-         FROM l1_records`,
-        "L1",
-        (r) =>
-          this.stmtL1FtsInsert.run(
-            tokenizeForFts(r.content), // content — segmented
-            r.content, // content_original — raw
-            r.record_id,
-            r.type,
-            r.priority,
-            r.scene_name,
-            r.session_key,
-            r.session_id,
-            r.timestamp_str,
-            r.timestamp_start,
-            r.timestamp_end,
-            r.metadata_json,
-          ),
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} FTS5 rebuild could not start: ${err instanceof Error ? err.message : String(err)}`,
       );
-
-      // ── Rebuild L0 FTS ──
-      this.db.exec("DELETE FROM l0_fts");
-
-      const l0 = this.reindexFtsRows<{
-        record_id: string;
-        message_text: string;
-        session_key: string;
-        session_id: string;
-        role: string;
-        recorded_at: string;
-        timestamp: number;
-      }>(
-        `SELECT record_id, message_text, session_key, session_id, role,
-                recorded_at, timestamp
-         FROM l0_conversations`,
-        "L0",
-        (r) =>
-          this.stmtL0FtsInsert.run(
-            tokenizeForFts(r.message_text), // message_text — segmented
-            r.message_text, // message_text_original — raw
-            r.record_id,
-            r.session_key,
-            r.session_id,
-            r.role,
-            r.recorded_at,
-            r.timestamp,
-          ),
-      );
-
+      return false;
+    }
+    try {
+      const complete = this.rebuildFtsRows();
       this.db.exec("COMMIT");
-      inTransaction = false;
-
-      const complete = l1.indexed === l1.seen && l0.indexed === l0.seen;
-      this.logger?.[complete ? "info" : "warn"](
-        `${TAG} FTS5 rebuild ${complete ? "complete" : "INCOMPLETE"}: ` +
-          `L1=${l1.indexed}/${l1.seen}, L0=${l0.indexed}/${l0.seen}`,
-      );
-      // Rows are skipped one by one on error, so a "finished" rebuild can
-      // still have holes in it. An index missing rows is not this version's
-      // index: leaving the marker unwritten costs one more rebuild attempt,
-      // claiming it costs the rows.
       return complete;
     } catch (err) {
-      if (inTransaction) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {
-          // Nothing left to undo — the failure already ended the transaction.
-        }
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // The failure already ended the transaction.
       }
       this.logger?.warn(
         `${TAG} FTS5 rebuild failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
+  }
+
+  /**
+   * Refill both FTS tables from the records they are derived from.
+   *
+   * Assumes an open transaction and a caller that will commit or roll it back:
+   * the tables are emptied first, and an index visible in that state is an
+   * index that has forgotten everything. Failures are THROWN for that reason —
+   * swallowing one here would commit the emptiness.
+   *
+   * @returns whether every row was indexed.
+   * @throws whatever the database raises; the caller must roll back.
+   */
+  private rebuildFtsRows(): boolean {
+    this.logger?.info(
+      `${TAG} Rebuilding FTS5 index with per-script segmentation…`,
+    );
+
+    // ── Rebuild L1 FTS ──
+    this.db.exec("DELETE FROM l1_fts");
+
+    // Streamed, not materialised: L0 alone is tens of MB of text on a real
+    // install, and `.all()` held every row of it in memory at once.
+    const l1 = this.reindexFtsRows<{
+      record_id: string;
+      content: string;
+      type: string;
+      priority: number;
+      scene_name: string;
+      session_key: string;
+      session_id: string;
+      timestamp_str: string;
+      timestamp_start: string;
+      timestamp_end: string;
+      metadata_json: string;
+    }>(
+      `SELECT record_id, content, type, priority, scene_name,
+              session_key, session_id, timestamp_str, timestamp_start,
+              timestamp_end, metadata_json
+       FROM l1_records`,
+      "L1",
+      (r) =>
+        this.stmtL1FtsInsert.run(
+          tokenizeForFts(r.content), // content — segmented
+          r.content, // content_original — raw
+          r.record_id,
+          r.type,
+          r.priority,
+          r.scene_name,
+          r.session_key,
+          r.session_id,
+          r.timestamp_str,
+          r.timestamp_start,
+          r.timestamp_end,
+          r.metadata_json,
+        ),
+    );
+
+    // ── Rebuild L0 FTS ──
+    this.db.exec("DELETE FROM l0_fts");
+
+    const l0 = this.reindexFtsRows<{
+      record_id: string;
+      message_text: string;
+      session_key: string;
+      session_id: string;
+      role: string;
+      recorded_at: string;
+      timestamp: number;
+    }>(
+      `SELECT record_id, message_text, session_key, session_id, role,
+              recorded_at, timestamp
+       FROM l0_conversations`,
+      "L0",
+      (r) =>
+        this.stmtL0FtsInsert.run(
+          tokenizeForFts(r.message_text), // message_text — segmented
+          r.message_text, // message_text_original — raw
+          r.record_id,
+          r.session_key,
+          r.session_id,
+          r.role,
+          r.recorded_at,
+          r.timestamp,
+        ),
+    );
+
+    const complete = l1.indexed === l1.seen && l0.indexed === l0.seen;
+    this.logger?.[complete ? "info" : "warn"](
+      `${TAG} FTS5 rebuild ${complete ? "complete" : "INCOMPLETE"}: ` +
+        `L1=${l1.indexed}/${l1.seen}, L0=${l0.indexed}/${l0.seen}`,
+    );
+    // Rows are skipped one by one on error, so a "finished" rebuild can
+    // still have holes in it. An index missing rows is not this version's
+    // index: leaving the marker unwritten costs one more rebuild attempt,
+    // claiming it costs the rows.
+    return complete;
+  }
+
+  /** The two FTS tables, created only when they are not already there. */
+  private createFtsTables(): void {
+    // L1 FTS5 virtual table (v2 schema)
+    this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS l1_fts USING fts5(
+          content,
+          content_original UNINDEXED,
+          record_id UNINDEXED,
+          type UNINDEXED,
+          priority UNINDEXED,
+          scene_name UNINDEXED,
+          session_key UNINDEXED,
+          session_id UNINDEXED,
+          timestamp_str UNINDEXED,
+          timestamp_start UNINDEXED,
+          timestamp_end UNINDEXED,
+          metadata_json UNINDEXED
+        )
+      `);
+
+    // L0 FTS5 virtual table (v2 schema)
+    this.db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
+          message_text,
+          message_text_original UNINDEXED,
+          record_id UNINDEXED,
+          session_key UNINDEXED,
+          session_id UNINDEXED,
+          role UNINDEXED,
+          recorded_at UNINDEXED,
+          timestamp UNINDEXED
+        )
+      `);
   }
 
   /**

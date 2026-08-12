@@ -229,6 +229,53 @@ describe("the registration a user pastes", () => {
     }
   });
 
+  it("bakes in an address the host could not have found for itself", () => {
+    // A config in the printing shell's directory, or one named by
+    // TDAI_GATEWAY_CONFIG, resolves a port that NOTHING in the pasted snippet
+    // carries: the host starts the launcher from its own directory with its
+    // own environment and lands on 8420 — another gateway's memory, on a
+    // machine that runs a default one too.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-origin-"));
+    const cwdDir = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-cwd-"));
+    try {
+      const named = path.join(dir, "tdai-gateway.yaml");
+      fs.writeFileSync(named, "server:\n  port: 9137\n");
+      fs.writeFileSync(
+        path.join(cwdDir, "tdai-gateway.yaml"),
+        "server:\n  port: 9138\n",
+      );
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+      vi.stubEnv("TDAI_GATEWAY_CONFIG", named);
+      expect(renderRegistration("claude", {})).toContain(
+        "http://127.0.0.1:9137",
+      );
+
+      vi.stubEnv("TDAI_GATEWAY_CONFIG", "");
+      expect(renderRegistration("claude", {})).toContain(
+        "http://127.0.0.1:9138",
+      );
+
+      // The data dir's own config is the MACHINE's answer: the host resolves it
+      // too, so the snippet stays free of an address that could go stale.
+      cwd.mockReturnValue(dir); // no config here…
+      fs.rmSync(named);
+      vi.stubEnv("MEMORY_TENCENTDB_ROOT", dir);
+      const dataDir = path.join(dir, "memory-tdai");
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dataDir, "tdai-gateway.yaml"),
+        "server:\n  port: 9139\n",
+      );
+      expect(renderRegistration("claude", {})).not.toContain("--gateway");
+      cwd.mockRestore();
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(cwdDir, { recursive: true, force: true });
+    }
+  });
+
   it("prints the gateway this very command line would serve", () => {
     // The flag the user just typed must reach the snippet: printing a
     // different address than the same argv would serve sends them off to a
