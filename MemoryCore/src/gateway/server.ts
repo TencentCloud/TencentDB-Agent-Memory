@@ -2562,7 +2562,17 @@ export class TdaiGateway {
         }
       },
       async executeFlush(task: TaskPayload) {
+        // Fix #549 Defect 2: flush muss L1 tatsächlich ausführen.
+        // Vorher: nur core.handleSessionEnd — kein Code-Pfad im flush-Flow
+        // rief jemals runL1WithStore auf, und flushSession hatte den
+        // L1_idle-Sicherheitstimer bereits gecancelt. Ergebnis: "Idle-time
+        // catch-up extraction" wurde zu "idle-time extraction cancellation".
+        // Delegation an executeL1 nutzt denselben idempotenten L1-Pfad
+        // (upsert-by-record_id), der auch von Timer/Drain-Trigger läuft.
         await core.handleSessionEnd(task.sessionId);
+        // `this` ist das rawExecutor-Objekt-Literal (inner des Decorators);
+        // `this.executeL1` ist die Methode im selben Literal weiter unten.
+        await this.executeL1(task);
       },
 
       // ── Offload executors (L1 summary, L1.5 task judgment, L2 MMD update) ──

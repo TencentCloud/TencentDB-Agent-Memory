@@ -116,6 +116,15 @@ const TAG = "[pipeline-worker]";
 // PipelineWorker
 // ============================
 
+/**
+ * Fix #549: Identifiziert L1-Drain-Tasks (Selbst-Re-Enqueue-Kette).
+ * Drain-Tasks werden von enqueueL1Drain() mit id=`L1-drain-...` erzeugt.
+ * Exportiert für Regressionstests.
+ */
+export function isL1DrainTask(task: { type: string; id: string }): boolean {
+  return task.type === "L1" && task.id.startsWith("L1-drain-");
+}
+
 export class PipelineWorker {
   private backend: IStateBackend;
   private executor: TaskExecutor;
@@ -366,6 +375,32 @@ export class PipelineWorker {
         delay = Math.min(delay * 3, 5000);
       }
       if (!acquired) {
+        // Fix #549: L1-Drain-Tasks NICHT droppen — die Drain-Kette lebt nur
+        // über die Selbst-Re-Enqueue der vorherigen Batch (kein Supervisor,
+        // kein L1_idle-Timer im hasFullBacklog-Branch). Ein Drop hier beendet
+        // den gesamten Backlog-Abbau still für Tage.
+        // Stattdessen: mit Backoff-Grenze re-enqueuen (idempotent, da
+        // L1-Extraktion upsert-by-record_id ist).
+        const isL1Drain = isL1DrainTask(task);
+        if (isL1Drain) {
+          this.logger?.warn?.(
+            `${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, ` +
+            `re-enqueuing to preserve drain chain (attempt=${(task.data as any)?.retryCount ?? 0})`,
+          );
+          const msgId = (task as any)._msgId;
+          if (msgId) {
+            try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+          }
+          const nextRetry = ((task.data as any)?.retryCount ?? 0) + 1;
+          if (nextRetry <= this.config.maxRetries + 5) {
+            await this.reEnqueue(task, nextRetry);
+            this.metrics.tasksRetried++;
+          } else {
+            await this.moveToDeadLetter(task, `lock conflict timeout after ${nextRetry} retries`, nextRetry);
+          }
+          releasePermitOnce();
+          return;
+        }
         this.logger?.warn?.(`${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, dropping task`);
         // CR-1 fix: ACK to prevent stale recovery from re-claiming this message in an
         // infinite loop. Without it, XPENDING keeps returning this msgId every
