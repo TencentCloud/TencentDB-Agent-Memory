@@ -61,6 +61,7 @@ function config(endpoint: string): PiMemoryConfig {
     scenarioLimit: 3,
     maxContextChars: 8_000,
     maxCaptureChars: 12_000,
+    maxSkillBytes: 512_000,
     includeCore: true,
     includeScenarios: true,
     allowInsecureHttp: false,
@@ -213,5 +214,16 @@ describe("TdaiMemoryClient", () => {
     });
     const client = new TdaiMemoryClient(config(fixture.endpoint));
     await expect(client.check()).rejects.toThrow("not-json");
+  });
+
+  it("does not issue a request for an already-aborted signal", async () => {
+    const fixture = await startServer((_request, response) => {
+      json(response, { code: 0, data: { total: 0 } });
+    });
+    const client = new TdaiMemoryClient(config(fixture.endpoint));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.check(controller.signal)).rejects.toThrow("aborted");
+    expect(fixture.seen).toHaveLength(0);
   });
 });

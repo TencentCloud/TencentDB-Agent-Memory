@@ -103,6 +103,7 @@ pi
 | TDAI_PI_SCENARIO_LIMIT | 否 | 3 | L2 摘要条数，范围 0–20 |
 | TDAI_PI_MAX_CONTEXT_CHARS | 否 | 8000 | 每轮召回上下文最大字符数 |
 | TDAI_PI_MAX_CAPTURE_CHARS | 否 | 12000 | 单条采集消息或工具载荷的最大字符数 |
+| TDAI_PI_MAX_SKILL_BYTES | 否 | 512000 | 每次 settled Skill 轨迹序列化后的最大字节数，范围 10000–900000 |
 | TDAI_PI_INCLUDE_CORE | 否 | true | 是否注入 L3 核心画像 |
 | TDAI_PI_INCLUDE_SCENARIOS | 否 | true | 是否注入 L2 场景摘要 |
 | TDAI_PI_ALLOW_INSECURE_HTTP | 否 | false | 是否允许通过非回环 HTTP 发送 Bearer 凭据 |
@@ -119,8 +120,14 @@ pi
 - /tdai-memory-status：检查带鉴权的 v3 连通性。
 
 适配器会等待 `agent_settled`，因此自动重试、压缩重试和排队的 follow-up 会作为
-一个完整单元采集，而不会保存中间回答。工具参数和结果有长度上限；图片替换为
-`[image]`，召回记忆块及常见凭据赋值会被清理。
+一个完整单元采集，而不会保存中间回答。settled transcript 会保留真实的 user、
+follow-up 和工具顺序，并整体丢弃失败的底层重试；Pi session entry ID 用于区分
+文本完全相同但实际发生在不同轮次的合法对话。
+
+工具参数和结果既有单条限制，也有完整 Skill 请求的总字节限制；图片替换为
+`[image]`。召回记忆块、JSON 中的凭据字段、环境变量赋值、带凭据 URL 和私钥块
+都会被清理。搜索工具返回值同样受长度限制，并标注为不可信召回数据。采集 marker
+只从当前 Pi 分支恢复，未完成链路会在 session 加载时立即 fail-open 补偿。
 
 Pi 会话 UUID 会加上 pi: 前缀，作为 TencentDB 的 session ID。自动召回默认在
 当前 Team、Agent、User 隔离范围内跨会话搜索；对话搜索工具可选择只查当前 Pi

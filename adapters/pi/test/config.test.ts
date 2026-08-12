@@ -23,6 +23,7 @@ describe("loadConfig", () => {
       scenarioLimit: 3,
       maxContextChars: 8_000,
       maxCaptureChars: 12_000,
+      maxSkillBytes: 512_000,
       includeCore: true,
       includeScenarios: true,
     });

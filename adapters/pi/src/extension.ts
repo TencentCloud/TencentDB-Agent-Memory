@@ -22,7 +22,7 @@ export interface ExtensionDependencies {
 }
 
 const CAPTURE_ENTRY_TYPE = "tdai-memory-captured";
-const CAPTURE_MARKER_VERSION = 2;
+const CAPTURE_MARKER_VERSION = 3;
 
 interface CaptureStatus {
   l0: boolean;
@@ -40,6 +40,25 @@ function messageOf(error: unknown): string {
 
 function sessionId(ctx: ExtensionContext): string {
   return "pi:" + ctx.sessionManager.getSessionId();
+}
+
+function finalAssistantEntryId(ctx: ExtensionContext): string | undefined {
+  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+    getBranch?: () => Array<{ id?: unknown; type?: unknown; message?: unknown }>;
+  };
+  const entries = manager.getBranch?.() ?? [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry || entry.type !== "message" || typeof entry.id !== "string") continue;
+    const message = entry.message as { role?: unknown; stopReason?: unknown } | undefined;
+    if (
+      message?.role === "assistant" &&
+      !["error", "aborted"].includes(String(message.stopReason))
+    ) {
+      return entry.id;
+    }
+  }
+  return undefined;
 }
 
 function setStatus(ctx: ExtensionContext, value: string): void {
@@ -90,7 +109,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
       return merged;
     };
 
-    const persistStatus = (key: string, status: CaptureStatus, turn: CaptureTurn): void => {
+    const persistPending = (key: string, status: CaptureStatus, turn: CaptureTurn): void => {
       try {
         pi.appendEntry(CAPTURE_ENTRY_TYPE, {
           version: CAPTURE_MARKER_VERSION,
@@ -98,6 +117,19 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           l0: status.l0,
           skill: status.skill,
           turn,
+        });
+      } catch (error) {
+        logger.warn("[tdai-memory] could not persist capture marker: " + messageOf(error));
+      }
+    };
+
+    const persistStatus = (key: string, status: CaptureStatus): void => {
+      try {
+        pi.appendEntry(CAPTURE_ENTRY_TYPE, {
+          version: CAPTURE_MARKER_VERSION,
+          key,
+          l0: status.l0,
+          skill: status.skill,
         });
       } catch (error) {
         logger.warn("[tdai-memory] could not persist capture marker: " + messageOf(error));
@@ -112,7 +144,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
             await client.captureConversation(item.turn, ctx.signal);
             status.l0 = true;
             rememberCaptured(key, status);
-            persistStatus(key, status, item.turn);
+            persistStatus(key, status);
           } catch (error) {
             setStatus(ctx, "memory: partial");
             logger.warn("[tdai-memory] L0 capture failed: " + messageOf(error));
@@ -124,7 +156,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
             await client.captureSkill(item.turn, ctx.signal);
             status.skill = true;
             rememberCaptured(key, status);
-            persistStatus(key, status, item.turn);
+            persistStatus(key, status);
           } catch (error) {
             setStatus(ctx, status.l0 ? "memory: partial" : "memory: offline");
             logger.warn("[tdai-memory] Skill capture failed: " + messageOf(error));
@@ -148,7 +180,15 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     };
 
     pi.on("session_start", async (_event, ctx) => {
-      for (const entry of ctx.sessionManager.getEntries()) {
+      pending.clear();
+      captured.clear();
+      capturedOrder.length = 0;
+      activePrompts.length = 0;
+      settledCandidate = [];
+      const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
+        getBranch?: () => ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
+      };
+      for (const entry of manager.getBranch?.() ?? ctx.sessionManager.getEntries()) {
         if (entry.type !== "custom" || entry.customType !== CAPTURE_ENTRY_TYPE) continue;
         const data = entry.data;
         if (data && typeof data === "object" && typeof (data as { key?: unknown }).key === "string") {
@@ -161,12 +201,12 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           };
           const status = rememberCaptured(
             marker.key,
-            marker.version === CAPTURE_MARKER_VERSION
+            marker.version === CAPTURE_MARKER_VERSION || marker.version === 2
               ? { l0: marker.l0 === true, skill: marker.skill === true }
               : { l0: true, skill: false },
           );
           if (
-            marker.version === CAPTURE_MARKER_VERSION &&
+            (marker.version === CAPTURE_MARKER_VERSION || marker.version === 2) &&
             marker.turn &&
             typeof marker.turn === "object" &&
             (!status.l0 || !status.skill)
@@ -176,6 +216,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         }
       }
       setStatus(ctx, "memory: on");
+      await flushPending(ctx);
     });
 
     pi.on("before_agent_start", async (event, ctx) => {
@@ -206,13 +247,16 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           activePrompts.join("\n\n--- queued follow-up ---\n\n"),
           settledCandidate,
           config.maxCaptureChars,
+          Date.now(),
+          config.maxSkillBytes,
+          finalAssistantEntryId(ctx),
         );
         if (turn) {
           const key = turnKey(turn);
           const status = captured.get(key) ?? { l0: false, skill: false };
           if (!status.l0 || !status.skill) {
             pending.set(key, { turn, status });
-            persistStatus(key, status, turn);
+            persistPending(key, status, turn);
           }
         }
       }
@@ -246,7 +290,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         try {
           const items = await client.searchAtomic(params.query, params.limit ?? config.recallLimit, signal);
           return {
-            content: [{ type: "text", text: formatAtomicResults(items) }],
+            content: [{ type: "text", text: formatAtomicResults(items, config.maxContextChars) }],
             details: { count: items.length, items },
           };
         } catch (error) {
@@ -286,7 +330,9 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
             signal,
           );
           return {
-            content: [{ type: "text", text: formatConversationResults(items) }],
+            content: [
+              { type: "text", text: formatConversationResults(items, config.maxContextChars) },
+            ],
             details: { count: items.length, items },
           };
         } catch (error) {

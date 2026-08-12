@@ -103,6 +103,7 @@ pi
 | TDAI_PI_SCENARIO_LIMIT | No | 3 | L2 summaries, 0–20 |
 | TDAI_PI_MAX_CONTEXT_CHARS | No | 8000 | Maximum recalled characters per run |
 | TDAI_PI_MAX_CAPTURE_CHARS | No | 12000 | Maximum characters per captured message/tool payload |
+| TDAI_PI_MAX_SKILL_BYTES | No | 512000 | Maximum serialized Skill trace bytes per settled run, 10000–900000 |
 | TDAI_PI_INCLUDE_CORE | No | true | Include the L3 core profile |
 | TDAI_PI_INCLUDE_SCENARIOS | No | true | Include L2 scenario summaries |
 | TDAI_PI_ALLOW_INSECURE_HTTP | No | false | Allow bearer credentials over non-loopback HTTP |
@@ -122,8 +123,16 @@ also registers:
 
 Pi waits for `agent_settled`, so automatic retries, compaction retries, and
 queued follow-ups are captured as one completed unit instead of intermediate
-answers. Tool arguments and results are size-bounded; images become `[image]`,
-recalled-memory blocks and common credential assignments are removed.
+answers. The settled transcript preserves the original user/follow-up and tool
+ordering, while failed low-level retry attempts are discarded. Pi session-entry
+IDs distinguish legitimate repeated turns with identical text.
+
+Tool arguments and results are bounded per message and across the complete Skill
+request. Images become `[image]`; recalled-memory blocks, credential-shaped JSON
+fields, environment assignments, credential-bearing URLs, and private-key blocks
+are removed. Search-tool results are also bounded and marked as untrusted data.
+Capture markers are restored only from the active Pi branch; incomplete delivery
+is retried immediately on session load and remains fail-open.
 
 Pi session UUIDs become TencentDB session IDs with a pi: prefix. Automatic
 recall searches across prior sessions within the configured Team, Agent, and

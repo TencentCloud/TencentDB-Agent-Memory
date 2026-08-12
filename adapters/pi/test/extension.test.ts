@@ -183,6 +183,61 @@ describe("Pi extension lifecycle", () => {
     expect(captureConversation.mock.calls[0]?.[0].assistant).toBe("fixed");
   });
 
+  it("drops an entire failed low-level tool run before capturing its retry", async () => {
+    const captureSkill = vi.fn(async (_turn: CaptureTurn) => undefined);
+    const pi = install(client({ captureSkill }));
+
+    await pi.handlers.get("before_agent_start")?.({ prompt: "retry tools", systemPrompt: "base" }, context);
+    await pi.handlers.get("agent_end")?.({ messages: [
+      { role: "assistant", stopReason: "toolUse", content: [
+        { type: "text", text: "failed intermediate" },
+        { type: "toolCall", id: "failed-call", name: "bash", arguments: { command: "false" } },
+      ] },
+      { role: "toolResult", toolCallId: "failed-call", toolName: "bash", content: "failed result" },
+      { role: "assistant", stopReason: "error", content: [{ type: "text", text: "retryable error" }] },
+    ] }, context);
+    await pi.handlers.get("agent_end")?.({ messages: [
+      { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "successful retry" }] },
+    ] }, context);
+    await pi.handlers.get("agent_settled")?.({}, context);
+
+    const serialized = JSON.stringify(captureSkill.mock.calls[0]?.[0]);
+    expect(serialized).toContain("successful retry");
+    expect(serialized).not.toContain("failed-call");
+    expect(serialized).not.toContain("failed intermediate");
+  });
+
+  it("captures identical content as distinct turns when Pi entry ids differ", async () => {
+    const captureConversation = vi.fn(async () => undefined);
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureConversation, captureSkill }));
+    let assistantId = "assistant-1";
+    const branchContext = {
+      ...context,
+      sessionManager: {
+        ...context.sessionManager,
+        getBranch: () => [{
+          id: assistantId,
+          type: "message",
+          message: { role: "assistant", stopReason: "stop" },
+        }],
+      },
+    };
+    const run = async () => {
+      await pi.handlers.get("before_agent_start")?.({ prompt: "same", systemPrompt: "base" }, branchContext);
+      await pi.handlers.get("agent_end")?.({ messages: [
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "same answer" }] },
+      ] }, branchContext);
+      await pi.handlers.get("agent_settled")?.({}, branchContext);
+    };
+
+    await run();
+    assistantId = "assistant-2";
+    await run();
+    expect(captureConversation).toHaveBeenCalledTimes(2);
+    expect(captureSkill).toHaveBeenCalledTimes(2);
+  });
+
   it("retries only the failed capture pipeline", async () => {
     const captureConversation = vi.fn(async () => undefined);
     const captureSkill = vi
@@ -280,10 +335,31 @@ describe("Pi extension lifecycle", () => {
     };
 
     await pi.handlers.get("session_start")?.({}, restoredContext);
-    await pi.handlers.get("agent_settled")?.({}, restoredContext);
 
     expect(captureConversation).not.toHaveBeenCalled();
     expect(captureSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores markers only from the active Pi branch", async () => {
+    const captureSkill = vi.fn(async () => undefined);
+    const pi = install(client({ captureSkill }));
+    const turn: CaptureTurn = {
+      sessionId: "pi:session-1",
+      user: "abandoned",
+      assistant: "branch",
+      skillMessages: [{ role: "user", content: "abandoned" }, { role: "assistant", content: "branch" }],
+      capturedAtMs: 1,
+    };
+    const branchContext = {
+      ...context,
+      sessionManager: {
+        getSessionId: () => "session-1",
+        getEntries: () => [{ type: "custom", customType: "tdai-memory-captured", data: { version: 3, key: "abandoned", l0: true, skill: false, turn } }],
+        getBranch: () => [],
+      },
+    };
+    await pi.handlers.get("session_start")?.({}, branchContext);
+    expect(captureSkill).not.toHaveBeenCalled();
   });
 
   it("fails open when recall and capture are unavailable", async () => {

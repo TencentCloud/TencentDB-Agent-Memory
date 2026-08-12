@@ -43,6 +43,7 @@ export interface RecallBundle {
 
 export interface CaptureTurn {
   sessionId: string;
+  sourceId?: string;
   user: string;
   assistant: string;
   skillMessages: SkillCaptureMessage[];
@@ -92,14 +93,12 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function turnKey(turn: Pick<CaptureTurn, "sessionId" | "user" | "assistant">): string {
-  return createHash("sha256")
-    .update(turn.sessionId)
-    .update("\0")
-    .update(turn.user)
-    .update("\0")
-    .update(turn.assistant)
-    .digest("hex");
+export function turnKey(
+  turn: Pick<CaptureTurn, "sessionId" | "sourceId" | "user" | "assistant">,
+): string {
+  const hash = createHash("sha256").update(turn.sessionId).update("\0");
+  if (turn.sourceId) hash.update(turn.sourceId).update("\0");
+  return hash.update(turn.user).update("\0").update(turn.assistant).digest("hex");
 }
 
 export class TdaiMemoryClient implements MemoryClientLike {
@@ -119,6 +118,9 @@ export class TdaiMemoryClient implements MemoryClientLike {
     body: Record<string, unknown>,
     externalSignal?: AbortSignal,
   ): Promise<T> {
+    if (externalSignal?.aborted) {
+      throw new TdaiClientError("MemoryCore request aborted", -1);
+    }
     const controller = new AbortController();
     const onExternalAbort = () => controller.abort(externalSignal?.reason);
     externalSignal?.addEventListener("abort", onExternalAbort, { once: true });

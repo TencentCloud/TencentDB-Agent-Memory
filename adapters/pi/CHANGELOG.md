@@ -9,6 +9,12 @@ here.
 - Capture ordered tool calls and tool results through `/v3/skill/conversation/add`.
 - Track L0 and Skill delivery independently and recover incomplete writes after reload.
 - Bound and sanitize captured tool payloads, images, recalled context, and credentials.
+- Preserve queued user/steering messages, discard failed low-level runs, and use Pi
+  session-entry identities so repeated text remains distinct.
+- Bound complete Skill requests, harden structured credential redaction, and mark
+  memory-search results as bounded untrusted data.
+- Restore compact capture markers from the active branch and immediately compensate
+  incomplete pipelines on session load.
 
 ## 0.1.0 - 2026-08-10
 
