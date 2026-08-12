@@ -11,7 +11,13 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  // Second entry: the stdio-MCP server every host registers (tz-08). The
+  // emitted `dist/mcp-server.mjs` is the ONLY link between the build and
+  // `bin/tdai-memory-mcp.mjs`, which imports it by that name.
+  // Named so the emitted file is `dist/mcp-server.mjs` regardless of where the
+  // source sits — a bare array would mirror the source tree into
+  // `dist/src/consumer/`, and the launcher resolves the name, not the path.
+  entry: { index: "./index.ts", "mcp-server": "./src/consumer/mcp-server.ts" },
   outDir: "./dist",
   format: "esm",
   platform: "node",
