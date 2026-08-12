@@ -3,6 +3,7 @@
  * auto-recall hook. No runtime code beyond the constant declarations.
  */
 
+import type { ContextEnvelope } from "../../context/types.js";
 import type { MemoryRecord } from "../../record/l1-reader.js";
 import type { L1SearchResult } from "../../store/types.js";
 
@@ -119,6 +120,12 @@ export interface RecallResult {
   recallStrategy?: string;
   /** Why the result looks the way it does — repo/scope/budget notes (tz-10 C10.5). */
   diagnostics?: RecallDiagnostic[];
+  /**
+   * What the assembly decided (tz-10b). Internal: the HTTP response keeps
+   * carrying text, and this is the object that explains it. Absent when there
+   * was nothing to assemble.
+   */
+  envelope?: ContextEnvelope;
 }
 
 /** Single source of truth for a memory that can be formatted for the LLM. */

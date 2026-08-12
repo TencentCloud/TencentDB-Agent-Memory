@@ -273,6 +273,14 @@ export interface CleanupConfig {
   paths: string[];
 }
 
+/**
+ * Token budget for the assembled context when the config does not say
+ * otherwise. Sized from the worst case the char limits allow (persona 6000 +
+ * memories 2000 + tools guide ≈300), so the assembler changes nothing that is
+ * injected today.
+ */
+export const DEFAULT_CONTEXT_BUDGET_TOKENS = 12000;
+
 /** Recall quality probe settings (`memory.probe`). */
 export interface ProbeConfig {
   /** Path to the probe corpus JSON (fixed queries with known top-k). Relative paths resolve against dataDir. */
@@ -788,7 +796,9 @@ export function parseConfig(
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 500,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 2000,
       maxPersonaChars: num(recallGroup, "maxPersonaChars") ?? 6000,
-      contextBudgetTokens: num(recallGroup, "contextBudgetTokens") ?? 12000,
+      contextBudgetTokens:
+        num(recallGroup, "contextBudgetTokens") ??
+        DEFAULT_CONTEXT_BUDGET_TOKENS,
       reservedForUserTokens: num(recallGroup, "reservedForUserTokens") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.2,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
@@ -801,7 +811,9 @@ export function parseConfig(
       crossProject:
         validateCrossProject(str(recallGroup, "crossProject")) ?? "hidden",
       scopeFilter:
-        str(recallGroup, "scopeFilter") === "attribute" ? "attribute" : "legacy",
+        str(recallGroup, "scopeFilter") === "attribute"
+          ? "attribute"
+          : "legacy",
       crossProjectDecay: num(recallGroup, "crossProjectDecay") ?? 0.5,
       defaultCrossProjectMultiplier:
         num(recallGroup, "defaultCrossProjectMultiplier") ?? 0.5,
