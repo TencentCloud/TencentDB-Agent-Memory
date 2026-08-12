@@ -163,7 +163,7 @@ function logRecallTiming(logger: Logger | undefined, r: { totalMs: number; l1: L
  */
 function projectContext(p: {
   l1: L1Recall; persona?: string; scene?: string; projectId: string; sessionKey: string; cfg: MemoryTdaiConfig;
-}): RecallResult | undefined {
+}): RecallResult {
   const { items, lineById } = buildContextItems(p.l1.kept, p.persona, p.scene, p.projectId);
   const envelope = assembleContext({
     items,
@@ -186,7 +186,13 @@ function projectContext(p: {
   };
   const prependContext = slot("prepend");
   const appendSystemContext = slot("append");
-  if (!appendSystemContext && !prependContext) return undefined;
+  const diagnostics = [...p.l1.diagnostics, ...envelope.diagnostics];
+  // Nothing fit — but WHY nothing fit must survive, exactly as it does when
+  // nothing was found (tz-10 C10.5). No context field is set, so no caller
+  // injects anything; returning undefined here would hide a budget of 1.
+  if (!appendSystemContext && !prependContext) {
+    return { recalledL1Memories: [], recallStrategy: p.l1.strategy, diagnostics, envelope };
+  }
   const includedIds = new Set(envelope.included.map((i) => i.memoryId));
   return {
     prependContext, appendSystemContext,
@@ -195,7 +201,7 @@ function projectContext(p: {
     recalledL1Memories: p.l1.recalledL1Memories.filter((_, i) => includedIds.has(items[i]?.memoryId ?? "")),
     recalledL3Persona: envelope.included.some((i) => i.kind === "persona") ? (p.persona ?? null) : null,
     recallStrategy: p.l1.strategy,
-    diagnostics: [...p.l1.diagnostics, ...envelope.diagnostics],
+    diagnostics,
     envelope,
   };
 }

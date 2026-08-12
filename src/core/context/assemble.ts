@@ -146,43 +146,15 @@ export function assembleContext(params: {
       ? dropDuplicates(ordered, diagnostics, excluded)
       : ordered;
 
-  // A candidate that does not fit is skipped, not a stop signal: a cheaper one
-  // further down may still fit, and the order is fixed, so the outcome stays
-  // deterministic.
-  let included: MemoryItem[] = [];
-  let spent = 0;
-  for (const item of candidates) {
-    if (spent + item.tokenCost <= available) {
-      included.push(item);
-      spent += item.tokenCost;
-      continue;
-    }
-    excluded.push({ item, reason: "budget" });
-    diagnostics.push({
-      stage: "budget",
-      code: "dropped",
-      message: `costs ${item.tokenCost}, ${available - spent} left of ${available}`,
-      itemId: item.memoryId,
-    });
-  }
-
-  let segments = render(included);
-  let used = recount(segments, tokenizer, diagnostics, included);
-  // The recount is the load-bearing check: the sum of item costs ignores the
-  // wrappers, so a context can be over budget while every item "fit".
-  for (let guard = included.length; used > available && guard > 0; guard--) {
-    const evicted = included[included.length - 1]!;
-    included = included.slice(0, -1);
-    excluded.push({ item: evicted, reason: "budget" });
-    diagnostics.push({
-      stage: "budget",
-      code: "recount-mismatch",
-      message: `rendered context cost ${used} > ${available}; dropped after render`,
-      itemId: evicted.memoryId,
-    });
-    segments = render(included);
-    used = recount(segments, tokenizer, diagnostics, included);
-  }
+  const fitted = fitToBudget(candidates, available, diagnostics, excluded);
+  const { included, segments, used } = evictUntilFits({
+    included: fitted,
+    available,
+    tokenizer,
+    render,
+    diagnostics,
+    excluded,
+  });
 
   const renderedContext = segments.map((s) => s.text).join("\n\n");
   const itemCosts = included.reduce((sum, item) => sum + item.tokenCost, 0);
@@ -206,6 +178,68 @@ export function assembleContext(params: {
     segments,
     renderedContext,
   };
+}
+
+/**
+ * Take candidates in order while they fit. A candidate that does not fit is
+ * skipped, not a stop signal: a cheaper one further down may still fit, and the
+ * order is fixed, so the outcome stays deterministic.
+ */
+function fitToBudget(
+  candidates: MemoryItem[],
+  available: number,
+  diagnostics: RecallDiagnostic[],
+  excluded: Array<{ item: MemoryItem; reason: string }>,
+): MemoryItem[] {
+  const included: MemoryItem[] = [];
+  let spent = 0;
+  for (const item of candidates) {
+    if (spent + item.tokenCost <= available) {
+      included.push(item);
+      spent += item.tokenCost;
+      continue;
+    }
+    excluded.push({ item, reason: "budget" });
+    diagnostics.push({
+      stage: "budget",
+      code: "dropped",
+      message: `costs ${item.tokenCost}, ${available - spent} left of ${available}`,
+      itemId: item.memoryId,
+    });
+  }
+  return included;
+}
+
+/**
+ * Render, then drop from the tail until the RENDERED text fits. This is the
+ * load-bearing check: the sum of item costs ignores the wrappers, so a context
+ * can be over budget while every item "fit".
+ */
+function evictUntilFits(p: {
+  included: MemoryItem[];
+  available: number;
+  tokenizer: Tokenizer;
+  render: ContextRenderer;
+  diagnostics: RecallDiagnostic[];
+  excluded: Array<{ item: MemoryItem; reason: string }>;
+}): { included: MemoryItem[]; segments: ContextSegment[]; used: number } {
+  let included = p.included;
+  let segments = p.render(included);
+  let used = recount(segments, p.tokenizer, p.diagnostics, included);
+  for (let guard = included.length; used > p.available && guard > 0; guard--) {
+    const evicted = included[included.length - 1]!;
+    included = included.slice(0, -1);
+    p.excluded.push({ item: evicted, reason: "budget" });
+    p.diagnostics.push({
+      stage: "budget",
+      code: "recount-mismatch",
+      message: `rendered context cost ${used} > ${p.available}; dropped after render`,
+      itemId: evicted.memoryId,
+    });
+    segments = p.render(included);
+    used = recount(segments, p.tokenizer, p.diagnostics, included);
+  }
+  return { included, segments, used };
 }
 
 /**

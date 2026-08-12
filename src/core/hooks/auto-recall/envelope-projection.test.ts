@@ -127,6 +127,14 @@ describe("recall shell: text projects the envelope", () => {
       // rather than a guide-only context.
       expect(result?.prependContext).toBeUndefined();
       expect(result?.appendSystemContext).toBeUndefined();
+      // …but "nothing was injected" must still say WHY (C10.5): the envelope
+      // and its budget diagnostics survive instead of collapsing to undefined,
+      // which is what a broken store would look like.
+      expect(result).toBeDefined();
+      const excluded = result!.envelope!.excluded;
+      expect(excluded.some((e) => e.item.kind === "persona")).toBe(true);
+      expect(excluded.every((e) => e.reason === "budget")).toBe(true);
+      expect(result!.diagnostics?.some((d) => d.stage === "budget")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -122,7 +122,13 @@ export interface ContextSegment {
   text: string;
 }
 
-/** Renders the included items into blocks, in the order they will be injected. */
+/**
+ * Renders the included items into blocks, in the order they will be injected.
+ *
+ * Contract for a caller that splits the envelope back into two fields: emit
+ * every `prepend` block before any `append` one. Only then does joining the two
+ * slots reproduce `renderedContext` byte for byte.
+ */
 export type ContextRenderer = (included: MemoryItem[]) => ContextSegment[];
 
 /**
