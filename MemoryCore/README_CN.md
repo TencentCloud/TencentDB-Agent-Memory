@@ -246,7 +246,7 @@ MemoryCore/
 
 ```bash
 npm run read-local-memory
-npm run seed-v2
+openclaw memory-tdai seed --input conversations.json
 ```
 
 ## 安全建议
