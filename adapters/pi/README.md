@@ -11,12 +11,13 @@ bridge or session-file watcher is required.
 - Recalls L1 atomic memories before every agent run.
 - Optionally adds bounded L2 scenario summaries and the L3 core profile.
 - Captures the completed user/assistant turn to L0 after Pi fully settles.
+- Sends ordered assistant, tool-call, and tool-result traces to the Skill pipeline.
 - Exposes native Pi tools for explicit atomic-memory and conversation search.
 - Uses the recommended v3 Team, Agent, and User isolation fields on every call.
 - Fails open on timeout or MemoryCore outage, so Pi can keep working.
 - Marks recalled data as untrusted and limits injected context size.
-- Persists successful capture hashes as Pi session metadata to deduplicate
-  repeated events across reloads without adding anything to model context.
+- Persists versioned per-pipeline capture state as Pi session metadata, allowing
+  failed L0 or Skill writes to resume after reload without entering model context.
 
 ## Architecture
 
@@ -32,6 +33,8 @@ Pi before_agent_start
 Pi agent_end -> agent_settled
         |
         +--> POST /v3/conversation/add - L0 completed turn
+        +--> POST /v3/skill/conversation/add
+             ordered user / assistant / tool_call / tool_result trace
 ~~~
 
 The adapter never reads Pi session files and never writes TencentDB memory
@@ -99,6 +102,7 @@ pi
 | TDAI_PI_RECALL_LIMIT | No | 5 | L1 matches, 1–20 |
 | TDAI_PI_SCENARIO_LIMIT | No | 3 | L2 summaries, 0–20 |
 | TDAI_PI_MAX_CONTEXT_CHARS | No | 8000 | Maximum recalled characters per run |
+| TDAI_PI_MAX_CAPTURE_CHARS | No | 12000 | Maximum characters per captured message/tool payload |
 | TDAI_PI_INCLUDE_CORE | No | true | Include the L3 core profile |
 | TDAI_PI_INCLUDE_SCENARIOS | No | true | Include L2 scenario summaries |
 | TDAI_PI_ALLOW_INSECURE_HTTP | No | false | Allow bearer credentials over non-loopback HTTP |
@@ -115,6 +119,11 @@ also registers:
 - tdai_memory_search — searches durable L1 atomic memories.
 - tdai_conversation_search — searches raw L0 conversation evidence.
 - /tdai-memory-status — checks authenticated v3 connectivity.
+
+Pi waits for `agent_settled`, so automatic retries, compaction retries, and
+queued follow-ups are captured as one completed unit instead of intermediate
+answers. Tool arguments and results are size-bounded; images become `[image]`,
+recalled-memory blocks and common credential assignments are removed.
 
 Pi session UUIDs become TencentDB session IDs with a pi: prefix. Automatic
 recall searches across prior sessions within the configured Team, Agent, and
@@ -154,8 +163,8 @@ npm run pack:check
 ~~~
 
 The tests cover configuration safety, v3 request contracts, partial recall,
-prompt-injection boundaries, lifecycle capture, deduplication, search tools, and
-fail-open behavior.
+prompt-injection boundaries, settled lifecycle capture, parallel tool traces,
+per-pipeline recovery, search tools, and fail-open behavior.
 
 ## Known boundaries
 
@@ -163,10 +172,10 @@ fail-open behavior.
   Memory Hub first and pass their IDs through the environment.
 - L2 currently uses the bounded summaries returned by scenario listing because
   the v3 data plane has no semantic scenario-search endpoint.
-- Successful captures are deduplicated across Pi reloads through non-context
-  session entries. An ambiguous network failure after the server writes but
-  before the response arrives can still duplicate a turn because the current
-  conversation-add endpoint assigns its own message IDs.
+- Capture state and the already-sanitized retry payload are stored in non-context
+  Pi session entries. An ambiguous failure after a server write but before its
+  response can still duplicate that pipeline because the current endpoints do
+  not accept a client idempotency key.
 - Recalled memory is model context, not authorization. Isolation and access
   control remain the responsibility of MemoryCore.
 

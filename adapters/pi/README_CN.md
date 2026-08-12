@@ -11,12 +11,13 @@ Memory 为 Pi 增加持久记忆。它直接使用 Pi 的生命周期事件与�
 - 每次 Agent 运行前自动召回 L1 原子记忆。
 - 可选注入有长度上限的 L2 场景摘要和 L3 核心画像。
 - Pi 完全结束本轮工作后，把完整的用户/助手回合写入 L0。
+- 把按顺序排列的助手、工具调用和工具结果轨迹写入 Skill 管线。
 - 提供 Pi 原生工具，供模型主动搜索原子记忆和历史对话。
 - 每次调用都携带 v3 推荐的 Team、Agent、User 隔离字段。
 - 请求超时或 MemoryCore 不可用时自动降级，不阻断 Pi 的主任务。
 - 明确把召回内容标记为不可信数据，并限制注入长度。
-- 把成功采集的哈希持久化为不进入模型上下文的 Pi 会话元数据，跨 reload
-  去重重复事件。
+- 把带版本、按写入管线区分的采集状态持久化为不进入模型上下文的 Pi 会话元数据；
+  L0 或 Skill 写入失败后可在 reload 后继续补偿。
 
 ## 架构
 
@@ -32,6 +33,8 @@ Pi before_agent_start
 Pi agent_end -> agent_settled
         |
         +--> POST /v3/conversation/add - L0 完整回合
+        +--> POST /v3/skill/conversation/add
+             有序的 user / assistant / tool_call / tool_result 轨迹
 ~~~
 
 适配器不会读取 Pi 会话文件，也不会直接操作 TencentDB 的记忆存储；MemoryCore
@@ -99,6 +102,7 @@ pi
 | TDAI_PI_RECALL_LIMIT | 否 | 5 | L1 返回条数，范围 1–20 |
 | TDAI_PI_SCENARIO_LIMIT | 否 | 3 | L2 摘要条数，范围 0–20 |
 | TDAI_PI_MAX_CONTEXT_CHARS | 否 | 8000 | 每轮召回上下文最大字符数 |
+| TDAI_PI_MAX_CAPTURE_CHARS | 否 | 12000 | 单条采集消息或工具载荷的最大字符数 |
 | TDAI_PI_INCLUDE_CORE | 否 | true | 是否注入 L3 核心画像 |
 | TDAI_PI_INCLUDE_SCENARIOS | 否 | true | 是否注入 L2 场景摘要 |
 | TDAI_PI_ALLOW_INSECURE_HTTP | 否 | false | 是否允许通过非回环 HTTP 发送 Bearer 凭据 |
@@ -113,6 +117,10 @@ pi
 - tdai_memory_search：搜索持久化的 L1 原子记忆。
 - tdai_conversation_search：搜索 L0 原始对话证据。
 - /tdai-memory-status：检查带鉴权的 v3 连通性。
+
+适配器会等待 `agent_settled`，因此自动重试、压缩重试和排队的 follow-up 会作为
+一个完整单元采集，而不会保存中间回答。工具参数和结果有长度上限；图片替换为
+`[image]`，召回记忆块及常见凭据赋值会被清理。
 
 Pi 会话 UUID 会加上 pi: 前缀，作为 TencentDB 的 session ID。自动召回默认在
 当前 Team、Agent、User 隔离范围内跨会话搜索；对话搜索工具可选择只查当前 Pi
@@ -150,17 +158,17 @@ npm run check
 npm run pack:check
 ~~~
 
-测试覆盖配置安全、v3 请求契约、部分召回、Prompt 注入边界、生命周期采集、去重、
-搜索工具和故障降级。
+测试覆盖配置安全、v3 请求契约、部分召回、Prompt 注入边界、settled 生命周期采集、
+并行工具轨迹、分管线恢复、搜索工具和故障降级。
 
 ## 已知边界
 
 - 适配器不会创建 Team、Agent 或 User。请先在 Memory Hub 中创建，并通过环境变量
   传入对应 ID。
 - v3 数据面暂时没有场景语义搜索接口，因此 L2 使用列表接口返回的有限条摘要。
-- 成功采集会通过不进入模型上下文的会话条目跨 Pi reload 去重。如果服务端已写入、
-  但响应在网络中丢失，当前 conversation-add 接口又会自行生成消息 ID，此类不确定
-  失败仍可能造成一次重复写入。
+- 采集状态与已清理的重试载荷会存入不进入模型上下文的 Pi 会话条目。如果服务端
+  已写入但响应在网络中丢失，由于当前接口不接受客户端幂等键，对应管线仍可能发生
+  一次重复写入。
 - 召回记忆只是模型上下文，不是鉴权机制；隔离与访问控制仍由 MemoryCore 负责。
 
 ## 参考资料
