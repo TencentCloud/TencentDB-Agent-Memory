@@ -414,6 +414,15 @@ export class TdaiCore {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      try {
+        const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        await checkpoint.recalibrateCounters({ vectorStore: this.vectorStore });
+      } catch (err) {
+        this.logger.warn(
+          `${TAG} Startup checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 

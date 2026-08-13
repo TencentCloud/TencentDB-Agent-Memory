@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -142,6 +143,15 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+}
+
+export interface RecalibrateCountersOptions {
+  vectorStore?: Pick<IMemoryStore, "countL0" | "countL1">;
+}
+
+export interface RecalibrateCountersResult {
+  l0ConversationsCount: number;
+  totalMemoriesExtracted: number;
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -291,6 +301,77 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Reconcile drift-prone global counters with the actual persisted data.
+   *
+   * The counters are incremented on the hot path, but cleanup/manual JSONL
+   * pruning can remove data later. Prefer the active VectorStore counts when
+   * available, and fall back to local JSONL line counts for degraded/local-only
+   * deployments.
+   */
+  async recalibrateCounters(options: RecalibrateCountersOptions = {}): Promise<RecalibrateCountersResult> {
+    let result: RecalibrateCountersResult = {
+      l0ConversationsCount: 0,
+      totalMemoriesExtracted: 0,
+    };
+
+    const dataDir = path.dirname(path.dirname(this.filePath));
+    await this.mutate(async (cp) => {
+      const l0Count = await this.resolveActualCount({
+        layer: "L0",
+        vectorCount: options.vectorStore?.countL0?.bind(options.vectorStore),
+        fallbackDir: path.join(dataDir, "conversations"),
+      });
+      const l1Count = await this.resolveActualCount({
+        layer: "L1",
+        vectorCount: options.vectorStore?.countL1?.bind(options.vectorStore),
+        fallbackDir: path.join(dataDir, "records"),
+      });
+
+      cp.l0_conversations_count = l0Count;
+      cp.total_memories_extracted = l1Count;
+      cp.memories_since_last_persona = Math.min(cp.memories_since_last_persona, l1Count);
+
+      result = {
+        l0ConversationsCount: l0Count,
+        totalMemoriesExtracted: l1Count,
+      };
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrateCounters: ` +
+      `l0_conversations_count=${result.l0ConversationsCount}, ` +
+      `total_memories_extracted=${result.totalMemoriesExtracted}`,
+    );
+
+    return result;
+  }
+
+  private async resolveActualCount(params: {
+    layer: "L0" | "L1";
+    vectorCount?: () => number | Promise<number>;
+    fallbackDir: string;
+  }): Promise<number> {
+    if (params.vectorCount) {
+      try {
+        const count = await params.vectorCount();
+        if (Number.isFinite(count) && count >= 0) {
+          return count;
+        }
+        this.logger.warn?.(
+          `[checkpoint] ${params.layer} vector count returned invalid value=${count}; falling back to JSONL`,
+        );
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] ${params.layer} vector count failed; falling back to JSONL: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    return countJsonlRecords(params.fallbackDir, this.logger);
   }
 
   // ============================
@@ -485,4 +566,44 @@ export class CheckpointManager {
     });
   }
 
+}
+
+async function countJsonlRecords(dirPath: string, logger: CheckpointLogger): Promise<number> {
+  let entries: Array<{ name: string; isFile(): boolean }>;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+
+    const filePath = path.join(dirPath, entry.name);
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch (err) {
+      logger.warn?.(
+        `[checkpoint] Failed to read JSONL file while recalibrating ${filePath}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+      continue;
+    }
+
+    const lines = raw.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        JSON.parse(line);
+        count += 1;
+      } catch {
+        logger.warn?.(`[checkpoint] Skipping malformed JSONL line during recalibration: ${filePath}:${i + 1}`);
+      }
+    }
+  }
+
+  return count;
 }
