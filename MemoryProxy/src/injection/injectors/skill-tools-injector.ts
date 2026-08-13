@@ -13,8 +13,9 @@
  * session.
  *
  * Tools injected:
- *   Always (read-only): skill_search, skill_view, skill_files_read,
- *                       skill_extract
+ *   Always (read-only): skill_search, skill_view, skill_files_read
+ *   (skill_extract 已下线 —— core 侧 extract 触发路径不可用，调用必返回
+ *    40003；恢复注入前需先恢复 skill-bridge.ts 的 extract 处理)
  *   Only when allowLlmWrite=true: skill_create, skill_update, skill_patch,
  *                                skill_delete, skill_files_write, skill_files_remove
  *
@@ -97,12 +98,8 @@ export function renderSkillToolsBlock(
     `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh", "encoding": "utf-8|base64"}`,
     `    use:  读取单个资源文件内容。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
     `  </tool>`,
-    "",
-    `  <tool name="skill_extract">`,
-    `    path: ${bridge}/extract`,
-    `    body: {"reason": "?可选，简要说明为什么觉得当前对话值得提取为 skill"}`,
-    `    use:  请求从当前对话中提取 skill（异步任务，由后台 agent 执行创建）。proxy 自动收集对话上下文，你只需传 reason 即可。`,
-    `  </tool>`,
+    // skill_extract 已下线：core 侧 extract 触发路径不可用，调用必返回 40003
+    // （见 skill-bridge.ts 的 extract 处理）。恢复 core 侧归档接口后再加回。
   ];
 
   const writeTools = [
