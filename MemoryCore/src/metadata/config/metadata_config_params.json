@@ -48,6 +48,18 @@
           "allowed_scopes": ["global", "user"]
         }
       ]
+    },
+    {
+      "module": "llm",
+      "description": "LLM 上游配置参数（按用户绑定转发到代理上游的 API Key）",
+      "params": [
+        {
+          "param_name": "api_key",
+          "param_value": "",
+          "description": "该用户转发到上游 LLM 时使用的 API Key（必填，未配置则上游鉴权失败；不回落到代理全局/agent Key）",
+          "allowed_scopes": ["global", "user"]
+        }
+      ]
     }
   ]
 }

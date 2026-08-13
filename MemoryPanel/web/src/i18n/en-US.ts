@@ -100,6 +100,20 @@ export const enUS = {
   'settings.notify.enabled': '{{label}} enabled',
   'settings.notify.disabled': '{{label}} disabled',
   'settings.notify.saveFailed': 'Save failed: {{msg}}',
+  // ===== SettingsDialog · Upstream LLM =====
+  'settings.tab.permissions': 'Permissions',
+  'settings.tab.upstream': 'Upstream LLM',
+  'settings.upstream.title': 'My upstream LLM API Key',
+  'settings.upstream.desc':
+    "Saved per signed-in user; the proxy uses this Key as the upstream server key when forwarding this user's requests (no fallback to the global default Key).",
+  'settings.upstream.keyLabel': 'API Key',
+  'settings.upstream.keyPlaceholder': 'ck_xxxxxxxx',
+  'settings.upstream.keyLink': 'Get a Key →',
+  'settings.upstream.keyExtra': ' (go to "API Management" in the left sidebar and click "Create Key")',
+  'settings.upstream.loading': 'Loading current user upstream config…',
+  'settings.upstream.save': 'Save',
+  'settings.upstream.saved': 'Upstream API Key saved',
+  'settings.upstream.clear': 'Clear',
 
   // ===== Common =====
   'common.cancel': 'Cancel',

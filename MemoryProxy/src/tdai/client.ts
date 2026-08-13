@@ -301,6 +301,50 @@ export class TdaiClient {
     }
   }
 
+  /**
+   * 读取某用户自定义的上游 LLM API Key（面板里按用户配置，存于 core 的
+   * `llm.api_key` config param）。
+   *
+   * 返回非空字符串 → proxy 转发该用户请求到上游时用它作为服务端 key；
+   * 返回空串 / 出错 → 由调用方回落到 agent / 全局上游 key（fail-open，不影响转发）。
+   *
+   * 鉴权走 `x-tdai-user-key`（Layer 3 用户鉴权），core 侧 `assertCallerIsOwner`
+   * 要求调用者就是目标用户自己 —— 这里传入的就是请求发起者自身的 user_key。
+   */
+  async getUserUpstreamApiKey(userKey: string, userId: string): Promise<string> {
+    if (!this.isEnabled() || !userKey || !userId) return "";
+    const base = this.config.endpoint.replace(/\/$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    try {
+      const res = await fetch(`${base}/v3/meta/config/user/get`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey || "local-proxy"}`,
+          "x-tdai-service-id": this.config.serviceId || "default",
+          "x-tdai-user-key": userKey,
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          module: "llm",
+          param_name: "api_key",
+        }),
+      });
+      if (!res.ok) return "";
+      const envelope = (await res.json()) as TdaiEnvelope<{ items?: Array<{ effective_value?: unknown }> }>;
+      if (typeof envelope.code === "number" && envelope.code !== 0) return "";
+      const raw = envelope.data?.items?.[0]?.effective_value;
+      return typeof raw === "string" ? raw : "";
+    } catch {
+      // fail-open：查不到用户 key 就回落默认上游 key，绝不阻断转发。
+      return "";
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // ── ACL check ──────────────────────────────────────────────────────────
   //
   // 与 memory 数据面调用（postForCtx）**语义相反**：
