@@ -1,0 +1,7 @@
+node_modules/
+coverage/
+*.tgz
+*.tsbuildinfo
+src/**/*.js
+test/**/*.js
+.e2e.local.json

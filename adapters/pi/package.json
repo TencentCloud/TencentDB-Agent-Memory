@@ -1,0 +1,51 @@
+{
+  "name": "@tencentdb-agent-memory/pi-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi.dev adapter for TencentDB Agent Memory",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "adapters/pi"
+  },
+  "keywords": [
+    "pi-package",
+    "tencentdb-agent-memory",
+    "agent-memory"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src/",
+    "README.md",
+    "README_CN.md",
+    "tdai-memory.example.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "endpoint": "http://127.0.0.1:8420",
+  "serviceId": "default",
+  "teamId": "team-example",
+  "agentId": "agt-example",
+  "userId": "usr-example",
+  "userKeyFile": "/path/to/.admin-key",
+  "timeoutMs": 3000
+}

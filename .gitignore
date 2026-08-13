@@ -34,6 +34,7 @@ install-plugin.sh
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+!adapters/pi/package-lock.json
 test-offload.sh
 test-offload-mmd.sh
 test-offload-sessions.sh
