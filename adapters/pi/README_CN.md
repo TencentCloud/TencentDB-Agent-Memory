@@ -17,13 +17,38 @@
 - 已用 Pi `0.84.1` 验证开发流程。
 - TencentDB Agent Memory Core 已启动，并且你已有 Team、Agent、User 和 User Key。
 
-## 本地加载
+## 维护者可复现环境
 
-在本仓库中以绝对路径启动 Pi：
+以下流程从干净克隆开始，不依赖全局安装的 Pi：
 
 ```powershell
-pi -e E:\path\to\TencentDB-Agent-Memory\adapters\pi
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory\adapters\pi
+node --version # 必须为 v22.19.0 或更高
+npm ci
+npm run check
+npm run verify:pi-load
 ```
+
+`verify:pi-load` 会用锁定版本的 Pi 开发依赖启动离线 RPC，并断言 `/tdai-memory-status` 已注册；它不需要 Memory 密钥，也不会调用模型。
+
+### 两种加载方式
+
+开发迭代时，以工作区源码临时启动一次 Pi：
+
+```powershell
+cd E:\path\to\TencentDB-Agent-Memory
+./adapters/pi/node_modules/.bin/pi.cmd -e (Resolve-Path ./adapters/pi)
+```
+
+要为一个项目持久安装本地包（Pi 只会写入 `<项目>/.pi/settings.json`），在该项目目录执行：
+
+```powershell
+pi install -l E:\path\to\TencentDB-Agent-Memory\adapters\pi --approve
+pi list
+```
+
+修改扩展源码后，可再次使用第一条命令加载最新源码；或者执行 `pi update E:\path\to\TencentDB-Agent-Memory\adapters\pi --approve` 更新本地包。
 
 目前包仍为开发期 `private`，还不能从 npm / Pi Gallery 安装；发布前需要维护者确认包名与 npm scope 权限。
 
@@ -65,12 +90,22 @@ pi -e E:\path\to\TencentDB-Agent-Memory\adapters\pi
 
 它会检查配置、鉴权、元数据可见性和 L0 读写能力，只显示掩码后的信息，绝不会回显密钥。一次完整回答后看到 `memory: captured`，表示该轮已被服务接受；在同一个 Agent 上进行下一次相关提问，就可能看到检索到的记忆。
 
+### 维护者验收清单
+
+1. `npm run check` 通过。
+2. `npm run verify:pi-load` 报告 `/tdai-memory-status` 已注册。
+3. 用专用测试 Agent 配置后，`/tdai-memory-status` 显示 `memory: ready`。
+4. 用 Pi 发一条短问题，再新开会话问相关问题；第一轮结束应显示 `memory: captured`，第二轮开始前应显示 `memory: recalled`。
+
+第 3–4 步要求 Memory 服务已启动，且可能消耗模型 Token；必须使用可丢弃的测试 Agent，不能使用共享记忆。
+
 ## 开发检查
 
 ```powershell
 cd adapters\pi
 npm ci
 npm run check
+npm run verify:pi-load
 npm run pack:check
 ```
 

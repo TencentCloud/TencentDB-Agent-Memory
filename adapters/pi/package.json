@@ -32,6 +32,7 @@
   "scripts": {
     "check": "npm run typecheck && npm test",
     "pack:check": "npm pack --dry-run",
+    "verify:pi-load": "node ./scripts/verify-pi-load.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

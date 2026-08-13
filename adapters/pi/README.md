@@ -17,15 +17,40 @@ This first deliverable intentionally covers L0 conversation memory only. It does
 - Pi `0.84.1` was used for development and verification.
 - A running TencentDB Agent Memory core and an existing Team, Agent, User, and User Key.
 
-## Local development installation
+## Reproducible maintainer setup
 
-From this repository, install the extension by absolute path so Pi loads its TypeScript entry point:
+The following flow starts from a clean clone and does not need a globally installed Pi:
 
 ```powershell
-pi -e E:\path\to\TencentDB-Agent-Memory\adapters\pi
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory\adapters\pi
+node --version # must be v22.19.0 or later
+npm ci
+npm run check
+npm run verify:pi-load
 ```
 
-For a permanent Pi configuration, use Pi's extension/package installation flow after this package has been published. The package remains `private` during development and is therefore not yet an npm/Gallery release.
+`verify:pi-load` launches the pinned Pi development dependency in offline RPC mode and asserts that `/tdai-memory-status` is registered. It does not need Memory credentials or make a model request.
+
+### Load modes
+
+For iterative adapter development, load the checked-out source for one Pi invocation:
+
+```powershell
+cd E:\path\to\TencentDB-Agent-Memory
+./adapters/pi/node_modules/.bin/pi.cmd -e (Resolve-Path ./adapters/pi)
+```
+
+To install the same local package for one project (Pi writes only `<project>/.pi/settings.json`), run this from that project directory:
+
+```powershell
+pi install -l E:\path\to\TencentDB-Agent-Memory\adapters\pi --approve
+pi list
+```
+
+After changing extension source, use the first command again for a fresh development load, or update the local package with `pi update E:\path\to\TencentDB-Agent-Memory\adapters\pi --approve`.
+
+The package remains `private` during development and is therefore not yet an npm/Gallery release.
 
 ## Configure it
 
@@ -65,12 +90,22 @@ Start Pi and run:
 
 It reports configuration, authentication, metadata visibility, and L0 access while masking IDs and never echoing keys. A status of `memory: captured` after a completed response means that exchange was accepted for the configured agent. Start a new prompt on the same agent to let relevant memory be recalled.
 
+### Maintainer acceptance checklist
+
+1. `npm run check` passes.
+2. `npm run verify:pi-load` reports that `/tdai-memory-status` is registered.
+3. With a dedicated test Agent configured, `/tdai-memory-status` reports `memory: ready`.
+4. Make one short Pi request, then make a related second request in a new session. The status should show `memory: captured` after the first and `memory: recalled` before the second.
+
+Steps 3–4 require a running Memory stack and may consume model tokens; they must use a disposable Agent, never shared memory.
+
 ## Development checks
 
 ```powershell
 cd adapters\pi
 npm ci
 npm run check
+npm run verify:pi-load
 npm run pack:check
 ```
 
