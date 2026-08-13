@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   appendEntry: vi.fn(),
   createClients: vi.fn(),
   createSessionMemoryClient: vi.fn(),
+  enqueueCapture: vi.fn(),
+  flushOutbox: vi.fn(),
   injectRecall: vi.fn((systemPrompt: string, recalled: string) => `${systemPrompt}\n\n${recalled}`),
   loadConfig: vi.fn(),
   recallMemory: vi.fn(),
@@ -17,6 +19,10 @@ vi.mock("../src/clients.js", () => ({
   createSessionMemoryClient: mocks.createSessionMemoryClient,
 }));
 vi.mock("../src/config.js", () => ({ loadConfig: mocks.loadConfig }));
+vi.mock("../src/outbox.js", () => ({
+  enqueueCapture: mocks.enqueueCapture,
+  flushOutbox: mocks.flushOutbox,
+}));
 vi.mock("../src/recall.js", () => ({
   injectRecall: mocks.injectRecall,
   recallMemory: mocks.recallMemory,
@@ -71,6 +77,8 @@ beforeEach(() => {
   mocks.loadConfig.mockResolvedValue({ ok: true, config });
   mocks.createClients.mockReturnValue({ memory: { name: "recall-client" } });
   mocks.createSessionMemoryClient.mockReturnValue({ addConversation: mocks.addConversation });
+  mocks.enqueueCapture.mockResolvedValue({ id: "capture-1" });
+  mocks.flushOutbox.mockResolvedValue({ delivered: 1, pending: 0, invalid: 0 });
   mocks.recallMemory.mockResolvedValue({
     content: "<tdai_recalled_memory>context</tdai_recalled_memory>",
     availableLayers: ["L0 conversation"],
@@ -97,16 +105,21 @@ describe("Pi extension lifecycle", () => {
     });
     await call(handlers, "agent_settled", {}, ctx);
 
-    expect(mocks.addConversation).toHaveBeenCalledWith({
+    expect(mocks.enqueueCapture).toHaveBeenCalledWith(config, "pi-session-1", [
+      { role: "user", content: "How should we install packages?" },
+      { role: "assistant", content: "Use pnpm." },
+    ]);
+    expect(mocks.flushOutbox).toHaveBeenCalled();
+    expect(mocks.appendEntry).toHaveBeenCalledWith(
+      "tdai-memory/capture-queued@1",
+      expect.objectContaining({ captureId: "capture-1", sessionId: "pi-session-1" }),
+    );
+    expect(mocks.addConversation).not.toHaveBeenCalledWith({
       messages: [
         { role: "user", content: "How should we install packages?" },
         { role: "assistant", content: "Use pnpm." },
       ],
     });
-    expect(mocks.appendEntry).toHaveBeenCalledWith(
-      "tdai-memory/capture-result@1",
-      expect.objectContaining({ acceptedIds: ["msg-1"], sessionId: "pi-session-1" }),
-    );
   });
 
   it("does not store an earlier response when the final run fails", async () => {
