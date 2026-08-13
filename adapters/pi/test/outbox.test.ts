@@ -18,7 +18,7 @@ const config: LoadedConfig = {
   timeoutMs: 1000,
   rejectUnauthorized: true,
   captureTools: false,
-  recall: { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
+  recall: { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
   sources: [],
   userKeySource: "test",
   gatewayApiKeySource: "test",

@@ -119,10 +119,17 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
         currentConfig.config.recall,
       );
       if (!recalled.content) {
-        if (recalled.failedLayers.length > 0) ctx.ui.setStatus(STATUS_KEY, "memory: recall unavailable");
+        if (recalled.failedLayers.length > 0 || recalled.timedOutLayers.length > 0) {
+          ctx.ui.setStatus(STATUS_KEY, "memory: recall unavailable");
+        }
         return;
       }
-      ctx.ui.setStatus(STATUS_KEY, recalled.failedLayers.length > 0 ? "memory: recalled (partial)" : "memory: recalled");
+      ctx.ui.setStatus(
+        STATUS_KEY,
+        recalled.failedLayers.length > 0 || recalled.timedOutLayers.length > 0
+          ? "memory: recalled (partial)"
+          : "memory: recalled",
+      );
       return { systemPrompt: injectRecall(event.systemPrompt, recalled.content) };
     } catch {
       ctx.ui.setStatus(STATUS_KEY, "memory: recall unavailable");

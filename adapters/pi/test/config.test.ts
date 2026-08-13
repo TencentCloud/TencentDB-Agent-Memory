@@ -119,6 +119,23 @@ describe("loadConfig", () => {
     expect(enabled.ok && enabled.config.enabled && enabled.config.captureTools).toBe(true);
   });
 
+  it("defaults recall to a bounded global deadline and rejects unsafe deadline values", async () => {
+    const { agentDir, cwd } = await fixture();
+    const defaults = await loadConfig({
+      cwd, agentDir, projectTrusted: false,
+      env: { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" },
+    });
+    expect(defaults.ok && defaults.config.enabled && defaults.config.recall.deadlineMs).toBe(3_000);
+
+    await writeFile(join(agentDir, "tdai-memory.json"), JSON.stringify({ recall: { deadlineMs: 99 } }));
+    const invalid = await loadConfig({
+      cwd, agentDir, projectTrusted: false,
+      env: { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" },
+    });
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.errors).toContain("recall.deadlineMs must be an integer between 100 and 30000");
+  });
+
   it.each([
     ["http://example.com:8420", "remote endpoints must use HTTPS"],
     ["https://user:password@example.com", "endpoint must not contain username or password"],

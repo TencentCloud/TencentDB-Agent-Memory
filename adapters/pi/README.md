@@ -92,7 +92,7 @@ Start Pi and run:
 
 It reports configuration, authentication, metadata visibility, and L0 access while masking IDs and never echoing keys. A status of `memory: captured` after a completed response means that exchange was accepted for the configured agent. Start a new prompt on the same agent to let relevant memory be recalled.
 
-Recall is bounded by the optional `recall` object in the configuration. The defaults are L0=4, L1=6, L2=2, and 12,000 characters across all layers. A failed layer does not prevent other layers or Pi itself from continuing.
+Recall is bounded by the optional `recall` object in the configuration. The defaults are a 3,000 ms global deadline, L0=4, L1=6, L2=2, and 12,000 characters across all layers. At the deadline Pi continues with completed layers; timed-out or failed layers do not prevent Pi itself from answering.
 
 `captureTools` defaults to `false`. Enable it only when successful tool-result text should be captured with the conversation. Failed output, image/binary content, and oversized text are excluded or bounded; common credentials are redacted before data reaches the local retry queue.
 

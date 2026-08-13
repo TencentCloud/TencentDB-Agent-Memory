@@ -48,7 +48,7 @@ const config: LoadedConfig = {
   sources: [],
   userKeySource: "test",
   gatewayApiKeySource: "test",
-  recall: { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
+  recall: { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
 };
 
 function installExtension(): { handlers: Map<string, Handler>; tools: Map<string, RegisteredTool>; ctx: Record<string, unknown> } {
@@ -87,6 +87,7 @@ beforeEach(() => {
     content: "<tdai_recalled_memory>context</tdai_recalled_memory>",
     availableLayers: ["L0 conversation"],
     failedLayers: [],
+    timedOutLayers: [],
   });
   mocks.addConversation.mockResolvedValue({ accepted_ids: ["msg-1"] });
 });
@@ -135,6 +136,24 @@ describe("Pi extension lifecycle", () => {
         { role: "assistant", content: "Use pnpm." },
       ],
     });
+  });
+
+  it("marks recall as partial when a slow layer reaches the global deadline", async () => {
+    mocks.recallMemory.mockResolvedValue({
+      content: "<tdai_recalled_memory>fast context</tdai_recalled_memory>",
+      availableLayers: ["L1 atomic"],
+      failedLayers: [],
+      timedOutLayers: ["L0 conversation"],
+    });
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+
+    await call(handlers, "before_agent_start", { prompt: "Use context", systemPrompt: "Base" }, ctx);
+
+    expect(((ctx.ui as { setStatus: ReturnType<typeof vi.fn> }).setStatus)).toHaveBeenCalledWith(
+      "tdai-memory",
+      "memory: recalled (partial)",
+    );
   });
 
   it("does not store an earlier response when the final run fails", async () => {

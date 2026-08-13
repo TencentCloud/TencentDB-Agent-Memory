@@ -16,6 +16,7 @@ export interface AdapterConfigFile {
 
 export interface RecallConfigFile {
   enabled?: boolean;
+  deadlineMs?: number;
   l0Limit?: number;
   l1Limit?: number;
   l2Limit?: number;
@@ -24,6 +25,7 @@ export interface RecallConfigFile {
 
 export interface RecallOptions {
   enabled: boolean;
+  deadlineMs: number;
   l0Limit: number;
   l1Limit: number;
   l2Limit: number;

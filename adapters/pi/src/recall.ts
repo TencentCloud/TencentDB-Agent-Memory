@@ -13,6 +13,7 @@ export interface RecallResult {
   content?: string;
   availableLayers: string[];
   failedLayers: string[];
+  timedOutLayers: string[];
 }
 
 interface RecallLayer {
@@ -139,7 +140,7 @@ function formatLayers(layers: RecallLayer[], maxChars: number): string | undefin
 
 export async function recallMemory(memory: MemoryClient, prompt: string, options: RecallOptions): Promise<RecallResult> {
   const query = boundedCharacters(prompt.trim(), 2048);
-  if (!options.enabled || !query) return { availableLayers: [], failedLayers: [] };
+  if (!options.enabled || !query) return { availableLayers: [], failedLayers: [], timedOutLayers: [] };
 
   const work: Array<{ name: RecallLayer["name"]; promise: Promise<string[]> }> = [
     {
@@ -161,22 +162,46 @@ export async function recallMemory(memory: MemoryClient, prompt: string, options
         : memory.searchConversation({ query, limit: options.l0Limit }).then((data) => conversationItems(data.messages)),
     },
   ];
-  const settled = await Promise.allSettled(work.map(({ promise }) => promise));
   const layers: RecallLayer[] = [];
   const availableLayers: string[] = [];
   const failedLayers: string[] = [];
-  for (const [index, result] of settled.entries()) {
-    const item = work[index];
-    if (!item) continue;
-    if (result.status === "rejected") {
-      failedLayers.push(item.name);
+  const timedOutLayers: string[] = [];
+  const results = new Map<RecallLayer["name"], PromiseSettledResult<string[]>>();
+  const tracked = work.map(({ name, promise }) => promise.then(
+    (value) => { results.set(name, { status: "fulfilled", value }); },
+    (reason) => { results.set(name, { status: "rejected", reason }); },
+  ));
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const completed = await Promise.race([
+    Promise.all(tracked).then(() => true),
+    new Promise<boolean>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve(false), options.deadlineMs);
+    }),
+  ]);
+  if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+
+  for (const { name } of work) {
+    const result = results.get(name);
+    if (!result) {
+      timedOutLayers.push(name);
       continue;
     }
-    availableLayers.push(item.name);
-    layers.push({ name: item.name, items: result.value });
+    if (result.status === "rejected") {
+      failedLayers.push(name);
+      continue;
+    }
+    availableLayers.push(name);
+    layers.push({ name, items: result.value });
   }
   const content = formatLayers(layers, options.maxChars);
-  return content ? { content, availableLayers, failedLayers } : { availableLayers, failedLayers };
+  // `completed` documents that a partial result is due to the global deadline;
+  // all tracked promises already absorb their own rejections, so late SDK work
+  // cannot create an unhandled rejection after Pi continues.
+  void completed;
+  return content
+    ? { content, availableLayers, failedLayers, timedOutLayers }
+    : { availableLayers, failedLayers, timedOutLayers };
 }
 
 export function injectRecall(systemPrompt: string, recalled: string): string {

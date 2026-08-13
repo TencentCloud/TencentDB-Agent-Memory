@@ -4,7 +4,7 @@ import { injectRecall, recallMemory } from "../src/recall.js";
 import { redactText, truncateUtf8 } from "../src/security.js";
 
 describe("recall", () => {
-  const options = { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 };
+  const options = { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 };
 
   it("automatically recalls all four layers, reads only relevant scenarios, and marks them as untrusted", async () => {
     const memory = {
@@ -56,9 +56,48 @@ describe("recall", () => {
     expect(recalled.availableLayers).toEqual(["L1 atomic", "L2 scenario"]);
   });
 
+  it("uses completed layers at the global deadline without waiting for a stuck layer", async () => {
+    let releaseCore: (() => void) | undefined;
+    const never = new Promise<never>((resolve) => { releaseCore = () => resolve(undefined as never); });
+    const memory = {
+      readCore: async () => never,
+      searchAtomic: async () => ({ items: [{ id: "a1", type: "fact", content: "Use a global recall deadline.", score: 1, created_at: "", updated_at: "" }] }),
+      listScenarios: async () => ({ entries: [], total: 0 }),
+      searchConversation: async () => ({ messages: [] }),
+    };
+
+    const started = Date.now();
+    const recalled = await recallMemory(memory as never, "How should recall behave?", { ...options, deadlineMs: 25 });
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(recalled.content).toContain("Use a global recall deadline.");
+    expect(recalled.availableLayers).toEqual(["L1 atomic", "L2 scenario", "L0 conversation"]);
+    expect(recalled.timedOutLayers).toEqual(["L3 core"]);
+    releaseCore?.();
+  });
+
+  it("fails open at the global deadline when every layer is stuck", async () => {
+    const never = new Promise<never>(() => undefined);
+    const memory = {
+      readCore: async () => never,
+      searchAtomic: async () => never,
+      listScenarios: async () => never,
+      searchConversation: async () => never,
+    };
+
+    const started = Date.now();
+    const recalled = await recallMemory(memory as never, "Will Pi still answer?", { ...options, deadlineMs: 25 });
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(recalled.content).toBeUndefined();
+    expect(recalled.availableLayers).toEqual([]);
+    expect(recalled.failedLayers).toEqual([]);
+    expect(recalled.timedOutLayers).toEqual(["L3 core", "L1 atomic", "L2 scenario", "L0 conversation"]);
+  });
+
   it("does not query for an empty prompt", async () => {
     const memory = { readCore: async () => { throw new Error("should not run"); } };
-    await expect(recallMemory(memory as never, "   ", options)).resolves.toEqual({ availableLayers: [], failedLayers: [] });
+    await expect(recallMemory(memory as never, "   ", options)).resolves.toEqual({ availableLayers: [], failedLayers: [], timedOutLayers: [] });
   });
 
   it("enforces an overall character budget", async () => {

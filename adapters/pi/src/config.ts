@@ -9,6 +9,7 @@ const DEFAULT_SERVICE_ID = "default";
 const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_RECALL: RecallOptions = {
   enabled: true,
+  deadlineMs: 3_000,
   l0Limit: 4,
   l1Limit: 6,
   l2Limit: 2,
@@ -92,7 +93,7 @@ function validateRecallConfig(input: Record<string, unknown>, path: string): Rec
     if (typeof input.enabled !== "boolean") throw new Error(`recall.enabled in ${path} must be a boolean`);
     result.enabled = input.enabled;
   }
-  for (const key of ["l0Limit", "l1Limit", "l2Limit", "maxChars"] as const) {
+  for (const key of ["deadlineMs", "l0Limit", "l1Limit", "l2Limit", "maxChars"] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "number") throw new Error(`recall.${key} in ${path} must be a number`);
     result[key] = input[key];
@@ -145,6 +146,9 @@ function mergeSource(target: MergedConfig, source: PartialWithOrigin): void {
 
 function resolveRecallOptions(value: RecallConfigFile | undefined, errors: string[]): RecallOptions {
   const result: RecallOptions = { ...DEFAULT_RECALL, ...value };
+  if (!Number.isInteger(result.deadlineMs) || result.deadlineMs < 100 || result.deadlineMs > 30_000) {
+    errors.push("recall.deadlineMs must be an integer between 100 and 30000");
+  }
   for (const [key, limit] of Object.entries({
     l0Limit: result.l0Limit,
     l1Limit: result.l1Limit,
