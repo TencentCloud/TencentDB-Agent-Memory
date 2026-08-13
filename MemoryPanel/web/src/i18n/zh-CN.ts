@@ -88,6 +88,20 @@ export const zhCN = {
   'settings.notify.enabled': '{{label}} 已开启',
   'settings.notify.disabled': '{{label}} 已关闭',
   'settings.notify.saveFailed': '保存失败：{{msg}}',
+  // ===== SettingsDialog · 上游 LLM =====
+  'settings.tab.permissions': '权限管理',
+  'settings.tab.upstream': '上游 LLM',
+  'settings.upstream.title': '我的上游 LLM API Key',
+  'settings.upstream.desc':
+    '按当前登录用户保存；proxy 转发该用户的请求时使用此 Key 作为上游服务端 Key（不回落到全局默认 Key）。',
+  'settings.upstream.keyLabel': 'API Key',
+  'settings.upstream.keyPlaceholder': 'ck_xxxxxxxx',
+  'settings.upstream.keyLink': '前往获取 Key →',
+  'settings.upstream.keyExtra': '（进入左侧「API 管理」，点击「创建密钥」）',
+  'settings.upstream.loading': '正在读取当前用户上游配置…',
+  'settings.upstream.save': '保存',
+  'settings.upstream.saved': '上游 API Key 已保存',
+  'settings.upstream.clear': '清除',
 
   // ===== Common =====
   'common.cancel': '取消',

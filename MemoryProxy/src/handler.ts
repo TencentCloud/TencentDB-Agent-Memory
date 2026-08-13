@@ -902,6 +902,23 @@ export async function handleChatCompletions(
   const effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
+  // Per-user upstream key: a signed-in user (userId resolvable) MUST use the
+  // `llm.api_key` they configured on their own profile page (stored in the core
+  // config param) as the server-side key forwarded upstream — never falling back
+  // to the global / agent key when it's unset, lookup fails, or an error occurs.
+  // Leaving it empty lets the client's own key passthrough, so a missing config
+  // surfaces as an upstream auth failure prompting the user to configure one.
+  // The global / agent key is only used as a fallback when userId is not
+  // resolvable (e.g. auth disabled).
+  let resolvedApiKey = effectiveApiKey;
+  if (userId && apiKey && tdaiClient) {
+    try {
+      resolvedApiKey = await tdaiClient.getUserUpstreamApiKey(apiKey, userId);
+    } catch {
+      // ignore — treat as not configured, keep empty (no fallback)
+      resolvedApiKey = "";
+    }
+  }
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
   const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
@@ -995,7 +1012,7 @@ export async function handleChatCompletions(
   writeRequestLog(config, body);
 
   // ── Build upstream request ───────────────────────────────────────────────
-  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, resolvedApiKey);
   const upstreamBody = buildUpstreamBody(body, target);
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
@@ -1008,11 +1025,11 @@ export async function handleChatCompletions(
       originalHeaders[k] = v;
     }
   }
-  // Retry uses the same effective key as the primary path — when it
-  // resolves to "" (agent entry present but no apiKey), retry also runs
-  // on the client's own key, preserving the passthrough intent.
-  if (effectiveApiKey) {
-    originalHeaders["authorization"] = `Bearer ${effectiveApiKey}`;
+  // Retry uses the same resolved key as the primary path — when it
+  // resolves to "" (no per-user key / agent entry with empty apiKey), retry
+  // also runs on the client's own key, preserving the passthrough intent.
+  if (resolvedApiKey) {
+    originalHeaders["authorization"] = `Bearer ${resolvedApiKey}`;
   }
 
   // Inject stream_options.include_usage for OpenAI compat
