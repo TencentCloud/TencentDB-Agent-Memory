@@ -2,7 +2,7 @@ import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { enqueueCapture, flushOutbox, outboxCount } from "../src/outbox.js";
+import { MAX_DELIVERY_ATTEMPTS, enqueueCapture, flushOutbox, outboxCount } from "../src/outbox.js";
 import type { LoadedConfig } from "../src/types.js";
 
 const directories: string[] = [];
@@ -51,14 +51,14 @@ describe("persistent capture outbox", () => {
       throw new Error("offline");
     }, options);
     expect(attempted).toEqual([first.id]);
-    expect(failed).toEqual({ delivered: 0, pending: 1, invalid: 0 });
+    expect(failed).toEqual({ delivered: 0, pending: 1, invalid: 0, dead: 0 });
     expect(await outboxCount(config, options)).toBe(2);
 
     const recovered = await flushOutbox(config, async (record) => {
       attempted.push(record.id);
     }, options);
     expect(attempted.slice(1)).toEqual([first.id, second.id]);
-    expect(recovered).toEqual({ delivered: 2, pending: 0, invalid: 0 });
+    expect(recovered).toEqual({ delivered: 2, pending: 0, invalid: 0, dead: 0 });
     expect(await outboxCount(config, options)).toBe(0);
   });
 
@@ -70,14 +70,59 @@ describe("persistent capture outbox", () => {
       delivered.push(record.id);
     }, { directory });
     expect(delivered).toEqual([]);
-    expect(result).toEqual({ delivered: 0, pending: 1, invalid: 0 });
+    expect(result).toEqual({ delivered: 0, pending: 1, invalid: 0, dead: 0 });
   });
 
   it("does not execute or delete malformed files", async () => {
     const directory = await outbox();
     await writeFile(join(directory, "bad.json"), "not json");
     const result = await flushOutbox(config, async () => undefined, { directory });
-    expect(result).toEqual({ delivered: 0, pending: 0, invalid: 1 });
+    expect(result).toEqual({ delivered: 0, pending: 0, invalid: 1, dead: 0 });
     expect(await readdir(directory)).toContain("bad.json");
+  });
+
+  it("serializes concurrent flushes so a record is delivered at most once per process", async () => {
+    const directory = await outbox();
+    await enqueueCapture(config, "pi-one", [{ role: "user", content: "only once" }], { directory });
+    let release: (() => void) | undefined;
+    let deliveries = 0;
+    const started = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deliver = async () => {
+      deliveries += 1;
+      await started;
+    };
+
+    const first = flushOutbox(config, deliver, { directory });
+    const second = flushOutbox(config, deliver, { directory });
+    release?.();
+    await Promise.all([first, second]);
+    expect(deliveries).toBe(1);
+    expect(await outboxCount(config, { directory })).toBe(0);
+  });
+
+  it("moves a permanently failing record to .dead and continues with later records", async () => {
+    const directory = await outbox();
+    const options = { directory };
+    const first = await enqueueCapture(config, "pi-one", [{ role: "user", content: "broken" }], options);
+    const second = await enqueueCapture(config, "pi-two", [{ role: "user", content: "later" }], options);
+    const attempted: string[] = [];
+
+    for (let attempt = 0; attempt < MAX_DELIVERY_ATTEMPTS - 1; attempt += 1) {
+      await flushOutbox(config, async (record) => {
+        attempted.push(record.id);
+        throw new Error("permanent failure");
+      }, options);
+    }
+    const final = await flushOutbox(config, async (record) => {
+      attempted.push(record.id);
+      if (record.id === first.id) throw new Error("permanent failure");
+    }, options);
+
+    expect(attempted).toEqual([first.id, first.id, first.id, second.id]);
+    expect(final).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 1 });
+    expect(await readdir(directory)).toEqual(expect.arrayContaining([expect.stringMatching(/\.json\.dead$/)]));
+    expect(await outboxCount(config, options)).toBe(0);
   });
 });

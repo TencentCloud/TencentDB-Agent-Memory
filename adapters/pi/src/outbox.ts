@@ -7,6 +7,11 @@ import type { LoadedConfig } from "./types.js";
 
 const OUTBOX_VERSION = 1;
 const OUTBOX_DIRECTORY = "tdai-memory-outbox";
+export const MAX_DELIVERY_ATTEMPTS = 3;
+
+// Pi may ask for a flush at session start and again when a turn settles. A
+// process-local queue prevents both calls from delivering the same file.
+const activeFlushes = new Map<string, Promise<FlushResult>>();
 
 export interface CaptureRecord {
   version: typeof OUTBOX_VERSION;
@@ -15,12 +20,14 @@ export interface CaptureRecord {
   scope: string;
   sessionId: string;
   messages: ConversationItem[];
+  attempts: number;
 }
 
 export interface FlushResult {
   delivered: number;
   pending: number;
   invalid: number;
+  dead: number;
 }
 
 export interface OutboxOptions {
@@ -69,7 +76,9 @@ function parseRecord(value: unknown): CaptureRecord | undefined {
   ) {
     return undefined;
   }
-  return candidate as CaptureRecord;
+  const attempts = candidate.attempts ?? 0;
+  if (!Number.isSafeInteger(attempts) || attempts < 0) return undefined;
+  return { ...candidate, attempts } as CaptureRecord;
 }
 
 async function listRecordFiles(directory: string): Promise<string[]> {
@@ -93,6 +102,12 @@ async function readRecord(path: string): Promise<CaptureRecord | undefined> {
   }
 }
 
+async function writeRecord(path: string, record: CaptureRecord): Promise<void> {
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  await rename(temporary, path);
+}
+
 export async function enqueueCapture(
   config: LoadedConfig,
   sessionId: string,
@@ -108,11 +123,10 @@ export async function enqueueCapture(
     scope: scopeFor(config),
     sessionId,
     messages,
+    attempts: 0,
   };
   const target = join(directory, `${record.createdAt.replaceAll(":", "-")}-${record.id}.json`);
-  const temporary = `${target}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  await rename(temporary, target);
+  await writeRecord(target, record);
   return record;
 }
 
@@ -122,10 +136,25 @@ export async function flushOutbox(
   options: OutboxOptions = {},
 ): Promise<FlushResult> {
   const directory = directoryFor(options);
+  const previous = activeFlushes.get(directory) ?? Promise.resolve({ delivered: 0, pending: 0, invalid: 0, dead: 0 });
+  const queued = previous.catch(() => undefined).then(async () => flushOutboxOnce(config, deliver, directory));
+  activeFlushes.set(directory, queued);
+  void queued.finally(() => {
+    if (activeFlushes.get(directory) === queued) activeFlushes.delete(directory);
+  });
+  return queued;
+}
+
+async function flushOutboxOnce(
+  config: LoadedConfig,
+  deliver: (record: CaptureRecord) => Promise<void>,
+  directory: string,
+): Promise<FlushResult> {
   const files = await listRecordFiles(directory);
   let delivered = 0;
   let invalid = 0;
   let pending = 0;
+  let dead = 0;
   const expectedScope = scopeFor(config);
 
   for (const file of files) {
@@ -144,13 +173,21 @@ export async function flushOutbox(
       await rm(path, { force: true });
       delivered += 1;
     } catch {
-      // Keep this and later same-scope records in order. The next session or
-      // capture will retry, preventing a transient outage from dropping data.
+      const retryRecord = { ...record, attempts: record.attempts + 1 };
+      await writeRecord(path, retryRecord);
+      if (retryRecord.attempts >= MAX_DELIVERY_ATTEMPTS) {
+        // A permanently invalid record must not block every later conversation.
+        // Keep it beside the outbox for inspection rather than deleting it.
+        await rename(path, `${path}.dead`);
+        dead += 1;
+        continue;
+      }
+      // Preserve FIFO while a transient failure is still eligible for retry.
       pending += 1;
       break;
     }
   }
-  return { delivered, pending, invalid };
+  return { delivered, pending, invalid, dead };
 }
 
 export async function outboxCount(config: LoadedConfig, options: OutboxOptions = {}): Promise<number> {

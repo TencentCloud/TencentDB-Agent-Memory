@@ -79,7 +79,7 @@ beforeEach(() => {
   mocks.createClients.mockReturnValue({ memory: { name: "recall-client" } });
   mocks.createSessionMemoryClient.mockReturnValue({ addConversation: mocks.addConversation });
   mocks.enqueueCapture.mockResolvedValue({ id: "capture-1" });
-  mocks.flushOutbox.mockResolvedValue({ delivered: 1, pending: 0, invalid: 0 });
+  mocks.flushOutbox.mockResolvedValue({ delivered: 1, pending: 0, invalid: 0, dead: 0 });
   mocks.recallMemory.mockResolvedValue({
     content: "<tdai_recalled_memory>context</tdai_recalled_memory>",
     availableLayers: ["L0 conversation"],
