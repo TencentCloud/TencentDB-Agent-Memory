@@ -11,7 +11,7 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts", "./cursor.ts"],
+  entry: ["./index.ts"],
   outDir: "./dist",
   format: "esm",
   platform: "node",

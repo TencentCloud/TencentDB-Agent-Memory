@@ -386,18 +386,17 @@ memory:
 
 ### 4. Cursor IDE (local, Linux / macOS)
 
-In addition to OpenClaw and Hermes, this repository includes a **Cursor IDE**
-host adapter: Hooks capture the last transcript turn into pending JSONL, a
-detached worker posts to Gateway `/capture`, and two read-only MCP tools
-search L1/L0.
+The standalone **Cursor IDE** package uses MemoryCore v3 strict isolation.
+Hooks retain complete turns in pending JSONL, a detached worker calls the v3
+SDK, and three read-only MCP tools expose L1/L0 search and L2 scenario reads.
 
 ```bash
+cd MemoryCore/cursor-plugin
 npm install && npm run build
-npx memory-tencentdb-cursor install --scope project   # or --scope user
+node dist/src/entry.js install --scope project   # or --scope user
 ```
 
-Full guide: [`src/adapters/cursor/README.md`](./src/adapters/cursor/README.md).
-Compatible with the Gateway client kit in [#316](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/316) (Bearer/JSON routes; does not require #316 to merge).
+Full guide: [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md).
 
 
 ## 🔒 Gateway Security (optional)
@@ -553,7 +552,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
-| [`src/adapters/cursor/README.md`](./src/adapters/cursor/README.md) | Cursor IDE adapter (Hooks / MCP / install) |
+| [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md) | Cursor IDE v3 adapter (Hooks / MCP / install) |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 

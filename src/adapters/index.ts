@@ -7,8 +7,7 @@
  * Directory structure:
  *   adapters/
  *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   ├── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
- *   └── cursor/        — Cursor IDE host (Hooks / MCP → Gateway HTTP)
+ *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
  */
 
 // OpenClaw adapter
@@ -18,15 +17,3 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
-
-// Cursor IDE adapter (Gateway HTTP; see src/adapters/cursor/README.md)
-export {
-  resolveCursorConfig,
-  CURSOR_ADAPTER_MARKER,
-  installCursorAdapter,
-  uninstallCursorAdapter,
-  createCursorMcpServer,
-  handleHook,
-  runWorker,
-} from "./cursor/index.js";
-export type { CursorConfig } from "./cursor/index.js";

@@ -388,17 +388,17 @@ memory:
 
 ### 4. Cursor IDE（本地，Linux / macOS）
 
-除 OpenClaw 与 Hermes 外，本仓库提供 **Cursor IDE** 宿主适配：Hooks 将
-transcript 最后一轮写入 pending JSONL，detached worker 投递 Gateway
-`/capture`，并暴露两个只读 MCP 检索工具（L1/L0）。
+独立 **Cursor IDE** 包使用 MemoryCore v3 严格隔离。Hooks 将完整轮次写入
+pending JSONL，detached worker 调用 v3 SDK，并暴露 L1/L0 检索和 L2 场景
+读取三个只读 MCP 工具。
 
 ```bash
+cd MemoryCore/cursor-plugin
 npm install && npm run build
-npx memory-tencentdb-cursor install --scope project   # 或 --scope user
+node dist/src/entry.js install --scope project   # 或 --scope user
 ```
 
-完整说明：[`src/adapters/cursor/README.md`](./src/adapters/cursor/README.md)。
-与 Gateway 客户端套件 [#316](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/316) 契约兼容（Bearer/JSON；不依赖其合入）。
+完整说明：[`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md)。
 
 
 ## 🔒 Gateway 安全配置（可选）
@@ -553,7 +553,7 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | 文档 | 内容 |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | 运维管理工具说明 |
-| [`src/adapters/cursor/README.md`](./src/adapters/cursor/README.md) | Cursor IDE 适配（Hooks / MCP / 安装） |
+| [`MemoryCore/cursor-plugin/README.md`](./MemoryCore/cursor-plugin/README.md) | Cursor IDE v3 适配（Hooks / MCP / 安装） |
 | [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw 插件声明与配置 Schema |
 
