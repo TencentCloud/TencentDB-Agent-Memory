@@ -6,6 +6,10 @@ export interface AdapterClients {
   metadata: MetadataClient;
 }
 
+export function createSessionMemoryClient(config: LoadedConfig, sessionId: string): MemoryClient {
+  return createClients(config).memory.withIsolation({ sessionId });
+}
+
 export function createClients(config: LoadedConfig): AdapterClients {
   const common = {
     endpoint: config.endpoint,

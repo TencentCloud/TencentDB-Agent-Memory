@@ -35,6 +35,7 @@ package-lock.json
 pnpm-lock.yaml
 yarn.lock
 !adapters/pi/package-lock.json
+.pi/tdai-memory.json
 test-offload.sh
 test-offload-mmd.sh
 test-offload-sessions.sh
