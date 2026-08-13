@@ -30,6 +30,7 @@ function configured(): ConfigResult {
       gatewayApiKey: "secret-gateway-key",
       timeoutMs: 1000,
       rejectUnauthorized: true,
+      captureTools: false,
       recall: { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
       sources: [],
       userKeySource: "key file",

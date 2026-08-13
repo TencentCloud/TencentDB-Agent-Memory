@@ -10,6 +10,7 @@ export interface AdapterConfigFile {
   gatewayApiKeyFile?: string;
   timeoutMs?: number;
   rejectUnauthorized?: boolean;
+  captureTools?: boolean;
   recall?: RecallConfigFile;
 }
 
@@ -40,6 +41,7 @@ export interface LoadedConfig {
   gatewayApiKey: string;
   timeoutMs: number;
   rejectUnauthorized: boolean;
+  captureTools: boolean;
   recall: RecallOptions;
   sources: string[];
   userKeySource: string;

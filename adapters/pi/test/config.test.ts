@@ -104,6 +104,21 @@ describe("loadConfig", () => {
     });
   });
 
+  it("keeps tool capture opt-in and disabled by default", async () => {
+    const { agentDir, cwd } = await fixture();
+    const defaults = await loadConfig({
+      cwd, agentDir, projectTrusted: false,
+      env: { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" },
+    });
+    expect(defaults.ok && defaults.config.enabled && defaults.config.captureTools).toBe(false);
+    await writeFile(join(agentDir, "tdai-memory.json"), JSON.stringify({ captureTools: true }));
+    const enabled = await loadConfig({
+      cwd, agentDir, projectTrusted: false,
+      env: { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" },
+    });
+    expect(enabled.ok && enabled.config.enabled && enabled.config.captureTools).toBe(true);
+  });
+
   it.each([
     ["http://example.com:8420", "remote endpoints must use HTTPS"],
     ["https://user:password@example.com", "endpoint must not contain username or password"],

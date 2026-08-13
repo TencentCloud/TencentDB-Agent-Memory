@@ -7,6 +7,7 @@
   "agentId": "agt-example",
   "userId": "usr-example",
   "userKeyFile": "/path/to/.admin-key",
+  "captureTools": false,
   "timeoutMs": 3000,
   "recall": {
     "enabled": true,

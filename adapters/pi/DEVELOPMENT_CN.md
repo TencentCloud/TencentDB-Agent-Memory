@@ -1,6 +1,6 @@
 # Pi.dev 适配器独立开发设计
 
-> 状态：实现前设计稿
+> 状态：实施中（目标设计与当前实现对账）
 >
 > 日期：2026-08-12
 >
@@ -20,6 +20,12 @@
 - Memory TypeScript SDK：`@tencentdb-agent-memory/memory-sdk-ts-v2@1.0.0-beta.2`。
 
 最低支持版本定为 Pi `0.84.1`、Node.js `22.19.0`。不修改 Pi 本体，也不修改 MemoryCore 服务端。
+
+### 1.1 当前实现状态
+
+截至 2026-08-13，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏、跨进程基础 outbox、状态命令、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
+
+当前 P0 尚未完成：树分支隔离、outbox 单 worker/退避/flush 命令、全局召回 deadline、setup 向导、完整 Skill 双管线与安全同步、adapter CI，以及包含非空 L1/L2/L3 的真实故障 E2E。下文章节描述最终目标；未完成项不能仅凭本文描述视为已经交付。
 
 ## 2. 问题与目标
 
@@ -42,8 +48,7 @@ Pi 的会话记录默认只保存在当前机器和当前 Pi 会话里。切换�
 - 不代理 Pi 的模型请求，不改变 Pi 的模型供应商配置。
 - 不提供 Memory 数据的任意写、删管理工具；模型侧工具首版只读。
 - 不绕过 Memory v3 的 `team_id + agent_id + user_id` 隔离。
-- 不承诺网络意义上的 exactly-once。服务端接受写入但响应丢失时，现有接口仍存在很小的重复窗口。
-- 不为 Pi 的 `--no-session` 临时会话承诺跨进程 outbox 恢复；当前进程内仍可召回和采集，退出后的补偿能力依赖 Pi 会话持久化。
+- 不承诺网络意义上的 exactly-once；服务端接受写入但响应丢失时，现有接口仍存在小概率重复窗口。
 
 ## 4. 官方约束与提交边界
 
@@ -66,8 +71,8 @@ Pi `0.84.1` 的关键事实如下：
 - `agent_end` 只表示一次底层 Agent run 结束；之后仍可能自动重试、自动压缩重试或继续处理排队消息。
 - `agent_settled` 只触发一次，并且发生在自动重试、自动压缩和 follow-up 全部结束之后。
 - 扩展收到的 `agent_end` 事件只有 `messages`，没有公开订阅事件上的 `willRetry` 字段。因此实现不得依赖 `willRetry`。
-- `ctx.sessionManager.getBranch()` 返回当前活动分支；`getEntries()` 会包含其他分支，恢复 outbox 时不能使用后者。
-- 在持久会话中，`pi.appendEntry()` 写入的 custom entry 会随会话持久化但不进入 LLM 上下文，适合保存运行状态与 outbox；`--no-session` 只具备进程内保障。
+- `ctx.sessionManager.getBranch()` 返回当前活动分支；`getEntries()` 会包含其他分支，后续实现树分支隔离时不能使用后者恢复状态。
+- 当前 outbox 使用 Pi agent 目录下的私有文件夹，因而 `--no-session` 也能跨进程补偿；每条记录携带完整隔离指纹，配置切换后不会误投递到其他 Agent。
 - `resources_discover` 只在启动和 reload 后发现动态 Skill；同步 Skill 的命令完成后需要 `await ctx.reload()`。
 - Pi 的原生 Skill 只把名称、描述和路径放进 system prompt，具体内容由模型按需用 `read` 读取，符合渐进式披露。
 

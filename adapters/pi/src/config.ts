@@ -50,7 +50,7 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
     if (typeof candidate !== "number") throw new Error(`${key} in ${path} must be a number`);
     output[key] = candidate;
   };
-  const assignBoolean = (key: "enabled" | "rejectUnauthorized") => {
+  const assignBoolean = (key: "enabled" | "rejectUnauthorized" | "captureTools") => {
     const candidate = input[key];
     if (candidate === undefined) return;
     if (typeof candidate !== "boolean") throw new Error(`${key} in ${path} must be a boolean`);
@@ -69,6 +69,7 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
   assignNumber("timeoutMs");
   assignBoolean("enabled");
   assignBoolean("rejectUnauthorized");
+  assignBoolean("captureTools");
   assignString("endpoint");
   assignString("serviceId");
   assignString("teamId");
@@ -236,6 +237,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
         serviceId: DEFAULT_SERVICE_ID,
         timeoutMs: DEFAULT_TIMEOUT_MS,
         rejectUnauthorized: true,
+        captureTools: false,
       },
       origins: {},
     };
@@ -331,6 +333,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
       gatewayApiKey,
       timeoutMs,
       rejectUnauthorized: values.rejectUnauthorized ?? true,
+      captureTools: values.captureTools ?? false,
       recall,
       sources: sourcePaths,
       userKeySource,

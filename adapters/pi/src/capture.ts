@@ -6,6 +6,25 @@ interface TextBlock {
   text: string;
 }
 
+interface ToolResultLike {
+  toolName: string;
+  isError: boolean;
+  content: unknown;
+}
+
+const MAX_TOOL_ITEMS = 8;
+const MAX_TOOL_ITEM_BYTES = 2048;
+
+function safeToolName(value: string): string {
+  const cleaned = value.replaceAll(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+  return cleaned || "unknown";
+}
+
+function toolText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value.filter(isTextBlock).map((part) => part.text).join("\n").trim();
+}
+
 interface AssistantLike {
   role: "assistant";
   content: unknown;
@@ -37,9 +56,24 @@ export function lastSuccessfulAssistantText(messages: readonly unknown[]): strin
   return undefined;
 }
 
-export function createConversationMessages(prompt: string, assistant: string): ConversationItem[] {
-  return [
+export function createConversationMessages(
+  prompt: string,
+  assistant: string,
+  toolResults: readonly ToolResultLike[] = [],
+): ConversationItem[] {
+  const messages: ConversationItem[] = [
     { role: "user", content: truncateUtf8(redactText(prompt.trim()), 8192) },
     { role: "assistant", content: truncateUtf8(redactText(assistant.trim()), 8192) },
   ];
+  const evidence = toolResults
+    .filter((result) => !result.isError)
+    .slice(0, MAX_TOOL_ITEMS)
+    .map((result) => {
+      const text = toolText(result.content);
+      if (!text) return undefined;
+      return `[tool:${safeToolName(result.toolName)}]\n${truncateUtf8(redactText(text), MAX_TOOL_ITEM_BYTES)}`;
+    })
+    .filter((value): value is string => Boolean(value));
+  if (evidence.length > 0) messages.push({ role: "system", content: evidence.join("\n\n") });
+  return messages;
 }

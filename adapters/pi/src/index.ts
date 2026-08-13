@@ -13,6 +13,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let currentConfig: ConfigResult | undefined;
   let activePrompt: string | undefined;
   let finalAssistant: string | undefined;
+  let successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }> = [];
 
   pi.registerCommand("tdai-memory-status", {
     description: "Check TencentDB Agent Memory configuration, identity, and connectivity",
@@ -58,6 +59,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, ctx) => {
     activePrompt = event.prompt;
     finalAssistant = undefined;
+    successfulToolResults = [];
     if (!currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
       const recalled = await recallMemory(
@@ -83,16 +85,23 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     finalAssistant = lastSuccessfulAssistantText(event.messages);
   });
 
+  pi.on("tool_result", async (event) => {
+    if (!currentConfig?.ok || !currentConfig.config.enabled || !currentConfig.config.captureTools || event.isError) return;
+    successfulToolResults.push({ toolName: event.toolName, isError: event.isError, content: event.content });
+  });
+
   pi.on("agent_settled", async (_event, ctx) => {
     const prompt = activePrompt;
     const assistant = finalAssistant;
+    const toolResults = successfulToolResults;
     activePrompt = undefined;
     finalAssistant = undefined;
+    successfulToolResults = [];
     if (!prompt || !assistant || !currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
       const sessionId = `pi-${ctx.sessionManager.getSessionId()}`;
       const loadedConfig = currentConfig.config;
-      const record = await enqueueCapture(loadedConfig, sessionId, createConversationMessages(prompt, assistant));
+      const record = await enqueueCapture(loadedConfig, sessionId, createConversationMessages(prompt, assistant, toolResults));
       pi.appendEntry("tdai-memory/capture-queued@1", {
         sessionId,
         captureId: record.id,

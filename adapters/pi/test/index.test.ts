@@ -43,6 +43,7 @@ const config: LoadedConfig = {
   gatewayApiKey: "gateway-test",
   timeoutMs: 1_000,
   rejectUnauthorized: true,
+  captureTools: false,
   sources: [],
   userKeySource: "test",
   gatewayApiKeySource: "test",
@@ -136,5 +137,23 @@ describe("Pi extension lifecycle", () => {
 
     expect(mocks.addConversation).not.toHaveBeenCalled();
     expect(mocks.appendEntry).not.toHaveBeenCalled();
+  });
+
+  it("captures only successful tool evidence when explicitly enabled", async () => {
+    mocks.loadConfig.mockResolvedValue({ ok: true, config: { ...config, captureTools: true } });
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+    await call(handlers, "before_agent_start", { prompt: "Inspect files", systemPrompt: "Base" }, ctx);
+    await call(handlers, "tool_result", { toolName: "read", isError: false, content: [{ type: "text", text: "safe evidence" }] }, ctx);
+    await call(handlers, "tool_result", { toolName: "bash", isError: true, content: [{ type: "text", text: "failed output" }] }, ctx);
+    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] });
+    await call(handlers, "agent_settled", {}, ctx);
+    expect(mocks.enqueueCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ captureTools: true }),
+      "pi-session-1",
+      expect.arrayContaining([{ role: "system", content: "[tool:read]\nsafe evidence" }]),
+    );
+    const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+    expect(captured).not.toContainEqual(expect.objectContaining({ content: expect.stringContaining("failed output") }));
   });
 });
