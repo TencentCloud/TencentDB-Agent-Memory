@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { createConversationMessages, lastSuccessfulAssistantText } from "./capture.js";
 import { createClients, createSessionMemoryClient } from "./clients.js";
 import { loadConfig } from "./config.js";
@@ -6,6 +7,7 @@ import { enqueueCapture, flushOutbox } from "./outbox.js";
 import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { checkStatus, formatStatus } from "./status.js";
+import { conversationSearch, memorySearch } from "./tools.js";
 import type { ConfigResult } from "./types.js";
 
 const STATUS_KEY = "tdai-memory";
@@ -16,6 +18,41 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let finalAssistant: string | undefined;
   let successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }> = [];
   let activeBranchId = "root";
+  let memoryToolCallsThisTurn = 0;
+
+  const memoryUnavailable = () => ({ content: [{ type: "text" as const, text: "Memory not configured." }], details: {} });
+  const memoryToolLimitReached = () => ({
+    content: [{ type: "text" as const, text: "Memory search limit reached for this turn. Use existing information to answer." }],
+    details: {},
+  });
+
+  pi.registerTool({
+    name: "tdai_memory_search",
+    label: "Search memory",
+    description: "Search structured memories (L1): user preferences, past events, rules, facts.",
+    promptSnippet: "Search L1 memories when needed; use both memory search tools at most 3 times total per turn, then answer from existing information.",
+    parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()), type: Type.Optional(Type.String()) }),
+    execute: async (_toolCallId, params) => {
+      if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
+      if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      memoryToolCallsThisTurn += 1;
+      return memorySearch(createClients(currentConfig.config).memory, params);
+    },
+  });
+
+  pi.registerTool({
+    name: "tdai_conversation_search",
+    label: "Search conversation history",
+    description: "Search raw conversation history (L0) with timestamps.",
+    promptSnippet: "Search L0 conversations when needed; use both memory search tools at most 3 times total per turn, then answer from existing information.",
+    parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()), session_key: Type.Optional(Type.String()) }),
+    execute: async (_toolCallId, params) => {
+      if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
+      if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      memoryToolCallsThisTurn += 1;
+      return conversationSearch(createClients(currentConfig.config).memory, params);
+    },
+  });
 
   pi.registerCommand("tdai-memory-status", {
     description: "Check TencentDB Agent Memory configuration, identity, and connectivity",
@@ -70,6 +107,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    memoryToolCallsThisTurn = 0;
     activePrompt = event.prompt;
     finalAssistant = undefined;
     successfulToolResults = [];

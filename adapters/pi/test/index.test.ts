@@ -30,7 +30,8 @@ vi.mock("../src/recall.js", () => ({
 
 import tdaiMemoryExtension from "../src/index.js";
 
-type Handler = (...args: never[]) => Promise<unknown> | unknown;
+type Handler = (...args: any[]) => Promise<unknown> | unknown;
+type RegisteredTool = { name: string; execute: Handler; promptSnippet?: string };
 
 const config: LoadedConfig = {
   enabled: true,
@@ -50,8 +51,9 @@ const config: LoadedConfig = {
   recall: { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
 };
 
-function installExtension(): { handlers: Map<string, Handler>; ctx: Record<string, unknown> } {
+function installExtension(): { handlers: Map<string, Handler>; tools: Map<string, RegisteredTool>; ctx: Record<string, unknown> } {
   const handlers = new Map<string, Handler>();
+  const tools = new Map<string, RegisteredTool>();
   const ctx = {
     cwd: "C:\\workspace",
     isProjectTrusted: () => true,
@@ -62,9 +64,10 @@ function installExtension(): { handlers: Map<string, Handler>; ctx: Record<strin
     appendEntry: mocks.appendEntry,
     on: (event: string, handler: Handler) => handlers.set(event, handler),
     registerCommand: vi.fn(),
+    registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
   };
   tdaiMemoryExtension(pi as unknown as ExtensionAPI);
-  return { handlers, ctx };
+  return { handlers, tools, ctx };
 }
 
 async function call(handlers: Map<string, Handler>, event: string, ...args: unknown[]): Promise<unknown> {
@@ -89,6 +92,17 @@ beforeEach(() => {
 });
 
 describe("Pi extension lifecycle", () => {
+  it("registers the two read-only memory search tools and fails open before configuration", async () => {
+    const { tools, ctx } = installExtension();
+    const structured = tools.get("tdai_memory_search");
+    const conversation = tools.get("tdai_conversation_search");
+    expect(structured?.promptSnippet).toContain("at most 3 times total per turn");
+    expect(conversation?.promptSnippet).toContain("at most 3 times total per turn");
+    const result = await structured?.execute("call-1", { query: "preference" }, undefined, undefined, ctx);
+    expect(result).toEqual({ content: [{ type: "text", text: "Memory not configured." }], details: {} });
+    expect(mocks.createClients).not.toHaveBeenCalled();
+  });
+
   it("recalls before the run and persists the final successful answer after settlement", async () => {
     const { handlers, ctx } = installExtension();
     await call(handlers, "session_start", {}, ctx);
