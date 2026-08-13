@@ -116,6 +116,19 @@ npm run pack:check
 
 测试不需要联网 Memory 或模型。端到端实验必须使用单独创建的测试 Agent，不能用生产/共享 Agent。
 
+### 真实 L0–L3 端到端验证
+
+受管 E2E 会启动一个临时 `agentmemory/memory-core` 容器和临时数据目录，初始化仅用一次的 admin 身份，把真实 L0 对话交给已配置的 LLM 生成 L1/L2/L3，最后用锁定版本的 Pi CLI 加载适配器。一个排在适配器之后的临时观察扩展会确认：四个非空层都进入 Pi 最终的 `before_agent_start` system prompt。它会在 Pi 请求回答模型之前停止，因此模型消耗只来自 MemoryCore 抽取。
+
+先启动 Docker。可传入现有部署 `.env`，也可直接导出 `MEMORY_LLM_BASE_URL`、`MEMORY_LLM_API_KEY` 和 `MEMORY_LLM_MODEL`：
+
+```powershell
+cd adapters\pi
+npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
+```
+
+任何一层为空、Pi hook 中缺少任意 L0–L3 分段，或缺少不可信记忆边界，命令都会硬失败。输出只包含脱敏后的临时 ID，不会显示 LLM 或 Memory 密钥；成功和失败都会移除临时容器与数据。该检查会发起真实模型请求，因此会消耗 Token。
+
 ## 安全提醒
 
 - User Key 等同密码，不能贴到 issue、聊天记录、提交的 JSON 或截图中。

@@ -25,7 +25,7 @@
 
 截至 2026-08-13，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏、跨进程基础 outbox（单进程串行投递、失败次数持久化与 `.dead` 隔离）、树分支与 fork 会话隔离、状态命令、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
 
-当前 P0 尚未完成：outbox 跨进程锁/退避/flush 命令、全局召回 deadline、setup 向导、完整 Skill 双管线与安全同步、adapter CI，以及包含非空 L1/L2/L3 的真实故障 E2E。下文章节描述最终目标；未完成项不能仅凭本文描述视为已经交付。
+当前 P0 尚未完成：outbox 跨进程锁/退避/flush 命令、全局召回 deadline、setup 向导、完整 Skill 双管线与安全同步、adapter CI，以及完整故障矩阵。非空 L0/L1/L2/L3 的真实模型生成与 Pi hook 注入已有受管 E2E 脚本验证；它不等于本节其余故障场景已完成。下文章节描述最终目标；未完成项不能仅凭本文描述视为已经交付。
 
 ## 2. 问题与目标
 
@@ -500,6 +500,15 @@ Footer status 只使用短状态，例如 `memory: ready`、`memory: offline (2 
 - `npm audit --audit-level=moderate`、typecheck、Vitest、`git diff --check` 和秘密扫描。
 
 ### 15.3 提交前真实 E2E
+
+已实现的受管基线命令：
+
+```powershell
+cd adapters\pi
+npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
+```
+
+该基线使用临时 MemoryCore 容器与数据，真实生成非空 L0–L3，再由真实 Pi `before_agent_start` 生命周期验证四层注入与不可信边界。测试在 Pi provider 请求前停止，不消耗 Pi 回答模型 Token；MemoryCore 的 L1/L2/L3 真实抽取会消耗 Token。
 
 用真实 `agentmemory/memory-core:latest` 和 Pi `0.84.1` 验证：
 

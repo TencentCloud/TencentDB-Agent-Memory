@@ -117,6 +117,19 @@ npm run pack:check
 
 The test suite has no external-memory or model requirement. End-to-end usage should use a dedicated test agent, never a production/shared one.
 
+### Real L0-L3 end-to-end check
+
+The managed E2E starts a disposable `agentmemory/memory-core` container and data directory, initializes a one-use admin identity, lets the configured LLM generate real L1/L2/L3 data from a real L0 conversation, and finally loads this extension in the pinned Pi CLI. A trailing observer extension verifies that all four non-empty sections reach Pi's final `before_agent_start` system prompt. It exits before any Pi provider request, so model usage is limited to MemoryCore extraction.
+
+Docker must be running. Pass the existing deployment environment file, or export `MEMORY_LLM_BASE_URL`, `MEMORY_LLM_API_KEY`, and `MEMORY_LLM_MODEL` directly:
+
+```powershell
+cd adapters\pi
+npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
+```
+
+The command hard-fails if any layer is empty, the Pi hook does not contain all L0-L3 sections, or the untrusted-memory boundary is missing. It prints only masked disposable IDs, never the LLM or Memory key. Its temporary container and data are removed on both success and failure. This check makes real model requests and therefore consumes tokens.
+
 ## Security notes
 
 - Treat a User Key as a password. Do not paste it into issues, chat logs, committed JSON, or screenshots.

@@ -20,6 +20,7 @@
   },
   "files": [
     "src/",
+    "scripts/",
     "README.md",
     "README_CN.md",
     "tdai-memory.example.json"
@@ -31,6 +32,7 @@
   },
   "scripts": {
     "check": "npm run typecheck && npm test",
+    "e2e:l0-l3": "node ./scripts/e2e-l0-l3.mjs",
     "pack:check": "npm pack --dry-run",
     "verify:pi-load": "node ./scripts/verify-pi-load.mjs",
     "typecheck": "tsc --noEmit",
