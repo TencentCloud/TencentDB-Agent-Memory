@@ -516,6 +516,39 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     };
   }
 
+  // ── Standalone embedding env-var override ──
+  // Mirror the LLM env overrides: TDAI_EMBEDDING_* take precedence over both the
+  // memory.embedding and top-level embedding blocks, so vector search can be
+  // configured via a single .env without editing the yaml. Because
+  // parseMemoryConfig derives enabled=false when provider defaults to "none",
+  // we also force enabled=true whenever a remote provider + apiKey is supplied
+  // via env, otherwise the vector store is short-circuited downstream.
+  const embProviderEnv = env("TDAI_EMBEDDING_PROVIDER");
+  const embBaseUrlEnv = env("TDAI_EMBEDDING_BASE_URL");
+  const embApiKeyEnv = env("TDAI_EMBEDDING_API_KEY");
+  const embModelEnv = env("TDAI_EMBEDDING_MODEL");
+  const embDimensionsEnv = envInt("TDAI_EMBEDDING_DIMENSIONS");
+  // Infer an OpenAI-compatible remote provider when a full remote config is
+  // supplied via env without an explicit provider (e.g. only
+  // baseUrl/apiKey/model/dimensions are set, matching the .env template).
+  const embProviderInferred =
+    embProviderEnv ??
+    (embBaseUrlEnv && embApiKeyEnv && embModelEnv && embDimensionsEnv ? "openai" : undefined);
+  if (embProviderInferred || embBaseUrlEnv || embApiKeyEnv || embModelEnv || embDimensionsEnv) {
+    const provider = embProviderInferred ?? memory.embedding.provider;
+    const apiKey = embApiKeyEnv ?? memory.embedding.apiKey;
+    const enableRemote = provider !== "none" && provider !== "local" && apiKey !== "";
+    memory.embedding = {
+      ...memory.embedding,
+      provider,
+      baseUrl: embBaseUrlEnv ?? memory.embedding.baseUrl,
+      apiKey,
+      model: embModelEnv ?? memory.embedding.model,
+      dimensions: embDimensionsEnv ?? memory.embedding.dimensions,
+      enabled: enableRemote ? true : memory.embedding.enabled,
+    };
+  }
+
   // ── Skill module config ──
   // Resolution order:
   //   1. Top-level `skill` block in yaml (preferred — skill is a top-level
