@@ -16,7 +16,7 @@
 
 [Installation](#installation) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
-[**English**](./README.md) · [简体中文](./README_CN.md)
+[**English**](./README.md) · [简体中文](./README_CN.md) · [Русский](./README_RU.md)
 
 </div>
 

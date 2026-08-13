@@ -16,7 +16,7 @@
 
 [安装](#安装) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
-[English](./README.md) · [**简体中文**](./README_CN.md)
+[English](./README.md) · [**简体中文**](./README_CN.md) · [Русский](./README_RU.md)
 
 </div>
 
@@ -49,7 +49,7 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 ### 从旧版本迁移数据
 
 如果你已经在用旧版（v1.x / v0.x），希望把存量数据迁到 v2.0.0+，我们提供了一个数据迁移工具：
-用法和参数详见 [**数据迁移工具（v2 → v3）**](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)。全新安装可跳过。
+用法和参数详见 [**数据迁移工具（v2 → v3）**](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md) · [Русский](./README_RU.md)。全新安装可跳过。
 
 # TencentDB Agent Memory 是什么？
 
@@ -264,7 +264,7 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 
 - [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
 - [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
-- [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
+- [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md) · [Русский](./README_RU.md)（如果在用旧版并想迁移存量数据）
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
 - [贡献指南](./CONTRIBUTING_CN.md)
 
