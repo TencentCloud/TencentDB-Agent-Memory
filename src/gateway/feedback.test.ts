@@ -68,6 +68,23 @@ beforeAll(() => {
   db.prepare(
     "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
   ).run("m4", "totally unrelated content here", "episodic", 40);
+  // At the ceiling, and the -1 sentinel of a strict global instruction.
+  db.prepare(
+    "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+  ).run(
+    "m5",
+    "Ceiling record already confirmed many times over and over again",
+    "instruction",
+    100,
+  );
+  db.prepare(
+    "INSERT INTO l1_records (record_id, content, type, priority, created_time, updated_time) VALUES (?, ?, ?, ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')",
+  ).run(
+    "m6",
+    "Strict global rule that outranks everything else in the tree",
+    "instruction",
+    -1,
+  );
   db.close();
 });
 
@@ -170,6 +187,25 @@ describe("bumpFeedbackPriorities (sqlite)", () => {
     expect(r.matched).toBe(1);
     expect(r.bumped).toBe(1);
     expect(priorityOf("m1")).toBe(52); // +1 from the previous test, +1 now — not +2
+  });
+
+  it("never lifts a record above the 0..100 scale", () => {
+    const key =
+      "Ceiling record already confirmed many times over and over again";
+    for (let i = 0; i < 3; i++) bumpFeedbackPriorities(dbPath, [key]);
+    expect(priorityOf("m5")).toBe(100);
+    // Matched, but nothing changed — the answer must not claim otherwise.
+    expect(bumpFeedbackPriorities(dbPath, [key])).toEqual({
+      matched: 1,
+      bumped: 0,
+    });
+  });
+
+  it("leaves the -1 sentinel of a strict global instruction alone", () => {
+    const key = "Strict global rule that outranks everything else in the tree";
+    const r = bumpFeedbackPriorities(dbPath, [key]);
+    expect(priorityOf("m6")).toBe(-1);
+    expect(r).toEqual({ matched: 1, bumped: 0 });
   });
 
   it("respects the cap parameter", () => {

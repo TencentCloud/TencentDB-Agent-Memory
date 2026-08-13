@@ -90,6 +90,9 @@ export function validateFeedbackBody(
 // SQLite bump
 // ============================
 
+/** Upper bound of the L1 priority scale (l1-writer.ts:46). */
+const MAX_PRIORITY = 100;
+
 export interface FeedbackBumpResult {
   matched: number;
   bumped: number;
@@ -110,21 +113,33 @@ export function bumpFeedbackPriorities(
   const db = openWritableSqlite(dbPath);
   try {
     const rows = db
-      .prepare("SELECT record_id, content FROM l1_records")
+      .prepare("SELECT record_id, content, priority FROM l1_records")
       .all() as Array<{
       record_id: string;
       content: string;
+      priority: number;
     }>;
     const matchedIds = matchFeedbackKeys(rows, keys);
     if (matchedIds.length === 0) return { matched: 0, bumped: 0 };
 
+    // The ceiling is the extraction contract (l1-writer.ts:46): priority lives
+    // in 0..100, and -1 is a sentinel for a strict global instruction, not a
+    // small number — bumping it would silently turn the strictest rule into an
+    // ordinary one. Without the clamp a record that keeps being confirmed
+    // drifts arbitrarily high (the live tree already holds 35 rows above 100,
+    // up to 481) and stops being comparable with every other record.
+    const priorityById = new Map(rows.map((r) => [r.record_id, r.priority]));
     const update = db.prepare(
-      "UPDATE l1_records SET priority = priority + ? WHERE record_id = ?",
+      "UPDATE l1_records SET priority = MIN(priority + ?, ?) WHERE record_id = ?",
     );
     let bumped = 0;
     for (const id of matchedIds) {
+      const current = priorityById.get(id) ?? 0;
+      // Reported as matched but not bumped: SQLite counts the row either way,
+      // so the honest number has to come from the value we already read.
+      if (current < 0 || current >= MAX_PRIORITY) continue;
       for (let i = 0; i < capPerRecord; i++) {
-        update.run(1, id);
+        update.run(1, MAX_PRIORITY, id);
       }
       bumped++;
     }
