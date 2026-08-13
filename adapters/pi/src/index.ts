@@ -4,6 +4,7 @@ import { createClients, createSessionMemoryClient } from "./clients.js";
 import { loadConfig } from "./config.js";
 import { enqueueCapture, flushOutbox } from "./outbox.js";
 import { injectRecall, recallMemory } from "./recall.js";
+import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { checkStatus, formatStatus } from "./status.js";
 import type { ConfigResult } from "./types.js";
 
@@ -14,6 +15,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let activePrompt: string | undefined;
   let finalAssistant: string | undefined;
   let successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }> = [];
+  let activeBranchId = "root";
 
   pi.registerCommand("tdai-memory-status", {
     description: "Check TencentDB Agent Memory configuration, identity, and connectivity",
@@ -36,6 +38,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    activeBranchId = restoreBranchId(ctx.sessionManager.getBranch()) ?? "root";
     currentConfig = await loadConfig({
       cwd: ctx.cwd,
       projectTrusted: ctx.isProjectTrusted(),
@@ -54,6 +57,16 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
         if (result.delivered > 0) ctx.ui.setStatus(STATUS_KEY, "memory: captured");
       }).catch(() => undefined);
     }
+  });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    const restored = restoreBranchId(ctx.sessionManager.getBranch());
+    if (restored) {
+      activeBranchId = restored;
+      return;
+    }
+    activeBranchId = createBranchId();
+    pi.appendEntry(BRANCH_ENTRY_TYPE, { branchId: activeBranchId, createdAt: new Date().toISOString() });
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -99,7 +112,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     successfulToolResults = [];
     if (!prompt || !assistant || !currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
-      const sessionId = `pi-${ctx.sessionManager.getSessionId()}`;
+      const sessionId = memorySessionId(ctx.sessionManager.getSessionId(), activeBranchId);
       const loadedConfig = currentConfig.config;
       const record = await enqueueCapture(loadedConfig, sessionId, createConversationMessages(prompt, assistant, toolResults));
       pi.appendEntry("tdai-memory/capture-queued@1", {

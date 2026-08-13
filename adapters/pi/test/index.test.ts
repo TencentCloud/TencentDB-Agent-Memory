@@ -55,7 +55,7 @@ function installExtension(): { handlers: Map<string, Handler>; ctx: Record<strin
   const ctx = {
     cwd: "C:\\workspace",
     isProjectTrusted: () => true,
-    sessionManager: { getSessionId: () => "session-1" },
+    sessionManager: { getSessionId: () => "session-1", getBranch: () => [] },
     ui: { notify: vi.fn(), setStatus: vi.fn() },
   };
   const pi = {
@@ -106,14 +106,14 @@ describe("Pi extension lifecycle", () => {
     });
     await call(handlers, "agent_settled", {}, ctx);
 
-    expect(mocks.enqueueCapture).toHaveBeenCalledWith(config, "pi-session-1", [
+    expect(mocks.enqueueCapture).toHaveBeenCalledWith(config, "pi-session-1-root", [
       { role: "user", content: "How should we install packages?" },
       { role: "assistant", content: "Use pnpm." },
     ]);
     expect(mocks.flushOutbox).toHaveBeenCalled();
     expect(mocks.appendEntry).toHaveBeenCalledWith(
       "tdai-memory/capture-queued@1",
-      expect.objectContaining({ captureId: "capture-1", sessionId: "pi-session-1" }),
+      expect.objectContaining({ captureId: "capture-1", sessionId: "pi-session-1-root" }),
     );
     expect(mocks.addConversation).not.toHaveBeenCalledWith({
       messages: [
@@ -150,10 +150,30 @@ describe("Pi extension lifecycle", () => {
     await call(handlers, "agent_settled", {}, ctx);
     expect(mocks.enqueueCapture).toHaveBeenCalledWith(
       expect.objectContaining({ captureTools: true }),
-      "pi-session-1",
+      "pi-session-1-root",
       expect.arrayContaining([{ role: "system", content: "[tool:read]\nsafe evidence" }]),
     );
     const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
     expect(captured).not.toContainEqual(expect.objectContaining({ content: expect.stringContaining("failed output") }));
+  });
+
+  it("creates a durable memory branch only after navigating to an unmarked tree branch", async () => {
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+    await call(handlers, "session_tree", {}, ctx);
+
+    expect(mocks.appendEntry).toHaveBeenCalledWith(
+      "tdai-memory/branch@1",
+      expect.objectContaining({ branchId: expect.stringMatching(/^branch-[A-Za-z0-9-]+$/) }),
+    );
+
+    await call(handlers, "before_agent_start", { prompt: "Separate branch", systemPrompt: "Base" }, ctx);
+    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] });
+    await call(handlers, "agent_settled", {}, ctx);
+    expect(mocks.enqueueCapture).toHaveBeenCalledWith(
+      config,
+      expect.stringMatching(/^pi-session-1-branch-[A-Za-z0-9-]+$/),
+      expect.any(Array),
+    );
   });
 });

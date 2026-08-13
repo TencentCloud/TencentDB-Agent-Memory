@@ -6,6 +6,7 @@ This is a local Pi extension that gives future Pi conversations durable, scoped 
 
 - Before a Pi run, automatically recalls bounded L0 conversation evidence, L1 atomic memories, relevant L2 scenario files, and the L3 core profile. All recalled text is added as explicitly **untrusted** context.
 - After Pi has settled, queues the final successful user/assistant exchange locally first, then delivers it to an isolated Pi-session scope. A temporary Memory outage leaves a sanitized record for retry instead of silently losing it.
+- Pi `/tree` branches receive distinct Memory session identities; returning to a prior branch restores its identity, while `/fork` is naturally isolated by Pi's new session ID.
 - Redacts common `sk-*`, Bearer-token, and private-key forms before persistence; secret values are never shown in the status command.
 - Fails open: memory configuration or network failures do not prevent Pi from answering.
 
