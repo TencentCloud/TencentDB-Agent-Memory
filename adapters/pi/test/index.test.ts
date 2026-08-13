@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   createSessionMemoryClient: vi.fn(),
   injectRecall: vi.fn((systemPrompt: string, recalled: string) => `${systemPrompt}\n\n${recalled}`),
   loadConfig: vi.fn(),
-  recallConversation: vi.fn(),
+  recallMemory: vi.fn(),
 }));
 
 vi.mock("../src/clients.js", () => ({
@@ -19,7 +19,7 @@ vi.mock("../src/clients.js", () => ({
 vi.mock("../src/config.js", () => ({ loadConfig: mocks.loadConfig }));
 vi.mock("../src/recall.js", () => ({
   injectRecall: mocks.injectRecall,
-  recallConversation: mocks.recallConversation,
+  recallMemory: mocks.recallMemory,
 }));
 
 import tdaiMemoryExtension from "../src/index.js";
@@ -40,6 +40,7 @@ const config: LoadedConfig = {
   sources: [],
   userKeySource: "test",
   gatewayApiKeySource: "test",
+  recall: { enabled: true, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
 };
 
 function installExtension(): { handlers: Map<string, Handler>; ctx: Record<string, unknown> } {
@@ -70,7 +71,11 @@ beforeEach(() => {
   mocks.loadConfig.mockResolvedValue({ ok: true, config });
   mocks.createClients.mockReturnValue({ memory: { name: "recall-client" } });
   mocks.createSessionMemoryClient.mockReturnValue({ addConversation: mocks.addConversation });
-  mocks.recallConversation.mockResolvedValue("<tdai_recalled_memory>context</tdai_recalled_memory>");
+  mocks.recallMemory.mockResolvedValue({
+    content: "<tdai_recalled_memory>context</tdai_recalled_memory>",
+    availableLayers: ["L0 conversation"],
+    failedLayers: [],
+  });
   mocks.addConversation.mockResolvedValue({ accepted_ids: ["msg-1"] });
 });
 

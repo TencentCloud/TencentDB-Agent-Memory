@@ -7,5 +7,12 @@
   "agentId": "agt-example",
   "userId": "usr-example",
   "userKeyFile": "/path/to/.admin-key",
-  "timeoutMs": 3000
+  "timeoutMs": 3000,
+  "recall": {
+    "enabled": true,
+    "l0Limit": 4,
+    "l1Limit": 6,
+    "l2Limit": 2,
+    "maxChars": 12000
+  }
 }

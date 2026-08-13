@@ -1,12 +1,19 @@
 import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AdapterConfigFile, ConfigResult, LoadedConfig } from "./types.js";
+import type { AdapterConfigFile, ConfigResult, LoadedConfig, RecallConfigFile, RecallOptions } from "./types.js";
 
 const CONFIG_FILE_NAME = "tdai-memory.json";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8420";
 const DEFAULT_SERVICE_ID = "default";
 const DEFAULT_TIMEOUT_MS = 3000;
+const DEFAULT_RECALL: RecallOptions = {
+  enabled: true,
+  l0Limit: 4,
+  l1Limit: 6,
+  l2Limit: 2,
+  maxChars: 12_000,
+};
 
 export interface LoadConfigOptions {
   cwd: string;
@@ -69,7 +76,27 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
   assignString("userId");
   assignString("userKeyFile");
   assignString("gatewayApiKeyFile");
+  if (input.recall !== undefined) {
+    if (!input.recall || typeof input.recall !== "object" || Array.isArray(input.recall)) {
+      throw new Error(`recall in ${path} must be an object`);
+    }
+    output.recall = validateRecallConfig(input.recall as Record<string, unknown>, path);
+  }
   return output;
+}
+
+function validateRecallConfig(input: Record<string, unknown>, path: string): RecallConfigFile {
+  const result: RecallConfigFile = {};
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== "boolean") throw new Error(`recall.enabled in ${path} must be a boolean`);
+    result.enabled = input.enabled;
+  }
+  for (const key of ["l0Limit", "l1Limit", "l2Limit", "maxChars"] as const) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== "number") throw new Error(`recall.${key} in ${path} must be a number`);
+    result[key] = input[key];
+  }
+  return result;
 }
 
 async function readConfigFile(path: string): Promise<PartialWithOrigin | undefined> {
@@ -106,9 +133,30 @@ function mergeSource(target: MergedConfig, source: PartialWithOrigin): void {
   for (const [rawKey, value] of Object.entries(source.values)) {
     if (value === undefined) continue;
     const key = rawKey as ConfigKey;
-    Object.assign(target.values, { [key]: value });
+    if (key === "recall") {
+      target.values.recall = { ...target.values.recall, ...value };
+    } else {
+      Object.assign(target.values, { [key]: value });
+    }
     target.origins[key] = source.path;
   }
+}
+
+function resolveRecallOptions(value: RecallConfigFile | undefined, errors: string[]): RecallOptions {
+  const result: RecallOptions = { ...DEFAULT_RECALL, ...value };
+  for (const [key, limit] of Object.entries({
+    l0Limit: result.l0Limit,
+    l1Limit: result.l1Limit,
+    l2Limit: result.l2Limit,
+  })) {
+    if (!Number.isInteger(limit) || limit < 0 || limit > 20) {
+      errors.push(`recall.${key} must be an integer between 0 and 20`);
+    }
+  }
+  if (!Number.isInteger(result.maxChars) || result.maxChars < 1_000 || result.maxChars > 48_000) {
+    errors.push("recall.maxChars must be an integer between 1000 and 48000");
+  }
+  return result;
 }
 
 function applyEnv(target: MergedConfig, env: NodeJS.ProcessEnv): string[] {
@@ -195,6 +243,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
     const errors = applyEnv(merged, env);
     const values = merged.values;
     const sourcePaths = sources.map((source) => source.path);
+    const recall = resolveRecallOptions(values.recall, errors);
 
     if (values.schemaVersion !== 1) errors.push("schemaVersion must be 1");
     if (values.enabled === false && errors.length === 0) {
@@ -282,6 +331,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
       gatewayApiKey,
       timeoutMs,
       rejectUnauthorized: values.rejectUnauthorized ?? true,
+      recall,
       sources: sourcePaths,
       userKeySource,
       gatewayApiKeySource,

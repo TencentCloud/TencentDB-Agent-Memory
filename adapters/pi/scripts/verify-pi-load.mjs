@@ -4,17 +4,17 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const adapterRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const piBinary = join(adapterRoot, "node_modules", ".bin", process.platform === "win32" ? "pi.cmd" : "pi");
+const piEntry = join(adapterRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
 
-if (!existsSync(piBinary)) {
+if (!existsSync(piEntry)) {
   console.error("Pi development dependency is missing. Run npm ci first.");
   process.exit(1);
 }
 
 const piArgs = ["--mode", "rpc", "--no-session", "--offline", "--no-extensions", "-e", adapterRoot];
 const child = spawn(
-  process.platform === "win32" ? process.env.ComSpec ?? "cmd.exe" : piBinary,
-  process.platform === "win32" ? ["/d", "/s", "/c", "call", piBinary, ...piArgs] : piArgs,
+  process.execPath,
+  [piEntry, ...piArgs],
   { cwd: adapterRoot, stdio: ["pipe", "pipe", "pipe"] },
 );
 
