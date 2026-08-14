@@ -18,8 +18,10 @@
   },
   "files": [
     "src",
+    "e2e",
     "README.md",
     "README_CN.md",
+    "E2E.md",
     "CHANGELOG.md"
   ],
   "pi": {

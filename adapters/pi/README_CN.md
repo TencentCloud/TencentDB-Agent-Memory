@@ -91,6 +91,10 @@ src/
 test/          vitest 单元 + 真实 HTTP 契约测试
 ```
 
+## 验证
+
+- [Pi + MemoryCore E2E 记录](./E2E.md) 记录了一轮真实 Pi `0.84.1` + MemoryCore standalone 离线恢复验证，包括 pending marker 重放，以及 Gateway 恢复后的 L0/Skill 写入确认。
+
 ## 故障排查
 
 - **`TencentDB memory is disabled: ...`** — 缺少必填变量；适配器以惰性模式运行，仅保留 `/tdai-memory-status`。

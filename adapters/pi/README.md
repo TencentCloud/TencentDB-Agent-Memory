@@ -91,6 +91,10 @@ src/
 test/          vitest unit + real-HTTP contract tests
 ```
 
+## Validation
+
+- [Pi + MemoryCore E2E evidence](./E2E.md) records a real Pi `0.84.1` + MemoryCore standalone offline-recovery run, including pending marker replay and verified L0/Skill writes after Gateway recovery.
+
 ## Troubleshooting
 
 - **`TencentDB memory is disabled: ...`** — a required variable is missing; the adapter runs inert with only `/tdai-memory-status`.
