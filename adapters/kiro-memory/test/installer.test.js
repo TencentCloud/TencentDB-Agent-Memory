@@ -135,6 +135,34 @@ test('concurrent identical installs both succeed and leave a complete v1 hook', 
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
+test('installer refuses an existing different receipt without overwriting it', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-receipt-conflict-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    await installProject({ project, env });
+    const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
+    const userReceipt = '{"owned":"by-user"}\n';
+    await writeFile(receiptPath, userReceipt);
+    await assert.rejects(installProject({ project, env }), /conflict/);
+    assert.equal(await readFile(receiptPath, 'utf8'), userReceipt);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('barriered concurrent installs publish one identical receipt without rename races', async () => {
+  for (let index = 0; index < 50; index += 1) {
+    const project = await mkdtemp(join(tmpdir(), 'kiro-receipt-race-'));
+    try {
+      const env = safeEnv(join(project, 'state'));
+      let arrived = 0; let release;
+      const barrier = new Promise((resolve) => { release = resolve; });
+      const afterHookPublished = async () => { arrived += 1; if (arrived === 2) release(); await barrier; };
+      await Promise.all([installProject({ project, env, afterHookPublished }), installProject({ project, env, afterHookPublished })]);
+      const receipt = JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'));
+      assert.equal(receipt.version, 1);
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
+});
+
 test('installer and doctor use safe failure output for missing configuration', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro-missing-config-'));
   try {
