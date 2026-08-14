@@ -60,6 +60,25 @@ export interface CaptureResponse {
 }
 
 // ============================
+// /memories/explicit
+// ============================
+
+export interface ExplicitMemoryWriteRequest {
+  action: string;
+  target: string;
+  content: string;
+  session_key: string;
+  session_id?: string;
+  user_id?: string;
+}
+
+export interface ExplicitMemoryWriteResponse {
+  stored: boolean;
+  memory_id?: string;
+  type?: string;
+}
+
+// ============================
 // /search/memories
 // ============================
 
