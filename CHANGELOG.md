@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 🐛 Bug 修复
+
+- **Checkpoint 计数器漂移** ([#157](https://github.com/Tencent/TencentDB-Agent-Memory/issues/157))：`total_memories_extracted`、`l0_conversations_count`、`total_processed`、`memories_since_last_persona` 四个全局计数器只增不减，`memory-cleaner` 清理或人工修剪 JSONL 后永久高估实际数据。新增 `CheckpointManager.recalibrate()`，在 Gateway 启动时用真实数据（L0/L1 JSONL 行数、store `countL0()`）重算这四个计数器，纠正漂移。其中 `memories_since_last_persona` 校准后不再虚高误触发 persona 生成。增量提取门控使用 per-session 游标，不读这些全局计数器，故不会因漂移跳过记录。
+
 ### ✨ 新功能
 
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
