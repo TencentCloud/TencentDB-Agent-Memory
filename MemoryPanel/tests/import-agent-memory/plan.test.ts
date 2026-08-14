@@ -23,24 +23,28 @@ describe('multi-source ImportPlan v1', () => {
     const documents: MemoryDocument[] = [
       {
         source: 'codex',
+        sourceKey: 'codex/memory_summary.md',
         sourceLabel: 'memory_summary.md',
         content: 'v1\n\n## Profile\nFact A\n\n## Preferences\nFact B',
         split: 'h2',
       },
       {
         source: 'codex',
+        sourceKey: 'codex/MEMORY.md',
         sourceLabel: 'MEMORY.md',
         content: '# Task Group: Alpha\nKnowledge A',
         split: 'codex-task-group',
       },
       {
         source: 'workbuddy',
+        sourceKey: 'workbuddy/workspace/demo/memory/2026-08-14.md',
         sourceLabel: 'workspace/demo/memory/2026-08-14.md',
         content: '# Work log\n\n## Topic\nConclusion',
         split: 'h2',
       },
       {
         source: 'claude',
+        sourceKey: 'claude/project-demo/debugging.md',
         sourceLabel: 'project-demo/debugging.md',
         content: '# Debugging\nUse pnpm for this project.',
         split: 'h2',
@@ -70,6 +74,7 @@ describe('multi-source ImportPlan v1', () => {
     const payload = 'x'.repeat(MAX_MESSAGE_CHARS * 2);
     const plan = buildImportPlan([{
       source: 'claude',
+      sourceKey: 'claude/project-demo/large.md',
       sourceLabel: 'project-demo/large.md',
       content: payload,
       split: 'h2',
@@ -93,6 +98,7 @@ describe('multi-source ImportPlan v1', () => {
     const content = 'x'.repeat(MAX_MESSAGE_CHARS * 101);
     const plan = buildImportPlan([{
       source: 'workbuddy',
+      sourceKey: 'workbuddy/workspace/demo/memory/log.md',
       sourceLabel: 'workspace/demo/memory/log.md',
       content,
       split: 'h2',
@@ -127,6 +133,7 @@ describe('multi-source ImportPlan v1', () => {
   it('keeps session ids deterministic without embedding source filesystem paths', () => {
     const document: MemoryDocument = {
       source: 'workbuddy',
+      sourceKey: 'workbuddy/workspace/demo/MEMORY.md',
       sourceLabel: 'workspace/demo/MEMORY.md',
       content: '## Stable\nFact',
       split: 'h2',
@@ -140,12 +147,14 @@ describe('multi-source ImportPlan v1', () => {
   it('reimports only a changed H2 section', () => {
     const original = buildImportPlan([{
       source: 'codex',
+      sourceKey: 'codex/memory_summary.md',
       sourceLabel: 'memory_summary.md',
       content: 'v1\n\n## Profile\nFact A\n\n## Preferences\nFact B',
       split: 'h2',
     }]);
     const changed = buildImportPlan([{
       source: 'codex',
+      sourceKey: 'codex/memory_summary.md',
       sourceLabel: 'memory_summary.md',
       content: 'v1\n\n## Profile\nFact A\n\n## Preferences\nFact C',
       split: 'h2',
@@ -156,6 +165,37 @@ describe('multi-source ImportPlan v1', () => {
     );
     expect(changed.sessions[0]?.messages).toEqual(original.sessions[0]?.messages);
     expect(changed.sessions[1]?.messages).not.toEqual(original.sessions[1]?.messages);
+  });
+
+  it('gives repeated identical headings distinct block identities', () => {
+    const plan = buildImportPlan([{
+      source: 'codex',
+      sourceKey: 'codex/memory_summary.md',
+      sourceLabel: 'memory_summary.md',
+      content: '## Repeated\nSame fact\n\n## Repeated\nSame fact',
+      split: 'h2',
+    }]);
+
+    expect(plan.sessions).toHaveLength(2);
+    expect(plan.sessions[0]?.session_id).not.toBe(plan.sessions[1]?.session_id);
+    expect(plan.sessions[1]?.source_label).toBe('memory_summary.md#Repeated [2]');
+  });
+
+  it('uses one independently resumable session per H2 section', () => {
+    const content = Array.from(
+      { length: 101 },
+      (_, index) => `## Topic ${index}\nFact ${index}`,
+    ).join('\n\n');
+    const plan = buildImportPlan([{
+      source: 'workbuddy',
+      sourceKey: 'workbuddy/workspace/demo/memory/log.md',
+      sourceLabel: 'workspace/demo/memory/log.md',
+      content,
+      split: 'h2',
+    }]);
+
+    expect(plan.sessions).toHaveLength(101);
+    expect(plan.sessions.every((session) => session.messages.length === 1)).toBe(true);
   });
 });
 
@@ -228,7 +268,7 @@ describe('source scanners', () => {
       await writeFile(join(memory, 'MEMORY.md'), '## Default\nStill scanned');
 
       const result = await scanClaude(root);
-      expect(result.documents.map((document) => document.sourceLabel)).toEqual(['project-1/MEMORY.md']);
+      expect(result.documents.map((document) => document.sourceLabel)).toEqual(['project/MEMORY.md']);
       expect(result.reports[0]?.notes).toContain(
         'settings.json is invalid JSON; scanning default project memories instead',
       );
@@ -253,6 +293,55 @@ describe('source scanners', () => {
       const result = await scanCodex(root);
       expect(result.documents.map((document) => document.sourceLabel)).toEqual(['memory_summary.md']);
       expect(JSON.stringify(result.documents)).not.toMatch(/PRIVATE RAW|PRIVATE ROLLOUT|PRIVATE AD HOC|PRIVATE DATABASE/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps Claude project identities stable when an earlier project is added', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'claude-stable-identity-'));
+    try {
+      for (const project of ['b', 'c']) {
+        const memory = join(root, 'projects', project, 'memory');
+        await mkdir(memory, { recursive: true });
+        await writeFile(join(memory, 'MEMORY.md'), `Project ${project.toUpperCase()}`);
+      }
+      const before = buildImportPlan((await scanClaude(root)).documents);
+      const beforeB = before.sessions.find((session) => session.messages[0]?.content.includes('Project B'));
+
+      const earlier = join(root, 'projects', 'a', 'memory');
+      await mkdir(earlier, { recursive: true });
+      await writeFile(join(earlier, 'MEMORY.md'), 'Project A');
+      const after = buildImportPlan((await scanClaude(root)).documents);
+      const afterB = after.sessions.find((session) => session.messages[0]?.content.includes('Project B'));
+
+      expect(afterB?.session_id).toBe(beforeB?.session_id);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps same-name WorkBuddy workspace identities stable when argument order changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workbuddy-stable-identity-'));
+    const first = join(root, 'one', 'repo');
+    const second = join(root, 'two', 'repo');
+    const home = join(root, 'home');
+    try {
+      await mkdir(join(first, '.workbuddy', 'memory'), { recursive: true });
+      await mkdir(join(second, '.workbuddy', 'memory'), { recursive: true });
+      await mkdir(home);
+      await writeFile(join(first, '.workbuddy', 'memory', 'MEMORY.md'), 'Workspace One');
+      await writeFile(join(second, '.workbuddy', 'memory', 'MEMORY.md'), 'Workspace Two');
+
+      const forward = buildImportPlan((await scanWorkBuddy(home, [first, second])).documents);
+      const reverse = buildImportPlan((await scanWorkBuddy(home, [second, first])).documents);
+      const sessionFor = (plan: ReturnType<typeof buildImportPlan>, marker: string) => (
+        plan.sessions.find((session) => session.messages[0]?.content.includes(marker))?.session_id
+      );
+
+      expect(sessionFor(reverse, 'Workspace One')).toBe(sessionFor(forward, 'Workspace One'));
+      expect(sessionFor(reverse, 'Workspace Two')).toBe(sessionFor(forward, 'Workspace Two'));
+      expect(JSON.stringify(forward)).not.toContain(root);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

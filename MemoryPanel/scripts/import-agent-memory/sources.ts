@@ -1,4 +1,5 @@
 import { readFile, readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { MemoryDocument, MemorySource } from './plan.js';
@@ -40,16 +41,22 @@ async function markdownFiles(path: string): Promise<string[]> {
 async function documentsFromDirectory(
   path: string,
   source: MemorySource,
+  sourceKeyPrefix: string,
   labelPrefix: string,
 ): Promise<MemoryDocument[]> {
   const names = await markdownFiles(path);
   const documents = await Promise.all(names.map(async (name) => ({
     source,
+    sourceKey: `${sourceKeyPrefix}/${name}`,
     sourceLabel: `${labelPrefix}/${name}`,
     content: await readFile(join(path, name), 'utf8'),
     split: 'h2' as const,
   })));
   return documents.filter((document) => document.content.trim());
+}
+
+function privateSourceKey(kind: string, location: string): string {
+  return `${kind}:${createHash('sha256').update(location).digest('hex')}`;
 }
 
 export async function scanCodex(codexHome: string): Promise<ScanResult> {
@@ -60,10 +67,22 @@ export async function scanCodex(codexHome: string): Promise<ScanResult> {
   ]);
   const documents: MemoryDocument[] = [];
   if (summary) {
-    documents.push({ source: 'codex', sourceLabel: 'memory_summary.md', content: summary, split: 'h2' });
+    documents.push({
+      source: 'codex',
+      sourceKey: 'codex/memory_summary.md',
+      sourceLabel: 'memory_summary.md',
+      content: summary,
+      split: 'h2',
+    });
   }
   if (memory) {
-    documents.push({ source: 'codex', sourceLabel: 'MEMORY.md', content: memory, split: 'codex-task-group' });
+    documents.push({
+      source: 'codex',
+      sourceKey: 'codex/MEMORY.md',
+      sourceLabel: 'MEMORY.md',
+      content: memory,
+      split: 'codex-task-group',
+    });
   }
   return {
     documents,
@@ -89,6 +108,7 @@ export async function scanWorkBuddy(
   if (userMemory) {
     documents.push({
       source: 'workbuddy',
+      sourceKey: 'workbuddy/user/MEMORY.md',
       sourceLabel: 'user/MEMORY.md',
       content: userMemory,
       split: 'h2',
@@ -100,16 +120,13 @@ export async function scanWorkBuddy(
 
   let locations = userMemory ? 1 : 0;
   const resolvedWorkspaces = [...new Set(workspaces.map((path) => resolve(path)))];
-  const nameCounts = new Map<string, number>();
   for (const workspace of resolvedWorkspaces) {
     const shortName = basename(workspace).replace(/[^a-zA-Z0-9._-]+/g, '-') || 'workspace';
-    const occurrence = (nameCounts.get(shortName) ?? 0) + 1;
-    nameCounts.set(shortName, occurrence);
-    const label = `workspace/${shortName}${occurrence > 1 ? `-${occurrence}` : ''}`;
     const found = await documentsFromDirectory(
       join(workspace, '.workbuddy', 'memory'),
       'workbuddy',
-      label,
+      privateSourceKey('workbuddy-workspace', workspace),
+      `workspace/${shortName}`,
     );
     if (found.length) locations += 1;
     documents.push(...found);
@@ -149,7 +166,12 @@ export async function scanClaude(claudeHome: string): Promise<ScanResult> {
   }
 
   if (customDirectory) {
-    const documents = await documentsFromDirectory(customDirectory, 'claude', 'custom');
+    const documents = await documentsFromDirectory(
+      customDirectory,
+      'claude',
+      privateSourceKey('claude-custom', customDirectory),
+      'custom',
+    );
     notes.push('user autoMemoryDirectory checked');
     return {
       documents,
@@ -170,11 +192,12 @@ export async function scanClaude(claudeHome: string): Promise<ScanResult> {
 
   const documents: MemoryDocument[] = [];
   let locations = 0;
-  for (const [index, projectDirectory] of projectDirectories.entries()) {
+  for (const projectDirectory of projectDirectories) {
     const found = await documentsFromDirectory(
       join(root, 'projects', projectDirectory, 'memory'),
       'claude',
-      `project-${index + 1}`,
+      privateSourceKey('claude-project', projectDirectory),
+      'project',
     );
     if (found.length) locations += 1;
     documents.push(...found);

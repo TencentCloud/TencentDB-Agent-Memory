@@ -7,6 +7,8 @@ export type DocumentSplit = 'h2' | 'codex-task-group';
 
 export interface MemoryDocument {
   source: MemorySource;
+  /** Stable scanner identity. It is never included in imported memory text. */
+  sourceKey: string;
   sourceLabel: string;
   content: string;
   split: DocumentSplit;
@@ -37,6 +39,7 @@ export interface ImportCheckpointV1 {
 
 interface SourceBlock {
   source: MemorySource;
+  sourceKey: string;
   sourceLabel: string;
   content: string;
 }
@@ -61,7 +64,8 @@ function splitDocument(document: MemoryDocument): SourceBlock[] {
   const lines = document.content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n');
   const blocks: SourceBlock[] = [];
   let preamble: string[] = [];
-  let current: { title: string; lines: string[] } | undefined;
+  let current: { title: string; occurrence: number; lines: string[] } | undefined;
+  const headingOccurrences = new Map<string, number>();
 
   const flush = () => {
     if (!current) return;
@@ -69,7 +73,9 @@ function splitDocument(document: MemoryDocument): SourceBlock[] {
     if (content) {
       blocks.push({
         source: document.source,
-        sourceLabel: `${document.sourceLabel}#${current.title}`,
+        sourceKey: `${document.sourceKey}\0${current.title}\0${current.occurrence}`,
+        sourceLabel: `${document.sourceLabel}#${current.title}`
+          + (current.occurrence > 1 ? ` [${current.occurrence}]` : ''),
         content,
       });
     }
@@ -84,8 +90,12 @@ function splitDocument(document: MemoryDocument): SourceBlock[] {
     }
     flush();
     const prefix = preamble.join('\n').trim();
+    const title = match[1]?.trim() || 'untitled';
+    const occurrence = (headingOccurrences.get(title) ?? 0) + 1;
+    headingOccurrences.set(title, occurrence);
     current = {
-      title: match[1]?.trim() || 'untitled',
+      title,
+      occurrence,
       lines: prefix ? [prefix, '', line] : [line],
     };
     preamble = [];
@@ -95,7 +105,12 @@ function splitDocument(document: MemoryDocument): SourceBlock[] {
   if (blocks.length === 0) {
     const content = preamble.join('\n').trim();
     if (content) {
-      blocks.push({ source: document.source, sourceLabel: document.sourceLabel, content });
+      blocks.push({
+        source: document.source,
+        sourceKey: document.sourceKey,
+        sourceLabel: document.sourceLabel,
+        content,
+      });
     }
   }
   return blocks;
@@ -159,7 +174,7 @@ export function buildImportPlan(documents: MemoryDocument[]): ImportPlanV1 {
     source: block.source,
     // Keep a section's session stable when its body changes. The checkpoint key
     // still includes the body, so only the changed section is imported again.
-    session_id: `import-${block.source}-${stableHash(block.sourceLabel)}`,
+    session_id: `import-${block.source}-${stableHash(block.sourceKey)}`,
     source_label: block.sourceLabel,
     messages: messagesFor(block),
   })));
