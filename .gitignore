@@ -16,6 +16,13 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Python environments and package output
+.venv/
+venv/
+pydantic-ai-plugin/build/
+pydantic-ai-plugin/dist/
+pydantic-ai-plugin/*.egg-info/
+
 # Migration build output
 scripts/export-tencent-vdb/dist/
 scripts/migrate-sqlite-to-tcvdb/dist/
