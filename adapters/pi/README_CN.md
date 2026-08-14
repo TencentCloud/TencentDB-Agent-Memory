@@ -54,12 +54,9 @@ pi list
 
 ## 配置
 
-复制 [`tdai-memory.example.json`](./tdai-memory.example.json)，放到以下其一：
+复制 [`tdai-memory.example.json`](./tdai-memory.example.json) 到全局位置：`~/.pi/agent/tdai-memory.json`（Windows 即 `%USERPROFILE%\.pi\agent\tdai-memory.json`）。环境变量覆盖全局配置。不要提交密钥文件，也不要把真实 ID、密钥直接写进仓库。
 
-- 全局：`~/.pi/agent/tdai-memory.json`（Windows 即 `%USERPROFILE%\.pi\agent\tdai-memory.json`）
-- 可信项目：`<项目目录>/.pi/tdai-memory.json`
-
-项目配置覆盖全局配置；环境变量覆盖两者。不要提交密钥文件，也不要把真实 ID、密钥直接写进仓库。
+适配器默认忽略 `<项目目录>/.pi/tdai-memory.json`。只有全局配置显式设置 `"allowProjectConfig": true` 后，可信项目才可以提供配置，并且项目文件**只能**包含 `recall` 对象；它不能覆盖 endpoint、Team/Agent/User 身份、密钥文件路径、TLS 设置或 `captureTools`。
 
 将 User Key 单独放在普通文本文件中，再用绝对路径引用。Windows 最小示例：
 
@@ -73,13 +70,14 @@ pi list
   "agentId": "agt-...",
   "userId": "usr-...",
   "userKeyFile": "C:\\Users\\you\\.secrets\\tdai-user-key",
+  "allowProjectConfig": false,
   "captureTools": false,
   "timeoutMs": 3000,
   "rejectUnauthorized": true
 }
 ```
 
-远程服务必须使用 HTTPS。也可以用 `TDAI_MEMORY_USER_KEY` 提供密钥；如果没有单独设置 `TDAI_MEMORY_GATEWAY_API_KEY`，会安全地复用 User Key 作为 Gateway Bearer。其他覆盖变量：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_SERVICE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_TIMEOUT_MS`、`TDAI_MEMORY_REJECT_UNAUTHORIZED`。
+远程服务必须使用操作系统信任证书的 HTTPS。也可以用 `TDAI_MEMORY_USER_KEY` 提供密钥；如果没有单独设置 `TDAI_MEMORY_GATEWAY_API_KEY`，会安全地复用 User Key 作为 Gateway Bearer。其他覆盖变量：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_SERVICE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_TIMEOUT_MS`。适配器故意不支持关闭 TLS 证书校验。
 
 ## 验证效果
 
@@ -133,4 +131,4 @@ npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
 
 - User Key 等同密码，不能贴到 issue、聊天记录、提交的 JSON 或截图中。
 - Team、Agent、User 一起决定数据范围；实验请使用单独 Agent。
-- `rejectUnauthorized: false` 只适合受控开发证书，远程环境不要关闭证书校验。
+- TLS 证书校验不能关闭。本地开发请使用 loopback HTTP；HTTPS 请安装受信任证书。

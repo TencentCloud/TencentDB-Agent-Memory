@@ -7,6 +7,7 @@ const CONFIG_FILE_NAME = "tdai-memory.json";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8420";
 const DEFAULT_SERVICE_ID = "default";
 const DEFAULT_TIMEOUT_MS = 3000;
+const MAX_SECRET_FILE_BYTES = 16 * 1024;
 const DEFAULT_RECALL: RecallOptions = {
   enabled: true,
   deadlineMs: 3_000,
@@ -27,6 +28,7 @@ export interface LoadConfigOptions {
 interface PartialWithOrigin {
   values: AdapterConfigFile;
   path: string;
+  scope: "global" | "project";
 }
 
 type ConfigKey = keyof AdapterConfigFile;
@@ -51,7 +53,7 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
     if (typeof candidate !== "number") throw new Error(`${key} in ${path} must be a number`);
     output[key] = candidate;
   };
-  const assignBoolean = (key: "enabled" | "rejectUnauthorized" | "captureTools") => {
+  const assignBoolean = (key: "enabled" | "rejectUnauthorized" | "captureTools" | "allowProjectConfig") => {
     const candidate = input[key];
     if (candidate === undefined) return;
     if (typeof candidate !== "boolean") throw new Error(`${key} in ${path} must be a boolean`);
@@ -71,6 +73,7 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
   assignBoolean("enabled");
   assignBoolean("rejectUnauthorized");
   assignBoolean("captureTools");
+  assignBoolean("allowProjectConfig");
   assignString("endpoint");
   assignString("serviceId");
   assignString("teamId");
@@ -101,14 +104,14 @@ function validateRecallConfig(input: Record<string, unknown>, path: string): Rec
   return result;
 }
 
-async function readConfigFile(path: string): Promise<PartialWithOrigin | undefined> {
+async function readConfigFile(path: string, scope: PartialWithOrigin["scope"]): Promise<PartialWithOrigin | undefined> {
   try {
     const text = await readFile(path, "utf8");
     const parsed: unknown = JSON.parse(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("configuration root must be a JSON object");
     }
-    return { values: validateConfigObject(parsed, path), path };
+    return { values: validateConfigObject(parsed, path), path, scope };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return undefined;
@@ -126,6 +129,9 @@ async function readSecretFile(path: string, label: string): Promise<string> {
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error(`${label} must be a regular file, not a directory or symbolic link`);
   }
+  if (info.size > MAX_SECRET_FILE_BYTES) {
+    throw new Error(`${label} must not exceed ${MAX_SECRET_FILE_BYTES} bytes`);
+  }
   const value = (await readFile(path, "utf8")).trim();
   if (!value) throw new Error(`${label} is empty`);
   return value;
@@ -141,6 +147,23 @@ function mergeSource(target: MergedConfig, source: PartialWithOrigin): void {
       Object.assign(target.values, { [key]: value });
     }
     target.origins[key] = source.path;
+  }
+}
+
+/**
+ * Pi does not ask for trust merely because a repository contains an arbitrary
+ * `.pi/*.json` file. Treat this adapter's project file as untrusted unless the
+ * user opted in from their global config, and keep that opt-in deliberately
+ * narrow: project authors may tune recall only, never route credentials.
+ */
+function mergeProjectRecallOnly(target: MergedConfig, source: PartialWithOrigin, errors: string[]): void {
+  const unsupported = Object.keys(source.values).filter((key) => key !== "recall");
+  if (unsupported.length > 0) {
+    errors.push(`project configuration may only set recall (unsupported: ${unsupported.sort().join(", ")})`);
+  }
+  if (source.values.recall !== undefined) {
+    target.values.recall = { ...target.values.recall, ...source.values.recall };
+    target.origins.recall = source.path;
   }
 }
 
@@ -224,14 +247,8 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
   const sources: PartialWithOrigin[] = [];
   try {
     const globalPath = join(options.agentDir ?? getAgentDir(), CONFIG_FILE_NAME);
-    const globalConfig = await readConfigFile(globalPath);
+    const globalConfig = await readConfigFile(globalPath, "global");
     if (globalConfig) sources.push(globalConfig);
-
-    if (options.projectTrusted) {
-      const projectPath = join(options.cwd, options.configDirName ?? CONFIG_DIR_NAME, CONFIG_FILE_NAME);
-      const projectConfig = await readConfigFile(projectPath);
-      if (projectConfig) sources.push(projectConfig);
-    }
 
     const merged: MergedConfig = {
       values: {
@@ -245,8 +262,21 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
       },
       origins: {},
     };
-    for (const source of sources) mergeSource(merged, source);
-    const errors = applyEnv(merged, env);
+    if (globalConfig) mergeSource(merged, globalConfig);
+    const errors: string[] = [];
+
+    // `ctx.isProjectTrusted()` alone is insufficient for this custom file:
+    // Pi treats a bare `.pi/tdai-memory.json` as non-trust-requiring. A global
+    // configuration must explicitly opt in before we even parse project data.
+    if (options.projectTrusted && globalConfig?.values.allowProjectConfig === true) {
+      const projectPath = join(options.cwd, options.configDirName ?? CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+      const projectConfig = await readConfigFile(projectPath, "project");
+      if (projectConfig) {
+        sources.push(projectConfig);
+        mergeProjectRecallOnly(merged, projectConfig, errors);
+      }
+    }
+    errors.push(...applyEnv(merged, env));
     const values = merged.values;
     const sourcePaths = sources.map((source) => source.path);
     const recall = resolveRecallOptions(values.recall, errors);
@@ -262,6 +292,12 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
     const timeoutMs = values.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30_000) {
       errors.push("timeoutMs must be between 1 and 30000");
+    }
+    if (values.rejectUnauthorized === false) {
+      // The SDK may disable TLS verification process-wide when this is false.
+      // Local deployments can use loopback HTTP; remote deployments need a
+      // certificate trusted by the operating system.
+      errors.push("rejectUnauthorized=false is not supported; use a trusted TLS certificate");
     }
 
     const serviceId = nonEmpty(values.serviceId) ?? DEFAULT_SERVICE_ID;

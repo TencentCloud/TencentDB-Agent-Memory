@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("loadConfig", () => {
-  it("merges trusted project config while resolving a global key file against its declaring file", async () => {
+  it("allows an explicitly opted-in project to tune recall while retaining the global identity", async () => {
     const { agentDir, cwd } = await fixture();
     await writeFile(join(agentDir, "admin.key"), "sk-mem-test-key\n");
     await writeFile(
@@ -32,19 +32,64 @@ describe("loadConfig", () => {
         agentId: "agt-global",
         userId: "usr-global",
         userKeyFile: "./admin.key",
+        allowProjectConfig: true,
       }),
     );
-    await writeFile(join(cwd, ".pi", "tdai-memory.json"), JSON.stringify({ teamId: "team-project" }));
+    await writeFile(join(cwd, ".pi", "tdai-memory.json"), JSON.stringify({ recall: { l0Limit: 2 } }));
 
     const result = await loadConfig({ cwd, agentDir, projectTrusted: true, env: {} });
 
     expect(result.ok).toBe(true);
     if (!result.ok || !result.config.enabled) return;
-    expect(result.config.teamId).toBe("team-project");
+    expect(result.config.teamId).toBe("team-global");
     expect(result.config.agentId).toBe("agt-global");
+    expect(result.config.recall.l0Limit).toBe(2);
     expect(result.config.userKey).toBe("sk-mem-test-key");
     expect(result.config.userKeySource).toBe("key file");
     expect(result.config.gatewayApiKey).toBe("sk-mem-test-key");
+  });
+
+  it("does not load a repository Memory config unless the global config explicitly allows it", async () => {
+    const { agentDir, cwd } = await fixture();
+    await writeFile(
+      join(agentDir, "tdai-memory.json"),
+      JSON.stringify({ teamId: "team-global", agentId: "agt-global", userId: "usr-global" }),
+    );
+    await writeFile(
+      join(cwd, ".pi", "tdai-memory.json"),
+      JSON.stringify({ endpoint: "https://untrusted.example", userKeyFile: "C:\\Windows\\win.ini", rejectUnauthorized: false }),
+    );
+
+    const result = await loadConfig({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+      env: { TDAI_MEMORY_USER_KEY: "test-key" },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.config.enabled) return;
+    expect(result.config.endpoint).toBe("http://127.0.0.1:8420");
+    expect(result.config.userKey).toBe("test-key");
+    expect(result.config.sources).toEqual([join(agentDir, "tdai-memory.json")]);
+  });
+
+  it("rejects security-sensitive project fields even after the user opts in", async () => {
+    const { agentDir, cwd } = await fixture();
+    await writeFile(
+      join(agentDir, "tdai-memory.json"),
+      JSON.stringify({ teamId: "team", agentId: "agent", userId: "user", allowProjectConfig: true }),
+    );
+    await writeFile(
+      join(cwd, ".pi", "tdai-memory.json"),
+      JSON.stringify({ endpoint: "https://untrusted.example", captureTools: true, recall: { l1Limit: 2 } }),
+    );
+
+    const result = await loadConfig({ cwd, agentDir, projectTrusted: true, env: { TDAI_MEMORY_USER_KEY: "test-key" } });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("project configuration may only set recall (unsupported: captureTools, endpoint)");
   });
 
   it("ignores project configuration before project trust is granted", async () => {
@@ -158,6 +203,26 @@ describe("loadConfig", () => {
     expect(result.errors).toContain(expected);
   });
 
+  it("never permits disabled TLS verification", async () => {
+    const { agentDir, cwd } = await fixture();
+    const result = await loadConfig({
+      cwd,
+      agentDir,
+      projectTrusted: false,
+      env: {
+        TDAI_MEMORY_ENDPOINT: "https://memory.example",
+        TDAI_MEMORY_TEAM_ID: "team",
+        TDAI_MEMORY_AGENT_ID: "agent",
+        TDAI_MEMORY_USER_ID: "user",
+        TDAI_MEMORY_USER_KEY: "key",
+        TDAI_MEMORY_REJECT_UNAUTHORIZED: "false",
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("rejectUnauthorized=false is not supported; use a trusted TLS certificate");
+  });
+
   it("rejects invalid environment booleans and pipe-delimited isolation ids", async () => {
     const { agentDir, cwd } = await fixture();
     const result = await loadConfig({
@@ -199,5 +264,18 @@ describe("loadConfig", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors).toContain("user key file must be a regular file, not a directory or symbolic link");
+  });
+
+  it("rejects unexpectedly large key files", async () => {
+    const { agentDir, cwd } = await fixture();
+    await writeFile(join(agentDir, "too-large.key"), "x".repeat(16 * 1024 + 1));
+    await writeFile(
+      join(agentDir, "tdai-memory.json"),
+      JSON.stringify({ teamId: "team", agentId: "agent", userId: "user", userKeyFile: "too-large.key" }),
+    );
+    const result = await loadConfig({ cwd, agentDir, projectTrusted: false, env: {} });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toContain("user key file must not exceed 16384 bytes");
   });
 });

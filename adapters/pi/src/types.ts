@@ -8,6 +8,8 @@ export interface AdapterConfigFile {
   userId?: string;
   userKeyFile?: string;
   gatewayApiKeyFile?: string;
+  /** Global-only opt-in for the constrained project recall override. */
+  allowProjectConfig?: boolean;
   timeoutMs?: number;
   rejectUnauthorized?: boolean;
   captureTools?: boolean;

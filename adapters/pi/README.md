@@ -55,12 +55,9 @@ The package remains `private` during development and is therefore not yet an npm
 
 ## Configure it
 
-Copy [`tdai-memory.example.json`](./tdai-memory.example.json) to one of these locations:
+Copy [`tdai-memory.example.json`](./tdai-memory.example.json) to the global location: `~/.pi/agent/tdai-memory.json` (Windows: `%USERPROFILE%\.pi\agent\tdai-memory.json`). Environment variables override global values. Do not commit either a key file or a config file containing local IDs to source control.
 
-- Global: `~/.pi/agent/tdai-memory.json` (Windows: `%USERPROFILE%\.pi\agent\tdai-memory.json`)
-- Per trusted project: `<project>/.pi/tdai-memory.json`
-
-Project values override global values. Environment variables override both. Do not commit either a key file or a config file containing local IDs to source control.
+The adapter ignores `<project>/.pi/tdai-memory.json` by default. If the global file explicitly sets `"allowProjectConfig": true`, a trusted project file may contain **only** the `recall` object. It cannot override an endpoint, any Team/Agent/User identity, key-file path, TLS setting, or `captureTools`.
 
 Put the User Key in a separate regular text file, then refer to it by absolute path. A minimal Windows configuration:
 
@@ -74,13 +71,14 @@ Put the User Key in a separate regular text file, then refer to it by absolute p
   "agentId": "agt-...",
   "userId": "usr-...",
   "userKeyFile": "C:\\Users\\you\\.secrets\\tdai-user-key",
+  "allowProjectConfig": false,
   "captureTools": false,
   "timeoutMs": 3000,
   "rejectUnauthorized": true
 }
 ```
 
-For a remote endpoint, use HTTPS. You may instead provide `TDAI_MEMORY_USER_KEY`; `TDAI_MEMORY_GATEWAY_API_KEY` is optional and otherwise falls back to the User Key. Other supported overrides are `TDAI_MEMORY_ENDPOINT`, `TDAI_MEMORY_SERVICE_ID`, `TDAI_MEMORY_TEAM_ID`, `TDAI_MEMORY_AGENT_ID`, `TDAI_MEMORY_USER_ID`, `TDAI_MEMORY_TIMEOUT_MS`, and `TDAI_MEMORY_REJECT_UNAUTHORIZED`.
+For a remote endpoint, use HTTPS with a certificate trusted by the operating system. You may instead provide `TDAI_MEMORY_USER_KEY`; `TDAI_MEMORY_GATEWAY_API_KEY` is optional and otherwise falls back to the User Key. Other supported overrides are `TDAI_MEMORY_ENDPOINT`, `TDAI_MEMORY_SERVICE_ID`, `TDAI_MEMORY_TEAM_ID`, `TDAI_MEMORY_AGENT_ID`, `TDAI_MEMORY_USER_ID`, and `TDAI_MEMORY_TIMEOUT_MS`. Disabling TLS verification is intentionally unsupported.
 
 ## Verify
 
@@ -134,4 +132,4 @@ The command hard-fails if any layer is empty, the Pi hook does not contain all L
 
 - Treat a User Key as a password. Do not paste it into issues, chat logs, committed JSON, or screenshots.
 - Use a separate Agent for experiments; memory is scoped by Team, Agent, and User.
-- `rejectUnauthorized: false` is only for controlled development certificates and should not be used for a remote endpoint.
+- TLS verification cannot be disabled. Use loopback HTTP for local development, or install a trusted certificate for HTTPS.

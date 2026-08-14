@@ -191,10 +191,10 @@ adapters/pi/
 
 1. 安全默认值。
 2. 全局配置：`getAgentDir()/tdai-memory.json`。
-3. 受信任项目配置：`<cwd>/<CONFIG_DIR_NAME>/tdai-memory.json`。
+3. 只有用户在全局配置显式设置 `allowProjectConfig: true` 后，才考虑受信任项目配置：`<cwd>/<CONFIG_DIR_NAME>/tdai-memory.json`。
 4. 环境变量。
 
-读取项目配置前必须检查 `ctx.isProjectTrusted()`。未受信任项目不能通过本地文件替换 endpoint、身份或密钥文件路径。
+不能只依赖 `ctx.isProjectTrusted()`：Pi 的 bare `.pi/tdai-memory.json` 本身不一定触发信任提示。项目配置默认忽略；全局显式 opt-in 后仍只允许 `recall`，出现 endpoint、身份、密钥文件、TLS 或采集字段必须报错，不能静默覆盖全局安全边界。
 
 非密钥配置示例：
 
