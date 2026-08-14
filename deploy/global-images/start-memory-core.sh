@@ -3,7 +3,7 @@
 # 把生成的 user_key 持久化到 .admin-key 供 proxy / claude-code 使用。
 #
 # 用法：
-#   ./start-memory-core.sh
+#   ./start-memory-core.sh [--force-regenerate-config]
 #
 # 数据持久化到 named volume（默认 tdai-memory-core-data，可在 .env 改 MEMORY_CORE_VOLUME）。
 # 重复执行会先移除旧容器再启新的，volume 数据保留 —— admin user_key 也随之保留。
@@ -12,6 +12,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
+
+FORCE_REGENERATE_CONFIG=false
+case "$#" in
+  0) ;;
+  1)
+    case "$1" in
+      --force-regenerate-config) FORCE_REGENERATE_CONFIG=true ;;
+      *) die "用法：./start-memory-core.sh [--force-regenerate-config]" ;;
+    esac
+    ;;
+  *) die "用法：./start-memory-core.sh [--force-regenerate-config]" ;;
+esac
 
 load_env
 require_vars MEMORY_CORE_IMAGE MEMORY_CORE_PORT MEMORY_CORE_VOLUME
@@ -45,15 +57,36 @@ fi
 pull_image "$MEMORY_CORE_IMAGE"
 rm_container_if_exists "$CONTAINER"
 
-# ── 生成 gateway config.yaml，挂到容器 /data/config/tdai-gateway.yaml ──
+# ── 准备 gateway config.yaml，挂到容器 /data/config/tdai-gateway.yaml ──
 # 默认镜像里没 config，memory-core 走编译时的默认（skill / knowledge 模块关闭）。
-# 从 .env 里的 MEMORY_LLM_* 生成一份 standalone+skill 的最小配置。
+# 未指定外部配置时，仅在首次启动（或显式强制）从 .env 生成 standalone+skill 的最小配置。
 CORE_CONFIG_DIR="${MEMORY_CORE_CONFIG_DIR:-$SCRIPT_DIR/.memory-core-config}"
-mkdir -p "$CORE_CONFIG_DIR"
-CORE_CONFIG_FILE="$CORE_CONFIG_DIR/tdai-gateway.yaml"
-info "生成 gateway config → $CORE_CONFIG_FILE"
-cat > "$CORE_CONFIG_FILE" <<YAML
-# 由 start-memory-core.sh 自动生成 —— 每次启动覆盖，请不要手动改。
+DEFAULT_CORE_CONFIG_FILE="$CORE_CONFIG_DIR/tdai-gateway.yaml"
+
+if [[ -n "${MEMORY_CORE_CONFIG_FILE:-}" ]]; then
+  if [[ "$FORCE_REGENERATE_CONFIG" == true ]]; then
+    die "--force-regenerate-config 不能与 MEMORY_CORE_CONFIG_FILE 同时使用。"
+  fi
+  CORE_CONFIG_FILE="$MEMORY_CORE_CONFIG_FILE"
+  [[ -f "$CORE_CONFIG_FILE" ]] || die "MEMORY_CORE_CONFIG_FILE 不存在或不是普通文件：$CORE_CONFIG_FILE"
+  CORE_CONFIG_FILE="$(cd "$(dirname "$CORE_CONFIG_FILE")" && pwd)/$(basename "$CORE_CONFIG_FILE")"
+  info "复用外部 gateway config → $CORE_CONFIG_FILE"
+elif [[ -f "$DEFAULT_CORE_CONFIG_FILE" && "$FORCE_REGENERATE_CONFIG" == false ]]; then
+  CORE_CONFIG_FILE="$DEFAULT_CORE_CONFIG_FILE"
+  info "复用已有 gateway config → $CORE_CONFIG_FILE"
+else
+  mkdir -p "$CORE_CONFIG_DIR"
+  CORE_CONFIG_FILE="$DEFAULT_CORE_CONFIG_FILE"
+  if [[ "$FORCE_REGENERATE_CONFIG" == true ]]; then
+    info "显式重建 gateway config → $CORE_CONFIG_FILE"
+  else
+    info "首次生成 gateway config → $CORE_CONFIG_FILE"
+  fi
+  (
+    umask 077
+    cat > "$CORE_CONFIG_FILE" <<YAML
+# 由 start-memory-core.sh 在首次启动时生成。
+# 修改后会被后续启动复用；如需从 .env 重新生成，请传 --force-regenerate-config。
 deployMode: standalone
 stateBackend: local
 
@@ -120,6 +153,9 @@ skill:
   resources:
     maxResourceSizeBytes: 5000000
 YAML
+  )
+  chmod 600 "$CORE_CONFIG_FILE"
+fi
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
