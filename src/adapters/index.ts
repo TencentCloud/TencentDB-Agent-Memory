@@ -17,3 +17,7 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Codex MCP adapter
+export { CodexGatewayClient, GatewayClientError, createCodexMcpServer, registerCodexMemoryTools, runCodexMcpServer } from "./codex/index.js";
+export type { CodexGatewayClientOptions, CodexMemoryClient, ToolRegistrationTarget } from "./codex/index.js";
