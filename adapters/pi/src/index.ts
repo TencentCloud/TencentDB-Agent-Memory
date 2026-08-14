@@ -8,10 +8,36 @@ import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { runSetup } from "./setup.js";
 import { checkStatus, formatStatus } from "./status.js";
-import { conversationSearch, memorySearch } from "./tools.js";
+import {
+  conversationSearch,
+  MAX_SEARCH_LIMIT,
+  MAX_SEARCH_QUERY_CHARS,
+  MAX_SESSION_KEY_CHARS,
+  memorySearch,
+  memorySearchMessage,
+} from "./tools.js";
 import type { ConfigResult } from "./types.js";
 
 const STATUS_KEY = "tdai-memory";
+const MEMORY_SEARCH_TOOLS = new Set(["tdai_memory_search", "tdai_conversation_search"]);
+
+type TimedOutcome<T> = { ok: true; value: T } | { ok: false };
+
+async function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const guarded = work.then<TimedOutcome<T>, TimedOutcome<T>>(
+    (value) => ({ ok: true, value }),
+    () => ({ ok: false }),
+  );
+  const outcome = await Promise.race([
+    guarded,
+    new Promise<TimedOutcome<T>>((resolve) => {
+      timeoutHandle = setTimeout(() => resolve({ ok: false }), timeoutMs);
+    }),
+  ]);
+  if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  return outcome.ok ? outcome.value : undefined;
+}
 
 export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let currentConfig: ConfigResult | undefined;
@@ -21,23 +47,31 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let activeBranchId = "root";
   let memoryToolCallsThisTurn = 0;
 
-  const memoryUnavailable = () => ({ content: [{ type: "text" as const, text: "Memory not configured." }], details: {} });
-  const memoryToolLimitReached = () => ({
-    content: [{ type: "text" as const, text: "Memory search limit reached for this turn. Use existing information to answer." }],
-    details: {},
-  });
+  const memoryUnavailable = () => memorySearchMessage("Memory not configured. Continue without memory.");
+  const memorySearchTimedOut = () => memorySearchMessage("Memory search unavailable. Continue without memory.");
+  const memoryToolLimitReached = () =>
+    memorySearchMessage("Memory search limit reached for this turn. Use existing information to answer.");
 
   pi.registerTool({
     name: "tdai_memory_search",
     label: "Search memory",
     description: "Search structured memories (L1): user preferences, past events, rules, facts.",
     promptSnippet: "Search L1 memories when needed; use both memory search tools at most 3 times total per turn, then answer from existing information.",
-    parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()), type: Type.Optional(Type.String()) }),
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: MAX_SEARCH_QUERY_CHARS }),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT })),
+      type: Type.Optional(Type.String()),
+    }),
     execute: async (_toolCallId, params) => {
       if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
       if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
       memoryToolCallsThisTurn += 1;
-      return memorySearch(createClients(currentConfig.config).memory, params);
+      return (
+        (await settleWithin(
+          memorySearch(createClients(currentConfig.config).memory, params),
+          currentConfig.config.recall.deadlineMs,
+        )) ?? memorySearchTimedOut()
+      );
     },
   });
 
@@ -46,12 +80,21 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     label: "Search conversation history",
     description: "Search raw conversation history (L0) with timestamps.",
     promptSnippet: "Search L0 conversations when needed; use both memory search tools at most 3 times total per turn, then answer from existing information.",
-    parameters: Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()), session_key: Type.Optional(Type.String()) }),
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: MAX_SEARCH_QUERY_CHARS }),
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT })),
+      session_key: Type.Optional(Type.String({ maxLength: MAX_SESSION_KEY_CHARS })),
+    }),
     execute: async (_toolCallId, params) => {
       if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
       if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
       memoryToolCallsThisTurn += 1;
-      return conversationSearch(createClients(currentConfig.config).memory, params);
+      return (
+        (await settleWithin(
+          conversationSearch(createClients(currentConfig.config).memory, params),
+          currentConfig.config.recall.deadlineMs,
+        )) ?? memorySearchTimedOut()
+      );
     },
   });
 
@@ -146,12 +189,19 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     successfulToolResults = [];
     if (!currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
-      const recalled = await recallMemory(
-        createClients(currentConfig.config).memory,
-        event.prompt,
-        currentConfig.config.recall,
+      const recalled = await settleWithin(
+        recallMemory(
+          createClients(currentConfig.config).memory,
+          event.prompt,
+          currentConfig.config.recall,
+        ),
+        currentConfig.config.recall.deadlineMs,
       );
-      if (!recalled.content) {
+      if (!recalled?.content) {
+        if (!recalled) {
+          ctx.ui.setStatus(STATUS_KEY, "memory: recall unavailable");
+          return;
+        }
         if (recalled.failedLayers.length > 0 || recalled.timedOutLayers.length > 0) {
           ctx.ui.setStatus(STATUS_KEY, "memory: recall unavailable");
         }
@@ -177,7 +227,15 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event) => {
-    if (!currentConfig?.ok || !currentConfig.config.enabled || !currentConfig.config.captureTools || event.isError) return;
+    if (
+      !currentConfig?.ok ||
+      !currentConfig.config.enabled ||
+      !currentConfig.config.captureTools ||
+      event.isError ||
+      MEMORY_SEARCH_TOOLS.has(event.toolName)
+    ) {
+      return;
+    }
     successfulToolResults.push({ toolName: event.toolName, isError: event.isError, content: event.content });
   });
 

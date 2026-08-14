@@ -3,6 +3,13 @@ import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { redactText, truncateUtf8 } from "./security.js";
 
 const MAX_RESULT_BYTES = 12_000;
+const MIN_SEARCH_LIMIT = 1;
+export const MAX_SEARCH_LIMIT = 20;
+export const MAX_SEARCH_QUERY_CHARS = 2_000;
+export const MAX_SESSION_KEY_CHARS = 256;
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
+const UNTRUSTED_MEMORY_OPEN = '<tdai_untrusted_memory trust="untrusted" purpose="reference-only">';
+const UNTRUSTED_MEMORY_CLOSE = "</tdai_untrusted_memory>";
 
 export interface MemorySearchParams {
   query: string;
@@ -17,27 +24,65 @@ export interface ConversationSearchParams {
 }
 
 function textResult(text: string, details: Record<string, unknown> = {}): AgentToolResult<Record<string, unknown>> {
-  return { content: [{ type: "text", text: truncateUtf8(redactText(text), MAX_RESULT_BYTES) }], details };
+  const prefix = `${UNTRUSTED_MEMORY_OPEN}\n`;
+  const suffix = `\n${UNTRUSTED_MEMORY_CLOSE}`;
+  const bodyBudget = MAX_RESULT_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+  const body = truncateUtf8(escapeBoundaryText(redactText(text)), bodyBudget);
+  return { content: [{ type: "text", text: `${prefix}${body}${suffix}` }], details };
+}
+
+export function memorySearchMessage(text: string): AgentToolResult<Record<string, unknown>> {
+  return textResult(text);
 }
 
 function safeErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+function escapeBoundaryText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 function score(value: unknown): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "n/a";
+}
+
+function normalizeQuery(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const query = value.trim();
+  if (!query || query.length > MAX_SEARCH_QUERY_CHARS) return undefined;
+  return query;
+}
+
+function normalizeLimit(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.min(MAX_SEARCH_LIMIT, Math.max(MIN_SEARCH_LIMIT, Math.trunc(value)));
+}
+
+function normalizeSessionKey(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const cleaned = value.replace(CONTROL_CHARACTERS, "").trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, MAX_SESSION_KEY_CHARS);
 }
 
 export async function memorySearch(
   memory: MemoryClient,
   params: MemorySearchParams,
 ): Promise<AgentToolResult<Record<string, unknown>>> {
-  const query = params.query.trim();
-  if (!query) return textResult("Query cannot be empty.");
+  const query = normalizeQuery(params.query);
+  if (!query) {
+    return textResult(
+      typeof params.query === "string" && params.query.trim().length > MAX_SEARCH_QUERY_CHARS
+        ? `Query must not exceed ${MAX_SEARCH_QUERY_CHARS} characters.`
+        : "Query cannot be empty.",
+    );
+  }
   try {
+    const limit = normalizeLimit(params.limit);
     const request = {
       query,
-      ...(params.limit === undefined ? {} : { limit: params.limit }),
+      ...(limit === undefined ? {} : { limit }),
       ...(params.type === undefined ? {} : { type: params.type }),
     };
     const result = await memory.searchAtomic(request);
@@ -53,13 +98,21 @@ export async function conversationSearch(
   memory: MemoryClient,
   params: ConversationSearchParams,
 ): Promise<AgentToolResult<Record<string, unknown>>> {
-  const query = params.query.trim();
-  if (!query) return textResult("Query cannot be empty.");
+  const query = normalizeQuery(params.query);
+  if (!query) {
+    return textResult(
+      typeof params.query === "string" && params.query.trim().length > MAX_SEARCH_QUERY_CHARS
+        ? `Query must not exceed ${MAX_SEARCH_QUERY_CHARS} characters.`
+        : "Query cannot be empty.",
+    );
+  }
   try {
+    const limit = normalizeLimit(params.limit);
+    const sessionKey = normalizeSessionKey(params.session_key);
     const result = await memory.searchConversation({
       query,
-      ...(params.limit === undefined ? {} : { limit: params.limit }),
-      ...(params.session_key === undefined ? {} : { session_id: params.session_key }),
+      ...(limit === undefined ? {} : { limit }),
+      ...(sessionKey === undefined ? {} : { session_id: sessionKey }),
     });
     if (result.messages.length === 0) return textResult("No matching conversation messages found.", { count: 0 });
     const lines = result.messages.map((message) => {

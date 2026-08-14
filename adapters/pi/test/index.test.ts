@@ -142,7 +142,13 @@ describe("Pi extension lifecycle", () => {
     expect(structured?.promptSnippet).toContain("at most 3 times total per turn");
     expect(conversation?.promptSnippet).toContain("at most 3 times total per turn");
     const result = await structured?.execute("call-1", { query: "preference" }, undefined, undefined, ctx);
-    expect(result).toEqual({ content: [{ type: "text", text: "Memory not configured." }], details: {} });
+    expect(result).toEqual({
+      content: [{
+        type: "text",
+        text: '<tdai_untrusted_memory trust="untrusted" purpose="reference-only">\nMemory not configured. Continue without memory.\n</tdai_untrusted_memory>',
+      }],
+      details: {},
+    });
     expect(mocks.createClients).not.toHaveBeenCalled();
   });
 
@@ -198,6 +204,73 @@ describe("Pi extension lifecycle", () => {
     );
   });
 
+  it("returns control to Pi so the answer model can run when Memory never settles", async () => {
+    const offlineConfig = {
+      ...config,
+      recall: { ...config.recall, deadlineMs: 100 },
+    };
+    mocks.loadConfig.mockResolvedValue({ ok: true, config: offlineConfig });
+    mocks.flushOutbox.mockRejectedValue(new Error("Memory is offline"));
+    mocks.recallMemory.mockReturnValue(new Promise(() => undefined));
+    mocks.createClients.mockReturnValue({
+      memory: {
+        searchAtomic: vi.fn(() => new Promise(() => undefined)),
+        searchConversation: vi.fn(() => new Promise(() => undefined)),
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      const answerModel = vi
+        .fn()
+        .mockResolvedValueOnce({ toolName: "tdai_memory_search", params: { query: "preference" } })
+        .mockResolvedValueOnce("model answer");
+      const { handlers, tools, ctx } = installExtension();
+      await call(handlers, "session_start", {}, ctx);
+
+      const beforePromise = call(
+        handlers,
+        "before_agent_start",
+        { prompt: "Answer without memory", systemPrompt: "Base instructions" },
+        ctx,
+      );
+      let beforeSettled = false;
+      void beforePromise.then(() => {
+        beforeSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(99);
+      expect(beforeSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const before = await beforePromise;
+
+      const systemPrompt =
+        before && typeof before === "object" && "systemPrompt" in before
+          ? String((before as { systemPrompt: unknown }).systemPrompt)
+          : "Base instructions";
+      const firstModelResult = await answerModel(systemPrompt);
+      const tool = tools.get(firstModelResult.toolName);
+      const toolPromise = tool?.execute("call-offline", firstModelResult.params, undefined, undefined, ctx);
+      await vi.advanceTimersByTimeAsync(100);
+      const toolResult = await toolPromise;
+      await answerModel(systemPrompt, toolResult);
+
+      expect(before).toBeUndefined();
+      expect(answerModel).toHaveBeenNthCalledWith(1, "Base instructions");
+      expect(answerModel).toHaveBeenNthCalledWith(
+        2,
+        "Base instructions",
+        expect.objectContaining({
+          content: [expect.objectContaining({ text: expect.stringContaining("Continue without memory.") })],
+        }),
+      );
+      expect(((ctx.ui as { setStatus: ReturnType<typeof vi.fn> }).setStatus)).toHaveBeenCalledWith(
+        "tdai-memory",
+        "memory: recall unavailable",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not store an earlier response when the final run fails", async () => {
     const { handlers, ctx } = installExtension();
     await call(handlers, "session_start", {}, ctx);
@@ -230,6 +303,37 @@ describe("Pi extension lifecycle", () => {
     );
     const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
     expect(captured).not.toContainEqual(expect.objectContaining({ content: expect.stringContaining("failed output") }));
+  });
+
+  it("does not capture results returned by either memory search tool", async () => {
+    mocks.loadConfig.mockResolvedValue({ ok: true, config: { ...config, captureTools: true } });
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+    await call(handlers, "before_agent_start", { prompt: "Recall and inspect", systemPrompt: "Base" }, ctx);
+    await call(handlers, "tool_result", {
+      toolName: "tdai_memory_search",
+      isError: false,
+      content: [{ type: "text", text: "structured memory result" }],
+    }, ctx);
+    await call(handlers, "tool_result", {
+      toolName: "tdai_conversation_search",
+      isError: false,
+      content: [{ type: "text", text: "conversation memory result" }],
+    }, ctx);
+    await call(handlers, "tool_result", {
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "fresh file evidence" }],
+    }, ctx);
+    await call(handlers, "agent_end", {
+      messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }],
+    });
+    await call(handlers, "agent_settled", {}, ctx);
+
+    const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+    expect(captured).toContainEqual({ role: "system", content: "[tool:read]\nfresh file evidence" });
+    expect(captured).not.toContainEqual(expect.objectContaining({ content: expect.stringContaining("structured memory result") }));
+    expect(captured).not.toContainEqual(expect.objectContaining({ content: expect.stringContaining("conversation memory result") }));
   });
 
   it("creates a durable memory branch only after navigating to an unmarked tree branch", async () => {
