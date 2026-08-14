@@ -17,3 +17,12 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Codex/CLI adapter
+export { CodexMemoryAdapter, GatewayHttpError } from "./codex/index.js";
+export type {
+  CaptureTurnParams,
+  CodexMemoryAdapterOptions,
+  SearchConversationsParams,
+  SearchMemoriesParams,
+} from "./codex/index.js";
