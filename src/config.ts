@@ -45,6 +45,8 @@ export interface CaptureConfig {
 export interface ExtractionConfig {
   /** Enable background extraction (default: true) */
   enabled: boolean;
+  /** Contract-driven role used for L1 extraction. */
+  role: string;
   /** Enable L1 smart dedup (default: true) */
   enableDedup: boolean;
   /** Max memories per session (default: 20) */
@@ -768,6 +770,7 @@ export function parseConfig(
     },
     extraction: {
       enabled: bool(extractionGroup, "enabled") ?? true,
+      role: str(extractionGroup, "role") ?? "l1-extractor",
       enableDedup: bool(extractionGroup, "enableDedup") ?? true,
       maxMemoriesPerSession:
         num(extractionGroup, "maxMemoriesPerSession") ?? 20,

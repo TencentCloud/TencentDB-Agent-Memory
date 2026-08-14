@@ -206,11 +206,12 @@ describe("wave config schema (P1)", () => {
   it("keeps other legacy memory groups intact", () => {
     const cfg = parseConfig({
       capture: { enabled: true, l0l1RetentionDays: 180 },
-      extraction: { maxMemoriesPerSession: 20 },
+      extraction: { maxMemoriesPerSession: 20, role: "custom-l1" },
       embedding: { conflictRecallTopK: 7 },
     });
     expect(cfg.capture.l0l1RetentionDays).toBe(180);
     expect(cfg.extraction.maxMemoriesPerSession).toBe(20);
+    expect(cfg.extraction.role).toBe("custom-l1");
     expect(cfg.embedding.conflictRecallTopK).toBe(7);
   });
 });

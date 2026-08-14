@@ -47,6 +47,10 @@ export interface RunnerSessionState {
   // ═══ L1 — cursor & continuity ═══
   /** L0 JSONL cursor: epoch ms of last message processed by L1 */
   last_l1_cursor: number;
+  /** Stable tie-breaker for L0 rows sharing last_l1_cursor. */
+  last_l1_cursor_id: string;
+  /** Last cohort whose cursor and counters were finalized atomically. */
+  last_l1_finalized_cohort_id: string;
   /** Last scene name from the most recent L1 extraction (for cross-batch continuity) */
   last_scene_name: string;
 }
@@ -111,6 +115,8 @@ export interface Checkpoint {
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
   last_captured_timestamp: 0,
   last_l1_cursor: 0,
+  last_l1_cursor_id: "",
+  last_l1_finalized_cohort_id: "",
   last_scene_name: "",
 };
 
@@ -159,11 +165,16 @@ const fileLocks = new Map<string, Promise<void>>();
  * Serialize async critical sections per file path.
  * Under no contention the overhead is a single resolved-promise await.
  */
-async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+async function withFileLock<T>(
+  filePath: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   // Chain after whatever is currently queued for this path
   const prev = fileLocks.get(filePath) ?? Promise.resolve();
   let release!: () => void;
-  const gate = new Promise<void>((r) => { release = r; });
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
   fileLocks.set(filePath, gate);
 
   await prev;
@@ -199,17 +210,22 @@ export class CheckpointManager {
       // structuredClone avoids shallow-copy pitfall: without it, the nested
       // runner_states/pipeline_states objects in DEFAULT_CHECKPOINT would be
       // shared across all callers and mutated in place — corrupting the default.
-      const cp = { ...structuredClone(DEFAULT_CHECKPOINT), ...parsed } as Checkpoint;
+      const cp = {
+        ...structuredClone(DEFAULT_CHECKPOINT),
+        ...parsed,
+      } as Checkpoint;
 
       // Migrate from old session_states format (pre-split)
-      const oldStates = parsed.session_states as Record<string, Record<string, unknown>> | undefined;
+      const oldStates = parsed.session_states as
+        Record<string, Record<string, unknown>> | undefined;
       if (oldStates && !parsed.runner_states && !parsed.pipeline_states) {
         cp.runner_states = {};
         cp.pipeline_states = {};
         for (const [key, state] of Object.entries(oldStates)) {
           cp.runner_states[key] = {
             ...DEFAULT_RUNNER_STATE,
-            last_captured_timestamp: (state.last_captured_timestamp as number) ?? 0,
+            last_captured_timestamp:
+              (state.last_captured_timestamp as number) ?? 0,
             last_l1_cursor: (state.last_l1_cursor as number) ?? 0,
             last_scene_name: (state.last_scene_name as string) ?? "",
           };
@@ -217,10 +233,12 @@ export class CheckpointManager {
             ...DEFAULT_PIPELINE_STATE,
             conversation_count: (state.conversation_count as number) ?? 0,
             last_extraction_time: (state.last_extraction_time as string) ?? "",
-            last_extraction_updated_time: (state.last_extraction_updated_time as string) ?? "",
+            last_extraction_updated_time:
+              (state.last_extraction_updated_time as string) ?? "",
             last_active_time: (state.last_active_time as number) ?? 0,
             l2_pending_l1_count: (state.l2_pending_l1_count as number) ?? 0,
-            l2_last_extraction_time: (state.l2_last_extraction_time as string) ?? "",
+            l2_last_extraction_time:
+              (state.l2_last_extraction_time as string) ?? "",
           };
         }
       } else {
@@ -260,7 +278,9 @@ export class CheckpointManager {
    * `fn` receives the current checkpoint and may modify it in place;
    * the updated checkpoint is atomically written back.
    */
-  private async mutate(fn: (cp: Checkpoint) => void | Promise<void>): Promise<Checkpoint> {
+  private async mutate(
+    fn: (cp: Checkpoint) => void | Promise<void>,
+  ): Promise<Checkpoint> {
     return withFileLock(this.filePath, async () => {
       const cp = await this.readRaw();
       await fn(cp);
@@ -329,7 +349,9 @@ export class CheckpointManager {
     const cp = await this.mutate((cp) => {
       cp.scenes_processed += 1;
     });
-    this.logger.info(`[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`);
+    this.logger.info(
+      `[checkpoint] incrementScenesProcessed: scenes_processed=${cp.scenes_processed}`,
+    );
   }
 
   // ============================
@@ -384,7 +406,9 @@ export class CheckpointManager {
    * This writes ONLY to `pipeline_states`, never touching `runner_states`.
    * This is the core guarantee that eliminates the split-brain overwrite bug.
    */
-  async mergePipelineStates(states: Record<string, PipelineSessionState>): Promise<void> {
+  async mergePipelineStates(
+    states: Record<string, PipelineSessionState>,
+  ): Promise<void> {
     await this.mutate((cp) => {
       if (!cp.pipeline_states) cp.pipeline_states = {};
       for (const [key, pState] of Object.entries(states)) {
@@ -426,9 +450,34 @@ export class CheckpointManager {
     });
     this.logger.info(
       `[checkpoint] markL1ExtractionComplete session=${sessionKey}: ` +
-      `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
-      `lastScene="${lastSceneName ?? "(unchanged)"}"`,
+        `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
+        `lastScene="${lastSceneName ?? "(unchanged)"}"`,
     );
+  }
+
+  /** Finalize one durable L1 cohort exactly once under the checkpoint lock. */
+  async finalizeL1Cohort(input: {
+    cohortId: string;
+    sessionKey: string;
+    memoriesExtracted: number;
+    cursorRecordedAtMs: number;
+    cursorRecordId: string;
+    lastSceneName?: string;
+  }): Promise<{ isNew: boolean }> {
+    let isNew = false;
+    await this.mutate((cp) => {
+      const state = this.getRunnerState(cp, input.sessionKey);
+      if (state.last_l1_finalized_cohort_id === input.cohortId) return;
+      state.last_l1_cursor = input.cursorRecordedAtMs;
+      state.last_l1_cursor_id = input.cursorRecordId;
+      state.last_l1_finalized_cohort_id = input.cohortId;
+      if (input.lastSceneName !== undefined)
+        state.last_scene_name = input.lastSceneName;
+      cp.total_memories_extracted += input.memoriesExtracted;
+      cp.memories_since_last_persona += input.memoriesExtracted;
+      isNew = true;
+    });
+    return { isNew };
   }
 
   // ============================
@@ -459,7 +508,9 @@ export class CheckpointManager {
   async captureAtomically(
     sessionKey: string,
     pluginStartTimestamp: number | undefined,
-    fn: (afterTimestamp: number) => Promise<{ maxTimestamp: number; messageCount: number } | null>,
+    fn: (
+      afterTimestamp: number,
+    ) => Promise<{ maxTimestamp: number; messageCount: number } | null>,
   ): Promise<void> {
     await this.mutate(async (cp) => {
       // Read the per-session cursor inside the lock
@@ -467,7 +518,11 @@ export class CheckpointManager {
       let afterTimestamp = state.last_captured_timestamp || 0;
 
       // Cold-start guard (same logic that was previously in auto-capture.ts)
-      if (afterTimestamp === 0 && pluginStartTimestamp && pluginStartTimestamp > 0) {
+      if (
+        afterTimestamp === 0 &&
+        pluginStartTimestamp &&
+        pluginStartTimestamp > 0
+      ) {
         afterTimestamp = pluginStartTimestamp;
       }
 
@@ -477,12 +532,14 @@ export class CheckpointManager {
         // Advance per-session cursor (runner-owned)
         state.last_captured_timestamp = result.maxTimestamp;
         // Global stats (aggregate only — not used for filtering)
-        cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
+        cp.last_captured_timestamp = Math.max(
+          cp.last_captured_timestamp,
+          result.maxTimestamp,
+        );
         cp.total_processed += result.messageCount;
         // Increment L0 conversation count (was a separate mutate() call before)
         cp.l0_conversations_count += 1;
       }
     });
   }
-
 }

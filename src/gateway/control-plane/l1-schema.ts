@@ -1,0 +1,61 @@
+export const L1_CONTROL_PLANE_SCHEMA: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS l1_cohorts (
+     cohortId TEXT PRIMARY KEY,
+     sessionKey TEXT NOT NULL,
+     startRecordedAtMs INTEGER NOT NULL,
+     startRecordId TEXT NOT NULL,
+     endRecordedAtMs INTEGER NOT NULL,
+     endRecordId TEXT NOT NULL,
+     rowManifestJson TEXT NOT NULL,
+     assignmentIdsJson TEXT NOT NULL,
+     state TEXT NOT NULL,
+     createdAt TEXT NOT NULL,
+     updatedAt TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS l1_cohorts_open_idx
+     ON l1_cohorts (sessionKey, state, createdAt)`,
+  `CREATE TABLE IF NOT EXISTS l1_assignments (
+     assignmentId TEXT PRIMARY KEY,
+     cohortId TEXT NOT NULL,
+     ordinal INTEGER NOT NULL,
+     runId TEXT,
+     roleContractHash TEXT NOT NULL DEFAULT '',
+     sessionKey TEXT NOT NULL,
+     sessionId TEXT NOT NULL,
+     projectId TEXT NOT NULL,
+     worksetJson TEXT NOT NULL,
+     worksetDigest TEXT NOT NULL,
+     candidateJson TEXT,
+     candidateDigest TEXT,
+     criticReceiptDigest TEXT,
+     approvedAttemptId TEXT,
+     state TEXT NOT NULL,
+     failureCount INTEGER NOT NULL DEFAULT 0,
+     nextRetryAt INTEGER NOT NULL DEFAULT 0,
+     error TEXT,
+     createdAt TEXT NOT NULL,
+     updatedAt TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS l1_assignments_cohort_idx
+     ON l1_assignments (cohortId, ordinal)`,
+  `CREATE TABLE IF NOT EXISTS l1_attempt_artifacts (
+     attemptId TEXT PRIMARY KEY,
+     assignmentId TEXT NOT NULL,
+     runId TEXT NOT NULL,
+     fence INTEGER NOT NULL,
+     ordinal INTEGER NOT NULL,
+     worksetDigest TEXT NOT NULL,
+     reviewInputJson TEXT NOT NULL,
+     reviewInputDigest TEXT NOT NULL,
+     candidateJson TEXT NOT NULL,
+     candidateDigest TEXT NOT NULL,
+     criticAttemptId TEXT,
+     verdictJson TEXT,
+     verdictDigest TEXT,
+     state TEXT NOT NULL,
+     createdAt TEXT NOT NULL,
+     updatedAt TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS l1_attempt_artifacts_assignment_idx
+     ON l1_attempt_artifacts (assignmentId, ordinal)`,
+];

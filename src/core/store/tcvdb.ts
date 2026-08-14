@@ -1145,14 +1145,20 @@ export class TcvdbMemoryStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId = "",
   ): Promise<L0QueryRow[]> {
     try {
       await this._ensureInit();
       if (this.degraded) return [];
 
-      const conditions: string[] = [`session_key = "${sessionKey}"`];
+      const conditions: string[] = [
+        `session_key = ${JSON.stringify(sessionKey)}`,
+      ];
       if (afterRecordedAtMs && afterRecordedAtMs > 0) {
-        conditions.push(`recorded_at_ms > ${afterRecordedAtMs}`);
+        conditions.push(
+          `(recorded_at_ms > ${afterRecordedAtMs} or ` +
+            `(recorded_at_ms = ${afterRecordedAtMs} and id > ${JSON.stringify(afterRecordId)}))`,
+        );
       }
       const filterExpr = conditions.join(" and ");
 
@@ -1161,10 +1167,12 @@ export class TcvdbMemoryStore implements IMemoryStore {
         filterExpr,
         L0_OUTPUT_FIELDS,
         limit,
-        [{ fieldName: "recorded_at_ms", direction: "desc" }],
+        [
+          { fieldName: "recorded_at_ms", direction: "asc" },
+          { fieldName: "id", direction: "asc" },
+        ],
       );
 
-      // Convert to L0QueryRow and reverse to chronological order (query is DESC, callers expect ASC)
       const rows: L0QueryRow[] = docs.map((doc) => ({
         record_id: String(doc.id ?? ""),
         session_key: String(doc.session_key ?? ""),
@@ -1173,9 +1181,10 @@ export class TcvdbMemoryStore implements IMemoryStore {
         message_text: String(doc.message_text ?? ""),
         recorded_at: epochMsToIso(Number(doc.recorded_at_ms ?? 0)),
         timestamp: Number(doc.timestamp ?? 0),
+        project_id: String(doc.project_id ?? ""),
       }));
 
-      return rows.reverse();
+      return rows;
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L0-queryForL1] FAILED: ${err instanceof Error ? err.message : String(err)}`,
@@ -1188,12 +1197,14 @@ export class TcvdbMemoryStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId = "",
   ): Promise<L0SessionGroup[]> {
     try {
       const rows = await this.queryL0ForL1(
         sessionKey,
         afterRecordedAtMs,
         limit,
+        afterRecordId,
       );
 
       // Group by session_id
@@ -1227,7 +1238,13 @@ export class TcvdbMemoryStore implements IMemoryStore {
       const groups: L0SessionGroup[] = [];
       for (const [sessionId, messages] of groupMap) {
         if (messages.length > 0) {
-          groups.push({ sessionId, messages });
+          groups.push({
+            sessionId,
+            projectId:
+              rows.find((row) => (row.session_id || "") === sessionId)
+                ?.project_id ?? "",
+            messages,
+          });
         }
       }
       groups.sort((a, b) => a.messages[0].timestamp - b.messages[0].timestamp);

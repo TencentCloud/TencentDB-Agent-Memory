@@ -1274,22 +1274,23 @@ export class VectorStore implements IMemoryStore {
       `);
     }
 
-    // L0 query statements for L1 runner (newest-first + LIMIT to bound memory)
+    // L0 query statements for L1 runner (oldest-first to drain backlog safely)
     // Sort/filter by recorded_at (write time) instead of timestamp (conversation time)
     // because L1 cursor uses recorded_at semantics. ISO 8601 string comparison preserves time order.
     this.stmtL0QueryAll = this.db.prepare(`
       SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp, project_id
       FROM l0_conversations
       WHERE session_key = ?
-      ORDER BY recorded_at DESC
+      ORDER BY recorded_at ASC, record_id ASC
       LIMIT ?
     `);
 
     this.stmtL0QueryAfter = this.db.prepare(`
       SELECT record_id, session_key, session_id, role, message_text, recorded_at, timestamp, project_id
       FROM l0_conversations
-      WHERE session_key = ? AND recorded_at > ?
-      ORDER BY recorded_at DESC
+      WHERE session_key = ? AND
+        (recorded_at > ? OR (recorded_at = ? AND record_id > ?))
+      ORDER BY recorded_at ASC, record_id ASC
       LIMIT ?
     `);
 
@@ -3096,6 +3097,7 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId = "",
   ): Array<{
     record_id: string;
     session_key: string;
@@ -3111,7 +3113,6 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      // Query newest-first (DESC) with LIMIT, then reverse to chronological order
       let rows: Array<Record<string, unknown>>;
       if (afterRecordedAtMs && afterRecordedAtMs > 0) {
         // Convert epoch ms to ISO string for recorded_at comparison
@@ -3119,6 +3120,8 @@ export class VectorStore implements IMemoryStore {
         rows = this.stmtL0QueryAfter.all(
           sessionKey,
           afterRecordedAtIso,
+          afterRecordedAtIso,
+          afterRecordId,
           limit,
         ) as Array<Record<string, unknown>>;
       } else {
@@ -3132,19 +3135,16 @@ export class VectorStore implements IMemoryStore {
           `limit=${limit}, returned ${rows.length} row(s)`,
       );
 
-      // Reverse: SQL returns newest-first (DESC), callers expect chronological order
-      return rows
-        .map((r) => ({
-          record_id: r.record_id as string,
-          session_key: r.session_key as string,
-          session_id: (r.session_id as string) || "",
-          role: r.role as string,
-          message_text: r.message_text as string,
-          recorded_at: (r.recorded_at as string) || "",
-          timestamp: (r.timestamp as number) || 0,
-          project_id: (r.project_id as string) || "",
-        }))
-        .reverse();
+      return rows.map((r) => ({
+        record_id: r.record_id as string,
+        session_key: r.session_key as string,
+        session_id: (r.session_id as string) || "",
+        role: r.role as string,
+        message_text: r.message_text as string,
+        recorded_at: (r.recorded_at as string) || "",
+        timestamp: (r.timestamp as number) || 0,
+        project_id: (r.project_id as string) || "",
+      }));
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L0-query] FAILED (non-fatal, returning empty): ${err instanceof Error ? err.message : String(err)}`,
@@ -3164,6 +3164,7 @@ export class VectorStore implements IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit = 50,
+    afterRecordId = "",
   ): Array<{
     sessionId: string;
     projectId: string;
@@ -3180,7 +3181,12 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
+      const rows = this.queryL0ForL1(
+        sessionKey,
+        afterRecordedAtMs,
+        limit,
+        afterRecordId,
+      );
 
       // Group by session_id
       const groupMap = new Map<

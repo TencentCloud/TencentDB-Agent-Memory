@@ -156,6 +156,7 @@ export interface L0QueryRow {
   message_text: string;
   recorded_at: string;
   timestamp: number;
+  project_id?: string;
 }
 
 /** L0 messages grouped by session ID (for L1 runner). */
@@ -327,11 +328,13 @@ export interface IMemoryStore {
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit?: number,
+    afterRecordId?: string,
   ): MaybePromise<L0QueryRow[]>;
   queryL0GroupedBySessionId(
     sessionKey: string,
     afterRecordedAtMs?: number,
     limit?: number,
+    afterRecordId?: string,
   ): MaybePromise<L0SessionGroup[]>;
   getAllL0Texts(): MaybePromise<
     Array<{ record_id: string; message_text: string; recorded_at: string }>

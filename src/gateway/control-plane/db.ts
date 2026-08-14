@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openWritableSqlite, type WritableSqlite } from "../http-utils.js";
+import { L1_CONTROL_PLANE_SCHEMA } from "./l1-schema.js";
 
 export type { WritableSqlite };
 
@@ -77,6 +78,7 @@ const ADDITIONS: readonly string[] = [
   // every run that predates the column reads as "not finalized", which is the
   // safe direction: at worst one recount, never a silent double count.
   `ALTER TABLE runs ADD COLUMN checkpointFinalizedAt TEXT`,
+  `ALTER TABLE l1_assignments ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0`,
 ];
 
 export function controlPlanePath(dataDir: string): string {
@@ -88,7 +90,8 @@ export function openControlPlane(dataDir: string): WritableSqlite {
   const file = controlPlanePath(dataDir);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = openWritableSqlite(file);
-  for (const stmt of SCHEMA) db.prepare(stmt).run();
+  for (const stmt of [...SCHEMA, ...L1_CONTROL_PLANE_SCHEMA])
+    db.prepare(stmt).run();
   for (const stmt of ADDITIONS) {
     try {
       db.prepare(stmt).run();
