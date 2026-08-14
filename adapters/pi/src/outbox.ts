@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -8,9 +8,11 @@ import type { LoadedConfig } from "./types.js";
 const OUTBOX_VERSION = 1;
 const OUTBOX_DIRECTORY = "tdai-memory-outbox";
 export const MAX_DELIVERY_ATTEMPTS = 3;
+export const DEFAULT_LEASE_TIMEOUT_MS = 60_000;
 
-// Pi may ask for a flush at session start and again when a turn settles. A
-// process-local queue prevents both calls from delivering the same file.
+// Pi may ask for a flush at session start and again when a turn settles. This
+// queue removes duplicate work inside one process; atomic record leases below
+// also protect independent Pi processes sharing the same agent directory.
 const activeFlushes = new Map<string, Promise<FlushResult>>();
 
 export interface CaptureRecord {
@@ -21,6 +23,7 @@ export interface CaptureRecord {
   sessionId: string;
   messages: ConversationItem[];
   attempts: number;
+  nextAttemptAt?: string;
 }
 
 export interface FlushResult {
@@ -32,6 +35,12 @@ export interface FlushResult {
 
 export interface OutboxOptions {
   directory?: string;
+  /** Internal/test hook. Production callers use the current time. */
+  now?: () => Date;
+  /** Internal/test hook. Production uses bounded exponential backoff. */
+  retryDelayMs?: (attempts: number) => number;
+  /** A claim left by a crashed process becomes recoverable after this period. */
+  leaseTimeoutMs?: number;
 }
 
 function defaultDirectory(): string {
@@ -78,6 +87,12 @@ function parseRecord(value: unknown): CaptureRecord | undefined {
   }
   const attempts = candidate.attempts ?? 0;
   if (!Number.isSafeInteger(attempts) || attempts < 0) return undefined;
+  if (
+    candidate.nextAttemptAt !== undefined &&
+    (typeof candidate.nextAttemptAt !== "string" || Number.isNaN(Date.parse(candidate.nextAttemptAt)))
+  ) {
+    return undefined;
+  }
   return { ...candidate, attempts } as CaptureRecord;
 }
 
@@ -86,6 +101,19 @@ async function listRecordFiles(directory: string): Promise<string[]> {
     const entries = await readdir(directory, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function listLeasedRecordFiles(directory: string): Promise<string[]> {
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.includes(".json.lease-"))
       .map((entry) => entry.name)
       .sort();
   } catch (error) {
@@ -106,6 +134,44 @@ async function writeRecord(path: string, record: CaptureRecord): Promise<void> {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await rename(temporary, path);
+}
+
+function retryDelayMs(attempts: number, options: OutboxOptions): number {
+  if (options.retryDelayMs) return Math.max(0, options.retryDelayMs(attempts));
+  return Math.min(30_000, 1_000 * 2 ** Math.max(0, attempts - 1));
+}
+
+function leasePathFor(path: string): string {
+  return `${path}.lease-${process.pid}-${randomUUID()}`;
+}
+
+function originalPathForLease(path: string): string | undefined {
+  const marker = path.indexOf(".json.lease-");
+  return marker === -1 ? undefined : path.slice(0, marker + ".json".length);
+}
+
+async function restoreLease(leasePath: string, recordPath: string): Promise<void> {
+  try {
+    await rename(leasePath, recordPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+async function reclaimExpiredLeases(directory: string, now: Date, options: OutboxOptions): Promise<void> {
+  const timeoutMs = options.leaseTimeoutMs ?? DEFAULT_LEASE_TIMEOUT_MS;
+  for (const name of await listLeasedRecordFiles(directory)) {
+    const leasePath = join(directory, name);
+    const recordPath = originalPathForLease(leasePath);
+    if (!recordPath) continue;
+    try {
+      const metadata = await stat(leasePath);
+      if (now.getTime() - metadata.mtimeMs < timeoutMs) continue;
+      await restoreLease(leasePath, recordPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
 }
 
 export async function enqueueCapture(
@@ -137,7 +203,7 @@ export async function flushOutbox(
 ): Promise<FlushResult> {
   const directory = directoryFor(options);
   const previous = activeFlushes.get(directory) ?? Promise.resolve({ delivered: 0, pending: 0, invalid: 0, dead: 0 });
-  const queued = previous.catch(() => undefined).then(async () => flushOutboxOnce(config, deliver, directory));
+  const queued = previous.catch(() => undefined).then(async () => flushOutboxOnce(config, deliver, directory, options));
   activeFlushes.set(directory, queued);
   void queued.finally(() => {
     if (activeFlushes.get(directory) === queued) activeFlushes.delete(directory);
@@ -149,7 +215,10 @@ async function flushOutboxOnce(
   config: LoadedConfig,
   deliver: (record: CaptureRecord) => Promise<void>,
   directory: string,
+  options: OutboxOptions,
 ): Promise<FlushResult> {
+  const now = options.now?.() ?? new Date();
+  await reclaimExpiredLeases(directory, now, options);
   const files = await listRecordFiles(directory);
   let delivered = 0;
   let invalid = 0;
@@ -159,29 +228,52 @@ async function flushOutboxOnce(
 
   for (const file of files) {
     const path = join(directory, file);
-    const record = await readRecord(path);
+    const leasedPath = leasePathFor(path);
+    try {
+      // Same-filesystem rename is atomic: only one independent Pi process can
+      // claim this record before making a network request.
+      await rename(path, leasedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+
+    const record = await readRecord(leasedPath);
     if (!record) {
       invalid += 1;
+      await restoreLease(leasedPath, path);
       continue;
     }
     if (record.scope !== expectedScope) {
       pending += 1;
+      await restoreLease(leasedPath, path);
       continue;
+    }
+    if (record.nextAttemptAt && Date.parse(record.nextAttemptAt) > now.getTime()) {
+      pending += 1;
+      await restoreLease(leasedPath, path);
+      break;
     }
     try {
       await deliver(record);
-      await rm(path, { force: true });
+      await rm(leasedPath, { force: true });
       delivered += 1;
     } catch {
-      const retryRecord = { ...record, attempts: record.attempts + 1 };
-      await writeRecord(path, retryRecord);
-      if (retryRecord.attempts >= MAX_DELIVERY_ATTEMPTS) {
-        // A permanently invalid record must not block every later conversation.
+      const attempts = record.attempts + 1;
+      if (attempts >= MAX_DELIVERY_ATTEMPTS) {
+        // A permanently failing record must not block every later conversation.
         // Keep it beside the outbox for inspection rather than deleting it.
-        await rename(path, `${path}.dead`);
+        await rename(leasedPath, `${path}.dead`);
         dead += 1;
         continue;
       }
+      const retryRecord: CaptureRecord = {
+        ...record,
+        attempts,
+        nextAttemptAt: new Date(now.getTime() + retryDelayMs(attempts, options)).toISOString(),
+      };
+      await writeRecord(leasedPath, retryRecord);
+      await restoreLease(leasedPath, path);
       // Preserve FIFO while a transient failure is still eligible for retry.
       pending += 1;
       break;
@@ -193,7 +285,7 @@ async function flushOutboxOnce(
 export async function outboxCount(config: LoadedConfig, options: OutboxOptions = {}): Promise<number> {
   const directory = directoryFor(options);
   const expectedScope = scopeFor(config);
-  const files = await listRecordFiles(directory);
+  const files = [...await listRecordFiles(directory), ...await listLeasedRecordFiles(directory)];
   let count = 0;
   for (const file of files) {
     const record = await readRecord(join(directory, file));

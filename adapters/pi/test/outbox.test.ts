@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,7 +41,8 @@ afterEach(async () => {
 describe("persistent capture outbox", () => {
   it("keeps a failed delivery and retries it in FIFO order", async () => {
     const directory = await outbox();
-    const options = { directory };
+    let now = new Date("2026-08-14T00:00:00.000Z");
+    const options = { directory, now: () => now, retryDelayMs: () => 1_000 };
     const first = await enqueueCapture(config, "pi-one", [{ role: "user", content: "first" }], options);
     const second = await enqueueCapture(config, "pi-two", [{ role: "user", content: "second" }], options);
     const attempted: string[] = [];
@@ -54,6 +55,13 @@ describe("persistent capture outbox", () => {
     expect(failed).toEqual({ delivered: 0, pending: 1, invalid: 0, dead: 0 });
     expect(await outboxCount(config, options)).toBe(2);
 
+    const tooSoon = await flushOutbox(config, async (record) => {
+      attempted.push(record.id);
+    }, options);
+    expect(tooSoon).toEqual({ delivered: 0, pending: 1, invalid: 0, dead: 0 });
+    expect(attempted).toEqual([first.id]);
+
+    now = new Date(now.getTime() + 1_000);
     const recovered = await flushOutbox(config, async (record) => {
       attempted.push(record.id);
     }, options);
@@ -104,7 +112,8 @@ describe("persistent capture outbox", () => {
 
   it("moves a permanently failing record to .dead and continues with later records", async () => {
     const directory = await outbox();
-    const options = { directory };
+    let now = new Date("2026-08-14T00:00:00.000Z");
+    const options = { directory, now: () => now, retryDelayMs: () => 1_000 };
     const first = await enqueueCapture(config, "pi-one", [{ role: "user", content: "broken" }], options);
     const second = await enqueueCapture(config, "pi-two", [{ role: "user", content: "later" }], options);
     const attempted: string[] = [];
@@ -114,6 +123,7 @@ describe("persistent capture outbox", () => {
         attempted.push(record.id);
         throw new Error("permanent failure");
       }, options);
+      now = new Date(now.getTime() + 1_000);
     }
     const final = await flushOutbox(config, async (record) => {
       attempted.push(record.id);
@@ -123,6 +133,35 @@ describe("persistent capture outbox", () => {
     expect(attempted).toEqual([first.id, first.id, first.id, second.id]);
     expect(final).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 1 });
     expect(await readdir(directory)).toEqual(expect.arrayContaining([expect.stringMatching(/\.json\.dead$/)]));
+    expect(await outboxCount(config, options)).toBe(0);
+  });
+
+  it("does not steal an active lease but recovers a crashed worker's stale lease", async () => {
+    const directory = await outbox();
+    const options = { directory };
+    await enqueueCapture(config, "pi-one", [{ role: "user", content: "recover me" }], options);
+    const file = (await readdir(directory)).find((entry) => entry.endsWith(".json"));
+    expect(file).toBeDefined();
+    const recordPath = join(directory, file as string);
+    await rename(recordPath, `${recordPath}.lease-crashed-worker`);
+
+    let delivered = 0;
+    const active = await flushOutbox(config, async () => {
+      delivered += 1;
+    }, { ...options, leaseTimeoutMs: 60_000 });
+    expect(active).toEqual({ delivered: 0, pending: 0, invalid: 0, dead: 0 });
+    expect(delivered).toBe(0);
+    expect(await outboxCount(config, options)).toBe(1);
+
+    const recovered = await flushOutbox(config, async () => {
+      delivered += 1;
+    }, {
+      ...options,
+      now: () => new Date(Date.now() + 60_001),
+      leaseTimeoutMs: 60_000,
+    });
+    expect(recovered).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 0 });
+    expect(delivered).toBe(1);
     expect(await outboxCount(config, options)).toBe(0);
   });
 });
