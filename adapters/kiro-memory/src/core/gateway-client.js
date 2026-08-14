@@ -100,4 +100,16 @@ export class GatewayClient {
     }
     return data;
   }
+
+  async skillConversationAdd(payload) {
+    const data = await this.post('/v3/skill/conversation/add', payload);
+    if (isObject(data) && Object.keys(data).length === 1 && data.status === 'ok') return data;
+    if (
+      isObject(data) && Object.keys(data).length === 2 && data.status === 'archived'
+      && isObject(data.archived) && Object.keys(data.archived).length === 4
+      && typeof data.archived.task_id === 'string' && Number.isInteger(data.archived.archived_at_ms)
+      && typeof data.archived.archive_key === 'string' && typeof data.archived.reason === 'string'
+    ) return data;
+    throw invalidEnvelope();
+  }
 }
