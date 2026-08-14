@@ -7,7 +7,9 @@
  * Directory structure:
  *   adapters/
  *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── gateway-client/ — Generic HTTP client for new platform adapters
+ *   └── langgraph/     — LangGraph StateGraph memory nodes
  */
 
 // OpenClaw adapter
@@ -17,3 +19,33 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Gateway client adapter
+export {
+  GatewayMemoryClient,
+  GatewayMemoryClientError,
+  createGatewayPlatformAdapter,
+} from "./gateway-client/index.js";
+export type {
+  GatewayMemoryClientOptions,
+  GatewayPlatformAdapter,
+  GatewayPlatformAdapterOptions,
+  GatewayPlatformContext,
+} from "./gateway-client/index.js";
+
+// LangGraph adapter
+export {
+  createLangGraphMemoryAdapter,
+  normalizeLangGraphMessages,
+  resolveLangGraphPlatformContext,
+  selectLangGraphCompletedTurn,
+  selectLangGraphRecallQuery,
+} from "./langgraph/index.js";
+export type {
+  LangGraphCompletedTurn,
+  LangGraphMemoryAdapter,
+  LangGraphMemoryAdapterOptions,
+  LangGraphMessageLike,
+  LangGraphRuntimeLike,
+  LangGraphStateLike,
+} from "./langgraph/index.js";
