@@ -355,4 +355,48 @@ describe("Pi extension lifecycle", () => {
       expect.any(Array),
     );
   });
+
+  it("captures the first turn and recalls it into the follow-up turn's system prompt", async () => {
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+
+    // Turn 1: a fresh recall finds nothing, and the settled answer is captured.
+    mocks.recallMemory.mockResolvedValueOnce({
+      content: undefined,
+      availableLayers: [],
+      failedLayers: [],
+      timedOutLayers: [],
+    });
+    await call(handlers, "before_agent_start", { prompt: "pnpm or npm?", systemPrompt: "Base" }, ctx);
+    await call(handlers, "agent_end", {
+      messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Use pnpm." }] }],
+    });
+    await call(handlers, "agent_settled", {}, ctx);
+    expect(mocks.enqueueCapture).toHaveBeenCalledTimes(1);
+    const turnOneCapture = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+    expect(turnOneCapture).toContainEqual({ role: "assistant", content: "Use pnpm." });
+
+    // Turn 2 (follow-up): recall now surfaces what turn 1 captured, and it
+    // reaches the follow-up's system prompt before the answer model runs.
+    mocks.recallMemory.mockResolvedValueOnce({
+      content: "<tdai_recalled_memory>Use pnpm.</tdai_recalled_memory>",
+      availableLayers: ["L0 conversation"],
+      failedLayers: [],
+      timedOutLayers: [],
+    });
+    const before = await call(
+      handlers,
+      "before_agent_start",
+      { prompt: "What do we install with?", systemPrompt: "Base" },
+      ctx,
+    );
+    expect(before).toEqual({ systemPrompt: "Base\n\n<tdai_recalled_memory>Use pnpm.</tdai_recalled_memory>" });
+
+    // Turn 2 also settles and captures, so the loop keeps closing.
+    await call(handlers, "agent_end", {
+      messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Use pnpm, as we said last turn." }] }],
+    });
+    await call(handlers, "agent_settled", {}, ctx);
+    expect(mocks.enqueueCapture).toHaveBeenCalledTimes(2);
+  });
 });
