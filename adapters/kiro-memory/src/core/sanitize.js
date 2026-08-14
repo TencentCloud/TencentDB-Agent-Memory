@@ -18,10 +18,10 @@ const sensitiveKeys = new Set([
 const normalizeKey = (key) => key.toLowerCase().replace(/[_-]/g, '');
 
 const redactString = (value) => value
-  .replace(/-----BEGIN [^-]* PRIVATE KEY-----[\s\S]*?-----END [^-]* PRIVATE KEY-----/g, redacted)
+  .replace(/-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )?PRIVATE KEY-----/gi, redacted)
   .replace(/\bBearer\s+[^\s,;]+/gi, `Bearer ${redacted}`)
   .replace(
-    /\b(aws[_-]?secret[_-]?access[_-]?key|openai[_-]?api[_-]?key|anthropic[_-]?api[_-]?key|authorization|api[_-]?key|token|password|secret)\b\s*([=:])\s*([^\s,;]+)/gi,
+    /\b(aws[_-]?secret[_-]?access[_-]?key|openai[_-]?api[_-]?key|anthropic[_-]?api[_-]?key|authorization|api[_-]?key|token|password|secret)\b\s*([=:])[^\r\n]*/gi,
     (match, key, separator) => `${key}${separator}${redacted}`,
   );
 
@@ -80,13 +80,13 @@ const truncateUtf8 = (content, maxBytes) => {
 
 export function sanitizeToolContent(value, maxBytes) {
   if (!Number.isInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid maxBytes');
+  let serialized;
   try {
-    const serialized = typeof value === 'string'
+    serialized = typeof value === 'string'
       ? value
       : JSON.stringify(stableValue(value, new Set()));
-    return truncateUtf8(redactString(serialized), maxBytes);
-  } catch (error) {
-    if (error?.message === 'SanitizationError') throw error;
-    return unserializable;
+  } catch {
+    serialized = unserializable;
   }
+  return truncateUtf8(redactString(serialized), maxBytes);
 }

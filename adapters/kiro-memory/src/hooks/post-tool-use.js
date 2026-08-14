@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { buildToolTrace } from '../core/tool-trace.js';
+import { TURN_MAX_BYTES } from '../core/sanitize.js';
 
 const validFactoryValue = (value) => typeof value === 'string'
   && value.length > 0
@@ -19,6 +20,10 @@ export async function handlePostToolUse(event, { turnStore, toolCallIdFactory = 
       turn,
       toolCallId: `kiro-${turn.turn_id}-${factoryValue}`,
     });
+    const candidate = { ...turn, tool_events: [...turn.tool_events, trace] };
+    if (Buffer.byteLength(`${JSON.stringify(candidate)}\n`, 'utf8') > TURN_MAX_BYTES) {
+      throw new Error('turn_size');
+    }
     const updated = await turnStore.appendToolEvent(event.sessionId, trace);
     if (updated === null) throw new Error('append');
     return { ...base, status: 'tool_trace_appended', turnId: turn.turn_id };

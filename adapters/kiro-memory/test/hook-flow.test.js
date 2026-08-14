@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { KiroIdeHookAssistantProvider } from '../src/core/assistant-response-provider.js';
+import { TURN_MAX_BYTES } from '../src/core/sanitize.js';
 import { TurnStore } from '../src/core/turn-store.js';
 import { handlePostToolUse } from '../src/hooks/post-tool-use.js';
 import { handlePromptSubmit } from '../src/hooks/prompt-submit.js';
@@ -112,6 +113,33 @@ test('PostToolUse truncates oversized input and result before persistence', asyn
     assert.equal(Buffer.byteLength(trace.tool_result.content, 'utf8') <= 32 * 1024, true);
     assert.equal(trace.tool_call.content.includes('<TRUNCATED original_bytes=9000>'), true);
     assert.equal(trace.tool_result.content.includes('<TRUNCATED original_bytes=34000>'), true);
+  });
+});
+
+test('PostToolUse rejects the first trace that would exceed the persisted turn byte budget', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    await store.createTurn({ sessionId: 'session-1', prompt: 'read' });
+    let calls = 0;
+    let successful = 0;
+    let exceeded = false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const result = await handlePostToolUse(
+        toolEvent('session-1', 'i'.repeat(8 * 1024), 'r'.repeat(32 * 1024)),
+        { turnStore: store, toolCallIdFactory: () => `budget-${++calls}` },
+      );
+      if (result.status === 'tool_trace_error') {
+        exceeded = true;
+        break;
+      }
+      assert.equal(result.status, 'tool_trace_appended');
+      successful += 1;
+    }
+    const turn = await store.getActiveTurn('session-1');
+    assert.equal(exceeded, true);
+    assert.equal(successful > 0, true);
+    assert.equal(turn.tool_events.length, successful);
+    assert.equal(Buffer.byteLength(`${JSON.stringify(turn)}\n`, 'utf8') <= TURN_MAX_BYTES, true);
   });
 });
 
