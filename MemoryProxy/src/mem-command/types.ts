@@ -12,7 +12,7 @@ export interface MemCommandContext {
   userId: string;
   apiKey: string;
   sessionInfo: Record<string, unknown>;
-  protocol: "anthropic" | "openai";
+  protocol: "anthropic" | "openai" | "responses";
   stream: boolean;
   /** 命令参数（如 create-skill 的提示词） */
   args: string;

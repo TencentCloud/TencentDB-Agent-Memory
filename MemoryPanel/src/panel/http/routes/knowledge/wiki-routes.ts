@@ -102,7 +102,7 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     return runKs(c, () => kc.wikiIngest(wikiId));
   });
 
-  // W3 get — id-only（需 read 权限）
+  // W3 get — id-only（需 read 权限）；聚合 Panel 内存 ingest progress（不新增接口）
   api.post('/knowledge/wiki/get', mw, async (c) => {
     const ctx = buildCtx(c);
     const body = await readJson(c);
@@ -111,7 +111,16 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
     const gate = await requireKnowledgeRead(deps, c, ctx, wikiId);
     if ('error' in gate) return gate.error;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
-    return runKs(c, () => kc.wikiGet(wikiId));
+    return runKs(c, async () => {
+      const detail = await kc.wikiGet(wikiId);
+      const status = (detail as { status?: string } | null)?.status;
+      const stored =
+        status === 'processing' ? deps.ingestProgressStore.get(wikiId) : null;
+      return {
+        ...(detail as unknown as Record<string, unknown>),
+        progress: stored,
+      };
+    });
   });
 
   // W5 delete — 删三处：KS + entity_knowledge 明细 + meta_asset（见 §0.6）

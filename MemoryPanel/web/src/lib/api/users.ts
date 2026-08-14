@@ -1,5 +1,5 @@
 /**
- * api/users.ts — User + UserKey + UserConfig（链路 A：meta/user/* + meta/user-key/* + meta/config/user/*）。
+ * api/users.ts — User + UserKey + UserConfig（meta/user/* + meta/user-key/* + meta/config/user/*）。
  */
 import { metaPost, metaListAll, getCurrentUser, dedupeInFlight } from './base';
 import type { PublicUser } from './types';
@@ -21,21 +21,30 @@ export const usersApi = {
   get: (userId: string) => metaPost<PublicUser>('user/get', { user_id: userId }),
 
   /**
-   * 新建用户（透明代理至内核 user/create）。
+   * 新建用户（透明代理至后端 user/create）。
    *
-   * 内核响应为 CreateUserResult：含 user_id / user_type / created_at / default_user_key。
+   * 响应为 CreateUserResult：含 user_id / user_type / created_at / default_user_key。
    * default_user_key 为一次性明文密钥，仅此次响应返回。
    *
-   * ⚠️ 权限：OpenAPI §1.4 — 须 Header X-Tdai-User-Key 为 system_admin；
-   *         普通用户 → 内核 403。Legacy 模式 Control 会用 METADATA_SYSTEM_ADMIN_USER_KEY
-   *         代调；stateless 模式下 Control 透明代理当前用户 key，需当前用户持有 system_admin 权限。
-   *         若团队管理员无 system_admin 权限，此接口会报 403，届时需后端支持。
+   * ⚠️ 权限：须当前用户持有 system_admin 权限；普通用户 → 403。
    */
   create: (data: { username: string; auth_provider: string; external_id: string; display_name?: string; email?: string }) =>
     metaPost<CreateUserResult>('user/create', data),
 
   /**
-   * 删除用户（透明代理至内核 user/delete）。
+   * 新建用户并显式指定 user_key（透明代理至后端 user/create-with-key）。
+   *
+   * user/create 的姊妹接口：所有行为对齐 create，唯一区别是 default_user_key 直接采用调用方给的 user_key，
+   * 而非由内核自动生成。适用于「面板 admin 建号时需要预先分配已知 key 给外部下发」的场景。
+   * user_key 冲突会由内核返回 409 `duplicate_user_key`，Panel 后端原样透传。
+   *
+   * ⚠️ 权限同 create：须当前用户持有 system_admin 权限；普通用户 → 403。
+   */
+  createWithKey: (data: { username: string; user_key: string }) =>
+    metaPost<CreateUserResult>('user/create-with-key', data),
+
+  /**
+   * 删除用户（透明代理至后端 user/delete）。
    *
    * ⚠️ 权限同上，须 system_admin 才能调用。
    */
@@ -44,7 +53,7 @@ export const usersApi = {
 
 // ========================= User API Keys（meta/user-key/*）=========================
 //
-// 走标准 meta action（与 team/agent 同模型，双 Header 鉴权），非链路 B 的 REST 包装。
+// 走标准 meta action（与 team/agent 同模型，双 Header 鉴权）。
 
 export interface UserKey {
   key_id: string;

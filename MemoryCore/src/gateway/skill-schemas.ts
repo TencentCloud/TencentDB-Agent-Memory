@@ -125,6 +125,32 @@ export const getRequestSchema = z.object({
   include_manifest: z.boolean().optional(),
 }).superRefine(refineAgentNeedsTeam);
 
+/**
+ * `POST /v3/skill/get-by-name` —— 基于 (team_id, agent_id, skill_name) 唯一定位。
+ *
+ * 存在动机:agent 通过工具调用 skill 时,更自然地使用 skill_name(与
+ * `<available_skills>` 块里渲染的 `- name: description` 一致),而不是内部
+ * `skl-xxx` id。之前 agent 必须先 skill_list 再解析出 skill_id 才能 get,
+ * 一次交互两次调用还费 tokens。新接口让 agent 一次拿到全文。
+ *
+ * 唯一性契约:同一 `(team_id, agent_id)` 下 skill_name 唯一(由 skill_create 侧
+ * 42201 SKILL_NAME_DUPLICATE 保证)。三个字段都必填:
+ *   - team_id + agent_id → owner scope
+ *   - skill_name          → 具体名字
+ *
+ * 缺 team_id 或 agent_id 直接 40001; 找不到 name 返回 40401(与 get 对齐)。
+ */
+export const getByNameRequestSchema = z.object({
+  user_id: z.string().min(1).optional(),
+  team_id: z.string().min(1),
+  agent_id: z.string().min(1),
+  task_id: z.string().min(1).optional(),
+  skill_name: z.string().min(1).max(64),
+  version: z.number().int().min(1).optional(),
+  include_content: z.boolean().optional(),
+  include_manifest: z.boolean().optional(),
+});
+
 export const listRequestSchema = z.object({
   ...idFieldsShape,
   filters: z.object({
@@ -170,6 +196,13 @@ export const filesReadRequestSchema = z.object({
   version: z.number().int().min(1).optional(),
   path: z.string().min(1),
   encoding: z.enum(["utf-8", "base64"]).optional(),
+}).superRefine(refineAgentNeedsTeam);
+
+export const exportRequestSchema = z.object({
+  ...idFieldsShape,
+  skill_id: z.string().min(1),
+  version: z.number().int().min(1).optional(),
+  format: z.enum(["zip"]).optional(),
 }).superRefine(refineAgentNeedsTeam);
 
 export const listingRequestSchema = z.object({
@@ -239,12 +272,14 @@ export type UpdateRequest = z.infer<typeof updateRequestSchema>;
 export type PatchRequest = z.infer<typeof patchRequestSchema>;
 export type DeleteRequest = z.infer<typeof deleteRequestSchema>;
 export type GetRequest = z.infer<typeof getRequestSchema>;
+export type GetByNameRequest = z.infer<typeof getByNameRequestSchema>;
 export type ListRequest = z.infer<typeof listRequestSchema>;
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
 export type VersionsRequest = z.infer<typeof versionsRequestSchema>;
 export type FilesWriteRequest = z.infer<typeof filesWriteRequestSchema>;
 export type FilesRemoveRequest = z.infer<typeof filesRemoveRequestSchema>;
 export type FilesReadRequest = z.infer<typeof filesReadRequestSchema>;
+export type ExportRequest = z.infer<typeof exportRequestSchema>;
 export type ListingRequest = z.infer<typeof listingRequestSchema>;
 export type ExtractRequest = z.infer<typeof extractRequestSchema>;
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;

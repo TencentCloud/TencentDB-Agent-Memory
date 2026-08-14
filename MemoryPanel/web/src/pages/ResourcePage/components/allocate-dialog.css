@@ -28,7 +28,7 @@
 }
 
 ._memory-allocate-desc-asset {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-brand-default);
   word-break: break-all;
 }
@@ -42,7 +42,7 @@
   border-radius: 4px;
   background: var(--tea-color-bg-secondary-default);
   padding: 4px 8px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-secondary);
 }

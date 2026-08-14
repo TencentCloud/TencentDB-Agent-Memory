@@ -96,6 +96,21 @@ pnpm test
 pnpm build        # tsdown → dist/
 ```
 
+## 可选：ClickHouse 工具调用埋点
+
+默认关闭。设置以下环境变量后，Knowledge Service 会把 `POST /v3/tools/call` 写入与 Memory/Skill 兼容的 `tool_call_logs`；启动时会幂等建表，批写或建表失败均不阻断业务请求。
+
+```dotenv
+KNOWLEDGE_CLICKHOUSE_ENABLED=true
+KNOWLEDGE_CLICKHOUSE_URL=http://clickhouse.example.com:8123
+KNOWLEDGE_CLICKHOUSE_DATABASE=default
+KNOWLEDGE_CLICKHOUSE_TABLE=tool_call_logs
+KNOWLEDGE_CLICKHOUSE_USER=knowledge_writer
+KNOWLEDGE_CLICKHOUSE_PASSWORD=              # 仅从环境注入，不写入代码
+```
+
+可选调优项见 `.env.example`。若调用方传入 `x-conversation-id`、`x-tdai-user-id`、`x-tdai-team-id`、`x-tdai-agent-id`、`x-tdai-agent-source`、`x-tdai-space-id`、`x-tdai-turn-seq`，这些维度会一并入库；缺失时对应列为空。请求正文递归脱敏并截断到 512 bytes。
+
 ## 可选：Langfuse
 
 配置 `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`（及可选 `LANGFUSE_BASE_URL`）即可上报 Wiki LLM 调用。  

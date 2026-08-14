@@ -1,7 +1,5 @@
 /**
- * api/skills.ts — Skill 数据面（/api/v1/skill/*，内核 /v3/skill/*）。
- *
- * 对接文档：tdai-memory-openclaw-plugin/docs/skill-api-for-frontend.md
+ * api/skills.ts — Skill 数据面（/api/v1/skill/*）。
  *
  * 与 meta 链路的关键区别：
  *   - skill 有独立存储与主键 skill_id（前缀 skl-），团队内可读、owner agent 可写；
@@ -233,8 +231,8 @@ export const skillApi = {
    *
    * 为什么用 fork 而不是 meta 授权（acl/grant）：
    *   - 「固定资产」tab（SkillsPanel）按 `owner_agent_id` 过滤展示；
-   *   - agent 运行时注入 `<available_skills>`（/skill/listing → core.list）同样按
-   *     `owner_agent_id` 过滤（skill-core.ts：`owner_agent_id = agent_id`）。
+   *   - agent 运行时注入 `<available_skills>`（/skill/listing）同样按
+   *     `owner_agent_id` 过滤。
    *   两处读取都认 `owner_agent_id`，而 acl/grant 只改 meta 授权层，对它们均无效。
    *   因此让 skill 真正归属某 agent 的唯一机制就是复制一份 owner=该 agent 的副本。
    *

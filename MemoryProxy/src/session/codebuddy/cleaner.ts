@@ -70,9 +70,12 @@ export function getLastUserMessageText(messages: RawMessage[]): string {
     const text = getMessageText(messages[i]);
     if (!text) continue;
 
-    // Tool messages linked to a session-init tool_call are always relevant
+    // Tool messages linked to a session-init tool_call are always relevant.
+    // 兼容三种前缀：CB 的 `call_session_init_`、WB 的 `call_wb_session_init_`
+    // （workbuddy/form.ts 里 TOOLCALL_PREFIX = "call_wb_session_init_"）、
+    // dsh 的 `call_dsh_session_init_`（dsh/form.ts TOOLCALL_PREFIX）。
     const tcid = (messages[i] as any).tool_call_id as string | undefined;
-    if (role === "tool" && tcid && /call_session_init_/.test(tcid)) {
+    if (role === "tool" && tcid && /call_(wb_|dsh_)?session_init_/.test(tcid)) {
       return text;
     }
 

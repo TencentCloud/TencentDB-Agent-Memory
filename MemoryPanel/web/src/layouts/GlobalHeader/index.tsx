@@ -106,7 +106,7 @@ export function GlobalHeader({
                 <dd>{currentUser}</dd>
               </div>
               <div>
-                <dt>User ID</dt>
+                <dt>{t('header.profile.userId')}</dt>
                 <dd>
                   <code>{currentUserId}</code> <Copy text={currentUserId} />
                 </dd>

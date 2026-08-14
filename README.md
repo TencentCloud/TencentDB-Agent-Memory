@@ -14,7 +14,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[Installation](#installation) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark)
+[Installation](#installation) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [**English**](./README.md) · [简体中文](./README_CN.md)
 
@@ -260,12 +260,21 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 
 ## Related Documentation
 
+- [Roadmap](./ROADMAP.md) (what we're building next)
 - [Full Installation Guide](./INSTALL.md) (Memory Core + Hub + Proxy one-click deployment)
+- [Roadmap](./ROADMAP.md) (what we're building next; 中文: [ROADMAP_CN.md](./ROADMAP_CN.md))
 - [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md) (if you're on an older release and want to migrate existing data)
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
 - [Contributing Guide](./CONTRIBUTING.md)
 
 Agent Memory doesn't have a settled standard yet. Bug reports, documentation, benchmarks, new framework adapters, and more creative Memory Hub use cases are all welcome.
+
+---
+## Roadmap
+
+Current release is **v2.0.0**. Next up (**v2.0.1**): zero-config cold start, faster Wiki generation, user/team custom prompts, Skill export, and Codex (IDE Plan mode) support.
+
+👉 See the full plan in [**ROADMAP.md**](./ROADMAP.md) (中文: [ROADMAP_CN.md](./ROADMAP_CN.md)).
 
 ---
 ## Acknowledgements
@@ -325,5 +334,16 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
   </tr>
 </table>
 
+---
+
+## Star History
+
+<p align="center">
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
+</p>
+
+---
 
 [MIT](./LICENSE) © TencentDB Agent Memory Team

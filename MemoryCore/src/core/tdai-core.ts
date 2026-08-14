@@ -948,6 +948,7 @@ export class TdaiCore {
             headChars: resolved.extraction.headChars,
             tailChars: resolved.extraction.tailChars,
             maxTokens: resolved.extraction.maxTokens,
+            prefixSkillsLimit: resolved.extraction.prefixSkillsLimit,
             logger: this.logger,
           });
         } else {
@@ -1038,6 +1039,15 @@ export class TdaiCore {
     store: IMemoryStore,
     embedding: EmbeddingService,
     storage?: StorageAdapter,
+    /**
+     * service 模式必须传：跨节点保护 checkpoint 读改写的分布式锁。
+     *
+     * 同 instance 的 checkpoint 是**同一个** COS 对象，而 L1 的任务锁是
+     * session 级 —— 不同 session / 不同 agent 会在多节点合法并发，
+     * 若不额外互斥，后写者会用旧快照覆盖先写者的 runner_states（L1 游标丢失）。
+     * standalone 单进程不需要传（进程内 withFileLock 已足够）。
+     */
+    checkpointLock?: import("../utils/checkpoint.js").CheckpointLockOptions,
   ): Promise<{ storedCount: number; creditUsed: number; hasMore: boolean; hasFullBacklog: boolean; profileScopes: string[] }> {
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
     const openclawConfig = (!useStandaloneRunner && this.hostAdapter.hostType === "openclaw")
@@ -1072,6 +1082,7 @@ export class TdaiCore {
       getInstanceId: () => this.instanceId,
       llmRunner,
       storage: storage ?? this.getStorage(),
+      checkpointLock,
     });
     const result = await runner({ sessionKey, msg: [], bg_msg: [] });
 

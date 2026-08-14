@@ -415,17 +415,18 @@ export class InjectionPipeline {
 
       case "system.before_tools":
       case "system.after_tools": {
-        // For now, treat these as system suffix/prefix respectively
-        // They will be refined in CodeBuddy-specific layer
+        // Fallback semantics for anchor-unresolved hooks: append to the end of
+        // the system message. The previous behavior for `system.before_tools`
+        // was to prepend (顶到最前面)，会把 knowledge/skill/rules 等资产块甩到
+        // 用户 persona 前面污染开场，尤其在子 agent / 简化 system prompt 场景
+        // (锚点永远解析不到) 直接看到 <knowledge_tools> 位于 offset 0。
+        // 统一收敛为 "锚点找不到 → 挂到系统提示词末尾"，跟 system.suffix 行为
+        // 一致，跟 asset-reflection / tdai-tools 这些 suffix 类块的落位对齐。
         const sysMsg = getSystemMessage(ctx);
         if (!sysMsg) break;
         for (const block of blocks) {
           if (block.type === "text") {
-            if (point === "system.before_tools") {
-              prependTextToMessage(sysMsg, block.content);
-            } else {
-              appendTextToMessage(sysMsg, block.content);
-            }
+            appendTextToMessage(sysMsg, block.content);
           }
         }
         break;

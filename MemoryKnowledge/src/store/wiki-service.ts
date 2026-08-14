@@ -22,6 +22,7 @@ import {
   statSync,
   existsSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 import type {
   AuditAction,
@@ -50,6 +51,8 @@ export interface WikiBuildContext {
   name: string;
   dir: string;
   setInternalStatus: (s: string) => void;
+  /** 单次 ingest 代际；进度/终态 callback 共用，防 Panel 迟到包 */
+  ingestRunId: string;
 }
 
 export interface WikiBuildResult {
@@ -646,7 +649,7 @@ export class WikiService {
    * 列出 wiki/ 下的 page 文件（recursive 扫描 .md 取 frontmatter）。
    * status≠ready 时返回空数组。
    */
-  pageLs(serviceId: string, teamId: string, wikiId: string): { id: string; title: string; type: string; path: string; locked?: boolean }[] | null {
+  pageLs(serviceId: string, teamId: string, wikiId: string): { id: string; title: string; type: string; path: string; description?: string; locked?: boolean }[] | null {
     const row = this.store.getWiki(serviceId, teamId, wikiId);
     if (!row) return null;
     if (row.status !== "ready") return [];
@@ -655,7 +658,7 @@ export class WikiService {
     const wikiDir = join(projectPath, "wiki");
     if (!existsSync(wikiDir)) return [];
 
-    const items: { id: string; title: string; type: string; path: string; locked?: boolean }[] = [];
+    const items: { id: string; title: string; type: string; path: string; description?: string; locked?: boolean }[] = [];
     this.scanPagesRecursive(wikiDir, wikiDir, items);
     return items;
   }
@@ -965,7 +968,7 @@ export class WikiService {
   private scanPagesRecursive(
     baseDir: string,
     dir: string,
-    out: { id: string; title: string; type: string; path: string; locked?: boolean }[],
+    out: { id: string; title: string; type: string; path: string; description?: string; locked?: boolean }[],
   ): void {
     if (!existsSync(dir)) return;
     for (const entry of readdirSync(dir)) {
@@ -996,6 +999,7 @@ export class WikiService {
         title: fm.title || entry.replace(/\.md$/, "").replace(/-/g, " "),
         type: fm.type || "other",
         path: `wiki/${rel}`,
+        ...(fm.description ? { description: fm.description } : {}),
         locked: fm.locked,
       });
     }
@@ -1018,6 +1022,8 @@ export class WikiService {
       internal_status: "scanning",
       sync_error: null,
     });
+    // 进度/终态 callback 共用同一代际，Panel 可拒绝 clear 后的迟到 progress
+    const ingestRunId = randomUUID();
     try {
       const result = await this.worker({
         wikiId,
@@ -1027,6 +1033,7 @@ export class WikiService {
         dir: this.dirFor(serviceId, teamId, wikiId),
         setInternalStatus: (s) =>
           this.store.updateWikiStatus(serviceId, wikiId, { status: "processing", internal_status: s }),
+        ingestRunId,
       });
       // 结束前检查点：processing 期间被删 → 跳过 ready/audit/回调，幂等收尾清理。
       if (this.isDeleted(serviceId, wikiId)) {
@@ -1047,7 +1054,7 @@ export class WikiService {
       this.logger?.info?.(`[wiki] ${wikiId} ready (pages: ${result?.pageCount ?? '?'})`);
 
       // Auto-generate summary + callback TMC
-      await this.onBuildComplete(synced, "ready", null);
+      await this.onBuildComplete(synced, "ready", null, ingestRunId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // worker 抛错，但若期间已被删，视为取消而非失败：跳过 failed 状态/回调，做清理。
@@ -1065,7 +1072,7 @@ export class WikiService {
       this.logger?.warn?.(`[wiki] ${wikiId} failed: ${msg}`);
 
       // Callback TMC about failure
-      await this.onBuildComplete(failed, "failed", msg);
+      await this.onBuildComplete(failed, "failed", msg, ingestRunId);
     }
   }
 
@@ -1077,6 +1084,7 @@ export class WikiService {
     row: WikiRow | null,
     status: "ready" | "failed",
     errorMsg: string | null,
+    ingestRunId?: string,
   ): Promise<void> {
     if (!row || !this.callbackConfig) return;
 
@@ -1091,7 +1099,7 @@ export class WikiService {
         summary = await generateWikiSummary(
           row.wiki_id,
           row.name,
-          pages.map((p) => ({ title: p.title })),
+          pages.map((p) => ({ title: p.title, description: p.description })),
           this.callbackConfig.resolveLlm(row.service_id),
         );
         this.logger?.info?.(`[wiki] summary generation done (wikiId=${row.wiki_id}, len=${summary?.length ?? 0}, empty=${!summary})`);
@@ -1114,6 +1122,7 @@ export class WikiService {
         summary,
         sync_error: errorMsg?.slice(0, 500) ?? null,
         timestamp: new Date().toISOString(),
+        ...(ingestRunId ? { run_id: ingestRunId } : {}),
       },
       this.callbackConfig,
     );
@@ -1126,16 +1135,20 @@ export class WikiService {
 
 // ─── 模块级 helper（不依赖 class state，便于单测） ───
 
-/** 极简 frontmatter 解析（仅取 title/type/locked），与 manager 一致风格。 */
-function parseFrontmatterMin(content: string): { title: string; type: string; locked: boolean } {
+/** 极简 frontmatter 解析（取 title/type/description/locked），与 manager 一致风格。 */
+function parseFrontmatterMin(content: string): { title: string; type: string; description: string; locked: boolean } {
   const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
   const fm = fmMatch ? fmMatch[1] : "";
   const titleMatch = fm.match(/^title:\s*["']?(.+?)["']?\s*$/m);
   const typeMatch = fm.match(/^type:\s*["']?(.+?)["']?\s*$/m);
+  // description 由 ingest-v2 写入（见 engines/wiki/ingest-v2/frontmatter.ts），
+  // 是页面的一句话概述——比标题更能说明内容，用于生成 wiki summary。
+  const descMatch = fm.match(/^description:\s*["']?(.+?)["']?\s*$/m);
   const lockedMatch = fm.match(/^locked:\s*(true|false)\s*$/m);
   return {
     title: titleMatch ? titleMatch[1].trim() : "",
     type: typeMatch ? typeMatch[1].trim().toLowerCase() : "",
+    description: descMatch ? descMatch[1].trim() : "",
     locked: lockedMatch ? lockedMatch[1] === "true" : false,
   };
 }

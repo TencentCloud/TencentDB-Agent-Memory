@@ -359,7 +359,10 @@ export function parseV2Auth(
     return null;
   }
 
-  return { apiKey: authHeader.slice(7).trim(), serviceId: serviceId.trim() };
+  return Object.fromEntries([
+    ["apiKey", authHeader.slice(7).trim()],
+    ["serviceId", serviceId.trim()],
+  ]) as V2AuthContext;
 }
 
 // ============================
@@ -478,7 +481,8 @@ export async function handleV2Route(
    * /v3/skill/* from `makeSkillRouteTable()`). Looked up only when the
    * built-in `routeTable` doesn't contain the pathname, so module-level
    * routes always win on collision. Supports `/v2/*`, `/v3/*` (L0–L3
-   * data-plane + extraRouteTable for /v3/skill/* and /v3/knowledge/*).
+   * data-plane + extraRouteTable for /v3/skill/*, /v3/knowledge/* and
+   * /v3/chat-memory/*).
    *
    * The handler's `deps` parameter is intentionally typed `unknown` here:
    * extra modules (skill/*, future namespaces) declare their own deps
@@ -491,14 +495,25 @@ export async function handleV2Route(
     (body: unknown, auth: V2AuthContext, requestId: string, deps: unknown) => Promise<ApiResponseEnvelope>
   >,
 ): Promise<boolean> {
-  if (method !== "POST") return false;
+  const isPromptRead = method === "GET" && (
+    pathname === "/v3/memory-prompt/get" ||
+    pathname === "/v3/memory-prompt/setting/list" ||
+    pathname === "/v3/memory-prompt/log" ||
+    pathname === "/v3/memory-generation-log/list" ||
+    pathname === "/v3/memory-generation-log/get"
+  );
+  if (method !== "POST" && !isPromptRead) return false;
   const isV3 = pathname.startsWith(`${V3_PREFIX}/`);
   const isV2 = pathname.startsWith(`${V2_PREFIX}/`);
-  // /v3/skill/* and /v3/knowledge/* are provided by extraRouteTable
-  // (makeSkillRouteTable / makeKnowledgeRouteTable), NOT in the built-in
-  // V3_ALLOWED_SUBPATHS. Both are management-plane, bypass strict isolation.
+  // Management-plane modules are provided by extraRouteTable, not by the
+  // built-in V3 data-plane list. They bypass strict L0-L3 isolation because
+  // each module validates its own target semantics.
   const isV3Extra = !!extraRouteTable && (
-    pathname.startsWith("/v3/skill/") || pathname.startsWith("/v3/knowledge/")
+    pathname.startsWith("/v3/skill/") ||
+    pathname.startsWith("/v3/knowledge/") ||
+    pathname.startsWith("/v3/chat-memory/") ||
+    pathname.startsWith("/v3/memory-prompt/") ||
+    pathname.startsWith("/v3/memory-generation-log/")
   );
   if (!isV2 && !isV3) return false;
 
@@ -558,7 +573,9 @@ export async function handleV2Route(
     };
 
     const bodyStart = Date.now();
-    const body = await parseJsonBody(req);
+    const body = method === "GET"
+      ? Object.fromEntries(new URL(req.url ?? pathname, "http://localhost").searchParams.entries())
+      : await parseJsonBody(req);
     perfMark("parseJsonBody", `dur=${Date.now() - bodyStart}ms len=${req.headers["content-length"] ?? "?"}`);
 
     // Tenancy isolation — pulled from body (preferred) or x-tdai-* headers
@@ -695,11 +712,15 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
 
   const embedding = deps.getEmbedding();
   const acceptedIds: string[] = [];
+  const acceptedRecords: L0Record[] = [];
   const ingestBaseMs = Date.now();
 
   for (const [index, msg] of messages.entries()) {
     const id = `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const recordedAtMs = ingestBaseMs + index;
+    const ingestRecordedAtMs = ingestBaseMs + index;
+    const recordedAtMs = msg.recorded_at
+      ? new Date(msg.recorded_at).getTime()
+      : ingestRecordedAtMs;
     const record: L0Record = {
       id,
       sessionKey: session_id,
@@ -722,6 +743,7 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
 
     await store.upsertL0(record, emb);
     acceptedIds.push(id);
+    acceptedRecords.push(record);
   }
 
   // Notify pipeline: trigger async L1 extraction (service mode).
@@ -748,21 +770,28 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
     const storage = deps.getStorage();
     if (storage) {
       try {
-        const recordKey = StoragePaths.conversation(formatLocalDateForJsonl(new Date(ingestBaseMs)));
-        const lines = messages.map((msg, idx) => JSON.stringify({
-          id: acceptedIds[idx],
-          sessionKey: session_id,
-          sessionId: session_id,
-          taskId: iso?.taskId,
-          teamId: iso?.teamId,
-          userId: iso?.userId,
-          agentId: iso?.agentId,
-          role: msg.role,
-          content: msg.content,
-          recordedAt: new Date(ingestBaseMs + idx).toISOString(),
-          timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : ingestBaseMs + idx,
-        })).join("\n") + "\n";
-        await storage.appendFile(recordKey, lines);
+        const linesByRecordKey = new Map<string, string[]>();
+        for (const record of acceptedRecords) {
+          const recordKey = StoragePaths.conversation(formatLocalDateForJsonl(new Date(record.recordedAt)));
+          const lines = linesByRecordKey.get(recordKey) ?? [];
+          lines.push(JSON.stringify({
+            id: record.id,
+            sessionKey: record.sessionKey,
+            sessionId: record.sessionId,
+            taskId: record.taskId,
+            teamId: record.teamId,
+            userId: record.userId,
+            agentId: record.agentId,
+            role: record.role,
+            content: record.messageText,
+            recordedAt: record.recordedAt,
+            timestamp: record.timestamp,
+          }));
+          linesByRecordKey.set(recordKey, lines);
+        }
+        for (const [recordKey, lines] of linesByRecordKey) {
+          await storage.appendFile(recordKey, `${lines.join("\n")}\n`);
+        }
       } catch (err) {
         deps.logger.warn(`${TAG} JSONL mirror failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -959,31 +988,50 @@ async function handleConversationSearch(body: unknown, auth: V2AuthContext, requ
 async function handleConversationDelete(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = conversationDeleteRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { message_ids, session_id } = parsed.data;
+  // schema 已归一：message_ids / session_ids 都是去重后的数组（单数 session_id 已合并进来）。
+  const { message_ids, session_ids } = parsed.data;
 
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
-  let deletedCount = 0;
+  // 删除的作用域是 (team, user, agent)，**不含 session**。
+  // /v3 严格 isolation 要求请求头带 session_id，但删除语义是"删指定的
+  // message / session"，若把 requestIsolation.sessionId 也塞进 filter，
+  // 就只能删当前会话 —— 批量删多个 session 会被静默过滤成 0 条。
+  const iso = deps.requestIsolation;
+  const scope = iso
+    ? { teamId: iso.teamId, userId: iso.userId, agentId: iso.agentId, taskId: iso.taskId }
+    : undefined;
 
-  if (message_ids && message_ids.length > 0) {
-    for (const id of message_ids) {
-      const ok = await store.deleteL0(id, deps.requestIsolation);
-      if (ok) deletedCount++;
-    }
-  } else if (session_id) {
-    // Use deleteL0BySession if available, else fallback
+  // message_ids 与 session_ids 可同时给出；两条路径都跑，用 id 集合去重避免
+  // 同一条消息被session 路径重复计数。
+  const deletedRecordIds = new Set<string>();
+
+  for (const id of message_ids) {
+    const ok = await store.deleteL0(id, scope);
+    if (ok) deletedRecordIds.add(id);
+  }
+
+  let sessionDeletedCount = 0;
+  for (const sessionId of session_ids) {
     if (store.deleteL0BySession) {
-      deletedCount = await store.deleteL0BySession(session_id, deps.requestIsolation);
-    } else {
-      const rows = await store.queryL0ForL1(session_id, undefined, 10000);
-      const sessionRows = rows.filter((r) => r.session_key === session_id || r.session_id === session_id);
-      for (const row of sessionRows) {
-        const ok = await store.deleteL0(row.record_id, deps.requestIsolation);
-        if (ok) deletedCount++;
-      }
+      sessionDeletedCount += await store.deleteL0BySession(sessionId, scope);
+      continue;
+    }
+    // Fallback：store 未实现按 session 删除时逐条删。
+    const rows = await store.queryL0ForL1(sessionId, undefined, 10000);
+    const sessionRows = rows.filter((r) => r.session_key === sessionId || r.session_id === sessionId);
+    for (const row of sessionRows) {
+      if (deletedRecordIds.has(row.record_id)) continue;
+      const ok = await store.deleteL0(row.record_id, scope);
+      if (ok) deletedRecordIds.add(row.record_id);
     }
   }
+
+  // deleteL0BySession 只回行数（无法回id），所以两条路径的计数相加。
+  // 同一批请求里message_ids 与 session_ids 重叠时可能轻微重复计数，
+  // 这是 store 接口的既有限制，不影响实际删除的正确性。
+  const deletedCount = deletedRecordIds.size + sessionDeletedCount;
 
   // Report memory deletion (non-fatal)
   if (deps.quotaManager && deletedCount > 0) {

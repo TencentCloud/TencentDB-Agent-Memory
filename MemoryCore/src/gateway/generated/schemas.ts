@@ -86,7 +86,8 @@ get "role"(){
                 return conversationRoleSchema
               },
 "content": z.string().min(1).max(8192),
-"timestamp": z.optional(z.iso.datetime())
+"timestamp": z.optional(z.iso.datetime().describe("消息实际发生时间；不传时使用服务端接收时间。")),
+"recorded_at": z.optional(z.iso.datetime().describe("历史导入时指定原始入库时间；不传时使用服务端接收时间。"))
     }).describe("一条原始对话消息。形状与 offload.yaml 同名 schema 一致。\n`id` / `version` 为只读字段：写入入口不接受调用方指定，读取\n入口必返回；`version` 在每次该消息被更新时自增。\n") as unknown as z.ZodType<ConversationItem>
 
 export const conversationAddRequestSchema = z.lazy(() => idFieldsSchema).and(z.object({
@@ -136,7 +137,9 @@ export const conversationSearchDataSchema = z.object({
     }) as unknown as z.ZodType<ConversationSearchData>
 
 export const conversationDeleteRequestSchema = z.object({
-    "message_ids": z.array(z.string()).min(1).max(100).describe("待删除的对话消息 id 列表。")
+    "message_ids": z.optional(z.array(z.string()).min(1).max(5000).describe("待删除的对话消息 id 列表。单次至多 5000 条。")),
+"session_ids": z.optional(z.array(z.string()).min(1).max(100).describe("待清空的会话 id 列表，单次至多 100 条。")),
+"session_id": z.optional(z.string().describe("已废弃，改用 session_ids。"))
     }) as unknown as z.ZodType<ConversationDeleteRequest>
 
 export const conversationDeleteDataSchema = z.object({
@@ -207,7 +210,7 @@ export const atomicSearchDataSchema = z.object({
  * @description L1 笔记按 id 批量删除请求。本期仅支持按主键精确删除，不接受\n按 `type` / 时间区间等条件批删；`ids` 缺省或为空数组视为非法\n请求，返回业务错误码 `400`。本接口不带分页参数。\n
  */
 export const atomicDeleteRequestSchema = z.object({
-    "ids": z.array(z.string()).min(1).max(100).describe("笔记主键列表，单次至多 100 条。")
+    "ids": z.array(z.string()).min(1).max(5000).describe("笔记主键列表，单次至多 5000 条。")
     }).describe("L1 笔记按 id 批量删除请求。本期仅支持按主键精确删除，不接受\n按 `type` / 时间区间等条件批删；`ids` 缺省或为空数组视为非法\n请求，返回业务错误码 `400`。本接口不带分页参数。\n") as unknown as z.ZodType<AtomicDeleteRequest>
 
 export const atomicDeleteDataSchema = z.object({

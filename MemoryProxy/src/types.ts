@@ -212,6 +212,24 @@ export interface SessionInitConfig {
     task_id?: string;
   };
   /**
+   * DEBUG：把请求识别到的 userId（来自 auth verify / x-user-id 头等）强制
+   * 覆盖为指定值。用于本地联调时——客户端传的 tokenhub-uid 与 kernel-uid 不一致
+   * （kernel 侧资产挂在另一个真实 user_id 下），无法通过 kernel /team/list 拉到
+   * 资产，导致 CB 状态机走 "no active agents, passing through" bypass。
+   *
+   * 配置此字段后，handler 层会用此 user_id 替换识别结果，让 CB 状态机以真实
+   * kernel 用户身份拉资产列表，弹出完整 team→agent→task 表单流程。
+   *
+   * 仅供本地/e2e 联调，生产环境务必留空。
+   */
+  debugForceUserId?: string;
+  /**
+   * DEBUG：开启详细诊断日志（包括请求 tools schema、system prompt 摘要、
+   * 用户输入文本等）。仅用于本地联调排查 session-init 表单交互问题。
+   * 生产环境务必保持 false 或不配置（默认关闭）。
+   */
+  debugVerboseLogging?: boolean;
+  /**
    * 从请求头自动预选 team/agent/task 身份。
    *
    * 当首轮请求头已带上身份字段时，先去（当前认证用户可见的）team/agent/task
@@ -481,10 +499,29 @@ export interface ProxyConfig {
    * 详见 docs/design/2026-07-30-cc-request-routing-plan.md
    */
   ccRequestRouting: CcRequestRoutingConfig;
+
+  /**
+   * WorkBuddy 请求分流总开关（运维 kill switch）。
+   *
+   * 启用时（默认）：调用 `classifyWorkbuddyRequest` 将请求分为 main / auxiliary
+   *   两类，auxiliary 请求直接 passthrough（跳过 session-init / injection / L0 /
+   *   skill 归档），credit 仍上报。
+   * 关闭时：所有请求视为 main，走完整业务链路 —— 等价于 aux 分流未启用的老链路，
+   *   用于 aux 分类规则出问题时快速回滚。
+   *
+   * 默认启用（与 CC 的 `ccRequestRouting.enabled` 默认 false 不同）：WB 的 aux
+   *   分流已在生产跑通并有日志验证，此开关是"保守回滚"保险而非"灰度上线"开关。
+   */
+  workbuddyRequestRouting: WorkbuddyRequestRoutingConfig;
 }
 
 export interface CcRequestRoutingConfig {
   /** 是否启用 CC 请求分流。默认 false —— 关闭时走完全等价原有行为的老链路。 */
+  enabled: boolean;
+}
+
+export interface WorkbuddyRequestRoutingConfig {
+  /** 是否启用 WB 请求分流。默认 true —— 关闭时所有请求视为 main，跳过 aux 分流。 */
   enabled: boolean;
 }
 
@@ -760,6 +797,8 @@ export interface RawYamlConfig {
       agent_id?: string;
       task_id?: string;
     };
+    debugForceUserId?: string;
+    debugVerboseLogging?: boolean;
     headerAutoSelect?: {
       enabled?: boolean;
       teamHeader?: string;
@@ -834,6 +873,13 @@ export interface UsageLogEntry {
   stream: boolean;
   usage: Record<string, unknown>; // raw LLM usage object, unmodified
   routedFrom?: string;     // original model if routing was applied
+  /**
+   * Scalar counters reported by the optional private request-preparation
+   * stage, recorded verbatim. The host neither defines nor interprets the key
+   * set — it varies with the extension version, and omitting the field means
+   * the stage did not run. See `request-prepare-adapter.ts`.
+   */
+  extensionStats?: Record<string, unknown>;
   /** Space/tenant ID extracted from /proxy/<spaceId>/... path. */
   spaceId?: string;
   /**

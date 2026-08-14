@@ -40,6 +40,21 @@ export interface ResolverLogger {
 
 const TAG = "[skill][config]";
 
+/** 通用正整数校验: 传入值有效则用, 否则 warn 落回默认。 */
+function validPositiveInteger(
+  raw: number | undefined,
+  fallback: number,
+  logger: ResolverLogger,
+  fieldName: string,
+): number {
+  if (raw === undefined) return fallback;
+  if (Number.isInteger(raw) && raw > 0) return raw;
+  logger.warn(
+    `${TAG} ${fieldName}=${raw} invalid (must be positive integer); falling back to ${fallback}`,
+  );
+  return fallback;
+}
+
 /**
  * @param strictMode — when true, COS/contentBackend degradations throw instead of silently
  *   falling back to local. Use in service mode where COS is always required.
@@ -160,6 +175,53 @@ export function resolveSkillConfig(
     }
   }
 
+  // --------------- worker (2026-07-30) ---------------
+  // Worker pool concurrency. 优先级: env > yaml > 默认 60。无效值 warn 落回默认。
+  const DEFAULT_WORKER_CONCURRENCY = 60;
+  const DEFAULT_WORKER_BRPOP_MS = 5000;
+  const DEFAULT_EXTRACT_LOCK_TTL_MS = 600_000;
+  // 优先级: env (合法) > yaml (合法) > 默认。env/yaml 非法值都 warn 并继续
+  // fall through, 让高优先级的坏值不吃掉低优先级的好值。
+  let workerConcurrency = DEFAULT_WORKER_CONCURRENCY;
+  const envConcurrencyRaw = process.env.TDAI_SKILL_WORKER_CONCURRENCY;
+  let envConcurrencyValid = false;
+  if (envConcurrencyRaw !== undefined && envConcurrencyRaw !== "") {
+    const parsed = Number.parseInt(envConcurrencyRaw, 10);
+    if (Number.isInteger(parsed) && parsed > 0 && String(parsed) === envConcurrencyRaw.trim()) {
+      workerConcurrency = parsed;
+      envConcurrencyValid = true;
+    } else {
+      logger.warn(
+        `${TAG} TDAI_SKILL_WORKER_CONCURRENCY=${envConcurrencyRaw} invalid (must be positive integer); ignored`,
+      );
+    }
+  }
+  if (!envConcurrencyValid && input.worker?.concurrency !== undefined) {
+    const raw = input.worker.concurrency;
+    if (Number.isInteger(raw) && raw > 0) {
+      workerConcurrency = raw;
+    } else {
+      logger.warn(
+        `${TAG} worker.concurrency=${raw} invalid (must be positive integer); ` +
+          `falling back to default ${DEFAULT_WORKER_CONCURRENCY}`,
+      );
+    }
+  }
+
+  const workerBrpopMs = validPositiveInteger(input.worker?.brpopBlockMs, DEFAULT_WORKER_BRPOP_MS, logger, "worker.brpopBlockMs");
+  const workerExtractLockTtlMs = validPositiveInteger(
+    input.worker?.extractLockTtlMs,
+    DEFAULT_EXTRACT_LOCK_TTL_MS,
+    logger,
+    "worker.extractLockTtlMs",
+  );
+  const workerExtractLockRenewMs = validPositiveInteger(
+    input.worker?.extractLockRenewIntervalMs,
+    Math.floor(workerExtractLockTtlMs / 4),
+    logger,
+    "worker.extractLockRenewIntervalMs",
+  );
+
   const resolved: ResolvedSkillConfig = {
     enabled: true,
     storeBackend,
@@ -178,6 +240,12 @@ export function resolveSkillConfig(
       maxIterations: input.extraction?.maxIterations ?? 16,
       archiveBytes,
       maxTokens: input.extraction?.maxTokens,
+      prefixSkillsLimit: validPositiveInteger(
+        input.extraction?.prefixSkillsLimit,
+        20,
+        logger,
+        "extraction.prefixSkillsLimit",
+      ),
       // 派生字段 — 命名和默认值来自 add-handler.ts / oversize-strategy.ts
       // 的 DEFAULT_* 常量，保持"改一个 archiveBytes 一切随动"的语义。
       bytesThreshold: archiveBytes,
@@ -200,6 +268,12 @@ export function resolveSkillConfig(
       allowExecutable: input.resources?.allowExecutable === true,
     },
     versionTtlSeconds: (input.versionTtlDays ?? 0) * 86400,
+    worker: {
+      concurrency: workerConcurrency,
+      brpopBlockMs: workerBrpopMs,
+      extractLockTtlMs: workerExtractLockTtlMs,
+      extractLockRenewIntervalMs: workerExtractLockRenewMs,
+    },
     degradations,
   };
 

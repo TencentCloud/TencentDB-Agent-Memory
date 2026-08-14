@@ -43,11 +43,27 @@ import type {
   KnowledgeType,
   KnowledgeListResult,
   BatchDeleteResult,
+  MemoryContentClearFilter,
+  MemoryContentClearResult,
 } from "./types.js";
 import { DEFAULT_ISOLATION_ID } from "./types.js";
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 import type { SparseVector } from "@tencentdb-agent-memory/tcvdb-text";
+import type {
+  MemoryPromptListFilter,
+  MemoryPromptRecord,
+  MemoryPromptSettingListFilter,
+  MemoryPromptSettingLogFilter,
+  MemoryPromptSettingLogRecord,
+  MemoryPromptSettingRecord,
+  MemoryPromptTargetType,
+} from "../memory-prompt/types.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLayer,
+  type MemoryGenerationRefRecord,
+} from "../memory-generation-log/types.js";
 
 // ============================
 // Config & Constants
@@ -77,6 +93,28 @@ const PROFILES_COLLECTION_SUFFIX = "profiles";
 const AUDIT_COLLECTION_SUFFIX = "memory_audit";
 /** entity_knowledge 明细注册表（见 docs/design/vdb-knowledge-collection.md）。 */
 const KNOWLEDGE_COLLECTION_SUFFIX = "knowledge";
+const MEMORY_PROMPTS_COLLECTION_SUFFIX = "memory_prompts";
+const MEMORY_PROMPT_SETTINGS_COLLECTION_SUFFIX = "memory_prompt_settings";
+const MEMORY_PROMPT_SETTING_LOGS_COLLECTION_SUFFIX = "memory_prompt_setting_logs";
+const MEMORY_GENERATION_REFS_COLLECTION_SUFFIX = "memory_generation_refs";
+
+const MEMORY_GENERATION_REF_OUTPUT_FIELDS = [
+  "id", "layer", "memory_id", "generation_id", "generation_log_id", "generation_log_key",
+  "memory_prompt_id", "memory_prompt_version", "memory_prompt_source", "created_at_ms",
+];
+
+const MEMORY_PROMPT_OUTPUT_FIELDS = [
+  "id", "name", "layer", "prompt", "version", "status",
+  "created_by", "updated_by", "created_at_ms", "updated_at_ms",
+];
+const MEMORY_PROMPT_SETTING_OUTPUT_FIELDS = [
+  "id", "target_type", "team_id", "agent_id", "layer",
+  "memory_prompt_id", "updated_by", "updated_at_ms",
+];
+const MEMORY_PROMPT_SETTING_LOG_OUTPUT_FIELDS = [
+  "id", "target_type", "team_id", "agent_id", "layer", "action", "reason",
+  "before_memory_prompt_id", "after_memory_prompt_id", "operator_id", "operated_at_ms",
+];
 
 const KNOWLEDGE_OUTPUT_FIELDS = [
   "id", "type", "team_id", "agent_id", "name", "user_id",
@@ -163,6 +201,36 @@ function joinFilter(conditions: string[]): string | undefined {
   return conditions.length > 0 ? conditions.join(" and ") : undefined;
 }
 
+/**
+ * 破坏性删除前的护栏：确认 filter 表达式非空且含所有必需的隔离字段。
+ *
+ * 背景：TCVDB `/document/delete` 在 filter 为空时会删掉**整个 collection**。
+ * 任何按条件批量删除的调用都必须先过这一关—— 与其在生产上静默清库，
+ * 不如在发请求前抛错。
+ *
+ * @param filter        joinFilter 的结果（可能是 undefined）
+ * @param op            操作名，用于错误信息定位
+ * @param requiredFields 必须出现在 filter 里的字段名（如 team_id / agent_id）
+ */
+function assertDeleteFilterSafe(
+  filter: string | undefined,
+  op: string,
+  requiredFields: string[],
+): void {
+  if (typeof filter !== "string" || filter.trim().length === 0) {
+    throw new Error(
+      `[tcvdb] refusing ${op}: empty delete filter would wipe the whole collection`,
+    );
+  }
+  for (const field of requiredFields) {
+    if (!filter.includes(`${field} = "`)) {
+      throw new Error(
+        `[tcvdb] refusing ${op}: delete filter missing required scope field "${field}"`,
+      );
+    }
+  }
+}
+
 // ============================
 // TcvdbMemoryStore
 // ============================
@@ -178,20 +246,24 @@ export class TcvdbMemoryStore implements IMemoryStore {
   private readonly profilesCollection: string;
   private readonly auditCollection: string;
   private readonly knowledgeCollection: string;
+  private readonly memoryPromptsCollection: string;
+  private readonly memoryPromptSettingsCollection: string;
+  private readonly memoryPromptSettingLogsCollection: string;
+  private readonly memoryGenerationRefsCollection: string;
   private degraded = false;
 
   /** Promise that resolves when async init completes. */
   private _initPromise: Promise<void> | undefined;
 
   constructor(config: TcvdbMemoryStoreConfig) {
-    this.client = new TcvdbClient({
-      url: config.url,
-      username: config.username,
-      apiKey: config.apiKey,
-      database: config.database,
-      timeout: config.timeout,
-      caPemPath: config.caPemPath,
-    }, config.logger);
+    this.client = new TcvdbClient(Object.fromEntries([
+      ["url", config.url],
+      ["username", config.username],
+      ["apiKey", config.apiKey],
+      ["database", config.database],
+      ["timeout", config.timeout],
+      ["caPemPath", config.caPemPath],
+    ]) as ConstructorParameters<typeof TcvdbClient>[0], config.logger);
     this.embeddingEnabled = config.embeddingEnabled === true;
     this.embeddingModel = config.embeddingModel;
     this.logger = config.logger;
@@ -204,6 +276,10 @@ export class TcvdbMemoryStore implements IMemoryStore {
     this.profilesCollection = `${config.database}_${PROFILES_COLLECTION_SUFFIX}`;
     this.auditCollection = `${config.database}_${AUDIT_COLLECTION_SUFFIX}`;
     this.knowledgeCollection = `${config.database}_${KNOWLEDGE_COLLECTION_SUFFIX}`;
+    this.memoryPromptsCollection = `${config.database}_${MEMORY_PROMPTS_COLLECTION_SUFFIX}`;
+    this.memoryPromptSettingsCollection = `${config.database}_${MEMORY_PROMPT_SETTINGS_COLLECTION_SUFFIX}`;
+    this.memoryPromptSettingLogsCollection = `${config.database}_${MEMORY_PROMPT_SETTING_LOGS_COLLECTION_SUFFIX}`;
+    this.memoryGenerationRefsCollection = `${config.database}_${MEMORY_GENERATION_REFS_COLLECTION_SUFFIX}`;
   }
 
   // ── Lifecycle ────────────────────────────────────────────
@@ -442,6 +518,56 @@ export class TcvdbMemoryStore implements IMemoryStore {
           { fieldName: "updated_at_ms", fieldType: "uint64", indexType: "filter" },
         ],
       });
+
+      const scalarCollection = async (
+        collection: string,
+        description: string,
+        filterIndexes: Array<Record<string, unknown>>,
+      ) => this.client.createCollection({
+        collection,
+        shardNum: 1,
+        replicaNum: 2,
+        description,
+        embedding: { status: "disabled" },
+        indexes: [
+          { fieldName: "id", fieldType: "string", indexType: "primaryKey" },
+          { fieldName: "vector", fieldType: "vector", indexType: "FLAT", dimension: 1, metricType: "COSINE" },
+          ...filterIndexes,
+        ],
+      });
+
+      await scalarCollection(this.memoryPromptsCollection, "Memory custom prompts", [
+        { fieldName: "layer", fieldType: "string", indexType: "filter" },
+        { fieldName: "status", fieldType: "string", indexType: "filter" },
+        { fieldName: "version", fieldType: "uint64", indexType: "filter" },
+        { fieldName: "updated_at_ms", fieldType: "uint64", indexType: "filter" },
+      ]);
+      await scalarCollection(this.memoryPromptSettingsCollection, "Memory prompt target settings", [
+        { fieldName: "target_type", fieldType: "string", indexType: "filter" },
+        { fieldName: "team_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "agent_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "layer", fieldType: "string", indexType: "filter" },
+        { fieldName: "memory_prompt_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "updated_at_ms", fieldType: "uint64", indexType: "filter" },
+      ]);
+      await scalarCollection(this.memoryPromptSettingLogsCollection, "Memory prompt setting history", [
+        { fieldName: "target_type", fieldType: "string", indexType: "filter" },
+        { fieldName: "team_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "agent_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "layer", fieldType: "string", indexType: "filter" },
+        { fieldName: "action", fieldType: "string", indexType: "filter" },
+        { fieldName: "before_memory_prompt_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "after_memory_prompt_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "operated_at_ms", fieldType: "uint64", indexType: "filter" },
+      ]);
+      await scalarCollection(this.memoryGenerationRefsCollection, "Memory generation provenance references", [
+        { fieldName: "layer", fieldType: "string", indexType: "filter" },
+        { fieldName: "memory_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "generation_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "generation_log_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "memory_prompt_id", fieldType: "string", indexType: "filter" },
+        { fieldName: "created_at_ms", fieldType: "uint64", indexType: "filter" },
+      ]);
 
       this.logger?.debug?.(`${TAG} Initialized: db=${this.client.getDatabase()}, model=${this.embeddingModel}`);
     } catch (err) {
@@ -1811,12 +1937,23 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }
 
   async deleteL0BySession(sessionId: string, filter?: IsolationFilter): Promise<number> {
+    // 空 sessionId 会生成 `(session_key = "" or session_id = "")` —— 这是个
+    // **合法非空** filter，会把所有 session 字段为空的历史/legacy 记录删掉。
+    // 空 session 不是有效的删除目标，直接拒绝，不能靠下游护栏兜。
+    const sessionIdTrimmed = (sessionId ?? "").trim();
+    if (!sessionIdTrimmed) {
+      throw new Error("[tcvdb] deleteL0BySession requires a non-empty sessionId");
+    }
+
     await this._ensureInit();
     if (this.degraded) return 0;
     try {
-      const sid = escapeFilterString(sessionId);
+      const sid = escapeFilterString(sessionIdTrimmed);
       const conditions = [`(session_key = "${sid}" or session_id = "${sid}")`, ...buildIsolationConditions(filter)];
       const filterExpr = joinFilter(conditions);
+      // 护栏：filter 为空会删掉整个 collection。这里 session 条件恒存在，
+      // 但仍显式断言，防止将来重构改坏条件拼装。
+      assertDeleteFilterSafe(filterExpr, "deleteL0BySession", []);
       const affected = await this.client.deleteDoc(this.l0Collection, {
         query: { filter: filterExpr },
       });
@@ -1825,6 +1962,52 @@ export class TcvdbMemoryStore implements IMemoryStore {
       this.logger?.warn(`[tcvdb] deleteL0BySession failed: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     }
+  }
+
+  /**
+   * 清空某个 (team, agent) 下的全部记忆内容：L0 + L1 + L2/L3 profile 行。
+   * 向量与 sparse_vector 随文档一起删除，无需单独清理。
+   *
+   * 不触碰 meta_* 资产表：asset_id、Owner、绑定、ACL、可见性、名称全部保留。
+   * 幂等：已清空的 memory 再次调用返回全 0。
+   *
+   * 失败语义：任一层删除失败直接抛出，由调用方标记该 memory 清空失败，
+   * 避免"部分删除但报告成功"。
+   */
+  async clearMemoryContent(filter: MemoryContentClearFilter): Promise<MemoryContentClearResult> {
+    const teamId = (filter?.teamId ?? "").trim();
+    const agentId = (filter?.agentId ?? "").trim();
+    if (!teamId || !agentId) {
+      throw new Error("clearMemoryContent requires non-empty teamId and agentId");
+    }
+    const userId = filter.userId?.trim() || undefined;
+
+    await this._ensureInit();
+    if (this.degraded) return { l0Deleted: 0, l1Deleted: 0, profilesDeleted: 0 };
+
+    // L0/L1 按 (team, agent[, user]) 过滤；不带 session 维度，覆盖该 agent 全部会话。
+    const contentFilter = joinFilter(buildIsolationConditions({
+      teamId,
+      agentId,
+      ...(userId ? { userId } : {}),
+    }));
+    // profiles(L2/L3) 是 team+agent 粒度（见 buildProfileIsolationScope），
+    // 不按 user 收窄，否则会漏删 user_id 为空的历史 profile 行。
+    const profileFilter = joinFilter([eqFilter("team_id", teamId), eqFilter("agent_id", agentId)]);
+
+    // ⚠️ 最后一道护栏：filter 为空时VDB /document/delete 会删掉**整个
+    // collection**。上面的 teamId/agentId 非空校验已能保证 filter 非空，
+    // 但那是"间接"保证（依赖 buildIsolationConditions 的实现细节）。
+    // 破坏性操作不能依赖间接推导，这里直接断言，任何将来的重构把
+    // filter 弄空都会在发请求前炸掉，而不是静默清库。
+    assertDeleteFilterSafe(contentFilter, "clearMemoryContent/content", ["team_id", "agent_id"]);
+    assertDeleteFilterSafe(profileFilter, "clearMemoryContent/profiles", ["team_id", "agent_id"]);
+
+    const l0Deleted = await this.client.deleteDoc(this.l0Collection, { query: { filter: contentFilter } });
+    const l1Deleted = await this.client.deleteDoc(this.l1Collection, { query: { filter: contentFilter } });
+    const profilesDeleted = await this.client.deleteDoc(this.profilesCollection, { query: { filter: profileFilter } });
+
+    return { l0Deleted, l1Deleted, profilesDeleted };
   }
 
   // ── Internal: parse search results ───────────────────────
@@ -1877,6 +2060,363 @@ export class TcvdbMemoryStore implements IMemoryStore {
       });
     }
     return results;
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Memory Generation Provenance References
+  // ─────────────────────────────────────────────────────────
+
+  async upsertMemoryGenerationRefs(records: MemoryGenerationRefRecord[]): Promise<void> {
+    await this._ensureInit();
+    for (let offset = 0; offset < records.length; offset += 100) {
+      await this.client.upsert(this.memoryGenerationRefsCollection, records.slice(offset, offset + 100).map((record) => ({
+        id: record.generation_ref_id,
+        vector: [0],
+        layer: record.layer,
+        memory_id: record.memory_id,
+        generation_id: record.generation_id,
+        generation_log_id: record.generation_log_id,
+        generation_log_key: record.generation_log_key,
+        memory_prompt_id: record.memory_prompt_id,
+        memory_prompt_version: record.memory_prompt_version,
+        memory_prompt_source: record.memory_prompt_source,
+        created_at_ms: record.created_at_ms,
+      })));
+    }
+  }
+
+  async getMemoryGenerationRef(layer: MemoryGenerationLayer, memoryId: string): Promise<MemoryGenerationRefRecord | null> {
+    await this._ensureInit();
+    const id = buildMemoryGenerationRefId(layer, memoryId);
+    const resp = await this.client.query(this.memoryGenerationRefsCollection, {
+      documentIds: [id],
+      retrieveVector: false,
+      outputFields: MEMORY_GENERATION_REF_OUTPUT_FIELDS,
+      limit: 1,
+    });
+    const doc = resp.documents?.[0];
+    if (!doc || String(doc.memory_id ?? "") !== memoryId || doc.layer !== layer) return null;
+    return {
+      generation_ref_id: String(doc.id ?? ""),
+      layer,
+      memory_id: memoryId,
+      generation_id: String(doc.generation_id ?? ""),
+      generation_log_id: String(doc.generation_log_id ?? ""),
+      generation_log_key: String(doc.generation_log_key ?? ""),
+      memory_prompt_id: String(doc.memory_prompt_id ?? ""),
+      memory_prompt_version: Number(doc.memory_prompt_version ?? 1),
+      memory_prompt_source: doc.memory_prompt_source === "agent" || doc.memory_prompt_source === "team" || doc.memory_prompt_source === "instance"
+        ? doc.memory_prompt_source
+        : "system",
+      created_at_ms: Number(doc.created_at_ms ?? 0),
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Custom Memory Prompt
+  // ─────────────────────────────────────────────────────────
+
+  private promptFromDoc(doc: Record<string, unknown>): MemoryPromptRecord {
+    return {
+      memory_prompt_id: String(doc.id ?? ""),
+      name: String(doc.name ?? ""),
+      layer: (doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1"),
+      prompt: String(doc.prompt ?? ""),
+      version: Number(doc.version ?? 1),
+      status: doc.status === "deleting" ? "deleting" : "active",
+      created_by: String(doc.created_by ?? "") || undefined,
+      updated_by: String(doc.updated_by ?? "") || undefined,
+      created_at_ms: Number(doc.created_at_ms ?? 0),
+      updated_at_ms: Number(doc.updated_at_ms ?? 0),
+    };
+  }
+
+  private settingFromDoc(doc: Record<string, unknown>): MemoryPromptSettingRecord {
+    return {
+      setting_id: String(doc.id ?? ""),
+      target_type: doc.target_type === "agent" || doc.target_type === "team" ? doc.target_type : "instance",
+      team_id: String(doc.team_id ?? "") || undefined,
+      agent_id: String(doc.agent_id ?? "") || undefined,
+      layer: doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1",
+      memory_prompt_id: String(doc.memory_prompt_id ?? ""),
+      updated_by: String(doc.updated_by ?? "") || undefined,
+      updated_at_ms: Number(doc.updated_at_ms ?? 0),
+    };
+  }
+
+  private promptLogFromDoc(doc: Record<string, unknown>): MemoryPromptSettingLogRecord {
+    return {
+      setting_log_id: String(doc.id ?? ""),
+      target_type: doc.target_type === "agent" || doc.target_type === "team" ? doc.target_type : "instance",
+      team_id: String(doc.team_id ?? "") || undefined,
+      agent_id: String(doc.agent_id ?? "") || undefined,
+      layer: doc.layer === "l2" || doc.layer === "l3" ? doc.layer : "l1",
+      action: doc.action === "replace" || doc.action === "clear" ? doc.action : "apply",
+      reason: doc.reason === "prompt_deleted" ? "prompt_deleted" : "explicit",
+      before_memory_prompt_id: String(doc.before_memory_prompt_id ?? "") || undefined,
+      after_memory_prompt_id: String(doc.after_memory_prompt_id ?? "") || undefined,
+      operator_id: String(doc.operator_id ?? "") || undefined,
+      operated_at_ms: Number(doc.operated_at_ms ?? 0),
+    };
+  }
+
+  private promptDoc(record: MemoryPromptRecord): Record<string, unknown> {
+    return {
+      id: record.memory_prompt_id,
+      vector: [0],
+      name: record.name,
+      layer: record.layer,
+      prompt: record.prompt,
+      version: record.version,
+      status: record.status,
+      created_by: record.created_by ?? "",
+      updated_by: record.updated_by ?? "",
+      created_at_ms: record.created_at_ms,
+      updated_at_ms: record.updated_at_ms,
+    };
+  }
+
+  async countMemoryPrompts(): Promise<number> {
+    await this._ensureInit();
+    return this.client.count(this.memoryPromptsCollection);
+  }
+
+  async createMemoryPrompt(record: MemoryPromptRecord): Promise<MemoryPromptRecord> {
+    await this._ensureInit();
+    await this.client.upsert(this.memoryPromptsCollection, [this.promptDoc(record)]);
+    return record;
+  }
+
+  async getMemoryPrompts(ids: string[]): Promise<MemoryPromptRecord[]> {
+    await this._ensureInit();
+    const records: MemoryPromptRecord[] = [];
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const chunk = ids.slice(offset, offset + 100);
+      const resp = await this.client.query(this.memoryPromptsCollection, {
+        documentIds: chunk,
+        retrieveVector: false,
+        outputFields: MEMORY_PROMPT_OUTPUT_FIELDS,
+        limit: chunk.length,
+      });
+      records.push(...(resp.documents ?? []).map((doc) => this.promptFromDoc(doc)));
+    }
+    return records;
+  }
+
+  async listMemoryPrompts(filter: MemoryPromptListFilter): Promise<MemoryPromptRecord[]> {
+    await this._ensureInit();
+    const conds = [eqFilter("status", "active")];
+    if (filter.layer) conds.push(eqFilter("layer", filter.layer));
+    const resp = await this.client.query(this.memoryPromptsCollection, {
+      filter: joinFilter(conds),
+      retrieveVector: false,
+      outputFields: MEMORY_PROMPT_OUTPUT_FIELDS,
+      limit: Math.min(Math.max(filter.limit ?? 20, 1), 100),
+      offset: Math.max(filter.offset ?? 0, 0),
+      sort: [{ fieldName: "updated_at_ms", direction: filter.timeOrder === "asc" ? "asc" : "desc" }],
+    });
+    return (resp.documents ?? []).map((doc) => this.promptFromDoc(doc));
+  }
+
+  async updateMemoryPrompt(
+    id: string,
+    patch: { name?: string; prompt?: string; updated_by?: string; updated_at_ms: number },
+  ): Promise<MemoryPromptRecord | null> {
+    const current = (await this.getMemoryPrompts([id]))[0];
+    if (!current || current.status !== "active") return null;
+    const sameName = patch.name === undefined || patch.name === current.name;
+    const samePrompt = patch.prompt === undefined || patch.prompt === current.prompt;
+    if (sameName && samePrompt) return current;
+
+    const updated: MemoryPromptRecord = {
+      ...current,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.prompt !== undefined ? { prompt: patch.prompt } : {}),
+      updated_by: patch.updated_by,
+      updated_at_ms: patch.updated_at_ms,
+      version: current.version + 1,
+    };
+    await this.client.upsert(this.memoryPromptsCollection, [this.promptDoc(updated)]);
+    return updated;
+  }
+
+  async getMemoryPromptSettings(ids: string[]): Promise<MemoryPromptSettingRecord[]> {
+    await this._ensureInit();
+    const records: MemoryPromptSettingRecord[] = [];
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const chunk = ids.slice(offset, offset + 100);
+      const resp = await this.client.query(this.memoryPromptSettingsCollection, {
+        documentIds: chunk,
+        retrieveVector: false,
+        outputFields: MEMORY_PROMPT_SETTING_OUTPUT_FIELDS,
+        limit: chunk.length,
+      });
+      records.push(...(resp.documents ?? []).map((doc) => this.settingFromDoc(doc)));
+    }
+    return records;
+  }
+
+  async listMemoryPromptSettings(filter: MemoryPromptSettingListFilter): Promise<MemoryPromptSettingRecord[]> {
+    await this._ensureInit();
+    const conds: string[] = [];
+    if (filter.memoryPromptId) conds.push(eqFilter("memory_prompt_id", filter.memoryPromptId));
+    if (filter.targetType) conds.push(eqFilter("target_type", filter.targetType));
+    if (filter.teamId) conds.push(eqFilter("team_id", filter.teamId));
+    if (filter.agentId) conds.push(eqFilter("agent_id", filter.agentId));
+    if (filter.layer) conds.push(eqFilter("layer", filter.layer));
+    const resp = await this.client.query(this.memoryPromptSettingsCollection, {
+      ...(conds.length > 0 ? { filter: joinFilter(conds) } : {}),
+      retrieveVector: false,
+      outputFields: MEMORY_PROMPT_SETTING_OUTPUT_FIELDS,
+      limit: Math.min(Math.max(filter.limit ?? 20, 1), 100),
+      offset: Math.max(filter.offset ?? 0, 0),
+      sort: [{ fieldName: "updated_at_ms", direction: filter.timeOrder === "asc" ? "asc" : "desc" }],
+    });
+    return (resp.documents ?? []).map((doc) => this.settingFromDoc(doc));
+  }
+
+  private settingDoc(record: MemoryPromptSettingRecord): Record<string, unknown> {
+    return {
+      id: record.setting_id,
+      vector: [0],
+      target_type: record.target_type,
+      team_id: record.team_id ?? "",
+      agent_id: record.agent_id ?? "",
+      layer: record.layer,
+      memory_prompt_id: record.memory_prompt_id,
+      updated_by: record.updated_by ?? "",
+      updated_at_ms: record.updated_at_ms,
+    };
+  }
+
+  private promptLogDoc(log: MemoryPromptSettingLogRecord): Record<string, unknown> {
+    return {
+      id: log.setting_log_id,
+      vector: [0],
+      target_type: log.target_type,
+      team_id: log.team_id ?? "",
+      agent_id: log.agent_id ?? "",
+      layer: log.layer,
+      action: log.action,
+      reason: log.reason,
+      before_memory_prompt_id: log.before_memory_prompt_id ?? "",
+      after_memory_prompt_id: log.after_memory_prompt_id ?? "",
+      operator_id: log.operator_id ?? "",
+      operated_at_ms: log.operated_at_ms,
+    };
+  }
+
+  async upsertMemoryPromptSettings(
+    records: MemoryPromptSettingRecord[],
+    logs: MemoryPromptSettingLogRecord[],
+  ): Promise<void> {
+    await this._ensureInit();
+    for (let offset = 0; offset < records.length; offset += 100) {
+      await this.client.upsert(
+        this.memoryPromptSettingsCollection,
+        records.slice(offset, offset + 100).map((record) => this.settingDoc(record)),
+      );
+    }
+    for (let offset = 0; offset < logs.length; offset += 100) {
+      await this.client.upsert(
+        this.memoryPromptSettingLogsCollection,
+        logs.slice(offset, offset + 100).map((log) => this.promptLogDoc(log)),
+      );
+    }
+  }
+
+  async clearMemoryPromptSettings(ids: string[], logs: MemoryPromptSettingLogRecord[]): Promise<void> {
+    await this._ensureInit();
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      await this.client.deleteDoc(this.memoryPromptSettingsCollection, {
+        query: { documentIds: ids.slice(offset, offset + 100) },
+      });
+    }
+    for (let offset = 0; offset < logs.length; offset += 100) {
+      await this.client.upsert(
+        this.memoryPromptSettingLogsCollection,
+        logs.slice(offset, offset + 100).map((log) => this.promptLogDoc(log)),
+      );
+    }
+  }
+
+  async deleteMemoryPrompts(ids: string[], operatorId?: string): Promise<{
+    deleted_prompt_ids: string[];
+    cleared_settings: Record<MemoryPromptTargetType, number>;
+  }> {
+    await this._ensureInit();
+    const prompts = await this.getMemoryPrompts(ids);
+    if (prompts.length !== ids.length) {
+      return { deleted_prompt_ids: [], cleared_settings: { instance: 0, team: 0, agent: 0 } };
+    }
+
+    const now = Date.now();
+    await this.client.upsert(this.memoryPromptsCollection, prompts.map((prompt) => this.promptDoc({
+      ...prompt,
+      status: "deleting",
+      updated_at_ms: now,
+    })));
+
+    const settingFilter = ids.map((id) => eqFilter("memory_prompt_id", id)).join(" or ");
+    const settingDocs = await this._queryAllDocs(
+      this.memoryPromptSettingsCollection,
+      settingFilter,
+      MEMORY_PROMPT_SETTING_OUTPUT_FIELDS,
+    );
+    const settings = settingDocs.map((doc) => this.settingFromDoc(doc));
+    const cleared: Record<MemoryPromptTargetType, number> = { instance: 0, team: 0, agent: 0 };
+    const logs = settings.map((setting): MemoryPromptSettingLogRecord => {
+      cleared[setting.target_type] += 1;
+      return {
+        setting_log_id: `mpsl:delete:${setting.setting_id}:${setting.memory_prompt_id}`,
+        target_type: setting.target_type,
+        team_id: setting.team_id,
+        agent_id: setting.agent_id,
+        layer: setting.layer,
+        action: "clear",
+        reason: "prompt_deleted",
+        before_memory_prompt_id: setting.memory_prompt_id,
+        operator_id: operatorId,
+        operated_at_ms: now,
+      };
+    });
+    const settingIds = settings.map((setting) => setting.setting_id);
+    for (let offset = 0; offset < settingIds.length; offset += 100) {
+      await this.client.deleteDoc(this.memoryPromptSettingsCollection, {
+        query: { documentIds: settingIds.slice(offset, offset + 100) },
+      });
+    }
+    for (let offset = 0; offset < logs.length; offset += 100) {
+      await this.client.upsert(
+        this.memoryPromptSettingLogsCollection,
+        logs.slice(offset, offset + 100).map((log) => this.promptLogDoc(log)),
+      );
+    }
+    await this.client.deleteDoc(this.memoryPromptsCollection, { query: { documentIds: ids } });
+    return { deleted_prompt_ids: ids, cleared_settings: cleared };
+  }
+
+  async queryMemoryPromptSettingLogs(filter: MemoryPromptSettingLogFilter): Promise<MemoryPromptSettingLogRecord[]> {
+    await this._ensureInit();
+    const conds: string[] = [];
+    if (filter.memoryPromptId) {
+      const id = escapeFilterString(filter.memoryPromptId);
+      conds.push(`(before_memory_prompt_id = "${id}" or after_memory_prompt_id = "${id}")`);
+    }
+    if (filter.teamId) conds.push(eqFilter("team_id", filter.teamId));
+    if (filter.agentId) conds.push(eqFilter("agent_id", filter.agentId));
+    if (filter.action) conds.push(eqFilter("action", filter.action));
+    if (filter.startTimeMs !== undefined) conds.push(`operated_at_ms >= ${filter.startTimeMs}`);
+    if (filter.endTimeMs !== undefined) conds.push(`operated_at_ms <= ${filter.endTimeMs}`);
+    const resp = await this.client.query(this.memoryPromptSettingLogsCollection, {
+      ...(conds.length > 0 ? { filter: joinFilter(conds) } : {}),
+      retrieveVector: false,
+      outputFields: MEMORY_PROMPT_SETTING_LOG_OUTPUT_FIELDS,
+      limit: Math.min(Math.max(filter.limit ?? 20, 1), 100),
+      offset: Math.max(filter.offset ?? 0, 0),
+      sort: [{ fieldName: "operated_at_ms", direction: filter.timeOrder === "asc" ? "asc" : "desc" }],
+    });
+    return (resp.documents ?? []).map((doc) => this.promptLogFromDoc(doc));
   }
 
   // ─────────────────────────────────────────────────────────

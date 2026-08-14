@@ -5,7 +5,7 @@
  * 保证不同后端行为一致。SQLite/MongoDB 各自的 *.test.ts 调用 runMetadataStoreContract。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import type { IMetadataStore } from "./interface.js";
+import { DuplicateUserKeyError, type IMetadataStore } from "./interface.js";
 import type { CreateUserInput, CreateTeamInput } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { newExternalAssetId } from "../utils/external-asset-id.js";
@@ -93,6 +93,23 @@ export function runMetadataStoreContract(
         const res = await store.deleteUsers([u.user_id, "usr-missing0"]);
         expect(res.deleted_ids).toContain(u.user_id);
         expect(await store.getUserById(u.user_id)).toBeNull();
+      });
+
+      it("createUser 指定 default_key_value：以该值写库并可按 key 反查", async () => {
+        const key = `sk-mem-explicit-${Math.random().toString(36).slice(2)}`;
+        const u = await store.createUser(uniqueUserInput({ default_key_value: key }));
+        const defaultKey = await store.getDefaultUserKey(u.user_id);
+        expect(defaultKey?.key_value).toBe(key);
+        expect(await store.getUserByKey(key)).toMatchObject({ user_id: u.user_id });
+      });
+
+      it("createUser 同 default_key_value 二次调用抛 DuplicateUserKeyError（key_value UNIQUE 兜底并发）", async () => {
+        const key = `sk-mem-dup-${Math.random().toString(36).slice(2)}`;
+        await store.createUser(uniqueUserInput({ default_key_value: key }));
+        // sqlite adapter 是同步方法：包一层 async fn 让同步抛的错也走 rejects matcher。
+        await expect(
+          (async () => store.createUser(uniqueUserInput({ default_key_value: key })))(),
+        ).rejects.toBeInstanceOf(DuplicateUserKeyError);
       });
     });
 

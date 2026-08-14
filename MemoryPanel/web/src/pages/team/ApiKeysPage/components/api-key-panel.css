@@ -41,7 +41,7 @@
   border: 1px solid var(--tea-color-border-success-default);
   border-radius: 4px;
   background: var(--tea-color-bg-primary-default);
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-success-default);
   word-break: break-all;

@@ -28,6 +28,7 @@ import { SkillResourceStore, type SkillResourcePayload } from "./skill-resource-
 import type { ISkillStore, SkillSearchResult } from "./skill-store.interface.js";
 import { SkillVersioning } from "./skill-versioning.js";
 import { randomBase62 } from "../../utils/short-id.js";
+import { strToU8, zipSync } from "fflate";
 import {
   SkillPermissionError,
   assertOwner,
@@ -67,7 +68,8 @@ export type SkillCoreErrorCode =
   | "RESOURCE_TOO_LARGE"
   | "STORAGE_NOT_FOUND"
   | "LLM_UNAVAILABLE"
-  | "SKILL_COS_REQUIRED";
+  | "SKILL_COS_REQUIRED"
+  | "SKILL_EXPORT_TOO_LARGE";
 
 export class SkillCoreError extends Error {
   constructor(public readonly code: SkillCoreErrorCode, message?: string) {
@@ -181,6 +183,12 @@ export interface ReadFileInput extends IdFields {
   version?: number;
   path: string;
   encoding?: "utf-8" | "base64";
+}
+
+export interface ExportInput extends IdFields {
+  skill_id: string;
+  version?: number;
+  format?: "zip";
 }
 
 export interface ListInput extends IdFields {
@@ -563,6 +571,82 @@ export class SkillCore {
     };
   }
 
+  async exportSkill(input: ExportInput): Promise<{
+    zip_base64: string;
+    filename: string;
+    name: string;
+    version: number;
+    file_count: number;
+    total_bytes: number;
+    warnings: string[];
+  }> {
+    // 1. 取目标版本
+    const head = await this.store.getHead(input.skill_id, input.team_id);
+    if (input.team_id) assertTeamMatchWrap(head, input.team_id);
+    if (!head) throw new SkillCoreError("SKILL_NOT_FOUND");
+
+    let target: Skill;
+    if (typeof input.version === "number" && input.version !== head.version) {
+      const byVersion = await this.store.getByVersion(input.skill_id, input.version, input.team_id);
+      if (!byVersion) {
+        throw new SkillCoreError(
+          "SKILL_NOT_FOUND",
+          `version ${input.version} not found`,
+        );
+      }
+      target = byVersion;
+      this.assertVersionNotExpired(target, head.version);
+    } else {
+      target = head;
+    }
+
+    // 2. 读 SKILL.md 内容（DB 权威源）
+    const content = target.content;
+
+    // 3. 读资源文件
+    const warnings: string[] = [];
+    const resources: Array<{
+      path: string; content: string; encoding: "base64"; is_executable: boolean;
+    }> = [];
+
+    for (const entry of target.manifest) {
+      const r = await this.resources.readResource(
+        input.skill_id, target.version, entry.path, "base64",
+      );
+      if (!r) {
+        warnings.push(`${entry.path}: missing in storage, skipped`);
+        continue;
+      }
+      resources.push({
+        path: entry.path,
+        content: r.content,
+        encoding: "base64",
+        is_executable: entry.is_executable,
+      });
+    }
+
+    // 4. 打包 zip
+    const zipBuf = buildZip(target.name, content, resources);
+
+    // 5. 上限防护
+    if (zipBuf.length > this.resources.getMaxSkillTotalBytes()) {
+      throw new SkillCoreError(
+        "SKILL_EXPORT_TOO_LARGE",
+        `exported zip ${zipBuf.length} bytes exceeds max ${this.resources.getMaxSkillTotalBytes()} bytes`,
+      );
+    }
+
+    return {
+      zip_base64: zipBuf.toString("base64"),
+      filename: `${target.name}.zip`,
+      name: target.name,
+      version: target.version,
+      file_count: resources.length,
+      total_bytes: zipBuf.length,
+      warnings,
+    };
+  }
+
   // ───────────────────────────────────────────────────────────────────
   //  helpers
   // ───────────────────────────────────────────────────────────────────
@@ -658,4 +742,35 @@ function countOccurrences(haystack: string, needle: string): number {
 
 function splitJoin(s: string, find: string, replace: string): string {
   return s.split(find).join(replace);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  zip 打包
+// ═════════════════════════════════════════════════════════════════════
+
+function buildZip(
+  name: string,
+  skillMdContent: string,
+  resources: Array<{ path: string; content: string; encoding: "base64"; is_executable: boolean }>,
+): Buffer {
+  const files: Record<string, [Uint8Array, { level?: number; mtime?: Date; mode?: number }?]> = {};
+
+  // 1. SKILL.md
+  files[`${name}/SKILL.md`] = [strToU8(skillMdContent)];
+
+  // 2. 资源文件（直接放在 name/ 下，与导入源目录结构一致）
+  for (const r of resources) {
+    const key = `${name}/${r.path}`;
+    const buf = r.encoding === "base64"
+      ? Uint8Array.from(Buffer.from(r.content, "base64"))
+      : strToU8(r.content);
+    files[key] = [buf, {
+      mode: r.is_executable ? 0o755 : 0o644,
+    }];
+  }
+
+  // fflate 的 Zippable 类型对 value 的约束与我们的 Record 不完全一致，
+  // 但运行时完全兼容（Uint8Array + opts tuple 就是合法的 ZippableFile）。
+  const zipped = zipSync(files as unknown as Parameters<typeof zipSync>[0]);
+  return Buffer.from(zipped);
 }

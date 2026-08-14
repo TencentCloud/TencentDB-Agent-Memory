@@ -1,5 +1,5 @@
 /**
- * CreateAgentDialog —— 创建 Agent 弹窗（拆自 TeamManagementPanel）。
+ * CreateAgentDialog —— 创建 Agent 弹窗。
  * 支持套用/保存模板、勾选 skills/code_graph/llm_wiki/chat_memory 原子能力。
  */
 
@@ -33,7 +33,7 @@ export default function CreateAgentDialog({
   onCreated,
   busy,
 }: {
-  /** Agent 严格归属一个 team（PRD §15.4），这里不让用户在 dialog 里改归属或转交 owner
+  /** Agent 严格归属一个 team，这里不让用户在 dialog 里改归属或转交 owner
    *  （owner 由后端在创建时固定为当前登录用户）。 */
   team: { team_id: string; name: string };
   currentUser: string;

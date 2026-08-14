@@ -20,9 +20,9 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "unknown";
+export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "unknown";
 
-export type RequestKind = "main" | "fork" | "sidequery";
+export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 
 export interface AgentAdapter {
   /** 客户端类型标识，从 URL 前缀映射来。 */
@@ -37,7 +37,11 @@ export interface AgentAdapter {
    * - codebuddy / unknown: 恒返回 "main" —— 未研究该客户端的分类规则，保守走
    *   等价现状的老链路（不启用分流）
    */
-  classifyRequest(body: Record<string, unknown>): RequestKind;
+  classifyRequest(
+    body: Record<string, unknown>,
+    path?: string,
+    headers?: Record<string, string>,
+  ): RequestKind;
 
   /**
    * 从 user message 的 content 里提取"用户真正键入的文本"。

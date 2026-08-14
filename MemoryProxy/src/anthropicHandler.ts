@@ -32,6 +32,7 @@ import {
 } from "./guard-adapter.js";
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
 import { writeRequestLog } from "./requestLog.js";
+import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
@@ -45,6 +46,7 @@ import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
+import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
@@ -965,6 +967,34 @@ export async function handleAnthropicMessages(
       // Step 18: observability
       console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} success=${memResult.success}`);
 
+      // Step 17: Langfuse — 上报 mem-command 为一个 generation observation。
+      //   mem 命令拦截在 Langfuse context 构造之前 (lf 在 L1088 才声明), 这里
+      //   inline 计算 turnSeq → traceId, 保证该 turn 在 Langfuse 有完整 trace。
+      const memTurnSeq = countHumanTurns(messages, "anthropic");
+      const memTraceId = langfuseTurnTraceId(sessionKey, memTurnSeq);
+      langfuseReportGeneration({
+        traceId: memTraceId,
+        name: "memory-proxy",
+        model: "memory-proxy",
+        startTime,
+        endTime: new Date().toISOString(),
+        input: memCmd.rawMessage,
+        output: memResult.messageText,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        traceName: `memory-proxy / ${keyId}`,
+        userId: keyId,
+        sessionId: sessionKey,
+        tags: [
+          `agent_source:${agentSource}`,
+          "protocol:anthropic",
+          isStream ? "stream" : "non-stream",
+          `session:${sessionKey}`,
+          "mem-command",
+        ],
+        traceInput: memCmd.rawMessage,
+        traceOutput: memResult.messageText,
+      });
+
       return memResult.response;
     }
   }
@@ -1067,7 +1097,11 @@ export async function handleAnthropicMessages(
 
 
   // ── Trace-level tags ──
+  // agent_source 标明客户端族群（codebuddy / claude-code / codex / …），供
+  // Langfuse 上按客户端筛选 trace；protocol 只区分 wire 协议，同一 wire
+  // 可对应多个客户端。
   const traceTags: string[] = [
+    `agent_source:${agentSource}`,
     "protocol:anthropic",
     isStream ? "stream" : "non-stream",
     `session:${sessionKey}`,
@@ -1138,6 +1172,31 @@ export async function handleAnthropicMessages(
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+
+  // Optional private preparation stage. It rewrites `body` / `messages` in
+  // place, so it has to land after every host-side mutation (injection, agent
+  // overrides) and before the upstream body is assembled below. The host does
+  // not interpret the returned stats — see request-prepare-adapter.ts.
+  const preparedStats = await prepareUpstreamRequest({
+    config,
+    protocol: "anthropic",
+    body,
+    messages,
+    sessionKey,
+    pipe,
+    upstreamCall: {
+      upstreamUrl: target.url,
+      headers: upstreamHeaders,
+      model: target.model,
+      tools: body.tools,
+      system: body.system,
+      bodyOverrides: target.bodyOverrides ?? undefined,
+    },
+    userQuery: lf.userQuery,
+    spaceId,
+    lf,
+  });
+
   const { body: upstreamBody, sanitizedCount } = buildUpstreamBody(body, target);
   if (sanitizedCount > 0) {
     pipe.info(
@@ -1218,6 +1277,10 @@ export async function handleAnthropicMessages(
     ? target.retryTarget.model
     : target.model;
 
+  // A retry falls back to the model the client asked for, so the request ends
+  // up costing what it would have cost unrouted — no saving to attribute.
+  const routedFrom = retried ? "" : target.routedFrom;
+
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
     if (!upstreamResp.body) {
@@ -1239,6 +1302,7 @@ export async function handleAnthropicMessages(
         upstreamUrl: target.url,
         stream: true,
         usage: { error: true, status: upstreamResp.status, body: errText.slice(0, 500) },
+        routedFrom,
         spaceId,
         upstreamRequestId,
       });
@@ -1275,6 +1339,7 @@ export async function handleAnthropicMessages(
       system: body.system,
       retried,
       logMeta: retried ? { retrySuccess: true } : {},
+      routedFrom,
       pipe,
       sessionKeyForSkill: sessionKey,
       agentSource,
@@ -1289,6 +1354,7 @@ export async function handleAnthropicMessages(
       requestKind,
       langfuseDebug,
       debugMetadata,
+      preparedStats,
     });
 
     const clientStream = rawClientStream.pipeThrough(createSseThinkingFixStream(pipe));
@@ -1335,6 +1401,56 @@ export async function handleAnthropicMessages(
       outputContent = textParts.join("\n");
       // Preserve full content array (incl. tool_use blocks) for skill trigger.
       assistantMessage = { role: "assistant", content };
+
+      // Report the completed response to the extension (same signal the
+      // streaming path emits). Fire-and-forget.
+      void notifyUpstreamResponse(
+        config,
+        {
+          protocol: "anthropic",
+          sessionKey,
+          model: effectiveModel,
+          stream: false,
+          turnSeq: lf.turnSeq,
+          text: outputContent,
+          toolCalls: (content as Record<string, unknown>[])
+            .filter((b) => b?.type === "tool_use")
+            .map((b) => ({
+              id: (b.id as string) ?? "",
+              name: (b.name as string) ?? "",
+              arguments: typeof b.input === "string" ? b.input : JSON.stringify(b.input ?? ""),
+            }))
+            .filter((tc) => tc.id && tc.arguments),
+          usage: usage ?? {},
+        },
+        pipe,
+      );
+
+      // 内部使用埋点：非流式响应 tool_use 块逐个记 model_intent。
+      try {
+        const intents = (content as Record<string, unknown>[])
+          .filter((b) => b?.type === "tool_use")
+          .map((b) => {
+            const name = (b.name as string) ?? "";
+            const input = b.input;
+            const argsStr = typeof input === "string" ? input : JSON.stringify(input ?? "");
+            return { name, arguments: argsStr };
+          })
+          .filter((i) => i.name);
+        if (intents.length > 0) {
+          emitModelIntentTelemetry({
+            // 与 session_init_logs 对齐 compositeKey 形态
+            sessionKey: `${agentSource}:${sessionKey}`,
+            turnSeq: lf.turnSeq,
+            spaceId,
+            userId: keyId,
+            agentSource,
+            intents,
+          });
+        }
+      } catch {
+        // 埋点绝不阻塞业务
+      }
     }
   } catch {
     // non-JSON response
@@ -1361,6 +1477,8 @@ export async function handleAnthropicMessages(
       upstreamUrl: target.url,
       stream: false,
       usage,
+      extensionStats: preparedStats ?? undefined,
+      routedFrom,
       spaceId,
       upstreamRequestId,
       ...logMeta,
@@ -1496,6 +1614,7 @@ export async function handleAnthropicMessages(
         upstreamUrl: target.url,
         stream: false,
         usage: usage === null ? undefined : usage,
+        routedFrom,
         upstreamRequestId,
         pricingConfig: config.creditPricing,
       },
@@ -1623,6 +1742,8 @@ interface AnthropicTapContext {
   system: unknown;
   retried: boolean;
   logMeta: Record<string, unknown>;
+  /** Requested model when the router forwarded elsewhere; "" otherwise. */
+  routedFrom: string;
   pipe: ReturnType<typeof createPipeline>;
   /** For skill extract trigger. */
   sessionKeyForSkill: string;
@@ -1646,6 +1767,8 @@ interface AnthropicTapContext {
   langfuseDebug: boolean;
   /** buildRequestDebugMetadata 求值结果；debug=false 时为 {}。 */
   debugMetadata: Record<string, unknown>;
+  /** Opaque counters from the request-preparation stage; null when it didn't run. */
+  preparedStats: Record<string, unknown> | null;
 }
 
 /**
@@ -1661,6 +1784,13 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
     let outputText = "";
     let toolUseCount = 0;
     let streamCompleted = false;
+    // 内部使用埋点用：按 index 累积每个 tool_use 块。
+    // Anthropic SSE 协议：
+    //   1. content_block_start(type=tool_use)  → 拿到 index + name（此时 input 是空 {}）
+    //   2. content_block_delta(type=input_json_delta) → 累积 partial_json 字符串
+    //   3. content_block_stop → 该块结束
+    // 之前的实现只读了 (1) 里的 input（永远空）—— 现在按 index 累加 (2) 里的 partial_json。
+    const toolUseAcc = new Map<number, { id: string; name: string; inputJson: string }>();
 
     const timeoutHandle = setTimeout(() => {
       if (!streamCompleted) {
@@ -1697,6 +1827,8 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             upstreamUrl,
             stream: true,
             usage,
+            extensionStats: ctx.preparedStats ?? undefined,
+            routedFrom: ctx.routedFrom,
             spaceId,
             upstreamRequestId,
             ...logMeta,
@@ -1792,6 +1924,47 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
 
+      // Report the completed response to the extension. Fire-and-forget; the
+      // client has already been served by this point.
+      void notifyUpstreamResponse(
+        ctx.config,
+        {
+          protocol: "anthropic",
+          sessionKey: ctx.sessionKey,
+          model: modelId,
+          stream: true,
+          turnSeq: lf.turnSeq,
+          text: outputText,
+          toolCalls: Array.from(toolUseAcc.values())
+            .filter((v) => v.id && v.inputJson)
+            .map((v) => ({ id: v.id, name: v.name, arguments: v.inputJson })),
+          usage,
+        },
+        pipe,
+      );
+
+      // 内部使用埋点：SSE 流累积的 tool_use 各出一条 model_intent。
+      // 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md §7.2 F。
+      // session_key 必须与 session_init_logs 用同一份 compositeKey (agentSource:sessionKey)，
+      // 否则 §4.1 CTE 里的 `session_key IN (init_sessions)` 会对不上。
+      if (toolUseAcc.size > 0) {
+        // 按 index 排序输出（还原模型生成顺序）；inputJson 是流式累积的 partial_json
+        const intents = Array.from(toolUseAcc.entries())
+          .sort(([a], [b]) => a - b)
+          .filter(([, v]) => v.name)
+          .map(([, v]) => ({ name: v.name, arguments: v.inputJson || "{}" }));
+        if (intents.length > 0) {
+          emitModelIntentTelemetry({
+            sessionKey: `${ctx.agentSource}:${ctx.sessionKey}`,
+            turnSeq: ctx.lf.turnSeq,
+            spaceId: ctx.spaceId,
+            userId: ctx.keyId,
+            agentSource: ctx.agentSource,
+            intents,
+          });
+        }
+      }
+
       // Skill extract trigger — after stream finalization.
       // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
       if (isMainDialog && isExtractionAllowed(ctx.config, "skill")) {
@@ -1840,6 +2013,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
                 upstreamUrl: ctx.upstreamUrl,
                 stream: true,
                 usage,
+                routedFrom: ctx.routedFrom,
                 upstreamRequestId: ctx.upstreamRequestId,
                 pricingConfig: ctx.config.creditPricing,
               },
@@ -1891,10 +2065,32 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
               const delta = evt.delta as Record<string, unknown> | undefined;
               if (delta?.type === "text_delta" && typeof delta.text === "string") {
                 outputText += delta.text;
+              } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+                // 累积到对应 tool_use 块（按 index）
+                try {
+                  const idx = evt.index as number | undefined;
+                  if (typeof idx === "number") {
+                    const acc = toolUseAcc.get(idx);
+                    if (acc) acc.inputJson += delta.partial_json;
+                  }
+                } catch {
+                  // ignore — 埋点级别的问题不阻塞主链路
+                }
               }
             } else if (evtType === "content_block_start") {
               const block = evt.content_block as Record<string, unknown> | undefined;
-              if (block?.type === "tool_use") toolUseCount++;
+              if (block?.type === "tool_use") {
+                toolUseCount++;
+                try {
+                  const name = (block.name as string) ?? "";
+                  const idx = evt.index as number | undefined;
+                  if (name && typeof idx === "number") {
+                    toolUseAcc.set(idx, { id: (block.id as string) ?? "", name, inputJson: "" });
+                  }
+                } catch {
+                  // ignore — 累积失败不影响主链路
+                }
+              }
             }
           } catch {
             // ignore malformed SSE data

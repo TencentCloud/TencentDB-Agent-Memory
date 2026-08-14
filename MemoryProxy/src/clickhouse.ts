@@ -18,6 +18,7 @@
 import type { ClickHouseClient } from "@clickhouse/client";
 import { log } from "./report/log.js";
 import { hostname } from "node:os";
+import { createHash } from "node:crypto";
 import { computeCreditDelta } from "./credit-reporter.js";
 import { getModelPricing, resolveModelName } from "./pricing.js";
 import type { CreditPricingConfig, CreditPricingEntry } from "./types.js";
@@ -76,6 +77,21 @@ export interface ClickHouseRow {
   source_tag: string;          // 来源标记，恒定为 "proxy"
   host: string;
   upstream_request_id: string; // 上游响应 header `x-request-id`（tokenhub/OpenAI 兼容网关生成），用于跨系统追溯
+  /**
+   * 压缩节省的 token 数：max(0, pre_compress_tokens − post_compress_tokens)。
+   * 来自 cost-guard extensionStats；未压缩时为 0。
+   */
+  compress_tokens_saved: number;
+  /**
+   * 压缩服务报告的压缩前 token 数（仅统计它真的返回过数字的内容）。
+   *
+   * 口径提示：这是压缩服务自己的 tokenizer 数出来的，与同一行的 `input_tokens`
+   * （上游模型的计费口径）不是同一把尺子，两者不可相减、也不能直接折算成费用。
+   * 它的用途是算压缩率 `post / pre`。
+   */
+  pre_compress_tokens: number;
+  /** 同一批内容压缩后的 token 数；保留原文的项记为与压缩前相同。 */
+  post_compress_tokens: number;
 }
 
 /**
@@ -141,6 +157,9 @@ export function initClickHouse(cfg: ClickHouseConfig): void {
   flushTimer = setInterval(() => {
     void flush();
     void flushRaw();
+    // Internal telemetry buffers (§7.1) — 静默兜底防 unhandledRejection
+    void flushSessionInit().catch(() => {});
+    void flushToolCall().catch(() => {});
   }, cfg.flushIntervalMs);
   flushTimer.unref(); // Don't prevent process exit
 
@@ -223,7 +242,10 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
     "  space_id String DEFAULT '',",
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String),",
-    "  upstream_request_id String DEFAULT ''",
+    "  upstream_request_id String DEFAULT '',",
+    "  compress_tokens_saved UInt64 DEFAULT 0,",
+    "  pre_compress_tokens UInt64 DEFAULT 0,",
+    "  post_compress_tokens UInt64 DEFAULT 0",
     ") ENGINE = MergeTree()",
     "ORDER BY (user_id, session_key, timestamp)",
     ttlClause,
@@ -274,6 +296,22 @@ async function ensureClickHouse(cfg: ClickHouseConfig): Promise<void> {
   // 补齐历史 schema 漂移：对存量表执行 ALTER TABLE ADD COLUMN IF NOT EXISTS。
   // 幂等且失败不阻断（缺 DDL 权限时降级为 warn，业务继续用可写字段）。
   await migrateSchema(client, cfg);
+
+  // Internal Usage Telemetry (§7.1) — 两张新表 DDL 幂等注册。
+  // 失败不阻断启动：单独 try/catch，记 warn 后继续（跟老表相同的失败降级思路）。
+  try {
+    await createTableIfNotExists(client, sessionInitTableDdl());
+    await createTableIfNotExists(client, toolCallTableDdl());
+    log.info("clickhouse.init.telemetryTableReady", {
+      sessionInitTable: `${cfg.database}.${SESSION_INIT_TABLE}`,
+      toolCallTable: `${cfg.database}.${TOOL_CALL_TABLE}`,
+      ttlDays: TELEMETRY_TTL_DAYS,
+    });
+  } catch (err: unknown) {
+    log.warn("clickhouse.init.telemetryTableFailed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   log.info("clickhouse.init.tableReady", {
     table: `${cfg.database}.${cfg.table}`,
@@ -332,6 +370,11 @@ export async function migrateSchema(
     // 上游响应 header `x-request-id`（tokenhub 等 OpenAI/Anthropic 兼容网关返回）。
     // 本次新增：用于跨系统追溯（客户端 x-request-id → 我方 upstream_request_id → 上游日志）。
     { table: cfg.table, column: "upstream_request_id", type: "String DEFAULT ''" },
+    // cost-guard 压缩节省 token：max(0, preCompressTokens − postCompressTokens)
+    { table: cfg.table, column: "compress_tokens_saved", type: "UInt64 DEFAULT 0" },
+    // 压缩前后的原始计数，用于算压缩率——只有差值算不出分母。
+    { table: cfg.table, column: "pre_compress_tokens", type: "UInt64 DEFAULT 0" },
+    { table: cfg.table, column: "post_compress_tokens", type: "UInt64 DEFAULT 0" },
   ];
 
   // usage_raw：追溯表补齐（本次新增 6 列 + model_name + upstream_request_id）
@@ -458,6 +501,12 @@ export interface ClickHouseWriteEntry {
    * → 上游服务日志。
    */
   upstreamRequestId?: string;
+  /**
+   * Opaque scalar counters from the optional request-preparation stage
+   * (cost-guard). `preCompressTokens` / `postCompressTokens` feed the three
+   * compression columns; the rest is carried to the JSONL log untouched.
+   */
+  extensionStats?: Record<string, unknown>;
   /** Pricing config for credit calculation (from config.yaml). */
   pricingConfig?: CreditPricingConfig;
 }
@@ -495,6 +544,32 @@ function computeCreditSaved(
 }
 
 /**
+ * Read the compression token pair out of extensionStats.
+ *
+ * Both columns are written together or not at all: a post without a pre has no
+ * denominator and would read as a 100% saving. Anything missing or non-finite
+ * means the stage produced no measurement, which is recorded as three zeros
+ * rather than a guess.
+ */
+function computeCompressTokens(
+  extensionStats: Record<string, unknown> | undefined,
+): { pre: number; post: number; saved: number } {
+  const none = { pre: 0, post: 0, saved: 0 };
+  if (!extensionStats) return none;
+  const pre = extensionStats.preCompressTokens;
+  const post = extensionStats.postCompressTokens;
+  if (typeof pre !== "number" || typeof post !== "number") return none;
+  if (!Number.isFinite(pre) || !Number.isFinite(post)) return none;
+  if (pre < 0 || post < 0) return none;
+  const saved = pre - post;
+  return {
+    pre: Math.floor(pre),
+    post: Math.floor(post),
+    saved: saved > 0 ? Math.floor(saved) : 0,
+  };
+}
+
+/**
  * Pure mapper: usage log entry → ClickHouse row.
  * Returns null for error records (4xx/5xx upstream errors carry no real usage).
  * Parses cache tokens across Anthropic / OpenAI / DeepSeek usage formats.
@@ -529,6 +604,8 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
   //     （promptTokens 已是含缓存的总输入）
   const totalTokens = num(usage.total_tokens) || (promptTokens + completionTokens);
 
+  const compressTokens = computeCompressTokens(entry.extensionStats);
+
   return {
     timestamp: toChTimestamp(entry.timestamp),
     event: entry.event,
@@ -557,6 +634,9 @@ export function buildClickHouseRow(entry: ClickHouseWriteEntry): ClickHouseRow |
     source_tag: "proxy",
     host: HOST_ID,
     upstream_request_id: entry.upstreamRequestId ?? "",
+    compress_tokens_saved: compressTokens.saved,
+    pre_compress_tokens: compressTokens.pre,
+    post_compress_tokens: compressTokens.post,
   };
 }
 
@@ -817,8 +897,420 @@ export async function shutdownClickHouse(): Promise<void> {
   }
   await flush();
   await flushRaw();
+  // Internal telemetry buffers (see §7.1)
+  await flushSessionInit().catch(() => {});
+  await flushToolCall().catch(() => {});
   if (client) {
     await client.close().catch(() => {});
     client = null;
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Internal Usage Telemetry — 团队记忆内部使用埋点
+// 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md
+//
+// 两张新表：session_init_logs / tool_call_logs
+// 三个通用 helper：createTableIfNotExists / enqueueRow / flushBuffer /
+//                requeueWithOverflowGuard
+//
+// 硬约束（§7.-1）：
+//   1. 所有 write*Row 同步返回 void，绝不 throw
+//   2. 内部 helper 也不 throw（enqueueRow 除了阈值触发 flush 外全静默）
+//   3. 老代码路径 (writeClickHouse/flush/writeFailedReportRaw) 一行不动
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── §9 决策常量 ─────────────────────────────────────────────────────────────
+
+/** request_body 截断长度（与 usage_logs.user_input 同口径） */
+const TOOL_CALL_BODY_MAX_BYTES = 512;
+/** bypass_reason 截断长度（防止 log 文案改动导致列基数爆炸） */
+const BYPASS_REASON_MAX_CHARS = 128;
+/** 表名（DDL + insert 共用） */
+const SESSION_INIT_TABLE = "session_init_logs";
+const TOOL_CALL_TABLE = "tool_call_logs";
+/** TTL（天）—— 内部观测 90 天足够 */
+const TELEMETRY_TTL_DAYS = 90;
+
+// ── 类型定义 ────────────────────────────────────────────────────────────────
+
+/** 埋点点位传入的 session_init 行输入（构造 row 前的原始形态）。 */
+export interface SessionInitLogInput {
+  /** ISO 8601 UTC 时间字符串（`new Date().toISOString()`） */
+  timestamp: string;
+  /** proxy 会话隔离键（compositeKey / x-conversation-id 兜底） */
+  sessionKey: string;
+  /** kernel tenant / instance ID（来自 sessionInfo.space_id） */
+  spaceId?: string;
+  /** 用户/团队/agent ID（bypass 时可能为空） */
+  userId?: string;
+  teamId?: string;
+  agentId?: string;
+  /** "claude-code" | "codebuddy" */
+  agentSource: string;
+  /** state.bypassed 的实际值 */
+  bypassed: boolean;
+  /** init.ts 里 log 原文首句（会被截断到 128 字符） */
+  bypassReason: string;
+  /** 恒为 "initialized"，未来若加更多终态可扩展 */
+  finalStatus: string;
+}
+
+/** ClickHouse `session_init_logs` 表一行的最终形态。 */
+export interface SessionInitLogRow {
+  timestamp: string;
+  session_key: string;
+  space_id: string;
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  agent_source: string;
+  bypassed: number;
+  bypass_reason: string;
+  final_status: string;
+  source_tag: string;
+  host: string;
+}
+
+/** 埋点点位传入的 tool_call 行输入。 */
+export interface ToolCallLogInput {
+  timestamp: string;
+  sessionKey: string;
+  turnSeq?: number;
+  spaceId?: string;
+  userId?: string;
+  teamId?: string;
+  agentId?: string;
+  agentSource: string;
+  /** 'model_intent' | 'bridge_call' */
+  kind: string;
+  /** 'memory-bridge' | 'skill-bridge' | ''（意图侧留空） */
+  bridgeSource?: string;
+  /** 模型 SSE 里的 function.name / tool_use.name（bridge_call 侧留空） */
+  initiatedTool?: string;
+  /** bridge 转发的 sub 字符串，如 "atomic/search"（意图侧留空） */
+  executedEndpoint: string;
+  /** 已脱敏的 body 内容（会被截断到 512 字节） */
+  requestBody: string;
+  /** upstream HTTP 状态（意图侧填 0） */
+  upstreamStatus?: number;
+  /** upstream 耗时毫秒（意图侧填 0） */
+  elapsedMs?: number;
+}
+
+/** ClickHouse `tool_call_logs` 表一行的最终形态。 */
+export interface ToolCallLogRow {
+  timestamp: string;
+  session_key: string;
+  turn_seq: number;
+  space_id: string;
+  user_id: string;
+  team_id: string;
+  agent_id: string;
+  agent_source: string;
+  kind: string;
+  bridge_source: string;
+  initiated_tool: string;
+  executed_endpoint: string;
+  request_body: string;
+  request_body_hash: string;
+  upstream_status: number;
+  elapsed_ms: number;
+  source_tag: string;
+  host: string;
+}
+
+// ── Pure builders（无副作用，可单测） ───────────────────────────────────────
+
+/** 计算 body 的 sha256 前 16 hex 字符（TopN GROUP BY 去重用）。空 body 返回空串。 */
+function bodyHash16(body: string): string {
+  if (!body) return "";
+  return createHash("sha256").update(body).digest("hex").slice(0, 16);
+}
+
+/** 构造 session_init 行；纯函数便于测试。 */
+export function buildSessionInitLogRow(input: SessionInitLogInput): SessionInitLogRow {
+  const reason = (input.bypassReason ?? "").slice(0, BYPASS_REASON_MAX_CHARS);
+  return {
+    timestamp: toChTimestamp(input.timestamp),
+    session_key: input.sessionKey ?? "",
+    space_id: input.spaceId ?? "",
+    user_id: input.userId ?? "",
+    team_id: input.teamId ?? "",
+    agent_id: input.agentId ?? "",
+    agent_source: input.agentSource,
+    bypassed: input.bypassed ? 1 : 0,
+    bypass_reason: reason,
+    final_status: input.finalStatus,
+    source_tag: "proxy",
+    host: HOST_ID,
+  };
+}
+
+/** 构造 tool_call 行；纯函数便于测试。 */
+export function buildToolCallLogRow(input: ToolCallLogInput): ToolCallLogRow {
+  const body = (input.requestBody ?? "").slice(0, TOOL_CALL_BODY_MAX_BYTES);
+  return {
+    timestamp: toChTimestamp(input.timestamp),
+    session_key: input.sessionKey ?? "",
+    turn_seq: input.turnSeq ?? 0,
+    space_id: input.spaceId ?? "",
+    user_id: input.userId ?? "",
+    team_id: input.teamId ?? "",
+    agent_id: input.agentId ?? "",
+    agent_source: input.agentSource,
+    kind: input.kind,
+    bridge_source: input.bridgeSource ?? "",
+    initiated_tool: input.initiatedTool ?? "",
+    executed_endpoint: input.executedEndpoint,
+    request_body: body,
+    request_body_hash: bodyHash16(body),
+    upstream_status: input.upstreamStatus ?? 0,
+    elapsed_ms: input.elapsedMs ?? 0,
+    source_tag: "proxy",
+    host: HOST_ID,
+  };
+}
+
+// ── 通用 helper（三个薄函数替代复制粘贴模板） ──────────────────────────────
+
+/**
+ * 转发 DDL 到 client.command。抽出以消除
+ * `client.command({ query, clickhouse_settings: { wait_end_of_query: 1 } })`
+ * 的模板重复。异常向上抛，让 ensureClickHouse 记录到启动日志。
+ */
+export async function createTableIfNotExists(
+  ch: ClickHouseClient,
+  ddl: string,
+): Promise<void> {
+  await ch.command({
+    query: ddl,
+    clickhouse_settings: { wait_end_of_query: 1 },
+  });
+}
+
+/**
+ * 通用入队 + 阈值触发 flush（fire-and-forget）。
+ *
+ * - 内部两层 try/catch：一层 push 兜底，一层 flushFn 抛（异步 Promise 不 await）。
+ * - 绝不向调用方 throw。
+ */
+export function enqueueRow<T>(
+  buf: T[],
+  row: T,
+  flushFn: () => Promise<void>,
+  threshold: number,
+): void {
+  try {
+    buf.push(row);
+    if (buf.length >= threshold) {
+      // fire-and-forget；错误在 flushBuffer 里已 log，同时用 .catch() 兜底
+      void flushFn().catch(() => { /* never throw */ });
+    }
+  } catch {
+    // 极端情况：buffer 本身坏了 —— 保持业务链路不受影响
+  }
+}
+
+/**
+ * 通用 flush：排空 buffer → 批量 insert → 失败调 requeueFn。
+ *
+ * - client 为 null / buf 为空时 no-op
+ * - 成功后 buf 已被 splice(0) 空掉
+ * - 失败时 rows 已从 buf 取出 → 交给 requeueFn；异常 log.error 后 resolve（不 reject）
+ */
+export async function flushBuffer<T>(
+  buf: T[],
+  ch: ClickHouseClient | null,
+  tableName: string,
+  requeueFn: (rows: T[]) => void,
+  logLabel: string,
+): Promise<void> {
+  if (!ch || buf.length === 0) return;
+  const rows = buf.splice(0);
+  try {
+    await ch.insert({
+      table: tableName,
+      values: rows,
+      format: "JSONEachRow",
+      clickhouse_settings: { async_insert: 1, wait_for_async_insert: 1 },
+    });
+    log.debug(`${logLabel}.flush.ok`, { rows: rows.length });
+  } catch (err: unknown) {
+    log.error(
+      `${logLabel}.flush.error`,
+      { rows: rows.length },
+      err instanceof Error ? err : new Error(String(err)),
+    );
+    try {
+      requeueFn(rows);
+    } catch {
+      // requeue 也炸 → 只能丢；至少不 rethrow 拖垮业务
+    }
+  }
+}
+
+/**
+ * 重排队 + overflow 保护：buffer 超过 10_000 时丢弃最早的一半保留 5_000。
+ *
+ * 返回值是新的 buffer 引用（可能与传入的是同一个数组，也可能是切片后的新数组）。
+ * 调用方需将返回值赋回自己的 buffer 变量。
+ */
+export function requeueWithOverflowGuard<T>(
+  buf: T[],
+  failedRows: T[],
+  logLabel: string,
+): T[] {
+  try {
+    buf.unshift(...failedRows);
+    if (buf.length > 10000) {
+      const dropped = buf.length - 5000;
+      const trimmed = buf.slice(buf.length - 5000);
+      log.warn(logLabel, { dropped });
+      return trimmed;
+    }
+    return buf;
+  } catch {
+    return buf;
+  }
+}
+
+// ── Session Init writer ─────────────────────────────────────────────────────
+
+let sessionInitBuffer: SessionInitLogRow[] = [];
+
+function requeueSessionInit(rows: SessionInitLogRow[]): void {
+  sessionInitBuffer = requeueWithOverflowGuard(
+    sessionInitBuffer,
+    rows,
+    "clickhouse.sessionInit.overflow",
+  );
+}
+
+async function flushSessionInit(): Promise<void> {
+  await flushBuffer(
+    sessionInitBuffer,
+    client,
+    SESSION_INIT_TABLE,
+    requeueSessionInit,
+    "clickhouse.sessionInit",
+  );
+}
+
+/**
+ * 写一条 session_init 记录（fire-and-forget，绝不抛）。
+ * CH 未启用/未初始化时 no-op；构造异常静默吞掉。
+ */
+export function writeSessionInitRow(input: SessionInitLogInput): void {
+  if (disabled || !config) return;
+  try {
+    const row = buildSessionInitLogRow(input);
+    enqueueRow(
+      sessionInitBuffer,
+      row,
+      flushSessionInit,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+// ── Tool Call writer ────────────────────────────────────────────────────────
+
+let toolCallBuffer: ToolCallLogRow[] = [];
+
+function requeueToolCall(rows: ToolCallLogRow[]): void {
+  toolCallBuffer = requeueWithOverflowGuard(
+    toolCallBuffer,
+    rows,
+    "clickhouse.toolCall.overflow",
+  );
+}
+
+async function flushToolCall(): Promise<void> {
+  await flushBuffer(
+    toolCallBuffer,
+    client,
+    TOOL_CALL_TABLE,
+    requeueToolCall,
+    "clickhouse.toolCall",
+  );
+}
+
+/**
+ * 写一条 tool_call 记录（fire-and-forget，绝不抛）。
+ * CH 未启用/未初始化时 no-op；构造异常静默吞掉。
+ */
+export function writeToolCallRow(input: ToolCallLogInput): void {
+  if (disabled || !config) return;
+  try {
+    const row = buildToolCallLogRow(input);
+    enqueueRow(
+      toolCallBuffer,
+      row,
+      flushToolCall,
+      config?.flushThreshold ?? 50,
+    );
+  } catch {
+    // 绝不阻塞业务
+  }
+}
+
+// ── DDL 常量（在 ensureClickHouse 追加调用 createTableIfNotExists） ────────
+
+/** session_init_logs 的 DDL（内部使用埋点 §3.1） */
+export function sessionInitTableDdl(): string {
+  const ttlClause = TELEMETRY_TTL_DAYS > 0
+    ? `TTL toDateTime(timestamp) + INTERVAL ${TELEMETRY_TTL_DAYS} DAY`
+    : "";
+  return [
+    `CREATE TABLE IF NOT EXISTS ${SESSION_INIT_TABLE} (`,
+    "  timestamp DateTime64(3, 'Asia/Shanghai'),",
+    "  session_key String,",
+    "  space_id String,",
+    "  user_id String,",
+    "  team_id String,",
+    "  agent_id String,",
+    "  agent_source LowCardinality(String),",
+    "  bypassed UInt8,",
+    "  bypass_reason String,",
+    "  final_status LowCardinality(String),",
+    "  source_tag LowCardinality(String) DEFAULT 'proxy',",
+    "  host LowCardinality(String)",
+    ") ENGINE = MergeTree()",
+    "ORDER BY (space_id, timestamp)",
+    ttlClause,
+  ].filter(Boolean).join("\n");
+}
+
+/** tool_call_logs 的 DDL（内部使用埋点 §3.2） */
+export function toolCallTableDdl(): string {
+  const ttlClause = TELEMETRY_TTL_DAYS > 0
+    ? `TTL toDateTime(timestamp) + INTERVAL ${TELEMETRY_TTL_DAYS} DAY`
+    : "";
+  return [
+    `CREATE TABLE IF NOT EXISTS ${TOOL_CALL_TABLE} (`,
+    "  timestamp DateTime64(3, 'Asia/Shanghai'),",
+    "  session_key String,",
+    "  turn_seq UInt32 DEFAULT 0,",
+    "  space_id String,",
+    "  user_id String,",
+    "  team_id String DEFAULT '',",
+    "  agent_id String DEFAULT '',",
+    "  agent_source LowCardinality(String),",
+    "  kind LowCardinality(String),",
+    "  bridge_source LowCardinality(String) DEFAULT '',",
+    "  initiated_tool String,",
+    "  executed_endpoint String,",
+    "  request_body String CODEC(ZSTD(3)),",
+    "  request_body_hash FixedString(16) DEFAULT '',",
+    "  upstream_status UInt16 DEFAULT 0,",
+    "  elapsed_ms UInt32 DEFAULT 0,",
+    "  source_tag LowCardinality(String) DEFAULT 'proxy',",
+    "  host LowCardinality(String)",
+    ") ENGINE = MergeTree()",
+    "ORDER BY (space_id, session_key, timestamp)",
+    ttlClause,
+  ].filter(Boolean).join("\n");
 }

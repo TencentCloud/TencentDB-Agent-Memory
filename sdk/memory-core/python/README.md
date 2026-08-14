@@ -124,6 +124,88 @@ asyncio.run(main())
 | Offload | `offload_compact()` | `POST /v2/offload/compact` |
 | Offload | `offload_query_mmd()` | `POST /v2/offload/query-mmd` |
 
+### v3 batch delete and clear
+
+`tencentdb_agent_memory.v3.MemoryClient` (strict-isolation data plane) supports
+batch deletes and asset-level clearing:
+
+```python
+from tencentdb_agent_memory.v3 import MemoryClient
+
+client = MemoryClient(
+    endpoint="http://127.0.0.1:8420", api_key="...", service_id="default",
+    team_id="t1", agent_id="agt1", user_id="u1",
+)
+
+# L0: delete by message ids (max 5000)
+client.delete_conversation(message_ids=["m1", "m2"])
+
+# L0: wipe whole sessions (max 100); both selectors may be combined
+client.delete_conversation(session_ids=["s1", "s2"])
+
+# L1: delete by note ids (max 5000)
+client.delete_atomic(["a1", "a2"])
+
+# Asset-level: wipe all content but keep the asset (max 100 ids)
+res = client.clear_chat_memory(["chat_memory-t1-agt1"])
+if not res["all_cleared"]:
+    # Failed items carry `retryable`; True means the server already retried
+    # internally and the call can be retried later.
+    retryable = [i for i in res["items"] if not i["cleared"] and i.get("retryable")]
+```
+
+> **Note**: delete paths never fall back to the constructor's `session_id`.
+> Deleting a few messages by `message_ids` will not silently wipe the whole
+> session; to clear sessions you must pass `session_ids` explicitly.
+
+`clear_chat_memory()` wipes L0/L1/L2/L3 + vectors + files, while keeping
+`memory_id`, agent bindings, ACL, owner and visibility — the agent keeps
+writing to the same `memory_id` with no re-creation. It rejects the **whole
+batch** if any id is missing or is not a chat_memory, and repeated calls are
+idempotent. Like other delete endpoints the kernel performs no user-level
+authorization; for owner-only semantics call the panel backend
+`/api/v1/chat-memory/clear`.
+
+Async variants exist on `AsyncMemoryClient` with identical signatures.
+
+## Custom Prompt and generation provenance
+
+```python
+from tencentdb_agent_memory.v3 import MemoryGenerationLogClient, MemoryPromptClient
+
+prompts = MemoryPromptClient(endpoint, api_key, service_id, team_id="team-1", agent_id="agent-1")
+created = prompts.create(name="decisions", layer="l1", prompt="Focus on decisions.")
+prompts.apply(created["memory_prompt_id"], layer="l1", agent_ids=["agent-1"])
+effective = prompts.get_effective(layer="l1")
+
+logs = MemoryGenerationLogClient(endpoint, api_key, service_id)
+provenance = logs.get_by_memory_id("memory-id", "l1")
+```
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `create()` | `POST /v3/memory-prompt/create` | Create a Prompt |
+| `get()` / `list()` / `get_effective()` | `GET /v3/memory-prompt/get` | Get one, list Prompts, or resolve the effective Prompt |
+| `update()` | `POST /v3/memory-prompt/update` | Update name/content; identical values are a no-op |
+| `delete()` | `POST /v3/memory-prompt/delete` | Batch-delete Prompts and clear their bindings |
+| `apply()` / `clear()` | `POST /v3/memory-prompt/set` | Apply, replace, or clear a target binding |
+| `list_settings()` | `GET /v3/memory-prompt/setting/list` | List current bindings by Prompt, target, or layer |
+| `list_setting_logs()` | `GET /v3/memory-prompt/log` | Query immutable binding-change logs |
+| `MemoryGenerationLogClient.list()` | `GET /v3/memory-generation-log/list` | List generation logs by layer/time |
+| `get()` / `get_by_memory_id()` | `GET /v3/memory-generation-log/get` | Read by log ID or Memory ID + layer |
+
+```python
+settings = prompts.list_settings(
+    memory_prompt_id=created["memory_prompt_id"],
+    target_type="agent",
+    team_id="team-1",
+    layer="l1",
+    limit=20,
+)
+```
+
+Async variants are exported as `AsyncMemoryPromptClient` and `AsyncMemoryGenerationLogClient`.
+
 ## MetadataClient (v3 management plane)
 
 `MetadataClient` / `AsyncMetadataClient` wrap the gateway's v3 management-plane endpoints. Unlike `MemoryClient` they do **not** require the isolation quad (team/agent/user/session); auth is Bearer + `x-tdai-service-id`, with business fields like `team_id` in the request body.
@@ -131,13 +213,16 @@ asyncio.run(main())
 Covers all **54 public `/v3/meta/*` routes** (aligned with Panel Control `META_ACTIONS`, including `user-key/*`), plus **5 `/v3/knowledge/*` Knowledge CRUD** routes.
 
 ```python
+import os
+
 from tencentdb_agent_memory.v3 import MetadataClient
 
+auth = os.environ["KERNEL_AUTH_TOKEN"]
 meta = MetadataClient(
-    endpoint="http://127.0.0.1:8420",
-    api_key="verify-token",        # gateway Bearer (KERNEL_AUTH_TOKEN)
-    service_id="knowledge-debug",  # x-tdai-service-id
-    # user_key="...",              # optional; only for system_admin endpoints
+    "http://127.0.0.1:8420",
+    auth,
+    "knowledge-debug",  # x-tdai-service-id
+    # user_key=os.getenv("TDAI_USER_KEY"),
 )
 
 # Register a wiki knowledge source

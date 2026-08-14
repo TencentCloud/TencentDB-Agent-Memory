@@ -66,6 +66,8 @@ export interface WorkerConfig {
 
 export interface CosExtraConfig {
   domain?: string;
+  /** Generation log retention in days. Default: 30. Set 0 to disable lifecycle management. */
+  generationLogRetentionDays: number;
 }
 
 export interface KafkaConfig {
@@ -595,7 +597,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const cosConfig = obj(fileConfig, "cos");
   const cos: CosExtraConfig = {
     domain: env("COS_DOMAIN") ?? str(cosConfig, "domain"),
+    generationLogRetentionDays: envInt("COS_GENERATION_LOG_RETENTION_DAYS")
+      ?? num(cosConfig, "generationLogRetentionDays")
+      ?? 30,
   };
+  if (!Number.isInteger(cos.generationLogRetentionDays) || cos.generationLogRetentionDays < 0) {
+    throw new Error("cos.generationLogRetentionDays must be a non-negative integer");
+  }
 
   // Observability config (yaml: observability.{otel,clickhouse,kafka}, env 兜底)
   const observabilityConfig = obj(fileConfig, "observability");

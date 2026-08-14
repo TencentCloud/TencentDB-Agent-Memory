@@ -171,6 +171,28 @@ export interface ForceArchiveResponse {
   message?: string;
 }
 
+/**
+ * Input for /v3/skill/list — owner-agent skill enumeration.
+ *
+ * Used by skill-bridge team-search to build the "agent 自有全量" 部分的
+ * whitelist（见 `docs/design/2026-08-10-skill-search-scope-fix.md` §4）。
+ * limit 走 core schema 上限 1000，一次拿完，不分页。
+ */
+export interface ListSkillsInput extends IdFields {
+  filters?: {
+    owner_agent_id?: string;
+    name_prefix?: string;
+    status?: Array<"active" | "archived">;
+  };
+  pagination?: { limit?: number; offset?: number };
+}
+
+/** Result from /v3/skill/list. */
+export interface ListSkillsResult {
+  items: SkillSummary[];
+  total: number;
+}
+
 /** Input for /v3/skill/listing — owner-agent skill injection. */
 export interface ListingInput extends IdFields {
   /** Optional search query; when set, plugin uses FTS BM25 to match relevant skills. */
@@ -266,6 +288,23 @@ export class CoreSkillClient {
     opts: CoreSkillRequestOptions = {},
   ): Promise<ForceArchiveResponse> {
     return this.post<ForceArchiveResponse>("/v3/skill/conversation/force-archive", input, opts);
+  }
+
+  /**
+   * `POST /v3/skill/list` — 枚举 agent 自有 skill 的 skill_id / 元数据。
+   *
+   * skill-bridge team-search 用来扩大 whitelist：把 agent 自己（含 private）
+   * 的 skill 也纳入检索池，避免 session-init `<available_skills>` 20 条上限
+   * 之外的私有 skill 永远搜不到。见
+   * `docs/design/2026-08-10-skill-search-scope-fix.md`。
+   *
+   * 语义：默认只返回 head + active。owner 归属由 (team_id, agent_id) 决定。
+   */
+  async listSkills(
+    input: ListSkillsInput,
+    opts: CoreSkillRequestOptions = {},
+  ): Promise<ListSkillsResult> {
+    return this.post<ListSkillsResult>("/v3/skill/list", input, opts);
   }
 
   /**

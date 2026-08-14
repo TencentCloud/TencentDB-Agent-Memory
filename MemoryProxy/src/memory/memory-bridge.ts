@@ -21,15 +21,14 @@
  */
 
 import type { Context } from "hono";
-import { extractBearerToken } from "../opik.js";
-import { apiKeyToKeyId } from "../opik.js";
 import { getSessionStore } from "../session/store.js";
-import { verifyUserKey, isAuthEnabled } from "../auth.js";
+import type { BindingRepo } from "../db/binding-repo.js";
 import type { ProxyConfig } from "../types.js";
 import { getMetadataClient } from "../meta/client.js";
 import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
+import { emitBridgeToolCallTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
 
 const TAG = "[memory-bridge]";
 
@@ -67,23 +66,36 @@ interface SessionIdFields {
    * `config.coreSkill.serviceId` 只作为老 session（迁移前缓存）的兜底。
    */
   space_id?: string;
+  /**
+   * Composite key actually used to load state from SessionStore
+   * (`${agentSource}:${sessionId}`). 用于埋点侧对齐 session_init_logs 的
+   * session_key —— 埋点不能猜前缀，必须用真实命中的 key。
+   */
+  composite_key?: string;
 }
 
-function deriveSessionKey(c: Context): string {
-  const auth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const apiKey = extractBearerToken(auth);
-  const keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
-  const conversationId =
+/**
+ * curl 模板固定 2 header:
+ *   - x-conversation-id → sessionId
+ *   - x-tdai-service-id → spaceId
+ *
+ * 不再吃 Authorization。见 docs/design/2026-08-03-binding-flatten.md。
+ */
+function deriveSessionId(c: Context): string | null {
+  return (
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
     c.req.header("x-chat-id") ??
     c.req.header("x-thread-id") ??
     c.req.header("x-claude-code-session-id") ??
-    null;
-  return conversationId ?? keyId;
+    null
+  );
 }
 
-function toIdFields(state: import("../session/types.js").SessionInitState | undefined): SessionIdFields | null {
+function toIdFields(
+  state: import("../session/types.js").SessionInitState | undefined,
+  compositeKey: string,
+): SessionIdFields | null {
   if (!state || state.status !== "initialized" || !state.sessionInfo) return null;
   const s = state.sessionInfo;
   if (!s.user_id || !s.team_id || !s.agent_id || !s.session_id) return null;
@@ -95,6 +107,27 @@ function toIdFields(state: import("../session/types.js").SessionInitState | unde
     task_id: s.task_id,
     user_key: s.user_key,
     space_id: s.space_id,
+    composite_key: compositeKey,
+  };
+}
+
+function bindingToIdFields(
+  binding: import("../db/binding-repo.js").SessionBinding,
+  spaceId: string,
+  sessionId: string,
+): SessionIdFields | null {
+  if (binding.outcome !== "initialized") return null;
+  if (!binding.userId || !binding.teamId || !binding.agentId) return null;
+  const agentSource = binding.agentSource || "claude-code";
+  return {
+    user_id: binding.userId,
+    team_id: binding.teamId,
+    agent_id: binding.agentId,
+    session_id: sessionId,
+    task_id: binding.taskId,
+    user_key: binding.userKey,
+    space_id: spaceId,
+    composite_key: `${agentSource}:${sessionId}`,
   };
 }
 
@@ -102,59 +135,45 @@ function toIdFields(state: import("../session/types.js").SessionInitState | unde
  * L1 fast path — try in-memory Map with prefix fallback.
  * Returns null on miss (caller decides whether to probe L2).
  */
-function loadSessionIdsL1(sessionKey: string): SessionIdFields | null {
-  let state = getSessionStore().get(sessionKey);
-  // 与 skill-bridge 对齐：尝试 codebuddy: / claude-code: 前缀兜底
-  if (!state && !sessionKey.includes(":")) {
-    state = getSessionStore().get(`codebuddy:${sessionKey}`)
-        ?? getSessionStore().get(`claude-code:${sessionKey}`);
+function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
+  // handler 层存的 L1 key 形如 `${agentSource}:${sessionId}`; curl 拿到的
+  // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
+  const candidates = sessionId.includes(":")
+    ? [sessionId]
+    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+  for (const k of candidates) {
+    const state = getSessionStore().get(k);
+    if (state) {
+      const fields = toIdFields(state, k);
+      if (fields) return fields;
+    }
   }
-  return toIdFields(state);
+  return null;
 }
 
 /**
- * L2 fallthrough — reconstruct SessionIdentity from (apiKey, spaceId, sessionKey)
- * and delegate to SessionStore.getOrRecover which walks L2a→L2b→history-scan.
+ * L2 fallthrough —— 拍平后只吃 (spaceId, sessionId)。见
+ * docs/design/2026-08-03-binding-flatten.md。
  *
- * 这是 §6.1 修复：跨 pod 部署时，LLM 手中 curl 走 gateway，gateway 路由到
- * 与 sessionInit 不同的 pod → L1 miss → 401。加了这一层后，跨 pod 也能
- * 从共享 COS 里恢复 session 状态。
- *
- * 代价：多一次 auth/verify roundtrip（~50ms）+ 一次 COS getObject。仅在 L1 miss
- * 时触发，命中 L1 的正常路径无影响。
+ * 不再走 verifyUserKey + getOrRecover 4 段路径:
+ *   1) bridge curl 模板没塞 bearer,verify 拿不到 userId
+ *   2) 拍平后 binding.json 里已经存了 user_id/team_id/agent_id/agent_source/user_key,
+ *      单次 GET 直接凑齐 IdFields
  */
 async function loadSessionIdsL2(
-  apiKey: string,
+  bindingRepo: BindingRepo | null,
   spaceId: string,
-  sessionKey: string,
+  sessionId: string,
 ): Promise<SessionIdFields | null> {
-  // 从 sessionKey 反解 agentSource + sessionId：
-  //   "claude-code:conv-abc"  → agentSource=claude-code, sessionId=conv-abc
-  //   "codebuddy:conv-abc"    → agentSource=codebuddy, sessionId=conv-abc
-  //   "conv-abc" (无前缀)      → agentSource=claude-code (默认), sessionId=conv-abc
-  let agentSource = "claude-code";
-  let sessionId = sessionKey;
-  const colonIdx = sessionKey.indexOf(":");
-  if (colonIdx >= 0) {
-    agentSource = sessionKey.slice(0, colonIdx);
-    sessionId = sessionKey.slice(colonIdx + 1);
-  }
-
-  // 拿 userId：先 verify（如果 auth 关了就没法走 L2 fallthrough）
-  if (!isAuthEnabled() || !apiKey) return null;
-  const verifyResult = await verifyUserKey(apiKey, spaceId);
-  if (verifyResult.rejected || !verifyResult.userId) return null;
-  const userId = verifyResult.userId;
-
-  const identity = { userId, agentSource, sessionId, spaceId };
-  let recovered;
+  if (!bindingRepo) return null;
   try {
-    recovered = await getSessionStore().getOrRecover(sessionKey, identity, {});
+    const binding = await bindingRepo.getBinding(spaceId, sessionId);
+    if (!binding) return null;
+    return bindingToIdFields(binding, spaceId, sessionId);
   } catch (err) {
-    console.warn(`${TAG} L2 fallthrough error session=${sessionKey}: ${(err as Error).message}`);
+    console.warn(`${TAG} L2 getBinding error space=${spaceId} sid=${sessionId}: ${(err as Error).message}`);
     return null;
   }
-  return toIdFields(recovered);
 }
 
 function envelope(code: number, message: string, httpStatus = 200): Response {
@@ -254,20 +273,20 @@ export function createMemoryBridgeHandler(
       return envelope(41501, `${TAG} content-type must be application/json`, 415);
     }
 
-    const sessionKey = deriveSessionKey(c);
+    const sessionKey = deriveSessionId(c);
+    if (!sessionKey) {
+      return envelope(40101, `${TAG} missing x-conversation-id (or x-session-id / x-chat-id / x-thread-id) header`, 401);
+    }
+    const spaceId = c.req.header("x-tdai-service-id")
+      ?? config.tdai?.serviceId
+      ?? config.coreSkill?.serviceId
+      ?? "";
+    const bindingRepo = getSessionStore().getBindingRepo() ?? null;
+
     let ids = loadSessionIdsL1(sessionKey);
-    if (!ids) {
-      // §6.1 修复：跨 pod L2 fallthrough。需要 apiKey + spaceId 才能走 verify。
-      const auth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-      const apiKey = extractBearerToken(auth);
-      const spaceId = c.req.header("x-tdai-service-id")
-        ?? config.tdai?.serviceId
-        ?? config.coreSkill?.serviceId
-        ?? "";
-      if (apiKey && spaceId) {
-        console.log(`${TAG} session=${sessionKey} L1 miss → L2 fallthrough (apiKey=${apiKeyToKeyId(apiKey)} spaceId=${spaceId})`);
-        ids = await loadSessionIdsL2(apiKey, spaceId, sessionKey);
-      }
+    if (!ids && bindingRepo && spaceId) {
+      console.log(`${TAG} session=${sessionKey} L1 miss → L2 binding lookup (space=${spaceId})`);
+      ids = await loadSessionIdsL2(bindingRepo, spaceId, sessionKey);
     }
     if (!ids) {
       return envelope(40101, `${TAG} session not initialized; cannot derive identity`, 401);
@@ -325,28 +344,66 @@ export function createMemoryBridgeHandler(
     });
 
     const callUpstream = async (target: FixedAssetCtx): Promise<{ status: number; text: string; contentType: string }> => {
-      const resp = await fetcher(upstreamUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(makeOutbound(target)),
-        signal: AbortSignal.timeout(Math.max(5000, config.coreSkill.timeoutMs * 4)),
-      });
-      return { status: resp.status, text: await resp.text().catch(() => ""), contentType: resp.headers.get("content-type") ?? "application/json" };
+      const outboundBody = JSON.stringify(makeOutbound(target));
+      const callStart = (deps.now ?? Date.now)();
+      let status = 0;
+      let text = "";
+      let contentType = "application/json";
+      try {
+        const resp = await fetcher(upstreamUrl, {
+          method: "POST",
+          headers,
+          body: outboundBody,
+          signal: AbortSignal.timeout(Math.max(5000, config.coreSkill.timeoutMs * 4)),
+        });
+        status = resp.status;
+        text = await resp.text().catch(() => "");
+        contentType = resp.headers.get("content-type") ?? "application/json";
+        return { status, text, contentType };
+      } finally {
+        // 埋点：每次实际调用 upstream 都记一条（成功/失败都算，方案 §5.1）
+        // 优先用 loadSessionIdsL1 里真实命中的 compositeKey，跟 session_init_logs 对齐；
+        // 拿不到才回落 raw sessionKey（L1/L2 miss 路径不该走到这里，但保底）。
+        const emitKey = ids.composite_key ?? sessionKey;
+        emitBridgeToolCallTelemetry({
+          sessionKey: emitKey,
+          spaceId: ids.space_id,
+          userId: target.userId,
+          teamId: target.teamId,
+          agentId: target.agentId,
+          agentSource: agentSourceFromSessionKey(emitKey),
+          bridgeSource: "memory-bridge",
+          executedEndpoint: sub,
+          requestBody: outboundBody.slice(0, 512),
+          upstreamStatus: status,
+          elapsedMs: (deps.now ?? Date.now)() - callStart,
+        });
+      }
     };
 
     if (MULTI_SEARCH_SUBPATHS.has(sub) && typeof inboundBody.agent_id !== "string") {
       const limit = limitFromBody(inboundBody);
+      // 两类 search 的响应 shape 不同：
+      //   - /v3/atomic/search       → data.items[]（L1 hit）
+      //   - /v3/conversation/search → data.messages[]（L0 hit）
+      // 早期代码固定读 data.items，导致 conversation/search 在 multi 分支
+      // 永远返回空（历史 bug）。这里按 sub 分派读写字段，保持透传语义。
+      const isConversationSearch = sub === "conversation/search";
+      const resultKey: "items" | "messages" = isConversationSearch ? "messages" : "items";
       const settled = await Promise.allSettled(ctxs.map(async (target) => ({ target, ...(await callUpstream(target)) })));
-      const items: Record<string, unknown>[] = [];
+      const collected: Record<string, unknown>[] = [];
       let okCount = 0;
       for (const r of settled) {
         if (r.status !== "fulfilled" || r.value.status < 200 || r.value.status >= 300) continue;
         okCount++;
         try {
-          const env = JSON.parse(r.value.text) as { data?: { items?: unknown[] } };
-          for (const item of env.data?.items ?? []) {
+          const env = JSON.parse(r.value.text) as {
+            data?: { items?: unknown[]; messages?: unknown[] };
+          };
+          const rows = (isConversationSearch ? env.data?.messages : env.data?.items) ?? [];
+          for (const item of rows) {
             if (!item || typeof item !== "object") continue;
-            items.push({
+            collected.push({
               ...(item as Record<string, unknown>),
               source_agent_id: r.value.target.agentId,
               source_agent_name: r.value.target.agentName,
@@ -357,14 +414,24 @@ export function createMemoryBridgeHandler(
           // ignore malformed upstream response from this target
         }
       }
-      items.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
+      collected.sort((a, b) => (typeof b.score === "number" ? b.score : 0) - (typeof a.score === "number" ? a.score : 0));
       const elapsed = (deps.now ?? Date.now)() - t0;
-      console.log(`${TAG} sub=${sub} multi targets=${ctxs.length} ok=${okCount} items=${items.length} elapsed=${elapsed}ms`);
+      console.log(`${TAG} sub=${sub} multi targets=${ctxs.length} ok=${okCount} ${resultKey}=${collected.length} elapsed=${elapsed}ms`);
+      const truncated = collected.slice(0, limit);
+      const searchedAgents = ctxs.map((x) => ({
+        agent_id: x.agentId,
+        name: x.agentName,
+        role: x.isSelf ? "self" : "imported_from",
+      }));
+      // 保持透传语义：返回字段名与上游一致（items vs messages）。
+      const responseData: Record<string, unknown> = isConversationSearch
+        ? { messages: truncated, searched_agents: searchedAgents }
+        : { items: truncated, searched_agents: searchedAgents };
       return new Response(JSON.stringify({
         code: 0,
         message: "ok",
         request_id: `mem-bridge-${Date.now()}`,
-        data: { items: items.slice(0, limit), searched_agents: ctxs.map((x) => ({ agent_id: x.agentId, name: x.agentName, role: x.isSelf ? "self" : "imported_from" })) },
+        data: responseData,
       }), {
         status: 200,
         headers: { "content-type": "application/json" },

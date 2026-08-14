@@ -52,6 +52,18 @@ import type {
 
 export type MaybePromise<T> = T | Promise<T>;
 
+/**
+ * 调用方指定 default_key_value / key_value 时，命中 meta_user_keys.key_value UNIQUE 约束。
+ * Service 层 catch 后翻译为 MetadataError("duplicate_user_key")；HTTP 层映射为 409。
+ * Store 层直接抛此错，独立于业务层 MetadataError（避免存储层反向依赖 service）。
+ */
+export class DuplicateUserKeyError extends Error {
+  constructor(public readonly keyValue: string) {
+    super(`user_key already exists: ${keyValue}`);
+    this.name = "DuplicateUserKeyError";
+  }
+}
+
 export interface IMetadataStore {
   /** 初始化存储（建表/建索引/建连接）。幂等。 */
   init(): MaybePromise<void>;

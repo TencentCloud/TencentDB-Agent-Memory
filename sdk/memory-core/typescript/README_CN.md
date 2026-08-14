@@ -123,6 +123,41 @@ await client.addConversation({
 | L3 | `readCore()` | `POST /v3/core/read` |
 | L3 | `writeCore()` | `POST /v3/core/write` |
 | L3 | `countCore()` | `POST /v3/core/count` |
+| 资产 | `clearChatMemory()` | `POST /v3/chat-memory/clear` |
+
+#### 批量删除与清空
+
+`deleteConversation()`（L0）与`deleteAtomic()`（L1）支持批量：
+
+```ts
+// L0：按消息 id 批量删除（≤5000）
+await client.deleteConversation({ message_ids: ["m1", "m2"] });
+
+// L0：按会话批量清空（≤100），两者可同时给
+await client.deleteConversation({ session_ids: ["s1", "s2"] });
+
+// L1：按笔记 id 批量删除（≤5000）
+await client.deleteAtomic({ ids: ["a1", "a2"] });
+```
+
+> **注意**：删除路径**不会**回退到构造函数里的 `session_id`。
+> 只想按`message_ids` 删几条消息时，不会意外把整个会话删掉；
+> 要清空会话必须显式传 `session_ids`。
+
+`clearChatMemory()` 是**资产级**操作，一键清空 memory 全部内容但保留资产：
+
+```ts
+const res = await client.clearChatMemory({ memory_ids: ["chat_memory-t1-agt1"] });
+if (!res.all_cleared) {
+  // 失败项带 retryable 标志；true 表示服务端已自动重试仍失败，稍后可再试
+  const retryable = res.items.filter((i) => !i.cleared && i.retryable);
+}
+```
+
+- 清空 L0/L1/L2/L3 + 向量 + 文件；保留 `memory_id`、Agent 绑定、ACL、Owner、可见性
+- 清空后 Agent 继续用原 `memory_id` 写入，无需重建
+- 任一 `memory_id` 不存在或不是 chat_memory 时**整批拒绝**；重复调用幂等
+- 权限：与其它删除接口一致，内核不做用户级鉴权。需要「仅 Owner 可清空」请走面板后端 `/api/v1/chat-memory/clear`
 
 ### v2 兼容数据面
 
@@ -150,6 +185,36 @@ await client.addConversation({
 | Offload | `offloadCompact()` | `POST /v2/offload/compact` |
 | Offload | `offloadQueryMmd()` | `POST /v2/offload/query-mmd` |
 
+## 自定义 Prompt 与生成溯源
+
+```typescript
+import { MemoryGenerationLogClient, MemoryPromptClient } from "@tencentdb-agent-memory/memory-sdk-ts";
+
+const config = { endpoint: "https://memory.example.com", apiKey: "<token>", serviceId: "instance-1" };
+const prompts = new MemoryPromptClient({ ...config, teamId: "team-1", agentId: "agent-1" });
+const created = await prompts.create({ name: "决策抽取", layer: "l1", prompt: "重点提取明确决策。" });
+await prompts.apply({ memory_prompt_id: created.memory_prompt_id, layer: "l1", agent_ids: ["agent-1"] });
+const effective = await prompts.getEffective({ layer: "l1" });
+const settings = await prompts.listSettings({ memory_prompt_id: created.memory_prompt_id, layer: "l1" });
+
+const logs = new MemoryGenerationLogClient(config);
+const provenance = await logs.getByMemoryId("memory-id", "l1");
+```
+
+| SDK 方法 | 接口 | 说明 |
+|----------|------|------|
+| `create()` | `POST /v3/memory-prompt/create` | 创建 Prompt |
+| `get()` / `list()` / `getEffective()` | `GET /v3/memory-prompt/get` | 查详情、列表或最终生效 Prompt |
+| `update()` | `POST /v3/memory-prompt/update` | 更新名称/内容；相同值为幂等 no-op |
+| `delete()` | `POST /v3/memory-prompt/delete` | 批量删除 Prompt 并清理其绑定 |
+| `apply()` / `clear()` | `POST /v3/memory-prompt/set` | 应用、替换或清除目标绑定 |
+| `listSettings()` | `GET /v3/memory-prompt/setting/list` | 按 Prompt、目标或 Layer 查询当前绑定 |
+| `listSettingLogs()` | `GET /v3/memory-prompt/log` | 查询不可变的绑定变更日志 |
+| `MemoryGenerationLogClient.list()` | `GET /v3/memory-generation-log/list` | 按 Layer/时间分页查询生成日志 |
+| `get()` / `getByMemoryId()` | `GET /v3/memory-generation-log/get` | 按日志 ID 或 Memory ID + Layer 查询溯源 |
+
+`listSettings()` 不传筛选条件时列出当前 Instance 的全部绑定；传 `memory_prompt_id` 可反向查询该 Prompt 绑定到哪些目标。传 `agent_id` 时必须同时传 `team_id`。
+
 ## MetadataClient（v3 管理面）
 
 `MetadataClient` 封装内核网关的 v3 元数据管理面接口（`/v3/meta/*` 54 条，与 Panel `META_ACTIONS` 对齐，含 `user-key/*`），以及 `/v3/knowledge/*` Knowledge CRUD（5 条）。鉴权用 Bearer + `x-tdai-service-id`，可选 `x-tdai-user-key`。
@@ -159,7 +224,7 @@ import { MetadataClient } from "@tencentdb-agent-memory/memory-sdk-ts";
 
 const meta = new MetadataClient({
   endpoint: "http://127.0.0.1:8420",
-  apiKey: "verify-token",        // 网关 Bearer（KERNEL_AUTH_TOKEN）
+  apiKey: process.env.KERNEL_AUTH_TOKEN!,  // 网关 Bearer，勿硬编码
   serviceId: "knowledge-debug",  // x-tdai-service-id
   // userKey: "...",             // 可选；user/create、user/delete 等 system_admin 接口需要
 });
