@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -16,8 +16,31 @@ const atomicJson = async (path, value) => {
   await rename(temp, path);
   return source;
 };
-const missing = async (path) => { try { await access(path); return false; } catch { return true; } };
 const safeExecutable = (value) => typeof value === 'string' && value.length > 0 && !/[\r\n%]/.test(value);
+
+const writeTempSynced = async (path, source) => {
+  const handle = await open(path, 'wx', 0o600);
+  try { await handle.writeFile(source, 'utf8'); await handle.sync(); } finally { await handle.close(); }
+};
+
+export async function publishHookNoReplace(hookPath, expected, { beforePublish = async () => {} } = {}) {
+  const tempPath = `${hookPath}.${randomUUID()}.tmp`;
+  await mkdir(dirname(hookPath), { recursive: true });
+  try {
+    await writeTempSynced(tempPath, expected);
+    await beforePublish();
+    try {
+      await link(tempPath, hookPath);
+      return 'created';
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      if (await readFile(hookPath, 'utf8') !== expected) throw new Error('conflict');
+      return 'existing';
+    }
+  } finally {
+    try { await unlink(tempPath); } catch (error) { if (error?.code !== 'ENOENT') { /* best-effort temporary cleanup */ } }
+  }
+}
 
 export const quotePosixShell = (value) => {
   if (typeof value !== 'string') throw new Error('quote');
@@ -50,20 +73,23 @@ export function buildHookDefinition(adapterPath, options = {}) {
   };
 }
 
-export async function install() {
-  const projectArg = args();
-  if (projectArg === null) throw new Error('args');
-  loadConfig(process.env);
+export async function installProject({ project: projectArg, env = process.env, adapterPath = adapterPathFor(), beforePublish } = {}) {
+  if (typeof projectArg !== 'string' || projectArg.length === 0) throw new Error('args');
+  loadConfig(env);
   const project = resolve(projectArg);
-  const adapterPath = adapterPathFor();
   const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
   const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
   const hook = buildHookDefinition(adapterPath);
   const expected = `${JSON.stringify(hook, null, 2)}\n`;
-  if (!(await missing(hookPath)) && await readFile(hookPath, 'utf8') !== expected) throw new Error('conflict');
-  if (await missing(hookPath)) await atomicJson(hookPath, hook);
-  const actual = await readFile(hookPath, 'utf8');
-  await atomicJson(receiptPath, { version: 1, hook_path: '.kiro/hooks/tdai-memory.json', hook_sha256: sha256(actual), adapter_path: adapterPath });
+  await publishHookNoReplace(hookPath, expected, { beforePublish });
+  if (await readFile(hookPath, 'utf8') !== expected) throw new Error('conflict');
+  await atomicJson(receiptPath, { version: 1, hook_path: '.kiro/hooks/tdai-memory.json', hook_sha256: sha256(expected), adapter_path: adapterPath });
+}
+
+export async function install() {
+  const projectArg = args();
+  if (projectArg === null) throw new Error('args');
+  await installProject({ project: projectArg });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

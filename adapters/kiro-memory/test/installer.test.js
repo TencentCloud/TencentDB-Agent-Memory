@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 
-import { buildHookCommand, quotePosixShell, quoteWindowsCommandLine } from '../scripts/install.mjs';
+import { buildHookCommand, installProject, quotePosixShell, quoteWindowsCommandLine } from '../scripts/install.mjs';
 
 const script = (name) => fileURLToPath(new URL(`../scripts/${name}.mjs`, import.meta.url));
 const safeEnv = (stateDir) => ({
@@ -17,7 +17,7 @@ const safeEnv = (stateDir) => ({
 });
 const run = (name, project, env) => spawnSync(process.execPath, [script(name), '--project', project], { encoding: 'utf8', env });
 const runCommand = (command, input, env) => new Promise((resolve, reject) => {
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$body=[Console]::In.ReadToEnd(); $body | & cmd.exe /d /s /c $env:TDAI_TEST_COMMAND; exit $LASTEXITCODE'], { encoding: 'utf8', env: { ...env, TDAI_TEST_COMMAND: command }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${command}"`], { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments: true });
   let stdout = ''; let stderr = '';
   child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
   child.once('error', reject); child.once('close', (code) => resolve({ code, stdout, stderr })); child.stdin.end(input);
@@ -101,15 +101,38 @@ test('shell quoting preserves hostile adapter paths without command injection', 
   const sourceAdapter = fileURLToPath(new URL('..', import.meta.url));
   try {
     await cp(sourceAdapter, adapterPath, { recursive: true });
-    await writeFile(join(adapterPath, 'src', 'cli.js'), "export async function runCli(){return { exitCode: 0, stdout: 'quoted-adapter-memory' };}\n");
+    await writeFile(join(adapterPath, 'src', 'cli.js'), "export async function runCli(){let input='';for await(const chunk of process.stdin)input+=chunk;await new Promise((resolve)=>setTimeout(resolve,10));return {exitCode:0,stdout:`seen:${input}`};}\n");
     const env = safeEnv(join(root, 'state'));
     const installed = spawnSync(process.execPath, [join(adapterPath, 'scripts', 'install.mjs'), '--project', project], { encoding: 'utf8', env });
     assert.equal(installed.status, 0);
     const command = JSON.parse(await readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8')).hooks[0].action.command;
     assert.equal(command.includes(adapterPath), false);
-    const result = await runCommand(command, JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'quoted', prompt: 'recall' }), env);
-    assert.equal(result.code, 0, JSON.stringify(result)); assert.equal(result.stderr, ''); assert.equal(result.stdout.includes('quoted-adapter-memory'), true, JSON.stringify(result));
+    const input = JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'quoted', prompt: 'recall' });
+    const result = await runCommand(command, input, env);
+    assert.equal(result.code, 0, JSON.stringify(result)); assert.equal(result.stderr, ''); assert.equal(result.stdout, `seen:${input}`);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('installer rejects a hook claimed by a concurrent conflicting writer without creating a receipt', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-install-race-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+    const userHook = '{"owned":"by-user"}\n';
+    await assert.rejects(installProject({ project, env, beforePublish: async () => { await writeFile(hookPath, userHook); } }), /conflict/);
+    assert.equal(await readFile(hookPath, 'utf8'), userHook);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('concurrent identical installs both succeed and leave a complete v1 hook', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-install-identical-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    await Promise.all([installProject({ project, env }), installProject({ project, env })]);
+    const hook = JSON.parse(await readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'));
+    assert.equal(hook.version, 'v1'); assert.deepEqual(hook.hooks.map((item) => item.trigger), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
+  } finally { await rm(project, { recursive: true, force: true }); }
 });
 
 test('installer and doctor use safe failure output for missing configuration', async () => {

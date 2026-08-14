@@ -39,7 +39,7 @@ node scripts/doctor.mjs --project /path/to/workspace
 node scripts/uninstall.mjs --project /path/to/workspace
 ```
 
-安装器会验证 config，但绝不把环境变量值写入文件；它创建 `.kiro/hooks/tdai-memory.json` 和无 secret 的 `.kiro/tdai-memory-install.json` receipt。相同内容可重复安装；同名不同内容会被保留且安全失败。卸载器只会在 hook SHA-256 与 receipt 匹配时删除 adapter 自有的两个文件，绝不删除 `.kiro/hooks` 或其他 hook。`doctor.mjs` 离线运行，只输出检查名称及 pass/fail，检查 Node、config schema、CLI、hook schema、receipt 和 hash。
+安装器会验证 config，但绝不把环境变量值写入文件；它创建 `.kiro/hooks/tdai-memory.json` 和无 secret 的 `.kiro/tdai-memory-install.json` receipt。完整、已 fsync 的临时 hook 文件通过原子 no-replace link 发布：并发的同名不同内容会被保留且安全失败，并发相同安装可幂等成功。卸载器只会在 hook SHA-256 与 receipt 匹配时删除 adapter 自有的两个文件，绝不删除 `.kiro/hooks` 或其他 hook。`doctor.mjs` 离线运行，只输出检查名称及 pass/fail，检查 Node、config schema、CLI、已安装 hook schema、receipt 和 hash；它不检查 `stateDir`，也不报告或修复遗留 session lock。
 
 ## 手工 Hook 模板
 
@@ -51,7 +51,7 @@ node scripts/uninstall.mjs --project /path/to/workspace
 
 敏感字段和常见 credential 在落盘前脱敏。tool input 上限 8KiB，result 上限 32KiB，完整 Turn 上限 128KiB。capture 写入 durable outbox 并按有限 backoff retry。`captureEnabled=false` 仍会 flush 历史 outbox，但不会创建 Turn，post-tool-use/stop 为 NOOP；`recallEnabled=false` 则返回空 Recall。
 
-已知限制：进程崩溃可能遗留 session lock。适配器 will not automatically delete 该 lock，后续操作会安全超时；当前 doctor 只报告状态/配置完整性，不会自动修复。
+已知限制：进程崩溃可能遗留 session lock。适配器 will not automatically delete 该 lock，后续操作会安全超时；doctor 有意不检查 `stateDir`，也不报告或修复 lock。
 
 ## 测试与故障排查
 

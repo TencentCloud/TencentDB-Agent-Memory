@@ -39,7 +39,7 @@ node scripts/doctor.mjs --project /path/to/workspace
 node scripts/uninstall.mjs --project /path/to/workspace
 ```
 
-The installer validates configuration without writing any environment value, creates `.kiro/hooks/tdai-memory.json`, and writes a secret-free `.kiro/tdai-memory-install.json` receipt. Reinstalling identical content is idempotent; a different existing hook is preserved and installation fails safely. The uninstaller deletes only the receipt and hook when their SHA-256 values still match. It never deletes `.kiro/hooks` or other hooks. `doctor.mjs` is offline and reports only check names and pass/fail; it checks Node, config schema, CLI, hook schema, receipt, and hash.
+The installer validates configuration without writing any environment value, creates `.kiro/hooks/tdai-memory.json`, and writes a secret-free `.kiro/tdai-memory-install.json` receipt. It publishes the complete, fsynced hook temporary file with an atomic no-replace link; a concurrent different hook is preserved and installation fails safely, while concurrent identical installs are idempotent. The uninstaller deletes only the receipt and hook when their SHA-256 values still match. It never deletes `.kiro/hooks` or other hooks. `doctor.mjs` is offline and reports only check names and pass/fail; it checks Node, config schema, CLI, installed hook schema, receipt, and hash. It does not inspect `stateDir` or repair/report leftover session locks.
 
 ## Manual hook template
 
@@ -51,7 +51,7 @@ Each Hook invokes `node src/cli.js recall|post-tool-use|stop`. The CLI reads at 
 
 Sensitive fields and common credentials are redacted before persistence. Input is limited to 8KiB, tool result to 32KiB, and a complete Turn to 128KiB. Captures are stored in a durable outbox and retried with bounded backoff; `captureEnabled=false` still flushes historical outbox but does not create Turns and makes post-tool-use/stop NOOP. `recallEnabled=false` returns empty Recall.
 
-Known limitation: a crash can leave a session lock. The adapter will not automatically delete that lock; subsequent operations safely time out. The current doctor reports state/configuration integrity only and does not repair locks.
+Known limitation: a crash can leave a session lock. The adapter will not automatically delete that lock; subsequent operations safely time out. Doctor intentionally does not inspect `stateDir` or repair/report locks.
 
 ## Testing and troubleshooting
 
