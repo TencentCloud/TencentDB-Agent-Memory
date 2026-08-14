@@ -239,3 +239,12 @@ export interface ConversationSearchParams {
   limit?: number;
   sessionKey?: string;
 }
+
+/** Parameters for explicit host-native durable-memory ingestion. */
+export interface ExplicitMemoryWriteParams {
+  action: string;
+  target: string;
+  content: string;
+  sessionKey: string;
+  sessionId?: string;
+}
