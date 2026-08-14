@@ -6,6 +6,7 @@ import { loadConfig } from "./config.js";
 import { enqueueCapture, flushOutbox } from "./outbox.js";
 import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
+import { runSetup } from "./setup.js";
 import { checkStatus, formatStatus } from "./status.js";
 import { conversationSearch, memorySearch } from "./tools.js";
 import type { ConfigResult } from "./types.js";
@@ -51,6 +52,38 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
       memoryToolCallsThisTurn += 1;
       return conversationSearch(createClients(currentConfig.config).memory, params);
+    },
+  });
+
+  pi.registerCommand("tdai-memory-setup", {
+    description: "Interactively configure TencentDB Agent Memory for Pi",
+    handler: async (_args, ctx) => {
+      const setup = await runSetup(ctx);
+      if (!setup.ok) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: setup incomplete");
+        ctx.ui.notify(setup.message, setup.cancelled ? "warning" : "error");
+        return;
+      }
+
+      currentConfig = await loadConfig({
+        cwd: ctx.cwd,
+        projectTrusted: ctx.isProjectTrusted(),
+      });
+      if (!currentConfig.ok || !currentConfig.config.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: setup needs attention");
+        const details = !currentConfig.ok ? currentConfig.errors.join("; ") : "adapter is disabled";
+        ctx.ui.notify(`Memory setup saved, but configuration could not be activated: ${details}`, "error");
+        return;
+      }
+
+      ctx.ui.setStatus(STATUS_KEY, "memory: configured");
+      await ctx.reload();
+      ctx.ui.notify(
+        setup.createdAgent
+          ? "Memory setup complete. A private Pi Agent was created and the extension was reloaded."
+          : "Memory setup complete. The extension was reloaded.",
+        "info",
+      );
     },
   });
 

@@ -1,9 +1,9 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { AdapterConfigFile, ConfigResult, LoadedConfig, RecallConfigFile, RecallOptions } from "./types.js";
 
-const CONFIG_FILE_NAME = "tdai-memory.json";
+export const CONFIG_FILE_NAME = "tdai-memory.json";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8420";
 const DEFAULT_SERVICE_ID = "default";
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -124,7 +124,7 @@ function resolveReference(path: string, declaringConfig: string): string {
   return isAbsolute(path) ? path : resolve(dirname(declaringConfig), path);
 }
 
-async function readSecretFile(path: string, label: string): Promise<string> {
+export async function readSecretFile(path: string, label: string): Promise<string> {
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error(`${label} must be a regular file, not a directory or symbolic link`);
@@ -221,7 +221,7 @@ function applyEnv(target: MergedConfig, env: NodeJS.ProcessEnv): string[] {
   return errors;
 }
 
-function validateEndpoint(raw: string): string | undefined {
+export function validateEndpoint(raw: string): string | undefined {
   let url: URL;
   try {
     url = new URL(raw);
@@ -233,6 +233,45 @@ function validateEndpoint(raw: string): string | undefined {
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol === "http:" && !loopback) return "remote endpoints must use HTTPS";
   return undefined;
+}
+
+export interface GlobalSetupConfig {
+  endpoint: string;
+  serviceId: string;
+  teamId: string;
+  agentId: string;
+  userId: string;
+  userKeyFile: string;
+  gatewayApiKeyFile?: string;
+}
+
+/**
+ * Persist only non-secret setup data in Pi's global agent directory. The key
+ * itself remains in a user-managed file; this also keeps repository config
+ * incapable of routing credentials to a different endpoint.
+ */
+export async function saveGlobalSetupConfig(config: GlobalSetupConfig, agentDir = getAgentDir()): Promise<string> {
+  const path = join(agentDir, CONFIG_FILE_NAME);
+  const existing = await readConfigFile(path, "global");
+  const next: AdapterConfigFile = {
+    ...existing?.values,
+    schemaVersion: 1,
+    enabled: true,
+    endpoint: config.endpoint,
+    serviceId: config.serviceId,
+    teamId: config.teamId,
+    agentId: config.agentId,
+    userId: config.userId,
+    userKeyFile: config.userKeyFile,
+  };
+  if (config.gatewayApiKeyFile) next.gatewayApiKeyFile = config.gatewayApiKeyFile;
+  else delete next.gatewayApiKeyFile;
+
+  await mkdir(agentDir, { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryPath, path);
+  return path;
 }
 
 function secretPath(value: string, origin: string | undefined, options: LoadConfigOptions): string {

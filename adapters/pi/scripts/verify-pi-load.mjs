@@ -32,7 +32,7 @@ function finish(error) {
     process.exitCode = 1;
     return;
   }
-  console.log("Pi extension load verified: /tdai-memory-status is registered.");
+  console.log("Pi extension load verified: /tdai-memory-setup and /tdai-memory-status are registered.");
 }
 
 function handleLine(line) {
@@ -47,8 +47,9 @@ function handleLine(line) {
     finish(new Error(event.error ?? "get_commands request failed"));
     return;
   }
-  const commandRegistered = event.data.commands.some((command) => command.name === "tdai-memory-status");
-  finish(commandRegistered ? undefined : new Error("/tdai-memory-status was not registered"));
+  const names = new Set(event.data.commands.map((command) => command.name));
+  const missing = ["tdai-memory-setup", "tdai-memory-status"].filter((name) => !names.has(name));
+  finish(missing.length === 0 ? undefined : new Error(`Missing command registrations: ${missing.map((name) => `/${name}`).join(", ")}`));
 }
 
 child.stdout.on("data", (chunk) => {

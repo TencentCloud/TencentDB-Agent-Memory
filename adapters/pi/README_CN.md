@@ -54,7 +54,21 @@ pi list
 
 ## 配置
 
-复制 [`tdai-memory.example.json`](./tdai-memory.example.json) 到全局位置：`~/.pi/agent/tdai-memory.json`（Windows 即 `%USERPROFILE%\.pi\agent\tdai-memory.json`）。环境变量覆盖全局配置。不要提交密钥文件，也不要把真实 ID、密钥直接写进仓库。
+如需手动配置，可复制 [`tdai-memory.example.json`](./tdai-memory.example.json) 到全局位置：`~/.pi/agent/tdai-memory.json`（Windows 即 `%USERPROFILE%\.pi\agent\tdai-memory.json`）。环境变量覆盖全局配置。不要提交密钥文件，也不要把真实 ID、密钥直接写进仓库。
+
+### 推荐：交互式配置
+
+启动 Pi 后执行：
+
+```text
+/tdai-memory-setup
+```
+
+向导会询问 endpoint、service ID、已有的 User Key**文件路径**，以及可选的 Gateway Bearer Key 文件路径；随后验证身份，让你选择可访问的 Team 和 Agent（或创建私有 `Pi` Agent），再验证 L0、L1、L2、L3 四层只读权限。全部通过后，它只把非敏感全局配置写入 Pi 并 reload。向导不会要求你在 Pi 界面粘贴密钥，也不会把密钥写入 JSON。本地 Docker 部署可直接选择生成的 `deploy/global-images/.admin-key`。
+
+如果远程 Gateway 需要独立 Bearer Key，请把它放进单独的普通文件，再在向导中提供路径；留空则有意复用 User Key，仅适用于 Gateway 接受该 Key 的部署。
+
+### 手动配置
 
 适配器默认忽略 `<项目目录>/.pi/tdai-memory.json`。只有全局配置显式设置 `"allowProjectConfig": true` 后，可信项目才可以提供配置，并且项目文件**只能**包含 `recall` 对象；它不能覆盖 endpoint、Team/Agent/User 身份、密钥文件路径、TLS 设置或 `captureTools`。
 
@@ -84,10 +98,11 @@ pi list
 启动 Pi 后运行：
 
 ```text
+/tdai-memory-setup
 /tdai-memory-status
 ```
 
-它会检查配置、鉴权、元数据可见性和 L0 读写能力，只显示掩码后的信息，绝不会回显密钥。一次完整回答后看到 `memory: captured`，表示该轮已被服务接受；在同一个 Agent 上进行下一次相关提问，就可能看到检索到的记忆。
+先执行一次 setup。`/tdai-memory-status` 会检查配置、鉴权、元数据可见性和 L0 读取能力，只显示掩码后的信息，绝不会回显密钥。一次完整回答后看到 `memory: captured`，表示该轮已被服务接受；在同一个 Agent 上进行下一次相关提问，就可能看到检索到的记忆。
 
 可在配置的 `recall` 对象中调整召回上限。默认全局 deadline 为 3,000 ms，L0=4、L1=6、L2=2，四层合计最多 12,000 个字符；到时后 Pi 直接使用已完成的层继续回答，超时或失败的层不会阻止 Pi 继续运行。
 
@@ -96,8 +111,8 @@ pi list
 ### 维护者验收清单
 
 1. `npm run check` 通过。
-2. `npm run verify:pi-load` 报告 `/tdai-memory-status` 已注册。
-3. 用专用测试 Agent 配置后，`/tdai-memory-status` 显示 `memory: ready`。
+2. `npm run verify:pi-load` 报告 `/tdai-memory-setup` 和 `/tdai-memory-status` 已注册。
+3. 通过 `/tdai-memory-setup` 配置专用测试 Agent 后，`/tdai-memory-status` 显示 `memory: ready`。
 4. 用 Pi 发一条短问题，再新开会话问相关问题；第一轮结束应显示 `memory: captured`，第二轮开始前应显示 `memory: recalled`。
 
 第 3–4 步要求 Memory 服务已启动，且可能消耗模型 Token；必须使用可丢弃的测试 Agent，不能使用共享记忆。

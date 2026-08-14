@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   injectRecall: vi.fn((systemPrompt: string, recalled: string) => `${systemPrompt}\n\n${recalled}`),
   loadConfig: vi.fn(),
   recallMemory: vi.fn(),
+  runSetup: vi.fn(),
 }));
 
 vi.mock("../src/clients.js", () => ({
@@ -27,11 +28,13 @@ vi.mock("../src/recall.js", () => ({
   injectRecall: mocks.injectRecall,
   recallMemory: mocks.recallMemory,
 }));
+vi.mock("../src/setup.js", () => ({ runSetup: mocks.runSetup }));
 
 import tdaiMemoryExtension from "../src/index.js";
 
 type Handler = (...args: any[]) => Promise<unknown> | unknown;
 type RegisteredTool = { name: string; execute: Handler; promptSnippet?: string };
+type RegisteredCommand = { handler: Handler };
 
 const config: LoadedConfig = {
   enabled: true,
@@ -51,23 +54,31 @@ const config: LoadedConfig = {
   recall: { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
 };
 
-function installExtension(): { handlers: Map<string, Handler>; tools: Map<string, RegisteredTool>; ctx: Record<string, unknown> } {
+function installExtension(): {
+  handlers: Map<string, Handler>;
+  tools: Map<string, RegisteredTool>;
+  commands: Map<string, RegisteredCommand>;
+  ctx: Record<string, unknown>;
+} {
   const handlers = new Map<string, Handler>();
   const tools = new Map<string, RegisteredTool>();
+  const commands = new Map<string, RegisteredCommand>();
   const ctx = {
     cwd: "C:\\workspace",
+    hasUI: true,
     isProjectTrusted: () => true,
+    reload: vi.fn(),
     sessionManager: { getSessionId: () => "session-1", getBranch: () => [] },
     ui: { notify: vi.fn(), setStatus: vi.fn() },
   };
   const pi = {
     appendEntry: mocks.appendEntry,
     on: (event: string, handler: Handler) => handlers.set(event, handler),
-    registerCommand: vi.fn(),
+    registerCommand: (name: string, command: RegisteredCommand) => commands.set(name, command),
     registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
   };
   tdaiMemoryExtension(pi as unknown as ExtensionAPI);
-  return { handlers, tools, ctx };
+  return { handlers, tools, commands, ctx };
 }
 
 async function call(handlers: Map<string, Handler>, event: string, ...args: unknown[]): Promise<unknown> {
@@ -89,10 +100,41 @@ beforeEach(() => {
     failedLayers: [],
     timedOutLayers: [],
   });
+  mocks.runSetup.mockResolvedValue({ ok: true, configPath: "C:\\agent\\tdai-memory.json", createdAgent: false });
   mocks.addConversation.mockResolvedValue({ accepted_ids: ["msg-1"] });
 });
 
 describe("Pi extension lifecycle", () => {
+  it("reloads Pi after interactive setup activates a verified global configuration", async () => {
+    const { commands, ctx } = installExtension();
+    const setup = commands.get("tdai-memory-setup");
+
+    await setup?.handler("", ctx);
+
+    expect(mocks.runSetup).toHaveBeenCalledWith(ctx);
+    expect(mocks.loadConfig).toHaveBeenCalledWith({ cwd: "C:\\workspace", projectTrusted: true });
+    expect((ctx.reload as ReturnType<typeof vi.fn>)).toHaveBeenCalledOnce();
+    expect((ctx.ui as { notify: ReturnType<typeof vi.fn> }).notify).toHaveBeenCalledWith(
+      "Memory setup complete. The extension was reloaded.",
+      "info",
+    );
+  });
+
+  it("does not reload Pi when setup is cancelled or fails", async () => {
+    mocks.runSetup.mockResolvedValue({ ok: false, cancelled: true, message: "Memory setup cancelled." });
+    const { commands, ctx } = installExtension();
+    const setup = commands.get("tdai-memory-setup");
+
+    await setup?.handler("", ctx);
+
+    expect((ctx.reload as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect((ctx.ui as { notify: ReturnType<typeof vi.fn> }).notify).toHaveBeenCalledWith(
+      "Memory setup cancelled.",
+      "warning",
+    );
+  });
+
   it("registers the two read-only memory search tools and fails open before configuration", async () => {
     const { tools, ctx } = installExtension();
     const structured = tools.get("tdai_memory_search");

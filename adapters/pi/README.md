@@ -55,7 +55,21 @@ The package remains `private` during development and is therefore not yet an npm
 
 ## Configure it
 
-Copy [`tdai-memory.example.json`](./tdai-memory.example.json) to the global location: `~/.pi/agent/tdai-memory.json` (Windows: `%USERPROFILE%\.pi\agent\tdai-memory.json`). Environment variables override global values. Do not commit either a key file or a config file containing local IDs to source control.
+For manual setup, copy [`tdai-memory.example.json`](./tdai-memory.example.json) to the global location: `~/.pi/agent/tdai-memory.json` (Windows: `%USERPROFILE%\.pi\agent\tdai-memory.json`). Environment variables override global values. Do not commit either a key file or a config file containing local IDs to source control.
+
+### Recommended: interactive setup
+
+Start Pi and run:
+
+```text
+/tdai-memory-setup
+```
+
+The wizard asks for the endpoint, service ID, an existing User Key **file path**, and an optional Gateway bearer-key file path. It verifies the identity, lets you select an accessible Team and Agent (or creates a private `Pi` Agent), then verifies read access to L0, L1, L2, and L3 before saving global configuration and reloading Pi. It never asks you to paste a key into the Pi UI or writes a key into JSON. For the local Docker deployment, select its generated `deploy/global-images/.admin-key` file.
+
+If your remote gateway requires a distinct bearer key, put it in a separate regular file and provide its path when prompted. Leaving that prompt blank intentionally reuses the User Key, which is appropriate only when the gateway accepts it.
+
+### Manual configuration
 
 The adapter ignores `<project>/.pi/tdai-memory.json` by default. If the global file explicitly sets `"allowProjectConfig": true`, a trusted project file may contain **only** the `recall` object. It cannot override an endpoint, any Team/Agent/User identity, key-file path, TLS setting, or `captureTools`.
 
@@ -85,10 +99,11 @@ For a remote endpoint, use HTTPS with a certificate trusted by the operating sys
 Start Pi and run:
 
 ```text
+/tdai-memory-setup
 /tdai-memory-status
 ```
 
-It reports configuration, authentication, metadata visibility, and L0 access while masking IDs and never echoing keys. A status of `memory: captured` after a completed response means that exchange was accepted for the configured agent. Start a new prompt on the same agent to let relevant memory be recalled.
+Run setup once first. `/tdai-memory-status` reports configuration, authentication, metadata visibility, and L0 read access while masking IDs and never echoing keys. A status of `memory: captured` after a completed response means that exchange was accepted for the configured agent. Start a new prompt on the same agent to let relevant memory be recalled.
 
 Recall is bounded by the optional `recall` object in the configuration. The defaults are a 3,000 ms global deadline, L0=4, L1=6, L2=2, and 12,000 characters across all layers. At the deadline Pi continues with completed layers; timed-out or failed layers do not prevent Pi itself from answering.
 
@@ -97,8 +112,8 @@ Recall is bounded by the optional `recall` object in the configuration. The defa
 ### Maintainer acceptance checklist
 
 1. `npm run check` passes.
-2. `npm run verify:pi-load` reports that `/tdai-memory-status` is registered.
-3. With a dedicated test Agent configured, `/tdai-memory-status` reports `memory: ready`.
+2. `npm run verify:pi-load` reports that `/tdai-memory-setup` and `/tdai-memory-status` are registered.
+3. With a dedicated test Agent configured through `/tdai-memory-setup`, `/tdai-memory-status` reports `memory: ready`.
 4. Make one short Pi request, then make a related second request in a new session. The status should show `memory: captured` after the first and `memory: recalled` before the second.
 
 Steps 3–4 require a running Memory stack and may consume model tokens; they must use a disposable Agent, never shared memory.
