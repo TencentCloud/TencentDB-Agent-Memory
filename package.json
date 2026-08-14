@@ -7,7 +7,12 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "tdai-claude-code-mcp": "./bin/tdai-claude-code-mcp.mjs",
+    "tdai-capture-hook": "./bin/tdai-capture-hook.mjs",
+    "tdai-cursor-mcp": "./bin/tdai-cursor-mcp.mjs",
+    "tdai-codex-mcp": "./bin/tdai-codex-mcp.mjs",
+    "tdai-dify-http": "./bin/tdai-dify-http.mjs"
   },
   "exports": {
     ".": {
