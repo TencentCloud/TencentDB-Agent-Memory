@@ -272,7 +272,11 @@ test('does not release an occupied lock when its owner token no longer matches',
       await new Promise((resolve) => { releaseLock = resolve; });
     }, { timeoutMs: 200, retryMs: 5 });
     await entered;
-    await writeFile(join(lockPath, 'owner'), 'replacement-owner', 'utf8');
+    await writeFile(join(lockPath, 'owner'), `${JSON.stringify({
+      owner_token: 'replacement-owner',
+      pid: 12345,
+      created_at: '2026-08-14T08:00:00.000Z',
+    })}\n`, 'utf8');
 
     releaseLock();
     await heldLock;
