@@ -1,4 +1,3 @@
-/**
  * Plugin state & L3 token consumption reporter.
  *
  * Uploads runtime diagnostics to the backend `/offload/v1/store` endpoint
@@ -31,46 +30,13 @@ import type { OffloadStateManager } from "./state-manager.js";
 import type { PluginLogger } from "./types.js";
 import { nowChinaISO } from "./time-utils.js";
 
-// ─── Fixed overhead constants ────────────────────────────────────────────────
-
-/**
- * Fixed L3 "patch overhead" charged per trigger.
- *
- * The context-offload runtime patch injects a small amount of boilerplate
- * (scanner loops, message-mutation wrappers, sentinel fields like
- * `_offloaded` / `_mmdContextMessage`) before the compression routine runs.
- * That boilerplate adds a roughly constant token cost per invocation that
- * is NOT captured by the tiktoken snapshot delta (which only measures
- * compressed vs uncompressed messages).
- *
- * We account for it here with a single fixed constant so cost/benefit
- * tracking on the backend is monotonic. The value is a conservative estimate
- * that can be tuned as the runtime patch evolves.
- */
-export const L3_FIXED_PATCH_COST_TOKENS = 80;
-
-/** L3 trigger site — matches the three places that invoke L3 compression. */
 export type L3TriggerStage = "after_tool_call" | "llm_input" | "assemble";
 
-/**
  * Patch-effectiveness signal derived from the after_tool_call event.
  *
- * The upstream runtime patch is expected to attach the current `messages`
- * array to the event object. When the patch is missing, `event.messages`
- * is undefined and L3 cannot inspect or mutate the conversation.
  */
 export type PatchEffective = "effective" | "missing_field" | "empty_messages" | "n/a";
 
-/** Inspects `event.messages` to classify patch health for after_tool_call. */
-export function classifyPatchEffectiveness(
-  event: unknown,
-  stage: L3TriggerStage,
-): { status: PatchEffective; messagesLen: number } {
-  // Only after_tool_call depends on the runtime patch for event.messages.
-  if (stage !== "after_tool_call") return { status: "n/a", messagesLen: 0 };
-  if (!event || typeof event !== "object") {
-    return { status: "missing_field", messagesLen: 0 };
-  }
   const msgs = (event as { messages?: unknown }).messages;
   if (!Array.isArray(msgs)) return { status: "missing_field", messagesLen: 0 };
   if (msgs.length === 0) return { status: "empty_messages", messagesLen: 0 };
@@ -84,25 +50,15 @@ export function classifyPatchEffectiveness(
 // (which rebuild hook closures but do not reload the module).
 
 interface CumulativeCounters {
-  /** Total tokens saved by L3 compression (sum of max(0, before-after)). */
   totalTokensSaved: number;
-  /** Net savings after subtracting fixed patch cost from each trigger. */
   totalNetTokensSaved: number;
-  /** Total number of after_tool_call events observed (incl. heartbeats/skips). */
   totalToolCalls: number;
-  /** Total number of L3 trigger reports emitted across all stages. */
   totalL3Triggers: number;
-  /** Per-stage L3 trigger counts. */
   totalL3TriggersByStage: Record<L3TriggerStage, number>;
-  /** Total messages deleted by aggressive compression. */
   totalAggressiveDeleted: number;
-  /** Total messages replaced by mild compression. */
   totalMildReplaced: number;
-  /** Total emergency compression triggers. */
   totalEmergencyTriggered: number;
-  /** Total messages deleted by emergency compression. */
   totalEmergencyDeleted: number;
-  /** Timestamp when counters started accumulating. */
   startedAt: string;
 }
 
@@ -119,7 +75,6 @@ const _counters: CumulativeCounters = {
   startedAt: nowChinaISO(),
 };
 
-/**
  * Record a tool-call observation. Called from the `after_tool_call` hook
  * entry regardless of whether L3 compression fires — it counts *all* tool
  * invocations the plugin has seen.
@@ -128,7 +83,6 @@ export function recordToolCall(): void {
   _counters.totalToolCalls += 1;
 }
 
-/** Returns a shallow copy of the current cumulative counters. */
 export function getCumulativeCounters(): CumulativeCounters {
   return {
     ..._counters,
@@ -136,7 +90,6 @@ export function getCumulativeCounters(): CumulativeCounters {
   };
 }
 
-/** Testing hook — wipes counters so unit tests stay isolated. */
 export function _resetCumulativeCountersForTests(): void {
   _counters.totalTokensSaved = 0;
   _counters.totalNetTokensSaved = 0;
@@ -152,10 +105,8 @@ export function _resetCumulativeCountersForTests(): void {
 
 // ─── Report payload types ────────────────────────────────────────────────────
 
-/** Stable report type tag — one line per reporting category. */
 export const REPORT_TYPE_L3 = "offload.l3.trigger" as const;
 
-/** Per-L3-trigger report payload. */
 export interface L3TriggerReport {
   reportType: typeof REPORT_TYPE_L3;
   reportedAt: string;
@@ -169,7 +120,6 @@ export interface L3TriggerReport {
     confirmedOffloadCount: number;
     deletedOffloadCount: number;
   };
-  /** Detailed accounting for THIS trigger only. */
   recent: {
     tokensBefore: number;
     tokensAfter: number;
@@ -180,7 +130,6 @@ export interface L3TriggerReport {
     messagesRemoved: number;
     durationMs: number;
   };
-  /** Threshold context so the report is self-describing. */
   thresholds: {
     contextWindow: number;
     mildThreshold: number;
@@ -197,7 +146,6 @@ export interface L3TriggerReport {
     emergencyTriggered: boolean;
     emergencyDeletedCount: number;
   };
-  /** Process-lifetime cumulative counters (not per-report). */
   cumulative: CumulativeCounters;
   patch: {
     status: PatchEffective;
@@ -217,9 +165,7 @@ export interface BuildL3ReportInput {
   aggressiveThreshold: number;
   tokensBefore: number;
   tokensAfter: number;
-  /** Message count before L3 compression ran. */
   messagesBefore: number;
-  /** Message count after L3 compression ran. */
   messagesAfter: number;
   durationMs: number;
   aboveMild: boolean;
@@ -253,8 +199,8 @@ export function buildL3TriggerReport(input: BuildL3ReportInput): L3TriggerReport
   } = input;
 
   const tokensSaved = Math.max(0, tokensBefore - tokensAfter);
-  const netTokensSaved = tokensSaved - L3_FIXED_PATCH_COST_TOKENS;
-  const patch = classifyPatchEffectiveness(event, stage);
+  const netTokensSaved = tokensSaved;
+  const patch = { status: "n/a" as PatchEffective, messagesLen: 0 };
 
   // ── Cumulative update (side effect — counters persist across triggers) ──
   _counters.totalTokensSaved += tokensSaved;
@@ -302,7 +248,7 @@ export function buildL3TriggerReport(input: BuildL3ReportInput): L3TriggerReport
       contextWindow,
       mildThreshold,
       aggressiveThreshold,
-      fixedPatchCostTokens: L3_FIXED_PATCH_COST_TOKENS,
+      fixedPatchCostTokens: 0,
       utilisationBeforePct: contextWindow > 0 ? +((tokensBefore / contextWindow) * 100).toFixed(2) : 0,
       utilisationAfterPct: contextWindow > 0 ? +((tokensAfter / contextWindow) * 100).toFixed(2) : 0,
     },
@@ -319,7 +265,6 @@ export function buildL3TriggerReport(input: BuildL3ReportInput): L3TriggerReport
   };
 }
 
-/**
  * Fire-and-forget upload of an L3 report to the backend store endpoint.
  * Must never throw — rejection is logged at warn level only.
  */
