@@ -14,7 +14,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[安装](#安装) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark)
+[安装](#安装) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [English](./README.md) · [**简体中文**](./README_CN.md)
 
@@ -251,7 +251,7 @@ Chat Memory、Skill、Wiki 和 CodeGraph 都被统一登记为 Memory Asset。Me
 | :--- | :---: | :---: | :---: |
 | **PersonaMem** | 48% | **76%** | **+59%** |
 
-PersonaMem 检验 Agent 能否在长期交互后正确理解和运用用户信息。
+PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息。
 
 ## 注意事项
 
@@ -263,11 +263,19 @@ PersonaMem 检验 Agent 能否在长期交互后正确理解和运用用户信�
 ## 相关文档
 
 - [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
+- [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
 - [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
 - [贡献指南](./CONTRIBUTING_CN.md)
 
 Agent Memory 还没有标准答案。Bug、文档、Benchmark、新框架适配，或者一个你觉得更好玩的 Memory Hub 用法，都欢迎。
+
+---
+## Roadmap
+
+当前版本 **v2.0.0**。下个版本（**v2.0.1**）的重点：零配置冷启动、更快的 Wiki 生成、用户 / 团队自定义 Prompt、Skill 导出，以及 Codex（IDE Plan 模式）接入。
+
+👉 完整计划见 [**ROADMAP_CN.md**](./ROADMAP_CN.md)（English: [ROADMAP.md](./ROADMAP.md)）。
 
 ---
 ## 致谢
@@ -289,7 +297,7 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/a4dbfcc8-93a9-4ec8-bb5c-066aeb084186" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/df46d340-572e-4d08-849a-ba25e9e990e1" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
@@ -327,5 +335,16 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
   </tr>
 </table>
 
+---
+
+## Star 趋势
+
+<p align="center">
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
+</p>
+
+---
 
 [MIT](./LICENSE) © TencentDB Agent Memory Team
