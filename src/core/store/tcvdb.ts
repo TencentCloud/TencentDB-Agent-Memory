@@ -644,13 +644,15 @@ export class TcvdbMemoryStore implements IMemoryStore {
     return [];
   }
 
+  async searchL1Keyword(queryText: string, limit?: number): Promise<L1FtsResult[]> {
+    const query = queryText.trim();
+    if (!query) return [];
+    return this.searchL1HybridAsync({ queryText: query, topK: limit });
+  }
+
   async searchL1Fts(ftsQuery: string, limit?: number): Promise<L1FtsResult[]> {
-    // TCVDB has no pure FTS — use hybrid search with sparse-only path
-    // The ftsQuery is raw text, use it as queryText for hybrid
-    if (!ftsQuery) return [];
-    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit });
-    // L1SearchResult and L1FtsResult have identical shapes
-    return results;
+    // Legacy entry point retained for callers that still use the FTS-shaped API.
+    return this.searchL1Keyword(ftsQuery, limit);
   }
 
   async searchL1Hybrid(params: {
@@ -975,10 +977,14 @@ export class TcvdbMemoryStore implements IMemoryStore {
     return [];
   }
 
+  async searchL0Keyword(queryText: string, limit?: number): Promise<L0FtsResult[]> {
+    const query = queryText.trim();
+    if (!query) return [];
+    return this.searchL0HybridAsync({ queryText: query, topK: limit });
+  }
+
   async searchL0Fts(ftsQuery: string, limit?: number): Promise<L0FtsResult[]> {
-    if (!ftsQuery) return [];
-    // Use hybrid search; L0SearchResult and L0FtsResult have identical shapes
-    return this.searchL0HybridAsync({ queryText: ftsQuery, topK: limit });
+    return this.searchL0Keyword(ftsQuery, limit);
   }
 
   /**

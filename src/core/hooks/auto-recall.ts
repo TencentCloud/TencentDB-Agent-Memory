@@ -3,7 +3,7 @@
  * before the agent starts processing.
  *
  * - Searches L1 memories using configurable strategy (keyword / embedding / hybrid)
- *   - keyword: FTS5 BM25 (requires FTS5; returns empty if unavailable)
+ *   - keyword: backend-native keyword ranking (requires a keyword index)
  *   - embedding: VectorStore cosine similarity
  *   - hybrid: keyword + embedding merged with RRF
  * - L3 persona injection
@@ -18,7 +18,6 @@ import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
@@ -392,7 +391,7 @@ async function searchMemories(
 }
 
 // ============================
-// Strategy: Keyword (FTS5 BM25, no in-memory fallback)
+// Strategy: Keyword (backend-native index, no in-memory fallback)
 // ============================
 
 async function searchByKeyword(
@@ -403,43 +402,39 @@ async function searchByKeyword(
   logger?: Logger,
   vectorStore?: IMemoryStore,
 ): Promise<string[]> {
-  // Prefer FTS5 if available
+  // Prefer the store's keyword index if available.
   if (vectorStore?.isFtsAvailable()) {
-    const ftsQuery = buildFtsQuery(userText);
-    if (ftsQuery) {
-      logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
-      if (ftsResults.length > 0) {
-        logger?.debug?.(
-          `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
-          ftsResults.map((r) => `id=${r.record_id} score=${r.score.toFixed(6)}`).join(", "),
-        );
-        const filtered = ftsResults
-          .filter((r) => r.score >= threshold)
-          .slice(0, maxResults);
+    const ftsResults = await vectorStore.searchL1Keyword(userText, maxResults * 2);
+    if (ftsResults.length > 0) {
+      logger?.debug?.(
+        `${TAG} [keyword] Raw results (${ftsResults.length}): ` +
+        ftsResults.map((r) => `id=${r.record_id} score=${r.score.toFixed(6)}`).join(", "),
+      );
+      const filtered = ftsResults
+        .filter((r) => r.score >= threshold)
+        .slice(0, maxResults);
 
-        if (filtered.length > 0) {
-          logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
-        }
-
-        // BM25 absolute scores are unreliable when the document set is very
-        // small (e.g. 1–3 records) because IDF approaches 0.  In that case,
-        // trust FTS5's MATCH + rank ordering and return the top results anyway.
-        if (ftsResults.length <= maxResults) {
-          logger?.debug?.(
-            `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
-            `but document set is small — returning all matched results`,
-          );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
-        }
-        logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
+      if (filtered.length > 0) {
+        logger?.debug?.(`${TAG} [keyword] Found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
+        return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
       }
+
+      // Keyword relevance scores are unreliable when the document set is very
+      // small (e.g. 1–3 records) because IDF approaches 0.  In that case,
+      // trust the backend's match + rank ordering and return the top results.
+      if (ftsResults.length <= maxResults) {
+        logger?.debug?.(
+          `${TAG} [keyword] All ${ftsResults.length} results below threshold=${threshold} ` +
+          `but document set is small — returning all matched results`,
+        );
+        return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+      }
+      logger?.debug?.(`${TAG} [keyword] Returned 0 results above threshold (from ${ftsResults.length} raw)`);
     }
   }
 
-  // FTS5 not available or returned no results — skip in-memory fallback to avoid O(N) full scan
-  logger?.debug?.(`${TAG} [keyword] FTS5 unavailable or no results, skipping keyword search`);
+  // Keyword index not available or returned no results — skip O(N) fallback.
+  logger?.debug?.(`${TAG} [keyword] Keyword search unavailable or empty, skipping`);
   return [];
 }
 
@@ -499,13 +494,13 @@ async function searchByEmbedding(
 // ============================
 
 /**
- * Hybrid search: run keyword (FTS5) and embedding in parallel, merge with
+ * Hybrid search: run backend-native keyword and embedding search in parallel, merge with
  * Reciprocal Rank Fusion (RRF) to combine rank lists.
  *
  * RRF score for a record at rank r = 1 / (k + r), where k=60 is a constant.
  * If a record appears in both lists, its RRF scores are summed.
  *
- * If FTS5 is unavailable, the keyword side returns empty and RRF uses
+ * If keyword search is unavailable, the keyword side returns empty and RRF uses
  * embedding results only.
  */
 async function searchHybrid(
@@ -522,41 +517,38 @@ async function searchHybrid(
   const candidateK = maxResults * 3; // retrieve more for merging
 
   const [keywordResult, embeddingResult] = await Promise.all([
-    // Keyword search: FTS5 only (no in-memory fallback)
+    // Backend-native keyword search (no in-memory fallback)
     (async () => {
       const tStart = performance.now();
       try {
-        // Try FTS5 first
+        // Let the backend translate raw text to its native keyword query.
         if (vectorStore.isFtsAvailable()) {
-          const ftsQuery = buildFtsQuery(userText);
-          if (ftsQuery) {
-            const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
-            if (ftsResults.length > 0) {
-              logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
-              // Convert FtsSearchResult to ScoredRecord for RRF merge
-              const records = ftsResults.map((r): ScoredRecord => ({
-                record: {
-                  id: r.record_id,
-                  content: r.content,
-                  type: r.type as MemoryRecord["type"],
-                  priority: r.priority,
-                  scene_name: r.scene_name,
-                  source_message_ids: [],
-                  metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
-                  timestamps: [r.timestamp_str].filter(Boolean),
-                  createdAt: "",
-                  updatedAt: "",
-                  sessionKey: r.session_key,
-                  sessionId: r.session_id,
-                },
-                score: r.score,
-              }));
-              return { records, ms: performance.now() - tStart };
-            }
+          const ftsResults = await vectorStore.searchL1Keyword(userText, candidateK);
+          if (ftsResults.length > 0) {
+            logger?.debug?.(`${TAG} [hybrid-keyword] Found ${ftsResults.length} candidates`);
+            // Convert FtsSearchResult to ScoredRecord for RRF merge
+            const records = ftsResults.map((r): ScoredRecord => ({
+              record: {
+                id: r.record_id,
+                content: r.content,
+                type: r.type as MemoryRecord["type"],
+                priority: r.priority,
+                scene_name: r.scene_name,
+                source_message_ids: [],
+                metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
+                timestamps: [r.timestamp_str].filter(Boolean),
+                createdAt: "",
+                updatedAt: "",
+                sessionKey: r.session_key,
+                sessionId: r.session_id,
+              },
+              score: r.score,
+            }));
+            return { records, ms: performance.now() - tStart };
           }
         }
-        // FTS5 not available or returned no results — skip in-memory fallback
-        logger?.debug?.(`${TAG} [hybrid-keyword] FTS5 unavailable or no results, skipping keyword part`);
+        // Keyword search not available or returned no results — skip O(N) fallback.
+        logger?.debug?.(`${TAG} [hybrid-keyword] Keyword search unavailable or empty, skipping keyword part`);
         return { records: [] as ScoredRecord[], ms: performance.now() - tStart };
       } catch (err) {
         logger?.warn?.(`${TAG} Hybrid: keyword part failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -853,7 +845,7 @@ function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
 }
 
 /**
- * Build a FormatableMemory from an FtsSearchResult (FTS5 keyword search path).
+ * Build a FormatableMemory from an FtsSearchResult (keyword search path).
  * Handles empty/invalid metadata_json, empty timestamp_str gracefully.
  */
 function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
