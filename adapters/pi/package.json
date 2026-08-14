@@ -1,0 +1,50 @@
+{
+  "name": "tencentdb-agent-memory-pi-adapter",
+  "version": "0.1.0",
+  "description": "Native Pi extension that gives Pi persistent memory through TencentDB Agent Memory (v3 recall + capture + search tools)",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "tencentdb",
+    "agent-memory",
+    "long-term-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "adapters/pi"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "README_CN.md",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@types/node": "24.12.4",
+    "typebox": "1.3.7",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}
