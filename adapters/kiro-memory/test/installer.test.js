@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
+
+import { buildHookCommand, quotePosixShell, quoteWindowsCommandLine } from '../scripts/install.mjs';
 
 const script = (name) => fileURLToPath(new URL(`../scripts/${name}.mjs`, import.meta.url));
 const safeEnv = (stateDir) => ({
@@ -13,6 +16,12 @@ const safeEnv = (stateDir) => ({
   TDAI_MEMORY_USER_ID: 'user-id', TDAI_MEMORY_STATE_DIR: stateDir, TDAI_MEMORY_API_KEY: 'installer-secret',
 });
 const run = (name, project, env) => spawnSync(process.execPath, [script(name), '--project', project], { encoding: 'utf8', env });
+const runCommand = (command, input, env) => new Promise((resolve, reject) => {
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '$body=[Console]::In.ReadToEnd(); $body | & cmd.exe /d /s /c $env:TDAI_TEST_COMMAND; exit $LASTEXITCODE'], { encoding: 'utf8', env: { ...env, TDAI_TEST_COMMAND: command }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.once('error', reject); child.once('close', (code) => resolve({ code, stdout, stderr })); child.stdin.end(input);
+});
 
 test('installer is idempotent, writes a secret-free receipt, and doctor verifies it', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro installer space '));
@@ -24,8 +33,10 @@ test('installer is idempotent, writes a secret-free receipt, and doctor verifies
     const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
     const hook = JSON.parse(await readFile(hookPath, 'utf8'));
     assert.equal(hook.version, 'v1');
-    assert.equal(hook.hooks.PostToolUse[0].matcher, '*');
-    assert.equal(hook.hooks.UserPromptSubmit[0].command.includes(process.execPath), true);
+    assert.equal(Array.isArray(hook.hooks), true);
+    assert.deepEqual(hook.hooks.map((item) => item.trigger), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
+    assert.equal(hook.hooks[1].matcher, '*');
+    assert.equal(hook.hooks[0].action.command.includes(process.execPath), true);
     const receipt = await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8');
     assert.equal(receipt.includes('installer-secret'), false);
     assert.equal(run('install', project, env).status, 0);
@@ -42,6 +53,9 @@ test('installer preserves a conflicting hook and uninstaller only removes matchi
     assert.equal(run('install', project, env).status, 0);
     const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
     await writeFile(hookPath, '{"user":"changed"}\n');
+    const reinstall = run('install', project, env);
+    assert.notEqual(reinstall.status, 0);
+    assert.equal(await readFile(hookPath, 'utf8'), '{"user":"changed"}\n');
     const uninstall = run('uninstall', project, env);
     assert.notEqual(uninstall.status, 0);
     assert.equal(await readFile(hookPath, 'utf8'), '{"user":"changed"}\n');
@@ -65,12 +79,37 @@ test('uninstaller is repeatable and does not delete other hooks', async () => {
 test('manual template is exact v1 hook JSON and contains no credential fields', async () => {
   const template = JSON.parse(await readFile(new URL('../templates/hooks.json.example', import.meta.url), 'utf8'));
   assert.equal(template.version, 'v1');
-  assert.deepEqual(Object.keys(template.hooks), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
-  assert.equal(template.hooks.UserPromptSubmit[0].name.startsWith('tdai-memory-'), true);
-  assert.equal(template.hooks.PostToolUse[0].matcher, '*');
-  assert.equal(template.hooks.PostToolUse[0].timeout, 5);
+  assert.equal(Array.isArray(template.hooks), true);
+  assert.deepEqual(template.hooks.map((item) => item.trigger), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
+  assert.equal(template.hooks[0].name.startsWith('tdai-memory-'), true);
+  assert.equal(template.hooks[1].matcher, '*');
+  assert.equal(Object.hasOwn(template.hooks[0], 'matcher'), false);
+  assert.equal(Object.hasOwn(template.hooks[2], 'matcher'), false);
+  assert.equal(template.hooks[1].timeout, 5);
+  assert.equal(template.hooks.every((item) => Object.keys(item).every((key) => ['name', 'trigger', 'action', 'timeout', 'enabled', 'matcher'].includes(key)) && item.action.type === 'command'), true);
   assert.equal(JSON.stringify(template).toLowerCase().includes('token'), false);
   assert.equal(JSON.stringify(template).toLowerCase().includes('api_key'), false);
+});
+
+test('shell quoting preserves hostile adapter paths without command injection', async () => {
+  assert.equal(quotePosixShell("$() `x` ' &"), "'$() `x` '\"'\"' &'");
+  assert.equal(quoteWindowsCommandLine('C:\\node\\trailing\\').startsWith('"'), true);
+  assert.throws(() => buildHookCommand('C:\\adapter', 'recall', { executable: 'C:\\%bad%\\node.exe', platform: 'win32' }), /command/);
+  const root = await mkdtemp(join(tmpdir(), 'kiro command root '));
+  const adapterPath = join(root, 'adapter %PATH% & ^ literal');
+  const project = join(root, 'workspace');
+  const sourceAdapter = fileURLToPath(new URL('..', import.meta.url));
+  try {
+    await cp(sourceAdapter, adapterPath, { recursive: true });
+    await writeFile(join(adapterPath, 'src', 'cli.js'), "export async function runCli(){return { exitCode: 0, stdout: 'quoted-adapter-memory' };}\n");
+    const env = safeEnv(join(root, 'state'));
+    const installed = spawnSync(process.execPath, [join(adapterPath, 'scripts', 'install.mjs'), '--project', project], { encoding: 'utf8', env });
+    assert.equal(installed.status, 0);
+    const command = JSON.parse(await readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8')).hooks[0].action.command;
+    assert.equal(command.includes(adapterPath), false);
+    const result = await runCommand(command, JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 'quoted', prompt: 'recall' }), env);
+    assert.equal(result.code, 0, JSON.stringify(result)); assert.equal(result.stderr, ''); assert.equal(result.stdout.includes('quoted-adapter-memory'), true, JSON.stringify(result));
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('installer and doctor use safe failure output for missing configuration', async () => {
@@ -83,4 +122,28 @@ test('installer and doctor use safe failure output for missing configuration', a
     const doctor = run('doctor', project, env);
     assert.notEqual(doctor.status, 0); assert.equal(doctor.stdout.includes('config: fail'), true); assert.equal(doctor.stderr, '');
   } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('doctor rejects a hash-consistent hook with an invalid v1 action schema', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-doctor-schema-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    assert.equal(run('install', project, env).status, 0);
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+    const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
+    const hook = JSON.parse(await readFile(hookPath, 'utf8'));
+    hook.hooks[0].action.type = 'unsafe';
+    const source = `${JSON.stringify(hook, null, 2)}\n`;
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+    receipt.hook_sha256 = createHash('sha256').update(source).digest('hex');
+    await writeFile(hookPath, source); await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    assert.equal(run('doctor', project, env).status, 1);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('package exposes hook lifecycle commands', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.scripts['install:hooks'], 'node scripts/install.mjs');
+  assert.equal(pkg.scripts['uninstall:hooks'], 'node scripts/uninstall.mjs');
+  assert.equal(pkg.scripts.doctor, 'node scripts/doctor.mjs');
 });

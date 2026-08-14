@@ -6,7 +6,7 @@
 
 此前基线本地自动化证据为 89/89。真实 Kiro IDE + remote Gateway E2E 尚未在当前环境执行，不能宣称已通过。
 
-官方契约见 [Kiro hooks](https://kiro.dev/docs/hooks/) 与 [hook actions](https://kiro.dev/docs/hooks/actions/)。Gateway/SDK 契约见本仓库 `sdk/` 和 `MemoryProxy/`。
+官方契约见 [Kiro hooks](https://kiro.dev/docs/hooks/) 与 [hook actions](https://kiro.dev/docs/hooks/actions/)。安装得到的 v1 文件为 `{ "version": "v1", "hooks": [...] }`：每项含 `name`、PascalCase `trigger`、`action: { "type": "command", "command": "..." }`、`timeout: 5` 和 `enabled: true`；仅 `PostToolUse` 含 `matcher: "*"`。Gateway/SDK 契约见本仓库 `sdk/` 和 `MemoryProxy/`。
 
 ## 前置条件与配置
 
@@ -43,7 +43,7 @@ node scripts/uninstall.mjs --project /path/to/workspace
 
 ## 手工 Hook 模板
 
-如需手工配置，使用 [templates/hooks.json.example](templates/hooks.json.example)，将 `<ADAPTER_ROOT>` 替换为绝对 adapter path。它是精确 v1 JSON，包含 `UserPromptSubmit`、带 matcher `*` 的 `PostToolUse`、`Stop`，全部 enabled，timeout 为 5 秒。安装器使用 `process.execPath` 并会正确引用含空格路径；建议优先使用安装器。模板不含 URL、token 或其他 credential。
+如需手工配置，使用 [templates/hooks.json.example](templates/hooks.json.example)，将 `<ADAPTER_ROOT>` 替换为绝对 adapter path。它是精确 v1 JSON，按顺序恰有 `UserPromptSubmit`、带 matcher `*` 的 `PostToolUse`、`Stop` 三项，全部 enabled、timeout 为 5 秒，且 `action.type` 为 `command`。安装器更安全：它将绝对 CLI file URL 编为 Base64，并由正确引用的 `process.execPath` 运行固定代码；生成的 shell command 不含 adapter path 原文。手工占位模板仅适用于常规、已正确引用的路径，不承诺覆盖所有 shell 元字符。模板不含 URL、token 或其他 credential。
 
 ## 数据流、安全与恢复
 

@@ -6,7 +6,7 @@ This Phase 1 adapter supports **Kiro IDE v1 Hook** only. It does not support Kir
 
 The local test evidence at this baseline is 89/89 before these delivery tests. Real Kiro IDE + remote Gateway E2E has not been executed in this environment and must not be treated as passed.
 
-Official contract: [Kiro hooks](https://kiro.dev/docs/hooks/) and [hook actions](https://kiro.dev/docs/hooks/actions/). The Gateway/SDK contract is documented in this repository's `sdk/` and `MemoryProxy/` directories.
+Official contract: [Kiro hooks](https://kiro.dev/docs/hooks/) and [hook actions](https://kiro.dev/docs/hooks/actions/). The installed v1 file is `{ "version": "v1", "hooks": [...] }`: each item has `name`, PascalCase `trigger`, `action: { "type": "command", "command": "..." }`, `timeout: 5`, and `enabled: true`; only `PostToolUse` has `matcher: "*"`. The Gateway/SDK contract is documented in this repository's `sdk/` and `MemoryProxy/` directories.
 
 ## Prerequisites and configuration
 
@@ -43,7 +43,7 @@ The installer validates configuration without writing any environment value, cre
 
 ## Manual hook template
 
-Use [templates/hooks.json.example](templates/hooks.json.example) only after replacing `<ADAPTER_ROOT>` with an absolute adapter path. It is v1 JSON with `UserPromptSubmit`, `PostToolUse` matcher `*`, and `Stop`, all enabled with a five-second timeout. The installer uses `process.execPath` and correctly quotes paths with spaces; prefer it to manual editing. The template contains no URL, token, or credential.
+Use [templates/hooks.json.example](templates/hooks.json.example) only after replacing `<ADAPTER_ROOT>` with an absolute adapter path. It is v1 JSON with exactly three ordered hook items: `UserPromptSubmit`, `PostToolUse` matcher `*`, and `Stop`, all enabled with a five-second timeout and `action.type: "command"`. The installer is safer than manual editing: it encodes the absolute CLI file URL as Base64 and runs fixed code through a quoted `process.execPath`; the generated shell command never contains the adapter path itself. The placeholder template is for ordinary manually quoted paths only and is not a claim of safety for every shell metacharacter. It contains no URL, token, or credential.
 
 ## Data flow, safety, and recovery
 

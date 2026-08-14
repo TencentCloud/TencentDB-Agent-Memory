@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "install:hooks": "node scripts/install.mjs",
+    "uninstall:hooks": "node scripts/uninstall.mjs",
+    "doctor": "node scripts/doctor.mjs"
   }
 }
