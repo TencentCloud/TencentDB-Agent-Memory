@@ -1,0 +1,12 @@
+{
+  "session_id": "session-tool-fixture",
+  "hook_event_name": "PostToolUse",
+  "cwd": "C:/workspace/demo",
+  "tool_name": "readFile",
+  "tool_input": {
+    "path": "notes.txt"
+  },
+  "tool_response": {
+    "content": "fixture content"
+  }
+}

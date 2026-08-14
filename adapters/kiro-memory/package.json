@@ -1,0 +1,8 @@
+{
+  "name": "@tencentdb-agent-memory/kiro-memory",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
