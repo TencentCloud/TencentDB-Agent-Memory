@@ -4,18 +4,16 @@
  * Two separate things live here, and conflating them is how a gate becomes a
  * formality:
  *
- *   1. the MECHANISM — `bwrap`, a mount+network namespace: the child sees a
- *      read-only system, its own scratch, its own /tmp, and no network;
+ *   1. the MECHANISM — `bwrap`, a mount+process namespace: the child sees a
+ *      read-only system, its own scratch and its own /tmp. The approved
+ *      `scratch-net-v1` profile retains network for the model API;
  *   2. the POLICY — whether a role is ALLOWED to run confined yet. That is
- *      `L6_SIGNED_OFF`, and it is false: the spec (§Risk tier) requires a
- *      separate security review before executable roles are enabled.
+ *      `L6_SIGNED_OFF`; executable roles still fail closed if the supported
+ *      profile or `bwrap` is unavailable.
  *
- * Until the policy flips, a role that asks for isolation is refused with a
- * typed `isolation-unavailable` — never launched unconfined "for now". The
- * mechanism is implemented and tested anyway, so the review has something
- * concrete to review instead of a promise.
+ * A requested profile is never launched unconfined as a fallback.
  */
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ResolvedRoleContract } from "../role-contract-types.js";
 import type { LaunchError } from "./types.js";
@@ -26,7 +24,7 @@ import type { LaunchError } from "./types.js";
  * deliberately not readable from the environment: a gate an operator (or a
  * compromised config) can open is not a gate.
  */
-export const L6_SIGNED_OFF = false;
+export const L6_SIGNED_OFF = true;
 
 export const ISOLATION_BINARY = "bwrap";
 
@@ -47,7 +45,7 @@ export function resolveExecutable(binary: string): string | null {
     const abs = path.resolve(binary);
     try {
       accessSync(abs, constants.X_OK);
-      return abs;
+      return realpathSync(abs);
     } catch {
       return null;
     }
@@ -57,7 +55,7 @@ export function resolveExecutable(binary: string): string | null {
     const candidate = path.join(dir, binary);
     try {
       accessSync(candidate, constants.X_OK);
-      return candidate;
+      return realpathSync(candidate);
     } catch {
       /* keep looking */
     }
@@ -70,9 +68,8 @@ export function isolationAvailable(): boolean {
 }
 
 /**
- * Wrap a command so it can only touch `cwd`. `--unshare-all` takes the
- * network with it, and `--die-with-parent` keeps the confined child from
- * outliving the gateway.
+ * Wrap a command so it can only mutate `cwd`. `scratch-net-v1` keeps network
+ * available for the model API while isolating every other namespace.
  */
 export function confineArgv(
   cwd: string,
@@ -89,6 +86,10 @@ export function confineArgv(
   const extra = RO_BINDS.some((p) => binDir === p || binDir.startsWith(`${p}/`))
     ? []
     : ["--ro-bind", binDir, binDir];
+  const bunModules = resolved.includes("/.bun/install/global/node_modules/")
+    ? resolved.slice(0, resolved.indexOf("/node_modules/") + 14)
+    : null;
+  const runtimeRoots = bunModules ? [bunModules] : [];
   const wrapped = [
     ...RO_BINDS.flatMap((p) => ["--ro-bind", p, p]),
     ...SYMLINKS.flatMap(([target, link]) => ["--symlink", target, link]),
@@ -103,12 +104,17 @@ export function confineArgv(
     // would be masked by it — and a binary under /tmp is exactly the case a
     // test hits first.
     ...extra,
+    ...runtimeRoots.flatMap((root) => ["--ro-bind", root, root]),
     "--bind",
     cwd,
     cwd,
     "--chdir",
     cwd,
-    "--unshare-all",
+    "--unshare-user",
+    "--unshare-ipc",
+    "--unshare-pid",
+    "--unshare-uts",
+    "--unshare-cgroup",
     "--die-with-parent",
     resolved,
     ...args,
@@ -127,6 +133,12 @@ export function isolationRefusal(
   // `?? null` and not `=== null`: a contract pinned before the field existed
   // has no profile at all, and "absent" is the legacy path, not a request.
   if ((contract.binding.isolationProfileRef ?? null) === null) return null;
+  if (contract.binding.isolationProfileRef !== "scratch-net-v1") {
+    return {
+      kind: "isolation-unavailable",
+      message: `unknown isolation profile "${contract.binding.isolationProfileRef}"`,
+    };
+  }
   if (!L6_SIGNED_OFF) {
     return {
       kind: "isolation-unavailable",

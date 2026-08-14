@@ -1,27 +1,22 @@
-/**
- * L1 runner cursor-gate test: when extraction reports success:false
- * (e.g. LLM throw), the L1 cursor must NOT advance — the batch re-presents
- * next cycle instead of being silently lost.
- */
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createL1Runner } from "./l1-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
+import { createTestL1Dispatcher } from "../../gateway/l1/l1-dispatch-fixture.js";
+import { readMemoryRecords } from "../../core/record/l1-reader.js";
+import type { MemoryRecord } from "../../core/record/l1-writer.js";
+import type { IMemoryStore, L1RecordRow } from "../../core/store/types.js";
 
 const SESSION_KEY = "session-1";
 const TODAY = new Date().toISOString().slice(0, 10);
-
-function makeLogger() {
-  const noop = () => undefined;
-  return {
-    debug: noop,
-    info: noop,
-    warn: noop,
-    error: noop,
-  };
-}
+const logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
 
 function seedL0(baseDir: string): void {
   const convDir = join(baseDir, "conversations");
@@ -38,79 +33,88 @@ function seedL0(baseDir: string): void {
   writeFileSync(join(convDir, `${TODAY}.jsonl`), `${line}\n`);
 }
 
-describe("l1-runner cursor gate", () => {
-  it("does NOT advance last_l1_cursor when extraction fails (LLM throws)", async () => {
+function makeRunner(baseDir: string, verdict: "approve" | "reject") {
+  const rows = new Map<string, L1RecordRow>();
+  const now = new Date().toISOString();
+  const vectorStore = {
+    isDegraded: () => false,
+    queryL0GroupedBySessionId: async (_key: string, after?: number) => after ? [] : [{
+      sessionId: SESSION_KEY,
+      projectId: "",
+      messages: [{
+        id: "m1", role: "user", content: "I prefer dark theme in all my editors",
+        timestamp: Date.now(), recordedAtMs: Date.now(),
+      }],
+    }],
+    getL1ById: async (id: string) => rows.get(id) ?? null,
+    upsertL1: async (record: MemoryRecord) => {
+      rows.set(record.id, {
+        record_id: record.id,
+        content: record.content,
+        type: record.type,
+        priority: record.priority,
+        scene_name: record.scene_name,
+        session_key: record.sessionKey,
+        session_id: record.sessionId,
+        timestamp_str: now,
+        timestamp_start: now,
+        timestamp_end: now,
+        created_time: record.createdAt,
+        updated_time: record.updatedAt,
+        metadata_json: JSON.stringify(record.metadata),
+        project_id: record.projectId,
+        scope: record.scope,
+      });
+      return true;
+    },
+  } as unknown as IMemoryStore;
+  return createL1Runner({
+    pluginDataDir: baseDir,
+    cfg: {
+      extraction: { role: "l1-extractor" },
+    } as never,
+    vectorStore,
+    embeddingService: undefined,
+    logger,
+    dispatcher: createTestL1Dispatcher(baseDir, verdict),
+  });
+}
+
+describe("agentic l1-runner cursor gate", () => {
+  it("does not advance the cursor when the critic rejects", async () => {
     const baseDir = mkdtempSync(join(tmpdir(), "l1-runner-gate-"));
     try {
       seedL0(baseDir);
-
-      const runner = createL1Runner({
-        pluginDataDir: baseDir,
-        cfg: {
-          extraction: { enableDedup: false, maxMemoriesPerSession: 10, model: "test" },
-          embedding: { conflictRecallTopK: 5, captureTimeoutMs: 5000, timeoutMs: 5000 },
-        } as never,
-        openclawConfig: {},
-        vectorStore: undefined,
-        embeddingService: undefined,
-        logger: makeLogger(),
-        llmRunner: {
-          async run() {
-            throw new Error("simulated LLM timeout");
-          },
-        },
-      });
-
-      const result = await runner({ sessionKey: SESSION_KEY });
-      expect(result.processedCount).toBe(0);
-
-      // Cursor must NOT have advanced — stays at the initial 0.
-      const checkpoint = new CheckpointManager(baseDir, makeLogger());
+      await expect(
+        makeRunner(baseDir, "reject")({ sessionKey: SESSION_KEY }),
+      ).rejects.toThrow("did not reach commit");
+      const checkpoint = new CheckpointManager(baseDir, logger);
       const cp = await checkpoint.read();
-      const state = checkpoint.getRunnerState(cp, SESSION_KEY);
-      expect(state.last_l1_cursor).toBe(0);
+      expect(checkpoint.getRunnerState(cp, SESSION_KEY).last_l1_cursor).toBe(0);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
   });
 
-  it("advances cursor on successful extraction", async () => {
+  it("commits memory then advances the composite cursor", async () => {
     const baseDir = mkdtempSync(join(tmpdir(), "l1-runner-ok-"));
     try {
       seedL0(baseDir);
-
-      const runner = createL1Runner({
-        pluginDataDir: baseDir,
-        cfg: {
-          extraction: { enableDedup: false, maxMemoriesPerSession: 10, model: "test" },
-          embedding: { conflictRecallTopK: 5, captureTimeoutMs: 5000, timeoutMs: 5000 },
-        } as never,
-        openclawConfig: {},
-        vectorStore: undefined,
-        embeddingService: undefined,
-        logger: makeLogger(),
-        llmRunner: {
-          async run() {
-            return JSON.stringify([
-              {
-                scene_name: "scene",
-                message_ids: ["m1"],
-                memories: [
-                  { content: "User prefers dark theme", type: "persona", scope: "project", priority: 50 },
-                ],
-              },
-            ]);
-          },
-        },
+      const runner = makeRunner(baseDir, "approve");
+      expect((await runner({ sessionKey: SESSION_KEY })).processedCount).toBe(
+        1,
+      );
+      const cp = await new CheckpointManager(baseDir, logger).read();
+      expect(cp.runner_states[SESSION_KEY]).toMatchObject({
+        last_l1_cursor_id: "m1",
+        last_l1_finalized_cohort_id: expect.stringMatching(/^l1c_/),
       });
-
-      const result = await runner({ sessionKey: SESSION_KEY });
-      expect(result.processedCount).toBe(1);
-
-      const checkpoint = new CheckpointManager(baseDir, makeLogger());
-      const cp = await checkpoint.read();
-      const state = checkpoint.getRunnerState(cp, SESSION_KEY);
-      expect(state.last_l1_cursor).toBeGreaterThan(0);
+      expect((await runner({ sessionKey: SESSION_KEY })).processedCount).toBe(
+        0,
+      );
+      expect(
+        await readMemoryRecords(SESSION_KEY, baseDir, logger),
+      ).toHaveLength(1);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }

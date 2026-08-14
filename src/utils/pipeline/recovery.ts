@@ -12,6 +12,7 @@
 import { TAG } from "./types.js";
 import type { MemoryPipelineManager } from "./manager.js";
 import { advanceL2Timer } from "./timers.js";
+import { enqueueL1 } from "./l1.js";
 
 export function recoverPendingSessions(m: MemoryPipelineManager): void {
   for (const [sessionKey, state] of m.sessionStates) {
@@ -20,11 +21,13 @@ export function recoverPendingSessions(m: MemoryPipelineManager): void {
       `${TAG} [${sessionKey}] Recovery: conversation_count=${state.conversation_count}, ` +
       `l2_pending_l1_count=${state.l2_pending_l1_count}, arming L2 timer`,
     );
-    // Roll conversation_count into l2_pending_l1_count: messages are gone
-    // (in-memory buffers don't survive restart), but the existence of
-    // pending work should still drive an L2 cycle to reconcile state.
-    state.l2_pending_l1_count = Math.max(state.l2_pending_l1_count, state.conversation_count);
-    state.conversation_count = 0;
-    advanceL2Timer(m, sessionKey);
+    if (state.conversation_count > 0) {
+      // L0 and any open cohort are durable even though the in-memory message
+      // buffer is gone. Re-enter L1 so an orphaned assignment is recovered;
+      // routing this straight to L2 permanently wedges state='running'.
+      enqueueL1(m, sessionKey);
+    } else {
+      advanceL2Timer(m, sessionKey);
+    }
   }
 }

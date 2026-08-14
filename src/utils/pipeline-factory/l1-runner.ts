@@ -1,121 +1,89 @@
-/**
- * L1 runner builder: reads L0 messages (VectorStore DB or JSONL fallback),
- * groups by sessionId, runs `extractL1Memories` for each group, and updates
- * the checkpoint cursor.
- */
-
 import type { MemoryTdaiConfig } from "../../config.js";
-import { extractL1Memories } from "../../core/record/l1-extractor.js";
-import { readConversationMessagesGroupedBySessionId } from "../../core/conversation/l0-recorder.js";
-import type { ConversationMessage } from "../../core/conversation/l0-recorder.js";
-import { CheckpointManager } from "../checkpoint.js";
-import type { IMemoryStore } from "../../core/store/types.js";
+import type { L1ExtractionDispatcher } from "../../core/record/l1-agent-types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
+import type { IMemoryStore } from "../../core/store/types.js";
+import {
+  commitL1Cohort,
+  listL1CohortAssignments,
+} from "../../gateway/l1/l1-cohort-repo.js";
+import { CheckpointManager } from "../checkpoint.js";
+import { processL1Assignment } from "./l1-assignment-processor.js";
+import { ensureOpenL1Cohort } from "./l1-cohort-source.js";
 import type { PipelineLogger } from "./types.js";
+import { L1DispatchError } from "../../core/record/l1-agent-errors.js";
 
-const TAG = "[memory-tdai] [pipeline-factory]";
+const TAG = "[memory-tdai] [l1-agent]";
 
 export function createL1Runner(opts: {
   pluginDataDir: string;
   cfg: MemoryTdaiConfig;
-  openclawConfig: unknown;
-  vectorStore: IMemoryStore | undefined;
-  embeddingService: EmbeddingService | undefined;
+  vectorStore?: IMemoryStore;
+  embeddingService?: EmbeddingService;
   logger: PipelineLogger;
-  /**
-   * Getter for the plugin instance ID used for metric reporting.
-   * Called at runner execution time (not at creation time).
-   */
-  getInstanceId?: () => string | undefined;
-  /** Host-neutral LLM runner for L1 extraction (standalone/gateway mode). */
-  llmRunner?: import("../../core/types.js").LLMRunner;
+  dispatcher: L1ExtractionDispatcher;
 }): (params: { sessionKey: string }) => Promise<{ processedCount: number }> {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner } = opts;
-  const config = openclawConfig as Record<string, unknown> | undefined;
-
-  return async ({ sessionKey }) => {
-    if (!config && !llmRunner) {
-      logger.debug?.(`${TAG} [l1] No OpenClaw config and no LLM runner, skipping L1 extraction`);
-      return { processedCount: 0 };
-    }
-    const checkpoint = new CheckpointManager(pluginDataDir, logger);
+  const run = async ({ sessionKey }: { sessionKey: string }) => {
+    const checkpoint = new CheckpointManager(opts.pluginDataDir, opts.logger);
     const cp = await checkpoint.read();
-    const runnerState = checkpoint.getRunnerState(cp, sessionKey);
-    logger.info(`${TAG} [l1] Session ${sessionKey}: l1_cursor=${runnerState.last_l1_cursor || "(start)"}`);
-
-    try {
-      let groups: Array<{ sessionId: string; projectId: string; messages: ConversationMessage[] }>;
-      let maxRecordedAtMs = 0;
-      if (vectorStore && !vectorStore.isDegraded()) {
-        const l1Cursor = runnerState.last_l1_cursor > 0 ? runnerState.last_l1_cursor : undefined;
-        const dbGroups = await vectorStore.queryL0GroupedBySessionId(sessionKey, l1Cursor);
-        groups = dbGroups.map((g) => ({
-          sessionId: g.sessionId,
-          projectId: g.projectId ?? "",
-          messages: g.messages.map((m) => ({
-            id: m.id, role: m.role as "user" | "assistant", content: m.content, timestamp: m.timestamp,
-          })),
-        }));
-        for (const g of dbGroups) for (const m of g.messages) if (m.recordedAtMs > maxRecordedAtMs) maxRecordedAtMs = m.recordedAtMs;
-        logger.debug?.(`${TAG} [l1] L0 data source: VectorStore DB`);
-      } else {
-        logger.debug?.(`${TAG} [l1] L0 data source: JSONL files (VectorStore unavailable)`);
-        const jsonlGroups = await readConversationMessagesGroupedBySessionId(
-          sessionKey, pluginDataDir, runnerState.last_l1_cursor || undefined, logger, 50,
+    const state = checkpoint.getRunnerState(cp, sessionKey);
+    const cohort = await ensureOpenL1Cohort({
+      dataDir: opts.pluginDataDir,
+      sessionKey,
+      role: opts.cfg.extraction.role,
+      state,
+      dispatcher: opts.dispatcher,
+      vectorStore: opts.vectorStore,
+      logger: opts.logger,
+    });
+    if (!cohort) return { processedCount: 0 };
+    let memoriesExtracted = 0;
+    let lastSceneName: string | undefined;
+    for (const assignment of listL1CohortAssignments(
+      opts.pluginDataDir,
+      cohort.cohortId,
+    )) {
+      const result = await processL1Assignment({
+        dataDir: opts.pluginDataDir,
+        role: opts.cfg.extraction.role,
+        assignment,
+        dispatcher: opts.dispatcher,
+        vectorStore: opts.vectorStore,
+        embeddingService: opts.embeddingService,
+        logger: opts.logger,
+      });
+      if (!result.ok) {
+        throw new L1DispatchError(
+          "launch-failed",
+          `L1 assignment ${assignment.assignmentId} did not reach commit`,
         );
-        groups = jsonlGroups.map((g) => ({
-          sessionId: g.sessionId, projectId: g.projectId ?? "", messages: g.messages,
-        }));
-        for (const g of jsonlGroups) for (const m of g.messages) if (m.recordedAtMs > maxRecordedAtMs) maxRecordedAtMs = m.recordedAtMs;
       }
-      if (groups.length === 0) {
-        logger.debug?.(`${TAG} [l1] No new L0 messages for session ${sessionKey}`);
-        return { processedCount: 0 };
-      }
-      const totalMessages = groups.reduce((sum, g) => sum + g.messages.length, 0);
-      logger.info(`${TAG} [l1] Processing ${totalMessages} L0 messages across ${groups.length} sessionId group(s) for session ${sessionKey}`);
-
-      let totalExtracted = 0;
-      let totalStored = 0;
-      let lastSceneName: string | undefined;
-      let anyFailed = false;
-      for (const group of groups) {
-        logger.debug?.(`${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"}: ${group.messages.length} messages`);
-        const l1Result = await extractL1Memories({
-          messages: group.messages, sessionKey, sessionId: group.sessionId, projectId: group.projectId,
-          baseDir: pluginDataDir, config,
-          options: {
-            enableDedup: cfg.extraction.enableDedup,
-            maxMemoriesPerSession: cfg.extraction.maxMemoriesPerSession,
-            model: cfg.extraction.model,
-            previousSceneName: lastSceneName ?? (runnerState.last_scene_name || undefined),
-            vectorStore, embeddingService,
-            conflictRecallTopK: cfg.embedding.conflictRecallTopK,
-            embeddingTimeoutMs: cfg.embedding.captureTimeoutMs ?? cfg.embedding.timeoutMs,
-            llmRunner,
-          },
-          logger,
-          instanceId: getInstanceId?.(),
-        });
-        if (!l1Result.success) {
-          anyFailed = true;
-          logger.warn(`${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"} failed: ${l1Result.error ?? "unknown"} — cursor NOT advanced, batch will re-present`);
-          break;
-        }
-        totalExtracted += l1Result.extractedCount;
-        totalStored += l1Result.storedCount;
-        if (l1Result.lastSceneName) lastSceneName = l1Result.lastSceneName;
-      }
-      if (anyFailed) {
-        // Preserve the cursor so the failed batch is re-presented next cycle.
-        return { processedCount: 0 };
-      }
-      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
-      logger.info(`${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`);
-      return { processedCount: totalMessages };
-    } catch (err) {
-      logger.error(`${TAG} [l1] L1 failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
-      throw err;
+      memoriesExtracted += result.memoryCount;
+      lastSceneName = result.lastSceneName ?? lastSceneName;
     }
+    await checkpoint.finalizeL1Cohort({
+      cohortId: cohort.cohortId,
+      sessionKey,
+      memoriesExtracted,
+      cursorRecordedAtMs: cohort.endRecordedAtMs,
+      cursorRecordId: cohort.endRecordId,
+      lastSceneName,
+    });
+    if (
+      !commitL1Cohort(
+        opts.pluginDataDir,
+        cohort.cohortId,
+        new Date().toISOString(),
+      )
+    )
+      throw new Error(`failed to commit L1 cohort ${cohort.cohortId}`);
+    const processedCount = (JSON.parse(cohort.rowManifestJson) as unknown[])
+      .length;
+    opts.logger.info(
+      `${TAG} cohort=${cohort.cohortId} processed=${processedCount} memories=${memoriesExtracted}`,
+    );
+    return { processedCount };
   };
+  return (params) => opts.dispatcher.trackOperation
+    ? opts.dispatcher.trackOperation(() => run(params))
+    : run(params);
 }

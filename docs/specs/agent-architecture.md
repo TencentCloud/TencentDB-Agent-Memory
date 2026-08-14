@@ -6,6 +6,20 @@
 > `agent-platform-unified-final-architecture(1).md` §«Generic Agent model» (унифицированные классы),
 > внешнее ревью Codex (2026-08-10).
 
+> Реализация на 2026-08-14: путь L0→L1 уже переведён на эту модель. Durable assignment запускает `l1-extractor` через общий `RoleLauncher`, затем отдельный `l1-extractor-critic`; parent-side recall и проверка дайджестов обязательны, а commit выполняет только родитель под возобновляемым глобальным lease. Exact-id recovery работает через `IMemoryStore` для SQLite и TencentDB, проверяет JSONL/retrieval postconditions и чинит отсутствующую либо расходящуюся проекцию. Старые утверждения ниже про inline-L1 и отсутствие ядрового critic-gate относятся к consolidation legacy path, а не к L1 extraction.
+
+### Реализованный L1 protocol
+
+```text
+oldest durable L0 cohort → immutable assignment/workset
+  → extractor LaunchAttempt → parent conflict snapshot
+  → critic Attempt + digest-bound verdict
+  → reviewed candidate → parent commit lease + oplog
+  → JSONL and IMemoryStore read-back → cursor finalize
+```
+
+Extractor/critic получают отдельные попытки и scratch, `ambient_access: none`, пустой tool subset и `scratch-net-v1`. Их stdout валидирует родитель, включая source/target references и `extraction.maxMemoriesPerSession`. `/status.l1` показывает последний assignment/run, обе attempt outcomes, verdict, typed error и verified/total commit operations. Live role install, config cutover and gateway restart остаются отдельным rollout-gate.
+
 ## 1. Зачем документ
 
 Пять пакетов TZ описывали пять несвязанных работ и местами противоречили коду. Причина расхождений одна: **контракт роли сегодня декоративен** — поля есть, исполнение идёт мимо них. Пока это не исправлено, любая доработка (L2, счётчики, recall, scopes) строится на песке.

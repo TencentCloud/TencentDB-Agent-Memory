@@ -106,6 +106,8 @@ import { listRecentRuns } from "./control-plane/run-repo.js";
 import nodeFs from "node:fs";
 import nodePath from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { createGatewayL1Dispatcher } from "./l1/l1-dispatcher-factory.js";
+import { readLatestL1Status } from "./l1/l1-status-repo.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -216,6 +218,12 @@ export class TdaiGateway {
       sessionFilter: new SessionFilter(
         this.config.memory.capture.excludeAgents,
       ),
+      l1Dispatcher: createGatewayL1Dispatcher({
+        dataDir: this.config.data.baseDir,
+        scratchRoot: this.config.data.scratchRoot,
+        config: this.config.memory,
+        logger: this.logger,
+      }),
     });
 
     // Consolidation orchestrator + night-run timer (P6/P7). Created here so
@@ -573,6 +581,15 @@ export class TdaiGateway {
           `[route] POST /memory/note done in ${(performance.now() - t0).toFixed(0)}ms`,
         );
         return;
+      }
+
+      if (
+        method === "POST" &&
+        (pathname === "/capture" ||
+          pathname === "/session/end" ||
+          pathname === "/seed")
+      ) {
+        if (!this.checkMemoryWriteAuth(req, res)) return;
       }
 
       // All other routes go through the optional auth gate. When apiKey is
@@ -1000,9 +1017,18 @@ export class TdaiGateway {
       },
       roles: listRoles(this.config.data.baseDir),
       reindexInProgress: this.core.getVectorStore()?.isReindexing?.() ?? false,
+      l1: this.latestL1Status(),
       runs: this.recentRuns(),
     };
     sendJson(res, 200, response);
+  }
+
+  private latestL1Status(): StatusResponse["l1"] {
+    try {
+      return readLatestL1Status(this.config.data.baseDir);
+    } catch {
+      return null;
+    }
   }
 
   /** Control-plane projection for /status (tz-09 Ф1). Fails soft: an absent

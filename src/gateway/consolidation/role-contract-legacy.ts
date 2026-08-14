@@ -117,7 +117,7 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
     model,
     thinking: cfg.thinking ?? legacy.thinking,
     authProfileRef: null,
-    isolationProfileRef: null,
+    isolationProfileRef: cfg.runtime?.isolation_profile ?? null,
   };
 
   const contract: ResolvedRoleContract = {
@@ -171,6 +171,8 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       skillPath: cfg.runtime?.skill_path ?? null,
       scratchRoot: cfg.runtime?.scratch_root ?? null,
       keepScratch: cfg.runtime?.keep_scratch ?? false,
+      artifactTransport: cfg.runtime?.artifact_transport ?? "files",
+      ambientAccess: cfg.runtime?.ambient_access ?? "inherit",
     },
   };
   contract.contractHash = hashContract(contract);

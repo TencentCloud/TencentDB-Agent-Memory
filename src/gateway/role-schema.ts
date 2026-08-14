@@ -54,6 +54,9 @@ export interface RoleConfigFile {
     /** Keep the attempt dir after the run — retention deletes it, not the
      * runner. Default false: the wipe stays the behaviour nobody opted out of. */
     keep_scratch?: boolean;
+    isolation_profile?: "scratch-net-v1";
+    artifact_transport?: "files" | "stdout-json";
+    ambient_access?: "inherit" | "none";
   };
 }
 
@@ -84,6 +87,9 @@ const RUNTIME_KEY_CHECKS: Record<string, (v: unknown) => boolean> = {
   skill_path: (v) => isStr(v),
   scratch_root: (v) => isStr(v),
   keep_scratch: (v) => isBool(v),
+  isolation_profile: (v) => v === "scratch-net-v1",
+  artifact_transport: (v) => v === "files" || v === "stdout-json",
+  ambient_access: (v) => v === "inherit" || v === "none",
 };
 
 export function isApplyOp(v: unknown): v is ApplyOp {

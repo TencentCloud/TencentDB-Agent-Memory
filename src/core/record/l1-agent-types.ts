@@ -1,4 +1,6 @@
 import type { MemoryScope, MemoryType } from "./l1-writer.js";
+import type { EmbeddingService } from "../store/embedding.js";
+import type { IMemoryStore } from "../store/types.js";
 
 export interface L1CursorV1 {
   recordedAtMs: number;
@@ -71,6 +73,15 @@ export type L1DispatchResult =
   | { ok: false; kind: L1DispatchFailureKind; message: string };
 
 export interface L1ExtractionDispatcher {
+  resolveRoleContractHash(role: string): string;
+  configureRecallContext?(input: {
+    vectorStore?: IMemoryStore;
+    embeddingService?: EmbeddingService;
+  }): void;
+  /** Cancel and reap every launched extractor/critic before stores close. */
+  shutdown?(): Promise<void>;
+  /** Track scheduler work through parent commit so shutdown can drain it. */
+  trackOperation?<T>(operation: () => Promise<T>): Promise<T>;
   dispatchExtraction(input: {
     role: string;
     workset: L1WorksetV1;

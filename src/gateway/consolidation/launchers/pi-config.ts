@@ -55,6 +55,18 @@ const OWNED_FLAGS_WITH_VALUE: ReadonlySet<string> = new Set([
   "--sandbox",
   "-m",
   "--model",
+  "--tools",
+  "--extension",
+  "--skill",
+  "--prompt-template",
+  "--theme",
+  "--append-system-prompt",
+  "--system-prompt",
+  "--mcp-config",
+  "--exclude-tools",
+  "-t",
+  "-xt",
+  "-e",
 ]);
 
 /** Drop launcher-owned flags (and the value of those that take one). Each
@@ -66,7 +78,8 @@ export function stripOwnedFlags(
   const kept: string[] = [];
   for (let i = 0; i < flags.length; i += 1) {
     const flag = flags[i]!;
-    if (!owned.includes(flag)) {
+    const name = flag.includes("=") ? flag.slice(0, flag.indexOf("=")) : flag;
+    if (!owned.includes(name)) {
       kept.push(flag);
       continue;
     }
@@ -75,7 +88,8 @@ export function stripOwnedFlags(
     // `-p` is the next FLAG, never its argument.
     const next = flags[i + 1];
     if (
-      OWNED_FLAGS_WITH_VALUE.has(flag) &&
+      !flag.includes("=") &&
+      OWNED_FLAGS_WITH_VALUE.has(name) &&
       next !== undefined &&
       !next.startsWith("-")
     ) {

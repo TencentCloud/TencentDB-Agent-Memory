@@ -28,8 +28,8 @@ export interface PostconditionResult {
 const sha = (content: string) =>
   createHash("sha256").update(content).digest("hex");
 
-/** Current content of an L1 record; null when unreadable, undefined when the
- * record is gone. Read-only, never throws. */
+/** Legacy control-plane operations are SQLite-only. Agentic L1 recovery uses
+ * its injected IMemoryStore path and never calls this helper. */
 function recordContent(dataDir: string, id: string): string | null | undefined {
   const dbPath = path.join(dataDir, "vectors.db");
   if (!fs.existsSync(dbPath)) return null;
@@ -37,14 +37,14 @@ function recordContent(dataDir: string, id: string): string | null | undefined {
     const db = openReadonlySqlite(dbPath);
     try {
       const row = db
-        .prepare(`SELECT content FROM l1_records WHERE record_id = ? LIMIT 1`)
+        .prepare("SELECT content FROM l1_records WHERE record_id = ? LIMIT 1")
         .get(id) as { content?: string } | undefined;
       return row === undefined ? undefined : (row.content ?? "");
     } finally {
       db.close();
     }
   } catch {
-    return null; // unreadable store — "unknown", never "verified"
+    return null;
   }
 }
 
@@ -129,6 +129,12 @@ export function checkPostcondition(
       }
       return { ...base, ...target };
     }
+    case "storeL1":
+      return {
+        ...base,
+        holds: false,
+        detail: "agentic L1 requires injected-store reconciliation",
+      };
     case "rewriteRecord": {
       const current = recordContent(dataDir, op.targetKey);
       if (current === null) {

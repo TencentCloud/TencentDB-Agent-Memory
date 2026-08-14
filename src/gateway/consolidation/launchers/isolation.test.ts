@@ -1,6 +1,5 @@
 /**
- * tz-06 Ф6 / L6 — the gate is closed, and closed means refused, not
- * "launched unconfined for now".
+ * tz-06 Ф6 / L6 — only the reviewed scratch-net-v1 profile may launch.
  */
 import { describe, it, expect } from "vitest";
 import path from "node:path";
@@ -13,16 +12,15 @@ const contract = (profile: string | null) =>
   }) as unknown as ResolvedRoleContract;
 
 describe("tz-06 Ф6 — isolation gate", () => {
-  it("is CLOSED: L6 is not signed off", () => {
-    // The whole package rests on this being false. If someone flips it, this
-    // test is the thing that says "that needed a security review".
-    expect(L6_SIGNED_OFF).toBe(false);
+  it("signs off only the named profile", () => {
+    expect(L6_SIGNED_OFF).toBe(true);
+    expect(isolationRefusal(contract("scratch-net-v1"))).toBeNull();
   });
 
-  it("refuses a role that asks for a profile", () => {
+  it("refuses an unknown profile", () => {
     const err = isolationRefusal(contract("confined"));
     expect(err?.kind).toBe("isolation-unavailable");
-    expect(err?.message).toContain("L6");
+    expect(err?.message).toContain("unknown isolation profile");
   });
 
   it("leaves a role that asks for nothing alone (the legacy path)", () => {
@@ -42,6 +40,7 @@ describe("tz-06 Ф6 — isolation gate", () => {
     expect(args[bindAt - 1]).toBe("--ro-bind");
     // The command itself survives the wrapping.
     expect(args.slice(-2)).toEqual([bin, "-p"]);
-    expect(args).toContain("--unshare-all");
+    expect(args).toContain("--unshare-user");
+    expect(args).not.toContain("--unshare-net");
   });
 });

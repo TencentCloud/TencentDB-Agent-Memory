@@ -82,6 +82,26 @@ const L1_OUTPUT_FIELDS = [
   "project_id",
 ];
 
+function toL1RecordRow(doc: Record<string, unknown>): L1RecordRow {
+  return {
+    record_id: String(doc.id ?? ""),
+    content: String(doc.text ?? ""),
+    type: String(doc.type ?? ""),
+    priority: Number(doc.priority ?? 0),
+    scene_name: String(doc.scene_name ?? ""),
+    session_key: String(doc.session_key ?? ""),
+    session_id: String(doc.session_id ?? ""),
+    timestamp_str: String(doc.timestamp_str ?? ""),
+    timestamp_start: String(doc.timestamp_start ?? ""),
+    timestamp_end: String(doc.timestamp_end ?? ""),
+    created_time: epochMsToIso(Number(doc.created_time_ms ?? 0)),
+    updated_time: epochMsToIso(Number(doc.updated_time_ms ?? 0)),
+    metadata_json: String(doc.metadata_json ?? "{}"),
+    project_id: String(doc.project_id ?? ""),
+    scope: String(doc.scope ?? "global"),
+  };
+}
+
 /** Fields the scope filter needs a filter index on (tz-05 Ф4b). */
 const SCOPE_FILTER_FIELDS = ["scope", "project_id"] as const;
 
@@ -780,27 +800,25 @@ export class TcvdbMemoryStore implements IMemoryStore {
         [{ fieldName: "updated_time_ms", direction: "asc" }],
       );
 
-      return docs.map((doc) => ({
-        record_id: String(doc.id ?? ""),
-        content: String(doc.text ?? ""),
-        type: String(doc.type ?? ""),
-        priority: Number(doc.priority ?? 0),
-        scene_name: String(doc.scene_name ?? ""),
-        session_key: String(doc.session_key ?? ""),
-        session_id: String(doc.session_id ?? ""),
-        timestamp_str: String(doc.timestamp_str ?? ""),
-        timestamp_start: String(doc.timestamp_start ?? ""),
-        timestamp_end: String(doc.timestamp_end ?? ""),
-        created_time: epochMsToIso(Number(doc.created_time_ms ?? 0)),
-        updated_time: epochMsToIso(Number(doc.updated_time_ms ?? 0)),
-        metadata_json: String(doc.metadata_json ?? "{}"),
-      }));
+      return docs.map(toL1RecordRow);
     } catch (err) {
       this.logger?.warn(
         `${TAG} [L1-query] FAILED: ${err instanceof Error ? err.message : String(err)}`,
       );
       return [];
     }
+  }
+
+  async getL1ById(recordId: string): Promise<L1RecordRow | null> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error(`${TAG} L1 store is degraded`);
+    const docs = await this._queryAllDocs(
+      this.l1Collection,
+      `id = ${JSON.stringify(recordId)}`,
+      L1_OUTPUT_FIELDS,
+      1,
+    );
+    return docs[0] ? toL1RecordRow(docs[0]) : null;
   }
 
   async getAllL1Texts(): Promise<

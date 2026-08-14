@@ -18,12 +18,16 @@ export function removeL1TestDataDirs(roots: string[]): void {
     fs.rmSync(root, { recursive: true, force: true });
 }
 
-export function createL1TestCohort(root: string): L1WorksetV1 {
-  const workset = createL1TestWorkset();
+export function createL1TestCohort(
+  root: string,
+  assignmentId = "l1a_test",
+  cohortId = "cohort-1",
+): L1WorksetV1 {
+  const workset = createL1TestWorkset(assignmentId);
   createL1Cohort(
     root,
     {
-      cohortId: "cohort-1",
+      cohortId,
       sessionKey: workset.sessionKey,
       cursorStart: workset.cursorStart,
       cursorEnd: workset.cursorEnd,

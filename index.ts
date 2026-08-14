@@ -45,6 +45,7 @@ import {
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
 import { allowLegacyFallback } from "./src/gateway/tdai-root.js";
+import { createGatewayL1Dispatcher } from "./src/gateway/l1/l1-dispatcher-factory.js";
 
 const TAG = "[memory-tdai]";
 
@@ -272,6 +273,11 @@ export default function register(api: OpenClawPluginApi) {
     hostAdapter,
     config: cfg,
     sessionFilter,
+    l1Dispatcher: createGatewayL1Dispatcher({
+      dataDir: pluginDataDir,
+      config: cfg,
+      logger: api.logger,
+    }),
   });
 
   // Initialize TdaiCore (async — store init, pipeline wiring)

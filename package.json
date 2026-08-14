@@ -31,7 +31,9 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "postinstall": "bash scripts/openclaw-after-tool-call-messages.patch.sh 2>/dev/null || true",
-    "tdai-memory-mcp": "node ./bin/tdai-memory-mcp.mjs"
+    "tdai-memory-mcp": "node ./bin/tdai-memory-mcp.mjs",
+    "install:l1-roles": "tsx scripts/install-l1-roles.ts",
+    "probe:l1-agent": "tsx scripts/l1-agent-probe.ts"
   },
   "files": [
     "dist/",
@@ -44,6 +46,8 @@
     "scripts/install_hermes_memory_tencentdb.sh",
     "scripts/README.memory-tencentdb-ctl.md",
     "src",
+    "roles/",
+    "scripts/install-l1-roles.ts",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",

@@ -68,6 +68,7 @@ export function provideIdentity(
     const dst = path.join(sessionDir, name);
     try {
       if (!fs.existsSync(src) || fs.existsSync(dst)) continue;
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
       fs.chmodSync(dst, 0o600);
       copied.push(dst);

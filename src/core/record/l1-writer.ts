@@ -194,6 +194,10 @@ export async function writeMemory(params: {
   previousMetadata?: unknown;
   /** Who is writing and what they are doing — one provenance step (tz-05 A3). */
   provenance?: { role: string; action: string; source: ProvenanceSource };
+  /** Agentic commit requires both projections; legacy callers stay fail-open. */
+  strictVectorWrites?: boolean;
+  /** Store-wide lease fence for strict agentic writes. */
+  assertWriteLease?: () => void;
 }): Promise<MemoryRecord | null> {
   const {
     memory,
@@ -208,6 +212,8 @@ export async function writeMemory(params: {
     createdAtOverride,
     previousMetadata,
     provenance,
+    strictVectorWrites = false,
+    assertWriteLease,
   } = params;
 
   if (decision.action === "skip") {
@@ -286,22 +292,28 @@ export async function writeMemory(params: {
     // by memory-cleaner (which reconciles against VectorStore as source of truth).
     if (vectorStore) {
       try {
-        await vectorStore.deleteL1Batch(decision.target_ids);
+        assertWriteLease?.();
+        const deleted = await vectorStore.deleteL1Batch(decision.target_ids);
+        if (!deleted && strictVectorWrites)
+          throw new Error("VectorStore target delete returned false");
         logger?.debug?.(
           `${TAG} VectorStore: deleted ${decision.target_ids.length} target record(s) for ${decision.action}`,
         );
       } catch (err) {
+        if (strictVectorWrites) throw err;
         logger?.warn?.(
           `${TAG} VectorStore delete failed for ${decision.action}: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
+    assertWriteLease?.();
     await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
     logger?.debug?.(
       `${TAG} ${decision.action} memory: removed [${decision.target_ids.join(",")}] from VectorStore → ${record.id}: ${finalContent.slice(0, 80)}...`,
     );
   } else {
     // store: append a new line
+    assertWriteLease?.();
     await fs.appendFile(filePath, JSON.stringify(record) + "\n", "utf-8");
     logger?.debug?.(
       `${TAG} Stored memory ${record.id}: ${finalContent.slice(0, 80)}...`,
@@ -335,7 +347,10 @@ export async function writeMemory(params: {
         }
       }
 
+      assertWriteLease?.();
       const upsertOk = await vectorStore.upsertL1(record, embedding);
+      if (!upsertOk && strictVectorWrites)
+        throw new Error(`VectorStore upsert returned false for ${record.id}`);
       logger?.debug?.(
         `${TAG} [vec-dual-write] upsert result=${upsertOk} id=${record.id}`,
       );
@@ -352,6 +367,7 @@ export async function writeMemory(params: {
         });
       }
     } catch (err) {
+      if (strictVectorWrites) throw err;
       // Vector write failure should NOT block the main JSONL write
       logger?.warn?.(
         `${TAG} [vec-dual-write] FAILED (JSONL already written) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,

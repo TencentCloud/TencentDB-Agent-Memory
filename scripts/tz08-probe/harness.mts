@@ -145,6 +145,8 @@ export interface SandboxConfig {
   /** `none` keeps the store without an embedding service. */
   embedding?:
     { provider: "none" } | { provider: "openai"; baseUrl: string; dim: number };
+  /** Optional fake/alternate Pi boundary for agentic L1 probes. */
+  piBinary?: string;
 }
 
 /** Write the gateway's yaml for a sandbox and return its path. */
@@ -176,6 +178,14 @@ export function writeSandboxConfig(
     "  apiKey: fake",
     "  model: fake-model",
     "memory:",
+    ...(cfg.piBinary
+      ? [
+          "  consolidation:",
+          "    launchers:",
+          "      pi:",
+          `        binary: ${JSON.stringify(cfg.piBinary)}`,
+        ]
+      : []),
     "  llm:",
     // Without this the runtime falls back to the HOST's runner and the fake
     // base URL is never consulted (tdai-core.ts wirePipelineRunners).
@@ -205,6 +215,7 @@ export interface Gateway {
   url: string;
   proc: ChildProcess;
   log: () => string;
+  token: string;
   stop: () => Promise<void>;
 }
 
@@ -273,6 +284,12 @@ export async function startGateway(opts: {
     url,
     proc,
     log: () => log,
+    token: fs.readFileSync(
+      ((await (await fetch(`${url}/memory/info`)).json()) as {
+        tokenPath: string;
+      }).tokenPath,
+      "utf-8",
+    ).trim(),
     stop: async () => {
       proc.kill();
       await new Promise((r) => setTimeout(r, 300));

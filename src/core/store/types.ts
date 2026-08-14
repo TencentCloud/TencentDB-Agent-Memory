@@ -101,6 +101,7 @@ export interface L1RecordRow {
   metadata_json: string;
   /** Project this memory belongs to; '' on legacy rows and non-sqlite backends. */
   project_id?: string;
+  scope?: string;
 }
 
 // ============================
@@ -280,6 +281,9 @@ export interface IMemoryStore {
   // ── L1 Read ──────────────────────────────────────────────
 
   countL1(): MaybePromise<number>;
+  /** Exact persistence lookup. Returns null only for confirmed absence and
+   * throws when the backend cannot establish the result. */
+  getL1ById(recordId: string): MaybePromise<L1RecordRow | null>;
   queryL1Records(filter?: L1QueryFilter): MaybePromise<L1RecordRow[]>;
   getAllL1Texts(): MaybePromise<
     Array<{ record_id: string; content: string; updated_time: string }>

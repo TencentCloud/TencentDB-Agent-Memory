@@ -25,6 +25,7 @@ import { parseConfig } from "../config.js";
 let tmp: string;
 let baseUrl: string;
 let gateway: TdaiGateway;
+const API_KEY = "capture-floor-key";
 
 beforeAll(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "capture-floor-"));
@@ -33,7 +34,7 @@ beforeAll(async () => {
   const port = await freePort();
   gateway = new TdaiGateway({
     data: { baseDir: base },
-    server: { port, host: "127.0.0.1", corsOrigins: [] },
+    server: { port, host: "127.0.0.1", corsOrigins: [], apiKey: API_KEY },
     memory: parseConfig({}),
   });
   await gateway.start();
@@ -53,7 +54,10 @@ describe("POST /capture on a session with no cursor yet", () => {
     const written = Date.now() - 50;
     const res = await fetch(`${baseUrl}/capture`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
       body: JSON.stringify({
         user_content: "вопрос",
         assistant_content: "ответ",

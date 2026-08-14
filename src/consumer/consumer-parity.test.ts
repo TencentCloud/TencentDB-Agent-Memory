@@ -23,7 +23,6 @@ import { execFileSync } from "node:child_process";
 import {
   REPO_ROOT,
   freePort,
-  DEFAULT_EXTRACTION,
   startFakeLlm,
   startGateway,
   startHost,
@@ -33,6 +32,9 @@ import {
   type Gateway,
   type McpHost,
 } from "../../scripts/tz08-probe/harness.mts";
+import { installFakeL1RoleHost } from "../../scripts/tz08-probe/fake-l1-role-host.mts";
+import { listRecentRuns } from "../gateway/control-plane/run-repo.js";
+import { listAttempts } from "../gateway/control-plane/attempt-repo.js";
 import { describeAllHosts, resolveLauncherPath } from "./hosts/registry.js";
 
 /**
@@ -61,6 +63,7 @@ function walk(target: string): string[] {
 }
 
 let home: string;
+let dataDir: string;
 let gateway: Gateway;
 let llm: FakeLlm;
 let hosts: McpHost[];
@@ -72,36 +75,20 @@ const NOTE_MARKER = `парити-${Date.now()}`;
 beforeAll(async () => {
   ensureBuild();
   home = fs.mkdtempSync(path.join(os.tmpdir(), "tz08-parity-"));
-  const dataDir = path.join(home, "memory", "tdai");
+  dataDir = path.join(home, "memory", "tdai");
   fs.mkdirSync(dataDir, { recursive: true });
 
   // The extraction echoes the marker of whatever note it is given, so "the
   // note came back" is about THAT note: with a fixed extraction the seeded
   // memory answers the query and the leg passes without the note existing.
-  llm = await startFakeLlm((requestBody: string) =>
-    requestBody.includes(NOTE_MARKER)
-      ? [
-          {
-            scene_name: "Заметка потребителя",
-            message_ids: ["1"],
-            memories: [
-              {
-                content: `Пользователь оставил заметку через обёртку: ${NOTE_MARKER}`,
-                type: "episodic",
-                scope: "project",
-                priority: 60,
-                source_message_ids: ["1"],
-              },
-            ],
-          },
-        ]
-      : DEFAULT_EXTRACTION,
-  );
+  llm = await startFakeLlm();
+  const piBinary = installFakeL1RoleHost(dataDir, home);
   const port = await freePort();
   const configPath = writeSandboxConfig(path.join(home, "gateway.yaml"), {
     dataDir,
     port,
     llmUrl: llm.url,
+    piBinary,
   });
   gateway = await startGateway({ home, dataDir, port, configPath });
   token = fs
@@ -221,7 +208,13 @@ describe("consumer-parity", () => {
       const answer = await searchThrough(hosts[1]!, marker);
       return JSON.stringify(answer).includes(marker);
     });
-    expect(llm.calls()).toBeGreaterThan(0);
+    const run = listRecentRuns(dataDir).find(
+      ({ roleId, state }) => roleId === "l1-extractor" && state === "applied",
+    );
+    expect(run).toBeDefined();
+    expect(
+      listAttempts(dataDir, run!.runId).map(({ outcome }) => outcome),
+    ).toEqual(["succeeded", "succeeded"]);
   });
 
   it("reads without a credential and refuses a write without one", async () => {

@@ -123,6 +123,18 @@ describe.each(bothBackends())("IMemoryStore contract — %s", (name, get) => {
     expect(await store.countL1()).toBe(before);
   });
 
+  it("exact-id lookup distinguishes a matching row from confirmed absence", async () => {
+    const store = get();
+    const expected = record(`${name}-exact`, "2026-08-03T00:00:00.000Z");
+    await store.upsertL1(expected);
+    expect(await store.getL1ById(expected.id)).toMatchObject({
+      record_id: expected.id,
+      content: expected.content,
+    });
+    await store.deleteL1(expected.id);
+    expect(await store.getL1ById(expected.id)).toBeNull();
+  });
+
   it("deleteL1Batch removes exactly the named ids", async () => {
     const store = get();
     const before = await store.countL1();

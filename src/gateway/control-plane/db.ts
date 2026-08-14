@@ -64,6 +64,8 @@ const SCHEMA: readonly string[] = [
      targetKey TEXT NOT NULL DEFAULT '',
      payloadDigest TEXT NOT NULL DEFAULT '',
      extraKeys TEXT NOT NULL DEFAULT '',
+     action TEXT NOT NULL DEFAULT '',
+     beforeDigestJson TEXT NOT NULL DEFAULT '',
      updatedAt TEXT NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS oplog_run_idx ON oplog (runId, opIndex)`,
@@ -74,6 +76,8 @@ const SCHEMA: readonly string[] = [
  * which fails harmlessly once the column is there. */
 const ADDITIONS: readonly string[] = [
   `ALTER TABLE oplog ADD COLUMN extraKeys TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE oplog ADD COLUMN action TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE oplog ADD COLUMN beforeDigestJson TEXT NOT NULL DEFAULT ''`,
   // tz-03a: which run already finalized the checkpoint. Nullable on purpose —
   // every run that predates the column reads as "not finalized", which is the
   // safe direction: at worst one recount, never a silent double count.

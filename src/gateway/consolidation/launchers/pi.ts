@@ -8,15 +8,19 @@
  * with the characterization tests of Ф0 as the before-picture.
  */
 import { piArgs } from "./pi-process.js";
-import { attemptSessionDir, startHosted } from "./start.js";
-import type { Logger } from "../../../core/types.js";
-import type { ResolvedRoleContract } from "../role-contract-types.js";
-import type { LauncherSettings } from "./pi-config.js";
+import path from "node:path";
 import {
-  DEFAULT_PI_FLAGS,
-  PI_LAUNCHER_ID,
-  stripOwnedFlags,
-} from "./pi-config.js";
+  attemptDir,
+  attemptSessionDir,
+  provideIdentity,
+  startHosted,
+} from "./start.js";
+import { authRootFor } from "./auth-root.js";
+import type { Logger } from "../../../core/types.js";
+import type { LauncherSettings } from "./pi-config.js";
+import { PI_LAUNCHER_ID } from "./pi-config.js";
+import { piAssetArgs, piFixedFlags } from "./pi-policy.js";
+export { piAssetArgs } from "./pi-policy.js";
 
 /** @see capabilities.ts — the role's vocabulary, not pi's flag names.
  *
@@ -32,20 +36,6 @@ const PI_CAPABILITIES: ReadonlySet<string> = new Set([
 ]);
 import type { LaunchInput, LaunchOutcome, RoleLauncher } from "./types.js";
 
-/** Instance assets → CLI args. A role that brings its own extension disables
- * the ambient ones: the forked task-cycle registers the same tool names, and
- * pi treats a tool-name conflict as fatal. */
-export function piAssetArgs(contract: ResolvedRoleContract): string[] {
-  const args: string[] = [];
-  if (contract.assets.extensionPath) {
-    args.push("--no-extensions", "--extension", contract.assets.extensionPath);
-  }
-  if (contract.assets.skillPath) {
-    args.push("--skill", contract.assets.skillPath);
-  }
-  return args;
-}
-
 export function createPiLauncher(
   settings: LauncherSettings,
   logger: Logger,
@@ -54,9 +44,28 @@ export function createPiLauncher(
     id: PI_LAUNCHER_ID,
     capabilities: PI_CAPABILITIES,
     async launch(input: LaunchInput): Promise<LaunchOutcome> {
+      if (
+        input.contract.assets.ambientAccess === "none" &&
+        (input.contract.assets.extensionPath || input.contract.assets.skillPath)
+      )
+        return {
+          ok: false,
+          error: {
+            kind: "invalid-binding",
+            message: "ambient-none role cannot load extensions or skills",
+          },
+        };
       // Session per ATTEMPT (tz-06 Ф3): two attempts of one run must not share
       // a transcript, or the second reads as a continuation of the first.
       const sessionRef = attemptSessionDir(input);
+      const privateHome = path.join(attemptDir(input), "home");
+      const dropIdentity = provideIdentity(
+        privateHome,
+        authRootFor(PI_LAUNCHER_ID),
+        [path.join(".pi", "agent", "auth.json")],
+        logger,
+        "pi",
+      );
       return startHosted({
         binary: settings.binary,
         args: piArgs({
@@ -64,7 +73,7 @@ export function createPiLauncher(
           // The session flags belong to the launcher, never to the operator's
           // fixed flags — see stripOwnedFlags.
           spawnFlags: [
-            ...stripOwnedFlags(settings.flags ?? [...DEFAULT_PI_FLAGS]),
+            ...piFixedFlags(settings, input.contract),
             "--session-dir",
             sessionRef,
           ],
@@ -76,10 +85,11 @@ export function createPiLauncher(
           cwd: input.cwd,
           env: input.env,
         }),
-        env: input.env,
+        env: { ...input.env, HOME: privateHome },
         sessionRef,
         input,
         logger,
+        onSettled: dropIdentity,
       });
     },
   };

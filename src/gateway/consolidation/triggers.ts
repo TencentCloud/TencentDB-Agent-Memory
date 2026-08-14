@@ -18,7 +18,7 @@ import { recoverOrphanRuns } from "../control-plane/recover.js";
 import { runOwnerId } from "../control-plane/owner.js";
 import { sweepKeeperOrphans } from "./child-spawn.js";
 import { busySummary } from "./busy-summary.js";
-import { acquireRoleLock } from "./role-lock.js";
+import { acquireRoleExecutionLease } from "../../agents/role-execution-lease.js";
 import { resolveRoleContract } from "./role-contract.js";
 import type { RoleGate } from "./role-gate.js";
 import type { RoleLegacyDefaults } from "./role-contract-types.js";
@@ -72,51 +72,16 @@ export interface TriggerHandle {
  * is refused downstream with the reason (`fail-closed-role`).
  */
 function acquireRole(self: TriggerHandle, role: string): (() => void) | null {
-  const releaseGate = self.gate.tryAcquire(role);
-  if (!releaseGate) return null;
   const resolution = resolveRoleContract(role, self.roleDir, self.roleDefaults);
-  if (!resolution.ok) return releaseGate;
-  let releaseFile: (() => void) | null = null;
-  try {
-    const lock = acquireRoleLock(self.dataDir, role, {
-      ttlMs: resolution.contract.policy.maxRunMs,
-      nowMs: self.now(),
-    });
-    if (lock === null) {
-      releaseGate();
-      self.logger.info?.(
-        `[trigger] role=${role} held by another process — refused`,
-      );
-      return null;
-    }
-    releaseFile = lock.release;
-    // A run slower than one ttl must not have its lock expire underneath it:
-    // renewal is what keeps "stale" meaning "the owner is gone" rather than
-    // "the owner is slow" (Codex major #9).
-    const ttl = resolution.contract.policy.maxRunMs;
-    const beat = setInterval(
-      () => {
-        if (!lock.renew(self.now())) clearInterval(beat);
-      },
-      Math.max(1_000, Math.floor(ttl / 3)),
-    );
-    beat.unref?.();
-    const stopBeat = (): void => clearInterval(beat);
-    const releaseLock = lock.release;
-    releaseFile = () => {
-      stopBeat();
-      releaseLock();
-    };
-  } catch (err) {
-    // Unusable lock dir: degrade to in-process locking, never crash.
-    self.logger.warn?.(
-      `[trigger] cross-process lock unavailable for ${role} (${err instanceof Error ? err.message : String(err)}) — in-process gate only`,
-    );
-  }
-  return () => {
-    releaseFile?.();
-    releaseGate();
-  };
+  const lease = acquireRoleExecutionLease({
+    dataDir: self.dataDir,
+    roleKey: role,
+    ttlMs: resolution.ok ? resolution.contract.policy.maxRunMs : null,
+    gate: self.gate,
+    logger: self.logger,
+    nowMs: self.now(),
+  });
+  return lease?.release ?? null;
 }
 
 /** Manual/scheduled trigger. Fire-and-forget. */

@@ -43,17 +43,18 @@ export function createPipelineManager(
  * attach L2/L3 runners via `createL2Runner` / `createL3Runner` afterwards.
  */
 export async function createPipeline(opts: PipelineFactoryOptions): Promise<PipelineInstance> {
-  const { pluginDataDir, cfg, openclawConfig, logger, sessionFilter, l1LlmRunner } = opts;
+  const { pluginDataDir, cfg, logger, sessionFilter, l1Dispatcher } = opts;
   initDataDirectories(pluginDataDir);
   const stores = await initStores(cfg, pluginDataDir, logger);
   const { vectorStore, embeddingService } = stores;
   const scheduler = createPipelineManager(cfg, logger, sessionFilter);
   scheduler.setL1Runner(createL1Runner({
-    pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, llmRunner: l1LlmRunner,
+    pluginDataDir, cfg, vectorStore, embeddingService, logger, dispatcher: l1Dispatcher,
   }));
   scheduler.setPersister(createPersister(pluginDataDir, logger));
   const destroy = async () => {
     logger.info(`${TAG} Destroying pipeline...`);
+    await l1Dispatcher.shutdown?.();
     await scheduler.destroy();
     if (vectorStore) { logger.info(`${TAG} Closing VectorStore`); vectorStore.close(); }
     if (embeddingService?.close) {

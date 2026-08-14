@@ -810,6 +810,7 @@ export class VectorStore implements IMemoryStore {
   private stmtQueryBySessionIdSince!: StatementSync;
   private stmtQueryBySessionKey!: StatementSync;
   private stmtQueryBySessionKeySince!: StatementSync;
+  private stmtQueryById!: StatementSync;
   private stmtQueryAll!: StatementSync;
   private stmtQueryAllSince!: StatementSync;
 
@@ -1366,6 +1367,12 @@ export class VectorStore implements IMemoryStore {
       SELECT ${l1QueryCols} FROM l1_records
       WHERE session_key = ? AND updated_time > ?
       ORDER BY updated_time ASC
+    `);
+
+    this.stmtQueryById = this.db.prepare(`
+      SELECT ${l1QueryCols} FROM l1_records
+      WHERE record_id = ?
+      LIMIT 1
     `);
 
     this.stmtQueryAll = this.db.prepare(`
@@ -2077,6 +2084,14 @@ export class VectorStore implements IMemoryStore {
       );
       return [];
     }
+  }
+
+  getL1ById(recordId: string): L1RecordRow | null {
+    if (this.degraded) throw new Error(`${TAG} L1 store is degraded`);
+    const row = this.stmtQueryById.get(recordId) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? (row as unknown as L1RecordRow) : null;
   }
 
   // ── L0 operations ──────────────────────────────────

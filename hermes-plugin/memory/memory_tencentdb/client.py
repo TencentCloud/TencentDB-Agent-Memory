@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10  # seconds
+_WRITE_PATHS = frozenset(("/capture", "/session/end", "/seed"))
 
 
 class MemoryTencentdbSdkClient:
@@ -51,6 +52,30 @@ class MemoryTencentdbSdkClient:
         # newlines from `echo` or YAML quoting; an exact-match Bearer
         # comparison would otherwise reject a key that "looks right".
         self._api_key = (api_key or "").strip() or None
+        self._loopback_token: Optional[str] = None
+
+    def _discover_loopback_token(self) -> Optional[str]:
+        """Resolve the local write token without returning it over HTTP."""
+        if self._loopback_token:
+            return self._loopback_token
+        req = urllib.request.Request(
+            f"{self._base_url}/memory/info",
+            headers=self._build_headers(content_type=False),
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                info = json.loads(resp.read().decode("utf-8"))
+            token_path = info.get("tokenPath")
+            if not isinstance(token_path, str) or not token_path:
+                return None
+            with open(token_path, "r", encoding="utf-8") as token_file:
+                token = token_file.read().strip()
+            self._loopback_token = token or None
+            return self._loopback_token
+        except Exception as exc:
+            logger.debug("memory-tencentdb token discovery failed: %s", exc)
+            return None
 
     def _build_headers(self, *, content_type: bool) -> Dict[str, str]:
         """Build request headers, conditionally adding Authorization.
@@ -70,10 +95,15 @@ class MemoryTencentdbSdkClient:
         """Make a POST request to the Gateway."""
         url = f"{self._base_url}{path}"
         data = json.dumps(body).encode("utf-8")
+        headers = self._build_headers(content_type=True)
+        if path in _WRITE_PATHS and not self._api_key:
+            token = self._discover_loopback_token()
+            if token:
+                headers["x-memory-token"] = token
         req = urllib.request.Request(
             url,
             data=data,
-            headers=self._build_headers(content_type=True),
+            headers=headers,
             method="POST",
         )
         try:

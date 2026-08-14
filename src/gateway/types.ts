@@ -94,6 +94,22 @@ export interface StatusResponse {
   };
   roles: unknown;
   reindexInProgress: boolean;
+  l1: {
+    assignmentId: string;
+    assignmentState: string;
+    runId: string | null;
+    runState: string | null;
+    errorKind: string | null;
+    extractorAttemptId: string | null;
+    extractorOutcome: string | null;
+    criticAttemptId: string | null;
+    criticOutcome: string | null;
+    criticVerdict: string | null;
+    commitState: string;
+    verifiedOperations: number;
+    totalOperations: number;
+    updatedAt: string;
+  } | null;
   /** Last runs from the control plane (tz-09 Ф1) — empty when the control
    * plane is unavailable; /status never fails over it. */
   runs: Array<{

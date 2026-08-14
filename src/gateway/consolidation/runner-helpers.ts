@@ -13,15 +13,9 @@ import {
   type RunContext,
 } from "../apply-executor.js";
 import { finishAttempt } from "../control-plane/attempt-repo.js";
-import { checkCapabilities, unusedBinding } from "./launchers/capabilities.js";
-import { isolationRefusal } from "./launchers/isolation.js";
+import { launchRoleAttempt } from "../../agents/role-execution-service.js";
 import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import type { ChildRunResult } from "./launchers/pi-process.js";
-import type {
-  LaunchInput,
-  LaunchOutcome,
-  RoleLauncher,
-} from "./launchers/types.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunSummary, SpawnChildContext } from "./types.js";
 
@@ -68,41 +62,6 @@ export async function runPostRunSteps(
   );
 }
 
-/** A launcher that THROWS is a bug in the launcher, not a failed run — but
- * the service promise still must not reject (criterion 10). The unexpected
- * error gets its own class, distinct from every declared LaunchError kind. */
-async function launchSafely(
-  ctx: OrchestratorContext,
-  launcher: RoleLauncher,
-  input: LaunchInput,
-): Promise<LaunchOutcome> {
-  // L5 gate HERE, not in the registry: `ctx.launcherFor` is a seam anyone can
-  // hand a raw launcher through, and a gate that a caller can walk around is
-  // not a gate. This is the one place every launch passes.
-  const incompatible = checkCapabilities(
-    launcher.id,
-    // A contract pinned into a run BEFORE this field existed has no list —
-    // that is "requires nothing", not a crash on replay.
-    input.contract.requiresCapabilities ?? [],
-    launcher.capabilities,
-  );
-  if (incompatible !== null) return { ok: false, error: incompatible };
-  // L6: a role that asks to be confined is refused until the gate opens —
-  // launching it unconfined "for now" is the outcome the gate exists to stop.
-  const unconfinable = isolationRefusal(input.contract);
-  if (unconfinable !== null) return { ok: false, error: unconfinable };
-  try {
-    return await launcher.launch(input);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    ctx.logger.error?.(`[launcher] ${launcher.id} threw: ${message}`);
-    return {
-      ok: false,
-      error: { kind: "internal-launcher", message },
-    };
-  }
-}
-
 /** Default child spawner: goes through the RoleLauncher port (tz-06 Ф1), so
  * nothing here knows a binary name or a host flag. Model, thinking level,
  * timeout and assets still come from the RESOLVED CONTRACT (tz-01 B5). */
@@ -114,28 +73,23 @@ export async function defaultSpawnChild(
   // Onto the ROW, not only into the log: `RoleRun.binding` persists the
   // thinking level, so a reader of the run would otherwise see a level the
   // host never applied and nothing saying so.
-  const droppedBinding = unusedBinding(
-    launcher.id,
-    childCtx.contract.binding.thinking,
-    launcher.capabilities,
-  );
-  // Not every mismatch is a refusal: a knob the host lacks but the role only
-  // inherited from the instance default is dropped — loudly, so neither the
-  // log nor the row claims a level that was never applied.
-  if (droppedBinding !== null)
-    ctx.logger.warn?.(`[launcher] ${droppedBinding}`);
-  const outcome = await launchSafely(ctx, launcher, {
-    runId: childCtx.runId,
-    attemptId: childCtx.attemptId,
-    cwd: childCtx.cwd,
-    promptPath: childCtx.promptPath,
-    taskPrompt: childCtx.taskPrompt,
-    env: childCtx.env,
-    contract: childCtx.contract,
-    onSpawn: (kill) => {
-      ctx.childrenRef.value.set(childCtx.runId, { kill });
+  const launched = await launchRoleAttempt({
+    launcher,
+    logger: ctx.logger,
+    launch: {
+      runId: childCtx.runId,
+      attemptId: childCtx.attemptId,
+      cwd: childCtx.cwd,
+      promptPath: childCtx.promptPath,
+      taskPrompt: childCtx.taskPrompt,
+      env: childCtx.env,
+      contract: childCtx.contract,
+      onSpawn: (kill) => {
+        ctx.childrenRef.value.set(childCtx.runId, { kill });
+      },
     },
   });
+  const { outcome, droppedBinding } = launched;
 
   if (!outcome.ok) {
     // A typed LaunchError is the host refusing, not the role failing — it

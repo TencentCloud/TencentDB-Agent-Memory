@@ -95,4 +95,36 @@ describe("L1 agent codec", () => {
     raw.scenes[0]!.memories[0]!.targetIds = ["hidden-record"];
     expect(() => parseL1Candidate(raw, input)).toThrow("unknown target id");
   });
+
+  it("does not borrow a target recalled for another candidate", () => {
+    const input = workset();
+    const raw = candidate(input) as {
+      scenes: Array<{
+        memories: Array<{ candidateId: string; action: string; targetIds: string[] }>;
+      }>;
+    };
+    raw.scenes[0]!.memories[0]!.action = "update";
+    raw.scenes[0]!.memories[0]!.targetIds = ["other-target"];
+    const allowed = new Map([
+      ["pref-dark", new Set<string>()],
+      ["other-candidate", new Set(["other-target"])],
+    ]);
+    expect(() => parseL1Candidate(raw, input, allowed)).toThrow(
+      "unknown target id",
+    );
+  });
+
+  it("enforces the configured parent-side memory cap", () => {
+    const input = workset();
+    const raw = candidate(input) as {
+      scenes: Array<{ memories: unknown[] }>;
+    };
+    raw.scenes[0]!.memories.push({
+      ...(raw.scenes[0]!.memories[0] as object),
+      candidateId: "pref-second",
+    });
+    expect(() => parseL1Candidate(raw, input, new Set(), 1)).toThrow(
+      "exceeds configured cap 1",
+    );
+  });
 });

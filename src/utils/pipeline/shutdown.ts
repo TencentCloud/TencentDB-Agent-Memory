@@ -77,8 +77,10 @@ async function _doFlush(m: MemoryPipelineManager): Promise<void> {
   await m.l1Queue.onIdle();
   for (const [sessionKey, timers] of m.sessionTimers) {
     if (timers.l2Schedule.pending) {
-      m.logger?.debug?.(`${TAG} [${sessionKey}] Flush: triggering L2 schedule timer`);
-      timers.l2Schedule.flush();
+      // l2_pending_l1_count is persisted below and recovery re-arms it.
+      // Starting a model call here races store teardown after the 2s timeout.
+      timers.l2Schedule.cancel();
+      m.logger?.debug?.(`${TAG} [${sessionKey}] Shutdown: preserving scheduled L2 for recovery`);
     }
   }
   m.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${m.l2Queue.size}, l3=${m.l3Queue.size})`);

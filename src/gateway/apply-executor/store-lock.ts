@@ -37,7 +37,7 @@ const sleep = (ms: number) =>
 
 export async function withStoreApplyLock<T>(
   dataDir: string,
-  fn: () => Promise<T>,
+  fn: (assertOwned: () => void) => Promise<T>,
   opts: StoreLockOpts = {},
 ): Promise<T> {
   const ttlMs = opts.ttlMs ?? 10 * 60_000;
@@ -57,9 +57,25 @@ export async function withStoreApplyLock<T>(
     }
     await sleep(pollMs);
   }
+  let isLive = true;
+  const assertOwned = () => {
+    if (!isLive || !lock?.renew()) {
+      isLive = false;
+      throw new ApplyRuntimeError("store apply lease expired before mutation");
+    }
+  };
+  const heartbeat = setInterval(() => {
+    if (lock !== null && !lock.renew()) isLive = false;
+  }, Math.max(1_000, Math.floor(ttlMs / 3)));
+  heartbeat.unref?.();
   try {
-    return await fn();
+    assertOwned();
+    const value = await fn(assertOwned);
+    assertOwned();
+    return value;
   } finally {
+    clearInterval(heartbeat);
+    isLive = false;
     lock.release();
   }
 }

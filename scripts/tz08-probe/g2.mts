@@ -96,7 +96,10 @@ try {
     // A second write path — exactly what the invariant forbids.
     await fetch(`${gateway.url}/capture`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-memory-token": gateway.token,
+      },
       body: JSON.stringify({
         user_content: `Заметка через обёртку: ${MARKER}`,
         assistant_content: "ответ второго пути",

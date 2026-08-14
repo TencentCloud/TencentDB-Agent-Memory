@@ -76,6 +76,12 @@ Whether it is long-term knowledge, short-term tasks, or future skill capabilitie
 
 **Heterogeneous storage and progressive disclosure.** A dual-layer storage strategy underpins this architecture. The bottom layer (facts, logs, traces) is persisted in databases for robust full-text retrieval; the top layer (personas, scenes, canvases) is stored as human-readable Markdown files for high information density and white-box inspection. **Lower layers preserve evidence; upper layers preserve structure.**
 
+#### Agent-reviewed L1 extraction
+
+L1 formation uses the same contract-driven role runtime as other memory agents. The parent builds an immutable L0 workset, launches the configured `extraction.role` (default `l1-extractor`), recalls exact conflict candidates, and launches the role's separately configured critic. Only a digest-bound approving verdict allows the trusted parent to commit JSONL plus the configured retrieval store; the child never writes memory directly. Assignments, attempts, verdicts, and commit operations are durable, so restart replay repairs a missing or divergent retrieval projection without duplicating a record or advancing the cursor early.
+
+The gateway's `GET /status` response includes the latest `l1` assignment/run, extractor and critic outcomes, typed error category, and commit progress. Role installation, live isolation/auth cutover, and a gateway restart remain explicit rollout operations; the isolated product check is `npm run probe:l1-agent -- --isolated`.
+
 **Full traceability and lossless recovery.** Compression often sacrifices traceability. TencentDB Agent Memory avoids irreversible compression by maintaining a deterministic path from high-level abstractions back to ground-truth evidence. Whether it is an offloaded error log or a distilled user preference, the system guarantees a complete drill-down path: "top-layer symbol (Persona / canvas) → mid-layer index (Scenario / jsonl) → bottom-layer raw text (L0 Conversation / refs)".
 
 <div align="center">

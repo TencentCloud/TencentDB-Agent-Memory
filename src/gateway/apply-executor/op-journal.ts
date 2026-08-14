@@ -11,7 +11,7 @@ import {
   opIndexBase,
   recordOp,
   type OpCounts,
-  type OpType,
+  type ApplyOpType,
 } from "../control-plane/oplog.js";
 import type { ApplyDiff } from "./schemas.js";
 
@@ -20,7 +20,7 @@ export type OpPhase = "prepared" | "applied";
 /** Called by a mutation module per operation. `localIndex` is the position
  * inside that op TYPE, not the global order — the journal maps it. */
 export type OnOp = (
-  opType: OpType,
+  opType: ApplyOpType,
   localIndex: number,
   targetKey: string,
   phase: OpPhase,
@@ -58,8 +58,8 @@ export interface JournalDeps {
 /** Every operation of a diff, in canonical order, as (type, localIndex, key).
  * The key is the RAW one from the candidate; the attempt overwrites it with
  * the resolved path where the two differ (recordOp keeps the non-empty one). */
-function planOf(diff: ApplyDiff): Array<[OpType, number, string]> {
-  const plan: Array<[OpType, number, string]> = [];
+function planOf(diff: ApplyDiff): Array<[ApplyOpType, number, string]> {
+  const plan: Array<[ApplyOpType, number, string]> = [];
   (diff.merge ?? []).forEach((op, i) => plan.push(["merge", i, op.target]));
   (diff.rewriteRecord ?? []).forEach((op, i) =>
     plan.push(["rewriteRecord", i, op.id]),
@@ -102,7 +102,7 @@ export function recordPlan(deps: JournalDeps, diff: ApplyDiff): void {
 
 /** A journal bound to one run + one candidate. */
 export function createOpJournal(deps: JournalDeps, counts: OpCounts): OnOp {
-  const bases = new Map<OpType, number>();
+  const bases = new Map<ApplyOpType, number>();
   return (opType, localIndex, targetKey, phase, payloadDigest, extraKeys) => {
     let base = bases.get(opType);
     if (base === undefined) {

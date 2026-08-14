@@ -12,6 +12,8 @@
 > требований пользователя и целевой архитектуры (§8/§8а/§8б/§8в). Этот документ
 > опирается на него и пересекается с ним по агентной подсистеме.
 
+> **Поправка 2026-08-14 для M0→M1 (code:L0→L1):** inline-LLM extraction и fail-open «store all» больше не являются production-путём. Scheduler сохраняет oldest-first cohort и immutable assignment, общий role runtime запускает extractor и отдельного critic, parent-side recall ограничивает допустимые update/merge targets, а родитель коммитит только digest-approved candidate. Assignment/attempt/oplog durable; cursor двигается лишь после JSONL + `IMemoryStore` postconditions, restart replay чинит missing/divergent retrieval projection. Актуальное состояние видно в `/status.l1`. Утверждения ниже о старом `extractL1Memories` оставлены как датированный аудит 2026-08-07, не как описание текущего L1.
+
 ---
 
 ## 1. Введение

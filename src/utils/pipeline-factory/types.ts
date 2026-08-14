@@ -46,8 +46,8 @@ export interface PipelineFactoryOptions {
   logger: PipelineLogger;
   /** Session filter (optional, defaults to empty). */
   sessionFilter?: import("../session-filter.js").SessionFilter;
-  /** Host-neutral LLM runner for L1 extraction (text-only, enableTools=false). */
-  l1LlmRunner?: import("../../core/types.js").LLMRunner;
+  /** Required agent-role dispatcher for L1 extraction. */
+  l1Dispatcher: import("../../core/record/l1-agent-types.js").L1ExtractionDispatcher;
   /** Host-neutral LLM runner for L2/L3 (tool-call enabled, enableTools=true). */
   l2l3LlmRunner?: import("../../core/types.js").LLMRunner;
 }
@@ -58,7 +58,8 @@ export interface PipelineInstance {
   /** VectorStore (undefined if init failed or degraded). */
   vectorStore: IMemoryStore | undefined;
   /** EmbeddingService (undefined if not configured or init failed). */
-  embeddingService: import("../../core/store/embedding.js").EmbeddingService | undefined;
+  embeddingService:
+    import("../../core/store/embedding.js").EmbeddingService | undefined;
   /**
    * Destroy all resources (scheduler, VectorStore, EmbeddingService).
    * Call this on shutdown / cleanup.

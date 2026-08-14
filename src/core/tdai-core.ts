@@ -30,6 +30,7 @@ import type {
   ConversationSearchParams,
 } from "./types.js";
 import type { MemoryTdaiConfig } from "../config.js";
+import type { L1ExtractionDispatcher } from "./record/l1-agent-types.js";
 import type { IMemoryStore } from "./store/types.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { performAutoRecall } from "./hooks/auto-recall.js";
@@ -66,6 +67,8 @@ export interface TdaiCoreOptions {
   sessionFilter?: SessionFilter;
   /** Plugin instance ID for metric reporting. */
   instanceId?: string;
+  /** Agent role runtime used by L1. Missing is an explicit failed stage. */
+  l1Dispatcher?: L1ExtractionDispatcher;
 }
 
 // ============================
@@ -80,6 +83,7 @@ export class TdaiCore {
   private runnerFactory: LLMRunnerFactory;
   private sessionFilter: SessionFilter;
   private instanceId?: string;
+  private l1Dispatcher?: L1ExtractionDispatcher;
 
   // Lazy-initialized resources
   private vectorStore?: IMemoryStore;
@@ -130,6 +134,7 @@ export class TdaiCore {
     this.runnerFactory = opts.hostAdapter.getLLMRunnerFactory();
     this.sessionFilter = opts.sessionFilter ?? new SessionFilter([]);
     this.instanceId = opts.instanceId;
+    this.l1Dispatcher = opts.l1Dispatcher;
   }
 
   // ============================
@@ -171,6 +176,8 @@ export class TdaiCore {
 
     // Wait for store init to complete before tearing down
     await this.storeReady?.catch(() => {});
+
+    await this.l1Dispatcher?.shutdown?.();
 
     if (this.scheduler && this.schedulerStartPromise) {
       await this.scheduler.destroy();
@@ -432,7 +439,7 @@ export class TdaiCore {
   private wirePipelineRunners(): void {
     if (!this.scheduler) return;
 
-    // Determine whether to use standalone LLM runner for extraction.
+    // Determine whether to use the standalone LLM runner for L2/L3.
     // Priority: cfg.llm.enabled (explicit override) > hostType detection.
     const useStandaloneRunner = this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw";
 
@@ -459,24 +466,29 @@ export class TdaiCore {
       this.logger.debug?.(`${TAG} Using standalone LLM override: model=${this.cfg.llm.model}, baseUrl=${this.cfg.llm.baseUrl}`);
     }
 
-    const l1LlmRunner = useStandaloneRunner
-      ? runnerFactory.createRunner({ enableTools: false })
-      : undefined;
     const l2l3LlmRunner = useStandaloneRunner
       ? runnerFactory.createRunner({ enableTools: true })
       : undefined;
 
     // L1 runner
-    this.scheduler.setL1Runner(createL1Runner({
-      pluginDataDir: this.dataDir,
-      cfg: this.cfg,
-      openclawConfig,
-      vectorStore: this.vectorStore,
-      embeddingService: this.embeddingService,
-      logger: this.logger,
-      getInstanceId: () => this.instanceId,
-      llmRunner: l1LlmRunner,
-    }));
+    if (this.l1Dispatcher) {
+      this.l1Dispatcher.configureRecallContext?.({
+        vectorStore: this.vectorStore,
+        embeddingService: this.embeddingService,
+      });
+      this.scheduler.setL1Runner(createL1Runner({
+        pluginDataDir: this.dataDir,
+        cfg: this.cfg,
+        vectorStore: this.vectorStore,
+        embeddingService: this.embeddingService,
+        logger: this.logger,
+        dispatcher: this.l1Dispatcher,
+      }));
+    } else {
+      this.scheduler.setL1Runner(async () => {
+        throw new Error("L1 agent dispatcher is not configured");
+      });
+    }
 
     // Persister
     this.scheduler.setPersister(createPersister(this.dataDir, this.logger));

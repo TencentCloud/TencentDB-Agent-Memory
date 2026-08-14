@@ -26,6 +26,8 @@ import { readManifest, writeManifest } from "../../utils/manifest.js";
 import { StandaloneLLMRunnerFactory } from "../../adapters/standalone/llm-runner.js";
 import type { MemoryPipelineManager } from "../../utils/pipeline-manager.js";
 import type { LLMRunner } from "../types.js";
+import { installL1RolePackages } from "../../gateway/l1/l1-role-installer.js";
+import { createGatewayL1Dispatcher } from "../../gateway/l1/l1-dispatcher-factory.js";
 import type {
   NormalizedInput,
   SeedProgress,
@@ -76,7 +78,6 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
   // Create standalone LLM runners if cfg.llm is configured.
   // Seed always runs outside OpenClaw, so it needs standalone runners
   // unless an explicit openclawConfig is provided (rare).
-  let l1LlmRunner: LLMRunner | undefined;
   let l2l3LlmRunner: LLMRunner | undefined;
 
   if (cfg.llm.enabled && cfg.llm.apiKey) {
@@ -91,18 +92,22 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
       },
       logger,
     });
-    l1LlmRunner = runnerFactory.createRunner({ enableTools: false });
     l2l3LlmRunner = runnerFactory.createRunner({ enableTools: true });
     logger.info(`${TAG} Seed using standalone LLM: model=${cfg.llm.model}`);
   }
 
   // Use shared factory for everything: store init, L1 runner, persister, destroy
+  installL1RolePackages({ dataDir: outputDir });
   const pipeline = await createPipeline({
     pluginDataDir: outputDir,
     cfg,
     openclawConfig,
     logger,
-    l1LlmRunner,
+    l1Dispatcher: createGatewayL1Dispatcher({
+      dataDir: outputDir,
+      config: cfg,
+      logger,
+    }),
   });
 
   // Wire L2 runner via shared factory (same logic as index.ts live runtime)

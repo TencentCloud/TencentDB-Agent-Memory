@@ -91,6 +91,8 @@ export interface ResolvedRoleContract {
     /** True → the attempt dir outlives the run and is deleted by retention
      * (tz-02 критерий 4): an unconditional wipe leaves nothing to inspect. */
     keepScratch: boolean;
+    artifactTransport: "files" | "stdout-json";
+    ambientAccess: "inherit" | "none";
   };
 }
 

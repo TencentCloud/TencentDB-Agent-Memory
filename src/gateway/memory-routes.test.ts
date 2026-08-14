@@ -377,6 +377,7 @@ describe("memory read routes (P3, integration)", () => {
     expect(body.totals).toBeDefined();
     expect(body).toHaveProperty("lastError");
     expect(body).toHaveProperty("vectorStore");
+    expect(body).toHaveProperty("l1");
     expect(body.consolidation).toBeDefined();
     // tz-09 Ф1: control-plane projection, empty on a store with no runs.
     expect(Array.isArray(body.runs)).toBe(true);

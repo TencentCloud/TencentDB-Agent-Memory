@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { L1AgentValidationError } from "./l1-agent-errors.js";
+import {
+  validateL1CandidateReferences,
+  type L1AllowedTargets,
+} from "./l1-agent-validation.js";
 import type {
   L1CandidateV1,
   L1WorksetV1,
@@ -85,45 +89,36 @@ export function deriveL1RecordId(
 export function parseL1Candidate(
   raw: unknown,
   workset: L1WorksetV1,
-  allowedTargetIds: ReadonlySet<string> = new Set(),
+  allowedTargetIds: Exclude<L1AllowedTargets, null> = new Set(),
+  maxMemories = Number.POSITIVE_INFINITY,
 ): L1CandidateV1 {
   const parsed = candidateSchema.safeParse(raw);
   if (!parsed.success) {
     throw new L1AgentValidationError(z.prettifyError(parsed.error));
   }
-  validateCandidateReferences(parsed.data, workset, allowedTargetIds);
+  validateL1CandidateReferences({
+    candidate: parsed.data,
+    workset,
+    allowedTargets: allowedTargetIds,
+    maxMemories,
+  });
   return parsed.data;
 }
 
-function validateCandidateReferences(
-  candidate: L1CandidateV1,
+/** Parse a proposal before parent recall has established allowed targets. */
+export function parseL1CandidateProposal(
+  raw: unknown,
   workset: L1WorksetV1,
-  allowedTargetIds: ReadonlySet<string>,
-): void {
-  if (candidate.assignmentId !== workset.assignmentId)
-    throw new L1AgentValidationError("candidate assignmentId mismatch");
-  if (candidate.inputDigest !== workset.inputDigest)
-    throw new L1AgentValidationError("candidate inputDigest mismatch");
-  const sourceIds = new Set(workset.messages.map((message) => message.id));
-  const candidateIds = new Set<string>();
-  for (const scene of candidate.scenes) {
-    for (const id of scene.messageIds)
-      if (!sourceIds.has(id))
-        throw new L1AgentValidationError(`unknown message id: ${id}`);
-    for (const memory of scene.memories) {
-      if (candidateIds.has(memory.candidateId))
-        throw new L1AgentValidationError(
-          `duplicate candidate id: ${memory.candidateId}`,
-        );
-      candidateIds.add(memory.candidateId);
-      for (const id of memory.sourceMessageIds)
-        if (!sourceIds.has(id))
-          throw new L1AgentValidationError(`unknown source id: ${id}`);
-      for (const id of memory.targetIds)
-        if (!allowedTargetIds.has(id))
-          throw new L1AgentValidationError(`unknown target id: ${id}`);
-      if (memory.scope === "project" && workset.projectId === "")
-        throw new L1AgentValidationError("project memory requires projectId");
-    }
-  }
+  maxMemories = Number.POSITIVE_INFINITY,
+): L1CandidateV1 {
+  const parsed = candidateSchema.safeParse(raw);
+  if (!parsed.success)
+    throw new L1AgentValidationError(z.prettifyError(parsed.error));
+  validateL1CandidateReferences({
+    candidate: parsed.data,
+    workset,
+    allowedTargets: null,
+    maxMemories,
+  });
+  return parsed.data;
 }
