@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+import { writeJsonAtomically, withSessionLock } from '../src/core/atomic-file.js';
+import { sha256 } from '../src/core/hash.js';
 import { TurnStore } from '../src/core/turn-store.js';
 
 const withStateDir = async (run) => {
@@ -14,6 +16,8 @@ const withStateDir = async (run) => {
     await rm(stateDir, { recursive: true, force: true });
   }
 };
+
+const delay = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs));
 
 test('creates and retrieves a turn using a hashed session directory', async () => {
   await withStateDir(async (stateDir) => {
@@ -132,9 +136,9 @@ test('marks capture status on a non-active turn', async () => {
     const first = await store.createTurn({ sessionId: 'session-1', prompt: 'first' });
     await store.createTurn({ sessionId: 'session-1', prompt: 'second' });
 
-    const updated = await store.markCaptureStatus('session-1', first.turn_id, 'captured', 'capture-1');
+    const updated = await store.markCaptureStatus('session-1', first.turn_id, 'partial_captured', 'capture-1');
 
-    assert.equal(updated.capture_status, 'captured');
+    assert.equal(updated.capture_status, 'partial_captured');
     assert.equal(updated.capture_id, 'capture-1');
     assert.equal((await store.getActiveTurn('session-1')).turn_id, 'turn-2');
   });
@@ -179,7 +183,7 @@ test('rejects invalid input and invalid stored turns without leaking sensitive e
       (error) => error.message.includes(secret) === false && error.message.includes('session-1') === false,
     );
     await assert.rejects(
-      store.markCaptureStatus('session-1', 'missing-turn', 'failed'),
+      store.markCaptureStatus('session-1', 'missing-turn', 'retry_pending'),
       /turn_id/,
     );
     assert.equal(JSON.parse(await readFile(activePath, 'utf8')).active_turn_id, 'turn-1');
@@ -204,5 +208,161 @@ test('rejects structurally invalid active pointers and turn files', async () => 
     );
     await writeFile(turnPath, '{"version":1,"turn_id":"turn-1","tool_events":[]}\n', 'utf8');
     await assert.rejects(store.getActiveTurn('session-1'), /turn_id/);
+  });
+});
+
+test('serializes same-session mutations across TurnStore instances and preserves a newer active turn', async () => {
+  await withStateDir(async (stateDir) => {
+    const storeA = new TurnStore({ stateDir, idFactory: () => 'turn-old' });
+    const storeB = new TurnStore({ stateDir, idFactory: () => 'turn-new' });
+    await storeA.createTurn({ sessionId: 'session-1', prompt: 'old' });
+    const lockPath = join(stateDir, 'sessions', sha256('session-1'), '.turn-state.lock');
+    let releaseLock;
+    let enteredLock;
+    const entered = new Promise((resolve) => { enteredLock = resolve; });
+    const holdLock = withSessionLock(lockPath, async () => {
+      enteredLock();
+      await new Promise((resolve) => { releaseLock = resolve; });
+    });
+    await entered;
+
+    const createNew = storeB.createTurn({ sessionId: 'session-1', prompt: 'new' });
+    releaseLock();
+    const newer = await createNew;
+    const cleared = await storeA.clearActiveTurn('session-1', 'turn-old');
+    await holdLock;
+
+    assert.equal(cleared, false);
+    assert.equal((await storeA.getActiveTurn('session-1')).turn_id, newer.turn_id);
+  });
+});
+
+test('recovers a stale session lock within a bounded wait', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.turn-state.lock');
+    await mkdir(lockPath, { recursive: true });
+    const staleTime = new Date(Date.now() - 1_000);
+    await utimes(lockPath, staleTime, staleTime);
+
+    let ran = false;
+    await withSessionLock(lockPath, async () => { ran = true; }, {
+      timeoutMs: 200,
+      staleMs: 20,
+      retryMs: 5,
+    });
+
+    assert.equal(ran, true);
+  });
+});
+
+test('does not release a replacement lock when a stale owner finishes', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.turn-state.lock');
+    let releaseFirst;
+    let releaseSecond;
+    let enterFirst;
+    let enterSecond;
+    const firstEntered = new Promise((resolve) => { enterFirst = resolve; });
+    const secondEntered = new Promise((resolve) => { enterSecond = resolve; });
+    const first = withSessionLock(lockPath, async () => {
+      enterFirst();
+      await new Promise((resolve) => { releaseFirst = resolve; });
+    }, { timeoutMs: 200, staleMs: 20, retryMs: 5 });
+    await firstEntered;
+    await delay(30);
+    const second = withSessionLock(lockPath, async () => {
+      enterSecond();
+      await new Promise((resolve) => { releaseSecond = resolve; });
+    }, { timeoutMs: 200, staleMs: 20, retryMs: 5 });
+    await secondEntered;
+
+    let thirdEntered = false;
+    const third = withSessionLock(lockPath, async () => { thirdEntered = true; }, {
+      timeoutMs: 200,
+      staleMs: 1_000,
+      retryMs: 5,
+    });
+    releaseFirst();
+    await first;
+    await delay(30);
+    assert.equal(thirdEntered, false);
+
+    releaseSecond();
+    await second;
+    await third;
+    assert.equal(thirdEntered, true);
+  });
+});
+
+test('rejects invalid cwd and capture fields before state is written', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+
+    await assert.rejects(
+      store.createTurn({ sessionId: 'session-1', cwd: null, prompt: 'valid' }),
+      /cwd/,
+    );
+    await store.createTurn({ sessionId: 'session-1', prompt: 'valid' });
+    await assert.rejects(
+      store.markCaptureStatus('session-1', 'turn-1', 'INVALID'),
+      /capture_status/,
+    );
+    await assert.rejects(
+      store.markCaptureStatus('session-1', 'turn-1', 'full_captured', 1),
+      /capture_id/,
+    );
+    const active = await store.getActiveTurn('session-1');
+    assert.equal(active.capture_status, 'not_started');
+    assert.equal(active.capture_id, null);
+  });
+});
+
+test('rejects invalid lifecycle timestamp relationships in stored turns', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    await store.createTurn({ sessionId: 'session-1', prompt: 'valid' });
+    const turnPath = join(
+      stateDir,
+      'sessions',
+      sha256('session-1'),
+      'turns',
+      'turn-1.json',
+    );
+    const state = JSON.parse(await readFile(turnPath, 'utf8'));
+    state.completed_at = '2026-08-14T08:00:00.000Z';
+    await writeFile(turnPath, `${JSON.stringify(state)}\n`, 'utf8');
+    await assert.rejects(store.getActiveTurn('session-1'), /turn_id/);
+
+    state.lifecycle_status = 'completed';
+    state.completed_at = null;
+    await writeFile(turnPath, `${JSON.stringify(state)}\n`, 'utf8');
+    await assert.rejects(store.getActiveTurn('session-1'), /turn_id/);
+  });
+});
+
+test('atomically replaces larger JSON files while concurrent readers see only complete JSON', async () => {
+  await withStateDir(async (stateDir) => {
+    const targetPath = join(stateDir, 'state.json');
+    const allowedRevisions = new Set([0, 1, 2, 3, 4, 5]);
+    await writeJsonAtomically(targetPath, { revision: 0, body: 'a'.repeat(256 * 1024) });
+    const reader = (async () => {
+      for (let readCount = 0; readCount < 100; readCount += 1) {
+        const state = JSON.parse(await readFile(targetPath, 'utf8'));
+        assert.equal(allowedRevisions.has(state.revision), true);
+        assert.equal(state.body.length, 256 * 1024);
+        assert.equal(state.body[0], state.revision === 0 ? 'a' : String(state.revision));
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    })();
+    const writer = (async () => {
+      for (let revision = 1; revision <= 5; revision += 1) {
+        await writeJsonAtomically(targetPath, {
+          revision,
+          body: String(revision).repeat(256 * 1024),
+        });
+      }
+    })();
+
+    await Promise.all([writer, reader]);
   });
 });
