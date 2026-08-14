@@ -7,7 +7,8 @@ import { nowChinaISO } from "../time-utils.js";
 import { buildTiktokenContextSnapshot, type ContextSnapshot } from "../context-token-tracker.js";
 import { traceOffloadDecision, traceMessagesSnapshot } from "../opik-tracer.js";
 import { PLUGIN_DEFAULTS } from "../types.js";
-import { readOffloadEntries, markOffloadStatus, readMmd } from "../storage.js";
+import { readOffloadEntries, markOffloadStatus, readMmd, writeRefMd } from "../storage.js";
+import { normalizeToolResultForPrompt } from "../tool-result-normalizer.js";
 import { createL3TokenCounter } from "../l3-token-counter.js";
 import {
   normalizeToolCallIdForLookup,
@@ -173,13 +174,62 @@ export function createAfterToolCallHandler(
       return;
     }
 
+    const rawResult = event.result;
+    const timestamp = nowChinaISO();
+    let promptResult = rawResult;
+    let frontOffload: { resultRef?: string; contentHash?: string; originalTokens?: number } = {};
+    try {
+      const normalized = await normalizeToolResultForPrompt({
+        toolName: event.toolName,
+        toolCallId,
+        timestamp,
+        result: rawResult,
+        maxTokens: pluginConfig?.inlineToolResultMaxTokens ?? PLUGIN_DEFAULTS.inlineToolResultMaxTokens,
+        summaryMaxTokens: pluginConfig?.summaryMaxTokens ?? PLUGIN_DEFAULTS.summaryMaxTokens,
+        previewMaxChars: pluginConfig?.previewMaxChars ?? PLUGIN_DEFAULTS.previewMaxChars,
+        writeRef: async (content) => writeRefMd(
+          stateManager.ctx,
+          timestamp,
+          event.toolName,
+          content,
+          `${toolCallId}-${normalizedHashPrefix(content)}`,
+          stateManager.getLastSessionKey() ?? undefined,
+        ),
+      });
+      if (normalized.offloaded) {
+        promptResult = normalized.promptResult;
+        frontOffload = {
+          resultRef: normalized.resultRef,
+          contentHash: normalized.contentHash,
+          originalTokens: normalized.originalTokens,
+        };
+        if (applyFrontOffloadResult(event, toolCallId, promptResult)) {
+          logger.debug?.(
+            `[context-offload] front-offload: ${event.toolName} (${toolCallId}) ` +
+            `tokens=${normalized.originalTokens}, ref=${normalized.resultRef}`,
+          );
+        } else {
+          frontOffload = {};
+          logger.warn?.(
+            `[context-offload] front-offload skipped for ${event.toolName} (${toolCallId}): ` +
+            "prompt-facing tool result was not found; retaining the original result for normal L3 handling.",
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn?.(`[context-offload] front-offload failed for ${event.toolName} (${toolCallId}): ${String(err)}`);
+    }
+
     const pair: ToolPair = {
       toolName: event.toolName,
       toolCallId,
       params: resolvedParams,
-      result: event.result,
+      result: rawResult,
+      result_ref: frontOffload.resultRef,
+      content_hash: frontOffload.contentHash,
+      original_tokens: frontOffload.originalTokens,
       error: event.error,
-      timestamp: nowChinaISO(),
+      timestamp,
       durationMs: event.durationMs,
     };
     stateManager.addToolPair(pair);
@@ -584,6 +634,81 @@ function _extractText(msg: any): string {
     return content.filter((c: any) => c.type === "text" && typeof c.text === "string").map((c: any) => c.text).join(" ");
   }
   return "";
+}
+
+function normalizedHashPrefix(content: string): string {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(16);
+}
+
+export function applyFrontOffloadResult(event: any, toolCallId: string, promptResult: unknown): boolean {
+  if (!replacePromptFacingToolResult(event?.messages, toolCallId, promptResult)) return false;
+  event.result = promptResult;
+  return true;
+}
+
+function replacePromptFacingToolResult(messages: any, toolCallId: string, promptResult: unknown): boolean {
+  if (!Array.isArray(messages)) return false;
+  const target = normalizeToolCallIdForLookup(toolCallId);
+  for (const msg of messages) {
+    const id = extractPromptToolResultId(msg);
+    if (id && normalizeToolCallIdForLookup(id) === target) {
+      replaceMessageContent(msg, promptResult);
+      stripLargePromptFields(msg);
+      return true;
+    }
+  }
+  return false;
+}
+
+function replaceMessageContent(msg: any, promptResult: unknown): void {
+  const text = typeof promptResult === "string" ? promptResult : JSON.stringify(promptResult, null, 2);
+  if (msg.type === "message" && msg.message) {
+    msg.message.content = [{ type: "text", text }];
+  } else {
+    msg.content = [{ type: "text", text }];
+  }
+}
+
+function extractPromptToolResultId(msg: any): string | null {
+  const direct = extractToolCallId(msg)
+    ?? msg?.id
+    ?? msg?.tool_use_id
+    ?? msg?.message?.id
+    ?? msg?.message?.tool_use_id;
+  if (typeof direct === "string" && direct) return direct;
+
+  const content = msg?.content ?? msg?.message?.content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      const id = block?.toolCallId ?? block?.tool_call_id ?? block?.tool_use_id ?? block?.id;
+      if (typeof id === "string" && id) return id;
+    }
+  }
+  return null;
+}
+
+function stripLargePromptFields(msg: any): void {
+  const preserve = new Set([
+    "role", "type", "name", "id", "toolCallId", "tool_call_id", "tool_use_id",
+    "content", "message", "status", "_offloaded", "_mmdContextMessage",
+    "_mmdInjection", "_contextOffloadProcessed", "_cachedTokens", "_tokenCount",
+  ]);
+  const stripObj = (obj: any) => {
+    if (!obj || typeof obj !== "object") return;
+    for (const key of Object.keys(obj)) {
+      if (preserve.has(key)) continue;
+      const value = obj[key];
+      if (value == null) continue;
+      const serialized = typeof value === "string" ? value : JSON.stringify(value);
+      if (serialized && serialized.length > 500) delete obj[key];
+    }
+  };
+  stripObj(msg);
+  if (msg?.message && typeof msg.message === "object") stripObj(msg.message);
 }
 
 /** Dump all messages after MMD injection for diagnostics (debug-level only). */
