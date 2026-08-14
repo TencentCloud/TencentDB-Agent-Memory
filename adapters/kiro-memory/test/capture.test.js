@@ -53,6 +53,18 @@ test('builds the exact observed tool trace payload without an assistant message'
   assert.throws(() => buildSkillConversationPayload(turn({ tool_events: [] }), {}), CaptureServiceError);
 });
 
+test('whitelists trace messages and rejects non-finite canonical values', () => {
+  const tainted = turn();
+  tainted.tool_events[0].tool_call.local_state = 'must-not-leave-disk';
+  tainted.tool_events[0].tool_result.credential = 'must-not-leave-disk';
+  const payload = buildSkillConversationPayload(tainted, { teamId: 'team-1', userId: 'user-1', agentId: 'agent-1' });
+  assert.deepEqual(payload.messages[1], { role: 'tool_call', tool_name: 'readFile', tool_call_id: 'call-1', content: '{"path":"README.md"}' });
+  assert.deepEqual(payload.messages[2], { role: 'tool_result', tool_name: 'readFile', tool_call_id: 'call-1', content: 'contents' });
+  assert.equal(JSON.stringify(payload).includes('must-not-leave-disk'), false);
+  assert.throws(() => createCaptureId({ sessionId: 'session-1', turnId: 'turn-1', payload: { value: NaN } }), CaptureServiceError);
+  assert.throws(() => createCaptureId({ sessionId: 'session-1', turnId: 'turn-1', payload: { value: Infinity } }), CaptureServiceError);
+});
+
 test('derives stable capture ids and rejects unsafe ids', () => {
   const payload = buildSkillConversationPayload(turn(), { teamId: 'team-1', userId: 'user-1', agentId: 'agent-1' });
   const id = createCaptureId({ adapterVersion: '1', sessionId: 'session-1', turnId: 'turn-1', payload });
@@ -66,7 +78,7 @@ test('posts the exact skill conversation request and only accepts safe responses
   const server = await startServer(async (request, response) => {
     received = await readRequest(request);
     response.writeHead(200, { 'Content-Type': 'application/json' });
-    response.end(JSON.stringify({ code: 0, data: { status: 'archived', archived: { task_id: 'turn-1', archived_at_ms: 1, archive_key: 'key-1', reason: 'done' } } }));
+    response.end(JSON.stringify({ code: 0, data: { status: 'archived', archived: { task_id: 'turn-1', archived_at_ms: 1, archive_key: 'key-1', reason: 'tool_calls' } } }));
   });
   try {
     const client = new GatewayClient({ gatewayUrl: server.url, timeoutMs: 1000, serviceId: 'svc', apiKey: 'key' });
@@ -87,6 +99,27 @@ test('rejects malformed skill conversation success data without exposing it', as
     const client = new GatewayClient({ gatewayUrl: server.url, timeoutMs: 1000, serviceId: 'svc' });
     await assert.rejects(client.skillConversationAdd({}), (error) => error instanceof GatewayError && error.message === 'Gateway response envelope is invalid' && !error.message.includes('must-not-be-accepted'));
   } finally { await server.close(); }
+});
+
+test('enforces call-specific gateway timeout and strict archived fields', async () => {
+  const delayed = await startServer((request, response) => setTimeout(() => {
+    response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ code: 0, data: { status: 'ok' } }));
+  }, 200));
+  try {
+    const client = new GatewayClient({ gatewayUrl: delayed.url, timeoutMs: 1000, serviceId: 'svc' });
+    const started = Date.now();
+    await assert.rejects(client.skillConversationAdd({}, { timeoutMs: 30 }), (error) => error instanceof GatewayError && error.retryable === true);
+    assert.equal(Date.now() - started < 150, true);
+  } finally { await delayed.close(); }
+
+  const invalidArchived = await startServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ code: 0, data: { status: 'archived', archived: { task_id: 'turn-1', archived_at_ms: -1, archive_key: 'key', reason: 'unexpected' } } }));
+  });
+  try {
+    const client = new GatewayClient({ gatewayUrl: invalidArchived.url, timeoutMs: 1000, serviceId: 'svc' });
+    await assert.rejects(client.skillConversationAdd({}), GatewayError);
+  } finally { await invalidArchived.close(); }
 });
 
 test('capture service retains gateway failures but propagates durable persistence failures', async () => {

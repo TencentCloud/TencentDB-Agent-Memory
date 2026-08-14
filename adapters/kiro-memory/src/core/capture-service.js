@@ -9,7 +9,8 @@ export class CaptureServiceError extends Error {
 
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const canonicalize = (value) => {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (Array.isArray(value)) return value.map(canonicalize);
   if (isObject(value)) return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
   throw new CaptureServiceError('Invalid capture payload');
@@ -29,7 +30,12 @@ export function buildSkillConversationPayload(turn, config) {
   }
   if (!isObject(config) || !['teamId', 'userId', 'agentId'].every((key) => typeof config[key] === 'string' && config[key].length > 0)) throw new CaptureServiceError('Capture configuration is invalid');
   const messages = [{ role: 'user', content: turn.prompt }];
-  for (const trace of turn.tool_events) messages.push(trace.tool_call, trace.tool_result);
+  for (const trace of turn.tool_events) {
+    messages.push(
+      { role: 'tool_call', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_call.content },
+      { role: 'tool_result', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_result.content },
+    );
+  }
   return { session_id: turn.session_id, team_id: config.teamId, user_id: config.userId, agent_id: config.agentId, task_id: turn.turn_id, messages };
 }
 

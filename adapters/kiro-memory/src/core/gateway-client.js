@@ -22,9 +22,15 @@ export class GatewayClient {
     this.fetch = options.fetch ?? globalThis.fetch;
   }
 
-  async post(path, body) {
+  async post(path, body, { timeoutMs } = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    const effectiveTimeoutMs = timeoutMs === undefined
+      ? this.config.timeoutMs
+      : Math.min(this.config.timeoutMs, timeoutMs);
+    if (!Number.isFinite(effectiveTimeoutMs) || effectiveTimeoutMs <= 0) {
+      throw new GatewayError('Gateway request failed', { retryable: true });
+    }
+    const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
     const headers = {
       'Content-Type': 'application/json',
       'x-tdai-service-id': this.config.serviceId,
@@ -101,14 +107,16 @@ export class GatewayClient {
     return data;
   }
 
-  async skillConversationAdd(payload) {
-    const data = await this.post('/v3/skill/conversation/add', payload);
+  async skillConversationAdd(payload, { timeoutMs } = {}) {
+    const data = await this.post('/v3/skill/conversation/add', payload, { timeoutMs });
     if (isObject(data) && Object.keys(data).length === 1 && data.status === 'ok') return data;
     if (
       isObject(data) && Object.keys(data).length === 2 && data.status === 'archived'
       && isObject(data.archived) && Object.keys(data.archived).length === 4
-      && typeof data.archived.task_id === 'string' && Number.isInteger(data.archived.archived_at_ms)
-      && typeof data.archived.archive_key === 'string' && typeof data.archived.reason === 'string'
+      && typeof data.archived.task_id === 'string'
+      && Number.isSafeInteger(data.archived.archived_at_ms) && data.archived.archived_at_ms >= 0
+      && typeof data.archived.archive_key === 'string'
+      && new Set(['tool_calls', 'bytes', 'compressed', 'oversize']).has(data.archived.reason)
     ) return data;
     throw invalidEnvelope();
   }
