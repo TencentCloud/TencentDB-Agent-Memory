@@ -57,7 +57,6 @@ export class TurnStore {
     idFactory = randomUUID,
     now = () => new Date(),
     lockTimeoutMs,
-    lockStaleMs,
     lockRetryMs,
   }) {
     this.stateDir = stateDir;
@@ -65,7 +64,6 @@ export class TurnStore {
     this.now = now;
     this.lockOptions = {
       ...(lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs }),
-      ...(lockStaleMs === undefined ? {} : { staleMs: lockStaleMs }),
       ...(lockRetryMs === undefined ? {} : { retryMs: lockRetryMs }),
     };
   }

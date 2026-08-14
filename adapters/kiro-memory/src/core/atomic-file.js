@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000;
-const DEFAULT_LOCK_STALE_MS = 60_000;
 const DEFAULT_LOCK_RETRY_MS = 20;
 const RENAME_RETRY_ATTEMPTS = 20;
 const RENAME_RETRY_DELAY_MS = 10;
@@ -13,38 +12,29 @@ const wait = (durationMs) => new Promise((resolve) => setTimeout(resolve, durati
 
 const isPositiveFiniteNumber = (value) => Number.isFinite(value) && value > 0;
 
-async function removeStaleLock(lockPath, staleMs) {
-  try {
-    const lockStats = await stat(lockPath);
-    if (Date.now() - lockStats.mtimeMs < staleMs) return false;
-    const stalePath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
-    await rename(lockPath, stalePath);
-    await rm(stalePath, { recursive: true, force: true });
-    return true;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return true;
-    return false;
-  }
-}
-
 async function releaseSessionLock(lockPath, ownerId) {
+  let ownerContents;
   try {
-    const currentOwner = await readFile(join(lockPath, 'owner'), 'utf8');
-    if (currentOwner !== ownerId) return;
-    await rm(lockPath, { recursive: true, force: true });
+    ownerContents = await readFile(join(lockPath, 'owner'), 'utf8');
   } catch (error) {
     if (error?.code === 'ENOENT') return;
     throw error;
   }
+  let currentOwner;
+  try {
+    currentOwner = JSON.parse(ownerContents);
+  } catch {
+    return;
+  }
+  if (currentOwner?.owner_token !== ownerId) return;
+  await rm(lockPath, { recursive: true, force: true });
 }
 
 export async function withSessionLock(lockPath, operation, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
-  const staleMs = options.staleMs ?? DEFAULT_LOCK_STALE_MS;
   const retryMs = options.retryMs ?? DEFAULT_LOCK_RETRY_MS;
   if (
     !isPositiveFiniteNumber(timeoutMs)
-    || !isPositiveFiniteNumber(staleMs)
     || !isPositiveFiniteNumber(retryMs)
   ) {
     throw new Error('Invalid session lock options');
@@ -59,7 +49,11 @@ export async function withSessionLock(lockPath, operation, options = {}) {
       try {
         await mkdir(lockPath);
         ownerId = randomUUID();
-        await writeFile(join(lockPath, 'owner'), ownerId, { encoding: 'utf8', flag: 'wx' });
+        await writeFile(join(lockPath, 'owner'), `${JSON.stringify({
+          owner_token: ownerId,
+          pid: process.pid,
+          created_at: new Date().toISOString(),
+        })}\n`, { encoding: 'utf8', flag: 'wx' });
         acquired = true;
         return await operation();
       } catch (error) {
@@ -69,7 +63,6 @@ export async function withSessionLock(lockPath, operation, options = {}) {
         }
         if (error?.code !== 'EEXIST') throw error;
       }
-      await removeStaleLock(lockPath, staleMs);
       await wait(retryMs);
     }
     throw new Error('Session lock acquisition timed out');

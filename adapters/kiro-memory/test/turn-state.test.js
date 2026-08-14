@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -16,8 +16,6 @@ const withStateDir = async (run) => {
     await rm(stateDir, { recursive: true, force: true });
   }
 };
-
-const delay = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs));
 
 test('creates and retrieves a turn using a hashed session directory', async () => {
   await withStateDir(async (stateDir) => {
@@ -237,60 +235,54 @@ test('serializes same-session mutations across TurnStore instances and preserves
   });
 });
 
-test('recovers a stale session lock within a bounded wait', async () => {
+test('times out without entering when an occupied lock has an old timestamp', async () => {
   await withStateDir(async (stateDir) => {
     const lockPath = join(stateDir, '.turn-state.lock');
-    await mkdir(lockPath, { recursive: true });
-    const staleTime = new Date(Date.now() - 1_000);
-    await utimes(lockPath, staleTime, staleTime);
+    let releaseLock;
+    let enterLock;
+    const entered = new Promise((resolve) => { enterLock = resolve; });
+    const heldLock = withSessionLock(lockPath, async () => {
+      enterLock();
+      await new Promise((resolve) => { releaseLock = resolve; });
+    }, { timeoutMs: 200, retryMs: 5 });
+    await entered;
+    const oldTime = new Date(Date.now() - 120_000);
+    await utimes(lockPath, oldTime, oldTime);
 
-    let ran = false;
-    await withSessionLock(lockPath, async () => { ran = true; }, {
-      timeoutMs: 200,
-      staleMs: 20,
+    let enteredSecond = false;
+    await assert.rejects(withSessionLock(lockPath, async () => { enteredSecond = true; }, {
+      timeoutMs: 50,
       retryMs: 5,
-    });
+    }), /timed out/);
+    assert.equal(enteredSecond, false);
 
-    assert.equal(ran, true);
+    releaseLock();
+    await heldLock;
   });
 });
 
-test('does not release a replacement lock when a stale owner finishes', async () => {
+test('does not release an occupied lock when its owner token no longer matches', async () => {
   await withStateDir(async (stateDir) => {
     const lockPath = join(stateDir, '.turn-state.lock');
-    let releaseFirst;
-    let releaseSecond;
-    let enterFirst;
-    let enterSecond;
-    const firstEntered = new Promise((resolve) => { enterFirst = resolve; });
-    const secondEntered = new Promise((resolve) => { enterSecond = resolve; });
-    const first = withSessionLock(lockPath, async () => {
-      enterFirst();
-      await new Promise((resolve) => { releaseFirst = resolve; });
-    }, { timeoutMs: 200, staleMs: 20, retryMs: 5 });
-    await firstEntered;
-    await delay(30);
-    const second = withSessionLock(lockPath, async () => {
-      enterSecond();
-      await new Promise((resolve) => { releaseSecond = resolve; });
-    }, { timeoutMs: 200, staleMs: 20, retryMs: 5 });
-    await secondEntered;
+    let releaseLock;
+    let enterLock;
+    const entered = new Promise((resolve) => { enterLock = resolve; });
+    const heldLock = withSessionLock(lockPath, async () => {
+      enterLock();
+      await new Promise((resolve) => { releaseLock = resolve; });
+    }, { timeoutMs: 200, retryMs: 5 });
+    await entered;
+    await writeFile(join(lockPath, 'owner'), 'replacement-owner', 'utf8');
 
-    let thirdEntered = false;
-    const third = withSessionLock(lockPath, async () => { thirdEntered = true; }, {
-      timeoutMs: 200,
-      staleMs: 1_000,
+    releaseLock();
+    await heldLock;
+    let enteredSecond = false;
+    await assert.rejects(withSessionLock(lockPath, async () => { enteredSecond = true; }, {
+      timeoutMs: 50,
       retryMs: 5,
-    });
-    releaseFirst();
-    await first;
-    await delay(30);
-    assert.equal(thirdEntered, false);
-
-    releaseSecond();
-    await second;
-    await third;
-    assert.equal(thirdEntered, true);
+    }), /timed out/);
+    assert.equal(enteredSecond, false);
+    await rm(lockPath, { recursive: true, force: true });
   });
 });
 
