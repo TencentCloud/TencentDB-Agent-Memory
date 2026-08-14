@@ -469,6 +469,19 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 
 任务感知选择器只影响自动注入的 L1 记忆，不改变 `tdai_memory_search` 的结果。它接收候选记忆 ID 和文本，只返回 ID；当 runner 不可用、调用超时或输出校验失败时，会 fail-open 回退到原始 RRF/检索 Top-K。请确保 `recall.timeoutMs` 足以覆盖检索和 `recall.taskSelector.timeoutMs`。
 
+如需使用真实 OpenAI-compatible 模型验证该可选能力，可先在不调用 API 的情况下检查仓库内置样例，再显式运行评测：
+
+```bash
+npm run eval:task-selector -- --dry-run
+TDAI_EVAL_BASE_URL="https://api.example.com/v1" \
+TDAI_EVAL_API_KEY="..." \
+TDAI_EVAL_MODEL="model-name" \
+TDAI_EVAL_RUNS=3 \
+npm run eval:task-selector
+```
+
+评测器会以原始检索 Top-K 为基线，对比 Precision@K、Recall@K、nDCG@K、关键记忆召回率、回退率、延迟和估算 token 用量。设置 `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` 可保存报告。内置案例仅用于示范；生产决策前建议扩充到 30–50 个具有代表性且经过人工标注的案例。API 凭据只从环境变量读取，真实模型评测不会进入普通 CI。
+
 </details>
 
 <details>

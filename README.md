@@ -468,6 +468,19 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 
 The task-aware selector affects automatic L1 injection only; `tdai_memory_search` results are unchanged. It receives candidate memory IDs and text, returns IDs only, and fails open to the original RRF/search Top-K when the runner, timeout, or output validation fails. Keep `recall.timeoutMs` large enough to cover both retrieval and `recall.taskSelector.timeoutMs`.
 
+To validate the opt-in selector against a real OpenAI-compatible model, first check the committed fixture without making API calls, then run the evaluation explicitly:
+
+```bash
+npm run eval:task-selector -- --dry-run
+TDAI_EVAL_BASE_URL="https://api.example.com/v1" \
+TDAI_EVAL_API_KEY="..." \
+TDAI_EVAL_MODEL="model-name" \
+TDAI_EVAL_RUNS=3 \
+npm run eval:task-selector
+```
+
+The evaluator compares the selector with the original retrieval Top-K using Precision@K, Recall@K, nDCG@K, critical-memory recall, fallback rate, latency, and estimated token usage. Set `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` to save a report. The included cases are examples; use 30–50 representative, manually labelled cases before making a production decision. API credentials are read from environment variables only, and real-model evaluation is not part of normal CI.
+
 </details>
 
 <details>
