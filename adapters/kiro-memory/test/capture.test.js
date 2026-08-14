@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
 import { CaptureService, CaptureServiceError, buildSkillConversationPayload, createCaptureId } from '../src/core/capture-service.js';
 import { GatewayClient, GatewayError } from '../src/core/gateway-client.js';
+import { Outbox } from '../src/core/outbox.js';
 
 const turn = (overrides = {}) => ({
   version: 1,
@@ -137,5 +138,22 @@ test('capture service retains gateway failures but propagates durable persistenc
     });
     await assert.rejects(persistenceFailure.captureObservedToolTrace(turn()), /disk/);
     await assert.rejects(service.captureFullTurn(turn(), 'nope'), (error) => error instanceof CaptureServiceError && error.message === 'Full turn capture is unsupported');
+  });
+});
+
+test('capture service flushes a pre-existing marker and outbox without another gateway call', async () => {
+  await withStateDir(async (stateDir) => {
+    let calls = 0;
+    const config = { stateDir, teamId: 'team-1', userId: 'user-1', agentId: 'agent-1' };
+    const outbox = new Outbox({ stateDir, gatewayClient: { skillConversationAdd: async () => { calls += 1; return { status: 'ok' }; } } });
+    const capturePayload = buildSkillConversationPayload(turn(), config);
+    const captureId = createCaptureId({ sessionId: 'session-1', turnId: 'turn-1', payload: capturePayload });
+    const item = { capture_id: captureId, type: 'skill_conversation', session_id: 'session-1', turn_id: 'turn-1', payload: capturePayload };
+    await outbox.enqueue(item);
+    await outbox.writeMarker(item);
+    const service = new CaptureService({ config, outbox });
+    assert.deepEqual(await service.captureObservedToolTrace(turn()), { captureStatus: 'partial_captured', captureId });
+    assert.equal(calls, 0);
+    await assert.rejects(readFile(outbox.outboxPath(captureId), 'utf8'), { code: 'ENOENT' });
   });
 });

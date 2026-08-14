@@ -57,9 +57,8 @@ export class CaptureService {
     const payload = buildSkillConversationPayload(turn, this.config);
     const captureId = createCaptureId({ adapterVersion: this.adapterVersion, sessionId: turn.session_id, turnId: turn.turn_id, payload });
     const envelope = { capture_id: captureId, type: 'skill_conversation', session_id: turn.session_id, turn_id: turn.turn_id, payload };
-    const existingMarker = await this.outbox.hasMarker(captureId);
     await this.outbox.enqueue(envelope);
-    if (!existingMarker) await this.outbox.flush({ maxItems: 3, budgetMs: 1_500 });
+    await this.outbox.flush({ maxItems: 3, budgetMs: 1_500 });
     return { captureStatus: await this.outbox.hasMarker(captureId) ? 'partial_captured' : 'retry_pending', captureId };
   }
 

@@ -112,3 +112,18 @@ test('returns at the flush deadline for an uncooperative gateway without acknowl
     assert.equal(await outbox.hasMarker(id()), false);
   });
 });
+
+test('propagates lock and marker persistence errors even when they advance the clock to deadline', async () => {
+  await withStateDir(async (stateDir) => {
+    let clock = 0;
+    const outbox = new Outbox({ stateDir, monotonicNow: () => clock, gatewayClient: { skillConversationAdd: async () => ({ status: 'ok' }) } });
+    await outbox.enqueue(envelope());
+    outbox.withLockUntil = async () => { clock = 10; throw new OutboxError('Outbox persistence failed'); };
+    await assert.rejects(outbox.flush({ budgetMs: 10 }), (error) => error instanceof OutboxError && error.message === 'Outbox persistence failed');
+
+    clock = 0;
+    outbox.withLockUntil = Outbox.prototype.withLockUntil;
+    outbox.writeMarkerUnlocked = async () => { clock = 10; throw new Error('marker-write'); };
+    await assert.rejects(outbox.flush({ budgetMs: 10 }), (error) => error instanceof OutboxError && error.message === 'Outbox persistence failed');
+  });
+});

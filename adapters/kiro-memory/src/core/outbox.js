@@ -92,10 +92,7 @@ export class Outbox {
 
   async process(captureId, deadline) {
     if (this.remaining(deadline) <= 0) return 'deferred';
-    let lockResult;
-    try { lockResult = await this.withLockUntil(captureId, deadline, async () => this.processLocked(captureId, deadline)); }
-    catch (error) { if (this.remaining(deadline) <= 0) return 'deferred'; throw error; }
-    return lockResult;
+    return this.withLockUntil(captureId, deadline, async () => this.processLocked(captureId, deadline));
   }
 
   async processLocked(captureId, deadline) {
