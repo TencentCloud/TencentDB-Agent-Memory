@@ -48,6 +48,7 @@ coverage/
 # Temporary
 tmp/
 .tmp/
+.agent-memory-import-state.json
 
 # iWiki plugin files
 .iwiki
