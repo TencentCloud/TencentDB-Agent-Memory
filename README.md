@@ -353,7 +353,36 @@ curl http://127.0.0.1:8420/health
 
 ---
 
-### 3. Hermes (Windows native)
+### 3. Claude Code
+
+Claude Code is supported through a self-contained plugin using the official
+`UserPromptSubmit`, `Stop`, and `SessionEnd` hooks plus a bundled MCP server.
+The hooks automatically recall and capture turns; MCP adds explicit memory and
+conversation search tools.
+
+Start the existing Gateway, then load the plugin from this checkout:
+
+```bash
+npm install
+export TDAI_LLM_API_KEY="your-provider-key"
+export TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+export TDAI_LLM_MODEL="gpt-4o"
+export TDAI_GATEWAY_API_KEY="choose-a-separate-gateway-secret"
+npm run gateway
+```
+
+In another shell:
+
+```bash
+export TDAI_GATEWAY_URL="http://127.0.0.1:8420"
+export TDAI_GATEWAY_API_KEY="choose-a-separate-gateway-secret"
+claude --plugin-dir ./claude-code-plugin
+```
+
+For installation, OpenRouter notes, configuration, and troubleshooting, see
+[`claude-code-plugin/README.md`](./claude-code-plugin/README.md).
+
+### 4. Hermes (Windows native)
 
 For a Windows-native Hermes install, run the bundled batch script from the
 repository root in Command Prompt or PowerShell:
@@ -537,6 +566,7 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
+| [`claude-code-plugin/README.md`](./claude-code-plugin/README.md) | Claude Code plugin installation and configuration |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 
@@ -558,7 +588,7 @@ We welcome every kind of contribution — bug reports, feature ideas, doc fixes,
 - [x] Long-term personalized memory (L0 → L3)
 - [x] Short-term context compression (Context Offload + Mermaid canvas)
 - [x] Local SQLite backend and Tencent Cloud Vector Database (TCVDB) backend
-- [x] OpenClaw plugin and Hermes Gateway integration
+- [x] OpenClaw, Hermes, and Claude Code integrations
 - [ ] Portable memory: cross-Agent / cross-framework / cross-device import, export, and live migration
 - [ ] Automatic Skill generation
 - [ ] Visual debugging and memory observability dashboard
