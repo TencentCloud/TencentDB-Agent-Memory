@@ -32,6 +32,11 @@ HEALTH_CHECK_RETRIES = 3     # retries for is_running check
 # Log file rotation parameters
 LOG_TAIL_BYTES_ON_CRASH = 2048  # bytes of stderr log to surface on startup crash
 
+# Shell metacharacters blocked in gateway_cmd to prevent command injection.
+# Defense-in-depth: shlex.split() already mitigates this, but we reject
+# suspicious input before it reaches Popen.
+_FORBIDDEN_CMD_CHARS = frozenset("|&;$\\`!<>(){}[]\"'*?")
+
 
 class GatewaySupervisor:
     """Manages the memory-tencentdb Gateway sidecar lifecycle."""
@@ -160,6 +165,17 @@ class GatewaySupervisor:
                 "memory-tencentdb Gateway is not running and no gateway command configured. "
                 "Set MEMORY_TENCENTDB_GATEWAY_CMD environment variable or pass gateway_cmd to supervisor. "
                 "memory-tencentdb memory will be unavailable."
+            )
+            return False
+
+        # Defense-in-depth: reject commands containing shell metacharacters.
+        # shlex.split() prevents most injection, but a path containing
+        # operators like "|" or ";" on some platforms is worth blocking outright.
+        if any(c in self._gateway_cmd for c in _FORBIDDEN_CMD_CHARS):
+            logger.error(
+                "memory-tencentdb Gateway: gateway_cmd contains forbidden shell metacharacters. "
+                "Rejecting to prevent command injection. "
+                "Command must be a plain executable path with no shell operators."
             )
             return False
 
