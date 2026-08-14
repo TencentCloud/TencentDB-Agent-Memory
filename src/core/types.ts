@@ -145,6 +145,7 @@ export interface LLMRunnerFactory {
  * Each host environment provides exactly one HostAdapter implementation:
  * - OpenClaw:    `OpenClawHostAdapter` — wraps `OpenClawPluginApi`
  * - Hermes/GW:   `StandaloneHostAdapter` — wraps Gateway HTTP request context
+ * - Codex:       `CodexHostAdapter` — exposes the core through a local MCP server
  *
  * HostAdapter answers these questions for TDAI Core:
  * - "Who is the current user/session?" → `getRuntimeContext()`
@@ -153,7 +154,7 @@ export interface LLMRunnerFactory {
  */
 export interface HostAdapter {
   /** Identifies the host type for conditional behavior (should be rare). */
-  readonly hostType: "openclaw" | "hermes" | "standalone";
+  readonly hostType: "openclaw" | "hermes" | "standalone" | "codex";
 
   /** Get the unified runtime context for the current session. */
   getRuntimeContext(): RuntimeContext;
