@@ -16,7 +16,7 @@
 
 import http from "node:http";
 import { URL } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
@@ -107,6 +107,10 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
+function recallContextHash(context: string): string {
+  return createHash("sha256").update(context, "utf-8").digest("hex");
+}
+
 // ============================
 // Gateway Server
 // ============================
@@ -117,6 +121,7 @@ export class TdaiGateway {
   private core: TdaiCore;
   private server: http.Server | null = null;
   private startTime = Date.now();
+  private recallDedupLedger = new Map<string, Set<string>>();
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -382,11 +387,26 @@ export class TdaiGateway {
 
     this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
 
+    let context = result.appendSystemContext ?? "";
+    let deduped = false;
+    if (body.dedup && context.length > 0) {
+      const contextHash = recallContextHash(context);
+      const seen = this.recallDedupLedger.get(body.session_key) ?? new Set<string>();
+      if (seen.has(contextHash)) {
+        context = "";
+        deduped = true;
+      } else {
+        seen.add(contextHash);
+        this.recallDedupLedger.set(body.session_key, seen);
+      }
+    }
+
     const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
+      context,
       strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
+      memory_count: deduped ? 0 : result.recalledL1Memories?.length ?? 0,
     };
+    if (body.dedup) response.deduped = deduped;
     sendJson(res, 200, response);
   }
 
@@ -473,6 +493,7 @@ export class TdaiGateway {
     }
 
     await this.core.handleSessionEnd(body.session_key);
+    this.recallDedupLedger.delete(body.session_key);
 
     const response: SessionEndResponse = { flushed: true };
     sendJson(res, 200, response);
