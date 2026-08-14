@@ -536,6 +536,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 
 | Document | Contents |
 | :--- | :--- |
+| [`docs/trae-adapter.md`](./docs/trae-adapter.md) | Trae platform adapter installation and configuration guide |
+| [`docs/platform-adapters-comparison.md`](./docs/platform-adapters-comparison.md) | Comparison across 6 Agent platforms (OpenClaw/Hermes/Codex/Claude Code/Dify/Trae) |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
