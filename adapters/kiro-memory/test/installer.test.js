@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -113,7 +113,7 @@ test('shell quoting preserves hostile adapter paths without command injection', 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('installer rejects a hook claimed by a concurrent conflicting writer without creating a receipt', async () => {
+test('installer rejects a hook claimed by a concurrent conflicting writer while preserving a recoverable staged receipt', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro-install-race-'));
   try {
     const env = safeEnv(join(project, 'state'));
@@ -121,7 +121,7 @@ test('installer rejects a hook claimed by a concurrent conflicting writer withou
     const userHook = '{"owned":"by-user"}\n';
     await assert.rejects(installProject({ project, env, beforePublish: async () => { await writeFile(hookPath, userHook); } }), /conflict/);
     assert.equal(await readFile(hookPath, 'utf8'), userHook);
-    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+    assert.equal(JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8')).version, 1);
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
@@ -148,6 +148,35 @@ test('installer refuses an existing different receipt without overwriting it', a
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
+test('installer refuses a different staged receipt before creating a hook', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-staged-receipt-conflict-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+    const userReceipt = '{"owned":"by-user"}\n';
+    await mkdir(join(project, '.kiro'), { recursive: true });
+    await writeFile(receiptPath, userReceipt, { encoding: 'utf8' });
+    await assert.rejects(installProject({ project, env }), /conflict/);
+    assert.equal(await readFile(receiptPath, 'utf8'), userReceipt);
+    await assert.rejects(readFile(hookPath, 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('a staged receipt without a hook recovers on the next install, doctor, and uninstall', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-staged-receipt-recovery-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+    await assert.rejects(installProject({ project, env, afterReceiptPublished: async () => { throw new Error('simulated-crash'); } }), /simulated-crash/);
+    await assert.rejects(readFile(hookPath, 'utf8'), { code: 'ENOENT' });
+    assert.equal(JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8')).version, 1);
+    await installProject({ project, env });
+    assert.equal(run('doctor', project, env).status, 0);
+    assert.equal(run('uninstall', project, env).status, 0);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
 test('barriered concurrent installs publish one identical receipt without rename races', async () => {
   for (let index = 0; index < 50; index += 1) {
     const project = await mkdtemp(join(tmpdir(), 'kiro-receipt-race-'));
@@ -155,8 +184,8 @@ test('barriered concurrent installs publish one identical receipt without rename
       const env = safeEnv(join(project, 'state'));
       let arrived = 0; let release;
       const barrier = new Promise((resolve) => { release = resolve; });
-      const afterHookPublished = async () => { arrived += 1; if (arrived === 2) release(); await barrier; };
-      await Promise.all([installProject({ project, env, afterHookPublished }), installProject({ project, env, afterHookPublished })]);
+      const afterReceiptPublished = async () => { arrived += 1; if (arrived === 2) release(); await barrier; };
+      await Promise.all([installProject({ project, env, afterReceiptPublished }), installProject({ project, env, afterReceiptPublished })]);
       const receipt = JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'));
       assert.equal(receipt.version, 1);
     } finally { await rm(project, { recursive: true, force: true }); }

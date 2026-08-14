@@ -39,7 +39,7 @@ node scripts/doctor.mjs --project /path/to/workspace
 node scripts/uninstall.mjs --project /path/to/workspace
 ```
 
-The installer validates configuration without writing any environment value, creates `.kiro/hooks/tdai-memory.json`, and writes a secret-free `.kiro/tdai-memory-install.json` receipt. It publishes the complete, fsynced hook temporary file with an atomic no-replace link; a concurrent different hook is preserved and installation fails safely, while concurrent identical installs are idempotent. The uninstaller deletes only the receipt and hook when their SHA-256 values still match. It never deletes `.kiro/hooks` or other hooks. `doctor.mjs` is offline and reports only check names and pass/fail; it checks Node, config schema, CLI, installed hook schema, receipt, and hash. It does not inspect `stateDir` or repair/report leftover session locks.
+The installer validates configuration without writing any environment value, stages a secret-free `.kiro/tdai-memory-install.json` receipt first, then creates `.kiro/hooks/tdai-memory.json`. It publishes complete, fsynced temporary files with atomic no-replace links; a concurrent different receipt or hook is preserved and installation fails safely, while concurrent identical installs are idempotent. A crash can leave only the matching staged receipt; the next install safely resumes hook creation. The uninstaller deletes only the receipt and hook when their SHA-256 values still match. It never deletes `.kiro/hooks` or other hooks. `doctor.mjs` is offline and reports only check names and pass/fail; it checks Node, config schema, CLI, installed hook schema, receipt, and hash. It does not inspect `stateDir` or repair/report leftover session locks.
 
 ## Manual hook template
 

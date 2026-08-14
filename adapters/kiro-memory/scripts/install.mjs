@@ -67,7 +67,7 @@ export function buildHookDefinition(adapterPath, options = {}) {
   };
 }
 
-export async function installProject({ project: projectArg, env = process.env, adapterPath = adapterPathFor(), beforePublish, afterHookPublished = async () => {} } = {}) {
+export async function installProject({ project: projectArg, env = process.env, adapterPath = adapterPathFor(), beforePublish, afterReceiptPublished = async () => {}, afterHookPublished = async () => {} } = {}) {
   if (typeof projectArg !== 'string' || projectArg.length === 0) throw new Error('args');
   loadConfig(env);
   const project = resolve(projectArg);
@@ -75,11 +75,12 @@ export async function installProject({ project: projectArg, env = process.env, a
   const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
   const hook = buildHookDefinition(adapterPath);
   const expected = `${JSON.stringify(hook, null, 2)}\n`;
+  const receipt = { version: 1, hook_path: '.kiro/hooks/tdai-memory.json', hook_sha256: sha256(expected), adapter_path: adapterPath };
+  await publishContentNoReplace(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+  await afterReceiptPublished();
   await publishHookNoReplace(hookPath, expected, { beforePublish });
   if (await readFile(hookPath, 'utf8') !== expected) throw new Error('conflict');
   await afterHookPublished();
-  const receipt = { version: 1, hook_path: '.kiro/hooks/tdai-memory.json', hook_sha256: sha256(expected), adapter_path: adapterPath };
-  await publishContentNoReplace(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
 export async function install() {
