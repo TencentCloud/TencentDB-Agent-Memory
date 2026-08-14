@@ -134,8 +134,9 @@ TDAI_USER_KEY=sk-mem-example TDAI_SERVICE_ID=default \
   pnpm import:agent-memory --source all --team-id team-example --agent-id agt-example --yes
 ```
 
-可用 `--output plan.json` 导出 ImportPlan v1 供审阅。该文件包含记忆正文，CLI 会以
-`0600` 权限写入，仍须按敏感数据保管。完整参数见 `pnpm import:agent-memory --help`。
+可用 `--output plan.json` 导出 ImportPlan v1 供审阅。该文件包含记忆正文；CLI 在
+POSIX 系统上以 `0600` 权限写入，Windows 上则继承所在目录的 ACL，因此应选择用户私有目录。
+无论平台都须按敏感数据保管。完整参数见 `pnpm import:agent-memory --help`。
 使用 `memory-hub` 合并镜像时，另传 `--panel-url http://127.0.0.1:8125`。
 
 ## 公开 API

@@ -155,24 +155,14 @@ function messagesFor(block: SourceBlock): ImportMessage[] {
 }
 
 export function buildImportPlan(documents: MemoryDocument[]): ImportPlanV1 {
-  const sessions = documents.flatMap((document) => {
-    const blocks = splitDocument(document);
-    if (document.split === 'codex-task-group') {
-      return blocks.map((block) => ({
-        source: block.source,
-        session_id: `import-${block.source}-${stableHash(`${block.sourceLabel}\0${block.content}`)}`,
-        source_label: block.sourceLabel,
-        messages: messagesFor(block),
-      }));
-    }
-    if (!blocks.length) return [];
-    return [{
-      source: document.source,
-      session_id: `import-${document.source}-${stableHash(`${document.sourceLabel}\0${document.content}`)}`,
-      source_label: document.sourceLabel,
-      messages: blocks.flatMap(messagesFor),
-    }];
-  });
+  const sessions = documents.flatMap((document) => splitDocument(document).map((block) => ({
+    source: block.source,
+    // Keep a section's session stable when its body changes. The checkpoint key
+    // still includes the body, so only the changed section is imported again.
+    session_id: `import-${block.source}-${stableHash(block.sourceLabel)}`,
+    source_label: block.sourceLabel,
+    messages: messagesFor(block),
+  })));
   return {
     version: IMPORT_PLAN_VERSION,
     sources: [...new Set(documents.map((document) => document.source))],
@@ -194,11 +184,18 @@ export function emptyCheckpoint(): ImportCheckpointV1 {
 }
 
 export function checkpointKey(
-  target: { teamId: string; agentId: string },
+  target: { endpoint: string; serviceId: string; teamId: string; agentId: string },
   sessionId: string,
   batch: ImportMessage[],
 ): string {
-  return stableHash(JSON.stringify([target.teamId, target.agentId, sessionId, batch]));
+  return stableHash(JSON.stringify([
+    target.endpoint,
+    target.serviceId,
+    target.teamId,
+    target.agentId,
+    sessionId,
+    batch,
+  ]));
 }
 
 export function recordSuccessfulBatch(

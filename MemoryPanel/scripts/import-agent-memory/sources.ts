@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
-import { stableHash, type MemoryDocument, type MemorySource } from './plan.js';
+import type { MemoryDocument, MemorySource } from './plan.js';
 
 export interface SourceReport {
   source: MemorySource;
@@ -30,7 +30,7 @@ async function markdownFiles(path: string): Promise<string[]> {
     return entries
       .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.md'))
       .map((entry) => entry.name)
-      .sort((left, right) => left.localeCompare(right));
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
@@ -99,9 +99,13 @@ export async function scanWorkBuddy(
   }
 
   let locations = userMemory ? 1 : 0;
-  for (const workspace of [...new Set(workspaces.map((path) => resolve(path)))]) {
+  const resolvedWorkspaces = [...new Set(workspaces.map((path) => resolve(path)))];
+  const nameCounts = new Map<string, number>();
+  for (const workspace of resolvedWorkspaces) {
     const shortName = basename(workspace).replace(/[^a-zA-Z0-9._-]+/g, '-') || 'workspace';
-    const label = `workspace/${shortName}-${stableHash(workspace).slice(0, 8)}`;
+    const occurrence = (nameCounts.get(shortName) ?? 0) + 1;
+    nameCounts.set(shortName, occurrence);
+    const label = `workspace/${shortName}${occurrence > 1 ? `-${occurrence}` : ''}`;
     const found = await documentsFromDirectory(
       join(workspace, '.workbuddy', 'memory'),
       'workbuddy',
@@ -132,17 +136,15 @@ export async function scanClaude(claudeHome: string): Promise<ScanResult> {
   let customDirectory: string | undefined;
   if (settings) {
     try {
-      const value = (JSON.parse(settings) as { autoMemoryDirectory?: unknown }).autoMemoryDirectory;
+      const value = (JSON.parse(settings.replace(/^\uFEFF/, '')) as {
+        autoMemoryDirectory?: unknown;
+      }).autoMemoryDirectory;
       if (typeof value === 'string') {
         customDirectory = configuredMemoryPath(value);
         if (!customDirectory) notes.push('autoMemoryDirectory ignored: expected an absolute or ~/ path');
       }
     } catch {
-      notes.push('settings.json is invalid JSON; default project memories were not scanned');
-      return {
-        documents: [],
-        reports: [{ source: 'claude', files: 0, locations: 0, notes }],
-      };
+      notes.push('settings.json is invalid JSON; scanning default project memories instead');
     }
   }
 
@@ -158,18 +160,21 @@ export async function scanClaude(claudeHome: string): Promise<ScanResult> {
   let projectDirectories: string[] = [];
   try {
     const entries = await readdir(join(root, 'projects'), { withFileTypes: true });
-    projectDirectories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+    projectDirectories = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 
   const documents: MemoryDocument[] = [];
   let locations = 0;
-  for (const projectDirectory of projectDirectories) {
+  for (const [index, projectDirectory] of projectDirectories.entries()) {
     const found = await documentsFromDirectory(
       join(root, 'projects', projectDirectory, 'memory'),
       'claude',
-      `project-${stableHash(projectDirectory).slice(0, 8)}`,
+      `project-${index + 1}`,
     );
     if (found.length) locations += 1;
     documents.push(...found);

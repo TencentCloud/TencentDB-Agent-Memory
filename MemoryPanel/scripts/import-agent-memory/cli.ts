@@ -157,6 +157,10 @@ async function writePrivateJson(path: string, value: unknown): Promise<void> {
   await chmod(absolute, 0o600);
 }
 
+function importEndpoint(panelUrl: string): URL {
+  return new URL('/api/v1/chat-memory/import', `${panelUrl.replace(/\/+$/, '')}/`);
+}
+
 function printPlan(plan: ImportPlanV1, result: ScanResult, options: CliOptions): void {
   console.log(`Scanning generated memories (${options.yes ? 'write enabled' : 'dry-run; no remote writes'}):\n`);
   for (const report of result.reports) {
@@ -191,7 +195,7 @@ async function importBatch(
   userKey: string,
   serviceId: string,
 ): Promise<number> {
-  const endpoint = new URL('/api/v1/chat-memory/import', `${options.panelUrl.replace(/\/+$/, '')}/`);
+  const endpoint = importEndpoint(options.panelUrl);
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -225,10 +229,16 @@ async function importBatch(
         + 'The batch was not checkpointed; inspect the target before rerunning.',
     );
   }
-  if (!response.ok || envelope.code !== 0) {
+  if (response.status >= 400 && response.status < 500) {
     throw new Error(
       `MemoryPanel rejected the batch (HTTP ${response.status}, code ${envelope.code}): `
         + (envelope.message ?? 'unknown error'),
+    );
+  }
+  if (!response.ok || envelope.code !== 0) {
+    throw new Error(
+      `Import outcome is unknown after MemoryPanel returned HTTP ${response.status}, code ${envelope.code}. `
+        + 'The batch was not checkpointed; inspect the target before rerunning.',
     );
   }
   if (typeof envelope.data?.accepted_count !== 'number') {
@@ -252,7 +262,12 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
       throw new Error('--output and --state-file must use different paths');
     }
     await writePrivateJson(options.output, plan);
-    console.log(`Import Plan written with mode 0600: ${resolve(options.output)}`);
+    if (process.platform === 'win32') {
+      console.log(`Import Plan written: ${resolve(options.output)}`);
+      console.log('Warning: on Windows the file inherits directory ACLs; use a private user directory.');
+    } else {
+      console.log(`Import Plan written with POSIX mode 0600: ${resolve(options.output)}`);
+    }
     console.log('Warning: the plan contains memory content and must be handled as sensitive data.');
   }
   if (!options.yes) {
@@ -263,6 +278,7 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
   const userKey = process.env.TDAI_USER_KEY;
   if (!userKey) throw new Error('TDAI_USER_KEY is required with --yes');
   const serviceId = process.env.TDAI_SERVICE_ID || 'default';
+  const endpoint = importEndpoint(options.panelUrl).href;
 
   const statePath = resolve(options.stateFile);
   let checkpoint = await readCheckpoint(statePath);
@@ -271,7 +287,11 @@ export async function run(argv = process.argv.slice(2)): Promise<void> {
   for (const session of plan.sessions) {
     const batches = batchMessages(session.messages);
     for (const [index, batch] of batches.entries()) {
-      const key = checkpointKey({ teamId: options.teamId, agentId: options.agentId }, session.session_id, batch);
+      const key = checkpointKey(
+        { endpoint, serviceId, teamId: options.teamId, agentId: options.agentId },
+        session.session_id,
+        batch,
+      );
       const completed = checkpoint.completed[key];
       if (completed && completed.accepted_count !== batch.length) {
         throw new Error(`Checkpoint entry does not match batch length for ${session.session_id}`);
