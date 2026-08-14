@@ -383,6 +383,22 @@ memory:
   provider: memory_tencentdb
 ```
 
+### 4. Cline CLI
+
+Cline CLI can connect to the Gateway through the dependency-free plugin in
+[`cline-adapter/tdai-memory`](./cline-adapter/tdai-memory). It recalls memory
+before a run, projects it into model requests, captures completed runs, and
+fails open when the Gateway is unavailable.
+
+Install the adapter as a local plugin:
+
+```bash
+cline plugin install ./cline-adapter/tdai-memory --cwd .
+```
+
+See the [Cline adapter guide](./cline-adapter/tdai-memory/README.md) for
+configuration, lifecycle details, and limitations.
+
 
 ## 🔒 Gateway Security (optional)
 
