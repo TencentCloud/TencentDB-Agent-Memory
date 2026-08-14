@@ -1,0 +1,27 @@
+identity:
+  name: tdai_memory
+  author: TencentDB-Agent-Memory
+  label:
+    en_US: TDAI Memory
+    zh_Hans: TDAI 记忆
+description:
+  en_US: TencentDB Agent Memory - recall, capture, and search conversation memories
+  zh_Hans: TencentDB Agent Memory - 召回、捕获和搜索对话记忆
+credentials_for_provider:
+  gateway_url:
+    type: text-input
+    required: false
+    label:
+      en_US: Gateway URL
+      zh_Hans: 网关地址
+    placeholder:
+      en_US: "http://127.0.0.1:8420"
+    default: "http://127.0.0.1:8420"
+  api_key:
+    type: secret-input
+    required: false
+    label:
+      en_US: API Key
+      zh_Hans: API 密钥
+    placeholder:
+      en_US: "Bearer token for gateway auth"
