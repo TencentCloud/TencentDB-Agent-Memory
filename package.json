@@ -4,6 +4,7 @@
   "description": "Four-layer local memory system plugin for OpenClaw — auto-captures, structures, and profiles conversational knowledge using local LLM + SQLite vector search (L0→L1→L2→L3 pipeline)",
   "type": "module",
   "main": "./dist/index.mjs",
+  "types": "./index.ts",
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
@@ -11,8 +12,14 @@
   },
   "exports": {
     ".": {
+      "types": "./index.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./adapters": {
+      "types": "./src/adapters/index.ts",
+      "import": "./dist/src/adapters/index.mjs",
+      "default": "./dist/src/adapters/index.mjs"
     }
   },
   "scripts": {
@@ -43,6 +50,7 @@
     "scripts/setup-hermes-memory-tencentdb.bat",
     "scripts/postinstall.mjs",
     "scripts/README.memory-tencentdb-ctl.md",
+    "docs/",
     "src",
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
