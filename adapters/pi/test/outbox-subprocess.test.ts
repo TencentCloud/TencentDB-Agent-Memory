@@ -1,0 +1,174 @@
+import { spawn } from "node:child_process";
+import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+
+/**
+ * Real cross-process coverage for the file outbox. The state machine is
+ * already exercised in outbox.test.ts, but that runs everything in one
+ * process, so the per-process `activeFlushes` map masks the lease race. These
+ * tests spawn independent OS processes (plain `node` with type stripping) so
+ * the atomic-rename lease and crash recovery run across real process
+ * boundaries.
+ */
+const here = dirname(fileURLToPath(import.meta.url));
+const childPath = join(here, "fixtures", "outbox-child.ts");
+const dirs: string[] = [];
+
+interface ChildResult {
+  code: number;
+  stdout: string;
+}
+
+function runChild(args: string[], timeoutMs = 30_000): Promise<ChildResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [childPath, ...args], {
+      cwd: join(here, ".."),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`child timed out; stdout=${stdout} stderr=${stderr}`));
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`child exited ${code}: ${stderr || stdout}`));
+      else resolve({ code, stdout });
+    });
+  });
+}
+
+async function tmpDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  dirs.push(dir);
+  return dir;
+}
+
+async function waitForFiles(files: string[], timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const present = await Promise.all(files.map((file) => access(file).then(() => true, () => false)));
+    if (present.every(Boolean)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for ${files.join(", ")}`);
+}
+
+function startDeliveryServer(): Promise<{
+  url: string;
+  deliveries: Array<{ id: string; sessionId: string }>;
+  close: () => Promise<void>;
+}> {
+  return new Promise((resolve) => {
+    const deliveries: Array<{ id: string; sessionId: string }> = [];
+    const server = createServer((request, response) => {
+      let data = "";
+      request.on("data", (chunk: Buffer) => { data += chunk.toString(); });
+      request.on("end", () => {
+        try {
+          deliveries.push(JSON.parse(data) as { id: string; sessionId: string });
+        } catch {
+          // Malformed payload: do not record it.
+        }
+        response.writeHead(200);
+        response.end("ok");
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address() as { port: number };
+      resolve({
+        url: `http://127.0.0.1:${address.port}`,
+        deliveries,
+        close: () => new Promise((resolveClose) => server.close(() => resolveClose())),
+      });
+    });
+  });
+}
+
+function flushResult(stdout: string): { delivered: number; pending: number; invalid: number; dead: number } {
+  const match = /FLUSH (\{.*\})/.exec(stdout);
+  if (!match) throw new Error(`no FLUSH result in stdout: ${stdout}`);
+  return JSON.parse(match[1] ?? "{}") as { delivered: number; pending: number; invalid: number; dead: number };
+}
+
+afterEach(async () => {
+  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+describe("cross-process capture outbox", () => {
+  it("recovers a capture written by a process that exited before flushing", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-recover-");
+    // The "writer" enqueues and exits without draining: exactly the window
+    // where Pi dies after the capture is durable but before it is sent.
+    const enqueued = await runChild(["enqueue", outboxDir, "pi-session-a"]);
+    const id = /ENQUEUED (\S+)/.exec(enqueued.stdout)?.[1];
+    expect(id).toBeTruthy();
+
+    const server = await startDeliveryServer();
+    try {
+      const flushed = await runChild(["flush", outboxDir, server.url]);
+      expect(flushResult(flushed.stdout)).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 0 });
+      expect(server.deliveries).toEqual([{ id, sessionId: "pi-session-a" }]);
+    } finally {
+      await server.close();
+    }
+    const remaining = await readdir(outboxDir);
+    expect(remaining).not.toEqual(expect.arrayContaining([expect.stringMatching(/\.json(\.|$)/)]));
+  }, 20_000);
+
+  it("delivers a record exactly once when two independent processes flush concurrently", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-race-");
+    const gate = await tmpDir("tdai-outbox-gate-");
+    await runChild(["enqueue", outboxDir, "pi-race"]);
+    const readyOne = join(gate, "ready-1");
+    const readyTwo = join(gate, "ready-2");
+    const go = join(gate, "go");
+
+    const server = await startDeliveryServer();
+    try {
+      // Both flushers are real processes; the gate makes them wait until both
+      // are armed so the atomic-rename lease actually races.
+      const first = runChild(["flush", outboxDir, server.url, "--ready", readyOne, "--wait-for", go]);
+      const second = runChild(["flush", outboxDir, server.url, "--ready", readyTwo, "--wait-for", go]);
+      await waitForFiles([readyOne, readyTwo]);
+      await writeFile(go, "go");
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+
+      expect(server.deliveries).toHaveLength(1);
+      const delivered = flushResult(firstResult.stdout).delivered + flushResult(secondResult.stdout).delivered;
+      expect(delivered).toBe(1);
+      expect(await readdir(outboxDir)).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("ignores a half-written temp file left by a crashed writer", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-tmp-");
+    await runChild(["enqueue", outboxDir, "pi-tmp"]);
+    // A crash inside writeRecord leaves an orphan *.tmp holding partial JSON.
+    await writeFile(join(outboxDir, "crash.json.12345.orphan.tmp"), '{"version":1,');
+
+    const server = await startDeliveryServer();
+    try {
+      const flushed = await runChild(["flush", outboxDir, server.url]);
+      const result = flushResult(flushed.stdout);
+      expect(result.invalid).toBe(0);
+      expect(result.delivered).toBe(1);
+      expect(server.deliveries).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+});
