@@ -204,6 +204,36 @@ describe("Pi extension lifecycle", () => {
     );
   });
 
+  it("still injects the available layers and completes the turn when one layer fails", async () => {
+    // L0/L2/L3 succeed while L1 fails: the available layers still reach the
+    // system prompt, and the answer loop finishes into a capture.
+    mocks.recallMemory.mockResolvedValueOnce({
+      content: "<tdai_recalled_memory>core and scenario context</tdai_recalled_memory>",
+      availableLayers: ["L0 conversation", "L2 scenario", "L3 core"],
+      failedLayers: ["L1 atomic"],
+      timedOutLayers: [],
+    });
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+
+    const before = await call(
+      handlers,
+      "before_agent_start",
+      { prompt: "Recall with a failed layer", systemPrompt: "Base instructions" },
+      ctx,
+    );
+    expect(before).toEqual({
+      systemPrompt: "Base instructions\n\n<tdai_recalled_memory>core and scenario context</tdai_recalled_memory>",
+    });
+
+    await call(handlers, "agent_end", {
+      messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Partial answer" }] }],
+    });
+    await call(handlers, "agent_settled", {}, ctx);
+    const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+    expect(captured).toContainEqual({ role: "assistant", content: "Partial answer" });
+  });
+
   it("returns control to Pi so the answer model can run when Memory never settles", async () => {
     const offlineConfig = {
       ...config,
