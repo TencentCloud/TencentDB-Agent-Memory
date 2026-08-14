@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
@@ -152,18 +152,41 @@ export async function pullProfilesToLocal(
     }
 
     const localBlocksDir = path.join(dataDir, "scene_blocks");
-    await fs.rm(localBlocksDir, { recursive: true, force: true });
     await fs.mkdir(path.dirname(localBlocksDir), { recursive: true });
+
+    // Swap scene_blocks via a backup dir so the original is preserved if the
+    // rename fails (disk full / permissions / EXDEV). Previously we deleted
+    // localBlocksDir first and then renamed — a non-race rename failure left
+    // local scene blocks gone until the next L2 extraction regenerated them.
+    const backupDir = `${localBlocksDir}.old-${randomBytes(4).toString("hex")}`;
+    let movedAside = false;
     try {
-      await fs.rename(tempBlocksDir, localBlocksDir);
-    } catch (err) {
-      if (isRenameRaceError(err)) {
-        // Another concurrent pull already wrote scene_blocks — ours is redundant.
-        // Both pulls fetched the same remote snapshot, so the other result is equivalent.
-        logger.debug?.(`[memory-tdai][profile-sync] scene_blocks rename lost race (${(err as NodeJS.ErrnoException).code}), using existing`);
-        return baseline;
+      try {
+        await fs.rename(localBlocksDir, backupDir);
+        movedAside = true;
+      } catch (err) {
+        // ENOENT just means there was no existing scene_blocks — proceed to
+        // install the new one. Anything else is a real failure.
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
-      throw err;
+      try {
+        await fs.rename(tempBlocksDir, localBlocksDir);
+      } catch (err) {
+        if (isRenameRaceError(err)) {
+          // Another concurrent pull already installed scene_blocks — ours is
+          // redundant. Both pulls fetched the same remote snapshot. Don't
+          // restore our backup (that would clobber the winner's fresh content).
+          logger.debug?.(`[memory-tdai][profile-sync] scene_blocks rename lost race (${(err as NodeJS.ErrnoException).code}), using existing`);
+          return baseline;
+        }
+        // Non-race failure: restore the original so scene_blocks isn't empty.
+        if (movedAside) {
+          await fs.rename(backupDir, localBlocksDir).catch(() => { /* best-effort */ });
+        }
+        throw err;
+      }
+    } finally {
+      if (movedAside) await fs.rm(backupDir, { recursive: true, force: true }).catch(() => { /* best-effort */ });
     }
 
     const tempPersonaPath = path.join(tempDir, "persona.md");

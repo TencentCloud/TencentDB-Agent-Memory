@@ -67,8 +67,13 @@ export interface StandaloneLLMConfig {
 // ============================
 
 function resolveSandboxedPath(workspaceDir: string, relativePath: string): string | null {
-  const resolved = path.resolve(workspaceDir, relativePath);
-  if (!resolved.startsWith(path.resolve(workspaceDir))) {
+  const root = path.resolve(workspaceDir);
+  const resolved = path.resolve(root, relativePath);
+  // Use a trailing-separator-aware prefix check so a workspace like `/data/tdai`
+  // does NOT match a sibling such as `/data/tdai-backup/secrets`. Without the
+  // separator, `startsWith` would pass the latter and let the LLM escape the
+  // sandbox via prompt-injected tool calls.
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     return null;
   }
   return resolved;
