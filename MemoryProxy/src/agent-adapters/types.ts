@@ -20,7 +20,7 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "unknown";
+export type AgentKind = "claude-code" | "codebuddy" | "opencode" | "unknown";
 
 export type RequestKind = "main" | "fork" | "sidequery";
 
@@ -49,4 +49,14 @@ export interface AgentAdapter {
    * 返回 null 表示"content 里没有用户键入的文本"（比如全是 tool_result）。
    */
   extractUserText(content: unknown): string | null;
+
+  /**
+   * 为上游请求生成动态 header（可选）。
+   *
+   * 用于上游 API 需要额外鉴权 header 的场景（如 Zen API 需要 x-opencode-* header）。
+   * 返回的 header 会在 auth header 之前注入（auth header 始终优先级最高）。
+   *
+   * @param sessionKey - 当前会话标识符（可用于生成稳定的 session ID）
+   */
+  headers?(sessionKey?: string): Record<string, string>;
 }

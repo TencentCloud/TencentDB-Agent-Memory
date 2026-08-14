@@ -36,6 +36,12 @@ upstream:
   # 留空则透传客户端原始 API Key。
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
 
+  # ── 全局自定义请求头 ─────────────────────────────────────────────────────────
+  # 这些 header 会被注入到每个上游请求中（auth header 优先级更高，不受影响）。
+  # 适用场景：上游 API 需要额外的鉴权 header（如某些企业内网 LLM 网关）。
+  # headers:
+  #   x-custom-header: "value"
+
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
   # Anthropic 和 OpenAI 协议共用同一张表。
@@ -55,10 +61,12 @@ upstream:
   # 一部分 agent 走服务端 key、另一部分透传客户端自己的 key。
   #
   # 完整优先级（高→低）：
-  #   1. costGuard 内部路由自带的凭据（cheap-model 兜底）
+  #   1. costGuard 内部路由自带的凭据（cheap-model 兜底路由自带凭据）
   #   2. upstream.agents[agent].url + upstream.agents[agent].apiKey
   #   3. costGuard.anthropicUpstream.url（仅 Anthropic 协议）
   #   4. upstream.url + upstream.apiKey（未命中 agent 时的默认）
+  #
+  # Per-Agent 也支持 headers 字段，用于覆盖/补充全局 headers。
   agents: {}
     # claude-code:                                        # 服务端 key 模式
     #   url: "https://claude-upstream.example.com/v1"
@@ -66,6 +74,19 @@ upstream:
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
+
+    # ── OpenCode Zen API（免费模型）示例 ───────────────────────────────────────
+    # Zen API 提供免费模型（如 longcat-2.0-free, deepseek-v4-flash-free 等）。
+    # 需要额外的 x-opencode-* header 才能通过鉴权。
+    #
+    # opencode:
+    #   url: "https://opencode.ai/zen/v1"
+    #   apiKey: "public"
+    #   headers:
+    #     User-Agent: "opencode/1.15.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+    #     x-opencode-client: "cli"
+    #     x-opencode-project: "global"
+    #     # x-opencode-request 和 x-opencode-session 由 proxy 自动生成
 
 
 # ── 日志 ─────────────────────────────────────────────────────────────────────
