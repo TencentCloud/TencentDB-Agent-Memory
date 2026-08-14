@@ -45,6 +45,9 @@ const readGatewayUrl = (env) => {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new ConfigError('TDAI_MEMORY_GATEWAY_URL must be an http or https URL');
   }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new ConfigError('TDAI_MEMORY_GATEWAY_URL must not include userinfo, query, or fragment');
+  }
   return value.replace(/\/+$/, '');
 };
 

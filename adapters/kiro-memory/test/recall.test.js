@@ -116,6 +116,26 @@ test('rejects invalid recall configuration without exposing supplied sensitive v
   }
 });
 
+test('rejects gateway URL credentials, queries, and fragments without echoing them', () => {
+  const unsafeUrls = [
+    { value: 'https://memory-user:memory-password@memory.example.test', secret: 'memory-password' },
+    { value: 'https://memory.example.test/base?access_token=sensitive-query-token', secret: 'sensitive-query-token' },
+    { value: 'https://memory.example.test/base#sensitive-fragment', secret: 'sensitive-fragment' },
+  ];
+
+  for (const { value, secret } of unsafeUrls) {
+    assert.throws(
+      () => loadConfig(requiredEnv({ TDAI_MEMORY_GATEWAY_URL: value })),
+      (error) => (
+        error instanceof ConfigError
+        && error.message === 'TDAI_MEMORY_GATEWAY_URL must not include userinfo, query, or fragment'
+        && error.message.includes(secret) === false
+        && error.message.includes(value) === false
+      ),
+    );
+  }
+});
+
 test('sends exact v3 atomic/core requests and unwraps their data without a session id', async () => {
   const requests = [];
   const server = await startServer(async (request, response) => {
