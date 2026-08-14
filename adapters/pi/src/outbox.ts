@@ -1,7 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ConversationItem } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import type { LoadedConfig } from "./types.js";
 
@@ -43,12 +42,15 @@ export interface OutboxOptions {
   leaseTimeoutMs?: number;
 }
 
-function defaultDirectory(): string {
+async function defaultDirectory(): Promise<string> {
+  // Loaded lazily so importing this module (e.g. from an isolated test
+  // subprocess) does not pull in the full Pi extension runtime.
+  const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
   return join(getAgentDir(), OUTBOX_DIRECTORY);
 }
 
-function directoryFor(options: OutboxOptions): string {
-  return options.directory ?? defaultDirectory();
+async function directoryFor(options: OutboxOptions): Promise<string> {
+  return options.directory ?? (await defaultDirectory());
 }
 
 function scopeFor(config: LoadedConfig): string {
@@ -180,7 +182,7 @@ export async function enqueueCapture(
   messages: ConversationItem[],
   options: OutboxOptions = {},
 ): Promise<CaptureRecord> {
-  const directory = directoryFor(options);
+  const directory = await directoryFor(options);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const record: CaptureRecord = {
     version: OUTBOX_VERSION,
@@ -201,7 +203,7 @@ export async function flushOutbox(
   deliver: (record: CaptureRecord) => Promise<void>,
   options: OutboxOptions = {},
 ): Promise<FlushResult> {
-  const directory = directoryFor(options);
+  const directory = await directoryFor(options);
   const previous = activeFlushes.get(directory) ?? Promise.resolve({ delivered: 0, pending: 0, invalid: 0, dead: 0 });
   const queued = previous.catch(() => undefined).then(async () => flushOutboxOnce(config, deliver, directory, options));
   activeFlushes.set(directory, queued);
@@ -283,7 +285,7 @@ async function flushOutboxOnce(
 }
 
 export async function outboxCount(config: LoadedConfig, options: OutboxOptions = {}): Promise<number> {
-  const directory = directoryFor(options);
+  const directory = await directoryFor(options);
   const expectedScope = scopeFor(config);
   const files = [...await listRecordFiles(directory), ...await listLeasedRecordFiles(directory)];
   let count = 0;
