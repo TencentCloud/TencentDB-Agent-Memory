@@ -455,6 +455,10 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `pipeline.l1IdleTimeoutSeconds` | `600` | 用户停止对话多久后触发 L1 |
 | `pipeline.l2MinIntervalSeconds` | `900` | 同 session 两次 L2 之间的最小间隔 |
 | `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.taskSelector.enabled` | `false` | 检索后由 LLM 筛选能推进当前任务的记忆 |
+| `recall.taskSelector.candidateMultiplier` | `3` | 候选池相对 `recall.maxResults` 的倍数（限制在 1–10，最多 100 条） |
+| `recall.taskSelector.timeoutMs` | `3000` | 选择器 LLM 超时；失败时回退到原检索排序 |
+| `recall.taskSelector.model` | — | 可选的 `provider/model`；默认使用宿主模型 |
 | `extraction.enableDedup` | `true` | L1 向量去重 / 冲突检测 |
 | `capture.excludeAgents` | `[]` | Glob 模式排除特定 Agent（如 `bench-judge-*`） |
 | `capture.l0l1RetentionDays` | `0` | L0/L1 本地文件保留天数，`0` = 永不清理 |
@@ -462,6 +466,8 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `offload.aggressiveCompressRatio` | `0.85` | 激进压缩触发比例 |
 | `offload.mmdMaxTokenRatio` | `0.2` | MMD 注入 token 预算比例 |
 | `bm25.language` | `"zh"` | 分词语言：`zh`（jieba） / `en` |
+
+任务感知选择器只影响自动注入的 L1 记忆，不改变 `tdai_memory_search` 的结果。它接收候选记忆 ID 和文本，只返回 ID；当 runner 不可用、调用超时或输出校验失败时，会 fail-open 回退到原始 RRF/检索 Top-K。请确保 `recall.timeoutMs` 足以覆盖检索和 `recall.taskSelector.timeoutMs`。
 
 </details>
 
