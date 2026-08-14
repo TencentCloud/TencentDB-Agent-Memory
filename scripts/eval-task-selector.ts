@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { StandaloneLLMRunnerFactory } from "../src/adapters/standalone/llm-runner.js";
 import type { Logger, LLMRunner } from "../src/core/types.js";
+import { normalizeDisableThinking, type DisableThinkingStrategy } from "../src/utils/no-think-fetch.js";
 import {
   selectTaskAwareMemories,
   type TaskAwareMemoryCandidate,
@@ -34,6 +35,9 @@ interface RunResult extends Scores {
   baseline: Scores;
   selectedIds: string[];
   fallback: boolean;
+  fallbackReason?: string;
+  rawOutputLength: number;
+  rawOutput?: string;
   latencyMs: number;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
@@ -62,22 +66,32 @@ async function main(): Promise<void> {
   const model = requiredEnv("TDAI_EVAL_MODEL");
   const runs = positiveInteger(process.env.TDAI_EVAL_RUNS, 3);
   const timeoutMs = positiveInteger(process.env.TDAI_EVAL_TIMEOUT_MS, 3000);
+  const delayMs = nonNegativeInteger(process.env.TDAI_EVAL_DELAY_MS, 0);
+  const disableThinking = parseDisableThinking(process.env.TDAI_EVAL_DISABLE_THINKING);
+  const captureRawOutput = parseBoolean(process.env.TDAI_EVAL_CAPTURE_RAW_OUTPUT);
   const results: RunResult[] = [];
+  let requestCount = 0;
 
   const runner = new StandaloneLLMRunnerFactory({
-    config: { baseUrl, apiKey, model, timeoutMs, maxTokens: 256 },
+    config: { baseUrl, apiKey, model, timeoutMs, maxTokens: 256, disableThinking },
   }).createRunner({ enableTools: false });
 
   for (let run = 1; run <= runs; run++) {
     for (const testCase of cases) {
+      if (requestCount > 0 && delayMs > 0) await delay(delayMs);
+      requestCount++;
+
       let fallback = false;
+      let fallbackReason: string | undefined;
       let inputChars = 0;
       let outputChars = 0;
+      let rawOutput = "";
       const logger: Logger = {
         info: () => {},
         error: (message) => console.error(message),
         warn: (message) => {
           fallback = true;
+          fallbackReason = message;
           console.warn(`[${testCase.name}] ${message}`);
         },
       };
@@ -86,6 +100,7 @@ async function main(): Promise<void> {
           inputChars += params.prompt.length + (params.systemPrompt?.length ?? 0);
           const output = await runner.run(params);
           outputChars += output.length;
+          rawOutput = output;
           return output;
         },
       };
@@ -107,6 +122,9 @@ async function main(): Promise<void> {
         ...scoreSelection(testCase, selected),
         selectedIds: selected.map((candidate) => candidate.memoryId),
         fallback,
+        fallbackReason,
+        rawOutputLength: rawOutput.length,
+        rawOutput: captureRawOutput && fallback ? rawOutput : undefined,
         latencyMs: performance.now() - startedAt,
         estimatedInputTokens: Math.ceil(inputChars / 4),
         estimatedOutputTokens: Math.ceil(outputChars / 4),
@@ -114,7 +132,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const report = buildReport(fixturePath, model, results);
+  const report = buildReport(fixturePath, model, results, {
+    runs,
+    timeoutMs,
+    delayMs,
+    disableThinking,
+    captureRawOutput,
+  });
   printReport(report);
 
   const outputPath = process.env.TDAI_EVAL_OUTPUT;
@@ -183,7 +207,18 @@ function dcg(relevances: number[]): number {
   return relevances.reduce((sum, relevance, index) => sum + ((2 ** relevance) - 1) / Math.log2(index + 2), 0);
 }
 
-function buildReport(fixturePath: string, model: string, results: RunResult[]) {
+function buildReport(
+  fixturePath: string,
+  model: string,
+  results: RunResult[],
+  settings: {
+    runs: number;
+    timeoutMs: number;
+    delayMs: number;
+    disableThinking: DisableThinkingStrategy;
+    captureRawOutput: boolean;
+  },
+) {
   const selector = aggregateScores(results);
   const baseline = aggregateScores(results.map((result) => result.baseline));
   const latencies = results.map((result) => result.latencyMs).sort((a, b) => a - b);
@@ -191,6 +226,7 @@ function buildReport(fixturePath: string, model: string, results: RunResult[]) {
     generatedAt: new Date().toISOString(),
     fixturePath,
     model,
+    settings,
     samples: results.length,
     baseline,
     selector,
@@ -225,6 +261,15 @@ function printReport(report: ReturnType<typeof buildReport>): void {
   console.log(`Fallback rate: ${(report.fallbackRate * 100).toFixed(1)}%`);
   console.log(`Latency: p50=${report.latencyMs.p50.toFixed(0)}ms, p95=${report.latencyMs.p95.toFixed(0)}ms`);
   console.log(`Estimated tokens: input=${report.estimatedTokens.input}, output=${report.estimatedTokens.output}`);
+  const fallbackReasons = new Map<string, number>();
+  for (const result of report.results) {
+    if (!result.fallback) continue;
+    const reason = result.fallbackReason ?? "unknown";
+    fallbackReasons.set(reason, (fallbackReasons.get(reason) ?? 0) + 1);
+  }
+  if (fallbackReasons.size > 0) {
+    console.table([...fallbackReasons].map(([reason, count]) => ({ count, reason })));
+  }
 }
 
 function formatScoreRow(score: Scores & { case?: string }) {
@@ -248,6 +293,25 @@ function mean(values: number[]): number {
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function parseBoolean(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+function parseDisableThinking(value: string | undefined): DisableThinkingStrategy {
+  if (!value || value === "0" || value.toLowerCase() === "false") return false;
+  if (value === "1" || value.toLowerCase() === "true") return normalizeDisableThinking(true);
+  return normalizeDisableThinking(value);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function requiredEnv(name: string): string {

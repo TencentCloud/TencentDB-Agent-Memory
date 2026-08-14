@@ -480,7 +480,7 @@ TDAI_EVAL_RUNS=3 \
 npm run eval:task-selector
 ```
 
-评测器会以原始检索 Top-K 为基线，对比 Precision@K、Recall@K、nDCG@K、关键记忆召回率、回退率、延迟和估算 token 用量。设置 `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` 可保存报告。内置案例仅用于示范；生产决策前建议扩充到 30–50 个具有代表性且经过人工标注的案例。API 凭据只从环境变量读取，真实模型评测不会进入普通 CI。
+评测器会以原始检索 Top-K 为基线，对比 Precision@K、Recall@K、nDCG@K、关键记忆召回率、回退率、延迟和估算 token 用量。设置 `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` 可保存报告。稳定性诊断时，`TDAI_EVAL_DISABLE_THINKING` 接受与 `llm.disableThinking` 相同的策略名，`TDAI_EVAL_DELAY_MS` 可设置请求间隔，`TDAI_EVAL_CAPTURE_RAW_OUTPUT=1` 会把失败的模型原始输出写入本地报告。由于评测记忆可能包含敏感文本，原始输出默认不记录。内置案例仅用于示范；生产决策前建议扩充到 30–50 个具有代表性且经过人工标注的案例。API 凭据只从环境变量读取，真实模型评测不会进入普通 CI。
 
 </details>
 

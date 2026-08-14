@@ -479,7 +479,7 @@ TDAI_EVAL_RUNS=3 \
 npm run eval:task-selector
 ```
 
-The evaluator compares the selector with the original retrieval Top-K using Precision@K, Recall@K, nDCG@K, critical-memory recall, fallback rate, latency, and estimated token usage. Set `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` to save a report. The included cases are examples; use 30–50 representative, manually labelled cases before making a production decision. API credentials are read from environment variables only, and real-model evaluation is not part of normal CI.
+The evaluator compares the selector with the original retrieval Top-K using Precision@K, Recall@K, nDCG@K, critical-memory recall, fallback rate, latency, and estimated token usage. Set `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` to save a report. For stability diagnosis, `TDAI_EVAL_DISABLE_THINKING` accepts the same strategy names as `llm.disableThinking`, `TDAI_EVAL_DELAY_MS` adds a delay between requests, and `TDAI_EVAL_CAPTURE_RAW_OUTPUT=1` stores failed model outputs in the local report. Raw output capture is opt-in because evaluation memories may contain sensitive text. The included cases are examples; use 30–50 representative, manually labelled cases before making a production decision. API credentials are read from environment variables only, and real-model evaluation is not part of normal CI.
 
 </details>
 
