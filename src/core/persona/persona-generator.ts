@@ -8,6 +8,7 @@ import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
+import type { Checkpoint } from "../../utils/checkpoint.js";
 import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import { buildPersonaPrompt } from "../prompts/persona-generation.js";
@@ -56,13 +57,18 @@ export class PersonaGenerator {
 
   /**
    * Execute local persona generation without advancing checkpoint.
+   * `checkpointSnapshot` keeps prompt input and completion coverage on the
+   * same generation-start view when the caller needs race-safe accounting.
    */
-  async generateLocalPersona(triggerReason?: string): Promise<boolean> {
+  async generateLocalPersona(
+    triggerReason?: string,
+    checkpointSnapshot?: Checkpoint,
+  ): Promise<boolean> {
     const startMs = Date.now();
     this.logger?.debug?.(`${TAG} Starting generation: reason="${triggerReason ?? "none"}"`);
 
     const cpManager = new CheckpointManager(this.dataDir);
-    const cp = await cpManager.read();
+    const cp = checkpointSnapshot ?? await cpManager.read();
     this.logger?.debug?.(`${TAG} Checkpoint: total_processed=${cp.total_processed}, last_persona_at=${cp.last_persona_at}`);
 
     const personaPath = path.join(this.dataDir, "persona.md");
@@ -207,12 +213,16 @@ export class PersonaGenerator {
    * Backward-compatible wrapper: local generation + checkpoint advance.
    */
   async generate(triggerReason?: string): Promise<boolean> {
-    const updated = await this.generateLocalPersona(triggerReason);
+    const sceneUpdatedThrough = new Date().toISOString();
+    const cpManager = new CheckpointManager(this.dataDir);
+    const baseline = await cpManager.read();
+    const updated = await this.generateLocalPersona(triggerReason, baseline);
     if (!updated) return false;
 
-    const cpManager = new CheckpointManager(this.dataDir);
-    const cp = await cpManager.read();
-    await cpManager.markPersonaGenerated(cp.total_processed);
+    await cpManager.markPersonaGenerated(baseline.total_processed, {
+      memoriesSinceLastPersona: baseline.memories_since_last_persona,
+      sceneUpdatedThrough,
+    });
     return true;
   }
 }
