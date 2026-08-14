@@ -1,0 +1,8 @@
+{
+  "version": "v1",
+  "hooks": {
+    "UserPromptSubmit": [{ "name": "tdai-memory-recall", "enabled": true, "command": "node \"<ADAPTER_ROOT>/src/cli.js\" recall", "timeout": 5 }],
+    "PostToolUse": [{ "name": "tdai-memory-tool-trace", "enabled": true, "matcher": "*", "command": "node \"<ADAPTER_ROOT>/src/cli.js\" post-tool-use", "timeout": 5 }],
+    "Stop": [{ "name": "tdai-memory-stop", "enabled": true, "command": "node \"<ADAPTER_ROOT>/src/cli.js\" stop", "timeout": 5 }]
+  }
+}
