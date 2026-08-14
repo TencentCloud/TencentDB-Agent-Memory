@@ -1,0 +1,20 @@
+# Hook commands run through PowerShell on Windows, where `${WHALE_PLUGIN_ROOT}`
+# is an (undefined) PowerShell variable and expands to an empty string. Resolve
+# the plugin root from the environment inside Node instead, so the same command
+# works under PowerShell, bash and sh alike.
+
+[[hooks.SessionStart]]
+command = "node -e \"import(require('node:url').pathToFileURL((process.env.WHALE_PLUGIN_ROOT||'.')+'/scripts/health.js').href).catch(()=>process.exit(0))\""
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+command = "node -e \"import(require('node:url').pathToFileURL((process.env.WHALE_PLUGIN_ROOT||'.')+'/scripts/recall.js').href).catch(()=>process.exit(0))\""
+timeout = 15
+
+[[hooks.Stop]]
+command = "node -e \"import(require('node:url').pathToFileURL((process.env.WHALE_PLUGIN_ROOT||'.')+'/scripts/capture.js').href).catch(()=>process.exit(0))\""
+timeout = 30
+
+[[hooks.SessionEnd]]
+command = "node -e \"import(require('node:url').pathToFileURL((process.env.WHALE_PLUGIN_ROOT||'.')+'/scripts/session-end.js').href).catch(()=>process.exit(0))\""
+timeout = 10
