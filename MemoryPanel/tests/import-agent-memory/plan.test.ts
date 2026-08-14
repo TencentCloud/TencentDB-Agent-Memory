@@ -189,7 +189,7 @@ describe('CLI resume', () => {
     const stateFile = join(root, 'state.json');
     await mkdir(memories);
     await writeFile(join(memories, 'MEMORY.md'), '# Task Group: Resume\nOne fact');
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       new Response(JSON.stringify({ code: 0, data: { accepted_count: 1 } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -211,11 +211,68 @@ describe('CLI resume', () => {
 
     try {
       await run(args);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+      expect(String(requestUrl)).toBe('http://example.invalid/api/v1/chat-memory/import');
+      expect(requestInit?.method).toBe('POST');
+      expect(requestInit?.headers).toMatchObject({
+        'Content-Type': 'application/json',
+        'X-Tdai-Service-Id': 'default',
+        'X-Tdai-User-Key': 'test-user-key',
+      });
+      const requestBody = JSON.parse(String(requestInit?.body)) as {
+        team_id: string;
+        agent_id: string;
+        session_id: string;
+        messages: Array<{ role: string; content: string }>;
+      };
+      expect(requestBody).toMatchObject({ team_id: 'team-a', agent_id: 'agent-a' });
+      expect(requestBody.session_id).toMatch(/^import-codex-[0-9a-f]{16}$/);
+      expect(requestBody.messages).toHaveLength(1);
+      expect(requestBody.messages[0]).toMatchObject({ role: 'user' });
+      expect(requestBody.messages[0]?.content).toContain('[Imported memory: codex/');
+
       await run(args);
       const state = JSON.parse(await readFile(stateFile, 'utf8')) as { completed: object };
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(Object.keys(state.completed)).toHaveLength(1);
       expect((await stat(stateFile)).mode & 0o777).toBe(0o600);
+    } finally {
+      if (previousUserKey === undefined) delete process.env.TDAI_USER_KEY;
+      else process.env.TDAI_USER_KEY = previousUserKey;
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to checkpoint an API response without accepted_count', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-memory-import-contract-'));
+    const memories = join(root, 'memories');
+    const stateFile = join(root, 'state.json');
+    await mkdir(memories);
+    await writeFile(join(memories, 'MEMORY.md'), '# Task Group: Contract\nOne fact');
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({ code: 0, data: { imported: true } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+    const previousUserKey = process.env.TDAI_USER_KEY;
+    process.env.TDAI_USER_KEY = 'test-user-key';
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    try {
+      await expect(run([
+        '--source', 'codex',
+        '--codex-home', root,
+        '--team-id', 'team-a',
+        '--agent-id', 'agent-a',
+        '--panel-url', 'http://example.invalid',
+        '--state-file', stateFile,
+        '--yes',
+      ])).rejects.toThrow('omitted accepted_count');
+      await expect(readFile(stateFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       if (previousUserKey === undefined) delete process.env.TDAI_USER_KEY;
       else process.env.TDAI_USER_KEY = previousUserKey;

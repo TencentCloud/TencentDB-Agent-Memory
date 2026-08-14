@@ -111,6 +111,7 @@ CLI 支持以下已经沉淀为 Markdown 的记忆来源，不读取原始会话
 - Codex：`$CODEX_HOME/memories/{memory_summary.md,MEMORY.md}`；
 - WorkBuddy/CodeBuddy：`~/.workbuddy/MEMORY.md`，以及显式 workspace 下的 `.workbuddy/memory/*.md`；
 - Claude Code Auto Memory：`~/.claude/projects/*/memory/*.md`，并支持用户设置中的 `autoMemoryDirectory`。
+  该路径契约来自 Claude Code 官方文档；当前 scanner 通过合成目录测试，尚未用本机真实样本验证。
 
 默认扫描全部来源并只生成 dry-run 计划。WorkBuddy/CodeBuddy 的 workspace 可以重复指定：
 
