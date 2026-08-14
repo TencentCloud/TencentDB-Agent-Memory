@@ -271,6 +271,68 @@ describe("Pi extension lifecycle", () => {
     }
   });
 
+  it("keeps the answer loop running when one search tool times out while another succeeds", async () => {
+    const offlineConfig = { ...config, recall: { ...config.recall, deadlineMs: 100 } };
+    mocks.loadConfig.mockResolvedValue({ ok: true, config: offlineConfig });
+    mocks.createClients.mockReturnValue({
+      memory: {
+        searchAtomic: vi.fn(() => new Promise(() => undefined)),
+        searchConversation: vi.fn(async () => ({
+          messages: [{ role: "user", content: "past preference", score: 0.9 }],
+        })),
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      const answerModel = vi
+        .fn()
+        .mockResolvedValueOnce({ toolName: "tdai_memory_search", params: { query: "preference" } })
+        .mockResolvedValueOnce({ toolName: "tdai_conversation_search", params: { query: "past" } })
+        .mockResolvedValueOnce("final answer");
+      const { handlers, tools, ctx } = installExtension();
+      await call(handlers, "session_start", {}, ctx);
+
+      const before = await call(
+        handlers,
+        "before_agent_start",
+        { prompt: "Recall memory", systemPrompt: "Base instructions" },
+        ctx,
+      );
+      const systemPrompt = (before as { systemPrompt: string }).systemPrompt;
+
+      // The model's first search times out: the tool returns the fail-open
+      // message instead of throwing, so the answer loop can continue.
+      const first = await answerModel(systemPrompt);
+      const stuckTool = tools.get(first.toolName);
+      const stuckPromise = stuckTool?.execute("call-1", first.params, undefined, undefined, ctx);
+      await vi.advanceTimersByTimeAsync(100);
+      const stuckResult = await stuckPromise;
+      expect(stuckResult).toEqual(
+        expect.objectContaining({
+          content: [expect.objectContaining({ text: expect.stringContaining("Continue without memory.") })],
+        }),
+      );
+
+      // The second search succeeds and reaches the model normally.
+      const second = await answerModel(systemPrompt, stuckResult);
+      const liveTool = tools.get(second.toolName);
+      const liveResult = await liveTool?.execute("call-2", second.params, undefined, undefined, ctx);
+      expect(JSON.stringify(liveResult)).toContain("past preference");
+      await answerModel(systemPrompt, liveResult);
+
+      // The turn still completes and settles into a capture.
+      await call(handlers, "agent_end", {
+        messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "final answer" }] }],
+      });
+      await call(handlers, "agent_settled", {}, ctx);
+      expect(mocks.enqueueCapture).toHaveBeenCalledTimes(1);
+      const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+      expect(captured).toContainEqual({ role: "assistant", content: "final answer" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not store an earlier response when the final run fails", async () => {
     const { handlers, ctx } = installExtension();
     await call(handlers, "session_start", {}, ctx);
