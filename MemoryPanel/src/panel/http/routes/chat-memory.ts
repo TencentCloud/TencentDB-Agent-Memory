@@ -1585,12 +1585,7 @@ function parseChatMemoryAssetId(assetId: string): { teamId: string; agentId: str
   }
   // 旧版格式：agent id 无 `agt` 前缀，按最后一个 '-' 分割
   const dash = inner.lastIndexOf('-');
-  if (dash <= 0) return null;
-  return {
-    teamId: inner.slice(0, dash),
-    agentId: inner.slice(dash + 1),
-  };
-}
+  if (dash <= 0 || dash === inner.length - 1) return null;
   return {
     teamId: inner.slice(0, dash),
     agentId: inner.slice(dash + 1),
