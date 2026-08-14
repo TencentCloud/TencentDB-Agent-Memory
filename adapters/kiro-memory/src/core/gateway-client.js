@@ -55,11 +55,12 @@ export class GatewayClient {
       let envelope;
       try {
         envelope = await response.json();
-      } catch {
-        if (controller.signal.aborted) {
+      } catch (error) {
+        if (controller.signal.aborted || error?.name === 'AbortError') {
           throw new GatewayError('Gateway request failed', { retryable: true });
         }
-        throw invalidEnvelope(response.status);
+        if (error instanceof SyntaxError) throw invalidEnvelope(response.status);
+        throw new GatewayError('Gateway request failed', { retryable: true });
       }
       if (!isObject(envelope) || envelope.code !== 0 || !Object.hasOwn(envelope, 'data')) {
         throw invalidEnvelope(response.status);

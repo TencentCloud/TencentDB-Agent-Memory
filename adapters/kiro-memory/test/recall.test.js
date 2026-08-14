@@ -264,6 +264,27 @@ test('keeps the timeout active while a gateway response body is still streaming'
   }
 });
 
+test('classifies a terminated gateway response stream as a retryable safe failure', async () => {
+  const server = await startServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.write('{"code":0,"data":');
+    setTimeout(() => response.socket.destroy(), 10);
+  });
+  try {
+    const client = new GatewayClient(configFor(server.url, { TDAI_MEMORY_API_KEY: 'private-key' }));
+    await assert.rejects(client.coreRead(), (error) => {
+      assert.equal(error instanceof GatewayError, true);
+      assert.equal(error.retryable, true);
+      assert.equal(error.message, 'Gateway request failed');
+      assert.equal(error.message.includes('private-key'), false);
+      assert.equal(error.message.includes('body-stream-sensitive'), false);
+      return true;
+    });
+  } finally {
+    await server.close();
+  }
+});
+
 test('formats recalled atomic and core memory inside the complete untrusted boundary', async () => {
   const calls = [];
   const service = new RecallService({
