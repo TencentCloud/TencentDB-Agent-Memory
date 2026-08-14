@@ -455,6 +455,10 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `pipeline.l1IdleTimeoutSeconds` | `600` | 用户停止对话多久后触发 L1 |
 | `pipeline.l2MinIntervalSeconds` | `900` | 同 session 两次 L2 之间的最小间隔 |
 | `recall.timeoutMs` | `5000` | 召回超时阈值，超时跳过注入不阻塞对话 |
+| `recall.taskSelector.enabled` | `false` | 检索后由 LLM 筛选能推进当前任务的记忆 |
+| `recall.taskSelector.candidateMultiplier` | `3` | 候选池相对 `recall.maxResults` 的倍数（限制在 1–10，最多 100 条） |
+| `recall.taskSelector.timeoutMs` | `3000` | 选择器 LLM 超时；失败时回退到原检索排序 |
+| `recall.taskSelector.model` | — | 可选的 `provider/model`；默认使用宿主模型 |
 | `extraction.enableDedup` | `true` | L1 向量去重 / 冲突检测 |
 | `capture.excludeAgents` | `[]` | Glob 模式排除特定 Agent（如 `bench-judge-*`） |
 | `capture.l0l1RetentionDays` | `0` | L0/L1 本地文件保留天数，`0` = 永不清理 |
@@ -462,6 +466,21 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `offload.aggressiveCompressRatio` | `0.85` | 激进压缩触发比例 |
 | `offload.mmdMaxTokenRatio` | `0.2` | MMD 注入 token 预算比例 |
 | `bm25.language` | `"zh"` | 分词语言：`zh`（jieba） / `en` |
+
+任务感知选择器只影响自动注入的 L1 记忆，不改变 `tdai_memory_search` 的结果。它接收候选记忆 ID 和文本，只返回 ID；当 runner 不可用、调用超时或输出校验失败时，会 fail-open 回退到原始 RRF/检索 Top-K。请确保 `recall.timeoutMs` 足以覆盖检索和 `recall.taskSelector.timeoutMs`。
+
+如需使用真实 OpenAI-compatible 模型验证该可选能力，可先在不调用 API 的情况下检查仓库内置样例，再显式运行评测：
+
+```bash
+npm run eval:task-selector -- --dry-run
+TDAI_EVAL_BASE_URL="https://api.example.com/v1" \
+TDAI_EVAL_API_KEY="..." \
+TDAI_EVAL_MODEL="model-name" \
+TDAI_EVAL_RUNS=3 \
+npm run eval:task-selector
+```
+
+评测器会以原始检索 Top-K 为基线，对比 Precision@K、Recall@K、nDCG@K、关键记忆召回率、回退率、延迟和估算 token 用量。设置 `TDAI_EVAL_OUTPUT=benchmark-runs/task-selector.json` 可保存报告。稳定性诊断时，`TDAI_EVAL_DISABLE_THINKING` 接受与 `llm.disableThinking` 相同的策略名，`TDAI_EVAL_DELAY_MS` 可设置请求间隔，`TDAI_EVAL_CAPTURE_RAW_OUTPUT=1` 会把失败的模型原始输出写入本地报告。由于评测记忆可能包含敏感文本，原始输出默认不记录。内置案例仅用于示范；生产决策前建议扩充到 30–50 个具有代表性且经过人工标注的案例。API 凭据只从环境变量读取，真实模型评测不会进入普通 CI。
 
 </details>
 
