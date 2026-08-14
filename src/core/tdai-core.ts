@@ -514,6 +514,7 @@ export class TdaiCore {
     this.schedulerStartPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        await checkpoint.recalibrate({ vectorStore: this.vectorStore });
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);
