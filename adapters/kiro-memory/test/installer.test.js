@@ -72,3 +72,15 @@ test('manual template is exact v1 hook JSON and contains no credential fields', 
   assert.equal(JSON.stringify(template).toLowerCase().includes('token'), false);
   assert.equal(JSON.stringify(template).toLowerCase().includes('api_key'), false);
 });
+
+test('installer and doctor use safe failure output for missing configuration', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-missing-config-'));
+  try {
+    const env = { ...process.env };
+    delete env.TDAI_MEMORY_GATEWAY_URL; delete env.TDAI_MEMORY_SERVICE_ID; delete env.TDAI_MEMORY_USER_ID;
+    const installer = run('install', project, env);
+    assert.notEqual(installer.status, 0); assert.equal(installer.stdout, ''); assert.equal(installer.stderr.includes('TDAI_MEMORY_'), false);
+    const doctor = run('doctor', project, env);
+    assert.notEqual(doctor.status, 0); assert.equal(doctor.stdout.includes('config: fail'), true); assert.equal(doctor.stderr, '');
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
