@@ -4,7 +4,11 @@ export default defineConfig({
   test: {
     environment: "node",
     pool: "forks",
-    include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
+    include: [
+      "src/**/*.test.ts",
+      "__tests__/**/*.test.ts",
+      "packages/tdai-memory-agent-sdk/src/**/*.test.ts",
+    ],
     exclude: ["dist/**", "node_modules/**", "**/*.e2e.test.ts"],
     testTimeout: 120_000,
     hookTimeout: 120_000,
@@ -15,9 +19,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
-      include: ["src/**/*.ts", "index.ts"],
+      include: ["src/**/*.ts", "index.ts", "packages/tdai-memory-agent-sdk/src/**/*.ts"],
       exclude: [
         "src/**/*.test.ts",
+        "packages/tdai-memory-agent-sdk/src/**/*.test.ts",
         "dist/**",
         "node_modules/**",
       ],

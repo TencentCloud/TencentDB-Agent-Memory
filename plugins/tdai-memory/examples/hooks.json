@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=SessionStart TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=0 TDAI_USER_ID=codex TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 python3 -m tdai_memory_cli.hook session-start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=UserPromptSubmit TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=0 TDAI_USER_ID=codex TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 python3 -m tdai_memory_cli.hook prefetch",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=Stop TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=0 TDAI_USER_ID=codex TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 python3 -m tdai_memory_cli.hook sync-turn",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
