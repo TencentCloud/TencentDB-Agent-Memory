@@ -11,6 +11,7 @@ const RECALL_END = "END_TENCENTDB_RECALLED_MEMORY";
 // module-level instances are safe to reuse across calls.
 const RECALL_CLOSED_RE = new RegExp(`${RECALL_BEGIN}[\\s\\S]*?${RECALL_END}`, "g");
 const RECALL_UNCLOSED_RE = new RegExp(`${RECALL_BEGIN}[\\s\\S]*$`);
+const RECALL_MARKER_RE = new RegExp(`${RECALL_BEGIN}|${RECALL_END}`, "g");
 
 export function sensitiveKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]+/g, "_");
@@ -26,6 +27,8 @@ export function redact(value: string): string {
     .replace(RECALL_CLOSED_RE, "[recalled memory omitted]")
     // Unclosed recall block (BEGIN with no END, e.g. truncated by Pi or pasted by user).
     .replace(RECALL_UNCLOSED_RE, "[recalled memory omitted]")
+    // Standalone recall markers that remain after whole-block removal.
+    .replace(RECALL_MARKER_RE, "[recalled memory marker omitted]")
     // Bearer tokens.
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
     // Private key blocks (closed and unclosed).

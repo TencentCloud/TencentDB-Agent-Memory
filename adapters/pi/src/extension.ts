@@ -19,7 +19,7 @@ export interface ExtensionDependencies {
 }
 
 const CAPTURE_ENTRY_TYPE = "tdai-memory-captured";
-const CAPTURE_MARKER_VERSION = 4;
+const CAPTURE_MARKER_VERSION = 5;
 const MAX_PENDING = 64;
 const MAX_RETRIES = 5;
 const MAX_BACKOFF_MS = 30_000;
@@ -91,13 +91,19 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
       return merged;
     };
 
-    const persistPending = (key: string, status: CaptureStatus, turn: CaptureTurn): void => {
+    const persistPending = (
+      key: string,
+      status: CaptureStatus,
+      turn: CaptureTurn,
+      retries: number,
+    ): void => {
       try {
         pi.appendEntry(CAPTURE_ENTRY_TYPE, {
           version: CAPTURE_MARKER_VERSION,
           key,
           l0: status.l0,
           skill: status.skill,
+          retries,
           turn,
         });
       } catch (error) {
@@ -107,13 +113,19 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
 
     // Compact status marker (no turn payload): written once per turn on completion or
     // partial progress, so each turn yields at most 2 entries (pending + status).
-    const persistStatus = (key: string, status: CaptureStatus, dead = false): void => {
+    const persistStatus = (
+      key: string,
+      status: CaptureStatus,
+      retries: number,
+      dead = false,
+    ): void => {
       try {
         pi.appendEntry(CAPTURE_ENTRY_TYPE, {
           version: CAPTURE_MARKER_VERSION,
           key,
           l0: status.l0,
           skill: status.skill,
+          retries,
           dead,
         });
       } catch (error) {
@@ -137,7 +149,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
       if (oldest) {
         const item = pending.get(oldest);
         pending.delete(oldest);
-        if (item) persistStatus(oldest, item.status, true);
+        if (item) persistStatus(oldest, item.status, item.retries, true);
         logger.warn("[tdai-memory] pending queue full; dropped oldest capture " + oldest);
       }
     };
@@ -171,7 +183,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         item.status = status;
         if (status.l0 && status.skill) {
           pending.delete(key);
-          persistStatus(key, status);
+          persistStatus(key, status, item.retries);
           recordSuccess();
           setStatus(ctx, "memory: synced");
         } else if (turnFailed) {
@@ -180,12 +192,12 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           item.retries += 1;
           if (item.retries >= MAX_RETRIES) {
             pending.delete(key);
-            persistStatus(key, status, true);
+            persistStatus(key, status, item.retries, true);
             logger.warn(
               "[tdai-memory] giving up on turn " + key + " after " + MAX_RETRIES + " retries",
             );
           } else {
-            persistStatus(key, status);
+            persistStatus(key, status, item.retries);
             // A partial success means the service is reachable: reset backoff so the
             // healthy pipeline is not stalled. A full failure escalates backoff.
             if (status.l0 || status.skill) recordSuccess();
@@ -214,6 +226,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
       };
       const turnsByKey = new Map<string, CaptureTurn>();
       const statusesByKey = new Map<string, CaptureStatus>();
+      const retriesByKey = new Map<string, number>();
       const deadKeys = new Set<string>();
       for (const entry of manager.getBranch?.() ?? ctx.sessionManager.getEntries()) {
         if (entry.type !== "custom" || entry.customType !== CAPTURE_ENTRY_TYPE) continue;
@@ -225,6 +238,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
               skill?: unknown;
               turn?: unknown;
               dead?: unknown;
+              retries?: unknown;
             }
           | undefined;
         if (!data || typeof data.key !== "string") continue;
@@ -232,6 +246,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           deadKeys.add(data.key);
           turnsByKey.delete(data.key);
           statusesByKey.delete(data.key);
+          retriesByKey.delete(data.key);
           continue;
         }
         deadKeys.delete(data.key);
@@ -239,12 +254,23 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           turnsByKey.set(data.key, data.turn as CaptureTurn);
         }
         const isCurrent =
-          data.version === CAPTURE_MARKER_VERSION || data.version === 3 || data.version === 2;
+          data.version === CAPTURE_MARKER_VERSION ||
+          data.version === 4 ||
+          data.version === 3 ||
+          data.version === 2;
         const prior = statusesByKey.get(data.key);
         const next = isCurrent
           ? { l0: prior?.l0 === true || data.l0 === true, skill: prior?.skill === true || data.skill === true }
           : { l0: true, skill: prior?.skill === true };
         statusesByKey.set(data.key, next);
+        const entryRetries =
+          data.version === CAPTURE_MARKER_VERSION &&
+          typeof data.retries === "number" &&
+          Number.isInteger(data.retries) &&
+          data.retries >= 0
+            ? data.retries
+            : 0;
+        retriesByKey.set(data.key, Math.max(retriesByKey.get(data.key) ?? 0, entryRetries));
       }
       for (const [key, status] of statusesByKey) {
         if (!deadKeys.has(key)) rememberCaptured(key, status);
@@ -253,7 +279,11 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         if (deadKeys.has(key)) continue;
         const status = captured.get(key);
         if (status && (!status.l0 || !status.skill)) {
-          pending.set(key, { turn, status: { l0: status.l0, skill: status.skill }, retries: 0 });
+          pending.set(key, {
+            turn,
+            status: { l0: status.l0, skill: status.skill },
+            retries: retriesByKey.get(key) ?? 0,
+          });
         }
       }
       setStatus(ctx, "memory: on");
@@ -300,7 +330,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
           if (!status.l0 || !status.skill) {
             if (pending.size >= MAX_PENDING) evictOldestPending();
             pending.set(key, { turn, status: { l0: status.l0, skill: status.skill }, retries: 0 });
-            persistPending(key, status, turn);
+            persistPending(key, status, turn, 0);
           }
         }
       }

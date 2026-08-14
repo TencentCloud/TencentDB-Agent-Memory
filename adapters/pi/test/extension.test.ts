@@ -263,6 +263,85 @@ describe("createTencentDbMemoryExtension", () => {
     expect(h.warns.some((w) => w.includes("giving up"))).toBe(true);
   });
 
+  it("preserves the retry budget across session reloads", async () => {
+    const turn = {
+      sessionId: "pi:test-session",
+      user: "old question",
+      assistant: "old answer",
+      capturedAtMs: 1,
+      clientMessageId: "turn-with-four-failures",
+    };
+    const key = turnKey(turn);
+    const h = setup({
+      captureTurn: vi.fn().mockRejectedValue(new Error("down")),
+      captureSkill: vi.fn().mockRejectedValue(new Error("down")),
+    });
+    const ctx = makeCtx([
+      {
+        type: "custom",
+        customType: ENTRY_TYPE,
+        data: {
+          version: 5,
+          key,
+          l0: false,
+          skill: false,
+          retries: 4,
+          turn,
+        },
+      },
+    ]);
+
+    const start = h.pi.handlers.get("session_start")!;
+    await start({}, ctx);
+    await vi.waitFor(() => {
+      expect(h.pi.entries.some((entry) => entry.data.key === key && entry.data.dead === true)).toBe(
+        true,
+      );
+    });
+  });
+
+  it("ignores retry counts on a v4 marker after session reload", async () => {
+    const turn = {
+      sessionId: "pi:test-session",
+      user: "old question",
+      assistant: "old answer",
+      capturedAtMs: 1,
+      clientMessageId: "v4-turn-with-retries",
+    };
+    const key = turnKey(turn);
+    const h = setup({
+      captureTurn: vi.fn().mockRejectedValue(new Error("down")),
+      captureSkill: vi.fn().mockRejectedValue(new Error("down")),
+    });
+    const ctx = makeCtx([
+      {
+        type: "custom",
+        customType: ENTRY_TYPE,
+        data: {
+          version: 4,
+          key,
+          l0: false,
+          skill: false,
+          retries: 4,
+          turn,
+        },
+      },
+    ]);
+
+    const start = h.pi.handlers.get("session_start")!;
+    await start({}, ctx);
+    await vi.waitFor(() => {
+      expect(
+        h.pi.entries.some(
+          (entry) => entry.data.key === key && entry.data.retries === 1 && entry.data.dead === false,
+        ),
+      ).toBe(true);
+    });
+    expect(h.pi.entries.some((entry) => entry.data.key === key && entry.data.dead === true)).toBe(
+      false,
+    );
+  });
+
   it("does not restore a pending marker after a later dead marker", async () => {
     const turn = {
       sessionId: "pi:test-session",

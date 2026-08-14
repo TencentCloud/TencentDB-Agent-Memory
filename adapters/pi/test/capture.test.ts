@@ -70,6 +70,60 @@ describe("buildCaptureTurn", () => {
     const roles = turn?.skillMessages?.map((m) => m.role);
     expect(roles).not.toContain("tool_call");
   });
+
+  it("keeps the serialized skill trace within its UTF-8 byte budget", () => {
+    const messages = [
+      { role: "user", content: "q" },
+      { role: "assistant", content: "汉".repeat(8_000), stopReason: "stop" },
+    ];
+
+    const turn = buildCaptureTurn("s", "q", messages, 8_000, 1_000, 1_024);
+    const skillMessages = turn?.skillMessages ?? [];
+    expect(Buffer.byteLength(JSON.stringify(skillMessages), "utf8")).toBeLessThanOrEqual(1_024);
+    expect(skillMessages.at(-1)).toMatchObject({ role: "assistant" });
+    expect(skillMessages.at(-1)?.content).toContain("[skill trace truncated]");
+  });
+
+  it("retains a paired final tool result within the byte budget when tool metadata is oversized", () => {
+    const toolCallId = "id".repeat(3_000);
+    const toolName = "tool".repeat(3_000);
+    const messages = [
+      { role: "user", content: "q" },
+      { role: "assistant", content: "completed", stopReason: "stop" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: { path: "/tmp" } }],
+      },
+      { role: "toolResult", toolCallId, toolName, content: "result" },
+    ];
+
+    const skillMessages = buildCaptureTurn("s", "q", messages, 8_000, 1_000, 1_024)?.skillMessages ?? [];
+    const finalResult = skillMessages.at(-1);
+    expect(Buffer.byteLength(JSON.stringify(skillMessages), "utf8")).toBeLessThanOrEqual(1_024);
+    expect(finalResult).toMatchObject({ role: "tool_result" });
+    expect(skillMessages).toContainEqual(
+      expect.objectContaining({ role: "tool_call", tool_call_id: finalResult?.tool_call_id }),
+    );
+    expect(skillMessages.length).toBeLessThanOrEqual(500);
+  });
+
+  it("retains a paired final tool result at the 500-message boundary", () => {
+    const messages = [
+      { role: "user", content: "q" },
+      { role: "assistant", content: "completed", stopReason: "stop" },
+      ...Array.from({ length: 498 }, () => ({ role: "assistant", content: "filler" })),
+      { role: "assistant", content: [{ type: "toolCall", id: "final-call", name: "bash", arguments: {} }] },
+      { role: "toolResult", toolCallId: "final-call", toolName: "bash", content: "result" },
+    ];
+
+    const skillMessages = buildCaptureTurn("s", "q", messages, 8_000, 1_000)?.skillMessages ?? [];
+    const finalResult = skillMessages.at(-1);
+    expect(finalResult).toMatchObject({ role: "tool_result", tool_call_id: "final-call" });
+    expect(skillMessages).toContainEqual(
+      expect.objectContaining({ role: "tool_call", tool_call_id: "final-call" }),
+    );
+    expect(skillMessages.length).toBeLessThanOrEqual(500);
+  });
 });
 
 describe("hasCompletedAssistant", () => {
