@@ -54,7 +54,6 @@ export interface CaptureTurn {
   user: string;
   assistant: string;
   capturedAtMs: number;
-  sourceId?: string;
   skillMessages?: SkillCaptureMessage[];
   clientMessageId?: string;
 }
@@ -92,9 +91,13 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function turnKey(turn: Pick<CaptureTurn, "sessionId" | "user" | "assistant">): string {
+export function turnKey(
+  turn: Pick<CaptureTurn, "sessionId" | "user" | "assistant" | "clientMessageId">,
+): string {
   return createHash("sha256")
     .update(turn.sessionId)
+    .update("\0")
+    .update(turn.clientMessageId ?? "")
     .update("\0")
     .update(turn.user)
     .update("\0")
@@ -267,7 +270,6 @@ export class TdaiMemoryClient implements MemoryClientLike {
   }
 
   async captureTurn(turn: CaptureTurn, signal?: AbortSignal): Promise<void> {
-    const clientMessageId = turn.clientMessageId ?? turnKey(turn);
     const assistantTime = new Date(turn.capturedAtMs).toISOString();
     const userTime = new Date(Math.max(0, turn.capturedAtMs - 1)).toISOString();
     await this.post(
@@ -275,7 +277,6 @@ export class TdaiMemoryClient implements MemoryClientLike {
       {
         ...this.isolation(),
         session_id: turn.sessionId,
-        client_message_id: clientMessageId,
         messages: [
           { role: "user", content: turn.user, timestamp: userTime },
           { role: "assistant", content: turn.assistant, timestamp: assistantTime },
@@ -287,13 +288,11 @@ export class TdaiMemoryClient implements MemoryClientLike {
 
   async captureSkill(turn: CaptureTurn, signal?: AbortSignal): Promise<void> {
     if (!turn.skillMessages || turn.skillMessages.length === 0) return;
-    const clientMessageId = (turn.clientMessageId ?? turnKey(turn)) + "-skill";
     await this.post(
       "/v3/skill/conversation/add",
       {
         ...this.isolation(),
         session_id: turn.sessionId,
-        client_message_id: clientMessageId,
         messages: turn.skillMessages,
       },
       signal,

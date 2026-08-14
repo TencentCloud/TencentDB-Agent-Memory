@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -22,9 +23,9 @@ describe("package", () => {
     );
   });
 
-  it("constrains peer dependency versions (no wildcards)", () => {
-    expect(pkg.peerDependencies?.["@earendil-works/pi-coding-agent"]).not.toBe("*");
-    expect(pkg.peerDependencies?.["typebox"]).not.toBe("*");
+  it("declares Pi-bundled core packages as wildcard peer dependencies", () => {
+    expect(pkg.peerDependencies?.["@earendil-works/pi-coding-agent"]).toBe("*");
+    expect(pkg.peerDependencies?.["typebox"]).toBe("*");
   });
 
   it("ships both English and Chinese READMEs", () => {

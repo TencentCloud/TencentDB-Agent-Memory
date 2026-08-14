@@ -1,7 +1,7 @@
 {
   "name": "tencentdb-agent-memory-pi-adapter",
   "version": "0.1.0",
-  "description": "Native Pi extension for TencentDB Agent Memory v3 - production-grade recall, capture, and skill tracing with idempotent dedup, bounded retry, and independent redaction",
+  "description": "Native Pi extension for TencentDB Agent Memory v3 - production-grade recall, capture, and skill tracing with bounded retry and independent redaction",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -37,8 +37,8 @@
     "node": ">=22.19.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.1",
-    "typebox": ">=1.3.7"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",

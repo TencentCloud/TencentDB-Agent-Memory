@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { TdaiClientError, TdaiMemoryClient, turnKey } from "../src/client.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { TdaiClientError, TdaiMemoryClient } from "../src/client.js";
 import type { PiMemoryConfig } from "../src/config.js";
 
 type RequestRecord = {
@@ -81,7 +82,7 @@ describe("TdaiMemoryClient", () => {
     await env.close();
   });
 
-  it("sends isolation fields and client_message_id on every captureTurn", async () => {
+  it("sends only MemoryCore v3 capture fields on captureTurn", async () => {
     const client = new TdaiMemoryClient(makeConfig({ endpoint: env.url }));
     await client.captureTurn({
       sessionId: "sess",
@@ -99,12 +100,10 @@ describe("TdaiMemoryClient", () => {
       user_id: "u",
       session_id: "sess",
     });
-    expect((req?.body as { client_message_id?: string }).client_message_id).toBe(
-      turnKey({ sessionId: "sess", user: "hi", assistant: "hello" }),
-    );
+    expect(req?.body).not.toHaveProperty("client_message_id");
   });
 
-  it("posts skill messages to /v3/skill/conversation/add with a suffixed idempotency key", async () => {
+  it("posts skill messages to /v3/skill/conversation/add without unsupported fields", async () => {
     const client = new TdaiMemoryClient(makeConfig({ endpoint: env.url }));
     await client.captureSkill({
       sessionId: "sess",
@@ -115,8 +114,7 @@ describe("TdaiMemoryClient", () => {
     });
     const req = env.requests[0];
     expect(req?.url).toBe("/v3/skill/conversation/add");
-    const id = (req?.body as { client_message_id?: string }).client_message_id ?? "";
-    expect(id.endsWith("-skill")).toBe(true);
+    expect(req?.body).not.toHaveProperty("client_message_id");
   });
 
   it("skips captureSkill when there are no skill messages", async () => {

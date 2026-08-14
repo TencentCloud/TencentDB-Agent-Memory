@@ -75,12 +75,81 @@ export function buildCaptureTurn(
   maxChars: number,
   capturedAtMs = Date.now(),
   maxSkillBytes = 512_000,
-  sourceId?: string,
+  clientMessageId?: string,
 ): CaptureTurn | null {
+  return (
+    buildCaptureTurnsInternal(
+      sessionId,
+      originalPrompt,
+      messages,
+      maxChars,
+      capturedAtMs,
+      maxSkillBytes,
+      () => clientMessageId,
+      false,
+    ).at(-1) ?? null
+  );
+}
+
+export function buildCaptureTurns(
+  sessionId: string,
+  originalPrompt: string,
+  messages: unknown[],
+  maxChars: number,
+  capturedAtMs = Date.now(),
+  maxSkillBytes = 512_000,
+  nextClientMessageId: () => string | undefined = () => undefined,
+): CaptureTurn[] {
+  return buildCaptureTurnsInternal(
+    sessionId,
+    originalPrompt,
+    messages,
+    maxChars,
+    capturedAtMs,
+    maxSkillBytes,
+    nextClientMessageId,
+    true,
+  );
+}
+
+function buildCaptureTurnsInternal(
+  sessionId: string,
+  originalPrompt: string,
+  messages: unknown[],
+  maxChars: number,
+  capturedAtMs: number,
+  maxSkillBytes: number,
+  nextClientMessageId: () => string | undefined,
+  splitOnUser: boolean,
+): CaptureTurn[] {
   const skillChars = Math.min(maxChars, Math.max(500, Math.floor(maxSkillBytes / 4)));
-  const skillMessages: SkillCaptureMessage[] = [];
+  const turns: CaptureTurn[] = [];
+  let skillMessages: SkillCaptureMessage[] = [];
   let finalAssistant = "";
-  const users: string[] = [];
+  let users: string[] = [];
+
+  const emitTurn = (): void => {
+    if (!finalAssistant) return;
+    if (users.length === 0) {
+      const fallback = clean(originalPrompt, skillChars);
+      if (fallback) {
+        users.push(fallback);
+        skillMessages.unshift({ role: "user", content: fallback, timestamp: capturedAtMs });
+      }
+    }
+    if (users.length === 0) return;
+    turns.push({
+      sessionId,
+      user: clean(users.join("\n\n--- queued follow-up ---\n\n"), Math.min(maxChars, MAX_L0_CHARS)),
+      assistant: clean(finalAssistant, Math.min(maxChars, MAX_L0_CHARS)),
+      skillMessages: boundSkillMessages(skillMessages, maxSkillBytes),
+      capturedAtMs,
+      clientMessageId: nextClientMessageId(),
+    });
+    skillMessages = [];
+    finalAssistant = "";
+    users = [];
+  };
 
   for (const raw of messages) {
     if (!raw || typeof raw !== "object") continue;
@@ -88,6 +157,7 @@ export function buildCaptureTurn(
     const timestamp = typeof message.timestamp === "number" ? message.timestamp : capturedAtMs;
 
     if (message.role === "user") {
+      if (splitOnUser) emitTurn();
       const user = clean(textContent(message.content), skillChars);
       if (user) {
         users.push(user);
@@ -142,22 +212,8 @@ export function buildCaptureTurn(
     }
   }
 
-  if (!finalAssistant) return null;
-  if (users.length === 0) {
-    const fallback = clean(originalPrompt, skillChars);
-    if (fallback) {
-      users.push(fallback);
-      skillMessages.unshift({ role: "user", content: fallback, timestamp: capturedAtMs });
-    }
-  }
-  return {
-    sessionId,
-    sourceId,
-    user: clean(users.join("\n\n--- queued follow-up ---\n\n"), Math.min(maxChars, MAX_L0_CHARS)),
-    assistant: clean(finalAssistant, Math.min(maxChars, MAX_L0_CHARS)),
-    skillMessages: boundSkillMessages(skillMessages, maxSkillBytes),
-    capturedAtMs,
-  };
+  emitTurn();
+  return turns;
 }
 
 export function hasCompletedAssistant(messages: unknown[]): boolean {

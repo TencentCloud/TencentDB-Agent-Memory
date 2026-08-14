@@ -97,9 +97,6 @@ describe("safeJson", () => {
   });
 
   it("falls back when input cannot be serialized", () => {
-    const circular: unknown = {};
-    (circular as Record<string, unknown>).self = circular;
-    // BigInt also throws on JSON.stringify; use it to force the fallback path.
     expect(safeJson({ big: BigInt(1) })).toBe("[unserializable arguments]");
   });
 });

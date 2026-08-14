@@ -9,6 +9,6 @@ Initial Pi adapter for TencentDB Agent Memory v3.
 - Dual independent pipelines (L0 + Skill) with append-only versioned markers and reload compensation.
 - Production-grade capture path: serialized flush, exponential backoff, retry cap, bounded pending queue, non-blocking startup.
 - Independent redaction module with closed/unclosed recall-block handling and secret-pattern scrubbing; recalled data wrapped as untrusted.
-- Client-generated `client_message_id` idempotency keys to close the duplicate-capture window.
+- Local capture IDs for Pi-side retry markers, with at-least-once writes matching the current MemoryCore v3 contract.
 - Native `tdai_memory_search` and `tdai_conversation_search` tools plus the `/tdai-memory-status` command.
 - Equivalent English and Simplified Chinese documentation.

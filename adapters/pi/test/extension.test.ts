@@ -201,6 +201,43 @@ describe("createTencentDbMemoryExtension", () => {
     );
   });
 
+  it("waits for the forced flush during session_shutdown", async () => {
+    let resolveCapture: () => void = () => {};
+    let shutdownSettled = false;
+    const h = setup({
+      captureTurn: vi.fn(
+        () => new Promise<void>((resolve) => {
+          resolveCapture = resolve;
+        }),
+      ),
+    });
+    const ctx = makeCtx();
+    const before = h.pi.handlers.get("before_agent_start")!;
+    const end = h.pi.handlers.get("agent_end")!;
+    const settled = h.pi.handlers.get("agent_settled")!;
+    const shutdown = h.pi.handlers.get("session_shutdown")!;
+    await before({ prompt: "q", systemPrompt: "" }, ctx);
+    await end(
+      {
+        messages: [
+          { role: "user", content: "q" },
+          { role: "assistant", content: "a", stopReason: "stop" },
+        ],
+      },
+      ctx,
+    );
+    const settledPromise = settled({}, ctx);
+    await Promise.resolve();
+    const shutdownPromise = shutdown({}, ctx).then(() => {
+      shutdownSettled = true;
+    });
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
+    resolveCapture();
+    await Promise.all([settledPromise, shutdownPromise]);
+    expect(shutdownSettled).toBe(true);
+  });
+
   it("applies backoff and skips a non-forced flush right after a failure", async () => {
     const h = setup({
       captureTurn: vi.fn().mockRejectedValue(new Error("down")),
@@ -224,6 +261,27 @@ describe("createTencentDbMemoryExtension", () => {
     }
     expect(h.pi.entries.some((e) => e.data.dead === true)).toBe(true);
     expect(h.warns.some((w) => w.includes("giving up"))).toBe(true);
+  });
+
+  it("does not restore a pending marker after a later dead marker", async () => {
+    const turn = {
+      sessionId: "pi:test-session",
+      user: "old question",
+      assistant: "old answer",
+      capturedAtMs: 1,
+      clientMessageId: "turn-dead",
+    };
+    const key = turnKey(turn);
+    const h = setup();
+    const ctx = makeCtx([
+      { type: "custom", customType: ENTRY_TYPE, data: { version: 4, key, l0: false, skill: false, turn } },
+      { type: "custom", customType: ENTRY_TYPE, data: { version: 4, key, l0: false, skill: false, dead: true } },
+    ]);
+    const start = h.pi.handlers.get("session_start")!;
+    await start({}, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.client.captureTurn).not.toHaveBeenCalled();
+    expect(h.client.captureSkill).not.toHaveBeenCalled();
   });
 
   it("evicts the oldest pending capture when the queue is full", async () => {
@@ -252,6 +310,27 @@ describe("createTencentDbMemoryExtension", () => {
     resolveCapture();
     await new Promise((r) => setTimeout(r, 10));
     expect(h.warns.some((w) => w.includes("pending queue full"))).toBe(true);
+    expect(h.pi.entries.some((e) => e.data.dead === true)).toBe(true);
+  });
+
+  it("does not restore an evicted pending marker on session_start", async () => {
+    const turn = {
+      sessionId: "pi:test-session",
+      user: "evicted question",
+      assistant: "evicted answer",
+      capturedAtMs: 1,
+      clientMessageId: "turn-evicted",
+    };
+    const key = turnKey(turn);
+    const h = setup();
+    const ctx = makeCtx([
+      { type: "custom", customType: ENTRY_TYPE, data: { version: 4, key, l0: false, skill: false, turn } },
+      { type: "custom", customType: ENTRY_TYPE, data: { version: 4, key, l0: false, skill: false, dead: true } },
+    ]);
+    const start = h.pi.handlers.get("session_start")!;
+    await start({}, ctx);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.client.captureTurn).not.toHaveBeenCalled();
   });
 
   it("compensates a previously-failed pipeline on session_start reload", async () => {
@@ -287,6 +366,51 @@ describe("createTencentDbMemoryExtension", () => {
     expect(statusEntries.length).toBe(1);
   });
 
+  it("captures repeated identical user and assistant turns separately", async () => {
+    const h = setup();
+    await runTurn(h, "same", "same answer");
+    await runTurn(h, "same", "same answer");
+    expect(h.client.captureTurn).toHaveBeenCalledTimes(2);
+    const keys = h.pi.entries
+      .filter((e) => e.data.turn !== undefined)
+      .map((e) => e.data.key);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("keeps earlier completed messages when a later agent_end ends with an error", async () => {
+    const h = setup();
+    const ctx = makeCtx(h.pi.entries);
+    const before = h.pi.handlers.get("before_agent_start")!;
+    const end = h.pi.handlers.get("agent_end")!;
+    const settled = h.pi.handlers.get("agent_settled")!;
+    await before({ prompt: "q1", systemPrompt: "" }, ctx);
+    await before({ prompt: "q2", systemPrompt: "" }, ctx);
+    await end(
+      {
+        messages: [
+          { role: "user", content: "q1" },
+          { role: "assistant", content: "a1", stopReason: "stop" },
+          { role: "user", content: "q2" },
+          { role: "assistant", content: "failed", stopReason: "error" },
+        ],
+      },
+      ctx,
+    );
+    await end({ messages: [{ role: "assistant", content: "a2", stopReason: "stop" }] }, ctx);
+    await settled({}, ctx);
+    expect(h.client.captureTurn).toHaveBeenCalledTimes(2);
+    expect(h.client.captureTurn).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ user: "q1", assistant: "a1" }),
+      expect.anything(),
+    );
+    expect(h.client.captureTurn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ user: "q2", assistant: "a2" }),
+      expect.anything(),
+    );
+  });
+
   it("returns redacted, untrusted-wrapped results from the memory_search tool", async () => {
     const h = setup({
       searchAtomic: vi.fn().mockResolvedValue([{ id: "1", type: "fact", content: "Bearer leak" }]),
@@ -294,18 +418,56 @@ describe("createTencentDbMemoryExtension", () => {
     const tool = h.pi.tools.get("tdai_memory_search")!;
     const result = (await tool.execute("id", { query: "x" }, new AbortController().signal)) as {
       content: Array<{ text: string }>;
+      details: Record<string, unknown>;
     };
     expect(result.content[0]?.text).toContain("BEGIN_TENCENTDB_RECALLED_MEMORY");
     expect(result.content[0]?.text).not.toContain("leak");
+    expect(result.details).toEqual({ count: 1 });
   });
 
-  it("returns isError when a tool search fails", async () => {
+  it("keeps conversation search results out of persisted details", async () => {
+    const searchConversation = vi.fn().mockResolvedValue([
+      { id: "1", role: "user", content: "api_key=leak", score: 0.9 },
+    ]);
+    const h = setup({ searchConversation });
+    const tool = h.pi.tools.get("tdai_conversation_search")!;
+    const signal = new AbortController().signal;
+    const result = (await tool.execute(
+      "id",
+      { query: "history", limit: 7, sessionOnly: true },
+      signal,
+      undefined,
+      makeCtx(),
+    )) as {
+      content: Array<{ text: string }>;
+      details: Record<string, unknown>;
+    };
+    expect(result.content[0]?.text).toContain("BEGIN_TENCENTDB_RECALLED_MEMORY");
+    expect(result.content[0]?.text).not.toContain("leak");
+    expect(result.details).toEqual({ count: 1 });
+    expect(searchConversation).toHaveBeenCalledWith("history", 7, "pi:test-session", signal);
+  });
+
+  it("throws when a tool search fails", async () => {
     const h = setup({ searchAtomic: vi.fn().mockRejectedValue(new Error("down")) });
     const tool = h.pi.tools.get("tdai_memory_search")!;
-    const result = (await tool.execute("id", { query: "x" }, new AbortController().signal)) as {
-      isError: boolean;
-    };
-    expect(result.isError).toBe(true);
+    await expect(tool.execute("id", { query: "x" }, new AbortController().signal)).rejects.toThrow(
+      "Memory search failed: down",
+    );
+  });
+
+  it("throws when conversation search fails", async () => {
+    const h = setup({ searchConversation: vi.fn().mockRejectedValue(new Error("down")) });
+    const tool = h.pi.tools.get("tdai_conversation_search")!;
+    await expect(
+      tool.execute(
+        "id",
+        { query: "x" },
+        new AbortController().signal,
+        undefined,
+        makeCtx(),
+      ),
+    ).rejects.toThrow("Conversation search failed: down");
   });
 
   it("reports count unavailable when check returns null", async () => {
@@ -315,5 +477,14 @@ describe("createTencentDbMemoryExtension", () => {
     await cmd.handler([], ctx);
     const notify = (ctx as { ui: { notify: ReturnType<typeof vi.fn> } }).ui.notify;
     expect(notify.mock.calls[0]?.[0]).toContain("count unavailable");
+  });
+
+  it("reports the atomic memory count when check returns a number", async () => {
+    const h = setup({ check: vi.fn().mockResolvedValue(5) });
+    const cmd = h.pi.commands.get("tdai-memory-status")!;
+    const ctx = makeCtx();
+    await cmd.handler([], ctx);
+    const notify = (ctx as { ui: { notify: ReturnType<typeof vi.fn> } }).ui.notify;
+    expect(notify.mock.calls[0]?.[0]).toContain("5 atomic memories");
   });
 });

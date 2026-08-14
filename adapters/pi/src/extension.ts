@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 
 import {
   TdaiMemoryClient,
@@ -7,13 +6,10 @@ import {
   type CaptureTurn,
   type MemoryClientLike,
 } from "./client.js";
-import { buildCaptureTurn, hasCompletedAssistant } from "./capture.js";
+import { buildCaptureTurns } from "./capture.js";
 import { loadConfig, type PiMemoryConfig } from "./config.js";
-import {
-  formatAtomicResults,
-  formatConversationResults,
-  formatRecallContext,
-} from "./format.js";
+import { formatRecallContext } from "./format.js";
+import { registerInvalidConfigStatusCommand, registerMemoryToolsAndCommands } from "./tools.js";
 
 export interface ExtensionDependencies {
   env?: Record<string, string | undefined>;
@@ -47,25 +43,6 @@ function sessionId(ctx: ExtensionContext): string {
   return "pi:" + ctx.sessionManager.getSessionId();
 }
 
-function finalAssistantEntryId(ctx: ExtensionContext): string | undefined {
-  const manager = ctx.sessionManager as ExtensionContext["sessionManager"] & {
-    getBranch?: () => Array<{ id?: unknown; type?: unknown; message?: unknown }>;
-  };
-  const entries = manager.getBranch?.() ?? [];
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    const entry = entries[index];
-    if (!entry || entry.type !== "message" || typeof entry.id !== "string") continue;
-    const message = entry.message as { role?: unknown; stopReason?: unknown } | undefined;
-    if (
-      message?.role === "assistant" &&
-      !["error", "aborted"].includes(String(message.stopReason))
-    ) {
-      return entry.id;
-    }
-  }
-  return undefined;
-}
-
 function setStatus(ctx: ExtensionContext, value: string): void {
   if (ctx.hasUI) ctx.ui.setStatus("tdai-memory", value);
 }
@@ -84,12 +61,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
   return function tencentDbMemory(pi: ExtensionAPI): void {
     const loaded = loadConfig(env);
     if (!loaded.ok) {
-      pi.registerCommand("tdai-memory-status", {
-        description: "Show TencentDB Agent Memory adapter status",
-        handler: async (_args, ctx) => {
-          notify(ctx, "TencentDB memory is disabled: " + loaded.errors.join("; "), "warning");
-        },
-      });
+      registerInvalidConfigStatusCommand(pi, loaded.errors);
       return;
     }
 
@@ -103,6 +75,7 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     let flushing: Promise<void> | undefined;
     let consecutiveFailures = 0;
     let backoffUntil = 0;
+    let captureSequence = 0;
 
     const rememberCaptured = (key: string, status: Partial<CaptureStatus>): CaptureStatus => {
       const merged = {
@@ -162,7 +135,9 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     const evictOldestPending = (): void => {
       const oldest = pending.keys().next().value;
       if (oldest) {
+        const item = pending.get(oldest);
         pending.delete(oldest);
+        if (item) persistStatus(oldest, item.status, true);
         logger.warn("[tdai-memory] pending queue full; dropped oldest capture " + oldest);
       }
     };
@@ -238,6 +213,8 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
         getBranch?: () => ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
       };
       const turnsByKey = new Map<string, CaptureTurn>();
+      const statusesByKey = new Map<string, CaptureStatus>();
+      const deadKeys = new Set<string>();
       for (const entry of manager.getBranch?.() ?? ctx.sessionManager.getEntries()) {
         if (entry.type !== "custom" || entry.customType !== CAPTURE_ENTRY_TYPE) continue;
         const data = entry.data as
@@ -251,20 +228,29 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
             }
           | undefined;
         if (!data || typeof data.key !== "string") continue;
-        if (data.dead === true) continue;
+        if (data.dead === true) {
+          deadKeys.add(data.key);
+          turnsByKey.delete(data.key);
+          statusesByKey.delete(data.key);
+          continue;
+        }
+        deadKeys.delete(data.key);
         if (data.turn && typeof data.turn === "object") {
           turnsByKey.set(data.key, data.turn as CaptureTurn);
         }
         const isCurrent =
           data.version === CAPTURE_MARKER_VERSION || data.version === 3 || data.version === 2;
-        rememberCaptured(
-          data.key,
-          isCurrent
-            ? { l0: data.l0 === true, skill: data.skill === true }
-            : { l0: true, skill: false },
-        );
+        const prior = statusesByKey.get(data.key);
+        const next = isCurrent
+          ? { l0: prior?.l0 === true || data.l0 === true, skill: prior?.skill === true || data.skill === true }
+          : { l0: true, skill: prior?.skill === true };
+        statusesByKey.set(data.key, next);
+      }
+      for (const [key, status] of statusesByKey) {
+        if (!deadKeys.has(key)) rememberCaptured(key, status);
       }
       for (const [key, turn] of turnsByKey) {
+        if (deadKeys.has(key)) continue;
         const status = captured.get(key);
         if (status && (!status.l0 || !status.skill)) {
           pending.set(key, { turn, status: { l0: status.l0, skill: status.skill }, retries: 0 });
@@ -293,22 +279,22 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     });
 
     pi.on("agent_end", async (event) => {
-      if (activePrompts.length === 0 || !hasCompletedAssistant(event.messages)) return;
+      if (activePrompts.length === 0 || !Array.isArray(event.messages)) return;
       settledCandidate.push(...event.messages);
     });
 
     pi.on("agent_settled", async (_event, ctx) => {
       if (activePrompts.length > 0) {
-        const turn = buildCaptureTurn(
+        const turns = buildCaptureTurns(
           sessionId(ctx),
           activePrompts.join("\n\n--- queued follow-up ---\n\n"),
           settledCandidate,
           config.maxCaptureChars,
           now(),
           config.maxSkillBytes,
-          finalAssistantEntryId(ctx),
+          () => sessionId(ctx) + ":" + now() + ":" + captureSequence++,
         );
-        if (turn) {
+        for (const turn of turns) {
           const key = turnKey(turn);
           const status = captured.get(key) ?? { l0: false, skill: false };
           if (!status.l0 || !status.skill) {
@@ -326,111 +312,16 @@ export function createTencentDbMemoryExtension(dependencies: ExtensionDependenci
     pi.on("session_shutdown", async (_event, ctx) => {
       activePrompts.length = 0;
       settledCandidate = [];
-      void flushPending(ctx, true);
+      await flushPending(ctx, true);
       if (pending.size > 0) {
         logger.warn(
-          "[tdai-memory] session closed with " + pending.size + " unsynced capture(s)",
+          "[tdai-memory] session closing while " +
+            pending.size +
+            " capture(s) remain pending; persisted entries will retry on next session_start if needed",
         );
       }
     });
 
-    pi.registerTool({
-      name: "tdai_memory_search",
-      label: "Search TencentDB memory",
-      description: "Search long-term atomic memories stored in TencentDB Agent Memory.",
-      promptSnippet: "Search durable user, project, and decision memories",
-      promptGuidelines: [
-        "Use tdai_memory_search when earlier preferences, decisions, or project facts may help.",
-      ],
-      parameters: Type.Object(
-        {
-          query: Type.String({ minLength: 1, description: "Semantic memory search query" }),
-          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-        },
-        { additionalProperties: false },
-      ),
-      async execute(_toolCallId, params, signal) {
-        try {
-          const items = await client.searchAtomic(
-            params.query,
-            params.limit ?? config.recallLimit,
-            signal,
-          );
-          return {
-            content: [{ type: "text", text: formatAtomicResults(items, config.maxContextChars) }],
-            details: { count: items.length, items },
-          };
-        } catch (error) {
-          return {
-            content: [{ type: "text", text: "Memory search failed: " + messageOf(error) }],
-            details: { count: 0, items: [] as Awaited<ReturnType<typeof client.searchAtomic>> },
-            isError: true,
-          };
-        }
-      },
-    });
-
-    pi.registerTool({
-      name: "tdai_conversation_search",
-      label: "Search TencentDB conversations",
-      description: "Search raw prior conversations stored in TencentDB Agent Memory.",
-      promptSnippet: "Search prior user and assistant conversation text",
-      promptGuidelines: [
-        "Use tdai_conversation_search only when raw conversation evidence is needed.",
-      ],
-      parameters: Type.Object(
-        {
-          query: Type.String({ minLength: 1, description: "Conversation search query" }),
-          limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-          sessionOnly: Type.Optional(
-            Type.Boolean({ description: "Limit results to the current Pi session" }),
-          ),
-        },
-        { additionalProperties: false },
-      ),
-      async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-        try {
-          const items = await client.searchConversation(
-            params.query,
-            params.limit ?? config.recallLimit,
-            params.sessionOnly ? sessionId(ctx) : undefined,
-            signal,
-          );
-          return {
-            content: [
-              { type: "text", text: formatConversationResults(items, config.maxContextChars) },
-            ],
-            details: { count: items.length, items },
-          };
-        } catch (error) {
-          return {
-            content: [{ type: "text", text: "Conversation search failed: " + messageOf(error) }],
-            details: {
-              count: 0,
-              items: [] as Awaited<ReturnType<typeof client.searchConversation>>,
-            },
-            isError: true,
-          };
-        }
-      },
-    });
-
-    pi.registerCommand("tdai-memory-status", {
-      description: "Check TencentDB Agent Memory connectivity",
-      handler: async (_args, ctx) => {
-        try {
-          const count = await client.check(ctx.signal);
-          setStatus(ctx, "memory: online");
-          if (count === null) {
-            notify(ctx, "TencentDB memory is online (count unavailable).", "info");
-          } else {
-            notify(ctx, "TencentDB memory is online (" + count + " atomic memories).", "info");
-          }
-        } catch (error) {
-          setStatus(ctx, "memory: offline");
-          notify(ctx, "TencentDB memory check failed: " + messageOf(error), "error");
-        }
-      },
-    });
+    registerMemoryToolsAndCommands(pi, client, config);
   };
 }
