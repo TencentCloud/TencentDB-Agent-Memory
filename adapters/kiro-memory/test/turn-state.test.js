@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import { writeJsonAtomically, withSessionLock } from '../src/core/atomic-file.js';
 import { sha256 } from '../src/core/hash.js';
-import { TurnStore } from '../src/core/turn-store.js';
+import { TurnStore, TurnStoreError } from '../src/core/turn-store.js';
 
 const withStateDir = async (run) => {
   const stateDir = await mkdtemp(join(tmpdir(), 'kiro-turn-state-'));
@@ -80,6 +80,21 @@ test('creates unique turns for the same session', async () => {
   });
 });
 
+test('rejects an oversized prompt before writing a turn file or active pointer', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    const oversizedPrompt = 'p'.repeat(128 * 1024);
+
+    await assert.rejects(
+      store.createTurn({ sessionId: 'session-1', prompt: oversizedPrompt }),
+      (error) => error instanceof TurnStoreError && error.message === 'turn state exceeds byte limit',
+    );
+    assert.equal(await store.getActiveTurn('session-1'), null);
+    await assert.rejects(readFile(store.turnPath('session-1', 'turn-1'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(store.activePath('session-1'), 'utf8'), { code: 'ENOENT' });
+  });
+});
+
 test('appends a cleaned tool event without changing its input', async () => {
   await withStateDir(async (stateDir) => {
     const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
@@ -92,6 +107,42 @@ test('appends a cleaned tool event without changing its input', async () => {
     assert.deepEqual(event, before);
     assert.deepEqual(updated.tool_events, [event]);
     assert.equal(await store.appendToolEvent('missing-session', event), null);
+  });
+});
+
+test('serializes concurrent append capacity checks and persists only turns within 128KiB', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    await store.createTurn({ sessionId: 'session-1', prompt: 'append' });
+    const writes = await Promise.allSettled(
+      Array.from({ length: 5 }, (_, index) => store.appendToolEvent('session-1', {
+        id: index,
+        content: 'e'.repeat(32 * 1024),
+      })),
+    );
+    const turn = await store.getActiveTurn('session-1');
+
+    assert.equal(writes.some((result) => result.status === 'rejected'), true);
+    assert.equal(Buffer.byteLength(`${JSON.stringify(turn)}\n`, 'utf8') <= 128 * 1024, true);
+  });
+});
+
+test('leaves an existing oversized turn file unchanged when completeTurn cannot write it', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    const turn = await store.createTurn({ sessionId: 'session-1', prompt: 'valid' });
+    const turnPath = store.turnPath('session-1', turn.turn_id);
+    const stored = JSON.parse(await readFile(turnPath, 'utf8'));
+    stored.prompt = 'p'.repeat(128 * 1024);
+    stored.prompt_hash = `sha256:${sha256(stored.prompt)}`;
+    const before = `${JSON.stringify(stored)}\n`;
+    await writeFile(turnPath, before, 'utf8');
+
+    await assert.rejects(
+      store.completeTurn('session-1'),
+      (error) => error instanceof TurnStoreError && error.message === 'turn state exceeds byte limit',
+    );
+    assert.equal(await readFile(turnPath, 'utf8'), before);
   });
 });
 

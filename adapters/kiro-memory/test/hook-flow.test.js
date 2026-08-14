@@ -60,6 +60,21 @@ test('Prompt Submit state and recall errors fail open without leaking prompt con
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test('Prompt Submit fails open for an oversized prompt while still recalling', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    let recalled = false;
+    const result = await handlePromptSubmit({ ...promptEvent(), prompt: 'p'.repeat(128 * 1024) }, {
+      turnStore: store,
+      recallService: { recall: async () => { recalled = true; return 'context'; } },
+    });
+
+    assert.deepEqual(result, { exitCode: 0, stdout: 'context', status: 'state_error' });
+    assert.equal(recalled, true);
+    assert.equal(await store.getActiveTurn('session-1'), null);
+  });
+});
+
 test('PostToolUse appends a sanitized trace to the real active turn with matching IDs', async () => {
   await withStateDir(async (stateDir) => {
     const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
@@ -139,6 +154,22 @@ test('PostToolUse rejects the first trace that would exceed the persisted turn b
     assert.equal(exceeded, true);
     assert.equal(successful > 0, true);
     assert.equal(turn.tool_events.length, successful);
+    assert.equal(Buffer.byteLength(`${JSON.stringify(turn)}\n`, 'utf8') <= TURN_MAX_BYTES, true);
+  });
+});
+
+test('PostToolUse reports concurrent over-capacity appends without exceeding the real turn budget', async () => {
+  await withStateDir(async (stateDir) => {
+    const store = new TurnStore({ stateDir, idFactory: () => 'turn-1' });
+    await store.createTurn({ sessionId: 'session-1', prompt: 'read' });
+    const results = await Promise.all(Array.from({ length: 4 }, (_, index) => handlePostToolUse(
+      toolEvent('session-1', 'i'.repeat(8 * 1024), 'r'.repeat(32 * 1024)),
+      { turnStore: store, toolCallIdFactory: () => `concurrent-${index}` },
+    )));
+    const turn = await store.getActiveTurn('session-1');
+
+    assert.equal(results.some((result) => result.status === 'tool_trace_error'), true);
+    assert.equal(turn.tool_events.length, results.filter((result) => result.status === 'tool_trace_appended').length);
     assert.equal(Buffer.byteLength(`${JSON.stringify(turn)}\n`, 'utf8') <= TURN_MAX_BYTES, true);
   });
 });

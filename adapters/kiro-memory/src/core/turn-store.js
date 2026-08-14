@@ -13,6 +13,7 @@ export class TurnStoreError extends Error {
 }
 
 const safeTurnFileName = (turnId) => `${encodeURIComponent(turnId)}.json`;
+const TURN_MAX_BYTES = 128 * 1024;
 
 const captureStatuses = new Set([
   'not_started',
@@ -113,11 +114,7 @@ export class TurnStore {
         capture_id: null,
       };
 
-      try {
-        await writeJsonAtomically(this.turnPath(sessionId, turnId), turn);
-      } catch {
-        throw new TurnStoreError('createTurn failed: turn_id');
-      }
+      await this.writeTurn(sessionId, turn, 'createTurn');
       try {
         await writeJsonAtomically(this.activePath(sessionId), {
           version: 1,
@@ -247,6 +244,15 @@ export class TurnStore {
   }
 
   async writeTurn(sessionId, turn, operation) {
+    let serialized;
+    try {
+      serialized = `${JSON.stringify(turn)}\n`;
+    } catch {
+      throw new TurnStoreError('turn state exceeds byte limit');
+    }
+    if (Buffer.byteLength(serialized, 'utf8') > TURN_MAX_BYTES) {
+      throw new TurnStoreError('turn state exceeds byte limit');
+    }
     try {
       await writeJsonAtomically(this.turnPath(sessionId, turn.turn_id), turn);
     } catch {
