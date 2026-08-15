@@ -17,6 +17,7 @@ import {
   str,
   okEnvelope,
   extractListItems,
+  fetchAllAgentFixedAssetBindings,
   resolveCallerUserId,
   isTeamMember,
   ASSET_TYPE_WIKI,
@@ -85,9 +86,9 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     const agent = agentEnv.data as AgentRaw;
     if (agent.team_id !== teamId) return respondControlError(c, 400, 'AGENT_NOT_IN_TEAM');
 
-    const bindEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
-    if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-    const bindings = extractListItems<BindingRaw>(bindEnv);
+    const bindingResult = await fetchAllAgentFixedAssetBindings<BindingRaw>(deps, ctx, agentId);
+    if (bindingResult.error) return respondEnvelope(c, bindingResult.error);
+    const bindings = bindingResult.items;
     if (bindings.some((b) => b.asset_id === knowledgeId)) {
       return respondControlError(c, 409, 'ALREADY_ALLOCATED');
     }
@@ -124,9 +125,9 @@ export function registerKnowledgeAllocateRoutes(api: Hono, deps: PanelDeps): voi
     if (!agent) return respondControlError(c, 404, 'AGENT_NOT_FOUND');
     if (agent.owner_user_id !== caller) return respondControlError(c, 403, 'NOT_YOUR_AGENT');
 
-    const bindEnv = await deps.metaKernel.invoke('agent-fixed-asset/list', { agent_id: agentId }, ctx);
-    if (bindEnv.code !== 0) return respondEnvelope(c, bindEnv);
-    const bindings = extractListItems<BindingRaw>(bindEnv);
+    const bindingResult = await fetchAllAgentFixedAssetBindings<BindingRaw>(deps, ctx, agentId);
+    if (bindingResult.error) return respondEnvelope(c, bindingResult.error);
+    const bindings = bindingResult.items;
     const remaining = bindings.filter((b) => b.asset_id !== knowledgeId);
     if (remaining.length === bindings.length) return respondControlError(c, 404, 'BINDING_NOT_FOUND');
 
