@@ -135,7 +135,7 @@ async function createSeedPipeline(opts: SeedRuntimeOptions): Promise<{ pipeline:
  * Poll pipeline queue status until L1 is idle for a given session.
  * Modeled after benchmark-ingest.ts waitForPipelineIdle() but focused on L1 only.
  */
-async function waitForL1Idle(
+export async function waitForL1Idle(
   scheduler: MemoryPipelineManager,
   sessionKeys: string[],
   logger: PipelineLogger,
@@ -174,8 +174,13 @@ async function waitForL1Idle(
 
     const isIdle =
       queues.l1Idle &&
-      totalBuffered === 0 &&
-      totalConversationCount === 0;
+      totalBuffered === 0;
+    // NOTE: totalConversationCount is intentionally NOT part of the idle
+    // condition. In seed mode, rounds that have not yet reached
+    // everyNConversations keep conversation_count > 0 while L1 is genuinely
+    // idle (they are picked up by the idle-timeout L1 run / the next batch).
+    // Requiring it to be 0 made waitL1 spin until maxWait, blocking the seed
+    // loop and stalling later rounds' L1 extraction (issue #505).
 
     if (isIdle) {
       consecutiveIdle++;
