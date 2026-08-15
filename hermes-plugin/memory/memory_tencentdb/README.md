@@ -32,10 +32,18 @@ Hermes lifecycle → Gateway mapping:
 
 | Hermes hook / call          | Gateway endpoint | Behavior                                                   |
 |-----------------------------|------------------|------------------------------------------------------------|
-| `prefetch(query)`           | `POST /recall`   | Synchronous. Returns `<memory-context>` text for injection |
+| `prefetch(query)`           | `POST /recall`   | Synchronous. Combines structured stable + dynamic recall for Hermes injection |
 | `sync_turn(user, assistant)`| `POST /capture`  | Fire-and-forget on a background daemon thread (max 4 in-flight) |
 | `shutdown()` / `on_session_end` | `POST /session/end` | Flush pending pipeline work                             |
 | `get_tool_schemas()`        | —                | Advertises two LLM tools (see below)                       |
+
+`POST /recall` returns `stable_context`, `dynamic_context`, and the preferred
+`injection_mode`. Hermes's `MemoryProvider.prefetch()` contract exposes only a
+single per-turn context string, which Hermes appends to the current user turn.
+The provider therefore combines both structured fields and uses native append
+placement. If Gateway configuration requests `prepend`, the provider logs one
+fallback warning; it never drops dynamic L1 recall. Older Gateway responses
+that only contain `context` remain supported.
 
 Reliability features baked into the provider:
 

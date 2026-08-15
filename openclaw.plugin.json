@@ -74,6 +74,7 @@
         "description": "记忆召回设置",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用自动召回" },
+          "injectionMode": { "type": "string", "enum": ["prepend", "append"], "default": "prepend", "description": "动态 L1 召回注入位置：prepend 保持兼容行为；append 将召回内容放在用户输入后，降低对前缀缓存的影响" },
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },

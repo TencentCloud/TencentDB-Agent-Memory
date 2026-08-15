@@ -50,7 +50,7 @@ export async function performAutoCapture(params: {
   pluginDataDir: string;
   logger?: Logger;
   scheduler?: MemoryPipelineManager;
-  /** Clean original user prompt from before_prompt_build cache (pre-prependContext). */
+  /** Clean original user prompt from before_prompt_build cache (before dynamic recall injection). */
   originalUserText?: string;
   /**
    * Number of messages in the session at before_prompt_build time.
