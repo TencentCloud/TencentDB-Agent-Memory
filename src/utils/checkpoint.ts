@@ -100,12 +100,50 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /**
+   * Legacy field name kept for on-disk checkpoint compatibility.
+   * Counts persisted L0 message records (the same unit as Store.countL0()).
+   */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Current active/searchable L1 records (legacy field name). */
   total_memories_extracted: number;
+}
+
+/**
+ * Authoritative aggregate values used to repair checkpoint counter drift.
+ * Per-session cursors are intentionally absent: reconciliation must never
+ * rewind incremental L0/L1 processing state.
+ */
+interface CheckpointCounters {
+  l0Conversations: number;
+  totalMemoriesExtracted: number;
+  memoriesSinceLastPersona: number;
+}
+
+/** Minimal Store surface required to recalculate active aggregate counters. */
+export interface CheckpointCounterStore {
+  countL0(): number | Promise<number>;
+  countL1(): number | Promise<number>;
+  /** `updatedAfter` must use a strict `updated_time >` comparison. */
+  queryL1Records(filter?: { updatedAfter?: string }):
+    | Array<{ updated_time: string }>
+    | Promise<Array<{ updated_time: string }>>;
+}
+
+function assertValidCounters(actual: CheckpointCounters): void {
+  for (const [name, value] of Object.entries(actual)) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(`Checkpoint counter ${name} must be a non-negative safe integer`);
+    }
+  }
+}
+
+function applyCounters(checkpoint: Checkpoint, actual: CheckpointCounters): void {
+  checkpoint.l0_conversations_count = actual.l0Conversations;
+  checkpoint.total_memories_extracted = actual.totalMemoriesExtracted;
+  checkpoint.memories_since_last_persona = actual.memoriesSinceLastPersona;
 }
 
 const DEFAULT_RUNNER_STATE: RunnerSessionState = {
@@ -293,6 +331,19 @@ export class CheckpointManager {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
   }
 
+  /**
+   * Recalculate active aggregate counters while holding the checkpoint lock.
+   * Store counts are authoritative because update/merge removes superseded
+   * records there while the recovery JSONL remains append-only.
+   */
+  async reconcileCountersFromStore(store: CheckpointCounterStore): Promise<void> {
+    await this.mutate(async (checkpoint) => {
+      const actual = await this.readStoreCounters(store, checkpoint.last_persona_time);
+      assertValidCounters(actual);
+      applyCounters(checkpoint, actual);
+    });
+  }
+
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
@@ -412,8 +463,9 @@ export class CheckpointManager {
     memoriesExtracted: number,
     cursorRecordedAtMs?: number,
     lastSceneName?: string,
+    store?: CheckpointCounterStore,
   ): Promise<void> {
-    await this.mutate((cp) => {
+    await this.mutate(async (cp) => {
       const state = this.getRunnerState(cp, sessionKey);
       if (cursorRecordedAtMs) {
         state.last_l1_cursor = cursorRecordedAtMs;
@@ -421,14 +473,34 @@ export class CheckpointManager {
       if (lastSceneName !== undefined) {
         state.last_scene_name = lastSceneName;
       }
-      cp.total_memories_extracted += memoriesExtracted;
-      cp.memories_since_last_persona += memoriesExtracted;
+      if (store) {
+        const actual = await this.readStoreCounters(store, cp.last_persona_time);
+        assertValidCounters(actual);
+        applyCounters(cp, actual);
+      } else {
+        cp.total_memories_extracted += memoriesExtracted;
+        cp.memories_since_last_persona += memoriesExtracted;
+      }
     });
     this.logger.info(
       `[checkpoint] markL1ExtractionComplete session=${sessionKey}: ` +
       `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
       `lastScene="${lastSceneName ?? "(unchanged)"}"`,
     );
+  }
+
+  private async readStoreCounters(
+    store: CheckpointCounterStore,
+    lastPersonaTime: string,
+  ): Promise<CheckpointCounters> {
+    const [l0Conversations, totalMemoriesExtracted] = await Promise.all([
+      store.countL0(),
+      store.countL1(),
+    ]);
+    const memoriesSinceLastPersona = lastPersonaTime
+      ? (await store.queryL1Records({ updatedAfter: lastPersonaTime })).length
+      : totalMemoriesExtracted;
+    return { l0Conversations, totalMemoriesExtracted, memoriesSinceLastPersona };
   }
 
   // ============================
@@ -449,8 +521,8 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
-   * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
+   * L0 message count is also incremented inside the lock when messages are
+   * captured, removing the need for a separate counter update.
    *
    * @param sessionKey   Per-session identifier
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
@@ -479,8 +551,8 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Keep this aggregate aligned with persisted L0 message records.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }

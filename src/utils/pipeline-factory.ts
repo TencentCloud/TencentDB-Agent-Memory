@@ -379,7 +379,13 @@ export function createL1Runner(opts: {
       }
 
       // Use maxRecordedAtMs (write time) as cursor — always positive, TCVDB-safe
-      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
+      await checkpoint.markL1ExtractionComplete(
+        sessionKey,
+        totalStored,
+        maxRecordedAtMs || undefined,
+        lastSceneName,
+        vectorStore && !vectorStore.isDegraded() ? vectorStore : undefined,
+      );
       logger.info(
         `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
       );
