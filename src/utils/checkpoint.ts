@@ -27,6 +27,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { readdir, readFile } from 'fs/promises';
+import { join } from 'path';
 
 // ============================
 // Types
@@ -181,10 +183,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 export class CheckpointManager {
   private filePath: string;
   private logger: CheckpointLogger;
+  private dataDir:string;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
+    this.dataDir = dataDir;
   }
 
   // ============================
@@ -270,6 +274,7 @@ export class CheckpointManager {
   }
 
   // ============================
+  
   // Public API — read-only
   // ============================
 
@@ -292,6 +297,30 @@ export class CheckpointManager {
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
   }
+  
+ async getTotalLines(folderPath: string): Promise<number> {
+    const files = await readdir(folderPath);
+    const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
+    
+    let total = 0;
+    for (const file of jsonlFiles) {
+        const content = await readFile(join(folderPath, file), 'utf-8');
+        const lines = content.split(/\r?\n/);
+        // 过滤空行（比如末尾的空行）
+        const nonEmpty = lines.filter(line => line.trim() !== '');
+        total += nonEmpty.length;
+    }
+    return total;
+ }
+ async recalibrate(): Promise<void>{
+    await this.mutate(async(cp)=>{
+      const recordsPath=path.join(this.dataDir,"records");
+      const conversationPath=path.join(this.dataDir,"conversations");
+      cp.total_memories_extracted=await this.getTotalLines(recordsPath);
+      cp.l0_conversations_count=await this.getTotalLines(conversationPath);
+    })
+  }
+
 
   // ============================
   // Public API — mutating (all serialized via file lock)
