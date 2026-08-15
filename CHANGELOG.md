@@ -20,7 +20,11 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
-### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
+### 🐛 修复
+
+- **checkpoint 计数器只增不减，cleaner 清理后与真实数据长期漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：`l0_conversations_count` 与 `total_memories_extracted` 此前只在采集/抽取时递增，memory-cleaner 删除过期 L0/L1 记录后从不回写，导致计数持续高估真实数据量，进而使依赖这些计数的 L2/L3 persona 阈值判断提前触发或长期失真。
+  - 新增 `CheckpointManager.recalibrate(source?)`：以在线存储（`countL0()` / `countL1()`，与 cleaner 判定删除时同源）为准回填计数；无存储的降级模式下回退为统计 `conversations/`、`records/` 下 `YYYY-MM-DD.jsonl` 分片的非空行数。写入复用同一把 per-file 锁，幂等且对瞬时异常计数（NaN/负数）做钳制。
+  - **调用时机**：Gateway 启动恢复 pipeline 状态前调用一次，以及每轮 cleaner 清理结束后调用；两处均为非致命，失败不影响主流程。
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
 

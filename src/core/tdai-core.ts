@@ -514,6 +514,15 @@ export class TdaiCore {
     this.schedulerStartPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        // Correct increment-only counter drift before restoring pipeline state,
+        // so persona thresholds start from counts that match real data (#157).
+        // Uses the live store as source of truth, falling back to JSONL line
+        // counts in degraded mode. Non-fatal: never blocks scheduler start.
+        try {
+          await checkpoint.recalibrate(this.vectorStore);
+        } catch (err) {
+          this.logger.warn(`${TAG} Checkpoint recalibration failed (continuing): ${err instanceof Error ? err.message : String(err)}`);
+        }
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);

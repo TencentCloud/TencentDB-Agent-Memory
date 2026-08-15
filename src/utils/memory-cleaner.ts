@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -184,6 +185,18 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+    // Cleanup just deleted L0/L1 records, so the increment-only checkpoint
+    // counters now overstate reality. Recalibrate them against the live store
+    // (or JSONL fallback) to keep persona thresholds accurate (#157).
+    // Non-fatal: a failed recalibration must never abort the cleanup cycle.
+    try {
+      const checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+      await checkpoint.recalibrate(this.vectorStore);
+    } catch (err) {
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private scheduleNext(): void {
