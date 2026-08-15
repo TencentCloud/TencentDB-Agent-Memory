@@ -197,13 +197,12 @@ export class StandaloneLLMRunner implements LLMRunner {
       `tools=${this.enableTools}, timeout=${timeoutMs}ms`,
     );
 
-    // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
+    // Create OpenAI-compatible provider via AI SDK.
+    // `provider.chat()` below targets /chat/completions (not the Responses
+    // API), which works with all OpenAI-compatible backends (DeepSeek, Qwen…).
     const provider = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
-      compatibility: "compatible",
       ...(this.customFetch ? { fetch: this.customFetch } : {}),
     });
 
