@@ -16,15 +16,30 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const COMMIT_IDENTITY_ARGS = ["-c", "user.name=git-storage-backend", "-c", "user.email=git-storage-backend@localhost"];
 
+/**
+ * Redact any `-c http.extraHeader=Authorization: ...` value before it can
+ * reach a public error property — GitCliError.args is exactly the kind of
+ * field a logger or `JSON.stringify` inspects without knowing it might hold
+ * a credential (argv itself is still OS-visible via `ps`/procfs, an
+ * inherent limitation of passing auth through `-c`/argv at all; this only
+ * closes the easier, more casual leak surface of serialized error objects).
+ */
+function redactConfigArgs(args: string[]): string[] {
+  return args.map((arg) => (/^http\.extraHeader=Authorization:/i.test(arg) ? "http.extraHeader=Authorization: [REDACTED]" : arg));
+}
+
 export class GitCliError extends Error {
+  public readonly args: string[];
+
   constructor(
     message: string,
-    public readonly args: string[],
+    args: string[],
     public readonly exitCode: number | null,
     public readonly stderr: string,
   ) {
     super(message);
     this.name = "GitCliError";
+    this.args = redactConfigArgs(args);
   }
 }
 
@@ -223,6 +238,12 @@ export async function gitCheckoutDiscard(dir: string): Promise<void> {
 
 export async function gitStatusPorcelain(dir: string): Promise<string> {
   const { stdout } = await runGit(["status", "--porcelain"], { cwd: dir });
+  return stdout;
+}
+
+/** `git status --porcelain -- <relPath>` — restricted to one key/prefix, for recovery's per-op reapply decision. */
+export async function gitStatusPorcelainForPath(dir: string, relPath: string): Promise<string> {
+  const { stdout } = await runGit(["status", "--porcelain", "--", relPath], { cwd: dir });
   return stdout;
 }
 

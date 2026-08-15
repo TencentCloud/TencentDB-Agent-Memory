@@ -9,7 +9,7 @@
  * mutating methods only. Experimental — single-writer-per-space pilot scope.
  */
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile, appendFile, rename } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile, rename, rm } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type {
@@ -42,6 +42,7 @@ import {
   gitRemoteAdd,
   gitResetHard,
   gitStatusPorcelain,
+  gitStatusPorcelainForPath,
   type GitAuth,
 } from "./git-cli.js";
 
@@ -139,6 +140,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Extract the path from one `git status --porcelain` line ("XY path", quoted, or a "orig -> new" rename). */
+function parsePorcelainPath(line: string): string {
+  let rest = line.slice(3);
+  const arrowIdx = rest.indexOf(" -> ");
+  if (arrowIdx >= 0) rest = rest.slice(arrowIdx + 4);
+  if (rest.startsWith('"') && rest.endsWith('"')) rest = rest.slice(1, -1);
+  // git always reports paths with forward slashes regardless of OS.
+  return rest;
+}
+
+/**
+ * Drop status lines that are expected, not "unexplained" dirt: the
+ * never-staged `.meta.json` sidecar (local-only by design — see path-safety
+ * discussion in the design doc) and paths covered by a currently-pending WAL
+ * op (exact match for put/append/delete, prefix match for deleteByPrefix).
+ */
+function filterUnexplainedDirt(
+  statusOutput: string,
+  explainedExactPaths: Set<string>,
+  explainedPrefixes: string[],
+): string {
+  return statusOutput
+    .split("\n")
+    .filter((line) => {
+      if (!line.trim()) return false;
+      const path = parsePorcelainPath(line);
+      if (path.endsWith(".meta.json")) return false;
+      if (explainedExactPaths.has(path)) return false;
+      if (explainedPrefixes.some((prefix) => path.startsWith(prefix))) return false;
+      return true;
+    })
+    .join("\n");
+}
+
 // ============================
 // GitStorageBackend
 // ============================
@@ -149,6 +184,8 @@ export interface GitSyncSummary {
   status: GitSyncStatus;
   pendingCount: number;
   lastPushedAt: number | null;
+  /** WAL timestamp of the oldest still-pending op, or null if nothing is pending. Distinct from lastPushedAt — a space that has never pushed successfully still has a real, computable pending age via this field. */
+  oldestPendingOpTs: number | null;
 }
 
 export interface GitStorageBackendOptions {
@@ -269,17 +306,23 @@ export class GitStorageBackend implements IStorageBackend {
     await this.ensureInitialized();
     const relPath = this.safeRelPath(key);
     await this.queue.add(async () => {
+      if (this.recoveryBlocked) {
+        throw new Error(`${TAG} writes blocked for ${this.branchName}: recovery required (recoveryMode=manual)`);
+      }
       // `git add -- <path>` fails with "pathspec did not match any files" for
       // a path git has never tracked — unlike a path it tracked and that was
-      // since removed, where `git add` correctly stages the deletion. Only
-      // stage when something actually existed to delete; deleteObject is
-      // idempotent (IStorageBackend contract), so a no-op delete needs no
-      // WAL entry or commit either.
+      // since removed, where `git add` correctly stages the deletion. This
+      // existence check is read-only (no write-ahead concern) — only a
+      // genuine deletion needs a WAL entry; deleteObject is idempotent
+      // (IStorageBackend contract), so a no-op delete needs no record.
       const existed = await this.inner.exists(key);
+      if (!existed) return;
+      const entry: WalEntry = { opId: randomUUID(), kind: "delete", key, ts: Date.now() };
+      await this.recordIntent(entry);
       await this.inner.deleteObject(key);
-      if (existed) {
-        await this.stageEntry({ opId: randomUUID(), kind: "delete", key, ts: Date.now() }, relPath);
-      }
+      await gitAdd(this.cloneDir, relPath);
+      await this.writeSyncState("dirty-local");
+      this.scheduleFlush();
     });
   }
 
@@ -287,9 +330,21 @@ export class GitStorageBackend implements IStorageBackend {
     await this.ensureInitialized();
     const relPath = this.safeRelPath(prefix);
     return this.queue.add(async () => {
+      if (this.recoveryBlocked) {
+        throw new Error(`${TAG} writes blocked for ${this.branchName}: recovery required (recoveryMode=manual)`);
+      }
+      // Unlike deleteObject, whether this will be a no-op is only known
+      // after actually calling deleteByPrefix — so record intent first
+      // (write-ahead) and retract it if it turns out nothing existed.
+      const entry: WalEntry = { opId: randomUUID(), kind: "deleteByPrefix", key: prefix, ts: Date.now() };
+      await this.recordIntent(entry);
       const count = await this.inner.deleteByPrefix(prefix);
       if (count > 0) {
-        await this.stageEntry({ opId: randomUUID(), kind: "deleteByPrefix", key: prefix, ts: Date.now() }, relPath);
+        await gitAdd(this.cloneDir, relPath);
+        await this.writeSyncState("dirty-local");
+        this.scheduleFlush();
+      } else {
+        await this.retractIntent(entry.opId);
       }
       return count;
     });
@@ -313,7 +368,13 @@ export class GitStorageBackend implements IStorageBackend {
 
   /** Sync-state snapshot for health-check exposure. Reads in-memory state only, no I/O. */
   getSyncSummary(): GitSyncSummary {
-    return { status: this.syncStatus, pendingCount: this.pendingOps.length, lastPushedAt: this.lastPushedAt };
+    const oldestPendingOpTs = this.pendingOps.length > 0 ? Math.min(...this.pendingOps.map((op) => op.ts)) : null;
+    return {
+      status: this.syncStatus,
+      pendingCount: this.pendingOps.length,
+      lastPushedAt: this.lastPushedAt,
+      oldestPendingOpTs,
+    };
   }
 
   /** Clear any live timers. Call when this instance is being discarded (e.g. cache eviction). */
@@ -371,22 +432,38 @@ export class GitStorageBackend implements IStorageBackend {
     return buildGitAuth(credential);
   }
 
+  /**
+   * Builds the clone into a staging directory and only renames it into place
+   * (`this.cloneDir`) once every step succeeds. `doInitialize()` treats
+   * "`.git` exists at cloneDir" as "fully initialized" — building in place
+   * would let a step that fails partway (e.g. checkout-orphan succeeds but
+   * the initial commit fails) leave a `.git` behind with no remote or wrong
+   * branch; every later `ensureInitialized()` call would then see `.git`,
+   * skip this method entirely, and proceed against a broken repo forever.
+   */
   private async cloneOrInitSpace(): Promise<void> {
     await gitCheckRefFormat(this.branchName).then((ok) => {
       if (!ok) throw new Error(`${TAG} generated branch name fails check-ref-format: ${this.branchName}`);
     });
     const auth = await this.auth();
     const remoteHasBranch = await gitLsRemoteHasBranch(this.opts.remoteUrl, this.branchName, auth);
-    if (remoteHasBranch) {
-      this.logger?.info(`${TAG} cloning existing space ${this.branchName}`);
-      await gitClone(this.opts.remoteUrl, this.cloneDir, this.branchName, auth);
-    } else {
-      this.logger?.info(`${TAG} initializing new space ${this.branchName}`);
-      await mkdir(this.cloneDir, { recursive: true });
-      await gitInit(this.cloneDir);
-      await gitRemoteAdd(this.cloneDir, "origin", this.opts.remoteUrl, this.branchName);
-      await gitCheckoutOrphan(this.cloneDir, this.branchName);
-      await gitCommit(this.cloneDir, "git-storage: initialize space", { allowEmpty: true });
+    const stagingDir = `${this.cloneDir}.init-${process.pid}-${Date.now()}`;
+    try {
+      if (remoteHasBranch) {
+        this.logger?.info(`${TAG} cloning existing space ${this.branchName}`);
+        await gitClone(this.opts.remoteUrl, stagingDir, this.branchName, auth);
+      } else {
+        this.logger?.info(`${TAG} initializing new space ${this.branchName}`);
+        await mkdir(stagingDir, { recursive: true });
+        await gitInit(stagingDir);
+        await gitRemoteAdd(stagingDir, "origin", this.opts.remoteUrl, this.branchName);
+        await gitCheckoutOrphan(stagingDir, this.branchName);
+        await gitCommit(stagingDir, "git-storage: initialize space", { allowEmpty: true });
+      }
+      await rename(stagingDir, this.cloneDir);
+    } catch (err) {
+      await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+      throw err;
     }
   }
 
@@ -402,16 +479,31 @@ export class GitStorageBackend implements IStorageBackend {
   }
 
   private async recoverIfNeeded(): Promise<void> {
-    const status = await gitStatusPorcelain(this.cloneDir);
     const locallyCommittedOpIds = await gitLogOpIds(this.cloneDir, "-500");
     this.uncommittedOpIds = new Set(
       this.pendingOps.filter((e) => !locallyCommittedOpIds.has(e.opId)).map((e) => e.opId),
     );
 
-    const hasWorktreeDirt = status.trim().length > 0;
-    const explainedByPendingOps = this.uncommittedOpIds.size > 0;
+    // Snapshot status BEFORE reapplying anything below, so the
+    // unexplained-dirt judgment reflects only pre-existing, genuinely
+    // unaccounted-for changes — not the staging we're about to do ourselves.
+    // `.meta.json` sidecars are never staged by design (local-only metadata,
+    // see design doc) and would otherwise show up as permanent "unexplained"
+    // dirt on every restart after any putObject call that used
+    // contentType/metadata, incorrectly tripping recoveryBlocked.
+    const rawStatus = await gitStatusPorcelain(this.cloneDir);
+    const explainedExactPaths = new Set<string>();
+    const explainedPrefixes: string[] = [];
+    for (const op of this.pendingOps) {
+      if (!this.uncommittedOpIds.has(op.opId)) continue;
+      const relPath = resolveSafeRelativePath(this.cloneDir, op.key).split(sep).join("/");
+      if (op.kind === "deleteByPrefix") explainedPrefixes.push(relPath);
+      else explainedExactPaths.add(relPath);
+    }
+    const unexplainedDirt = filterUnexplainedDirt(rawStatus, explainedExactPaths, explainedPrefixes);
+    const hasUnexplainedDirt = unexplainedDirt.trim().length > 0;
 
-    if (hasWorktreeDirt && !explainedByPendingOps) {
+    if (hasUnexplainedDirt) {
       if (this.recoveryMode === "auto-wal-only") {
         this.logger?.warn(`${TAG} discarding unexplained worktree dirt (recoveryMode=auto-wal-only): ${this.branchName}`);
         await gitCheckoutDiscard(this.cloneDir);
@@ -425,7 +517,23 @@ export class GitStorageBackend implements IStorageBackend {
       }
     }
 
-    if (this.pendingOps.length > 0 || hasWorktreeDirt) {
+    // A crash can land between a pending op's WAL-append and its apply()/
+    // gitAdd() — per-path status is the ground truth for whether apply()
+    // already ran: reapply (exactly once) only when nothing shows for that
+    // path yet, otherwise just ensure it's staged. Reapplying an "append"
+    // that already landed would double its content.
+    for (const op of this.pendingOps) {
+      if (!this.uncommittedOpIds.has(op.opId)) continue;
+      const relPath = resolveSafeRelativePath(this.cloneDir, op.key);
+      const pathStatus = await gitStatusPorcelainForPath(this.cloneDir, relPath);
+      if (pathStatus.trim().length === 0) {
+        await this.reapplyOp(op);
+      } else {
+        await gitAdd(this.cloneDir, relPath).catch(() => {});
+      }
+    }
+
+    if (this.pendingOps.length > 0 || rawStatus.trim().length > 0) {
       await this.writeSyncState("dirty-local");
       this.scheduleFlush();
     }
@@ -433,21 +541,35 @@ export class GitStorageBackend implements IStorageBackend {
 
   // ── Write path ───────────────────────────────────────────────
 
+  /**
+   * Write-ahead: record intent in the WAL and in-memory pendingOps BEFORE
+   * mutating the worktree, so a crash between them leaves a durable record
+   * that recovery can reapply exactly once (see recoverIfNeeded's per-path
+   * status check). Writing the WAL entry after apply() — the original
+   * ordering — left a window where the mutation could happen with no record
+   * of it at all, undetectable and unrecoverable on restart.
+   */
   private async applyAndStage(entry: WalEntry, relPath: string, apply: () => Promise<void>): Promise<void> {
     if (this.recoveryBlocked) {
       throw new Error(`${TAG} writes blocked for ${this.branchName}: recovery required (recoveryMode=manual)`);
     }
+    await this.recordIntent(entry);
     await apply();
-    await this.stageEntry(entry, relPath);
-  }
-
-  private async stageEntry(entry: WalEntry, relPath: string): Promise<void> {
-    await appendWalLine(this.walPath, entry);
     await gitAdd(this.cloneDir, relPath);
-    this.pendingOps.push(entry);
-    this.uncommittedOpIds.add(entry.opId);
     await this.writeSyncState("dirty-local");
     this.scheduleFlush();
+  }
+
+  private async recordIntent(entry: WalEntry): Promise<void> {
+    await appendWalLine(this.walPath, entry);
+    this.pendingOps.push(entry);
+    this.uncommittedOpIds.add(entry.opId);
+  }
+
+  private async retractIntent(opId: string): Promise<void> {
+    this.pendingOps = this.pendingOps.filter((e) => e.opId !== opId);
+    this.uncommittedOpIds.delete(opId);
+    await rewriteWalFile(this.walPath, this.pendingOps);
   }
 
   private scheduleFlush(): void {
@@ -483,10 +605,15 @@ export class GitStorageBackend implements IStorageBackend {
     }
 
     this.lockLost = false;
-    this.startLockRenewal();
-    await this.writeSyncState("pushing");
 
     try {
+      // Lock renewal and the "pushing" state write both happen inside the
+      // try so a failure in either (e.g. sync-state rename fails) still
+      // reaches finally and releases the lock/timer instead of leaking them
+      // for up to lockTtlMs (or, since renewal would otherwise keep
+      // succeeding, effectively indefinitely).
+      this.startLockRenewal();
+      await this.writeSyncState("pushing");
       await this.commitUncommittedOps();
       await this.pushWithReplay();
       await this.writeSyncState("clean");
@@ -570,10 +697,22 @@ export class GitStorageBackend implements IStorageBackend {
   }
 
   private async confirmAllPending(): Promise<void> {
+    // Persist the WAL trim BEFORE clearing in-memory state: if the rewrite
+    // fails after the push already succeeded, flushLocked's catch marks
+    // "push-failed" but pendingOps/uncommittedOpIds must still reflect
+    // reality, or every later flush() call would return immediately (both
+    // collections already empty) and only a process restart — which
+    // reloads the still-populated WAL file — would ever retry the trim.
+    await rewriteWalFile(this.walPath, []);
     this.pendingOps = [];
     this.uncommittedOpIds.clear();
     this.lastPushedAt = Date.now();
-    await rewriteWalFile(this.walPath, []);
+    if (this.lockLost) {
+      this.logger?.warn(
+        `${TAG} push for ${this.branchName} succeeded but the lock lease was lost during the attempt; ` +
+          `data is safe (git's non-fast-forward push is the real CAS), but the single-writer lease was not held throughout.`,
+      );
+    }
   }
 
   /**

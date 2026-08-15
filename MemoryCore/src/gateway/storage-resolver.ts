@@ -54,6 +54,15 @@ export interface ResolveFileStorageBackendOptions {
   getStateBackend: () => IStateBackend | null;
   /** Only the worker-task path lazily initializes a missing COS client; resolveStorageForInstance does not (preserves existing behavior at both call sites). */
   ensureCosClient?: () => Promise<void>;
+  /**
+   * Only `start()`'s core-default-storage call site historically had an
+   * unconditional-success contract: pre-this-diff it always fell back to
+   * LocalStorageBackend rather than ever throwing, regardless of deployMode.
+   * resolveStorageForInstance/the worker-task closure correctly throw when
+   * COS is unavailable in service mode — this must default to false so
+   * their stricter behavior isn't accidentally loosened.
+   */
+  allowLocalFallbackOnCosUnavailable?: boolean;
   /** For error messages, e.g. "instance abc123" vs "worker task xyz (instance=abc123)". */
   errorContext: string;
 }
@@ -118,6 +127,12 @@ export async function resolveFileStorageBackend(opts: ResolveFileStorageBackendO
   }
   const sharedCosClient = opts.getSharedCosClient();
   if (!sharedCosClient) {
+    if (opts.allowLocalFallbackOnCosUnavailable) {
+      const backend = new LocalStorageBackend({ rootDir: opts.config.data.baseDir, logger: opts.logger });
+      const adapter = new StorageAdapterCtor(backend);
+      opts.cache.set(opts.instanceId, adapter);
+      return adapter;
+    }
     throw new Error(`SharedCosClient not initialized for ${opts.errorContext}`);
   }
   const configProvider = opts.getConfigProvider();

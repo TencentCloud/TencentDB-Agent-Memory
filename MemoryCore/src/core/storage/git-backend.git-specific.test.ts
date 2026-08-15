@@ -80,6 +80,65 @@ describe("GitStorageBackend — crash recovery", () => {
       await rm(checkoutDir, { recursive: true, force: true });
     }
   });
+
+  it("a metadata write does not permanently block recovery after a restart (Codex checkpoint B #1)", async () => {
+    // .meta.json sidecars are never staged (local-only by design) and show
+    // up as an untracked file in `git status` forever after — recovery must
+    // not mistake that for unexplained dirt, or every space that ever used
+    // contentType/metadata would brick itself (recoveryBlocked) on restart.
+    const seed = { tenantId: "meta-restart", instanceId: "space-1" };
+    const backendA = makeBackend(remoteDir, localRootDir, { branchNameSeed: seed });
+    await backendA.putObject("persona.md", "hello", { contentType: "text/markdown", metadata: { a: "b" } });
+    await backendA.flush();
+    expect(backendA.getSyncSummary().status).toBe("clean");
+
+    const backendB = makeBackend(remoteDir, localRootDir, { branchNameSeed: seed, stateBackend: new FakeStateBackend() });
+    await backendB.putObject("scene_blocks/x.md", "y");
+    await backendB.flush();
+    expect(backendB.getSyncSummary().status).toBe("clean");
+    expect(backendB.getSyncSummary().pendingCount).toBe(0);
+  });
+
+  it("recovery reapplies a WAL-recorded op whose mutation never reached disk (Codex checkpoint B #2)", async () => {
+    // Simulates a crash landing exactly between the WAL append (now
+    // write-ahead) and the actual file mutation: hand-write a WAL entry
+    // whose content was never applied to the worktree, then start a fresh
+    // instance and confirm recovery reapplies (not silently drops) it.
+    const seed = { tenantId: "wal-order", instanceId: "space-1" };
+    const backendA = makeBackend(remoteDir, localRootDir, { branchNameSeed: seed });
+    await backendA.putObject("persona.md", "base");
+    await backendA.flush();
+
+    const branchDirName = buildBranchName(seed).replace(/\//g, "_");
+    const stateDir = join(localRootDir, "state", branchDirName);
+    const { mkdir: mkdirFn, appendFile, readFile: readFileFn } = await import("node:fs/promises");
+    const { randomUUID } = await import("node:crypto");
+    await mkdirFn(stateDir, { recursive: true });
+    const entry = {
+      opId: randomUUID(),
+      kind: "append",
+      key: "records/log.jsonl",
+      contentBase64: Buffer.from("line1\n", "utf-8").toString("base64"),
+      ts: Date.now(),
+    };
+    await appendFile(join(stateDir, "pending-ops.jsonl"), `${JSON.stringify(entry)}\n`);
+
+    const backendB = makeBackend(remoteDir, localRootDir, { branchNameSeed: seed, stateBackend: new FakeStateBackend() });
+    await backendB.flush();
+    expect(backendB.getSyncSummary().status).toBe("clean");
+
+    const checkoutDir = await mkdtemp(join(tmpdir(), "storage-git-checkout-"));
+    try {
+      const branchName = buildBranchName(seed);
+      await runGit(["clone", "--quiet", "--single-branch", "--branch", branchName, remoteDir, checkoutDir], {
+        cwd: process.cwd(),
+      });
+      const content = await readFileFn(join(checkoutDir, "records/log.jsonl"), "utf-8");
+      expect(content).toBe("line1\n");
+    } finally {
+      await rm(checkoutDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GitStorageBackend — push-rejected replay", () => {

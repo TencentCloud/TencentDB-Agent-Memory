@@ -633,6 +633,9 @@ export class TdaiGateway {
         getSharedCosClient: () => this.sharedCosClient,
         getConfigProvider: () => this.configProvider,
         getStateBackend: () => this.stateBackend,
+        // Historically this call site never threw — it always fell back to
+        // local storage when COS wasn't available, regardless of deployMode.
+        allowLocalFallbackOnCosUnavailable: true,
         errorContext: "default storage",
       });
       this.core.setStorage(adapter);
@@ -1310,9 +1313,30 @@ export class TdaiGateway {
       }
     }
 
-    // 3. Delete COS objects for this instance
+    // 3. Delete COS objects for this instance / dispose git storage.
+    // git storage's remote branch and local clone are deliberately NOT
+    // deleted here — Git cannot verifiably erase history (RFC结论8), so
+    // "instance destroy" only stops this process from tracking the space
+    // further, it does not attempt the out-of-scope deletion semantics COS
+    // gets below. Best-effort flush first so a pending local write isn't
+    // silently stranded the moment the adapter is evicted and its timers
+    // disposed.
+    const evictedAdapter = this.cosStorageCache?.get(instanceId);
     if (this.cosStorageCache?.has(instanceId)) {
       this.cosStorageCache.delete(instanceId);
+    }
+    if (evictedAdapter?.getBackend().type === "git") {
+      const gitBackend = evictedAdapter.getBackend() as GitStorageBackend;
+      try {
+        await gitBackend.flush();
+      } catch (err) {
+        this.logger.warn(
+          `${tag} final git storage flush before instance destroy failed (pending local writes may be stranded): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      gitBackend.dispose();
+      cleaned.git_storage_disposed = true;
+      this.logger.info(`${tag} git storage adapter disposed for instance ${instanceId} (remote branch and local clone not deleted)`);
     }
     if (this.sharedCosClient && this.configProvider) {
       try {
@@ -1395,15 +1419,25 @@ export class TdaiGateway {
    * summary.
    */
   private collectGitStorageHealth(): GitStorageHealthSummary | undefined {
-    if (!this.cosStorageCache) return undefined;
     let enabledSpaceCount = 0;
     let unsyncedSpaceCount = 0;
     let oldestPendingPushAgeMs: number | null = null;
     const severityOrder: GitStorageHealthSummary["worstStatus"][] = ["clean", "dirty-local", "pushing", "replaying", "push-failed"];
     let worstIdx = 0;
     const now = Date.now();
+    const seen = new Set<StorageAdapter>();
 
-    for (const adapter of this.cosStorageCache.values()) {
+    // start()'s core-default-storage resolution uses a throwaway cache Map
+    // (it's a single one-off value, not per-instance), so it would never
+    // show up by scanning cosStorageCache alone — check this.core.getStorage()
+    // too, deduped by reference in case a future change makes them overlap.
+    const defaultStorage = this.core.getStorage();
+    const candidates: StorageAdapter[] = defaultStorage ? [defaultStorage] : [];
+    if (this.cosStorageCache) candidates.push(...this.cosStorageCache.values());
+
+    for (const adapter of candidates) {
+      if (seen.has(adapter)) continue;
+      seen.add(adapter);
       const backend = adapter.getBackend();
       if (backend.type !== "git") continue;
       enabledSpaceCount++;
@@ -1411,8 +1445,8 @@ export class TdaiGateway {
       if (summary.status !== "clean") unsyncedSpaceCount++;
       const idx = severityOrder.indexOf(summary.status);
       if (idx > worstIdx) worstIdx = idx;
-      if (summary.status !== "clean") {
-        const age = summary.lastPushedAt ? now - summary.lastPushedAt : now;
+      if (summary.oldestPendingOpTs !== null) {
+        const age = now - summary.oldestPendingOpTs;
         if (oldestPendingPushAgeMs === null || age > oldestPendingPushAgeMs) oldestPendingPushAgeMs = age;
       }
     }
@@ -2568,16 +2602,28 @@ export class TdaiGateway {
           }
         }
 
-        // Set Core default storage to COS
-        const defaultInstanceId = this.config.instanceId ?? "default";
-        const defaultPrefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${defaultInstanceId}/`;
-        const cosBackend = new CosStorageBackend({
-          sharedClient: this.sharedCosClient,
-          prefix: defaultPrefix,
-          logger: this.logger,
-        });
-        this.core.setStorage(new StorageAdapter(cosBackend));
-        this.logger.info(`${TAG} Core default storage switched to COS (prefix=${defaultPrefix})`);
+        // Set Core default storage to COS — unless the operator explicitly
+        // selected a different backend for it. Without this check, an
+        // explicit fileStorageBackend="local"|"git" would be silently
+        // overridden here whenever COS itself is reachable, even though
+        // resolveFileStorageBackend() correctly honors the selection for
+        // every per-instance path.
+        const explicitSelection = this.config.memory.fileStorageBackend;
+        if (explicitSelection !== "local" && explicitSelection !== "git") {
+          const defaultInstanceId = this.config.instanceId ?? "default";
+          const defaultPrefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${defaultInstanceId}/`;
+          const cosBackend = new CosStorageBackend({
+            sharedClient: this.sharedCosClient,
+            prefix: defaultPrefix,
+            logger: this.logger,
+          });
+          this.core.setStorage(new StorageAdapter(cosBackend));
+          this.logger.info(`${TAG} Core default storage switched to COS (prefix=${defaultPrefix})`);
+        } else {
+          this.logger.info(
+            `${TAG} SharedCosClient ready, but core default storage left for fileStorageBackend=${explicitSelection} to claim`,
+          );
+        }
         return;
       } catch (err) {
         this.logger.warn(`${TAG} COS init attempt ${attempt}/${maxRetries} failed: ${err instanceof Error ? err.message : String(err)}`);
