@@ -626,6 +626,12 @@ export class TdaiGateway {
       this.logger.info(`${TAG} StorageAdapter initialized (local: ${this.config.data.baseDir})`);
     }
 
+    // Reconcile checkpoint counters only after the final storage backend has
+    // been selected. In service mode this updates the COS checkpoint; in
+    // standalone mode it updates the local checkpoint. Awaiting it here also
+    // prevents the first HTTP request from observing stale status counters.
+    await this.core.recalibrateCheckpointCounters();
+
     // ── Skill module post-wiring (after storage is set) ──
     // setStorage() above kicks off ensureSkillModuleWired() asynchronously
     // (B1 fix in tdai-core: concurrent triggers coalesce onto one promise);
