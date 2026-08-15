@@ -366,7 +366,7 @@ export class LocalEmbeddingService implements EmbeddingService {
 const MAX_BATCH_SIZE = 256;
 
 /** Max retries for API calls */
-const MAX_RETRIES = 0;
+const MAX_RETRIES = 2;
 /** Default timeout per API call in milliseconds */
 const DEFAULT_API_TIMEOUT_MS = 10_000;
 
