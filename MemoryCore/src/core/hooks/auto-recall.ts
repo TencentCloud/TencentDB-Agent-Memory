@@ -639,7 +639,7 @@ async function searchHybrid(
   userText: string,
   _pluginDataDir: string,
   maxResults: number,
-  _threshold: number,
+  threshold: number,
   vectorStore: IMemoryStore,
   embeddingService: EmbeddingService,
   logger?: Logger,
@@ -710,7 +710,17 @@ async function searchHybrid(
   ]);
 
   const keywordResults = keywordResult.records;
-  const embeddingResults = embeddingResult.results;
+  // Only vector scores are cosine similarities. Apply the configured floor
+  // before RRF while leaving BM25-derived keyword scores untouched.
+  const embeddingResults = threshold > 0
+    ? embeddingResult.results.filter((r) => r.score >= threshold)
+    : embeddingResult.results;
+  if (embeddingResults.length !== embeddingResult.results.length) {
+    logger?.debug?.(
+      `${TAG} [hybrid-embedding] Kept ${embeddingResults.length}/${embeddingResult.results.length} ` +
+      `candidates above threshold=${threshold}`,
+    );
+  }
   const timing: SearchTiming = {
     ftsMs: keywordResult.ms,
     embeddingMs: embeddingResult.ms,
