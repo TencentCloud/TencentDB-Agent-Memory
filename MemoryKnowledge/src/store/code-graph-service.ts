@@ -35,6 +35,7 @@ export interface CodeGraphBuildContext {
   teamId: string;
   repoUrl: string;
   branch: string;
+  sparsePaths: string[];
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
@@ -87,6 +88,7 @@ export interface CreateCodeGraphParams {
   team_id: string;
   repo_url: string;
   branch: string;
+  sparse_paths?: string[];
   repo_name?: string;
   owner_user_id?: string;
   user_id?: string;
@@ -268,7 +270,7 @@ export class CodeGraphService {
 
   private enqueueBuild(row: CodeGraphRow): void {
     this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
+      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch, row.sparse_paths),
     );
   }
 
@@ -278,6 +280,7 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
+    sparsePaths: string[],
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
@@ -296,6 +299,7 @@ export class CodeGraphService {
         teamId,
         repoUrl,
         branch,
+        sparsePaths,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),
