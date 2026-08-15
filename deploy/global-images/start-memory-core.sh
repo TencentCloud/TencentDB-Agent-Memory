@@ -16,6 +16,13 @@ source "$SCRIPT_DIR/_lib.sh"
 load_env
 require_vars MEMORY_CORE_IMAGE MEMORY_CORE_PORT MEMORY_CORE_VOLUME
 
+# MEMORY_LLM_PROTOCOL 对 hub/knowledge 生效，但 memory-core 的 standalone
+# runner 目前只支持 OpenAI 兼容协议（POST {base}/chat/completions）。
+if [[ "${MEMORY_LLM_PROTOCOL:-openai}" == "anthropic" ]]; then
+  warn "MEMORY_LLM_PROTOCOL=anthropic：memory-core 运行时只走 OpenAI 兼容 /chat/completions，该设置对 memory-core 不生效。"
+  warn "Anthropic 请改用其 OpenAI 兼容端点：MEMORY_LLM_BASE_URL=https://api.anthropic.com/v1 + MEMORY_LLM_PROTOCOL=openai，否则 L1 抽取会一直 404（Not Found）。"
+fi
+
 # ── Gateway 内部管理凭据 ─────────────────────────────────────────
 # 用 ${VAR-default}（不是 :-default）：允许 .env 里显式设为空字符串来关闭 Bearer gate。
 #
