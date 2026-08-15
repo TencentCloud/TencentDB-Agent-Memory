@@ -120,9 +120,10 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager.js";
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import packageJson from "../../package.json" with { type: "json" };
 
 const TAG = "[tdai-gateway]";
-const VERSION = "0.1.0";
+const VERSION = packageJson.version;
 
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
