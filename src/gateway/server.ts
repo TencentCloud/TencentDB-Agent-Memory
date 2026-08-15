@@ -47,6 +47,40 @@ import type { SeedProgress } from "../core/seed/types.js";
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"]);
+
+function isLoopbackHostHeader(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  let host = hostHeader.trim().toLowerCase();
+  if (host.startsWith("[")) {
+    const closeBracket = host.indexOf("]");
+    if (closeBracket === -1) return false;
+    host = host.slice(1, closeBracket);
+  } else {
+    const colonIdx = host.indexOf(":");
+    if (colonIdx !== -1) host = host.slice(0, colonIdx);
+  }
+  return LOOPBACK_HOSTS.has(host);
+}
+
+/**
+ * Refuse to bind a non-loopback `TDAI_GATEWAY_HOST` unless
+ * `TDAI_GATEWAY_ALLOW_REMOTE=1` is explicitly set. Exits with code 2 on
+ * violation. Called from main() (auto-start when running this file directly)
+ * to prevent the daemon from accidentally binding to a LAN/public interface.
+ */
+function assertSafeHost(): void {
+  const host = process.env.TDAI_GATEWAY_HOST?.trim();
+  if (!host) return;
+  if (LOOPBACK_HOSTS.has(host)) return;
+  if (process.env.TDAI_GATEWAY_ALLOW_REMOTE === "1") return;
+  process.stderr.write(
+    `tdai-gateway: refusing to bind TDAI_GATEWAY_HOST=${host} (non-loopback). ` +
+      `Set TDAI_GATEWAY_ALLOW_REMOTE=1 to opt in.\n`,
+  );
+  process.exit(2);
+}
+
 // ============================
 // Console logger (for standalone gateway — no OpenClaw logger available)
 // ============================
@@ -233,6 +267,19 @@ export class TdaiGateway {
   // ============================
 
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // Host header allowlist: defence against DNS rebinding. An attacker with
+    // a domain `evil.com` that has a short TTL can DNS-rebind a victim's
+    // browser to resolve `evil.com -> 127.0.0.1`, then issue fetch() to the
+    // local daemon. Require Host to be a loopback name/IP unless
+    // TDAI_GATEWAY_ALLOW_REMOTE=1 opted in at startup.
+    if (
+      process.env.TDAI_GATEWAY_ALLOW_REMOTE !== "1" &&
+      !isLoopbackHostHeader(req.headers.host)
+    ) {
+      sendError(res, 403, "Forbidden: Host header not in loopback allowlist");
+      return;
+    }
+
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const method = req.method?.toUpperCase() ?? "GET";
     const pathname = url.pathname;
@@ -240,7 +287,7 @@ export class TdaiGateway {
     // Apply CORS headers based on configured allow-list (empty → no headers).
     this.applyCorsHeaders(req, res);
 
-    if (method === "OPTIONS") {
+    if (method === "OPTIONS" && this.config.server.corsOrigins.length > 0) {
       res.writeHead(204);
       res.end();
       return;
@@ -584,8 +631,14 @@ export class TdaiGateway {
 /**
  * Start the gateway from the command line.
  * Usage: node --import tsx src/gateway/server.ts
+ *
+ * Auto-start path applies `assertSafeHost()` first so that a stray
+ * `TDAI_GATEWAY_HOST=0.0.0.0` in the environment does NOT silently expose
+ * the daemon to the LAN; binding non-loopback requires explicit
+ * `TDAI_GATEWAY_ALLOW_REMOTE=1`.
  */
 async function main(): Promise<void> {
+  assertSafeHost();
   const gateway = new TdaiGateway();
 
   // Graceful shutdown
