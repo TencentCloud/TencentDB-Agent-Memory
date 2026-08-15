@@ -19,7 +19,7 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { generateText, tool, stepCountIs, jsonSchema } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAI, type OpenAIProviderSettings } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import { createNoThinkFetch, type DisableThinkingStrategy } from "../../utils/no-think-fetch.js";
 import type {
@@ -203,9 +203,8 @@ export class StandaloneLLMRunner implements LLMRunner {
     const provider = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
-      compatibility: "compatible",
       ...(this.customFetch ? { fetch: this.customFetch } : {}),
-    });
+    } satisfies OpenAIProviderSettings);
 
     // For pure text tasks like L1 extraction, avoid exposing any tools.
     const tools = this.enableTools
