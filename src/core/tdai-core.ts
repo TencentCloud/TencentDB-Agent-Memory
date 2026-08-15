@@ -160,6 +160,19 @@ export class TdaiCore {
         });
     }
 
+    // Recalibrate checkpoint counters from actual data on disk.
+    // This ensures total_memories_extracted and l0_conversations_count are
+    // accurate after any external data cleanup (e.g. memory-cleaner) and
+    // on every process restart.
+    try {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      await checkpoint.recalibrate();
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
 

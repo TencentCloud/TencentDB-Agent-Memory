@@ -28,6 +28,32 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
+/**
+ * Helper: count total non-empty lines across all JSONL/JSON files in a directory.
+ * Used by recalibrate() to recount actual data from the filesystem.
+ */
+async function countJsonlLines(dirPath: string, logger?: CheckpointLogger): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+      const filePath = path.join(dirPath, entry.name);
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const lines = content.split("\n").filter((line) => line.trim().length > 0);
+        total += lines.length;
+      } catch {
+        // skip unreadable files
+      }
+    }
+  } catch {
+    // directory doesn't exist yet — normal before first capture
+  }
+  return total;
+}
+
 // ============================
 // Types
 // ============================
@@ -483,6 +509,56 @@ export class CheckpointManager {
         cp.l0_conversations_count += 1;
       }
     });
+  }
+
+  // ============================
+  // Recalibrate
+  // ============================
+
+  /**
+   * Recalibrate global counters from actual data on disk.
+   *
+   * After cleanup operations (memory-cleaner, manual JSONL pruning, pipeline
+   * state deletion), the counters in `recall_checkpoint.json` may permanently
+   * overstate reality because they only increment. This method recounts actual
+   * data from the filesystem and corrects the checkpoint.
+   *
+   * What gets recalibrated:
+   *   - `total_memories_extracted` ← line count of `records/*.jsonl`
+   *   - `l0_conversations_count`  ← line count of `conversations/*.jsonl`
+   *   - `memories_since_last_persona` ← reset to 0 (will build naturally)
+   *
+   * What stays untouched:
+   *   - `total_processed` — represents the total messages ever processed through
+   *     the capture pipeline. Cleanup removes files, but those messages were
+   *     still "processed". Recalibrating this would lose the processing history
+   *     and break per-session cursor integrity.
+   *   - Per-session `runner_states` and `pipeline_states` — session-level cursors
+   *     are independent of global counters.
+   *
+   * Safe to call multiple times. Uses the per-file lock for atomicity.
+   * Recommended call sites: gateway startup, after memory-cleaner completes.
+   */
+  async recalibrate(): Promise<void> {
+    const dataDir = path.dirname(path.dirname(this.filePath));
+    const recordsDir = path.join(dataDir, "records");
+    const conversationsDir = path.join(dataDir, "conversations");
+
+    const [l1Count, l0MessageCount] = await Promise.all([
+      countJsonlLines(recordsDir, this.logger),
+      countJsonlLines(conversationsDir, this.logger),
+    ]);
+
+    await this.mutate((cp) => {
+      cp.total_memories_extracted = l1Count;
+      cp.l0_conversations_count = l0MessageCount;
+      cp.memories_since_last_persona = 0;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: total_memories_extracted=${l1Count}, ` +
+      `l0_conversations_count=${l0MessageCount}, memories_since_last_persona=0`,
+    );
   }
 
 }
