@@ -45,21 +45,21 @@ export async function publishContentNoReplace(path, expected, { beforePublish = 
 
 export const publishHookNoReplace = (hookPath, expected, options) => publishContentNoReplace(hookPath, expected, options);
 
-const removeExpectedHook = async (hookPath, expected) => {
-  const quarantine = `${hookPath}.${randomUUID()}.install-rollback`;
+const removeExpectedPublishedFile = async (path, expected) => {
+  const quarantine = `${path}.${randomUUID()}.install-rollback`;
   try {
-    if (!(await lstat(hookPath)).isFile()) return;
+    if (!(await lstat(path)).isFile()) return;
   } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
-  try { await rename(hookPath, quarantine); } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
+  try { await rename(path, quarantine); } catch (error) { if (error?.code === 'ENOENT') return; throw error; }
   if (!(await lstat(quarantine)).isFile()) {
-    try { await rename(quarantine, hookPath); } catch { /* keep the non-regular object quarantined if the original path is occupied */ }
+    try { await rename(quarantine, path); } catch { /* keep the non-regular object quarantined if the original path is occupied */ }
     return;
   }
   if (await readFile(quarantine, 'utf8') === expected) {
     await unlink(quarantine);
     return;
   }
-  try { await link(quarantine, hookPath); } catch (error) { if (error?.code === 'EEXIST') return; throw error; }
+  try { await link(quarantine, path); } catch (error) { if (error?.code === 'EEXIST') return; throw error; }
   await unlink(quarantine);
 };
 
@@ -94,7 +94,16 @@ export function buildHookDefinition(adapterPath, options = {}) {
   };
 }
 
-export async function installProject({ project: projectArg, env = process.env, adapterPath = adapterPathFor(), beforePublish, afterReceiptPublished = async () => {}, afterHookPublished = async () => {} } = {}) {
+export async function installProject({
+  project: projectArg,
+  env = process.env,
+  adapterPath = adapterPathFor(),
+  beforePublish,
+  afterInitialTransactionCheck = async () => {},
+  afterReceiptPublished = async () => {},
+  beforeReceiptRollback = async () => {},
+  afterHookPublished = async () => {},
+} = {}) {
   if (typeof projectArg !== 'string' || projectArg.length === 0) throw new Error('args');
   loadConfig(env);
   const project = resolve(projectArg);
@@ -105,13 +114,20 @@ export async function installProject({ project: projectArg, env = process.env, a
   const receipt = { version: 1, hook_path: '.kiro/hooks/tdai-memory.json', hook_sha256: sha256(expected), adapter_path: adapterPath };
   const receiptExpected = `${JSON.stringify(receipt, null, 2)}\n`;
   await refuseUninstallTransaction(project);
-  await publishContentNoReplace(receiptPath, receiptExpected);
+  await afterInitialTransactionCheck();
+  const receiptPublished = await publishContentNoReplace(receiptPath, receiptExpected);
   await afterReceiptPublished();
-  await refuseUninstallTransaction(project);
+  try { await refuseUninstallTransaction(project); } catch (error) {
+    if (receiptPublished === 'created') {
+      await beforeReceiptRollback();
+      await removeExpectedPublishedFile(receiptPath, receiptExpected);
+    }
+    throw error;
+  }
   await publishHookNoReplace(hookPath, expected, { beforePublish });
   await afterHookPublished();
   if (await transactionExists(project) || await readFile(receiptPath, 'utf8').catch((error) => error?.code === 'ENOENT' ? null : Promise.reject(error)) !== receiptExpected) {
-    await removeExpectedHook(hookPath, expected);
+    await removeExpectedPublishedFile(hookPath, expected);
     throw new Error('lifecycle');
   }
   if (await readFile(hookPath, 'utf8') !== expected) throw new Error('conflict');

@@ -23,6 +23,10 @@ const runAsync = (name, project, env) => new Promise((resolve, reject) => {
   child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
   child.once('error', reject); child.once('close', (status) => resolve({ status, stdout, stderr }));
 });
+const waitForBarrier = async (promise) => {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('barrier-timeout')), 1000); })]); } finally { clearTimeout(timer); }
+};
 const runCommand = (command, input, env) => new Promise((resolve, reject) => {
   const child = spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${command}"`], { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments: true });
   let stdout = ''; let stderr = '';
@@ -290,6 +294,67 @@ test('an abandoned uninstall transaction is resumed before installation can reco
     await installProject({ project, env });
     assert.equal((await lstat(join(project, '.kiro', 'tdai-memory-install.json'))).isFile(), true);
     assert.equal((await lstat(join(project, '.kiro', 'hooks', 'tdai-memory.json'))).isFile(), true);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('installer rolls back a newly published receipt when uninstall starts after its initial check', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-receipt-race-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    let continueInstall; const installReleased = new Promise((resolve) => { continueInstall = resolve; });
+    let initialChecked; const initialCheck = new Promise((resolve) => { initialChecked = resolve; });
+    const installing = installProject({ project, env, afterInitialTransactionCheck: async () => { initialChecked(); await installReleased; } });
+    await waitForBarrier(initialCheck);
+    let continueUninstall; const uninstallReleased = new Promise((resolve) => { continueUninstall = resolve; });
+    let receiptStaged; const staged = new Promise((resolve) => { receiptStaged = resolve; });
+    const uninstalling = uninstallProject({ project, afterReceiptStaged: async () => { receiptStaged(); await uninstallReleased; } });
+    await staged; continueInstall(); await assert.rejects(installing, /lifecycle/); continueUninstall(); await uninstalling;
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('receipt rollback preserves a concurrent user file or directory at the original path', async () => {
+  for (const replacement of ['file', 'directory']) {
+    const project = await mkdtemp(join(tmpdir(), `kiro-receipt-replace-${replacement}-`));
+    try {
+      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      const receiptPath = join(project, '.kiro', 'tdai-memory-install.json'); const userReceipt = '{"user":true}\n';
+      let continueInstall; const installReleased = new Promise((resolve) => { continueInstall = resolve; });
+      let initialChecked; const initialCheck = new Promise((resolve) => { initialChecked = resolve; });
+      const installing = installProject({
+        project,
+        env,
+        afterInitialTransactionCheck: async () => { initialChecked(); await installReleased; },
+        beforeReceiptRollback: async () => { await fsUnlink(receiptPath); if (replacement === 'file') await writeFile(receiptPath, userReceipt); else await mkdir(receiptPath); },
+      });
+      await waitForBarrier(initialCheck);
+      let continueUninstall; const uninstallReleased = new Promise((resolve) => { continueUninstall = resolve; });
+      let receiptStaged; const staged = new Promise((resolve) => { receiptStaged = resolve; });
+      const uninstalling = uninstallProject({ project, afterReceiptStaged: async () => { receiptStaged(); await uninstallReleased; } });
+      await staged; continueInstall(); await assert.rejects(installing, /lifecycle/);
+      if (replacement === 'file') assert.equal(await readFile(receiptPath, 'utf8'), userReceipt); else assert.equal((await lstat(receiptPath)).isDirectory(), true);
+      continueUninstall(); await uninstalling;
+      if (replacement === 'file') assert.equal(await readFile(receiptPath, 'utf8'), userReceipt); else assert.equal((await lstat(receiptPath)).isDirectory(), true);
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
+});
+
+test('installer never removes an existing matching receipt when uninstall owns the old receipt', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-receipt-existing-race-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    const receiptPath = join(project, '.kiro', 'tdai-memory-install.json'); const matching = await readFile(receiptPath, 'utf8');
+    let continueInstall; const installReleased = new Promise((resolve) => { continueInstall = resolve; });
+    let initialChecked; const initialCheck = new Promise((resolve) => { initialChecked = resolve; });
+    const installing = installProject({ project, env, afterInitialTransactionCheck: async () => { initialChecked(); await installReleased; } });
+    await waitForBarrier(initialCheck);
+    let continueUninstall; const uninstallReleased = new Promise((resolve) => { continueUninstall = resolve; });
+    let receiptStaged; const staged = new Promise((resolve) => { receiptStaged = resolve; });
+    const uninstalling = uninstallProject({ project, afterReceiptStaged: async () => { receiptStaged(); await uninstallReleased; } });
+    await staged; await writeFile(receiptPath, matching); continueInstall(); await assert.rejects(installing, /lifecycle/);
+    assert.equal(await readFile(receiptPath, 'utf8'), matching); continueUninstall(); await uninstalling;
+    assert.equal(await readFile(receiptPath, 'utf8'), matching);
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
