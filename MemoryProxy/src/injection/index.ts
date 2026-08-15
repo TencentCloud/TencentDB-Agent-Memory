@@ -53,6 +53,7 @@ export {
 
 // Registry
 export { HookRegistryImpl } from "./registry.js";
+import { shouldRegisterKnowledgeInjector } from "./should-register-knowledge.js";
 
 // Pipeline
 export { InjectionPipeline } from "./pipeline.js";
@@ -443,18 +444,15 @@ export async function prewarmFromConfig(
 
 /**
  * Pure predicate: should the knowledge-tools injector be registered?
- * Exposed for unit tests (registry itself is not publicly introspectable).
+ * Re-exported from its own module so tests can import it without the
+ * pipeline bundle.
  *
  * Conditions (all must hold):
  *   1. `injection.injectors` includes "knowledge"
  *   2. `knowledge.enabled` is true
  *   3. `knowledge.serviceToken` is non-empty
  */
-export function shouldRegisterKnowledgeInjector(config: ProxyConfig): boolean {
-  return config.injection.injectors.includes("knowledge")
-    && config.knowledge.enabled
-    && !!config.knowledge.serviceToken;
-}
+export { shouldRegisterKnowledgeInjector } from "./should-register-knowledge.js";
 
 /** Test-only: drop the cached pipeline so the next call rebuilds from config. */
 export function __resetInjectionPipelineForTests(): void {

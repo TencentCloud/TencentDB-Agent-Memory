@@ -107,6 +107,13 @@ skill:
   endpoint: "http://memory-core:8420"
   serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
 
+knowledge:
+  enabled: true
+  endpoint: "http://memory-core:8420"
+  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+  serviceId: default
+  timeoutMs: 1500
+
 auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)
   url: "http://memory-core:8420"
