@@ -315,6 +315,14 @@ MemoryCore/
 ```bash
 npm run read-local-memory
 npm run seed-v2
+
+# 导出记忆资产（chat-memory）为可移植 ZIP（issue #779 第一步）
+npm run build:export-memory
+npm run export-memory -- --data-dir "$HOME/.memory-tencentdb/memory-tdai" --out ./memory-backup.zip
+
+# 导入前校验导出包（dry-run，不写入；issue #779 第二步）
+npm run build:import-memory
+npm run import-memory -- --file ./memory-backup.zip --dry-run
 ```
 
 ## 安全建议
