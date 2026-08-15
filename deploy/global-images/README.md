@@ -82,7 +82,7 @@ $EDITOR .env
 | `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1` |
 | `MEMORY_LLM_API_KEY` | 上述端点的 API Key | `sk-xxxxxxxx` |
 | `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat` |
-| `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai` | `openai` |
+| `MEMORY_LLM_PROTOCOL` | 线协议：`openai`（/chat/completions）或 `anthropic`（原生 /v1/messages），默认 `openai`；`anthropic` 时 base URL 指向 Anthropic API 根 | `openai` |
 
 ### proxy 组（proxy 使用）
 
