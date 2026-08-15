@@ -435,6 +435,8 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
+| `recall.injectionMode` | `"prepend"` | Dynamic L1 recall placement: `prepend` keeps legacy behavior; `append` uses OpenClaw `appendContext` to avoid changing the user prompt prefix on compatible hosts |
+| `recall.showInjected` | `false` | Preserve injected `<relevant-memories>` in persisted history. Keep `false` to avoid replaying stale dynamic recall and growing the prompt prefix |
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
@@ -442,6 +444,9 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `extraction.maxMemoriesPerSession` | `20` | Max memories extracted per L1 pass |
 | `persona.triggerEveryN` | `50` | Generate the user persona every N new memories |
 | `offload.enabled` | `false` | Whether to enable short-term compression |
+
+See [Prompt-cache mitigation and verification](docs/prompt-cache-mitigation.md)
+for the context layout, multi-turn growth model, and provider A/B protocol.
 
 </details>
 
