@@ -32,6 +32,7 @@ import { createExtractorAdapter, SkillExtractor as SkillExtractorClass } from ".
 import type { SkillCore as SkillCoreType } from "../core/skill/skill-core.js";
 import type {
   HealthResponse,
+  GitStorageHealthSummary,
   RecallRequest,
   RecallResponse,
   CaptureRequest,
@@ -110,8 +111,9 @@ import type { OffloadV2Deps } from "../offload_server/router.js";
 import { resolveV3StrictIsolation } from "../utils/env-config.js";
 import { initServerOpikTracer } from "../offload_server/opik-tracer.js";
 import { classifyError } from "./error-handler.js";
-import { LocalStorageBackend } from "../core/storage/local-backend.js";
 import { StorageAdapter } from "../core/storage/adapter.js";
+import type { GitStorageBackend } from "../core/storage/git-backend.js";
+import { resolveFileStorageBackend } from "./storage-resolver.js";
 import type { TaskPayload } from "../core/state/types.js";
 import type { TaskExecutor } from "../services/pipeline-worker.js";
 import type { IStateBackend } from "../core/state/types.js";
@@ -618,12 +620,23 @@ export class TdaiGateway {
     await this.startIntegratedServices();
 
     // ── Initialize StorageAdapter for v2 API ──
-    // In standalone mode, use LocalStorageBackend pointing to dataDir.
+    // In standalone mode, use local/git storage pointing to dataDir.
     // In service mode, CosStorageBackend was already injected above.
     if (!this.core.getStorage()) {
-      const backend = new LocalStorageBackend(this.config.data.baseDir);
-      this.core.setStorage(new StorageAdapter(backend));
-      this.logger.info(`${TAG} StorageAdapter initialized (local: ${this.config.data.baseDir})`);
+      // Single default storage for the whole deployment (not per-instance),
+      // so a throwaway one-entry cache is fine — nothing else reads it.
+      const adapter = await resolveFileStorageBackend({
+        instanceId: "default",
+        config: this.config,
+        logger: this.logger,
+        cache: new Map(),
+        getSharedCosClient: () => this.sharedCosClient,
+        getConfigProvider: () => this.configProvider,
+        getStateBackend: () => this.stateBackend,
+        errorContext: "default storage",
+      });
+      this.core.setStorage(adapter);
+      this.logger.info(`${TAG} StorageAdapter initialized (${adapter.type}: ${this.config.data.baseDir})`);
     }
 
     // ── Skill module post-wiring (after storage is set) ──
@@ -1372,6 +1385,42 @@ export class TdaiGateway {
     }
   }
 
+  /**
+   * Aggregate sync status across every live GitStorageBackend instance
+   * cached in `cosStorageCache` (the name is historical — it holds
+   * local/COS/git adapters). Reads each instance's already-in-memory sync
+   * state only, no I/O, to stay consistent with /health's "cheap, k8s
+   * liveness-probe-safe" convention. Returns undefined when git storage
+   * isn't in use, so the field is simply absent rather than a zeroed-out
+   * summary.
+   */
+  private collectGitStorageHealth(): GitStorageHealthSummary | undefined {
+    if (!this.cosStorageCache) return undefined;
+    let enabledSpaceCount = 0;
+    let unsyncedSpaceCount = 0;
+    let oldestPendingPushAgeMs: number | null = null;
+    const severityOrder: GitStorageHealthSummary["worstStatus"][] = ["clean", "dirty-local", "pushing", "replaying", "push-failed"];
+    let worstIdx = 0;
+    const now = Date.now();
+
+    for (const adapter of this.cosStorageCache.values()) {
+      const backend = adapter.getBackend();
+      if (backend.type !== "git") continue;
+      enabledSpaceCount++;
+      const summary = (backend as GitStorageBackend).getSyncSummary();
+      if (summary.status !== "clean") unsyncedSpaceCount++;
+      const idx = severityOrder.indexOf(summary.status);
+      if (idx > worstIdx) worstIdx = idx;
+      if (summary.status !== "clean") {
+        const age = summary.lastPushedAt ? now - summary.lastPushedAt : now;
+        if (oldestPendingPushAgeMs === null || age > oldestPendingPushAgeMs) oldestPendingPushAgeMs = age;
+      }
+    }
+
+    if (enabledSpaceCount === 0) return undefined;
+    return { enabledSpaceCount, unsyncedSpaceCount, oldestPendingPushAgeMs, worstStatus: severityOrder[worstIdx]! };
+  }
+
   private handleHealth(res: http.ServerResponse): void {
     const response: HealthResponse = {
       status: this.core.getVectorStore() ? "ok" : "degraded",
@@ -1386,6 +1435,7 @@ export class TdaiGateway {
         timerScanner: this.timerScanner?.getMetrics() ?? null,
         pipelineWorker: this.pipelineWorker?.getMetrics() ?? null,
         stateBackend: this.stateBackend ? "connected" : "none",
+        gitStorage: this.collectGitStorageHealth(),
       },
     };
     sendJson(res, 200, response);
@@ -2409,55 +2459,30 @@ export class TdaiGateway {
   /**
    * Resolve per-instance StorageAdapter.
    *
-   * Two paths (both cached in `cosStorageCache` — the name is historical; it
-   * also holds LocalStorageBackend adapters in standalone mode):
-   *   - Standalone (sharedCosClient == null && deployMode==='standalone'):
-   *     LocalStorageBackend rooted at data.baseDir.
-   *   - Service: per-instance CosStorageBackend with `${pathPrefix}/${instanceId}/`.
+   * Three paths (all cached in `cosStorageCache` — the name is historical;
+   * it also holds LocalStorageBackend/GitStorageBackend adapters), decided
+   * by `resolveFileStorageBackend()`:
+   *   - fileStorageBackend="git": GitStorageBackend (experimental).
+   *   - "auto" + standalone + no shared COS client: LocalStorageBackend
+   *     rooted at data.baseDir.
+   *   - otherwise: per-instance CosStorageBackend with `${pathPrefix}/${instanceId}/`.
    *
    * Both `/v2/*` (memory) and `/v3/skill/conversation/add` need per-instance
    * storage; keeping this in one method keeps the fallback semantics identical
    * on both paths.
    */
   private async resolveStorageForInstance(instanceId: string): Promise<StorageAdapter> {
-    const cached = this.cosStorageCache?.get(instanceId);
-    if (cached) return cached;
-
-    // Standalone mode: fall back to local storage (no COS needed)
-    if (!this.sharedCosClient && this.config.deployMode === "standalone") {
-      const localDir = this.config.data.baseDir;
-      const backend = new LocalStorageBackend({ rootDir: localDir, logger: this.logger });
-      const adapter = new StorageAdapter(backend);
-      if (!this.cosStorageCache) this.cosStorageCache = new Map();
-      this.cosStorageCache.set(instanceId, adapter);
-      return adapter;
-    }
-
-    if (!this.sharedCosClient) {
-      throw new Error(`SharedCosClient not initialized for instance ${instanceId}`);
-    }
-    if (!this.configProvider) {
-      throw new Error(`configProvider not initialized for instance ${instanceId}`);
-    }
-
-    // Get current COS config to determine prefix
-    const cosConfig = await this.configProvider.resolveCos();
-    if (!cosConfig?.cosUrl) {
-      throw new Error(`COS config not available for instance ${instanceId} (Shark returned null or empty CosUrl)`);
-    }
-
-    // Per-instance CosStorageBackend: lightweight, only holds prefix
-    const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
-    const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-    const backend = new CosStorageBackend({
-      sharedClient: this.sharedCosClient,
-      prefix,
-      logger: this.logger,
-    });
-    const adapter = new StorageAdapter(backend);
     if (!this.cosStorageCache) this.cosStorageCache = new Map();
-    this.cosStorageCache.set(instanceId, adapter);
-    return adapter;
+    return resolveFileStorageBackend({
+      instanceId,
+      config: this.config,
+      logger: this.logger,
+      cache: this.cosStorageCache,
+      getSharedCosClient: () => this.sharedCosClient,
+      getConfigProvider: () => this.configProvider,
+      getStateBackend: () => this.stateBackend,
+      errorContext: `instance ${instanceId}`,
+    });
   }
 
   /**
@@ -2594,44 +2619,20 @@ export class TdaiGateway {
       if (!instanceId) {
         throw new Error(`Task ${task.id} missing instanceId in service mode (task.data.instanceId is required)`);
       }
-
-      // Standalone mode: use local storage (no COS needed)
-      if (!gateway.sharedCosClient && gateway.config.deployMode === "standalone") {
-        const cached = gateway.cosStorageCache?.get(instanceId);
-        if (cached) return cached;
-        const localDir = gateway.config.data.baseDir;
-        const backend = new LocalStorageBackend({ rootDir: localDir, logger: gateway.logger });
-        const adapter = new StorageAdapter(backend);
-        if (!gateway.cosStorageCache) gateway.cosStorageCache = new Map();
-        gateway.cosStorageCache.set(instanceId, adapter);
-        return adapter;
-      }
-
-      // Lazy-init COS if not yet initialized (startup may have failed)
-      if (!gateway.sharedCosClient) {
-        await gateway.initSharedCosClient();
-      }
-
-      if (!gateway.sharedCosClient) {
-        throw new Error(`SharedCosClient not initialized for worker task ${task.id} (instance=${instanceId})`);
-      }
-      const cached = gateway.cosStorageCache?.get(instanceId);
-      if (cached) return cached;
-      const cosConfig = await configProvider.resolveCos();
-      if (!cosConfig) {
-        throw new Error(`COS config not available for worker task ${task.id} (instance=${instanceId}, Shark returned null)`);
-      }
-      const { CosStorageBackend } = await import("../integrations/cos/cos-backend.js");
-      const prefix = `${cosConfig.pathPrefix.replace(/\/$/, '')}/${instanceId}/`;
-      const backend = new CosStorageBackend({
-        sharedClient: gateway.sharedCosClient,
-        prefix,
-        logger: gateway.logger,
-      });
-      const adapter = new StorageAdapter(backend);
       if (!gateway.cosStorageCache) gateway.cosStorageCache = new Map();
-      gateway.cosStorageCache.set(instanceId, adapter);
-      return adapter;
+      return resolveFileStorageBackend({
+        instanceId,
+        config: gateway.config,
+        logger: gateway.logger,
+        cache: gateway.cosStorageCache,
+        getSharedCosClient: () => gateway.sharedCosClient,
+        getConfigProvider: () => configProvider,
+        getStateBackend: () => gateway.stateBackend,
+        // Only this worker-task path lazily initializes a missing COS client
+        // (startup may have failed) — resolveStorageForInstance does not.
+        ensureCosClient: () => gateway.initSharedCosClient(),
+        errorContext: `worker task ${task.id} (instance=${instanceId})`,
+      });
     };
 
     /**
