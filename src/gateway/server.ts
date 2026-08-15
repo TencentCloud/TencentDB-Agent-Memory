@@ -26,7 +26,6 @@ import { SessionFilter } from "../utils/session-filter.js";
 import type {
   HealthResponse,
   RecallRequest,
-  RecallResponse,
   CaptureRequest,
   CaptureResponse,
   MemorySearchRequest,
@@ -43,6 +42,7 @@ import type { Logger } from "../core/types.js";
 import { validateAndNormalizeRaw, fillTimestamps, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
+import { buildRecallResponse } from "./recall-response.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -379,14 +379,10 @@ export class TdaiGateway {
     const startMs = Date.now();
     const result = await this.core.handleBeforeRecall(body.query, body.session_key);
     const elapsed = Date.now() - startMs;
+    const response = buildRecallResponse(result);
 
-    this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
+    this.logger.info(`Recall completed in ${elapsed}ms: context=${response.context.length} chars`);
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
     sendJson(res, 200, response);
   }
 
