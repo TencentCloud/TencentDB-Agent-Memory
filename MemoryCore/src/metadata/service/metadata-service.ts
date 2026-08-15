@@ -1997,4 +1997,60 @@ export class MetadataService {
     await this.assertCallerIsAssetOwnerOrTeamAdmin(ctx, assetId);
     return this.listAclByAsset(assetId, pagination);
   }
+
+  /**
+   * Caller-scoped team listing. Plain listTeamsByUser trusts body user_id /
+   * user_key, so any valid key holder can enumerate another user's teams.
+   * Scope matches user-key/list (admins may still query other users).
+   */
+  async listTeamsByUserForCaller(
+    params: { user_id?: string; user_key?: string; name?: string },
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+  ): Promise<PaginatedResult<TeamEntity>> {
+    const userId = await resolveUserId(this, params);
+    this.assertUserScope(userId, ctx.userId, ctx.isAdmin, ctx.isSystemAdmin);
+    const filter = params.name ? { name: params.name } : undefined;
+    return this.listTeamsByUser(userId, pagination, filter);
+  }
+
+  /**
+   * Caller-scoped owner agent listing. Plain listAgentsByOwner trusts body
+   * owner_user_id / owner_user_key, so an outsider can dump another user's
+   * agents including prompt. Scope matches user-key/list.
+   */
+  async listAgentsByOwnerForCaller(
+    params: { owner_user_id?: string; owner_user_key?: string },
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+    filter?: AgentFilter,
+  ): Promise<PaginatedResult<AgentEntity>> {
+    const ownerId =
+      params.owner_user_id ??
+      (await resolveUserId(this, { user_key: params.owner_user_key }));
+    this.assertUserScope(ownerId, ctx.userId, ctx.isAdmin, ctx.isSystemAdmin);
+    return this.listAgentsByOwner(ownerId, pagination, filter);
+  }
+
+  /**
+   * Caller-scoped creator task listing (non-team branch). Plain listTasks
+   * with a body creator_user_id / creator_user_key lets any key holder
+   * enumerate another user's tasks. Scope matches user-key/list.
+   */
+  async listTasksByCreatorForCaller(
+    filter: TaskFilter,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+  ): Promise<PaginatedResult<TaskEntity>> {
+    if (!filter.creator_user_id) {
+      throw new MetadataError("invalid_request", "creator_user_id required");
+    }
+    this.assertUserScope(
+      filter.creator_user_id,
+      ctx.userId,
+      ctx.isAdmin,
+      ctx.isSystemAdmin,
+    );
+    return this.listTasks(filter, pagination);
+  }
 }

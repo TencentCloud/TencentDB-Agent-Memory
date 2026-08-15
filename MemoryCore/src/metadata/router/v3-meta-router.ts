@@ -140,11 +140,9 @@ const routeTable: Record<string, Handler> = {
     return s.updateTeamForCaller(team_id, patch, c);
   }),
   [`${V3_PREFIX}/team/delete`]: bind(S.teamDeleteSchema, (d, c, s) => s.deleteTeamsForCaller(d.team_ids, c)),
-  [`${V3_PREFIX}/team/list`]: bind(S.teamListSchema, async (d, _c, s) => {
-    const userId = await resolveUserId(s, d);
-    const filter = d.name ? { name: d.name } : undefined;
-    return s.listTeamsByUser(userId, resolvePagination(d), filter);
-  }),
+  [`${V3_PREFIX}/team/list`]: bind(S.teamListSchema, (d, c, s) =>
+    s.listTeamsByUserForCaller(d, c, resolvePagination(d)),
+  ),
 
   // TeamMember
   [`${V3_PREFIX}/team-member/add`]: bind(S.teamMemberAddSchema, async (d, c, s) => {
@@ -170,7 +168,7 @@ const routeTable: Record<string, Handler> = {
     return s.updateAgentForCaller(agent_id, patch, c);
   }),
   [`${V3_PREFIX}/agent/delete`]: bind(S.agentDeleteSchema, (d, c, s) => s.deleteAgentsForCaller(d.agent_ids, c)),
-  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, c, s) => {
     const pagination = resolvePagination(d);
     if (d.team_id) {
       // team_id 分支：owner_user_id 若同传则叠加过滤（"团队内我 owner 的 agent"），
@@ -181,11 +179,15 @@ const routeTable: Record<string, Handler> = {
       if (d.name) filter.name = d.name;
       return s.listAgentsByTeam(d.team_id, pagination, filter);
     }
-    const ownerId = d.owner_user_id ?? await resolveUserId(s, { user_key: d.owner_user_key });
     const filter2: AgentFilter = {};
     if (d.status) filter2.status = d.status;
     if (d.name) filter2.name = d.name;
-    return s.listAgentsByOwner(ownerId, pagination, Object.keys(filter2).length ? filter2 : undefined);
+    return s.listAgentsByOwnerForCaller(
+      { owner_user_id: d.owner_user_id, owner_user_key: d.owner_user_key },
+      c,
+      pagination,
+      Object.keys(filter2).length ? filter2 : undefined,
+    );
   }),
   [`${V3_PREFIX}/agent/archive`]: bind(S.agentArchiveSchema, (d, c, s) => s.archiveAgentForCaller(d.agent_id, c)),
 
@@ -197,7 +199,7 @@ const routeTable: Record<string, Handler> = {
     return s.updateTaskForCaller(task_id, patch, c);
   }),
   [`${V3_PREFIX}/task/delete`]: bind(S.taskDeleteSchema, (d, c, s) => s.deleteTasksForCaller(d.task_ids, c)),
-  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, c, s) => {
     const filter: TaskFilter = {};
     if (d.status) filter.status = d.status;
     if (d.title) filter.title = d.title;
@@ -208,7 +210,7 @@ const routeTable: Record<string, Handler> = {
     }
     const pagination = resolvePagination(d);
     if (d.team_id) return s.listTasksByTeam(d.team_id, pagination, filter);
-    return s.listTasks(filter, pagination);
+    return s.listTasksByCreatorForCaller(filter, c, pagination);
   }),
   [`${V3_PREFIX}/task/archive`]: bind(S.taskArchiveSchema, (d, c, s) => s.archiveTaskForCaller(d.task_id, c)),
 
