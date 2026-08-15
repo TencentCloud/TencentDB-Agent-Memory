@@ -70,6 +70,11 @@ export function sanitizeText(text: string): string {
   // become empty after sanitization and are naturally filtered by length checks.
   cleaned = cleaned.replace(/data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+/gi, "");
 
+  // Replace Unicode ellipsis (U+2026, decimal 8230) with ASCII "..."
+  // The offload backend rejects non-ASCII chars in protobuf ByteString conversion
+  // (issue #879). Replace before any downstream ByteString/ASCII-only encoding.
+  cleaned = cleaned.replace(/\u2026/g, "...");
+
   // Remove null chars + compress whitespace
   cleaned = cleaned.replace(/\0/g, "").replace(/\n{3,}/g, "\n\n").trim();
 
