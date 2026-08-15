@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🐛 修复
+
+- **Checkpoint 计数在数据清理后持续漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：启动时从健康存储或 JSONL 分片重算 L0/L1 实际记录数，memory cleaner 按成功删除量原子递减计数，并按 persona 时间水位精确维护待处理 L1 数；手工裁剪、存储降级、状态回滚及并发清理后不再保留虚高计数或覆盖新写入，增量游标保持不变。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
