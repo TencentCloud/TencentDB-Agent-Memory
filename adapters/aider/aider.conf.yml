@@ -1,0 +1,14 @@
+# TencentDB Agent Memory — aider Adapter
+# Copy to your project root (or merge into your existing .aider.conf.yml).
+# The API key is intentionally NOT set here — export it as an environment
+# variable instead (see README), so it never lands in version control.
+
+model: openai/claude-sonnet-4-20250514
+
+# Point aider at the Memory Proxy's OpenAI-compatible endpoint.
+# The trailing path segment is the memory space ID ("default");
+# change it if you run multiple spaces.
+openai-api-base: http://127.0.0.1:8096/codebuddy/default
+
+# Keep aider's auto-commits so every memory-bound session has a clean history.
+auto-commits: true
