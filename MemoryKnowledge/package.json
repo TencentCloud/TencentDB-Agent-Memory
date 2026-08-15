@@ -41,7 +41,6 @@
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.44.0",
     "graphology": "^0.26.0",
-    "graphology-communities-louvain": "^2.0.2",
     "hono": "^4.7.0",
     "js-tiktoken": "^1.0.18",
     "js-yaml": "^4.2.0",
