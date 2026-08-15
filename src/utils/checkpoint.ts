@@ -82,7 +82,7 @@ export interface Checkpoint {
   // ═══ Global counters ═══
   /** Epoch ms of the newest message successfully uploaded. Messages with ts > this are new. */
   last_captured_timestamp: number;
-  /** Total messages processed across all time */
+  /** Total L0 message records currently retained */
   total_processed: number;
   last_persona_at: number;
   last_persona_time: string;
@@ -100,11 +100,11 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Total L0 message records currently retained */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Total L1 memory records currently retained */
   total_memories_extracted: number;
 }
 
@@ -142,6 +142,16 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+}
+
+/**
+ * Minimal storage contract used to recalibrate data-derived counters.
+ * Kept structural so CheckpointManager does not depend on a concrete store.
+ */
+export interface CheckpointCounterSource {
+  isDegraded?(): boolean;
+  countL0(): number | Promise<number>;
+  countL1(): number | Promise<number>;
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -291,6 +301,42 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Recount retained L0/L1 records and replace counters that can drift after
+   * cleanup, manual JSONL pruning, or data rollback.
+   *
+   * The active store is authoritative when available because it is the
+   * pipeline's primary read path. In degraded mode, valid records in the
+   * local JSONL shards are counted instead.
+   */
+  async recalibrate(source?: CheckpointCounterSource): Promise<void> {
+    await this.mutate(async (checkpoint) => {
+      const counts = await this.readActualCounts(source);
+      const previousTotalProcessed = checkpoint.total_processed;
+      const previousL0Count = checkpoint.l0_conversations_count;
+      const previousMemoriesExtracted = checkpoint.total_memories_extracted;
+      const memoryDelta = counts.l1 - previousMemoriesExtracted;
+
+      checkpoint.total_processed = counts.l0;
+      checkpoint.l0_conversations_count = counts.l0;
+      checkpoint.total_memories_extracted = counts.l1;
+
+      // Preserve the relationship to the last persona checkpoint while
+      // keeping the derived counters within the currently retained data.
+      checkpoint.memories_since_last_persona = Math.min(
+        counts.l1,
+        Math.max(0, checkpoint.memories_since_last_persona + memoryDelta),
+      );
+
+      this.logger.info(
+        `[checkpoint] recalibrate source=${counts.source}: ` +
+        `total_processed=${previousTotalProcessed}->${counts.l0}, ` +
+        `l0_conversations_count=${previousL0Count}->${counts.l0}, ` +
+        `total_memories_extracted=${previousMemoriesExtracted}->${counts.l1}`,
+      );
+    });
   }
 
   // ============================
@@ -449,7 +495,7 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
+   * L0 message record count is also incremented inside the lock when messages
    * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
    *
    * @param sessionKey   Per-session identifier
@@ -479,10 +525,105 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Keep this counter in the same unit as countL0() and JSONL records.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }
 
+  private async readActualCounts(
+    source?: CheckpointCounterSource,
+  ): Promise<{ l0: number; l1: number; source: "store" | "jsonl" }> {
+    if (source) {
+      try {
+        if (!source.isDegraded?.()) {
+          const [l0, l1] = await Promise.all([source.countL0(), source.countL1()]);
+          return {
+            l0: normalizeCount(l0, "L0"),
+            l1: normalizeCount(l1, "L1"),
+            source: "store",
+          };
+        }
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Store recount failed, falling back to JSONL: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const [l0, l1] = await Promise.all([
+      this.countJsonlRecords("conversations", isL0Record),
+      this.countJsonlRecords("records", isL1Record),
+    ]);
+    return { l0, l1, source: "jsonl" };
+  }
+
+  private async countJsonlRecords(
+    directoryName: string,
+    isRecord: (value: unknown) => boolean,
+  ): Promise<number> {
+    const directory = path.join(path.dirname(path.dirname(this.filePath)), directoryName);
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let count = 0;
+    let skipped = 0;
+    const files = entries.filter(
+      (entry) => entry.isFile() && /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(entry.name),
+    );
+
+    for (const entry of files) {
+      const filePath = path.join(directory, entry.name);
+      try {
+        const raw = await fs.readFile(filePath, "utf-8");
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            if (isRecord(JSON.parse(line))) {
+              count++;
+            } else {
+              skipped++;
+            }
+          } catch {
+            skipped++;
+          }
+        }
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Failed to count ${filePath}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    if (skipped > 0) {
+      this.logger.warn?.(
+        `[checkpoint] Ignored ${skipped} malformed ${directoryName} JSONL record(s) during recalibration`,
+      );
+    }
+    return count;
+  }
+}
+
+function normalizeCount(value: number, layer: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`Invalid ${layer} record count: ${value}`);
+  }
+  return Math.floor(value);
+}
+
+function isL0Record(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.role === "string" && typeof record.content === "string";
+}
+
+function isL1Record(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return typeof (value as Record<string, unknown>).content === "string";
 }
