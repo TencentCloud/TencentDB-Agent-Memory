@@ -144,6 +144,10 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+export interface CheckpointL0Counter {
+  countL0(): number | Promise<number>;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -179,10 +183,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -294,6 +300,55 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Counter reconciliation
+  // ============================
+  /**
+   * Reconcile aggregate counters with the current data sources.
+   *
+   * L1 records are counted from JSONL so manual pruning is reflected; L0 uses
+   * the active store because it owns the authoritative conversation table.
+   */
+  async recalibrate(l0Counter: CheckpointL0Counter): Promise<void> {
+    const [l0ConversationsCount, totalMemoriesExtracted] = await Promise.all([
+      l0Counter.countL0(),
+      this.countJsonlRecords(path.join(this.dataDir, "records")),
+    ]);
+
+    if (
+      !Number.isSafeInteger(l0ConversationsCount) || l0ConversationsCount < 0 ||
+      !Number.isSafeInteger(totalMemoriesExtracted) || totalMemoriesExtracted < 0
+    ) {
+      throw new Error("Checkpoint recalibration received an invalid counter value");
+    }
+
+    await this.mutate((cp) => {
+      cp.l0_conversations_count = l0ConversationsCount;
+      cp.total_memories_extracted = totalMemoriesExtracted;
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrated counters: l0=${l0ConversationsCount}, ` +
+      `l1=${totalMemoriesExtracted}`,
+    );
+  }
+
+  private async countJsonlRecords(recordsDir: string): Promise<number> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(recordsDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+
+    let count = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || path.extname(entry.name) !== ".jsonl") continue;
+      const contents = await fs.readFile(path.join(recordsDir, entry.name), "utf-8");
+      count += contents.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+    }
+    return count;
+  }
   // Public API — mutating (all serialized via file lock)
   // ============================
 

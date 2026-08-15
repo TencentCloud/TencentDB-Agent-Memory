@@ -410,6 +410,17 @@ export class TdaiCore {
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
+      if (this.vectorStore && !this.vectorStore.isDegraded()) {
+        try {
+          const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+          await checkpoint.recalibrate(this.vectorStore);
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Checkpoint recalibration failed; retaining existing counters: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     } catch (err) {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
