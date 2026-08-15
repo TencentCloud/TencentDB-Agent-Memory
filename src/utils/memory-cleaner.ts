@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -12,6 +13,16 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /**
+   * Optional CheckpointManager used to reconcile global counters after cleanup.
+   * When provided, {@link LocalMemoryCleaner.runOnce} will recalculate
+   * `total_processed`, `total_memories_extracted`, and `scenes_processed`
+   * against authoritative sources (vectorStore counts + scene_blocks file count)
+   * after the deletion pass, fixing the counter-drift issue (#157).
+   *
+   * If absent, cleanup proceeds but counters are NOT recalculated (legacy behavior).
+   */
+  checkpointManager?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -33,14 +44,25 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpointManager?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpointManager = opts.checkpointManager;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  /**
+   * Inject (or replace) the CheckpointManager used for post-cleanup counter
+   * reconciliation. Mirrors the {@link setVectorStore} pattern so callers can
+   * wire the checkpoint after async store init completes.
+   */
+  setCheckpointManager(cm: CheckpointManager | undefined): void {
+    this.checkpointManager = cm;
   }
 
   start(): void {
@@ -184,6 +206,72 @@ export class LocalMemoryCleaner {
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
 
+    // ── Counter reconciliation (issue #157) ──────────────────────────
+    // After cleanup, global counters (total_processed, total_memories_extracted,
+    // scenes_processed) may have drifted from actual data. Recalculate them
+    // against authoritative sources so downstream logic (persona trigger, L2,
+    // backup naming) operates on accurate counts.
+    //
+    // Only the 3 counters with authoritative sources are auto-recalculated:
+    //   total_processed         ← vectorStore.countL0()   (L0 message count)
+    //   total_memories_extracted ← vectorStore.countL1()  (L1 record count)
+    //   scenes_processed        ← fs count of scene_blocks/*.md
+    //
+    // l0_conversations_count and memories_since_last_persona have no
+    // authoritative source and are left for manual recalculate/decrement.
+    //
+    // NOTE: This is a best-effort snapshot reconciliation. The counts are read
+    // outside the checkpoint file lock, so there is an inherent TOCTOU window
+    // between the count read and the locked set. Acceptable for a daily cleaner
+    // running during quiescent periods.
+    await this.reconcileCheckpointCounters();
+
+  }
+
+  /**
+   * Recalculate checkpoint counters against authoritative sources after cleanup.
+   * No-op if neither checkpointManager nor vectorStore is available.
+   */
+  private async reconcileCheckpointCounters(): Promise<void> {
+    if (!this.checkpointManager) {
+      this.opts.logger?.debug?.(`${TAG} Skip counter reconciliation: no checkpointManager`);
+      return;
+    }
+
+    // Read authoritative counts. countL0/countL1 are best-effort (return 0 on failure).
+    let actualL0 = 0;
+    let actualL1 = 0;
+    if (this.vectorStore) {
+      try { actualL0 = await this.vectorStore.countL0(); } catch { /* non-fatal */ }
+      try { actualL1 = await this.vectorStore.countL1(); } catch { /* non-fatal */ }
+    } else {
+      this.opts.logger?.debug?.(`${TAG} Counter reconciliation: no vectorStore, L0/L1 counts default to 0`);
+    }
+
+    // Count scene block files (fs-based, no vectorStore dependency).
+    let actualScenes = 0;
+    try {
+      actualScenes = await countSceneBlockFiles(this.opts.baseDir);
+    } catch (err) {
+      this.opts.logger?.warn?.(
+        `${TAG} Failed to count scene_blocks for reconciliation: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    try {
+      await this.checkpointManager.recalculateCounters({
+        total_processed: actualL0,
+        total_memories_extracted: actualL1,
+        scenes_processed: actualScenes,
+      });
+      this.opts.logger?.info?.(
+        `${TAG} Counter reconciliation done: total_processed=${actualL0}, total_memories_extracted=${actualL1}, scenes_processed=${actualScenes}`,
+      );
+    } catch (err) {
+      this.opts.logger?.warn?.(
+        `${TAG} Counter reconciliation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private scheduleNext(): void {
@@ -381,4 +469,24 @@ function nextRunAt(cleanTime: string, nowMs: number): number {
   }
 
   return next.getTime();
+}
+
+/**
+ * Count `.md` scene block files in `<baseDir>/scene_blocks/`.
+ * Used as the authoritative source for `scenes_processed` during reconciliation.
+ * Returns 0 if the directory does not exist.
+ */
+async function countSceneBlockFiles(baseDir: string): Promise<number> {
+  const blocksDir = path.join(baseDir, "scene_blocks");
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(blocksDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith(".md")) count += 1;
+  }
+  return count;
 }

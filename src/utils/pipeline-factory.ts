@@ -532,24 +532,24 @@ export function createL2Runner(opts: {
     if (extractResult.success && extractResult.memoriesProcessed > 0) {
       const checkpoint = new CheckpointManager(pluginDataDir, logger);
       const postState = await checkpoint.read();
+
+      // ── Counter decrease is no longer treated as corruption (#157) ──
+      // Previously, a decrease in total_processed / scenes_processed between
+      // pre and post read was "repaired" via Math.max (restore old value).
+      // This assumed counters only ever increase. With the new decrementCounters
+      // / recalculateCounters methods (called by memory-cleaner and manual
+      // cleanup), a decrease is a legitimate reconciliation — the max-repair
+      // would actively undo the fix. We now only log the change for observability.
       if (
         postState.scenes_processed < preScenesProcessed ||
         postState.total_processed < preTotalProcessed
       ) {
-        logger.warn(
-          `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
+        logger.debug?.(
+          `${TAG} [L2] Counter decrease detected during extraction (legitimate reconciliation, not repaired): ` +
           `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
           `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
-          `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
-          `Repairing...`,
+          `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}.`,
         );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-          memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
-        });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
       }
 
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {
