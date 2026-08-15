@@ -499,6 +499,32 @@ export class MemoryPipelineManager {
   }
 
   /**
+   * Evict a single session from ALL in-memory maps (state, timers, buffer,
+   * L2 last-run time). Pending timers are cancelled first.
+   *
+   * Pairs with `CheckpointManager.resetSession()` for the "session data
+   * reset" scenario: after the persisted runner/pipeline states are wiped,
+   * the runtime copies must go too — otherwise the pipeline would persist the
+   * stale counters right back on the next notifyConversation().
+   *
+   * Unlike `gcStaleSessions()` this is unconditional and immediate: callers
+   * are expected to have flushed (or deliberately discarded) pending work.
+   * Unknown session keys are a no-op.
+   */
+  evictSession(sessionKey: string): void {
+    const timers = this.sessionTimers.get(sessionKey);
+    if (timers) {
+      timers.l1Idle.cancel();
+      timers.l2Schedule.cancel();
+    }
+    this.sessionStates.delete(sessionKey);
+    this.sessionTimers.delete(sessionKey);
+    this.messageBuffers.delete(sessionKey);
+    this.l2LastRunTime.delete(sessionKey);
+    this.logger?.debug?.(`${TAG} [${sessionKey}] Session evicted from pipeline memory`);
+  }
+
+  /**
    * Maximum time (ms) to wait for pipeline flush during destroy.
    * Must be shorter than the gateway_stop hook timeout (3 s) to leave
    * headroom for VectorStore / EmbeddingService cleanup that runs after.

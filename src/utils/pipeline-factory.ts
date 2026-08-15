@@ -527,6 +527,7 @@ export function createL2Runner(opts: {
     const preScenesProcessed = preState.scenes_processed;
     const preMemoriesSince = preState.memories_since_last_persona;
     const preTotalProcessed = preState.total_processed;
+    const preStatsRevision = preState.stats_revision;
 
     const extractResult = await extractor.extract(memories);
     if (extractResult.success && extractResult.memoriesProcessed > 0) {
@@ -536,20 +537,35 @@ export function createL2Runner(opts: {
         postState.scenes_processed < preScenesProcessed ||
         postState.total_processed < preTotalProcessed
       ) {
-        logger.warn(
-          `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
-          `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
-          `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
-          `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
-          `Repairing...`,
-        );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-          memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
-        });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
+        // A decrease is only "corruption" when no intentional calibration
+        // happened in between. decrement*/recalculate/resetSession all bump
+        // stats_revision — if it changed, the lower counters are ground truth
+        // (e.g. memory-cleaner just deleted expired data) and must NOT be
+        // restored, otherwise every cleanup would be immediately undone.
+        if (postState.stats_revision !== preStatsRevision) {
+          logger.info(
+            `${TAG} [L2] Checkpoint calibration detected (stats_revision ${preStatsRevision} → ` +
+            `${postState.stats_revision}), accepting lower counters: ` +
+            `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
+            `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
+            `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}.`,
+          );
+        } else {
+          logger.warn(
+            `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
+            `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
+            `total_processed: ${preTotalProcessed} → ${postState.total_processed}, ` +
+            `memories_since: ${preMemoriesSince} → ${postState.memories_since_last_persona}. ` +
+            `Repairing...`,
+          );
+          await checkpoint.write({
+            ...postState,
+            scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
+            total_processed: Math.max(postState.total_processed, preTotalProcessed),
+            memories_since_last_persona: Math.max(postState.memories_since_last_persona, preMemoriesSince),
+          });
+          logger.info(`${TAG} [L2] Checkpoint repaired`);
+        }
       }
 
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {

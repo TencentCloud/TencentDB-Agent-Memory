@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
+import { CheckpointManager } from "./checkpoint.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
 
@@ -12,6 +13,8 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  /** Optional injection for tests; defaults to a CheckpointManager on baseDir. */
+  checkpoint?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -19,6 +22,9 @@ interface CleanupStats {
   changedFiles: number;
   skippedNonShardFiles: number;
   deleteFailedFiles: number;
+  /** Data entries (JSONL lines / DB rows) actually removed, used to
+   *  calibrate checkpoint counters after the run. */
+  removedEntries: number;
 }
 
 const TAG = "[memory-tdai][cleaner]";
@@ -33,14 +39,24 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpoint?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpoint = opts.checkpoint;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  /** Lazy checkpoint accessor (cleaner and checkpoint share the same data dir). */
+  private getCheckpoint(): CheckpointManager {
+    if (!this.checkpoint) {
+      this.checkpoint = new CheckpointManager(this.opts.baseDir, this.opts.logger);
+    }
+    return this.checkpoint;
   }
 
   start(): void {
@@ -85,9 +101,9 @@ export class LocalMemoryCleaner {
       this.opts.logger?.error(`${TAG} ${err instanceof Error ? err.message : String(err)}`);
       return;
     }
-    const targetDirs = [
-      path.join(this.opts.baseDir, L0_DIR_NAME),
-      path.join(this.opts.baseDir, L1_DIR_NAME),
+    const targetDirs: Array<{ kind: "L0" | "L1"; dirPath: string }> = [
+      { kind: "L0", dirPath: path.join(this.opts.baseDir, L0_DIR_NAME) },
+      { kind: "L1", dirPath: path.join(this.opts.baseDir, L1_DIR_NAME) },
     ];
 
     const total: CleanupStats = {
@@ -95,14 +111,23 @@ export class LocalMemoryCleaner {
       changedFiles: 0,
       skippedNonShardFiles: 0,
       deleteFailedFiles: 0,
+      removedEntries: 0,
     };
 
-    for (const dirPath of targetDirs) {
+    // Track removed entries per layer so checkpoint counters can be
+    // decremented by the exact amount afterwards.
+    let removedL0Entries = 0;
+    let removedL1Entries = 0;
+
+    for (const { kind, dirPath } of targetDirs) {
       const stats = await this.cleanDirectory(dirPath, cutoffMs);
       total.scannedFiles += stats.scannedFiles;
       total.changedFiles += stats.changedFiles;
       total.skippedNonShardFiles += stats.skippedNonShardFiles;
       total.deleteFailedFiles += stats.deleteFailedFiles;
+      total.removedEntries += stats.removedEntries;
+      if (kind === "L0") removedL0Entries += stats.removedEntries;
+      else removedL1Entries += stats.removedEntries;
     }
 
     if (this.vectorStore) {
@@ -164,6 +189,9 @@ export class LocalMemoryCleaner {
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
       }
+      removedL0Entries += removedL0;
+      removedL1Entries += removedL1;
+      total.removedEntries += removedL0 + removedL1;
 
       // ── Post-delete: audit summary ──
       const durationMs = Date.now() - startMs;
@@ -178,6 +206,32 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    }
+
+    // ── Checkpoint calibration ──
+    // Counters only ever increase, so without this step every cleanup would
+    // leave the checkpoint permanently overestimated. Decrement by the exact
+    // number of removed entries (floored at 0 inside the checkpoint); the
+    // decrement also bumps stats_revision so concurrent defensive readers
+    // accept the lower counters instead of "repairing" them back up.
+    if (removedL0Entries > 0 || removedL1Entries > 0) {
+      try {
+        const checkpoint = this.getCheckpoint();
+        if (removedL0Entries > 0) {
+          await checkpoint.decrementTotalProcessed(removedL0Entries);
+        }
+        if (removedL1Entries > 0) {
+          await checkpoint.decrementMemoriesExtracted(removedL1Entries);
+        }
+        this.opts.logger?.info(
+          `${TAG} Checkpoint calibrated: total_processed -= ${removedL0Entries}, total_memories_extracted -= ${removedL1Entries}`,
+        );
+      } catch (err) {
+        // Non-fatal: counters can also be rebuilt later via recalculate().
+        this.opts.logger?.warn(
+          `${TAG} Checkpoint calibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     this.opts.logger?.info(
@@ -231,6 +285,7 @@ export class LocalMemoryCleaner {
       changedFiles: 0,
       skippedNonShardFiles: 0,
       deleteFailedFiles: 0,
+      removedEntries: 0,
     };
 
     let entries;
@@ -259,9 +314,13 @@ export class LocalMemoryCleaner {
 
       const dayEndMs = localDayEndMs(shard.year, shard.month, shard.day);
       if (dayEndMs < cutoffMs) {
+        // Count entries before deletion so checkpoint counters can be
+        // calibrated by the exact amount (one JSONL line = one entry).
+        const entries = await countJsonlEntries(filePath);
         try {
           await fs.unlink(filePath);
           stats.changedFiles += 1;
+          stats.removedEntries += entries;
           this.opts.logger?.info(`${TAG} Removed expired file by name: ${filePath}`);
         } catch (err) {
           stats.deleteFailedFiles += 1;
@@ -280,6 +339,23 @@ export class LocalMemoryCleaner {
 
 function isJsonLikeFile(name: string): boolean {
   return name.endsWith(".jsonl") || name.endsWith(".json");
+}
+
+/**
+ * Count data entries in a JSONL-like file (one non-empty line = one entry).
+ * Returns 0 on unreadable files — deletion proceeds regardless.
+ */
+async function countJsonlEntries(filePath: string): Promise<number> {
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
+    let count = 0;
+    for (const line of content.split("\n")) {
+      if (line.trim().length > 0) count += 1;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
 }
 
 function extractShardDateFromFileName(
