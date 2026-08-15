@@ -120,6 +120,8 @@ skill:
   resources:
     maxResourceSizeBytes: 5000000
 YAML
+# 配置里含 apiKey 明文，收紧文件权限
+chmod 600 "$CORE_CONFIG_FILE"
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
