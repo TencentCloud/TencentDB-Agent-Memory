@@ -175,6 +175,28 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Keep only non-empty tokenizer output that can contribute a searchable term.
+ * FTS5 syntax is made harmless by `quoteFts5Phrase`, rather than by deleting
+ * words such as `AND` that a user may genuinely want to search for.
+ */
+function toFts5LiteralToken(token: string): string | null {
+  const trimmed = token.trim();
+  if (!trimmed || !/[\p{L}\p{N}]/u.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * Quote an FTS5 phrase and escape embedded double quotes SQL-style.
+ *
+ * `MATCH ?` binds the value safely as SQL, but FTS5 still parses the bound
+ * value as its own query language. Phrase encoding is the boundary that keeps
+ * tokenizer output from becoming user-controlled FTS5 syntax.
+ */
+function quoteFts5Phrase(token: string): string {
+  return `"${token.replaceAll('"', '""')}"`;
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -183,6 +205,11 @@ const ZH_STOP_WORDS = new Set([
  *
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
+ *
+ * Every tokenizer term is emitted as an escaped, quoted FTS5 phrase. User
+ * input therefore contributes literal search terms only: FTS5 query syntax
+ * (including `AND`, `OR`, `NOT`, and `NEAR`) is introduced solely by this
+ * function when it joins terms with its fixed `OR` recall strategy.
  *
  * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
  * matching *any* token is returned.  BM25 naturally ranks documents that
@@ -204,15 +231,10 @@ export function buildFtsQuery(raw: string): string | null {
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
       .cutForSearch(raw, true)
-      .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
+      .map(toFts5LiteralToken)
+      .filter((t): t is string => t !== null)
+      // Remove common Chinese stop-words to reduce noise
+      .filter((t) => !ZH_STOP_WORDS.has(t));
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
@@ -220,12 +242,12 @@ export function buildFtsQuery(raw: string): string | null {
     tokens =
       raw
         .match(/[\p{L}\p{N}_]+/gu)
-        ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        ?.map(toFts5LiteralToken)
+        .filter((t): t is string => t !== null) ?? [];
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(quoteFts5Phrase);
   return quoted.join(" OR ");
 }
 
