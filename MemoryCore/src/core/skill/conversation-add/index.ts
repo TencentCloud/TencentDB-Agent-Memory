@@ -71,4 +71,14 @@ export {
   type MetadataServiceLike,
 } from "./skill-core-sink.js";
 
-export { wireConversationAdd, type WireConversationAddDeps, type WiredConversationAdd } from "./wire.js";
+export {
+  wireConversationAddHandler,
+  type WireConversationAddDeps,
+  type WiredConversationAddHandler,
+} from "./wire.js";
+
+export {
+  SkillWorkerPool,
+  type SkillWorkerPoolOptions,
+  type SkillWorkerResolvers,
+} from "./worker-pool.js";

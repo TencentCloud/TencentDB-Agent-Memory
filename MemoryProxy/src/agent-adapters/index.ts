@@ -14,6 +14,9 @@
 import type { AgentAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { codebuddyAdapter } from "./codebuddy.js";
+import { codexAdapter } from "./codex.js";
+import { workbuddyAdapter } from "./workbuddy.js";
+import { dshAdapter } from "./dsh.js";
 import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
@@ -24,6 +27,12 @@ export function resolveAgentAdapter(agentSource: string): AgentAdapter {
       return claudeCodeAdapter;
     case "codebuddy":
       return codebuddyAdapter;
+    case "codex":
+      return codexAdapter;
+    case "workbuddy":
+      return workbuddyAdapter;
+    case "dsh":
+      return dshAdapter;
     default:
       return defaultAdapter;
   }

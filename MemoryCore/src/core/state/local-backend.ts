@@ -106,7 +106,7 @@ export class LocalStateBackend implements IStateBackend {
 
     const delay = Math.max(0, fireAtMs - Date.now());
     const handle = this.onTimerExpired
-      ? setTimeout(() => { this.timers.delete(key); this.onTimerExpired!({ member, fireAtMs }); }, delay)
+      ? setTimeout(() => { this.timers.delete(key); this.onTimerExpired!({ instanceId, member, fireAtMs }); }, delay)
       : undefined;
     if (handle) handle.unref();
     this.timers.set(key, { member, fireAtMs, handle });
@@ -131,7 +131,7 @@ export class LocalStateBackend implements IStateBackend {
     const expired: TimerEntry[] = [];
     for (const [key, timer] of this.timers) {
       if (key.startsWith(prefix) && timer.fireAtMs <= nowMs) {
-        expired.push({ member: timer.member, fireAtMs: timer.fireAtMs });
+        expired.push({ instanceId, member: timer.member, fireAtMs: timer.fireAtMs });
       }
     }
     for (const entry of expired) {
@@ -226,7 +226,9 @@ export class LocalStateBackend implements IStateBackend {
   async captureAtomic(params: CaptureAtomicParams): Promise<CaptureAtomicResult> {
     const { instanceId, sessionId, teamId, agentId, messageJson, threshold, fireAtMs, timerMember, taskPayload, nowMs, rounds } = params;
 
-    await this.appendBuffer(instanceId, sessionId, messageJson, teamId, agentId);
+    if (messageJson) {
+      await this.appendBuffer(instanceId, sessionId, messageJson, teamId, agentId);
+    }
 
     const stateKey = this.k(instanceId, sessionId, teamId, agentId);
     let state = this.sessionStates.get(stateKey);

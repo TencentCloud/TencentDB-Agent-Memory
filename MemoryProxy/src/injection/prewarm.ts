@@ -25,6 +25,27 @@ import type {
 export interface PrewarmOptions {
   /** Total timeout for the whole prewarm pass, in ms. Defaults to 20000. */
   totalTimeoutMs?: number;
+  /**
+   * 刷新场景专用:在 prewarm 前先 `clearBySession` 把该 session 现有缓存全清掉,
+   * 让本次 prewarm 的结果成为**唯一权威**。默认 `false`(保留首次 session_init 的
+   * 语义:cache miss 时 pipeline 走 execute() self-heal)。
+   *
+   * 为什么需要这个开关 —— 首次 session_init 与 mem:sync 刷新走同一个入口
+   * `prewarmFromConfig`,但语义不同:
+   *   - 首次:缓存本来是空的,prewarm 拿到 `[]`/error 就 skip 写入,pipeline 侧
+   *     get 回 null 时会走 execute() 现拉一次,并 self-heal 回写缓存 —— 语义闭环。
+   *   - 刷新:缓存里**已经有旧数据**了。prewarm 若某个 hook 拿到 `[]`(比如用户
+   *     刚解绑 wiki+codegraph)或超时/异常,`prewarmAll` 会 skip 写入,旧数据
+   *     原封不动留在 COS 上;下次请求 pipeline 从 COS 读回老快照继续注入,表现
+   *     就是"资产已经解绑但注入还带着"。
+   *
+   * 开启 `clearBefore` 后语义变成"prewarm 拿到什么就是什么,拿不到就没有":
+   *   - hook A 有内容 → 覆写缓存(正常)。
+   *   - hook B 拿到 `[]` → 旧缓存被上面的 clear 清掉,不再命中(修 knowledge 那个 bug)。
+   *   - hook C prewarm 抛异常/超时 → 旧缓存同样被清掉,下次 pipeline 走 execute()
+   *     兜底 —— 一次网络抖动不会让老快照"无限续命"。
+   */
+  clearBefore?: boolean;
 }
 
 export interface PrewarmResult {
@@ -91,6 +112,29 @@ export async function prewarmAll(
       `[hook-cache] prewarm session=${sessionId}: no hooks declared cacheStrategy, skipping`,
     );
     return { cachedHookIds, skipped, durationMs: Date.now() - startedAt };
+  }
+
+  // Refresh 场景:先清掉该 session 所有 hook 的现有缓存,让本次 prewarm 成为
+  // 唯一权威。见 `PrewarmOptions.clearBefore` 的注释里详细解释了为什么首次
+  // session_init 不需要这么做、而刷新必须这么做。
+  //
+  // 位置刻意放在 targets 非空 → 每个 hook 执行之前:如果注册表里根本没有
+  // 需要 prewarm 的 hook,清理也没意义(且可能误清别人在同 session 下写的东西)。
+  //
+  // clearBySession 内部对底层错误 swallow(见 hookCacheRepo 各实现),不会
+  // 阻断后续 prewarm,符合 "prewarm 是 best-effort" 的整体语义。
+  if (opts.clearBefore) {
+    try {
+      repo.clearBySession(input.spaceId ?? "", input.userId, input.agentSource, sessionId);
+      console.log(
+        `[hook-cache] prewarm session=${sessionId}: clearBefore=true, cleared existing entries`,
+      );
+    } catch (err) {
+      console.warn(
+        `[hook-cache] prewarm session=${sessionId}: clearBefore failed (continuing):`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   }
 
   // Per-hook budget: shared total, but each individual call also caps at

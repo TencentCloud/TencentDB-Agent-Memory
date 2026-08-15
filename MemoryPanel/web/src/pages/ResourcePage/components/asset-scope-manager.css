@@ -89,7 +89,7 @@
 }
 
 ._memory-asset-scope-item-owner-id {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-secondary);
 }
 

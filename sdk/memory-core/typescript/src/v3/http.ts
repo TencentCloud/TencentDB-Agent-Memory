@@ -45,17 +45,38 @@ export class V3HttpTransport {
     path: string,
     body: Record<string, unknown> = {},
   ): Promise<T & { trace_id?: string }> {
+    return this.request<T>("POST", path, body);
+  }
+
+  async get<T = unknown>(
+    path: string,
+    query: Record<string, unknown> = {},
+  ): Promise<T & { trace_id?: string }> {
+    return this.request<T>("GET", path, query);
+  }
+
+  private async request<T>(
+    method: "GET" | "POST",
+    path: string,
+    params: Record<string, unknown>,
+  ): Promise<T & { trace_id?: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);
     try {
+      const query = method === "GET"
+        ? new URLSearchParams(Object.entries(params)
+          .filter(([, value]) => value !== undefined)
+          .map(([key, value]) => [key, String(value)]))
+        : undefined;
       const fetchOptions: RequestInit & { dispatcher?: Agent } = {
-        method: "POST",
+        method,
         headers: this.headers,
-        body: JSON.stringify(body),
+        ...(method === "POST" ? { body: JSON.stringify(params) } : {}),
         signal: controller.signal,
       };
       if (this.dispatcher) fetchOptions.dispatcher = this.dispatcher;
-      const response = await fetch(`${this.endpoint}${path}`, fetchOptions as RequestInit);
+      const url = `${this.endpoint}${path}${query && query.size > 0 ? `?${query.toString()}` : ""}`;
+      const response = await fetch(url, fetchOptions as RequestInit);
       const responseText = await response.text().catch(() => "");
       const headerRequestId =
         response.headers.get("x-qcloud-transaction-id") ??

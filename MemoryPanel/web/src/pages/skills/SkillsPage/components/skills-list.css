@@ -283,7 +283,7 @@
 
 ._memory-personal-asset-id {
   margin-top: 4px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
   overflow: hidden;
@@ -309,4 +309,18 @@
 
 ._memory-personal-asset-delete {
   flex-shrink: 0;
+}
+
+/* ============================================================
+ * 通用 AssetListPanel 列表项在 Skills 页的字体统一覆盖
+ * ============================================================ */
+/* 用户名徽章：与时间戳统一字号（覆盖通用 ._alp-badge 的 11px） */
+._memory-skills-body ._alp-item-badges ._alp-badge {
+  font-size: 12px;
+}
+
+/* 时间戳：与用户名统一（通用 ._alp-item-time 已声明 12px，这里再兜底颜色一致） */
+._memory-skills-body ._alp-item-badges ._alp-item-time {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
 }

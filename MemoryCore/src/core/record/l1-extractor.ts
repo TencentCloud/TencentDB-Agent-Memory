@@ -26,7 +26,21 @@ import { metricProducer } from "../report/kafka-metric-producer.js";
 import { reportL1LatencyMetrics } from "../report/metric-tracking-l1-latency.js";
 import type { LLMRunner, Logger, TraceContext } from "../types.js";
 import { buildTraceParams } from "../types.js";
-import type { StorageAdapter } from "../storage/adapter.js";
+import { StorageAdapter } from "../storage/adapter.js";
+import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
+import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
+import { LocalStorageBackend } from "../storage/local-backend.js";
+import {
+  buildGenerationLogIdentity,
+  buildGenerationProvenance,
+  buildPromptGenerationRef,
+  MemoryGenerationLogStore,
+} from "../memory-generation-log/store.js";
+import { writeGenerationProvenanceBestEffort } from "../memory-generation-log/best-effort.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLog,
+} from "../memory-generation-log/types.js";
 
 const TAG = "[memory-tdai][l1-extractor]";
 
@@ -101,6 +115,8 @@ export async function extractL1Memories(params: {
     previousSceneName?: string;
     /** Prompt family for L1 extraction (default: chat). */
     promptMode?: MemoryPromptMode;
+    /** Resolved custom strategy. Undefined preserves the current system prompt exactly. */
+    memoryPrompt?: ResolvedMemoryPrompt;
     /** Vector store for cosine similarity candidate recall */
     vectorStore?: IMemoryStore;
     /** Embedding service for computing query vectors */
@@ -178,6 +194,7 @@ export async function extractL1Memories(params: {
       logger,
       model: options.model,
       promptMode: options.promptMode,
+      memoryPrompt: options.memoryPrompt,
       traceContext: { teamId, userId, agentId, sessionId },
       llmRunner: options.llmRunner,
     });
@@ -252,6 +269,14 @@ export async function extractL1Memories(params: {
   // Step 2: Batch Conflict Detection + Write
   let storedRecords: MemoryRecord[];
   let dedupLatencyMs: number | null = null;
+  const generationFinishedAt = Date.now();
+  const generationIdentity = buildGenerationLogIdentity(
+    "l1",
+    generationFinishedAt,
+    memoriesWithIds[0]?.record_id,
+  );
+  const generationPrompt = buildPromptGenerationRef(options.memoryPrompt, "l1");
+  const generation = buildGenerationProvenance(generationIdentity, generationPrompt);
 
   if (enableDedup) {
     try {
@@ -313,6 +338,45 @@ export async function extractL1Memories(params: {
   } else {
     storedRecords = await storeAllDirectly(memoriesWithIds, baseDir, sessionKey, sessionId, taskId, teamId, userId, agentId, logger, options.vectorStore, options.embeddingService, storage);
   }
+
+  const logStorage = storage ?? new StorageAdapter(new LocalStorageBackend(baseDir));
+  const generationLogStore = new MemoryGenerationLogStore(logStorage, metricInstanceId ?? "standalone");
+  const generationLog: MemoryGenerationLog = {
+    schema_version: 1,
+    log_id: generationIdentity.logId,
+    generation_id: generationIdentity.generationId,
+    instance_id: metricInstanceId ?? "standalone",
+    layer: "l1",
+    status: "succeeded",
+    team_id: teamId,
+    agent_id: agentId,
+    user_id: userId,
+    session_id: sessionId,
+    task_id: taskId,
+    prompt: generationPrompt,
+    anchor_memory_id: storedRecords[0]?.id ?? memoriesWithIds[0]?.record_id,
+    input_refs: newMessages.map((message) => ({ layer: "l0", record_id: message.id })),
+    output_refs: storedRecords.map((record) => ({ layer: "l1", record_id: record.id })),
+    model: options.model,
+    prompt_mode: options.promptMode ?? "chat",
+    started_at_ms: l1StartMs,
+    finished_at_ms: generationFinishedAt,
+    latency_ms: generationFinishedAt - l1StartMs,
+  };
+  await writeGenerationProvenanceBestEffort({
+    layer: "l1",
+    logger,
+    writeLog: () => generationLogStore.write(generationLog, generationIdentity.key),
+    writeRefs: options.vectorStore?.upsertMemoryGenerationRefs && storedRecords.length > 0
+      ? () => options.vectorStore!.upsertMemoryGenerationRefs!(storedRecords.map((record) => ({
+          generation_ref_id: buildMemoryGenerationRefId("l1", record.id),
+          layer: "l1" as const,
+          memory_id: record.id,
+          ...generation,
+          created_at_ms: generationFinishedAt,
+        })))
+      : undefined,
+  });
 
   logger?.info(`${TAG} Extraction complete: extracted=${extracted.length}, stored=${storedRecords.length}`);
 
@@ -392,14 +456,15 @@ async function callLlmExtraction(params: {
   logger?: Logger;
   model?: string;
   promptMode?: MemoryPromptMode;
+  memoryPrompt?: ResolvedMemoryPrompt;
   /** Host-neutral LLM runner — when provided, used instead of CleanContextRunner. */
   llmRunner?: LLMRunner;
   /** langfuse 上报身份四元组（team/user/agent/session）。 */
   traceContext?: TraceContext;
 }): Promise<SceneSegment[]> {
-  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", llmRunner, traceContext } = params;
+  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext } = params;
 
-  const systemPrompt = getExtractMemoriesSystemPrompt(promptMode);
+  const systemPrompt = composeMemorySystemPrompt(getExtractMemoriesSystemPrompt(promptMode), memoryPrompt);
   const userPrompt = formatExtractionPrompt({
     newMessages,
     backgroundMessages,

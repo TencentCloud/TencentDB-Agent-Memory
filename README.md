@@ -260,6 +260,7 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 
 ## Related Documentation
 
+- [Roadmap](./ROADMAP.md) (what we're building next)
 - [Full Installation Guide](./INSTALL.md) (Memory Core + Hub + Proxy one-click deployment)
 - [Roadmap](./ROADMAP.md) (what we're building next; 中文: [ROADMAP_CN.md](./ROADMAP_CN.md))
 - [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md) (if you're on an older release and want to migrate existing data)

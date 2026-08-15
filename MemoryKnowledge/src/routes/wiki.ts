@@ -12,6 +12,8 @@
  * EVERY endpoint (unified with the kernel routing key). id-only endpoints resolve
  * `getById(service_id, wiki_id)` so a foreign tenant's resource is never exposed (R1).
  * service_id / wiki_id are validated as safe path segments before use (R5).
+ *
+ * 细粒度 ingest progress 不在 KS 暴露：由 Panel 收 ingest_progress 回调并在 wiki/get 聚合。
  */
 
 import { Hono } from "hono";

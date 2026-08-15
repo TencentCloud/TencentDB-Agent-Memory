@@ -46,6 +46,13 @@ export interface SkillConfigInput {
     archiveBytes?: number;
     /** Skill review 单次 LLM 调用输出 token 上限。不填 → 继承顶层 llm.maxTokens。 */
     maxTokens?: number;
+    /**
+     * Extractor 在把 transcript 交给 review LLM 之前, 会先注入一段"预先检索"的
+     * skill 列表 (由抽取器自己代跑 skill_list 得到)。本字段控制这段的最大条数,
+     * 同时是 relevant 检索 (LLM 生成 query + BM25 search) 与 recent 兜底
+     * (按 updated_at DESC 分页) 共用的上限。默认 20; <=0 或非整数 warn 落回 20。
+     */
+    prefixSkillsLimit?: number;
   };
 
   /**
@@ -69,6 +76,22 @@ export interface SkillConfigInput {
 
   /** 旧版本 TTL 天数。默认 0（关闭）。设 7 = 非 head 版本创建 7 天后过期。 */
   versionTtlDays?: number;
+
+  /**
+   * Skill 抽取 worker 池 (2026-07-30 引入)。整个进程一个池, 全 instance
+   * 共享一条 skill agent 队列, 池里 N 条无状态 worker loop 从队列拿活。
+   * 详见 docs/design/2026-07-30-skill-worker-instance-decoupling.md。
+   */
+  worker?: {
+    /** 池里 worker 数, 全进程 skill 抽取并发上限。默认 60。可被 env TDAI_SKILL_WORKER_CONCURRENCY 覆盖。 */
+    concurrency?: number;
+    /** dequeueAgent 单次自旋 deadline (ms)。默认 5000。 */
+    brpopBlockMs?: number;
+    /** extract-lock TTL (ms), 保护同 (instance, agent) 串行。默认 600_000 (10 min)。 */
+    extractLockTtlMs?: number;
+    /** extract-lock 续约间隔 (ms), 默认 ttl / 4。 */
+    extractLockRenewIntervalMs?: number;
+  };
 }
 
 // ============================
@@ -97,6 +120,11 @@ export interface ResolvedSkillConfig {
     archiveBytes: number;
     /** Skill review 单次 LLM 调用输出 token 上限；不填 → 由 runner 继承 llm.maxTokens。 */
     maxTokens?: number;
+    /**
+     * Extractor 预检索 skill 列表条数上限 (relevant BM25 检索 & recent 兜底共用)。
+     * 默认 20。
+     */
+    prefixSkillsLimit: number;
     // ↓↓↓ 以下 7 个由 archiveBytes 派生，用户不直接配 ↓↓↓
     /** Handler: buffer 累计字节 ≥ 触发归档。= archiveBytes。 */
     bytesThreshold: number;
@@ -129,6 +157,14 @@ export interface ResolvedSkillConfig {
 
   /** 旧版本 TTL 秒数。0 = 关闭。 */
   versionTtlSeconds: number;
+
+  /** Skill 抽取 worker 池配置 (2026-07-30)。见 SkillConfigInput.worker 注释。 */
+  worker: {
+    concurrency: number;
+    brpopBlockMs: number;
+    extractLockTtlMs: number;
+    extractLockRenewIntervalMs: number;
+  };
 
   /** Records of automatic downgrades made during resolution. */
   degradations: SkillDegradation[];

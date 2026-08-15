@@ -31,6 +31,7 @@ import {
 } from "./guard-adapter.js";
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
 import { writeRequestLog } from "./requestLog.js";
+import { prepareUpstreamRequest, notifyUpstreamResponse } from "./request-prepare-adapter.js";
 import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-reporter.js";
 import { resolveModelId, isModelInPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
@@ -44,6 +45,7 @@ import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
+import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import {
   enforceRateLimit,
@@ -304,6 +306,23 @@ async function forwardWithRetry(
   let upstreamResp: Response | undefined;
   let forwardFailed = false;
 
+  // ── Optional full-body dump (dev only) ───────────────────────────────
+  // 打开: PROXY_DEBUG_DUMP_BODY=/tmp/proxy-outbound
+  // 每次 forward 落一个文件,方便排查上游 400。
+  if (process.env.PROXY_DEBUG_DUMP_BODY) {
+    try {
+      const fs = await import("node:fs");
+      const dir = process.env.PROXY_DEBUG_DUMP_BODY;
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const fn = `${dir}/${ts}-${sessionKeyForDebug ?? "nosid"}.json`;
+      fs.writeFileSync(fn, JSON.stringify({ url: target.url, headers: upstreamHeaders, body: upstreamBody }, null, 2));
+      console.log(`[dump-body] wrote ${fn}`);
+    } catch (e) {
+      console.log(`[dump-body] error: ${(e as Error).message}`);
+    }
+  }
+
   // ── Optional outbound body md5 debug log (see anthropicHandler.ts) ─────
   // openai 协议侧没有 cache_control 概念，只算 sys + 整个 messages 数组两个 md5。
   if (process.env.PROXY_DEBUG_DUMP_OUTBOUND_MD5) {
@@ -450,6 +469,103 @@ export async function handleChatCompletions(
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
+  // ── Optional inbound body dump (dev only) ─────────────────────────
+  // 打开: PROXY_DEBUG_DUMP_INBOUND=/tmp/proxy-inbound
+  // 每个入站请求落一个文件,方便排查客户端 replay 时到底带没带某个字段。
+  if (process.env.PROXY_DEBUG_DUMP_INBOUND) {
+    try {
+      const fs = await import("node:fs");
+      const dir = process.env.PROXY_DEBUG_DUMP_INBOUND;
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const hdrs: Record<string, string> = {};
+      for (const [k, v] of c.req.raw.headers.entries()) hdrs[k] = v;
+      const sid = hdrs["x-deepseek-harness-session-id"] ?? hdrs["x-session-id"] ?? "nosid";
+      const fn = `${dir}/${ts}-${sid}.json`;
+      fs.writeFileSync(fn, JSON.stringify({ path: c.req.path, headers: hdrs, body }, null, 2));
+      console.log(`[dump-inbound] wrote ${fn}`);
+    } catch (e) {
+      console.log(`[dump-inbound] error: ${(e as Error).message}`);
+    }
+  }
+
+  // ── DEBUG: dump tools/instructions/metadata（Phase 1 workbuddy 调研）──
+  // 仅在 sessionInit.debugVerboseLogging=true 时启用，生产环境默认关闭。
+  if (config.sessionInit?.debugVerboseLogging) {
+  try {
+    const dbgPath = c.req.path;
+    if (dbgPath.includes("/workbuddy/")) {
+      // 只保留精简字段（不 dump 原始 tools 数组，避免超长被截断）
+      const dumpKeys = [
+        "tool_choice",
+        "toolset",
+        "tool_config",
+        "response_format",
+        "metadata",
+        "client_metadata",
+      ];
+      const dump: Record<string, unknown> = { path: dbgPath, model: body.model };
+      for (const k of dumpKeys) {
+        if (k in body) dump[k] = (body as Record<string, unknown>)[k];
+      }
+      const toolsField = (body as Record<string, unknown>).tools;
+      if (Array.isArray(toolsField)) {
+        dump.tools_summary = toolsField.map((t: unknown) => {
+          const tt = t as Record<string, unknown>;
+          const fn = (tt as any).function ?? {};
+          const paramProps = fn.parameters?.properties;
+          return {
+            type: tt.type,
+            name: (tt as any).name ?? fn.name,
+            description:
+              typeof (tt as any).description === "string"
+                ? String((tt as any).description).slice(0, 400)
+                : typeof fn.description === "string"
+                  ? String(fn.description).slice(0, 400)
+                  : undefined,
+            param_keys: paramProps && typeof paramProps === "object"
+              ? Object.keys(paramProps)
+              : undefined,
+          };
+        });
+      }
+      // messages[0] 若是 system，一起 dump（可能声明 tool 用法）
+      const msgs = (body as Record<string, unknown>).messages;
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        const first = msgs[0] as Record<string, unknown>;
+        if (first?.role === "system") {
+          const content = typeof first.content === "string"
+            ? first.content
+            : JSON.stringify(first.content);
+          dump.system_head = content.slice(0, 2000);
+          dump.system_length = content.length;
+        }
+        dump.messages_count = msgs.length;
+      }
+      console.log(
+        `[wb-tools-dump] path=${dbgPath} tools_count=${Array.isArray(toolsField) ? toolsField.length : 0}`,
+      );
+      console.log(`[wb-tools-dump-json] ${JSON.stringify(dump).slice(0, 60000)}`);
+
+      // 额外：单独 dump AskUserQuestion 的完整 schema（Phase 1 关键调研）
+      if (Array.isArray(toolsField)) {
+        const askTool = toolsField.find((t: unknown) => {
+          const tt = t as any;
+          const name = tt?.name ?? tt?.function?.name;
+          return name === "AskUserQuestion";
+        });
+        if (askTool) {
+          console.log(
+            `[wb-ask-user-schema] ${JSON.stringify(askTool).slice(0, 20000)}`,
+          );
+        }
+      }
+    }
+  } catch (e) {
+    console.log(`[wb-tools-dump] error: ${String(e)}`);
+  }
+  } // debugVerboseLogging gate
+
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，
   // 大小写不敏感）。真实 model_id 是内部细节，不作为客户端入口。未匹配则直接
@@ -551,11 +667,21 @@ export async function handleChatCompletions(
   // system-user short-circuit; running verify again here would double the
   // network round-trip for every request.
   const spaceId = earlySpaceId;
-  const userId = earlyVerify.userId
+  let userId = earlyVerify.userId
     || c.req.header("x-user-id")
     || c.req.header("x-cb-user-id")
     || c.req.header("x-tdai-user-token")
     || "";
+  // DEBUG override：客户端传的 tokenhub-uid 与 kernel-uid 不一致（本地联调
+  // 常见），配置 sessionInit.debugForceUserId 后用真实 kernel user_id 替换，
+  // 让 CB 状态机能通过 kernel /team/list 拉到资产、正常弹表单。
+  const debugForceUserId = config.sessionInit?.debugForceUserId;
+  if (debugForceUserId) {
+    console.log(
+      `[handler] DEBUG override userId ${userId || "<empty>"} → ${debugForceUserId}`,
+    );
+    userId = debugForceUserId;
+  }
   if (userId) keyId = userId;
 
   // Activate Redis storage early — must run BEFORE session init.
@@ -564,18 +690,64 @@ export async function handleChatCompletions(
     getInjectionPipeline(config);
   }
 
+  // ── Request kind classification (auxiliary detection for OpenAI-chat clients) ──
+  // dsh (deepseek-harness) 会在 compaction 请求带 `x-deepseek-harness-compact: 1`
+  // header,title-gen 靠 body 特征三合一。这类请求**不能**走 session-init form,
+  // 也不能触发 mem 拦截 / L0 写入 / skill 提取 —— 应该直接透传上游。
+  // codebuddy / claude-code 客户端 adapter classifyRequest 恒返 "main",行为无变。
+  const { resolveAgentAdapter } = await import("./agent-adapters/index.js");
+  const _adapter = resolveAgentAdapter(agentSource);
+  const _requestKind = _adapter.classifyRequest(body as Record<string, unknown>, c.req.path, lcHeaders);
+  const isAuxiliary = _requestKind === "auxiliary";
+  if (isAuxiliary) {
+    console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → auxiliary (skip session-init/mem/injection/L0/skill)`);
+  }
+
+  // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
+  // dsh 客户端在 headless bundle 或未挂 ask-user preset 时,body.tools 里
+  // 不含 `ask_user_question` 工具。proxy 塞 fake `ask_user_question` tool_call
+  // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
+  // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
+  //
+  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
+  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
+  // 有 preset 挂 UI 工具,正常走 form。)
+  const _dshHeadless = agentSource === "dsh" && (() => {
+    const tools = (body as { tools?: unknown }).tools;
+    if (!Array.isArray(tools) || tools.length === 0) return false;
+    return !tools.some((t) => {
+      const fn = (t as { function?: { name?: string }; name?: string })?.function;
+      const n = fn?.name ?? (t as { name?: string })?.name;
+      return n === "ask_user_question";
+    });
+  })();
+  if (_dshHeadless) {
+    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+  }
+
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId;
+  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId) {
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
-      const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
+      // kernel /v3/meta/* 走 x-tdai-user-key 鉴权，需要 sk-mem-* 用户 key。
+      // 优先级：客户端 Authorization bearer > config.tdai.apiKey。
+      // 说明：
+      //   - workbuddy / codebuddy 等真实客户端会在 Authorization 里传合法的
+      //     sk-mem-* 用户 key（形如 ck_ft1xxx.yyy），verifyUserKey 能解出 userId。
+      //   - config.tdai.apiKey 常被本地/测试环境设成占位符（如 "local"），
+      //     若用它覆盖客户端真实 key，会导致 kernel 401 invalid_user_key，
+      //     session-init 直接 bypass，前端表单永不弹出。
+      //   - 只有客户端未提供 apiKey 时（例如某些内部脚本），才回退到 config。
+      // 与 workbuddyHandler.ts 里的 kernelUserKey 逻辑对齐（那里也是客户端优先）。
+      const kernelUserKey = apiKey || config.tdai?.apiKey || "";
+      const metadataClient = getMetadataClient(config.coreSkill, spaceId, kernelUserKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
@@ -642,7 +814,7 @@ export async function handleChatCompletions(
           { stream: isStream, modelId: modelId as string, protocol: "openai" },
           agentSource,
           metadataClient,
-          apiKey,
+          kernelUserKey,
           spaceId,
           presetIdentity,
         );
@@ -760,7 +932,7 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (config.memCommand?.enabled) {
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
     const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -837,11 +1009,39 @@ export async function handleChatCompletions(
 
       console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} success=${memResult.success}`);
 
+      // Langfuse: 上报 mem-command（跟 anthropicHandler 对称）。
+      //   lf 在 L955 才构造，这里 inline 推导 turnSeq → traceId。
+      const memTurnSeq = countHumanTurns(messages, "openai");
+      const memTraceId = langfuseTurnTraceId(sessionKey, memTurnSeq);
+      langfuseReportGeneration({
+        traceId: memTraceId,
+        name: "memory-proxy",
+        model: "memory-proxy",
+        startTime,
+        endTime: new Date().toISOString(),
+        input: memCmd.rawMessage,
+        output: memResult.messageText,
+        usage: { input_tokens: 0, output_tokens: 0 },
+        traceName: `memory-proxy / ${keyId}`,
+        userId: keyId,
+        sessionId: sessionKey,
+        tags: [
+          `agent_source:${agentSource}`,
+          "protocol:openai",
+          isStream ? "stream" : "non-stream",
+          `session:${sessionKey}`,
+          "mem-command",
+        ],
+        traceInput: memCmd.rawMessage,
+        traceOutput: memResult.messageText,
+      });
+
       return memResult.response;
     }
   }
 
-  const tdaiClient = assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
+  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -935,7 +1135,11 @@ export async function handleChatCompletions(
   pipe.requestReceived(messages.length, isStream);
 
   // ── Trace-level tags ──
+  // agent_source 标明客户端族群（codebuddy / claude-code / codex / …），供
+  // Langfuse 上按客户端筛选 trace；protocol 只区分 wire 协议，同一 wire
+  // 可对应多个客户端。
   const traceTags: string[] = [
+    `agent_source:${agentSource}`,
     "protocol:openai",
     isStream ? "stream" : "non-stream",
     `session:${sessionKey}`,
@@ -996,6 +1200,30 @@ export async function handleChatCompletions(
 
   // ── Build upstream request ───────────────────────────────────────────────
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+
+  // Optional private preparation stage. It rewrites `body` / `messages` in
+  // place, so it has to land after every host-side mutation (injection, agent
+  // overrides) and before the upstream body is assembled below. The host does
+  // not interpret the returned stats — see request-prepare-adapter.ts.
+  const preparedStats = await prepareUpstreamRequest({
+    config,
+    protocol: "openai",
+    body,
+    messages,
+    sessionKey,
+    pipe,
+    upstreamCall: {
+      upstreamUrl: target.url,
+      headers: upstreamHeaders,
+      model: target.model,
+      tools: body.tools,
+      bodyOverrides: target.bodyOverrides ?? undefined,
+    },
+    userQuery: lf.userQuery,
+    spaceId,
+    lf,
+  });
+
   const upstreamBody = buildUpstreamBody(body, target);
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
@@ -1027,7 +1255,9 @@ export async function handleChatCompletions(
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
-  pipe.forwardStart();
+  // Pass target.url so the FORWARD log reflects the actual per-agent upstream
+  // (otherwise it prints the global default and misleads triage).
+  pipe.forwardStart(target.url);
   let upstreamResp: Response;
   let retried = false;
 
@@ -1075,6 +1305,10 @@ export async function handleChatCompletions(
     ? target.retryTarget.model
     : target.model;
 
+  // A retry falls back to the model the client asked for, so the request ends
+  // up costing what it would have cost unrouted — no saving to attribute.
+  const routedFrom = retried ? "" : target.routedFrom;
+
   // ── Streaming response ───────────────────────────────────────────────────
   if (isStream) {
     if (!upstreamResp.body) {
@@ -1096,6 +1330,7 @@ export async function handleChatCompletions(
         upstreamUrl: target.url,
         stream: true,
         usage: { error: true, status: upstreamResp.status, body: errText.slice(0, 500) },
+        routedFrom,
         spaceId,
         upstreamRequestId,
       });
@@ -1129,6 +1364,7 @@ export async function handleChatCompletions(
       inputMessages: messages,
       retried,
       logMeta: retried ? { retrySuccess: true } : {},
+      routedFrom,
       tdaiClient,
       tdaiIdentity,
       tdaiUserMessage,
@@ -1136,12 +1372,15 @@ export async function handleChatCompletions(
       pipe,
       sessionKeyForSkill: sessionKey,
       agentSource,
+      isAuxiliary,
+      isDshHeadless: _dshHeadless,
       sessionInfo,
       lf,
       spaceId,
       upstreamRequestId,
       langfuseDebug,
       debugMetadata,
+      preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
     const tappedStream = upstreamResp.body.pipeThrough(passthrough);
@@ -1173,6 +1412,64 @@ export async function handleChatCompletions(
 
   const logMeta = retried ? { retrySuccess: true } : {};
 
+  // Report the completed response to the extension (same signal the streaming
+  // path emits from its tap). Fire-and-forget.
+  void notifyUpstreamResponse(
+    config,
+    {
+      protocol: "openai",
+      sessionKey,
+      model: effectiveModel,
+      stream: false,
+      turnSeq: lf.turnSeq,
+      text: typeof assistantMessage?.content === "string" ? assistantMessage.content : "",
+      toolCalls: (Array.isArray(assistantMessage?.tool_calls) ? assistantMessage.tool_calls : [])
+        .map((tc) => {
+          const t = tc as Record<string, unknown>;
+          const fn = t.function as Record<string, unknown> | undefined;
+          const argsVal = fn?.arguments;
+          return {
+            id: (t.id as string) ?? "",
+            name: (fn?.name as string) ?? "",
+            arguments: typeof argsVal === "string" ? argsVal : JSON.stringify(argsVal ?? ""),
+          };
+        })
+        .filter((tc) => tc.id && tc.arguments),
+      usage: usage ?? {},
+    },
+    pipe,
+  );
+
+  // 内部使用埋点：非流式响应里的 tool_calls 逐个记 model_intent。
+  try {
+    const toolCalls = assistantMessage?.tool_calls;
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const intents = toolCalls
+        .map((tc) => {
+          const t = tc as Record<string, unknown>;
+          const fn = t.function as Record<string, unknown> | undefined;
+          const name = (fn?.name as string) ?? "";
+          const argsVal = fn?.arguments;
+          const argsStr = typeof argsVal === "string" ? argsVal : JSON.stringify(argsVal ?? "");
+          return { name, arguments: argsStr };
+        })
+        .filter((i) => i.name);
+      if (intents.length > 0) {
+        emitModelIntentTelemetry({
+          // 与 session_init_logs 对齐 compositeKey 形态
+          sessionKey: `${agentSource}:${sessionKey}`,
+          turnSeq: lf.turnSeq,
+          spaceId,
+          userId: keyId,
+          agentSource,
+          intents,
+        });
+      }
+    }
+  } catch {
+    // 埋点绝不阻塞业务
+  }
+
   if (usage) {
     await recordInputTokenUsage({
       config,
@@ -1192,6 +1489,8 @@ export async function handleChatCompletions(
       upstreamUrl: target.url,
       stream: false,
       usage,
+      extensionStats: preparedStats ?? undefined,
+      routedFrom,
       spaceId,
       upstreamRequestId,
       ...logMeta,
@@ -1283,7 +1582,8 @@ export async function handleChatCompletions(
 
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-  if (isExtractionAllowed(config, "skill")) {
+  // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
+  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1294,7 +1594,7 @@ export async function handleChatCompletions(
       protocol: "openai",
       assetCapabilities,
     });
-  } else {
+  } else if (!isAuxiliary && !_dshHeadless) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -1326,6 +1626,7 @@ export async function handleChatCompletions(
         upstreamUrl: target.url,
         stream: false,
         usage: usage === null ? undefined : usage,
+        routedFrom,
         upstreamRequestId,
         pricingConfig: config.creditPricing,
       },
@@ -1371,6 +1672,8 @@ interface TapContext {
   inputMessages: unknown[];
   retried: boolean;
   logMeta: Record<string, unknown>;
+  /** Requested model when the router forwarded elsewhere; "" otherwise. */
+  routedFrom: string;
   tdaiClient: TdaiClient | null;
   tdaiIdentity: TdaiIdentity | null;
   tdaiUserMessage: TdaiMessage | null;
@@ -1380,6 +1683,12 @@ interface TapContext {
   sessionKeyForSkill: string;
   /** Client type (URL path 第一段) — 透传给 extract trigger 作为三段隔离键之一。 */
   agentSource: string;
+  /** True when this request was classified as auxiliary (compaction/title-gen) —
+   * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
+  isAuxiliary: boolean;
+  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
+   * in tools) — behaves like aux for downstream side-effects. */
+  isDshHeadless: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -1391,6 +1700,8 @@ interface TapContext {
   langfuseDebug: boolean;
   /** buildRequestDebugMetadata 结果；debug=false 时为 {}。 */
   debugMetadata: Record<string, unknown>;
+  /** Opaque counters from the request-preparation stage; null when it didn't run. */
+  preparedStats: Record<string, unknown> | null;
 }
 
 /** Accumulated tool call state during SSE streaming. */
@@ -1518,6 +1829,46 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       }
     }
 
+    // Report the completed response to the extension. Fire-and-forget; the
+    // client has already been served by this point.
+    void notifyUpstreamResponse(
+      config,
+      {
+        protocol: "openai",
+        sessionKey,
+        model: modelId,
+        stream: true,
+        turnSeq: lf.turnSeq,
+        text: assistantContent,
+        toolCalls: Array.from(toolCallAccumulators.values())
+          .filter((acc) => acc.id && acc.functionArguments)
+          .map((acc) => ({
+            id: acc.id,
+            name: acc.functionName,
+            arguments: acc.functionArguments,
+          })),
+        usage: lastUsage ?? {},
+      },
+      pipe,
+    );
+
+    // 内部使用埋点：每个 tool_use 意图一条 model_intent（fan-out）。
+    // 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md §7.2 E。
+    if (toolCallAccumulators.size > 0) {
+      const intents = Array.from(toolCallAccumulators.values())
+        .filter((acc) => acc.functionName)
+        .map((acc) => ({ name: acc.functionName, arguments: acc.functionArguments }));
+      emitModelIntentTelemetry({
+        // 与 session_init_logs 对齐 compositeKey 形态
+        sessionKey: `${ctx.agentSource}:${sessionKey}`,
+        turnSeq: lf.turnSeq,
+        spaceId: spaceId,
+        userId: keyId,
+        agentSource: ctx.agentSource,
+        intents,
+      });
+    }
+
     if (lastUsage) {
       await recordInputTokenUsage({
         config,
@@ -1538,6 +1889,8 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           upstreamUrl,
           stream: true,
           usage: lastUsage,
+          extensionStats: ctx.preparedStats ?? undefined,
+          routedFrom: ctx.routedFrom,
           spaceId,
           upstreamRequestId,
         });
@@ -1649,7 +2002,8 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
 
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-    if (isExtractionAllowed(ctx.config, "skill")) {
+    // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
+    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -1661,7 +2015,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else {
+    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 
@@ -1691,6 +2045,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
               upstreamUrl: ctx.upstreamUrl,
               stream: true,
               usage: lastUsage === null ? undefined : lastUsage,
+              routedFrom: ctx.routedFrom,
               upstreamRequestId: ctx.upstreamRequestId,
               pricingConfig: ctx.config.creditPricing,
             },

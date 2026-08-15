@@ -9,6 +9,7 @@ import { validatePanelMetaHeaders } from '../../middleware/validate-panel-header
 import { respondControlError, respondEnvelope } from '../../envelope.js';
 import type { MetaCallContext } from '../../../kernel/types.js';
 import { KNOWLEDGE_SERVICE_USERNAME } from '../../../startup/ensure-knowledge-llm-binding.js';
+import { DEFAULT_SKILLS } from './default-skills.js';
 
 /**
  * Hide the internal per-instance `knowledge-service` billing user from panel user
@@ -50,6 +51,15 @@ interface DupCheckConfig {
 
 const DUP_CHECK_MAP: Record<string, DupCheckConfig> = {
   'user/create': {
+    listAction: 'user/list',
+    listBody: () => ({}),
+    filterParam: 'username',
+    matchValue: (b) => (typeof b.username === 'string' ? b.username : undefined),
+    entityLabel: '用户',
+  },
+  // user/create 的姊妹接口：查重口径与 user/create 完全一致（先按 username 精确 list）。
+  // user_key 的重复由内核 duplicate_user_key(409) 兜底，Panel 直接透传。
+  'user/create-with-key': {
     listAction: 'user/list',
     listBody: () => ({}),
     filterParam: 'username',
@@ -167,6 +177,12 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
     }
 
     const envelope = await deps.metaKernel.invoke(action, body, ctx);
+
+    // team-member/add 成功后，为默认 Agent 导入预置 Skill（best-effort，异步不阻塞响应）
+    if (action === 'team-member/add' && envelope.code === 0) {
+      void importDefaultSkillsForNewMember(body, ctx, deps);
+    }
+
     if (action === 'user/list' && envelope.code === 0) {
       hideKnowledgeServiceUser(envelope.data);
     }
@@ -176,4 +192,77 @@ export function registerMetaProxyRoutes(api: Hono, deps: PanelDeps): void {
     // apply_visibility_filter=true 过滤掉 canBindAsset=false 的项。
     return respondEnvelope(c, envelope);
   });
+}
+
+// ── team-member/add 成功后：为 default-agent 导入预置 Skill ──
+
+async function importDefaultSkillsForNewMember(
+  body: Record<string, unknown>,
+  ctx: MetaCallContext,
+  deps: PanelDeps,
+): Promise<void> {
+  try {
+    const userId = body.user_id as string | undefined;
+    const teamId = body.team_id as string | undefined;
+    if (!userId || !teamId) return;
+
+    // 1. 获取用户信息（拿 username 拼 agent 名称）
+    const userEnv = await deps.metaKernel.invoke('user/get', { user_id: userId }, ctx);
+    if (userEnv.code !== 0) return;
+    const user = userEnv.data as { username?: string };
+    const agentName = `default-agent-${user.username ?? userId}`;
+
+    // 2. 查 default-agent
+    const agentsEnv = await deps.metaKernel.invoke('agent/list', {
+      team_id: teamId,
+      owner_user_id: userId,
+      limit: 50,
+      offset: 0,
+    }, ctx);
+    if (agentsEnv.code !== 0) return;
+    const agents = (agentsEnv.data as { items?: Array<{ agent_id: string; name: string }> })?.items ?? [];
+    const defaultAgent = agents.find(a => a.name === agentName);
+    if (!defaultAgent) {
+      deps.logger.warn('default agent not found, skip skill import', {
+        instanceId: ctx.instanceId, userId, teamId, agentName,
+      });
+      return;
+    }
+
+    // 3. 创建预置 Skill（依赖内核 name 唯一约束做幂等，42201 直接跳过）
+    for (const skill of DEFAULT_SKILLS) {
+      try {
+        const createEnv = await deps.skillKernel.invoke('create', {
+          user_id: userId,
+          team_id: teamId,
+          agent_id: defaultAgent.agent_id,
+          name: skill.name,
+          content: skill.content,
+        }, ctx);
+        if (createEnv.code === 0) {
+          deps.logger.info(`default skill "${skill.name}" created`, {
+            instanceId: ctx.instanceId,
+            agentId: defaultAgent.agent_id,
+          });
+        } else if (createEnv.code !== 42201) {
+          // 42201 = SKILL_NAME_DUPLICATE，忽略
+          deps.logger.warn(`default skill "${skill.name}" create failed`, {
+            instanceId: ctx.instanceId,
+            code: createEnv.code,
+            message: createEnv.message,
+          });
+        }
+      } catch (err) {
+        deps.logger.warn(`default skill "${skill.name}" create error`, {
+          instanceId: ctx.instanceId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } catch (err) {
+    deps.logger.warn('import default skills for new member failed', {
+      instanceId: ctx.instanceId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

@@ -12,7 +12,7 @@
  * 不感知具体后端（SQLite / MongoDB），保证存储可切换。
  */
 
-import type { IMetadataStore } from "../store/interface.js";
+import { DuplicateUserKeyError, type IMetadataStore } from "../store/interface.js";
 import {
   checkPermission,
   canBindAsset,
@@ -89,7 +89,33 @@ import type {
 } from "../types.js";
 import { formatListResult, paginateArray, resolvePagination, wrapPaginated, DEFAULT_PAGINATION } from "../pagination.js";
 import { generateId, ID_PREFIX } from "../utils/id-generator.js";
-import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
+import { buildChatMemoryAssetId, resolveChatMemoryAgentId } from "../utils/chat-memory-asset.js";
+
+// ── 默认 Agent / Team 常量 ──
+
+const DEFAULT_TEAM_NAME = "default-team";
+const DEFAULT_TEAM_DESCRIPTION = "系统初始化时自动创建的默认团队，用于存放默认助手";
+
+const DEFAULT_AGENT_NAME = "default-agent";
+const DEFAULT_AGENT_DESCRIPTION = "默认助手，可处理通用开发任务与日常协作。";
+
+// prompt 拼接格式与前端手动创建 Agent 完全一致：
+// [card.rolePrompt, card.rulesPrompt].filter(Boolean).join('\n\n')
+const DEFAULT_AGENT_ROLE_PROMPT = "";
+const DEFAULT_AGENT_RULES_PROMPT = "";
+const DEFAULT_AGENT_PROMPT = [DEFAULT_AGENT_ROLE_PROMPT, DEFAULT_AGENT_RULES_PROMPT]
+  .filter(Boolean)
+  .join("\n\n");
+
+// metadata_json 存储拆分后的 role_prompt / rules_prompt，
+// 与前端 writeAgentUiMeta / readAgentUiMeta 的 "ui" namespace 格式一致，
+// 保证 Agent 详情页「角色定位 prompt」和「规则固定 prompt」分开显示。
+const DEFAULT_AGENT_METADATA_JSON = JSON.stringify({
+  ui: {
+    role_prompt: DEFAULT_AGENT_ROLE_PROMPT,
+    rules_prompt: DEFAULT_AGENT_RULES_PROMPT,
+  },
+});
 
 /** 业务校验错误，带可映射到 HTTP 状态的 code。 */
 export class MetadataError extends Error {
@@ -101,6 +127,17 @@ export class MetadataError extends Error {
     this.name = "MetadataError";
   }
 }
+
+/**
+ * 清空某个 (team, agent) 的 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）。
+ *
+ * 由 gateway 装配处实现并注入（见 MetadataService.setChatMemoryContentCleaner），
+ * 因为内容存放在 IMemoryStore / StorageAdapter，不在 metadata store 里。
+ */
+export type ChatMemoryContentCleaner = (params: {
+  teamId: string;
+  agentId: string;
+}) => Promise<void>;
 
 /** Detect unique constraint violation (SQLite UNIQUE or MongoDB E11000) on a specific column. */
 function isUniqueViolation(err: unknown, column?: string): boolean {
@@ -219,6 +256,9 @@ export class MetadataService {
   private readonly ensuredSkillAssets = new Map<string, true>();
   private static readonly SKILL_ENSURE_CACHE_SIZE = 4096;
 
+  /** 由 gateway 注入的 chat_memory 内容清理器；未注入时归档只删资产不清内容。 */
+  private _chatMemoryContentCleaner?: ChatMemoryContentCleaner;
+
   constructor(
     private readonly store: IMetadataStore,
     private readonly instanceId: string = DEFAULT_INSTANCE_ID,
@@ -243,6 +283,21 @@ export class MetadataService {
 
   setConfigParamService(svc: import("./config-param-service.js").IConfigParamService): void {
     this._configParams = svc;
+  }
+
+  /**
+   * 注入「chat_memory 内容清理器」。
+   *
+   * 为什么用可选钩子而不是直接依赖 store：metadata 层只持有 IMetadataStore
+   * （元数据），拿不到 IMemoryStore / StorageAdapter（L0–L3 内容）。归档
+   * Agent 时要顺带删掉它的记忆内容，就需要由gateway 装配处把清理能力注入
+   * 进来 —— 与 setConfigParamService 同一模式，保持依赖方向不反转。
+   *
+   * 未注入时 archiveAgent 退化为原行为（只删资产，不清内容），因此
+   * 单测/ 迁移脚本等不装配该钩子的场景不受影响。
+   */
+  setChatMemoryContentCleaner(cleaner: ChatMemoryContentCleaner): void {
+    this._chatMemoryContentCleaner = cleaner;
   }
 
   /** memory 静态 key 仅用于 auth/verify body，不可作 Header 鉴权。 */
@@ -325,15 +380,81 @@ export class MetadataService {
     if ((await this.store.countSystemAdmins()) > 0) {
       throw new MetadataError("already_initialized", "system_admin already exists");
     }
+
+    // 核心操作：创建 admin 用户
     const created = await this.createUserWithType(
       { username: input.username, default_key_value: input.user_key },
       "system_admin",
     );
+
+    // 辅助操作：自动创建默认 Team 和 Agent（失败不阻塞核心流程）
+    try {
+      const team = await this.createTeam({
+        name: DEFAULT_TEAM_NAME,
+        description: DEFAULT_TEAM_DESCRIPTION,
+        owner_user_id: created.user_id,
+      });
+
+      try {
+        const agentName = `${DEFAULT_AGENT_NAME}-${input.username}`;
+        await this.createAgent({
+          team_id: team.team_id,
+          owner_user_id: created.user_id,
+          name: agentName,
+          description: DEFAULT_AGENT_DESCRIPTION,
+          prompt: DEFAULT_AGENT_PROMPT,
+          metadata_json: DEFAULT_AGENT_METADATA_JSON,
+          visibility: "team",
+          status: "active",
+        });
+      } catch (err) {
+        console.warn(
+          `[init-admin] 默认 Agent 创建失败，已跳过 (user=${created.user_id})`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[init-admin] 默认 Team 创建失败，已跳过 (user=${created.user_id})`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
     return { user_id: created.user_id, user_key: created.default_user_key };
   }
 
   async createNormalUser(input: CreateUserInput): Promise<CreateUserApiResult> {
     return this.createUserWithType(input, "normal");
+  }
+
+  /**
+   * 仅供 /v3/meta/user/create-with-key 使用：允许 system_admin 在建号时显式指定 user_key。
+   *
+   * 两层去重：
+   *   1. 前置 getUserByKey：正常路径快速失败，不进事务
+   *   2. store 层 UNIQUE 约束（DuplicateUserKeyError）：TOCTOU / 并发兜底
+   *
+   * router 层需先调 assertCanManageUsers 做鉴权。
+   */
+  async createNormalUserWithKey(input: {
+    username: string;
+    user_key: string;
+  }): Promise<CreateUserApiResult> {
+    const existing = await this.store.getUserByKey(input.user_key);
+    if (existing) {
+      throw new MetadataError("duplicate_user_key", "user_key already exists");
+    }
+    try {
+      return await this.createUserWithType(
+        { username: input.username, default_key_value: input.user_key },
+        "normal",
+      );
+    } catch (err) {
+      if (err instanceof DuplicateUserKeyError) {
+        throw new MetadataError("duplicate_user_key", "user_key already exists");
+      }
+      throw err;
+    }
   }
 
   /** 未传 auth_provider / external_id 时补默认值（local / user_id）。 */
@@ -699,7 +820,41 @@ export class MetadataService {
         `member already exists: ${input.team_id}/${input.user_id}`,
       );
     }
-    return this.store.addTeamMember({ ...input, role: reqRole });
+
+    // 核心操作：将用户加入 Team
+    const result = await this.store.addTeamMember({ ...input, role: reqRole });
+
+    // 辅助操作：自动创建默认 Agent（失败不阻塞，已有则跳过）
+    try {
+      const user = await this.getUserById(input.user_id);
+      const agentName = user?.username
+        ? `${DEFAULT_AGENT_NAME}-${user.username}`
+        : DEFAULT_AGENT_NAME;
+      const agents = await this.store.listAgentsByTeam(input.team_id, null, {
+        owner_user_id: input.user_id,
+        name: agentName,
+        status: "active",
+      });
+      if (agents.items.length === 0) {
+        await this.createAgent({
+          team_id: input.team_id,
+          owner_user_id: input.user_id,
+          name: agentName,
+          description: DEFAULT_AGENT_DESCRIPTION,
+          prompt: DEFAULT_AGENT_PROMPT,
+          metadata_json: DEFAULT_AGENT_METADATA_JSON,
+          visibility: "team",
+          status: "active",
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `[addTeamMember] 默认 Agent 创建失败，已跳过 (user=${input.user_id} team=${input.team_id})`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+
+    return result;
   }
 
   async removeTeamMember(teamId: string, userId: string): Promise<void> {
@@ -780,11 +935,34 @@ export class MetadataService {
     return formatListResult({ items, total: page.total }, pagination);
   }
 
-  /** 归档（软关闭）agent：status → inactive，并归档其自身 chat_memory 资产。 */
+  /**
+   * 归档（软关闭）agent。
+   *
+   * 顺序很关键 —— **先清内容，再删资产**：
+   *   1. status → inactive
+   *   2.清空该 agent 的 chat_memory 内容（L0/L1/L2/L3 + 向量 + 文件）
+   *   3. 删除自身 chat_memory 资产记录（并级联清掉其它 agent 的借入绑定）
+   *
+   * 若把顺序颠倒（先删资产再清内容），资产记录一没，就再也无法从
+   * asset_id 定位到 (team, agent)，内容会变成**永久不可达的孤儿数据**
+   * 留在库里 —— 这正是本次修复的问题。
+   *
+   * 内容清理失败时**中止归档**并向上抛：宁可让调用方重试，也不要留下
+   * "资产已删、内容还在"的不一致状态。未注入 cleaner 时（单测 / 迁移
+   * 脚本）跳过第 2 步，退化为原行为。
+   */
   async archiveAgent(agentId: string): Promise<AgentEntity> {
     const existing = await this.getAgentById(agentId);
     if (!existing) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
     const archived = await this.updateAgent(agentId, { status: "inactive" });
+
+    if (this._chatMemoryContentCleaner) {
+      await this._chatMemoryContentCleaner({
+        teamId: existing.team_id,
+        agentId: existing.agent_id,
+      });
+    }
+
     const selfMemoryAssetId = buildChatMemoryAssetId(existing.team_id, existing.agent_id);
     await this.store.deleteAssets([selfMemoryAssetId]);
     return archived;
@@ -1717,6 +1895,73 @@ export class MetadataService {
   async touchAssetUsageForCaller(assetId: string, ctx: V3AuthContext): Promise<void> {
     await this.assertCallerIsAssetOwner(ctx, assetId);
     return this.touchAssetUsage(assetId);
+  }
+
+  /**
+   * 为 `/v3/chat-memory/clear` 做整批前置解析：把 asset_id 映射到 (team, agent)。
+   *
+   * 语义（与需求「任一 memory_id 不合法时，整批拒绝」对齐）：
+   *   - 每个 id 必须存在且 asset_type === "chat_memory"；
+   *   - 必须能在该资产的 team 下定位到对应 agent；
+   *   - 任一条不满足直接抛 MetadataError，整批不执行。
+   *
+   * **不做用户级 Owner 校验**：内核数据面的信任模型是 Bearer +
+   * x-tdai-service-id 即管理员级凭据（与 L0–L3 删除接口一致）。
+   * "仅资产 Owner 可操作"由面板后端在转发前完成。
+   *
+   * 只做校验与读取，**不修改任何资产字段** —— 清空只删内容不动资产。
+   */
+  async resolveChatMemoryTargets(
+    assetIds: string[],
+  ): Promise<Array<{ asset_id: string; team_id: string; agent_id: string }>> {
+    const targets: Array<{ asset_id: string; team_id: string; agent_id: string }> = [];
+    // 同一 team 的 agent 列表在批量场景里会被反复用到，按 team 缓存一次。
+    const agentIdsByTeam = new Map<string, string[]>();
+
+    for (const assetId of assetIds) {
+      const asset = await this.getAssetById(assetId);
+      if (!asset) {
+        throw new MetadataError("asset_not_found", `asset not found: ${assetId}`);
+      }
+      if (asset.asset_type !== "chat_memory") {
+        throw new MetadataError(
+          "asset_type_mismatch",
+          `asset ${assetId} is not a chat_memory asset (got ${asset.asset_type})`,
+        );
+      }
+
+      let agentIds = agentIdsByTeam.get(asset.team_id);
+      if (!agentIds) {
+        agentIds = await this.listAllAgentIdsByTeam(asset.team_id);
+        agentIdsByTeam.set(asset.team_id, agentIds);
+      }
+
+      const agentId = resolveChatMemoryAgentId(assetId, asset.team_id, agentIds);
+      if (!agentId) {
+        throw new MetadataError(
+          "agent_not_found",
+          `cannot resolve owning agent for chat_memory asset ${assetId} in team ${asset.team_id}`,
+        );
+      }
+      targets.push({ asset_id: assetId, team_id: asset.team_id, agent_id: agentId });
+    }
+    return targets;
+  }
+
+  /**
+   * 拉取一个 team 下全部 agent_id（分页遍历，单页上限 100）。
+   * 加硬上限防御异常大team 把内存打满。
+   */
+  private async listAllAgentIdsByTeam(teamId: string): Promise<string[]> {
+    const PAGE = 100;
+    const MAX_AGENTS = 10_000;
+    const ids: string[] = [];
+    for (let offset = 0; offset < MAX_AGENTS; offset += PAGE) {
+      const page = await this.store.listAgentsByTeam(teamId, { limit: PAGE, offset });
+      for (const agent of page.items) ids.push(agent.agent_id);
+      if (page.items.length < PAGE) break;
+    }
+    return ids;
   }
 
   async setAgentFixedAssetsForCaller(

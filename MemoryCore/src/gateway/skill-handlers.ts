@@ -31,6 +31,7 @@ import {
   patchRequestSchema,
   deleteRequestSchema,
   getRequestSchema,
+  getByNameRequestSchema,
   listRequestSchema,
   searchRequestSchema,
   versionsRequestSchema,
@@ -39,6 +40,7 @@ import {
   filesReadRequestSchema,
   listingRequestSchema,
   extractRequestSchema,
+  exportRequestSchema,
   conversationAddRequestSchema,
   forceArchiveRequestSchema,
 } from "./skill-schemas.js";
@@ -117,7 +119,7 @@ export interface SkillRouterDeps {
    * (server.ts) 按 auth.serviceId 缓存 + resolve。
    */
   resolveConversationAdd?: (instanceId: string) => Promise<
-    import("../core/skill/conversation-add/wire.js").WiredConversationAdd | undefined
+    import("../core/skill/conversation-add/wire.js").WiredConversationAddHandler | undefined
   >;
 }
 
@@ -141,6 +143,7 @@ const ERROR_CODE_MAP: Record<string, number> = {
   SKILL_COS_REQUIRED: 50303,
   SKILL_ID_COLLISION: 50304,
   SKILL_VERSION_EXPIRED: 41002,
+  SKILL_EXPORT_TOO_LARGE: 41301,
 };
 
 function mapCoreError(e: unknown, requestId: string, deps?: SkillRouterDeps, meta?: Record<string, unknown>): ApiResponseEnvelope {
@@ -425,6 +428,79 @@ export async function handleDelete(body: unknown, _auth: V2AuthContext, requestI
   }
 }
 
+/**
+ * `POST /v3/skill/get-by-name` —— (team_id, agent_id, skill_name) → skill 详情。
+ *
+ * 见 skill-schemas.ts 里 `getByNameRequestSchema` 的动机注释。实现路径:
+ *   1) schema 已强制 team_id + agent_id + skill_name 必填
+ *   2) 走 `SkillCore.list` 拿到 (team, agent, name_prefix=name) 的候选(1-2 条)
+ *   3) 精确名字匹配一条,交给 `SkillCore.get(skill_id)` 复用 include_content /
+ *      include_manifest / version 分支,保证与 /v3/skill/get 输出体一致
+ *
+ * 找不到 → 40401 SKILL_NOT_FOUND(与 get 对齐,agent 视角看不出"是没这名字
+ * 还是没这 id",统一一种错误码)。
+ */
+export async function handleGetByName(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
+  const t0 = Date.now();
+  const pre = await precheck(getByNameRequestSchema, body, _auth, deps, requestId);
+  if (!pre.ok) { obsLogger.warn("skill.handleGetByName.done", { req_id: requestId, code: pre.envelope.code, dur_ms: Date.now() - t0, reason: "precheck" }); return pre.envelope; }
+  try {
+    // 用 name 当 prefix 拉 1-2 条候选(prefix LIKE 会命中同前缀的邻居,
+    // 显式再 exact-match 一次;不用 limit=1 以便 exact 命中稳定)。
+    const listed = await pre.core.list({
+      team_id: pre.data.team_id,
+      agent_id: pre.data.agent_id,
+      filters: { name_prefix: pre.data.skill_name },
+      pagination: { limit: 10 },
+    });
+    const hit = listed.items.find((s) => s.name === pre.data.skill_name);
+    if (!hit) {
+      obsLogger.info("skill.handleGetByName.done", {
+        req_id: requestId, code: 40401, dur_ms: Date.now() - t0,
+        team_id: pre.data.team_id, agent_id: pre.data.agent_id, skill_name: pre.data.skill_name,
+        reason: "not_found",
+      });
+      // 与 handleGet SKILL_NOT_FOUND 走同一路径:errorEnvelope(40401, ...)
+      return errorEnvelope(40401, `SKILL_NOT_FOUND: no skill named "${pre.data.skill_name}" for agent ${pre.data.agent_id}`, requestId);
+    }
+
+    // 复用 handleGet 主体:构造 get input 走 core.get,保证行为完全一致
+    // (含 version 分支、include_content / include_manifest 语义)。
+    const row = await pre.core.get({
+      user_id: pre.data.user_id,
+      team_id: pre.data.team_id,
+      agent_id: pre.data.agent_id,
+      task_id: pre.data.task_id,
+      skill_id: hit.skill_id,
+      version: pre.data.version,
+      include_content: pre.data.include_content,
+      include_manifest: pre.data.include_manifest,
+    });
+    const includeContent = pre.data.include_content ?? true;
+    const includeManifest = pre.data.include_manifest ?? true;
+    const data = {
+      ...toSummary(row),
+      ...(row.content_hash ? { content_hash: row.content_hash } : {}),
+      ...(row.storage_dir ? { storage_dir: row.storage_dir } : {}),
+      ...(includeContent ? { content: row.content } : {}),
+      ...(includeManifest ? { manifest: row.manifest } : {}),
+    };
+    obsLogger.info("skill.handleGetByName.done", {
+      req_id: requestId, code: 0, dur_ms: Date.now() - t0,
+      skill_id: row.skill_id, version: row.version,
+      content_len: row.content?.length ?? 0,
+      manifest_n: row.manifest?.length ?? 0,
+    });
+    return successEnvelope(data, requestId);
+  } catch (e) {
+    obsLogger.error("skill.handleGetByName.done", {
+      req_id: requestId, dur_ms: Date.now() - t0,
+      skill_name: pre.data.skill_name,
+    }, e instanceof Error ? e : undefined);
+    return mapCoreError(e, requestId);
+  }
+}
+
 export async function handleGet(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
   const t0 = Date.now();
   const pre = await precheck(getRequestSchema, body, _auth, deps, requestId);
@@ -567,6 +643,31 @@ export async function handleFilesRead(body: unknown, _auth: V2AuthContext, reque
   } catch (e) { obsLogger.error("skill.handleFilesRead.done", { req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id }, e instanceof Error ? e : undefined); return mapCoreError(e, requestId); }
 }
 
+export async function handleExport(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
+  const t0 = Date.now();
+  const pre = await precheck(exportRequestSchema, body, _auth, deps, requestId);
+  if (!pre.ok) {
+    obsLogger.warn("skill.handleExport.done", {
+      req_id: requestId, code: pre.envelope.code, dur_ms: Date.now() - t0, reason: "precheck",
+    });
+    return pre.envelope;
+  }
+  try {
+    const r = await pre.core.exportSkill(pre.data);
+    obsLogger.info("skill.handleExport.done", {
+      req_id: requestId, code: 0, dur_ms: Date.now() - t0,
+      skill_id: pre.data.skill_id, version: r.version,
+      file_count: r.file_count, total_bytes: r.total_bytes,
+    });
+    return successEnvelope(r, requestId);
+  } catch (e) {
+    obsLogger.error("skill.handleExport.done", {
+      req_id: requestId, dur_ms: Date.now() - t0, skill_id: pre.data.skill_id,
+    }, e instanceof Error ? e : undefined);
+    return mapCoreError(e, requestId);
+  }
+}
+
 export async function handleListing(body: unknown, _auth: V2AuthContext, requestId: string, deps: SkillRouterDeps): Promise<ApiResponseEnvelope> {
   const t0 = Date.now();
   const pre = await precheck(listingRequestSchema, body, _auth, deps, requestId);
@@ -684,7 +785,28 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
   // session_id 只决定 COS 归档路径分段, 每次调用独立即可; caller 传了也接受。
   const sessionId = input.session_id ?? `sx-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
-  // 压缩 + 兜底 (共享 helper, direct-trigger 场景恒 forceCompress=true)
+  // 压缩 + 兜底策略 (2026-08-10 重新设计):
+  //   ① 总量 < chunkMax → 全量归档, 不压不截
+  //   ② 总量 ≥ chunkMax → 压缩 tool 消息 (> threshold 的 tool_call/tool_result 截头尾)
+  //   ③ 压缩后仍 ≥ chunkMax → 走 oversize 兜底截断 (保留头 + 尾, 中间砍掉)
+  // 从 resolvedSkillConfig 取参数; DEFAULT_* 仅作 fallback (standalone 未配置场景)。
+  const skillCfg = deps.getResolvedSkillConfig?.();
+  const compressOpts = skillCfg
+    ? {
+        toolContentThresholdBytes: skillCfg.compress.toolContentThresholdBytes,
+        headBytes: skillCfg.compress.headBytes,
+        tailBytes: skillCfg.compress.tailBytes,
+      }
+    : DEFAULT_COMPRESS_OPTIONS;
+  const oversizeOpts = skillCfg
+    ? {
+        chunkMaxBytes: skillCfg.extraction.chunkMaxBytes,
+        headKeepBytes: skillCfg.extraction.headKeepBytes,
+        tailKeepBytes: skillCfg.extraction.tailKeepBytes,
+      }
+    : DEFAULT_OVERSIZE_OPTIONS;
+  const chunkMax = oversizeOpts.chunkMaxBytes ?? DEFAULT_OVERSIZE_OPTIONS.chunkMaxBytes;
+
   const t0Prep = Date.now();
   const incoming: CompressibleMessage[] = input.messages.map((m) => ({
     role: m.role,
@@ -692,18 +814,27 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
     tool_name: m.tool_name,
     tool_call_id: m.tool_call_id,
   }));
+
+  // 先算原始字节, 只有超过 chunkMax 时才走压缩 + 兜底
+  const rawBytes = incoming.reduce(
+    (sum, m) => sum + Buffer.byteLength(JSON.stringify(m), "utf8"), 0,
+  );
+  const needCompress = rawBytes >= chunkMax;
+
   const prepared = prepareArchivePayload(
     /* existing */ [],
     incoming,
     {
-      compress: DEFAULT_COMPRESS_OPTIONS,
-      oversize: DEFAULT_OVERSIZE_OPTIONS,
-      forceCompress: true,
+      compress: compressOpts,
+      oversize: oversizeOpts,
+      forceCompress: needCompress,
     },
   );
   obsLogger.info("skill.handleExtract.prepare_archive", {
     req_id: requestId, dur_ms: Date.now() - t0Prep,
     msg_in: input.messages.length, msg_out: prepared.messages.length,
+    raw_bytes: rawBytes, need_compress: needCompress,
+    used_compress: prepared.usedCompress, used_oversize: prepared.usedOversize,
   });
 
   // space_id 优先取 body（向后兼容早期调用方），缺省回落到 auth.serviceId ——
@@ -720,6 +851,9 @@ export async function handleExtract(body: unknown, auth: V2AuthContext, requestI
     const t0Archive = Date.now();
     const res = await wired.trigger.archive({
       session: {
+        // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由
+        // 到对应 instance 的资源 (CoS bucket / VDB collection / LLM key)。
+        instance_id: auth.serviceId,
         space_id: spaceId,
         user_id: input.user_id,
         team_id: input.team_id,
@@ -834,6 +968,8 @@ export async function handleConversationAdd(
   try {
     const t0Handle = Date.now();
     const out = await wired.handler.handle({
+      // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由。
+      instance_id: auth.serviceId,
       session_id: input.session_id,
       space_id: spaceId,
       user_id: input.user_id,
@@ -920,6 +1056,11 @@ export async function handleForceArchive(
   }
 
   const sess = {
+    // 2026-08-04 修复: 缺 instance_id 会让 trigger.archive → serializeAgentTuple
+    // 抛 `instance_id must be a non-empty string`, handler 把它包成 envelope
+    // 50001 返给 proxy, 面板 / mem:create-skill "强制归档" 100% 失败。
+    // 跟 handleExtract / handleConversationAdd 保持一致, 从 auth.serviceId 兜底。
+    instance_id: auth.serviceId,
     space_id: input.space_id,
     user_id: input.user_id,
     team_id: input.team_id,
@@ -1001,12 +1142,14 @@ export function makeSkillRouteTable(): Record<string, SkillHandler> {
     "/v3/skill/patch": handlePatch,
     "/v3/skill/delete": handleDelete,
     "/v3/skill/get": handleGet,
+    "/v3/skill/get-by-name": handleGetByName,
     "/v3/skill/list": handleList,
     "/v3/skill/search": handleSearch,
     "/v3/skill/versions": handleVersions,
     "/v3/skill/files/write": handleFilesWrite,
     "/v3/skill/files/remove": handleFilesRemove,
     "/v3/skill/files/read": handleFilesRead,
+    "/v3/skill/export": handleExport,
     "/v3/skill/listing": handleListing,
     "/v3/skill/extract": handleExtract,
     "/v3/skill/conversation/add": handleConversationAdd,

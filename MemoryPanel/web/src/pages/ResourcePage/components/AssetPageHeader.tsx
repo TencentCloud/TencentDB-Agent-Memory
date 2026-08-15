@@ -21,14 +21,14 @@ export function AssetPageHeader({ title, scope, agent, actions, subtitle }: Asse
     <Card className="_asset-page-header">
       <Card.Body>
         <div className="_asset-page-header-main">
-          <div className="_asset-page-header-context">
-            <h2 className="_asset-page-header-title">{title}</h2>
+          <h2 className="_asset-page-header-title">{title}</h2>
+          <div className="_asset-page-header-right">
             <div className="_asset-page-header-filters">
               {scope}
               {agent}
             </div>
+            {actions && <div className="_asset-page-header-actions">{actions}</div>}
           </div>
-          {actions && <div className="_asset-page-header-actions">{actions}</div>}
         </div>
         {subtitle && <div className="_asset-page-header-subtitle">{subtitle}</div>}
       </Card.Body>

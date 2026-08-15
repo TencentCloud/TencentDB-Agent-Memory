@@ -1,5 +1,5 @@
 /**
- * v3 元数据路由（/v3/meta/*，54 接口）。
+ * v3 元数据路由（/v3/meta/*，55 接口）。
  *
  * 对应设计文档 §7 + 实施计划 M3.3。镜像 v2-router 的 dispatch 模式：
  *   - 仅 POST，前缀 /v3/meta
@@ -80,12 +80,18 @@ function orNotFound<T>(entity: T | null, code: string, id: string): T {
 
 const OK = { ok: true } as const;
 
-// ── Route table（54 接口）──
+// ── Route table（55 接口）──
 const routeTable: Record<string, Handler> = {
   // User
   [`${V3_PREFIX}/user/create`]: bind(S.userCreateSchema, async (d, c, s) => {
     s.assertCanManageUsers(c);
     return s.createNormalUser(d);
+  }),
+  // 姊妹接口：允许 system_admin 建号时显式指定 user_key。鉴权与 /user/create 完全对称。
+  // Zod 只校验 username + user_key 非空，user_id 若被传入会被 zod strip 忽略。
+  [`${V3_PREFIX}/user/create-with-key`]: bind(S.userCreateWithKeySchema, async (d, c, s) => {
+    s.assertCanManageUsers(c);
+    return s.createNormalUserWithKey(d);
   }),
   [`${V3_PREFIX}/user/get`]: bind(S.userGetSchema, async (d, c, s) => {
     const userId = await resolveUserId(s, d);
@@ -319,6 +325,7 @@ function mapErrorCode(code: string): number {
       return 403;
     case "asset_not_bindable":
     case "duplicate_entry":
+    case "duplicate_user_key":
     case "key_limit_exceeded":
     case "user_limit_exceeded":
     case "team_limit_exceeded":

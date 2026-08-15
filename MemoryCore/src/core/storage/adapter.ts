@@ -56,10 +56,14 @@ class ScopedStorageBackend implements IStorageBackend {
   }
 
   async listObjects(prefix: string, opts?: ListObjectsOptions): Promise<ListResult> {
-    const result = await this.base.listObjects(this.key(prefix), opts);
+    const result = await this.base.listObjects(this.key(prefix), opts ? {
+      ...opts,
+      marker: opts.marker ? this.key(opts.marker) : undefined,
+    } : undefined);
     return {
       ...result,
       entries: result.entries.map((entry) => ({ ...entry, key: this.unkey(entry.key) })),
+      nextMarker: result.nextMarker ? this.unkey(result.nextMarker) : undefined,
     };
   }
 
@@ -130,6 +134,22 @@ export class StorageAdapter {
     const result = await this.backend.listObjects(prefix, { maxKeys: 10000 });
     if (!suffix) return result.entries;
     return result.entries.filter(e => e.key.endsWith(suffix));
+  }
+
+  /**
+   * Read one page without changing the legacy all-at-once `readdir` contract.
+   * Pass the returned `nextMarker` into the next call to continue listing.
+   */
+  async readdirPage(
+    prefix: string,
+    opts: ListObjectsOptions & { suffix?: string } = {},
+  ): Promise<ListResult> {
+    const { suffix, ...listOpts } = opts;
+    const result = await this.backend.listObjects(prefix, listOpts);
+    const entries = suffix
+      ? result.entries.filter((entry) => entry.key.endsWith(suffix))
+      : result.entries;
+    return { ...result, entries };
   }
 
   async readdirNames(prefix: string, suffix?: string): Promise<string[]> {

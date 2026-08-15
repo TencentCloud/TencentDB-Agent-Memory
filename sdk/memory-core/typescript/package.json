@@ -1,6 +1,6 @@
 {
   "name": "@tencentdb-agent-memory/memory-sdk-ts-v2",
-  "version": "1.0.0-beta.2",
+  "version": "1.0.1-beta.1",
   "description": "TypeScript SDK for TencentDB Agent Memory (v3 strict-isolation API + /v3/skill/*)",
   "type": "module",
   "main": "./dist/index.js",

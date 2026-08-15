@@ -1,7 +1,7 @@
 {
   "id": "memory-tencentdb-client",
   "name": "Memory TencentDB (Client)",
-  "version": "2.0.0-beta.1",
+  "version": "1.0.0-beta.1",
   "description": "长期记忆插件（客户端接入版 /v3）— 通过远端 Memory Gateway 提供四层记忆能力",
   "author": "TDAI Team",
   "activation": {

@@ -11,6 +11,7 @@ export function resolveConversationId(c: Context): string | null {
     c.req.header("x-conversation-id") ??
     c.req.header("x-session-id") ??
     c.req.header("x-claude-code-session-id") ?? // Claude Code CLI sends this
+    c.req.header("x-deepseek-harness-session-id") ?? // dsh (deepseek-harness) CLI/web sends this
     c.req.header("x-chat-id") ??
     c.req.header("x-thread-id") ??
     null;

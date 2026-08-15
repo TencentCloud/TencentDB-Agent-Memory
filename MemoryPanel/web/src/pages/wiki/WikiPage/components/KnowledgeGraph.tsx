@@ -178,9 +178,9 @@ function GraphControls() {
   const cls = "h-7 w-7 bg-card/90 hover:bg-card border border-border text-muted-foreground shadow-md rounded-md flex items-center justify-center transition-colors text-[12px] backdrop-blur";
   return (
     <div className="absolute bottom-3 right-3 flex flex-col gap-1 z-10">
-      <button className={cls} onClick={() => sigma.getCamera().animatedZoom({ duration: 200 })}>+</button>
-      <button className={cls} onClick={() => sigma.getCamera().animatedUnzoom({ duration: 200 })}>−</button>
-      <button className={cls} onClick={() => sigma.getCamera().animatedReset({ duration: 300 })}>⊙</button>
+      <button type="button" aria-label="Zoom in" className={cls} onClick={() => sigma.getCamera().animatedZoom({ duration: 200 })}>+</button>
+      <button type="button" aria-label="Zoom out" className={cls} onClick={() => sigma.getCamera().animatedUnzoom({ duration: 200 })}>−</button>
+      <button type="button" aria-label="Reset view" className={cls} onClick={() => sigma.getCamera().animatedReset({ duration: 300 })}>⊙</button>
     </div>
   );
 }
@@ -242,7 +242,7 @@ export default function KnowledgeGraph({ data, loading, onNodeClick, highlightNo
             onChange={(e) => handleSearch(e.target.value)}
           />
           {searchQuery && (
-            <button className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground text-xs inline-flex items-center" onClick={() => { setSearchQuery(""); setSearchResults([]); }}><CloseIcon size={12} /></button>
+            <button type="button" aria-label={t('graph.clearSearch')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/70 hover:text-muted-foreground text-xs inline-flex items-center" onClick={() => { setSearchQuery(""); setSearchResults([]); }}><CloseIcon size={12} /></button>
           )}
         </div>
         <div className="flex gap-0.5">

@@ -88,11 +88,23 @@ import { readApiTraceEnabled } from "../utils/env-config.js";
 import { makeSkillRouteTable } from "./skill-handlers.js";
 import type { SkillRouterDeps as SkillRouterDeps } from "./skill-handlers.js";
 import {
-  wireConversationAdd,
-  type WiredConversationAdd,
+  wireConversationAddHandler,
+  RedisSkillAgentTaskQueue,
+  LocalSkillAgentTaskQueue,
+  SkillWorkerPool,
+  parseAgentTuple as parseSkillAgentTuple,
+  type ISkillAgentTaskQueue,
+  type WiredConversationAddHandler,
+  type WireConversationAddDeps,
   type SkillAgentTaskQueueRedisLike,
+  type SkillCandidatesSink,
 } from "../core/skill/conversation-add/index.js";
+import type { ISkillExtractor } from "../core/skill/queue/types.js";
+import type { SkillBufferStorage } from "../core/skill/conversation-add/index.js";
 import { makeKnowledgeRouteTable } from "./knowledge-handlers.js";
+import { makeChatMemoryRouteTable, clearChatMemoryContentResilient } from "./chat-memory-handlers.js";
+import { makeMemoryPromptRouteTable } from "./memory-prompt-handlers.js";
+import { makeMemoryGenerationLogRouteTable } from "./memory-generation-log-handlers.js";
 import { handleOffloadV2Route } from "../offload_server/router.js";
 import type { OffloadV2Deps } from "../offload_server/router.js";
 import { resolveV3StrictIsolation } from "../utils/env-config.js";
@@ -299,17 +311,21 @@ export class TdaiGateway {
   private memorySystemUserConfig: MemorySystemUserConfig | undefined;
   private readonly metadataServiceByInstance = new Map<string, MetadataService>();
 
-  // ── Skill conversation-add (§21): per-instance handler+worker cache ──
+  // ── Skill conversation-add (§21): per-instance handler cache ──
   //
-  // 每个实例懒加载一份 { handler, worker, sink, queue, buffer } —— storage 复用
-  // memory 侧的 CosStorageBackend cache (this.cosStorageCache), redis 复用
-  // stateBackend 的 ioredis 客户端 (getClient())。keyPrefix 拼接 memory 的
-  // redis.keyPrefix，避免和老 skill 队列以及 memory 状态撞。
+  // 2026-07-30 池化重构后, 每 instance 只缓存 handler + trigger + sink + buffer
+  // (无 worker), 全 instance 共享同一个 SkillWorkerPool 和 skillSharedQueue。
+  // handler 端的 storage 依旧走 per-instance CosStorageBackend cache
+  // (this.cosStorageCache) 以保证 CoS 路径 prefix 正确。
   //
-  // 用 in-flight Promise cache 而不是最终值 cache —— 避免并发请求同时 miss cache
-  // 导致重复 wire 出多个 Worker（v1 观察: 30 并发请求触发 30 次 wire, 每次起一个
-  // Worker 都 BRPOP 抢同一 agent → extract-lock 灾难）。
-  private readonly conversationAddByInstance = new Map<string, Promise<WiredConversationAdd>>();
+  // 用 in-flight Promise cache 保证并发请求同 instance 只 wire 一次 handler
+  // (worker 池是全局单例, 并发不再是 wire 的问题)。
+  private readonly conversationAddByInstance = new Map<string, Promise<WiredConversationAddHandler>>();
+
+  /** 2026-07-30: 全进程共享的 skill agent 队列 (List + Set)。启动后 lazy init。 */
+  private skillSharedQueue: ISkillAgentTaskQueue | null = null;
+  /** 2026-07-30: 全进程唯一的 skill 抽取 worker 池。 */
+  private skillWorkerPool: SkillWorkerPool | null = null;
 
   constructor(configOverrides?: Partial<GatewayConfig>) {
     this.config = loadGatewayConfig(configOverrides);
@@ -435,6 +451,20 @@ export class TdaiGateway {
       await configSvc.initDefaults(registry, this.config.metadata);
       rawSvc.setConfigParamService(configSvc);
 
+      // 归档 Agent 时连带清掉它的 chat_memory 内容（L0–L3 + 向量 + 文件）。
+      // metadata 层拿不到 IMemoryStore / StorageAdapter，所以这里把清理能力
+      // 注入进去；与 /v3/chat-memory/clear 共用同一份清理实现 + 重试策略，
+      // 避免出现"资产已删、内容还在"的孤儿数据。
+      //
+      // 必须按 instanceId 解析 store/storage：service 模式下每个实例有独立的
+      // TCVDB + COS，用全局单例会清到错误的库。
+      rawSvc.setChatMemoryContentCleaner(async ({ teamId, agentId }) => {
+        const { store: memoryStore, storage } = await this.resolveMemoryContentTargets(instanceId);
+        await clearChatMemoryContentResilient({
+          store: memoryStore, storage, teamId, agentId, logger: this.logger,
+        });
+      });
+
       svc = wrapApiServiceForTrace(rawSvc);
       this.metadataServiceByInstance.set(instanceId, svc);
     }
@@ -498,6 +528,19 @@ export class TdaiGateway {
     // 都会走 NoopBackend，导致 Metric、Langfuse、业务 Trace 全部丢失。
     const obsCfg = this.config.observability;
     try {
+      const clickhouseConfig = Object.fromEntries([
+        ["enabled", obsCfg.clickhouse.enabled],
+        ["endpoint", obsCfg.clickhouse.endpoint],
+        ["username", obsCfg.clickhouse.username],
+        ["password", obsCfg.clickhouse.password],
+        ["database", obsCfg.clickhouse.database],
+      ]) as CoreObservabilityConfig["clickhouse"];
+      const langfuseConfig = Object.fromEntries([
+        ["enabled", obsCfg.langfuse.enabled],
+        ["host", obsCfg.langfuse.host],
+        ["publicKey", obsCfg.langfuse.publicKey],
+        ["secretKey", obsCfg.langfuse.secretKey],
+      ]) as CoreObservabilityConfig["langfuse"];
       const coreObsCfg: CoreObservabilityConfig = {
         type: "internal",
         otel: {
@@ -507,24 +550,13 @@ export class TdaiGateway {
           serviceName: obsCfg.otel.serviceName,
           tenantId: obsCfg.otel.tenantId,
         },
-        clickhouse: {
-          enabled: obsCfg.clickhouse.enabled,
-          endpoint: obsCfg.clickhouse.endpoint,
-          username: obsCfg.clickhouse.username,
-          password: obsCfg.clickhouse.password,
-          database: obsCfg.clickhouse.database,
-        },
+        clickhouse: clickhouseConfig,
         kafka: {
           brokers: parseBrokers(obsCfg.kafka.brokers),
           topic: obsCfg.kafka.topic,
           enabled: obsCfg.kafka.enabled,
         },
-        langfuse: {
-          enabled: obsCfg.langfuse.enabled,
-          host: obsCfg.langfuse.host,
-          publicKey: obsCfg.langfuse.publicKey,
-          secretKey: obsCfg.langfuse.secretKey,
-        },
+        langfuse: langfuseConfig,
       };
       await initObservabilityBackend(coreObsCfg);
       this.logger.info("Observability backend initialized (type=internal)");
@@ -549,19 +581,19 @@ export class TdaiGateway {
           tenantId: obsCfg.otel.tenantId,
           logExportIntervalMs: obsCfg.otel.logExportInterval * 1000,
           clickhouse: obsCfg.clickhouse.enabled
-            ? {
-                endpoint: obsCfg.clickhouse.endpoint,
-                username: obsCfg.clickhouse.username,
-                password: obsCfg.clickhouse.password,
-                database: obsCfg.clickhouse.database,
-              }
+            ? Object.fromEntries([
+                ["endpoint", obsCfg.clickhouse.endpoint],
+                ["username", obsCfg.clickhouse.username],
+                ["password", obsCfg.clickhouse.password],
+                ["database", obsCfg.clickhouse.database],
+              ])
             : false,
           langfuse: obsCfg.langfuse.enabled
-            ? {
-                host: obsCfg.langfuse.host,
-                publicKey: obsCfg.langfuse.publicKey,
-                secretKey: obsCfg.langfuse.secretKey,
-              }
+            ? Object.fromEntries([
+                ["host", obsCfg.langfuse.host],
+                ["publicKey", obsCfg.langfuse.publicKey],
+                ["secretKey", obsCfg.langfuse.secretKey],
+              ])
             : false,
         });
         this.logger.info(`OTel SDK initialized: ${otelOk ? "enabled" : "skipped (deps not available)"}`);
@@ -748,19 +780,16 @@ export class TdaiGateway {
       await this.pipelineWorker.stop();
       this.logger.info("Pipeline Worker stopped");
     }
-    // Stop skill conversation-add per-instance workers.
-    // Cache 里存的是 Promise<WiredConversationAdd>；先 await settle 再 stop。
-    if (this.conversationAddByInstance.size > 0) {
-      const settled = await Promise.allSettled(Array.from(this.conversationAddByInstance.values()));
-      const stops = settled.flatMap((r) =>
-        r.status === "fulfilled"
-          ? [r.value.stop().catch((e) => this.logger.warn(`[skill-conversation-add] stop failed: ${e}`))]
-          : [],
+    // 2026-07-30 池化重构后, 全进程一个 SkillWorkerPool, 直接 stop 池就够。
+    // conversationAddByInstance 里只是 handler bundle, 不持有生命周期资源。
+    if (this.skillWorkerPool) {
+      await this.skillWorkerPool.stop().catch((e) =>
+        this.logger.warn(`[skill-worker-pool] stop failed: ${e}`),
       );
-      await Promise.allSettled(stops);
-      this.conversationAddByInstance.clear();
-      this.logger.info("Skill Conversation-Add workers stopped");
+      this.skillWorkerPool = null;
+      this.logger.info("Skill Worker Pool stopped");
     }
+    this.conversationAddByInstance.clear();
     if (this.timerScanner) {
       await this.timerScanner.stop();
       this.logger.info("Timer Scanner stopped");
@@ -985,10 +1014,13 @@ export class TdaiGateway {
       // tells the dispatcher which subset of fields each handler reads.
       const mergedDeps = Object.assign({}, v2Deps, skillDeps);
 
-      // Merge skill + knowledge extra route tables
+      // Merge management-plane extra route tables.
       const extraRoutes = {
         ...makeSkillRouteTable(),
         ...makeKnowledgeRouteTable(),
+        ...makeChatMemoryRouteTable(),
+        ...makeMemoryPromptRouteTable(),
+        ...makeMemoryGenerationLogRouteTable(),
       } as Record<
         string,
         (body: unknown, auth: import("./v2-schemas.js").V2AuthContext, requestId: string, deps: unknown) => Promise<import("./v2-schemas.js").ApiResponseEnvelope>
@@ -1290,6 +1322,27 @@ export class TdaiGateway {
       }
     }
 
+    // 4. Purge skill queue residue (2026-07-30)
+    //
+    // 全进程共享一条 skill agent LIST + SET, key 里不含 instanceId。要清掉
+    // 属于本 instance 的 tuple, 需要 SSCAN + LREM 按 `{instanceId}|` 前缀
+    // 匹配 5 段 tuple; 同时清 extract-lock:{instanceId}|* / tasks-mutex:*
+    // 相关的锁 key (SCAN + DEL)。Standalone / 无 redis 场景走内存队列, 用
+    // Local queue 的 _snapshot 迭代删除。
+    try {
+      const skillPurged = await this.purgeSkillQueueForInstance(instanceId);
+      cleaned.skill_queue = skillPurged;
+    } catch (err) {
+      this.logger.error(`${tag} Skill queue purge failed: ${err instanceof Error ? err.message : String(err)}`);
+      cleaned.skill_queue_error = err instanceof Error ? err.message : String(err);
+    }
+
+    // Clear handler bundle cache for this instance
+    if (this.conversationAddByInstance.has(instanceId)) {
+      this.conversationAddByInstance.delete(instanceId);
+      cleaned.skill_handler_cache_cleared = true;
+    }
+
     // 5. Clear QuotaManager cache
     if (this.quotaManager) {
       (this.quotaManager as any).cache?.delete?.(instanceId);
@@ -1507,14 +1560,14 @@ export class TdaiGateway {
     const baseConfig = this.config.memory as unknown as Record<string, unknown>;
     let pluginConfig: Record<string, unknown> = {
       ...baseConfig,
-      llm: {
-        enabled: true,
-        baseUrl: this.config.llm.baseUrl,
-        apiKey: this.config.llm.apiKey,
-        model: this.config.llm.model,
-        maxTokens: this.config.llm.maxTokens,
-        timeoutMs: this.config.llm.timeoutMs,
-      },
+      llm: Object.fromEntries([
+        ["enabled", true],
+        ["baseUrl", this.config.llm.baseUrl],
+        ["apiKey", this.config.llm.apiKey],
+        ["model", this.config.llm.model],
+        ["maxTokens", this.config.llm.maxTokens],
+        ["timeoutMs", this.config.llm.timeoutMs],
+      ]),
     };
     if (body.config_override) {
       for (const key of Object.keys(body.config_override)) {
@@ -1633,7 +1686,7 @@ export class TdaiGateway {
             taskType = parsed.taskType;
             teamId = parsed.teamId;
             agentId = parsed.agentId;
-            instanceId = this.config.instanceId ?? "default";
+            instanceId = entry.instanceId ?? this.config.instanceId ?? "default";
           }
           const now = Date.now();
           // Extract targetMmdFile from member for offload-l2 (needed by pipeline-worker lockKey)
@@ -1660,13 +1713,13 @@ export class TdaiGateway {
           });
         },
       } : undefined,
-      redis: backendType === "redis" ? {
-        host: this.config.redis.host,
-        port: this.config.redis.port,
-        password: this.config.redis.password,
-        db: this.config.redis.db,
-        keyPrefix: this.config.redis.keyPrefix,
-      } : undefined,
+      redis: backendType === "redis" ? Object.fromEntries([
+        ["host", this.config.redis.host],
+        ["port", this.config.redis.port],
+        ["password", this.config.redis.password],
+        ["db", this.config.redis.db],
+        ["keyPrefix", this.config.redis.keyPrefix],
+      ]) : undefined,
     });
     this.logger.info(`State Backend created (${backendType})`);
 
@@ -1939,12 +1992,12 @@ export class TdaiGateway {
     );
 
     const llmRunner = new StandaloneLLMRunner({
-      config: {
-        baseUrl: effective.baseUrl,
-        apiKey: effective.apiKey,
-        model: effective.model ?? "default",
-        timeoutMs: effective.timeoutMs ?? 120_000,
-      },
+      config: Object.fromEntries([
+        ["baseUrl", effective.baseUrl],
+        ["apiKey", effective.apiKey],
+        ["model", effective.model ?? "default"],
+        ["timeoutMs", effective.timeoutMs ?? 120_000],
+      ]) as import("../adapters/standalone/llm-runner.js").StandaloneLLMConfig,
     });
     const cfg = this.core.getResolvedSkillConfig();
     return new SkillExtractorClass({
@@ -1958,6 +2011,7 @@ export class TdaiGateway {
       headChars: cfg?.extraction.headChars,
       tailChars: cfg?.extraction.tailChars,
       maxTokens: cfg?.extraction.maxTokens,
+      prefixSkillsLimit: cfg?.extraction.prefixSkillsLimit,
       logger: this.logger,
     } as import("../core/skill/skill-extractor.js").ExtractorOptions);
   }
@@ -1976,15 +2030,14 @@ export class TdaiGateway {
    * `tdai_memory_prod_v3:skill-conv` —— 跟老 skill 队列
    * (`{prefix}:skill:*`) 字面不撞。
    */
-  private ensureConversationAddForInstance(instanceId: string): Promise<WiredConversationAdd> {
-    // In-flight cache：同 instanceId 并发请求共享同一个 wire promise，
-    // 避免并发情形下 wire 被跑多次生成多个 Worker（灾难：多 Worker 抢同一 agent lock）。
+  private ensureConversationAddForInstance(instanceId: string): Promise<WiredConversationAddHandler> {
+    // In-flight cache: 同 instanceId 并发请求共享同一个 handler wire promise。
+    // (worker 池是全局单例, 并发不再有 wire 出多个 worker 抢锁的问题)
     const cached = this.conversationAddByInstance.get(instanceId);
     if (cached) return cached;
 
     const inflight = this.buildConversationAddForInstance(instanceId);
     this.conversationAddByInstance.set(instanceId, inflight);
-    // 失败时移除 cache，允许下次重试
     inflight.catch(() => {
       if (this.conversationAddByInstance.get(instanceId) === inflight) {
         this.conversationAddByInstance.delete(instanceId);
@@ -1997,7 +2050,7 @@ export class TdaiGateway {
    * Standalone (sqlite) 版本的 in-flight cache 入口，语义与
    * ensureConversationAddForInstance 完全一致，只是 build 走 standalone 路径。
    */
-  private ensureConversationAddForStandalone(instanceId: string): Promise<WiredConversationAdd> {
+  private ensureConversationAddForStandalone(instanceId: string): Promise<WiredConversationAddHandler> {
     const cached = this.conversationAddByInstance.get(instanceId);
     if (cached) return cached;
 
@@ -2012,6 +2065,197 @@ export class TdaiGateway {
   }
 
   /**
+   * 全进程共享的 skill agent 队列。首次访问时按 redis / 内存 lazy 构造,
+   * 之后所有 handler 入队 + SkillWorkerPool 出队都走这一个 queue 对象。
+   *
+   * key prefix 与老 per-instance queue 相同 (`${mem}:skill-conv:*`), 保证
+   * 升级过程 redis 层平滑, 不做数据迁移。老 4 段 tuple 由 pool 侧丢弃 + error。
+   */
+  /**
+   * Purge instance 时清掉共享 skill 队列里属于该 instance 的残留 (2026-07-30)。
+   *
+   * 场景:
+   *   - Redis 后端: SSCAN `pending-agents-set` 匹配 `{instanceId}|*` → 逐个
+   *     SREM + LREM; SCAN 查所有 `extract-lock:{instanceId}|*` /
+   *     `tasks-mutex:{instanceId}|*` → DEL。
+   *   - Local 内存后端 (standalone / 无 redis): 用私有字段 list/set 直接过滤。
+   *
+   * 幂等 —— 无残留时不报错, 返回 0。
+   */
+  private async purgeSkillQueueForInstance(instanceId: string): Promise<{
+    tuples_removed: number;
+    locks_removed: number;
+    backend: "redis" | "local" | "none";
+  }> {
+    const queue = this.skillSharedQueue;
+    if (!queue) {
+      return { tuples_removed: 0, locks_removed: 0, backend: "none" };
+    }
+    const prefixSegment = `${instanceId}|`;
+    const memoryPrefix = this.config.redis?.keyPrefix ?? "tdai_memory";
+    const keyPrefix = `${memoryPrefix}:skill-conv`;
+
+    // Redis 后端: 直接从 stateBackend 拿 ioredis 客户端做 SCAN
+    const redisClient = this.getSharedIoRedisClient();
+    if (redisClient && queue instanceof RedisSkillAgentTaskQueue) {
+      const client = redisClient as unknown as {
+        sscan(k: string, cursor: string, ...args: (string | number)[]): Promise<[string, string[]]>;
+        scan(cursor: string, ...args: (string | number)[]): Promise<[string, string[]]>;
+        srem(k: string, ...members: string[]): Promise<number>;
+        lrem(k: string, count: number, value: string): Promise<number>;
+        del(...keys: string[]): Promise<number>;
+      };
+      const setKey = `${keyPrefix}:pending-agents-set`;
+      const listKey = `${keyPrefix}:pending-agents`;
+      let tuplesRemoved = 0;
+      // SSCAN + MATCH 匹配 5 段 tuple
+      let cursor = "0";
+      do {
+        const [next, members] = await client.sscan(setKey, cursor, "MATCH", `${prefixSegment}*`, "COUNT", 500);
+        cursor = next;
+        for (const m of members) {
+          await client.srem(setKey, m);
+          await client.lrem(listKey, 0, m);
+          tuplesRemoved++;
+        }
+      } while (cursor !== "0");
+
+      // 4 段 legacy tuple 如果 instanceId 恰好是 space_id 值也会命中 space_id
+      // 段的前缀; 不做启发式匹配以免误伤, 靠 pool 自身 legacy 分支处理 (见
+      // worker-pool.ts)。若确定要清可以另开脚本, 本次仅清 5 段。
+
+      // SCAN + MATCH 清 extract-lock / tasks-mutex
+      const patterns = [
+        `${keyPrefix}:extract-lock:${prefixSegment}*`,
+        `${keyPrefix}:tasks-mutex:${prefixSegment}*`,
+      ];
+      let locksRemoved = 0;
+      for (const pattern of patterns) {
+        let cur = "0";
+        do {
+          const [next, keys] = await client.scan(cur, "MATCH", pattern, "COUNT", 500);
+          cur = next;
+          if (keys.length > 0) {
+            const deleted = await client.del(...keys);
+            locksRemoved += deleted;
+          }
+        } while (cur !== "0");
+      }
+      this.logger.info(
+        `[skill-queue-purge] instance=${instanceId} redis: tuples=${tuplesRemoved} locks=${locksRemoved}`,
+      );
+      return { tuples_removed: tuplesRemoved, locks_removed: locksRemoved, backend: "redis" };
+    }
+
+    // Local backend: 走 _snapshot 反向过滤
+    if (queue instanceof LocalSkillAgentTaskQueue) {
+      const snap = queue._snapshot();
+      let tuplesRemoved = 0;
+      const seenRaws = new Set<string>();
+      const collect = (arr: string[]) => {
+        for (const r of arr) if (r.startsWith(prefixSegment)) seenRaws.add(r);
+      };
+      collect(snap.list);
+      collect(snap.set);
+      for (const raw of seenRaws) {
+        const t = parseSkillAgentTuple(raw);
+        if (t) {
+          await queue.removeAgent(t);
+          tuplesRemoved++;
+        }
+      }
+      this.logger.info(
+        `[skill-queue-purge] instance=${instanceId} local: tuples=${tuplesRemoved}`,
+      );
+      return { tuples_removed: tuplesRemoved, locks_removed: 0, backend: "local" };
+    }
+    return { tuples_removed: 0, locks_removed: 0, backend: "none" };
+  }
+
+  private ensureSkillSharedQueue(): ISkillAgentTaskQueue {
+    if (this.skillSharedQueue) return this.skillSharedQueue;
+    const memoryPrefix = this.config.redis?.keyPrefix ?? "tdai_memory";
+    const keyPrefix = `${memoryPrefix}:skill-conv`;
+    const redisClient = this.getSharedIoRedisClient();
+    if (redisClient) {
+      this.skillSharedQueue = new RedisSkillAgentTaskQueue({
+        client: redisClient as SkillAgentTaskQueueRedisLike,
+        keyPrefix,
+      });
+      this.logger.info(`[skill-worker-pool] shared queue ready: backend=redis prefix=${keyPrefix}`);
+    } else {
+      // Local state backend / standalone 无 redis → 单节点内存队列
+      this.skillSharedQueue = new LocalSkillAgentTaskQueue();
+      this.logger.warn(
+        `[skill-worker-pool] no shared ioredis (deployMode=${this.config.deployMode}); ` +
+          `falling back to in-memory queue (single-node only) prefix=${keyPrefix}`,
+      );
+    }
+    return this.skillSharedQueue;
+  }
+
+  /**
+   * 全进程唯一的 SkillWorkerPool, start() 阶段调用一次。之后 stop() 里
+   * pool.stop() 等所有 workerLoop 退出。
+   *
+   * Resolver closure 复用现有 per-instance cache：
+   *   - resolveBuffer  → resolveStorageForInstance + SkillBufferStorage
+   *   - resolveExtractor → buildSkillExtractorForInstance (service) 或
+   *     TdaiCore.getSkillExtractor (standalone)
+   *   - resolveSink → ensureMetadataService + SkillCoreSink
+   */
+  private async ensureSkillWorkerPool(): Promise<SkillWorkerPool | null> {
+    if (this.skillWorkerPool) return this.skillWorkerPool;
+    const skillCfg = this.core.getResolvedSkillConfig();
+    if (!skillCfg) {
+      this.logger.info(`[skill-worker-pool] resolved skill config missing (skill.enabled=false?); pool not started`);
+      return null;
+    }
+    const queue = this.ensureSkillSharedQueue();
+    const gateway = this;
+    const isStandalone = this.config.deployMode !== "service";
+
+    this.skillWorkerPool = new SkillWorkerPool({
+      concurrency: skillCfg.worker.concurrency,
+      queue,
+      logger: this.logger,
+      poolId: `skill-pool-${this.config.instanceId ?? "gateway"}-${process.pid}`,
+      brpopBlockMs: skillCfg.worker.brpopBlockMs,
+      extractLockTtlMs: skillCfg.worker.extractLockTtlMs,
+      extractLockRenewIntervalMs: skillCfg.worker.extractLockRenewIntervalMs,
+      resolveBuffer: async (instanceId: string): Promise<SkillBufferStorage> => {
+        const storage = await gateway.resolveStorageForInstance(instanceId);
+        // SkillBufferStorage 是每次 new 的 (轻量), 但 storage adapter 是缓存的
+        const { SkillBufferStorage: Cls } = await import("../core/skill/conversation-add/buffer-storage.js");
+        return new Cls({ storage });
+      },
+      resolveExtractor: async (instanceId: string): Promise<ISkillExtractor> => {
+        if (isStandalone) {
+          const raw = gateway.core.getSkillExtractor();
+          if (!raw) {
+            throw new Error(`[skill-worker-pool] standalone SkillExtractor unavailable (instance=${instanceId})`);
+          }
+          return createExtractorAdapter(raw, gateway.logger);
+        }
+        const skillCore = await gateway.resolveSkillCoreForInstance(instanceId);
+        const raw = await gateway.buildSkillExtractorForInstance(skillCore, instanceId);
+        return createExtractorAdapter(raw, gateway.logger);
+      },
+      resolveSink: async (instanceId: string): Promise<SkillCandidatesSink> => {
+        const metadataService = await gateway.ensureMetadataService(instanceId).catch(() => undefined);
+        const { SkillCoreSink } = await import("../core/skill/conversation-add/skill-core-sink.js");
+        return new SkillCoreSink({ metadata: metadataService, logger: gateway.logger });
+      },
+    });
+    this.skillWorkerPool.start();
+    this.logger.info(
+      `[skill-worker-pool] started concurrency=${skillCfg.worker.concurrency} ` +
+        `brpopBlockMs=${skillCfg.worker.brpopBlockMs} extractLockTtlMs=${skillCfg.worker.extractLockTtlMs}`,
+    );
+    return this.skillWorkerPool;
+  }
+
+  /**
    * 把 resolved skill config 的归档/压缩派生字段翻译成 wireConversationAdd 的
    * thresholds / compressOptions / oversizeOptions 覆盖参数。cfg 缺失时返回空对象,
    * wire 层退回内置默认 (与旧行为等价)。
@@ -2019,7 +2263,7 @@ export class TdaiGateway {
    * 让 yaml 里的 skill.extraction.archiveBytes / skill.compress 生效不用改代码。
    */
   private buildSkillWireOverrides(): Pick<
-    Parameters<typeof wireConversationAdd>[0],
+    WireConversationAddDeps,
     "thresholds" | "compressOptions" | "oversizeOptions"
   > {
     const cfg = this.core.getResolvedSkillConfig();
@@ -2043,53 +2287,39 @@ export class TdaiGateway {
     };
   }
 
-  private async buildConversationAddForInstance(instanceId: string): Promise<WiredConversationAdd> {
-    // 1) storage —— 复用 resolveSkillCoreForInstance 已经建好的 per-instance COS adapter
-    //    resolveSkillCoreForInstance 里已经把 skillCore 和 storage 关联并 cache 好,
-    //    这里再调一次仅是为了保证 cosStorageCache 里有对应 instance 的 adapter。
-    const skillCore = await this.resolveSkillCoreForInstance(instanceId);
+  private async buildConversationAddForInstance(instanceId: string): Promise<WiredConversationAddHandler> {
+    // 2026-07-30 池化后, 此函数只造 per-instance handler bundle。
+    // extractor / sink 从 handler 侧移除, 交给 SkillWorkerPool 的 resolver 现取。
+    // 但 wireConversationAddHandler 签名仍要求 extractor 参数 (兼容老 wireConversationAdd),
+    // 传一个 noop 即可 —— handler 内部不会用 extractor, 只 worker 用。
+
+    // 1) storage: 复用 resolveSkillCoreForInstance 已建好的 per-instance COS adapter
+    await this.resolveSkillCoreForInstance(instanceId);
     const storage = this.cosStorageCache?.get(instanceId);
     if (!storage) {
       throw new Error(`[skill-conversation-add] storage missing for instance=${instanceId} after resolveSkillCore`);
     }
 
-    // 2) redis —— 从 stateBackend 拿 ioredis (只有 RedisStateBackend 才有 getClient)
-    const redisClient = this.getSharedIoRedisClient();
-    if (!redisClient) {
-      // Local state backend 场景：降级到内存 queue（单节点可用）
-      this.logger.warn(
-        `[skill-conversation-add] no shared ioredis client available (deployMode=${this.config.deployMode}); ` +
-          `falling back to in-memory queue for instance=${instanceId} (single-node only)`,
-      );
-    }
+    // 2) queue: 全进程共享单例
+    const queue = this.ensureSkillSharedQueue();
 
-    // 3) extractor —— 复用 buildSkillExtractorForInstance
-    const rawExtractor = await this.buildSkillExtractorForInstance(skillCore, instanceId);
-    const extractor = createExtractorAdapter(rawExtractor, this.logger);
+    // 3) noop extractor / sink 占位 (handler 不用, 只 worker pool 用真的)
+    const noopExtractor: ISkillExtractor = { extract: async () => ({ candidates: [] }) };
 
-    // 4) metadataService —— 兜底 asset 登记 (sink 只做这个)
-    const metadataService = await this.ensureMetadataService(instanceId).catch(() => undefined);
-
-    // 5) Redis key prefix
-    const memoryPrefix = this.config.redis?.keyPrefix ?? "tdai_memory";
-    const keyPrefix = `${memoryPrefix}:skill-conv`;
-
-    const wired = wireConversationAdd({
+    const wired = wireConversationAddHandler({
       storage,
-      redis: redisClient as SkillAgentTaskQueueRedisLike | undefined,
-      redisKeyPrefix: keyPrefix,
-      metadataService,
-      extractor,
+      queue,
+      extractor: noopExtractor,
       logger: this.logger,
-      workerId: `${this.config.instanceId ?? "gateway"}:${instanceId}:skill-conv-worker`,
-      // 归档 / 压缩 / 兜底 参数从 resolved skill config 派生，
-      // 让 skill.extraction.archiveBytes + skill.compress yaml 改动即时生效。
       ...this.buildSkillWireOverrides(),
     });
 
+    // Pool 首次 ensure, 保证 worker 已经在跑。多 instance 首次访问时都会走到这里,
+    // ensureSkillWorkerPool 内部有幂等 cache。
+    await this.ensureSkillWorkerPool();
+
     this.logger.info(
-      `[skill-conversation-add] wired instance=${instanceId} storage=${storage.type} ` +
-        `redis=${redisClient ? "shared-ioredis" : "in-memory-fallback"} prefix=${keyPrefix}`,
+      `[skill-conversation-add] handler wired instance=${instanceId} storage=${storage.type}`,
     );
     return wired;
   }
@@ -2105,63 +2335,75 @@ export class TdaiGateway {
    *   - extractor：若 cfg.llm 不全导致 TdaiCore 没造出 skillExtractor，就 skipWorker
    *     只挂 handler+buffer，Client 端能落 buffer，但归档触发不了（warn）。
    */
-  private async buildConversationAddForStandalone(instanceId: string): Promise<WiredConversationAdd> {
-    // 1) skillCore —— 单例
+  private async buildConversationAddForStandalone(instanceId: string): Promise<WiredConversationAddHandler> {
+    // 2026-07-30 池化后, standalone 走同一套 handler wire, worker 池全局单例。
     const skillCore = this.core.getSkillCore();
     if (!skillCore) {
       throw new Error(`[skill-conversation-add] SkillCore not enabled (standalone) — check cfg.skill.enabled`);
     }
 
-    // 2) storage —— 复用 resolveStorageForInstance；standalone 下会返回 LocalStorageBackend adapter
     const storage = await this.resolveStorageForInstance(instanceId);
+    const queue = this.ensureSkillSharedQueue();
+    const noopExtractor: ISkillExtractor = { extract: async () => ({ candidates: [] }) };
 
-    // 3) redis —— standalone 下通常没有；wire 层自动降级到 LocalSkillAgentTaskQueue
-    const redisClient = this.getSharedIoRedisClient();
-
-    // 4) extractor —— TdaiCore 单例，可能是 undefined（cfg.llm 未配全）
-    const rawExtractor = this.core.getSkillExtractor();
-    const skipWorker = !rawExtractor;
-    if (skipWorker) {
-      this.logger.warn(
-        `[skill-conversation-add] singleton SkillExtractor unavailable (check cfg.llm); ` +
-          `wiring handler+buffer only, skipping Worker for instance=${instanceId}. ` +
-          `Buffer will accumulate but archive won't fire until extractor is available.`,
-      );
-    }
-    // Worker 需要一个 extractor 实例；skipWorker=true 时占位不会被调用。
-    const noopExtractor: import("../core/skill/queue/types.js").ISkillExtractor = {
-      extract: async () => ({ candidates: [] }),
-    };
-    const extractor = rawExtractor
-      ? createExtractorAdapter(rawExtractor, this.logger)
-      : noopExtractor;
-
-    // 5) metadataService —— 兜底 asset 登记 (sink 只做这个)
-    const metadataService = await this.ensureMetadataService(instanceId).catch(() => undefined);
-
-    // 6) Redis key prefix (即便走内存队列, 命名保持一致以便后续接 redis 时无缝切换)
-    const memoryPrefix = this.config.redis?.keyPrefix ?? "tdai_memory";
-    const keyPrefix = `${memoryPrefix}:skill-conv`;
-
-    const wired = wireConversationAdd({
+    const wired = wireConversationAddHandler({
       storage,
-      redis: redisClient as SkillAgentTaskQueueRedisLike | undefined,
-      redisKeyPrefix: keyPrefix,
-      metadataService,
-      extractor,
+      queue,
+      extractor: noopExtractor,
       logger: this.logger,
-      workerId: `${this.config.instanceId ?? "gateway"}:${instanceId}:skill-conv-worker`,
-      skipWorker,
-      // 归档 / 压缩 / 兜底 参数由 resolved skill config 派生 (跟 service 模式一致)
       ...this.buildSkillWireOverrides(),
     });
 
+    // Standalone 模式下 extractor 可能因 cfg.llm 未配全而不可用; 但 pool 侧
+    // 会在 resolveExtractor 里抛错, 归档到队列的 tuple 会走 consumeAgent 的 catch
+    // 分支被识别为 transient → 无限 requeue 等外部恢复。跟老 skipWorker 逻辑
+    // 等价 (老: handler 端 wire 后完全跳过 worker; 新: 任务照样落队列, 但 pool
+    // 端消费失败, 后续 extractor 配好后自然恢复)。
+    await this.ensureSkillWorkerPool();
+
     this.logger.info(
-      `[skill-conversation-add] wired (standalone) instance=${instanceId} storage=${storage.type} ` +
-        `redis=${redisClient ? "shared-ioredis" : "in-memory-fallback"} ` +
-        `worker=${skipWorker ? "skipped" : "on"} prefix=${keyPrefix}`,
+      `[skill-conversation-add] handler wired (standalone) instance=${instanceId} storage=${storage.type}`,
     );
     return wired;
+  }
+
+  /**
+   * 解析某实例的「内容侧」句柄（memory store + storage），用于清空 chat_memory
+   * 内容。两种模式都走各自既有的解析路径，保证与 /v2 数据面读写命中同一份数据：
+   *   - service（storePool + configProvider 就绪）：per-instance TCVDB + COS
+   *   - standalone：TdaiCore 的全局 VectorStore +本地 storage
+   *
+   * 任一侧不可用时**抛错**而不是静默跳过 —— 归档 Agent 时若跳过内容清理，
+   * 就会留下"资产已删、内容还在"的孤儿数据，正是本次要修的问题。
+   */
+  private async resolveMemoryContentTargets(
+    instanceId: string,
+  ): Promise<{ store: IMemoryStore; storage: StorageAdapter }> {
+    let store: IMemoryStore | undefined;
+
+    if (this.storePool && this.configProvider) {
+      const vdbConfig = this.storePool.mode === "tcvdb"
+        ? await this.configProvider.resolveVdb(instanceId)
+        : null;
+      const pooled = await this.storePool.getStore(instanceId, vdbConfig);
+      store = pooled.store;
+    } else {
+      store = this.core.getVectorStore();
+    }
+
+    if (!store) {
+      throw new Error(`memory store unavailable for instance ${instanceId}, cannot clear chat memory content`);
+    }
+
+    const storage = this.storePool && this.configProvider
+      ? await this.resolveStorageForInstance(instanceId)
+      : this.core.getStorage();
+
+    if (!storage) {
+      throw new Error(`storage unavailable for instance ${instanceId}, cannot clear chat memory content`);
+    }
+
+    return { store, storage };
   }
 
   /**
@@ -2270,15 +2512,15 @@ export class TdaiGateway {
             const fresh = await configProvider.resolveCos();
             if (!fresh) throw new Error("Shark returned null COS config");
             const parsed = parseCosUrl(fresh.cosUrl);
-            return {
-              secretId: fresh.tmpSecretId,
-              secretKey: fresh.tmpSecretKey,
-              token: fresh.tmpToken || undefined,
-              bucket: parsed.bucket,
-              region: parsed.region,
-              prefix: fresh.pathPrefix,
-              expiresAt: fresh.expirationTime ? new Date(fresh.expirationTime).getTime() : undefined,
-            };
+            return Object.fromEntries([
+              ["secretId", fresh.tmpSecretId],
+              ["secretKey", fresh.tmpSecretKey],
+              ["token", fresh.tmpToken || undefined],
+              ["bucket", parsed.bucket],
+              ["region", parsed.region],
+              ["prefix", fresh.pathPrefix],
+              ["expiresAt", fresh.expirationTime ? new Date(fresh.expirationTime).getTime() : undefined],
+            ]);
           },
           cacheTtlMs: this.config.shark.cosBufferMs ?? 120000,
           logger: this.logger,
@@ -2291,6 +2533,15 @@ export class TdaiGateway {
         });
         await this.sharedCosClient.getClient();
         this.logger.info(`${TAG} SharedCosClient initialized (bucket=${bucket}, domain=${cosEndpointDomain}, attempt=${attempt})`);
+        if (this.config.cos.generationLogRetentionDays > 0) {
+          try {
+            await this.sharedCosClient.ensureGenerationLogRetention(this.config.cos.generationLogRetentionDays);
+          } catch (error) {
+            this.logger.warn(
+              `${TAG} generation log lifecycle setup failed (non-fatal, retention=${this.config.cos.generationLogRetentionDays}d): ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
 
         // Set Core default storage to COS
         const defaultInstanceId = this.config.instanceId ?? "default";
@@ -2383,6 +2634,53 @@ export class TdaiGateway {
       return adapter;
     };
 
+    /**
+     * 构造 checkpoint 的跨节点互斥锁。
+     *
+     * 为什么必需：同一 instance 的 checkpoint 是**同一个** COS 对象
+     * (`{pathPrefix}/{instanceId}/.metadata/checkpoint.json`)，而 writeRaw 是
+     * 整对象覆盖、COS 不支持 If-Match 条件写（官方文档仅提供
+     * x-cos-forbid-overwrite，语义是「不存在才写」，无法做 CAS）。
+     * 同时 L1 的任务锁是 session 级，不同 session / 不同 agent 会在多节点
+     * 合法并发 —— 若不额外互斥，后写者用旧快照覆盖先写者已提交的
+     * runner_states，导致 L1 游标丢失并永久重复抽取。
+     *
+     * lockKey 用 instanceId：与 checkpoint 对象一一对应，粒度不能更细
+     * （更细就保护不住共享对象），也不必更粗。
+     *
+     * stateBackend 缺失（standalone 单进程）时返回 undefined，
+     * 此时 CheckpointManager 只用进程内 withFileLock，行为与历史一致。
+     */
+    const resolveCheckpointLock = (
+      instanceId: string,
+    ): import("../utils/checkpoint.js").CheckpointLockOptions | undefined => {
+      const backend = gateway.stateBackend;
+      if (!backend) return undefined;
+      return {
+        lock: {
+          acquireLock: (key, ownerId, ttlMs) => backend.acquireLock(key, ownerId, ttlMs),
+          renewLock: (key, ownerId, ttlMs) => backend.renewLock(key, ownerId, ttlMs),
+          releaseLock: (key, ownerId) => backend.releaseLock(key, ownerId),
+        },
+        lockKey: instanceId,
+        metrics: {
+          onRequeueRequired: (key, waitedMs) => {
+            gateway.logger.warn(
+              `[checkpoint-lock] acquire timeout key=${key} waited=${waitedMs}ms → task will be requeued`,
+            );
+          },
+          onBackendError: (key, err) => {
+            gateway.logger.warn(
+              `[checkpoint-lock] backend error key=${key}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          },
+          onLockLost: (key) => {
+            gateway.logger.warn(`[checkpoint-lock] lock lost during critical section key=${key}`);
+          },
+        },
+      };
+    };
+
     return {
       async executeL1(task: TaskPayload, signal?: AbortSignal) {
         const instanceId = typeof task.data?.instanceId === "string" ? task.data.instanceId : undefined;
@@ -2418,7 +2716,13 @@ export class TdaiGateway {
         core.setInstanceId(instanceId);
         const { store, embedding } = await resolveStore(task);
         const storage = await resolveStorage(task);
-        const result = await core.runL1WithStore(task.sessionId, store, embedding, storage ?? undefined);
+        const result = await core.runL1WithStore(
+          task.sessionId,
+          store,
+          embedding,
+          storage ?? undefined,
+          resolveCheckpointLock(instanceId),
+        );
 
         (task as any)._l2ProfileScopes = result.profileScopes;
 

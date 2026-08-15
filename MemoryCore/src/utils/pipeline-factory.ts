@@ -24,6 +24,19 @@ import { CheckpointManager } from "./checkpoint.js";
 import type { PipelineSessionState } from "./checkpoint.js";
 import { createStoreBundle } from "../core/store/factory.js";
 import type { IMemoryStore } from "../core/store/types.js";
+import { memoryPromptResolveKey, resolveMemoryPrompts } from "../core/memory-prompt/resolver.js";
+import {
+  buildGenerationLogIdentity,
+  buildGenerationProvenance,
+  buildPromptGenerationRef,
+  MemoryGenerationLogStore,
+} from "../core/memory-generation-log/store.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLog,
+} from "../core/memory-generation-log/types.js";
+import { writeGenerationProvenanceBestEffort } from "../core/memory-generation-log/best-effort.js";
+import { LocalStorageBackend } from "../core/storage/local-backend.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import {
   readManifest,
@@ -40,11 +53,12 @@ import {
   buildProfileIsolationScope,
   parseProfileIsolationScope,
   pullProfilesToLocal,
+  listLocalProfiles,
   syncLocalProfilesToStore,
   type ProfileIsolation,
   type ProfileScopeOptions,
 } from "../core/profile/profile-sync.js";
-import { createScopedStorageAdapter, type StorageAdapter } from "../core/storage/adapter.js";
+import { createScopedStorageAdapter, StorageAdapter } from "../core/storage/adapter.js";
 import type { Logger } from "../core/types.js";
 
 const TAG = "[memory-tdai] [pipeline-factory]";
@@ -372,6 +386,11 @@ export function createL1Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
+  /**
+   * 跨节点保护 checkpoint 读改写的分布式锁配置。
+   * service 模式下必须提供，否则同 instance 的多节点并发会丢失 L1 游标。
+   */
+  checkpointLock?: import("./checkpoint.js").CheckpointLockOptions;
 }): (params: { sessionKey: string }) => Promise<{
   processedCount: number;
   storedCount: number;
@@ -381,7 +400,7 @@ export function createL1Runner(opts: {
   hasFullBacklog: boolean;
   profileScopes: string[];
 }> {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage } = opts;
+  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage, checkpointLock } = opts;
   const config = openclawConfig as Record<string, unknown> | undefined;
 
   return async ({ sessionKey }) => {
@@ -390,7 +409,7 @@ export function createL1Runner(opts: {
       return { processedCount: 0, storedCount: 0, hasMore: false, hasFullBacklog: false, profileScopes: [] };
     }
 
-    const checkpoint = new CheckpointManager(pluginDataDir, logger, storage);
+    const checkpoint = new CheckpointManager(pluginDataDir, logger, storage, checkpointLock);
     const cp = await checkpoint.read();
     const runnerState = checkpoint.getRunnerState(cp, sessionKey);
 
@@ -560,6 +579,12 @@ export function createL1Runner(opts: {
       let totalStored = 0;
       let lastSceneName: string | undefined;
       const profileScopes = new Set<string>();
+      const l1PromptTargets = groups.map((group) => ({
+        teamId: group.teamId,
+        agentId: group.agentId,
+        layer: "l1" as const,
+      }));
+      const l1Prompts = await resolveMemoryPrompts(vectorStore, l1PromptTargets);
 
       for (const group of groups) {
         logger.debug?.(
@@ -581,6 +606,11 @@ export function createL1Runner(opts: {
             maxMemoriesPerSession: cfg.extraction.maxMemoriesPerSession,
             model: cfg.extraction.model,
             promptMode: cfg.extraction.promptMode,
+            memoryPrompt: l1Prompts.get(memoryPromptResolveKey({
+              teamId: group.teamId,
+              agentId: group.agentId,
+              layer: "l1",
+            })),
             previousSceneName: lastSceneName ?? (runnerState.last_scene_name || undefined),
             vectorStore,
             embeddingService,
@@ -671,8 +701,13 @@ export function createL2Runner(opts: {
   llmRunner?: import("../core/types.js").LLMRunner;
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
+  /**
+   * 跨节点保护 checkpoint 读改写的分布式锁配置。
+   * service 模式下必须提供，否则同instance 的多节点并发会丢失计数器修复结果。
+   */
+  checkpointLock?: import("./checkpoint.js").CheckpointLockOptions;
 }): L2Runner {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage } = opts;
+  const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner, storage, checkpointLock } = opts;
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
 
   return async (sessionKey: string, cursor?: string) => {
@@ -742,6 +777,12 @@ export function createL2Runner(opts: {
 
     let processedTotal = 0;
     let anyEmptyExtraction = false;
+    const l2PromptTargets = [...grouped.values()].map((groupRecords) => ({
+      teamId: groupRecords[0]?.teamId,
+      agentId: groupRecords[0]?.agentId,
+      layer: "l2" as const,
+    }));
+    const l2Prompts = await resolveMemoryPrompts(vectorStore, l2PromptTargets);
     for (const groupRecords of grouped.values()) {
       const ctx = groupRecords[0];
       const groupStorage = scopedStorage(storage, ctx);
@@ -757,6 +798,11 @@ export function createL2Runner(opts: {
         config: openclawConfig!,
         model: cfg.persona.model,
         promptMode: cfg.persona.promptMode,
+        memoryPrompt: l2Prompts.get(memoryPromptResolveKey({
+          teamId: ctx.teamId,
+          agentId: ctx.agentId,
+          layer: "l2",
+        })),
         maxScenes: cfg.persona.maxScenes,
         sceneBackupCount: cfg.persona.sceneBackupCount,
         logger,
@@ -773,11 +819,17 @@ export function createL2Runner(opts: {
         id: r.id,
       }));
 
-      const preCheckpoint = new CheckpointManager(groupDataDir, logger, groupStorage);
+      const preCheckpoint = new CheckpointManager(groupDataDir, logger, groupStorage, checkpointLock);
       const preState = await preCheckpoint.read();
       const preScenesProcessed = preState.scenes_processed;
       const preTotalProcessed = preState.total_processed;
 
+      const l2StartMs = Date.now();
+      const resolvedL2Prompt = l2Prompts.get(memoryPromptResolveKey({
+        teamId: ctx.teamId,
+        agentId: ctx.agentId,
+        layer: "l2",
+      }));
       const extractResult = await extractor.extract(memories);
       if (!(extractResult.success && extractResult.memoriesProcessed > 0)) continue;
       if (extractResult.emptyExtraction) {
@@ -786,25 +838,81 @@ export function createL2Runner(opts: {
         continue;
       }
 
-      const checkpoint = new CheckpointManager(groupDataDir, logger, groupStorage);
-      const postState = await checkpoint.read();
-      if (postState.scenes_processed < preScenesProcessed || postState.total_processed < preTotalProcessed) {
+      //⚠️ 这里**不能**用 `checkpoint.write({...postState})`：
+      //
+      // postState 是跨越了整个 L2 LLM 抽取（数秒~数十秒）的旧快照，而write()
+      // 是「整对象覆盖 + 只有进程内锁」。用它写回会把这期间其他节点合法推进的
+      // runner_states / pipeline_states 全部抹掉（L1 游标丢失 → 重复抽取）。
+      //
+      // 正确做法：走 repairMonotonicCounters()，在分布式锁保护的临界区内重读，
+      // 只对这两个标量做单调取大，绝不触碰其他字段。
+      const checkpoint = new CheckpointManager(groupDataDir, logger, groupStorage, checkpointLock);
+      const repaired = await checkpoint.repairMonotonicCounters({
+        scenes_processed: preScenesProcessed,
+        total_processed: preTotalProcessed,
+      });
+      if (repaired) {
         logger.warn(
-          `${TAG} [L2] ⚠️ Checkpoint corruption detected! ` +
-          `scenes_processed: ${preScenesProcessed} → ${postState.scenes_processed}, ` +
-          `total_processed: ${preTotalProcessed} → ${postState.total_processed}. Repairing...`,
+          `${TAG} [L2] ⚠️ Checkpoint counter regression detected and repaired ` +
+          `(scenes_processed >= ${preScenesProcessed}, total_processed >= ${preTotalProcessed})`,
         );
-        await checkpoint.write({
-          ...postState,
-          scenes_processed: Math.max(postState.scenes_processed, preScenesProcessed),
-          total_processed: Math.max(postState.total_processed, preTotalProcessed),
-        });
-        logger.info(`${TAG} [L2] Checkpoint repaired`);
       }
 
+      const l2FinishedAt = Date.now();
+      const l2PromptRef = buildPromptGenerationRef(resolvedL2Prompt, "l2");
+      let changedProfiles = (await listLocalProfiles(groupDataDir, groupStorage, groupProfileOptions))
+        .filter((profile) => groupBaseline.get(profile.id)?.contentMd5 !== profile.contentMd5 || !groupBaseline.has(profile.id));
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {
-        await syncLocalProfilesToStore(groupDataDir, vectorStore, groupBaseline, logger, groupStorage, groupProfileOptions);
+        changedProfiles = (await syncLocalProfilesToStore(
+          groupDataDir, vectorStore, groupBaseline, logger, groupStorage, groupProfileOptions,
+        )) ?? changedProfiles;
       }
+      if (changedProfiles.length === 0) {
+        logger.debug?.(`${TAG} [L2] No changed Scene profiles, skipping generation provenance`);
+        await checkpoint.incrementScenesProcessed();
+        processedTotal += extractResult.memoriesProcessed;
+        continue;
+      }
+      const l2Identity = buildGenerationLogIdentity("l2", l2FinishedAt, changedProfiles[0]?.id);
+      const l2Provenance = buildGenerationProvenance(l2Identity, l2PromptRef);
+      const rootStorage = storage ?? new StorageAdapter(new LocalStorageBackend(pluginDataDir));
+      const l2Log: MemoryGenerationLog = {
+        schema_version: 1,
+        log_id: l2Identity.logId,
+        generation_id: l2Identity.generationId,
+        instance_id: instanceId ?? "standalone",
+        layer: "l2",
+        status: "succeeded",
+        team_id: ctx.teamId,
+        agent_id: ctx.agentId,
+        user_id: ctx.userId,
+        session_id: ctx.sessionId,
+        task_id: ctx.taskId,
+        prompt: l2PromptRef,
+        anchor_memory_id: changedProfiles[0]?.id,
+        input_refs: groupRecords.map((record) => ({ layer: "l1", record_id: record.id })),
+        output_refs: changedProfiles.map((profile) => ({ layer: "l2", record_id: profile.id })),
+        model: cfg.persona.model,
+        prompt_mode: cfg.persona.promptMode,
+        started_at_ms: l2StartMs,
+        finished_at_ms: l2FinishedAt,
+        latency_ms: l2FinishedAt - l2StartMs,
+      };
+      const l2LogStore = new MemoryGenerationLogStore(rootStorage, instanceId ?? "standalone");
+      await writeGenerationProvenanceBestEffort({
+        layer: "l2",
+        logger,
+        writeLog: () => l2LogStore.write(l2Log, l2Identity.key),
+        writeRefs: vectorStore?.upsertMemoryGenerationRefs && changedProfiles.length > 0
+          ? () => vectorStore.upsertMemoryGenerationRefs!(changedProfiles.map((profile) => ({
+              generation_ref_id: buildMemoryGenerationRefId("l2", profile.id),
+              layer: "l2" as const,
+              memory_id: profile.id,
+              ...l2Provenance,
+              created_at_ms: l2FinishedAt,
+            })))
+          : undefined,
+      });
       await checkpoint.incrementScenesProcessed();
       processedTotal += extractResult.memoriesProcessed;
     }
@@ -846,6 +954,11 @@ export function createL3Runner(opts: {
     const scopes = await discoverProfileScopes(pluginDataDir, storage, logger);
     const executionScopes = scopes.length > 0 ? scopes : [DEFAULT_PROFILE_SCOPE];
     let generatedAny = false;
+    const l3PromptTargets = executionScopes.map((scope) => {
+      const isolation = parseProfileIsolationScope(scope);
+      return { teamId: isolation.teamId, agentId: isolation.agentId, layer: "l3" as const };
+    });
+    const l3Prompts = await resolveMemoryPrompts(vectorStore, l3PromptTargets);
 
     for (const scope of executionScopes) {
       const scopedDir = scopedDataDirForScope(pluginDataDir, scope);
@@ -890,11 +1003,18 @@ export function createL3Runner(opts: {
       logger.info(`${TAG} [L3] Starting persona generation: ${reason} (scope=${scope})`);
       // 反解 scope 拿回 teamId/userId/agentId/sessionId 给 langfuse trace 用
       const scopeIsolation = parseProfileIsolationScope(scope);
+      const l3StartMs = Date.now();
+      const resolvedL3Prompt = l3Prompts.get(memoryPromptResolveKey({
+        teamId: scopeIsolation.teamId,
+        agentId: scopeIsolation.agentId,
+        layer: "l3",
+      }));
       const generator = new PersonaGenerator({
         dataDir: scopedDir,
         config: openclawConfig,
         model: cfg.persona.model,
         promptMode: cfg.persona.promptMode,
+        memoryPrompt: resolvedL3Prompt,
         backupCount: cfg.persona.backupCount,
         logger,
         instanceId,
@@ -914,9 +1034,60 @@ export function createL3Runner(opts: {
         continue;
       }
 
+      const l3FinishedAt = Date.now();
+      const l3PromptRef = buildPromptGenerationRef(resolvedL3Prompt, "l3");
+      let changedProfiles = (await listLocalProfiles(scopedDir, scopedStore, profileOptions))
+        .filter((profile) => profileBaseline.get(profile.id)?.contentMd5 !== profile.contentMd5 || !profileBaseline.has(profile.id));
       if (vectorStore && supportsProfileSyncWrite(vectorStore)) {
-        await syncLocalProfilesToStore(scopedDir, vectorStore, profileBaseline, logger, scopedStore, profileOptions);
+        changedProfiles = (await syncLocalProfilesToStore(
+          scopedDir, vectorStore, profileBaseline, logger, scopedStore, profileOptions,
+        )) ?? changedProfiles;
       }
+      if (changedProfiles.length === 0) {
+        logger.debug?.(`${TAG} [L3] No changed Persona profiles, skipping generation provenance`);
+        await checkpoint.markPersonaGenerated(personaMarker);
+        generatedAny = true;
+        continue;
+      }
+      const l3Identity = buildGenerationLogIdentity("l3", l3FinishedAt, changedProfiles[0]?.id);
+      const l3Provenance = buildGenerationProvenance(l3Identity, l3PromptRef);
+      const rootStorage = storage ?? new StorageAdapter(new LocalStorageBackend(pluginDataDir));
+      const l3Log: MemoryGenerationLog = {
+        schema_version: 1,
+        log_id: l3Identity.logId,
+        generation_id: l3Identity.generationId,
+        instance_id: instanceId ?? "standalone",
+        layer: "l3",
+        status: "succeeded",
+        team_id: scopeIsolation.teamId,
+        agent_id: scopeIsolation.agentId,
+        user_id: scopeIsolation.userId,
+        session_id: scopeIsolation.sessionId,
+        prompt: l3PromptRef,
+        anchor_memory_id: changedProfiles[0]?.id,
+        input_refs: sceneIndex.map((scene) => ({ layer: "l2", record_id: scene.filename })),
+        output_refs: changedProfiles.map((profile) => ({ layer: "l3", record_id: profile.id })),
+        model: cfg.persona.model,
+        prompt_mode: cfg.persona.promptMode,
+        started_at_ms: l3StartMs,
+        finished_at_ms: l3FinishedAt,
+        latency_ms: l3FinishedAt - l3StartMs,
+      };
+      const l3LogStore = new MemoryGenerationLogStore(rootStorage, instanceId ?? "standalone");
+      await writeGenerationProvenanceBestEffort({
+        layer: "l3",
+        logger,
+        writeLog: () => l3LogStore.write(l3Log, l3Identity.key),
+        writeRefs: vectorStore?.upsertMemoryGenerationRefs && changedProfiles.length > 0
+          ? () => vectorStore.upsertMemoryGenerationRefs!(changedProfiles.map((profile) => ({
+              generation_ref_id: buildMemoryGenerationRefId("l3", profile.id),
+              layer: "l3" as const,
+              memory_id: profile.id,
+              ...l3Provenance,
+              created_at_ms: l3FinishedAt,
+            })))
+          : undefined,
+      });
 
       await checkpoint.markPersonaGenerated(personaMarker);
       generatedAny = true;

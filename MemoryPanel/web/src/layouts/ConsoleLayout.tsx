@@ -1,8 +1,7 @@
 /**
- * ConsoleLayout — 主布局壳（Tea 组件重构版）
+ * ConsoleLayout — 主布局壳。
  *
- * 使用外部版 tea-component@2.8.0 的 `Layout` + `Menu` 组件替换手写布局。
- * 保留 TabBar、路由、菜单过滤等所有业务逻辑。
+ * 基于 tea-component 的 `Layout` + `Menu` 组件，包含 TabBar、路由、菜单过滤等业务逻辑。
  */
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
@@ -12,6 +11,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useCurrentRole, type TeamRole } from '@/services/useCurrentRole';
 import { GlobalHeader } from '@/layouts/GlobalHeader';
 import { TabBar } from '@/layouts/TabBar';
+import { OnboardingGuide, shouldShowOnboarding } from '@/layouts/OnboardingGuide';
 import { ITEM_ICON, usePageMeta, GROUP_ORDER_KEYS, type PageId } from '@/constants/menu';
 
 const { Body, Sider, Content } = Layout;
@@ -30,7 +30,7 @@ const PATH_TO_PAGE: Record<string, PageId> = {
 
 /** PageId → 路由 path */
 const PAGE_TO_PATH: Record<PageId, string> = Object.fromEntries(
-  Object.entries(PATH_TO_PAGE).map(([path, id]) => [id, path])
+  Object.entries(PATH_TO_PAGE).map(([path, id]) => [id, path]),
 ) as Record<PageId, string>;
 
 function legacyHashToPath(): string | null {
@@ -57,7 +57,7 @@ export function ConsoleLayout() {
 
   const activePage: PageId = useMemo(() => {
     const match = Object.entries(PATH_TO_PAGE).find(
-      ([path]) => path !== '/' && location.pathname.startsWith(path)
+      ([path]) => path !== '/' && location.pathname.startsWith(path),
     );
     return match ? match[1] : 'workbench_board';
   }, [location.pathname]);
@@ -77,12 +77,21 @@ export function ConsoleLayout() {
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // 首次使用引导：登录后按「每用户仅首次」判定自动弹出
+  const currentUserId = auth?.user_id;
+  const [onboardingVisible, setOnboardingVisible] = useState(false);
+  useEffect(() => {
+    if (currentUserId && shouldShowOnboarding(currentUserId)) {
+      setOnboardingVisible(true);
+    }
+  }, [currentUserId]);
+
   const navigateTo = useCallback(
     (id: PageId) => {
       const path = PAGE_TO_PATH[id];
       if (path) navigate(path);
     },
-    [navigate]
+    [navigate],
   );
 
   const closePage = useCallback(
@@ -95,14 +104,14 @@ export function ConsoleLayout() {
         return next;
       });
     },
-    [activePage, navigateTo]
+    [activePage, navigateTo],
   );
 
   // ===== 基于 team role 的菜单过滤 =====
   // admin 可访问所有页面（含资源管理）
   // 「成员管理」项：reviewer 不可见
   const menuGroups = useMemo(() => {
-    const byGroup = new Map<string, typeof PAGE_META[PageId][]>();
+    const byGroup = new Map<string, (typeof PAGE_META)[PageId][]>();
 
     for (const meta of Object.values(PAGE_META)) {
       if (userRole === 'reviewer' && meta.id === 'team_members') continue;
@@ -111,8 +120,7 @@ export function ConsoleLayout() {
       byGroup.set(meta.group, list);
     }
 
-    return GROUP_ORDER_KEYS
-      .map((key) => t(`menu.group.${key}`))
+    return GROUP_ORDER_KEYS.map((key) => t(`menu.group.${key}`))
       .filter((g) => byGroup.has(g))
       .map((g) => ({
         title: g,
@@ -124,7 +132,7 @@ export function ConsoleLayout() {
   const pinnedGroup = menuGroups.find((g) => g.title === workbenchGroupTitle);
   const restGroups = menuGroups.filter((g) => g.title !== workbenchGroupTitle);
 
-  const renderMenuItem = (item: typeof PAGE_META[PageId]) => {
+  const renderMenuItem = (item: (typeof PAGE_META)[PageId]) => {
     const isActive = activePage === item.id;
     return (
       <Menu.Item
@@ -139,6 +147,12 @@ export function ConsoleLayout() {
 
   return (
     <div className="_memory-app-shell">
+      <OnboardingGuide
+        visible={onboardingVisible}
+        userId={currentUserId}
+        userRole={userRole}
+        onClose={() => setOnboardingVisible(false)}
+      />
       <GlobalHeader
         userRole={userRole}
         currentUser={auth?.user ?? ''}
@@ -149,11 +163,7 @@ export function ConsoleLayout() {
         <Body>
           <Sider>
             {/* 品牌已在全局 Header 展示，侧栏只承载导航（与 Memory项目公共壳层一致）。 */}
-            <Menu
-              collapsable
-              collapsed={sidebarCollapsed}
-              onCollapsedChange={setSidebarCollapsed}
-            >
+            <Menu collapsable collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed}>
               {pinnedGroup?.items.map((item) => renderMenuItem(item))}
               {restGroups.map((group) => (
                 <Menu.Group key={group.title} title={group.title}>
@@ -170,7 +180,8 @@ export function ConsoleLayout() {
               onClose={closePage}
             />
             <Content.Body className="_memory-content-body">
-              <main className="_memory-page-frame">
+              {/* key 绑定 pathname：路由切换时重挂载页面帧，触发 _page-enter 过渡，保持跨页连续性 */}
+              <main key={location.pathname} className="_memory-page-frame">
                 <Outlet />
               </main>
             </Content.Body>

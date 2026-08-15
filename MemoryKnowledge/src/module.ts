@@ -8,6 +8,7 @@
 
 import { join } from "node:path";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
+import pLimit from "p-limit";
 
 import type { Db } from "./db/client.js";
 import { SqliteKnowledgeStore, type IKnowledgeStore } from "./store/index.js";
@@ -24,9 +25,14 @@ import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGrap
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
+import { getGlobalLlmConcurrency } from "./config.js";
+import { buildProgressFn } from "./callback.js";
 import { AutoSyncScheduler, resolveAutoSyncConfig, type AutoSyncConfig } from "./store/auto-sync-scheduler.js";
 
 const log = createLogger("knowledge-module");
+
+/** 进程级全局 LLM 并发信号量（跨所有 wiki 的 extract + merge）。 */
+export const globalLlmLimit = pLimit(getGlobalLlmConcurrency());
 
 // ───────────────────────── Module Config ─────────────────────────
 
@@ -166,21 +172,29 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── Real wiki worker: ingest via wiki engine ──
   const realWikiWorker: WikiWorker = async (ctx) => {
-    const { wikiId, serviceId, dir, setInternalStatus } = ctx;
+    const { wikiId, serviceId, teamId, dir, setInternalStatus, ingestRunId } = ctx;
     setInternalStatus("ingesting");
 
     // Per-instance LLM routing (proxy/byo/global fallback), keyed by service_id.
     const effectiveLlm = resolveLlm(serviceId);
+    // 进度只推 Panel（Panel 内存 store + wiki/get 聚合）；KS 不落进度态
+    const onProgress = config.tmcCallbackUrl
+      ? buildProgressFn(config.tmcCallbackUrl, wikiId, serviceId, teamId, ingestRunId)
+      : undefined;
     wikiMgr.init({ name: wikiId, path: dir });
-    await wikiMgr.ingest(wikiId, {
-      protocol: effectiveLlm.protocol,
-      provider: effectiveLlm.provider,
-      apiKey: effectiveLlm.apiKey,
-      model: effectiveLlm.model,
-      customEndpoint: effectiveLlm.baseUrl,
-      maxContextSize: effectiveLlm.maxTokens,
-      timeoutMs: effectiveLlm.timeoutMs,
-    });
+    await wikiMgr.ingest(
+      wikiId,
+      {
+        protocol: effectiveLlm.protocol,
+        provider: effectiveLlm.provider,
+        apiKey: effectiveLlm.apiKey,
+        model: effectiveLlm.model,
+        customEndpoint: effectiveLlm.baseUrl,
+        maxContextSize: effectiveLlm.maxTokens,
+        timeoutMs: effectiveLlm.timeoutMs,
+      },
+      { onProgress, globalLlmLimit },
+    );
     setInternalStatus("rebuilding-index");
 
     const pages = wikiMgr.getPages(wikiId);

@@ -1,15 +1,148 @@
 /**
  * ChatMemoryPanel — Memory 页面特有样式。
  *
- * 通用列表容器 / 分栏布局 / 骨架屏 / 选中态 已由
+ * 通用列表容器 / 分栏布局 / 骨架屏 已由
  * ResourcePage/components/asset-list-panel.css 统一提供。
- * 此处仅保留 Memory 特有的样式。
+ * 此处：
+ *   1. 在 _asset-memory-page 作用域下把通用 ALP 列表项改写为「无边框纯背景卡片」样式
+ *      （对齐 Skills 页成熟风格：无边框 + 圆角 + 纯背景，hover 浅灰、选中浅蓝）
+ *   2. 提供 Memory 专属的卡片内部 4 行结构样式（标题+计数 / id / 作者+时间·解绑 / 共享·私密）
  */
 
 ._asset-memory-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ============================================================
+ * Memory 页面下：把通用 ALP 列表项改写为「无边框纯背景卡片」
+ * （对齐项目 Skills 页 `_memory-personal-asset` 的成熟风格：
+ *   无边框 + 圆角 + 纯背景；hover 浅灰、选中浅蓝）
+ * 仅作用于本页面，不影响 Skills 等复用同一面板的页面。
+ *
+ * 关键：AssetListPanel 结构是 li > button，视觉必须只落在 button 上
+ * （li 保持透明），否则 button 的直角背景会盖住 li 圆角 → 四角被覆盖。
+ * ============================================================ */
+._asset-memory-page ._alp-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* li：去掉 ALP 默认下分隔线，只做圆角定位，不承载背景/边框 */
+._asset-memory-page ._alp-item {
+  border-bottom: none;
+  border-radius: 8px;
+}
+
+/* 视觉全部落在 button：圆角 + 纯背景，hover/选中色统一由 button 呈现 */
+._asset-memory-page ._alp-item-btn {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background-color: var(--tea-color-bg-primary-default);
+  transition: background-color 0.15s ease-in-out;
+}
+
+._asset-memory-page ._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-secondary-default);
+}
+
+._asset-memory-page ._alp-item--selected ._alp-item-btn {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._asset-memory-page ._alp-item--selected ._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._asset-memory-page ._alp-item--disabled {
+  opacity: 0.6;
+}
+
+/* ============================================================
+ * Memory 卡片内部 4 行结构
+ * ============================================================ */
+
+/* 第 1 行：标题 + 蓝色计数徽章 */
+._memory-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+
+._memory-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 右上角蓝色计数徽章（如 L0 消息数） */
+._memory-card-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--tea-color-text-brand-default);
+  background-color: var(--tea-color-bg-brand-lighten-default);
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* 第 2 行：资产真实 id，等宽灰色 */
+._memory-card-id {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 第 3 行：用户名 + 时间 / 解绑（复用通用 AssetItemBadges 容器，与 Skills 页同构）
+   时间戳走通用 ._alp-item-time（已声明 12px / secondary + margin-left:auto 靠右），
+   此处只对 memory 特有部分做覆盖。 */
+
+/* 用户名徽章：与时间戳统一字号（覆盖通用 ._alp-badge 的 11px） */
+._memory-card ._alp-badge {
+  font-size: 12px;
+}
+
+/* 「解绑」红色链接文字按钮：靠右对齐（对齐 AssetItemTime 的 margin-left:auto） */
+._memory-card-unbind {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tea-color-text-warning-default);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s ease-in-out;
+}
+
+._memory-card-unbind:hover {
+  opacity: 0.75;
+  text-decoration: underline;
+}
+
+/* 第 4 行：共享/私密切换 */
+._memory-card-scope {
+  margin-top: 10px;
 }
 
 /* ===== Memory 特有：已私密警告徽章 ===== */
@@ -32,27 +165,6 @@
   margin-left: 6px;
 }
 
-/* ===== Memory 特有：解绑按钮 ===== */
-._memory-block-item-unbind {
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  z-index: 10;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  color: var(--tea-color-text-secondary);
-  background: var(--tea-color-bg-secondary-default);
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
-}
-
-._memory-block-item-unbind:hover {
-  background: var(--tea-color-bg-primary-default);
-  color: var(--tea-color-text-primary);
-}
-
 /* ===== 详情面板容器 ===== */
 ._memory-detail-panel {
   min-height: 480px;
@@ -72,7 +184,17 @@
 
 /* ===== BlockDetail 头部 ===== */
 ._memory-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
+}
+
+/* 左侧标题 + meta 信息列，占据剩余宽度 */
+._memory-detail-header-info {
+  min-width: 0;
+  flex: 1;
 }
 
 ._memory-detail-title {
@@ -81,6 +203,22 @@
   color: var(--tea-color-text-primary);
   line-height: 1.4;
   word-break: break-all;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+._memory-detail-title-name {
+  font-weight: 600;
+}
+
+/* 名字旁弱化展示的真实 id */
+._memory-detail-title-id {
+  font-size: 12px;
+  font-weight: 400;
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-tertiary);
 }
 
 ._memory-detail-meta {
@@ -100,7 +238,7 @@
 }
 
 ._memory-detail-mono {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-secondary);
 }
 
@@ -157,7 +295,7 @@
 
 ._memory-detail-layer-count {
   font-size: 11px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-tertiary);
 }
 
@@ -181,16 +319,61 @@
 ._memory-detail {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  /* 撑满右栏高度（外层 _asset-split-detail 已限定视口高度），内部body滚动，头部固定 */
+  height: 100%;
   min-height: 0;
+  /* 卡片外框：与左栏列表（_alp）、Skills 右栏详情（_memory-skill-detail-card）视觉统一 */
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+}
+
+/* 详情空态：同样套卡片外框并撑满高度，避免"贴边灰底"与留白 */
+._memory-detail-empty-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 480px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+  font-size: 13px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* 窄屏堆叠布局下（AssetSplitLayout 取消高度限制），卡片也回归文档流高度 */
+@media (max-width: 960px) {
+  ._memory-detail {
+    height: auto;
+    min-height: 480px;
+  }
+
+  ._memory-detail-empty-card {
+    height: auto;
+  }
 }
 
 /* ===== 层内容区 ===== */
+/* 唯一滚动容器：L1/L2/L3 列表在此滚动；L0 由内部 _memory-chat-scroll 自管滚动锚点，
+   两者不会同时出现（互斥渲染），故不会产生双层滚动条 */
 ._memory-detail-body {
   flex: 1;
   min-height: 200px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+}
+
+/* L0 聊天滚动容器：需自管"滚到底 / 加载更早"的锚点，作为独立滚动容器 */
+._memory-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 ._memory-detail-skeleton {
@@ -218,121 +401,196 @@
   color: var(--tea-color-text-tertiary);
 }
 
-/* ===== L0 对话原文（聊天气泡式） ===== */
-/* 撑满层内容区剩余高度；视口高度兜底封顶，避免左栏很短时整页被拉得过长 */
-._memory-detail-l0-scroll {
-  flex: 1;
-  min-height: 200px;
-  max-height: calc(100vh - 320px);
-  overflow-y: auto;
+._memory-detail-empty--warn {
+  color: var(--tea-color-text-warning, #e6a23c);
 }
 
-._memory-detail-l0-more {
+/* ===== 时间筛选器（L0 / L1，使用 Tea RangePicker）===== */
+/* 置于详情头部右上角，随标题行顶部对齐，不随内容宽度收缩 */
+._memory-detail-timefilter {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ===== L0 对话原文（IM 聊天布局：头像 + 气泡）===== */
+/*顶部「加载更早」区 */
+._memory-chat-more {
   display: flex;
   justify-content: center;
-  padding: 2px 0 10px;
+  padding: 4px 0 14px;
 }
 
-._memory-detail-l0-more-btn {
-  border: none;
-  background: none;
-  padding: 0;
+._memory-chat-more-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 999px;
+  background: var(--tea-color-bg-primary-default);
   cursor: pointer;
   font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out;
+}
+
+._memory-chat-more-btn:hover {
   color: var(--tea-color-text-brand-default);
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-brand-lighten-default);
 }
 
-._memory-detail-l0-more-btn:hover {
-  text-decoration: underline;
+._memory-chat-more-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
 }
 
-._memory-detail-l0-more-text {
+._memory-chat-more-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--tea-color-border-primary-default);
+  border-top-color: var(--tea-color-text-brand-default);
+  border-radius: 50%;
+  animation: _memory-chat-spin 0.7s linear infinite;
+}
+
+@keyframes _memory-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+._memory-chat-more-end {
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
 }
 
-._memory-detail-l0-list {
+/* 消息流：整体纵向排布，行间距稍大让气泡有呼吸感 */
+._memory-chat-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 18px;
+  padding: 4px 2px;
 }
 
-._memory-detail-l0-row {
+/* 单行：主体左右分列，assistant 左、user 右 */
+._memory-chat-row {
   display: flex;
+  align-items: flex-start;
+  max-width: 100%;
 }
 
-._memory-detail-l0-row--user {
+._memory-chat-row--user {
   justify-content: flex-end;
 }
 
-._memory-detail-l0-row--assistant {
-  justify-content: flex-start;
-}
-
-._memory-detail-l0-row--system {
-  justify-content: stretch;
-}
-
-/* 气泡：assistant 左对齐白底，user 右对齐品牌浅色，system 通栏提示条 */
-._memory-detail-l0-bubble {
-  max-width: 85%;
+/* 主体：meta（角色 + 时间）在气泡上方，气泡随行左右靠 */
+._memory-chat-main {
   min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--tea-color-border-primary-default);
-  background: var(--tea-color-bg-primary-default);
-  border-radius: 2px 8px 8px 8px;
-}
-
-._memory-detail-l0-row--user ._memory-detail-l0-bubble {
-  background: var(--tea-color-bg-brand-lighten-default);
-  border-color: transparent;
-  border-radius: 8px 2px 8px 8px;
-}
-
-._memory-detail-l0-row--system ._memory-detail-l0-bubble {
-  max-width: 100%;
-  width: 100%;
-  background: var(--tea-color-bg-warning-lighten-default);
-  border-color: transparent;
-  border-radius: 6px;
-}
-
-._memory-detail-l0-bubble-head {
+  max-width: 85%;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-chat-row--user ._memory-chat-main {
+  align-items: flex-end;
+}
+
+._memory-chat-meta {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
-  margin-bottom: 4px;
+  padding: 0 2px;
 }
 
-._memory-detail-l0-role {
-  flex-shrink: 0;
+._memory-chat-row--user ._memory-chat-meta {
+  flex-direction: row-reverse;
+}
+
+._memory-chat-role {
   font-size: 10px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-weight: 600;
-  text-transform: uppercase;
+  font-family: var(--font-mono);
+  font-weight: 700;
   letter-spacing: 0.4px;
+  color: var(--tea-color-text-secondary);
 }
 
-._memory-detail-l0-role--user { color: var(--tea-color-text-brand-default); }
-._memory-detail-l0-role--system { color: var(--tea-color-text-warning-default); }
-._memory-detail-l0-role--assistant { color: var(--tea-color-text-secondary); }
-
-._memory-detail-l0-time {
-  flex-shrink: 0;
+._memory-chat-time {
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
   white-space: nowrap;
 }
 
-._memory-detail-l0-body {
+/* 气泡：柔和圆角 + 细边+ 轻阴影 + hover 抬升；尾部小缺角贴合头像侧 */
+._memory-chat-bubble {
+  position: relative;
+  max-width: 100%;
+  padding: 9px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+  transition: box-shadow 0.15s ease-in-out;
+}
+
+._memory-chat-bubble:hover {
+  box-shadow: var(--tea-shadow-sm);
+}
+
+/* assistant / tool：左侧，左上角收一个尖角贴向头像 */
+._memory-chat-bubble--assistant,
+._memory-chat-bubble--tool {
+  border-top-left-radius: 3px;
+}
+
+/* user：右侧，品牌浅底、无边、右上角收尖角 */
+._memory-chat-bubble--user {
+  border-top-right-radius: 3px;
+  border-color: transparent;
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+
+._memory-chat-body {
   margin: 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--tea-color-text-primary);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+}
+
+/* system：居中通栏胶囊提示 */
+._memory-chat-system {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 90%;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--tea-color-bg-secondary-default);
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+._memory-chat-system svg {
+  flex-shrink: 0;
+}
+
+._memory-chat-system-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+._memory-chat-system-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 /* ===== L1/L2/L3 原子列表 ===== */
@@ -342,20 +600,22 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 /* 条目卡片：标题行与正文同处一张白底卡片，避免「标题浮在灰底、正文另起白盒」的割裂感 */
 ._memory-detail-atomic-item {
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--tea-color-border-primary-default);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--tea-color-bg-primary-default);
-  transition: border-color 0.15s ease-in-out;
+  box-shadow: var(--tea-shadow-xs);
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
 }
 
 ._memory-detail-atomic-item:hover {
-  border-color: var(--tea-color-border-secondary-default);
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: var(--tea-shadow-sm);
 }
 
 /* 标题行：层级徽章 + 标题 + 右侧（loading/时间/展开箭头） */
@@ -384,7 +644,7 @@
 ._memory-detail-atomic-layer {
   flex-shrink: 0;
   font-size: 10px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   line-height: 1;
   padding: 3px 5px;
@@ -618,7 +878,7 @@
 
 ._cm-personal-asset-id {
   margin-top: 4px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
   overflow: hidden;

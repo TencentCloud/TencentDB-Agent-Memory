@@ -29,11 +29,16 @@ import { createAutoSyncRoutes } from "./routes/auto-sync.js";
 import { accessLog } from "./middleware/response-envelope.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { createLogger } from "./logger.js";
+import {
+  createKnowledgeTelemetry,
+  createKnowledgeTelemetryMiddleware,
+} from "./clickhouse-telemetry.js";
 
 const log = createLogger("server");
 
 export function createApp() {
   const config = loadConfig();
+  const knowledgeTelemetry = createKnowledgeTelemetry(config.clickhouse);
 
   // Initialize DB + knowledge module
   const { db } = createDb({ path: config.dbPath });
@@ -56,6 +61,8 @@ export function createApp() {
 
   // /v3 prefix applied once here — routes define paths without prefix
   const api = new Hono();
+  // Only Agent tool executions are usage telemetry; health/admin/ingest remain excluded.
+  api.use("/tools/call", createKnowledgeTelemetryMiddleware(knowledgeTelemetry));
   api.route("/wiki", createWikiRoutes({
     wikiService: knowledgeModule.wikiService,
     wikiMgr: knowledgeModule.wikiMgr,
@@ -103,19 +110,41 @@ export function createApp() {
     log.warn("OpenAPI spec not found at openapi.yaml, skipping Swagger UI");
   }
 
-  return { app, config, knowledgeModule };
+  return { app, config, knowledgeModule, knowledgeTelemetry };
 }
 
-// Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  const { app, config } = createApp();
+async function startServer(): Promise<void> {
+  const { app, config, knowledgeTelemetry } = createApp();
+  await knowledgeTelemetry.initialize();
 
   log.info(`Starting knowledge service on port ${config.port}`);
   log.info(`Data dir: ${config.dataDir}`);
   log.info(`DB path: ${config.dbPath}`);
   log.info(`API prefix: ${config.apiPrefix}`);
+  log.info(`ClickHouse telemetry: ${config.clickhouse.enabled ? "enabled" : "disabled"}`);
 
-  serve({ fetch: app.fetch, port: config.port }, (info) => {
+  const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     log.info(`Knowledge service listening on http://localhost:${info.port}`);
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log.info(`Received ${signal}, shutting down`);
+    await knowledgeTelemetry.shutdown();
+    server.close(() => process.exit(0));
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
+}
+
+// Start server when run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  void startServer().catch((err) => {
+    log.error("Knowledge service failed to start", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exitCode = 1;
   });
 }

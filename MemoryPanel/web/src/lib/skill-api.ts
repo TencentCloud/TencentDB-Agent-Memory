@@ -103,7 +103,7 @@ function stripEmpty(body: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-async function skillCall<T>(action: string, body: Record<string, unknown>): Promise<T> {
+async function skillCall<T>(action: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const session = getPanelSession();
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -116,6 +116,7 @@ async function skillCall<T>(action: string, body: Record<string, unknown>): Prom
     method: 'POST',
     headers,
     body: JSON.stringify(stripEmpty(body)),
+    signal,
   });
   if (res.status === 401) {
     throw new SkillApiError(401, i18n.t('skillApi.error.unauthorized'), '');
@@ -360,7 +361,7 @@ export function getSkillListing(params: {
 // ---- 3.13 extract ----
 
 /**
- * `/v3/skill/extract` 入参（2026-07-17 后端契约; space_id 于 2026-07-20 转 optional）：
+ * `/v3/skill/extract` 入参（space_id 已转 optional）：
  *   - user_id / team_id / agent_id：必填
  *   - space_id：**前端不传**。跟其他 12 个 skill 接口一致, 从 `X-Tdai-Service-Id`
  *     header (= panelSession.instanceId) 走; 后端 handler 用 `auth.serviceId` 兜底。
@@ -386,7 +387,7 @@ export interface ExtractParams {
 }
 
 /**
- * `/v3/skill/extract` 返回体（2026-07-17 起）：
+ * `/v3/skill/extract` 返回体：
  *   - 后端恒走 archive → agent 队列 → worker 异步链路，永远返回 task_id；
  *     老版本的 `{mode:'sync', candidates}` 已被移除。
  *   - task_id 是**归档 task_id**（`task-<uuid8>`），跟入参 task_id (业务 task_ref_id) 是两个字段。
@@ -403,8 +404,46 @@ export function extractSkills(params: ExtractParams): Promise<ExtractResult> {
   return skillCall('extract', params as unknown as Record<string, unknown>);
 }
 
-// ---- 3.14 extract/result ----
+// ---- 3.14 export ----
+
+export interface ExportSkillParams {
+  user_id?: string;
+  team_id?: string;
+  skill_id: string;
+  version?: number;
+  format?: 'zip';
+}
+
+export interface ExportSkillResult {
+  zip_base64: string;
+  filename: string;
+  name: string;
+  version: number;
+  file_count: number;
+  total_bytes: number;
+  warnings: string[];
+}
+
+const EXPORT_TIMEOUT_MS = 30_000;
+
+export function exportSkill(params: ExportSkillParams, signal?: AbortSignal): Promise<ExportSkillResult> {
+  const timeout = AbortSignal.timeout ? AbortSignal.timeout(EXPORT_TIMEOUT_MS) : undefined;
+  // 合并外部 signal 与内部超时
+  const effectiveSignal = signal && timeout
+    ? AbortSignal.any?.([signal, timeout]) ?? timeout
+    : (signal ?? timeout);
+
+  return skillCall('export', {
+    user_id: params.user_id ?? '',
+    team_id: params.team_id ?? '',
+    skill_id: params.skill_id,
+    version: params.version,
+    format: params.format,
+  }, effectiveSignal);
+}
+
+// ---- 3.15 extract/result (deprecated) ----
 //
-// `/v3/skill/extract/result` 已于 2026-07-18 下线。SkillCoreSink 会在 worker
+// `/v3/skill/extract/result` 已下线。SkillCoreSink 会在 worker
 // drain 后直接把 skill 写入表，提取结果通过 `/v3/skill/list` 拿到（不再有独立
 // 的 result 查询接口）。前端拿到 extract 的 task_id 即视为"任务已受理"。

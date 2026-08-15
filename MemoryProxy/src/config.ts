@@ -141,6 +141,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   admin: { apiKey: "" },
   memCommand: { enabled: false, allowedCommands: [] },
   ccRequestRouting: { enabled: false },
+  workbuddyRequestRouting: { enabled: true },
 };
 
 /** Load and parse a YAML config file. Returns empty object on missing file. */
@@ -419,6 +420,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
             : undefined,
         }
       : undefined,
+    debugForceUserId: typeof yaml.sessionInit?.debugForceUserId === "string"
+      && yaml.sessionInit.debugForceUserId.trim()
+      ? yaml.sessionInit.debugForceUserId.trim()
+      : undefined,
+    debugVerboseLogging: yaml.sessionInit?.debugVerboseLogging ?? false,
   },
     tdai: {
       enabled: yaml.tdai?.enabled ?? DEFAULT_CONFIG.tdai.enabled,
@@ -496,6 +502,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled:
         (yaml as { ccRequestRouting?: { enabled?: boolean } }).ccRequestRouting?.enabled
         ?? DEFAULT_CONFIG.ccRequestRouting.enabled,
+    },
+    workbuddyRequestRouting: {
+      enabled:
+        (yaml as { workbuddyRequestRouting?: { enabled?: boolean } }).workbuddyRequestRouting?.enabled
+        ?? DEFAULT_CONFIG.workbuddyRequestRouting.enabled,
     },
   };
 }
