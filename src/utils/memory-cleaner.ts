@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -178,6 +179,19 @@ export class LocalMemoryCleaner {
         durationMs,
       };
       this.opts.logger?.info(`${TAG} ${JSON.stringify(summary)}`);
+    }
+
+    try {
+      const checkpoint = new CheckpointManager(
+        this.opts.baseDir,
+        this.opts.logger,
+      );
+      await checkpoint.recalibrateFromDisk();
+    } catch (err) {
+      this.opts.logger?.warn(
+        `${TAG} Checkpoint counter recalibration failed after cleanup (non-fatal): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     this.opts.logger?.info(
