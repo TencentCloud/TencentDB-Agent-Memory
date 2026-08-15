@@ -1777,6 +1777,20 @@ function mergeToolCallDeltas(
   }
 }
 
+/** Return true once a complete SSE data line carries the terminal sentinel. */
+function hasCompleteSseDoneLine(sseText: string): boolean {
+  const lastLineBreak = sseText.lastIndexOf("\n");
+  if (lastLineBreak < 0) return false;
+
+  return sseText
+    .slice(0, lastLineBreak)
+    .split("\n")
+    .some((line) => {
+      const trimmed = line.trim();
+      return trimmed.startsWith("data:") && trimmed.slice(5).trim() === "[DONE]";
+    });
+}
+
 /** Create a TransformStream that passes bytes through unchanged,
  *  while extracting usage/content/tool_calls from SSE events in-band.
  */
@@ -1789,8 +1803,11 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
   let assistantContent = "";
   const toolCallAccumulators = new Map<number, ToolCallAccumulator>();
 
-  function processSseChunk(chunk: string): void {
-    sseBuf += chunk;
+  function processSseChunk(chunk: string): boolean {
+    // Normalize CRLF only in the parsing buffer; forwarded bytes stay untouched.
+    // A trailing CR is retained until the next chunk arrives and completes CRLF.
+    sseBuf = (sseBuf + chunk).replace(/\r\n/g, "\n");
+    const sawDone = hasCompleteSseDoneLine(sseBuf);
     const parts = sseBuf.split("\n\n");
     sseBuf = parts.pop() ?? "";
     for (const part of parts) {
@@ -1800,6 +1817,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       assistantContent += content;
       mergeToolCallDeltas(toolCallAccumulators, toolCallDeltas);
     }
+    return sawDone;
+  }
+
+  let finalizePromise: Promise<void> | null = null;
+
+  function finalizeOnce(): Promise<void> {
+    if (!finalizePromise) {
+      finalizePromise = finalize().catch((err: unknown) => {
+        pipe.error("STREAM_FINALIZE", err);
+      });
+    }
+    return finalizePromise;
   }
 
   async function finalize(): Promise<void> {
@@ -2060,17 +2089,15 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     transform(chunk, controller) {
       controller.enqueue(chunk);
       try {
-        processSseChunk(decoder.decode(chunk, { stream: true }));
+        if (processSseChunk(decoder.decode(chunk, { stream: true }))) {
+          void finalizeOnce();
+        }
       } catch (err: unknown) {
         pipe.error("STREAM_TAP", err);
       }
     },
     async flush() {
-      try {
-        await finalize();
-      } catch (err: unknown) {
-        pipe.error("STREAM_FINALIZE", err);
-      }
+      await finalizeOnce();
     },
   });
 }
