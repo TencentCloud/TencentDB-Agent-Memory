@@ -81,6 +81,13 @@ export interface PipelineTriggerConfig {
 export interface RecallConfig {
   /** Enable auto-recall (default: true) */
   enabled: boolean;
+  /**
+   * Where dynamic L1 recall is placed in the prompt.
+   * - "prepend" (default): before the user prompt (legacy behavior)
+   * - "append": after the user prompt via the host's appendContext, keeping the
+   *   user-prompt prefix stable for prefix-matching caches (requires host support)
+   */
+  injectionMode: RecallInjectionMode;
   /** Max results to return (default: 5) */
   maxResults: number;
   /** Max characters injected for a single recalled L1 memory. 0 disables the per-memory limit. */
@@ -93,7 +100,17 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * When false (default), <relevant-memories> blocks are stripped from user
+   * messages before persistence, keeping history clean and prompt-cache
+   * friendly. When true, blocks are retained for auditing (bloats history and
+   * hurts cache — not recommended).
+   */
+  showInjected: boolean;
 }
+
+/** Dynamic L1 recall placement in the prompt. */
+export type RecallInjectionMode = "prepend" | "append";
 
 /** Embedding service configuration for vector search. */
 export interface EmbeddingConfig {
@@ -529,12 +546,14 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     recall: {
       enabled: bool(recallGroup, "enabled") ?? true,
+      injectionMode: validateRecallInjectionMode(str(recallGroup, "injectionMode")) ?? "prepend",
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -643,6 +662,15 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+const VALID_RECALL_INJECTION_MODES: RecallInjectionMode[] = ["prepend", "append"];
+
+function validateRecallInjectionMode(value: string | undefined): RecallInjectionMode | undefined {
+  if (!value) return undefined;
+  return VALID_RECALL_INJECTION_MODES.includes(value as RecallInjectionMode)
+    ? (value as RecallInjectionMode)
     : undefined;
 }
 

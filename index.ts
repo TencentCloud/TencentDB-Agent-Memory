@@ -31,6 +31,9 @@ import {
 } from "./src/utils/clean-context-runner.js";
 import { SessionFilter } from "./src/utils/session-filter.js";
 import { LocalMemoryCleaner } from "./src/utils/memory-cleaner.js";
+import { stripRelevantMemories, hasRelevantMemories } from "./src/utils/relevant-memories.js";
+import { shapeRecallForOpenClawHook } from "./src/adapters/openclaw/recall-injection.js";
+import { describeRecallShape } from "./src/utils/recall-shape-diagnostics.js";
 import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
@@ -584,17 +587,19 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        const hookResult = shapeRecallForOpenClawHook(result, cfg.recall.injectionMode);
+        const shape = describeRecallShape(hookResult);
+        if (hookResult?.appendSystemContext || hookResult?.prependContext || hookResult?.appendContext) {
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `injectionMode=${cfg.recall.injectionMode}, ` +
+            `stable=${shape.stableChars}chars(hash=${shape.stableHash}), ` +
+            `dynamic=${shape.dynamicPlacement}/${shape.dynamicChars}chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -624,12 +629,13 @@ export default function register(api: OpenClawPluginApi) {
 
     if (msg.role !== "user") return;
 
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
+    // showInjected=true keeps injected blocks in history for auditing, at the
+    // cost of cache-hostile history bloat.
+    if (cfg.recall.showInjected) return;
 
     if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
+      if (!hasRelevantMemories(msg.content)) return;
+      const cleaned = stripRelevantMemories(msg.content);
       if (cleaned === msg.content) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
       return { message: { ...event.message, content: cleaned } as typeof event.message };
@@ -639,9 +645,9 @@ export default function register(api: OpenClawPluginApi) {
       let totalStripped = 0;
       const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
         if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
+        if (!hasRelevantMemories(part.text)) return part;
+        const cleaned = stripRelevantMemories(part.text);
+        totalStripped += part.text.length - cleaned.length;
         return { ...part, text: cleaned };
       });
       if (totalStripped === 0) return;
