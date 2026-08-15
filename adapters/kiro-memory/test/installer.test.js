@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import { buildHookCommand, installProject, quotePosixShell, quoteWindowsCommandLine } from '../scripts/install.mjs';
+import { uninstallProject } from '../scripts/uninstall.mjs';
 
 const script = (name) => fileURLToPath(new URL(`../scripts/${name}.mjs`, import.meta.url));
 const safeEnv = (stateDir) => ({
@@ -73,6 +74,56 @@ test('uninstaller is repeatable and does not delete other hooks', async () => {
     assert.equal(run('uninstall', project, env).status, 0);
     assert.equal(await readFile(other, 'utf8'), '{"user":true}\n');
     assert.equal(run('uninstall', project, env).status, 0);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller rejects a foreign adapter receipt and preserves both files byte-for-byte', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-foreign-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    assert.equal(run('install', project, env).status, 0);
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+    const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
+    const hookSource = await readFile(hookPath, 'utf8');
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8')); receipt.adapter_path = 'C:\\foreign-adapter';
+    const receiptSource = `${JSON.stringify(receipt, null, 2)}\n`; await writeFile(receiptPath, receiptSource);
+    assert.notEqual(run('uninstall', project, env).status, 0);
+    assert.equal(await readFile(hookPath, 'utf8'), hookSource); assert.equal(await readFile(receiptPath, 'utf8'), receiptSource);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller quarantines the owned hook before allowing a new user hook at the original path', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-replace-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json'); const userHook = '{"new":"user-hook"}\n';
+    await uninstallProject({ project, afterHookQuarantined: async () => { await writeFile(hookPath, userHook); } });
+    assert.equal(await readFile(hookPath, 'utf8'), userHook);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller restores a quarantined modified hook when hash validation fails', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-restore-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json'); const changed = '{"changed":true}\n'; await writeFile(hookPath, changed);
+    await assert.rejects(uninstallProject({ project }), /changed/);
+    assert.equal(await readFile(hookPath, 'utf8'), changed);
+    assert.equal((await readdir(join(project, '.kiro', 'hooks'))).some((name) => name.endsWith('.quarantine')), false);
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller keeps both a replacement hook and quarantine backup when restore is occupied', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-occupied-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    const hookDirectory = join(project, '.kiro', 'hooks'); const hookPath = join(hookDirectory, 'tdai-memory.json');
+    const quarantinedContent = '{"changed":"old"}\n'; const replacement = '{"new":"user"}\n'; await writeFile(hookPath, quarantinedContent);
+    await assert.rejects(uninstallProject({ project, afterHookQuarantined: async () => { await writeFile(hookPath, replacement); } }), /changed/);
+    assert.equal(await readFile(hookPath, 'utf8'), replacement);
+    const backups = (await readdir(hookDirectory)).filter((name) => name.endsWith('.quarantine'));
+    assert.equal(backups.length, 1); assert.equal(await readFile(join(hookDirectory, backups[0]), 'utf8'), quarantinedContent);
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
