@@ -174,6 +174,19 @@ const ZH_STOP_WORDS = new Set([
   "吗", "吧", "呢", "啊", "呀", "哦", "嗯",
 ]);
 
+const FTS5_OPERATORS = /\b(?:AND|OR|NOT|NEAR)\b/gi;
+const FTS5_NON_TOKEN_CHARS = /[^\p{L}\p{N}_\s]/gu;
+
+/**
+ * Remove FTS5 query syntax before tokenization.
+ *
+ * `buildFtsQuery()` constructs the final MATCH expression itself; raw user
+ * input must not be allowed to smuggle operators that alter query semantics.
+ */
+function sanitizeFtsInput(raw: string): string {
+  return raw.replace(FTS5_OPERATORS, " ").replace(FTS5_NON_TOKEN_CHARS, " ");
+}
+
 /**
  * Build an FTS5 MATCH query from raw text.
  *
@@ -197,13 +210,14 @@ const ZH_STOP_WORDS = new Set([
  */
 export function buildFtsQuery(raw: string): string | null {
   const jieba = getJieba();
+  const sanitized = sanitizeFtsInput(raw);
 
   let tokens: string[];
   if (jieba) {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(sanitized, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +232,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      sanitized
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];
@@ -2049,13 +2063,15 @@ export class VectorStore implements IMemoryStore {
    * FTS5 keyword search on L1 records.
    * Returns top-`limit` results sorted by BM25 relevance (highest first).
    *
-   * @param ftsQuery  A pre-built FTS5 MATCH expression (from `buildFtsQuery()`).
+   * @param query Raw user query. The SQLite store builds and binds the MATCH expression.
    * @param limit     Maximum number of results to return.
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
+  searchL1Fts(query: string, limit = 20): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
     try {
       const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;
@@ -2098,13 +2114,15 @@ export class VectorStore implements IMemoryStore {
    * FTS5 keyword search on L0 conversation messages.
    * Returns top-`limit` results sorted by BM25 relevance (highest first).
    *
-   * @param ftsQuery  A pre-built FTS5 MATCH expression (from `buildFtsQuery()`).
+   * @param query Raw user query. The SQLite store builds and binds the MATCH expression.
    * @param limit     Maximum number of results to return.
    *
    * **Fault-tolerant**: returns an empty array on any error.
    */
-  searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
+  searchL0Fts(query: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    const ftsQuery = buildFtsQuery(query);
+    if (!ftsQuery) return [];
     try {
       const rows = this.stmtL0FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;

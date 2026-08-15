@@ -644,11 +644,11 @@ export class TcvdbMemoryStore implements IMemoryStore {
     return [];
   }
 
-  async searchL1Fts(ftsQuery: string, limit?: number): Promise<L1FtsResult[]> {
+  async searchL1Fts(query: string, limit?: number): Promise<L1FtsResult[]> {
     // TCVDB has no pure FTS — use hybrid search with sparse-only path
-    // The ftsQuery is raw text, use it as queryText for hybrid
-    if (!ftsQuery) return [];
-    const results = await this.searchL1HybridAsync({ queryText: ftsQuery, topK: limit });
+    // The query is raw text; keep it that way for BM25 and server-side embedding.
+    if (!query) return [];
+    const results = await this.searchL1HybridAsync({ queryText: query, topK: limit });
     // L1SearchResult and L1FtsResult have identical shapes
     return results;
   }
@@ -975,10 +975,10 @@ export class TcvdbMemoryStore implements IMemoryStore {
     return [];
   }
 
-  async searchL0Fts(ftsQuery: string, limit?: number): Promise<L0FtsResult[]> {
-    if (!ftsQuery) return [];
+  async searchL0Fts(query: string, limit?: number): Promise<L0FtsResult[]> {
+    if (!query) return [];
     // Use hybrid search; L0SearchResult and L0FtsResult have identical shapes
-    return this.searchL0HybridAsync({ queryText: ftsQuery, topK: limit });
+    return this.searchL0HybridAsync({ queryText: query, topK: limit });
   }
 
   /**

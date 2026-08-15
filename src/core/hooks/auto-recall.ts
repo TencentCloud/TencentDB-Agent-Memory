@@ -18,7 +18,6 @@ import { readSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
@@ -405,36 +404,33 @@ async function searchByKeyword(
 ): Promise<string[]> {
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
-    const ftsQuery = buildFtsQuery(userText);
-    if (ftsQuery) {
-      logger?.debug?.(`${TAG} [keyword-fts] Using FTS5 BM25 search: query="${ftsQuery}"`);
-      const ftsResults = await vectorStore.searchL1Fts(ftsQuery, maxResults * 2);
-      if (ftsResults.length > 0) {
-        logger?.debug?.(
-          `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
-          ftsResults.map((r) => `id=${r.record_id} score=${r.score.toFixed(6)}`).join(", "),
-        );
-        const filtered = ftsResults
-          .filter((r) => r.score >= threshold)
-          .slice(0, maxResults);
+    logger?.debug?.(`${TAG} [keyword-fts] Using FTS search`);
+    const ftsResults = await vectorStore.searchL1Fts(userText, maxResults * 2);
+    if (ftsResults.length > 0) {
+      logger?.debug?.(
+        `${TAG} [keyword-fts] FTS5 raw results (${ftsResults.length}): ` +
+        ftsResults.map((r) => `id=${r.record_id} score=${r.score.toFixed(6)}`).join(", "),
+      );
+      const filtered = ftsResults
+        .filter((r) => r.score >= threshold)
+        .slice(0, maxResults);
 
-        if (filtered.length > 0) {
-          logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
-        }
-
-        // BM25 absolute scores are unreliable when the document set is very
-        // small (e.g. 1–3 records) because IDF approaches 0.  In that case,
-        // trust FTS5's MATCH + rank ordering and return the top results anyway.
-        if (ftsResults.length <= maxResults) {
-          logger?.debug?.(
-            `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
-            `but document set is small — returning all matched results`,
-          );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
-        }
-        logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
+      if (filtered.length > 0) {
+        logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
+        return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
       }
+
+      // BM25 absolute scores are unreliable when the document set is very
+      // small (e.g. 1–3 records) because IDF approaches 0.  In that case,
+      // trust FTS5's MATCH + rank ordering and return the top results anyway.
+      if (ftsResults.length <= maxResults) {
+        logger?.debug?.(
+          `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
+          `but document set is small — returning all matched results`,
+        );
+        return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+      }
+      logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
     }
   }
 
@@ -528,31 +524,28 @@ async function searchHybrid(
       try {
         // Try FTS5 first
         if (vectorStore.isFtsAvailable()) {
-          const ftsQuery = buildFtsQuery(userText);
-          if (ftsQuery) {
-            const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
-            if (ftsResults.length > 0) {
-              logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
-              // Convert FtsSearchResult to ScoredRecord for RRF merge
-              const records = ftsResults.map((r): ScoredRecord => ({
-                record: {
-                  id: r.record_id,
-                  content: r.content,
-                  type: r.type as MemoryRecord["type"],
-                  priority: r.priority,
-                  scene_name: r.scene_name,
-                  source_message_ids: [],
-                  metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
-                  timestamps: [r.timestamp_str].filter(Boolean),
-                  createdAt: "",
-                  updatedAt: "",
-                  sessionKey: r.session_key,
-                  sessionId: r.session_id,
-                },
-                score: r.score,
-              }));
-              return { records, ms: performance.now() - tStart };
-            }
+          const ftsResults = await vectorStore.searchL1Fts(userText, candidateK);
+          if (ftsResults.length > 0) {
+            logger?.debug?.(`${TAG} [hybrid-keyword-fts] FTS5 found ${ftsResults.length} candidates`);
+            // Convert FtsSearchResult to ScoredRecord for RRF merge
+            const records = ftsResults.map((r): ScoredRecord => ({
+              record: {
+                id: r.record_id,
+                content: r.content,
+                type: r.type as MemoryRecord["type"],
+                priority: r.priority,
+                scene_name: r.scene_name,
+                source_message_ids: [],
+                metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
+                timestamps: [r.timestamp_str].filter(Boolean),
+                createdAt: "",
+                updatedAt: "",
+                sessionKey: r.session_key,
+                sessionId: r.session_id,
+              },
+              score: r.score,
+            }));
+            return { records, ms: performance.now() - tStart };
           }
         }
         // FTS5 not available or returned no results — skip in-memory fallback
