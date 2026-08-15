@@ -26,6 +26,7 @@ import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type {
   IMemoryStore,
+  CountOptions,
   StoreCapabilities,
   L0Record,
   L1SearchResult,
@@ -1335,8 +1336,13 @@ export class VectorStore implements IMemoryStore {
   /**
    * Get the total number of records in the store.
    */
-  countL1(): number {
-    if (this.degraded) return 0;
+  countL1(options: CountOptions = {}): number {
+    if (this.degraded) {
+      if (options.strict) {
+        throw new Error("Cannot count L1 records: store is degraded");
+      }
+      return 0;
+    }
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l1_records")
@@ -1345,8 +1351,9 @@ export class VectorStore implements IMemoryStore {
       return row.cnt;
     } catch (err) {
       this.logger?.warn(
-        `${TAG} count failed (non-fatal, returning 0): ${err instanceof Error ? err.message : String(err)}`,
+        `${TAG} count failed${options.strict ? "" : " (non-fatal, returning 0)"}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      if (options.strict) throw err;
       return 0;
     }
   }
@@ -1742,8 +1749,13 @@ export class VectorStore implements IMemoryStore {
    *
    * **Fault-tolerant**: returns 0 on failure.
    */
-  countL0(): number {
-    if (this.degraded) return 0;
+  countL0(options: CountOptions = {}): number {
+    if (this.degraded) {
+      if (options.strict) {
+        throw new Error("Cannot count L0 records: store is degraded");
+      }
+      return 0;
+    }
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l0_conversations")
@@ -1752,8 +1764,9 @@ export class VectorStore implements IMemoryStore {
       return row.cnt;
     } catch (err) {
       this.logger?.warn(
-        `${TAG} countL0 failed (non-fatal, returning 0): ${err instanceof Error ? err.message : String(err)}`,
+        `${TAG} countL0 failed${options.strict ? "" : " (non-fatal, returning 0)"}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      if (options.strict) throw err;
       return 0;
     }
   }

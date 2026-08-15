@@ -104,6 +104,8 @@ export class TdaiCore {
    * (effectively a no-op).
    */
   private schedulerStartPromise?: Promise<void>;
+  /** One-shot gate that repairs checkpoint counters before the first capture. */
+  private checkpointRecalibrationPromise?: Promise<void>;
   private storeReady?: Promise<void>;
 
   /**
@@ -264,6 +266,7 @@ export class TdaiCore {
    */
   async handleTurnCommitted(turn: CompletedTurn): Promise<CaptureResult> {
     await this.storeReady?.catch(() => {});
+    await this.ensureCheckpointRecalibrated();
     await this.ensureSchedulerStarted();
 
     return performAutoCapture({
@@ -498,6 +501,32 @@ export class TdaiCore {
     });
 
     this.logger.debug?.(`${TAG} Pipeline runners wired`);
+  }
+
+  private ensureCheckpointRecalibrated(): Promise<void> {
+    if (this.checkpointRecalibrationPromise) {
+      return this.checkpointRecalibrationPromise;
+    }
+
+    const source = this.vectorStore;
+    if (!source || source.isDegraded()) {
+      this.logger.debug?.(`${TAG} Checkpoint recalibration skipped: store unavailable`);
+      this.checkpointRecalibrationPromise = Promise.resolve();
+      return this.checkpointRecalibrationPromise;
+    }
+
+    const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+    this.checkpointRecalibrationPromise = checkpoint
+      .recalibrate(source)
+      .then(() => undefined)
+      .catch((err) => {
+        this.logger.warn(
+          `${TAG} Checkpoint recalibration failed; will retry before the next capture: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        this.checkpointRecalibrationPromise = undefined;
+      });
+
+    return this.checkpointRecalibrationPromise;
   }
 
   private ensureSchedulerStarted(): Promise<void> {

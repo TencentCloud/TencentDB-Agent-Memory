@@ -144,6 +144,25 @@ export interface CheckpointLogger {
   warn?(msg: string): void;
 }
 
+/** Live store counts used to repair checkpoint drift at startup. */
+export interface CheckpointCountSource {
+  countL0(options?: { strict?: boolean }): number | Promise<number>;
+  countL1(options?: { strict?: boolean }): number | Promise<number>;
+}
+
+export interface RecalibrationResult {
+  l0: { before: number; observed: number; after: number };
+  l1: { before: number; observed: number; after: number };
+  changed: boolean;
+}
+
+function validateObservedCount(value: number, label: "L0" | "L1"): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid ${label} count from store: ${String(value)}`);
+  }
+  return value;
+}
+
 const noopLogger: CheckpointLogger = { info() {} };
 
 // ============================
@@ -449,8 +468,9 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
-   * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
+   * L0 record count is incremented by `messageCount` inside the lock when
+   * messages are captured. This keeps the checkpoint aligned with the L0
+   * store row count used by startup recalibration.
    *
    * @param sessionKey   Per-session identifier
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
@@ -479,10 +499,56 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        // Count persisted L0 message rows, not capture callbacks.
+        cp.l0_conversations_count += result.messageCount;
       }
     });
+  }
+
+  // ============================
+  // Startup recalibration (issue #157)
+  // ============================
+
+  /**
+   * Reconcile incremented counters with live store rows before capture starts.
+   *
+   * Store reads happen while holding the same checkpoint lock used by capture
+   * and L1 completion. This method is intentionally a startup operation: the
+   * caller must run it before starting pipeline work.
+   *
+   * Strict counts distinguish a legitimately empty store from a read failure:
+   * zero is applied, while failures and invalid, negative, fractional, or
+   * unsafe counts abort the mutation and leave the checkpoint unchanged.
+   */
+  async recalibrate(source: CheckpointCountSource): Promise<RecalibrationResult> {
+    let result: RecalibrationResult | undefined;
+
+    await this.mutate(async (cp) => {
+      const [l0Value, l1Value] = await Promise.all([
+        source.countL0({ strict: true }),
+        source.countL1({ strict: true }),
+      ]);
+      const observedL0 = validateObservedCount(l0Value, "L0");
+      const observedL1 = validateObservedCount(l1Value, "L1");
+      const beforeL0 = cp.l0_conversations_count;
+      const beforeL1 = cp.total_memories_extracted;
+
+      cp.l0_conversations_count = observedL0;
+      cp.total_memories_extracted = observedL1;
+      result = {
+        l0: { before: beforeL0, observed: observedL0, after: observedL0 },
+        l1: { before: beforeL1, observed: observedL1, after: observedL1 },
+        changed: beforeL0 !== observedL0 || beforeL1 !== observedL1,
+      };
+    });
+
+    if (!result) throw new Error("Checkpoint recalibration did not produce a result");
+    this.logger.info(
+      "[checkpoint] recalibrate: l0 " + result.l0.before + "→" + result.l0.after +
+      ", l1 " + result.l1.before + "→" + result.l1.after +
+      (result.changed ? "" : " (no drift)"),
+    );
+    return result;
   }
 
 }

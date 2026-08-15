@@ -15,6 +15,7 @@ import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type {
   IMemoryStore,
+  CountOptions,
   StoreCapabilities,
   StoreInitResult,
   L1SearchResult,
@@ -555,13 +556,17 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L1 Read Operations ───────────────────────────────────
 
-  async countL1(): Promise<number> {
+  async countL1(options: CountOptions = {}): Promise<number> {
     try {
       await this._ensureInit();
-      if (this.degraded) return 0;
+      if (this.degraded) {
+        if (options.strict) throw new Error("Cannot count L1 records: store is degraded");
+        return 0;
+      }
       return await this.client.count(this.l1Collection);
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-count] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      if (options.strict) throw err;
       return 0;
     }
   }
@@ -857,13 +862,17 @@ export class TcvdbMemoryStore implements IMemoryStore {
 
   // ── L0 Read Operations ───────────────────────────────────
 
-  async countL0(): Promise<number> {
+  async countL0(options: CountOptions = {}): Promise<number> {
     try {
       await this._ensureInit();
-      if (this.degraded) return 0;
+      if (this.degraded) {
+        if (options.strict) throw new Error("Cannot count L0 records: store is degraded");
+        return 0;
+      }
       return await this.client.count(this.l0Collection);
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-count] FAILED: ${err instanceof Error ? err.message : String(err)}`);
+      if (options.strict) throw err;
       return 0;
     }
   }
