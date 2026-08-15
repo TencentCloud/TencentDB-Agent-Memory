@@ -36,6 +36,8 @@ import { performAutoRecall } from "./hooks/auto-recall.js";
 import { performAutoCapture } from "./hooks/auto-capture.js";
 import { executeMemorySearch, formatSearchResponse } from "./tools/memory-search.js";
 import { executeConversationSearch, formatConversationSearchResponse } from "./tools/conversation-search.js";
+import { countL0JsonlStats } from "./conversation/l0-recorder.js";
+import { countL1JsonlLines, countL1JsonlLinesSince } from "./record/l1-reader.js";
 import {
   initDataDirectories,
   initStores,
@@ -48,6 +50,7 @@ import {
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
+import type { CheckpointRecalibrationResult } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 
@@ -144,7 +147,8 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Initializing TDAI Core: dataDir=${this.dataDir}`);
     initDataDirectories(this.dataDir);
 
-    // Initialize stores (async)
+    // Initialize stores. Recalibration below waits for this promise so startup
+    // counters are synced before the first capture can start the scheduler.
     this.storeReady = this.initStores();
 
     // Create pipeline manager (sync — does not need store)
@@ -160,6 +164,11 @@ export class TdaiCore {
         });
     }
 
+    try {
+      await this.recalibrateCheckpoint("startup");
+    } catch (err) {
+      this.logger.warn(`${TAG} Startup checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    }
     this.logger.debug?.(`${TAG} TDAI Core initialized`);
   }
 
@@ -390,6 +399,59 @@ export class TdaiCore {
   /** Whether the scheduler has been started (or is currently starting). */
   isSchedulerStarted(): boolean {
     return this.schedulerStartPromise !== undefined;
+  }
+
+  /**
+   * Recount durable L0/L1 data and overwrite checkpoint aggregate counters.
+   *
+   * Per-session runner cursors and pipeline states are deliberately left
+   * untouched. Those cursors drive incremental extraction correctness; the
+   * recalibrated fields are aggregate status and persona-threshold inputs.
+   */
+  async recalibrateCheckpoint(reason = "manual"): Promise<CheckpointRecalibrationResult> {
+    await this.storeReady?.catch(() => {});
+
+    const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+    const cp = await checkpoint.read();
+
+    const [l0Stats, totalMemoriesExtracted, memoriesSinceLastPersona] = await Promise.all([
+      countL0JsonlStats(this.dataDir, this.logger),
+      countL1JsonlLines(this.dataDir, this.logger),
+      countL1JsonlLinesSince(this.dataDir, cp.last_persona_time, this.logger),
+    ]);
+
+    let totalProcessed = l0Stats.messages;
+    const vectorStore = this.vectorStore;
+    if (vectorStore && !vectorStore.isDegraded()) {
+      const storeL0Count = await vectorStore.countL0();
+      // Store count is authoritative when available. If it reports empty while
+      // JSONL still has rows, keep the file count to avoid wiping counters
+      // during partial migrations or degraded bootstrap.
+      if (storeL0Count > 0 || l0Stats.messages === 0) {
+        totalProcessed = storeL0Count;
+      }
+    }
+
+    const result = await checkpoint.recalibrate({
+      total_processed: totalProcessed,
+      l0_conversations_count: l0Stats.captures,
+      total_memories_extracted: totalMemoriesExtracted,
+      memories_since_last_persona: memoriesSinceLastPersona,
+    });
+
+    if (result.changed) {
+      this.logger.info(
+        `${TAG} Checkpoint recalibrated (${reason}): ` +
+        `total_processed ${result.before.total_processed}->${result.after.total_processed}, ` +
+        `l0_conversations_count ${result.before.l0_conversations_count}->${result.after.l0_conversations_count}, ` +
+        `total_memories_extracted ${result.before.total_memories_extracted}->${result.after.total_memories_extracted}, ` +
+        `memories_since_last_persona ${result.before.memories_since_last_persona}->${result.after.memories_since_last_persona}`,
+      );
+    } else {
+      this.logger.debug?.(`${TAG} Checkpoint recalibration (${reason}) found no drift`);
+    }
+
+    return result;
   }
 
   /** Set the instance ID for metrics (may be resolved asynchronously). */
