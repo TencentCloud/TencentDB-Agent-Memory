@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 420" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <rect width="680" height="420" fill="#ffffff"/>
+  <defs>
+    <marker id="arw" markerWidth="10" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#556"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="15" width="560" height="52" rx="6" fill="#eef3ff" stroke="#9fb4d8" stroke-width="1.5"/>
+  <text x="36" y="38" font-weight="bold" fill="#33476b">1 · Session file updated</text>
+  <text x="36" y="57" fill="#51648a">Codex JSONL: a new user message is appended</text>
+  <line x1="300" y1="67" x2="300" y2="79" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="79" width="560" height="52" rx="6" fill="#eaf7ea" stroke="#8cc08c" stroke-width="1.5"/>
+  <text x="36" y="102" font-weight="bold" fill="#2f5a2f">2 · Adapter parses message</text>
+  <text x="36" y="121" fill="#3f6b3f">CodexAdapter.parseNewMessages() → role="user"</text>
+  <line x1="300" y1="131" x2="300" y2="143" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="143" width="560" height="52" rx="6" fill="#fff7e0" stroke="#e0bf66" stroke-width="1.5"/>
+  <text x="36" y="166" font-weight="bold" fill="#7a5c00">3 · Session Watcher detects turn</text>
+  <text x="36" y="185" fill="#8a6a00">detectTurns() → a new user turn is found</text>
+  <line x1="300" y1="195" x2="300" y2="207" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="207" width="560" height="52" rx="6" fill="#f5ecf7" stroke="#c09bd0" stroke-width="1.5"/>
+  <text x="36" y="230" font-weight="bold" fill="#5e3a6e">4 · Gateway /recall</text>
+  <text x="36" y="249" fill="#6e4a7e">POST /recall { query, session_key }</text>
+  <line x1="300" y1="259" x2="300" y2="271" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="271" width="560" height="52" rx="6" fill="#e3f4fd" stroke="#6aa8d8" stroke-width="1.5"/>
+  <text x="36" y="294" font-weight="bold" fill="#1f4f7a">5 · TdaiCore builds recall context</text>
+  <text x="36" y="313" fill="#2f5f8a">L1 memory search + L3 persona → recall payload</text>
+  <line x1="300" y1="323" x2="300" y2="335" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="335" width="560" height="58" rx="6" fill="#f0f0f0" stroke="#bbbbbb" stroke-width="1.5"/>
+  <text x="36" y="358" font-weight="bold" fill="#444">6 · Write context + Agent reads</text>
+  <text x="36" y="377" fill="#666">write ~/.agent-memory/recall/{session}.md</text>
+  <text x="36" y="392" fill="#666">agent reads it before responding (system prompt instruction)</text>
+</svg>
