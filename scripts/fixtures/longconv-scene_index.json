@@ -1,0 +1,12 @@
+[
+  {
+    "name": "task-tracker-backend",
+    "description": "任务管理应用后端开发，使用 FastAPI + SQLAlchemy + PostgreSQL，包含 Task CRUD API 和 JWT 认证",
+    "path": "scene_blocks/task-tracker-backend.md"
+  },
+  {
+    "name": "task-tracker-frontend",
+    "description": "任务管理应用前端开发，使用 React + TypeScript + Vite + Zustand，包含登录、任务列表、创建/编辑/删除功能",
+    "path": "scene_blocks/task-tracker-frontend.md"
+  }
+]
