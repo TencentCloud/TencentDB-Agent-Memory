@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -113,8 +114,10 @@ export class LocalMemoryCleaner {
       // ── Pre-delete: count totals and decide whether to proceed ──
       let totalL0 = 0;
       let totalL1 = 0;
-      try { totalL0 = await vectorStore.countL0(); } catch { /* non-fatal */ }
-      try { totalL1 = await vectorStore.countL1(); } catch { /* non-fatal */ }
+      let countedL0 = true;
+      let countedL1 = true;
+      try { totalL0 = await vectorStore.countL0(); } catch { countedL0 = false; }
+      try { totalL1 = await vectorStore.countL1(); } catch { countedL1 = false; }
 
       this.opts.logger?.info(
         `${TAG} [Pre-delete] cutoffIso=${cutoffIso}, retentionDays=${retentionDays}, totalL0=${totalL0}, totalL1=${totalL1}`,
@@ -169,6 +172,14 @@ export class LocalMemoryCleaner {
       const durationMs = Date.now() - startMs;
       const remainingL0 = totalL0 - removedL0;
       const remainingL1 = totalL1 - removedL1;
+      const actualL1 = await this.countJsonlLines(path.join(this.opts.baseDir, L1_DIR_NAME));
+      if (countedL0 || countedL1) {
+        await new CheckpointManager(this.opts.baseDir, this.opts.logger).reconcileDataCounters({
+          ...(countedL0 ? { l0ConversationsCount: remainingL0 } : {}),
+          ...(countedL1 ? { totalMemoriesExtracted: actualL1 } : {}),
+          reason: `memory-cleaner cutoff=${cutoffIso}`,
+        });
+      }
       const summary = {
         event: "cleaner_summary",
         cutoffIso,
@@ -275,6 +286,21 @@ export class LocalMemoryCleaner {
     }
 
     return stats;
+  }
+
+  private async countJsonlLines(dirPath: string): Promise<number> {
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      let count = 0;
+      for (const entry of entries) {
+        if (!entry.isFile() || !isJsonLikeFile(entry.name)) continue;
+        const raw = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+        count += raw.split("\n").filter((line) => line.trim()).length;
+      }
+      return count;
+    } catch {
+      return 0;
+    }
   }
 }
 
