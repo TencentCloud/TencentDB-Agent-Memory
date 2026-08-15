@@ -170,7 +170,7 @@ const routeTable: Record<string, Handler> = {
     return s.updateAgentForCaller(agent_id, patch, c);
   }),
   [`${V3_PREFIX}/agent/delete`]: bind(S.agentDeleteSchema, (d, c, s) => s.deleteAgentsForCaller(d.agent_ids, c)),
-  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/agent/list`]: bind(S.agentListSchema, async (d, c, s) => {
     const pagination = resolvePagination(d);
     if (d.team_id) {
       // team_id 分支：owner_user_id 若同传则叠加过滤（"团队内我 owner 的 agent"），
@@ -179,7 +179,7 @@ const routeTable: Record<string, Handler> = {
       if (d.status) filter.status = d.status;
       if (d.owner_user_id) filter.owner_user_id = d.owner_user_id;
       if (d.name) filter.name = d.name;
-      return s.listAgentsByTeam(d.team_id, pagination, filter);
+      return s.listAgentsByTeamForCaller(d.team_id, c, pagination, filter);
     }
     const ownerId = d.owner_user_id ?? await resolveUserId(s, { user_key: d.owner_user_key });
     const filter2: AgentFilter = {};
@@ -197,7 +197,7 @@ const routeTable: Record<string, Handler> = {
     return s.updateTaskForCaller(task_id, patch, c);
   }),
   [`${V3_PREFIX}/task/delete`]: bind(S.taskDeleteSchema, (d, c, s) => s.deleteTasksForCaller(d.task_ids, c)),
-  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, _c, s) => {
+  [`${V3_PREFIX}/task/list`]: bind(S.taskListSchema, async (d, c, s) => {
     const filter: TaskFilter = {};
     if (d.status) filter.status = d.status;
     if (d.title) filter.title = d.title;
@@ -207,7 +207,7 @@ const routeTable: Record<string, Handler> = {
       filter.creator_user_id = await resolveUserId(s, { user_key: d.creator_user_key });
     }
     const pagination = resolvePagination(d);
-    if (d.team_id) return s.listTasksByTeam(d.team_id, pagination, filter);
+    if (d.team_id) return s.listTasksByTeamForCaller(d.team_id, c, pagination, filter);
     return s.listTasks(filter, pagination);
   }),
   [`${V3_PREFIX}/task/archive`]: bind(S.taskArchiveSchema, (d, c, s) => s.archiveTaskForCaller(d.task_id, c)),
@@ -221,8 +221,8 @@ const routeTable: Record<string, Handler> = {
     await s.unlinkTaskAgentForCaller(d.task_id, d.agent_id, c);
     return OK;
   }),
-  [`${V3_PREFIX}/task-agent/list`]: bind(S.taskAgentListSchema, (d, _c, s) =>
-    s.listTaskAgents(d.task_id, resolvePagination(d)),
+  [`${V3_PREFIX}/task-agent/list`]: bind(S.taskAgentListSchema, (d, c, s) =>
+    s.listTaskAgentsForCaller(d.task_id, c, resolvePagination(d)),
   ),
 
   // ParticipationLog
