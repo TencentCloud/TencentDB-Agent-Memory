@@ -6,8 +6,8 @@
  *   - 鉴权由前端 sessionStorage 缓存 instance_id + user_key（见 lib/panelSession.ts），
  *     每次请求注入 Header X-Tdai-Service-Id + X-Tdai-User-Key（auth/verify 除外，
  *     该接口 user_key 只放 body，不放 Header）；
- *   - agent-fixed-asset/* 不适用通用「资产」UI（PANEL_CAPABILITIES.assets 为 false），
- *     skill 挂载走 v3 数据面 fork（skillApi.forkToAgent）；
+ *   - agent-fixed-asset/list-with-detail 已供 Skill 固定资产页读取；其余 action
+ *     不适用通用「资产」UI（PANEL_CAPABILITIES.assets 为 false）；
  *   - 所有函数返回 Promise<T>，失败抛 ApiError。
  */
 import { getPanelSession, clearPanelSession } from '../panelSession';
@@ -16,7 +16,7 @@ import type { MetaEnvelope, PaginatedResult, PublicUser } from './types';
 
 /**
  * 通用「资产」能力开关。
- * UI 消费 assetsApi / agentsApi.getAssets|getFixedAssets|setFixedAssets 前应先判断
+ * UI 消费 assetsApi / agentsApi.getFixedAssets|setFixedAssets 前应先判断
  * `PANEL_CAPABILITIES.assets`，为 false 时展示"暂未开放"占位，不要发起注定 501 的请求。
  */
 export const PANEL_CAPABILITIES = {

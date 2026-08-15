@@ -226,7 +226,7 @@ components:
             request_id: req-example
             data: null
     NotInScope:
-      description: 新面板一期禁用的 action 域（asset / agent-fixed-asset）
+      description: 未通过面板公开代理转发的 meta action
       content:
         application/json:
           schema:

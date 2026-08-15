@@ -1397,7 +1397,7 @@ paths:
       tags: ["Meta · Agent Fixed Asset"]
       operationId: meta_agent-fixed-asset_list-with-detail
       summary: agent-fixed-asset/list-with-detail
-      description: "新面板一期 **不转发** 至内核；Control 返回 HTTP 501、`message=NOT_IN_SCOPE`。"
+      description: "分页 list；body 可选 limit（默认 20，最大 100）、offset（默认 0）。默认 created_at DESC（v3.1.2+；team-member 为 joined_at DESC）。须 Header 双凭证。"
       security: []
       parameters:
         - $ref: '#/components/parameters/TdaiServiceId'
@@ -1416,8 +1416,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiResponse'
-        '501':
-          $ref: "#/components/responses/NotInScope"
         '400':
           $ref: "#/components/responses/ControlBadRequest"
         '502':
@@ -1728,7 +1726,7 @@ components:
             request_id: req-example
             data: null
     NotInScope:
-      description: 新面板一期禁用的 action 域（asset / agent-fixed-asset）
+      description: 未通过面板公开代理转发的 meta action
       content:
         application/json:
           schema:
