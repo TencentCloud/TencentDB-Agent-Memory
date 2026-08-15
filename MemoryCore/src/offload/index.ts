@@ -2150,11 +2150,20 @@ class OffloadContextEngine {
     const logger = this._logger;
     logger.debug?.(`[context-offload] >>> CE.compact CALLED: sessionKey=${params.sessionKey ?? "?"}`);
     let stateManager: OffloadStateManager | undefined = params._offloadManager;
-    if (!stateManager && params.sessionKey) {
-      try {
-        const entry = await this._sessions.resolveIfAllowed(params.sessionKey, params.sessionId);
-        if (entry) stateManager = entry.manager;
-      } catch { /* ignore */ }
+    if (!stateManager) {
+      // OpenClaw's /compact calls compact() without sessionKey (only sessionId
+      // + sessionTarget) — fall back to those so manual compaction works
+      // (issue #862).
+      const effectiveSessionKey = params.sessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
+      if (effectiveSessionKey) {
+        try {
+          const entry = await this._sessions.resolveIfAllowed(effectiveSessionKey, params.sessionId);
+          if (entry) {
+            stateManager = entry.manager;
+            params._offloadManager = entry.manager; // cache for subsequent calls
+          }
+        } catch { /* ignore */ }
+      }
     }
     const pCfg = this._pCfg;
     logger.debug?.(`[context-offload] >>> compact START: params=${JSON.stringify(params ?? {}).slice(0, 500)}`);
@@ -2308,3 +2317,4 @@ export const _testExports = {
   simpleHash,
   OffloadContextEngine,
 };
+
