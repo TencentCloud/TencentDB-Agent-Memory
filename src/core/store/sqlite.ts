@@ -335,6 +335,11 @@ export class VectorStore implements IMemoryStore {
   private readonly dimensions: number;
   private readonly logger?: Logger;
 
+  /** FTS5-Verfügbarkeit für Keyword-Search (Health-Exposure, Fix #679). */
+  get keywordSearchAvailable(): boolean {
+    return this.ftsAvailable;
+  }
+
   /** @see IMemoryStore.supportsDeferredEmbedding */
   readonly supportsDeferredEmbedding = true;
 
