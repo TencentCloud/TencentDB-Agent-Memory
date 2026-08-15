@@ -13,7 +13,10 @@
 export type {
   IStorageBackend,
   ICredentialProvider,
+  IGitCredentialProvider,
+  GitCredential,
   StorageBackendConfig,
+  GitStorageBackendConfig,
   StorageObject,
   PutObjectOptions,
   ListObjectsOptions,
@@ -28,6 +31,13 @@ export { StoragePaths } from "./types.js";
 export { LocalStorageBackend } from "./local-backend.js";
 export type { LocalStorageBackendOptions } from "./local-backend.js";
 export { StorageAdapter } from "./adapter.js";
+export { resolveSafeRelativePath } from "./path-safety.js";
+
+// Git backend (experimental — see docs/rfc/git-storage-backend.md). No
+// optional npm dependency (shells out to the system `git` binary), so unlike
+// COS it doesn't need dynamic import — always available like local.
+export { GitStorageBackend, buildBranchName } from "./git-backend.js";
+export type { GitStorageBackendOptions, GitSyncStatus, GitSyncSummary, BranchNameSeed } from "./git-backend.js";
 
 // Generic credential primitives (no cloud-vendor dependency)
 export {
@@ -43,6 +53,14 @@ export type {
   CredentialFetcher,
   CachedCredentialProviderOptions,
 } from "./credential-provider.js";
+export {
+  StaticGitCredentialProvider,
+  CachedGitCredentialProvider,
+} from "./git-credential.js";
+export type {
+  GitCredentialFetcher,
+  CachedGitCredentialProviderOptions,
+} from "./git-credential.js";
 
 // Factory (dynamically loads optional COS backend when requested)
 export {

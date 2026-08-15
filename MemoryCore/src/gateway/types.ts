@@ -15,6 +15,14 @@ export interface GatewayErrorResponse {
 // /health
 // ============================
 
+/** Aggregate sync status across all live GitStorageBackend instances (experimental — see docs/rfc/git-storage-backend.md). Only present when at least one instance has resolved a git-backed StorageAdapter. */
+export interface GitStorageHealthSummary {
+  enabledSpaceCount: number;
+  unsyncedSpaceCount: number;
+  oldestPendingPushAgeMs: number | null;
+  worstStatus: "clean" | "dirty-local" | "pushing" | "replaying" | "push-failed";
+}
+
 export interface HealthResponse {
   status: "ok" | "degraded";
   version: string;
@@ -28,6 +36,7 @@ export interface HealthResponse {
     timerScanner: unknown;
     pipelineWorker: unknown;
     stateBackend: string;
+    gitStorage?: GitStorageHealthSummary;
   };
 }
 

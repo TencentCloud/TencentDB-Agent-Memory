@@ -67,6 +67,27 @@ jobs:
           path: "MemoryCore/*.tgz"
           retention-days: 7
 
+  # ── 3. Unit tests ───────────────────────────────────────────
+  test:
+    name: Unit Tests
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        with:
+          path: MemoryCore/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+
+      - name: npm test
+        run: npm test
+
   # ── 5. Plugin manifest validation ──────────────────────────
   manifest:
     name: Manifest

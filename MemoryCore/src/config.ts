@@ -182,6 +182,51 @@ export interface TcvdbConfig {
 /** Storage backend type. */
 export type StoreBackend = "sqlite" | "tcvdb";
 
+/**
+ * File storage backend selection ("local" | "cos" | "git").
+ *
+ * "auto" (default) preserves today's behavior exactly: the gateway infers
+ * local-vs-COS from `deployMode` + whether a shared COS client is configured,
+ * the same way it always has. Set this explicitly only to opt into "git", or
+ * to force "local"/"cos" instead of the runtime inference.
+ */
+export type FileStorageBackend = "auto" | "local" | "cos" | "git";
+
+/**
+ * Git file storage backend configuration (experimental — see
+ * docs/rfc/git-storage-backend.md). Only read when fileStorageBackend="git".
+ */
+export interface GitStorageConfig {
+  /** Local clone root; one subdirectory per memory-space branch. */
+  localRootDir: string;
+  /** Private remote URL (https://, git@ ssh, or file:// for local/testing). */
+  remoteUrl: string;
+  /**
+   * Opaque reference to a secret resolved externally by the host wiring
+   * layer into an IGitCredentialProvider — never a plaintext token here.
+   */
+  credentialRef: string;
+  /** Auth transport: "http-token" (default) or "ssh". */
+  authMethod: "http-token" | "ssh";
+  /** SSH private key path; required when authMethod="ssh". */
+  sshKeyPath?: string;
+  /** Debounce window for batching writes into one commit, in ms. 0 = commit per call. */
+  batchWindowMs: number;
+  /** Hard cap on debounce delay under sustained write load, in ms. */
+  maxBatchDelayMs: number;
+  /** Distributed lock TTL for the single-writer guarantee, in ms. */
+  lockTtlMs: number;
+  /** Max push-rejected replay attempts before surfacing push-failed. */
+  maxPushRetries: number;
+  /**
+   * Crash-recovery strategy on first use of a space after process start:
+   * "manual" (default) refuses to auto-flush a space with unknown dirt in
+   * its worktree (only known WAL ops are replayed); "auto-wal-only" opt-in
+   * discards unknown dirt via `git checkout --` before replaying.
+   */
+  recoveryMode: "manual" | "auto-wal-only";
+}
+
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
   /** Enable reporting (default: true) */
@@ -321,6 +366,10 @@ export interface MemoryTdaiConfig {
   storeBackend: StoreBackend;
   /** Tencent Cloud VectorDB configuration (required when storeBackend = "tcvdb") */
   tcvdb: TcvdbConfig;
+  /** File storage backend selection: "auto" (default, preserves current runtime inference) | "local" | "cos" | "git" */
+  fileStorageBackend: FileStorageBackend;
+  /** Git file storage backend configuration (only read when fileStorageBackend = "git") */
+  git: GitStorageConfig;
   /** BM25 sparse vector encoding (local @tencentdb-agent-memory/tcvdb-text) */
   bm25: BM25Config;
   /** Local JSONL cleanup settings */
@@ -482,6 +531,21 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
 
+  // --- File storage backend selection ---
+  const fileStorageBackendRaw = str(c, "fileStorageBackend") ?? "auto";
+  const fileStorageBackend: FileStorageBackend =
+    (["auto", "local", "cos", "git"] as const).includes(fileStorageBackendRaw as FileStorageBackend)
+      ? (fileStorageBackendRaw as FileStorageBackend)
+      : "auto";
+
+  // --- Git storage backend config (only relevant when fileStorageBackend="git") ---
+  const gitGroup = obj(c, "git");
+  const gitAuthMethodRaw = str(gitGroup, "authMethod") ?? "http-token";
+  const gitAuthMethod: GitStorageConfig["authMethod"] = gitAuthMethodRaw === "ssh" ? "ssh" : "http-token";
+  const gitRecoveryModeRaw = str(gitGroup, "recoveryMode") ?? "manual";
+  const gitRecoveryMode: GitStorageConfig["recoveryMode"] =
+    gitRecoveryModeRaw === "auto-wal-only" ? "auto-wal-only" : "manual";
+
   const memoryCleanup: MemoryCleanupConfig = {
     retentionDays,
     enabled: retentionDays != null,
@@ -605,6 +669,19 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       embeddingModel: str(tcvdbGroup, "embeddingModel") ?? "bge-large-zh",
       timeout: num(tcvdbGroup, "timeout") ?? 10000,
       caPemPath: str(tcvdbGroup, "caPemPath") || undefined,
+    },
+    fileStorageBackend,
+    git: {
+      localRootDir: str(gitGroup, "localRootDir") ?? "./data/git-storage",
+      remoteUrl: str(gitGroup, "remoteUrl") ?? "",
+      credentialRef: str(gitGroup, "credentialRef") ?? "",
+      authMethod: gitAuthMethod,
+      sshKeyPath: optStr(gitGroup, "sshKeyPath"),
+      batchWindowMs: num(gitGroup, "batchWindowMs") ?? 2000,
+      maxBatchDelayMs: num(gitGroup, "maxBatchDelayMs") ?? 10000,
+      lockTtlMs: num(gitGroup, "lockTtlMs") ?? 30000,
+      maxPushRetries: num(gitGroup, "maxPushRetries") ?? 5,
+      recoveryMode: gitRecoveryMode,
     },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
