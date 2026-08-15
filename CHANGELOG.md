@@ -44,6 +44,9 @@
 
 ### 🐛 修复
 
+#### 数据一致性
+- **Checkpoint 计数器只增不减，cleanup 后与真实数据漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：`recall_checkpoint.json` 中的 `total_memories_extracted` 和 `l0_conversations_count` 仅在 L0 capture / L1 完成时递增，`memory-cleaner` 清理 JSONL 分片或 SQLite 过期行、以及手工编辑 checkpoint 后从不下调；结果计数长期偏高，导致 `memories_since_last_persona` / `total_processed` 触发 L3 persona 生成阈值时机错乱，状态查询也持续高报。新增 `CheckpointManager.recalibrate(dataDir, store?)`：JSONL (`records/*.jsonl`) 为 L1 数据源、可选 store probe (`countL0` / `countL1`) 为 L0 数据源；`MAX(jsonl, dbL1)` 容忍两侧未同步；**只下调不上调**（避免 crash 前未 flush 的写入落盘后被双计）；对 `memories_since_last_persona` 做 clamp 防止 persona 幻触发。`TdaiCore.initialize()` 中在 `storeReady` 后 fire-and-forget 调用一次，best-effort，永不阻塞启动。12 组 vitest 覆盖 issue 复现、downward 修正、no-grow 保护、probe 抛错回退、malformed JSONL 跳过、并发写入锁。
+
 #### 数据安全 / 数据隔离
 - **L2 LLM 提取失败导致 `scene_blocks/` 被清空 / 半写入** ([#88](https://github.com/Tencent/TencentDB-Agent-Memory/issues/88))：Phase 1 已对 `scene_blocks/` 做完整快照，但 LLM 抛错时 `catch` 直接 `return`，沙箱里的部分写入 / 删除不会回滚，后续 recall 因此看不到场景导航，降级为碎片召回。新增 `BackupManager.findLatestBackup` + `restoreLatestDirectory`，在 LLM 失败时自动从最新备份恢复；采用 fail-soft 设计：无备份时不动目标目录，恢复过程自身的错误也不会替换原始 LLM 错误。
 - **Cleaner 安全加固**：`computeCutoffMsByLocalDay` 拒绝无效 cutoff（未来时间 / 距今不足 24h）；SQLite 与 TCVDB 在 `expired/total > 80%` 时阻止删除；`runOnce` 增加最小保留护栏（L0:50 / L1:20）并产出 `cleaner_summary` JSON 审计日志；新增 `__tests__/cleaner/verify-cleaner-safety.ts` E2E 校验。
