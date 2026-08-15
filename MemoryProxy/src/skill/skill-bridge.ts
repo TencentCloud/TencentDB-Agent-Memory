@@ -677,16 +677,35 @@ export function createSkillBridgeHandler(
           return envelope(50001, `${TAG} team search misconfigured: session has no user_key`, 500);
         }
 
-        // Whitelist 三路并行（见 docs/design/2026-08-10-skill-search-scope-fix.md §4）：
+        // Whitelist 两路并行：
         //   A = meta list-accessible(visibility='team') — team-shared skill
         //   B = core /v3/skill/list(agent 自有全量)   — 含 private
-        //   C = core /v3/skill/listing                — 本会话已注入
-        // whitelist = (A ∪ B) − C
+        // whitelist = A ∪ B
         //
-        // 失败降级策略（三路各自 try/catch）：
+        // 曾经还有第三路 C = core /v3/skill/listing，试图扣掉"本会话已注入"的
+        // skill 以避免 skill_search 重复出现已经在 <available_skills> 里的条目。
+        // 但 C 是"当前时刻"的实时 listing，而 <available_skills> 是
+        // SkillInjector 在 session_init 时刻打的快照（cacheStrategy:
+        // "session_init"，见 skill-injector.ts）——两者在会话期间会分叉：
+        // 会话初始化之后才创建/共享的 skill 会被 C 实时捕获、当作"已注入"从
+        // whitelist 里扣掉，但它从未真正出现在这个会话的 <available_skills>
+        // 里。结果是这类 skill 既不在 prompt 里，也搜不到，直到用户开新会话
+        // 才能用上（见 issue #1006，日志 `merged=0` 稳定复现）。
+        //
+        // 去掉 C：换来的代价是 skill_search 偶尔会返回一个已经在
+        // <available_skills> 里的 skill（轻微冗余，LLM 看到重复条目，不是
+        // 错误）；换到的收益是消灭一个永久性的不可发现盲区。要精确实现"只
+        // 扣掉本会话真正注入的 skill"，需要 SkillInjector 在 prewarm 时把
+        // 实际注入的 skill id 列表（而不是当前只存的 count）落进
+        // HookCacheRepo，再让这里去读那份 session-init 快照而不是实时查
+        // listing——这是更彻底的修法，但要跨两个模块、两套身份体系
+        // （skill 域的 team_id/agent_id vs. 缓存层的 userId/agentSource/
+        // spaceId），影响面更大；这次先用更小、更能确认正确性的改法堵住
+        // 报告的具体 bug。
+        //
+        // 失败降级策略（两路各自 try/catch）：
         //   A 失败 → fail-closed 返回空（安全兜底：绝不让 LLM 看到未过滤结果）
-        //   B 失败 → 当空集，退化为 A−C（约等于修复前行为）
-        //   C 失败 → 当空集，不做减法（无害，最多让已注入 skill 占槽位）
+        //   B 失败 → 当空集，退化为仅 A
         const coreClient = deps.coreClient ?? getCoreSkillClient(config.coreSkill);
         const resolver = deps.resolveVisibleSkillIds
           ?? defaultVisibleSkillIdsResolver(config);
@@ -714,19 +733,7 @@ export function createSkillBridgeHandler(
             return [] as string[];
           });
 
-        // C 不传 query → 走 mode=full 拿 head 列表，跟 session-init 无 query 场景一致。
-        // 严格来说 session-init 可能带 query 走 BM25，结果不完全一致；这里作为"排除已知重复"
-        // 的近似，允许少量重复占槽位，不追求 100% 精确。
-        const promiseC = coreClient.listListing(
-          { team_id: ids.team_id, agent_id: ids.agent_id },
-          { serviceId: ids.space_id },
-        ).then(r => (r.hits ?? []).map(h => h.skill_id))
-          .catch(err => {
-            console.warn(`${TAG} team search C (listing) failed, treating as empty: ${(err as Error).message}`);
-            return [] as string[];
-          });
-
-        const [aResult, bIds, cIds] = await Promise.all([promiseA, promiseB, promiseC]);
+        const [aResult, bIds] = await Promise.all([promiseA, promiseB]);
 
         if (!aResult.ok) {
           // Fail-closed: A 挂掉不能降级到不过滤搜索。
@@ -738,10 +745,9 @@ export function createSkillBridgeHandler(
         }
 
         const merged = new Set<string>([...aResult.ids, ...bIds]);
-        for (const id of cIds) merged.delete(id);
         const whitelist: string[] = Array.from(merged);
         console.log(
-          `${TAG} team search whitelist A=${aResult.ids.length} B=${bIds.length} C=${cIds.length}`
+          `${TAG} team search whitelist A=${aResult.ids.length} B=${bIds.length}`
             + ` merged=${whitelist.length} user=${ids.user_id} team=${ids.team_id}`,
         );
 
