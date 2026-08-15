@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, unlink as fsUnlink, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink as fsUnlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -17,6 +17,12 @@ const safeEnv = (stateDir) => ({
   TDAI_MEMORY_USER_ID: 'user-id', TDAI_MEMORY_STATE_DIR: stateDir, TDAI_MEMORY_API_KEY: 'installer-secret',
 });
 const run = (name, project, env) => spawnSync(process.execPath, [script(name), '--project', project], { encoding: 'utf8', env });
+const runAsync = (name, project, env) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [script(name), '--project', project], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = ''; let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk; }); child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.once('error', reject); child.once('close', (status) => resolve({ status, stdout, stderr }));
+});
 const runCommand = (command, input, env) => new Promise((resolve, reject) => {
   const child = spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${command}"`], { encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments: true });
   let stdout = ''; let stderr = '';
@@ -194,6 +200,97 @@ test('two concurrent uninstalls safely complete the same transaction', async () 
       await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
     } finally { await rm(project, { recursive: true, force: true }); }
   }
+});
+
+test('uninstaller refuses non-regular original and transaction objects without moving them', async () => {
+  for (const target of ['receipt', 'hook', 'transaction-receipt', 'transaction-hook']) {
+    const project = await mkdtemp(join(tmpdir(), `kiro-uninstall-object-${target}-`));
+    try {
+      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      const receiptPath = join(project, '.kiro', 'tdai-memory-install.json');
+      const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
+      const receiptSource = await readFile(receiptPath, 'utf8'); const hookSource = await readFile(hookPath, 'utf8');
+      const tx = join(project, '.kiro', '.tdai-memory-uninstall'); await mkdir(tx, { recursive: true });
+      const path = target === 'receipt' ? receiptPath : target === 'hook' ? hookPath : join(tx, target === 'transaction-receipt' ? 'receipt.quarantine' : 'hook.quarantine');
+      if (target === 'receipt' || target === 'hook') await fsUnlink(path);
+      await mkdir(path);
+      await assert.rejects(uninstallProject({ project }), /object/);
+      assert.equal((await lstat(path)).isDirectory(), true);
+      if (target !== 'receipt') assert.equal(await readFile(receiptPath, 'utf8'), receiptSource);
+      if (target !== 'hook') assert.equal(await readFile(hookPath, 'utf8'), hookSource);
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
+});
+
+test('uninstaller refuses symbolic-link hook and receipt paths without moving the links', async () => {
+  for (const target of ['receipt', 'hook']) {
+    const project = await mkdtemp(join(tmpdir(), `kiro-uninstall-symlink-${target}-`));
+    try {
+      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      const path = target === 'receipt' ? join(project, '.kiro', 'tdai-memory-install.json') : join(project, '.kiro', 'hooks', 'tdai-memory.json');
+      const external = join(project, 'external'); await mkdir(external); await fsUnlink(path); await symlink(external, path, 'junction');
+      await assert.rejects(uninstallProject({ project }), /object/);
+      assert.equal((await lstat(path)).isSymbolicLink(), true);
+      assert.equal((await lstat(external)).isDirectory(), true);
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
+});
+
+test('installer refuses while a recoverable uninstall transaction owns the receipt', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-lifecycle-interleave-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    let release; const released = new Promise((resolve) => { release = resolve; });
+    let entered; const staged = new Promise((resolve) => { entered = resolve; });
+    const uninstalling = uninstallProject({ project, afterReceiptStaged: async () => { entered(); await released; } });
+    await staged;
+    const installing = await runAsync('install', project, env);
+    assert.notEqual(installing.status, 0); assert.equal(installing.stderr.includes('installer-secret'), false);
+    release(); await uninstalling;
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('installer compensates if uninstall starts after its transaction check and finishes before hook publication', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-lifecycle-check-act-'));
+  try {
+    const env = safeEnv(join(project, 'state')); let release; const released = new Promise((resolve) => { release = resolve; });
+    let entered; const receiptPublished = new Promise((resolve) => { entered = resolve; });
+    const installing = installProject({ project, env, afterReceiptPublished: async () => { entered(); await released; } });
+    await receiptPublished; await uninstallProject({ project }); release();
+    await assert.rejects(installing, /lifecycle/);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('installer compensation preserves a user hook created at the original path by concurrent uninstall', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-lifecycle-user-hook-'));
+  try {
+    const env = safeEnv(join(project, 'state')); const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json'); const userHook = '{"user":true}\n';
+    const installing = installProject({
+      project,
+      env,
+      afterHookPublished: async () => uninstallProject({ project, afterHookQuarantined: async () => { await writeFile(hookPath, userHook); } }),
+    });
+    await assert.rejects(installing, /lifecycle/);
+    assert.equal(await readFile(hookPath, 'utf8'), userHook);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('an abandoned uninstall transaction is resumed before installation can recover', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-lifecycle-recover-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    await assert.rejects(uninstallProject({ project, afterReceiptStaged: async () => { throw new Error('crash'); } }), /crash/);
+    await assert.rejects(installProject({ project, env }), /lifecycle/);
+    await uninstallProject({ project });
+    await installProject({ project, env });
+    assert.equal((await lstat(join(project, '.kiro', 'tdai-memory-install.json'))).isFile(), true);
+    assert.equal((await lstat(join(project, '.kiro', 'hooks', 'tdai-memory.json'))).isFile(), true);
+  } finally { await rm(project, { recursive: true, force: true }); }
 });
 
 test('manual template is exact v1 hook JSON and contains no credential fields', async () => {

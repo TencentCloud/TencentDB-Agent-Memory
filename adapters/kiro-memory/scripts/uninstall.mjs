@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { access, link, mkdir, readFile, rename, rmdir, unlink } from 'node:fs/promises';
+import { access, link, lstat, mkdir, readFile, rename, rmdir, unlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -19,10 +19,26 @@ const readIfPresent = async (path) => {
   try { return await readFile(path, 'utf8'); } catch (error) { if (error?.code === 'ENOENT') return null; throw error; }
 };
 
+const objectKind = async (path) => {
+  try { return (await lstat(path)).isFile() ? 'regular' : 'object'; } catch (error) { if (error?.code === 'ENOENT') return 'missing'; throw error; }
+};
+
 const stageNoReplace = async (originalPath, transactionPath) => {
-  if (await exists(transactionPath)) return 'staged';
+  const transactionKind = await objectKind(transactionPath);
+  if (transactionKind === 'object') throw new Error('object');
+  if (transactionKind === 'regular') return 'staged';
+  const originalKind = await objectKind(originalPath);
+  if (originalKind === 'object') throw new Error('object');
+  if (originalKind === 'missing') return 'missing';
   try {
     await rename(originalPath, transactionPath);
+    const stagedKind = await objectKind(transactionPath);
+    if (stagedKind === 'object') {
+      if (await objectKind(originalPath) === 'missing') {
+        try { await rename(transactionPath, originalPath); } catch { /* keep the object quarantined if its path was concurrently occupied */ }
+      }
+      throw new Error('object');
+    }
     return 'staged';
   } catch (error) {
     if (error?.code !== 'ENOENT' && error?.code !== 'EEXIST' && error?.code !== 'EPERM') throw error;
@@ -109,7 +125,11 @@ export async function uninstallProject({
     throw new Error('receipt');
   }
 
-  const hookStage = await stageNoReplace(hookPath, transactionHook);
+  let hookStage;
+  try { hookStage = await stageNoReplace(hookPath, transactionHook); } catch (error) {
+    await restoreTransaction({ transactionHook, hookPath, transactionReceipt, receiptPath, transactionDirectory });
+    throw error;
+  }
   if (hookStage === 'busy') return;
   if (hookStage === 'missing') {
     await unlinkIfPresent(transactionReceipt, unlinkQuarantine);
