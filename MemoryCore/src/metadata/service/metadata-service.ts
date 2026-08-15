@@ -1130,6 +1130,72 @@ export class MetadataService {
     return formatListResult({ items, total: page.total }, pagination);
   }
 
+  /**
+   * Caller-scoped read of a single asset. The plain getAssetById performs no
+   * authorization; this variant applies the same permission model as
+   * checkAssetPermission but with the identity taken from the authenticated
+   * context. Returns null (rendered as asset_not_found upstream) on denial so
+   * the endpoint does not become an existence oracle.
+   */
+  async getAssetForCaller(assetId: string, ctx: V3AuthContext): Promise<AssetEntity | null> {
+    const asset = await this.getAssetById(assetId);
+    if (!asset || asset.status === "archived") return null;
+    const callerId = this.requireCallerId(ctx);
+    if (asset.owner_user_id === callerId) return asset;
+    const membership = await this.store.getTeamMember(asset.team_id, callerId);
+    const perm = checkPermission({
+      user: { user_id: callerId },
+      asset,
+      membership,
+      action: "read",
+      aclRecords: [],
+      logger: this.logger,
+    });
+    return perm.allowed ? asset : null;
+  }
+
+  /**
+   * Caller-scoped team asset listing. The plain listAssetsByTeam accepts any
+   * team_id with no membership requirement and returns private rows of other
+   * users; this variant requires the caller to be an active member of the
+   * team and filters each row through the read permission model (owner
+   * short-circuit, visibility, role defaults), mirroring listAccessibleAssets.
+   */
+  async listAssetsForCaller(
+    teamId: string,
+    ctx: V3AuthContext,
+    pagination: PaginationParams = DEFAULT_PAGINATION,
+    filter?: AssetFilter,
+  ): Promise<PaginatedResult<AssetEntity>> {
+    const callerId = this.requireCallerId(ctx);
+    const membership = await this.requireActiveTeamMember(ctx, teamId);
+    const result: AssetEntity[] = [];
+    let offset = 0;
+    const limit = 100;
+    while (true) {
+      const page = await this.store.listAssetsByTeam(teamId, { limit, offset }, filter);
+      for (const asset of page.items) {
+        if (FILTERED_STATUSES.includes(asset.status)) continue;
+        if (asset.owner_user_id === callerId) {
+          result.push(asset);
+          continue;
+        }
+        const perm = checkPermission({
+          user: { user_id: callerId },
+          asset,
+          membership,
+          action: "read",
+          aclRecords: [],
+          logger: this.logger,
+        });
+        if (perm.allowed) result.push(asset);
+      }
+      if (offset + page.items.length >= page.total) break;
+      offset += limit;
+    }
+    return paginateArray(result, pagination);
+  }
+
   async touchAssetUsage(assetId: string): Promise<void> {
     if (!(await this.getAssetById(assetId))) throw new MetadataError("asset_not_found", `asset not found: ${assetId}`);
     await this.store.touchAssetUsage(assetId);
