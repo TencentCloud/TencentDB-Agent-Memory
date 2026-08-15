@@ -10,63 +10,26 @@
  * - L2 scene navigation (full injection, LLM decides relevance)
  */
 
-import fs from "node:fs/promises";
-import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
 import type { MemoryTdaiConfig } from "../../config.js";
-import { readSceneIndex } from "../scene/scene-index.js";
-import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
-import type { Logger } from "../types.js";
+import type { Logger, RecallResult } from "../types.js";
+import type { StableRecallSnapshot } from "../session/recall-context-epoch.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
 
-/**
- * Memory tools usage guide — injected at the end of memory context so the
- * main agent knows how to actively retrieve deeper information.
- */
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
-## 记忆工具调用指南
-
-当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
-
-- **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件节点、规则等关键信息。
-- **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节；也可用于补充或校验 memory_search 的结果。
-- **read_file**（Scene Navigation 中的路径）：当已定位到相关情境，且需要该场景的完整画像、事件经过或阶段结论时使用。
-
-### ⚠️ 调用次数限制
-每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
-- 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
-- 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户，不要继续搜索。
-</memory-tools-guide>`
-
 /** A single recalled L1 memory with its search score and type. */
 export interface RecalledMemory {
   content: string;
   score: number;
   type: string;
-}
-
-export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
-  prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
-  appendSystemContext?: string;
-
-  // ── Metric payload (for pendingRecallCache in index.ts) ──
-  /** L1 memories that were recalled (with scores), for metric reporting */
-  recalledL1Memories?: RecalledMemory[];
-  /** L3 Persona raw content loaded during recall (null if none) */
-  recalledL3Persona?: string | null;
-  /** Effective search strategy used */
-  recallStrategy?: string;
 }
 
 export async function performAutoRecall(params: {
@@ -78,9 +41,10 @@ export async function performAutoRecall(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
-}): Promise<RecallResult | undefined> {
+  stableSnapshot: StableRecallSnapshot;
+}): Promise<RecallResult> {
   const { cfg, logger } = params;
-  const timeoutMs = cfg.recall.timeoutMs ?? 5000;
+  const timeoutMs = cfg.recall.timeoutMs;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -88,12 +52,16 @@ export async function performAutoRecall(params: {
     performAutoRecallInner(params).finally(() => {
       if (timer) clearTimeout(timer);
     }),
-    new Promise<undefined>((resolve) => {
+    new Promise<RecallResult>((resolve) => {
       timer = setTimeout(() => {
         logger?.warn?.(
-          `${TAG} ⚠️ Recall timed out after ${timeoutMs}ms — skipping memory injection to avoid blocking the user`,
+          `${TAG} ⚠️ Recall delta timed out after ${timeoutMs}ms — keeping the stable snapshot`,
         );
-        resolve(undefined);
+        resolve({
+          appendSystemContext: params.stableSnapshot.text,
+          recalledL3Persona: params.stableSnapshot.persona,
+          recallStrategy: "timed-out",
+        });
       }, timeoutMs);
     }),
   ]);
@@ -108,28 +76,29 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
-}): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  stableSnapshot: StableRecallSnapshot;
+}): Promise<RecallResult> {
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, stableSnapshot } = params;
   const tRecallStart = performance.now();
 
-  // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
+  // Search relevant memories (L1 layer) unless the current user prompt is empty.
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
-  if (!userText || userText.length === 0) {
-    logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
+  if (userText.length === 0) {
+    logger?.debug?.(`${TAG} User text empty, skipping memory search (stable snapshot still injected)`);
   } else {
-    effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    effectiveStrategy = cfg.recall.strategy;
+    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy, vectorStore, embeddingService);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
-      const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
+      const match = line.match(/^-\s+\[([^\]]+)\]\s+([\s\S]+?)(?:\s*\(活动时间:[\s\S]*\))?$/);
       if (match) {
         const tag = match[1];
         const content = match[2].trim();
@@ -141,81 +110,13 @@ async function performAutoRecallInner(params: {
   }
   const tSearchEnd = performance.now();
 
-  // Read persona (L3 layer)
-  const tPersonaStart = performance.now();
-  let personaContent: string | undefined;
-  try {
-    const personaPath = path.join(pluginDataDir, "persona.md");
-    const raw = await fs.readFile(personaPath, "utf-8");
-    personaContent = stripSceneNavigation(raw).trim();
-    if (!personaContent) personaContent = undefined;
-    logger?.debug?.(`${TAG} Persona loaded: ${personaContent ? `${personaContent.length} chars` : "empty"}`);
-  } catch {
-    logger?.debug?.(`${TAG} No persona file found (expected for new users)`);
-  }
-  const tPersonaEnd = performance.now();
-
-  // Load full scene navigation (L2 layer)
-  const tSceneStart = performance.now();
-  let sceneNavigation: string | undefined;
-  try {
-    const sceneIndex = await readSceneIndex(pluginDataDir);
-    if (sceneIndex.length > 0) {
-      sceneNavigation = generateSceneNavigation(sceneIndex, pluginDataDir);
-      logger?.debug?.(`${TAG} Scene navigation generated: ${sceneIndex.length} scenes`);
-    }
-  } catch {
-    logger?.debug?.(`${TAG} No scene index found`);
-  }
-  const tSceneEnd = performance.now();
-
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
-    const totalMs = performance.now() - tRecallStart;
-    logger?.info(
-      `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
-      `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
-      `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
-      `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
-      `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms, ` +
-      `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms — no context to inject`,
-    );
-    logger?.debug?.(`${TAG} No memories/persona/scenes to inject`);
-    return undefined;
-  }
-
-  // Split recall context into stable and dynamic parts to optimize prompt caching.
-  //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
-  //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
-
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // L1 memories remain separate from the stable snapshot. The host adapter
+  // decides whether they are transient or recorded as a cache-stable epoch.
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
   }
-
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -223,19 +124,14 @@ async function performAutoRecallInner(params: {
     `search=${(tSearchEnd - tSearchStart).toFixed(0)}ms(strategy=${effectiveStrategy},hits=${memoryLines.length},` +
     `fts=${searchTiming.ftsMs.toFixed(0)}ms/${searchTiming.ftsHits}hits,` +
     `vec=${searchTiming.embeddingMs.toFixed(0)}ms/${searchTiming.embeddingHits}hits), ` +
-    `persona=${(tPersonaEnd - tPersonaStart).toFixed(0)}ms(${personaContent ? `${personaContent.length}chars` : "none"}), ` +
-    `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
+    `snapshot=${stableSnapshot.hash}/${stableSnapshot.text.length}chars`,
   );
-
-  if (!appendSystemContext && !prependContext) {
-    return undefined;
-  }
 
   return {
     prependContext,
-    appendSystemContext,
+    appendSystemContext: stableSnapshot.text,
     recalledL1Memories,
-    recalledL3Persona: personaContent ?? null,
+    recalledL3Persona: stableSnapshot.persona,
     recallStrategy: effectiveStrategy,
   };
 }
@@ -260,40 +156,6 @@ interface SearchTiming {
 interface SearchResult {
   lines: string[];
   timing: SearchTiming;
-}
-
-/**
- * Search memories and return both formatted lines and structured details.
- *
- * This is a thin wrapper around `searchMemories` that also captures
- * the recalled memory metadata for metric reporting (agent_turn event).
- * It parses the returned formatted lines to extract type/content info.
- */
-async function searchMemoriesWithDetails(
-  userText: string,
-  pluginDataDir: string,
-  cfg: MemoryTdaiConfig,
-  logger: Logger | undefined,
-  strategy: "keyword" | "embedding" | "hybrid",
-  vectorStore?: IMemoryStore,
-  embeddingService?: EmbeddingService,
-): Promise<{ lines: string[]; memories: RecalledMemory[]; timing: SearchTiming }> {
-  const result = await searchMemories(userText, pluginDataDir, cfg, logger, strategy, vectorStore, embeddingService);
-
-  // Extract structured data from formatted memory lines.
-  // Format: "- [type|scene] content (活动时间: ...)" or "- [type] content"
-  const memories: RecalledMemory[] = result.lines.map((line) => {
-    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
-    if (match) {
-      const tag = match[1];
-      const content = match[2].trim();
-      const typePart = tag.includes("|") ? tag.split("|")[0] : tag;
-      return { content, score: 0, type: typePart };
-    }
-    return { content: line, score: 0, type: "unknown" };
-  });
-
-  return { lines: result.lines, memories, timing: result.timing };
 }
 
 /**

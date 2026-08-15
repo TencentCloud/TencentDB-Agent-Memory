@@ -92,7 +92,7 @@
   },
   "peerDependencies": {
     "node-llama-cpp": "^3.16.2",
-    "openclaw": ">=2026.3.7"
+    "openclaw": ">=2026.5.28"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -107,12 +107,12 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.3.13",
-      "minGatewayVersion": ">=2026.3.13"
+      "pluginApi": ">=2026.5.28",
+      "minGatewayVersion": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.3.13",
-      "pluginSdkVersion": "2026.3.13"
+      "openclawVersion": "2026.5.28",
+      "pluginSdkVersion": "2026.5.28"
     },
     "bundle": {
       "stageRuntimeDependencies": true

@@ -432,6 +432,8 @@ export function createL2Runner(opts: {
   instanceId?: string;
   /** Host-neutral LLM runner for L2 scene extraction (standalone/gateway mode). Must have enableTools=true. */
   llmRunner?: import("../core/types.js").LLMRunner;
+  /** Publishes a new stable prompt epoch after scene navigation changes. */
+  onStableContextChanged?: () => void;
 }): L2Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
   let profileBaseline = new Map<string, { version: number; contentMd5: string; createdAtMs: number }>();
@@ -564,6 +566,7 @@ export function createL2Runner(opts: {
       logger.debug?.(
         `${TAG} [L2] Extraction complete: processed=${extractResult.memoriesProcessed}, latestCursor=${latestCursor}`,
       );
+      opts.onStableContextChanged?.();
 
       return { latestCursor: latestCursor || undefined };
     }
@@ -589,6 +592,8 @@ export function createL3Runner(opts: {
   instanceId?: string;
   /** Host-neutral LLM runner for L3 persona generation (standalone/gateway mode). Must have enableTools=true. */
   llmRunner?: import("../core/types.js").LLMRunner;
+  /** Publishes a new stable prompt epoch after persona generation succeeds. */
+  onStableContextChanged?: () => void;
 }): L3Runner {
   const { pluginDataDir, cfg, openclawConfig, vectorStore, logger, instanceId, llmRunner } = opts;
 
@@ -641,6 +646,7 @@ export function createL3Runner(opts: {
     const checkpoint = new CheckpointManager(pluginDataDir, logger);
     const cp = await checkpoint.read();
     await checkpoint.markPersonaGenerated(cp.total_processed);
+    opts.onStableContextChanged?.();
     logger.info(`${TAG} [L3] Persona generation succeeded`);
   };
 }
