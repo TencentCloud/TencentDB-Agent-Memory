@@ -44,6 +44,11 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  appendRecallLedgerToContent,
+  buildRecallLedger,
+  stripRecallLedger,
+} from "./src/core/hooks/recall-ledger.js";
 
 const TAG = "[memory-tdai]";
 
@@ -87,6 +92,7 @@ const pendingRecallCache = new Map<string, {
  * Entries are cleaned up in agent_end after use; stale entries swept alongside prompt cache.
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
+const pendingRecallLedgers = new Map<string, { context: string; ts: number }>();
 
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
@@ -103,12 +109,18 @@ function sweepStaleCaches(): void {
     if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
       pendingOriginalPrompts.delete(key);
       pendingRecallEndTimestamps.delete(key);
+      pendingRecallLedgers.delete(key);
     }
   }
   // Clean pendingRecallCache
   for (const [key, entry] of pendingRecallCache) {
     if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
       pendingRecallCache.delete(key);
+    }
+  }
+  for (const [key, entry] of pendingRecallLedgers) {
+    if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
+      pendingRecallLedgers.delete(key);
     }
   }
   // Hard limit: evict oldest entries if either Map exceeds cap
@@ -118,6 +130,7 @@ function sweepStaleCaches(): void {
     for (const [key] of toEvict) {
       pendingOriginalPrompts.delete(key);
       pendingRecallEndTimestamps.delete(key);
+      pendingRecallLedgers.delete(key);
     }
   }
   if (pendingRecallCache.size > PROMPT_CACHE_MAX_SIZE) {
@@ -125,6 +138,13 @@ function sweepStaleCaches(): void {
     const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
     for (const [key] of toEvict) {
       pendingRecallCache.delete(key);
+    }
+  }
+  if (pendingRecallLedgers.size > PROMPT_CACHE_MAX_SIZE) {
+    const entries = [...pendingRecallLedgers.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
+    for (const [key] of toEvict) {
+      pendingRecallLedgers.delete(key);
     }
   }
 }
@@ -584,17 +604,56 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        const hookResult = cfg.recall.historyMode === "persist-dedup" && result
+          ? (() => {
+              const ledger = buildRecallLedger({
+                candidates: result.recalledL1Memories ?? [],
+                messages: messages ?? [],
+                maxSessionRecallChars: cfg.recall.maxSessionRecallChars,
+              });
+              if (ledger.skippedBudgetCount > 0) {
+                api.logger.warn(
+                  `${TAG} [before_prompt_build] Recall ledger session budget reached: ` +
+                  `used=${ledger.history.usedChars}, remaining=${ledger.remainingChars}, ` +
+                  `skipped=${ledger.skippedBudgetCount}`,
+                );
+              }
+              api.logger.debug?.(
+                `${TAG} [before_prompt_build] Recall ledger: historyBlocks=${ledger.history.blockCount}, ` +
+                `historyChars=${ledger.history.usedChars}, injected=${ledger.injected.length}, ` +
+                `duplicates=${ledger.skippedDuplicateCount}, remaining=${ledger.remainingChars}`,
+              );
+              if (sessionKey) {
+                if (ledger.appendContext) {
+                  pendingRecallLedgers.set(sessionKey, {
+                    context: ledger.appendContext,
+                    ts: Date.now(),
+                  });
+                } else {
+                  pendingRecallLedgers.delete(sessionKey);
+                }
+              }
+              return {
+                ...result,
+                prependContext: undefined,
+                appendContext: ledger.appendContext,
+              };
+            })()
+          : result;
+
+        if (hookResult?.appendSystemContext || hookResult?.prependContext || hookResult?.appendContext) {
+          const systemLen = hookResult.appendSystemContext?.length ?? 0;
+          const prependLen = hookResult.prependContext?.length ?? 0;
+          const appendLen = hookResult.appendContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${systemLen} chars, prependContext=${prependLen} chars, ` +
+            `appendContext=${appendLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -613,23 +672,35 @@ export default function register(api: OpenClawPluginApi) {
   }
 
   // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
-  api.on("before_message_write", (event) => {
+  // Keep the provider-visible Recall ledger byte-identical in session history
+  // for append-only replay. Legacy "strip" mode retains the old cleanup path.
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write hook ` +
+    `(recall.historyMode=${cfg.recall.historyMode})`,
+  );
+  api.on("before_message_write", (event, ctx) => {
     const msg = event.message as { role?: string; content?: unknown };
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
     if (msg.role !== "user") return;
+    if (cfg.recall.historyMode === "persist-dedup") {
+      const sessionKey = event.sessionKey ?? ctx.sessionKey;
+      if (!sessionKey) return;
+      const pending = pendingRecallLedgers.get(sessionKey);
+      if (!pending) return;
+      pendingRecallLedgers.delete(sessionKey);
+      const content = appendRecallLedgerToContent(msg.content, pending.context);
+      api.logger.debug?.(
+        `${TAG} [before_message_write] Persisted Recall ledger (${pending.context.length} chars)`,
+      );
+      return { message: { ...event.message, content } as typeof event.message };
+    }
 
     // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
     if (typeof msg.content === "string") {
       if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
+      const cleaned = stripRecallLedger(msg.content);
       if (cleaned === msg.content) return;
       api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
       return { message: { ...event.message, content: cleaned } as typeof event.message };
@@ -640,7 +711,7 @@ export default function register(api: OpenClawPluginApi) {
       const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
         if (part.type !== "text" || typeof part.text !== "string") return part;
         if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
+        const cleaned = stripRecallLedger(part.text as string);
         totalStripped += (part.text as string).length - cleaned.length;
         return { ...part, text: cleaned };
       });

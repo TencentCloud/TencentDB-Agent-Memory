@@ -87,6 +87,10 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /** Session history behavior for injected Recall context (default: "persist-dedup"). */
+  historyMode: "persist-dedup" | "strip";
+  /** Maximum persisted Recall ledger characters in one session (default: 32000). */
+  maxSessionRecallChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -532,6 +536,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      historyMode: validateRecallHistoryMode(str(recallGroup, "historyMode")) ?? "persist-dedup",
+      maxSessionRecallChars: positiveInt(num(recallGroup, "maxSessionRecallChars")) ?? 32_000,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -644,6 +650,16 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
     : undefined;
+}
+
+function validateRecallHistoryMode(value: string | undefined): RecallConfig["historyMode"] | undefined {
+  if (value === "persist-dedup" || value === "strip") return value;
+  return undefined;
+}
+
+function positiveInt(value: number | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.floor(value);
 }
 
 /**

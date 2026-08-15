@@ -199,10 +199,19 @@ export interface CompletedTurn {
 export interface RecallResult {
   /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn). */
   prependContext?: string;
+  /** L1 relevant memories — appended to user prompt by host-specific integrations. */
+  appendContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
-  recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
+  recalledL1Memories?: Array<{
+    id: string;
+    revision: string;
+    renderedLine: string;
+    content: string;
+    score: number;
+    type: string;
+  }>;
   /** L3 Persona content (for metrics). */
   recalledL3Persona?: string | null;
   /** Search strategy used. */

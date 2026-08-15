@@ -8,6 +8,7 @@
 
 ### ✨ 新功能
 
+- **Append-only Persisted Recall Ledger（#120）**：OpenClaw 集成默认将每轮新增 Recall 以版本化 ledger 追加到当前 user message，并原样持久化到 session history，使 OpenAI-compatible provider 的后续请求保持 append-only 前缀。ledger 从历史消息重建去重状态，按 memory ID + 内容 SHA-256 revision 去重，并对跨 ID 相同内容做二次去重；记录更新时追加新 revision 并标记 `supersedes`。新增 `recall.historyMode`（默认 `"persist-dedup"`，可设 `"strip"` 保持旧行为）和 `recall.maxSessionRecallChars`（默认 `32000`）配置。达到 session 上限后只停止新的自动 Recall，不重写历史，也不影响主动 memory search 工具；L0 capture 继续保存原始用户文本。
 - **时区可配置** ([#75](https://github.com/Tencent/TencentDB-Agent-Memory/issues/75) / [#87](https://github.com/Tencent/TencentDB-Agent-Memory/issues/87))：新增顶层 `timezone` 配置项，支持 IANA 时区名（`Asia/Shanghai`、`Europe/Berlin`）和 UTC 偏移串（`+08:00`、`-05:30`）。默认 `"system"`（跟随进程系统时区），升级零感。
   - **暴露给 LLM 的时间戳**统一为带显式 offset 的 ISO 8601（如 `2026-04-07T11:04:45+08:00`），修复 #87 报告的 UTC/本地时区混用导致 LLM 误算时间差的问题。
   - **L1 / L2 prompt 顶部**自动插入时区声明，指引 LLM 按正确时区推算"昨天"、"上周"等相对时间。
@@ -93,6 +94,8 @@
 |---|---|---|
 | `recall.maxCharsPerMemory` | `0` | `0`/未设置 = 不裁剪 |
 | `recall.maxTotalRecallChars` | `0` | `0`/未设置 = 不裁剪 |
+| `recall.historyMode` | `"persist-dedup"` | 新默认会将 Recall ledger 原样写入 OpenClaw session history；设为 `"strip"` 可保留旧行为 |
+| `recall.maxSessionRecallChars` | `32000` | 单 session 的持久化 Recall ledger 字符硬上限 |
 | `embedding.sendDimensions` | `true` | `false` 时不在请求体携带 `dimensions`，适配 BGE-M3 等 |
 | `l3TiktokenEncoding` | `cl100k_base`（原 `o200k_base`） | 仅在显式依赖 `o200k_base` 时需手动覆盖回去 |
 
