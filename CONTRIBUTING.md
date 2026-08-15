@@ -47,7 +47,7 @@ The simplest inner loop: run the full stack in Docker, then patch the target
 module locally.
 
 ```bash
-git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+git clone https://github.com/TencentCloud/TencentDB-Agent-Memory.git
 cd TencentDB-Agent-Memory/deploy/global-images
 cp .env.example .env && $EDITOR .env
 ./start-all.sh
