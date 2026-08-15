@@ -45,6 +45,7 @@ import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
+import { isFinalAnswer } from "./skill/normalize-conversation.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import {
@@ -1515,7 +1516,14 @@ export async function handleChatCompletions(
     }
 
     if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
+      if (isFinalAnswer(assistantMessage)) {
+        await recordTdaiTurn(
+          tdaiClient,
+          tdaiIdentity,
+          tdaiUserMessage,
+          assistantContentForTdai(assistantMessage),
+        );
+      }
     } else if (tdaiClient) {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
     }
@@ -1984,16 +1992,18 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     }
 
     if (ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory")) {
-      // Streaming 不 await（会拖慢 SSE 关流体感），改成 trackWrite + 重试：
-      //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
-      //     flushPendingWrites 等待或超时兜底，避免 pod rolling 时丢 L0。
-      //   - withL0Retry 应对 tdai kernel 瞬断 / 5xx（3 次退避 ~3.5s 总时长）。
-      trackWrite(
-        withL0Retry(() => recordTdaiTurn(
-          ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
-          outputMessageContent(outputMessage),
-        )).catch((err: unknown) => pipe.error("TDAI_L0", err))
-      );
+      if (isFinalAnswer(outputMessage, toolCallAccumulators.size)) {
+        // Streaming 不 await（会拖慢 SSE 关流体感），改成 trackWrite + 重试：
+        //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
+        //     flushPendingWrites 等待或超时兜底，避免 pod rolling 时丢 L0。
+        //   - withL0Retry 应对 tdai kernel 瞬断 / 5xx（3 次退避 ~3.5s 总时长）。
+        trackWrite(
+          withL0Retry(() => recordTdaiTurn(
+            ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
+            outputMessageContent(outputMessage),
+          )).catch((err: unknown) => pipe.error("TDAI_L0", err))
+        );
+      }
     } else if (ctx.tdaiClient) {
       logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKeyForSkill);
     }
