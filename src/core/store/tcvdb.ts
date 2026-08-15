@@ -28,6 +28,8 @@ import type {
   ProfileRecord,
   ProfileSyncRecord,
   StoreLogger,
+  CheckpointCountFilter,
+  CheckpointCounts,
 } from "./types.js";
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
@@ -865,6 +867,40 @@ export class TcvdbMemoryStore implements IMemoryStore {
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-count] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
+    }
+  }
+
+  async getCheckpointCounts(filter?: CheckpointCountFilter): Promise<CheckpointCounts> {
+    await this._ensureInit();
+    if (this.degraded) throw new Error("TCVDB store is degraded");
+
+    const conditions: string[] = [];
+    if (filter?.l1UpdatedAfter) {
+      const timestamp = isoToEpochMs(filter.l1UpdatedAfter);
+      if (timestamp > 0) conditions.push(`updated_time_ms > ${timestamp}`);
+    }
+    if (filter?.l1UpdatedBefore) {
+      const timestamp = isoToEpochMs(filter.l1UpdatedBefore);
+      if (timestamp > 0) conditions.push(`updated_time_ms < ${timestamp}`);
+    }
+    const filtered = conditions.length > 0
+      ? await this.client.count(this.l1Collection, conditions.join(" and "))
+      : undefined;
+    try {
+      const [l0Records, l1Records] = await Promise.all([
+        this.client.count(this.l0Collection),
+        this.client.count(this.l1Collection),
+      ]);
+      return {
+        l0Records,
+        l1Records,
+        filteredL1Records: filtered ?? l1Records,
+      };
+    } catch (err) {
+      throw new Error(
+        `TCVDB checkpoint count failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
   }
 

@@ -514,6 +514,16 @@ export class TdaiCore {
     this.schedulerStartPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        // Reconcile drift-prone counters with live store counts before
+        // restoring pipeline state so persona thresholds resume from accurate
+        // numbers even after manual pruning (non-fatal).
+        try {
+          await checkpoint.recalibrateFromStorage(this.vectorStore, "scheduler-startup");
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);

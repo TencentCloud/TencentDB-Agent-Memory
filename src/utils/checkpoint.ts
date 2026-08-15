@@ -28,6 +28,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
+import { countCheckpointJsonlData, type CheckpointDataCounts } from "./checkpoint-data.js";
+
 // ============================
 // Types
 // ============================
@@ -82,7 +84,7 @@ export interface Checkpoint {
   // ═══ Global counters ═══
   /** Epoch ms of the newest message successfully uploaded. Messages with ts > this are new. */
   last_captured_timestamp: number;
-  /** Total messages processed across all time */
+  /** Total persisted L0 message records */
   total_processed: number;
   last_persona_at: number;
   last_persona_time: string;
@@ -100,11 +102,11 @@ export interface Checkpoint {
   pipeline_states: Record<string, PipelineSessionState>;
 
   // ═══ L0 ═══
-  /** Total L0 conversation files recorded */
+  /** Total persisted L0 message records (legacy field name retained for compatibility) */
   l0_conversations_count: number;
 
   // ═══ L1 ═══
-  /** Total L1 memories extracted across all time */
+  /** Total persisted L1 memory records */
   total_memories_extracted: number;
 }
 
@@ -146,6 +148,64 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+/**
+ * Live-count source for recalibrating drift-prone global counters.
+ *
+ * Shape-compatible with the L0/L1 count methods of `IMemoryStore`, so any
+ * store instance can be passed directly. Both methods are expected to be
+ * fault-tolerant (store implementations return 0 rather than throw when
+ * degraded); `recalibrate()` additionally falls back to JSONL line counts.
+ */
+export interface CheckpointCountStore {
+  isDegraded(): boolean;
+  getCheckpointCounts(filter?: {
+    l1UpdatedAfter?: string;
+    l1UpdatedBefore?: string;
+  }): {
+    l0Records: number;
+    l1Records: number;
+    filteredL1Records: number;
+  } | Promise<{
+    l0Records: number;
+    l1Records: number;
+    filteredL1Records: number;
+  }>;
+}
+
+export interface CheckpointCounterSnapshot {
+  total_processed: number;
+  l0_conversations_count: number;
+  total_memories_extracted: number;
+  memories_since_last_persona: number;
+}
+
+export interface CheckpointRecalibrationResult {
+  source: "store" | "jsonl";
+  reason: string;
+  before: CheckpointCounterSnapshot;
+  after: CheckpointCounterSnapshot;
+}
+
+function normalizeCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+function requireValidCount(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} returned invalid count: ${value}`);
+  }
+  return Math.trunc(value);
+}
+
+function counterSnapshot(cp: Checkpoint): CheckpointCounterSnapshot {
+  return {
+    total_processed: cp.total_processed,
+    l0_conversations_count: cp.l0_conversations_count,
+    total_memories_extracted: cp.total_memories_extracted,
+    memories_since_last_persona: cp.memories_since_last_persona,
+  };
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -179,10 +239,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -296,6 +358,151 @@ export class CheckpointManager {
   // ============================
   // Public API — mutating (all serialized via file lock)
   // ============================
+
+  // ============================
+  // Counter recalibration
+  // ============================
+
+  /**
+   * Rebuild derived counters from the active persistence layer.
+   *
+   * A healthy store is authoritative because retrieval and cleanup operate on
+   * its deduplicated rows. JSONL shards are used when the store is unavailable
+   * or degraded. This absolute recount is intended for startup, before runners
+   * begin mutating the checkpoint; runtime cleanup uses atomic deltas instead.
+   */
+  async recalibrateFromStorage(
+    store?: CheckpointCountStore,
+    reason = "startup",
+  ): Promise<CheckpointRecalibrationResult> {
+    const current = await this.read();
+    const lastPersonaTime = Number.isFinite(Date.parse(current.last_persona_time))
+      ? current.last_persona_time
+      : "";
+
+    let source: "store" | "jsonl" = "jsonl";
+    let actual: CheckpointDataCounts | undefined;
+
+    if (store && !store.isDegraded()) {
+      try {
+        const counts = await Promise.resolve(store.getCheckpointCounts(
+          lastPersonaTime ? { l1UpdatedAfter: lastPersonaTime } : undefined,
+        ));
+        const l0Records = requireValidCount(counts.l0Records, "l0Records");
+        const l1Records = requireValidCount(counts.l1Records, "l1Records");
+        const l1RecordsSincePersona = requireValidCount(
+          counts.filteredL1Records,
+          "filteredL1Records",
+        );
+        actual = { l0Records, l1Records, l1RecordsSincePersona };
+        source = "store";
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Store count failed during ${reason}; preserving checkpoint ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+        const before = counterSnapshot(current);
+        return { source: "store", reason, before, after: before };
+      }
+    }
+
+    if (!actual) {
+      actual = await countCheckpointJsonlData(this.dataDir, lastPersonaTime, this.logger);
+    }
+
+    return this.recalibrateCounts(actual, source, reason);
+  }
+
+  /**
+   * Atomically overwrite derived counters with already-counted persistence
+   * truth. JSONL can rebuild a brand-new checkpoint, but for an existing
+   * checkpoint it is append-only recovery data: it may lower drifted counters
+   * but must not grow them from superseded L1 events.
+   */
+  async recalibrateCounts(
+    actual: CheckpointDataCounts,
+    source: "store" | "jsonl" = "store",
+    reason = "manual",
+  ): Promise<CheckpointRecalibrationResult> {
+    let before!: CheckpointCounterSnapshot;
+    const cp = await this.mutate((cp) => {
+      before = counterSnapshot(cp);
+      const countedL0 = normalizeCount(actual.l0Records);
+      const countedL1 = normalizeCount(actual.l1Records);
+      // A brand-new checkpoint has no prior truth to protect. In that case
+      // JSONL is the active persistence layer (typically during store
+      // degradation) and must be allowed to rebuild counters upward.
+      const jsonlCanRebuild = source === "jsonl" &&
+        cp.total_processed === 0 &&
+        cp.total_memories_extracted === 0 &&
+        cp.memories_since_last_persona === 0;
+      const l0Records = source === "jsonl" && !jsonlCanRebuild
+        ? Math.min(cp.total_processed, countedL0)
+        : countedL0;
+      const l1Records = source === "jsonl" && !jsonlCanRebuild
+        ? Math.min(cp.total_memories_extracted, countedL1)
+        : countedL1;
+      const l1RecordsSincePersona = Math.min(
+        l1Records,
+        source === "jsonl" && !jsonlCanRebuild
+          ? Math.min(cp.memories_since_last_persona, normalizeCount(actual.l1RecordsSincePersona))
+          : normalizeCount(actual.l1RecordsSincePersona),
+      );
+
+      cp.total_processed = l0Records;
+      cp.l0_conversations_count = l0Records;
+      cp.total_memories_extracted = l1Records;
+      cp.memories_since_last_persona = l1RecordsSincePersona;
+    });
+    const after = counterSnapshot(cp);
+
+    this.logger.info(
+      `[checkpoint] recalibrated (${source}, ${reason}): ` +
+      `l0=${before.total_processed}->${after.total_processed}, ` +
+      `l1=${before.total_memories_extracted}->${after.total_memories_extracted}, ` +
+      `sincePersona=${before.memories_since_last_persona}->${after.memories_since_last_persona}`,
+    );
+
+    return { source, reason, before, after };
+  }
+
+  /** Apply successful cleanup as deltas so concurrent updates are preserved. */
+  async applyCleanupDelta(removed: {
+    l0Records?: number;
+    l1Records?: number;
+    l1RecordsSincePersona?: number;
+  }): Promise<void> {
+    const removedL0 = normalizeCount(removed.l0Records ?? 0);
+    const removedL1 = normalizeCount(removed.l1Records ?? 0);
+    const removedSincePersona = Math.min(
+      removedL1,
+      normalizeCount(removed.l1RecordsSincePersona ?? removedL1),
+    );
+    if (removedL0 === 0 && removedL1 === 0) return;
+
+    const cp = await this.mutate((cp) => {
+      cp.total_processed = Math.max(0, cp.total_processed - removedL0);
+      cp.l0_conversations_count = Math.max(0, cp.l0_conversations_count - removedL0);
+      cp.total_memories_extracted = Math.max(0, cp.total_memories_extracted - removedL1);
+      cp.memories_since_last_persona = Math.min(
+        cp.total_memories_extracted,
+        Math.max(0, cp.memories_since_last_persona - removedSincePersona),
+      );
+    });
+
+    this.logger.info(
+      `[checkpoint] cleanup delta: removedL0=${removedL0}, removedL1=${removedL1}, ` +
+      `removedSincePersona=${removedSincePersona}, l0=${cp.total_processed}, ` +
+      `l1=${cp.total_memories_extracted}, sincePersona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  async ensureScenesProcessedAtLeast(minimum: number): Promise<void> {
+    const normalizedMinimum = normalizeCount(minimum);
+    await this.mutate((cp) => {
+      cp.scenes_processed = Math.max(cp.scenes_processed, normalizedMinimum);
+    });
+  }
 
   // ============================
   // Persona methods (L3)
@@ -449,8 +656,8 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
-   * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
+   * The persisted L0 record count is also incremented inside the lock when
+   * messages are captured.
    *
    * @param sessionKey   Per-session identifier
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
@@ -479,8 +686,7 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }

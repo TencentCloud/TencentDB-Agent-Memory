@@ -32,6 +32,8 @@ import type {
   L1FtsResult,
   L0SearchResult,
   L0FtsResult,
+  CheckpointCountFilter,
+  CheckpointCounts,
 } from "./types.js";
 import type { Logger } from "../types.js";
 
@@ -1755,6 +1757,38 @@ export class VectorStore implements IMemoryStore {
         `${TAG} countL0 failed (non-fatal, returning 0): ${err instanceof Error ? err.message : String(err)}`,
       );
       return 0;
+    }
+  }
+
+  getCheckpointCounts(filter?: CheckpointCountFilter): CheckpointCounts {
+    if (this.degraded) throw new Error("SQLite store is degraded");
+    try {
+      const l0 = this.db.prepare("SELECT COUNT(*) AS cnt FROM l0_conversations").get() as { cnt: number };
+      const l1 = this.db.prepare("SELECT COUNT(*) AS cnt FROM l1_records").get() as { cnt: number };
+      const clauses: string[] = [];
+      const params: string[] = [];
+      if (filter?.l1UpdatedAfter) {
+        clauses.push("updated_time > ?");
+        params.push(filter.l1UpdatedAfter);
+      }
+      if (filter?.l1UpdatedBefore) {
+        clauses.push("updated_time < ?");
+        params.push(filter.l1UpdatedBefore);
+      }
+      const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+      const filtered = this.db
+        .prepare(`SELECT COUNT(*) AS cnt FROM l1_records${where}`)
+        .get(...params) as { cnt: number };
+      return {
+        l0Records: l0.cnt,
+        l1Records: l1.cnt,
+        filteredL1Records: filtered.cnt,
+      };
+    } catch (err) {
+      throw new Error(
+        `SQLite checkpoint count failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
     }
   }
 

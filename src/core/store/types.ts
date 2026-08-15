@@ -75,6 +75,18 @@ export interface L1QueryFilter {
   updatedAfter?: string;
 }
 
+/** Filtered aggregate counts used by checkpoint reconciliation. */
+export interface CheckpointCountFilter {
+  l1UpdatedAfter?: string;
+  l1UpdatedBefore?: string;
+}
+
+export interface CheckpointCounts {
+  l0Records: number;
+  l1Records: number;
+  filteredL1Records: number;
+}
+
 /** Row shape returned by L1 query methods. */
 export interface L1RecordRow {
   record_id: string;
@@ -248,6 +260,12 @@ export interface IMemoryStore {
 
   init(providerInfo?: EmbeddingProviderInfo): MaybePromise<StoreInitResult>;
   isDegraded(): boolean;
+  /**
+   * Return authoritative aggregate counts. Unlike the normal fault-tolerant
+   * count/query methods, this method throws when the backend cannot answer so
+   * callers never mistake a failed read for an empty store.
+   */
+  getCheckpointCounts(filter?: CheckpointCountFilter): MaybePromise<CheckpointCounts>;
   getCapabilities(): StoreCapabilities;
   close(): void;
 
