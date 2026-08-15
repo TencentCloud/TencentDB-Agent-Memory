@@ -201,6 +201,15 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
+  /**
+   * Dynamic recall block written to the system prompt tail AFTER any cache
+   * boundary marker. Populated only when `recall.cacheSafe.placement` is
+   * `"system-tail-dynamic"` or `"system-tail-cacheable"`. Host adapters that
+   * do not distinguish this from `appendSystemContext` may concatenate the
+   * two — placement is still safer than `prependContext` because the user
+   * message stays cache-stable.
+   */
+  appendContext?: string;
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */

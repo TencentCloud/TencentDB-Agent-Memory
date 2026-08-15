@@ -22,6 +22,7 @@ import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
 import type { Logger } from "../types.js";
+import { createHash } from "node:crypto";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
@@ -59,6 +60,8 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
+  /** Dynamic recall block appended to system prompt tail after cache boundary (issue #120). */
+  appendContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
   /** L1 memories that were recalled (with scores), for metric reporting */
@@ -123,8 +126,13 @@ async function performAutoRecallInner(params: {
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
-    memoryLines = searchResult.lines;
+    let memoryFormatables = searchResult.formatables;
     searchTiming = searchResult.timing;
+    // Cache-safe: sort BEFORE budget so truncation itself is deterministic too.
+    if (cfg.recall.cacheSafe?.deterministicOrder) {
+      memoryFormatables = sortMemoriesForCache(memoryFormatables);
+    }
+    memoryLines = memoryFormatables.map((f) => formatMemoryLine(f));
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
@@ -201,21 +209,54 @@ async function performAutoRecallInner(params: {
     stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
   }
 
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
+  // Dynamic part: L1 relevant memories (changes every turn).
+  let memoryBlock: string | undefined;
   if (memoryLines.length > 0) {
-    prependContext =
+    memoryBlock =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  }
+
+  // Session-level dedup: if the same sanitized query in the same session was
+  // just rendered, reuse the exact string. Prevents ordering/format churn
+  // from busting the prefix cache on adjacent turns of the same topic.
+  const cacheSafe = params.cfg.recall.cacheSafe;
+  if (cacheSafe?.sessionDedup && memoryBlock && params.sessionKey) {
+    const key = sanitizeText(userText);
+    const cached = sessionRecallCache.get(params.sessionKey, key);
+    if (cached) {
+      memoryBlock = cached;
+    } else {
+      sessionRecallCache.set(params.sessionKey, key, memoryBlock);
+    }
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
   // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
+  if (stableParts.length > 0 || memoryBlock) {
     stableParts.push(MEMORY_TOOLS_GUIDE);
   }
 
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const stableAppend = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+
+  // Placement routing (issue #120).
+  const placement = cacheSafe?.placement ?? "user-prefix";
+  let prependContext: string | undefined;
+  let appendContext: string | undefined;
+  let appendSystemContext = stableAppend;
+  if (memoryBlock) {
+    if (placement === "user-prefix") {
+      prependContext = memoryBlock;
+    } else if (placement === "system-tail-dynamic") {
+      appendContext = memoryBlock;
+    } else {
+      // system-tail-cacheable: fold into stable append. Only safe when
+      // sessionDedup=true (guaranteed identical across repeat turns).
+      appendSystemContext = appendSystemContext
+        ? `${appendSystemContext}\n\n${memoryBlock}`
+        : memoryBlock;
+    }
+  }
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,13 +268,24 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (cacheSafe?.diagnostics) {
+    logger?.info(
+      `${TAG} 🔎 prompt-shape: placement=${placement} det=${cacheSafe.deterministicOrder} dedup=${cacheSafe.sessionDedup} ` +
+      `appendSystem[len=${appendSystemContext?.length ?? 0} sha=${fingerprint(appendSystemContext)}] ` +
+      `appendCtx[len=${appendContext?.length ?? 0} sha=${fingerprint(appendContext)}] ` +
+      `prepend[len=${prependContext?.length ?? 0} sha=${fingerprint(prependContext)}] ` +
+      `memBlock[len=${memoryBlock?.length ?? 0} sha=${fingerprint(memoryBlock)}]`,
+    );
+  }
+
+  if (!appendSystemContext && !prependContext && !appendContext) {
     return undefined;
   }
 
   return {
     prependContext,
     appendSystemContext,
+    appendContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
@@ -259,6 +311,8 @@ interface SearchTiming {
 
 interface SearchResult {
   lines: string[];
+  /** Parallel to `lines` — pre-format records used by cache-safe reordering. */
+  formatables: FormatableMemory[];
   timing: SearchTiming;
 }
 
@@ -314,7 +368,7 @@ async function searchMemories(
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
 ): Promise<SearchResult> {
-  const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
+  const emptyResult: SearchResult = { lines: [], formatables: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
   // base64 image data, etc.) so FTS / embedding queries are based on pure user intent.
   const cleanText = sanitizeText(userText);
@@ -361,14 +415,14 @@ async function searchMemories(
   try {
     if (effectiveStrategy === "keyword") {
       const tFts = performance.now();
-      const lines = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
-      return { lines, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: lines.length, embeddingHits: 0 } };
+      const result = await searchByKeyword(cleanText, pluginDataDir, maxResults, threshold, logger, vectorStore);
+      return { lines: result.lines, formatables: result.formatables, timing: { ftsMs: performance.now() - tFts, embeddingMs: 0, ftsHits: result.lines.length, embeddingHits: 0 } };
     }
 
     if (effectiveStrategy === "embedding") {
       const tEmb = performance.now();
-      const lines = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
-      return { lines, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: lines.length } };
+      const result = await searchByEmbedding(cleanText, maxResults, threshold, vectorStore!, embeddingService!, logger, embeddingCallOpts);
+      return { lines: result.lines, formatables: result.formatables, timing: { ftsMs: 0, embeddingMs: performance.now() - tEmb, ftsHits: 0, embeddingHits: result.lines.length } };
     }
 
     // Hybrid: if the store natively supports hybrid search (e.g. TCVDB does
@@ -379,8 +433,9 @@ async function searchMemories(
       const results = await vectorStore.searchL1Hybrid({ query: cleanText, topK: maxResults });
       const nativeMs = performance.now() - tNative;
       logger?.debug?.(`${TAG} [hybrid-native] Single-call hybrid: ${results.length} results in ${nativeMs.toFixed(0)}ms`);
-      const lines = results.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
-      return { lines, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
+      const formatables = results.map((r) => vectorResultToFormatable(r));
+      const lines = formatables.map((f) => formatMemoryLine(f));
+      return { lines, formatables, timing: { ftsMs: 0, embeddingMs: nativeMs, ftsHits: 0, embeddingHits: results.length } };
     }
 
     // Fallback: run keyword + embedding in parallel, merge with client-side RRF (SQLite path)
@@ -402,7 +457,12 @@ async function searchByKeyword(
   threshold: number,
   logger?: Logger,
   vectorStore?: IMemoryStore,
-): Promise<string[]> {
+): Promise<{ lines: string[]; formatables: FormatableMemory[] }> {
+  const empty = { lines: [] as string[], formatables: [] as FormatableMemory[] };
+  const materialize = (rs: L1FtsResult[]) => {
+    const formatables = rs.map((r) => ftsResultToFormatable(r));
+    return { lines: formatables.map((f) => formatMemoryLine(f)), formatables };
+  };
   // Prefer FTS5 if available
   if (vectorStore?.isFtsAvailable()) {
     const ftsQuery = buildFtsQuery(userText);
@@ -420,7 +480,7 @@ async function searchByKeyword(
 
         if (filtered.length > 0) {
           logger?.debug?.(`${TAG} [keyword-fts] FTS5 found ${filtered.length} results (from ${ftsResults.length} raw, threshold=${threshold})`);
-          return filtered.map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return materialize(filtered);
         }
 
         // BM25 absolute scores are unreliable when the document set is very
@@ -431,7 +491,7 @@ async function searchByKeyword(
             `${TAG} [keyword-fts] All ${ftsResults.length} results below threshold=${threshold} ` +
             `but document set is small — returning all matched results`,
           );
-          return ftsResults.slice(0, maxResults).map((r) => formatMemoryLine(ftsResultToFormatable(r)));
+          return materialize(ftsResults.slice(0, maxResults));
         }
         logger?.debug?.(`${TAG} [keyword-fts] FTS5 returned 0 results above threshold (from ${ftsResults.length} raw)`);
       }
@@ -440,7 +500,7 @@ async function searchByKeyword(
 
   // FTS5 not available or returned no results — skip in-memory fallback to avoid O(N) full scan
   logger?.debug?.(`${TAG} [keyword] FTS5 unavailable or no results, skipping keyword search`);
-  return [];
+  return empty;
 }
 
 // ============================
@@ -455,7 +515,7 @@ async function searchByEmbedding(
   embeddingService: EmbeddingService,
   logger?: Logger,
   embeddingCallOpts?: EmbeddingCallOptions,
-): Promise<string[]> {
+): Promise<{ lines: string[]; formatables: FormatableMemory[] }> {
   logger?.debug?.(
     `${TAG} [embedding-search] START query="${userText.slice(0, 80)}...", maxResults=${maxResults}, threshold=${threshold}`,
   );
@@ -470,7 +530,7 @@ async function searchByEmbedding(
 
   if (vecResults.length === 0) {
     logger?.debug?.(`${TAG} [embedding-search] Returned 0 results`);
-    return [];
+    return { lines: [], formatables: [] };
   }
 
   logger?.debug?.(`${TAG} [embedding-search] Got ${vecResults.length} candidates, filtering by threshold=${threshold}`);
@@ -487,11 +547,12 @@ async function searchByEmbedding(
 
   if (filtered.length > 0) {
     logger?.debug?.(`${TAG} [embedding-search] Found ${filtered.length} relevant memories above threshold (from ${vecResults.length} candidates)`);
-    return filtered.map((r) => formatMemoryLine(vectorResultToFormatable(r)));
+    const formatables = filtered.map((r) => vectorResultToFormatable(r));
+    return { lines: formatables.map((f) => formatMemoryLine(f)), formatables };
   }
 
   logger?.debug?.(`${TAG} [embedding-search] No results above threshold ${threshold}`);
-  return [];
+  return { lines: [], formatables: [] };
 }
 
 // ============================
@@ -593,7 +654,7 @@ async function searchHybrid(
 
   if (keywordResults.length === 0 && embeddingResults.length === 0) {
     logger?.debug?.(`${TAG} Hybrid search: both strategies returned 0 results`);
-    return { lines: [], timing };
+    return { lines: [], formatables: [], timing };
   }
 
   // RRF merge: k=60 is a standard constant from the RRF paper
@@ -638,11 +699,12 @@ async function searchHybrid(
       `${TAG} Hybrid search found ${sorted.length} results ` +
       `(keyword=${keywordResults.length}, embedding=${embeddingResults.length})`,
     );
-    return { lines: sorted.map(([, { formatable }]) => formatMemoryLine(formatable)), timing };
+    const formatables = sorted.map(([, { formatable }]) => formatable);
+    return { lines: formatables.map((f) => formatMemoryLine(f)), formatables, timing };
   }
 
   logger?.debug?.(`${TAG} Hybrid search: no results after merge`);
-  return { lines: [], timing };
+  return { lines: [], formatables: [], timing };
 }
 
 // ============================
@@ -667,6 +729,8 @@ interface FormatableMemory {
   type: string;
   content: string;
   scene_name?: string;
+  /** Stable record id, used for deterministic ordering (issue #120). */
+  id?: string;
   /** Activity time range start (段时间 start), may be empty */
   activity_start_time?: string;
   /** Activity time range end (段时间 end), may be empty */
@@ -822,6 +886,7 @@ function recordToFormatable(record: MemoryRecord): FormatableMemory {
     type: record.type,
     content: record.content,
     scene_name: record.scene_name || undefined,
+    id: record.id || undefined,
     activity_start_time: meta?.activity_start_time || undefined,
     activity_end_time: meta?.activity_end_time || undefined,
     timestamp: (record.timestamps && record.timestamps.length > 0) ? record.timestamps[0] : undefined,
@@ -846,6 +911,7 @@ function vectorResultToFormatable(r: L1SearchResult): FormatableMemory {
     type: r.type,
     content: r.content,
     scene_name: r.scene_name || undefined,
+    id: r.record_id || undefined,
     activity_start_time: activityStart,
     activity_end_time: activityEnd,
     timestamp: r.timestamp_str || undefined,
@@ -870,8 +936,94 @@ function ftsResultToFormatable(r: L1FtsResult): FormatableMemory {
     type: r.type,
     content: r.content,
     scene_name: r.scene_name || undefined,
+    id: r.record_id || undefined,
     activity_start_time: activityStart,
     activity_end_time: activityEnd,
     timestamp: r.timestamp_str || undefined,
   };
+}
+
+// ============================
+// Cache-safe recall helpers (issue #120)
+// ============================
+
+/**
+ * Deterministic memory line ordering. Sort by (record id) ascending so RRF
+ * tie-order, score jitter, and provider latency races do not shift the
+ * rendered `<relevant-memories>` block across turns.
+ *
+ * The input `lines` are already `formatMemoryLine` output; we cannot recover
+ * ids from them, so this operates on the pre-format `FormatableMemory[]`.
+ */
+export function sortMemoriesForCache(mems: FormatableMemory[]): FormatableMemory[] {
+  return [...mems].sort((a, b) => {
+    const ai = a.id ?? "";
+    const bi = b.id ?? "";
+    if (ai !== bi) return ai < bi ? -1 : 1;
+    // Fallback: type, then content (stable, byte-comparable).
+    if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+    return a.content < b.content ? -1 : a.content > b.content ? 1 : 0;
+  });
+}
+
+/**
+ * Per-session LRU cache: sanitized-query → rendered recall string.
+ * Bounded so we do not grow unboundedly for long-lived sessions.
+ */
+class SessionRecallLRU {
+  private readonly map = new Map<string, Map<string, string>>();
+  constructor(private readonly maxPerSession: number) {}
+
+  get(sessionKey: string, query: string): string | undefined {
+    const inner = this.map.get(sessionKey);
+    if (!inner) return undefined;
+    const v = inner.get(query);
+    if (v !== undefined) {
+      // Bump recency.
+      inner.delete(query);
+      inner.set(query, v);
+    }
+    return v;
+  }
+
+  set(sessionKey: string, query: string, value: string): void {
+    let inner = this.map.get(sessionKey);
+    if (!inner) {
+      inner = new Map();
+      this.map.set(sessionKey, inner);
+    }
+    if (inner.has(query)) inner.delete(query);
+    inner.set(query, value);
+    while (inner.size > this.maxPerSession) {
+      const oldest = inner.keys().next().value;
+      if (oldest === undefined) break;
+      inner.delete(oldest);
+    }
+  }
+}
+
+const sessionRecallCache = new SessionRecallLRU(1024);
+
+/** Fingerprint for diagnostics. Truncated SHA1 hex, 8 chars is plenty for eyeball diffing. */
+function fingerprint(s: string | undefined): string {
+  if (!s) return "-";
+  return createHash("sha1").update(s).digest("hex").slice(0, 8);
+}
+
+/**
+ * Route the recalled dynamic memory string to the placement configured by
+ * `recall.cacheSafe.placement`.
+ *
+ * Returns a partial RecallResult with only placement-related fields set.
+ * The caller merges this with stable append fields.
+ */
+export function routeRecallPlacement(
+  memoryBlock: string | undefined,
+  placement: "user-prefix" | "system-tail-dynamic" | "system-tail-cacheable",
+): { prependContext?: string; appendContext?: string; appendSystemContext?: string } {
+  if (!memoryBlock) return {};
+  if (placement === "user-prefix") return { prependContext: memoryBlock };
+  if (placement === "system-tail-dynamic") return { appendContext: memoryBlock };
+  // system-tail-cacheable — merge into the stable append (caller concatenates).
+  return { appendSystemContext: memoryBlock };
 }

@@ -93,6 +93,50 @@ export interface RecallConfig {
   strategy: "embedding" | "keyword" | "hybrid";
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
+  /**
+   * Cache-safe recall behavior (issue #120). Controls how recalled context is
+   * placed relative to the provider's cacheable prefix, whether the memory
+   * ordering is deterministic across turns, and whether the same
+   * `(sessionKey, sanitizedQuery)` returns the exact same string on repeat.
+   *
+   * Defaults keep prior behavior; opt in for prefix-cache friendliness.
+   */
+  cacheSafe: {
+    /**
+     * Where the dynamic recalled-memories block is written into the request.
+     *
+     * - "user-prefix" (default, legacy): prepend to the current user message.
+     *   Simple; but the block enters conversation history and shifts every
+     *   turn, so downstream truncation invalidates the prefix cache.
+     * - "system-tail-dynamic": append to the system prompt tail alongside
+     *   persona/scene, but AFTER the cache boundary. Keeps the user message
+     *   pristine; system-prefix cache still busts but user-message prefix
+     *   caches survive.
+     * - "system-tail-cacheable": append to the system prompt tail BEFORE the
+     *   cache boundary. Only safe when combined with `sessionDedup=true`
+     *   (otherwise every turn changes the cacheable region).
+     */
+    placement: "user-prefix" | "system-tail-dynamic" | "system-tail-cacheable";
+    /**
+     * When true, sort recalled memories by a stable key (record id) before
+     * rendering so score jitter and RRF tie-order do not shift the string
+     * between otherwise identical turns.
+     */
+    deterministicOrder: boolean;
+    /**
+     * When true, within a single session cache the last emitted recall
+     * string keyed by sanitized user text; a repeat query reuses the same
+     * string byte-for-byte. Bounded by `sessionDedupMax` entries per session.
+     */
+    sessionDedup: boolean;
+    /** LRU size for per-session recall dedup (default: 32). */
+    sessionDedupMax: number;
+    /**
+     * Emit per-turn prompt-shape diagnostics (region sizes + SHA1 of each
+     * region) into the logger at info level. For cache-hit forensics.
+     */
+    diagnostics: boolean;
+  };
 }
 
 /** Embedding service configuration for vector search. */
@@ -535,6 +579,13 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
+      cacheSafe: {
+        placement: validatePlacement(str(cacheSafeGroup(recallGroup), "placement")) ?? "user-prefix",
+        deterministicOrder: bool(cacheSafeGroup(recallGroup), "deterministicOrder") ?? false,
+        sessionDedup: bool(cacheSafeGroup(recallGroup), "sessionDedup") ?? false,
+        sessionDedupMax: num(cacheSafeGroup(recallGroup), "sessionDedupMax") ?? 32,
+        diagnostics: bool(cacheSafeGroup(recallGroup), "diagnostics") ?? false,
+      },
     },
     embedding: {
       enabled: embeddingEnabled,
@@ -643,6 +694,24 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+/** cacheSafe sub-group extractor. */
+function cacheSafeGroup(recallGroup: Record<string, unknown>): Record<string, unknown> {
+  return obj(recallGroup, "cacheSafe");
+}
+
+const VALID_PLACEMENTS: RecallConfig["cacheSafe"]["placement"][] = [
+  "user-prefix",
+  "system-tail-dynamic",
+  "system-tail-cacheable",
+];
+
+function validatePlacement(value: string | undefined): RecallConfig["cacheSafe"]["placement"] | undefined {
+  if (!value) return undefined;
+  return VALID_PLACEMENTS.includes(value as RecallConfig["cacheSafe"]["placement"])
+    ? (value as RecallConfig["cacheSafe"]["placement"])
     : undefined;
 }
 
