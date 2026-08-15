@@ -170,6 +170,17 @@ export interface StoreInitResult {
   reason?: string;
 }
 
+/**
+ * Strict storage snapshot used to reconcile derived checkpoint counters.
+ * A successful empty-store read is represented by zero values; failures are
+ * reported by throwing rather than by returning an empty snapshot.
+ */
+export interface CheckpointStoreCounts {
+  l0: number;
+  l1: number;
+  l1Since: number;
+}
+
 // ============================
 // Capability Flags
 // ============================
@@ -250,6 +261,20 @@ export interface IMemoryStore {
   isDegraded(): boolean;
   getCapabilities(): StoreCapabilities;
   close(): void;
+
+  /**
+   * Read all checkpoint-derived counts without fault-tolerant empty fallbacks.
+   *
+   * Built-in SQLite and TCVDB stores implement this strict contract: legitimate
+   * empty data returns zero counts, while degraded state and read failures throw.
+   * External/custom stores may omit the method for backward compatibility. Callers
+   * may then use the legacy count/query APIs as a best-effort fallback, but those
+   * APIs cannot necessarily distinguish a read failure from a legitimate 0 / [].
+   *
+   * Any custom implementation that opts into this method MUST also throw when the
+   * underlying storage read fails.
+   */
+  readCheckpointCountsStrict?(updatedAfter?: string): MaybePromise<CheckpointStoreCounts>;
 
   // ── L1 Write ─────────────────────────────────────────────
 
