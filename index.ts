@@ -66,6 +66,15 @@ const pendingOriginalPrompts = new Map<string, { text: string; ts: number; messa
 const PROMPT_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const PROMPT_CACHE_MAX_SIZE = 10_000; // Hard limit to prevent unbounded growth in high-concurrency scenarios
 
+function estimateConversationTurns(messages: unknown[] | undefined): number {
+  if (!messages || messages.length === 0) return 1;
+  const userMessageCount = messages.reduce((count, msg) => {
+    const role = typeof msg === "object" && msg !== null ? (msg as { role?: unknown }).role : undefined;
+    return role === "user" ? count + 1 : count;
+  }, 0);
+  return Math.max(1, userMessageCount + 1);
+}
+
 /**
  * Cache recall results (L1 memories + L3 Persona) from before_prompt_build
  * for retrieval at agent_end, enabling the agent_turn metric event.
@@ -77,6 +86,20 @@ const pendingRecallCache = new Map<string, {
   l3Persona: string | null;
   strategy: string;
   durationMs: number;
+  showInjected?: boolean;
+  showInjectedReason?: "memory_auto_degrade";
+  promptCacheImpact?: {
+    turns: number;
+    stableContextChars: number;
+    dynamicContextChars: number;
+    estimatedStableTokens: number;
+    estimatedDynamicTokens: number;
+    legacyVisibleHistoryChars: number;
+    optimizedVisibleHistoryChars: number;
+    legacyEstimatedHitRate: number;
+    optimizedEstimatedHitRate: number;
+    estimatedHitRateDelta: number;
+  };
   ts: number;
 }>();
 
@@ -564,7 +587,8 @@ export default function register(api: OpenClawPluginApi) {
       try {
         await coreReady;
         const recallStartMs = Date.now();
-        const result = await core.handleBeforeRecall(userText, resolvedSessionKey);
+        const estimatedTurns = estimateConversationTurns(messages);
+        const result = await core.handleBeforeRecall(userText, resolvedSessionKey, { estimatedTurns });
         const elapsedMs = Date.now() - startMs;
         const recallDurationMs = Date.now() - recallStartMs;
 
@@ -575,6 +599,9 @@ export default function register(api: OpenClawPluginApi) {
             l3Persona: result.recalledL3Persona ?? null,
             strategy: result.recallStrategy ?? "unknown",
             durationMs: recallDurationMs,
+            showInjected: result.showInjected,
+            showInjectedReason: result.showInjectedReason,
+            promptCacheImpact: result.promptCacheImpact,
             ts: Date.now(),
           });
         }
@@ -587,9 +614,11 @@ export default function register(api: OpenClawPluginApi) {
         if (result?.appendSystemContext || result?.prependContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          const showInjected = result.showInjected === false ? `false/${result.showInjectedReason ?? "unknown"}` : "default";
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars, ` +
+            `showInjected=${showInjected}`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
@@ -729,6 +758,9 @@ export default function register(api: OpenClawPluginApi) {
             recalledL3Persona: cachedRecall?.l3Persona ?? null,
             recallStrategy: cachedRecall?.strategy ?? null,
             recallDurationMs: cachedRecall?.durationMs ?? 0,
+            cachePartition: cachedRecall?.promptCacheImpact ?? null,
+            showInjected: cachedRecall?.showInjected ?? null,
+            showInjectedReason: cachedRecall?.showInjectedReason ?? null,
             l0CapturedMessages: captureResult.filteredMessages.map((m) => ({
               role: m.role,
               content: m.content,

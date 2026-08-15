@@ -201,6 +201,23 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide). */
   appendSystemContext?: string;
+  /** Hide injected context from visible history when the host supports it. */
+  showInjected?: boolean;
+  /** Reason for the showInjected decision, used for metrics and diagnostics. */
+  showInjectedReason?: "memory_auto_degrade";
+  /** Local deterministic cache-impact estimate for logging and metric reporting. */
+  promptCacheImpact?: {
+    turns: number;
+    stableContextChars: number;
+    dynamicContextChars: number;
+    estimatedStableTokens: number;
+    estimatedDynamicTokens: number;
+    legacyVisibleHistoryChars: number;
+    optimizedVisibleHistoryChars: number;
+    legacyEstimatedHitRate: number;
+    optimizedEstimatedHitRate: number;
+    estimatedHitRateDelta: number;
+  };
   /** Recalled L1 memories with scores (for metrics). */
   recalledL1Memories?: Array<{ content: string; score: number; type: string }>;
   /** L3 Persona content (for metrics). */
