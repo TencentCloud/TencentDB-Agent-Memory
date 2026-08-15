@@ -185,14 +185,12 @@ async function performAutoRecallInner(params: {
 
   // Split recall context into stable and dynamic parts to optimize prompt caching.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
-  //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  // appendSystemContext (Core field — stable: persona, scene nav, tools guide):
+  //   OpenClaw adapter maps this to prependSystemContext by default (issue #120)
+  //   so hosts can place it before CACHE_BOUNDARY for prefix-matching caches.
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
+  // prependContext (user prompt — dynamic, per-turn):
+  //   L1 relevant memories. injectionMode=append may map this to appendContext.
   const stableParts: string[] = [];
   if (personaContent) {
     stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
