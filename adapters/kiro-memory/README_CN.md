@@ -39,7 +39,7 @@ node scripts/doctor.mjs --project /path/to/workspace
 node scripts/uninstall.mjs --project /path/to/workspace
 ```
 
-安装器会验证 config，但绝不把环境变量值写入文件；它先写入无 secret 的 `.kiro/tdai-memory-install.json` receipt，再创建 `.kiro/hooks/tdai-memory.json`。完整、已 fsync 的临时文件通过原子 no-replace link 发布：并发的不同 receipt 或 hook 会被保留且安全失败，并发相同安装可幂等成功。崩溃时最多遗留内容匹配、尚未启用 hook 的 staged receipt；下一次安装会安全继续创建 hook。卸载器只接受 `adapter_path` 精确属于当前适配器的 receipt，并先把 receipt 与 hook 原子隔离到非 JSON 名称，再校验 hash，因此不会删除并发写入原路径的新文件。校验失败时使用 hard-link no-replace 恢复；若原路径已被占用，新文件与 quarantine backup 都会保留。它绝不删除 `.kiro/hooks` 或其他 hook。`doctor.mjs` 离线运行，只输出检查名称及 pass/fail，检查 Node、config schema、CLI、已安装 hook schema、receipt 和 hash；它不检查 `stateDir`，也不报告或修复遗留 session lock。
+安装器会验证 config，但绝不把环境变量值写入文件；它先写入无 secret 的 `.kiro/tdai-memory-install.json` receipt，再创建 `.kiro/hooks/tdai-memory.json`。完整、已 fsync 的临时文件通过原子 no-replace link 发布：并发的不同 receipt 或 hook 会被保留且安全失败，并发相同安装可幂等成功。崩溃时最多遗留内容匹配、尚未启用 hook 的 staged receipt；下一次安装会安全继续创建 hook。卸载器只接受 `adapter_path` 精确属于当前适配器的 receipt，并先把 receipt 与 hook 移入可恢复事务目录 `.kiro/.tdai-memory-uninstall/` 下的非 JSON quarantine 文件，再校验 hash。成功清理时先删除 hook quarantine，再删除 receipt quarantine，因此卸载中断后可由下次运行安全续作。校验失败时使用 hard-link no-replace 恢复；若原路径已被占用，新文件与 quarantine backup 都会保留。并发写入原路径的新文件不会被删除，`.kiro/hooks` 与其他 hook 也绝不会被删除。`doctor.mjs` 离线运行，只输出检查名称及 pass/fail，检查 Node、config schema、CLI、已安装 hook schema、receipt 和 hash；它不检查 `stateDir`，也不报告或修复遗留 session lock。
 
 ## 手工 Hook 模板
 

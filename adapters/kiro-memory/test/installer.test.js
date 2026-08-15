@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, unlink as fsUnlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -122,9 +122,78 @@ test('uninstaller keeps both a replacement hook and quarantine backup when resto
     const quarantinedContent = '{"changed":"old"}\n'; const replacement = '{"new":"user"}\n'; await writeFile(hookPath, quarantinedContent);
     await assert.rejects(uninstallProject({ project, afterHookQuarantined: async () => { await writeFile(hookPath, replacement); } }), /changed/);
     assert.equal(await readFile(hookPath, 'utf8'), replacement);
-    const backups = (await readdir(hookDirectory)).filter((name) => name.endsWith('.quarantine'));
-    assert.equal(backups.length, 1); assert.equal(await readFile(join(hookDirectory, backups[0]), 'utf8'), quarantinedContent);
+    const backup = join(project, '.kiro', '.tdai-memory-uninstall', 'hook.quarantine');
+    assert.equal(await readFile(backup, 'utf8'), quarantinedContent);
   } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller resumes after hook quarantine deletion fails', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-hook-delete-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    let failed = false;
+    const unlinkQuarantine = async (path) => { if (!failed && path.endsWith('hook.quarantine')) { failed = true; throw new Error('hook-unlink'); } await fsUnlink(path); };
+    await assert.rejects(uninstallProject({ project, unlinkQuarantine }), /hook-unlink/);
+    const tx = join(project, '.kiro', '.tdai-memory-uninstall');
+    assert.equal(JSON.parse(await readFile(join(tx, 'receipt.quarantine'), 'utf8')).version, 1);
+    await readFile(join(tx, 'hook.quarantine'), 'utf8');
+    await uninstallProject({ project });
+    await assert.rejects(readFile(join(tx, 'receipt.quarantine'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller resumes after receipt quarantine deletion fails', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-receipt-delete-'));
+  try {
+    const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+    let failed = false;
+    const unlinkQuarantine = async (path) => { if (!failed && path.endsWith('receipt.quarantine')) { failed = true; throw new Error('receipt-unlink'); } await fsUnlink(path); };
+    await assert.rejects(uninstallProject({ project, unlinkQuarantine }), /receipt-unlink/);
+    const tx = join(project, '.kiro', '.tdai-memory-uninstall');
+    await assert.rejects(readFile(join(tx, 'hook.quarantine'), 'utf8'), { code: 'ENOENT' });
+    await readFile(join(tx, 'receipt.quarantine'), 'utf8');
+    await uninstallProject({ project });
+    await assert.rejects(readFile(join(tx, 'receipt.quarantine'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('uninstaller resumes each deterministic transaction crash stage', async () => {
+  for (const [name, option] of [
+    ['directory', 'afterTransactionCreated'],
+    ['receipt', 'afterReceiptStaged'],
+    ['hook', 'afterHookStaged'],
+  ]) {
+    const project = await mkdtemp(join(tmpdir(), `kiro-uninstall-crash-${name}-`));
+    try {
+      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      await assert.rejects(uninstallProject({ project, [option]: async () => { throw new Error(`crash-${name}`); } }), new RegExp(`crash-${name}`));
+      await uninstallProject({ project });
+      await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+      await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
+});
+
+test('uninstaller completes a receipt-first staged install that has no hook', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-staged-only-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    await assert.rejects(installProject({ project, env, afterReceiptPublished: async () => { throw new Error('install-crash'); } }), /install-crash/);
+    await uninstallProject({ project });
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
+});
+
+test('two concurrent uninstalls safely complete the same transaction', async () => {
+  for (let index = 0; index < 20; index += 1) {
+    const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-concurrent-'));
+    try {
+      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      await Promise.all([uninstallProject({ project }), uninstallProject({ project })]);
+      await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
+      await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
+    } finally { await rm(project, { recursive: true, force: true }); }
+  }
 });
 
 test('manual template is exact v1 hook JSON and contains no credential fields', async () => {
