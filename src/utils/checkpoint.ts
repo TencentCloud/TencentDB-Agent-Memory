@@ -432,6 +432,35 @@ export class CheckpointManager {
   }
 
   // ============================
+  // Recalibration (counter repair)
+  // ============================
+
+  /**
+   * Recalibrates counters based on actual file data.
+   * Executed on startup and immediately after cleaner execution completes.
+   */
+  async recalibrate(): Promise<void> {
+    await this.mutate(async (cp) => {
+      // L1: Count total lines of all .jsonl files under records/
+      const recordsDir = path.join(
+        path.dirname(this.filePath), "..", "records",
+      );
+      cp.total_memories_extracted = await countJsonlLines(recordsDir);
+
+      // L0: Count total lines of all .jsonl files under conversations/
+      const convDir = path.join(
+        path.dirname(this.filePath), "..", "conversations",
+      );
+      const totalLines = await countJsonlLines(convDir);
+      // l0_conversations_count represents capture event count, not message line count.
+      // There is no perfect way to restore event count from files.
+      // Using file line count is a reasonable approximation.
+      // If the cleaner cleans L0 data, the line count reduction will be reflected.
+      cp.l0_conversations_count = Math.min(cp.l0_conversations_count, totalLines);
+    });
+  }
+
+  // ============================
   // Atomic capture (race-condition fix)
   // ============================
 
@@ -485,4 +514,18 @@ export class CheckpointManager {
     });
   }
 
+}
+
+/** Counts total valid lines of all .jsonl files in a directory (returns 0 for empty directories). */
+async function countJsonlLines(dir: string): Promise<number> {
+  let total = 0;
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const e of entries) {
+      if (!e.isFile() || !e.name.endsWith(".jsonl")) continue;
+      const content = await fs.readFile(path.join(dir, e.name), "utf-8");
+      total += content.split("\n").filter(l => l.trim()).length;
+    }
+  } catch { /* Return 0 if directory does not exist */ }
+  return total;
 }
