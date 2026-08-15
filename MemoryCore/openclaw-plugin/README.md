@@ -184,6 +184,7 @@ openclaw gateway restart
 | `recall.includePersona` | `true` | Include L3 core/profile |
 | `recall.includeSceneNav` | `true` | Include L2 scene navigation |
 | `capture.enabled` | `true` | Auto-capture completed turns |
+| `storage.localDir` | _(empty)_ | Absolute path to a local scene-memory root. When set, `tdai_read_local` is registered instead of `tdai_read_cos` (COS-less deployments, issue #762) |
 | `hooks.allowPromptInjection` | `true` | Only write on OpenClaw `>= 2026.4.24` |
 | `hooks.allowConversationAccess` | `true` | Only write on OpenClaw `>= 2026.4.24`; required for L0 on non-bundled plugins |
 

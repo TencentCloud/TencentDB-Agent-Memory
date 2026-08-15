@@ -16,6 +16,8 @@ import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
 import { handleConversationSearch } from "./src/tools/conversation-search.js";
 import { handleReadCos } from "./src/tools/read-cos.js";
+import { handleReadLocal } from "./src/tools/read-local.js";
+import type { ReadTool } from "./src/format.js";
 
 const TAG = "[memory-client]";
 
@@ -37,10 +39,16 @@ interface RecallConfig {
 interface CaptureConfig {
   enabled?: boolean;
 }
+interface StorageConfig {
+  /** Absolute path to the local scene-memory root. When set, tdai_read_local
+   *  is registered instead of tdai_read_cos (COS-less deployments, #762). */
+  localDir?: string;
+}
 interface PluginConfig {
   server?: ServerConfig;
   recall?: RecallConfig;
   capture?: CaptureConfig;
+  storage?: StorageConfig;
 }
 
 // Matches OpenClaw plugin register() signature: export default function register(api)
@@ -50,6 +58,12 @@ export default function register(api: any) {
   const server = cfg.server ?? {};
   const recall = cfg.recall ?? {};
   const capture = cfg.capture ?? {};
+  const storage = cfg.storage ?? {};
+
+  // Local scene-memory root. When set, the plugin reads scene detail from a
+  // local directory (tdai_read_local) instead of COS (tdai_read_cos).
+  const localDir = storage.localDir?.trim() ?? "";
+  const readTool: ReadTool = localDir ? "local" : "cos";
 
   const serverUrl = server.url || "http://127.0.0.1:8420";
   const apiKey = server.apiKey || "local";
@@ -88,7 +102,8 @@ export default function register(api: any) {
     `${TAG} Initialized: server=${serverUrl}, instance=${instanceId}, ` +
     `isolation(team=${teamId},agent=${agentId},user=${userId}), ` +
     `recall(persona=${includePersona},sceneNav=${includeSceneNav},max=${recallMaxResults}), ` +
-    `capture=${captureEnabled}, cosRead=on, rejectUnauthorized=${rejectUnauthorized}`,
+    `capture=${captureEnabled}, read=${readTool}${localDir ? `(localDir=${localDir})` : ""}, ` +
+    `rejectUnauthorized=${rejectUnauthorized}`,
   );
 
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
@@ -138,31 +153,63 @@ export default function register(api: any) {
     { name: "tdai_conversation_search" },
   );
 
-  api.registerTool(
-    {
-      name: "tdai_read_cos",
-      label: "Read Memory File",
-      description:
-        "Read a memory pipeline file from object storage by relative path " +
-        "(e.g. Scene Navigation paths like 'scene_blocks/xxx.md', or 'persona.md'). " +
-        "Uses STS credentials from the Memory Gateway.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description:
-              "Full relative storage key (e.g. 'scene_blocks/travel-plan.md' or 'persona.md').",
+  // Scene-detail read tool: register exactly one, depending on deployment.
+  // COS mode (default) → tdai_read_cos via STS; local mode → tdai_read_local
+  // reading a configured local directory. Never register a tool that is
+  // guaranteed to fail (issue #762).
+  if (localDir) {
+    api.registerTool(
+      {
+        name: "tdai_read_local",
+        label: "Read Local Memory File",
+        description:
+          "Read a local scene-memory file by relative path " +
+          "(e.g. Scene Navigation paths like 'scene_blocks/xxx.md', or 'persona.md'). " +
+          "Reads from the configured local storage directory.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description:
+                "Relative path under the local memory root (e.g. 'scene_blocks/travel-plan.md' or 'persona.md').",
+            },
           },
+          required: ["path"],
         },
-        required: ["path"],
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          return handleReadLocal(localDir, params as any, api.logger);
+        },
       },
-      async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleReadCos(fileReader, params as any, api.logger);
+      { name: "tdai_read_local" },
+    );
+  } else {
+    api.registerTool(
+      {
+        name: "tdai_read_cos",
+        label: "Read Memory File",
+        description:
+          "Read a memory pipeline file from object storage by relative path " +
+          "(e.g. Scene Navigation paths like 'scene_blocks/xxx.md', or 'persona.md'). " +
+          "Uses STS credentials from the Memory Gateway.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description:
+                "Full relative storage key (e.g. 'scene_blocks/travel-plan.md' or 'persona.md').",
+            },
+          },
+          required: ["path"],
+        },
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          return handleReadCos(fileReader, params as any, api.logger);
+        },
       },
-    },
-    { name: "tdai_read_cos" },
-  );
+      { name: "tdai_read_cos" },
+    );
+  }
 
   // ── Register Hooks (api.on pattern, same as memory-tencentdb) ──
 
@@ -200,6 +247,7 @@ export default function register(api: any) {
         maxResults: recallMaxResults,
         includePersona,
         includeSceneNav,
+        readTool,
       }, api.logger);
 
       // OpenClaw consumes the *return value* of before_prompt_build,
