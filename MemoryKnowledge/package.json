@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Standalone knowledge service — Code-Graph + LLM-Wiki engine for user-side deployment",
   "type": "module",
-  "main": "./dist/server.js",
+  "main": "./dist/server.mjs",
   "bin": {
     "knowledge-server": "./bin/server.mjs",
     "knowledge-mcp": "./bin/mcp.mjs"

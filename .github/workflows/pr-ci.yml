@@ -2,7 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    # The repo's default / release branch (feat/server_team) is where every
+    # PR lands — main is a legacy branch. Trigger CI on both (issue #782).
+    branches: [main, feat/server_team]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
