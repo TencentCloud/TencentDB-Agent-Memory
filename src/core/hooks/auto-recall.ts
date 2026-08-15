@@ -94,6 +94,8 @@ export async function performAutoRecall(params: {
   embeddingService?: EmbeddingService;
   /** StorageAdapter for file operations (COS/local). Falls back to fs when absent. */
   storage?: StorageAdapter;
+  /** Optional L1 result-count override (clamped 1..50); see gateway /recall top_k. */
+  topK?: number;
 }): Promise<RecallResult | undefined> {
   const { cfg, logger } = params;
   const timeoutMs = cfg.recall.timeoutMs ?? 5000;
@@ -147,8 +149,9 @@ async function performAutoRecallCore(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   storage?: StorageAdapter;
+  topK?: number;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, storage } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, storage, topK } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -161,7 +164,7 @@ async function performAutoRecallCore(params: {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
-    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
+    const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService, topK);
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
@@ -314,6 +317,7 @@ async function performAutoRecallInner(params: {
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
   storage?: StorageAdapter;
+  topK?: number;
 }): Promise<RecallResult | undefined> {
   try {
     return await performAutoRecallCore(params);
@@ -418,6 +422,8 @@ async function searchMemories(
   strategy: "keyword" | "embedding" | "hybrid",
   vectorStore?: IMemoryStore,
   embeddingService?: EmbeddingService,
+  /** Optional result-count override from the gateway (/recall top_k); clamped 1..50. */
+  topKOverride?: number,
 ): Promise<SearchResult> {
   const emptyResult: SearchResult = { lines: [], timing: { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 } };
   // Strip gateway-injected inbound metadata (Sender, timestamps, media markers,
@@ -435,7 +441,12 @@ async function searchMemories(
     );
   }
 
-  const maxResults = cfg.recall.maxResults ?? 5;
+  // top_k override (gateway /recall) wins over the configured default;
+  // clamp to 1..50 so neither a tiny nor a hostile value reaches the store.
+  const maxResults = Math.min(
+    50,
+    Math.max(1, topKOverride ?? cfg.recall.maxResults ?? 5),
+  );
   const threshold = cfg.recall.scoreThreshold ?? 0.3;
 
   const embeddingAvailable = !!vectorStore && !!embeddingService;

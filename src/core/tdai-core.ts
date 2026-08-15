@@ -247,8 +247,11 @@ export class TdaiCore {
   /**
    * Handle recall (memory retrieval) before an LLM turn.
    * Maps to: OpenClaw `before_prompt_build` / Hermes `prefetch()`.
+   *
+   * @param topK Optional override for the L1 result count (clamped to
+   *   1..50); when omitted the configured `recall.maxResults` applies.
    */
-  async handleBeforeRecall(userText: string, sessionKey: string): Promise<RecallResult> {
+  async handleBeforeRecall(userText: string, sessionKey: string, topK?: number): Promise<RecallResult> {
     await this.storeReady?.catch(() => {});
 
     const tStart = performance.now();
@@ -262,6 +265,7 @@ export class TdaiCore {
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
       storage: this.storage,
+      topK,
     });
     const recallLatencyMs = performance.now() - tStart;
 
