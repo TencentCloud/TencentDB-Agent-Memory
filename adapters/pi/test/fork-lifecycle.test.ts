@@ -6,16 +6,20 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { BRANCH_ENTRY_TYPE, memorySessionId, restoreBranchId } from "../src/session.js";
 
 /**
- * The adapter relies on Pi's real fork/branch semantics for memory isolation:
- * - a fork (`forkFrom`) is a NEW session file with a NEW session id, so the
- *   first segment of the memory session id changes;
- * - a branch (`branch`) keeps the SAME session id and only moves the leaf
- *   pointer, so sibling branches are told apart solely by the
- *   `tdai-memory/branch@1` marker written on session_tree.
+ * The adapter splits memory by `pi-<sessionId>-<branchId>`, assuming Pi's real
+ * fork semantics: a fork is a NEW session id, while a branch keeps the SAME
+ * session id and is told apart only by the `tdai-memory/branch@1` marker.
+ *
+ * Pi has two real fork paths (verified against earendil-works/pi source):
+ * - the interactive TUI `/fork` opens the current session file and calls
+ *   `createBranchedSession(targetLeafId)` (fork "before" a user message forks
+ *   at that message's parent);
+ * - the CLI `pi --fork <path>` calls the static `SessionManager.forkFrom`.
+ * Both produce a new session id and record the source file as parentSession.
  *
  * These contracts were previously unverified against the real API. This test
- * drives the actual SessionManager class (no Docker, no full Pi TUI) to lock
- * down the behavior the adapter depends on.
+ * drives the actual SessionManager class (no Docker, no full Pi TUI) along
+ * both real fork paths and the branch path.
  */
 const dirs: string[] = [];
 
@@ -38,7 +42,7 @@ function userMessage(content: string): { role: "user"; content: string; timestam
   return { role: "user", content, timestamp: Date.now() };
 }
 
-/** Structurally valid Pi assistant message: its presence makes the outbox file durable. */
+/** Structurally valid Pi assistant message: its presence makes the session file durable. */
 function assistantMessage(content: string) {
   return {
     role: "assistant" as const,
@@ -59,11 +63,22 @@ function assistantMessage(content: string) {
   };
 }
 
-/** The session file is only written once an assistant message arrives. */
-function seedConversation(session: SessionManager): { userMessageId: string; leafId: string } {
-  const userMessageId = session.appendMessage(userMessage("origin turn"));
+/**
+ * A two-turn conversation under one branch marker. The file is only written
+ * once the first assistant message arrives, and forkTargetId is the entry the
+ * TUI `/fork` would branch at for the follow-up turn (its parent).
+ */
+function seedConversation(session: SessionManager): { firstUserMessageId: string; forkTargetId: string; leafId: string } {
+  const firstUser = session.appendMessage(userMessage("origin turn"));
   session.appendMessage(assistantMessage("origin reply"));
-  return { userMessageId, leafId: session.getLeafId() ?? "" };
+  const lastUser = session.appendMessage(userMessage("follow-up"));
+  const lastUserEntry = session.getEntry(lastUser);
+  session.appendMessage(assistantMessage("follow-up reply"));
+  return {
+    firstUserMessageId: firstUser,
+    forkTargetId: lastUserEntry?.parentId ?? "",
+    leafId: session.getLeafId() ?? "",
+  };
 }
 
 afterEach(async () => {
@@ -71,24 +86,25 @@ afterEach(async () => {
 });
 
 describe("real Pi fork lifecycle", () => {
-  it("a fork becomes a new session id, remembers its parent, and keeps the branch marker", async () => {
-    const sourceCwd = await tmpDir("tdai-fork-src-cwd-");
-    const sourceDir = await tmpDir("tdai-fork-src-sessions-");
-    const source = SessionManager.create(sourceCwd, sourceDir);
+  it("interactive /fork (createBranchedSession) gets a new session id and keeps the branch marker", async () => {
+    const cwd = await tmpDir("tdai-fork-tui-cwd-");
+    const sessionDir = await tmpDir("tdai-fork-tui-sessions-");
+    const source = SessionManager.create(cwd, sessionDir);
     markBranch(source, "branch-alpha");
-    seedConversation(source);
+    const { forkTargetId } = seedConversation(source);
     const sourceFile = source.getSessionFile();
     expect(sourceFile).toBeTruthy();
+    expect(forkTargetId).toBeTruthy();
 
-    const targetCwd = await tmpDir("tdai-fork-dst-cwd-");
-    const targetDir = await tmpDir("tdai-fork-dst-sessions-");
-    const forked = SessionManager.forkFrom(sourceFile!, targetCwd, targetDir);
+    // The TUI /fork runtime: open the current session file, then fork.
+    const forked = SessionManager.open(sourceFile!, sessionDir);
+    forked.createBranchedSession(forkTargetId);
 
     // New session id: this is what separates the two memory stores.
     expect(forked.getSessionId()).not.toBe(source.getSessionId());
     // The header records the source session file as parent.
     expect(forked.getHeader()?.parentSession).toBe(sourceFile);
-    // Fork copies the full history, including the extension's branch marker.
+    // The forked path keeps the extension's branch marker.
     expect(restoreBranchId(forked.getBranch())).toBe("branch-alpha");
     // Same branch id, different session prefix -> isolated memory session.
     expect(memorySessionId(source.getSessionId(), "branch-alpha")).not.toBe(
@@ -96,17 +112,39 @@ describe("real Pi fork lifecycle", () => {
     );
   });
 
-  it("two forks of one session are mutually isolated from each other", async () => {
-    const sourceCwd = await tmpDir("tdai-fork2-src-cwd-");
-    const sessionDir = await tmpDir("tdai-fork2-sessions-");
+  it("CLI --fork (forkFrom) gets a new session id and keeps the branch marker", async () => {
+    const sourceCwd = await tmpDir("tdai-fork-cli-src-cwd-");
+    const sessionDir = await tmpDir("tdai-fork-cli-sessions-");
     const source = SessionManager.create(sourceCwd, sessionDir);
     markBranch(source, "branch-alpha");
     seedConversation(source);
     const sourceFile = source.getSessionFile();
     expect(sourceFile).toBeTruthy();
 
-    const forkOne = SessionManager.forkFrom(sourceFile!, await tmpDir("tdai-fork2-1-cwd-"), sessionDir);
-    const forkTwo = SessionManager.forkFrom(sourceFile!, await tmpDir("tdai-fork2-2-cwd-"), sessionDir);
+    const targetCwd = await tmpDir("tdai-fork-cli-dst-cwd-");
+    const forked = SessionManager.forkFrom(sourceFile!, targetCwd, sessionDir);
+
+    expect(forked.getSessionId()).not.toBe(source.getSessionId());
+    expect(forked.getHeader()?.parentSession).toBe(sourceFile);
+    expect(restoreBranchId(forked.getBranch())).toBe("branch-alpha");
+    expect(memorySessionId(source.getSessionId(), "branch-alpha")).not.toBe(
+      memorySessionId(forked.getSessionId(), "branch-alpha"),
+    );
+  });
+
+  it("two interactive forks of one session are mutually isolated from each other", async () => {
+    const cwd = await tmpDir("tdai-fork2-cwd-");
+    const sessionDir = await tmpDir("tdai-fork2-sessions-");
+    const source = SessionManager.create(cwd, sessionDir);
+    markBranch(source, "branch-alpha");
+    const { forkTargetId } = seedConversation(source);
+    const sourceFile = source.getSessionFile();
+    expect(sourceFile).toBeTruthy();
+
+    const forkOne = SessionManager.open(sourceFile!, sessionDir);
+    forkOne.createBranchedSession(forkTargetId);
+    const forkTwo = SessionManager.open(sourceFile!, sessionDir);
+    forkTwo.createBranchedSession(forkTargetId);
 
     const memoryIds = new Set(
       [source, forkOne, forkTwo].map((session) => memorySessionId(session.getSessionId(), "branch-alpha")),
@@ -121,10 +159,10 @@ describe("real Pi fork lifecycle", () => {
     const sessionId = session.getSessionId();
 
     markBranch(session, "branch-a");
-    const { userMessageId, leafId } = seedConversation(session);
+    const { firstUserMessageId, leafId } = seedConversation(session);
 
-    // Pi's tree navigation: re-edit from the trunk message, then a new marker.
-    session.branch(userMessageId);
+    // Pi's tree navigation: re-edit from the first turn, then a new marker.
+    session.branch(firstUserMessageId);
     markBranch(session, "branch-b");
     session.appendMessage(userMessage("alternate turn"));
 
@@ -132,7 +170,7 @@ describe("real Pi fork lifecycle", () => {
     expect(session.getSessionId()).toBe(sessionId);
     // The current leaf resolves the nearest marker on its path.
     expect(restoreBranchId(session.getBranch())).toBe("branch-b");
-    // The trunk path resolves the original marker: the two paths diverge.
+    // The original path resolves the original marker: the two paths diverge.
     expect(restoreBranchId(session.getBranch(leafId))).toBe("branch-a");
     // Same session prefix, different branch id -> distinct memory sessions.
     expect(memorySessionId(session.getSessionId(), "branch-a")).not.toBe(
