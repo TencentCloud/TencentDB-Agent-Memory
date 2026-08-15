@@ -55,9 +55,14 @@ export interface RecalledMemory {
 }
 
 export interface RecallResult {
-  /** L1 relevant memories — prepended to user prompt text (dynamic, per-turn) */
+  /**
+   * @deprecated Auto-recall no longer emits user-message context because it
+   * either accumulates in history or breaks the next turn's cached prefix.
+   */
   prependContext?: string;
-  /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
+  /** Stable recall context placed before the host's system-prompt cache boundary. */
+  prependSystemContext?: string;
+  /** Dynamic L1 recall placed after the system-prompt cache boundary. */
   appendSystemContext?: string;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
@@ -67,6 +72,64 @@ export interface RecallResult {
   recalledL3Persona?: string | null;
   /** Effective search strategy used */
   recallStrategy?: string;
+}
+
+export interface RecallPromptContext {
+  /** Stable persona, scene navigation, and tool guidance. */
+  prependSystemContext?: string;
+  /** Query-dependent L1 memories for the current turn. */
+  appendSystemContext?: string;
+}
+
+/**
+ * Partition recall content around the host's system-prompt cache boundary.
+ *
+ * L1 memories belong in the dynamic system suffix instead of the user
+ * message. This keeps them model-visible without persisting one copy per turn
+ * in the transcript. When consecutive turns recall the same memories, the
+ * complete system prompt also remains identical and the provider can reuse the
+ * prior conversation prefix.
+ */
+export function buildRecallPromptContext(params: {
+  memoryLines: string[];
+  personaContent?: string;
+  sceneNavigation?: string;
+}): RecallPromptContext {
+  const { memoryLines, personaContent, sceneNavigation } = params;
+  const stableParts: string[] = [];
+
+  if (personaContent) {
+    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
+  }
+  if (sceneNavigation) {
+    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+  }
+
+  let appendSystemContext: string | undefined;
+  if (memoryLines.length > 0) {
+    appendSystemContext =
+      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  }
+
+  if (stableParts.length > 0 || appendSystemContext) {
+    stableParts.push(MEMORY_TOOLS_GUIDE);
+  }
+
+  return {
+    prependSystemContext: stableParts.length > 0 ? stableParts.join("\n\n") : undefined,
+    appendSystemContext,
+  };
+}
+
+/** Flatten cache partitions for hosts that accept only one recall string. */
+export function flattenRecallPromptContext(context: RecallResult): string {
+  return [
+    context.prependSystemContext,
+    context.appendSystemContext,
+    context.prependContext,
+  ]
+    .filter((part): part is string => typeof part === "string" && part.trim().length > 0)
+    .join("\n\n");
 }
 
 export async function performAutoRecall(params: {
@@ -183,39 +246,20 @@ async function performAutoRecallInner(params: {
     return undefined;
   }
 
-  // Split recall context into stable and dynamic parts to optimize prompt caching.
+  // Partition recall context around the system-prompt cache boundary.
   //
-  // appendSystemContext (system prompt end — stable, cacheable):
+  // prependSystemContext (before cache boundary — stable, cacheable):
   //   persona, scene navigation, memory tools guide
-  //   These change infrequently; when content is identical across turns,
-  //   providers with prompt caching (Anthropic/OpenAI) can cache this region.
+  //   These change infrequently and remain an exact prefix across turns.
   //
-  // prependContext (user prompt prefix — dynamic, per-turn):
-  //   L1 relevant memories — different every turn, moved out of system prompt
-  //   so it doesn't bust the system prompt cache.
-  const stableParts: string[] = [];
-  if (personaContent) {
-    stableParts.push(`<user-persona>\n${personaContent}\n</user-persona>`);
-  }
-  if (sceneNavigation) {
-    stableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
-  }
-
-  // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
-  let prependContext: string | undefined;
-  if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
-  }
-
-  // Append memory tools usage guide to the stable part so the agent knows
-  // how to actively retrieve deeper context when the injected snippets
-  // are not enough. This is static content and benefits from caching.
-  if (stableParts.length > 0 || prependContext) {
-    stableParts.push(MEMORY_TOOLS_GUIDE);
-  }
-
-  const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  // appendSystemContext (after cache boundary — dynamic, bounded):
+  //   query-dependent L1 memories. Keeping one current snapshot in the system
+  //   prompt avoids both transcript accumulation and user-message prefix drift.
+  const { prependSystemContext, appendSystemContext } = buildRecallPromptContext({
+    memoryLines,
+    personaContent,
+    sceneNavigation,
+  });
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,12 +271,12 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
-  if (!appendSystemContext && !prependContext) {
+  if (!prependSystemContext && !appendSystemContext) {
     return undefined;
   }
 
   return {
-    prependContext,
+    prependSystemContext,
     appendSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
