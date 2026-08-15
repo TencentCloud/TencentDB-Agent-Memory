@@ -34,6 +34,7 @@ import type {
   L0FtsResult,
 } from "./types.js";
 import type { Logger } from "../types.js";
+import { sanitizeFtsQuery } from "../../utils/sanitize.js";
 
 // ============================
 // Types
@@ -196,6 +197,7 @@ const ZH_STOP_WORDS = new Set([
  *   "旅行计划 API" → '"旅行计划" OR "API"'
  */
 export function buildFtsQuery(raw: string): string | null {
+  const safeRaw = sanitizeFtsQuery(raw);
   const jieba = getJieba();
 
   let tokens: string[];
@@ -203,7 +205,7 @@ export function buildFtsQuery(raw: string): string | null {
     // jieba cutForSearch: splits long words further for better recall
     // e.g. "北京烤鸭" → ["北京", "烤鸭", "北京烤鸭"]
     tokens = jieba
-      .cutForSearch(raw, true)
+      .cutForSearch(safeRaw, true)
       .map((t) => t.trim())
       .filter((t) => {
         if (!t) return false;
@@ -218,7 +220,7 @@ export function buildFtsQuery(raw: string): string | null {
   } else {
     // Fallback: simple Unicode regex split
     tokens =
-      raw
+      safeRaw
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
         .filter(Boolean) ?? [];

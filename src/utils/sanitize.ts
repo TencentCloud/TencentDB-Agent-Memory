@@ -403,3 +403,32 @@ function escapeControlCharsInJsonStrings(text: string): string {
 
   return out.join("");
 }
+
+// ============================
+// FTS5 Input Sanitization
+// ============================
+
+/**
+ * Sanitize raw user input before feeding it into FTS5 MATCH queries.
+ * 
+ * FTS5 has special operators (AND, OR, NOT, NEAR) and syntax characters (", ', (, ), *, -)
+ * that can cause syntax errors or unintended logic if exposed to unescaped user input.
+ * 
+ * This function:
+ * 1. Strips out FTS5 syntax characters to prevent syntax breakage.
+ * 2. Downcases FTS5 uppercase keywords (AND, OR, NOT, NEAR) so they are treated 
+ *    as regular search terms instead of boolean operators.
+ */
+export function sanitizeFtsQuery(text: string): string {
+  if (!text) return "";
+
+  // 1. Strip FTS5 punctuation/special syntax characters: " ' ( ) * -
+  // We replace them with space to avoid merging words unintentionally.
+  let safeText = text.replace(/["'()*\\-]/g, " ");
+
+  // 2. Downcase FTS5 boolean operators to strip their special semantics
+  safeText = safeText.replace(/\b(AND|OR|NOT|NEAR)\b/g, (match) => match.toLowerCase());
+
+  // 3. Clean up extra spaces
+  return safeText.replace(/\s+/g, " ").trim();
+}
