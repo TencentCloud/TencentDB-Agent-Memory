@@ -409,6 +409,9 @@ export class TdaiCore {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
+      // Repair counters left stale by cleanup/manual JSONL edits before this
+      // gateway instance starts accepting turns.
+      await new CheckpointManager(this.dataDir, this.logger).recalibrate(this.vectorStore);
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
     } catch (err) {
       this.logger.warn(
