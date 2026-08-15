@@ -7,7 +7,7 @@
 
 import { readFile, writeFile, mkdir, readdir, unlink, stat, rm, appendFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, dirname, sep, resolve } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import type {
   IStorageBackend,
   StorageObject,
@@ -17,6 +17,7 @@ import type {
   ListEntry,
   StorageLogger,
 } from "./types.js";
+import { resolveSafeRelativePath } from "./path-safety.js";
 
 const TAG = "[storage][local]";
 
@@ -51,40 +52,11 @@ export class LocalStorageBackend implements IStorageBackend {
    * rootDir). Affects standalone mode where user-controllable fields like
    * instanceId / sceneName / sessionKey end up in the key.
    *
-   * Rejected:
-   * - Empty key
-   * - Keys containing NUL (\0) — POSIX/Linux path terminator, can confuse
-   *   downstream tooling (sqlite, file managers).
-   * - Keys with leading "/" or "\" (absolute paths).
-   * - Keys whose resolved path falls outside rootDir (../ traversal).
+   * Validation itself lives in `path-safety.ts`, shared with other backends
+   * (e.g. GitStorageBackend) that need the same guard.
    */
   private resolvePath(key: string): string {
-    if (!key || typeof key !== "string") {
-      throw new Error(`Invalid storage key: ${JSON.stringify(key)}`);
-    }
-    if (key.includes("\0")) {
-      throw new Error("Storage key must not contain NUL character");
-    }
-    if (key.startsWith("/") || key.startsWith("\\")) {
-      throw new Error(`Storage key must be relative, got absolute: ${key}`);
-    }
-
-    // Normalize key separators to OS path separators
-    const normalized = key.split("/").join(sep);
-
-    // Compute the absolute resolved path; resolve() collapses ".." segments.
-    const absRoot = resolve(this.rootDir);
-    const absResolved = resolve(absRoot, normalized);
-
-    // Ensure the resolved path stays inside rootDir. Append sep so that
-    // a key like "../rootDir2/foo" (which resolves to a sibling directory
-    // whose name happens to start with rootDir's name) is also rejected.
-    const rootWithSep = absRoot.endsWith(sep) ? absRoot : absRoot + sep;
-    if (absResolved !== absRoot && !absResolved.startsWith(rootWithSep)) {
-      throw new Error(`Path traversal rejected: key "${key}" escapes rootDir`);
-    }
-
-    return absResolved;
+    return resolve(this.rootDir, resolveSafeRelativePath(this.rootDir, key));
   }
 
   async putObject(key: string, content: string | Buffer, opts?: PutObjectOptions): Promise<void> {
