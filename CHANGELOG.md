@@ -20,6 +20,10 @@
   - 修复 offload local-llm 模式下每次 LLM 调用都重新创建 fetch wrapper 的性能问题（现在在 `LocalLlmClient` 构造函数中创建一次并缓存）。
   - 注入逻辑抽取到 `src/utils/no-think-fetch.ts` 共享，新增 vitest 单测覆盖全部策略 / 跳过 embedding / 非 JSON 容错。
 
+### 🔒 安全
+
+- **FTS5 查询操作符注入防御加固** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：`buildFtsQuery()` 此前仅靠双引号包裹 token 来中和 FTS5 操作符，缺少显式的纵深防御。现增加三道净化：(1) **NFKC 归一化**——使全角 `ＡＮＤ` 等变体也能被后续规则捕获；(2) **Unicode 白名单** `[\p{L}\p{N}_]+` 切 token——一次性丢弃 `* " ' ( ) : ^` 等全部 FTS5 语法字符；(3) **token 级抑制** `AND`/`OR`/`NOT`/`NEAR`（大小写不敏感，且不误伤 `android`/`orange`/`notebook` 等含操作符子串的正常词）。用户输入无法再改变 MATCH 查询语义。新增 `src/core/store/sqlite.test.ts`（14 个用例），覆盖 fallback / jieba 双路径单元测试，以及基于 `node:sqlite` 内存 FTS5 的真实 MATCH 集成测试（验证操作符语义被中和、benign 查询召回不退化、对抗性输入不抛错）。
+
 ### ⚠️ 升级注意（仅在显式配置 `timezone` 时生效）
 
 如果你**显式**设置了 IANA 时区（如 `"Asia/Shanghai"`）：
