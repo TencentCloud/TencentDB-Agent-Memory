@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
 import { assertKeySegment } from "../storage/key-utils.js";
 import { getRateLimitStore } from "../rate-limit/guard.js";
+import { adminAuthError, checkAdminAuth } from "./admin-auth.js";
 
 interface RateLimitBody {
   instance_id?: unknown;
@@ -11,10 +12,18 @@ interface RateLimitBody {
 }
 
 export function createRateLimitHandlers(config: ProxyConfig) {
+  // Admin endpoints must require the admin.apiKey bearer token — otherwise any
+  // network caller can tamper with tenant rate limits (issue #672, CWE-306).
+  const enforceAuth = (c: Context): Response | null => {
+    const result = checkAdminAuth(c, config.admin.apiKey);
+    if (result !== "ok") return adminAuthError(c, result);
+    return null;
+  };
+
   return {
-    get: (c: Context) => handleGet(c, config),
-    put: (c: Context) => handlePut(c, config),
-    delete: (c: Context) => handleDelete(c, config),
+    get: (c: Context) => enforceAuth(c) || handleGet(c, config),
+    put: (c: Context) => enforceAuth(c) || handlePut(c, config),
+    delete: (c: Context) => enforceAuth(c) || handleDelete(c, config),
   };
 }
 
