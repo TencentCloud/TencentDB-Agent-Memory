@@ -97,8 +97,14 @@ export function createStoreBundle(
     case "sqlite":
     default: {
       // ── Embedding service (only when enabled) ──
+      // provider="local" uses node-llama-cpp (offline, no apiKey needed);
+      // remote providers require an apiKey.
       let embeddingService: EmbeddingService | undefined;
-      if (config.embedding.enabled && config.embedding.provider !== "local" && config.embedding.apiKey) {
+      if (
+        config.embedding.enabled &&
+        config.embedding.provider !== "none" &&
+        (config.embedding.provider === "local" || config.embedding.apiKey)
+      ) {
         embeddingService = createEmbeddingService({
           provider: config.embedding.provider,
           baseUrl: config.embedding.baseUrl,
