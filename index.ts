@@ -44,6 +44,11 @@ import {
   decideHookPolicy,
 } from "./src/utils/ensure-hook-policy.js";
 import { resolveOpenClawStateDir } from "./src/utils/openclaw-state-dir.js";
+import {
+  resolveOpenClawRecallCompatibility,
+  shapeOpenClawRecallResult,
+} from "./src/adapters/openclaw/recall-injection.js";
+import { stripInjectedRecallFromMessage } from "./src/utils/recall-injection.js";
 
 const TAG = "[memory-tdai]";
 
@@ -88,13 +93,17 @@ const pendingRecallCache = new Map<string, {
  */
 const pendingRecallEndTimestamps = new Map<string, number>();
 
+const pendingInjectedRecallBlocks = new Map<string, {
+  context: string;
+  placement: "prepend" | "append";
+  ts: number;
+}>();
+
 // 进程级单例，避免同一进程重复启动清理器导致并发清理竞态
 let sharedMemoryCleaner: LocalMemoryCleaner | undefined;
 
 /**
- * Sweep both pendingOriginalPrompts and pendingRecallCache for stale entries.
- * Unified from the original sweepStalePromptCache() to cover both Maps
- * with identical TTL + hard-cap logic.
+ * Sweep pending per-session hook state for stale entries.
  */
 function sweepStaleCaches(): void {
   const now = Date.now();
@@ -111,6 +120,11 @@ function sweepStaleCaches(): void {
       pendingRecallCache.delete(key);
     }
   }
+  for (const [key, entry] of pendingInjectedRecallBlocks) {
+    if (now - entry.ts > PROMPT_CACHE_TTL_MS) {
+      pendingInjectedRecallBlocks.delete(key);
+    }
+  }
   // Hard limit: evict oldest entries if either Map exceeds cap
   if (pendingOriginalPrompts.size > PROMPT_CACHE_MAX_SIZE) {
     const entries = [...pendingOriginalPrompts.entries()].sort((a, b) => a[1].ts - b[1].ts);
@@ -125,6 +139,13 @@ function sweepStaleCaches(): void {
     const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
     for (const [key] of toEvict) {
       pendingRecallCache.delete(key);
+    }
+  }
+  if (pendingInjectedRecallBlocks.size > PROMPT_CACHE_MAX_SIZE) {
+    const entries = [...pendingInjectedRecallBlocks.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const toEvict = entries.slice(0, entries.length - PROMPT_CACHE_MAX_SIZE);
+    for (const [key] of toEvict) {
+      pendingInjectedRecallBlocks.delete(key);
     }
   }
 }
@@ -179,7 +200,7 @@ export default function register(api: OpenClawPluginApi) {
     api.logger.debug?.(
       `${TAG} Config parsed: ` +
       `capture=${cfg.capture.enabled}, ` +
-      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}), ` +
+      `recall=${cfg.recall.enabled}(maxResults=${cfg.recall.maxResults}, injectionMode=${cfg.recall.injectionMode}, showInjected=${cfg.recall.showInjected}), ` +
       `extraction=${cfg.extraction.enabled}(dedup=${cfg.extraction.enableDedup}, maxMem=${cfg.extraction.maxMemoriesPerSession}), ` +
       `pipeline=(everyN=${cfg.pipeline.everyNConversations}, warmup=${cfg.pipeline.enableWarmup}, l1Idle=${cfg.pipeline.l1IdleTimeoutSeconds}s, l2DelayAfterL1=${cfg.pipeline.l2DelayAfterL1Seconds}s, l2Min=${cfg.pipeline.l2MinIntervalSeconds}s, l2Max=${cfg.pipeline.l2MaxIntervalSeconds}s, activeWindow=${cfg.pipeline.sessionActiveWindowHours}h), ` +
       `persona(triggerEvery=${cfg.persona.triggerEveryN}, backupCount=${cfg.persona.backupCount}, sceneBackupCount=${cfg.persona.sceneBackupCount}), ` +
@@ -193,6 +214,18 @@ export default function register(api: OpenClawPluginApi) {
 
   // Initialize unified time module (must happen before any timestamp formatting)
   initTimeModule({ timezone: cfg.timezone }, api.logger);
+  const rawOpenClawVersion = (api.runtime as { version?: unknown } | undefined)?.version;
+  const recallCompatibility = resolveOpenClawRecallCompatibility(
+    cfg.recall.injectionMode,
+    rawOpenClawVersion,
+  );
+  if (recallCompatibility.fallbackReason) {
+    api.logger.warn(
+      `${TAG} recall.injectionMode=append is unavailable ` +
+      `(hostVersion=${JSON.stringify(rawOpenClawVersion)}, reason=${recallCompatibility.fallbackReason}); ` +
+      `falling back to prependContext`,
+    );
+  }
 
   // ============================
   // Hook policy auto-patch (v2026.4.24+ compat)
@@ -212,7 +245,7 @@ export default function register(api: OpenClawPluginApi) {
     // version we cannot parse — which is the safe default on old hosts
     // that don't expose `api.runtime.version`. See ensure-hook-policy.ts
     // for the full policy + co-located unit tests.
-    const rawVersion = (api.runtime as any)?.version;
+    const rawVersion = rawOpenClawVersion;
     const decision = decideHookPolicy(rawVersion);
     const parsedStr = decision.parsedXYZ ? decision.parsedXYZ.join(".") : "<unparsable>";
     const minStr = decision.minXYZ.join(".");
@@ -584,17 +617,36 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
-          const appendLen = result.appendSystemContext?.length ?? 0;
-          const prependLen = result.prependContext?.length ?? 0;
+        const hookResult = shapeOpenClawRecallResult(result, recallCompatibility);
+        if (sessionKey) {
+          if (!cfg.recall.showInjected && result?.prependContext) {
+            pendingInjectedRecallBlocks.set(sessionKey, {
+              context: result.prependContext,
+              placement: recallCompatibility.effectiveMode,
+              ts: Date.now(),
+            });
+          } else {
+            pendingInjectedRecallBlocks.delete(sessionKey);
+          }
+        }
+
+        if (hookResult) {
+          const stableLen = result?.appendSystemContext?.length ?? 0;
+          const dynamicLen = result?.prependContext?.length ?? 0;
+          const stablePlacement = recallCompatibility.supportsPrependSystemContext
+            ? "prependSystemContext"
+            : "appendSystemContext";
+          const dynamicPlacement = recallCompatibility.effectiveMode === "append"
+            ? "appendContext"
+            : "prependContext";
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
-            `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
+            `${stablePlacement}=${stableLen} chars, ${dynamicPlacement}=${dynamicLen} chars`,
           );
         } else {
           api.logger.info(`${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), no context to inject`);
         }
-        return result;
+        return hookResult;
       } catch (err) {
         const elapsedMs = Date.now() - startMs;
         api.logger.error(`${TAG} [before_prompt_build] Auto-recall failed after ${elapsedMs}ms: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
@@ -612,42 +664,37 @@ export default function register(api: OpenClawPluginApi) {
     });
   }
 
-  // Strip <relevant-memories> from user messages before they are persisted to
-  // the session JSONL.  The current-turn LLM already saw the full prompt
-  // (effectivePrompt lives in memory), but we don't want recall artifacts
-  // polluting the historical transcript for future replays.
-  api.logger.debug?.(`${TAG} Registering before_message_write hook (strip <relevant-memories>)`);
-  api.on("before_message_write", (event) => {
+  // The current-turn LLM already saw generated recall. Remove it before
+  // persistence unless the user explicitly opts into debugging visibility.
+  api.logger.debug?.(
+    `${TAG} Registering before_message_write hook ` +
+    `(showInjected=${cfg.recall.showInjected}, generated recall cleanup)`,
+  );
+  api.on("before_message_write", (event, ctx) => {
     const msg = event.message as { role?: string; content?: unknown };
+    const eventSessionKey = (event as { sessionKey?: string }).sessionKey;
+    const sessionKey = eventSessionKey ?? ctx?.sessionKey;
+    const pendingInjection = sessionKey
+      ? pendingInjectedRecallBlocks.get(sessionKey)
+      : undefined;
     const contentType = typeof msg.content === "string" ? "string" : Array.isArray(msg.content) ? "parts" : typeof msg.content;
     api.logger.debug?.(`${TAG} [before_message_write] role=${msg.role}, contentType=${contentType}`);
 
-    if (msg.role !== "user") return;
-
-    // UserMessage.content: string | (TextContent | ImageContent)[]
-    const STRIP_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g;
-
-    if (typeof msg.content === "string") {
-      if (!msg.content.includes("<relevant-memories>")) return;
-      const cleaned = msg.content.replace(STRIP_RE, "").trim();
-      if (cleaned === msg.content) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped: ${msg.content.length} → ${cleaned.length} chars`);
-      return { message: { ...event.message, content: cleaned } as typeof event.message };
+    const stripped = stripInjectedRecallFromMessage(msg, {
+      generatedContext: pendingInjection?.context,
+      showInjected: cfg.recall.showInjected,
+      placement: pendingInjection?.placement ?? recallCompatibility.effectiveMode,
+    });
+    if (msg.role === "user" && sessionKey) {
+      pendingInjectedRecallBlocks.delete(sessionKey);
     }
+    if (!stripped) return;
 
-    if (Array.isArray(msg.content)) {
-      let totalStripped = 0;
-      const cleanedParts = (msg.content as Array<Record<string, unknown>>).map((part) => {
-        if (part.type !== "text" || typeof part.text !== "string") return part;
-        if (!(part.text as string).includes("<relevant-memories>")) return part;
-        const cleaned = (part.text as string).replace(STRIP_RE, "").trim();
-        totalStripped += (part.text as string).length - cleaned.length;
-        return { ...part, text: cleaned };
-      });
-      if (totalStripped === 0) return;
-      api.logger.debug?.(`${TAG} [before_message_write] Stripped from parts: removed ${totalStripped} chars`);
-      return { message: { ...event.message, content: cleanedParts } as unknown as typeof event.message };
-    }
+    api.logger.debug?.(
+      `${TAG} [before_message_write] Stripped generated recall from ${stripped.contentType}: ` +
+      `removed ${stripped.strippedChars} chars`,
+    );
+    return { message: stripped.message as typeof event.message };
   });
 
   // After agent end: auto-capture + L0 record + L1/L2/L3 schedule
