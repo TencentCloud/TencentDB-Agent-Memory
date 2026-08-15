@@ -1,8 +1,29 @@
 # 实现计划：GitStorageBackend
 
-- 状态：设计评审中（Codex 检查点 A）
+- 状态：实现完成，两轮 Codex 评审已处理，待提 PR
 - 关联：[docs/rfc/git-storage-backend.md](../rfc/git-storage-backend.md)、上游 RFC PR [#894](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/894)
 - 分支：`feat/git-storage-backend`，基于 `feat/server_team`（**注意**：不是 `main` —— `main` 是另一条落后且结构不同的分支，`IStorageBackend` 在那条线上不存在；`feat/server_team` 才是 PR #894 实际的 base branch）
+
+## Codex 检查点 B：diff 评审结论与修复（2026-08-15）
+
+代码写完后，把真实 diff（而非设计文档）交给 Codex 复核。分两部分：
+
+**A. 检查点 A 六条修复的落地核查**：4 条完全落地（`.git` 保留路径拒绝、`--single-branch`/`-t <branch>` 限制、分支编码方案、`deleteByPrefix` 批处理路径），2 条"落地但不完整"——操作 UUID/commit trailer/重放去重都实现了但 WAL 条目仍在文件变更**之后**才写入；锁的获取/续约在 flush 内部但变更本身发生在拿锁**之前**，续约失败也没有真正中断正在跑的 git 子进程。
+
+**B. 新发现的 10 个问题**（3 critical、4 high、3 warning），全部核实后修复：
+
+1. **Critical** `.meta.json` sidecar 永远不会被 `git add`，重启后 `git status` 会一直显示这个未跟踪文件，被误判为"无法解释的脏改动"，默认 `recoveryMode=manual` 下永久拒绝写入——任何用过 `contentType`/`metadata` 的空间重启后都会被拉黑。修复：`recoverIfNeeded()` 判断"无法解释的脏改动"前先过滤掉 `.meta.json` 和当前 pending 操作覆盖的路径。
+2. **Critical** WAL 条目写入顺序反了——先执行文件变更，后写 WAL，崩溃窗口在两者之间会导致"变更已发生但无任何记录，不可恢复"。修复：WAL 先写（真正的 write-ahead），恢复时用逐路径 `git status` 作为"这个操作是否已经落盘"的依据，只有该路径完全没有改动痕迹时才重放（对非幂等的 append 也能保证恰好重放一次）。
+3. **Critical** `startLockRenewal()`/`writeSyncState("pushing")` 在 `try` 块之外执行，其中任何一步失败都会导致续约定时器和分布式锁泄漏（续约还在成功续期，等于锁被永久持有）。修复：挪进 `try`。
+4. **High** `cloneOrInitSpace()` 先创建 `.git` 再执行剩余步骤，中途失败会留下"看起来已初始化但实际上是半成品"的仓库，后续每次重试都直接跳过初始化、在残缺仓库上继续操作。修复：整个初始化流程在临时目录里完成，全部成功后才原子 rename 到正式位置。
+5. **High** 实例销毁时只是把 cache 条目删掉，既没调用 `dispose()`（续约定时器泄漏）也没做最后一次 flush（可能悄悄丢掉本地待推送的写入）。修复：销毁前尽力 flush 一次再 dispose；明确不删除远端分支/本地 clone——Git 做不到可验证的历史删除（RFC 结论 8），这不是这次该补的能力。
+6. **High** `initSharedCosClient()` 只要 COS 可达就无条件覆盖默认存储，完全忽略显式配置的 `fileStorageBackend=local|git`；反过来，service 模式下 COS 初始化失败时，新代码会直接抛错，而旧代码是静默降级到 local——这是真实的行为回归。修复：COS 只在没有显式选择时才接管默认存储；`start()` 里默认存储解析调用加了 `allowLocalFallbackOnCosUnavailable`（只有这个调用点历史上有"从不失败"的约定，`resolveStorageForInstance`/worker 任务闭包该抛还是抛）。
+7. **High（部分修复，作为已知限制记录）** 锁丢失无法真正中断正在执行的 git 子进程，push 成功但锁在过程中已丢失的情况也没有任何信号。修复：`confirmAllPending()` 在这种情况下打一条醒目的 warning；真正的正确性兜底始终是 git 自己的非强制 push 拒绝（ref 层面的 CAS），这一点在设计文档里本来就写清楚了。
+8. **Warning** `confirmAllPending()` 先清内存状态再持久化 WAL trim，如果 rewrite 在 push 成功后失败，内存里 `pendingOps`/`uncommittedOpIds` 已经空了，后续每次 `flush()` 都会直接返回、什么也不重试，只有进程重启重新加载 WAL 文件才能恢复。修复：先持久化再清内存。
+9. **Warning** `GitCliError` 把包含 Base64 认证头的完整 argv 通过公开的 `args` 属性暴露出去，日志或 `JSON.stringify` 序列化错误对象时会带出凭据。修复：构造时脱敏。
+10. **Warning** 健康检查只扫 `cosStorageCache`，扫不到默认存储走的那个一次性 Map；`oldestPendingPushAgeMs` 用的是"距上次成功推送多久"而不是"最老的待推送操作等了多久"，从未推送成功过的空间会报出当前时间戳。修复：`GitSyncSummary` 直接暴露 `oldestPendingOpTs`；健康检查同时查 `this.core.getStorage()`。
+
+两个新增回归测试专门钉住 #1 和 #2 这两条 critical。修完后 101 个测试全过，`tsc --strict` 对照基线零新增错误。
 
 ## Context
 
