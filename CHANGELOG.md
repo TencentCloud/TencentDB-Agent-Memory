@@ -14,6 +14,12 @@
   - **L0 JSONL 分片日**和 **cleaner 清理边界**跟随配置时区（默认仍为系统时区）。
   - 存储层（SQLite / TCVDB）时间戳始终为 UTC instant，**无需数据迁移**。
   - 统一收敛原有 4 处分散的时间格式化 helper 到 `src/utils/time.ts`，减少代码重复。
+
+- **Gateway `/recall` 会话级去重（变更检测）**（[#120](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/120)）：Hermes 侧每轮 prefetch 都会得到与上一轮逐字相同的 `appendSystemContext`（稳定 persona / scene / tools 块），同 session 内重复注入浪费 tokens。新增 Gateway 配置 `recallDedup`（`enabled` / `ttlMs` / `maxEntries`，**默认关闭**，开启后行为才改变）：同一 `session_key` 的 `/recall` 若返回内容与最近一次响应逐字相同，则以 `context: ""` + `deduplicated: true` 跳过重复注入；内容一旦变化（如场景切换）自动恢复注入。
+  - 语义为**变更检测**而非"出现过即跳过"：仅当与最近一次响应相同才跳过，避免消费方每轮重建 prompt 时丢失稳定上下文。
+  - 条目按 `session_key` 隔离；`ttlMs`（默认 1h）惰性过期；`maxEntries`（默认 1000）LRU 淘汰；`POST /session/end` 时清除对应会话。
+  - 环境变量：`TDAI_GATEWAY_RECALL_DEDUP_ENABLED` / `TDAI_GATEWAY_RECALL_DEDUP_TTL_MS` / `TDAI_GATEWAY_RECALL_DEDUP_MAX_ENTRIES`；yaml：`recallDedup: { enabled, ttlMs, maxEntries }`。
+  - 新增 `src/gateway/recall-dedup.ts` 及 13 个单测；`/recall` 响应新增可选字段 `deduplicated`（向后兼容）。
 - **关闭推理模型 thinking（`disableThinking`）**：新增 `llm.disableThinking` 与 `offload.disableThinking` 两项配置（均默认 `false`，不改变现有行为），支持多种推理引擎/模型提供商的关闭方式。
   - 可选策略：`"vllm"` (vLLM/SGLang, `chat_template_kwargs.enable_thinking=false`)、`"deepseek"` (DeepSeek API, 顶层 `enable_thinking=false`)、`"dashscope"` (阿里云 DashScope/Qwen, 顶层 `enable_thinking=false`)、`"openai"` (OpenAI o系列, `reasoning_effort="low"`)、`"anthropic"` (Anthropic Claude, `thinking.type="disabled"`)、`"kimi"` (Kimi/Moonshot, `thinking.type="disabled"`)、`"gemini"` (Google Gemini, `thinking_config.thinking_budget=0`)。
   - 环境变量 `TDAI_LLM_DISABLE_THINKING` 支持策略名（如 `deepseek`）和布尔值。
