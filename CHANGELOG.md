@@ -30,6 +30,10 @@
 
 不动配置 = 行为完全不变。
 
+### 🐛 问题修复
+
+- **checkpoint 计数器漂移修复** ([#157](https://github.com/Tencent/TencentDB-Agent-Memory/issues/157))：`recall_checkpoint.json` 中的 `l0_conversations_count`、`total_memories_extracted`、`memories_since_last_persona` 此前只增不减，清理（memory-cleaner / 手动 prune）后永久高估，导致状态报告失真与 persona 生成阈值误判。新增 `CheckpointManager.recalibrate()`，在 gateway 启动与 memory-cleaner 清理后从实际数据重算——L0 按 capture 批次 `DISTINCT session_key, recorded_at`（TCVDB 降级为 per-message）、L1 取 store 计数，并通过 `reporter` 上报漂移指标。内置 dry-run、幂等跳过写盘、degraded / 损坏文件 / zero-wipe 守卫等安全边界。
+
 ---
 
 ## [0.3.6] - 2026-05-27

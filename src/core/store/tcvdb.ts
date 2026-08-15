@@ -868,6 +868,17 @@ export class TcvdbMemoryStore implements IMemoryStore {
     }
   }
 
+  /**
+   * TCVDB collection-level `count()` cannot express `DISTINCT(session_key, recorded_at)`,
+   * so this falls back to the per-message `countL0()`. That overcounts relative to
+   * true capture batches — the SQLite backend returns the precise distinct count.
+   * Acceptable because this only feeds recalibration (never wipes; clamp-to-truth),
+   * and TCVDB remains secondary to the SQLite path.
+   */
+  async countL0CaptureRounds(): Promise<number> {
+    return this.countL0();
+  }
+
   async queryL0ForL1(sessionKey: string, afterRecordedAtMs?: number, limit = 50): Promise<L0QueryRow[]> {
     try {
       await this._ensureInit();

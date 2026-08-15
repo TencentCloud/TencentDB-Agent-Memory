@@ -47,7 +47,8 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
-import { CheckpointManager } from "../utils/checkpoint.js";
+import { CheckpointManager, recalibrateCheckpointFromStore } from "../utils/checkpoint.js";
+import { report } from "./report/reporter.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 
@@ -146,6 +147,23 @@ export class TdaiCore {
 
     // Initialize stores (async)
     this.storeReady = this.initStores();
+
+    // Recalibrate drifted counters against the store once it's ready. Independent
+    // of extraction being enabled — cleanup/pruning can run in any mode and leave
+    // the counters permanently overstated. Safe-noop when degraded/nothing drifted.
+    this.storeReady
+      .then(() => this.vectorStore
+        ? recalibrateCheckpointFromStore({
+            dataDir: this.dataDir,
+            store: this.vectorStore,
+            trigger: "startup",
+            logger: this.logger,
+            onDrift: (r) => report("checkpoint_recalibrate", { ...r }),
+          })
+        : undefined)
+      .catch((err) => this.logger.warn(
+        `${TAG} Startup recalibrate failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      ));
 
     // Create pipeline manager (sync — does not need store)
     if (this.cfg.extraction.enabled) {

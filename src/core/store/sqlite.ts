@@ -1758,6 +1758,36 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
+  /**
+   * Count distinct L0 capture rounds (session_key × recorded_at), approximating
+   * the per-capture increment semantics of `l0_conversations_count`.
+   *
+   * `captureAtomically` increments that counter once per capture batch, while
+   * `countL0()` counts per-message rows — so using `countL0()` for recalibration
+   * would swap in a value from a different order of magnitude (e.g. 50 batches
+   * shown as 200 messages). Grouping messages that share a recorded_at (one
+   * capture writes them at the same instant) recovers the batch count.
+   *
+   * **Fault-tolerant**: returns 0 on failure or degraded mode.
+   */
+  countL0CaptureRounds(): number {
+    if (this.degraded) return 0;
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT COUNT(*) AS cnt FROM (SELECT DISTINCT session_key, recorded_at FROM l0_conversations)",
+        )
+        .get() as { cnt: number };
+      this.logger?.debug?.(`${TAG} [L0-captureRounds] total=${row.cnt}`);
+      return row.cnt;
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} countL0CaptureRounds failed (non-fatal, returning 0): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 0;
+    }
+  }
+
   // ── Re-index operations ──────────────────────────────────
 
   /**

@@ -5,6 +5,8 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { recalibrateCheckpointFromStore } from "./checkpoint.js";
+import { report } from "../core/report/reporter.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -163,6 +165,18 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+        // Data was actually deleted — recalibrate checkpoint counters against the
+        // (now-smaller) store so they stop permanently overstating reality.
+        // Safe-noop when the store is degraded or nothing drifted.
+        if (this.vectorStore) {
+          await recalibrateCheckpointFromStore({
+            dataDir: this.opts.baseDir,
+            store: this.vectorStore,
+            trigger: "cleanup",
+            logger: this.opts.logger,
+            onDrift: (r) => report("checkpoint_recalibrate", { ...r }),
+          });
+        }
       }
 
       // ── Post-delete: audit summary ──
