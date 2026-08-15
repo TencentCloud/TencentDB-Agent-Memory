@@ -96,7 +96,7 @@ export interface ListResult {
  */
 export interface IStorageBackend {
   /** Storage backend identifier for logging/diagnostics. */
-  readonly type: "local" | "cos";
+  readonly type: "local" | "cos" | "git";
 
   /**
    * Write an object (create or overwrite).
@@ -203,19 +203,67 @@ export interface ICredentialProvider {
 }
 
 // ============================
+// Credential Types (for Git backend)
+// ============================
+
+/**
+ * Git auth credential — a reference is resolved into one of these by an
+ * `IGitCredentialProvider` implementation supplied by the host wiring layer.
+ * Never stored in config as a plaintext token (config only ever holds a
+ * `credentialRef: string` — see `GitStorageConfig` in src/config.ts).
+ */
+export type GitCredential =
+  | { authMethod: "http-token"; token: string; username?: string }
+  | { authMethod: "ssh"; privateKeyPath: string; knownHostsPath?: string };
+
+/**
+ * Credential provider abstraction for the Git storage backend — mirrors
+ * `ICredentialProvider`'s shape (cached, invalidate-on-rejection) but for
+ * git auth instead of COS. Deployment-specific resolution of a
+ * `credentialRef` into a real `GitCredential` lives outside core storage.
+ */
+export interface IGitCredentialProvider {
+  /** Get current valid git credentials (may return cached). */
+  getGitCredential(): Promise<GitCredential>;
+
+  /** Force invalidate cached credentials, e.g. after an auth-rejected push. */
+  invalidate(): void;
+}
+
+// ============================
 // Storage Configuration
 // ============================
 
+/** Git backend configuration, resolved and ready to construct a GitStorageBackend. */
+export interface GitStorageBackendConfig {
+  /** Local clone root; one subdirectory per memory-space branch. */
+  localRootDir: string;
+  /** Private remote URL. */
+  remoteUrl: string;
+  /** Resolved credential provider (never a plaintext token). */
+  credentialProvider: IGitCredentialProvider;
+  authMethod: "http-token" | "ssh";
+  sshKeyPath?: string;
+  batchWindowMs: number;
+  maxBatchDelayMs: number;
+  lockTtlMs: number;
+  maxPushRetries: number;
+  recoveryMode: "manual" | "auto-wal-only";
+}
+
 /** Configuration for creating a storage backend. */
 export interface StorageBackendConfig {
-  /** Backend type: "local" for dev, "cos" for production. */
-  type: "local" | "cos";
+  /** Backend type: "local" for dev, "cos" for production, "git" (experimental). */
+  type: "local" | "cos" | "git";
 
   /** Local backend: root directory for file storage. */
   localRootDir?: string;
 
   /** COS backend: credential provider instance. */
   credentialProvider?: ICredentialProvider;
+
+  /** Git backend: resolved config (only used when type === "git"). */
+  git?: GitStorageBackendConfig;
 }
 
 /** Minimal logger interface for storage operations. */
