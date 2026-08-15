@@ -27,8 +27,8 @@ export function buildProfileStableId(scope: string, type: "l2" | "l3", filename:
   return `profile:v1:${hash}`;
 }
 
-function md5(text: string): string {
-  return createHash("md5").update(text).digest("hex");
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 async function statTimes(filePath: string): Promise<{ createdAtMs: number; updatedAtMs: number }> {
@@ -76,7 +76,7 @@ export async function listLocalProfiles(dataDir: string): Promise<ProfileRecord[
         type: "l2",
         filename,
         content,
-        contentMd5: md5(content),
+        contentMd5: sha256(content),
         version: 0,
         createdAtMs,
         updatedAtMs,
@@ -97,7 +97,7 @@ export async function listLocalProfiles(dataDir: string): Promise<ProfileRecord[
         type: "l3",
         filename: "persona.md",
         content: body,
-        contentMd5: md5(body),
+        contentMd5: sha256(body),
         version: 0,
         createdAtMs,
         updatedAtMs,
@@ -134,9 +134,9 @@ export async function pullProfilesToLocal(
       if (record.type === "l2") {
         const target = path.join(tempBlocksDir, record.filename);
         await fs.writeFile(target, record.content, "utf-8");
-        if (md5(record.content) !== record.contentMd5) {
+        if (sha256(record.content) !== record.contentMd5) {
           await fs.rm(target, { force: true });
-          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`);
+          logger.debug?.(`[memory-tdai][profile-sync] SHA-256 mismatch for ${record.filename} (will re-pull on next sync)`);
         }
         continue;
       }
@@ -144,9 +144,9 @@ export async function pullProfilesToLocal(
       if (record.type === "l3") {
         const body = stripSceneNavigation(record.content).trim();
         await fs.writeFile(path.join(tempDir, "persona.md"), body, "utf-8");
-        if (md5(body) !== record.contentMd5) {
+        if (sha256(body) !== record.contentMd5) {
           await fs.rm(path.join(tempDir, "persona.md"), { force: true });
-          logger.debug?.(`[memory-tdai][profile-sync] MD5 mismatch for ${record.filename} (will re-pull on next sync)`);
+          logger.debug?.(`[memory-tdai][profile-sync] SHA-256 mismatch for ${record.filename} (will re-pull on next sync)`);
         }
       }
     }
