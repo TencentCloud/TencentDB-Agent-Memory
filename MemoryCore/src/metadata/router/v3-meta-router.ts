@@ -265,12 +265,17 @@ const routeTable: Record<string, Handler> = {
     await s.setAgentFixedAssetsForCaller(d.agent_id, d.bindings, c);
     return OK;
   }),
-  [`${V3_PREFIX}/agent-fixed-asset/list`]: bind(S.fixedAssetListSchema, (d, _c, s) =>
-    s.listAgentFixedAssets(d.agent_id, resolvePagination(d)),
+  [`${V3_PREFIX}/agent-fixed-asset/list`]: bind(S.fixedAssetListSchema, (d, c, s) =>
+    s.listAgentFixedAssetsForCaller(d.agent_id, c, resolvePagination(d)),
   ),
-  [`${V3_PREFIX}/agent-fixed-asset/list-with-detail`]: bind(S.fixedAssetListWithDetailSchema, (d, _c, s) => s.listAgentFixedAssetsWithDetail(d)),
-  [`${V3_PREFIX}/agent-fixed-asset/summary-by-agents`]: bind(S.fixedAssetSummaryByAgentsSchema, (d, _c, s) =>
-    s.summarizeAgentFixedAssetsByAgents({ agent_ids: d.agent_ids, asset_id: d.asset_id }),
+  [`${V3_PREFIX}/agent-fixed-asset/list-with-detail`]: bind(S.fixedAssetListWithDetailSchema, (d, c, s) =>
+    s.listAgentFixedAssetsWithDetailForCaller(d, c),
+  ),
+  [`${V3_PREFIX}/agent-fixed-asset/summary-by-agents`]: bind(S.fixedAssetSummaryByAgentsSchema, (d, c, s) =>
+    s.summarizeAgentFixedAssetsByAgentsForCaller(
+      { agent_ids: d.agent_ids, asset_id: d.asset_id },
+      c,
+    ),
   ),
 
   // ACL
