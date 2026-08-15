@@ -240,15 +240,17 @@ export interface GitStorageBackendConfig {
   localRootDir: string;
   /** Private remote URL. */
   remoteUrl: string;
-  /** Resolved credential provider (never a plaintext token). */
+  /** Resolved credential provider (never a plaintext token). Encapsulates authMethod. */
   credentialProvider: IGitCredentialProvider;
-  authMethod: "http-token" | "ssh";
-  sshKeyPath?: string;
-  batchWindowMs: number;
-  maxBatchDelayMs: number;
-  lockTtlMs: number;
-  maxPushRetries: number;
-  recoveryMode: "manual" | "auto-wal-only";
+  /** Raw (unsanitized) tenant/instance identifiers this backend instance's branch is derived from. */
+  branchNameSeed: { tenantId: string; instanceId: string };
+  /** Single-writer lock backend — injected, never imported from src/core/state/* directly. */
+  stateBackend: import("../state/types.js").IStateBackend;
+  batchWindowMs?: number;
+  maxBatchDelayMs?: number;
+  lockTtlMs?: number;
+  maxPushRetries?: number;
+  recoveryMode?: "manual" | "auto-wal-only";
 }
 
 /** Configuration for creating a storage backend. */

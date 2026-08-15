@@ -9,6 +9,8 @@
 
 import type { IStorageBackend, StorageBackendConfig, StorageLogger } from "./types.js";
 import { LocalStorageBackend } from "./local-backend.js";
+import { GitStorageBackend } from "./git-backend.js";
+import { gitVersion } from "./git-cli.js";
 
 const TAG = "[storage][factory]";
 
@@ -26,6 +28,22 @@ export async function createStorageBackend(
   logger?: StorageLogger,
 ): Promise<IStorageBackend> {
   switch (config.type) {
+    case "git": {
+      if (!config.git) {
+        throw new Error(`${TAG} git backend requires config.git`);
+      }
+      try {
+        await gitVersion();
+      } catch (err) {
+        throw new Error(
+          `${TAG} git binary not found on PATH; required for storage type=git. ` +
+            `Original error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      logger?.info(`${TAG} Creating git storage backend (branch seed: ${JSON.stringify(config.git.branchNameSeed)})`);
+      return new GitStorageBackend({ ...config.git, logger });
+    }
+
     case "cos": {
       if (!config.credentialProvider) {
         throw new Error(`${TAG} COS backend requires a credentialProvider`);
