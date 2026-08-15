@@ -85,10 +85,10 @@ memory:
     triggerEveryN: 50
     maxScenes: 15
   pipeline:
-    everyNConversations: 5
+    everyNConversations: 1
     enableWarmup: true
-    l1IdleTimeoutSeconds: 600
-    l2DelayAfterL1Seconds: 90
+    l1IdleTimeoutSeconds: 30
+    l2DelayAfterL1Seconds: 15
     l2MinIntervalSeconds: 900
     l2MaxIntervalSeconds: 3600
   recall:
@@ -99,7 +99,17 @@ memory:
     timeoutMs: 5000
   storeBackend: sqlite
   embedding:
-    provider: none
+    # Local Ollama — snowflake-arctic-embed2, 1024-dim, OpenAI-compatible.
+    # Ollama's /v1/embeddings endpoint needs no auth (localhost:11434).
+    # Container reaches host via host.docker.internal:11434.
+    # Override via EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL env.
+    provider: openai
+    baseUrl: "${EMBEDDING_BASE_URL:-http://host.docker.internal:11434/v1}"
+    apiKey: "${EMBEDDING_API_KEY:-ollama}"
+    model: "${EMBEDDING_MODEL:-snowflake-arctic-embed2}"
+    dimensions: 1024
+    sendDimensions: false
+    conflictRecallTopK: 5
 
 # ── Skill 模块 ──
 skill:
@@ -135,6 +145,16 @@ $DOCKER run -d --name "$CONTAINER" \
   "$MEMORY_CORE_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
+
+# memory-core 镜像没有 healthcheck，wait_healthy 看到容器 running 就返回，
+# 但内部 Node 服务监听 8420 还需要几秒。下面的 init-admin 紧接着就发请求，
+# 必须先等 /health 真正返回 200，否则会拿到 HTTP=000（连接拒绝）或请求在
+# 半启动的服务上中断（issue #761，podman 下几乎必现，Docker Desktop 偶发）。
+if ! wait_http_ready "http://localhost:${MEMORY_CORE_PORT}/health" 45 "memory-core"; then
+  warn "memory-core 容器日志："
+  $DOCKER logs --tail 30 "$CONTAINER" 2>&1 || true
+  die "memory-core HTTP 未就绪，init-admin 无法继续。"
+fi
 ok "memory-core 已启动 → http://localhost:${MEMORY_CORE_PORT}/"
 
 # ── Admin user 生命周期 ─────────────────────────────────────────
@@ -167,12 +187,14 @@ verify_user_key() {
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
-    "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
-    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
+    -d "$(printf '{"user_key":"%s"}' "$key")" \
+    "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" 2>/dev/null || echo "000")
   [[ "$code" == "200" ]]
 }
 
-info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → $ADMIN_KEY_FILE）..."
+# ${ADMIN_KEY_FILE} 必须带花括号：macOS 自带 bash 3.2 会把紧邻的全角"）"
+# 字节并入变量名，在 set -u 下报 "ADMIN_KEY_FILE）: unbound variable"。
+info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → ${ADMIN_KEY_FILE}）..."
 
 # 生成随机 key（首次 init-admin 用；若之前有 file 就复用）
 if [[ -s "$ADMIN_KEY_FILE" ]]; then
@@ -188,8 +210,8 @@ init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
-  "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
-  -d "$init_body" 2>/dev/null || echo "000")
+  -d "$init_body" \
+  "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" 2>/dev/null || echo "000")
 
 case "$init_resp" in
   200)

@@ -771,6 +771,29 @@ export async function handleChatCompletions(
       // (initialized or bypassed). Pending / mid-form states MUST fall through
       // to handleSessionInit so the state machine can advance to the next form.
       const isTerminalState = recovered?.status === "initialized";
+      // ── Preset-identity recovery override ────────────────────────────────────
+      // Recovery (getOrRecover → tryHistoryScan) only knows about the form-based
+      // flow: it scans history for Claude Code / CodeBuddy form markers. When
+      // a header-driven client (Hermes / A2A) sends x-team-id / x-agent-id /
+      // x-task-id but has never been through the form, the scan finds nothing
+      // and returns a one-shot bypass — bypassing the very init flow that DOES
+      // understand presetIdentity (codebuddy/init.ts:388, claude-code/init.ts:724)
+      // and would have validated the headers against the kernel and registered
+      // directly. Override the bypass here: clear the wasted L1 state and route
+      // through handleSessionInit so the preset can take effect. Subsequent
+      // requests will hit L2a/L2b and skip both paths.
+      const shouldRetryAsPreset =
+        !!presetIdentity &&
+        config.headerAutoSelect?.enabled === true &&
+        recovered?.bypassed === true;
+      if (shouldRetryAsPreset) {
+        console.log(
+          `[session-init] session=${sessionKey} recovery bypassed but preset identity present ` +
+          `(team=${presetIdentity!.teamId} agent=${presetIdentity!.agentId ?? "-"} task=${presetIdentity!.taskId ?? "-"}) ` +
+          `→ routing through init flow`,
+        );
+        store.delete(compositeKey);
+      }
       // 记录本 turn 是否真的走了 handleSessionInit state machine（详见 anthropicHandler
       // 对称位置的注释）。sessionJustRegistered = wentThrough && justRegistered，覆盖
       // 正常注册 + bypass 两种终态转换（bypass 分支现在也带 justRegistered=true），让
@@ -779,7 +802,7 @@ export async function handleChatCompletions(
       // L2b recovery 分支 justRegistered=true 只是 prewarm 信号，走 recovered 分支时
       // wentThroughSessionInitStateMachine=false 会自然过滤掉，不进 sessionJustRegistered。
       let wentThroughSessionInitStateMachine = false;
-      if (recovered && isTerminalState) {
+      if (recovered && isTerminalState && !shouldRetryAsPreset) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
         // 用户对话永远保留原样，包括 session_init form 交互 — 不做任何删除。

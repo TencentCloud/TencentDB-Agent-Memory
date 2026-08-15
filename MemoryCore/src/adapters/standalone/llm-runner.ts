@@ -280,110 +280,227 @@ export class StandaloneLLMRunner implements LLMRunner {
       `tools=${effectiveEnableTools}${callerProvidedTools ? "(caller)" : ""}, timeout=${timeoutMs}ms`,
     );
 
-    // Create OpenAI-compatible provider via AI SDK
-    // Use "compatible" mode to call /chat/completions (not Responses API),
-    // which works with all OpenAI-compatible backends (DeepSeek, Qwen, etc.)
-    const provider = createOpenAI({
-      baseURL: this.config.baseUrl,
-      apiKey: this.config.apiKey,
-      compatibility: "compatible",
-    });
+    // ── Direct-fetch fallback for pure-text tasks (no tools) ──
+    //
+    // The Vercel AI SDK's createOpenAI({ compatibility: "compatible" }) path
+    // requests `stream: true` regardless of the caller's intent, then parses
+    // the SSE response. Some OpenAI-compatible backends (notably OmniRoute
+    // 3.8.48) emit trailing SSE comments and an empty `usage` chunk that the
+    // SDK's stream parser rejects with "Invalid JSON response" — even though
+    // the model itself returned valid JSON.
+    //
+    // For pure-text tasks (L1 extraction, summarization) we bypass the SDK
+    // and use a plain fetch. The model-protocol contract is identical for
+    // non-tool use cases, and we get a clean response without the parser
+    // mismatch.
+    //
+    // For tool-enabled tasks (L2 scene extraction) we also bypass the SDK
+    // because the AI SDK's tool-using path goes through the same broken
+    // SSE parser. We send tool definitions as OpenAI function-calling
+    // format and parse the response manually. If the LLM returns tool_calls,
+    // we extract the first tool's arguments as the response text. If the
+    // LLM returns text, we use that directly. The scene-extractor parses
+    // text output for persona update signals and uses the file system
+    // independently, so partial tool-support is fine.
+    const useDirectFetch = true;
+    if (useDirectFetch) {
+      // Build tools up-front so directFetch can include them in the request.
+      let tools: Record<string, unknown> | undefined;
+      if (callerProvidedTools && effectiveEnableTools) {
+        tools = params.tools;
+      } else if (effectiveEnableTools && params.storage) {
+        const { createStorageTools } = await import("./storage-tools.js");
+        tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger);
+      } else if (effectiveEnableTools) {
+        tools = createSandboxedTools(workspaceDir, this.logger);
+      }
+      const directFetchParams = tools ? { ...params, tools } : params;
+      return this.directFetch(directFetchParams, runStartMs, timeoutMs, maxTokens);
+    }
+  }
 
-    // Select tools based on mode + storage
-    // Service mode (COS): use storage-backed tools → LLM reads/writes via StorageAdapter
-    // Standalone mode (local FS): use sandboxed FS tools → LLM reads/writes local files
-    // enableTools=false: omit tools entirely so the model cannot hallucinate calls.
-    // Caller-provided tools (params.tools) override the defaults — used by
-    // SkillExtractor to inject domain-specific tools (skill_list, etc.).
-    let tools: Record<string, unknown> | undefined;
-    if (callerProvidedTools && effectiveEnableTools) {
-      tools = params.tools;
-      this.logger?.debug?.(`${TAG} Using caller-provided tools: [${Object.keys(tools!).join(", ")}]`);
-    } else if (effectiveEnableTools && params.storage) {
-      const { createStorageTools } = await import("./storage-tools.js");
-      tools = createStorageTools(params.storage, params.storagePrefix ?? "", this.logger);
-      this.logger?.debug?.(`${TAG} Using storage-backed tools (prefix="${params.storagePrefix ?? ""}")`);
-    } else if (effectiveEnableTools) {
-      tools = createSandboxedTools(workspaceDir, this.logger);
-    } else {
-      tools = undefined; // pure-text task — never expose any tool to the model
+  // SDK path removed — directFetch handles all LLM calls.
+  // (The Vercel AI SDK's OpenAI-compatible provider has a broken SSE parser
+  //  on certain backends; see directFetch for the bypass logic.)
+
+  /**
+   * Direct-fetch path for LLM calls.
+   *
+   * Bypasses the Vercel AI SDK's OpenAI-compatible provider because that
+   * implementation has a broken SSE parser on certain backends (notably
+   * OmniRoute 3.8.48's trailing-comment format). Plain fetch + `stream: false`
+   * works against every OpenAI-compatible endpoint we care about.
+   *
+   * Handles both text-only tasks (L1 extraction) and tool-using tasks (L2
+   * scene extraction). For tool-using tasks, we send the tool definitions
+   * as OpenAI function-calling format and parse the response — if the LLM
+   * returns tool_calls, we extract the first tool's arguments as the
+   * response text; otherwise we use the message content directly.
+   */
+  private async directFetch(
+    params: LLMRunParams,
+    runStartMs: number,
+    timeoutMs: number,
+    maxTokens: number,
+  ): Promise<string> {
+    const toolsList = this.buildOpenAITools(params.tools);
+    const messages: Array<Record<string, unknown>> = [
+      ...(params.systemPrompt ? [{ role: "system", content: params.systemPrompt }] : []),
+      { role: "user", content: params.prompt },
+    ];
+    return this.directFetchInternal(messages, toolsList, params, runStartMs, timeoutMs, maxTokens, 0);
+  }
+
+  /**
+   * Internal recursion for tool execution: send messages to LLM, if it returns
+   * tool_calls, execute them, append results, recurse. Returns final text.
+   */
+  private async directFetchInternal(
+    messages: Array<Record<string, unknown>>,
+    toolsList: Array<{ type: "function"; function: { name: string; description?: string; parameters: unknown } }>,
+    params: LLMRunParams,
+    runStartMs: number,
+    timeoutMs: number,
+    maxTokens: number,
+    depth: number,
+  ): Promise<string> {
+    const MAX_DEPTH = 8;
+    if (depth >= MAX_DEPTH) {
+      this.logger?.warn?.(`${TAG} [direct] max tool-call depth reached (${MAX_DEPTH}), returning last text`);
+      return "";
+    }
+    const url = `${this.config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
+    const tools = params.tools as Record<string, unknown> | undefined;
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages,
+      max_tokens: maxTokens,
+      stream: false,
+    };
+    if (toolsList.length > 0) {
+      body.tools = toolsList;
+      body.tool_choice = "auto";
     }
 
-    try {
-      // H-11 Step 2: combine internal timeout with caller-provided abortSignal
-      // (e.g. pipeline-worker lost its lock and wants the LLM call to bail out).
-      // AbortSignal.any (Node 20+) aborts when ANY of the listed signals abort.
-      const timeoutSignal = AbortSignal.timeout(timeoutMs);
-      const combinedSignal = params.abortSignal
-        ? AbortSignal.any([timeoutSignal, params.abortSignal])
-        : timeoutSignal;
+    this.logger?.debug?.(
+      `${TAG} [direct] POST ${url} model=${this.model} maxTokens=${maxTokens} tools=${toolsList.length}`,
+    );
 
-      const result = await generateText({
-        model: provider.chat(this.model),
-        system: params.systemPrompt,
-        prompt: params.prompt,
-        // Only attach tools when actually enabled — passing an empty object
-        // (or even a tools-only-with-`read`) makes some OpenAI-compatible
-        // backends emit spurious tool calls on pure-text tasks.
-        ...(tools && Object.keys(tools).length > 0
-          ? { tools, stopWhen: stepCountIs(maxIterations) }
-          : {}),
-        maxOutputTokens: maxTokens,
-        abortSignal: combinedSignal,
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: params.taskId,
-          metadata: buildTelemetryMetadata(params),
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const combinedSignal = params.abortSignal
+      ? AbortSignal.any([controller.signal, params.abortSignal])
+      : controller.signal;
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config.apiKey}`,
         },
+        body: JSON.stringify(body),
+        signal: combinedSignal,
       });
 
-      const text = (result.text ?? "").trim();
       const totalMs = Date.now() - runStartMs;
+      clearTimeout(timeoutId);
 
-      // 暴露 token usage 到 side-channel（供 MetricTrackingRunner 读取）
-      if (result.usage) {
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "");
+        this.logger?.error?.(`${TAG} [direct] HTTP ${response.status} after ${totalMs}ms: ${errText.slice(0, 500)}`);
+        throw new Error(`LLM HTTP ${response.status}: ${errText.slice(0, 500)}`);
+      }
+
+      const json = (await response.json()) as {
+        choices?: Array<{
+          message?: {
+            content?: string | null;
+            tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
+          };
+        }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+
+      const choice = json.choices?.[0]?.message;
+      let text = (choice?.content ?? "").trim();
+      const toolCalls = choice?.tool_calls ?? [];
+
+      // Tool execution loop: if the LLM returned tool_calls, execute them,
+      // append results to the message history, and call the LLM again.
+      // Repeats until the LLM returns text (no tool_calls) or maxIterations.
+      if (toolCalls.length > 0 && toolsList.length > 0) {
+        const toolResultMessages: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
+        for (const tc of toolCalls) {
+          const name = tc.function?.name ?? "";
+          const argsJson = tc.function?.arguments ?? "{}";
+          const toolDef = tools[name];
+          const execute = (toolDef as any)?.execute;
+          if (typeof execute !== "function") {
+            toolResultMessages.push({
+              role: "tool",
+              tool_call_id: tc.id ?? "",
+              content: JSON.stringify({ error: `Tool "${name}" has no execute()` }),
+            });
+            continue;
+          }
+          let parsedArgs: unknown = {};
+          try { parsedArgs = JSON.parse(argsJson); } catch { /* keep as {} */ }
+          this.logger?.debug?.(
+            `${TAG} [direct] executing tool: ${name}(${JSON.stringify(parsedArgs).slice(0, 100)})`,
+          );
+          let result: unknown;
+          try {
+            result = await Promise.resolve(execute.call(toolDef, parsedArgs, { toolCallId: tc.id, messages: [] }));
+          } catch (toolErr) {
+            result = { error: toolErr instanceof Error ? toolErr.message : String(toolErr) };
+          }
+          const resultText = typeof result === "string" ? result : JSON.stringify(result);
+          toolResultMessages.push({
+            role: "tool",
+            tool_call_id: tc.id ?? "",
+            content: resultText,
+          });
+        }
+        this.logger?.debug?.(
+          `${TAG} [direct] tool_call round: ${toolCalls.length} call(s), results=${toolResultMessages.length}`,
+        );
+        // Build follow-up messages with assistant + tool results and recurse.
+        const followUpMessages = [
+          ...body.messages,
+          { role: "assistant" as const, content: text, tool_calls: toolCalls },
+          ...toolResultMessages,
+        ];
+        return await this.directFetchInternal(
+          followUpMessages,
+          toolsList,
+          params,
+          runStartMs,
+          timeoutMs,
+          maxTokens,
+          depth + 1,
+        );
+      }
+
+      // Side-channel usage for MetricTrackingRunner
+      if (json.usage) {
         this.lastUsage = {
-          promptTokens: result.usage.promptTokens ?? 0,
-          completionTokens: result.usage.completionTokens ?? 0,
-          totalTokens: (result.usage.promptTokens ?? 0) + (result.usage.completionTokens ?? 0),
+          promptTokens: json.usage.prompt_tokens ?? 0,
+          completionTokens: json.usage.completion_tokens ?? 0,
+          totalTokens: json.usage.total_tokens ?? (json.usage.prompt_tokens ?? 0) + (json.usage.completion_tokens ?? 0),
         };
       } else {
         this.lastUsage = undefined;
       }
 
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${result.steps.length}, output=${text.length} chars`,
+        `${TAG} [direct] completed: ${totalMs}ms, output=${text.length} chars`,
       );
 
-      // Log each step's activity (tool calls + text output)
-      for (const step of result.steps) {
-        const calls = step.toolCalls ?? [];
-        const textLen = step.text?.length ?? 0;
-        if (calls.length > 0) {
-          const callSummary = calls.map((tc) =>
-            `${tc.toolName}(${JSON.stringify(tc.input).slice(0, 120)})`,
-          ).join(", ");
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] toolCalls: ${callSummary}`,
-          );
-        }
-        if (textLen > 0) {
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] text: ${textLen} chars, finishReason=${step.finishReason}`,
-          );
-        }
-        if (calls.length === 0 && textLen === 0) {
-          this.logger?.debug?.(
-            `${TAG} step[${step.stepNumber}] empty (no tools, no text), finishReason=${step.finishReason}`,
-          );
-        }
-      }
-
-      // Metric
       if (params.instanceId) {
         report("llm_call", {
           taskId: params.taskId,
-          provider: "standalone",
+          provider: "standalone-direct",
           model: this.model,
           inputLength: params.prompt.length,
           outputLength: text.length,
@@ -396,13 +513,14 @@ export class StandaloneLLMRunner implements LLMRunner {
       return text;
     } catch (err) {
       const totalMs = Date.now() - runStartMs;
+      clearTimeout(timeoutId);
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.logger?.error(`${TAG} run() failed after ${totalMs}ms: ${errMsg}`);
+      this.logger?.error?.(`${TAG} [direct] failed after ${totalMs}ms: ${errMsg}`);
 
       if (params.instanceId) {
         report("llm_call", {
           taskId: params.taskId,
-          provider: "standalone",
+          provider: "standalone-direct",
           model: this.model,
           inputLength: params.prompt.length,
           outputLength: 0,
@@ -414,6 +532,46 @@ export class StandaloneLLMRunner implements LLMRunner {
 
       throw err;
     }
+  }
+
+  /**
+   * Convert AI SDK tool definitions to OpenAI function-calling format.
+   *
+   * The AI SDK's `tool()` wraps a JSON schema under an `inputSchema` field.
+   * OpenAI expects `parameters` at the top level, with `type: "function"`.
+   * This adapter handles both: AI SDK-style tools (`{ description, inputSchema }`)
+   * and pre-formatted OpenAI-style tools (passed through as-is).
+   */
+  private buildOpenAITools(
+    tools: Record<string, unknown> | undefined,
+  ): Array<{ type: "function"; function: { name: string; description?: string; parameters: unknown } }> {
+    if (!tools) return [];
+    const out: Array<{ type: "function"; function: { name: string; description?: string; parameters: unknown } }> = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const d = def as Record<string, unknown>;
+      // AI SDK tool format: { description, inputSchema, execute }
+      if (d.inputSchema && typeof d.inputSchema === "object") {
+        out.push({
+          type: "function",
+          function: {
+            name,
+            description: typeof d.description === "string" ? d.description : undefined,
+            parameters: d.inputSchema,
+          },
+        });
+      } else if (d.parameters && typeof d.parameters === "object") {
+        // Already OpenAI-format
+        out.push({
+          type: "function",
+          function: {
+            name,
+            description: typeof d.description === "string" ? d.description : undefined,
+            parameters: d.parameters,
+          },
+        });
+      }
+    }
+    return out;
   }
 }
 
