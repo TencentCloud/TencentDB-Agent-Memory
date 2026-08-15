@@ -29,7 +29,7 @@ import {
 import type { MetadataClient } from "../../meta/client.js";
 import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
 
-import { buildFormResponse, FormData, MORE_LABEL } from "./form.js";
+import { buildFormResponse, FormData, MORE_LABEL, stripSessionInitArtifacts } from "./form.js";
 import { computePagination } from "./pagination.js";
 import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
 import {
@@ -612,10 +612,12 @@ async function handleSessionInitInner(
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
-  // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
-  // 现在**永远保留** session_init form 交互, 不做任何删除。变量名 stripped
-  // 保留只为下游调用点不用大改, 语义上就是 messages 本身。
-  const stripped = messages;
+  // session_init form 交互（toolu_cc_session_init_* 合成 tool_use / tool_result）
+  // 在转发上游前必须剥离：DeepSeek 等上游在 extended-thinking 模式下校验
+  // assistant 消息 thinking 签名的真实性，无签名的合成消息必然 400。
+  // 选择解析（extractAssetConfirm / extractFromOptionText / ...）在剥离前
+  // 已消费这些消息，剥离只影响发给上游的请求体，不影响初始化逻辑。
+  const stripped = stripSessionInitArtifacts(messages);
 
   // ── DEBUG BYPASS ─────────────────────────────────────────────────────────
   // When `sessionInit.debugForceIdentity` is set (developer/e2e config),
