@@ -182,14 +182,12 @@ ALLOWED2=$(jget "$R" data.allowed)
 pass "撤销后 acl/check allowed=$ALLOWED2"
 
 # ============================
-info "⑮ agent-fixed-asset/list-with-detail → 预期 501 NOT_IN_SCOPE（stateless 模式挡着）"
+info "⑮ agent-fixed-asset/list-with-detail → 面板代理应正常转发"
 R=$(call_meta agent-fixed-asset/list-with-detail "$ADMIN_KEY" "{\"agent_id\":\"$AGENT_ID\",\"limit\":100,\"offset\":0}")
-STATUS=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code', 'no-code'))")
-if [[ $STATUS == "501" ]] || echo "$R" | grep -q "NOT_IN_SCOPE"; then
-  pass "预期挡住：$R"
-else
-  echo -e "  ${YELLOW}⚠${NC} agent-fixed-asset/list-with-detail 竟然通了？response: $R"
-fi
+[[ $(jcode "$R") == "0" ]] || fail "agent-fixed-asset/list-with-detail" "$R"
+COUNT_FIXED=$(echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sum(1 for i in d['data']['items'] if i['asset_id']=='$SKILL_ID'))")
+[[ $COUNT_FIXED == "1" ]] || fail "固定资产详情应包含刚建的 skill" "$R"
+pass "固定资产详情已正常转发 ($COUNT_FIXED/1)"
 
 # ============================
 info "⑯ 内容面 skill/list → 验证固定资产 Tab 现用的接口"
