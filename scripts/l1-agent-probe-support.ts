@@ -41,7 +41,7 @@ export async function waitForL1Commit(dataDir: string, sessionKey: string) {
 }
 
 export function assertProbeLines(lines: string[]): void {
-  const expected = ["2", "succeeded", "succeeded", "approve", "1", "true", "0"];
+  const expected = ["2", "succeeded", "1", "true", "0"];
   lines.forEach((line, index) => {
     if (!line.endsWith(`=${expected[index]}`)) throw new Error(line);
   });

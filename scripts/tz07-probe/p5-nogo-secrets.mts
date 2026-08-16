@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildChildEnv } from "../../src/gateway/consolidation/child-spawn.js";
 import { authRootFor } from "../../src/gateway/consolidation/launchers/auth-root.js";
+import { ENV_PI_SUBAGENT_DIRS } from "../../src/gateway/consolidation/launchers/pi-config.js";
 import { must, finish } from "./assert.mts";
 
 const LEAK = process.env.FALSIFY === "leak-key";
@@ -59,7 +60,14 @@ function childEnvFor(launcherId: string): Record<string, string> {
       ? { CLAUDE_CONFIG_DIR: attemptSession }
       : launcherId === "codex"
         ? { CODEX_HOME: attemptSession }
-        : {};
+        : launcherId === "pi"
+          ? // Каталоги определений субагентов: путь, а не секрет — ребёнок с
+            // приватным HOME иначе не видит, кого он может позвать. Ветка
+            // нужна, чтобы модель «что добавляет хост» не отставала от кода:
+            // проба меряет только ЗНАЧЕНИЯ, и без этой строки pi выглядел бы
+            // хостом, который не добавляет ничего.
+            { [ENV_PI_SUBAGENT_DIRS]: path.join(home, ".pi/agent/agents") }
+          : {};
   const leaked: Record<string, string> = LEAK
     ? { ANTHROPIC_API_KEY: AUTH_SECRET, TDAI_MEMORY_TOKEN: LOOPBACK_TOKEN }
     : {};

@@ -4,7 +4,7 @@ import { startL1AssignmentEpoch } from "./l1-assignment-repo.js";
 import {
   approveL1Assignment,
   createL1AttemptArtifact,
-  recordL1CriticVerdict,
+  settleL1Attempt,
 } from "./l1-attempt-repo.js";
 import { commitL1Cohort } from "./l1-cohort-repo.js";
 import {
@@ -17,8 +17,8 @@ import {
 const roots: string[] = [];
 afterEach(() => removeL1TestDataDirs(roots));
 
-describe("L1 critic receipt", () => {
-  it("refuses approval for another enriched input", () => {
+describe("L1 candidate digest binding", () => {
+  it("refuses approval when the stored candidate is not the one validated", () => {
     const root = createL1TestDataDir(roots);
     const workset = createL1TestCohort(root);
     startL1AssignmentEpoch({
@@ -29,7 +29,6 @@ describe("L1 critic receipt", () => {
       nowMs: 1,
       nowIso: L1_TEST_NOW,
     });
-    const candidateDigest = digestL1Artifact({});
     createL1AttemptArtifact({
       dataDir: root,
       nowIso: L1_TEST_NOW,
@@ -43,20 +42,14 @@ describe("L1 critic receipt", () => {
         reviewInputJson: "{}",
         reviewInputDigest: digestL1Artifact({ expected: true }),
         candidateJson: "{}",
-        candidateDigest,
+        candidateDigest: digestL1Artifact({}),
       },
     });
-    recordL1CriticVerdict({
+    settleL1Attempt({
       dataDir: root,
       attemptId: "attempt-1",
-      criticAttemptId: "critic-1",
+      approved: true,
       nowIso: L1_TEST_NOW,
-      isApproved: true,
-      verdict: {
-        verdict: "approve",
-        candidateDigest,
-        inputDigest: digestL1Artifact({ wrong: true }),
-      },
     });
     expect(
       approveL1Assignment({
@@ -64,6 +57,7 @@ describe("L1 critic receipt", () => {
         assignmentId: workset.assignmentId,
         runId: "run-1",
         attemptId: "attempt-1",
+        candidateDigest: digestL1Artifact({ wrong: true }),
         nowIso: L1_TEST_NOW,
       }),
     ).toBe(false);

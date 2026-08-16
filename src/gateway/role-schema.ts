@@ -34,7 +34,6 @@ export interface RoleConfigFile {
   caps?: { delete_per_run?: number; rewrite_per_run?: number };
   max_run_ms?: number;
   fail_on_missing_prompt?: boolean;
-  critic_role?: string | null;
   /** Retry budget of the role: how many LaunchAttempts a RoleRun may spend
    * before it is terminal (tz-01 B4; tz-09 builds `failed-terminal` on it).
    * Finite by construction — absent means DEFAULT_RETRY_BUDGET, never
@@ -125,7 +124,6 @@ const FIELD_CHECKS: Record<string, (v: unknown) => boolean> = {
   trigger: (v) => ROLE_TRIGGERS.includes(v as (typeof ROLE_TRIGGERS)[number]),
   schedule: (v) => v === null || isStr(v),
   threshold: (v) => v === null || isNum(v),
-  critic_role: (v) => v === null || isStr(v),
   ops_subset: (v) => Array.isArray(v) && v.every(isApplyOp),
   tools_subset: (v) => Array.isArray(v) && v.every(isStr),
   requires_capabilities: (v) => Array.isArray(v) && v.every(isStr),
@@ -160,7 +158,6 @@ export const REQUIRED_PRESENT_FIELDS = [
   "caps",
   "max_run_ms",
   "fail_on_missing_prompt",
-  "critic_role",
 ] as const;
 
 /** Whitelist of allowed keys: the 19 required ones plus the optional. */

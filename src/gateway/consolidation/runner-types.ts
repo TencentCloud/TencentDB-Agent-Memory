@@ -4,6 +4,7 @@
  * Split from runner.ts to keep that file ≤150 lines.
  */
 
+import type { RejectedOp } from "../apply-executor.js";
 import type { L0Cursor, RecordEntry } from "./diff-builder.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
 
@@ -30,6 +31,10 @@ export interface RunBatchResult {
   /** Merge ops skipped because the TARGET is missing (cross-batch partner
    * deleted earlier) — the night anchor, NOT heal-skip. */
   skippedMergesMissingTarget: string[];
+  /** Ops the apply refused one by one, with reasons. Optional because the
+   * repo carries hand-built ApplyResult fakes that bypass the typecheck
+   * (role-lock.worker.ts `as never`), so the field can arrive absent. */
+  rejected?: RejectedOp[];
   /** True when this batch applied NOTHING (empty/heal-skip diff). */
   appliedNothing: boolean;
   deleteOps: number;

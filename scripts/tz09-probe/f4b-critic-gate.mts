@@ -16,8 +16,8 @@ import { must, finish } from "../tz07-probe/assert.mts";
 import { runBatch } from "../../src/gateway/consolidation/runner.js";
 import { resolveRoleContract } from "../../src/gateway/consolidation/role-contract.js";
 import { createRun } from "../../src/gateway/control-plane/run-repo.js";
-import { CRITIC_VERDICT_FILE } from "../../src/gateway/consolidation/critic-launch.js";
-import { digestOf } from "../../src/gateway/consolidation/critic-stage.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
+import { CRITIC_REL } from "../../src/gateway/consolidation/attempt-layout.js";
 import type { OrchestratorContext } from "../../src/gateway/consolidation/context.js";
 
 const sbx = makeSandbox([]);
@@ -135,10 +135,10 @@ async function attempt(
         );
       } else {
         fs.writeFileSync(
-          path.join(scratch, CRITIC_VERDICT_FILE),
+          path.join(scratch, CRITIC_REL),
           JSON.stringify({
             verdict: "reject",
-            candidateDigest: digestOf(CANDIDATE),
+            candidateDigest: digestOf(JSON.stringify(CANDIDATE)),
             reasons: ["synthetic critic says no"],
           }),
           "utf-8",
@@ -154,6 +154,7 @@ async function attempt(
         applied: { merges: [], deletes: [], rewrites: [] },
         skipped: { merges: [], deletes: [], rewrites: [] },
         skippedMergesMissingTarget: [],
+        rejected: [],
         reindexed: false,
         needsReindex: false,
         partial: false,
@@ -187,7 +188,7 @@ const gatedMode =
 const gatedCalls = await attempt(gatedMode, "run-gated");
 must("отрицательный вердикт критика не пустил apply", gatedCalls === 0);
 
-fs.rmSync(path.join(scratch, CRITIC_VERDICT_FILE), { force: true });
+fs.rmSync(path.join(scratch, CRITIC_REL), { force: true });
 const shadowCalls = await attempt("shadow");
 must(
   "контроль: в shadow тот же кандидат доходит до apply",

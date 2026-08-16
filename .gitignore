@@ -59,3 +59,6 @@ node_modules
 
 # Probe corpus is derived from personal memory — measurements only, never the questions (tz-04).
 probe-corpus.json
+
+# pi subagents scratch (missions/artifacts) — tooling residue, never committed
+.pi-subagents/

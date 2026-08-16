@@ -12,7 +12,6 @@
 import { manifestShaMap } from "./diff-builder.js";
 import { preApply } from "./runner-stages.js";
 import { recordApplyResult } from "./apply-batch.js";
-import { runCriticStage, digestOf } from "./critic-stage.js";
 import type { OrchestratorContext } from "./context.js";
 import type { RunBatchArgs, RunBatchResult } from "./runner-types.js";
 
@@ -25,6 +24,7 @@ function emptyResult(): RunBatchResult {
     applied: { merges: [], deletes: [], rewrites: [] },
     skipped: { merges: [], deletes: [], rewrites: [] },
     skippedMergesMissingTarget: [],
+    rejected: [],
     appliedNothing: true,
     deleteOps: 0,
     rewriteOps: 0,
@@ -42,39 +42,20 @@ export async function runBatch(
     const pre = await preApply(ctx, args, result);
     if (!pre.ok || !pre.baseline || pre.rawDiff === undefined) return result;
 
-    // tz-09 Ф4b: the critic decides BEFORE apply. Fail-closed in enforce —
-    // no verdict is a refusal, never a default-approve.
-    const review = await runCriticStage(ctx, {
-      runId: args.runId,
-      scratchDir: args.scratchDir,
-      role: args.contract,
-      candidate: pre.rawDiff,
-      inputDigest: digestOf(result.diffText ?? ""),
-    });
-    if (!review.ok) {
-      result.error = `critic gate refused apply: ${review.reason ?? "no verdict"}`;
-      result.status = "failed";
-      return result;
-    }
-
+    // TDAI does NOT launch a critic. The role's output IS the candidate.
+    // TDAI just applies it. Critic logic lives inside the pi role.
     const applyResult = await ctx.applyDiff(
       {
         diff: pre.rawDiff,
         manifest: { baseline: manifestShaMap(pre.baseline) },
         context: { presentedRecordIds: pre.presentedRecordIds ?? [] },
       },
-      // tz-09 Ф3: what this run may do comes from the CONTRACT, alongside the
-      // body — never inside it.
       {
         runId: args.runId,
-        // Half of every operationId (Ф5): the journal is bound to THIS
-        // candidate, so a replay of a different one cannot collide with it.
-        candidateDigest: digestOf(pre.rawDiff),
+        candidateDigest: "",
         opsSubset: args.contract.policy.opsSubset,
         caps: args.contract.policy.caps,
         gateMode: ctx.applyGateMode,
-        // The run is closed by finalizeRunOutcome when the WHOLE run ends —
-        // not by the first batch that applies (night-batches.ts runs several).
         closesRun: false,
       },
     );

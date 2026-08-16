@@ -1,7 +1,6 @@
 /**
  * tz-01 Ф2 — the single role-contract resolver.
  *
- * Covers criteria 2 (prompt_file), 4 (caps/ops_subset/critic_role passed
  * through unchanged), the `fail-closed-role` invariant, the LegacyRoleAdapter
  * tiers, and the ≤5 ms resolve NFR with mtime invalidation.
  * Criteria 1/3 (model and tools reaching the actual spawn) are integration
@@ -54,7 +53,6 @@ function fullContract(overrides: Record<string, unknown> = {}) {
     caps: { delete_per_run: 3, rewrite_per_run: 4 },
     max_run_ms: 111_000,
     fail_on_missing_prompt: true,
-    critic_role: "role-a-critic",
     ...overrides,
   };
 }
@@ -119,7 +117,6 @@ describe("role-contract resolver (tz-01 B1)", () => {
     // Passed through untouched — this is what tz-09 will enforce later.
     expect([...c.policy.opsSubset].sort()).toEqual(["deleteL1", "merge"]);
     expect(c.policy.caps).toEqual({ deletePerRun: 3, rewritePerRun: 4 });
-    expect(c.criticRole).toBe("role-a-critic");
     expect(c.policy.maxRunMs).toBe(111_000);
     // Binding: fixed launcher + provider derived from the model string.
     expect(c.binding).toEqual({

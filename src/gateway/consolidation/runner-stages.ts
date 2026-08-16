@@ -108,7 +108,7 @@ export async function preApply(
     presentedDiffPath: PRESENTED_REL,
   });
   // Nothing but THIS attempt's role may leave a candidate here — the same
-  // rule critic-launch.ts applies to critic.json. Today runScratch carries the
+  // The runner applies to out/result.json. Today runScratch carries the
   // runId so a leftover is not reachable; the guard is what keeps it that way.
   // BOTH result paths: the reader falls back to the retired one, so a stale
   // `diff.json` left by an earlier attempt would be read as this attempt's

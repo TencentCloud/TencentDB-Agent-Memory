@@ -59,7 +59,10 @@ export type L1DispatchFailureKind =
   | "role-disabled"
   | "launch-failed"
   | "invalid-candidate"
-  | "critic-rejected"
+  /** The candidate is well-formed but breaks a store rule the parent owns —
+   * today the near-duplicate policy. Quality of wording is judged by the
+   * critic INSIDE the pi role; the gateway never sees that verdict. */
+  | "policy-rejected"
   | "stale-artifact";
 
 export type L1DispatchResult =
@@ -68,7 +71,6 @@ export type L1DispatchResult =
       runId: string;
       approvedAttemptId: string;
       candidate: L1CandidateV1;
-      criticReceipt: string;
     }
   | { ok: false; kind: L1DispatchFailureKind; message: string };
 
@@ -78,7 +80,7 @@ export interface L1ExtractionDispatcher {
     vectorStore?: IMemoryStore;
     embeddingService?: EmbeddingService;
   }): void;
-  /** Cancel and reap every launched extractor/critic before stores close. */
+  /** Cancel and reap every launched extractor before stores close. */
   shutdown?(): Promise<void>;
   /** Track scheduler work through parent commit so shutdown can drain it. */
   trackOperation?<T>(operation: () => Promise<T>): Promise<T>;

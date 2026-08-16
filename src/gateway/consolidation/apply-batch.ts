@@ -16,6 +16,9 @@ export function recordApplyResult(
   result.applied = applyResult.applied;
   result.skipped = applyResult.skipped;
   result.skippedMergesMissingTarget = applyResult.skippedMergesMissingTarget;
+  // `?? []` guards the hand-built ApplyResult fakes that bypass the typecheck
+  // (role-lock.worker.ts `as never`) — from those the field arrives undefined.
+  result.rejected = applyResult.rejected ?? [];
   result.appliedNothing =
     applyResult.applied.merges.length === 0 &&
     applyResult.applied.deletes.length === 0 &&

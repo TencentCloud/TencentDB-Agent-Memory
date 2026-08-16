@@ -5,6 +5,7 @@ import type {
   LaunchInput,
   RoleLauncher,
 } from "../consolidation/launchers/types.js";
+import type { IMemoryStore } from "../../core/store/types.js";
 import { GatewayL1AgentDispatcher } from "./l1-agent-dispatcher.js";
 
 const logger = {
@@ -30,12 +31,14 @@ const defaults: RoleLegacyDefaults = {
   },
 };
 
+/** The record the near-duplicate recall lever plants in the store. */
+export const NEAR_DUPLICATE_ID = "existing-dark-mode";
+
 export function createTestL1Dispatcher(
   root: string,
-  criticVerdict: "approve" | "reject" | readonly ("approve" | "reject")[],
   launcherOverride?: RoleLauncher,
 ): GatewayL1AgentDispatcher {
-  const launcher = launcherOverride ?? fakeLauncher(criticVerdict);
+  const launcher = launcherOverride ?? storeOnlyLauncher();
   return new GatewayL1AgentDispatcher({
     dataDir: root,
     scratchRoot: path.join(root, "scratch"),
@@ -47,10 +50,88 @@ export function createTestL1Dispatcher(
   });
 }
 
-function fakeLauncher(
-  configured: "approve" | "reject" | readonly ("approve" | "reject")[],
+/**
+ * Make the parent's recall report an existing near-duplicate for whatever the
+ * role proposes. This is the ONLY lever that fills `parentPolicyReasons`:
+ * without a vector store the recall returns no matches and every candidate
+ * passes the store policy.
+ */
+export function configureNearDuplicateRecall(
+  dispatcher: GatewayL1AgentDispatcher,
+): void {
+  const row = {
+    record_id: NEAR_DUPLICATE_ID,
+    content: "The user prefers dark mode.",
+    type: "persona",
+    priority: 80,
+    scene_name: "preference",
+    score: 0.99,
+    timestamp_str: "2026-08-14T00:00:00.000Z",
+    timestamp_start: "",
+    timestamp_end: "",
+    session_key: "old",
+    session_id: "old",
+    metadata_json: "{}",
+    project_id: "/repo",
+    scope: "project",
+  };
+  const stored = {
+    ...row,
+    created_time: row.timestamp_str,
+    updated_time: row.timestamp_str,
+  };
+  dispatcher.configureRecallContext({
+    vectorStore: {
+      isDegraded: () => false,
+      getCapabilities: () => ({
+        vectorSearch: true,
+        ftsSearch: false,
+        nativeHybridSearch: false,
+        sparseVectors: false,
+      }),
+      searchL1Vector: async () => [row],
+      getL1ById: async () => stored,
+      queryL1Records: async () => [stored],
+    } as unknown as IMemoryStore,
+    embeddingService: {
+      isReady: () => true,
+      embed: async () => new Float32Array([1]),
+    } as never,
+  });
+}
+
+/** Always proposes a fresh `store`. Deliberately NOT retry-aware: a test that
+ * expects a policy rejection must stay rejected on the second attempt too. */
+function storeOnlyLauncher(): RoleLauncher {
+  return stdoutLauncher((input) => candidateFor(input, null));
+}
+
+/** Repairs itself from the retry feedback the gateway hands back: the second
+ * attempt updates the near-duplicate the parent recalled. The target id comes
+ * from that feedback and never from a constant — `parseL1Candidate` only
+ * accepts targets present in the same recall snapshot. */
+export function retryAwareLauncher(): RoleLauncher {
+  return stdoutLauncher((input) => {
+    const { retry } = JSON.parse(input.taskPrompt) as {
+      retry: { conflicts?: Array<{ nearDuplicateTargetId?: string }> } | null;
+    };
+    const target = retry?.conflicts?.find(
+      ({ nearDuplicateTargetId }) => nearDuplicateTargetId,
+    )?.nearDuplicateTargetId;
+    return candidateFor(input, target ?? null);
+  });
+}
+
+/** Emits a candidate that cannot pass the schema, so the attempt fails with
+ * `invalid-candidate` — the fail-closed lever that survives the critic's
+ * removal. */
+export function invalidOutputLauncher(): RoleLauncher {
+  return stdoutLauncher(() => ({ version: 1, scenes: "not-an-array" }));
+}
+
+function stdoutLauncher(
+  outputFor: (input: LaunchInput) => unknown,
 ): RoleLauncher {
-  let criticCalls = 0;
   return {
     id: "pi",
     capabilities: new Set(["session", "thinking", "tool-subset"]),
@@ -59,16 +140,7 @@ function fakeLauncher(
         status: "succeeded",
         exitCode: 0,
         signal: null,
-        stdout: JSON.stringify(
-          outputFor(
-            input,
-            Array.isArray(configured)
-              ? input.contract.role.endsWith("critic")
-                ? configured[Math.min(criticCalls++, configured.length - 1)]!
-                : configured[0]!
-              : configured,
-          ),
-        ),
+        stdout: JSON.stringify(outputFor(input)),
         stderr: "",
       };
       return {
@@ -83,16 +155,8 @@ function fakeLauncher(
   };
 }
 
-function outputFor(input: LaunchInput, verdict: "approve" | "reject") {
+function candidateFor(input: LaunchInput, targetId: string | null) {
   const parsed = JSON.parse(input.taskPrompt) as Record<string, unknown>;
-  if (input.contract.role.endsWith("critic")) {
-    return {
-      verdict,
-      candidateDigest: parsed.candidateDigest,
-      inputDigest: parsed.inputDigest,
-      reasons: verdict === "approve" ? [] : ["not durable"],
-    };
-  }
   const workset = (parsed.workset ?? parsed) as {
     assignmentId: string;
     inputDigest: string;
@@ -117,8 +181,8 @@ function outputFor(input: LaunchInput, verdict: "approve" | "reject") {
             priority: 80,
             sourceMessageIds: [sourceId],
             metadata: {},
-            action: "store",
-            targetIds: [],
+            action: targetId ? "update" : "store",
+            targetIds: targetId ? [targetId] : [],
           },
         ],
       },

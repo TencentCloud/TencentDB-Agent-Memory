@@ -146,6 +146,29 @@ describe("wave config schema (P1)", () => {
     ]);
   });
 
+  // The child runs on a private HOME, so the directories holding the subagent
+  // definitions have to be named. They are PATHS, hence `~/` expansion — the
+  // same treatment `binary` gets, and the reason this is not just a flag.
+  it("subagentDirs are read with ~/ expanded on each entry", () => {
+    const cfg = parseConfig({
+      consolidation: {
+        launchers: {
+          pi: { subagentDirs: ["~/.pi/agent/agents", "/opt/agents"] },
+        },
+      },
+    });
+    const home = process.env.HOME ?? os.homedir();
+    expect(cfg.consolidation.launchers.pi!.subagentDirs).toEqual([
+      `${home}/.pi/agent/agents`,
+      "/opt/agents",
+    ]);
+  });
+
+  it("no subagentDirs means the child spawns nothing", () => {
+    const cfg = parseConfig({ consolidation: { launchers: { pi: {} } } });
+    expect(cfg.consolidation.launchers.pi!.subagentDirs).toBeUndefined();
+  });
+
   it("the launcher section wins over the legacy keys", () => {
     const cfg = parseConfig({
       consolidation: {

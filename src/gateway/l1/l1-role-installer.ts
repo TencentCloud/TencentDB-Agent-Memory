@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolveRoleDir } from "../role-files.js";
 
 const MANAGED_MARKER = "managed:l1-agent-v1";
-const ROLE_NAMES = ["l1-extractor", "l1-extractor-critic"] as const;
+const ROLE_NAMES = ["l1-extractor"] as const;
 
 export function installL1RolePackages(input: {
   dataDir: string;

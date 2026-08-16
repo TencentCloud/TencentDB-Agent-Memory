@@ -14,7 +14,6 @@ import { mkFailedSummary } from "./summary.js";
 import { createRun } from "../control-plane/run-repo.js";
 import { claimRun } from "../control-plane/lease.js";
 import { runOwnerId } from "../control-plane/owner.js";
-import { resolveCriticPackage } from "./critic-bootstrap.js";
 import { taggedLogger, runTag } from "../../utils/logger-tag.js";
 import type { OrchestratorContext } from "./context.js";
 import type { ResolvedRoleContract } from "./role-contract-types.js";
@@ -61,29 +60,6 @@ export async function executeRunForRole(
   const runCtx: OrchestratorContext = { ...ctx, logger: log };
   for (const w of contract.warnings) {
     runCtx.logger.warn?.(`[role] ${opts.role}: ${w}`);
-  }
-
-  // tz-09 Ф4a (criterion 6): an unusable critic stops the role BEFORE the
-  // first LaunchAttempt — in enforce. In shadow it is logged only, so the
-  // package can ship while no critic package exists yet.
-  const critic = resolveCriticPackage(ctx, contract);
-  if (!critic.ok) {
-    if (ctx.applyGateMode === "enforce") {
-      const startedAt = new Date(ctx.now()).toISOString();
-      const summary = mkFailedSummary(
-        opts.role,
-        startedAt,
-        opts.reason,
-        opts.dryRun,
-      );
-      summary.status = "disabled";
-      summary.error = `role disabled: ${critic.reason}`;
-      log.warn?.(
-        `[role] ${opts.role} disabled — ${critic.reason} (no run started)`,
-      );
-      return summary;
-    }
-    runCtx.logger.warn?.(`[critic] SHADOW ${opts.role}: ${critic.reason}`);
   }
   // tz-09 Ф1: the Run row is created HERE — the one place that already holds
   // both the run id and the RESOLVED contract, so the contract snapshot is

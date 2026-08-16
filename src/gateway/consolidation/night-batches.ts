@@ -81,6 +81,9 @@ export async function runNightBatches(
     opts.summary.skipped.rewrites.push(...batchRes.skipped.rewrites);
     opts.summary.reindexed ||= batchRes.reindexed;
     opts.summary.needsReindex ||= batchRes.needsReindex;
+    if ((batchRes.rejected?.length ?? 0) > 0) {
+      (opts.summary.rejected ??= []).push(...(batchRes.rejected ?? []));
+    }
     if (batchRes.child) opts.summary.child = batchRes.child;
     if (dryRunDiffText === undefined && batchRes.diffText) {
       dryRunDiffText = batchRes.diffText;

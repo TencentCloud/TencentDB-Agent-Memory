@@ -18,7 +18,7 @@ import type { LauncherSettings } from "./launchers/pi-config.js";
 import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
-import type { ApplyResult } from "../apply-executor.js";
+import type { ApplyResult, RejectedOp } from "../apply-executor.js";
 import type { ChildRunResult } from "./child-spawn.js";
 import type { RunContext } from "../apply-executor.js";
 import type { ProbeResult } from "../probe.js";
@@ -50,6 +50,9 @@ export interface RunSummary {
   overLimitBlocks: number;
   applied: { merges: string[]; deletes: string[]; rewrites: string[] };
   skipped: { merges: string[]; deletes: string[]; rewrites: string[] };
+  /** Ops the apply refused one by one, with reasons — the run's own record of
+   * what the role produced that was unusable. Absent when nothing was. */
+  rejected?: RejectedOp[];
   error?: string;
   reindexed: boolean;
   needsReindex: boolean;

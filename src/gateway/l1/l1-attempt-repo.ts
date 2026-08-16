@@ -1,20 +1,10 @@
 import { L1AgentPersistenceError } from "../../core/record/l1-agent-errors.js";
-import { digestL1Artifact } from "../../core/record/l1-agent-codec.js";
 import { openControlPlane } from "../control-plane/db.js";
 import type { L1AttemptArtifactRow } from "./l1-control-types.js";
-import { hasMatchingL1Receipt } from "./l1-receipt.js";
 
 export function createL1AttemptArtifact(input: {
   dataDir: string;
-  row: Omit<
-    L1AttemptArtifactRow,
-    | "criticAttemptId"
-    | "verdictJson"
-    | "verdictDigest"
-    | "state"
-    | "createdAt"
-    | "updatedAt"
-  >;
+  row: Omit<L1AttemptArtifactRow, "state" | "createdAt" | "updatedAt">;
   nowIso: string;
 }): void {
   const { row } = input;
@@ -45,28 +35,24 @@ export function createL1AttemptArtifact(input: {
   }
 }
 
-export function recordL1CriticVerdict(input: {
+/** Close a candidate artifact with the gateway's own validation outcome.
+ * Only a row still in `candidate` moves, so a replayed settle is a no-op
+ * instead of a state flip. */
+export function settleL1Attempt(input: {
   dataDir: string;
   attemptId: string;
-  criticAttemptId: string;
-  verdict: unknown;
-  isApproved: boolean;
+  approved: boolean;
   nowIso: string;
 }): boolean {
-  const verdictJson = JSON.stringify(input.verdict);
   const db = openControlPlane(input.dataDir);
   try {
     const result = db
       .prepare(
-        `UPDATE l1_attempt_artifacts SET criticAttemptId = ?, verdictJson = ?,
-           verdictDigest = ?, state = ?, updatedAt = ?
+        `UPDATE l1_attempt_artifacts SET state = ?, updatedAt = ?
          WHERE attemptId = ? AND state = 'candidate'`,
       )
       .run(
-        input.criticAttemptId,
-        verdictJson,
-        digestL1Artifact(input.verdict),
-        input.isApproved ? "approved" : "rejected",
+        input.approved ? "approved" : "rejected",
         input.nowIso,
         input.attemptId,
       );
@@ -76,11 +62,18 @@ export function recordL1CriticVerdict(input: {
   }
 }
 
+/** Promote the approved artifact onto its assignment.
+ *
+ * `candidateDigest` is the caller's copy of the bytes it validated. Without
+ * that equality a caller with a valid attemptId could promote a row that was
+ * written by some other pass — the assignment would then carry a candidate
+ * nobody checked. */
 export function approveL1Assignment(input: {
   dataDir: string;
   assignmentId: string;
   runId: string;
   attemptId: string;
+  candidateDigest: string;
   nowIso: string;
 }): boolean {
   const db = openControlPlane(input.dataDir);
@@ -92,21 +85,23 @@ export function approveL1Assignment(input: {
       input.assignmentId,
       input.runId,
     );
-    if (artifact === null || !hasMatchingL1Receipt(artifact)) {
+    if (
+      artifact === null ||
+      artifact.candidateDigest !== input.candidateDigest
+    ) {
       db.exec("ROLLBACK");
       return false;
     }
     const result = db
       .prepare(
         `UPDATE l1_assignments SET approvedAttemptId = ?, candidateJson = ?,
-           candidateDigest = ?, criticReceiptDigest = ?, state = 'reviewed', updatedAt = ?
+           candidateDigest = ?, state = 'reviewed', updatedAt = ?
          WHERE assignmentId = ? AND runId = ? AND state = 'running'`,
       )
       .run(
         artifact.attemptId,
         artifact.candidateJson,
         artifact.candidateDigest,
-        artifact.verdictDigest,
         input.nowIso,
         input.assignmentId,
         input.runId,

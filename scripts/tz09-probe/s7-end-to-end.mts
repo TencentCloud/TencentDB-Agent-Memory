@@ -22,8 +22,8 @@ import { parseConfig } from "../../src/config.js";
 import { ConsolidationOrchestrator } from "../../src/gateway/consolidation/orchestrator.js";
 import { listRecentRuns } from "../../src/gateway/control-plane/run-repo.js";
 import { listOps } from "../../src/gateway/control-plane/oplog.js";
-import { CRITIC_VERDICT_FILE } from "../../src/gateway/consolidation/critic-launch.js";
-import { digestOf } from "../../src/gateway/consolidation/critic-stage.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
+import { CRITIC_REL } from "../../src/gateway/consolidation/attempt-layout.js";
 import type { Logger } from "../../src/core/types.js";
 
 const APPROVE = process.env.FALSIFY !== "1";
@@ -142,10 +142,10 @@ const orchestrator = new ConsolidationOrchestrator({
       );
     } else {
       fs.writeFileSync(
-        path.join(dir, CRITIC_VERDICT_FILE),
+        path.join(dir, CRITIC_REL),
         JSON.stringify({
           verdict: APPROVE ? "approve" : "reject",
-          candidateDigest: digestOf(CANDIDATE),
+          candidateDigest: digestOf(JSON.stringify(CANDIDATE)),
           reasons: [APPROVE ? "looks fine" : "probe rejection"],
         }),
         "utf-8",

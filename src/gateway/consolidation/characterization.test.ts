@@ -107,7 +107,6 @@ const ROLE_FIXTURES: Record<string, Record<string, unknown>> = {
     caps: { delete_per_run: 50, rewrite_per_run: 50 },
     max_run_ms: 1_800_000,
     fail_on_missing_prompt: false,
-    critic_role: "memory-critic",
   },
   "night-keeper": {
     name: "night-keeper",
@@ -139,7 +138,6 @@ const ROLE_FIXTURES: Record<string, Record<string, unknown>> = {
     caps: { delete_per_run: 50, rewrite_per_run: 50 },
     max_run_ms: 2_700_000,
     fail_on_missing_prompt: true,
-    critic_role: "night-critic",
   },
   "dedup-daily": {
     name: "dedup-daily",
@@ -160,7 +158,6 @@ const ROLE_FIXTURES: Record<string, Record<string, unknown>> = {
     caps: { delete_per_run: 100, rewrite_per_run: 0 },
     max_run_ms: 3_600_000,
     fail_on_missing_prompt: true,
-    critic_role: "dedup-daily-critic",
   },
 };
 
@@ -342,6 +339,7 @@ describe("Ф0 characterization — role spawn surface (tz-01 parity baseline)", 
         applied: { merges: [], deletes: [], rewrites: [] },
         skipped: { merges: [], deletes: [], rewrites: [] },
         skippedMergesMissingTarget: [],
+        rejected: [],
         counts: null,
         reindexed: false,
         needsReindex: false,

@@ -5,13 +5,14 @@
  *
  * Module split (final, 14 files, each ≤150 lines):
  *   - apply-executor/types.ts              — ApplyCounts/ApplyResult/etc + re-exports ApplyOp/ApplyDiff
- *   - apply-executor/schemas.ts            — ApplyOp/ApplyDiff types + 6 zod ^4.4.3 schemas
+ *   - apply-executor/schemas.ts            — ApplyOp/ApplyDiff types + per-op zod ^4.4.3 schemas
  *   - apply-executor/errors.ts             — 4 typed errors (ApplyValidationError, …)
  *   - apply-executor/apply-executor-deps.ts — ApplyExecutorDeps interface
  *   - apply-executor/apply-helpers.ts      — resolveWithinDataDir, fetchMetaRows, writeBackup
  *   - apply-executor/apply-provenance.ts   — writeProvenanceRecord (merge + rewriteRecord share)
  *   - apply-executor/apply-route-helpers.ts — parseMetadata, hasApplied/hasMutated, atomicWrite (pure)
- *   - apply-executor/validate.ts           — parseRequest + validateSemantics + assertOpsSubset
+ *   - apply-executor/salvage.ts            — per-op shape salvage of the role's diff
+ *   - apply-executor/validate.ts           — parseRequest + screenDiff + assertOpsSubset
  *   - apply-executor/manifest.ts           — checkManifest (trust-boundary recheck)
  *   - apply-executor/apply-ops-merge.ts    — applyMerges
  *   - apply-executor/apply-ops-record.ts   — applyRewritesRecords
@@ -22,9 +23,10 @@
  */
 import {
   parseRequest,
-  validateSemantics,
+  screenDiff,
   assertOpsSubset,
 } from "./apply-executor/validate.js";
+import { isEmptyDiff, rejectionSummary } from "./apply-executor/salvage.js";
 import { checkManifest } from "./apply-executor/manifest.js";
 import { runApplyGate } from "./apply-executor/gate.js";
 import { resolveRunPolicy } from "./apply-executor/run-policy.js";
@@ -69,6 +71,7 @@ export type {
   MetaRow,
   ApplyOp,
   ApplyDiff,
+  RejectedOp,
 } from "./apply-executor/types.js";
 export type { ApplyExecutorDeps } from "./apply-executor/apply-executor-deps.js";
 export { EMPTY_RESULT } from "./apply-executor/types.js";
@@ -107,11 +110,29 @@ export class ApplyExecutor {
     let scopedForFinish: RunContext | undefined;
     // Set only when THIS call opened the door — see leaveApplying.
     let entered = false;
+    // Refusals are per-OPERATION (tz-#5): an op the guardrails will not run is
+    // dropped and named here, and the rest of the diff still applies. Assigned
+    // to the result before the first thing that can throw, so a request
+    // refused mid-screen still reports what it had already refused.
+    const rejected = result.rejected;
     try {
-      // 1. zod validation (strict, readable errors) — before any mutation.
-      const parsed = parseRequest(rawBody);
-      // 2. Semantic guardrails (DB reads) — before any mutation.
-      await validateSemantics(this.deps, parsed);
+      // 1. zod on the envelope + per-op shape salvage of the diff.
+      const parsed = parseRequest(rawBody, rejected);
+      // 2. Semantic guardrails (DB reads) — before any mutation. Returns the
+      //    ops that survived; `parsed.diff` must not be used past this line.
+      const diff = await screenDiff(this.deps, parsed, rejected);
+      for (const r of rejected) {
+        this.deps.logger.warn?.(
+          `[memory/apply] op refused ${r.section}[${r.ref}]: ${r.reason}`,
+        );
+      }
+      // Every op refused is a failed run, not an empty success: a role whose
+      // whole output is unusable must not look like one that found nothing.
+      if (rejected.length > 0 && isEmptyDiff(diff)) {
+        throw new ApplyValidationError(
+          `every operation in the diff was refused: ${rejectionSummary(rejected)}`,
+        );
+      }
       // 2a. Run identity + policy (tz-09 Ф6): with runRepo on, an apply
       // without a live Run is refused here, and the policy the gate uses is
       // the Run's pinned contract, not what the caller passed.
@@ -125,7 +146,7 @@ export class ApplyExecutor {
       // 2b. Role-scoped gate (tz-09 Ф3): ops_subset + mechanical caps. The
       // ONLY call site — a second one would be a way past it.
       scopedForFinish = scoped;
-      runApplyGate(this.deps, parsed.diff, scoped);
+      runApplyGate(this.deps, diff, scoped);
       // 3-5. Critical section (tz-09 Ф7, tz-02 критерий 1a): the manifest
       // recheck, every mutation AND the index rebuild run under ONE
       // store-wide lock. The baseline is only worth rechecking while nobody
@@ -138,14 +159,14 @@ export class ApplyExecutor {
       // do contend on that slug's index, which is written afterwards and
       // without an atomic swap — so outside the lock the later rebuild could
       // publish a snapshot taken before the earlier write.
-      const onOp = journalFor(this.deps, parsed.diff, scoped);
+      const onOp = journalFor(this.deps, diff, scoped);
       await withStoreApplyLock(this.deps.dataDir, async () => {
-        checkManifest(this.deps, parsed);
+        checkManifest(this.deps, diff, parsed.manifest);
         entered = enterApplying(this.deps, scoped);
-        await applyMutations(this.deps, parsed.diff, result, onOp);
+        await applyMutations(this.deps, diff, result, onOp);
         result.sceneIndexSynced = await syncSceneIndex(
           this.deps,
-          touchedSlugs(parsed.diff),
+          touchedSlugs(diff),
         );
       });
       if (!result.sceneIndexSynced) {

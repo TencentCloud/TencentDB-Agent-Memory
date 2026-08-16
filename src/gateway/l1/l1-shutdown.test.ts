@@ -16,7 +16,7 @@ afterEach(() => removeL1TestDataDirs(roots));
 describe("agentic L1 shutdown", () => {
   it("waits for parent commit work after role handles have settled", async () => {
     const root = createL1TestDataDir(roots);
-    const dispatcher = createTestL1Dispatcher(root, "approve");
+    const dispatcher = createTestL1Dispatcher(root);
     let releaseCommit!: () => void;
     let enterCommit!: () => void;
     const entered = new Promise<void>((resolve) => (enterCommit = resolve));
@@ -72,7 +72,7 @@ describe("agentic L1 shutdown", () => {
         };
       },
     };
-    const dispatcher = createTestL1Dispatcher(root, "approve", launcher);
+    const dispatcher = createTestL1Dispatcher(root, launcher);
     const dispatch = dispatcher.dispatchExtraction({
       role: "l1-extractor",
       workset,

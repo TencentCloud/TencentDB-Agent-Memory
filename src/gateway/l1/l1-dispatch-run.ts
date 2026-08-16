@@ -8,7 +8,10 @@ import type { Logger } from "../../core/types.js";
 import { assertLiveRoleLease } from "../../agents/role-execution-lease.js";
 import type { RoleExecutionLease } from "../../agents/role-execution-lease.js";
 import type { ResolvedRoleContract } from "../consolidation/role-contract-types.js";
-import type { RoleLauncher, RunningHandle } from "../consolidation/launchers/types.js";
+import type {
+  RoleLauncher,
+  RunningHandle,
+} from "../consolidation/launchers/types.js";
 import { startL1AssignmentEpoch } from "./l1-assignment-repo.js";
 import {
   executeL1Attempt,
@@ -20,11 +23,10 @@ type DispatchInput = Parameters<
   L1ExtractionDispatcher["dispatchExtraction"]
 >[0];
 
-export async function executeL1RolePair(input: {
+export async function executeL1Extraction(input: {
   dataDir: string;
   input: DispatchInput;
   extractor: ResolvedRoleContract;
-  critic: ResolvedRoleContract;
   runId: string;
   scratchDir: string;
   launcherFor: (id: string) => RoleLauncher;
@@ -58,13 +60,7 @@ export async function executeL1RolePair(input: {
     contract: input.extractor,
     now: input.now,
   });
-  const attempts = Math.max(
-    1,
-    Math.min(
-      input.extractor.policy.retryBudget,
-      input.critic.policy.retryBudget,
-    ),
-  );
+  const attempts = Math.max(1, input.extractor.policy.retryBudget);
   let retry: L1RetryFeedback | null = null;
   let lastError: unknown = null;
   for (let ordinal = 1; ordinal <= attempts; ordinal += 1) {
@@ -81,8 +77,8 @@ export async function executeL1RolePair(input: {
       if (outcome.approved) return outcome.result;
       retry = { reasons: outcome.reasons, conflicts: outcome.conflicts };
       lastError = new L1DispatchError(
-        "critic-rejected",
-        `critic rejected: ${outcome.reasons.join("; ")}`,
+        "policy-rejected",
+        `candidate rejected by store policy: ${outcome.reasons.join("; ")}`,
       );
     } catch (error) {
       lastError = error;
@@ -93,5 +89,5 @@ export async function executeL1RolePair(input: {
     }
   }
   if (lastError instanceof Error) throw lastError;
-  throw new L1DispatchError("critic-rejected", "role retry budget exhausted");
+  throw new L1DispatchError("policy-rejected", "role retry budget exhausted");
 }

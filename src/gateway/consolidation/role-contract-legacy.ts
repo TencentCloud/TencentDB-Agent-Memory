@@ -148,7 +148,6 @@ export function adaptRoleContract(input: AdaptInput): ResolvedRoleContract {
       maxRunMs: cfg.max_run_ms ?? legacy.night.maxRunMs,
       retryBudget: cfg.retry_budget ?? DEFAULT_RETRY_BUDGET,
     },
-    criticRole: cfg.critic_role ?? null,
     prompt: {
       file: cfg.prompt_file ?? `${role}.md`,
       path: input.promptPath,
@@ -194,7 +193,6 @@ export function hashContract(c: ResolvedRoleContract): string {
       maxRunMs: c.policy.maxRunMs,
       retryBudget: c.policy.retryBudget,
     },
-    criticRole: c.criticRole,
     prompt: { file: c.prompt.file, failOnMissing: c.prompt.failOnMissing },
     promptText: c.prompt.text,
     toolsSubset: c.toolsSubset ? [...c.toolsSubset].sort() : null,

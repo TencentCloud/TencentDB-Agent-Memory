@@ -17,6 +17,26 @@ export type { ApplyOp, ApplyDiff };
 // apply-executor-deps.ts so this file stays a pure data-shape module).
 export type { ApplyExecutorDeps };
 
+/**
+ * One operation the apply refused, with the reason.
+ *
+ * Refusal is PER-OPERATION: the diff loses the operation, not the batch. Run
+ * f947be67 (night-keeper, 2026-08-14) lost 362 presented records and 16
+ * minutes of model work because a literal `null` in the optional
+ * `rewritePersona` failed the whole request — a blast radius the guardrails
+ * never needed. Every guardrail is stated per-op ("the child may only touch
+ * what it was shown"), so refusing the op alone keeps the guarantee whole.
+ */
+export interface RejectedOp {
+  /** Diff section the op came from ("merge", "rewritePersona", …) — or an
+   * unknown key exactly as the role sent it. */
+  section: string;
+  /** Which op: record id / path, or "#<index>" when the element is malformed
+   * past having a name. */
+  ref: string;
+  reason: string;
+}
+
 export interface ApplyCounts {
   metaCount: number | null;
   vecCount: number | null;
@@ -47,6 +67,9 @@ export interface ApplyResult {
    * deleted earlier) — distinct from heal-skip (target alive, members gone).
    * The night loop anchors its cursor on the FIRST such skip (plan #9). */
   skippedMergesMissingTarget: string[];
+  /** Ops refused one by one, with reasons (@see RejectedOp). Non-empty with
+   * `status: "applied"` means the rest of the diff went through. */
+  rejected: RejectedOp[];
   counts: ApplyCounts | null;
   reindexed: boolean;
   needsReindex: boolean;
@@ -93,6 +116,7 @@ export const EMPTY_RESULT = (): ApplyResult => ({
   applied: { merges: [], deletes: [], rewrites: [] },
   skipped: { merges: [], deletes: [], rewrites: [] },
   skippedMergesMissingTarget: [],
+  rejected: [],
   counts: null,
   reindexed: false,
   needsReindex: false,

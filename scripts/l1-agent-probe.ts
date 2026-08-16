@@ -7,7 +7,6 @@ import { listAttempts } from "../src/gateway/control-plane/attempt-repo.js";
 import { TdaiGateway } from "../src/gateway/server.js";
 import { createGatewayL1Dispatcher } from "../src/gateway/l1/l1-dispatcher-factory.js";
 import { installL1RolePackages } from "../src/gateway/l1/l1-role-installer.js";
-import { readL1AttemptArtifact } from "../src/gateway/l1/l1-status-repo.js";
 import { freePort } from "../src/test-support/free-port.js";
 import { CheckpointManager } from "../src/utils/checkpoint.js";
 import { createL1Runner } from "../src/utils/pipeline-factory/l1-runner.js";
@@ -92,14 +91,6 @@ try {
   const assignment = await waitForL1Commit(dataDir, SESSION_KEY);
   const attempts = listAttempts(dataDir, assignment.runId!);
   const extractor = attempts.find(({ kind }) => kind === "launch");
-  const critic = attempts.find(({ kind }) => kind === "critic");
-  const artifact = readL1AttemptArtifact(
-    dataDir,
-    assignment.approvedAttemptId!,
-  );
-  const verdict = JSON.parse(artifact?.verdictJson ?? "null") as {
-    verdict?: string;
-  } | null;
   const search = await postJson<{ total: number }>(port, "/search/memories", {
     query: "dark theme",
     limit: 1,
@@ -135,8 +126,6 @@ try {
   outputLines = [
     `L0_CAPTURED=${capture.l0_recorded}`,
     `EXTRACTOR_ATTEMPT=${extractor?.outcome ?? "missing"}`,
-    `CRITIC_ATTEMPT=${critic?.outcome ?? "missing"}`,
-    `CRITIC_VERDICT=${verdict?.verdict ?? "missing"}`,
     `L1_SEARCH_HITS=${search.total}`,
     `CURSOR_ADVANCED=${cursor.last_l1_cursor > 0}`,
     `REPLAY_DUPLICATES=${afterReplay - beforeReplay}`,

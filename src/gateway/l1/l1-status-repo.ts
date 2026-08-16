@@ -12,9 +12,6 @@ export interface L1StatusProjection {
   errorKind: string | null;
   extractorAttemptId: string | null;
   extractorOutcome: string | null;
-  criticAttemptId: string | null;
-  criticOutcome: string | null;
-  criticVerdict: string | null;
   commitState: "not-started" | "planned" | "prepared" | "applied" | "verified";
   verifiedOperations: number;
   totalOperations: number;
@@ -56,9 +53,6 @@ export function readLatestL1Status(dataDir: string): L1StatusProjection | null {
       errorKind: run?.errorClass ?? (assignment.error ? "assignment-failed" : null),
       extractorAttemptId: artifact?.attemptId ?? null,
       extractorOutcome: attemptOutcome(artifact?.attemptId),
-      criticAttemptId: artifact?.criticAttemptId ?? null,
-      criticOutcome: attemptOutcome(artifact?.criticAttemptId),
-      criticVerdict: verdictOf(artifact?.verdictJson),
       commitState: commitStateOf(opStates.map(({ state }) => state)),
       verifiedOperations: opStates.filter(({ state }) => state === "verified").length,
       totalOperations: opStates.length,
@@ -67,12 +61,6 @@ export function readLatestL1Status(dataDir: string): L1StatusProjection | null {
   } finally {
     db.close();
   }
-}
-
-function verdictOf(raw: string | null | undefined): string | null {
-  try {
-    return raw ? String((JSON.parse(raw) as { verdict?: unknown }).verdict ?? "") || null : null;
-  } catch { return null; }
 }
 
 function commitStateOf(states: L1StatusProjection["commitState"][]): L1StatusProjection["commitState"] {

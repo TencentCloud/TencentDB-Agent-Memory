@@ -66,7 +66,6 @@ export interface ResolvedRoleContract {
     maxRunMs: number;
     retryBudget: number;
   };
-  criticRole: string | null;
   prompt: {
     /** `prompt_file` as written in the contract. */
     file: string;

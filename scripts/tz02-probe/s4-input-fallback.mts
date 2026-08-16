@@ -23,9 +23,9 @@ import { makeSandbox } from "../tz09-probe/sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { parseConfig } from "../../src/config.js";
 import { ConsolidationOrchestrator } from "../../src/gateway/consolidation/orchestrator.js";
-import { CRITIC_VERDICT_FILE } from "../../src/gateway/consolidation/critic-launch.js";
-import { digestOf } from "../../src/gateway/consolidation/critic-stage.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
 import {
+  CRITIC_REL,
   LEGACY_RESULT_REL,
   PRESENTED_REL,
   WORKSET_REL,
@@ -175,14 +175,14 @@ const orchestrator = new ConsolidationOrchestrator({
         fs.rmSync(path.join(dir, LEGACY_RESULT_REL), { force: true });
       }
     } else {
-      fs.mkdirSync(path.dirname(path.join(dir, CRITIC_VERDICT_FILE)), {
+      fs.mkdirSync(path.dirname(path.join(dir, CRITIC_REL)), {
         recursive: true,
       });
       fs.writeFileSync(
-        path.join(dir, CRITIC_VERDICT_FILE),
+        path.join(dir, CRITIC_REL),
         JSON.stringify({
           verdict: "approve",
-          candidateDigest: digestOf(CANDIDATE),
+          candidateDigest: digestOf(JSON.stringify(CANDIDATE)),
           reasons: ["probe"],
         }),
         "utf-8",

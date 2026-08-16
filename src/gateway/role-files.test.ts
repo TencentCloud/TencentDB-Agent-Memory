@@ -8,7 +8,7 @@
  * lives in diff-builder escapeFenceContent and is covered by its own suite),
  * and the repo canonical prompt file content (limits + task-simple instruction).
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +44,6 @@ function roleConfig(overrides: Record<string, unknown> = {}) {
     caps: { delete_per_run: 500, rewrite_per_run: 100 },
     max_run_ms: 30 * 60_000,
     fail_on_missing_prompt: false,
-    critic_role: "memory-critic",
     ...overrides,
   };
 }
@@ -96,6 +95,50 @@ describe("role-files", () => {
     fs.mkdirSync(broken, { recursive: true });
     fs.writeFileSync(path.join(broken, "role.json"), "{not json");
     expect(loadRoleConfig("broken", tmp)).toBeNull();
+  });
+
+  /**
+   * A role.json the schema rejects leaves the role disabled: /status reports
+   * `enabled: false` and /memory/run answers 409. Reproduced on the live
+   * instance — a running gateway held a schema one field ahead of the files on
+   * disk, EVERY role read as disabled, and neither the log nor /status carried
+   * a reason. The WARN is the only place that reason can exist.
+   */
+  it("names the reason a role.json is unusable, once per file version", () => {
+    const write = (name: string, body: string): void => {
+      const dir = path.join(roleDir, name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "role.json"), body);
+    };
+    const warns: string[] = [];
+    const spy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        warns.push(String(chunk));
+        return true;
+      });
+    try {
+      const { caps: _dropped, ...withoutCaps } = roleConfig();
+      write("incomplete", JSON.stringify(withoutCaps));
+      write("unknown-key", JSON.stringify(roleConfig({ critic_role: "x" })));
+      write("garbage", "{not json");
+
+      expect(loadRoleConfig("incomplete", tmp)).toBeNull();
+      expect(loadRoleConfig("unknown-key", tmp)).toBeNull();
+      expect(loadRoleConfig("garbage", tmp)).toBeNull();
+      // Re-reading an unchanged file must not print the same line again:
+      // /status lists every role on every call.
+      expect(loadRoleConfig("incomplete", tmp)).toBeNull();
+
+      const reasons = warns.filter((line) => line.includes("[role-files]"));
+      expect(reasons).toHaveLength(3);
+      expect(reasons[0]).toContain("missing required fields: caps");
+      expect(reasons[1]).toContain('unknown field "critic_role"');
+      expect(reasons[2]).toContain("unreadable JSON");
+      for (const line of reasons) expect(line).toContain("409");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("retry_budget: absent is allowed, a finite integer passes, junk fails (tz-01 B4)", () => {
@@ -150,7 +193,6 @@ describe("role-files", () => {
       hasPrompt: true,
       scope: "fresh_tail",
       trigger: "threshold",
-      criticRole: "memory-critic",
     });
     expect(roles).toContainEqual({
       name: "prompt-only",
@@ -159,7 +201,6 @@ describe("role-files", () => {
       hasPrompt: true,
       scope: null,
       trigger: null,
-      criticRole: null,
     });
   });
 

@@ -151,6 +151,7 @@ function okApply(): ApplyResult {
     applied: { merges: [], deletes: ["m_1"], rewrites: [] },
     skipped: { merges: [], deletes: [], rewrites: [] },
     skippedMergesMissingTarget: [],
+    rejected: [],
     counts: null,
     reindexed: false,
     needsReindex: false,

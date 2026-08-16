@@ -1,30 +1,34 @@
 {
-  "_comment": "managed:l1-agent-v1",
-  "name": "l1-extractor",
-  "model": "opencode-go/deepseek-v4-flash",
-  "prompt_file": "prompt.md",
-  "enabled": true,
-  "thinking": "high",
-  "timeout_min": 5,
-  "scope": "fresh_tail",
-  "trigger": "manual_only",
-  "schedule": null,
-  "threshold": null,
-  "idsOnly": false,
-  "diff_cap": 50,
-  "diff_byte_cap": 65536,
-  "ops_subset": [],
-  "tools_subset": [],
-  "caps": { "delete_per_run": 0, "rewrite_per_run": 0 },
-  "max_run_ms": 900000,
-  "fail_on_missing_prompt": true,
-  "critic_role": "l1-extractor-critic",
-  "retry_budget": 2,
-  "requires_capabilities": ["session"],
-  "runtime": {
-    "keep_scratch": true,
-    "isolation_profile": "scratch-net-v1",
-    "artifact_transport": "stdout-json",
-    "ambient_access": "none"
-  }
+    "_comment": "managed:l1-agent-v1",
+    "name": "l1-extractor",
+    "model": "opencode-go/deepseek-v4-flash",
+    "prompt_file": "prompt.md",
+    "enabled": true,
+    "thinking": "high",
+    "timeout_min": 5,
+    "scope": "fresh_tail",
+    "trigger": "manual_only",
+    "schedule": null,
+    "threshold": null,
+    "idsOnly": false,
+    "diff_cap": 50,
+    "diff_byte_cap": 65536,
+    "ops_subset": [],
+    "tools_subset": [],
+    "caps": {
+        "delete_per_run": 0,
+        "rewrite_per_run": 0
+    },
+    "max_run_ms": 900000,
+    "fail_on_missing_prompt": true,
+    "retry_budget": 2,
+    "requires_capabilities": [
+        "session"
+    ],
+    "runtime": {
+        "keep_scratch": true,
+        "isolation_profile": "scratch-net-v1",
+        "artifact_transport": "stdout-json",
+        "ambient_access": "none"
+    }
 }

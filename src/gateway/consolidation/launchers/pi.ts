@@ -18,7 +18,7 @@ import {
 import { authRootFor } from "./auth-root.js";
 import type { Logger } from "../../../core/types.js";
 import type { LauncherSettings } from "./pi-config.js";
-import { PI_LAUNCHER_ID } from "./pi-config.js";
+import { ENV_PI_SUBAGENT_DIRS, PI_LAUNCHER_ID } from "./pi-config.js";
 import { piAssetArgs, piFixedFlags } from "./pi-policy.js";
 export { piAssetArgs } from "./pi-policy.js";
 
@@ -85,7 +85,11 @@ export function createPiLauncher(
           cwd: input.cwd,
           env: input.env,
         }),
-        env: { ...input.env, HOME: privateHome },
+        env: {
+          ...input.env,
+          HOME: privateHome,
+          ...subagentDirsEnv(settings, input),
+        },
         sessionRef,
         input,
         logger,
@@ -93,4 +97,23 @@ export function createPiLauncher(
       });
     },
   };
+}
+
+/**
+ * The subagent-definition dirs, or nothing.
+ *
+ * Withheld from an `ambient_access: "none"` role on purpose. Such a role starts
+ * with `--no-tools --no-extensions --no-skills`, so it could not spawn anything
+ * anyway — but the variable would still hand it a path into the operator's
+ * tree, and "hermetic" has to mean the child is told nothing about the outside,
+ * not merely that it cannot act on it.
+ */
+function subagentDirsEnv(
+  settings: LauncherSettings,
+  input: LaunchInput,
+): Record<string, string> {
+  const dirs = settings.subagentDirs ?? [];
+  if (dirs.length === 0 || input.contract.assets.ambientAccess === "none")
+    return {};
+  return { [ENV_PI_SUBAGENT_DIRS]: dirs.join(path.delimiter) };
 }

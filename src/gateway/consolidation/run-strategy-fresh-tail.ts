@@ -42,6 +42,8 @@ export async function runFreshTailSingleBatch(
   summary.skipped = { ...batchRes.skipped };
   summary.reindexed = batchRes.reindexed;
   summary.needsReindex = batchRes.needsReindex;
+  if ((batchRes.rejected?.length ?? 0) > 0)
+    summary.rejected = batchRes.rejected;
   if (batchRes.child) summary.child = batchRes.child;
 
   if (batchRes.error) {

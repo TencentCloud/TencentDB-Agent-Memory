@@ -20,6 +20,21 @@ export const DEFAULT_PI_BINARY = "pi";
 export const DEFAULT_PI_FLAGS: readonly string[] = ["-p", "--no-context-files"];
 
 /**
+ * Extra read-only directories pi scans for subagent definitions.
+ *
+ * The child runs on a private HOME carrying nothing but its credential, so
+ * `~/.pi/agent/agents` — where the operator keeps the definitions — resolves
+ * into an empty directory and the role cannot spawn anything. This variable is
+ * the host's own way out: the extension documents it for exactly this case
+ * ("lets a hermetic wrapper expose bundled agents without copying them into the
+ * writable agent dir").
+ *
+ * The gateway names DIRECTORIES, never an agent: which critic a role calls is
+ * written in the role's skill, and TDAI does not get to know it (AGENTS.md).
+ */
+export const ENV_PI_SUBAGENT_DIRS = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
+
+/**
  * Session flags the launcher OWNS (tz-06 Ф3, `session-per-attempt`).
  *
  * A run without a session cannot be inspected after the fact, and two attempts
@@ -105,12 +120,16 @@ export interface LauncherSettings {
    * the host (`no-host-hardcode`), so the config only carries an OVERRIDE.
    * An empty array is a deliberate "no flags", not "give me the defaults". */
   flags?: string[];
+  /** Directories of subagent definitions the child may read. @see
+   * ENV_PI_SUBAGENT_DIRS. Absent means the child spawns nothing. */
+  subagentDirs?: string[];
 }
 
 /** `memory.consolidation.launchers.<id>` — the new home. */
 const launcherSettingsSchema = z.strictObject({
   binary: z.string().min(1).optional(),
   flags: z.array(z.string()).optional(),
+  subagentDirs: z.array(z.string().min(1)).optional(),
 });
 
 export const launchersSchema = z
@@ -160,12 +179,20 @@ export function readLauncherConfig(
   if (legacyBinary !== undefined) deprecated.push("piBinary");
   if (legacyFlags !== undefined) deprecated.push("spawnFlags");
 
+  // Subagent dirs are PATHS, so `~/` is expanded per entry — the same courtesy
+  // `binary` already gets. `flags` deliberately stays raw: an operator's flag
+  // list is passed through verbatim, and folding `~` into it now would change
+  // how every existing config is read.
+  const dirs = (cfg: Raw): string[] | undefined =>
+    strArray(cfg, "subagentDirs")?.map(expandHome);
+
   const settings: Record<string, LauncherSettings> = {
     [PI_LAUNCHER_ID]: {
       binary: expandHome(
         str(pi, "binary") ?? legacyBinary ?? DEFAULT_PI_BINARY,
       ),
       flags: strArray(pi, "flags") ?? legacyFlags ?? [...DEFAULT_PI_FLAGS],
+      subagentDirs: dirs(pi),
     },
   };
   // Any OTHER launcher the operator configured. Defaults for a host nobody
@@ -177,6 +204,7 @@ export function readLauncherConfig(
     settings[id] = {
       binary: expandHome(str(cfg, "binary") ?? id),
       flags: strArray(cfg, "flags"),
+      subagentDirs: dirs(cfg),
     };
   }
   return { settings, deprecated };

@@ -1,3 +1,13 @@
+/**
+ * Row shapes for the L1 control-plane tables.
+ *
+ * The tables still carry columns from the era when a critic ran inside the
+ * gateway (`criticReceiptDigest`, `criticAttemptId`, `verdictJson`,
+ * `verdictDigest`). The schema is additive-only (control-plane/db.ts), so they
+ * stay in SQLite; they are absent here because nothing reads or writes them any
+ * more — a row type describes what the code uses, and `SELECT *` tolerates the
+ * extra columns.
+ */
 import type {
   L1CursorV1,
   L1WorksetV1,
@@ -34,7 +44,6 @@ export interface L1AssignmentRow {
   worksetDigest: string;
   candidateJson: string | null;
   candidateDigest: string | null;
-  criticReceiptDigest: string | null;
   approvedAttemptId: string | null;
   state: L1AssignmentState;
   failureCount: number;
@@ -55,9 +64,6 @@ export interface L1AttemptArtifactRow {
   reviewInputDigest: string;
   candidateJson: string;
   candidateDigest: string;
-  criticAttemptId: string | null;
-  verdictJson: string | null;
-  verdictDigest: string | null;
   state: "candidate" | "approved" | "rejected";
   createdAt: string;
   updatedAt: string;

@@ -9,7 +9,7 @@ import {
 import {
   approveL1Assignment,
   createL1AttemptArtifact,
-  recordL1CriticVerdict,
+  settleL1Attempt,
 } from "./l1-attempt-repo.js";
 import {
   commitL1Cohort,
@@ -93,17 +93,11 @@ describe("durable L1 protocol", () => {
       },
     });
     expect(
-      recordL1CriticVerdict({
+      settleL1Attempt({
         dataDir: root,
         attemptId: "attempt-1",
-        criticAttemptId: "critic-1",
+        approved: true,
         nowIso: L1_TEST_NOW,
-        isApproved: true,
-        verdict: {
-          verdict: "approve",
-          candidateDigest,
-          inputDigest: reviewInputDigest,
-        },
       }),
     ).toBe(true);
     expect(
@@ -112,6 +106,7 @@ describe("durable L1 protocol", () => {
         assignmentId: workset.assignmentId,
         runId: "run-1",
         attemptId: "attempt-1",
+        candidateDigest,
         nowIso: L1_TEST_NOW,
       }),
     ).toBe(true);

@@ -23,28 +23,20 @@ const SKILLS_DST = path.join(TDAI, "skills");
 const prompt = (name: string) =>
   path.join(REPO_ROOT, "src", "core", "prompts", name);
 
-/** [canonical, live] — must stay in step with ROLE_FILES in the sync script. */
-const ROLE_FILES: [string, string][] = [
-  [
-    prompt("night-keeper.md"),
-    path.join(TDAI, "memory-keeper", "night-keeper.md"),
-  ],
-  [
-    prompt("memory-keeper.md"),
-    path.join(TDAI, "memory-keeper", "memory-keeper.md"),
-  ],
-  [
-    prompt("night-keeper.md"),
-    path.join(TDAI, "roles", "night-keeper", "prompt.md"),
-  ],
-];
-
-/** Live prompts with no repo canonical — guarded, not synced. */
-const GUARDED_FILES = [
-  path.join(TDAI, "roles", "memory-keeper", "prompt.md"),
-  path.join(TDAI, "roles", "dedup-daily", "prompt.md"),
-  path.join(TDAI, "roles", "dedup-daily-critic", "prompt.md"),
-];
+/**
+ * Roles whose prompt is synced from the repo — must stay in step with
+ * ROLE_FILES in the sync script. The live path is the one the gateway reads
+ * at spawn time (`resolveRolePrompt` → `<roleDir>/<role>/prompt.md`).
+ *
+ * These are every role that can be spawned. The one live prompt left out is
+ * roles/dedup-daily-critic/prompt.md: a critic is not a TDAI role (AGENTS.md),
+ * it has no role.json, and the directory is on its way out — an unsynced
+ * leftover, not a role missing its canonical.
+ */
+const SYNCED_ROLES = ["memory-keeper", "night-keeper", "dedup-daily"] as const;
+const canonicalPrompt = (role: string) => prompt(`${role}.md`);
+const livePrompt = (role: string) =>
+  path.join(TDAI, "roles", role, "prompt.md");
 
 const SKILL_NAMES = [
   "memory-keeper",
@@ -83,15 +75,41 @@ describe("memory-role skills parity (canon = runtime)", () => {
   });
 
   it("live role prompts parity (canon = the file the gateway reads at spawn)", () => {
-    for (const [src, dst] of ROLE_FILES) {
+    for (const role of SYNCED_ROLES) {
+      const dst = livePrompt(role);
       expect(fs.readFileSync(dst, "utf-8"), `${dst} parity`).toBe(
-        fs.readFileSync(src, "utf-8"),
+        fs.readFileSync(canonicalPrompt(role), "utf-8"),
       );
     }
   });
 
-  it("guarded live prompts never name the retired result path diff.json", () => {
-    for (const file of GUARDED_FILES) {
+  /**
+   * Parity alone is not enough: `resolveRolePrompt` tries `prompt_file` FIRST,
+   * and the keeper role.json files are not versioned in the repo. A prompt_file
+   * pointing anywhere else sends the child to a different file while parity
+   * stays green — which is exactly how memory-keeper ended up spawning on a
+   * 6-byte stub. Scoped to the synced roles on purpose: the live tree also
+   * holds probe fixtures (roles/broken/role.json is literally `{not json`).
+   */
+  it("every synced role names prompt.md as its prompt_file", () => {
+    for (const role of SYNCED_ROLES) {
+      const file = path.join(TDAI, "roles", role, "role.json");
+      const { prompt_file: promptFile } = JSON.parse(
+        fs.readFileSync(file, "utf-8"),
+      ) as { prompt_file?: string };
+      expect(promptFile, `${file} prompt_file`).toBe("prompt.md");
+    }
+  });
+
+  /**
+   * `diff.json` is the RESULT path the runner retired in favour of
+   * out/result.json; a prompt that still names it tells the role to write where
+   * nothing is read. Checked on the canonical prompts — the source every live
+   * copy is now overwritten from — not on the copies.
+   */
+  it("no canonical role prompt names the retired result path diff.json", () => {
+    for (const role of SYNCED_ROLES) {
+      const file = canonicalPrompt(role);
       const stale = fs
         .readFileSync(file, "utf-8")
         .split("\n")

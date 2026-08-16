@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createL1Runner } from "./l1-runner.js";
 import { CheckpointManager } from "../../utils/checkpoint.js";
-import { createTestL1Dispatcher } from "../../gateway/l1/l1-dispatch-fixture.js";
+import type { RoleLauncher } from "../../gateway/consolidation/launchers/types.js";
+import {
+  createTestL1Dispatcher,
+  invalidOutputLauncher,
+} from "../../gateway/l1/l1-dispatch-fixture.js";
 import { readMemoryRecords } from "../../core/record/l1-reader.js";
 import type { MemoryRecord } from "../../core/record/l1-writer.js";
 import type { IMemoryStore, L1RecordRow } from "../../core/store/types.js";
@@ -33,7 +37,7 @@ function seedL0(baseDir: string): void {
   writeFileSync(join(convDir, `${TODAY}.jsonl`), `${line}\n`);
 }
 
-function makeRunner(baseDir: string, verdict: "approve" | "reject") {
+function makeRunner(baseDir: string, launcherOverride?: RoleLauncher) {
   const rows = new Map<string, L1RecordRow>();
   const now = new Date().toISOString();
   const vectorStore = {
@@ -76,17 +80,17 @@ function makeRunner(baseDir: string, verdict: "approve" | "reject") {
     vectorStore,
     embeddingService: undefined,
     logger,
-    dispatcher: createTestL1Dispatcher(baseDir, verdict),
+    dispatcher: createTestL1Dispatcher(baseDir, launcherOverride),
   });
 }
 
 describe("agentic l1-runner cursor gate", () => {
-  it("does not advance the cursor when the critic rejects", async () => {
+  it("does not advance the cursor when the role output is rejected", async () => {
     const baseDir = mkdtempSync(join(tmpdir(), "l1-runner-gate-"));
     try {
       seedL0(baseDir);
       await expect(
-        makeRunner(baseDir, "reject")({ sessionKey: SESSION_KEY }),
+        makeRunner(baseDir, invalidOutputLauncher())({ sessionKey: SESSION_KEY }),
       ).rejects.toThrow("did not reach commit");
       const checkpoint = new CheckpointManager(baseDir, logger);
       const cp = await checkpoint.read();
@@ -100,7 +104,7 @@ describe("agentic l1-runner cursor gate", () => {
     const baseDir = mkdtempSync(join(tmpdir(), "l1-runner-ok-"));
     try {
       seedL0(baseDir);
-      const runner = makeRunner(baseDir, "approve");
+      const runner = makeRunner(baseDir);
       expect((await runner({ sessionKey: SESSION_KEY })).processedCount).toBe(
         1,
       );

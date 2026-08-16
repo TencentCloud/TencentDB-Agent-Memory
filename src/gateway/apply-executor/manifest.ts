@@ -16,13 +16,19 @@ import { createHash } from "node:crypto";
 import { ManifestDriftError } from "./errors.js";
 import { resolveWithinDataDir } from "./apply-helpers.js";
 import type { ApplyExecutorDeps } from "./apply-executor-deps.js";
-import type { ParsedApplyRequest } from "./types.js";
+import type { ApplyDiff, ParsedApplyRequest } from "./types.js";
 
+/**
+ * @param diff the SCREENED diff, not the parsed one: the heal tolerance below
+ * excuses a changed file when its content already equals a rewrite from this
+ * same diff, and a rewrite that was refused (@see validate.screenDiff) is not
+ * a rewrite this apply is going to perform.
+ */
 export function checkManifest(
   deps: ApplyExecutorDeps,
-  parsed: ParsedApplyRequest,
+  diff: ApplyDiff,
+  manifest: ParsedApplyRequest["manifest"],
 ): void {
-  const { manifest, diff } = parsed;
   const rewrites = new Map<string, string>();
   for (const op of diff.rewriteBlock ?? []) rewrites.set(op.path, op.content);
   if (diff.rewritePersona !== undefined)

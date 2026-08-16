@@ -8,12 +8,13 @@ import type { Logger } from "../../core/types.js";
 import type { IMemoryStore } from "../../core/store/types.js";
 import type { EmbeddingService } from "../../core/store/embedding.js";
 import { StoreL1ConflictCandidates } from "../../repo/l1/l1-conflict-candidate-store.js";
+import { L1AgentValidationError } from "../../core/record/l1-agent-errors.js";
 import { RoleGate } from "../consolidation/role-gate.js";
 import { acquireRoleExecutionLease } from "../../agents/role-execution-lease.js";
 import type { RoleLegacyDefaults } from "../consolidation/role-contract-types.js";
 import type { RoleLauncher } from "../consolidation/launchers/types.js";
-import { executeL1RolePair } from "./l1-dispatch-pair.js";
-import { resolveL1RolePair } from "./l1-role-resolution.js";
+import { executeL1Extraction } from "./l1-dispatch-run.js";
+import { resolveL1Role } from "./l1-role-resolution.js";
 import { L1OperationTracker } from "./l1-operation-tracker.js";
 import { recordL1DispatchFailure } from "./l1-dispatch-failure.js";
 
@@ -47,13 +48,13 @@ export class GatewayL1AgentDispatcher implements L1ExtractionDispatcher {
   }
 
   resolveRoleContractHash(role: string): string {
-    const pair = resolveL1RolePair({
+    const resolved = resolveL1Role({
       role,
       roleDir: this.options.roleDir,
       defaults: this.options.roleDefaults,
     });
-    if (!pair.ok) throw new Error(pair.reason);
-    return pair.extractor.contractHash;
+    if (!resolved.ok) throw new L1AgentValidationError(resolved.reason);
+    return resolved.extractor.contractHash;
   }
 
   async shutdown(): Promise<void> {
@@ -75,18 +76,18 @@ export class GatewayL1AgentDispatcher implements L1ExtractionDispatcher {
   private async executeExtraction(
     input: Parameters<L1ExtractionDispatcher["dispatchExtraction"]>[0],
   ): Promise<L1DispatchResult> {
-    const pair = resolveL1RolePair({
+    const resolved = resolveL1Role({
       role: input.role,
       roleDir: this.options.roleDir,
       defaults: this.options.roleDefaults,
     });
-    if (!pair.ok)
-      return { ok: false, kind: "role-disabled", message: pair.reason };
+    if (!resolved.ok)
+      return { ok: false, kind: "role-disabled", message: resolved.reason };
     const gateKey = input.role;
     const lease = acquireRoleExecutionLease({
       dataDir: this.options.dataDir,
       roleKey: gateKey,
-      ttlMs: pair.extractor.policy.maxRunMs,
+      ttlMs: resolved.extractor.policy.maxRunMs,
       gate: this.gate,
       logger: this.options.logger,
       nowMs: this.now(),
@@ -102,12 +103,11 @@ export class GatewayL1AgentDispatcher implements L1ExtractionDispatcher {
       runId,
     );
     try {
-      return await executeL1RolePair({
+      return await executeL1Extraction({
         ...this.options,
         now: this.now,
         input,
-        extractor: pair.extractor,
-        critic: pair.critic,
+        extractor: resolved.extractor,
         lease,
         conflicts: new StoreL1ConflictCandidates(
           () => this.vectorStore,

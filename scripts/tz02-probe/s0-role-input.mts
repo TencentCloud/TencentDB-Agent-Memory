@@ -19,9 +19,11 @@ import { makeSandbox } from "../tz09-probe/sandbox.mts";
 import { VectorStore } from "../../src/core/store/sqlite.js";
 import { parseConfig } from "../../src/config.js";
 import { ConsolidationOrchestrator } from "../../src/gateway/consolidation/orchestrator.js";
-import { CRITIC_VERDICT_FILE } from "../../src/gateway/consolidation/critic-launch.js";
-import { digestOf } from "../../src/gateway/consolidation/critic-stage.js";
-import { RESULT_REL } from "../../src/gateway/consolidation/attempt-layout.js";
+import { digestOf } from "../../src/gateway/apply-executor/op-journal.js";
+import {
+  CRITIC_REL,
+  RESULT_REL,
+} from "../../src/gateway/consolidation/attempt-layout.js";
 import type { Logger } from "../../src/core/types.js";
 
 const OLD_PATH = process.env.FALSIFY === "old-path";
@@ -157,10 +159,10 @@ const orchestrator = new ConsolidationOrchestrator({
       );
     } else {
       fs.writeFileSync(
-        path.join(dir, CRITIC_VERDICT_FILE),
+        path.join(dir, CRITIC_REL),
         JSON.stringify({
           verdict: APPROVE ? "approve" : "reject",
-          candidateDigest: digestOf(CANDIDATE),
+          candidateDigest: digestOf(JSON.stringify(CANDIDATE)),
           reasons: [APPROVE ? "looks fine" : "probe rejection"],
         }),
         "utf-8",

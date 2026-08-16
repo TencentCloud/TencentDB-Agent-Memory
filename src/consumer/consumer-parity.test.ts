@@ -214,7 +214,7 @@ describe("consumer-parity", () => {
     expect(run).toBeDefined();
     expect(
       listAttempts(dataDir, run!.runId).map(({ outcome }) => outcome),
-    ).toEqual(["succeeded", "succeeded"]);
+    ).toEqual(["succeeded"]);
   });
 
   it("reads without a credential and refuses a write without one", async () => {

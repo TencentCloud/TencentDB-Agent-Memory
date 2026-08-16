@@ -102,9 +102,6 @@ export interface StatusResponse {
     errorKind: string | null;
     extractorAttemptId: string | null;
     extractorOutcome: string | null;
-    criticAttemptId: string | null;
-    criticOutcome: string | null;
-    criticVerdict: string | null;
     commitState: string;
     verifiedOperations: number;
     totalOperations: number;
