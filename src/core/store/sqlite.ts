@@ -349,6 +349,14 @@ export class VectorStore implements IMemoryStore {
   private closed = false;
 
   /**
+   * Tracks whether the store itself has an active write transaction (BEGIN issued,
+   * COMMIT/ROLLBACK not yet executed). This prevents `ensureNoStaleTransaction()`
+   * from rolling back transactions that were intentionally opened by the store's
+   * own write methods (upsertL1, upsertL0, reindexAll, etc.).
+   */
+  private _ownTxnActive = false;
+
+  /**
    * `true` when vec0 virtual tables (l1_vec / l0_vec) have been created and
    * their prepared statements are ready.  When `dimensions === 0` (i.e.
    * provider="none"), vec0 tables are deferred and this stays `false`.
@@ -434,6 +442,60 @@ export class VectorStore implements IMemoryStore {
    */
   isDegraded(): boolean {
     return this.degraded;
+  }
+
+  /**
+   * Defensive guard: ensure no stale write transaction is left open.
+   *
+   * In WAL mode, if a previous `BEGIN` was issued but the corresponding
+   * `COMMIT` / `ROLLBACK` was swallowed by an error path (e.g. the catch
+   * block itself threw), the connection remains inside an unclosed
+   * transaction.  Subsequent read queries then operate on a stale snapshot
+   * that predates the uncommitted writes — producing empty results even
+   * though the data exists on disk and is visible to other connections.
+   *
+   * This method issues a harmless `ROLLBACK` — a no-op when no transaction
+   * is active — before every read operation to guarantee a fresh snapshot.
+   *
+   * **Safety**: When `_ownTxnActive` is `true`, the transaction was opened
+   * intentionally by a VectorStore write method (e.g. `upsertL1`, `reindexAll`),
+   * and the ROLLBACK is skipped to avoid rolling back a valid in-progress
+   * transaction.
+   *
+   * Background: https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/987
+   */
+  private ensureNoStaleTransaction(): void {
+    if (this._ownTxnActive) return; // Don't roll back our own intentional transaction
+    try {
+      this.db.exec("ROLLBACK");
+    } catch {
+      // "no transaction is active" — expected on the happy path
+    }
+  }
+
+  /**
+   * Begin a write transaction and mark it as owned by the store.
+   * Use `commitTxn()` / `rollbackTxn()` to close it — they clear the flag.
+   */
+  private beginTxn(): void {
+    this.db.exec("BEGIN");
+    this._ownTxnActive = true;
+  }
+
+  /** Commit the current write transaction and clear the ownership flag. */
+  private commitTxn(): void {
+    this.db.exec("COMMIT");
+    this._ownTxnActive = false;
+  }
+
+  /** Roll back the current write transaction and clear the ownership flag. */
+  private rollbackTxn(): void {
+    try {
+      this.db.exec("ROLLBACK");
+    } catch {
+      // "no transaction is active" — expected if rollback already happened
+    }
+    this._ownTxnActive = false;
   }
 
 
@@ -1024,7 +1086,7 @@ export class VectorStore implements IMemoryStore {
           : " (no embedding — metadata-only write)"),
       );
 
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         // Upsert metadata (INSERT OR UPDATE)
         this.stmtUpsertMeta.run(
@@ -1079,10 +1141,10 @@ export class VectorStore implements IMemoryStore {
           }
         }
 
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1108,6 +1170,7 @@ export class VectorStore implements IMemoryStore {
       if (this.degraded) this.logger?.warn(`${TAG} [L1-search] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Over-retrieve to compensate for legacy zero-vector placeholders that
       // may still exist in the vec0 table.  New zero vectors are no longer
@@ -1210,17 +1273,17 @@ export class VectorStore implements IMemoryStore {
   deleteL1(recordId: string): boolean {
     if (this.degraded) return false;
     try {
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         this.stmtDeleteMeta.run(recordId);
         if (this.vecTablesReady) this.stmtDeleteVec!.run(recordId);
         if (this.ftsAvailable) {
           try { this.stmtL1FtsDelete.run(recordId); } catch { /* non-fatal */ }
         }
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1243,7 +1306,7 @@ export class VectorStore implements IMemoryStore {
     if (recordIds.length === 0) return true;
 
     try {
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         for (const id of recordIds) {
           this.stmtDeleteMeta.run(id);
@@ -1252,10 +1315,10 @@ export class VectorStore implements IMemoryStore {
             try { this.stmtL1FtsDelete.run(id); } catch { /* non-fatal */ }
           }
         }
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1289,38 +1352,52 @@ export class VectorStore implements IMemoryStore {
       const expiredCount = row?.cnt ?? 0;
       if (expiredCount <= 0) return 0;
 
-      // Ratio protection: refuse to delete > 80% in one pass
+      // Ratio protection: when >80% would be deleted, batch the deletion
+      // to avoid a permanent deadlock where expired records keep accumulating
+      // but the safety threshold blocks all cleanup.
       const totalRow = this.db.prepare(
         "SELECT COUNT(*) AS cnt FROM l1_records",
       ).get() as { cnt: number };
       const total = totalRow.cnt;
       const ratio = total > 0 ? expiredCount / total : 0;
+      let deleteLimit: number | null = null; // null = no limit
       if (ratio > 0.8) {
+        // Batch: delete at most 80% of total in this pass
+        deleteLimit = Math.max(1, Math.floor(total * 0.8));
         this.logger?.warn(
-          `${TAG} [L1-deleteExpired] BLOCKED: would delete ${expiredCount}/${total} ` +
-          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+          `${TAG} [L1-deleteExpired] BATCHED: would delete ${expiredCount}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — batching to ${deleteLimit} to avoid 80% safety deadlock, cutoff=${cutoffIso}`,
         );
-        return 0;
       }
 
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         if (this.vecTablesReady) {
-          this.db.prepare(
-            "DELETE FROM l1_vec WHERE updated_time != '' AND updated_time < ?",
-          ).run(cutoffIso);
+          if (deleteLimit !== null) {
+            // Use subquery since SQLite doesn't support DELETE ... LIMIT
+            this.db.prepare(
+              "DELETE FROM l1_vec WHERE rowid IN (SELECT rowid FROM l1_vec WHERE updated_time != '' AND updated_time < ? LIMIT ?)",
+            ).run(cutoffIso, deleteLimit);
+          } else {
+            this.db.prepare(
+              "DELETE FROM l1_vec WHERE updated_time != '' AND updated_time < ?",
+            ).run(cutoffIso);
+          }
         }
-        this.db.prepare(
-          "DELETE FROM l1_records WHERE updated_time != '' AND updated_time < ?",
-        ).run(cutoffIso);
-        this.db.exec("COMMIT");
+        const info = this.db.prepare(
+          deleteLimit !== null
+            ? "DELETE FROM l1_records WHERE rowid IN (SELECT rowid FROM l1_records WHERE updated_time != '' AND updated_time < ? LIMIT ?)"
+            : "DELETE FROM l1_records WHERE updated_time != '' AND updated_time < ?",
+        ).run(...(deleteLimit !== null ? [cutoffIso, deleteLimit] : [cutoffIso]));
+        this.commitTxn();
+        const deleted = Number((info as { changes?: number }).changes ?? expiredCount);
         this.logger?.info?.(
-          `${TAG} [L1-deleteExpired] Deleted ${expiredCount}/${total} records (cutoff=${cutoffIso})`,
+          `${TAG} [L1-deleteExpired] Deleted ${deleted}/${expiredCount} (total ${total}) records (cutoff=${cutoffIso})`,
         );
-        return expiredCount;
+        return deleted;
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1337,6 +1414,7 @@ export class VectorStore implements IMemoryStore {
    */
   countL1(): number {
     if (this.degraded) return 0;
+    this.ensureNoStaleTransaction();
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l1_records")
@@ -1364,6 +1442,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L1-query] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       const { sessionKey, sessionId, updatedAfter } = filter ?? {};
 
@@ -1442,7 +1521,7 @@ export class VectorStore implements IMemoryStore {
           : " (no embedding — metadata-only write)"),
       );
 
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         this.stmtL0UpsertMeta.run(
           record.id,
@@ -1486,10 +1565,10 @@ export class VectorStore implements IMemoryStore {
           }
         }
 
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1530,13 +1609,13 @@ export class VectorStore implements IMemoryStore {
         return false;
       }
 
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         this.stmtL0DeleteVec!.run(recordId);
         this.stmtL0InsertVec!.run(recordId, Buffer.from(embedding.buffer), meta.recorded_at);
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
-        try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+        try { this.rollbackTxn(); } catch { /* ignore */ }
         throw err;
       }
       return true;
@@ -1559,6 +1638,7 @@ export class VectorStore implements IMemoryStore {
       if (this.degraded) this.logger?.warn(`${TAG} [L0-search] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Over-retrieve to compensate for legacy zero-vector placeholders that
       // may still exist in the vec0 table.  New zero vectors are no longer
@@ -1652,17 +1732,17 @@ export class VectorStore implements IMemoryStore {
   deleteL0(recordId: string): boolean {
     if (this.degraded) return false;
     try {
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         this.stmtL0DeleteMeta.run(recordId);
         if (this.vecTablesReady) this.stmtL0DeleteVec!.run(recordId);
         if (this.ftsAvailable) {
           try { this.stmtL0FtsDelete.run(recordId); } catch { /* non-fatal */ }
         }
-        this.db.exec("COMMIT");
+        this.commitTxn();
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1694,38 +1774,48 @@ export class VectorStore implements IMemoryStore {
       const expiredCount = row?.cnt ?? 0;
       if (expiredCount <= 0) return 0;
 
-      // Ratio protection: refuse to delete > 80% in one pass
+      // Ratio protection: batch deletion when >80% would be deleted
       const totalRow = this.db.prepare(
         "SELECT COUNT(*) AS cnt FROM l0_conversations",
       ).get() as { cnt: number };
       const total = totalRow.cnt;
       const ratio = total > 0 ? expiredCount / total : 0;
+      let deleteLimit: number | null = null; // null = no limit
       if (ratio > 0.8) {
+        deleteLimit = Math.max(1, Math.floor(total * 0.8));
         this.logger?.warn(
-          `${TAG} [L0-deleteExpired] BLOCKED: would delete ${expiredCount}/${total} ` +
-          `(${(ratio * 100).toFixed(1)}%) — exceeds 80% safety threshold, cutoff=${cutoffIso}`,
+          `${TAG} [L0-deleteExpired] BATCHED: would delete ${expiredCount}/${total} ` +
+          `(${(ratio * 100).toFixed(1)}%) — batching to ${deleteLimit} to avoid 80% safety deadlock, cutoff=${cutoffIso}`,
         );
-        return 0;
       }
 
-      this.db.exec("BEGIN");
+      this.beginTxn();
       try {
         if (this.vecTablesReady) {
-          this.db.prepare(
-            "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
-          ).run(cutoffIso);
+          if (deleteLimit !== null) {
+            this.db.prepare(
+              "DELETE FROM l0_vec WHERE rowid IN (SELECT rowid FROM l0_vec WHERE recorded_at != '' AND recorded_at < ? LIMIT ?)",
+            ).run(cutoffIso, deleteLimit);
+          } else {
+            this.db.prepare(
+              "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
+            ).run(cutoffIso);
+          }
         }
-        this.db.prepare(
-          "DELETE FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?",
-        ).run(cutoffIso);
-        this.db.exec("COMMIT");
+        const info = this.db.prepare(
+          deleteLimit !== null
+            ? "DELETE FROM l0_conversations WHERE rowid IN (SELECT rowid FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ? LIMIT ?)"
+            : "DELETE FROM l0_conversations WHERE recorded_at != '' AND recorded_at < ?",
+        ).run(...(deleteLimit !== null ? [cutoffIso, deleteLimit] : [cutoffIso]));
+        this.commitTxn();
+        const deleted = Number((info as { changes?: number }).changes ?? expiredCount);
         this.logger?.info?.(
-          `${TAG} [L0-deleteExpired] Deleted ${expiredCount}/${total} records (cutoff=${cutoffIso})`,
+          `${TAG} [L0-deleteExpired] Deleted ${deleted}/${expiredCount} (total ${total}) records (cutoff=${cutoffIso})`,
         );
-        return expiredCount;
+        return deleted;
       } catch (err) {
         try {
-          this.db.exec("ROLLBACK");
+          this.rollbackTxn();
         } catch { /* ignore rollback errors */ }
         throw err;
       }
@@ -1744,6 +1834,7 @@ export class VectorStore implements IMemoryStore {
    */
   countL0(): number {
     if (this.degraded) return 0;
+    this.ensureNoStaleTransaction();
     try {
       const row = this.db
         .prepare("SELECT COUNT(*) AS cnt FROM l0_conversations")
@@ -1766,6 +1857,7 @@ export class VectorStore implements IMemoryStore {
    */
   getAllL1Texts(): Array<{ record_id: string; content: string; updated_time: string }> {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.db
         .prepare("SELECT record_id, content, updated_time FROM l1_records")
@@ -1784,6 +1876,7 @@ export class VectorStore implements IMemoryStore {
    */
   getAllL0Texts(): Array<{ record_id: string; message_text: string; recorded_at: string }> {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.db
         .prepare("SELECT record_id, message_text, recorded_at FROM l0_conversations")
@@ -1824,13 +1917,13 @@ export class VectorStore implements IMemoryStore {
         try {
           const embedding = await embedFn(content);
           // Wrap delete+insert in a transaction to prevent orphan vectors
-          this.db.exec("BEGIN");
+          this.beginTxn();
           try {
             this.stmtDeleteVec!.run(record_id);
             this.stmtInsertVec!.run(record_id, Buffer.from(embedding.buffer), updated_time);
-            this.db.exec("COMMIT");
+            this.commitTxn();
           } catch (txErr) {
-            try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+            try { this.rollbackTxn(); } catch { /* ignore */ }
             throw txErr;
           }
         } catch (err) {
@@ -1849,13 +1942,13 @@ export class VectorStore implements IMemoryStore {
         try {
           const embedding = await embedFn(message_text);
           // Wrap delete+insert in a transaction to prevent orphan vectors
-          this.db.exec("BEGIN");
+          this.beginTxn();
           try {
             this.stmtL0DeleteVec!.run(record_id);
             this.stmtL0InsertVec!.run(record_id, Buffer.from(embedding.buffer), recorded_at);
-            this.db.exec("COMMIT");
+            this.commitTxn();
           } catch (txErr) {
-            try { this.db.exec("ROLLBACK"); } catch { /* ignore */ }
+            try { this.rollbackTxn(); } catch { /* ignore */ }
             throw txErr;
           }
         } catch (err) {
@@ -1905,6 +1998,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L0-query] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       // Query newest-first (DESC) with LIMIT, then reverse to chronological order
       let rows: Array<Record<string, unknown>>;
@@ -1955,6 +2049,7 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L0-query-grouped] SKIPPED (degraded mode)`);
       return [];
     }
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.queryL0ForL1(sessionKey, afterRecordedAtMs, limit);
 
@@ -2008,6 +2103,7 @@ export class VectorStore implements IMemoryStore {
    */
   queryL1RecordsCursor(afterId: string, pageSize: number): L1RecordRow[] {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.stmtL1QueryMigrationCursor.all(afterId, pageSize) as unknown as L1RecordRow[];
     } catch (err) {
@@ -2025,6 +2121,7 @@ export class VectorStore implements IMemoryStore {
    */
   queryL0RecordsCursor(afterId: string, pageSize: number): L0RecordRow[] {
     if (this.degraded) return [];
+    this.ensureNoStaleTransaction();
     try {
       return this.stmtL0QueryMigrationCursor.all(afterId, pageSize) as unknown as L0RecordRow[];
     } catch (err) {
@@ -2056,6 +2153,7 @@ export class VectorStore implements IMemoryStore {
    */
   searchL1Fts(ftsQuery: string, limit = 20): FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.stmtL1FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;
@@ -2105,6 +2203,7 @@ export class VectorStore implements IMemoryStore {
    */
   searchL0Fts(ftsQuery: string, limit = VectorStore.FTS_DEFAULT_LIMIT): L0FtsSearchResult[] {
     if (this.degraded || !this.ftsAvailable) return [];
+    this.ensureNoStaleTransaction();
     try {
       const rows = this.stmtL0FtsSearch.all(ftsQuery, limit) as Array<{
         record_id: string;
