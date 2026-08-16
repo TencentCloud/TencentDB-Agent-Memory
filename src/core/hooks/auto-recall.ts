@@ -27,6 +27,7 @@ const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
+const NO_RELEVANT_MEMORIES_PLACEHOLDER = "（本次对话未召回相关记忆）";
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -115,12 +116,14 @@ async function performAutoRecallInner(params: {
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
   const tSearchStart = performance.now();
   let memoryLines: string[] = [];
+  let memorySearchAttempted = false;
   let effectiveStrategy = "skipped";
   let recalledL1Memories: RecalledMemory[] = [];
   let searchTiming: SearchTiming = { ftsMs: 0, embeddingMs: 0, ftsHits: 0, embeddingHits: 0 };
   if (!userText || userText.length === 0) {
     logger?.debug?.(`${TAG} User text empty/undefined, skipping memory search (persona/scene still injected)`);
   } else {
+    memorySearchAttempted = true;
     effectiveStrategy = cfg.recall.strategy ?? "hybrid";
     const searchResult = await searchMemories(userText, pluginDataDir, cfg, logger, effectiveStrategy as "keyword" | "embedding" | "hybrid", vectorStore, embeddingService);
     memoryLines = searchResult.lines;
@@ -169,7 +172,7 @@ async function performAutoRecallInner(params: {
   }
   const tSceneEnd = performance.now();
 
-  if (memoryLines.length === 0 && !personaContent && !sceneNavigation) {
+  if (!memorySearchAttempted && memoryLines.length === 0 && !personaContent && !sceneNavigation) {
     const totalMs = performance.now() - tRecallStart;
     logger?.info(
       `${TAG} ⏱ Recall timing: total=${totalMs.toFixed(0)}ms, ` +
@@ -202,10 +205,13 @@ async function performAutoRecallInner(params: {
   }
 
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
+  // Keep the wrapper even for zero-hit searches so prompt shape stays stable.
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
     prependContext =
       `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+  } else if (memorySearchAttempted) {
+    prependContext = `<relevant-memories>\n${NO_RELEVANT_MEMORIES_PLACEHOLDER}\n</relevant-memories>`;
   }
 
   // Append memory tools usage guide to the stable part so the agent knows
