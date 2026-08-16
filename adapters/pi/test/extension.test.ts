@@ -17,10 +17,12 @@ function makePi() {
   const tools: RegisteredTool[] = [];
   const commands: string[] = [];
   const handlers: RecordedHandler[] = [];
+  const entries: Array<{ type: string; customType?: string; data?: unknown }> = [];
   return {
     tools,
     commands,
     handlers,
+    entries,
     pi: {
       registerTool(def: RegisteredTool) {
         tools.push(def);
@@ -30,6 +32,9 @@ function makePi() {
       },
       on(event: string, handler: (...args: unknown[]) => unknown) {
         handlers.push({ event, handler });
+      },
+      appendEntry(customType: string, data?: unknown) {
+        entries.push({ type: "custom", customType, data });
       },
     },
   };
@@ -193,5 +198,122 @@ describe("createTencentDbMemoryExtension", () => {
     expect(captured[0]!.assistant).toBe("final answer");
     expect(captured[0]!.user).toContain("first request");
     expect(captured[0]!.user).toContain("queued follow-up");
+  });
+
+  it("recovers incomplete captures on session start", async () => {
+    const captured: string[] = [];
+    const { pi, handlers, entries } = makePi();
+    const factory = createTencentDbMemoryExtension({
+      env: fullEnv,
+      clientFactory: () => ({
+        ...makeClient(),
+        async captureConversation(turn) {
+          captured.push(turn.assistant);
+        },
+      }),
+      logger: { warn() {} },
+    });
+    factory(pi as never);
+
+    entries.push({
+      type: "custom",
+      customType: "tdai-memory-captured",
+      data: {
+        version: 1,
+        key: "key-1",
+        l0: false,
+        skill: true,
+        turn: { sessionId: "pi:s", user: "hi", assistant: "recovered", skillMessages: [], capturedAtMs: 1 },
+      },
+    });
+
+    const ctx = {
+      signal: undefined,
+      hasUI: false,
+      ui: {},
+      sessionManager: { getSessionId: () => "s", getBranch: () => entries, getEntries: () => entries },
+    };
+    const sessionStart = handlers.find((h) => h.event === "session_start")!;
+    await sessionStart.handler({}, ctx);
+
+    expect(captured).toContain("recovered");
+  });
+
+  it("retries only the failed pipeline on recovery", async () => {
+    let l0Calls = 0;
+    let skillCalls = 0;
+    const { pi, handlers, entries } = makePi();
+    const factory = createTencentDbMemoryExtension({
+      env: fullEnv,
+      clientFactory: () => ({
+        ...makeClient(),
+        async captureConversation() {
+          l0Calls += 1;
+        },
+        async captureSkill() {
+          skillCalls += 1;
+          if (skillCalls === 1) throw new Error("boom");
+        },
+      }),
+      logger: { warn() {} },
+    });
+    factory(pi as never);
+
+    entries.push({
+      type: "custom",
+      customType: "tdai-memory-captured",
+      data: {
+        version: 1,
+        key: "key-1",
+        l0: true,
+        skill: false,
+        turn: { sessionId: "pi:s", user: "hi", assistant: "recovered", skillMessages: [], capturedAtMs: 1 },
+      },
+    });
+
+    const ctx = {
+      signal: undefined,
+      hasUI: false,
+      ui: {},
+      sessionManager: { getSessionId: () => "s", getBranch: () => entries, getEntries: () => entries },
+    };
+    const sessionStart = handlers.find((h) => h.event === "session_start")!;
+    await sessionStart.handler({}, ctx);
+
+    expect(l0Calls).toBe(0);
+    expect(skillCalls).toBe(1);
+  });
+
+  it("treats unknown marker versions as L0-written", async () => {
+    let l0Calls = 0;
+    const { pi, handlers, entries } = makePi();
+    const factory = createTencentDbMemoryExtension({
+      env: fullEnv,
+      clientFactory: () => ({
+        ...makeClient(),
+        async captureConversation() {
+          l0Calls += 1;
+        },
+      }),
+      logger: { warn() {} },
+    });
+    factory(pi as never);
+
+    entries.push({
+      type: "custom",
+      customType: "tdai-memory-captured",
+      data: { version: 0, key: "old-key", l0: false, skill: false },
+    });
+
+    const ctx = {
+      signal: undefined,
+      hasUI: false,
+      ui: {},
+      sessionManager: { getSessionId: () => "s", getBranch: () => entries, getEntries: () => entries },
+    };
+    const sessionStart = handlers.find((h) => h.event === "session_start")!;
+    await sessionStart.handler({}, ctx);
+
+    expect(l0Calls).toBe(0);
   });
 });

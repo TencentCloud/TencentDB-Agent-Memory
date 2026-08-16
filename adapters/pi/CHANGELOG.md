@@ -12,5 +12,7 @@ All notable changes to the TencentDB Agent Memory adapter for Pi are recorded he
 - Add v3 Team / Agent / User / optional Task / service isolation on every call.
 - Add timeout handling and fail-open behavior so MemoryCore outages never block Pi.
 - Add credential-redaction and size-bounding for captured transcripts.
+- Add durable capture markers that resume incomplete L0/Skill writes after reload.
+- Add layered recall with a soft budget for optional L2/L3 enrichment.
 - Add equivalent English and Simplified Chinese setup guides.
 - Add unit and HTTP contract tests.

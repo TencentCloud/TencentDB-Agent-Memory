@@ -122,6 +122,7 @@ export function buildCaptureTurn(
   messages: unknown[],
   maxChars: number,
   capturedAtMs = Date.now(),
+  sourceId?: string,
 ): CaptureTurn | null {
   const skillMessages: SkillCaptureMessage[] = [];
   const users: string[] = [];
@@ -195,6 +196,7 @@ export function buildCaptureTurn(
 
   return {
     sessionId,
+    sourceId,
     user: clean(users.join("\n\n--- queued follow-up ---\n\n"), Math.min(maxChars, MAX_L0_CHARS)),
     assistant: clean(finalAssistant, Math.min(maxChars, MAX_L0_CHARS)),
     skillMessages: boundSkillMessages(skillMessages, maxChars),

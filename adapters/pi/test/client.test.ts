@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { TdaiMemoryClient } from "../src/client.js";
+import { TdaiMemoryClient, turnKey } from "../src/client.js";
 import type { PiMemoryConfig } from "../src/config.js";
 
 interface SeenRequest {
@@ -184,5 +184,25 @@ describe("TdaiMemoryClient", () => {
       name: "TdaiClientError",
       code: 401,
     });
+  });
+});
+
+describe("turnKey", () => {
+  it("is deterministic for identical turns", () => {
+    const a = { sessionId: "pi:s", sourceId: "e1", user: "hi", assistant: "hello" };
+    const b = { sessionId: "pi:s", sourceId: "e1", user: "hi", assistant: "hello" };
+    expect(turnKey(a)).toBe(turnKey(b));
+  });
+
+  it("differs when the source id differs", () => {
+    const a = { sessionId: "pi:s", sourceId: "e1", user: "hi", assistant: "hello" };
+    const b = { sessionId: "pi:s", sourceId: "e2", user: "hi", assistant: "hello" };
+    expect(turnKey(a)).not.toBe(turnKey(b));
+  });
+
+  it("differs when the assistant text differs", () => {
+    const a = { sessionId: "pi:s", user: "hi", assistant: "hello" };
+    const b = { sessionId: "pi:s", user: "hi", assistant: "world" };
+    expect(turnKey(a)).not.toBe(turnKey(b));
   });
 });

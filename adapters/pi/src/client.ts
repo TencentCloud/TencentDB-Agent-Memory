@@ -6,6 +6,8 @@
  * out, fail with a typed error, and never throw on a malformed HTTP body.
  */
 
+import { createHash } from "node:crypto";
+
 import type { PiMemoryConfig } from "./config.js";
 
 interface ResponseEnvelope<T> {
@@ -49,6 +51,8 @@ export interface RecallBundle {
 
 export interface CaptureTurn {
   sessionId: string;
+  /** Distinct id of the source assistant message, used to dedupe identical text across turns. */
+  sourceId?: string;
   user: string;
   assistant: string;
   skillMessages: SkillCaptureMessage[];
@@ -63,6 +67,17 @@ export interface SkillCaptureMessage {
   tool_name?: string;
   tool_call_id?: string;
   timestamp?: number | string;
+}
+
+/**
+ * Deterministic dedupe key for a capture turn. Two turns with the same session,
+ * source assistant id, user text, and assistant text collapse to one key, so a
+ * replay of an already-captured turn never writes twice.
+ */
+export function turnKey(turn: Pick<CaptureTurn, "sessionId" | "sourceId" | "user" | "assistant">): string {
+  const hash = createHash("sha256").update(turn.sessionId).update("\0");
+  if (turn.sourceId) hash.update(turn.sourceId).update("\0");
+  return hash.update(turn.user).update("\0").update(turn.assistant).digest("hex");
 }
 
 /** Narrow interface used by the extension so tests can inject a fake client. */
