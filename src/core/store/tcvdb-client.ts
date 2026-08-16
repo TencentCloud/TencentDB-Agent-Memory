@@ -65,10 +65,19 @@ export interface CollectionInfo {
 
 export class TcvdbApiError extends Error {
   readonly apiCode: number;
-  constructor(path: string, code: number, msg: string) {
+  /**
+   * Whether request() should retry this error.
+   *
+   * The HTTP status is only available at the throw site, so it is captured here
+   * rather than re-derived in the catch block. `false` (the default) means the
+   * server gave a definitive 4xx answer and retrying can only repeat it.
+   */
+  readonly retryable: boolean;
+  constructor(path: string, code: number, msg: string, retryable = false) {
     super(`VectorDB ${path}: code=${code}, msg=${msg}`);
     this.name = "TcvdbApiError";
     this.apiCode = code;
+    this.retryable = retryable;
   }
 }
 
@@ -78,6 +87,17 @@ export class TcvdbApiError extends Error {
 
 const TAG = "[memory-tdai][tcvdb-client]";
 const MAX_RETRIES = 2;
+
+/**
+ * Whether an HTTP status should be retried.
+ *
+ * Only 4xx is treated as definitive: the server understood the request and
+ * rejected it, so re-sending it verbatim yields the same answer. 5xx and
+ * missing/unknown statuses are transient infrastructure failures worth retrying.
+ */
+function isRetryableStatus(statusCode: number | undefined): boolean {
+  return statusCode === undefined || statusCode < 400 || statusCode >= 500;
+}
 
 export class TcvdbClient {
   private readonly baseUrl: string;
@@ -138,16 +158,31 @@ export class TcvdbClient {
         });
 
         const text = await respBody.text();
-        const json = JSON.parse(text) as ApiResponse;
+        // A gateway/load-balancer failure (502, 503, connection reset page) returns
+        // HTML, not JSON. Parsing that unguarded threw a bare SyntaxError whose
+        // message ("Unexpected token '<'") hid the real status code and, worse,
+        // was not a TcvdbApiError — so the retry classification below never saw
+        // the 5xx. Report the status and let it retry as the transient error it is.
+        let json: ApiResponse;
+        try {
+          json = JSON.parse(text) as ApiResponse;
+        } catch {
+          throw new TcvdbApiError(
+            path,
+            statusCode ?? -1,
+            `non-JSON response (HTTP ${statusCode}): ${text.slice(0, 200)}`,
+            isRetryableStatus(statusCode),
+          );
+        }
         const attemptMs = Math.round(performance.now() - tAttempt);
         this.logger?.debug?.(`${TAG} ← ${path} status=${statusCode} code=${json.code} attemptMs=${attemptMs} attempt=${attempt}`);
 
         if (json.code !== 0) {
-          const err = new TcvdbApiError(path, json.code, json.msg);
-          if (statusCode !== undefined && statusCode >= 400 && statusCode < 500) throw err;
-          lastError = err;
-          continue;
-        }
+          // 4xx is a definitive answer — fatal. Anything else is transient, so
+          // throw into the catch below to pick up its exponential backoff.
+          // A `continue` here would skip the catch entirely and re-fire every
+          // remaining attempt back-to-back with no delay.
+          throw new TcvdbApiError(path, json.code, json.msg, isRetryableStatus(statusCode));        }
 
         // Always log completion at info level (one line per request)
         const totalMs = Math.round(performance.now() - t0);
@@ -156,7 +191,11 @@ export class TcvdbClient {
         return json as unknown as T;
       } catch (err) {
         const attemptMs = Math.round(performance.now() - tAttempt);
-        if (err instanceof TcvdbApiError && err.apiCode !== 0) throw err;
+        // Only API errors explicitly marked retryable (5xx / unknown status) fall
+        // through to the backoff; a 4xx is a definitive answer and retrying it
+        // just burns the caller's latency budget to get the same rejection.
+        // Network/timeout errors are not TcvdbApiError and always retry.
+        if (err instanceof TcvdbApiError && !err.retryable) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
         if (attempt < MAX_RETRIES) {
           const delay = 500 * (attempt + 1);

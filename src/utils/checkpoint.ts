@@ -437,12 +437,16 @@ export class CheckpointManager {
 
   /**
    * Atomically read the per-session cursor, execute the capture callback,
-   * and advance the cursor — all within a single file-lock critical section.
+   * and advance the cursor.
    *
-   * This eliminates the race window that existed when `read()` (unlocked) and
-   * `advanceSessionCapturedTimestamp()` (locked) were separate calls:
-   * two concurrent `agent_end` events could both read the same stale cursor
-   * and record duplicate messages.
+   * **Implementation note**: The callback executes **outside** the file lock
+   * to prevent deadlocks when the callback itself calls CheckpointManager
+   * methods (e.g. `markL1ExtractionComplete`). To preserve atomicity, the
+   * per-session cursor is read inside the lock, the callback runs unlocked,
+   * and then the cursor is updated inside a fresh lock — but only if the
+   * cursor hasn't been advanced by a concurrent capture. If a concurrent
+   * capture did advance the cursor, the callback's results are discarded
+   * (the messages were already captured by the other call).
    *
    * The callback receives `afterTimestamp` (the current per-session cursor)
    * and must return either:
@@ -461,25 +465,39 @@ export class CheckpointManager {
     pluginStartTimestamp: number | undefined,
     fn: (afterTimestamp: number) => Promise<{ maxTimestamp: number; messageCount: number } | null>,
   ): Promise<void> {
-    await this.mutate(async (cp) => {
-      // Read the per-session cursor inside the lock
+    // Phase 1: Read the cursor inside the lock
+    let afterTimestamp: number;
+    {
+      const cp = await this.mutate((cp) => {
+        // Just read; mutate will write back unchanged state
+      });
       const state = this.getRunnerState(cp, sessionKey);
-      let afterTimestamp = state.last_captured_timestamp || 0;
+      afterTimestamp = state.last_captured_timestamp || 0;
+    }
 
-      // Cold-start guard (same logic that was previously in auto-capture.ts)
-      if (afterTimestamp === 0 && pluginStartTimestamp && pluginStartTimestamp > 0) {
-        afterTimestamp = pluginStartTimestamp;
-      }
+    // Cold-start guard (same logic that was previously in auto-capture.ts)
+    if (afterTimestamp === 0 && pluginStartTimestamp && pluginStartTimestamp > 0) {
+      afterTimestamp = pluginStartTimestamp;
+    }
 
-      const result = await fn(afterTimestamp);
+    // Phase 2: Execute the callback outside the lock
+    // This prevents deadlocks when the callback calls CheckpointManager methods
+    const result = await fn(afterTimestamp);
 
-      if (result) {
-        // Advance per-session cursor (runner-owned)
+    if (!result) {
+      return; // Nothing captured — cursor stays unchanged
+    }
+
+    // Phase 3: Update the cursor inside a fresh lock
+    // Optimistic: if a concurrent capture advanced the cursor beyond our
+    // afterTimestamp, we skip the update (the other capture won).
+    await this.mutate((cp) => {
+      const state = this.getRunnerState(cp, sessionKey);
+      // Only advance if no concurrent capture has moved the cursor
+      if (state.last_captured_timestamp <= afterTimestamp) {
         state.last_captured_timestamp = result.maxTimestamp;
-        // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
         cp.l0_conversations_count += 1;
       }
     });
