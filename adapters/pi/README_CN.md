@@ -142,6 +142,28 @@ npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
 
 任何一层为空、Pi hook 中缺少任意 L0–L3 分段，或缺少不可信记忆边界，命令都会硬失败。输出只包含脱敏后的临时 ID，不会显示 LLM 或 Memory 密钥；成功和失败都会移除临时容器与数据。该检查会发起真实模型请求，因此会消耗 Token。
 
+### 受管服务端与真实 Pi 生命周期 E2E
+
+同一套一次性 MemoryCore 容器还驱动两个受管检查：
+
+- `npm run e2e:setup` 用脚本化的 `ctx.ui` 应答 + 真实 SDK 客户端把 `/tdai-memory-setup` 向导对着真实服务跑完，覆盖四个场景：创建私有 Agent / 复用已有 Agent / 假密钥被真实身份校验拒绝 / 取消干净；断言写入的全局配置经 `loadConfig` 往返一致且**不含密钥值**（只含路径）。
+- `npm run e2e:lifecycle` 用锁定的真实 Pi 0.84.1 RPC 模式验证两条可靠性承诺：(1) 重启不会重复采集已安顿的回合——预先在文件 outbox 里放一条未投递采集，Pi 启动时恰好投递一次，再次重启不再投递，且观察到 Pi 加载会话时从不重发 `agent_settled`；(2) RPC `fork` 命令产出新会话 id、在 header 记录源文件为 `parentSession`、保留 `tdai-memory/branch@1` 标记，使分叉落到各自隔离的 Memory 会话。
+
+```powershell
+cd adapters\pi
+npm run e2e:setup -- --env-file ../../deploy/global-images/.env
+npm run e2e:lifecycle -- --env-file ../../deploy/global-images/.env
+```
+
+## 卸载
+
+卸载适配器不会删除服务端记忆——数据仍保存在你配置的 Memory 服务里。需要彻底移除时按顺序：
+
+1. 停止加载适配器：从 Pi 启动参数中去掉 `-e <适配器目录>`，或从 Pi 的扩展配置中移除该扩展，然后重启 Pi。
+2. 删除全局配置 `~/.pi/agent/tdai-memory.json`（Windows：`%USERPROFILE%\.pi\agent\tdai-memory.json`；设置了 `PI_CODING_AGENT_DIR` 时以它为准）。若显式放行过项目配置（`allowProjectConfig`），也删除项目目录下的 `.pi/tdai-memory.json`。
+3. 检查本地待投递队列 `<agentDir>/tdai-memory-outbox/`：下次启动适配器会把未投递的记录补投给服务端；`*.json.dead` 文件是多次重试仍失败、已隔离的记录。确认不再需要后即可删除整个目录。
+4. User Key 是你自行管理的文件——适配器从不写入密钥。要真正作废该 Key 或清理服务端记忆，请登录 Memory 服务操作。
+
 ## 安全提醒
 
 - User Key 等同密码，不能贴到 issue、聊天记录、提交的 JSON 或截图中。

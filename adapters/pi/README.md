@@ -143,6 +143,28 @@ npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
 
 The command hard-fails if any layer is empty, the Pi hook does not contain all L0-L3 sections, or the untrusted-memory boundary is missing. It prints only masked disposable IDs, never the LLM or Memory key. Its temporary container and data are removed on both success and failure. This check makes real model requests and therefore consumes tokens.
 
+### Managed-server setup and real-Pi lifecycle E2E
+
+The same disposable MemoryCore container powers two more managed checks:
+
+- `npm run e2e:setup` scripts the `/tdai-memory-setup` wizard against the real server (`ctx.ui` is scripted, the SDK clients stay real). It runs four scenarios — creating a private agent, reusing a preselected agent, a wrong key rejected by real identity verification, and a clean cancel — and asserts the written global config round-trips through `loadConfig` and never embeds the secret key (only its path).
+- `npm run e2e:lifecycle` drives the pinned real Pi 0.84.1 in RPC mode to verify two reliability guarantees: (1) a restart never re-captures a settled turn — a record pre-seeded in the filesystem outbox is flushed exactly once on startup, a second restart delivers nothing, and Pi is observed never re-emitting `agent_settled` on load; (2) the RPC `fork` command produces a new session id, records the source file as `parentSession`, and preserves the `tdai-memory/branch@1` marker, so a fork lands in its own isolated memory session.
+
+```powershell
+cd adapters\pi
+npm run e2e:setup -- --env-file ../../deploy/global-images/.env
+npm run e2e:lifecycle -- --env-file ../../deploy/global-images/.env
+```
+
+## Uninstall
+
+Uninstalling the adapter does not delete server-side memory — your data stays in the Memory service you configured. To remove the adapter fully, in order:
+
+1. Stop loading it: drop `-e <adapter dir>` from Pi's startup arguments (or remove the extension from Pi's extension configuration) and restart Pi.
+2. Delete the global config file `~/.pi/agent/tdai-memory.json` (Windows: `%USERPROFILE%\.pi\agent\tdai-memory.json`; honor `PI_CODING_AGENT_DIR` if set). If you explicitly enabled project config with `allowProjectConfig`, also delete `.pi/tdai-memory.json` in the project directory.
+3. Review the local outbox `<agentDir>/tdai-memory-outbox/`: on the next adapter start, pending records are re-delivered to the server; `*.json.dead` files are records quarantined after repeated delivery failures. Delete the directory once you are sure nothing is still needed.
+4. Your User Key is a file you manage — the adapter never writes keys. Revoking it or cleaning up server-side memory are Memory-service operations.
+
 ## Security notes
 
 - Treat a User Key as a password. Do not paste it into issues, chat logs, committed JSON, or screenshots.
