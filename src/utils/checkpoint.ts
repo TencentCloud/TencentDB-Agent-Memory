@@ -146,6 +146,11 @@ export interface CheckpointLogger {
 
 const noopLogger: CheckpointLogger = { info() {} };
 
+export interface CheckpointRecalibrationStore {
+  countL0(): number | Promise<number>;
+  countL1(): number | Promise<number>;
+}
+
 // ============================
 // Per-file async lock
 // ============================
@@ -291,6 +296,68 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Reconcile drift-prone aggregate counters with persisted data.
+   *
+   * Prefer the live store when available because it represents the retrieval
+   * source of truth after dedup updates and cleaner deletions. When no store is
+   * available, fall back to counting JSONL records on disk.
+   */
+  async recalibrate(store?: CheckpointRecalibrationStore): Promise<void> {
+    const [l0Count, l1Count] = await Promise.all([
+      this.countActualRecords("conversations", () => store?.countL0()),
+      this.countActualRecords("records", () => store?.countL1()),
+    ]);
+
+    const cp = await this.mutate((cp) => {
+      cp.l0_conversations_count = l0Count;
+      cp.total_memories_extracted = l1Count;
+      cp.memories_since_last_persona = Math.min(cp.memories_since_last_persona, l1Count);
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrate: l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `memories_since_last_persona=${cp.memories_since_last_persona}`,
+    );
+  }
+
+  private async countActualRecords(
+    subdir: "conversations" | "records",
+    storeCount: () => number | Promise<number> | undefined,
+  ): Promise<number> {
+    const fromStore = await storeCount();
+    if (typeof fromStore === "number" && Number.isFinite(fromStore) && fromStore >= 0) {
+      return Math.trunc(fromStore);
+    }
+    return this.countJsonlLines(path.join(path.dirname(this.filePath), "..", subdir));
+  }
+
+  private async countJsonlLines(dirPath: string): Promise<number> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let total = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const filePath = path.join(dirPath, entry.name);
+      try {
+        const raw = await fs.readFile(filePath, "utf-8");
+        total += raw.split("\n").filter((line) => line.trim()).length;
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] recalibrate: failed to count ${filePath}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return total;
   }
 
   // ============================
