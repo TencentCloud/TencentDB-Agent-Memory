@@ -98,6 +98,26 @@ proxy 接到用户请求后转发到这组端点。
 
 参数缺失时脚本会**在启动前一次性列出所有缺失项**并 `exit 1`，不会跑到一半才失败。
 
+## Memory Core 配置持久化
+
+`start-memory-core.sh` 默认只会在首次启动时生成
+`.memory-core-config/tdai-gateway.yaml`。之后启动会复用该文件，因此可以安全地
+修改 embedding、recall、persona 等实例配置，而不会被 `.env` 中的默认值覆盖。
+
+如需按当前 `.env` 的值重新生成默认配置，请显式执行：
+
+```bash
+./start-memory-core.sh --force-regenerate-config
+```
+
+如需由外部配置文件管理实例，设置绝对路径并正常启动即可；脚本只读挂载该文件，
+不会创建或修改它：
+
+```bash
+MEMORY_CORE_CONFIG_FILE=/absolute/path/to/tdai-gateway.yaml \
+  ./start-memory-core.sh
+```
+
 ## 内部凭据（生产环境必看）
 
 三件套之间用 `MEMORY_CORE_GATEWAY_API_KEY` 互相认证，首次启动还会通过
