@@ -18,6 +18,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
 import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import { parseSourceMessageIds } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -1076,7 +1077,7 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
     type: record.type as any,
     priority: record.priority ?? 50,
     scene_name: background !== undefined ? background : (record.scene_name ?? ""),
-    source_message_ids: [],
+    source_message_ids: parseSourceMessageIds(record.source_message_ids_json),
     metadata: parseMetadataJson(record.metadata_json),
     timestamps: record.timestamp_str ? [record.timestamp_str] : [],
     createdAt: record.created_time,

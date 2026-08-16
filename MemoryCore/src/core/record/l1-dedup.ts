@@ -18,6 +18,7 @@ import type { CandidateMatch } from "../prompts/l1-dedup.js";
 import { CleanContextRunner } from "../../utils/clean-context-runner.js";
 import { sanitizeJsonForParse } from "../../utils/sanitize.js";
 import type { IMemoryStore, IsolationFilter } from "../store/types.js";
+import { parseSourceMessageIds } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { LLMRunner, Logger, TraceContext } from "../types.js";
@@ -239,7 +240,7 @@ async function findCandidatesByVector(
         type: r.type as MemoryRecord["type"],
         priority: r.priority,
         scene_name: r.scene_name,
-        source_message_ids: [],
+        source_message_ids: parseSourceMessageIds(r.source_message_ids_json),
         metadata: {},
         timestamps: [r.timestamp_str].filter(Boolean),
         createdAt: "",
@@ -288,7 +289,7 @@ async function findCandidatesByFts(
           type: r.type as MemoryRecord["type"],
           priority: r.priority,
           scene_name: r.scene_name,
-          source_message_ids: [],
+          source_message_ids: parseSourceMessageIds(r.source_message_ids_json),
           metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
           timestamps: [r.timestamp_str].filter(Boolean),
           createdAt: "",

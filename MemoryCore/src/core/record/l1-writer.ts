@@ -17,7 +17,7 @@
  */
 
 import crypto from "node:crypto";
-import { DEFAULT_ISOLATION_ID, type IMemoryStore } from "../store/types.js";
+import { DEFAULT_ISOLATION_ID, parseSourceMessageIds, type IMemoryStore } from "../store/types.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
@@ -189,15 +189,21 @@ export async function writeMemory(params: {
   const now = new Date().toISOString();
 
   let nextVersion = 0;
+  let existingSourceMessageIds: string[] = [];
   if ((decision.action === "update" || decision.action === "merge") && decision.target_ids.length > 0 && vectorStore) {
     try {
       const existing = await vectorStore.queryL1Records({ recordIds: decision.target_ids });
       const maxVersion = existing.reduce((max, row) => Math.max(max, row.version ?? 0), 0);
       nextVersion = maxVersion + 1;
+      existingSourceMessageIds = existing.flatMap((row) => parseSourceMessageIds(row.source_message_ids_json));
     } catch (err) {
       logger?.warn?.(`${TAG} Failed to read existing memory version, defaulting to v0: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+
+  // A rewrite replaces the old L1 record. Preserve the evidence chain from all
+  // replaced records as well as the newly extracted memory.
+  const sourceMessageIds = [...new Set([...existingSourceMessageIds, ...memory.source_message_ids])];
 
   // Determine final content, type, priority based on action
   let finalContent: string;
@@ -224,7 +230,7 @@ export async function writeMemory(params: {
     type: finalType,
     priority: finalPriority,
     scene_name: memory.scene_name,
-    source_message_ids: memory.source_message_ids,
+    source_message_ids: sourceMessageIds,
     metadata: memory.metadata,
     timestamps: finalTimestamps,
     createdAt: now,

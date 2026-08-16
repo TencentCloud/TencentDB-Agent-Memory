@@ -72,6 +72,8 @@ export interface L1SearchResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  /** JSON-encoded L0 message IDs that produced this memory. */
+  source_message_ids_json: string;
 }
 
 /** Result from an L1 FTS keyword search. */
@@ -94,6 +96,8 @@ export interface L1FtsResult {
   user_id: string;
   agent_id: string;
   metadata_json: string;
+  /** JSON-encoded L0 message IDs that produced this memory. */
+  source_message_ids_json: string;
 }
 
 /** Filter options for querying L1 records. */
@@ -131,6 +135,33 @@ export interface L1RecordRow {
   created_time: string;
   updated_time: string;
   metadata_json: string;
+  /** JSON-encoded L0 message IDs that produced this memory. */
+  source_message_ids_json: string;
+}
+
+/**
+ * Serialize source-message provenance for storage without accepting malformed
+ * values from legacy callers.
+ */
+export function serializeSourceMessageIds(ids: readonly string[] | null | undefined): string {
+  if (!Array.isArray(ids)) return "[]";
+  return JSON.stringify([...new Set(ids.filter((id): id is string => typeof id === "string" && id.length > 0))]);
+}
+
+/**
+ * Read source-message provenance from storage. Old rows and malformed values
+ * intentionally degrade to an empty list so they remain readable.
+ */
+export function parseSourceMessageIds(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.filter((id): id is string => typeof id === "string" && id.length > 0))]
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 // ============================
