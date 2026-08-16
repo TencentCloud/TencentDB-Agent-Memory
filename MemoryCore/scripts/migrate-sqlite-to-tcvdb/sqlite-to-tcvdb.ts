@@ -6,7 +6,14 @@ import { listLocalProfiles } from "../../src/core/profile/profile-sync.js";
 import { createBM25Encoder } from "../../src/core/store/bm25-local.js";
 import { VectorStore, type L0RecordRow } from "../../src/core/store/sqlite.js";
 import { TcvdbMemoryStore } from "../../src/core/store/tcvdb.js";
-import type { L0Record, L1RecordRow, ProfileRecord, ProfileSyncRecord, StoreInitResult } from "../../src/core/store/types.js";
+import {
+  parseSourceMessageIds,
+  type L0Record,
+  type L1RecordRow,
+  type ProfileRecord,
+  type ProfileSyncRecord,
+  type StoreInitResult,
+} from "../../src/core/store/types.js";
 import { readManifest } from "../../src/utils/manifest.js";
 import {
   rewriteMigrationManifest as rewriteMigrationManifestDefault,
@@ -303,7 +310,7 @@ function mapL1RowToMemoryRecord(row: L1RecordRow): MemoryRecord {
     type: row.type as MemoryRecord["type"],
     priority: row.priority,
     scene_name: row.scene_name,
-    source_message_ids: [],
+    source_message_ids: parseSourceMessageIds(row.source_message_ids_json),
     metadata: safeParseMetadata(row.metadata_json),
     timestamps,
     createdAt: row.created_time || fallbackIso,

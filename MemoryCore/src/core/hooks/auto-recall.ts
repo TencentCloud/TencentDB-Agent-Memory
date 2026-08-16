@@ -16,6 +16,7 @@ import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-na
 import { RecallErrors, toRecallFailure, type RecallError } from "./recall-errors.js";
 import type { MemoryRecord } from "../record/l1-reader.js";
 import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.js";
+import { parseSourceMessageIds } from "../store/types.js";
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
@@ -668,7 +669,7 @@ async function searchHybrid(
                   type: r.type as MemoryRecord["type"],
                   priority: r.priority,
                   scene_name: r.scene_name,
-                  source_message_ids: [],
+                  source_message_ids: parseSourceMessageIds(r.source_message_ids_json),
                   metadata: r.metadata_json ? (() => { try { return JSON.parse(r.metadata_json); } catch { return {}; } })() : {},
                   timestamps: [r.timestamp_str].filter(Boolean),
                   createdAt: "",
