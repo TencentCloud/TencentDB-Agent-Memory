@@ -77,6 +77,11 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# curl 优先走 PATH（Windows Git Bash 没有 /usr/bin/curl，见 issue #655），
+# 兜底 /usr/bin/curl 与 Homebrew/系统默认布局保持兼容。所有脚本里发 HTTP
+# 请求都应该用 $CURL，不要再各自硬编码 /usr/bin/curl。
+CURL="$(command -v curl 2>/dev/null || echo /usr/bin/curl)"
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
@@ -148,15 +153,11 @@ wait_http_ready() {
   local url="$1"
   local timeout="${2:-45}"
   local label="${3:-$1}"
-  # curl 优先走 PATH（Windows Git Bash 没有 /usr/bin/curl，见 issue #655），
-  # 兜底 /usr/bin/curl 与本目录其它脚本保持一致。
-  local curl_bin
-  curl_bin="$(command -v curl 2>/dev/null || echo /usr/bin/curl)"
   local waited=0 code="000"
   while (( waited < timeout )); do
     # curl 失败时 -w 已经输出 "000"，|| true 只兜 set -e，不再追加字符
     # （否则会出现 "000000" 这类叠加状态码，见 issue #761 的报错样例）。
-    code="$("$curl_bin" -sS -o /dev/null -w "%{http_code}" --max-time 2 "$url" 2>/dev/null || true)"
+    code="$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 2 "$url" 2>/dev/null || true)"
     code="${code:-000}"
     if [[ "$code" == "200" ]]; then
       ok "$label HTTP 就绪（$url → 200）"
