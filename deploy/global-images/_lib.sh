@@ -77,6 +77,11 @@ find_docker() {
 
 DOCKER="$(find_docker)"
 
+# curl 优先走 PATH（Windows Git Bash 没有 /usr/bin/curl，见 issue #655），
+# 兜底 /usr/bin/curl 与 Homebrew/系统默认布局保持兼容。所有脚本里发 HTTP
+# 请求都应该用 $CURL，不要再各自硬编码 /usr/bin/curl。
+CURL="$(command -v curl 2>/dev/null || echo /usr/bin/curl)"
+
 # PULL=1 时拉取镜像最新版本。
 # 默认关闭：docker run 在本地没有镜像时会自动拉，但本地已有同名 :latest 时会直接复用，
 # 不会感知远端更新——想升级到最新 latest 就带 PULL=1。
@@ -132,6 +137,37 @@ wait_healthy() {
   warn "${name} 等待超时，最后日志："
   $DOCKER logs --tail 30 "$name" 2>&1 || true
   die "${name} 在 ${timeout}s 内未就绪。"
+}
+
+# 等待一个 HTTP 端点真正就绪（返回 200）。
+#
+# wait_healthy 对没有 healthcheck 的镜像只等容器 running 就返回，而容器
+# running 只代表 entrypoint 已启动 —— 内部服务真正监听端口还需要几秒
+# （podman libkrun 下窗口更大，Docker Desktop 偶发）。在这个窗口内发请求，
+# 连接会被拒绝或在服务半启动时中断，表现为 HTTP=000 或请求体不完整
+# （见 issue #761）。需要在 wait_healthy 之后紧接着调接口的脚本，先用本
+# 函数确认 HTTP 已就绪。
+#
+# 用法：wait_http_ready <url> [timeout_s=45] [label=<url>]
+wait_http_ready() {
+  local url="$1"
+  local timeout="${2:-45}"
+  local label="${3:-$1}"
+  local waited=0 code="000"
+  while (( waited < timeout )); do
+    # curl 失败时 -w 已经输出 "000"，|| true 只兜 set -e，不再追加字符
+    # （否则会出现 "000000" 这类叠加状态码，见 issue #761 的报错样例）。
+    code="$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 2 "$url" 2>/dev/null || true)"
+    code="${code:-000}"
+    if [[ "$code" == "200" ]]; then
+      ok "$label HTTP 就绪（$url → 200）"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  warn "$label 在 ${timeout}s 内未就绪（最后状态码 $code，url=$url）"
+  return 1
 }
 
 # 打印统一的服务地址表
