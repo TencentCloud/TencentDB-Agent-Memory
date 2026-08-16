@@ -24,8 +24,12 @@ const ADAPTER_PATH = join(ADAPTER_DIR, "src", "index.ts");
 const PI_ENTRY = join(ADAPTER_DIR, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
 let endpoint = process.env.TDAI_MEMORY_ENDPOINT ?? "http://127.0.0.1:8420";
 const SERVICE_ID = process.env.TDAI_MEMORY_SERVICE_ID ?? "default";
+// The L2 scenario extractor's own LLM deadline is 300s (memory config
+// `llm.timeoutMs`); the E2E wait must outlive it or a slow extraction model
+// response looks like a pipeline stall. Same budget covers the L3 persona
+// generator (180s LLM deadline) plus a comfortable buffer.
 const L1_TIMEOUT_MS = Number(process.env.TDAI_E2E_L1_TIMEOUT_MS ?? 180_000);
-const L2_TIMEOUT_MS = Number(process.env.TDAI_E2E_L2_TIMEOUT_MS ?? 240_000);
+const L2_TIMEOUT_MS = Number(process.env.TDAI_E2E_L2_TIMEOUT_MS ?? 420_000);
 const PI_TIMEOUT_MS = Number(process.env.TDAI_E2E_PI_TIMEOUT_MS ?? 30_000);
 const MANAGED_CORE = process.argv.includes("--managed-core");
 let activeManagedCore;
@@ -179,11 +183,21 @@ memory:
 async function stopManagedCore(core, failed) {
   if (failed) {
     try {
-      const logs = await run("docker", ["logs", "--tail", "160", core.container]);
-      const safe = logs.stdout
-        .replaceAll(core.llmApiKey, "[REDACTED]")
-        .replaceAll(/sk-(?:mem-)?[A-Za-z0-9_-]+/gu, "[REDACTED]");
-      console.error(`\nManaged MemoryCore tail (redacted):\n${safe.slice(-12_000)}`);
+      // Full-log pipeline trace: where did the L1/L2/L3 chain actually stall?
+      const logs = await run("docker", ["logs", core.container]);
+      const redact = (text) =>
+        text
+          .replaceAll(core.llmApiKey, "[REDACTED]")
+          .replaceAll(/sk-(?:mem-)?[A-Za-z0-9_-]+/gu, "[REDACTED]");
+      const pipelineLines = logs.stdout
+        .split(/\r?\n/u)
+        .filter((line) => /pipeline|extractor|l1|l2|l3|persona|scenario|llm|error|fail|timeout|retry|enqueued/i.test(line))
+        .slice(-80);
+      if (pipelineLines.length > 0) {
+        console.error(`\nManaged MemoryCore pipeline trace (redacted):\n${redact(pipelineLines.join("\n")).slice(-12_000)}`);
+      }
+      const tail = logs.stdout.split(/\r?\n/u).slice(-80).join("\n");
+      console.error(`\nManaged MemoryCore tail (redacted):\n${redact(tail).slice(-12_000)}`);
     } catch {}
   }
   await run("docker", ["rm", "-f", core.container]).catch(() => {});
