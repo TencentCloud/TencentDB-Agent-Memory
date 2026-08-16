@@ -166,7 +166,7 @@ describe("Pi extension lifecycle", () => {
 
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Use pnpm." }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
 
     expect(mocks.enqueueCapture).toHaveBeenCalledWith(config, "pi-session-1-root", [
@@ -228,7 +228,7 @@ describe("Pi extension lifecycle", () => {
 
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Partial answer" }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
     const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
     expect(captured).toContainEqual({ role: "assistant", content: "Partial answer" });
@@ -353,7 +353,7 @@ describe("Pi extension lifecycle", () => {
       // The turn still completes and settles into a capture.
       await call(handlers, "agent_end", {
         messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "final answer" }] }],
-      });
+      }, ctx);
       await call(handlers, "agent_settled", {}, ctx);
       expect(mocks.enqueueCapture).toHaveBeenCalledTimes(1);
       const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
@@ -369,10 +369,10 @@ describe("Pi extension lifecycle", () => {
     await call(handlers, "before_agent_start", { prompt: "Remember this", systemPrompt: "Base" }, ctx);
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "old answer" }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "error", content: [{ type: "text", text: "partial answer" }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
 
     expect(mocks.addConversation).not.toHaveBeenCalled();
@@ -386,7 +386,7 @@ describe("Pi extension lifecycle", () => {
     await call(handlers, "before_agent_start", { prompt: "Inspect files", systemPrompt: "Base" }, ctx);
     await call(handlers, "tool_result", { toolName: "read", isError: false, content: [{ type: "text", text: "safe evidence" }] }, ctx);
     await call(handlers, "tool_result", { toolName: "bash", isError: true, content: [{ type: "text", text: "failed output" }] }, ctx);
-    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] });
+    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
     expect(mocks.enqueueCapture).toHaveBeenCalledWith(
       expect.objectContaining({ captureTools: true }),
@@ -419,7 +419,7 @@ describe("Pi extension lifecycle", () => {
     }, ctx);
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
 
     const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
@@ -439,7 +439,7 @@ describe("Pi extension lifecycle", () => {
     );
 
     await call(handlers, "before_agent_start", { prompt: "Separate branch", systemPrompt: "Base" }, ctx);
-    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] });
+    await call(handlers, "agent_end", { messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Done" }] }] }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
     expect(mocks.enqueueCapture).toHaveBeenCalledWith(
       config,
@@ -462,7 +462,7 @@ describe("Pi extension lifecycle", () => {
     await call(handlers, "before_agent_start", { prompt: "pnpm or npm?", systemPrompt: "Base" }, ctx);
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Use pnpm." }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
     expect(mocks.enqueueCapture).toHaveBeenCalledTimes(1);
     const turnOneCapture = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
@@ -487,8 +487,53 @@ describe("Pi extension lifecycle", () => {
     // Turn 2 also settles and captures, so the loop keeps closing.
     await call(handlers, "agent_end", {
       messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Use pnpm, as we said last turn." }] }],
-    });
+    }, ctx);
     await call(handlers, "agent_settled", {}, ctx);
     expect(mocks.enqueueCapture).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates turn state between interleaved sessions (A not polluted by B)", async () => {
+    mocks.loadConfig.mockResolvedValue({ ok: true, config: { ...config, captureTools: true } });
+    const { handlers, tools, ctx } = installExtension();
+    const ctxB = {
+      ...ctx,
+      sessionManager: { getSessionId: () => "session-2", getBranch: () => [] },
+    };
+
+    // Session A starts a turn and searches memory 3 times, then runs a tool.
+    await call(handlers, "session_start", {}, ctx);
+    await call(handlers, "before_agent_start", { prompt: "A's prompt", systemPrompt: "Base" }, ctx);
+    const searchTool = tools.get("tdai_memory_search");
+    const runSearch = (callId: string) => searchTool?.execute(callId, { query: "q" }, undefined, undefined, ctx);
+    await runSearch("a-1");
+    await runSearch("a-2");
+    await runSearch("a-3");
+    await call(handlers, "tool_result", {
+      toolName: "read",
+      isError: false,
+      content: [{ type: "text", text: "A evidence" }],
+    }, ctx);
+
+    // Session B starts a different turn in the same process.
+    await call(handlers, "session_start", {}, ctxB);
+    await call(handlers, "before_agent_start", { prompt: "B's prompt", systemPrompt: "Base" }, ctxB);
+
+    // A's fourth search must still be throttled: B's start must not reset A's budget.
+    const fourth = await runSearch("a-4");
+    expect(JSON.stringify(fourth)).toContain("Memory search limit reached");
+
+    // A settles and must capture A's own prompt, answer, and tool evidence.
+    await call(handlers, "agent_end", {
+      messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "A answer" }] }],
+    }, ctx);
+    await call(handlers, "agent_settled", {}, ctx);
+
+    expect(mocks.enqueueCapture).toHaveBeenCalledTimes(1);
+    const captured = mocks.enqueueCapture.mock.calls[0]?.[2] ?? [];
+    expect(captured).toContainEqual({ role: "user", content: "A's prompt" });
+    expect(captured).toContainEqual({ role: "assistant", content: "A answer" });
+    expect(captured).toContainEqual({ role: "system", content: "[tool:read]\nA evidence" });
+    expect(captured).not.toContainEqual({ role: "user", content: "B's prompt" });
+    expect(mocks.enqueueCapture.mock.calls[0]?.[1]).toBe("pi-session-1-root");
   });
 });

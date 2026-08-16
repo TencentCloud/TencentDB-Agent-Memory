@@ -18,7 +18,18 @@ export interface RecallResult {
 
 interface RecallLayer {
   name: "L0 conversation" | "L1 atomic" | "L2 scenario" | "L3 core";
-  items: string[];
+  items: RecallItem[];
+}
+
+/**
+ * One recalled item: `raw` is what gets rendered (for L0/L1 that includes the
+ * display label), `key` is the cross-layer dedupe fingerprint computed from the
+ * label-free content so that label-shaped text inside the content itself (e.g.
+ * "Status: active in prod") is never mistaken for a label.
+ */
+interface RecallItem {
+  raw: string;
+  key: string;
 }
 
 const LAYER_BUDGETS = {
@@ -40,9 +51,11 @@ function normalize(value: string): string {
 }
 
 function fingerprint(value: string): string {
-  // L0 labels (user/assistant) and L1 types (preference/fact) are display
-  // metadata, not memory content. Ignore them when deduplicating across layers.
-  return normalize(value.replace(/^[^:\n]{1,80}:\s*/, ""));
+  // Callers pass label-free content for L0/L1 (the role/type prefix is display
+  // metadata and is added back only for rendering), so there is no `label:`
+  // prefix to strip here. Stripping any leading `word: ` would shred genuine
+  // content such as "Status: active in prod" or "2024-01-01: ship it".
+  return normalize(value);
 }
 
 function boundedCharacters(value: string, maxChars: number): string {
@@ -68,7 +81,7 @@ function scenarioScore(entry: ScenarioEntry, terms: string[]): number {
   return terms.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
 }
 
-async function recallScenarios(memory: MemoryClient, query: string, limit: number): Promise<string[]> {
+async function recallScenarios(memory: MemoryClient, query: string, limit: number): Promise<RecallItem[]> {
   if (limit === 0) return [];
   const listed = await memory.listScenarios();
   const terms = queryTerms(query);
@@ -82,28 +95,29 @@ async function recallScenarios(memory: MemoryClient, query: string, limit: numbe
   return files.flatMap((file) => scenarioItem(file));
 }
 
-function scenarioItem(file: ScenarioFile): string[] {
+function scenarioItem(file: ScenarioFile): RecallItem[] {
   if (!file.content) return [];
   const content = safeItem(file.content);
-  return content ? [`${file.path}\n${content}`] : [];
+  const raw = `${file.path}\n${content}`;
+  return content ? [{ raw, key: fingerprint(raw) }] : [];
 }
 
-function coreItem(file: CoreFile): string[] {
+function coreItem(file: CoreFile): RecallItem[] {
   const content = file.content ? safeItem(file.content) : undefined;
-  return content ? [content] : [];
+  return content ? [{ raw: content, key: fingerprint(content) }] : [];
 }
 
-function atomicItems(items: AtomicSearchHit[]): string[] {
+function atomicItems(items: AtomicSearchHit[]): RecallItem[] {
   return items.flatMap((item) => {
     const content = safeItem(item.content);
-    return content ? [`${item.type}: ${content}`] : [];
+    return content ? [{ raw: `${item.type}: ${content}`, key: fingerprint(content) }] : [];
   });
 }
 
-function conversationItems(items: ConversationSearchHit[]): string[] {
+function conversationItems(items: ConversationSearchHit[]): RecallItem[] {
   return items.flatMap((item) => {
     const content = safeItem(item.content);
-    return content ? [`${item.role}: ${content}`] : [];
+    return content ? [{ raw: `${item.role}: ${content}`, key: fingerprint(content) }] : [];
   });
 }
 
@@ -115,8 +129,7 @@ function formatLayers(layers: RecallLayer[], maxChars: number): string | undefin
     const layerLimit = Math.max(1, Math.floor(maxChars * LAYER_BUDGETS[layer.name]));
     const items: string[] = [];
     let layerTotal = 0;
-    for (const raw of layer.items) {
-      const key = fingerprint(raw);
+    for (const { raw, key } of layer.items) {
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const remaining = Math.min(layerLimit - layerTotal, maxChars - total);
@@ -142,7 +155,7 @@ export async function recallMemory(memory: MemoryClient, prompt: string, options
   const query = boundedCharacters(prompt.trim(), 2048);
   if (!options.enabled || !query) return { availableLayers: [], failedLayers: [], timedOutLayers: [] };
 
-  const work: Array<{ name: RecallLayer["name"]; promise: Promise<string[]> }> = [
+  const work: Array<{ name: RecallLayer["name"]; promise: Promise<RecallItem[]> }> = [
     {
       name: "L3 core",
       promise: memory.readCore().then(coreItem),
@@ -166,7 +179,7 @@ export async function recallMemory(memory: MemoryClient, prompt: string, options
   const availableLayers: string[] = [];
   const failedLayers: string[] = [];
   const timedOutLayers: string[] = [];
-  const results = new Map<RecallLayer["name"], PromiseSettledResult<string[]>>();
+  const results = new Map<RecallLayer["name"], PromiseSettledResult<RecallItem[]>>();
   const tracked = work.map(({ name, promise }) => promise.then(
     (value) => { results.set(name, { status: "fulfilled", value }); },
     (reason) => { results.set(name, { status: "rejected", reason }); },

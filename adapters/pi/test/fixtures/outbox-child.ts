@@ -7,10 +7,14 @@
  *     Writes a capture to disk and exits without flushing — a stand-in for Pi
  *     dying after enqueue but before the network send.
  *
- *   node outbox-child.ts flush <outboxDir> <targetUrl> [--ready f] [--wait-for g]
+ *   node outbox-child.ts flush <outboxDir> <targetUrl> [--ready f] [--wait-for g] [--deliver-gate d] [--lease-timeout ms]
  *     Recovers pending records and delivers each to <targetUrl> over HTTP.
  *     --ready writes a marker file once ready, --wait-for blocks until a gate
  *     file exists (used to make two processes race the flush at once).
+ *     --deliver-gate blocks inside the delivery callback until a gate file
+ *     exists (used to hold a claim while a second process flushes).
+ *     --lease-timeout overrides the lease timeout on this process (used to
+ *     shrink the window so a test can outlive it without waiting a minute).
  */
 import { access, writeFile } from "node:fs/promises";
 import { enqueueCapture, flushOutbox } from "../../src/outbox.ts";
@@ -65,19 +69,27 @@ async function main(): Promise<void> {
   if (mode === "flush") {
     const readyIndex = args.indexOf("--ready");
     const gateIndex = args.indexOf("--wait-for");
+    const deliverGateIndex = args.indexOf("--deliver-gate");
+    const leaseTimeoutIndex = args.indexOf("--lease-timeout");
     const ready = readyIndex === -1 ? undefined : args[readyIndex + 1];
     const gate = gateIndex === -1 ? undefined : args[gateIndex + 1];
+    const deliverGate = deliverGateIndex === -1 ? undefined : args[deliverGateIndex + 1];
+    const leaseTimeout = leaseTimeoutIndex === -1 ? undefined : Number(args[leaseTimeoutIndex + 1]);
     if (ready) await writeFile(ready, "ready");
     if (gate) await waitFor(gate);
     const targetUrl = third ?? "http://127.0.0.1:1";
     const result = await flushOutbox(config, async (record) => {
+      if (deliverGate) await waitFor(deliverGate);
       const response = await fetch(targetUrl, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: record.id, sessionId: record.sessionId }),
       });
       if (!response.ok) throw new Error(`deliver failed with ${response.status}`);
-    }, { directory: outboxDir });
+    }, {
+      directory: outboxDir,
+      ...(leaseTimeout === undefined ? {} : { leaseTimeoutMs: leaseTimeout }),
+    });
     console.log(`FLUSH ${JSON.stringify(result)}`);
     return;
   }

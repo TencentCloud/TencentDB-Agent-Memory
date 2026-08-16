@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -63,6 +63,16 @@ async function waitForFiles(files: string[], timeoutMs = 15_000): Promise<void> 
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`timed out waiting for ${files.join(", ")}`);
+}
+
+async function waitForLease(directory: string, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const names = await readdir(directory);
+    if (names.some((name) => name.includes(".json.lease-"))) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for a lease in ${directory}`);
 }
 
 function startDeliveryServer(): Promise<{
@@ -149,6 +159,76 @@ describe("cross-process capture outbox", () => {
       const delivered = flushResult(firstResult.stdout).delivered + flushResult(secondResult.stdout).delivered;
       expect(delivered).toBe(1);
       expect(await readdir(outboxDir)).toEqual([]);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("does not reclaim a lease another process is actively delivering because the record was enqueued long ago", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-stale-lease-");
+    const gate = await tmpDir("tdai-outbox-stale-lease-gate-");
+    const readyA = join(gate, "ready-a");
+    const releaseA = join(gate, "release-a");
+
+    // Enqueue a record, then age its mtime well past the lease timeout.
+    // rename() preserves mtime, so a claim starts from that stale timestamp
+    // and, without the fix, looks immediately reclaimable to a concurrent
+    // flusher even though another process is mid-delivery.
+    await runChild(["enqueue", outboxDir, "pi-lease"]);
+    const recordFile = (await readdir(outboxDir)).find((name) => name.endsWith(".json"));
+    expect(recordFile).toBeDefined();
+    const ancient = new Date(Date.now() - 120_000);
+    await utimes(join(outboxDir, recordFile as string), ancient, ancient);
+
+    const server = await startDeliveryServer();
+    try {
+      // A claims the record and blocks inside deliver, holding the lease so B
+      // can observe it. B flushes only after A's lease is on disk, then A is
+      // released only after B has finished its reclaim pass.
+      const first = runChild(["flush", outboxDir, server.url, "--ready", readyA, "--deliver-gate", releaseA]);
+      await waitForFiles([readyA]);
+      await waitForLease(outboxDir);
+
+      const second = runChild(["flush", outboxDir, server.url]);
+      const secondResult = await second;
+      await writeFile(releaseA, "go");
+      const firstResult = await first;
+
+      expect(server.deliveries).toHaveLength(1);
+      const delivered = flushResult(firstResult.stdout).delivered + flushResult(secondResult.stdout).delivered;
+      expect(delivered).toBe(1);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("does not reclaim a lease a delivery holds longer than the lease timeout", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-long-delivery-");
+    const gate = await tmpDir("tdai-outbox-long-delivery-gate-");
+    const readyA = join(gate, "ready-a");
+    const releaseA = join(gate, "release-a");
+
+    await runChild(["enqueue", outboxDir, "pi-long"]);
+    const server = await startDeliveryServer();
+    try {
+      // A claims the record and blocks inside deliver. With a 300ms lease
+      // timeout, A's claim stamp goes stale after 300ms - the only thing still
+      // protecting the lease is the delivery heartbeat renewing its mtime. B
+      // flushes after that point, so it must NOT reclaim A's live lease.
+      const first = runChild(["flush", outboxDir, server.url, "--ready", readyA, "--deliver-gate", releaseA, "--lease-timeout", "300"]);
+      await waitForFiles([readyA]);
+      await waitForLease(outboxDir);
+      await new Promise((resolve) => setTimeout(resolve, 450));
+
+      const second = runChild(["flush", outboxDir, server.url, "--lease-timeout", "300"]);
+      const secondResult = await second;
+      await writeFile(releaseA, "go");
+      const firstResult = await first;
+
+      expect(server.deliveries).toHaveLength(1);
+      expect(flushResult(secondResult.stdout).delivered).toBe(0);
+      const delivered = flushResult(firstResult.stdout).delivered + flushResult(secondResult.stdout).delivered;
+      expect(delivered).toBe(1);
     } finally {
       await server.close();
     }

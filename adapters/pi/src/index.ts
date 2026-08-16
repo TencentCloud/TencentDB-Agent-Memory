@@ -23,6 +23,13 @@ const MEMORY_SEARCH_TOOLS = new Set(["tdai_memory_search", "tdai_conversation_se
 
 type TimedOutcome<T> = { ok: true; value: T } | { ok: false };
 
+interface TurnState {
+  activePrompt: string | undefined;
+  finalAssistant: string | undefined;
+  successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }>;
+  memoryToolCallsThisTurn: number;
+}
+
 async function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T | undefined> {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const guarded = work.then<TimedOutcome<T>, TimedOutcome<T>>(
@@ -41,11 +48,27 @@ async function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T |
 
 export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   let currentConfig: ConfigResult | undefined;
-  let activePrompt: string | undefined;
-  let finalAssistant: string | undefined;
-  let successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }> = [];
-  let activeBranchId = "root";
-  let memoryToolCallsThisTurn = 0;
+  const turnStates = new Map<string, TurnState>();
+  const branchBySessionId = new Map<string, string>();
+
+  const sessionIdOf = (ctx: { sessionManager: { getSessionId: () => string } }): string =>
+    ctx.sessionManager.getSessionId();
+
+  const createTurnState = (): TurnState => ({
+    activePrompt: undefined,
+    finalAssistant: undefined,
+    successfulToolResults: [],
+    memoryToolCallsThisTurn: 0,
+  });
+
+  const getOrCreateTurnState = (sessionId: string): TurnState => {
+    let state = turnStates.get(sessionId);
+    if (!state) {
+      state = createTurnState();
+      turnStates.set(sessionId, state);
+    }
+    return state;
+  };
 
   const memoryUnavailable = () => memorySearchMessage("Memory not configured. Continue without memory.");
   const memorySearchTimedOut = () => memorySearchMessage("Memory search unavailable. Continue without memory.");
@@ -62,10 +85,11 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT })),
       type: Type.Optional(Type.String()),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
-      if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
-      memoryToolCallsThisTurn += 1;
+      const state = getOrCreateTurnState(sessionIdOf(ctx));
+      if (state.memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      state.memoryToolCallsThisTurn += 1;
       return (
         (await settleWithin(
           memorySearch(createClients(currentConfig.config).memory, params),
@@ -85,10 +109,11 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT })),
       session_key: Type.Optional(Type.String({ maxLength: MAX_SESSION_KEY_CHARS })),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       if (!currentConfig?.ok || !currentConfig.config.enabled) return memoryUnavailable();
-      if (memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
-      memoryToolCallsThisTurn += 1;
+      const state = getOrCreateTurnState(sessionIdOf(ctx));
+      if (state.memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      state.memoryToolCallsThisTurn += 1;
       return (
         (await settleWithin(
           conversationSearch(createClients(currentConfig.config).memory, params),
@@ -151,7 +176,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    activeBranchId = restoreBranchId(ctx.sessionManager.getBranch()) ?? "root";
+    branchBySessionId.set(sessionIdOf(ctx), restoreBranchId(ctx.sessionManager.getBranch()) ?? "root");
     currentConfig = await loadConfig({
       cwd: ctx.cwd,
       projectTrusted: ctx.isProjectTrusted(),
@@ -175,18 +200,18 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx) => {
     const restored = restoreBranchId(ctx.sessionManager.getBranch());
     if (restored) {
-      activeBranchId = restored;
+      branchBySessionId.set(sessionIdOf(ctx), restored);
       return;
     }
-    activeBranchId = createBranchId();
-    pi.appendEntry(BRANCH_ENTRY_TYPE, { branchId: activeBranchId, createdAt: new Date().toISOString() });
+    const branchId = createBranchId();
+    branchBySessionId.set(sessionIdOf(ctx), branchId);
+    pi.appendEntry(BRANCH_ENTRY_TYPE, { branchId, createdAt: new Date().toISOString() });
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
-    memoryToolCallsThisTurn = 0;
-    activePrompt = event.prompt;
-    finalAssistant = undefined;
-    successfulToolResults = [];
+    const state = createTurnState();
+    state.activePrompt = event.prompt;
+    turnStates.set(sessionIdOf(ctx), state);
     if (!currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
       const recalled = await settleWithin(
@@ -220,13 +245,13 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("agent_end", async (event) => {
+  pi.on("agent_end", async (event, ctx) => {
     // A later failed/cancelled run must clear a prior successful answer: only
     // the final settled run is eligible for persistence.
-    finalAssistant = lastSuccessfulAssistantText(event.messages);
+    getOrCreateTurnState(sessionIdOf(ctx)).finalAssistant = lastSuccessfulAssistantText(event.messages);
   });
 
-  pi.on("tool_result", async (event) => {
+  pi.on("tool_result", async (event, ctx) => {
     if (
       !currentConfig?.ok ||
       !currentConfig.config.enabled ||
@@ -236,23 +261,28 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     ) {
       return;
     }
-    successfulToolResults.push({ toolName: event.toolName, isError: event.isError, content: event.content });
+    getOrCreateTurnState(sessionIdOf(ctx)).successfulToolResults.push({
+      toolName: event.toolName,
+      isError: event.isError,
+      content: event.content,
+    });
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    const prompt = activePrompt;
-    const assistant = finalAssistant;
-    const toolResults = successfulToolResults;
-    activePrompt = undefined;
-    finalAssistant = undefined;
-    successfulToolResults = [];
+    const sessionId = sessionIdOf(ctx);
+    const state = turnStates.get(sessionId);
+    turnStates.delete(sessionId);
+    if (!state) return;
+    const prompt = state.activePrompt;
+    const assistant = state.finalAssistant;
+    const toolResults = state.successfulToolResults;
     if (!prompt || !assistant || !currentConfig?.ok || !currentConfig.config.enabled) return;
     try {
-      const sessionId = memorySessionId(ctx.sessionManager.getSessionId(), activeBranchId);
+      const captureSessionId = memorySessionId(sessionId, branchBySessionId.get(sessionId) ?? "root");
       const loadedConfig = currentConfig.config;
-      const record = await enqueueCapture(loadedConfig, sessionId, createConversationMessages(prompt, assistant, toolResults));
+      const record = await enqueueCapture(loadedConfig, captureSessionId, createConversationMessages(prompt, assistant, toolResults));
       pi.appendEntry("tdai-memory/capture-queued@1", {
-        sessionId,
+        sessionId: captureSessionId,
         captureId: record.id,
         capturedAt: new Date().toISOString(),
       });

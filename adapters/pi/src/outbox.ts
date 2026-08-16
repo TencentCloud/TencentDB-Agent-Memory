@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ConversationItem } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
@@ -143,8 +143,19 @@ function retryDelayMs(attempts: number, options: OutboxOptions): number {
   return Math.min(30_000, 1_000 * 2 ** Math.max(0, attempts - 1));
 }
 
-function leasePathFor(path: string): string {
-  return `${path}.lease-${process.pid}-${randomUUID()}`;
+function leasePathFor(path: string, claimedAtMs: number): string {
+  // The claim time is embedded in the filename because rename() preserves the
+  // record's original mtime: without it, a record that sat in the outbox past
+  // the lease timeout would carry that stale age into its lease and look
+  // reclaimable to a concurrent flusher the moment it is claimed.
+  return `${path}.lease-${process.pid}-${claimedAtMs}-${randomUUID()}`;
+}
+
+function claimedAtFromLeasePath(leasePath: string): number | undefined {
+  const match = /\.json\.lease-\d+-(\d+)-/.exec(leasePath);
+  if (!match) return undefined;
+  const claimedAt = Number(match[1]);
+  return Number.isFinite(claimedAt) && claimedAt > 0 ? claimedAt : undefined;
 }
 
 function originalPathForLease(path: string): string | undefined {
@@ -167,8 +178,15 @@ async function reclaimExpiredLeases(directory: string, now: Date, options: Outbo
     const recordPath = originalPathForLease(leasePath);
     if (!recordPath) continue;
     try {
+      // A lease is alive while its claim stamp (embedded atomically in the
+      // filename at claim time) is fresh, OR while a delivery heartbeat keeps
+      // refreshing its mtime. Only restore when both have gone stale - i.e.
+      // the holder crashed without renewing its lease.
+      const claimedAt = claimedAtFromLeasePath(leasePath);
       const metadata = await stat(leasePath);
-      if (now.getTime() - metadata.mtimeMs < timeoutMs) continue;
+      const nowMs = now.getTime();
+      const live = (claimedAt !== undefined && nowMs - claimedAt < timeoutMs) || nowMs - metadata.mtimeMs < timeoutMs;
+      if (live) continue;
       await restoreLease(leasePath, recordPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -230,7 +248,11 @@ async function flushOutboxOnce(
 
   for (const file of files) {
     const path = join(directory, file);
-    const leasedPath = leasePathFor(path);
+    // Claim now, not from the loop-start `now`: a delay before this record's
+    // turn (a slow lease reclaim, an earlier record's failed delivery) could
+    // otherwise exceed the lease timeout and stamp a stale claim time.
+    const claimedAtMs = (options.now?.() ?? new Date()).getTime();
+    const leasedPath = leasePathFor(path, claimedAtMs);
     try {
       // Same-filesystem rename is atomic: only one independent Pi process can
       // claim this record before making a network request.
@@ -238,6 +260,17 @@ async function flushOutboxOnce(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw error;
+    }
+
+    // rename() preserves the record's mtime, so a record that sat in the
+    // outbox past the lease timeout would carry that stale age into its lease
+    // and look reclaimable to a concurrent flusher the moment it is claimed.
+    // Stamp the lease with the claim time so its age is measured from the
+    // claim, not from the original enqueue.
+    try {
+      await utimes(leasedPath, new Date(claimedAtMs), new Date(claimedAtMs));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
 
     const record = await readRecord(leasedPath);
@@ -256,6 +289,18 @@ async function flushOutboxOnce(
       await restoreLease(leasedPath, path);
       break;
     }
+    // A delivery that outlives the lease timeout must keep renewing the lease
+    // so a concurrent flusher cannot reclaim the record mid-flight. The
+    // heartbeat refreshes the lease's mtime every third of the timeout.
+    const timeoutMs = options.leaseTimeoutMs ?? DEFAULT_LEASE_TIMEOUT_MS;
+    const heartbeatMs = Math.max(1, Math.floor(timeoutMs / 3));
+    const heartbeat = setInterval(async () => {
+      try {
+        await utimes(leasedPath, new Date(), new Date());
+      } catch {
+        // Lease already gone (removed or reclaimed): nothing left to renew.
+      }
+    }, heartbeatMs);
     try {
       await deliver(record);
       await rm(leasedPath, { force: true });
@@ -279,6 +324,8 @@ async function flushOutboxOnce(
       // Preserve FIFO while a transient failure is still eligible for retry.
       pending += 1;
       break;
+    } finally {
+      clearInterval(heartbeat);
     }
   }
   return { delivered, pending, invalid, dead };

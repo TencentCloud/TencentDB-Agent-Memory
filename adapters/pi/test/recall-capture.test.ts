@@ -110,6 +110,34 @@ describe("recall", () => {
     const recalled = await recallMemory(memory as never, "memory", { ...options, maxChars: 1000 });
     expect(Array.from(recalled.content ?? "").length).toBeLessThanOrEqual(1200);
   });
+
+  it("does not strip a content-internal label-like prefix when deduplicating", async () => {
+    const memory = {
+      readCore: async () => ({ content: "Status: active in prod", created_at: null, updated_at: null }),
+      searchAtomic: async () => ({ items: [{ id: "a1", type: "fact", content: "active in prod", score: 1, created_at: "", updated_at: "" }] }),
+      listScenarios: async () => ({ entries: [], total: 0 }),
+      searchConversation: async () => ({ messages: [] }),
+    };
+
+    const recalled = await recallMemory(memory as never, "service status", options);
+
+    expect(recalled.content).toContain("Status: active in prod");
+    expect(recalled.content).toContain("fact: active in prod");
+  });
+
+  it("does not strip a date prefix from a memory when deduplicating", async () => {
+    const memory = {
+      readCore: async () => ({ content: "2024-01-01: ship it", created_at: null, updated_at: null }),
+      searchAtomic: async () => ({ items: [{ id: "a1", type: "fact", content: "ship it", score: 1, created_at: "", updated_at: "" }] }),
+      listScenarios: async () => ({ entries: [], total: 0 }),
+      searchConversation: async () => ({ messages: [] }),
+    };
+
+    const recalled = await recallMemory(memory as never, "shipping date", options);
+
+    expect(recalled.content).toContain("2024-01-01: ship it");
+    expect(recalled.content).toContain("fact: ship it");
+  });
 });
 
 describe("capture", () => {
@@ -159,5 +187,41 @@ describe("security helpers", () => {
     expect(result).not.toContain("�");
     expect(Buffer.byteLength(result)).toBeLessThanOrEqual(10);
     expect(result).toMatch(/…$/);
+  });
+
+  it("keeps a whole multi-byte character when the cutoff lands after its lead byte", () => {
+    // 'ß' is 2 bytes (C3 9F); the cutoff at 7 bytes would keep the lead C3 and
+    // drop its continuation 9F, emitting a U+FFFD replacement char.
+    const result = truncateUtf8("abcdeß文文", 10);
+    expect(result).toBe("abcdeß…");
+    expect(result).not.toContain("�");
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(10);
+  });
+
+  it("drops a whole multi-byte character when it does not fit the budget", () => {
+    // "ß文😀x" is 10 bytes against a 9-byte budget; the emoji needs 4 bytes but
+    // only 1 remains, so the whole emoji is dropped instead of splitting it.
+    const result = truncateUtf8("ß文😀x", 9);
+    expect(result).toBe("ß文…");
+    expect(result).not.toContain("�");
+    expect(Buffer.byteLength(result)).toBeLessThanOrEqual(9);
+  });
+
+  it("never exceeds the budget when it cannot even fit the ellipsis", () => {
+    // With a 1-2 byte budget the 3-byte ellipsis does not fit; the marker is
+    // dropped instead of overflowing.
+    expect(truncateUtf8("ab文", 1)).toBe("a");
+    expect(truncateUtf8("ab文", 2)).toBe("ab");
+    expect(Buffer.byteLength(truncateUtf8("ab文", 1))).toBeLessThanOrEqual(1);
+    expect(Buffer.byteLength(truncateUtf8("ab文", 2))).toBeLessThanOrEqual(2);
+  });
+
+  it("never emits a replacement char or overflows for any cutoff", () => {
+    const value = "ab文ß😀e€中";
+    for (let maxBytes = 1; maxBytes <= Buffer.byteLength(value) + 5; maxBytes += 1) {
+      const result = truncateUtf8(value, maxBytes);
+      expect(result, `budget ${maxBytes}`).not.toContain("�");
+      expect(Buffer.byteLength(result), `budget ${maxBytes}`).toBeLessThanOrEqual(maxBytes);
+    }
   });
 });

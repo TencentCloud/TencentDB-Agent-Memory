@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rename, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -162,6 +162,71 @@ describe("persistent capture outbox", () => {
     });
     expect(recovered).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 0 });
     expect(delivered).toBe(1);
+    expect(await outboxCount(config, options)).toBe(0);
+  });
+
+  it("keeps a lease alive while its claim stamp is fresh, then reclaims once both signals age", async () => {
+    // The claim stamp is embedded in the filename atomically at claim time, so
+    // a claim stays live by its stamp even when the file mtime is ancient
+    // (rename() preserves the record's original mtime). Only when BOTH the
+    // stamp and the mtime have aged past the timeout is the lease reclaimed.
+    const directory = await outbox();
+    const options = { directory };
+    await enqueueCapture(config, "pi-one", [{ role: "user", content: "stamped claim" }], options);
+    const file = (await readdir(directory)).find((entry) => entry.endsWith(".json"));
+    expect(file).toBeDefined();
+    const recordPath = join(directory, file as string);
+    const leasePath = `${recordPath}.lease-9999-${Date.now()}-00000000-0000-4000-8000-000000000000`;
+    await rename(recordPath, leasePath);
+    const ancient = new Date(Date.now() - 120_000);
+    await utimes(leasePath, ancient, ancient);
+
+    let delivered = 0;
+    const live = await flushOutbox(config, async () => { delivered += 1; }, options);
+    expect(live).toEqual({ delivered: 0, pending: 0, invalid: 0, dead: 0 });
+    expect(delivered).toBe(0);
+    expect(await outboxCount(config, options)).toBe(1);
+
+    const recovered = await flushOutbox(config, async () => { delivered += 1; }, {
+      ...options,
+      now: () => new Date(Date.now() + 60_001),
+      leaseTimeoutMs: 60_000,
+    });
+    expect(recovered).toEqual({ delivered: 1, pending: 0, invalid: 0, dead: 0 });
+    expect(delivered).toBe(1);
+    expect(await outboxCount(config, options)).toBe(0);
+  });
+
+  it("renews a lease while a delivery outlives the lease timeout", async () => {
+    // A slow network delivery can exceed the lease timeout. The heartbeat
+    // refreshes the lease's mtime every third of the timeout, so a concurrent
+    // flusher's reclaim pass must still see the lease as live.
+    const directory = await outbox();
+    const options = { directory, leaseTimeoutMs: 300 };
+    await enqueueCapture(config, "pi-one", [{ role: "user", content: "slow delivery" }], options);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const flushing = flushOutbox(config, async () => { await gate; }, options);
+
+    const deadline = Date.now() + 5_000;
+    let leaseName: string | undefined;
+    while (Date.now() < deadline) {
+      leaseName = (await readdir(directory)).find((name) => name.includes(".json.lease-"));
+      if (leaseName) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(leaseName).toBeDefined();
+    const leasePath = join(directory, leaseName as string);
+
+    // Wait past the 300ms lease timeout. The heartbeat (every 100ms) must have
+    // kept refreshing the mtime; an aged mtime here would mean a concurrent
+    // reclaim would steal the lease mid-delivery.
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    const metadata = await stat(leasePath);
+    expect(Date.now() - metadata.mtimeMs).toBeLessThan(300);
+
+    release?.();
+    await flushing;
     expect(await outboxCount(config, options)).toBe(0);
   });
 });
