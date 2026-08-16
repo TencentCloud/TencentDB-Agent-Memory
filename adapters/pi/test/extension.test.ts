@@ -316,4 +316,83 @@ describe("createTencentDbMemoryExtension", () => {
 
     expect(l0Calls).toBe(0);
   });
+
+  it("survives a capture failure across a reload loop", async () => {
+    const l0Calls: string[] = [];
+    const skillCalls: string[] = [];
+
+    // First process: L0 succeeds, Skill fails.
+    const first = makePi();
+    const factory1 = createTencentDbMemoryExtension({
+      env: fullEnv,
+      clientFactory: () => ({
+        ...makeClient(),
+        async captureConversation(turn) {
+          l0Calls.push(turn.assistant);
+        },
+        async captureSkill(turn) {
+          skillCalls.push(turn.assistant);
+          throw new Error("skill pipeline down");
+        },
+      }),
+      logger: { warn() {} },
+    });
+    factory1(first.pi as never);
+
+    const ctx1 = {
+      signal: undefined,
+      hasUI: false,
+      ui: {},
+      sessionManager: { getSessionId: () => "s", getBranch: () => [], getEntries: () => [] },
+    };
+    await first.handlers.find((h) => h.event === "session_start")!.handler({}, ctx1);
+    await first.handlers.find((h) => h.event === "before_agent_start")!.handler(
+      { prompt: "hi", systemPrompt: "base" },
+      ctx1,
+    );
+    await first.handlers.find((h) => h.event === "agent_end")!.handler({
+      messages: [
+        { role: "user", content: [{ type: "text", text: "hi" }] },
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "hello" }] },
+      ],
+    });
+    await first.handlers.find((h) => h.event === "agent_settled")!.handler({}, ctx1);
+
+    expect(l0Calls).toEqual(["hello"]);
+    expect(skillCalls).toEqual(["hello"]);
+    expect(first.entries.length).toBeGreaterThan(0);
+
+    // Reload: a fresh extension instance restores the marker from the session.
+    const second = makePi();
+    second.entries.push(...first.entries);
+    const factory2 = createTencentDbMemoryExtension({
+      env: fullEnv,
+      clientFactory: () => ({
+        ...makeClient(),
+        async captureConversation(turn) {
+          l0Calls.push(turn.assistant);
+        },
+        async captureSkill(turn) {
+          skillCalls.push(turn.assistant);
+        },
+      }),
+      logger: { warn() {} },
+    });
+    factory2(second.pi as never);
+
+    const ctx2 = {
+      signal: undefined,
+      hasUI: false,
+      ui: {},
+      sessionManager: {
+        getSessionId: () => "s",
+        getBranch: () => second.entries,
+        getEntries: () => second.entries,
+      },
+    };
+    await second.handlers.find((h) => h.event === "session_start")!.handler({}, ctx2);
+
+    expect(l0Calls).toEqual(["hello"]);
+    expect(skillCalls).toEqual(["hello", "hello"]);
+  });
 });
