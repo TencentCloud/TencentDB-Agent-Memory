@@ -121,7 +121,14 @@ const repositoryBuildAvailable = await access(path.resolve(root, "../../MemoryCo
 test("launcher discovers the v2 repository build without an override", {
   skip: !repositoryBuildAvailable,
 }, async () => {
-  const result = await runAsync("run-official-mcp.mjs", [], {});
+  const result = await runAsync("run-official-mcp.mjs", [], {
+    TDAI_SERVICE_ID: "service-test",
+    TDAI_INSTANCE_ID: "instance-test",
+    TDAI_TEAM_ID: "team-test",
+    TDAI_USER_ID: "user-test",
+    TDAI_AGENT_ID: "agent-test",
+    TDAI_SESSION_ID: "session-test",
+  });
   // Closing stdin lets a correctly discovered stdio MCP process exit cleanly.
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /not found/i);

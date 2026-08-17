@@ -31,6 +31,21 @@ const shared = {
   },
 };
 
+const nodeAndHostExternal = {
+  alwaysBundle: (id: string) => {
+    if (id.startsWith("node:")) return false;
+    if (id === "openclaw" || id.startsWith("openclaw/")) return false;
+    if (id === "node-llama-cpp" || id.startsWith("node-llama-cpp/")) return false;
+    return true;
+  },
+  neverBundle: (id: string) => {
+    if (id.startsWith("node:")) return true;
+    if (id === "openclaw" || id.startsWith("openclaw/")) return true;
+    if (id === "node-llama-cpp" || id.startsWith("node-llama-cpp/")) return true;
+    return false;
+  },
+};
+
 export default defineConfig([
   {
     ...shared,
@@ -49,5 +64,6 @@ export default defineConfig([
     entry: { "memory-tencentdb-mcp": "./src/adapters/mcp/server.ts" },
     clean: false,
     dts: { sourcemap: false },
+    deps: nodeAndHostExternal,
   },
 ]);
