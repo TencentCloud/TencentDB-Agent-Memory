@@ -138,6 +138,10 @@ The installer writes config by default. Edit manually only when using `WRITE_OPE
           },
           "capture": {
             "enabled": true
+          },
+          "agentFilter": {
+            "include": ["coding-agent"],
+            "exclude": []
           }
         }
       }
@@ -145,6 +149,11 @@ The installer writes config by default. Edit manually only when using `WRITE_OPE
   }
 }
 ```
+
+`agentFilter` scopes automatic recall, automatic capture, and the remote memory
+tools to specific OpenClaw runtime agent ids. When `include` is non-empty,
+unknown or unlisted agents are denied. `exclude` takes precedence over
+`include`. Leave both lists empty to preserve the previous all-agent behavior.
 
 **Example B — OpenClaw `< 2026.4.24`:** omit the `hooks` block entirely; keep the same `config` (including isolation).
 
