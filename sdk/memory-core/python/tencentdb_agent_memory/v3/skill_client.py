@@ -581,7 +581,7 @@ class SkillClient:
     def __enter__(self) -> "SkillClient":
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
 
@@ -952,5 +952,5 @@ class AsyncSkillClient:
     async def __aenter__(self) -> "AsyncSkillClient":
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.close()
