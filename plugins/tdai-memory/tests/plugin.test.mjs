@@ -48,6 +48,8 @@ test("manifest exposes Skill, MCP, and the Codex lifecycle hook contract", async
   assert.equal(manifest.hooks, undefined);
   assert.equal(manifest.apps, undefined);
   const hooks = JSON.parse(await readFile(path.join(root, "hooks/hooks.json")));
+  const rootHooks = JSON.parse(await readFile(path.join(root, "hooks.json")));
+  assert.deepEqual(rootHooks, hooks);
   assert.deepEqual(Object.keys(hooks.hooks).sort(), [
     "SessionEnd",
     "SessionStart",
