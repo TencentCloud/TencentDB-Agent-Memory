@@ -19,5 +19,22 @@ describe('bilingual documentation guard', () => {
       assert.match(text, /\/proxy\//);
       assert.match(text, /TDAI_USER_KEY/);
     });
+
+    it(`${file} has no broken local links`, async () => {
+      const text = await readFile(join(root, file), 'utf8');
+      const targets = [...text.matchAll(/\]\(([^)]+)\)/g)]
+        .map((match) => match[1].trim())
+        .filter((target) => !/^(https?:|#)/.test(target));
+
+      assert.ok(targets.length > 0, `${file} should reference at least one local file`);
+      for (const target of targets) {
+        const path = target.split('#')[0];
+        try {
+          await access(join(root, path));
+        } catch {
+          throw new Error(`broken link in ${file}: ${target}`);
+        }
+      }
+    });
   }
 });

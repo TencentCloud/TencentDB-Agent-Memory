@@ -38,7 +38,7 @@ The generated `custom-models.json` declares:
 ## Prerequisites
 
 1. The three-piece stack from
-   [`deploy/global-images`](../../../deploy/global-images/README.md) is running
+   [`deploy/global-images`](../../deploy/global-images/README.md) is running
    (MemoryCore `:8420`, MemoryProxy `:8096`, Memory Hub `:8125`).
 2. A business user key (`sk-mem-...`) was created in the Memory Hub. Do **not**
    use the admin key for daily work.

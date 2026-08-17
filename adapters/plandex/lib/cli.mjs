@@ -165,6 +165,14 @@ async function check(options, env, fetchImpl, stdout, stderr) {
     return 1;
   }
 
+  stdout.log(`model  ${cfg.upstreamModel}`);
+  stdout.log(`space  ${cfg.spaceId}`);
+  if (!/^sk-/i.test(cfg.userKey)) {
+    stderr.error(
+      `warning: ${API_KEY_ENV_VAR} does not look like a Memory user key (expected sk-mem-...); the probe may fail if this is an upstream API key.`,
+    );
+  }
+
   stdout.log(`proxy  ${cfg.proxyBaseUrl}`);
   const proxyHealth = await getJson(buildHealthUrl(cfg.proxyBaseUrl), { fetchImpl });
   if (!proxyHealth.ok) {

@@ -101,13 +101,17 @@ describe('run check', () => {
   const healthyFetch = async () => jsonResponse(200, { status: 'ok' });
 
   it('passes when proxy and core are healthy', async () => {
+    let out = '';
     const code = await run(['check'], {
       env: { TDAI_UPSTREAM_MODEL: 'gpt-5.5', TDAI_USER_KEY: 'sk-mem-x' },
       fetchImpl: healthyFetch,
-      stdout: silent,
+      stdout: { log: (s) => (out += `${s}\n`), error() {} },
       stderr: silent,
     });
     assert.equal(code, 0);
+    assert.match(out, /model\s+gpt-5\.5/);
+    assert.match(out, /space\s+default/);
+    assert.match(out, /check passed/);
   });
 
   it('fails when the proxy is down and points at port 8096', async () => {
@@ -135,6 +139,18 @@ describe('run check', () => {
       stderr: silent,
     });
     assert.equal(code, 1);
+  });
+
+  it('warns, without failing, when the key does not look like a memory key', async () => {
+    let err = '';
+    const code = await run(['check'], {
+      env: { TDAI_UPSTREAM_MODEL: 'gpt-5.5', TDAI_USER_KEY: 'not-a-memory-key' },
+      fetchImpl: healthyFetch,
+      stdout: silent,
+      stderr: { log: (s) => (err += s), error: (s) => (err += s) },
+    });
+    assert.equal(code, 0);
+    assert.match(err, /does not look like a Memory user key/i);
   });
 });
 

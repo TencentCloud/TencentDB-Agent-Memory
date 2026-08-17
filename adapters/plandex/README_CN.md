@@ -34,7 +34,7 @@ MemoryProxy :8096  ── 会话初始化 / 记忆注入 / 对话回流
 
 ## 前置条件
 
-1. 已按 [`deploy/global-images`](../../../deploy/global-images/README.md) 启动
+1. 已按 [`deploy/global-images`](../../deploy/global-images/README.md) 启动
    三件套（MemoryCore `:8420`、MemoryProxy `:8096`、Memory Hub `:8125`）。
 2. 在 Memory Hub 创建了业务用户 key（`sk-mem-...`），日常使用**不要**直接拿
    admin key。
