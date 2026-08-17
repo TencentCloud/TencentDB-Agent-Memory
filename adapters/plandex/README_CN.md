@@ -102,6 +102,7 @@ tdai-plandex check [--probe]
 ```bash
 cd adapters/plandex
 npm test
+npm run test:coverage   # 输出行/分支/函数覆盖率
 ```
 
 覆盖：配置生成与校验、URL 边界、环境变量解析与报错提示、Proxy/Core 健康检查、

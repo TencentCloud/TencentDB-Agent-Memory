@@ -49,7 +49,8 @@ export async function postChatCompletion({
   fetchImpl = fetch,
   timeoutMs = 30000,
 }) {
-  const url = `${baseUrl}/proxy/${spaceId}/v1/chat/completions`;
+  const normalizedBase = String(baseUrl ?? '').replace(/\/+$/, '');
+  const url = `${normalizedBase}/proxy/${spaceId}/v1/chat/completions`;
   const { signal, cancel } = withTimeout(fetchImpl, timeoutMs);
   try {
     const response = await fetchImpl(url, {

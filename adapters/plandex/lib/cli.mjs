@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import {
   API_KEY_ENV_VAR,
@@ -28,6 +29,10 @@ Environment:
   TDAI_PROXY_BASE_URL        default http://127.0.0.1:8096
   TDAI_CORE_BASE_URL         default http://127.0.0.1:8420
   TDAI_SPACE_ID              memory instance id, default "default"
+
+Exit codes:
+  0  success
+  1  validation, connectivity or probe failure
 `;
 
 export function parseArgs(argv) {
@@ -133,6 +138,7 @@ async function generate(options, env, stdout, stderr) {
           }
         }
       }
+      await mkdir(dirname(options.output), { recursive: true });
       await writeFile(options.output, json, 'utf8');
       stdout.log(`wrote ${options.output}`);
       stdout.log(

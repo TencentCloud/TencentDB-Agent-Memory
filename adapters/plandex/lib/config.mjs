@@ -20,6 +20,9 @@ export function normalizeBaseUrl(raw, label = 'URL') {
     );
   }
   const url = new URL(raw);
+  if (url.username || url.password) {
+    throw new Error(`${label} must not embed credentials`);
+  }
   if (url.search || url.hash) {
     throw new Error(`${label} must not contain a query string or fragment`);
   }
@@ -88,23 +91,30 @@ export function parseEnv(env = process.env) {
   };
 }
 
-export function buildProvider(cfg) {
+export function buildProvider(cfg = {}) {
+  const proxyBaseUrl = cfg.proxyBaseUrl ?? DEFAULTS.proxyBaseUrl;
+  const spaceId = cfg.spaceId ?? DEFAULTS.spaceId;
   return {
     name: PROVIDER_NAME,
-    baseUrl: `${cfg.proxyBaseUrl}/proxy/${cfg.spaceId}/v1`,
+    baseUrl: `${proxyBaseUrl}/proxy/${spaceId}/v1`,
     apiKeyEnvVar: API_KEY_ENV_VAR,
   };
 }
 
-export function buildModel(cfg) {
+export function buildModel(cfg = {}) {
+  if (!cfg.upstreamModel) {
+    throw new Error('upstreamModel is required to build the Plandex model mapping');
+  }
+  const maxOutputTokens = cfg.maxOutputTokens ?? DEFAULTS.maxOutputTokens;
+  const defaultMaxConvoTokens = cfg.defaultMaxConvoTokens ?? DEFAULTS.defaultMaxConvoTokens;
   return {
     modelId: MODEL_ID,
     publisher: PUBLISHER,
     description:
       'Routes Plandex through TencentDB Agent Memory so conversations, skills, wiki knowledge and code graphs are captured and re-injected as team memory.',
-    defaultMaxConvoTokens: cfg.defaultMaxConvoTokens,
-    maxOutputTokens: cfg.maxOutputTokens,
-    reservedOutputTokens: cfg.maxOutputTokens,
+    defaultMaxConvoTokens,
+    maxOutputTokens,
+    reservedOutputTokens: maxOutputTokens,
     preferredOutputFormat: 'xml',
     providers: [
       {

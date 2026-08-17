@@ -24,14 +24,26 @@ describe('normalizeBaseUrl', () => {
     assert.equal(normalizeBaseUrl('http://127.0.0.1:8096///'), 'http://127.0.0.1:8096');
   });
 
+  it('accepts uppercase schemes, IPv6 literals and custom ports', () => {
+    assert.equal(normalizeBaseUrl('HTTP://localhost:8096/'), 'http://localhost:8096');
+    assert.equal(normalizeBaseUrl('http://[::1]:8096/'), 'http://[::1]:8096');
+    assert.equal(normalizeBaseUrl('https://proxy.example.com:8443/'), 'https://proxy.example.com:8443');
+  });
+
   it('rejects non-http(s) URLs', () => {
     assert.throws(() => normalizeBaseUrl('ftp://proxy'), /must start with http/);
     assert.throws(() => normalizeBaseUrl('localhost:8096'), /must start with http/);
+    assert.throws(() => normalizeBaseUrl(''), /must start with http/);
+    assert.throws(() => normalizeBaseUrl('   '), /must start with http/);
   });
 
   it('rejects query strings and fragments', () => {
     assert.throws(() => normalizeBaseUrl('http://127.0.0.1:8096?x=1'), /query|fragment/i);
     assert.throws(() => normalizeBaseUrl('http://127.0.0.1:8096#x'), /query|fragment/i);
+  });
+
+  it('rejects embedded credentials so secrets cannot leak into config files', () => {
+    assert.throws(() => normalizeBaseUrl('http://user:pass@127.0.0.1:8096'), /credentials/i);
   });
 });
 
@@ -78,6 +90,12 @@ describe('parseEnv', () => {
     assert.equal(cfg.defaultMaxConvoTokens, 60000);
   });
 
+  it('trims surrounding whitespace from string values', () => {
+    const cfg = parseEnv({ TDAI_UPSTREAM_MODEL: '  gpt-5.5  ', TDAI_SPACE_ID: ' prod ' });
+    assert.equal(cfg.upstreamModel, 'gpt-5.5');
+    assert.equal(cfg.spaceId, 'prod');
+  });
+
   it('fails with an actionable message when the upstream model is missing', () => {
     assert.throws(() => parseEnv({}), /TDAI_UPSTREAM_MODEL/);
     assert.throws(() => parseEnv({ TDAI_UPSTREAM_MODEL: '  ' }), /TDAI_UPSTREAM_MODEL/);
@@ -86,6 +104,19 @@ describe('parseEnv', () => {
   it('fails on invalid base URLs and space ids', () => {
     assert.throws(() => parseEnv({ TDAI_UPSTREAM_MODEL: 'm', TDAI_PROXY_BASE_URL: 'nope' }), /TDAI_PROXY_BASE_URL/);
     assert.throws(() => parseEnv({ TDAI_UPSTREAM_MODEL: 'm', TDAI_SPACE_ID: '../x' }), /TDAI_SPACE_ID/);
+  });
+
+  it('fails on non-positive, fractional or non-numeric token limits', () => {
+    for (const bad of ['abc', '0', '-5', '1.5']) {
+      assert.throws(
+        () => parseEnv({ TDAI_UPSTREAM_MODEL: 'm', TDAI_MAX_OUTPUT_TOKENS: bad }),
+        /TDAI_MAX_OUTPUT_TOKENS/,
+      );
+    }
+    assert.throws(
+      () => parseEnv({ TDAI_UPSTREAM_MODEL: 'm', TDAI_DEFAULT_MAX_CONVO_TOKENS: 'abc' }),
+      /TDAI_DEFAULT_MAX_CONVO_TOKENS/,
+    );
   });
 });
 
@@ -97,6 +128,19 @@ describe('buildProvider', () => {
       baseUrl: 'http://127.0.0.1:8096/proxy/default/v1',
       apiKeyEnvVar: API_KEY_ENV_VAR,
     });
+  });
+
+  it('falls back to documented defaults and keeps https/custom ports intact', () => {
+    assert.deepEqual(buildProvider({}), {
+      name: PROVIDER_NAME,
+      baseUrl: `${DEFAULTS.proxyBaseUrl}/proxy/${DEFAULTS.spaceId}/v1`,
+      apiKeyEnvVar: API_KEY_ENV_VAR,
+    });
+    const provider = buildProvider({
+      proxyBaseUrl: 'https://proxy.example.com:8443',
+      spaceId: 'team-a',
+    });
+    assert.equal(provider.baseUrl, 'https://proxy.example.com:8443/proxy/team-a/v1');
   });
 });
 
@@ -116,6 +160,17 @@ describe('buildModel', () => {
     assert.equal(model.providers[0].provider, 'custom');
     assert.equal(model.providers[0].customProvider, PROVIDER_NAME);
     assert.equal(model.providers[0].modelName, 'gpt-5.5');
+  });
+
+  it('falls back to default token budgets when not configured', () => {
+    const model = buildModel({ upstreamModel: 'gpt-5.5' });
+    assert.equal(model.maxOutputTokens, DEFAULTS.maxOutputTokens);
+    assert.equal(model.reservedOutputTokens, DEFAULTS.maxOutputTokens);
+    assert.equal(model.defaultMaxConvoTokens, DEFAULTS.defaultMaxConvoTokens);
+  });
+
+  it('refuses to emit a model without an upstream model id', () => {
+    assert.throws(() => buildModel({}), /upstreamModel/);
   });
 });
 

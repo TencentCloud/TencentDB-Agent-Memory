@@ -7,6 +7,16 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 
+const REQUIRED_TERMS = [
+  'TDAI_UPSTREAM_MODEL',
+  'TDAI_USER_KEY',
+  'TDAI_PROXY_BASE_URL',
+  'TDAI_CORE_BASE_URL',
+  'TDAI_SPACE_ID',
+  'generate',
+  'check',
+];
+
 // The official Season 2 rule requires EN and CN docs in the same PR.
 // This guard mirrors that rule so it can never regress silently.
 describe('bilingual documentation guard', () => {
@@ -18,6 +28,9 @@ describe('bilingual documentation guard', () => {
       assert.match(text, /tencentdb-agent-memory/i);
       assert.match(text, /\/proxy\//);
       assert.match(text, /TDAI_USER_KEY/);
+      for (const term of REQUIRED_TERMS) {
+        assert.ok(text.includes(term), `${file} must document "${term}"`);
+      }
     });
 
     it(`${file} has no broken local links`, async () => {

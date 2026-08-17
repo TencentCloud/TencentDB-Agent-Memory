@@ -9,6 +9,14 @@ const jsonResponse = (status, body) =>
     headers: { 'Content-Type': 'application/json' },
   });
 
+const pendingUntilAbort = () =>
+  (url, init) =>
+    new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () =>
+        reject(new DOMException('The operation was aborted.', 'AbortError')),
+      );
+    });
+
 describe('buildHealthUrl', () => {
   it('joins the /health endpoint', () => {
     assert.equal(buildHealthUrl('http://127.0.0.1:8096'), 'http://127.0.0.1:8096/health');
@@ -48,6 +56,27 @@ describe('getJson', () => {
     assert.equal(result.ok, false);
     assert.match(result.error, /json/i);
   });
+
+  it('times out instead of hanging forever', async () => {
+    const result = await getJson('http://proxy/health', {
+      fetchImpl: pendingUntilAbort(),
+      timeoutMs: 15,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /timed out after 15ms/);
+  });
+
+  it('forwards custom headers to the fetch implementation', async () => {
+    let seenHeaders;
+    await getJson('http://proxy/health', {
+      headers: { 'x-custom': 'yes' },
+      fetchImpl: async (url, init) => {
+        seenHeaders = init.headers;
+        return jsonResponse(200, { status: 'ok' });
+      },
+    });
+    assert.equal(seenHeaders['x-custom'], 'yes');
+  });
 });
 
 describe('postChatCompletion', () => {
@@ -73,6 +102,21 @@ describe('postChatCompletion', () => {
     assert.equal(body.messages[0].role, 'user');
   });
 
+  it('normalizes a trailing slash on the base URL to avoid double slashes', async () => {
+    let seenUrl;
+    await postChatCompletion({
+      baseUrl: 'http://127.0.0.1:8096/',
+      spaceId: 'default',
+      model: 'gpt-5.5',
+      apiKey: 'sk-mem-x',
+      fetchImpl: async (url) => {
+        seenUrl = url;
+        return jsonResponse(200, { choices: [] });
+      },
+    });
+    assert.equal(seenUrl, 'http://127.0.0.1:8096/proxy/default/v1/chat/completions');
+  });
+
   it('reports upstream failures', async () => {
     const result = await postChatCompletion({
       baseUrl: 'http://proxy',
@@ -83,5 +127,30 @@ describe('postChatCompletion', () => {
     });
     assert.equal(result.ok, false);
     assert.equal(result.status, 401);
+  });
+
+  it('reports a non-JSON success body without throwing', async () => {
+    const result = await postChatCompletion({
+      baseUrl: 'http://proxy',
+      spaceId: 'default',
+      model: 'm',
+      apiKey: 'k',
+      fetchImpl: async () => new Response('not-json', { status: 200 }),
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /json/i);
+  });
+
+  it('times out instead of hanging forever', async () => {
+    const result = await postChatCompletion({
+      baseUrl: 'http://proxy',
+      spaceId: 'default',
+      model: 'm',
+      apiKey: 'k',
+      fetchImpl: pendingUntilAbort(),
+      timeoutMs: 15,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /timed out after 15ms/);
   });
 });

@@ -19,3 +19,12 @@ and this adapter adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependency-free test suite written tests-first (Node's built-in runner),
   including a local mock-gateway integration test and a bilingual-docs guard.
 - Bilingual setup guides (`README.md` / `README_CN.md`).
+
+### Fixed
+
+- Corrected the relative deploy link depth in both guides (`../../` instead of
+  `../../../`), which previously 404'd on GitHub.
+- Hardened base-URL handling: embedded credentials are rejected, trailing
+  slashes are normalized before building the chat route, and builders fall
+  back to documented defaults instead of emitting missing fields.
+- `generate --output` now creates missing parent directories.

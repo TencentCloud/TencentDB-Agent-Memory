@@ -110,6 +110,7 @@ runner), including a local mock gateway integration test, written tests-first:
 ```bash
 cd adapters/plandex
 npm test
+npm run test:coverage   # prints line/branch/function coverage
 ```
 
 Coverage: config generation and validation, URL edge cases, environment
