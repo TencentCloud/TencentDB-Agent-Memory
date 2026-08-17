@@ -8,6 +8,19 @@
 `MemoryProxy` / SDK。
 
 ---
+# PR #955 — feat: add dark mode toggle to Memory Hub UI
+
+Validation note from reviewer hot777zzz (commit d285132, 2026-08-XX):
+- `useTheme` hook toggles `[theme-mode=dark]`; persists preference in localStorage;
+  defaults to system `prefers-color-scheme`.
+- CSS bridge: `[theme-mode='dark'] { color-scheme: dark }` kept on top of the
+  upstream Avatar-based profile UI + new design tokens (no delete of frontend).
+- Re-inserted sun/moon toggle button into GlobalHeader right area, between
+  LanguageSwitcher and the new Avatar profile menu (which still works unchanged).
+- Built MemoryPanel/web: tsc clean, Vite build clean (1339 modules transformed),
+  so no import/stylesheet errors relative to latest upstream `feat/server_team` UI.
+
+
 
 ## [2.0.1-beta.1] — 2026-08-13
 

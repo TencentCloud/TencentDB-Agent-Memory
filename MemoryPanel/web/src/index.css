@@ -56,6 +56,13 @@
   color-scheme: light;
 }
 
+/* Dark mode: o tea-component aplica os tokens dark via [theme-mode=dark].
+   Aqui apenas sincronizamos o color-scheme para o browser renderizar
+   scrollbars/inputs nativos no tema correto. */
+[theme-mode='dark'] {
+  color-scheme: dark;
+}
+
 /* 映射到 Tailwind 可用的 bg-* / text-* / border-* */
 @layer base {
   * {
