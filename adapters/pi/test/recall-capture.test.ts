@@ -152,6 +152,22 @@ describe("capture", () => {
     expect(lastSuccessfulAssistantText(messages.slice(0, 2))).toBeUndefined();
   });
 
+  it("fails closed when Pi changes the assistant message shape (content becomes a string)", () => {
+    // A future Pi format that flattens content to a plain string must not be
+    // silently mis-read; capture degrades to nothing instead.
+    const futureShape = [
+      { role: "assistant", stopReason: "stop", content: "Final answer." },
+    ];
+    expect(lastSuccessfulAssistantText(futureShape)).toBeUndefined();
+  });
+
+  it("fails closed when Pi renames the text block type", () => {
+    const renamedBlocks = [
+      { role: "assistant", stopReason: "stop", content: [{ type: "content", text: "Final answer." }] },
+    ];
+    expect(lastSuccessfulAssistantText(renamedBlocks)).toBeUndefined();
+  });
+
   it("redacts secrets before building bounded L0 messages", () => {
     const messages = createConversationMessages("token is sk-mem-abcdefghijklmnopqrstuvwxyz", "Bearer abcdefghijklmnop");
     expect(messages).toEqual([

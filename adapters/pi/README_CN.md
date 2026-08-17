@@ -15,7 +15,7 @@ L1–L3 由 MemoryCore 根据已采集的对话异步生成；适配器只读取
 ## 前置条件
 
 - Node.js `>= 22.19.0`
-- 已用 Pi `0.84.1` 验证开发流程。
+- 已用 Pi `0.84.1` 验证开发流程。适配器依赖 Pi 的扩展 API 契约（hooks、`registerTool`/`registerCommand`、`ctx.ui`、消息格式），`peerDependencies` 声明兼容 `>=0.84.1 <0.85`；升级 Pi 前建议先跑 `npm run verify:pi-load` 与端到端检查。
 - TencentDB Agent Memory Core 已启动，并且你已有 Team、Agent、User 和 User Key。
 
 ## 维护者可复现环境
