@@ -1,6 +1,10 @@
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { TDAMError } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { createClients } from "./clients.js";
 import type { AdapterStatus, ConfigResult, LoadedConfig } from "./types.js";
+
+const SKILL_PENDING_DIRECTORY = "tdai-memory-skills";
 
 export function maskId(value: string): string {
   if (value.length <= 10) return value;
@@ -19,6 +23,43 @@ async function findPageItem<T>(
     if (page.items.length < pageSize || offset + page.items.length >= page.total) return undefined;
   }
   return undefined;
+}
+
+/**
+ * Local view of the Skill pipeline: how many captured turns are still awaiting
+ * delivery (`pending`), which of those hit an ambiguous failure and are marked
+ * `uncertain` (never auto-retried), and how many were quarantined as `dead`.
+ * Pure filesystem scan; skipped entirely when skills are disabled.
+ */
+async function skillPipelineState(config: LoadedConfig): Promise<string | undefined> {
+  if (!config.skills.enabled) return undefined;
+  const { getAgentDir } = await import("@earendil-works/pi-coding-agent");
+  const directory = join(getAgentDir(), SKILL_PENDING_DIRECTORY);
+  let pending = 0;
+  let uncertain = 0;
+  let dead = 0;
+  try {
+    const entries = await readdir(directory);
+    for (const name of entries) {
+      if (name.endsWith(".json.dead")) {
+        dead += 1;
+        continue;
+      }
+      if (name.endsWith(".json")) {
+        pending += 1;
+        try {
+          const record = JSON.parse(await readFile(join(directory, name), "utf8")) as { uncertain?: boolean };
+          if (record.uncertain === true) uncertain += 1;
+        } catch {
+          // unreadable record still counts as pending
+        }
+      }
+    }
+  } catch {
+    // directory does not exist yet — nothing has been queued
+  }
+  const labels = [`pending ${pending}`, `uncertain ${uncertain}`, `dead ${dead}`];
+  return `Skills: on · ${labels.join(" · ")} (run /tdai-memory-sync-skills to pull learned skills into Pi)`;
 }
 
 export function classifyError(error: unknown): AdapterStatus {
@@ -94,7 +135,7 @@ export async function checkStatus(
     }
 
     onProgress("data");
-    await clients.memory.queryConversation({ limit: 1, offset: 0 });
+    const l0 = await clients.memory.queryConversation({ limit: 1, offset: 0 });
     const details = [
       `Endpoint: ${new URL(config.endpoint).origin}`,
       `User: ${verification.user.username} (${maskId(config.userId)})`,
@@ -103,6 +144,14 @@ export async function checkStatus(
       `User key source: ${config.userKeySource}`,
       `Gateway key source: ${config.gatewayApiKeySource}`,
     ];
+    const hasMemory = (l0.total ?? 0) > 0;
+    details.push(
+      hasMemory
+        ? `Memory: has L0 history — recall will surface earlier conversations on related questions`
+        : `Memory: no conversations yet — finish a few sessions and recall will kick in`,
+    );
+    const skillsLine = await skillPipelineState(config);
+    if (skillsLine) details.push(skillsLine);
     if (!config.rejectUnauthorized) details.push("WARNING: TLS certificate verification is disabled");
     return {
       kind: "ready",

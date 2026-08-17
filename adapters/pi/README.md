@@ -35,6 +35,30 @@ Pi session ── adapter (local extension) ── official SDK ── MemoryCor
 
 **Quick start.** Details below. The simplest path: start MemoryCore → run `/tdai-memory-setup` in Pi and finish the wizard → start using it. To try skill learning, add `"skills": { "enabled": true }`, complete a tool-heavy task, then run `/tdai-memory-sync-skills`.
 
+## Common questions (why nothing shows up yet)
+
+**"It seems to do nothing after install?"**
+The adapter *accumulates* memory; it is not instant feedback. Seeing no recall in the first few sessions is normal — memories only appear once the server mines them from your conversations.
+
+**"How long until memories show up?"**
+After a few settled sessions (one user + assistant pair each), the server asynchronously distills L1/L2/L3. Open a new session and ask something related — the adapter injects matching memories into context and the status shows `memory: recalled`.
+
+**"What are skills for? Do I need to install them?"**
+**No.** There are two "skills" concepts:
+- **Pi's native skills**: hand-written or downloaded skill packages in `<agentDir>/skills/` — that's Pi's own system, and yes you'd install those yourself.
+- **Skills the Memory server learns**: a review model *automatically* distills `SKILL.md` files from your tool-heavy conversations — nothing to install or write.
+The adapter bridges the two: the server learns automatically → when you want those learned skills as visible, editable Pi-native files under `/skills`, run `/tdai-memory-sync-skills` once.
+
+**"Why do skills take so long to appear?"**
+The server archives only after ~40 KB of cumulative conversation *or* 10 tool calls per session. Casual short chats accumulate slowly; a **single tool-heavy task** is the fastest path.
+
+**"What do the status numbers mean?"**
+- `Memory: no conversations yet` → nothing captured yet; have a few sessions with Pi.
+- `Skills: pending N · uncertain N · dead N` → pending = awaiting delivery; uncertain = an ambiguous network failure that is never auto-retried (next turn continues, usually nothing to do); dead = a permanently-failed record that was quarantined (check if you want to clear it).
+
+**"Does a memory outage break Pi?"**
+No. Fail-open — Pi answers normally, it just has no memory to inject for that turn.
+
 ## What it does
 
 - Before a Pi run, automatically recalls bounded L0 conversation evidence, L1 atomic memories, relevant L2 scenario files, and the L3 core profile. All recalled text is added as explicitly **untrusted** context.

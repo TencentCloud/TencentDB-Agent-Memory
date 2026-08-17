@@ -1,9 +1,17 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const verifyAuth = vi.fn();
 const listTeams = vi.fn();
 const listAgents = vi.fn();
 const queryConversation = vi.fn();
+
+// Point the lazy getAgentDir import at a scratch dir so the skill-pipeline
+// scan never touches the real user's agent directory.
+const agentDirHolder = vi.hoisted(() => ({ value: "" }));
+vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => agentDirHolder.value }));
 
 vi.mock("../src/clients.js", () => ({
   createClients: () => ({
@@ -102,5 +110,39 @@ describe("status", () => {
   it("masks long ids but leaves short ids readable", () => {
     expect(maskId("short")).toBe("short");
     expect(maskId("usr-123456789")).toBe("usr-12…6789");
+  });
+
+  it("reports a cold-start memory hint and the skill pipeline state when skills are on", async () => {
+    verifyAuth.mockResolvedValue({
+      valid: true,
+      user: { user_id: "usr-123456789", username: "admin", user_type: "admin", created_at: "now" },
+    });
+    listTeams.mockResolvedValue({ items: [{ team_id: "team-123456789", name: "Pi Team" }], total: 1, limit: 100, offset: 0 });
+    listAgents.mockResolvedValue({ items: [{ agent_id: "agt-123456789", name: "Pi Agent" }], total: 1, limit: 100, offset: 0 });
+    queryConversation.mockResolvedValue({ items: [], total: 0 });
+
+    const scratch = await mkdtemp(join(tmpdir(), "tdai-status-"));
+    agentDirHolder.value = scratch;
+    try {
+      const skillsDir = join(scratch, "tdai-memory-skills");
+      await mkdir(skillsDir, { recursive: true });
+      await writeFile(join(skillsDir, "a.json"), JSON.stringify({ uncertain: true }), "utf8");
+      await writeFile(join(skillsDir, "b.json.dead"), "{}", "utf8");
+
+      const base = configured();
+      if (!base.ok || !base.config.enabled) throw new Error("fixture must be enabled");
+      const config = {
+        ok: true as const,
+        config: { ...base.config, skills: { ...base.config.skills, enabled: true } },
+      };
+      const status = await checkStatus(config);
+
+      expect(status.kind).toBe("ready");
+      const joined = status.details.join("\n");
+      expect(joined).toContain("no conversations yet");
+      expect(joined).toContain("Skills: on · pending 1 · uncertain 1 · dead 1");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   });
 });
