@@ -109,6 +109,40 @@ pi list
 
 `captureTools` 默认是 `false`。只有明确设置为 `true` 才会把成功工具结果的文本证据一并采集；失败工具输出、图片/二进制内容和过大的输出会被排除或截断，常见凭据会在进入本地待投递队列前脱敏。
 
+### Skills 学习闭环
+
+Skills 默认关闭（`skills.enabled` 默认 `false`）。开启后，适配器会把每个落定的回合按五角色会话格式采集，投递到 Memory 网关的 `/v3/skill/conversation/add`，由服务端异步抽取把可复用的可执行能力提炼成 SKILL.md。召回时，适配器按 `skills.routingMode` 搜索这些技能，并把最匹配的结果作为第五层不受信的 `[Skill]` 注入召回记忆块。
+
+全局配置中可选的 `skills` 对象：
+
+```json
+{
+  "skills": {
+    "enabled": true,
+    "capture": true,
+    "runtimeTools": true,
+    "routingMode": "bm25",
+    "allowTeamSearch": false,
+    "includeFailedTools": false,
+    "maxMessageBytes": 32768,
+    "maxToolItems": 16,
+    "flushTimeoutMs": 1500
+  }
+}
+```
+
+- `enabled` — 总开关；`tdai_skill_search` / `tdai_skill_read` 工具与采集都受它控制。
+- `capture` — 是否把落定回合投递用于技能抽取。置 `false` 时召回仍可用，但不再学习新技能。
+- `runtimeTools` — 是否暴露会话内 `tdai_skill_search` / `tdai_skill_read` 工具。它们与记忆工具共享每回合 3 次调用上限。
+- `routingMode` — `bm25`（默认）| `embedding` | `hybrid`；须与网关技能路由配置一致。
+- `allowTeamSearch` — 技能搜索范围扩展到整个 Team 而非当前 Agent。
+- `includeFailedTools` — 是否把失败的工具调用保留在采集会话里（默认排除）。
+- `maxMessageBytes` — 单条消息字节上限（1 KiB–1 MiB），默认 32 KiB。
+- `maxToolItems` — 每回合最多采集的 tool_call/tool_result 对数（0–100），默认 16。
+- `flushTimeoutMs` — 单次 conversation/add 投递的截止时间（100 ms–30 s），默认 1500 ms。
+
+投递语义是 at-most-once：每个落定回合先写入本地待投递文件，恰好发送一次后才删除。网关返回确定性 4xx 时记录进入死信路径；超时或 5xx 时保留并标记为 `uncertain`，**绝不自动重试**——因为重发会污染服务端累计会话缓冲。任何环节都不需要人工确认；由服务端 review agent 判断什么值得沉淀为技能。
+
 ### 维护者验收清单
 
 1. `npm run check` 通过。

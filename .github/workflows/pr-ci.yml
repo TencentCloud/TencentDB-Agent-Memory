@@ -141,8 +141,8 @@ jobs:
   # ── 4. Pi adapter (typecheck + unit + pack + load smoke) ──
   # adapters/pi 是独立 npm 包（自带 lockfile），MemoryCore 的 install/pack
   # job 都不覆盖它。这里只守"快速面"：npm ci 锁文件可复现性、类型检查、
-  # 单测、包内容、真实 Pi RPC 加载扩展。三个真实 Docker E2E
-  # （e2e:l0-l3 / e2e:setup / e2e:lifecycle）需要 LLM 密钥，不进 PR CI。
+  # 单测、包内容、真实 Pi RPC 加载扩展。四个真实 Docker E2E
+  # （e2e:l0-l3 / e2e:setup / e2e:lifecycle / e2e:skill）需要 LLM 密钥，不进 PR CI。
   adapter-pi:
     name: Adapter · pi
     runs-on: ubuntu-latest

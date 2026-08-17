@@ -112,6 +112,10 @@ MemoryCore/scripts/tests/
 
 # Backup files
 *.bak
+*.bak-*
+
+# IDE (JetBrains) local workspace
+.idea/
 
 # self-implement-wiki e2e 产物（人工查看用，不入库）
 docs/knowledge/self-implement-wiki/_e2e-output/
