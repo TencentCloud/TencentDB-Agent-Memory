@@ -17,6 +17,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   mcpArgs: [],
 });
 
+export const PLUGIN_MCP_ENTRY = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../vendor/memory-tencentdb-mcp.mjs",
+);
+
 export const REPO_MCP_ENTRY = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../MemoryCore/dist/memory-tencentdb-mcp.mjs",
@@ -103,6 +108,12 @@ export function resolveMcpArgs(args, workingDirectory = process.cwd()) {
 
 export async function resolveMcpCommand(config, explicitBinary) {
   if (explicitBinary) return { command: explicitBinary, args: [], source: "environment" };
+  try {
+    await access(PLUGIN_MCP_ENTRY);
+    return { command: process.execPath, args: [PLUGIN_MCP_ENTRY], source: "plugin-bundle" };
+  } catch {
+    // Development checkouts keep the official build in MemoryCore/dist.
+  }
   try {
     await access(REPO_MCP_ENTRY);
     return { command: process.execPath, args: [REPO_MCP_ENTRY], source: "repository-build" };
