@@ -2,6 +2,39 @@
 
 This is a local Pi extension that gives future Pi conversations durable, scoped memory through TencentDB Agent Memory. It is an independent adapter: it does not import, modify, or upload your existing Claude Code, Codex, or Pi history.
 
+## Project introduction
+
+**In one line:** adapt TencentDB Agent Memory to Pi, giving Pi durable cross-session memory and learnable skills — what you tell it does not vanish when the session ends, and what it learns can grow into reusable capabilities.
+
+**Why it exists.** Pi (`@earendil-works/pi-coding-agent`) has no memory across sessions by default. Each new session forgets who you are, what you did, and what it already solved — the same pitfalls get re-hit, the same context gets re-explained. This project gives Pi a long-term memory through TencentDB Agent Memory.
+
+**What it solves.**
+
+- **Cross-session memory**: preferences and conclusions from earlier sessions come back when you ask again.
+- **Memory that evolves**: rather than storing raw chat, the server mines captured conversations into atomic memories (L1), scenario notes (L2), and a durable profile (L3).
+- **Skill learning**: tool-heavy turns are distilled by a server review model into reusable `SKILL.md` files — injected into context automatically when relevant, and syncable into Pi's native skills.
+- **Branch isolation**: Pi `/tree` branches hold independent memory identities, so they never leak into each other.
+
+**Architecture.** The adapter is a local Pi extension talking to MemoryCore through the official SDK — no hand-rolled HTTP, no private protocol:
+
+```text
+Pi session ── adapter (local extension) ── official SDK ── MemoryCore (memory + skill engine)
+   │
+   ├─ before_agent_start → recall L0-L3 + relevant skills, injected as UNTRUSTED context
+   ├─ agent_settled      → capture the turn (L0 via a durable outbox; skills at-most-once)
+   └─ commands / tools   → setup / status / sync-skills / 4 read-only search tools
+```
+
+**Design values (why you can trust it).**
+
+- **Fail-open**: if the memory service is down, times out, or misconfigured, Pi still answers — it only loses memory, never adds a blocker.
+- **Untrusted boundary**: recalled memory is always marked `untrusted`; injected content is never treated as instructions.
+- **Reliability**: L0 flows through a cross-process file outbox (at-least-once, offline catch-up, dead-letter quarantine); skill writes are at-most-once, so a retry never pollutes the server's cumulative buffer.
+- **Official SDK, no reinvention**: authentication, isolation, and TLS all go through the official client; the adapter only translates a Pi turn into the protocol Memory understands.
+- **Secure by default**: secrets are redacted before persistence, project config can never touch credentials, and remote endpoints require HTTPS.
+
+**Quick start.** Details below. The simplest path: start MemoryCore → run `/tdai-memory-setup` in Pi and finish the wizard → start using it. To try skill learning, add `"skills": { "enabled": true }`, complete a tool-heavy task, then run `/tdai-memory-sync-skills`.
+
 ## What it does
 
 - Before a Pi run, automatically recalls bounded L0 conversation evidence, L1 atomic memories, relevant L2 scenario files, and the L3 core profile. All recalled text is added as explicitly **untrusted** context.
