@@ -21,6 +21,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MetadataClient, SkillClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+import { installSyncedSkill } from "../src/skill-sync.ts";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ADAPTER_DIR = resolve(SCRIPT_DIR, "..");
@@ -481,7 +483,35 @@ async function main() {
       buildRule,
       query,
     });
-    console.log("\nE2E PASS: real MemoryCore Skill extraction reached the real Pi adapter recall system prompt.");
+
+    // Phase: sync the extracted skill into Pi's native skills directory using
+    // the adapter's real install path, and assert Pi discovers it.
+    const syncAgentDir = await mkdtemp(join(tmpdir(), "tdai-pi-skill-sync-"));
+    try {
+      const synced = await installSyncedSkill({
+        skill,
+        agentDir: syncAgentDir,
+        skillId: createdSkill.skill_id,
+        source: { endpoint, teamId: team.team_id, agentId: agent.agent_id },
+      });
+      if (synced.status !== "synced") {
+        throw new Error(`installSyncedSkill returned ${synced.status} (${synced.error ?? ""})`);
+      }
+      const skillMdPath = join(syncAgentDir, "skills", synced.name, "SKILL.md");
+      const markerPath = join(syncAgentDir, "skills", synced.name, "tdai-remote.json");
+      if (!(await readFile(skillMdPath, "utf8")).trim()) throw new Error("synced SKILL.md is empty");
+      const marker = JSON.parse(await readFile(markerPath, "utf8"));
+      if (marker.skillId !== createdSkill.skill_id) throw new Error("sync marker skillId mismatch");
+      const loaded = loadSkillsFromDir({ dir: join(syncAgentDir, "skills"), source: "user" });
+      if (!loaded.skills.some((item) => item.name === synced.name)) {
+        throw new Error(`Pi did not discover synced skill "${synced.name}"`);
+      }
+      console.log(`PASS  synced skill "${synced.name}" (v${synced.version}) into Pi's skills dir and Pi discovered it`);
+    } finally {
+      await rm(syncAgentDir, { recursive: true, force: true });
+    }
+
+    console.log("\nE2E PASS: real MemoryCore Skill extraction reached the real Pi adapter recall system prompt, and the skill syncs into Pi's native skills directory.");
     failed = false;
   } finally {
     try {

@@ -5,6 +5,8 @@ import { createClients, createSessionMemoryClient } from "./clients.js";
 import { loadConfig } from "./config.js";
 import { enqueueCapture, flushOutbox } from "./outbox.js";
 import { createSkillMessages, enqueueSkillTurn, type SkillToolCall } from "./skill-capture.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { installSyncedSkill, listSyncCandidates } from "./skill-sync.js";
 import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { runSetup } from "./setup.js";
@@ -250,6 +252,88 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       ctx.ui.setStatus(STATUS_KEY, status.summary);
       const kind = status.kind === "ready" || status.kind === "disabled" ? "info" : status.kind === "offline" ? "warning" : "error";
       ctx.ui.notify(formatStatus(status), kind);
+    },
+  });
+
+  pi.registerCommand("tdai-memory-sync-skills", {
+    description: "Preview and sync server-side skills into Pi's native skills directory",
+    handler: async (_args, ctx) => {
+      if (!currentConfig?.ok || !currentConfig.config.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: not configured");
+        ctx.ui.notify("Memory is not configured. Run /tdai-memory-setup first.", "error");
+        return;
+      }
+      const config = currentConfig.config;
+      const skill = createClients(config).skill;
+      const agentDir = getAgentDir();
+      const source = { endpoint: config.endpoint, teamId: config.teamId, agentId: config.agentId };
+
+      ctx.ui.setStatus(STATUS_KEY, "skills: listing");
+      let candidates;
+      try {
+        candidates = await listSyncCandidates(skill);
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skills unavailable");
+        ctx.ui.notify(`Could not list skills: ${error instanceof Error ? error.message : String(error)}`, "error");
+        return;
+      }
+      if (candidates.length === 0) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skills empty");
+        ctx.ui.notify("No skills found on the server yet. Skills appear after the server mines a conversation.", "info");
+        return;
+      }
+
+      const optionOf = (candidate: { name: string; version: number }) => `${candidate.name} (v${candidate.version})`;
+      const options = ["all", ...candidates.map(optionOf)];
+      const selectedLabel = ctx.hasUI
+        ? (await ctx.ui.select("Sync which skills into Pi?", options)) ?? "all"
+        : "all";
+      const selectedIds = selectedLabel === "all"
+        ? candidates.map((candidate) => candidate.skill_id)
+        : candidates.filter((candidate) => optionOf(candidate) === selectedLabel).map((candidate) => candidate.skill_id);
+      if (selectedIds.length === 0) {
+        ctx.ui.notify("No matching skill selected; nothing to sync.", "warning");
+        return;
+      }
+
+      if (ctx.hasUI) {
+        const proceed = await ctx.ui.confirm(
+          "Sync skills to Pi",
+          `Download ${selectedIds.length} skill${selectedIds.length === 1 ? "" : "s"} into ${agentDir}\\skills? Local files with the same name are kept unless they were synced before.`,
+        );
+        if (!proceed) {
+          ctx.ui.notify("Skill sync cancelled.", "info");
+          return;
+        }
+      }
+
+      const results: Array<{ name: string; status: string }> = [];
+      for (const skillId of selectedIds) {
+        ctx.ui.setStatus(STATUS_KEY, `skills: syncing ${results.length + 1}/${selectedIds.length}`);
+        try {
+          const result = await installSyncedSkill({ skill, agentDir, skillId, source });
+          results.push({ name: result.name, status: result.status });
+          ctx.ui.notify(
+            result.status === "synced"
+              ? `Synced skill "${result.name}" (v${result.version}) to Pi.`
+              : result.status === "skipped-user-owned"
+                ? `Skipped "${result.name}": a user-written skill with that name already exists locally.`
+                : `Failed to sync "${result.name}": ${result.error ?? "unknown"}`,
+            result.status === "synced" ? "info" : "warning",
+          );
+        } catch (error) {
+          results.push({ name: skillId, status: "failed" });
+          ctx.ui.notify(`Sync failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        }
+      }
+
+      const synced = results.filter((result) => result.status === "synced").length;
+      ctx.ui.setStatus(STATUS_KEY, synced > 0 ? "memory: skills synced" : "memory: skills unchanged");
+      ctx.ui.notify(
+        `Skill sync complete: ${synced} synced, ${results.length - synced} skipped/failed. Reloading to discover new skills.`,
+        synced > 0 ? "info" : "info",
+      );
+      await ctx.reload();
     },
   });
 

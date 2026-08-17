@@ -143,6 +143,16 @@ The optional `skills` object in the global configuration:
 
 Delivery is at-most-once: each captured turn is written to a local pending file, sent exactly once, and only then removed. A deterministic 4xx from the gateway moves the record to a dead-letter path; a timeout or 5xx leaves it marked `uncertain` and is never auto-retried, because re-appending would pollute the server's cumulative session buffer. Nothing is ever human-confirmed; the server's review agent decides what becomes a skill.
 
+### Syncing skills into Pi's native skills
+
+Server-side skills live on the gateway and are used indirectly via recall injection. Run:
+
+```text
+/tdai-memory-sync-skills
+```
+
+The command lists the server's skills, lets you pick (or take all) and confirm, then downloads each remote `SKILL.md` (and optional resources) into `<agentDir>/skills/<name>/` and reloads Pi. Downloads are validated (valid frontmatter, no path traversal, bounded sizes, no executable bits) and installed via a temp dir + atomic replace — any failure rolls back and keeps the previous version. Synced skills enter Pi's native discovery chain: they show up under `/skills` and are loaded by Pi itself like any hand-written skill. **A hand-written skill with the same name (a directory without the `tdai-remote.json` marker) is never overwritten**; only previously-synced skills are replaced by newer versions.
+
 ### Maintainer acceptance checklist
 
 1. `npm run check` passes.
