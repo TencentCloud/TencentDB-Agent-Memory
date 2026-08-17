@@ -109,6 +109,40 @@ Recall is bounded by the optional `recall` object in the configuration. The defa
 
 `captureTools` defaults to `false`. Enable it only when successful tool-result text should be captured with the conversation. Failed output, image/binary content, and oversized text are excluded or bounded; common credentials are redacted before data reaches the local retry queue.
 
+### Skills learning loop
+
+Skills are off by default (`skills.enabled` defaults to `false`). When enabled, the adapter captures each settled turn as a five-role conversation, posts it to the Memory gateway's `/v3/skill/conversation/add`, and lets the server's asynchronous extraction mine reusable executable capabilities (SKILL.md) from it. On recall, the adapter searches those skills with `skills.routingMode` and injects the best matches as the fifth, untrusted `[Skill]` layer of the recalled-memory block.
+
+The optional `skills` object in the global configuration:
+
+```json
+{
+  "skills": {
+    "enabled": true,
+    "capture": true,
+    "runtimeTools": true,
+    "routingMode": "bm25",
+    "allowTeamSearch": false,
+    "includeFailedTools": false,
+    "maxMessageBytes": 32768,
+    "maxToolItems": 16,
+    "flushTimeoutMs": 1500
+  }
+}
+```
+
+- `enabled` — master switch; the `tdai_skill_search` / `tdai_skill_read` tools and capture are gated on it.
+- `capture` — post settled turns for skill extraction. When `false`, recall still works but nothing new is learned.
+- `runtimeTools` — expose the in-session `tdai_skill_search` / `tdai_skill_read` tools. They share the per-turn 3-call limit with the memory tools.
+- `routingMode` — `bm25` (default) | `embedding` | `hybrid`; must match what the gateway's skill router is configured with.
+- `allowTeamSearch` — scope skill searches across the whole team instead of the current agent.
+- `includeFailedTools` — keep failed tool calls in the captured transcript (default excludes them).
+- `maxMessageBytes` — per-message byte bound (1 KiB–1 MiB), default 32 KiB.
+- `maxToolItems` — cap on tool_call/tool_result pairs captured per turn (0–100), default 16.
+- `flushTimeoutMs` — deadline for a single conversation/add delivery (100 ms–30 s), default 1500 ms.
+
+Delivery is at-most-once: each captured turn is written to a local pending file, sent exactly once, and only then removed. A deterministic 4xx from the gateway moves the record to a dead-letter path; a timeout or 5xx leaves it marked `uncertain` and is never auto-retried, because re-appending would pollute the server's cumulative session buffer. Nothing is ever human-confirmed; the server's review agent decides what becomes a skill.
+
 ### Maintainer acceptance checklist
 
 1. `npm run check` passes.
@@ -154,6 +188,15 @@ The same disposable MemoryCore container powers two more managed checks:
 cd adapters\pi
 npm run e2e:setup -- --env-file ../../deploy/global-images/.env
 npm run e2e:lifecycle -- --env-file ../../deploy/global-images/.env
+```
+
+### Real Skill learning-loop E2E
+
+- `npm run e2e:skill` uses the same disposable MemoryCore container to verify the complete Skill learning loop: (1) it posts a realistic "triage an intermittent Node CI build OOM" conversation (including a 40 KB+ build log) to `/v3/skill/conversation/add` and asserts a single append trips the byte-archive threshold and returns `archived`; (2) it waits for the real LLM review agent to mine a reusable skill from the conversation and asserts the skill appears via `/v3/skill/list` and `/v3/skill/search`; (3) it loads the pinned real Pi 0.84.1 with the adapter and `skills.enabled`, and asserts the skill reaches `before_agent_start` as the fifth, untrusted `[Skill]` recall layer. As with the L0–L3 check, Pi never makes an answer-model request; the only model consumption is MemoryCore's extraction.
+
+```powershell
+cd adapters\pi
+npm run e2e:skill -- --managed-core --env-file ../../deploy/global-images/.env
 ```
 
 ## Uninstall

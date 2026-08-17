@@ -156,6 +156,15 @@ npm run e2e:setup -- --env-file ../../deploy/global-images/.env
 npm run e2e:lifecycle -- --env-file ../../deploy/global-images/.env
 ```
 
+### 真实 Skills 闭环 E2E
+
+- `npm run e2e:skill` 用同一套一次性 MemoryCore 容器验证完整 Skill 学习闭环：(1) 向 `/v3/skill/conversation/add` 提交一段真实的"排查 Node CI 构建 OOM"对话（含 40 KB+ 构建日志，跨过服务端字节归档阈值），断言单次追加即返回 `archived`；(2) 等真实 LLM 审查模型从对话中抽取出一个可复用技能，断言它能被 `/v3/skill/list` 列出；(3) 用真实 Pi 0.84.1 加载适配器并开启 `skills.enabled`，断言该技能以第五层 `[Skill]` 形式进入 `before_agent_start` 的不可信召回 system prompt。与 L0–L3 相同：Pi 本身不发回答模型请求，模型消耗只来自 MemoryCore 抽取。
+
+```powershell
+cd adapters\pi
+npm run e2e:skill -- --managed-core --env-file ../../deploy/global-images/.env
+```
+
 ## 卸载
 
 卸载适配器不会删除服务端记忆——数据仍保存在你配置的 Memory 服务里。需要彻底移除时按顺序：

@@ -35,6 +35,7 @@
     "e2e:l0-l3": "node ./scripts/e2e-l0-l3.mjs",
     "e2e:setup": "node ./scripts/e2e-setup.mjs",
     "e2e:lifecycle": "node ./scripts/e2e-pi-lifecycle.mjs",
+    "e2e:skill": "node ./scripts/e2e-skill.mjs",
     "pack:check": "npm pack --dry-run",
     "verify:pi-load": "node ./scripts/verify-pi-load.mjs",
     "typecheck": "tsc --noEmit",
