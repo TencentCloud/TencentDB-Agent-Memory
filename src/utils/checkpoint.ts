@@ -485,4 +485,59 @@ export class CheckpointManager {
     });
   }
 
+  /**
+   * Recalculate global counters from on-disk data files.
+   *
+   * `total_memories_extracted` and `l0_conversations_count` are only ever
+   * incremented in the normal capture path — no code path decrements them
+   * after cleanup, test-pipeline teardown, or manual JSONL pruning.
+   *
+   * Call this after any data-deletion operation to bring the checkpoint
+   * counters back in line with reality.
+   *
+   * @param getL0ConversationCount  Callback that returns the current count of
+   *   L0 conversations actually present on disk.
+   * @param getL1MemoryCount  Callback that returns the current count of L1
+   *   memories actually present on disk.
+   */
+  async recountFromDisk(
+    getL0ConversationCount: () => Promise<number>,
+    getL1MemoryCount: () => Promise<number>,
+  ): Promise<void> {
+    await this.mutate((cp) => {
+      // Counters are derived from actual data, not accumulated deltas.
+      // Set a sentinel that tells callers the counters were recalculated.
+      const flag = "__recount_pending__";
+      (cp as Record<string, unknown>)[flag] = true;
+    });
+
+    // Perform the actual count outside the lock to avoid holding it
+    // during I/O.
+    let l0Count: number;
+    let l1Count: number;
+    try {
+      [l0Count, l1Count] = await Promise.all([
+        getL0ConversationCount(),
+        getL1MemoryCount(),
+      ]);
+    } catch (err) {
+      this.logger.warn(
+        `[checkpoint] recountFromDisk failed to count data: ${err}`,
+      );
+      return;
+    }
+
+    await this.mutate((cp) => {
+      cp.l0_conversations_count = l0Count;
+      cp.total_memories_extracted = l1Count;
+      delete (cp as Record<string, unknown>).__recount_pending__;
+    });
+
+    this.logger.info(
+      `[checkpoint] recountFromDisk: ` +
+      `l0_conversations_count=${l0Count}, ` +
+      `total_memories_extracted=${l1Count}`,
+    );
+  }
+
 }
