@@ -26,6 +26,7 @@ import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { workbuddyAdapter } from "./agent-adapters/workbuddy.js";
+import { sseDataValue } from "./anthropicHandler.js";
 import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
@@ -693,8 +694,8 @@ async function consumeWorkbuddyStream(
       for (const frame of frames) {
         const dataLines = frame
           .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6));
+          .map((l) => sseDataValue(l))
+          .filter((v): v is string => v !== undefined);
         if (dataLines.length === 0) continue;
         const payload = dataLines.join("\n");
         if (payload === "[DONE]") continue;

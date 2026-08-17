@@ -1627,6 +1627,20 @@ export async function handleAnthropicMessages(
 
 
 /**
+ * Value of an SSE `data` field, or undefined when the line is not one.
+ *
+ * The space after the colon is optional framing per the SSE spec, and the
+ * non-Anthropic upstreams this module exists to patch are exactly the ones
+ * that may omit it — so matching only `"data: "` would skip the frames that
+ * most need patching.
+ */
+export function sseDataValue(line: string): string | undefined {
+  if (!line.startsWith("data:")) return undefined;
+  const value = line.slice(5);
+  return value.startsWith(" ") ? value.slice(1) : value;
+}
+
+/**
  * Create a TransformStream that patches Anthropic SSE events in-band.
  */
 function createSseThinkingFixStream(
@@ -1646,20 +1660,22 @@ function createSseThinkingFixStream(
 
       for (const part of parts) {
         const lines = part.split("\n");
-        let dataLine = "";
+        let dataStr = "";
+        let dataLineIndex = -1;
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            dataLine = line;
+        for (let i = 0; i < lines.length; i++) {
+          const value = sseDataValue(lines[i]!);
+          if (value !== undefined) {
+            dataStr = value;
+            dataLineIndex = i;
           }
         }
 
-        if (!dataLine) {
+        if (dataLineIndex === -1) {
           controller.enqueue(encoder.encode(part + "\n\n"));
           continue;
         }
 
-        const dataStr = dataLine.slice(6);
         if (!dataStr || dataStr === "[DONE]") {
           controller.enqueue(encoder.encode(part + "\n\n"));
           continue;
@@ -1701,9 +1717,9 @@ function createSseThinkingFixStream(
           if (patched) {
             patchedCount++;
             const newDataLine = "data: " + JSON.stringify(evt);
-            const newLines = lines.map((l) =>
-              l.startsWith("data: ") ? newDataLine : l,
-            );
+            // Replace the data line we actually parsed. Matching by prefix
+            // would rewrite every data line in the frame with the same value.
+            const newLines = lines.map((l, i) => (i === dataLineIndex ? newDataLine : l));
             controller.enqueue(encoder.encode(newLines.join("\n") + "\n\n"));
           } else {
             controller.enqueue(encoder.encode(part + "\n\n"));
@@ -2103,9 +2119,8 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
         const lines = sseBuf.split("\n");
         let dataStr = "";
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            dataStr = line.slice(6);
-          }
+          const value = sseDataValue(line);
+          if (value !== undefined) dataStr = value;
         }
         if (dataStr && dataStr !== "[DONE]") {
           try {
