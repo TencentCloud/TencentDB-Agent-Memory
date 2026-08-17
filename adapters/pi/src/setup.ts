@@ -32,6 +32,8 @@ interface SetupAgent {
   team_id: string;
   name: string;
   status: string;
+  /** "private" | "team" | "restricted"; missing means not private. */
+  visibility?: string;
 }
 
 export interface SetupConnection {
@@ -233,28 +235,45 @@ export async function runSetup(
       "agents",
     );
     const agentOptions = [CREATE_AGENT, ...agents.map((item) => safeLabel(item.name, item.agent_id))];
-    const selectedAgentOption = await ctx.ui.select("Select Memory Agent", agentOptions);
-    if (!selectedAgentOption) return { ok: false, cancelled: true, message: "Memory setup cancelled." };
 
     let agent: SetupAgent | undefined;
-    if (selectedAgentOption === CREATE_AGENT) {
-      const name = cleanInput(await ctx.ui.input("Name for the new private Pi agent", DEFAULT_AGENT_NAME), DEFAULT_AGENT_NAME);
-      if (!name) return { ok: false, cancelled: true, message: "Memory setup cancelled." };
-      if (name.length > 120) return { ok: false, cancelled: false, message: "Agent name must be at most 120 characters." };
-      ctx.ui.setStatus("tdai-memory", "memory: creating Pi agent");
-      createdAgent = await metadata.createAgent({
-        team_id: team.team_id,
-        owner_user_id: user.user_id,
-        name,
-        description: "Private long-term memory space for Pi.",
-        visibility: "private",
-        status: "active",
-      });
-      agent = createdAgent;
-    } else {
+    for (;;) {
+      const selectedAgentOption = await ctx.ui.select("Select Memory Agent", agentOptions);
+      if (!selectedAgentOption) return { ok: false, cancelled: true, message: "Memory setup cancelled." };
+
+      if (selectedAgentOption === CREATE_AGENT) {
+        const name = cleanInput(await ctx.ui.input("Name for the new private Pi agent", DEFAULT_AGENT_NAME), DEFAULT_AGENT_NAME);
+        if (!name) return { ok: false, cancelled: true, message: "Memory setup cancelled." };
+        if (name.length > 120) return { ok: false, cancelled: false, message: "Agent name must be at most 120 characters." };
+        ctx.ui.setStatus("tdai-memory", "memory: creating Pi agent");
+        createdAgent = await metadata.createAgent({
+          team_id: team.team_id,
+          owner_user_id: user.user_id,
+          name,
+          description: "Private long-term memory space for Pi.",
+          visibility: "private",
+          status: "active",
+        });
+        agent = createdAgent;
+        break;
+      }
+
       agent = agents.find((item) => safeLabel(item.name, item.agent_id) === selectedAgentOption);
+      if (!agent || agent.agent_id.includes("|")) return { ok: false, cancelled: false, message: "Selected Agent is invalid." };
+
+      // The server now auto-creates a team-visible `default-agent-<user>` on
+      // cold start. Personal memory written to a non-private agent is shared
+      // with the team, so warn before committing to it; declining re-prompts.
+      if (agent.visibility !== "private" && ctx.ui.confirm) {
+        const proceed = await ctx.ui.confirm(
+          "Team-visible agent",
+          `"${safeLabel(agent.name, agent.agent_id)}" is not private (${agent.visibility ?? "unknown"} visibility). Personal memory written here is shared with the team. Continue with this agent?`,
+        );
+        if (!proceed) continue;
+      }
+      break;
     }
-    if (!agent || agent.agent_id.includes("|")) return { ok: false, cancelled: false, message: "Selected Agent is invalid." };
+    if (!agent) return { ok: false, cancelled: false, message: "Selected Agent is invalid." };
 
     ctx.ui.setStatus("tdai-memory", "memory: verifying L0-L3 access");
     const memory = (dependencies.createMemoryClient ?? defaultMemoryClient)(connection, {

@@ -53,6 +53,7 @@ function interactiveContext(cwd: string, inputs: string[], selectChoice?: (title
     ui: {
       input: vi.fn(async () => inputs.shift()),
       select: vi.fn(async (title: string, options: string[]) => selectChoice?.(title, options) ?? options[0]),
+      confirm: vi.fn(async () => true),
       setStatus: vi.fn(),
     },
   };
@@ -96,6 +97,50 @@ describe("Pi memory setup", () => {
       captureTools: true,
     });
     expect(JSON.parse(saved)).not.toHaveProperty("gatewayApiKeyFile");
+  });
+
+  it("warns before reusing a non-private (team-visible) agent and re-prompts when declined", async () => {
+    const { agentDir, cwd, keyPath } = await fixture();
+    const { metadata, memory } = clients();
+    // Cold start: the server auto-created a team-visible default-agent.
+    vi.mocked(metadata.listAgents).mockResolvedValue({
+      total: 1,
+      items: [{ agent_id: "agt-1", team_id: "team-1", name: "Existing Pi", status: "active", visibility: "team" }],
+    });
+    vi.mocked(metadata.createAgent).mockResolvedValue({ agent_id: "agt-new", team_id: "team-1", name: "Pi", status: "active" });
+
+    let selects = 0;
+    const inputs = ["", "", keyPath, "", ""];
+    const ctx = {
+      cwd,
+      hasUI: true,
+      ui: {
+        input: vi.fn(async () => inputs.shift()),
+        select: vi.fn(async () => {
+          // select calls: 1) team, 2) agent -> team-visible, 3) agent re-prompt
+          // after declining the warning -> create a private Pi agent.
+          const step = selects++;
+          if (step === 0) return "Personal (team-1)";
+          if (step === 1) return "Existing Pi (agt-1)";
+          return "+ Create a private Pi agent";
+        }),
+        confirm: vi.fn(async () => false),
+        setStatus: vi.fn(),
+      },
+    };
+
+    const result = await runSetup(ctx as never, {
+      agentDir,
+      createMetadataClient: () => metadata,
+      createMemoryClient: () => memory,
+    });
+
+    if (!result.ok) throw new Error("setup should have succeeded");
+    expect(result.createdAgent).toBe(true);
+    // Declined once, then created a private agent — never reused the team-visible one.
+    expect(vi.mocked(metadata.createAgent)).toHaveBeenCalledWith(expect.objectContaining({ visibility: "private" }));
+    expect(JSON.parse(await readFile(join(agentDir, "tdai-memory.json"), "utf8"))).toMatchObject({ agentId: "agt-new" });
+    void keyPath;
   });
 
   it("can create a private Pi agent when the user selects that option", async () => {

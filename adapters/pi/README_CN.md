@@ -126,6 +126,8 @@ pi list
 
 如果远程 Gateway 需要独立 Bearer Key，请把它放进单独的普通文件，再在向导中提供路径；留空则有意复用 User Key，仅适用于 Gateway 接受该 Key 的部署。
 
+> 服务端冷启动会自动创建团队可见的 `default-agent-<用户名>`。向导复用**非私有** Agent 时会先确认——个人记忆写在团队可见的 Agent 里会与团队共享。默认创建**私有** `Pi` Agent 更安全，个人记忆只属于你。
+
 ### 手动配置
 
 适配器默认忽略 `<项目目录>/.pi/tdai-memory.json`。只有全局配置显式设置 `"allowProjectConfig": true` 后，可信项目才可以提供配置，并且项目文件**只能**包含 `recall` 对象；它不能覆盖 endpoint、Team/Agent/User 身份、密钥文件路径、TLS 设置或 `captureTools`。

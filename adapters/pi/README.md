@@ -126,6 +126,8 @@ The wizard asks for the endpoint, service ID, an existing User Key **file path**
 
 If your remote gateway requires a distinct bearer key, put it in a separate regular file and provide its path when prompted. Leaving that prompt blank intentionally reuses the User Key, which is appropriate only when the gateway accepts it.
 
+> Cold start auto-creates a team-visible `default-agent-<username>` on the server. The wizard confirms before reusing a **non-private** agent, because personal memory written to a team-visible agent is shared with the team. Creating a private `Pi` agent is the safer default — personal memory stays yours.
+
 ### Manual configuration
 
 The adapter ignores `<project>/.pi/tdai-memory.json` by default. If the global file explicitly sets `"allowProjectConfig": true`, a trusted project file may contain **only** the `recall` object. It cannot override an endpoint, any Team/Agent/User identity, key-file path, TLS setting, or `captureTools`.
