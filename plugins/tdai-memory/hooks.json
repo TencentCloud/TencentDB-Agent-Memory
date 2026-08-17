@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" SessionStart", "commandWindows": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" SessionStart", "timeout": 10}]}],
+    "UserPromptSubmit": [{"matcher": "*", "hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" UserPromptSubmit", "commandWindows": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" UserPromptSubmit", "timeout": 20, "additionalContextLimit": 12000}]}],
+    "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" Stop", "commandWindows": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" Stop", "timeout": 20}]}],
+    "SessionEnd": [{"matcher": "*", "hooks": [{"type": "command", "command": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" SessionEnd", "commandWindows": "node \"${PLUGIN_ROOT}/scripts/hooks/runner.mjs\" SessionEnd", "timeout": 3}]}]
+  }
+}
