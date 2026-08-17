@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Real-Pi E2E for the adapter's reload and fork guarantees.
- *
- * Two scenarios, both running the actual Pi 0.84.1 binary in RPC mode with the
- * adapter extension loaded, against a disposable MemoryCore:
+ * Real-Pi E2E for the adapter's durability guarantees: reload, fork, and
+ * outage recovery. All three run the actual Pi 0.84.1 binary in RPC mode with
+ * the adapter extension loaded, against a disposable MemoryCore:
  *
  *   A. reload must not re-capture a settled turn.
  *      A fabricated persisted session is opened by the real Pi. We pre-seed the
@@ -21,6 +20,12 @@
  *      preserves the branch marker (so the adapter's restoreBranchId keeps the
  *      same branch id), and that the derived memory session id therefore
  *      differs from the parent's.
+ *
+ *   C. outage then recovery never loses or duplicates a capture.
+ *      MemoryCore is stopped while an undelivered capture is queued. Pi must
+ *      still come up (fail-open) and the capture must stay pending on disk.
+ *      Once the service is restarted, a fresh Pi delivers it exactly once, and
+ *      a further restart delivers nothing new.
  *
  * Usage: npm run e2e:lifecycle -- --env-file deploy/global-images/.env
  */
@@ -167,8 +172,12 @@ memory:
   await writeFile(configPath, yaml, { encoding: "utf8", mode: 0o600 });
   try {
     await run("docker", ["volume", "create", volume]);
+    // No --rm: Phase C removes and re-creates this container on the same volume
+    // and host port to simulate a restart (stop/start can lose the auto-assigned
+    // host port binding on Docker Desktop). stopManagedCore still removes it
+    // explicitly at teardown.
     await run("docker", [
-      "run", "-d", "--rm", "--name", container,
+      "run", "-d", "--name", container,
       "-p", "127.0.0.1::8420",
       "--mount", `type=volume,source=${volume},target=/data/tdai-memory`,
       "--mount", `type=bind,source=${configPath},target=/data/config/tdai-gateway.yaml,readonly`,
@@ -181,7 +190,8 @@ memory:
     const portResult = await run("docker", ["port", container, "8420/tcp"]);
     const portMatch = portResult.stdout.match(/127\.0\.0\.1:(\d+)/u);
     if (!portMatch) throw new Error("could not resolve managed MemoryCore port");
-    const endpoint = `http://127.0.0.1:${portMatch[1]}`;
+    const hostPort = portMatch[1];
+    const endpoint = `http://127.0.0.1:${hostPort}`;
     const response = await fetch(`${endpoint}/v3/internal/meta/user/init-admin`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-tdai-service-id": SERVICE_ID },
@@ -189,7 +199,7 @@ memory:
     });
     if (!response.ok) throw new Error(`managed MemoryCore init-admin returned HTTP ${response.status}`);
     console.log(`PASS  disposable MemoryCore ready @ ${endpoint}`);
-    return { endpoint, userKey: adminKey, container, volume, temporary, llmApiKey: llm.apiKey };
+    return { endpoint, hostPort, image: llm.image, userKey: adminKey, container, volume, temporary, llmApiKey: llm.apiKey };
   } catch (error) {
     await run("docker", ["rm", "-f", container]).catch(() => {});
     await run("docker", ["volume", "rm", volume]).catch(() => {});
@@ -203,6 +213,30 @@ async function stopManagedCore(core) {
   await run("docker", ["volume", "rm", core.volume]).catch(() => {});
   await rm(core.temporary, { recursive: true, force: true });
   if (activeManagedCore === core) activeManagedCore = undefined;
+}
+
+/**
+ * "Restart" the managed MemoryCore after an outage. The outage is simulated by
+ * removing the container, so recovery re-creates it on the same named volume
+ * (data and admin identity persist) and the same pinned host port (the endpoint
+ * and scope stay identical). Re-creating from scratch is deliberate: `docker
+ * stop`/`start` on Docker Desktop can leave the auto-assigned host port binding
+ * dead even while the container reports healthy, which would make the endpoint
+ * unreachable exactly when the test needs it back.
+ */
+async function restartManagedCore(core) {
+  const configPath = join(core.temporary, "tdai-gateway.yaml");
+  await run("docker", [
+    "run", "-d", "--name", core.container,
+    "-p", `127.0.0.1:${core.hostPort}:8420`,
+    "--mount", `type=volume,source=${core.volume},target=/data/tdai-memory`,
+    "--mount", `type=bind,source=${configPath},target=/data/config/tdai-gateway.yaml,readonly`,
+    "-e", "TDAI_GATEWAY_PORT=8420",
+    "-e", "TDAI_GATEWAY_HOST=0.0.0.0",
+    "-e", "TDAI_DATA_DIR=/data/tdai-memory",
+    core.image,
+  ]);
+  await waitForCore(core.container);
 }
 
 function mask(value) {
@@ -367,6 +401,118 @@ async function queryConversationMessages(endpoint, identity, sessionId) {
   // Mirror the adapter's read path (createSessionMemoryClient) so the query is
   // scoped to the same isolated session.
   return memory.withIsolation({ sessionId }).queryConversation();
+}
+
+/**
+ * Phase C — outage then recovery. Stop MemoryCore while a capture is still
+ * queued, prove Pi keeps working (fail-open) and the record stays pending, then
+ * restart the service and prove a fresh Pi delivers it exactly once - and a
+ * further restart delivers nothing new.
+ */
+async function runOfflineRecovery({ managedCore, endpoint, identity, userKey, cleanupDirs }) {
+  const { loadConfig } = await import("../src/config.ts");
+  const { enqueueCapture } = await import("../src/outbox.ts");
+  const { BRANCH_ENTRY_TYPE, memorySessionId } = await import("../src/session.ts");
+
+  // Dedicated session so this phase's memory scope starts empty.
+  const sessionCwd = await mkdtemp(join(tmpdir(), "tdai-recovery-cwd-"));
+  const sessionDir = await mkdtemp(join(tmpdir(), "tdai-recovery-sessions-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "tdai-recovery-agentdir-"));
+  cleanupDirs.push(sessionCwd, sessionDir, agentDir);
+
+  const fabricated = SessionManager.create(sessionCwd, sessionDir);
+  const branchId = `branch-recovery-${randomBytes(4).toString("hex")}`;
+  fabricated.appendCustomEntry(BRANCH_ENTRY_TYPE, { branchId, createdAt: new Date().toISOString() });
+  fabricated.appendMessage(userMessage("offline origin turn"));
+  fabricated.appendMessage(assistantMessage("offline origin reply"));
+  const sessionFile = fabricated.getSessionFile();
+  const sessionId = fabricated.getSessionId();
+  if (!sessionFile) throw new Error("recovery session was not persisted");
+
+  await writeFile(join(agentDir, "user.key"), userKey, { encoding: "utf8", mode: 0o600 });
+  await writeFile(
+    join(agentDir, "tdai-memory.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        enabled: true,
+        endpoint,
+        serviceId: SERVICE_ID,
+        teamId: identity.teamId,
+        agentId: identity.agentId,
+        userId: identity.userId,
+        userKeyFile: "user.key",
+      },
+      null,
+      2,
+    )}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+
+  const recoveryMemoryId = memorySessionId(sessionId, branchId);
+
+  // The service is down before the capture is made, so the local outbox is the
+  // only place the record can live until Memory comes back. Removing the
+  // container drops the host port binding immediately (ECONNREFUSED), so the
+  // offline flush fails fast and restores the record cleanly.
+  console.log("→ stopping MemoryCore to simulate an outage");
+  await run("docker", ["rm", "-f", managedCore.container]);
+
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const config = await loadConfig({ cwd: sessionCwd, projectTrusted: false, agentDir, env: {} });
+    if (!config.ok || !config.config.enabled) {
+      throw new Error(`recovery config did not load: ${JSON.stringify(config.errors)}`);
+    }
+    await enqueueCapture(config.config, recoveryMemoryId, [
+      { role: "user", content: "offline origin turn" },
+      { role: "assistant", content: "offline origin reply" },
+    ]);
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  }
+
+  // Pi starts against a dead service: the flush fails open, so Pi still answers
+  // and the record stays pending for the next time the service is reachable.
+  const piOffline = startPi({ sessionFile, sessionDir, cwd: sessionCwd, agentDir });
+  await piOffline.ready();
+  await sleep(1_500); // let the failed flush restore the record with a retry backoff
+  const pending = await outboxEntries(agentDir);
+  if (pending.length !== 1) {
+    throw new Error(`expected 1 pending capture while Memory is down, got ${pending.length}: ${pending.join(", ")}`);
+  }
+  console.log("PASS  Pi answers while Memory is down and the capture stays pending in the outbox");
+  await stopPi(piOffline);
+
+  // Bring the service back (same volume, same host port), let the retry
+  // backoff elapse, then flush.
+  await restartManagedCore(managedCore);
+  await sleep(1_500);
+
+  const piRecover = startPi({ sessionFile, sessionDir, cwd: sessionCwd, agentDir });
+  await piRecover.ready();
+  await waitForFlush(agentDir);
+  await sleep(1_000); // grace for any duplicate delivery
+  const afterRecover = await queryConversationMessages(endpoint, identity, recoveryMemoryId);
+  if (afterRecover.total !== 2 || afterRecover.messages.length !== 2) {
+    throw new Error(`expected exactly one 2-message capture after recovery, got total=${afterRecover.total}`);
+  }
+  if ((await outboxEntries(agentDir)).length !== 0) throw new Error("outbox was not drained after recovery");
+  console.log("PASS  after Memory returns, a fresh Pi delivers the pending capture exactly once");
+  await stopPi(piRecover);
+
+  // Restart the same session again: nothing may be delivered a second time.
+  const piAgain = startPi({ sessionFile, sessionDir, cwd: sessionCwd, agentDir });
+  await piAgain.ready();
+  await sleep(2_000);
+  const afterAgain = await queryConversationMessages(endpoint, identity, recoveryMemoryId);
+  if (afterAgain.total !== 2) {
+    throw new Error(`reload after recovery re-delivered: expected 2 messages, got total=${afterAgain.total}`);
+  }
+  console.log("PASS  a further restart delivers nothing new");
+  await stopPi(piAgain);
 }
 
 async function main() {
@@ -550,8 +696,15 @@ async function main() {
       `PASS  RPC fork -> new session ${mask(forkedSessionId)}, parent recorded, branch marker preserved (` +
         `${mask(parentMemoryId)} -> ${mask(forkedMemoryId)})`,
     );
+    await stopPi(piThree);
 
-    console.log("\nE2E PASS: real-Pi reload stays duplicate-free and RPC fork keeps branch isolation.");
+    // ---- Phase C: outage then recovery never loses or duplicates a capture ----
+    await runOfflineRecovery({ managedCore, endpoint, identity, userKey, cleanupDirs });
+
+    console.log(
+      "\nE2E PASS: real-Pi reload stays duplicate-free, RPC fork keeps branch isolation, " +
+        "and an outage never loses or duplicates a capture.",
+    );
     failed = false;
   } finally {
     for (const child of activeChildren.splice(0)) {

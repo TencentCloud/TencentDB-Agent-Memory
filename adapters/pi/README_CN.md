@@ -5,11 +5,12 @@
 ## 第一版能做什么
 
 - Pi 开始回答前：自动召回有界的 L0 对话证据、L1 原子记忆、相关 L2 场景正文和 L3 核心画像，并以“**不可信参考资料**”的形式放进上下文。
-- Pi 对话稳定结束后：先把最终成功的一轮“用户问题 + 助手回答”脱敏写入本地待投递队列，再异步写入该 Pi 会话的隔离空间；Memory 暂时离线时留待之后重试。
+- Pi 对话稳定结束后：先把最终成功的一轮“用户问题 + 助手回答”脱敏写入本地待投递队列，再异步写入该 Pi 会话的隔离空间；Memory 暂时离线时留待之后重试；连续三次失败后，记录会保留为本地 `.dead` 文件，不再阻塞后续采集。
+- Pi `/tree` 分支获得独立的 Memory session 身份；返回旧分支会恢复其身份，而 `/fork` 因 Pi 分配的新 session id 天然隔离。
 - 写入前会遮蔽常见 `sk-*`、Bearer Token、私钥文本；状态命令不会输出密钥。
 - Memory 配置、网络或服务故障时会降级，不会阻止 Pi 正常回答。
 
-L1–L3 由 MemoryCore 根据已采集的对话异步生成；适配器只读取它们，不伪造、编辑或删除。当前仍不会自动创建 Team/Agent、迁移历史聊天。投递语义是 at-least-once：如果服务端已经接受请求但响应丢失，之后重试可能产生重复。
+L1–L3 由 MemoryCore 根据已采集的对话异步生成；适配器只读取它们，不伪造、编辑或删除。除 setup 向导可选创建私有 Agent 外，不会自动创建 Team/Agent，也不迁移历史聊天。投递语义是 at-least-once：如果服务端已经接受请求但响应丢失，之后重试可能产生重复。
 
 ## 前置条件
 
@@ -30,7 +31,7 @@ npm run check
 npm run verify:pi-load
 ```
 
-`verify:pi-load` 会用锁定版本的 Pi 开发依赖启动离线 RPC，并断言 `/tdai-memory-status` 已注册；它不需要 Memory 密钥，也不会调用模型。
+`verify:pi-load` 会用锁定版本的 Pi 开发依赖启动离线 RPC，并断言 `/tdai-memory-setup` 和 `/tdai-memory-status` 都已注册；它不需要 Memory 密钥，也不会调用模型。
 
 ### 两种加载方式
 
@@ -91,7 +92,7 @@ pi list
 }
 ```
 
-远程服务必须使用操作系统信任证书的 HTTPS。也可以用 `TDAI_MEMORY_USER_KEY` 提供密钥；如果没有单独设置 `TDAI_MEMORY_GATEWAY_API_KEY`，会安全地复用 User Key 作为 Gateway Bearer。其他覆盖变量：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_SERVICE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_TIMEOUT_MS`。适配器故意不支持关闭 TLS 证书校验。
+远程服务必须使用操作系统信任证书的 HTTPS。也可以用 `TDAI_MEMORY_USER_KEY` 提供密钥；如果没有单独设置 `TDAI_MEMORY_GATEWAY_API_KEY`，会安全地复用 User Key 作为 Gateway Bearer。其他覆盖变量：`TDAI_MEMORY_ENDPOINT`、`TDAI_MEMORY_SERVICE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_USER_ID`、`TDAI_MEMORY_TIMEOUT_MS`、`TDAI_MEMORY_USER_KEY_FILE`、`TDAI_MEMORY_GATEWAY_API_KEY_FILE`。`TDAI_MEMORY_REJECT_UNAUTHORIZED` 会被读取，但只支持 `true`；适配器故意不支持关闭 TLS 证书校验。
 
 ## 验证效果
 
@@ -147,7 +148,7 @@ npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
 同一套一次性 MemoryCore 容器还驱动两个受管检查：
 
 - `npm run e2e:setup` 用脚本化的 `ctx.ui` 应答 + 真实 SDK 客户端把 `/tdai-memory-setup` 向导对着真实服务跑完，覆盖四个场景：创建私有 Agent / 复用已有 Agent / 假密钥被真实身份校验拒绝 / 取消干净；断言写入的全局配置经 `loadConfig` 往返一致且**不含密钥值**（只含路径）。
-- `npm run e2e:lifecycle` 用锁定的真实 Pi 0.84.1 RPC 模式验证两条可靠性承诺：(1) 重启不会重复采集已安顿的回合——预先在文件 outbox 里放一条未投递采集，Pi 启动时恰好投递一次，再次重启不再投递，且观察到 Pi 加载会话时从不重发 `agent_settled`；(2) RPC `fork` 命令产出新会话 id、在 header 记录源文件为 `parentSession`、保留 `tdai-memory/branch@1` 标记，使分叉落到各自隔离的 Memory 会话。
+- `npm run e2e:lifecycle` 用锁定的真实 Pi 0.84.1 RPC 模式验证三条可靠性承诺：(1) 重启不会重复采集已安顿的回合——预先在文件 outbox 里放一条未投递采集，Pi 启动时恰好投递一次，再次重启不再投递，且观察到 Pi 加载会话时从不重发 `agent_settled`；(2) RPC `fork` 命令产出新会话 id、在 header 记录源文件为 `parentSession`、保留 `tdai-memory/branch@1` 标记，使分叉落到各自隔离的 Memory 会话；(3) 服务中断不丢记忆也不重复——在一条采集仍排队时停掉 MemoryCore，Pi 仍能正常启动（fail-open）且记录保持 pending，服务恢复后新 Pi 恰好投递一次，再次重启不再投递。
 
 ```powershell
 cd adapters\pi

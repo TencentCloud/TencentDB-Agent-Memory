@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { access, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -23,16 +23,20 @@ interface ChildResult {
   stdout: string;
 }
 
-function runChild(args: string[], timeoutMs = 30_000): Promise<ChildResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [childPath, ...args], {
-      cwd: join(here, ".."),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+/**
+ * Spawn a child and return its handle so a test can hard-kill it mid-run (the
+ * crash-recovery path) while still awaiting its eventual exit via `done`.
+ */
+function spawnChild(args: string[], timeoutMs = 30_000): { child: ChildProcess; done: Promise<ChildResult> } {
+  const child = spawn(process.execPath, [childPath, ...args], {
+    cwd: join(here, ".."),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+  child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+  const done = new Promise<ChildResult>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`child timed out; stdout=${stdout} stderr=${stderr}`));
@@ -47,6 +51,11 @@ function runChild(args: string[], timeoutMs = 30_000): Promise<ChildResult> {
       else resolve({ code, stdout });
     });
   });
+  return { child, done };
+}
+
+function runChild(args: string[], timeoutMs = 30_000): Promise<ChildResult> {
+  return spawnChild(args, timeoutMs).done;
 }
 
 async function tmpDir(prefix: string): Promise<string> {
@@ -229,6 +238,45 @@ describe("cross-process capture outbox", () => {
       expect(flushResult(secondResult.stdout).delivered).toBe(0);
       const delivered = flushResult(firstResult.stdout).delivered + flushResult(secondResult.stdout).delivered;
       expect(delivered).toBe(1);
+    } finally {
+      await server.close();
+    }
+  }, 20_000);
+
+  it("reclaims and delivers a record whose holder was hard-killed mid-delivery once its lease expires", async () => {
+    const outboxDir = await tmpDir("tdai-outbox-kill-");
+    const gate = await tmpDir("tdai-outbox-kill-gate-");
+    const readyA = join(gate, "ready-a");
+    const blockedA = join(gate, "blocked-in-deliver"); // A is killed, never released
+
+    await runChild(["enqueue", outboxDir, "pi-killed"]);
+
+    const server = await startDeliveryServer();
+    try {
+      // A claims the record and blocks inside deliver, holding the lease. It is
+      // then hard-killed (not released through the gate), so the lease stays on
+      // disk with no further heartbeats. B starts only after the lease has gone
+      // stale, reclaims the record, and delivers it exactly once.
+      const first = spawnChild([
+        "flush", outboxDir, server.url,
+        "--ready", readyA, "--deliver-gate", blockedA, "--lease-timeout", "300",
+      ]);
+      await waitForFiles([readyA]);
+      await waitForLease(outboxDir);
+
+      // Kill the process mid-delivery and wait for it to actually die.
+      first.child.kill();
+      await first.done.catch(() => {});
+
+      // The claim stamp (embedded in the lease filename) and the last heartbeat
+      // mtime are both stale now; B must reclaim the orphaned lease.
+      await new Promise((resolve) => setTimeout(resolve, 450));
+
+      const second = await runChild(["flush", outboxDir, server.url, "--lease-timeout", "300"]);
+      expect(flushResult(second.stdout).delivered).toBe(1);
+      expect(server.deliveries).toHaveLength(1);
+      expect(server.deliveries[0]?.sessionId).toBe("pi-killed");
+      expect(await readdir(outboxDir)).toEqual([]);
     } finally {
       await server.close();
     }
