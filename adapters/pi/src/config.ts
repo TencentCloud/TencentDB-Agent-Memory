@@ -1,7 +1,15 @@
 import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AdapterConfigFile, ConfigResult, LoadedConfig, RecallConfigFile, RecallOptions } from "./types.js";
+import type {
+  AdapterConfigFile,
+  ConfigResult,
+  LoadedConfig,
+  RecallConfigFile,
+  RecallOptions,
+  SkillsConfigFile,
+  SkillsOptions,
+} from "./types.js";
 
 export const CONFIG_FILE_NAME = "tdai-memory.json";
 const DEFAULT_ENDPOINT = "http://127.0.0.1:8420";
@@ -15,6 +23,21 @@ const DEFAULT_RECALL: RecallOptions = {
   l1Limit: 6,
   l2Limit: 2,
   maxChars: 12_000,
+};
+
+// Skills are opt-in: absent `skills` or `skills.enabled=false` keeps today's
+// L0-L3 behaviour unchanged. When enabled, capture defaults on but the runtime
+// read tools and team-wide search stay gated by the sub-flags below.
+const DEFAULT_SKILLS: SkillsOptions = {
+  enabled: false,
+  capture: true,
+  runtimeTools: true,
+  routingMode: "bm25",
+  allowTeamSearch: false,
+  includeFailedTools: false,
+  maxMessageBytes: 32_768,
+  maxToolItems: 16,
+  flushTimeoutMs: 1_500,
 };
 
 export interface LoadConfigOptions {
@@ -87,6 +110,12 @@ function validateConfigObject(value: object, path: string): AdapterConfigFile {
     }
     output.recall = validateRecallConfig(input.recall as Record<string, unknown>, path);
   }
+  if (input.skills !== undefined) {
+    if (!input.skills || typeof input.skills !== "object" || Array.isArray(input.skills)) {
+      throw new Error(`skills in ${path} must be an object`);
+    }
+    output.skills = validateSkillsConfig(input.skills as Record<string, unknown>, path);
+  }
   return output;
 }
 
@@ -99,6 +128,27 @@ function validateRecallConfig(input: Record<string, unknown>, path: string): Rec
   for (const key of ["deadlineMs", "l0Limit", "l1Limit", "l2Limit", "maxChars"] as const) {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "number") throw new Error(`recall.${key} in ${path} must be a number`);
+    result[key] = input[key];
+  }
+  return result;
+}
+
+function validateSkillsConfig(input: Record<string, unknown>, path: string): SkillsConfigFile {
+  const result: SkillsConfigFile = {};
+  for (const key of ["enabled", "capture", "runtimeTools", "allowTeamSearch", "includeFailedTools"] as const) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== "boolean") throw new Error(`skills.${key} in ${path} must be a boolean`);
+    result[key] = input[key];
+  }
+  if (input.routingMode !== undefined) {
+    if (input.routingMode !== "bm25" && input.routingMode !== "embedding" && input.routingMode !== "hybrid") {
+      throw new Error(`skills.routingMode in ${path} must be one of bm25, embedding, hybrid`);
+    }
+    result.routingMode = input.routingMode;
+  }
+  for (const key of ["maxMessageBytes", "maxToolItems", "flushTimeoutMs"] as const) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== "number") throw new Error(`skills.${key} in ${path} must be a number`);
     result[key] = input[key];
   }
   return result;
@@ -142,7 +192,9 @@ function mergeSource(target: MergedConfig, source: PartialWithOrigin): void {
     if (value === undefined) continue;
     const key = rawKey as ConfigKey;
     if (key === "recall") {
-      target.values.recall = { ...target.values.recall, ...value };
+      target.values.recall = { ...target.values.recall, ...(value as RecallConfigFile) };
+    } else if (key === "skills") {
+      target.values.skills = { ...target.values.skills, ...(value as SkillsConfigFile) };
     } else {
       Object.assign(target.values, { [key]: value });
     }
@@ -183,6 +235,20 @@ function resolveRecallOptions(value: RecallConfigFile | undefined, errors: strin
   }
   if (!Number.isInteger(result.maxChars) || result.maxChars < 1_000 || result.maxChars > 48_000) {
     errors.push("recall.maxChars must be an integer between 1000 and 48000");
+  }
+  return result;
+}
+
+function resolveSkillsOptions(value: SkillsConfigFile | undefined, errors: string[]): SkillsOptions {
+  const result: SkillsOptions = { ...DEFAULT_SKILLS, ...value };
+  if (!Number.isInteger(result.maxMessageBytes) || result.maxMessageBytes < 1_024 || result.maxMessageBytes > 1_048_576) {
+    errors.push("skills.maxMessageBytes must be an integer between 1024 and 1048576");
+  }
+  if (!Number.isInteger(result.maxToolItems) || result.maxToolItems < 0 || result.maxToolItems > 100) {
+    errors.push("skills.maxToolItems must be an integer between 0 and 100");
+  }
+  if (!Number.isInteger(result.flushTimeoutMs) || result.flushTimeoutMs < 100 || result.flushTimeoutMs > 30_000) {
+    errors.push("skills.flushTimeoutMs must be an integer between 100 and 30000");
   }
   return result;
 }
@@ -319,6 +385,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
     const values = merged.values;
     const sourcePaths = sources.map((source) => source.path);
     const recall = resolveRecallOptions(values.recall, errors);
+    const skills = resolveSkillsOptions(values.skills, errors);
 
     if (values.schemaVersion !== 1) errors.push("schemaVersion must be 1");
     if (values.enabled === false && errors.length === 0) {
@@ -414,6 +481,7 @@ export async function loadConfig(options: LoadConfigOptions): Promise<ConfigResu
       rejectUnauthorized: values.rejectUnauthorized ?? true,
       captureTools: values.captureTools ?? false,
       recall,
+      skills,
       sources: sourcePaths,
       userKeySource,
       gatewayApiKeySource,

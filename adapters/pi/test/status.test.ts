@@ -32,6 +32,7 @@ function configured(): ConfigResult {
       rejectUnauthorized: true,
       captureTools: false,
       recall: { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
+      skills: { enabled: false, capture: true, runtimeTools: true, routingMode: "bm25", allowTeamSearch: false, includeFailedTools: false, maxMessageBytes: 32768, maxToolItems: 16, flushTimeoutMs: 1500 },
       sources: [],
       userKeySource: "key file",
       gatewayApiKeySource: "environment variable TDAI_MEMORY_GATEWAY_API_KEY",

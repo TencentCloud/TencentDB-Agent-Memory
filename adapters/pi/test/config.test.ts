@@ -278,4 +278,46 @@ describe("loadConfig", () => {
     if (result.ok) return;
     expect(result.errors).toContain("user key file must not exceed 16384 bytes");
   });
+
+  it("keeps skills disabled by default and enables them only when explicitly set", async () => {
+    const { agentDir, cwd } = await fixture();
+    const identity = { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" };
+    const defaults = await loadConfig({ cwd, agentDir, projectTrusted: false, env: identity });
+    expect(defaults.ok && defaults.config.enabled && defaults.config.skills.enabled).toBe(false);
+
+    await writeFile(join(agentDir, "tdai-memory.json"), JSON.stringify({ skills: { enabled: true, routingMode: "hybrid", maxToolItems: 4 } }));
+    const enabled = await loadConfig({ cwd, agentDir, projectTrusted: false, env: identity });
+    expect(enabled.ok).toBe(true);
+    if (!enabled.ok || !enabled.config.enabled) return;
+    expect(enabled.config.skills.enabled).toBe(true);
+    expect(enabled.config.skills.routingMode).toBe("hybrid");
+    expect(enabled.config.skills.maxToolItems).toBe(4);
+  });
+
+  it("rejects invalid skills routing mode and budgets", async () => {
+    const { agentDir, cwd } = await fixture();
+    const identity = { TDAI_MEMORY_TEAM_ID: "team", TDAI_MEMORY_AGENT_ID: "agent", TDAI_MEMORY_USER_ID: "user", TDAI_MEMORY_USER_KEY: "key" };
+    await writeFile(join(agentDir, "tdai-memory.json"), JSON.stringify({ skills: { routingMode: "bm25x" } }));
+    const badMode = await loadConfig({ cwd, agentDir, projectTrusted: false, env: identity });
+    expect(badMode.ok).toBe(false);
+    if (!badMode.ok) expect(badMode.errors[0]).toContain("must be one of bm25, embedding, hybrid");
+
+    await writeFile(join(agentDir, "tdai-memory.json"), JSON.stringify({ skills: { maxMessageBytes: 10 } }));
+    const badBytes = await loadConfig({ cwd, agentDir, projectTrusted: false, env: identity });
+    expect(badBytes.ok).toBe(false);
+    if (!badBytes.ok) expect(badBytes.errors).toContain("skills.maxMessageBytes must be an integer between 1024 and 1048576");
+  });
+
+  it("rejects a repository skills override even after opting in", async () => {
+    const { agentDir, cwd } = await fixture();
+    await writeFile(
+      join(agentDir, "tdai-memory.json"),
+      JSON.stringify({ teamId: "team", agentId: "agent", userId: "user", allowProjectConfig: true }),
+    );
+    await writeFile(join(cwd, ".pi", "tdai-memory.json"), JSON.stringify({ skills: { enabled: true } }));
+
+    const result = await loadConfig({ cwd, agentDir, projectTrusted: true, env: { TDAI_MEMORY_USER_KEY: "key" } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors).toContain("project configuration may only set recall (unsupported: skills)");
+  });
 });

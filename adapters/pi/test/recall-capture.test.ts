@@ -5,6 +5,7 @@ import { redactText, truncateUtf8 } from "../src/security.js";
 
 describe("recall", () => {
   const options = { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 };
+  const skillsOptions = { enabled: false, capture: true, runtimeTools: true, routingMode: "bm25" as const, allowTeamSearch: false, includeFailedTools: false, maxMessageBytes: 32768, maxToolItems: 16, flushTimeoutMs: 1500 };
 
   it("automatically recalls all four layers, reads only relevant scenarios, and marks them as untrusted", async () => {
     const memory = {
@@ -27,7 +28,7 @@ describe("recall", () => {
       }),
     };
 
-    const recalled = await recallMemory(memory as never, "Which package manager should this project use?", options);
+    const recalled = await recallMemory({ memory, skill: {} } as never, "Which package manager should this project use?", options, skillsOptions);
 
     expect(recalled.content).toContain('trust="untrusted"');
     expect(recalled.content).toContain("[L3 core]");
@@ -49,7 +50,7 @@ describe("recall", () => {
       searchConversation: async () => { throw new Error("conversation offline"); },
     };
 
-    const recalled = await recallMemory(memory as never, "How should TypeScript be configured?", options);
+    const recalled = await recallMemory({ memory, skill: {} } as never, "How should TypeScript be configured?", options, skillsOptions);
 
     expect(recalled.content).toContain("Keep TypeScript strict.");
     expect(recalled.failedLayers).toEqual(["L3 core", "L0 conversation"]);
@@ -67,7 +68,7 @@ describe("recall", () => {
     };
 
     const started = Date.now();
-    const recalled = await recallMemory(memory as never, "How should recall behave?", { ...options, deadlineMs: 25 });
+    const recalled = await recallMemory({ memory, skill: {} } as never, "How should recall behave?", { ...options, deadlineMs: 25 }, skillsOptions);
 
     expect(Date.now() - started).toBeLessThan(500);
     expect(recalled.content).toContain("Use a global recall deadline.");
@@ -86,7 +87,7 @@ describe("recall", () => {
     };
 
     const started = Date.now();
-    const recalled = await recallMemory(memory as never, "Will Pi still answer?", { ...options, deadlineMs: 25 });
+    const recalled = await recallMemory({ memory, skill: {} } as never, "Will Pi still answer?", { ...options, deadlineMs: 25 }, skillsOptions);
 
     expect(Date.now() - started).toBeLessThan(500);
     expect(recalled.content).toBeUndefined();
@@ -97,7 +98,7 @@ describe("recall", () => {
 
   it("does not query for an empty prompt", async () => {
     const memory = { readCore: async () => { throw new Error("should not run"); } };
-    await expect(recallMemory(memory as never, "   ", options)).resolves.toEqual({ availableLayers: [], failedLayers: [], timedOutLayers: [] });
+    await expect(recallMemory({ memory, skill: {} } as never, "   ", options, skillsOptions)).resolves.toEqual({ availableLayers: [], failedLayers: [], timedOutLayers: [] });
   });
 
   it("enforces an overall character budget", async () => {
@@ -107,7 +108,7 @@ describe("recall", () => {
       listScenarios: async () => ({ entries: [], total: 0 }),
       searchConversation: async () => ({ messages: [] }),
     };
-    const recalled = await recallMemory(memory as never, "memory", { ...options, maxChars: 1000 });
+    const recalled = await recallMemory({ memory, skill: {} } as never, "memory", { ...options, maxChars: 1000 }, skillsOptions);
     expect(Array.from(recalled.content ?? "").length).toBeLessThanOrEqual(1200);
   });
 
@@ -119,7 +120,7 @@ describe("recall", () => {
       searchConversation: async () => ({ messages: [] }),
     };
 
-    const recalled = await recallMemory(memory as never, "service status", options);
+    const recalled = await recallMemory({ memory, skill: {} } as never, "service status", options, skillsOptions);
 
     expect(recalled.content).toContain("Status: active in prod");
     expect(recalled.content).toContain("fact: active in prod");
@@ -133,7 +134,7 @@ describe("recall", () => {
       searchConversation: async () => ({ messages: [] }),
     };
 
-    const recalled = await recallMemory(memory as never, "shipping date", options);
+    const recalled = await recallMemory({ memory, skill: {} } as never, "shipping date", options, skillsOptions);
 
     expect(recalled.content).toContain("2024-01-01: ship it");
     expect(recalled.content).toContain("fact: ship it");

@@ -1,9 +1,10 @@
-import { MemoryClient, MetadataClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+import { MemoryClient, MetadataClient, SkillClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import type { LoadedConfig } from "./types.js";
 
 export interface AdapterClients {
   memory: MemoryClient;
   metadata: MetadataClient;
+  skill: SkillClient;
 }
 
 export function createSessionMemoryClient(config: LoadedConfig, sessionId: string): MemoryClient {
@@ -28,6 +29,12 @@ export function createClients(config: LoadedConfig): AdapterClients {
     metadata: new MetadataClient({
       ...common,
       userKey: config.userKey,
+    }),
+    skill: new SkillClient({
+      ...common,
+      teamId: config.teamId,
+      agentId: config.agentId,
+      userId: config.userId,
     }),
   };
 }

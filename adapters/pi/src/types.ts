@@ -14,6 +14,7 @@ export interface AdapterConfigFile {
   rejectUnauthorized?: boolean;
   captureTools?: boolean;
   recall?: RecallConfigFile;
+  skills?: SkillsConfigFile;
 }
 
 export interface RecallConfigFile {
@@ -23,6 +24,30 @@ export interface RecallConfigFile {
   l1Limit?: number;
   l2Limit?: number;
   maxChars?: number;
+}
+
+export interface SkillsConfigFile {
+  enabled?: boolean;
+  capture?: boolean;
+  runtimeTools?: boolean;
+  routingMode?: "bm25" | "embedding" | "hybrid";
+  allowTeamSearch?: boolean;
+  includeFailedTools?: boolean;
+  maxMessageBytes?: number;
+  maxToolItems?: number;
+  flushTimeoutMs?: number;
+}
+
+export interface SkillsOptions {
+  enabled: boolean;
+  capture: boolean;
+  runtimeTools: boolean;
+  routingMode: "bm25" | "embedding" | "hybrid";
+  allowTeamSearch: boolean;
+  includeFailedTools: boolean;
+  maxMessageBytes: number;
+  maxToolItems: number;
+  flushTimeoutMs: number;
 }
 
 export interface RecallOptions {
@@ -47,6 +72,7 @@ export interface LoadedConfig {
   rejectUnauthorized: boolean;
   captureTools: boolean;
   recall: RecallOptions;
+  skills: SkillsOptions;
   sources: string[];
   userKeySource: string;
   gatewayApiKeySource: string;

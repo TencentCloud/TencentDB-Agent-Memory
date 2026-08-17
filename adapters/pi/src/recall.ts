@@ -5,9 +5,12 @@ import type {
   MemoryClient,
   ScenarioEntry,
   ScenarioFile,
+  SkillClient,
+  SkillSearchHit,
 } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { redactText } from "./security.js";
-import type { RecallOptions } from "./types.js";
+import type { AdapterClients } from "./clients.js";
+import type { RecallOptions, SkillsOptions } from "./types.js";
 
 export interface RecallResult {
   content?: string;
@@ -17,7 +20,7 @@ export interface RecallResult {
 }
 
 interface RecallLayer {
-  name: "L0 conversation" | "L1 atomic" | "L2 scenario" | "L3 core";
+  name: "L0 conversation" | "L1 atomic" | "L2 scenario" | "L3 core" | "Skill";
   items: RecallItem[];
 }
 
@@ -33,11 +36,14 @@ interface RecallItem {
 }
 
 const LAYER_BUDGETS = {
-  "L3 core": 0.25,
-  "L1 atomic": 0.3,
-  "L2 scenario": 0.25,
+  "L3 core": 0.2,
+  "L1 atomic": 0.25,
+  "L2 scenario": 0.2,
   "L0 conversation": 0.2,
+  Skill: 0.15,
 } as const;
+
+const SKILL_RECALL_LIMIT = 5;
 
 function escapeBoundary(value: string): string {
   return value.replaceAll("<tdai_recalled_memory", "&lt;tdai_recalled_memory").replaceAll(
@@ -121,6 +127,22 @@ function conversationItems(items: ConversationSearchHit[]): RecallItem[] {
   });
 }
 
+function skillItem(hit: SkillSearchHit): RecallItem | undefined {
+  const name = hit.name?.trim() ? `Skill "${hit.name.trim()}"` : "";
+  const raw = [name, hit.description, hit.snippet].filter((part) => part && part.trim()).join("\n");
+  const cleaned = safeItem(raw);
+  return cleaned ? { raw: cleaned, key: fingerprint(cleaned) } : undefined;
+}
+
+async function recallSkills(skill: SkillClient, query: string, options: SkillsOptions): Promise<RecallItem[]> {
+  if (!options.enabled) return [];
+  const data = await skill.search({ query, top_k: SKILL_RECALL_LIMIT, mode: options.routingMode });
+  return data.items.flatMap((item) => {
+    const rendered = skillItem(item);
+    return rendered ? [rendered] : [];
+  });
+}
+
 function formatLayers(layers: RecallLayer[], maxChars: number): string | undefined {
   const seen = new Set<string>();
   const sections: string[] = [];
@@ -151,7 +173,13 @@ function formatLayers(layers: RecallLayer[], maxChars: number): string | undefin
   ].join("\n\n");
 }
 
-export async function recallMemory(memory: MemoryClient, prompt: string, options: RecallOptions): Promise<RecallResult> {
+export async function recallMemory(
+  clients: AdapterClients,
+  prompt: string,
+  options: RecallOptions,
+  skillsOptions: SkillsOptions,
+): Promise<RecallResult> {
+  const memory = clients.memory;
   const query = boundedCharacters(prompt.trim(), 2048);
   if (!options.enabled || !query) return { availableLayers: [], failedLayers: [], timedOutLayers: [] };
 
@@ -175,6 +203,9 @@ export async function recallMemory(memory: MemoryClient, prompt: string, options
         : memory.searchConversation({ query, limit: options.l0Limit }).then((data) => conversationItems(data.messages)),
     },
   ];
+  if (skillsOptions.enabled) {
+    work.push({ name: "Skill", promise: recallSkills(clients.skill, query, skillsOptions) });
+  }
   const layers: RecallLayer[] = [];
   const availableLayers: string[] = [];
   const failedLayers: string[] = [];

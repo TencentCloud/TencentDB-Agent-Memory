@@ -4,12 +4,22 @@ import {
   MAX_SEARCH_QUERY_CHARS,
   MAX_SESSION_KEY_CHARS,
   memorySearch,
+  skillRead,
+  skillSearch,
 } from "../src/tools.js";
 
 function memoryClient() {
   return {
     searchAtomic: vi.fn(),
     searchConversation: vi.fn(),
+  };
+}
+
+function skillClient() {
+  return {
+    search: vi.fn(),
+    get: vi.fn(),
+    readFile: vi.fn(),
   };
 }
 
@@ -100,5 +110,61 @@ describe("read-only memory tools", () => {
     expect(bounded).toContain("[REDACTED]");
     expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(12_000);
     expect(bounded.endsWith("\n</tdai_untrusted_memory>")).toBe(true);
+  });
+});
+
+describe("read-only skill tools", () => {
+  it("rejects an empty skill query without calling the SDK", async () => {
+    const skill = skillClient();
+    expect(text(await skillSearch(skill as never, { query: "  " }, false, "bm25"))).toContain("Query cannot be empty.");
+    expect(skill.search).not.toHaveBeenCalled();
+  });
+
+  it("renders skill hits as an untrusted list with name, version and description", async () => {
+    const skill = skillClient();
+    skill.search.mockResolvedValue({
+      items: [{ name: "deploy", version: 3, description: "How to deploy", snippet: "pnpm deploy", score: 0.9 }],
+    });
+    const result = text(await skillSearch(skill as never, { query: "deploy", top_k: 5 }, false, "bm25"));
+    expect(result.startsWith('<tdai_untrusted_memory trust="untrusted" purpose="reference-only">\n')).toBe(true);
+    expect(result).toContain("deploy (v3) — How to deploy");
+    expect(result).toContain("pnpm deploy");
+    expect(skill.search).toHaveBeenCalledWith({ query: "deploy", top_k: 5, mode: "bm25" });
+  });
+
+  it("only forwards team scope when explicitly allowed", async () => {
+    const skill = skillClient();
+    skill.search.mockResolvedValue({ items: [] });
+    await skillSearch(skill as never, { query: "x", scope: "team" }, false, "bm25");
+    expect(skill.search).toHaveBeenCalledWith({ query: "x", mode: "bm25" });
+
+    skill.search.mockClear();
+    await skillSearch(skill as never, { query: "x", scope: "team" }, true, "bm25");
+    expect(skill.search).toHaveBeenCalledWith({ query: "x", mode: "bm25", scope: "team" });
+  });
+
+  it("reads SKILL.md by default and a resource file when a path is given", async () => {
+    const skill = skillClient();
+    skill.get.mockResolvedValue({ content: "# SKILL.md body" });
+    expect(text(await skillRead(skill as never, { skill_id: "skill_1" }))).toContain("SKILL.md body");
+    expect(skill.get).toHaveBeenCalledWith({ skill_id: "skill_1", include_content: true, include_manifest: false });
+
+    skill.readFile.mockResolvedValue({ content: "resource body" });
+    expect(text(await skillRead(skill as never, { skill_id: "skill_1", path: "references/x.md" }))).toContain("resource body");
+    expect(skill.readFile).toHaveBeenCalledWith({ skill_id: "skill_1", path: "references/x.md" });
+  });
+
+  it("rejects an empty skill_id and fails open on SDK errors", async () => {
+    const skill = skillClient();
+    expect(text(await skillRead(skill as never, { skill_id: "  " }))).toContain("skill_id cannot be empty.");
+    expect(skill.get).not.toHaveBeenCalled();
+
+    skill.get.mockRejectedValue(new Error("offline sk-mem-abcdefghi"));
+    const failure = text(await skillRead(skill as never, { skill_id: "skill_1" }));
+    expect(failure).toContain("Skill read failed:");
+    expect(failure).not.toContain("sk-mem-abcdefghi");
+
+    skill.search.mockRejectedValue(new Error("down"));
+    expect(text(await skillSearch(skill as never, { query: "x" }, false, "bm25"))).toContain("Skill search failed:");
   });
 });

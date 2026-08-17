@@ -11,6 +11,36 @@ export function redactText(value: string): string {
   return result;
 }
 
+// Keys whose values are secret-shaped: replaced wholesale rather than running
+// the value through redactText, so a short token without a recognisable prefix
+// (e.g. a bare UUID used as a password) is still never written into a Skill
+// conversation. Matched case-insensitively against the whole key name.
+const SENSITIVE_KEY = /(authorization|api[-_]?key|token|password|passwd|secret|cookie|credential|private[-_]?key)/i;
+const MAX_REDACT_DEPTH = 8;
+
+/**
+ * Recursively redact a structured value (tool arguments / tool results) before
+ * it becomes a Skill message. Unlike `redactText`, which only catches
+ * secret-looking substrings, this also blanks entire values under sensitive
+ * keys and bounds recursion depth so an adversarial or cyclic payload cannot
+ * cause unbounded work.
+ */
+export function redactValue(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return redactText(value);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return value;
+  if (depth >= MAX_REDACT_DEPTH) return "[...]";
+  if (Array.isArray(value)) return value.map((item) => redactValue(item, depth + 1));
+  if (typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = SENSITIVE_KEY.test(key) ? "[REDACTED]" : redactValue(item, depth + 1);
+    }
+    return result;
+  }
+  return value;
+}
+
 export function truncateUtf8(value: string, maxBytes: number): string {
   const bytes = Buffer.from(value, "utf8");
   if (bytes.length <= maxBytes) return value;

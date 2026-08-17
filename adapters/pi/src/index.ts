@@ -4,6 +4,7 @@ import { createConversationMessages, lastSuccessfulAssistantText } from "./captu
 import { createClients, createSessionMemoryClient } from "./clients.js";
 import { loadConfig } from "./config.js";
 import { enqueueCapture, flushOutbox } from "./outbox.js";
+import { createSkillMessages, enqueueSkillTurn, type SkillToolCall } from "./skill-capture.js";
 import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { runSetup } from "./setup.js";
@@ -15,11 +16,17 @@ import {
   MAX_SESSION_KEY_CHARS,
   memorySearch,
   memorySearchMessage,
+  skillRead,
+  skillSearch,
 } from "./tools.js";
 import type { ConfigResult } from "./types.js";
 
 const STATUS_KEY = "tdai-memory";
 const MEMORY_SEARCH_TOOLS = new Set(["tdai_memory_search", "tdai_conversation_search"]);
+const SKILL_TOOLS = new Set(["tdai_skill_search", "tdai_skill_read"]);
+// Any adapter tool whose read-back must never be re-learned: the memory
+// search tools (L0/L1 evidence) plus the skill tools themselves.
+const SELF_TOOLS = new Set([...MEMORY_SEARCH_TOOLS, ...SKILL_TOOLS]);
 
 type TimedOutcome<T> = { ok: true; value: T } | { ok: false };
 
@@ -27,6 +34,8 @@ interface TurnState {
   activePrompt: string | undefined;
   finalAssistant: string | undefined;
   successfulToolResults: Array<{ toolName: string; isError: boolean; content: unknown }>;
+  toolCalls: Map<string, SkillToolCall>;
+  toolCallOrder: string[];
   memoryToolCallsThisTurn: number;
 }
 
@@ -58,6 +67,8 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     activePrompt: undefined,
     finalAssistant: undefined,
     successfulToolResults: [],
+    toolCalls: new Map(),
+    toolCallOrder: [],
     memoryToolCallsThisTurn: 0,
   });
 
@@ -74,6 +85,7 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
   const memorySearchTimedOut = () => memorySearchMessage("Memory search unavailable. Continue without memory.");
   const memoryToolLimitReached = () =>
     memorySearchMessage("Memory search limit reached for this turn. Use existing information to answer.");
+  const skillsUnavailable = () => memorySearchMessage("Skills not configured. Continue without skills.");
 
   pi.registerTool({
     name: "tdai_memory_search",
@@ -123,6 +135,72 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerTool({
+    name: "tdai_skill_search",
+    label: "Search skills",
+    description: "Search learned skills (SKILL.md) by name, description and snippet.",
+    promptSnippet: "Search learned skills when relevant; use memory and skill tools at most 3 times total per turn, then answer from existing information.",
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: MAX_SEARCH_QUERY_CHARS }),
+      top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEARCH_LIMIT })),
+      scope: Type.Optional(Type.String()),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      if (
+        !currentConfig?.ok ||
+        !currentConfig.config.enabled ||
+        !currentConfig.config.skills.enabled ||
+        !currentConfig.config.skills.runtimeTools
+      ) {
+        return skillsUnavailable();
+      }
+      const state = getOrCreateTurnState(sessionIdOf(ctx));
+      if (state.memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      state.memoryToolCallsThisTurn += 1;
+      return (
+        (await settleWithin(
+          skillSearch(
+            createClients(currentConfig.config).skill,
+            params,
+            currentConfig.config.skills.allowTeamSearch,
+            currentConfig.config.skills.routingMode,
+          ),
+          currentConfig.config.recall.deadlineMs,
+        )) ?? memorySearchTimedOut()
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "tdai_skill_read",
+    label: "Read skill",
+    description: "Read a learned skill's SKILL.md body or a specific resource file.",
+    promptSnippet: "Read a skill's full SKILL.md when a search result needs more detail; use memory and skill tools at most 3 times total per turn.",
+    parameters: Type.Object({
+      skill_id: Type.String({ minLength: 1, maxLength: MAX_SESSION_KEY_CHARS }),
+      path: Type.Optional(Type.String({ maxLength: MAX_SESSION_KEY_CHARS })),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      if (
+        !currentConfig?.ok ||
+        !currentConfig.config.enabled ||
+        !currentConfig.config.skills.enabled ||
+        !currentConfig.config.skills.runtimeTools
+      ) {
+        return skillsUnavailable();
+      }
+      const state = getOrCreateTurnState(sessionIdOf(ctx));
+      if (state.memoryToolCallsThisTurn >= 3) return memoryToolLimitReached();
+      state.memoryToolCallsThisTurn += 1;
+      return (
+        (await settleWithin(
+          skillRead(createClients(currentConfig.config).skill, params),
+          currentConfig.config.recall.deadlineMs,
+        )) ?? memorySearchTimedOut()
+      );
+    },
+  });
+
   pi.registerCommand("tdai-memory-setup", {
     description: "Interactively configure TencentDB Agent Memory for Pi",
     handler: async (_args, ctx) => {
@@ -145,13 +223,13 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       }
 
       ctx.ui.setStatus(STATUS_KEY, "memory: configured");
-      await ctx.reload();
       ctx.ui.notify(
         setup.createdAgent
           ? "Memory setup complete. A private Pi Agent was created and the extension was reloaded."
           : "Memory setup complete. The extension was reloaded.",
         "info",
       );
+      await ctx.reload();
     },
   });
 
@@ -216,9 +294,10 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     try {
       const recalled = await settleWithin(
         recallMemory(
-          createClients(currentConfig.config).memory,
+          createClients(currentConfig.config),
           event.prompt,
           currentConfig.config.recall,
+          currentConfig.config.skills,
         ),
         currentConfig.config.recall.deadlineMs,
       );
@@ -251,21 +330,50 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     getOrCreateTurnState(sessionIdOf(ctx)).finalAssistant = lastSuccessfulAssistantText(event.messages);
   });
 
-  pi.on("tool_result", async (event, ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     if (
       !currentConfig?.ok ||
       !currentConfig.config.enabled ||
-      !currentConfig.config.captureTools ||
-      event.isError ||
-      MEMORY_SEARCH_TOOLS.has(event.toolName)
+      !currentConfig.config.skills.enabled ||
+      !currentConfig.config.skills.capture ||
+      SELF_TOOLS.has(event.toolName)
     ) {
       return;
     }
-    getOrCreateTurnState(sessionIdOf(ctx)).successfulToolResults.push({
+    const state = getOrCreateTurnState(sessionIdOf(ctx));
+    state.toolCalls.set(event.toolCallId, {
+      toolCallId: event.toolCallId,
       toolName: event.toolName,
-      isError: event.isError,
-      content: event.content,
+      input: event.input,
     });
+    state.toolCallOrder.push(event.toolCallId);
+  });
+
+  pi.on("tool_result", async (event, ctx) => {
+    const state = getOrCreateTurnState(sessionIdOf(ctx));
+    if (
+      currentConfig?.ok &&
+      currentConfig.config.enabled &&
+      currentConfig.config.captureTools &&
+      !event.isError &&
+      !MEMORY_SEARCH_TOOLS.has(event.toolName)
+    ) {
+      state.successfulToolResults.push({
+        toolName: event.toolName,
+        isError: event.isError,
+        content: event.content,
+      });
+    }
+    if (
+      currentConfig?.ok &&
+      currentConfig.config.enabled &&
+      currentConfig.config.skills.enabled &&
+      currentConfig.config.skills.capture &&
+      !SELF_TOOLS.has(event.toolName)
+    ) {
+      const call = state.toolCalls.get(event.toolCallId);
+      if (call) call.result = { content: event.content, isError: event.isError };
+    }
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -293,6 +401,24 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       }).then((result) => {
         if (result.delivered > 0) ctx.ui.setStatus(STATUS_KEY, "memory: captured");
       }).catch(() => undefined);
+
+      // Skill learning ingest: independent of L0, at-most-once, never blocks.
+      if (loadedConfig.skills.enabled && loadedConfig.skills.capture) {
+        const skillCalls = state.toolCallOrder
+          .map((id) => state.toolCalls.get(id))
+          .filter((call): call is SkillToolCall => call !== undefined);
+        const skillMessages = createSkillMessages({
+          prompt,
+          finalAssistant: assistant,
+          toolCalls: skillCalls,
+          options: loadedConfig.skills,
+        });
+        void enqueueSkillTurn(loadedConfig, captureSessionId, skillMessages)
+          .then((status) => {
+            if (status === "uncertain") ctx.ui.setStatus(STATUS_KEY, "memory: skill uncertain");
+          })
+          .catch(() => undefined);
+      }
     } catch {
       ctx.ui.setStatus(STATUS_KEY, "memory: capture failed");
     }

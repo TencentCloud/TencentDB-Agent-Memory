@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+import type { MemoryClient, SkillClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { redactText, truncateUtf8 } from "./security.js";
 
 const MAX_RESULT_BYTES = 12_000;
@@ -122,5 +122,89 @@ export async function conversationSearch(
     return textResult(lines.join("\n"), { count: result.messages.length });
   } catch (error) {
     return textResult(`Memory search failed: ${safeErrorMessage(error)}`);
+  }
+}
+
+export interface SkillSearchParams {
+  query: string;
+  top_k?: number;
+  scope?: string;
+}
+
+export interface SkillReadParams {
+  skill_id: string;
+  path?: string;
+}
+
+function normalizeSkillId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(CONTROL_CHARACTERS, "").trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, MAX_SESSION_KEY_CHARS);
+}
+
+function normalizeSkillPath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(CONTROL_CHARACTERS, "").trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, MAX_SESSION_KEY_CHARS);
+}
+
+export async function skillSearch(
+  skill: SkillClient,
+  params: SkillSearchParams,
+  allowTeamSearch: boolean,
+  routingMode: "bm25" | "embedding" | "hybrid",
+): Promise<AgentToolResult<Record<string, unknown>>> {
+  const query = normalizeQuery(params.query);
+  if (!query) {
+    return textResult(
+      typeof params.query === "string" && params.query.trim().length > MAX_SEARCH_QUERY_CHARS
+        ? `Query must not exceed ${MAX_SEARCH_QUERY_CHARS} characters.`
+        : "Query cannot be empty.",
+    );
+  }
+  try {
+    const topK = normalizeLimit(params.top_k);
+    const scope = params.scope === "team" && allowTeamSearch ? "team" : undefined;
+    const result = await skill.search({
+      query,
+      ...(topK === undefined ? {} : { top_k: topK }),
+      mode: routingMode,
+      ...(scope === undefined ? {} : { scope }),
+    });
+    if (result.items.length === 0) return textResult("No matching skills found.", { count: 0 });
+    const lines = result.items.map((item) => {
+      const name = item.name || "unnamed";
+      const description = item.description ? ` — ${item.description}` : "";
+      const snippet = item.snippet ? `\n    ${item.snippet}` : "";
+      return `- ${name} (v${item.version})${description}${snippet}`;
+    });
+    return textResult(lines.join("\n"), { count: result.items.length });
+  } catch (error) {
+    return textResult(`Skill search failed: ${safeErrorMessage(error)}`);
+  }
+}
+
+export async function skillRead(
+  skill: SkillClient,
+  params: SkillReadParams,
+): Promise<AgentToolResult<Record<string, unknown>>> {
+  const skillId = normalizeSkillId(params.skill_id);
+  if (!skillId) return textResult("skill_id cannot be empty.");
+  try {
+    const path = normalizeSkillPath(params.path);
+    let content: string;
+    if (!path || path === "SKILL.md") {
+      const detail = await skill.get({ skill_id: skillId, include_content: true, include_manifest: false });
+      content = detail.content ?? "";
+    } else {
+      const file = await skill.readFile({ skill_id: skillId, path });
+      content = file.content;
+    }
+    if (!content) return textResult("No content found.", { skill_id: skillId });
+    return textResult(content, { skill_id: skillId });
+  } catch (error) {
+    return textResult(`Skill read failed: ${safeErrorMessage(error)}`);
   }
 }

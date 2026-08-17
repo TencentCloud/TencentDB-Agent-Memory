@@ -1,7 +1,8 @@
-import { mkdtemp, readdir, rename, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rename, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createConversationMessages } from "../src/capture.js";
 import { MAX_DELIVERY_ATTEMPTS, enqueueCapture, flushOutbox, outboxCount } from "../src/outbox.js";
 import type { LoadedConfig } from "../src/types.js";
 
@@ -19,6 +20,7 @@ const config: LoadedConfig = {
   rejectUnauthorized: true,
   captureTools: false,
   recall: { enabled: true, deadlineMs: 3_000, l0Limit: 4, l1Limit: 6, l2Limit: 2, maxChars: 12000 },
+  skills: { enabled: false, capture: true, runtimeTools: true, routingMode: "bm25", allowTeamSearch: false, includeFailedTools: false, maxMessageBytes: 32768, maxToolItems: 16, flushTimeoutMs: 1500 },
   sources: [],
   userKeySource: "test",
   gatewayApiKeySource: "test",
@@ -228,5 +230,35 @@ describe("persistent capture outbox", () => {
     release?.();
     await flushing;
     expect(await outboxCount(config, options)).toBe(0);
+  });
+});
+
+describe("outbox persistence hygiene", () => {
+  it("persists nothing secret to disk: the queued JSON is redacted before it is written", async () => {
+    const directory = await outbox();
+    // The redaction happens in createConversationMessages (before enqueue); this
+    // test proves the bytes that actually land in the outbox file are already
+    // scrubbed, not merely that redactText() returns a clean string in memory.
+    const messages = createConversationMessages(
+      "roll out with Authorization: Bearer secret-123",
+      "set API_KEY=sk-example-secret and rerun the deploy",
+      [
+        {
+          toolName: "bash",
+          isError: false,
+          content: [
+            { type: "text", text: "export API_KEY=sk-example-secret\ncurl -H 'Authorization: Bearer secret-123'" },
+          ],
+        },
+      ],
+    );
+    await enqueueCapture(config, "pi-redact", messages, { directory });
+
+    const files = (await readdir(directory)).filter((name) => name.endsWith(".json"));
+    expect(files).toHaveLength(1);
+    const raw = await readFile(join(directory, files[0] as string), "utf8");
+    expect(raw).not.toContain("secret-123");
+    expect(raw).not.toContain("sk-example-secret");
+    expect(raw).toContain("[REDACTED]");
   });
 });
