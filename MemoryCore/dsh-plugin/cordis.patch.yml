@@ -1,0 +1,12 @@
+- insert:
+    - id: tdai-memory
+      name: tdai-memory-dsh-plugin
+      inject: [tools, systemPrompt]
+      config:
+        endpoint: !!js process.env.TDAI_MEMORY_ENDPOINT || 'http://127.0.0.1:8420'
+        apiKeyEnv: !!js process.env.TDAI_MEMORY_API_KEY_ENV || 'TDAI_MEMORY_API_KEY'
+        serviceId: !!js process.env.TDAI_MEMORY_INSTANCE_ID || ''
+        teamId: !!js process.env.TDAI_MEMORY_TEAM_ID || ''
+        agentId: !!js process.env.TDAI_MEMORY_AGENT_ID || ''
+        userId: !!js process.env.TDAI_MEMORY_USER_ID || ''
+        recallLimit: !!js Number(process.env.TDAI_MEMORY_RECALL_LIMIT || 5)
