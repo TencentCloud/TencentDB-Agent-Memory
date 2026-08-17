@@ -1,0 +1,363 @@
+{
+  "generated_at": "2026-07-02T13:49:10.939Z",
+  "dry_run": false,
+  "task": {
+    "description": "Issue #120 E2E comparison: same release-brief task, showInjected risk baseline vs ABC combined.",
+    "expected": {
+      "product": "Aurora Ledger",
+      "release_target": "2026-08-15",
+      "owner": "Lin Wei",
+      "database": "TencentDB for PostgreSQL",
+      "feature_flag_storage": "config_flags table",
+      "compliance": "EU data residency",
+      "smoke_test": "npm run test:smoke",
+      "ready": true
+    },
+    "turns": 2
+  },
+  "results": [
+    {
+      "provider": "mimo",
+      "baseline": {
+        "model": "mimo-v2.5-pro",
+        "scenario": "show_injected_risk",
+        "rows": [
+          {
+            "turn": 1,
+            "recall_chars": 3429,
+            "usage": {
+              "prompt_tokens": 3218,
+              "cache_hit_tokens": 3200,
+              "cache_miss_tokens": 18,
+              "cache_hit_ratio": 0.9944,
+              "output_tokens": 1471
+            },
+            "output_preview": "{\"product_name\":\"Aurora Ledger\",\"release_target\":\"2026-08-15\",\"release_owner\":\"Lin Wei\",\"required_database\":\"TencentDB for PostgreSQL\",\"database_constraint\":\"Do not switch to Redis or a document database\",\"feature_flags_storage\":\"config_flags table\",\"feature_flags_decision\":\"Team rejected Redis\",\"co..."
+          },
+          {
+            "turn": 2,
+            "recall_chars": 3429,
+            "usage": {
+              "prompt_tokens": 4164,
+              "cache_hit_tokens": 3200,
+              "cache_miss_tokens": 964,
+              "cache_hit_ratio": 0.7685,
+              "output_tokens": 128
+            },
+            "output_preview": "{\"product\":\"Aurora Ledger\",\"release_target\":\"2026-08-15\",\"owner\":\"Lin Wei\",\"database\":\"TencentDB for PostgreSQL\",\"feature_flag_storage\":\"config_flags table\",\"compliance\":\"EU data residency\",\"primary_risk\":\"Batch importer can double entries when retrying after HTTP 429 responses\",\"mitigation\":\"Add an..."
+          }
+        ],
+        "total": {
+          "prompt_tokens": 7382,
+          "cache_hit_tokens": 6400,
+          "cache_miss_tokens": 982,
+          "output_tokens": 1599,
+          "cache_hit_ratio": 0.867
+        },
+        "final_output": "{\"product\":\"Aurora Ledger\",\"release_target\":\"2026-08-15\",\"owner\":\"Lin Wei\",\"database\":\"TencentDB for PostgreSQL\",\"feature_flag_storage\":\"config_flags table\",\"compliance\":\"EU data residency\",\"primary_risk\":\"Batch importer can double entries when retrying after HTTP 429 responses\",\"mitigation\":\"Add an idempotency key and deduplicate by source_event_id before insert\",\"smoke_test\":\"npm run test:smoke\",\"ready\":true}",
+        "grade": {
+          "pass": true,
+          "parsed": {
+            "product": "Aurora Ledger",
+            "release_target": "2026-08-15",
+            "owner": "Lin Wei",
+            "database": "TencentDB for PostgreSQL",
+            "feature_flag_storage": "config_flags table",
+            "compliance": "EU data residency",
+            "primary_risk": "Batch importer can double entries when retrying after HTTP 429 responses",
+            "mitigation": "Add an idempotency key and deduplicate by source_event_id before insert",
+            "smoke_test": "npm run test:smoke",
+            "ready": true
+          },
+          "checks": {
+            "parse_json": true,
+            "product": true,
+            "release_target": true,
+            "owner": true,
+            "database": true,
+            "feature_flag_storage": true,
+            "compliance": true,
+            "smoke_test": true,
+            "ready": true,
+            "primary_risk": true,
+            "mitigation": true
+          },
+          "score": 1
+        },
+        "provider": "mimo"
+      },
+      "optimized_skip": {
+        "model": "mimo-v2.5-pro",
+        "scenario": "ABC_combined",
+        "rows": [
+          {
+            "turn": 1,
+            "recall_chars": 980,
+            "usage": {
+              "prompt_tokens": 2701,
+              "cache_hit_tokens": 2688,
+              "cache_miss_tokens": 13,
+              "cache_hit_ratio": 0.9952,
+              "output_tokens": 1154
+            },
+            "output_preview": "{\n  \"product_name\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"release_owner\": \"Lin Wei\",\n  \"required_database\": \"TencentDB for PostgreSQL\",\n  \"database_note\": \"Do not switch to Redis or document database\",\n  \"feature_flags_storage\": \"config_flags table\",\n  \"feature_flags_note\": \"Team rej..."
+          },
+          {
+            "turn": 2,
+            "recall_chars": 0,
+            "usage": {
+              "prompt_tokens": 2720,
+              "cache_hit_tokens": 2048,
+              "cache_miss_tokens": 672,
+              "cache_hit_ratio": 0.7529,
+              "output_tokens": 1385
+            },
+            "output_preview": "{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP 429 res..."
+          }
+        ],
+        "total": {
+          "prompt_tokens": 5421,
+          "cache_hit_tokens": 4736,
+          "cache_miss_tokens": 685,
+          "output_tokens": 2539,
+          "cache_hit_ratio": 0.8736
+        },
+        "final_output": "{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP 429 responses\",\n  \"mitigation\": \"Add idempotency key and deduplicate by source_event_id before insert\",\n  \"smoke_test\": \"npm run test:smoke\",\n  \"ready\": \"Ready is true after mitigation and smoke-test command are included in final brief\"\n}",
+        "grade": {
+          "pass": false,
+          "parsed": {
+            "product": "Aurora Ledger",
+            "release_target": "2026-08-15",
+            "owner": "Lin Wei",
+            "database": "TencentDB for PostgreSQL",
+            "feature_flag_storage": "config_flags table",
+            "compliance": "EU data residency",
+            "primary_risk": "Batch importer can double entries when retrying after HTTP 429 responses",
+            "mitigation": "Add idempotency key and deduplicate by source_event_id before insert",
+            "smoke_test": "npm run test:smoke",
+            "ready": "Ready is true after mitigation and smoke-test command are included in final brief"
+          },
+          "checks": {
+            "parse_json": true,
+            "product": true,
+            "release_target": true,
+            "owner": true,
+            "database": true,
+            "feature_flag_storage": true,
+            "compliance": true,
+            "smoke_test": true,
+            "ready": false,
+            "primary_risk": true,
+            "mitigation": true
+          },
+          "score": 0.9091
+        },
+        "provider": "mimo"
+      },
+      "optimized_reminder": {
+        "model": "mimo-v2.5-pro",
+        "scenario": "ABC_reminder",
+        "rows": [
+          {
+            "turn": 1,
+            "recall_chars": 980,
+            "usage": {
+              "prompt_tokens": 2701,
+              "cache_hit_tokens": 2688,
+              "cache_miss_tokens": 13,
+              "cache_hit_ratio": 0.9952,
+              "output_tokens": 1569
+            },
+            "output_preview": "{\n  \"product_name\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"release_owner\": \"Lin Wei\",\n  \"required_database\": \"TencentDB for PostgreSQL\",\n  \"database_constraint\": \"Do not switch to Redis or a document database\",\n  \"feature_flags_storage\": \"config_flags table\",\n  \"feature_flags_note\": \"..."
+          },
+          {
+            "turn": 2,
+            "recall_chars": 1041,
+            "usage": {
+              "prompt_tokens": 2950,
+              "cache_hit_tokens": 2048,
+              "cache_miss_tokens": 902,
+              "cache_hit_ratio": 0.6942,
+              "output_tokens": 161
+            },
+            "output_preview": "```json\n{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP..."
+          }
+        ],
+        "total": {
+          "prompt_tokens": 5651,
+          "cache_hit_tokens": 4736,
+          "cache_miss_tokens": 915,
+          "output_tokens": 1730,
+          "cache_hit_ratio": 0.8381
+        },
+        "final_output": "```json\n{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP 429 responses\",\n  \"mitigation\": \"Add an idempotency key and deduplicate by source_event_id before insert\",\n  \"smoke_test\": \"npm run test:smoke\",\n  \"ready\": true\n}\n```",
+        "grade": {
+          "pass": true,
+          "parsed": {
+            "product": "Aurora Ledger",
+            "release_target": "2026-08-15",
+            "owner": "Lin Wei",
+            "database": "TencentDB for PostgreSQL",
+            "feature_flag_storage": "config_flags table",
+            "compliance": "EU data residency",
+            "primary_risk": "Batch importer can double entries when retrying after HTTP 429 responses",
+            "mitigation": "Add an idempotency key and deduplicate by source_event_id before insert",
+            "smoke_test": "npm run test:smoke",
+            "ready": true
+          },
+          "checks": {
+            "parse_json": true,
+            "product": true,
+            "release_target": true,
+            "owner": true,
+            "database": true,
+            "feature_flag_storage": true,
+            "compliance": true,
+            "smoke_test": true,
+            "ready": true,
+            "primary_risk": true,
+            "mitigation": true
+          },
+          "score": 1
+        },
+        "provider": "mimo"
+      },
+      "comparisons": [
+        {
+          "provider": "mimo",
+          "scenario": "ABC_combined",
+          "same_task_pass": false,
+          "baseline_grade": 1,
+          "optimized_grade": 0.9091,
+          "token_key": "prompt_tokens",
+          "baseline_tokens": 7382,
+          "optimized_tokens": 5421,
+          "token_delta": -1961,
+          "token_delta_pct": -26.56,
+          "hit_tokens_before": 6400,
+          "hit_tokens_after": 4736,
+          "miss_token_key": "cache_miss_tokens",
+          "baseline_miss_tokens": 982,
+          "optimized_miss_tokens": 685,
+          "miss_delta": -297,
+          "miss_delta_pct": -30.24,
+          "cache_hit_ratio_before": 0.867,
+          "cache_hit_ratio_after": 0.8736,
+          "cache_hit_ratio_delta_pp": 0.66
+        },
+        {
+          "provider": "mimo",
+          "scenario": "ABC_reminder",
+          "same_task_pass": true,
+          "baseline_grade": 1,
+          "optimized_grade": 1,
+          "token_key": "prompt_tokens",
+          "baseline_tokens": 7382,
+          "optimized_tokens": 5651,
+          "token_delta": -1731,
+          "token_delta_pct": -23.45,
+          "hit_tokens_before": 6400,
+          "hit_tokens_after": 4736,
+          "miss_token_key": "cache_miss_tokens",
+          "baseline_miss_tokens": 982,
+          "optimized_miss_tokens": 915,
+          "miss_delta": -67,
+          "miss_delta_pct": -6.82,
+          "cache_hit_ratio_before": 0.867,
+          "cache_hit_ratio_after": 0.8381,
+          "cache_hit_ratio_delta_pp": -2.89
+        }
+      ],
+      "optimized": {
+        "model": "mimo-v2.5-pro",
+        "scenario": "ABC_combined",
+        "rows": [
+          {
+            "turn": 1,
+            "recall_chars": 980,
+            "usage": {
+              "prompt_tokens": 2701,
+              "cache_hit_tokens": 2688,
+              "cache_miss_tokens": 13,
+              "cache_hit_ratio": 0.9952,
+              "output_tokens": 1154
+            },
+            "output_preview": "{\n  \"product_name\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"release_owner\": \"Lin Wei\",\n  \"required_database\": \"TencentDB for PostgreSQL\",\n  \"database_note\": \"Do not switch to Redis or document database\",\n  \"feature_flags_storage\": \"config_flags table\",\n  \"feature_flags_note\": \"Team rej..."
+          },
+          {
+            "turn": 2,
+            "recall_chars": 0,
+            "usage": {
+              "prompt_tokens": 2720,
+              "cache_hit_tokens": 2048,
+              "cache_miss_tokens": 672,
+              "cache_hit_ratio": 0.7529,
+              "output_tokens": 1385
+            },
+            "output_preview": "{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP 429 res..."
+          }
+        ],
+        "total": {
+          "prompt_tokens": 5421,
+          "cache_hit_tokens": 4736,
+          "cache_miss_tokens": 685,
+          "output_tokens": 2539,
+          "cache_hit_ratio": 0.8736
+        },
+        "final_output": "{\n  \"product\": \"Aurora Ledger\",\n  \"release_target\": \"2026-08-15\",\n  \"owner\": \"Lin Wei\",\n  \"database\": \"TencentDB for PostgreSQL\",\n  \"feature_flag_storage\": \"config_flags table\",\n  \"compliance\": \"EU data residency\",\n  \"primary_risk\": \"Batch importer can double entries when retrying after HTTP 429 responses\",\n  \"mitigation\": \"Add idempotency key and deduplicate by source_event_id before insert\",\n  \"smoke_test\": \"npm run test:smoke\",\n  \"ready\": \"Ready is true after mitigation and smoke-test command are included in final brief\"\n}",
+        "grade": {
+          "pass": false,
+          "parsed": {
+            "product": "Aurora Ledger",
+            "release_target": "2026-08-15",
+            "owner": "Lin Wei",
+            "database": "TencentDB for PostgreSQL",
+            "feature_flag_storage": "config_flags table",
+            "compliance": "EU data residency",
+            "primary_risk": "Batch importer can double entries when retrying after HTTP 429 responses",
+            "mitigation": "Add idempotency key and deduplicate by source_event_id before insert",
+            "smoke_test": "npm run test:smoke",
+            "ready": "Ready is true after mitigation and smoke-test command are included in final brief"
+          },
+          "checks": {
+            "parse_json": true,
+            "product": true,
+            "release_target": true,
+            "owner": true,
+            "database": true,
+            "feature_flag_storage": true,
+            "compliance": true,
+            "smoke_test": true,
+            "ready": false,
+            "primary_risk": true,
+            "mitigation": true
+          },
+          "score": 0.9091
+        },
+        "provider": "mimo"
+      },
+      "comparison": {
+        "provider": "mimo",
+        "scenario": "ABC_combined",
+        "same_task_pass": false,
+        "baseline_grade": 1,
+        "optimized_grade": 0.9091,
+        "token_key": "prompt_tokens",
+        "baseline_tokens": 7382,
+        "optimized_tokens": 5421,
+        "token_delta": -1961,
+        "token_delta_pct": -26.56,
+        "hit_tokens_before": 6400,
+        "hit_tokens_after": 4736,
+        "miss_token_key": "cache_miss_tokens",
+        "baseline_miss_tokens": 982,
+        "optimized_miss_tokens": 685,
+        "miss_delta": -297,
+        "miss_delta_pct": -30.24,
+        "cache_hit_ratio_before": 0.867,
+        "cache_hit_ratio_after": 0.8736,
+        "cache_hit_ratio_delta_pp": 0.66
+      }
+    }
+  ]
+}

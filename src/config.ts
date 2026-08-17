@@ -87,6 +87,25 @@ export interface RecallConfig {
   maxCharsPerMemory: number;
   /** Max total characters injected for all recalled L1 memories. 0 disables the total limit. */
   maxTotalRecallChars: number;
+  /** Preserve injected recall in persisted history. Default false keeps recall ephemeral. */
+  showInjected: boolean;
+  /**
+   * Where the stable system context (persona, scene navigation, tools guide)
+   * is placed relative to the host's prompt cache boundary.
+   *
+   * "auto" uses the cacheable prefix on hosts new enough to accept it and
+   * falls back to the legacy suffix otherwise. The stable text is emitted
+   * either way, so this only trades cache reuse, never content.
+   */
+  stableContextPlacement: StableContextPlacement;
+  /** Skip L1 memories already injected in the same session. */
+  dedupeInjected: boolean;
+  /** Duplicate L1 recall handling mode. "skip" preserves legacy dedupeInjected behavior. */
+  dedupeMode: "off" | "skip" | "reminder";
+  /** Turns before an injected-memory digest can be injected again. 0 means never within process lifetime. */
+  dedupeInjectedTtlTurns: number;
+  /** Max total characters for duplicate recall reminders when dedupeMode="reminder". 0 disables the cap. */
+  maxReminderChars: number;
   /** Minimum score threshold (default: 0.3) */
   scoreThreshold: number;
   /** Search strategy (default: "hybrid") */
@@ -94,6 +113,15 @@ export interface RecallConfig {
   /** Overall recall timeout in milliseconds (default: 5000). When exceeded, recall is skipped with a warning. */
   timeoutMs: number;
 }
+
+/**
+ * Placement request for the stable system context.
+ *
+ * - "auto"         — cacheable prefix when the host supports it, legacy suffix otherwise
+ * - "systemPrefix" — force the cacheable prefix (operator knows the host)
+ * - "systemSuffix" — force the legacy suffix
+ */
+export type StableContextPlacement = "auto" | "systemPrefix" | "systemSuffix";
 
 /** Embedding service configuration for vector search. */
 export interface EmbeddingConfig {
@@ -532,6 +560,14 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       maxResults: num(recallGroup, "maxResults") ?? 5,
       maxCharsPerMemory: num(recallGroup, "maxCharsPerMemory") ?? 0,
       maxTotalRecallChars: num(recallGroup, "maxTotalRecallChars") ?? 0,
+      showInjected: bool(recallGroup, "showInjected") ?? false,
+      stableContextPlacement:
+        validateStableContextPlacement(str(recallGroup, "stableContextPlacement")) ?? "auto",
+      dedupeInjected: bool(recallGroup, "dedupeInjected") ?? false,
+      dedupeMode: validateDedupeMode(str(recallGroup, "dedupeMode"))
+        ?? ((bool(recallGroup, "dedupeInjected") ?? false) ? "skip" : "off"),
+      dedupeInjectedTtlTurns: num(recallGroup, "dedupeInjectedTtlTurns") ?? 0,
+      maxReminderChars: num(recallGroup, "maxReminderChars") ?? 600,
       scoreThreshold: num(recallGroup, "scoreThreshold") ?? 0.3,
       strategy: validateStrategy(str(recallGroup, "strategy")) ?? "hybrid",
       timeoutMs: num(recallGroup, "timeoutMs") ?? 5000,
@@ -634,6 +670,22 @@ function strArray(src: Record<string, unknown>, key: string): string[] | undefin
 }
 
 const VALID_STRATEGIES: RecallConfig["strategy"][] = ["embedding", "keyword", "hybrid"];
+const VALID_DEDUPE_MODES: RecallConfig["dedupeMode"][] = ["off", "skip", "reminder"];
+const VALID_STABLE_CONTEXT_PLACEMENTS: StableContextPlacement[] = [
+  "auto",
+  "systemPrefix",
+  "systemSuffix",
+];
+
+/** Validate stable-context placement against the whitelist. */
+function validateStableContextPlacement(
+  value: string | undefined,
+): StableContextPlacement | undefined {
+  if (!value) return undefined;
+  return VALID_STABLE_CONTEXT_PLACEMENTS.includes(value as StableContextPlacement)
+    ? (value as StableContextPlacement)
+    : undefined;
+}
 
 /**
  * Validate recall strategy against whitelist.
@@ -643,6 +695,13 @@ function validateStrategy(value: string | undefined): RecallConfig["strategy"] |
   if (!value) return undefined;
   return VALID_STRATEGIES.includes(value as RecallConfig["strategy"])
     ? (value as RecallConfig["strategy"])
+    : undefined;
+}
+
+function validateDedupeMode(value: string | undefined): RecallConfig["dedupeMode"] | undefined {
+  if (!value) return undefined;
+  return VALID_DEDUPE_MODES.includes(value as RecallConfig["dedupeMode"])
+    ? (value as RecallConfig["dedupeMode"])
     : undefined;
 }
 
