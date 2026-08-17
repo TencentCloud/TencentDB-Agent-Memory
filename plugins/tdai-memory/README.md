@@ -46,6 +46,17 @@ Hooks require explicit `TDAI_SERVICE_ID`, `TDAI_INSTANCE_ID`, `TDAI_TEAM_ID`,
 invent team/user/agent fallbacks. Hook failures are fail-open so Codex remains
 usable while the diagnostic is reported on stderr.
 
+## Explicit identity setup
+
+Hooks and the MCP launcher require explicit non-secret TencentDB identity
+fields. If the desktop host does not export the TDAI_* variables, write them
+into the shared config so both surfaces use the same identity. Run:
+
+    node scripts/setup.mjs --service-id codex-desktop --instance-id macos --team-id Home --agent-id "Codex Memory Agent" --user-id Vocllum --session-id codex-mcp --write ~/.config/tdai-memory/openai-plugin.json
+
+Host-provided Hook session ids override the configured MCP session id. Team,
+agent, and user values are never fabricated by the plugin.
+
 ## Setup and health
 
 Preview the non-secret config:

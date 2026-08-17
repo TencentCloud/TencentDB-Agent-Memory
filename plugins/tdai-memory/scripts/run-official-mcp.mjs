@@ -9,9 +9,20 @@ const allowRemote = process.argv.includes("--allow-remote")
 try {
   const { config } = await loadConfig({ allowRemote });
   const resolved = await resolveMcpCommand(config, process.env.TDAI_MEMORY_MCP_BIN);
+  const identityEnv = config.identity
+    ? {
+      TDAI_SERVICE_ID: config.identity.serviceId,
+      TDAI_INSTANCE_ID: config.identity.instanceId,
+      TDAI_TEAM_ID: config.identity.teamId,
+      TDAI_AGENT_ID: config.identity.agentId,
+      TDAI_USER_ID: config.identity.userId,
+      TDAI_SESSION_ID: config.identity.sessionId,
+    }
+    : {};
   const child = spawn(resolved.command, resolved.args, {
     env: {
       ...process.env,
+      ...identityEnv,
       TDAI_GATEWAY_URL: process.env.TDAI_GATEWAY_URL || config.gatewayUrl,
     },
     shell: false,

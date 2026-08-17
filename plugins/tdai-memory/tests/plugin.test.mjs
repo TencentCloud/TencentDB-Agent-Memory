@@ -116,6 +116,40 @@ test("launcher delegates stdio to an external executable", async () => {
   assert.equal(result.stdout, "official-mcp-ok\n");
 });
 
+test("launcher passes explicit configured identity to the official MCP", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "tdai-plugin-test-"));
+  const fake = path.join(temporary, "memory-tencentdb-mcp");
+  const config = path.join(temporary, "config.json");
+  await writeFile(fake, [
+    "#!/bin/sh",
+    "printf '%s|%s|%s|%s|%s|%s\\n' \\\"$TDAI_SERVICE_ID\\\" \\\"$TDAI_INSTANCE_ID\\\" \\\"$TDAI_TEAM_ID\\\" \\\"$TDAI_AGENT_ID\\\" \\\"$TDAI_USER_ID\\\" \\\"$TDAI_SESSION_ID\\\"",
+  ].join(String.fromCharCode(10)) + String.fromCharCode(10), "utf8");
+  await chmod(fake, 0o755);
+  await writeFile(config, JSON.stringify({
+    gatewayUrl: "http://127.0.0.1:8420",
+    memoryProxyUrl: "http://127.0.0.1:8096",
+    mcpBinary: fake,
+    mcpArgs: [],
+    identity: {
+      serviceId: "service-test",
+      instanceId: "instance-test",
+      teamId: "team-test",
+      agentId: "agent-test",
+      userId: "user-test",
+      sessionId: "session-test",
+    },
+  }), "utf8");
+  const result = run("run-official-mcp.mjs", [], {
+    TDAI_OPENAI_PLUGIN_CONFIG: config,
+    TDAI_MEMORY_MCP_BIN: fake,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    result.stdout.trim().split("|").map((value) => value.replace(/^\"|\"$/g, "")),
+    ["service-test", "instance-test", "team-test", "agent-test", "user-test", "session-test"],
+  );
+});
+
 const repositoryBuildAvailable = await access(path.resolve(root, "../../MemoryCore/dist/memory-tencentdb-mcp.mjs"))
   .then(() => true)
   .catch(() => false);

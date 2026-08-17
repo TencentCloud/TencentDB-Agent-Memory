@@ -17,6 +17,15 @@ export const DEFAULT_CONFIG = Object.freeze({
   mcpArgs: [],
 });
 
+const IDENTITY_FIELDS = [
+  ["serviceId", "TDAI_SERVICE_ID"],
+  ["instanceId", "TDAI_INSTANCE_ID"],
+  ["teamId", "TDAI_TEAM_ID"],
+  ["agentId", "TDAI_AGENT_ID"],
+  ["userId", "TDAI_USER_ID"],
+  ["sessionId", "TDAI_SESSION_ID"],
+];
+
 export const PLUGIN_MCP_ENTRY = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../vendor/memory-tencentdb-mcp.mjs",
@@ -56,6 +65,18 @@ function normalizeUrl(value, field, allowRemote) {
   return parsed.toString().replace(/\/+$/, "");
 }
 
+function validateIdentity(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("identity must be a JSON object");
+  }
+  const identity = {};
+  for (const [field, envName] of IDENTITY_FIELDS) {
+    identity[field] = requireString(value[field], "identity." + field + " (" + envName + ")");
+  }
+  return identity;
+}
+
 export function validateConfig(input, { allowRemote = false } = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("configuration must be a JSON object");
@@ -69,6 +90,7 @@ export function validateConfig(input, { allowRemote = false } = {}) {
     memoryProxyUrl: normalizeUrl(input.memoryProxyUrl, "memoryProxyUrl", allowRemote),
     mcpBinary: requireString(input.mcpBinary, "mcpBinary"),
     mcpArgs: args,
+    ...(input.identity === undefined ? {} : { identity: validateIdentity(input.identity) }),
   };
 }
 

@@ -16,6 +16,12 @@ function valueAfter(flag) {
 }
 
 if (process.argv.includes("--help")) {
+  process.stdout.write("  --service-id ID      Explicit TencentDB service identity\\n");
+  process.stdout.write("  --instance-id ID     Explicit TencentDB instance identity\\n");
+  process.stdout.write("  --team-id ID         Explicit TencentDB team identity\\n");
+  process.stdout.write("  --agent-id ID        Explicit TencentDB agent identity\\n");
+  process.stdout.write("  --user-id ID         Explicit TencentDB user identity\\n");
+  process.stdout.write("  --session-id ID      MCP session identity\\n");
   process.stdout.write(`Usage: node scripts/setup.mjs [options]\n\n`);
   process.stdout.write(`  --write PATH         Write a non-secret JSON config (default: dry run)\n`);
   process.stdout.write(`  --gateway-url URL    MemoryCore Gateway URL\n`);
@@ -26,12 +32,22 @@ if (process.argv.includes("--help")) {
 }
 
 try {
+  const identity = {
+    serviceId: valueAfter("--service-id"),
+    instanceId: valueAfter("--instance-id"),
+    teamId: valueAfter("--team-id"),
+    agentId: valueAfter("--agent-id"),
+    userId: valueAfter("--user-id"),
+    sessionId: valueAfter("--session-id"),
+  };
+  const hasIdentity = Object.values(identity).some((value) => value !== undefined);
   const config = validateConfig({
     ...DEFAULT_CONFIG,
     gatewayUrl: valueAfter("--gateway-url") ?? DEFAULT_CONFIG.gatewayUrl,
     memoryProxyUrl: valueAfter("--proxy-url") ?? DEFAULT_CONFIG.memoryProxyUrl,
     mcpBinary: valueAfter("--mcp-bin") ?? DEFAULT_CONFIG.mcpBinary,
     mcpArgs: [],
+    ...(hasIdentity ? { identity } : {}),
   }, { allowRemote: process.argv.includes("--allow-remote") });
   const output = `${JSON.stringify(config, null, 2)}\n`;
   const writeTarget = valueAfter("--write");

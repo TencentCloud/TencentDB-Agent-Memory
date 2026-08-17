@@ -11,6 +11,7 @@ import {
   withStateLock,
   writeState,
 } from "../lib/state.mjs";
+import { loadConfig } from "../lib/config.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repoClientModule = path.resolve(pluginRoot, "../..", "MemoryCore/dist/gateway-client.mjs");
@@ -99,7 +100,20 @@ async function loadClientModule() {
 
 async function resolveRuntime(input, { timeoutMs } = {}) {
   const module = await loadClientModule();
-  const identity = module.resolveTdaiIdentity({ sessionId: sessionId(input) });
+  const { config } = await loadConfig();
+  const configuredIdentity = config.identity ?? {};
+  const identityEnv = {
+    ...(configuredIdentity.serviceId && { TDAI_SERVICE_ID: configuredIdentity.serviceId }),
+    ...(configuredIdentity.instanceId && { TDAI_INSTANCE_ID: configuredIdentity.instanceId }),
+    ...(configuredIdentity.teamId && { TDAI_TEAM_ID: configuredIdentity.teamId }),
+    ...(configuredIdentity.agentId && { TDAI_AGENT_ID: configuredIdentity.agentId }),
+    ...(configuredIdentity.userId && { TDAI_USER_ID: configuredIdentity.userId }),
+    ...(configuredIdentity.sessionId && { TDAI_SESSION_ID: configuredIdentity.sessionId }),
+  };
+  const identity = module.resolveTdaiIdentity({
+    env: { ...identityEnv, ...process.env },
+    sessionId: sessionId(input),
+  });
   const clientOptions = module.gatewayClientOptionsFromEnv();
   const client = new module.GatewayMemoryClient({
     ...clientOptions,
