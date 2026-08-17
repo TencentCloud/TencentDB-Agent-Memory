@@ -14,6 +14,7 @@ import {
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const repoClientModule = path.resolve(pluginRoot, "../..", "MemoryCore/dist/gateway-client.mjs");
+const bundledClientModule = path.resolve(pluginRoot, "vendor/gateway-client.mjs");
 let outputWritten = false;
 
 function output(value = {}) {
@@ -87,7 +88,12 @@ async function loadClientModule() {
     await readFile(repoClientModule);
     return import(pathToFileURL(repoClientModule).href);
   } catch {
-    return import("@tencentdb-agent-memory/memory-tencentdb-v2/gateway-client");
+    try {
+      await readFile(bundledClientModule);
+      return import(pathToFileURL(bundledClientModule).href);
+    } catch {
+      return import("@tencentdb-agent-memory/memory-tencentdb-v2/gateway-client");
+    }
   }
 }
 
