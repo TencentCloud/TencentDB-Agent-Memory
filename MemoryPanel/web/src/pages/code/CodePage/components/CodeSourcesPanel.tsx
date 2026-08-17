@@ -47,6 +47,14 @@ export default function CodeSourcesPanel() {
     setFormRepo,
     formBranch,
     setFormBranch,
+    formAuthMethod,
+    setFormAuthMethod,
+    formToken,
+    setFormToken,
+    formTokenUsername,
+    setFormTokenUsername,
+    formSshKey,
+    setFormSshKey,
     submitting,
     // allocate
     allocateTarget,
@@ -437,6 +445,12 @@ export default function CodeSourcesPanel() {
           const validUrl = isValidGitHttpUrl(trimmedRepo);
           // 已输入内容、非 SSH、但又不是合法 http(s) 地址 → 提示格式错误。
           const showUrlError = !!trimmedRepo && !isSsh && !validUrl;
+          // SSH 提交条件：git@ URL + 认证方式 ssh + 已粘贴私钥；token 提交条件：已填 token
+          const authedSsh = isSsh && formAuthMethod === 'ssh' && !!formSshKey.trim();
+          const canSubmit =
+            !!formBranch.trim() &&
+            (validUrl || authedSsh) &&
+            (formAuthMethod !== 'token' || !!formToken.trim());
           return (
             <Modal
               visible
@@ -455,7 +469,50 @@ export default function CodeSourcesPanel() {
                       placeholder="https://gitlab.example.com/namespace/repo.git"
                     />
                   </Form.Item>
-                  {isSsh && (
+                  <Form.Item label={t('code.register.authMethod')}>
+                    <Segment
+                      value={formAuthMethod}
+                      onChange={(v) => setFormAuthMethod(v as 'none' | 'token' | 'ssh')}
+                      options={[
+                        { value: 'none', text: t('code.register.authNone') },
+                        { value: 'token', text: t('code.register.authToken') },
+                        { value: 'ssh', text: t('code.register.authSsh') },
+                      ]}
+                    />
+                  </Form.Item>
+                  {formAuthMethod === 'token' && (
+                    <>
+                      <Form.Item label={t('code.register.accessToken')} required extra={t('code.register.accessTokenExtra')}>
+                        <Input
+                          size="full"
+                          type="password"
+                          value={formToken}
+                          onChange={setFormToken}
+                          placeholder={t('code.register.accessTokenPlaceholder')}
+                        />
+                      </Form.Item>
+                      <Form.Item label={t('code.register.tokenUsername')}>
+                        <Input
+                          size="full"
+                          value={formTokenUsername}
+                          onChange={setFormTokenUsername}
+                          placeholder={t('code.register.tokenUsernamePlaceholder')}
+                        />
+                      </Form.Item>
+                    </>
+                  )}
+                  {formAuthMethod === 'ssh' && (
+                    <Form.Item label={t('code.register.sshKey')} required extra={t('code.register.sshKeyExtra')}>
+                      <Input
+                        multiline
+                        size="full"
+                        value={formSshKey}
+                        onChange={setFormSshKey}
+                        placeholder="-----BEGIN OPENSSH PRIVATE KEY-----..."
+                      />
+                    </Form.Item>
+                  )}
+                  {isSsh && formAuthMethod !== 'ssh' && (
                     <Form.Item>
                       <Alert type="warning">{t('code.register.sshWarning')}</Alert>
                     </Form.Item>
@@ -479,7 +536,7 @@ export default function CodeSourcesPanel() {
                 <Button
                   type="primary"
                   onClick={handleRegister}
-                  disabled={submitting || !formBranch.trim() || !validUrl}
+                  disabled={submitting || !canSubmit}
                   loading={submitting}
                 >
                   {submitting ? t('code.register.submitting') : t('code.register.submit')}

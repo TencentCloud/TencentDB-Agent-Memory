@@ -11,7 +11,7 @@ import { dirname } from "node:path";
 
 import * as schema from "./schema.js";
 
-export type Db = BetterSQLite3Database<typeof schema>;
+export type Db = BetterSQLite3Database<typeof schema> & { $client: Database.Database };
 
 export interface CreateDbOptions {
   /** Path to SQLite file. Use ":memory:" for in-memory DB. */
@@ -150,12 +150,51 @@ export function migrate(_db: Db, raw: Database.Database): void {
       enabled        INTEGER NOT NULL DEFAULT 1,
       updated_at     TEXT NOT NULL
     );
+
+    -- 凭据密文表（949spec §5.1/§6）：CodeGraph 元数据表不含任何明文凭据；
+    -- 此处仅存 AES-256-GCM 密文 + 元数据，master key 在环境变量 KNOWLEDGE_SECRET_MASTER_KEY。
+    -- 复合主键 (credential_ref, version)：rotate 产生新版本行，历史版本保留可追溯。
+    CREATE TABLE IF NOT EXISTS knowledge_credential (
+      credential_ref       TEXT NOT NULL,
+      version              INTEGER NOT NULL,
+      service_id           TEXT NOT NULL,
+      team_id              TEXT NOT NULL,
+      code_graph_id        TEXT NOT NULL,
+      auth_method          TEXT NOT NULL,
+      username             TEXT,
+      provider             TEXT,
+      ciphertext           TEXT NOT NULL,
+      kek_version          INTEGER NOT NULL DEFAULT 1,
+      fingerprint          TEXT,
+      status               TEXT NOT NULL DEFAULT 'active',
+      last_validated_at    TEXT,
+      last_auth_failure_at TEXT,
+      created_at           TEXT NOT NULL,
+      updated_at           TEXT NOT NULL,
+      PRIMARY KEY (credential_ref, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_kcred_cg
+      ON knowledge_credential(code_graph_id, version);
   `);
 
   // Column migrations — SQLite ALTER TABLE ADD COLUMN is not idempotent,
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
+  // 私有仓库认证列（token/ssh 凭据）
+  addColumnIfMissing(raw, "knowledge_code_graph", "auth_method", "TEXT NOT NULL DEFAULT 'none'");
+  addColumnIfMissing(raw, "knowledge_code_graph", "access_token", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "token_username", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "ssh_private_key", "TEXT");
+  // 凭据引用列（949spec §5.2 / §29 Phase 1）：新写入只落引用，明文列仅迁移期保留。
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_ref", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_version", "INTEGER");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_status", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_fingerprint", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_provider", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_last_validated_at", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "credential_last_auth_failure_at", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");
   // service_id on audit tables is nullable → safe to add to existing dev DBs.

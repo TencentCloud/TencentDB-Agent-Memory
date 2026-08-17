@@ -23,6 +23,7 @@ import {
 import { createWikiSourceManager, type WikiSourceManager } from "./engines/wiki/index.js";
 import { indexProject, openIndex, syncIndex, getStats, closeIndex, type CodeGraphInstance } from "./engines/code/index.js";
 import { SourceFetcherRegistry } from "./source-fetcher/index.js";
+import { EnvelopeSecretStore, type SecretStore } from "./secrets/index.js";
 import { createLogger } from "./logger.js";
 import type { LlmConfig } from "./config.js";
 import { getGlobalLlmConcurrency } from "./config.js";
@@ -47,6 +48,8 @@ export interface KnowledgeModuleConfig {
   wikiWorker?: WikiWorker;
   /** Optional: externally injected code worker (for testing). */
   codeWorker?: CodeGraphWorker;
+  /** Optional: 注入外部 SecretStore（测试/云 Secret Manager）。缺省自建 EnvelopeSecretStore。 */
+  secretStore?: SecretStore;
 }
 
 export interface CodeGraphInstancePool {
@@ -68,6 +71,8 @@ export interface KnowledgeModule {
   autoSyncScheduler: AutoSyncScheduler;
   /** 定时自动同步的解析后配置（挂载 admin 路由时透出）。 */
   autoSyncConfig: AutoSyncConfig;
+  /** 凭据存储（949spec §5.3；可能未配置 → create 回退 legacy 明文列）。 */
+  secretStore?: SecretStore;
 }
 
 /**
@@ -81,6 +86,22 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // Store
   const store = new SqliteKnowledgeStore(db);
+
+  // 凭据存储（949spec §5.3/§6）：自托管信封加密。
+  // master key 缺失时 fail-closed 禁用（create 回退 legacy 明文列，迁移期兼容并记录 warn）。
+  let secretStore: SecretStore | undefined = config.secretStore;
+  if (!secretStore) {
+    try {
+      secretStore = new EnvelopeSecretStore({ db: db.$client });
+      log.info("[knowledge-module] EnvelopeSecretStore enabled (AES-256-GCM, keyed by KNOWLEDGE_SECRET_MASTER_KEY)");
+    } catch (err) {
+      log.warn(
+        `[knowledge-module] SecretStore disabled, legacy plaintext credential columns remain active (migration phase): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
 
   // Per-instance LLM routing binding + resolver (proxy/byo → effective LlmConfig).
   // No binding → global LLM_MODE decides: 'custom' uses global LLM_* direct,
@@ -117,9 +138,9 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
+    const { dir, repoUrl, branch, codeGraphId, auth, setInternalStatus } = ctx;
 
-    // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
+    // Resolve protocol-specific fetcher (validates url: https/ssh + SSRF blocklist).
     const fetcher = fetcherRegistry.resolve(repoUrl);
 
     const isExistingRepo = existsSync(join(dir, ".git"));
@@ -129,7 +150,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
+        const res = await fetcher.sync(repoUrl, branch, dir, auth);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -151,7 +172,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (!didIncrementalSync) {
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
+      const res = await fetcher.fetch(repoUrl, branch, dir, auth);
       version = res.version;
 
       setInternalStatus("indexing");
@@ -222,6 +243,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     queue: sharedQueue,
     logger: { info: log.info.bind(log), warn: log.warn.bind(log), error: log.error.bind(log) },
     callbackConfig,
+    secretStore,
     // 释放 code-graph 内存资源（008 delete 清理）：从 pool 移除并关闭索引句柄。幂等。
     releaseInstance: (codeGraphId: string) => {
       const inst = instancePool.get(codeGraphId);
@@ -292,5 +314,5 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
   });
   autoSyncScheduler.start();
 
-  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, autoSyncScheduler, autoSyncConfig };
+  return { wikiService, cgService, wikiMgr, store, instancePool, llmBindingStore, autoSyncScheduler, autoSyncConfig, secretStore };
 }

@@ -405,8 +405,20 @@ export const enUS = {
     'After registration, it will automatically clone and build a code index.',
   'code.register.gitUrlPlaceholder': 'https://gitlab.example.com/namespace/repo.git',
   'code.register.branch': 'Branch',
+  'code.register.authMethod': 'Auth Method',
+  'code.register.authNone': 'No auth (public repo)',
+  'code.register.authToken': 'Access Token',
+  'code.register.authSsh': 'SSH Key',
+  'code.register.accessToken': 'Access Token',
+  'code.register.accessTokenExtra': 'GitHub only needs the token; Gitee also requires the username.',
+  'code.register.accessTokenPlaceholder': 'GitHub PAT or Gitee private token, no prefix required',
+  'code.register.tokenUsername': 'Username',
+  'code.register.tokenUsernamePlaceholder': 'Required for Gitee private repos',
+  'code.register.sshKey': 'SSH Private Key',
+  'code.register.sshKeyExtra': 'Paste the private key (including BEGIN/END lines); use a read-only deploy key.',
+  'code.register.tokenRequired': 'Access Token is required',
   'code.register.sshWarning':
-    'SSH format repository URLs are not supported in this version. Please use HTTPS format (e.g. https://gitlab.example.com/namespace/repo.git).',
+    'SSH format URLs require selecting SSH Key under Auth Method and pasting the private key.',
   'code.register.urlError':
     'Please enter a valid HTTP(S) Git repository URL ending with .git (e.g. https://gitlab.example.com/namespace/repo.git). No spaces allowed.',
   'code.register.invalidUrl':

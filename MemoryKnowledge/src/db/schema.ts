@@ -10,7 +10,7 @@
  * Soft-delete via `deleted_at` + partial unique index (WHERE deleted_at IS NULL).
  */
 
-import { sqliteTable, text, integer, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex, index, primaryKey } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 // ───────────────────────── knowledge_code_graph ─────────────────────────
@@ -24,6 +24,19 @@ export const knowledgeCodeGraph = sqliteTable(
     repoName: text("repo_name").notNull().default(""),
     repoUrl: text("repo_url").notNull(),
     branch: text("branch").notNull(),
+    // 私有仓库认证（token/ssh 凭据独立列存储，repo_url 恒为干净 URL）
+    authMethod: text("auth_method").notNull().default("none"),
+    accessToken: text("access_token"),
+    tokenUsername: text("token_username"),
+    sshPrivateKey: text("ssh_private_key"),
+    // 凭据引用（949spec §5.2）：新写入只落引用，明文列仅迁移期保留。
+    credentialRef: text("credential_ref"),
+    credentialVersion: integer("credential_version"),
+    credentialStatus: text("credential_status"),
+    credentialFingerprint: text("credential_fingerprint"),
+    credentialProvider: text("credential_provider"),
+    credentialLastValidatedAt: text("credential_last_validated_at"),
+    credentialLastAuthFailureAt: text("credential_last_auth_failure_at"),
     commitHash: text("commit_hash"),
     ownerUserId: text("owner_user_id"),
     userId: text("user_id"),
@@ -137,6 +150,37 @@ export const llmBinding = sqliteTable("llm_binding", {
   enabled: integer("enabled").notNull().default(1),
   updatedAt: text("updated_at").notNull(),
 });
+
+// ───────────────────────── knowledge_credential ─────────────────────────
+// 凭据密文表（949spec §5.1/§6）：独立于 CodeGraph 元数据表，仅存密文 + 元数据。
+// master key（KEK）在环境变量 KNOWLEDGE_SECRET_MASTER_KEY，绝不同库同盘。
+
+export const knowledgeCredential = sqliteTable(
+  "knowledge_credential",
+  {
+    credentialRef: text("credential_ref").notNull(),
+    version: integer("version").notNull(),
+    serviceId: text("service_id").notNull(),
+    teamId: text("team_id").notNull(),
+    codeGraphId: text("code_graph_id").notNull(),
+    authMethod: text("auth_method").notNull(),
+    username: text("username"),
+    provider: text("provider"),
+    ciphertext: text("ciphertext").notNull(),
+    kekVersion: integer("kek_version").notNull().default(1),
+    fingerprint: text("fingerprint"),
+    status: text("status").notNull().default("active"),
+    lastValidatedAt: text("last_validated_at"),
+    lastAuthFailureAt: text("last_auth_failure_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    // 复合主键 (credential_ref, version)：rotate 产生新版本行，历史版本保留。
+    primaryKey({ columns: [table.credentialRef, table.version] }),
+    index("idx_kcred_cg").on(table.codeGraphId, table.version),
+  ],
+);
 
 // ───────────────────────── Type exports ─────────────────────────
 

@@ -34,6 +34,21 @@ export interface CodeGraphRow {
   repo_name: string;
   repo_url: string;
   branch: string;
+  /** 私有仓库认证方式：none=公开仓库；token=access_token URL 注入；ssh=私钥注入。 */
+  auth_method: string;
+  /** access_token（auth_method=token 时使用，Gitee 另需 token_username）。 */
+  access_token: string | null;
+  token_username: string | null;
+  /** SSH 私钥原文（auth_method=ssh 时使用）。 */
+  ssh_private_key: string | null;
+  // ── 凭据引用（949spec §5.2；新写入只落引用，明文列仅迁移期保留）──
+  credential_ref: string | null;
+  credential_version: number | null;
+  credential_status: string | null;
+  credential_fingerprint: string | null;
+  credential_provider: string | null;
+  credential_last_validated_at: string | null;
+  credential_last_auth_failure_at: string | null;
   commit_hash: string | null;
   owner_user_id: string | null;
   user_id: string | null;
@@ -59,6 +74,15 @@ export interface CreateCodeGraphInput {
   repo_url: string;
   branch: string;
   repo_name?: string;
+  auth_method?: string;
+  access_token?: string | null;
+  token_username?: string | null;
+  ssh_private_key?: string | null;
+  // 凭据引用（949spec §5.2）：优先使用 SecretStore；access_token/ssh_private_key 为迁移期兼容。
+  credential_ref?: string | null;
+  credential_version?: number | null;
+  credential_fingerprint?: string | null;
+  credential_provider?: string | null;
   owner_user_id?: string;
   user_id?: string;
   agent_id?: string;
@@ -77,6 +101,17 @@ export interface CodeGraphStatusPatch {
   service_url?: string | null;
   summary?: string | null;
   version?: number;
+  // 凭据引用元数据（949spec §20：rotation/revocation 状态透出；access_token 等明文列清空迁移）
+  credential_ref?: string | null;
+  credential_version?: number | null;
+  credential_status?: string | null;
+  credential_fingerprint?: string | null;
+  credential_provider?: string | null;
+  credential_last_validated_at?: string | null;
+  credential_last_auth_failure_at?: string | null;
+  access_token?: string | null;
+  token_username?: string | null;
+  ssh_private_key?: string | null;
 }
 
 export interface CodeGraphMetaPatch {

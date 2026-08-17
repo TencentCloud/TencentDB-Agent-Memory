@@ -431,9 +431,29 @@ export const knowledgeApi = {
   // ---- Code-Graph ----
 
   code: {
-    /** 创建（注册仓库） */
-    create: (teamId: string, repoUrl: string, branch?: string, repoName?: string): Promise<CodeGraphDetail> =>
-      panelPost('/code-graph/create', { team_id: teamId, repo_url: repoUrl, branch: branch ?? 'main', repo_name: repoName }),
+    /** 创建（注册仓库）；auth 为私有仓库认证配置（token/ssh）。 */
+    create: (
+      teamId: string,
+      repoUrl: string,
+      branch?: string,
+      repoName?: string,
+      auth?: {
+        auth_method?: string;
+        access_token?: string;
+        token_username?: string;
+        ssh_private_key?: string;
+      },
+    ): Promise<CodeGraphDetail> =>
+      panelPost('/code-graph/create', {
+        team_id: teamId,
+        repo_url: repoUrl,
+        branch: branch ?? 'main',
+        repo_name: repoName,
+        ...(auth?.auth_method ? { auth_method: auth.auth_method } : {}),
+        ...(auth?.access_token ? { access_token: auth.access_token } : {}),
+        ...(auth?.token_username ? { token_username: auth.token_username } : {}),
+        ...(auth?.ssh_private_key ? { ssh_private_key: auth.ssh_private_key } : {}),
+      }),
 
     /** @deprecated 使用 teamAssets */
     list: async (teamId: string): Promise<CodeGraphDetail[]> => {

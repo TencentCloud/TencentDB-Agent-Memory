@@ -29,6 +29,11 @@ export function useCodeSources() {
   const [showRegister, setShowRegister] = useState(false);
   const [formRepo, setFormRepo] = useState('');
   const [formBranch, setFormBranch] = useState('main');
+  // 私有仓库认证：none=公开；token=access_token URL 注入；ssh=私钥注入
+  const [formAuthMethod, setFormAuthMethod] = useState<'none' | 'token' | 'ssh'>('none');
+  const [formToken, setFormToken] = useState('');
+  const [formTokenUsername, setFormTokenUsername] = useState('');
+  const [formSshKey, setFormSshKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Allocate-to-agent dialog state
@@ -272,17 +277,39 @@ export function useCodeSources() {
   const handleRegister = async () => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过
-    if (!isValidGitHttpUrl(repo)) {
+    // 防御性校验：按钮已按 canSubmit 禁用，这里再挡一层防止绕过
+    const isSsh = repo.startsWith('git@');
+    const authedSsh = isSsh && formAuthMethod === 'ssh' && !!formSshKey.trim();
+    if (!isValidGitHttpUrl(repo) && !authedSsh) {
       tea.notify.error(t('code.register.invalidUrl'));
+      return;
+    }
+    if (formAuthMethod === 'token' && !formToken.trim()) {
+      tea.notify.error(t('code.register.tokenRequired'));
       return;
     }
     setSubmitting(true);
     try {
-      const detail = await knowledgeApi.code.create(activeTeamId, repo, formBranch.trim(), repo);
+      const auth =
+        formAuthMethod === 'none'
+          ? undefined
+          : {
+              auth_method: formAuthMethod,
+              ...(formAuthMethod === 'token'
+                ? {
+                    access_token: formToken.trim(),
+                    token_username: formTokenUsername.trim() || undefined,
+                  }
+                : { ssh_private_key: formSshKey.trim() }),
+            };
+      const detail = await knowledgeApi.code.create(activeTeamId, repo, formBranch.trim(), repo, auth);
       setShowRegister(false);
       setFormRepo('');
       setFormBranch('main');
+      setFormAuthMethod('none');
+      setFormToken('');
+      setFormTokenUsername('');
+      setFormSshKey('');
       setScopeTab('team');
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
@@ -405,6 +432,14 @@ export function useCodeSources() {
     setFormRepo,
     formBranch,
     setFormBranch,
+    formAuthMethod,
+    setFormAuthMethod,
+    formToken,
+    setFormToken,
+    formTokenUsername,
+    setFormTokenUsername,
+    formSshKey,
+    setFormSshKey,
     submitting,
     setSubmitting,
     // allocate
