@@ -350,11 +350,14 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
     ctx.ui.setStatus(STATUS_KEY, currentConfig.config.enabled ? "memory: configured" : "memory: disabled");
     const loadedConfig = currentConfig.config;
     if (loadedConfig.enabled) {
+      // Catch-up delivery of records left over from an offline period. This is
+      // background work about PAST sessions: it must not write a status, or its
+      // async `.then` could race `before_agent_start` and clobber `memory:
+      // recalled` with `memory: captured` (which is reserved for the CURRENT
+      // turn, set by agent_settled).
       void flushOutbox(loadedConfig, async (record) => {
         const memory = createSessionMemoryClient(loadedConfig, record.sessionId);
         await memory.addConversation({ messages: record.messages });
-      }).then((result) => {
-        if (result.delivered > 0) ctx.ui.setStatus(STATUS_KEY, "memory: captured");
       }).catch(() => undefined);
     }
   });

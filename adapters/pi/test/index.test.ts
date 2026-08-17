@@ -136,6 +136,20 @@ describe("Pi extension lifecycle", () => {
     );
   });
 
+  it("does not report 'captured' for catch-up outbox delivery at session start", async () => {
+    // flushOutbox resolves with delivered: 1, but the background catch-up of
+    // PAST sessions' records must not write `memory: captured` (reserved for
+    // the current turn), or it would race before_agent_start and clobber
+    // `memory: recalled`.
+    const { handlers, ctx } = installExtension();
+    await call(handlers, "session_start", {}, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const statusCalls = (ctx.ui as { setStatus: ReturnType<typeof vi.fn> }).setStatus.mock.calls;
+    expect(statusCalls.some(([key, text]) => key === "tdai-memory" && text === "memory: captured")).toBe(false);
+    expect(statusCalls.some(([key, text]) => key === "tdai-memory" && text === "memory: configured")).toBe(true);
+  });
+
   it("registers the two read-only memory search tools and fails open before configuration", async () => {
     const { tools, ctx } = installExtension();
     const structured = tools.get("tdai_memory_search");
