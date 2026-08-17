@@ -109,6 +109,7 @@ import type { StatefulPipelineManager } from "../utils/stateful-pipeline-manager
 import type { PipelineLogger } from "../utils/pipeline-factory.js";
 import { parsePipelineTimerMember } from "../core/state/timer-member.js";
 import { captureCursorFloor } from "./capture-timing.js";
+import { GATEWAY_ROUTE_KEYS } from "./public-routes.js";
 
 const TAG = "[tdai-gateway]";
 const VERSION = "0.1.0";
@@ -817,7 +818,7 @@ export class TdaiGateway {
       //    When `server.apiKey` is unset this is open by default, matching
       //    the pre-existing behaviour; operators see the "auth disabled"
       //    WARN at startup.
-      if (method === "POST" && pathname === "/v2/instance/destroy") {
+      if (`${method} ${pathname}` === GATEWAY_ROUTE_KEYS.instanceDestroyV2) {
         if (!this.checkAuth(req, res)) return;
         return await this.handleInstanceDestroy(req, res);
       }
@@ -828,7 +829,7 @@ export class TdaiGateway {
       //    实现上先复用 v2 的通用清理（state / store / cos / quota），再预留
       //    v3 独有的 metadata 清理（team/user/asset/acl 等），后续由负责 v3
       //    metadata 的同学补上。此处不做完全复用，避免把 v3 侧清理静默漏掉。
-      if (method === "POST" && pathname === "/v3/instance/destroy") {
+      if (`${method} ${pathname}` === GATEWAY_ROUTE_KEYS.instanceDestroyV3) {
         if (!this.checkAuth(req, res)) return;
         return await this.handleInstanceDestroyV3(req, res);
       }
@@ -1012,7 +1013,7 @@ export class TdaiGateway {
       // GET /health is always reachable without auth — operators and
       // orchestrators (k8s liveness, docker health-check) rely on it being
       // an unconditionally cheap probe.
-      if (method === "GET" && pathname === "/health") {
+      if (`${method} ${pathname}` === GATEWAY_ROUTE_KEYS.health) {
         return this.handleHealth(res);
       }
 
@@ -1022,17 +1023,17 @@ export class TdaiGateway {
       if (!this.checkAuth(req, res)) return;
 
       switch (`${method} ${pathname}`) {
-        case "POST /recall":
+        case GATEWAY_ROUTE_KEYS.recall:
           return await this.handleRecall(req, res);
-        case "POST /capture":
+        case GATEWAY_ROUTE_KEYS.capture:
           return await this.handleCapture(req, res);
-        case "POST /search/memories":
+        case GATEWAY_ROUTE_KEYS.memorySearch:
           return await this.handleSearchMemories(req, res);
-        case "POST /search/conversations":
+        case GATEWAY_ROUTE_KEYS.conversationSearch:
           return await this.handleSearchConversations(req, res);
-        case "POST /session/end":
+        case GATEWAY_ROUTE_KEYS.sessionEnd:
           return await this.handleSessionEnd(req, res);
-        case "POST /seed":
+        case GATEWAY_ROUTE_KEYS.seed:
           return await this.handleSeed(req, res);
         default:
           sendError(res, 404, `Not found: ${method} ${pathname}`);

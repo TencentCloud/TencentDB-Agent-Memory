@@ -4,15 +4,27 @@
 
 These surfaces can load Plugins. The bundled `.mcp.json` starts only the local launcher, which in turn starts the official `memory-tencentdb-mcp` executable. The launcher passes through stdio and environment variables unchanged and contains no MCP protocol handling.
 
-This provides an honest fallback for Codex CLI and non-Plan work: the agent can explicitly recall, search, capture, or flush through MCP. It does not provide transparent injection, automatic capture, or model-provider proxying.
+Plugin-capable Codex hosts receive three coordinated surfaces: the Skill, the
+focused MCP server, and the four Codex lifecycle hooks. Hooks automatically
+recall on `UserPromptSubmit` and capture the pending prompt plus
+`last_assistant_message` on `Stop`; the MCP server remains independently usable
+when hooks are disabled. Hook failures are fail-open.
+
+This is not model-provider proxying. The plugin delegates transport and business
+logic to the shared MemoryCore Gateway/Core.
 
 ## Codex IDE extension
 
-OpenAI's Plugin documentation says the IDE extension does not support Plugins. TencentDB v2.0.1's Roadmap assigns IDE Plan-mode support to MemoryProxy. These are complementary surfaces, so this Plugin never registers a `codex` agent kind or changes Proxy routing.
+The IDE extension is documented conservatively. This PR does not claim Plugin
+loading, a `codex` agent kind, or transparent IDE injection. TencentDB v2.0.1's
+Roadmap/#833 remain the separate MemoryProxy transport route.
 
 ## ChatGPT Chat and Work
 
-The universal Plugin model can package Skills and registered MCP connections across ChatGPT and Codex, but a local stdio command is not a hosted Work integration. A real Work path requires:
+The universal Plugin model can package compatible Skills and registered MCP
+connections across ChatGPT and Codex, but a local stdio command is not a hosted
+Work integration. ChatGPT does not execute Codex lifecycle hooks. A real Work
+path requires:
 
 1. an official TencentDB MCP service reachable from ChatGPT;
 2. registration in ChatGPT developer mode;

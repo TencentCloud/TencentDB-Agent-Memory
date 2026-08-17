@@ -1,47 +1,34 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import packageJson from "../../../package.json" with { type: "json" };
 import {
+  assertTdaiIdentity,
   GatewayMemoryClient,
-  type GatewayMemoryClientOptions,
+  gatewayClientOptionsFromEnv,
+  resolveTdaiIdentity,
 } from "../gateway-client/index.js";
+import type { TdaiIdentity } from "../gateway-client/index.js";
 import { isMainModule } from "../is-main-module.js";
+import { createTdaiOperationRegistry } from "./operation-registry.js";
+export { gatewayClientOptionsFromEnv };
+export { createTdaiOperationRegistry, TdaiOperationRegistry } from "./operation-registry.js";
+export type {
+  TdaiIdentityField,
+  TdaiOperationAccess,
+  TdaiOperationDefinition,
+  TdaiOperationDomain,
+  TdaiOperationMethod,
+  TdaiRouterSchemaReference,
+} from "./operation-registry.js";
 const SERVER_NAME = "memory-tencentdb";
 const SERVER_VERSION = packageJson.version;
-const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8420";
 
 export interface MemoryMcpServerOptions {
-  sessionKey: string;
-}
-
-export function deriveCodexSessionKey(
-  cwd = process.cwd(),
-  override = process.env.TDAI_CODEX_SESSION_KEY,
-): string {
-  const explicit = override?.trim();
-  if (explicit) return explicit;
-  const digest = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  return `codex:${digest}`;
-}
-
-export function gatewayClientOptionsFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): GatewayMemoryClientOptions {
-  const timeoutRaw = env.TDAI_GATEWAY_TIMEOUT_MS?.trim();
-  const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
-  return {
-    baseUrl: env.TDAI_GATEWAY_URL?.trim() || DEFAULT_GATEWAY_URL,
-    apiKey: env.TDAI_GATEWAY_API_KEY,
-    timeoutMs,
-    allowRemote: /^(1|true|yes)$/i.test(env.TDAI_GATEWAY_ALLOW_REMOTE?.trim() ?? ""),
-  };
-}
-
-function sessionKey(input: { session_key?: string }, fallback: string): string {
-  return input.session_key?.trim() || fallback;
+  identity: TdaiIdentity;
+  /** Opt-in read-only capability discovery; never a raw route executor. */
+  enableAdvancedTools?: boolean;
 }
 
 function textResult(value: unknown) {
@@ -56,9 +43,13 @@ function textResult(value: unknown) {
 
 function toolError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
+  const configuredSecret = process.env.TDAI_GATEWAY_API_KEY?.trim();
+  const safeMessage = configuredSecret
+    ? message.split(configuredSecret).join("[redacted]")
+    : message;
   return {
     isError: true,
-    content: [{ type: "text" as const, text: `TencentDB Memory request failed: ${message}` }],
+    content: [{ type: "text" as const, text: `TencentDB Memory request failed: ${safeMessage}` }],
   };
 }
 
@@ -66,6 +57,8 @@ export function createMemoryMcpServer(
   client: GatewayMemoryClient,
   options: MemoryMcpServerOptions,
 ): McpServer {
+  const identity = assertTdaiIdentity(options.identity);
+  const operationRegistry = createTdaiOperationRegistry();
   const server = new McpServer(
     {
       name: SERVER_NAME,
@@ -95,9 +88,6 @@ export function createMemoryMcpServer(
   const captureInput = z.object({
     user_content: z.string().trim().min(1),
     assistant_content: z.string().trim().min(1),
-    session_key: z.string().trim().min(1).optional(),
-    session_id: z.string().trim().min(1).optional(),
-    user_id: z.string().trim().min(1).optional(),
     user_timestamp_ms: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     assistant_timestamp_ms: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).strict().superRefine((input, context) => {
@@ -129,8 +119,6 @@ export function createMemoryMcpServer(
         "Recall relevant long-term memory as historical evidence before answering a query.",
       inputSchema: z.object({
         query: z.string().trim().min(1),
-        session_key: z.string().trim().min(1).optional(),
-        user_id: z.string().trim().min(1).optional(),
       }).strict(),
       annotations: readAnnotations,
     },
@@ -138,8 +126,8 @@ export function createMemoryMcpServer(
       try {
         return textResult(await client.recall({
           query: input.query,
-          sessionKey: sessionKey(input, options.sessionKey),
-          userId: input.user_id,
+          sessionKey: identity.sessionKey,
+          userId: identity.userId,
         }));
       } catch (error) {
         return toolError(error);
@@ -178,7 +166,6 @@ export function createMemoryMcpServer(
       inputSchema: z.object({
         query: z.string().trim().min(1),
         limit: z.number().int().min(1).max(50).optional(),
-        session_key: z.string().trim().min(1).optional(),
       }).strict(),
       annotations: readAnnotations,
     },
@@ -187,7 +174,7 @@ export function createMemoryMcpServer(
         return textResult(await client.searchConversations({
           query: input.query,
           limit: input.limit,
-          sessionKey: sessionKey(input, options.sessionKey),
+          sessionKey: identity.sessionKey,
         }));
       } catch (error) {
         return toolError(error);
@@ -223,9 +210,9 @@ export function createMemoryMcpServer(
         return textResult(await client.capture({
           userContent: input.user_content,
           assistantContent: input.assistant_content,
-          sessionKey: sessionKey(input, options.sessionKey),
-          sessionId: input.session_id,
-          userId: input.user_id,
+          sessionKey: identity.sessionKey,
+          sessionId: identity.sessionId,
+          userId: identity.userId,
           messages,
         }));
       } catch (error) {
@@ -239,10 +226,7 @@ export function createMemoryMcpServer(
     {
       title: "Flush a memory session",
       description: "Flush pending memory pipeline work for one session.",
-      inputSchema: z.object({
-        session_key: z.string().trim().min(1).optional(),
-        user_id: z.string().trim().min(1).optional(),
-      }).strict(),
+      inputSchema: z.object({}).strict(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -252,8 +236,8 @@ export function createMemoryMcpServer(
     async (input) => {
       try {
         return textResult(await client.endSession({
-          sessionKey: sessionKey(input, options.sessionKey),
-          userId: input.user_id,
+          sessionKey: identity.sessionKey,
+          userId: identity.userId,
         }));
       } catch (error) {
         return toolError(error);
@@ -261,13 +245,52 @@ export function createMemoryMcpServer(
     },
   );
 
+  if (options.enableAdvancedTools) {
+    server.registerTool(
+      "tdai_capabilities",
+      {
+        title: "Describe TencentDB capabilities",
+        description:
+          "List public TencentDB Gateway operations and their safety/identity metadata. " +
+          "This is discovery only; it cannot execute an arbitrary route.",
+        inputSchema: z.object({}).strict(),
+        annotations: readAnnotations,
+      },
+      async () => textResult({ operations: operationRegistry.list() }),
+    );
+
+    server.registerTool(
+      "tdai_operation_describe",
+      {
+        title: "Describe one TencentDB operation",
+        description:
+          "Describe a public operation by registry operation_id. Raw URL/method/body execution is not supported.",
+        inputSchema: z.object({
+          operation_id: z.string().trim().min(1),
+        }).strict(),
+        annotations: readAnnotations,
+      },
+      async (input) => {
+        const operation = operationRegistry.describe(input.operation_id);
+        if (!operation) {
+          return toolError(new Error(`Unknown TDAI operation_id: ${input.operation_id}`));
+        }
+        return textResult(operation);
+      },
+    );
+  }
+
   return server;
 }
 
 export async function runStdioMcpServer(): Promise<void> {
+  const identity = resolveTdaiIdentity();
   const client = new GatewayMemoryClient(gatewayClientOptionsFromEnv());
   const server = createMemoryMcpServer(client, {
-    sessionKey: deriveCodexSessionKey(),
+    identity,
+    enableAdvancedTools: /^(1|true|yes)$/i.test(
+      process.env.TDAI_MCP_ENABLE_ADVANCED?.trim() ?? "",
+    ),
   });
   await server.connect(new StdioServerTransport());
 }

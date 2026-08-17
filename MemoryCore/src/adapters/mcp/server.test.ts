@@ -7,21 +7,41 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayMemoryClient } from "../gateway-client/index.js";
+import { deriveTdaiSessionKey, GatewayMemoryClient } from "../gateway-client/index.js";
+import type { TdaiIdentity } from "../gateway-client/index.js";
 import packageJson from "../../../package.json" with { type: "json" };
 import {
   createMemoryMcpServer,
-  deriveCodexSessionKey,
   gatewayClientOptionsFromEnv,
 } from "./server.js";
 const closeCallbacks: Array<() => Promise<unknown>> = [];
+
+const TEST_IDENTITY: TdaiIdentity = {
+  serviceId: "service-test",
+  instanceId: "instance-test",
+  teamId: "team-test",
+  agentId: "agent-test",
+  userId: "user-test",
+  sessionId: "session-test",
+  sessionKey: deriveTdaiSessionKey({
+    serviceId: "service-test",
+    instanceId: "instance-test",
+    teamId: "team-test",
+    agentId: "agent-test",
+    userId: "user-test",
+    sessionId: "session-test",
+  }),
+};
 
 afterEach(async () => {
   await Promise.all(closeCallbacks.splice(0).map((close) => close()));
 });
 
-async function connectTestClient(gateway: GatewayMemoryClient) {
-  const server = createMemoryMcpServer(gateway, { sessionKey: "codex:default" });
+async function connectTestClient(
+  gateway: GatewayMemoryClient,
+  options: { enableAdvancedTools?: boolean } = {},
+) {
+  const server = createMemoryMcpServer(gateway, { identity: TEST_IDENTITY, ...options });
   const client = new Client({ name: "test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([
@@ -48,6 +68,18 @@ function textJson(result: Awaited<ReturnType<Client["callTool"]>>): unknown {
 }
 
 describe("memory-tencentdb MCP server", () => {
+  it("rejects a non-object runtime identity as a configuration error", () => {
+    expect(() => createMemoryMcpServer(mockGateway(), {
+      identity: null as unknown as TdaiIdentity,
+    })).toThrow(/identity: expected an object/);
+  });
+
+  it("rejects a caller-supplied identity with a mismatched derived session key", () => {
+    expect(() => createMemoryMcpServer(mockGateway(), {
+      identity: { ...TEST_IDENTITY, sessionKey: "attacker-controlled" },
+    })).toThrow(/sessionKey does not match/);
+  });
+
   it("publishes five strictly described tools with read/write annotations", async () => {
     const client = await connectTestClient(mockGateway());
     const result = await client.listTools();
@@ -77,6 +109,37 @@ describe("memory-tencentdb MCP server", () => {
     }
   });
 
+  it("keeps registry discovery opt-in and never offers raw route execution", async () => {
+    const defaultClient = await connectTestClient(mockGateway());
+    expect((await defaultClient.listTools()).tools.map((tool) => tool.name))
+      .not.toContain("tdai_capabilities");
+
+    const client = await connectTestClient(mockGateway(), { enableAdvancedTools: true });
+    const tools = await client.listTools();
+    expect(tools.tools.map((tool) => tool.name)).toContain("tdai_capabilities");
+    expect(tools.tools.map((tool) => tool.name)).toContain("tdai_operation_describe");
+    expect(tools.tools.map((tool) => tool.name)).not.toContain("tdai_operation_execute");
+
+    const capabilities = await client.callTool({
+      name: "tdai_capabilities",
+      arguments: {},
+    });
+    const capabilityJson = textJson(capabilities) as { operations: Array<{ operationId: string }> };
+    expect(capabilityJson.operations.length).toBeGreaterThan(100);
+    expect(capabilityJson.operations.some((operation) => operation.operationId === "tdai.v3.skill.search"))
+      .toBe(true);
+
+    const described = await client.callTool({
+      name: "tdai_operation_describe",
+      arguments: { operation_id: "tdai.v3.skill.search" },
+    });
+    expect(textJson(described)).toMatchObject({
+      operationId: "tdai.v3.skill.search",
+      route: "/v3/skill/search",
+      access: "read",
+    });
+  });
+
   it("routes all tools to the shared Gateway client", async () => {
     const gateway = mockGateway();
     const client = await connectTestClient(gateway);
@@ -92,8 +155,8 @@ describe("memory-tencentdb MCP server", () => {
     });
     expect(gateway.recall).toHaveBeenCalledWith({
       query: "what matters?",
-      sessionKey: "codex:default",
-      userId: undefined,
+      sessionKey: TEST_IDENTITY.sessionKey,
+      userId: "user-test",
     });
 
     await client.callTool({
@@ -107,12 +170,12 @@ describe("memory-tencentdb MCP server", () => {
 
     await client.callTool({
       name: "conversation_search",
-      arguments: { query: "raw", session_key: "explicit" },
+      arguments: { query: "raw" },
     });
     expect(gateway.searchConversations).toHaveBeenCalledWith({
       query: "raw",
       limit: undefined,
-      sessionKey: "explicit",
+      sessionKey: TEST_IDENTITY.sessionKey,
     });
 
     await client.callTool({
@@ -120,7 +183,6 @@ describe("memory-tencentdb MCP server", () => {
       arguments: {
         user_content: "hello",
         assistant_content: "world",
-        session_id: "turn-1",
         user_timestamp_ms: 100,
         assistant_timestamp_ms: 200,
       },
@@ -128,8 +190,9 @@ describe("memory-tencentdb MCP server", () => {
     expect(gateway.capture).toHaveBeenCalledWith(expect.objectContaining({
       userContent: "hello",
       assistantContent: "world",
-      sessionKey: "codex:default",
-      sessionId: "turn-1",
+      sessionKey: TEST_IDENTITY.sessionKey,
+      sessionId: "session-test",
+      userId: "user-test",
     }));
     const captureArg = vi.mocked(gateway.capture).mock.calls[0][0];
     expect(captureArg.messages).toHaveLength(2);
@@ -140,8 +203,8 @@ describe("memory-tencentdb MCP server", () => {
       arguments: {},
     });
     expect(gateway.endSession).toHaveBeenCalledWith({
-      sessionKey: "codex:default",
-      userId: undefined,
+      sessionKey: TEST_IDENTITY.sessionKey,
+      userId: "user-test",
     });
   });
 
@@ -200,6 +263,20 @@ describe("memory-tencentdb MCP server", () => {
     expect(JSON.stringify(reversedTimestamp.content)).toContain(
       "greater than or equal",
     );
+
+    const identityOverride = await client.callTool({
+      name: "memory_capture",
+      arguments: {
+        user_content: "hello",
+        assistant_content: "world",
+        session_key: "attacker-controlled",
+        user_id: "attacker-controlled",
+      },
+    });
+    expect(identityOverride.isError).toBe(true);
+    expect(JSON.stringify(identityOverride.content)).toMatch(
+      /session_key|user_id|unrecognized/i,
+    );
   });
 
   it("turns Gateway failures into MCP tool errors without throwing protocol errors", async () => {
@@ -213,17 +290,28 @@ describe("memory-tencentdb MCP server", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result.content)).toContain("gateway unavailable");
   });
+
+  it("redacts the configured Gateway API key from MCP error results", async () => {
+    const previous = process.env.TDAI_GATEWAY_API_KEY;
+    process.env.TDAI_GATEWAY_API_KEY = "test-secret";
+    try {
+      const gateway = mockGateway();
+      vi.mocked(gateway.recall).mockRejectedValueOnce(new Error("Bearer test-secret"));
+      const client = await connectTestClient(gateway);
+      const result = await client.callTool({
+        name: "memory_recall",
+        arguments: { query: "q" },
+      });
+      expect(JSON.stringify(result.content)).toContain("[redacted]");
+      expect(JSON.stringify(result.content)).not.toContain("test-secret");
+    } finally {
+      if (previous === undefined) delete process.env.TDAI_GATEWAY_API_KEY;
+      else process.env.TDAI_GATEWAY_API_KEY = previous;
+    }
+  });
 });
 
 describe("Codex defaults", () => {
-  it("derives a stable session key without exposing the workspace path", () => {
-    const first = deriveCodexSessionKey("/private/work/acme", "");
-    expect(first).toMatch(/^codex:[a-f0-9]{12}$/);
-    expect(first).toBe(deriveCodexSessionKey("/private/work/acme", ""));
-    expect(first).not.toContain("/private/work/acme");
-    expect(deriveCodexSessionKey("/private/work/acme", " explicit ")).toBe("explicit");
-  });
-
   it("maps documented environment variables to client options", () => {
     expect(gatewayClientOptionsFromEnv({
       TDAI_GATEWAY_URL: " https://memory.example.com/root ",
@@ -241,6 +329,14 @@ describe("Codex defaults", () => {
 
 describe("STDIO process integration", () => {
   it("keeps stdout protocol-clean and reaches real local Gateway routes", async () => {
+    const stdioSessionKey = deriveTdaiSessionKey({
+      serviceId: "service-test",
+      instanceId: "instance-test",
+      teamId: "team-test",
+      agentId: "agent-test",
+      userId: "user-test",
+      sessionId: "session-test",
+    });
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const gateway = http.createServer((request, response) => {
       const chunks: Buffer[] = [];
@@ -277,7 +373,12 @@ describe("STDIO process integration", () => {
       env: {
         ...getDefaultEnvironment(),
         TDAI_GATEWAY_URL: `http://127.0.0.1:${address.port}`,
-        TDAI_CODEX_SESSION_KEY: "codex:stdio-test",
+        TDAI_SERVICE_ID: "service-test",
+        TDAI_INSTANCE_ID: "instance-test",
+        TDAI_TEAM_ID: "team-test",
+        TDAI_AGENT_ID: "agent-test",
+        TDAI_USER_ID: "user-test",
+        TDAI_SESSION_ID: "session-test",
       },
       stderr: "pipe",
     });
@@ -319,7 +420,7 @@ describe("STDIO process integration", () => {
       "/search/conversations",
     ]);
     expect(requests[0].body).toMatchObject({
-      session_key: "codex:stdio-test",
+      session_key: stdioSessionKey,
       messages: [
         { role: "user", content: "remember this", timestamp: 100 },
         { role: "assistant", content: "captured", timestamp: 200 },
@@ -327,7 +428,7 @@ describe("STDIO process integration", () => {
     });
     expect(requests[1].body).toMatchObject({
       query: "remember",
-      session_key: "codex:stdio-test",
+      session_key: stdioSessionKey,
     });
   });
 });

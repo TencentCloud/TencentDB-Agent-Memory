@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -40,13 +40,24 @@ function runAsync(script, args = [], env = {}) {
   });
 }
 
-test("manifest stays thin and points only to Skill and MCP config", async () => {
+test("manifest exposes Skill, MCP, and the Codex lifecycle hook contract", async () => {
   const manifest = JSON.parse(await readFile(path.join(root, ".codex-plugin/plugin.json")));
   assert.equal(manifest.name, "tdai-memory");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.mcpServers, "./.mcp.json");
   assert.equal(manifest.hooks, undefined);
   assert.equal(manifest.apps, undefined);
+  const hooks = JSON.parse(await readFile(path.join(root, "hooks/hooks.json")));
+  assert.deepEqual(Object.keys(hooks.hooks).sort(), [
+    "SessionEnd",
+    "SessionStart",
+    "Stop",
+    "UserPromptSubmit",
+  ]);
+  for (const entries of Object.values(hooks.hooks)) {
+    const command = entries[0].hooks[0];
+    assert.equal(command.commandWindows, command.command);
+  }
 });
 
 test("repo marketplace exposes the same plugin identity", async () => {
@@ -103,7 +114,13 @@ test("launcher delegates stdio to an external executable", async () => {
   assert.equal(result.stdout, "official-mcp-ok\n");
 });
 
-test("launcher discovers the v2 repository build without an override", async () => {
+const repositoryBuildAvailable = await access(path.resolve(root, "../../MemoryCore/dist/memory-tencentdb-mcp.mjs"))
+  .then(() => true)
+  .catch(() => false);
+
+test("launcher discovers the v2 repository build without an override", {
+  skip: !repositoryBuildAvailable,
+}, async () => {
   const result = await runAsync("run-official-mcp.mjs", [], {});
   // Closing stdin lets a correctly discovered stdio MCP process exit cleanly.
   assert.equal(result.status, 0, result.stderr);

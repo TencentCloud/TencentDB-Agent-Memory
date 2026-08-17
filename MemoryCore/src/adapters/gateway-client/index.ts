@@ -1,5 +1,7 @@
 export { GatewayMemoryClient } from "./client.js";
 export { createGatewayPlatformAdapter } from "./platform-adapter.js";
+export { gatewayClientOptionsFromEnv } from "./environment.js";
+export { assertTdaiIdentity, deriveTdaiSessionKey, resolveTdaiIdentity } from "./identity.js";
 export {
   GatewayMemoryClientError,
   GatewayConfigurationError,
@@ -29,3 +31,7 @@ export type {
   PlatformBinding,
   GatewayPlatformAdapter,
 } from "./types.js";
+export type {
+  TdaiIdentity,
+  ResolveTdaiIdentityOptions,
+} from "./identity.js";

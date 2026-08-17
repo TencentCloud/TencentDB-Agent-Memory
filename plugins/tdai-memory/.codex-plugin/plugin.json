@@ -1,7 +1,7 @@
 {
   "name": "tdai-memory",
   "version": "0.1.0",
-  "description": "Thin OpenAI and Codex packaging for TencentDB Agent Memory v2.",
+  "description": "Codex integration plugin for TencentDB Agent Memory v2 with lifecycle hooks and focused MCP tools.",
   "author": {
     "name": "TencentDB Agent Memory contributors",
     "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory"
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "TencentDB Agent Memory",
     "shortDescription": "Use official TencentDB memory tools from Codex.",
-    "longDescription": "Packages TencentDB Agent Memory instructions and delegates MCP calls to the official memory-tencentdb-mcp executable. It does not duplicate Memory Core, MemoryProxy, the Gateway SDK, or an MCP server.",
+    "longDescription": "Combines Codex lifecycle recall/capture hooks, a Skill, and focused MCP tools while reusing the shared MemoryCore Gateway client. It does not duplicate Memory Core, MemoryProxy, the Gateway SDK, or an MCP server.",
     "developerName": "TencentDB Agent Memory contributors",
     "category": "Productivity",
     "capabilities": [

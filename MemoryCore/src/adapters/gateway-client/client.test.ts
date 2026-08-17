@@ -11,6 +11,7 @@ import {
   GatewayTransportError,
 } from "./errors.js";
 import { createGatewayPlatformAdapter } from "./platform-adapter.js";
+import { assertTdaiIdentity, deriveTdaiSessionKey, resolveTdaiIdentity } from "./identity.js";
 interface SeenRequest {
   method: string;
   url: string;
@@ -293,6 +294,69 @@ describe("GatewayMemoryClient", () => {
       ],
     })).rejects.toThrow(/JSON-serializable/);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe("strict TencentDB identity", () => {
+  const configured = {
+    TDAI_SERVICE_ID: "service",
+    TDAI_INSTANCE_ID: "instance",
+    TDAI_TEAM_ID: "team",
+    TDAI_AGENT_ID: "agent",
+    TDAI_USER_ID: "user",
+    TDAI_TASK_ID: "task",
+  };
+
+  it("derives one stable opaque session key from the full identity", () => {
+    const identity = resolveTdaiIdentity({ env: configured, sessionId: "session" });
+    expect(identity).toMatchObject({
+      serviceId: "service",
+      instanceId: "instance",
+      teamId: "team",
+      agentId: "agent",
+      userId: "user",
+      taskId: "task",
+      sessionId: "session",
+    });
+    expect(identity.sessionKey).toMatch(/^codex:[a-f0-9]{32}$/);
+    expect(identity.sessionKey).toBe(deriveTdaiSessionKey({
+      serviceId: "service",
+      instanceId: "instance",
+      teamId: "team",
+      agentId: "agent",
+      userId: "user",
+      taskId: "task",
+      sessionId: "session",
+    }));
+    expect(identity.sessionKey).not.toContain("team");
+  });
+
+  it.each([
+    "TDAI_SERVICE_ID",
+    "TDAI_INSTANCE_ID",
+    "TDAI_TEAM_ID",
+    "TDAI_AGENT_ID",
+    "TDAI_USER_ID",
+  ])("rejects missing %s instead of fabricating a fallback", (field) => {
+    expect(() => resolveTdaiIdentity({
+      env: { ...configured, [field]: undefined },
+      sessionId: "session",
+    })).toThrow(field);
+  });
+
+  it.each([null, undefined, [], "identity", 42])(
+    "rejects runtime-invalid identity %j with a configuration error",
+    (identity) => {
+      expect(() => assertTdaiIdentity(identity)).toThrow(GatewayConfigurationError);
+    },
+  );
+
+  it("rejects an identity with a missing session key before deriving it", () => {
+    const { sessionKey: _sessionKey, ...withoutSessionKey } = resolveTdaiIdentity({
+      env: configured,
+      sessionId: "session",
+    });
+    expect(() => assertTdaiIdentity(withoutSessionKey)).toThrow(/sessionKey/);
   });
 });
 

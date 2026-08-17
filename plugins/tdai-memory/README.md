@@ -1,10 +1,24 @@
-# TencentDB Agent Memory OpenAI/Codex Plugin PoC
+# TencentDB Agent Memory Codex integration plugin
 
-This is a deliberately thin packaging and distribution layer for TencentDB Agent Memory v2. It bundles instructions and a launcher for the **official** MCP executable; it contains no memory implementation.
+This plugin combines Codex lifecycle automation, model-facing guidance, and
+focused MCP tools for TencentDB Agent Memory v2. Hooks and MCP reuse the
+shared MemoryCore Gateway client; the plugin contains no memory store,
+extraction pipeline, or second SDK/server implementation.
+
+The original #953 rescope was too aggressive: while removing the duplicated
+adapter/SDK framework discussed in #392, it also removed Codex hooks. The #392
+triage asked platform-specific hooks to be split out behind the shared Gateway
+boundary; it did not reject them. See [the executable redesign](./docs/design-v2.md).
 
 ## Status
 
-The Plugin package is functional and validated. This branch ports the already-reviewed #603 Gateway client and stdio MCP adapter to the current v2 `MemoryCore` package, preserving its executable and tool contract rather than creating a parallel implementation.
+The package currently lands the first reviewable redesign slice: a four-event
+fail-open hook contract (`SessionStart`, `UserPromptSubmit`, `Stop`,
+`SessionEnd`), shared identity/state plumbing, the focused stdio MCP adapter,
+and a public-route operation registry. Read-only capability discovery is
+available only when `TDAI_MCP_ENABLE_ADVANCED=true`; raw operation execution is
+not implemented. Additional curated L0-L3/Skill/Knowledge typed tools remain
+separately staged.
 
 ## Install for repo-local testing
 
@@ -26,6 +40,11 @@ export TDAI_GATEWAY_URL=http://127.0.0.1:8420
 ```
 
 Gateway API keys are inherited from `TDAI_GATEWAY_API_KEY`; setup never writes them to disk.
+
+Hooks require explicit `TDAI_SERVICE_ID`, `TDAI_INSTANCE_ID`, `TDAI_TEAM_ID`,
+`TDAI_AGENT_ID`, `TDAI_USER_ID`, and a host-provided session id. They never
+invent team/user/agent fallbacks. Hook failures are fail-open so Codex remains
+usable while the diagnostic is reported on stderr.
 
 ## Setup and health
 
@@ -53,9 +72,9 @@ Remote endpoints are rejected by default. Use `--allow-remote` only for a truste
 
 | Surface | PoC behavior | Ownership |
 | --- | --- | --- |
-| Codex app / CLI | Skill plus official stdio MCP tools | This Plugin packages; official MCP executes |
-| Codex CLI / non-Plan | Explicit tool recall/capture; no automatic injection | Official MCP/Gateway |
-| Codex IDE Plan mode | Plugin unavailable in IDE | v2.0.1 MemoryProxy roadmap |
-| ChatGPT Chat / Work | Skill portable; tools require registered remote MCP | Future official hosted MCP/app registration |
+| Codex app / CLI | Skill, focused MCP tools, and four lifecycle hooks | This Plugin packages; shared Gateway/Core executes |
+| Codex with hooks disabled | MCP and Skill continue to work | Hook automation is independent of MCP startup |
+| Codex IDE extension | Documented separately; no plugin/Proxy claim here | MemoryProxy/#833 remains a separate transport route |
+| ChatGPT Chat / Work | Compatible Skill/MCP only when a trusted remote MCP is registered | ChatGPT does not execute Codex lifecycle hooks |
 
 See [Non-goals and overlap](./docs/overlap-analysis.md) and [surface compatibility](./docs/surfaces.md).
