@@ -18,12 +18,12 @@ export class TdaiClient {
     return payload.data ?? payload
   }
 
-  recall(identity, query, limit, signal, scope) {
-    return this.post('/v3/atomic/search', { ...identity, query, limit, ...(scope ? { scope } : {}) }, signal)
+  recall(identity, query, limit, signal) {
+    return this.post('/v3/atomic/search', { ...identity, query, top_k: limit }, signal)
   }
 
-  conversationSearch(identity, query, limit, signal, scope) {
-    return this.post('/v3/conversation/search', { ...identity, query, limit, ...(scope ? { scope } : {}) }, signal)
+  conversationSearch(identity, query, limit, signal) {
+    return this.post('/v3/conversation/search', { ...identity, query, limit }, signal)
   }
 
   skillSearch(identity, query, top_k, signal) {

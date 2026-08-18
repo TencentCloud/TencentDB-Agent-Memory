@@ -307,8 +307,6 @@ export type ConversationSearchRequest = (IdFields & {
      * @type string | undefined
     */
     session_id?: string;
-    /** Optional team-wide read scope; agent_id remains required for authorization. */
-    scope?: "team";
     /**
      * @type string | undefined, date-time
     */
@@ -487,8 +485,6 @@ export type AtomicSearchRequest = (IdFields & {
      * @type string | undefined
     */
     type?: string;
-    /** Optional team-wide read scope; agent_id remains required for authorization. */
-    scope?: "team";
     /**
      * @type string | undefined, date-time
     */

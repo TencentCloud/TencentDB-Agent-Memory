@@ -10,4 +10,3 @@
         agentId: !!js process.env.TDAI_MEMORY_AGENT_ID || ''
         userId: !!js process.env.TDAI_MEMORY_USER_ID || ''
         recallLimit: !!js Number(process.env.TDAI_MEMORY_RECALL_LIMIT || 5)
-        sharedRecall: !!js process.env.TDAI_MEMORY_SHARED_RECALL === 'true'

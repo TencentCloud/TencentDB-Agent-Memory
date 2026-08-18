@@ -28,7 +28,6 @@ function render(value) {
 export function apply(ctx, config = {}) {
   const apiKey = process.env[config.apiKeyEnv || 'TDAI_MEMORY_API_KEY'] || ''
   const client = new TdaiClient({ ...config, apiKey })
-  const recallScope = config.sharedRecall === true ? 'team' : undefined
   const pending = new Map()
   const turns = new Map()
   const currentTurn = new Map()
@@ -62,13 +61,13 @@ export function apply(ctx, config = {}) {
     async execute(args) {
       const identity = identityFor(ctx.agent?.session || ctx.sessions?.list?.()[0])
       if (!identity) return 'TDAI memory is not configured for this session.'
-      try { return JSON.stringify(await search(identity, args.query, Math.min(Math.max(args.limit || 5, 1), 20), undefined, recallScope)) }
+      try { return JSON.stringify(await search(identity, args.query, Math.min(Math.max(args.limit || 5, 1), 20))) }
       catch (error) { log(`${name} unavailable`, error); return 'TDAI memory is temporarily unavailable.' }
     },
   })
 
-  registerSearch('tdai_memory_search', 'Search structured TencentDB long-term memory.', (identity, query, limit, signal, scope) => client.recall(identity, query, limit, signal, scope))
-  registerSearch('tdai_conversation_search', 'Search exact TencentDB conversation history.', (identity, query, limit, signal, scope) => client.conversationSearch(identity, query, limit, signal, scope))
+  registerSearch('tdai_memory_search', 'Search structured TencentDB long-term memory.', (identity, query, limit) => client.recall(identity, query, limit))
+  registerSearch('tdai_conversation_search', 'Search exact TencentDB conversation history.', (identity, query, limit) => client.conversationSearch(identity, query, limit))
   registerSearch('tdai_skill_search', 'Search TencentDB Skill assets managed by the backend.', (identity, query, limit) => client.skillSearch(identity, query, limit))
 
   ctx.on('agent/pre-step', async (payload, next) => {
@@ -77,7 +76,7 @@ export function apply(ctx, config = {}) {
     const query = payload.messages?.map((message) => safeText(message.content)).join('\n').trim()
     if (!identity || !query) return decision
     try {
-      const result = await client.recall(identity, query, config.recallLimit || 5, payload.signal, recallScope)
+      const result = await client.recall(identity, query, config.recallLimit || 5, payload.signal)
       const text = safeText(JSON.stringify(result))
       if (!text || text === '{}') return decision
       if (decision.kind !== 'enter') return decision

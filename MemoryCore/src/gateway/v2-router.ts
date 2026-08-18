@@ -915,19 +915,17 @@ async function handleConversationCount(body: unknown, _auth: V2AuthContext, requ
 async function handleConversationSearch(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = conversationSearchRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { query, session_id, scope } = parsed.data;
+  const { query, session_id } = parsed.data;
   const limit = parsed.data.limit ?? 5;
 
   const tStart = performance.now();
   // 搜索场景：只使用显式传入的 isolation 维度作为 filter，避免默认 sessionId="default" 错误过滤真实 session 数据。
   // 当请求未传 session_id 时，搜索应跨 session；当传了 session_id 时，由 sessionKey 参数单独过滤。
   const iso = deps.requestIsolation;
-  // scope=team is opt-in: strict v3 identity still authorizes the caller, but
-  // the result is readable across agents in the same team.
   const searchFilter = iso ? {
     ...(iso.teamId ? { teamId: iso.teamId } : {}),
     ...(iso.userId ? { userId: iso.userId } : {}),
-    ...(scope === "team" ? {} : (iso.agentId ? { agentId: iso.agentId } : {})),
+    ...(iso.agentId ? { agentId: iso.agentId } : {}),
     ...(iso.taskId ? { taskId: iso.taskId } : {}),
     // 不传 sessionId：全局搜索不应被默认 sessionId 限制
   } : undefined;
@@ -1194,7 +1192,7 @@ async function handleAtomicCount(body: unknown, _auth: V2AuthContext, requestId:
 async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = atomicSearchRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { query, type, scope } = parsed.data;
+  const { query, type } = parsed.data;
   const limit = parsed.data.limit ?? 5;
 
   const tStart = performance.now();
@@ -1202,12 +1200,10 @@ async function handleAtomicSearch(body: unknown, auth: V2AuthContext, requestId:
   // **不带 sessionId**，否则会把其它 session 写入的 L1 记忆过滤掉，导致
   // 新会话里召不回历史记忆（与 conversation/search 的处理保持一致）。
   const iso = deps.requestIsolation;
-  // scope=team is opt-in: strict v3 identity still authorizes the caller, but
-  // the result is readable across agents in the same team.
   const searchFilter = iso ? {
     ...(iso.teamId ? { teamId: iso.teamId } : {}),
     ...(iso.userId ? { userId: iso.userId } : {}),
-    ...(scope === "team" ? {} : (iso.agentId ? { agentId: iso.agentId } : {})),
+    ...(iso.agentId ? { agentId: iso.agentId } : {}),
     ...(iso.taskId ? { taskId: iso.taskId } : {}),
     // 不传 sessionId：L1 召回应跨 session（agent 维度）
   } : undefined;
