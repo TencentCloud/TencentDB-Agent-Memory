@@ -283,7 +283,11 @@ export async function handleCodexEndpoint(
   const path = c.req.path;
 
   // ── 1. Auth ────────────────────────────────────────────────────────────────
+  // x-tdai-user-key 优先：passthrough 场景下 Authorization 已被上游真实凭据占用
+  // （如 ChatGPT OAuth），客户端用该头单独携带 sk-mem 身份。对齐 anthropicHandler
+  // 的 extractApiKey()。该头在 SKIP_REQUEST_HEADERS 中，不会透传给上游。
   const apiKey =
+    c.req.header("x-tdai-user-key") ??
     extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ??
     c.req.header("x-api-key") ??
     "";
@@ -966,8 +970,15 @@ async function forwardToUpstream(
   if (agentUpstreamEntry) {
     if (agentUpstreamEntry.apiKey) {
       upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+    } else {
+      // buildUpstreamHeaders() 已用全局 upstream.apiKey 无条件覆盖过 authorization，
+      // 所以 passthrough 必须在这里显式还原客户端原始凭据，否则上游收到的是全局
+      // key（例如把 DeepSeek key 发给 ChatGPT 后端 → 401）。
+      const clientAuth =
+        c.req.header("authorization") ?? c.req.header("Authorization");
+      if (clientAuth) upstreamHeaders["authorization"] = clientAuth;
+      else delete upstreamHeaders["authorization"];
     }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
   }
 
   pipe.forwardStart(upstreamUrl);
