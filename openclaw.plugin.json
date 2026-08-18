@@ -74,6 +74,8 @@
         "description": "记忆召回设置",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用自动召回" },
+          "injectionMode": { "type": "string", "enum": ["prepend", "append"], "default": "prepend", "description": "动态 L1 召回注入位置：prepend 保持旧行为；append 使用 appendContext 降低对用户消息前缀缓存的影响" },
+          "showInjected": { "type": "boolean", "default": false, "description": "是否将 <relevant-memories> 保留到持久化对话历史中；默认 false 以避免历史膨胀" },
           "maxResults": { "type": "number", "default": 5, "description": "召回最大结果数" },
           "maxCharsPerMemory": { "type": "number", "default": 0, "description": "单条 L1 记忆注入的最大字符数；填 0 表示不限制" },
           "maxTotalRecallChars": { "type": "number", "default": 0, "description": "本轮 auto-recall 注入的 L1 记忆总字符预算；填 0 表示不限制" },
