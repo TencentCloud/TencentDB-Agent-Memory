@@ -5,9 +5,21 @@
 [Semantic Versioning](https://semver.org/)。
 
 覆盖仓库全部开源模块：`MemoryCore` / `MemoryPanel` / `MemoryKnowledge` /
-`MemoryProxy` / SDK。
+`MemoryProxy` / SDK / `adapters/pi`。
 
 ---
+
+## [Unreleased]
+
+### 🔌 新增 Pi 适配器（adapters/pi，v0.1.0）
+
+原生 [Pi](https://pi.dev/) 扩展，为 Pi 编码 Agent 接入腾讯云 Agent Memory v3。
+
+- **召回 + 捕获 + Skill 追踪**：`before_agent_start` 召回相关原子记忆 / 场景摘要 / 核心画像并注入系统提示；`agent_settled` 捕获完成的轮次；有序 `assistant` / `tool_call` / `tool_result` 写入 Skill 管线。
+- **生产级捕获链路**：串行化 flush、指数退避、重试上限（5 次）、有界待发队列、非阻塞启动；reload 后补偿未落库的轮次，MemoryCore 短暂不可用也不会静默丢数据。
+- **独立脱敏模块**：对 Bearer token、私钥块（含未闭合）、URL 凭证、敏感 JSON key 做擦洗；召回数据以不可信边界标记注入，降低历史密钥泄漏与提示注入风险。
+- **内置工具与命令**：`tdai_memory_search` / `tdai_conversation_search` 工具与 `/tdai-memory-status` 命令；中英文文档对齐。
+- 详见 [adapters/pi/README_CN.md](./adapters/pi/README_CN.md)。
 
 ## [2.0.1-beta.1] — 2026-08-13
 
