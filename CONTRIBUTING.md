@@ -59,7 +59,8 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
 ## Submitting changes
 
 1. Fork the repo
-2. Cut a feature branch off `master` or the latest `develop_*` branch
+2. Cut a feature branch off the branch you intend to target (see
+   [Branches](#branches) below)
    ```bash
    git checkout -b fix/xxx-issue
    ```
@@ -69,9 +70,22 @@ it standalone (usually `cd <module> && npm install && npm run dev`).
    npm test          # or pnpm test
    ```
 4. Commit using Conventional Commits + DCO sign-off (see below)
-5. Push and open a PR against `develop_server_team` or `master` (follow the
-   maintainer's latest guidance)
+5. Push and open a PR against the matching branch (see [Branches](#branches))
 6. Get through CI + review, then merge
+
+### Branches
+
+The repository maintains three long-lived branches:
+
+| Branch | Notes |
+|--------|-------|
+| `feat/server_team` | Default branch |
+| `feat/server` | |
+| `main` | The only branch CI (`.github/workflows/pr-ci.yml`) runs on |
+
+Target the branch your change applies to, and mention in the PR description
+whether it also applies to the other two — changes that are relevant to all
+three are currently landed separately on each.
 
 ## Commit conventions
 
