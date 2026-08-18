@@ -170,6 +170,9 @@ async function promptSubmit(input) {
     const response = await client.recall({
       query: prompt,
       sessionKey: identity.sessionKey,
+      sessionId: identity.sessionId,
+      teamId: identity.teamId,
+      agentId: identity.agentId,
       userId: identity.userId,
     });
     const additionalContext = contextFromRecall(response);
@@ -210,6 +213,8 @@ async function stop(input) {
         assistantContent,
         sessionKey: identity.sessionKey,
         sessionId: identity.sessionId,
+        teamId: identity.teamId,
+        agentId: identity.agentId,
         userId: identity.userId,
         messages: [
           { role: "user", content: pending.prompt, timestamp: pending.promptTimestampMs },

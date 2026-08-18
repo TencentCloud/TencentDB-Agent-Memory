@@ -4,6 +4,7 @@ interface GatewayMemoryClientOptions {
   baseUrl?: string;
   /** Optional Bearer token matching TDAI_GATEWAY_API_KEY on the Gateway. */
   apiKey?: string;
+  serviceId?: string;
   /** Per-request timeout in milliseconds. */
   timeoutMs?: number;
   /** Explicitly permit a non-loopback Gateway URL. */
@@ -23,6 +24,9 @@ interface GatewayHealthResponse {
 interface GatewayRecallInput {
   query: string;
   sessionKey: string;
+  sessionId?: string;
+  teamId: string;
+  agentId: string;
   userId?: string;
 }
 interface GatewayRecallResponse {
@@ -46,6 +50,8 @@ interface GatewayCaptureInput {
   assistantContent: string;
   sessionKey: string;
   sessionId?: string;
+  teamId: string;
+  agentId: string;
   userId?: string;
   messages?: GatewayCaptureMessage[];
 }
@@ -58,6 +64,10 @@ interface GatewayMemorySearchInput {
   limit?: number;
   type?: string;
   scene?: string;
+  teamId?: string;
+  agentId?: string;
+  userId?: string;
+  sessionId?: string;
 }
 interface GatewayMemorySearchResponse {
   results: string;
@@ -68,6 +78,10 @@ interface GatewayConversationSearchInput {
   query: string;
   limit?: number;
   sessionKey?: string;
+  teamId?: string;
+  agentId?: string;
+  userId?: string;
+  sessionId?: string;
 }
 interface GatewayConversationSearchResponse {
   results: string;
@@ -83,6 +97,8 @@ interface GatewaySessionEndResponse {
 interface SessionIdentity {
   sessionKey: string;
   sessionId?: string;
+  teamId?: string;
+  agentId?: string;
   userId?: string;
 }
 interface CompletedPlatformTurn {

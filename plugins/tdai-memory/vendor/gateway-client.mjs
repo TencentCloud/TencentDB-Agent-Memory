@@ -96,6 +96,15 @@ function isConversationSearchResponse(value) {
 function isSessionEndResponse(value) {
 	return isRecord(value) && typeof value.flushed === "boolean";
 }
+function isV3EnvelopeResponse(value) {
+	return isRecord(value) && value.code === 0 && isRecord(value.data);
+}
+function isV3AtomicSearchResponse(value) {
+	return isV3EnvelopeResponse(value) && Array.isArray(value.data.items);
+}
+function isV3ConversationSearchResponse(value) {
+	return isV3EnvelopeResponse(value) && Array.isArray(value.data.messages);
+}
 function isLoopbackHostname(hostname) {
 	const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
 	return normalized === "localhost" || normalized === "::1" || normalized === "127.0.0.1";
@@ -126,6 +135,14 @@ function optionalLimit(value) {
 	if (!Number.isSafeInteger(value) || value < 1 || value > 50) throw new GatewayConfigurationError("limit must be an integer between 1 and 50");
 	return value;
 }
+function tdaiRequestIdentity(input) {
+	return {
+		team_id: requireText(input.teamId, "teamId"),
+		agent_id: requireText(input.agentId, "agentId"),
+		user_id: requireText(input.userId, "userId"),
+		session_id: requireText(input.sessionId, "sessionId")
+	};
+}
 function normalizeMessages(messages) {
 	if (messages === void 0) return void 0;
 	if (!Array.isArray(messages) || messages.length === 0) throw new GatewayConfigurationError("messages must be a non-empty array when provided");
@@ -134,21 +151,25 @@ function normalizeMessages(messages) {
 		const role = requireText(message.role, `messages[${index}].role`);
 		const content = requireText(message.content, `messages[${index}].content`);
 		if (message.timestamp !== void 0 && (!Number.isSafeInteger(message.timestamp) || message.timestamp <= 0)) throw new GatewayConfigurationError(`messages[${index}].timestamp must be a positive safe integer`);
+		const timestamp = message.timestamp === void 0 ? void 0 : new Date(message.timestamp).toISOString();
 		return {
 			...message,
 			role,
-			content
+			content,
+			...timestamp ? { timestamp } : {}
 		};
 	});
 }
 var GatewayMemoryClient = class {
 	baseUrl;
 	apiKey;
+	serviceId;
 	timeoutMs;
 	fetchImpl;
 	constructor(options = {}) {
 		this.baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL, options.allowRemote ?? false);
 		this.apiKey = options.apiKey?.trim() || void 0;
+		this.serviceId = options.serviceId?.trim() || void 0;
 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) throw new GatewayConfigurationError("timeoutMs must be a positive finite number");
 		const fetchImpl = options.fetch ?? globalThis.fetch;
@@ -159,52 +180,52 @@ var GatewayMemoryClient = class {
 		return this.request("GET", "/health", void 0, isHealthResponse);
 	}
 	recall(input) {
-		const userId = optionalText(input.userId, "userId");
-		return this.request("POST", "/recall", {
-			query: requireText(input.query, "query"),
-			session_key: requireText(input.sessionKey, "sessionKey"),
-			...userId ? { user_id: userId } : {}
-		}, isRecallResponse);
+		const query = requireText(input.query, "query");
+		const identity = tdaiRequestIdentity(input);
+		return this.request("POST", "/v3/atomic/search", {
+			...identity, query, limit: 5, scope: "user_shared"
+		}, isV3AtomicSearchResponse).then((response) => {
+			const items = response.data?.items ?? [];
+			const context = items.map((item) => `- [${item.type ?? "memory"}] ${item.content ?? ""}`).join("\n");
+			return { context, prepend_context: context, strategy: "v3-atomic-user-shared", memory_count: items.length };
+		});
 	}
 	capture(input) {
-		const sessionId = optionalText(input.sessionId, "sessionId");
-		const userId = optionalText(input.userId, "userId");
+		const identity = tdaiRequestIdentity(input);
 		const messages = normalizeMessages(input.messages);
-		return this.request("POST", "/capture", {
-			user_content: requireText(input.userContent, "userContent"),
-			assistant_content: requireText(input.assistantContent, "assistantContent"),
-			session_key: requireText(input.sessionKey, "sessionKey"),
-			...sessionId ? { session_id: sessionId } : {},
-			...userId ? { user_id: userId } : {},
-			...messages ? { messages } : {}
-		}, isCaptureResponse);
+		return this.request("POST", "/v3/conversation/add", {
+			...identity,
+			messages: messages ?? [{ role: "user", content: requireText(input.userContent, "userContent") }, { role: "assistant", content: requireText(input.assistantContent, "assistantContent") }]
+		}, isV3EnvelopeResponse).then((response) => ({
+			l0_recorded: response.data?.total_count ?? response.data?.accepted_ids?.length ?? 0,
+			scheduler_notified: true
+		}));
 	}
 	searchMemories(input) {
 		const limit = optionalLimit(input.limit);
 		const type = optionalText(input.type, "type");
-		const scene = optionalText(input.scene, "scene");
-		return this.request("POST", "/search/memories", {
-			query: requireText(input.query, "query"),
-			...limit !== void 0 ? { limit } : {},
-			...type ? { type } : {},
-			...scene ? { scene } : {}
-		}, isMemorySearchResponse);
+		return this.request("POST", "/v3/atomic/search", {
+			...tdaiRequestIdentity(input), query: requireText(input.query, "query"),
+			...limit !== void 0 ? { limit } : {}, ...type ? { type } : {}, scope: "user_shared"
+		}, isV3AtomicSearchResponse).then((response) => {
+			const items = response.data?.items ?? [];
+			return { results: items.map((item) => `- [${item.type ?? "memory"}] ${item.content ?? ""}`).join("\n"), total: items.length, strategy: "v3-atomic-user-shared" };
+		});
 	}
 	searchConversations(input) {
 		const limit = optionalLimit(input.limit);
 		const sessionKey = optionalText(input.sessionKey, "sessionKey");
-		return this.request("POST", "/search/conversations", {
-			query: requireText(input.query, "query"),
+		return this.request("POST", "/v3/conversation/search", {
+			...tdaiRequestIdentity(input), query: requireText(input.query, "query"),
 			...limit !== void 0 ? { limit } : {},
-			...sessionKey ? { session_key: sessionKey } : {}
-		}, isConversationSearchResponse);
+			...(sessionKey ? { session_id: sessionKey } : {}), scope: "agent"
+		}, isV3ConversationSearchResponse).then((response) => {
+			const items = response.data?.messages ?? [];
+			return { results: items.map((item) => `[${item.role ?? "?"}] ${item.content ?? ""}`).join("\n"), total: items.length };
+		});
 	}
 	endSession(input) {
-		const userId = optionalText(input.userId, "userId");
-		return this.request("POST", "/session/end", {
-			session_key: requireText(input.sessionKey, "sessionKey"),
-			...userId ? { user_id: userId } : {}
-		}, isSessionEndResponse);
+		return Promise.resolve({ flushed: true });
 	}
 	async request(method, path, body, validate) {
 		const url = `${this.baseUrl}${path}`;
@@ -222,6 +243,7 @@ var GatewayMemoryClient = class {
 			const headers = {};
 			if (body !== void 0) headers["Content-Type"] = "application/json";
 			if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+			if (this.serviceId) headers["x-tdai-service-id"] = this.serviceId;
 			response = await this.fetchImpl(url, {
 				method,
 				headers,
@@ -269,6 +291,9 @@ function createGatewayPlatformAdapter(binding, client) {
 			const response = await client.recall({
 				query: binding.getRecallQuery(event),
 				sessionKey: identity.sessionKey,
+				sessionId: identity.sessionId,
+				teamId: identity.teamId,
+				agentId: identity.agentId,
 				userId: identity.userId
 			});
 			return binding.formatRecall(response, event);
@@ -281,6 +306,8 @@ function createGatewayPlatformAdapter(binding, client) {
 				...turn,
 				sessionKey: identity.sessionKey,
 				sessionId: identity.sessionId,
+				teamId: identity.teamId,
+				agentId: identity.agentId,
 				userId: identity.userId
 			});
 		},
@@ -302,6 +329,7 @@ function gatewayClientOptionsFromEnv(env = process.env) {
 	return {
 		baseUrl: env.TDAI_GATEWAY_URL?.trim() || DEFAULT_GATEWAY_URL,
 		apiKey: env.TDAI_GATEWAY_API_KEY,
+		serviceId: env.TDAI_SERVICE_ID,
 		timeoutMs,
 		allowRemote: /^(1|true|yes)$/i.test(env.TDAI_GATEWAY_ALLOW_REMOTE?.trim() ?? "")
 	};
