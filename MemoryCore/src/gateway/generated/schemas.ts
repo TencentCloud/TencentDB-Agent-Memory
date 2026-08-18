@@ -124,6 +124,7 @@ export const conversationSearchRequestSchema = z.lazy(() => idFieldsSchema).and(
 "session_id": z.optional(z.string()),
 "time_start": z.optional(z.iso.datetime()),
 "time_end": z.optional(z.iso.datetime())
+ ,"scope": z.optional(z.enum(["team"]))
     })) as unknown as z.ZodType<ConversationSearchRequest>
 
 export const conversationSearchHitSchema = z.lazy(() => conversationItemSchema).and(z.object({
@@ -194,6 +195,7 @@ export const atomicSearchRequestSchema = z.lazy(() => idFieldsSchema).and(z.obje
 "type": z.optional(z.string()),
 "time_start": z.optional(z.iso.datetime()),
 "time_end": z.optional(z.iso.datetime())
+ ,"scope": z.optional(z.enum(["team"]))
     })) as unknown as z.ZodType<AtomicSearchRequest>
 
 export const atomicSearchHitSchema = z.lazy(() => atomicDetailSchema).and(z.object({
