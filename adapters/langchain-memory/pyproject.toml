@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tencentdb-agent-memory-langchain"
+version = "0.1.0"
+description = "LangChain / LangGraph adapter for TencentDB Agent Memory — persistent, team-scoped memory for agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "TencentDB Agent Memory Team" }]
+keywords = ["langchain", "langgraph", "memory", "tencentdb", "agent", "rag"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "tencentdb-agent-memory-sdk-python-v2>=1.0.0b1",
+    "langchain-core>=0.3.0",
+    "langgraph>=0.2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tencentdb_langchain"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
