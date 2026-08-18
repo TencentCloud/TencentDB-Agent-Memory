@@ -1,7 +1,7 @@
 import { TdaiClient, safeText } from './client.mjs'
 
 export const name = 'tdai-memory-dsh-plugin'
-export const inject = ['tools', 'systemPrompt']
+export const inject = ['tools', 'systemPrompt', 'sessions']
 
 function required(value) {
   const text = typeof value === 'string' ? value.trim() : ''

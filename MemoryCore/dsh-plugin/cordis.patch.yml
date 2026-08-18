@@ -1,7 +1,7 @@
 - insert:
     - id: tdai-memory
       name: tdai-memory-dsh-plugin
-      inject: [tools, systemPrompt]
+      inject: [tools, systemPrompt, sessions]
       config:
         endpoint: !!js process.env.TDAI_MEMORY_ENDPOINT || 'http://127.0.0.1:8420'
         apiKeyEnv: !!js process.env.TDAI_MEMORY_API_KEY_ENV || 'TDAI_MEMORY_API_KEY'
