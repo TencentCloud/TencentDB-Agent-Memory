@@ -12,6 +12,7 @@
 [![Node](https://img.shields.io/badge/node-%3E=22.16-brightgreen)](https://nodejs.org/)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E=2026.3.13-orange)](https://github.com/openclaw/openclaw)
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
+[![OpenCode](https://img.shields.io/badge/OpenCode-Plugin-4C8BF5)](https://opencode.ai/docs/plugins/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
 [效果亮点](#-效果亮点) · [项目简介](#项目简介) · [核心技术](#核心技术拒绝平铺走向分层与符号化) · [方案特点](#-方案特点) · [快速开始](#快速开始)
@@ -386,6 +387,19 @@ memory:
   provider: memory_tencentdb
 ```
 
+
+### 4. OpenCode
+
+完整 OpenCode 适配层使用原生 `chat.message`、`session.idle`、`session.deleted` 和 `dispose` 生命周期，同时保持 Gateway 为记忆状态的唯一所有者。
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["@tencentdb-agent-memory/memory-tencentdb-opencode"]
+}
+```
+
+该适配层包含自动召回/捕获、Session flush、七个显式记忆工具、Gateway 进程管理、Bearer 鉴权、熔断、恢复和非致命降级。配置与生命周期细节见 [OpenCode 适配层说明](./integrations/opencode/README.md)。
 
 ## 🔒 Gateway 安全配置（可选）
 

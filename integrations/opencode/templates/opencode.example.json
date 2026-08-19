@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "@tencentdb-agent-memory/memory-tencentdb-opencode",
+      {
+        "gatewayUrl": "http://127.0.0.1:8420",
+        "enableSupervisor": true,
+        "requestTimeoutMs": 10000,
+        "startupTimeoutMs": 30000,
+        "userId": "default_user",
+        "resultMaxChars": 12000
+      }
+    ]
+  ]
+}

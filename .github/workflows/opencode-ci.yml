@@ -1,0 +1,47 @@
+name: OpenCode Adapter CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "integrations/opencode/**"
+      - ".github/workflows/opencode-ci.yml"
+      - "package.json"
+      - "vitest.config.ts"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/opencode/**"
+      - ".github/workflows/opencode-ci.yml"
+      - "package.json"
+      - "vitest.config.ts"
+
+concurrency:
+  group: opencode-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build, typecheck, and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Typecheck adapter
+        run: npx tsc --project integrations/opencode/tsconfig.json
+
+      - name: Check adapter formatting
+        run: npm run format:check:opencode
+
+      - name: Build adapter
+        run: npm run build:opencode
+
+      - name: Test adapter
+        run: npx vitest run integrations/opencode/tests
