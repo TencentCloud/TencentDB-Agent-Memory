@@ -138,3 +138,6 @@ coverage/
 
 # Local project docs (generated, not for VCS)
 .local-docs/
+
+# Standalone Pi adapter repo (separate git repository, never commit into this tree)
+.standalone-pi-agent-memory-adapter/

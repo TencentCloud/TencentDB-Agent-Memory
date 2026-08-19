@@ -5,3 +5,11 @@ coverage/
 src/**/*.js
 test/**/*.js
 .e2e.local.json
+
+# Standalone-repo publication artifacts (live in the separate pi-agent-memory-adapter repo)
+OPENSOURCE_README.md
+OPENSOURCE_README_CN.md
+repo-root/
+
+# Internal handover notes, not part of the public package
+HANDOVER_CN.md
