@@ -607,6 +607,57 @@ Edit `~/.openclaw/openclaw.json`, add a provider under `models.providers`:
 - `headers`: must include `x-team-id`, `x-agent-id`, `x-task-id`, `x-conversation-id`. `x-task-id` is required in the current version (see [Known limitation: x-task-id](#known-limitation-x-task-id))
 - `models[].id`: must match the model ID configured in the Proxy upstream
 
+## Using Proxy with pi
+
+[pi](https://github.com/earendil-works/pi-mono) is an open-source coding agent harness. By configuring a custom model provider, pi requests can be routed through the Proxy.
+
+### Configuration
+
+Edit `~/.pi/agent/models.json`, add a provider under `providers`:
+
+```jsonc
+{
+  "providers": {
+    "tdai-proxy": {
+      "baseUrl": "http://<proxy-host>:<port>/pi/<spaceId>/v1",
+      "api": "openai-completions",
+      "apiKey": "<business user's sk-mem-... user_key>",
+      "authHeader": true,
+      "headers": {
+        "x-team-id": "<team_id>",
+        "x-agent-id": "<agent_id>",
+        "x-task-id": "<task_id>"
+      },
+      "models": [
+        { "id": "gpt-5.5", "reasoning": false, "input": ["text"], "contextWindow": 128000, "maxTokens": 32000 }
+      ]
+    }
+  }
+}
+```
+
+- `baseUrl`: Proxy address + `/pi/<spaceId>/v1` path. pi appends `/chat/completions` to this value (the standard OpenAI path), matching the Proxy route `/pi/{spaceId}/v1/chat/completions`
+- `apiKey`: the business user's `user_key`; `authHeader: true` makes pi send `Authorization: Bearer <key>`
+- `headers`: must include `x-team-id`, `x-agent-id`, `x-task-id`. `x-task-id` is required in the current version (see [Known limitation: x-task-id](#known-limitation-x-task-id))
+- `models[].id`: must match a model ID supported by the Proxy upstream
+
+`x-conversation-id` is a per-session value that pi's static provider headers cannot supply, so it must be injected per request. Add a small pi extension that hooks `before_provider_headers`:
+
+```typescript
+// ~/.pi/agent/extensions/tdai-proxy/index.ts
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("before_provider_headers", (event, ctx) => {
+    if (!event.headers["x-team-id"]) return; // only the tdai-proxy provider sets this
+    const sid = ctx.sessionManager.getSessionId();
+    if (sid) event.headers["x-conversation-id"] = sid;
+  });
+}
+```
+
+Then select the `tdai-proxy` model in pi (`/model`, or `pi --model tdai-proxy/<id>`).
+
 ## Using Proxy with Other Platforms (Generic)
 
 Beyond ClaudeCode / CodeBuddy / WorkBuddy / Codex / Hermes / OpenClaw, any OpenAI-compatible platform or custom-built agent can connect to the Proxy to access team memory capabilities.
