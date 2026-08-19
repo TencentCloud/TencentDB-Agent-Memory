@@ -199,6 +199,40 @@ describe("security helpers", () => {
     expect(redactText("Authorization: Bearer abcdefghijklmnop sk-live-abcdefghijklmnop")).not.toMatch(/abcdefghijklmnop/);
   });
 
+  it("redacts platform access tokens in free text", () => {
+    // Tokens are assembled at runtime so the source never contains a complete
+    // secret-shaped literal (GitHub push protection flags those).
+    const sample = [
+      `token=ghp_${"a".repeat(40)}`,
+      `fine=github_pat_${"a".repeat(50)}`,
+      `aws=AKIA${"A".repeat(16)}`,
+      `slack=xoxb-${"1".repeat(12)}-${"a".repeat(16)}`,
+      `jwt=eyJ${"a".repeat(20)}.${"a".repeat(20)}.${"a".repeat(20)}`,
+      `npm=npm_${"a".repeat(40)}`,
+      `google=AIza${"A".repeat(35)}`,
+      `stripe=sk_live_${"a".repeat(24)}`,
+      `telegram=123456789:${"A".repeat(35)}`,
+    ].join(" ");
+    const redacted = redactText(sample);
+    expect(redacted).not.toContain("ghp_");
+    expect(redacted).not.toContain("github_pat_");
+    expect(redacted).not.toContain("AKIA");
+    expect(redacted).not.toContain("xoxb-");
+    expect(redacted).not.toContain("eyJ");
+    expect(redacted).not.toContain("npm_");
+    expect(redacted).not.toContain("AIza");
+    expect(redacted).not.toContain("sk_live_");
+    expect(redacted).not.toContain("123456789:A");
+  });
+
+  it("leaves ordinary text that merely resembles token prefixes untouched", () => {
+    // A short `sk-` value or a bare `eyJ` fragment without the full JWT shape
+    // must not be shredded: these patterns require length/format guards.
+    expect(redactText("branch sk-01 tagged")).toContain("sk-01");
+    expect(redactText("note: eyJ is the JWT header prefix")).toContain("eyJ");
+    expect(redactText("AKIA is a prefix")).toContain("AKIA");
+  });
+
   it("truncates on a UTF-8 boundary", () => {
     const result = truncateUtf8("中文内容中文内容", 10);
     expect(result).not.toContain("�");

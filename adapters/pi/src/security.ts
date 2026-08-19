@@ -1,8 +1,29 @@
 const SECRET_PATTERNS: RegExp[] = [
+  // TencentDB Agent Memory user keys
   /\bsk-mem-[A-Za-z0-9_-]+\b/g,
+  // Generic sk- prefixed secrets (OpenAI / Anthropic / Stripe legacy, ...)
   /\bsk-[A-Za-z0-9_-]{12,}\b/g,
+  // Stripe restricted/live secret keys use an underscore form
+  /\bsk_live_[0-9a-zA-Z]{16,}\b/g,
+  // Authorization headers
   /\bBearer\s+[A-Za-z0-9._~-]+/gi,
+  // PEM private keys
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  // GitHub personal access tokens (classic prefixes + fine-grained)
+  /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{22,}\b/g,
+  // AWS access key IDs
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  // Slack tokens (xoxa- / xoxb- / xoxp- / xoxr- / xoxs-)
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  // JSON Web Tokens (three dot-separated base64url segments)
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+  // npm access tokens
+  /\bnpm_[A-Za-z0-9]{36,}\b/g,
+  // Google API keys
+  /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  // Telegram bot tokens
+  /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
 ];
 
 export function redactText(value: string): string {

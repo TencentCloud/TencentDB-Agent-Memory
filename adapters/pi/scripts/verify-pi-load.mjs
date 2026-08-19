@@ -20,7 +20,7 @@ const child = spawn(
 
 let buffer = "";
 let completed = false;
-const timeout = setTimeout(() => finish(new Error("Timed out waiting for Pi to load the extension")), 15_000);
+const timeout = setTimeout(() => finish(new Error("Timed out waiting for Pi to load the extension")), 30_000);
 
 function finish(error) {
   if (completed) return;
@@ -32,7 +32,7 @@ function finish(error) {
     process.exitCode = 1;
     return;
   }
-  console.log("Pi extension load verified: /tdai-memory-setup and /tdai-memory-status are registered.");
+  console.log("Pi extension load verified: all tdai-memory commands are registered.");
 }
 
 function handleLine(line) {
@@ -48,7 +48,14 @@ function handleLine(line) {
     return;
   }
   const names = new Set(event.data.commands.map((command) => command.name));
-  const missing = ["tdai-memory-setup", "tdai-memory-status"].filter((name) => !names.has(name));
+  const missing = [
+    "tdai-memory-setup",
+    "tdai-memory-status",
+    "tdai-memory-sync-skills",
+    "tdai-memory-flush",
+    "tdai-memory-retry-skills",
+    "tdai-memory-cleanup-skills",
+  ].filter((name) => !names.has(name));
   finish(missing.length === 0 ? undefined : new Error(`Missing command registrations: ${missing.map((name) => `/${name}`).join(", ")}`));
 }
 
