@@ -103,14 +103,24 @@ await mem.close()
 
 | 字段 | 作用 | 默认值 |
 |---|---|---|
-| `gateway_url` | memory-core gateway 地址 | `http://127.0.0.1:8420` |
+| `gateway_url` | memory-core gateway 地址（非本地明文 HTTP 默认拒绝，除非 `allow_remote_http=True`） | `http://127.0.0.1:8420` |
 | `api_key` | `Authorization: Bearer` 密钥；gateway 以 `TDAI_GATEWAY_API_KEY` 启动时必填 | `""` |
 | `app_name` / `user_id` | 捕获/召回的身份作用域 | `"semantic-kernel-app"` / `"default-user"` |
 | `timeout` | 单请求 HTTP 超时 | `5.0` 秒 |
 | `recall_mode` | `append` / `template` / `off` | `append` |
+| `max_context_chars` | 注入召回块的硬性字符上限 | `4000` |
+| `allow_remote_http` | 允许对非本地 gateway 使用明文 HTTP | `False` |
 | `memory_search_tool` | 暴露 `memory_search` kernel function | `True` |
 | `conversation_search_tool` | 暴露 `conversation_search` | `True` |
 | `fail_open` | 记忆错误记日志并吞掉，而非抛出 | `True` |
+
+## 安全与行为
+
+- **身份作用域**：每个 gateway 请求都携带 `app_name` / `user_id`；它们是溯源元数据而非鉴权边界 —— 硬性多租户隔离依赖 gateway 侧。
+- **远程明文禁运凭证**：默认仅允许回环地址使用 `http://`；其余必须 `https://` 或显式 `allow_remote_http=True`，避免 Bearer token 明文出网。
+- **提示注入加固**：召回上下文受 `max_context_chars` 硬性约束，包裹在显式标记为*不可信上下文*的定界符中，并对内容中嵌套的定界符做消毒，gateway 内容无法伪造记忆区块。
+- **默认 fail-open**：召回/捕获/检索失败仅记日志并跳过，不阻断对话主链路；记忆为硬性依赖时设置 `fail_open=False`。
+- **捕获重试**：每线程水位线仅在成功响应后推进，失败捕获会在下次调用重试。存在窄重复窗口：gateway 已持久化但响应丢失时，重试会重发相同增量（消息 ID 由服务端分配）。
 
 ## 常见问题
 
@@ -124,7 +134,7 @@ await mem.close()
 
 ## 测试
 
-冒烟测试基于假 gateway 运行（无需服务或 LLM）：
+冒烟测试基于假 gateway 运行（无需服务或 LLM），按模块拆分为 6 个文件、49 个用例：
 
 ```bash
 cd adapters/semantic-kernel

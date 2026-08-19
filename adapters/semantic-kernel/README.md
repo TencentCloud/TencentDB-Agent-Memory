@@ -103,14 +103,24 @@ await mem.close()
 
 | Field | Effect | Default |
 |---|---|---|
-| `gateway_url` | memory-core gateway URL | `http://127.0.0.1:8420` |
+| `gateway_url` | memory-core gateway URL (remote plaintext HTTP rejected unless `allow_remote_http=True`) | `http://127.0.0.1:8420` |
 | `api_key` | `Authorization: Bearer` key; required when gateway starts with `TDAI_GATEWAY_API_KEY` | `""` |
 | `app_name` / `user_id` | Identity scope for capture/recall | `"semantic-kernel-app"` / `"default-user"` |
 | `timeout` | Per-request HTTP timeout | `5.0` s |
 | `recall_mode` | `append` / `template` / `off` | `append` |
+| `max_context_chars` | Hard bound on the injected recall block | `4000` |
+| `allow_remote_http` | Permit plaintext HTTP to a non-local gateway | `False` |
 | `memory_search_tool` | expose `memory_search` kernel function | `True` |
 | `conversation_search_tool` | expose `conversation_search` | `True` |
 | `fail_open` | memory errors logged-and-swallowed instead of raised | `True` |
+
+## Security and behavior
+
+- **Identity scoping**: `app_name` / `user_id` are sent on every gateway request; they are provenance metadata, not an authorization boundary — hard multi-tenant isolation depends on the gateway.
+- **No cleartext credentials to remote hosts**: `http://` is only allowed for loopback gateways by default; `https://` or explicit `allow_remote_http=True` is required otherwise.
+- **Prompt-injection hardening**: recalled context is bounded by `max_context_chars`, wrapped in explicit delimiters marked as *untrusted context*, and nested occurrences of the block delimiters are sanitized so gateway content cannot forge the memory section.
+- **Fail-open by default**: recall/capture/search failures are logged and skipped so the chat path never blocks; set `fail_open=False` when memory is a hard requirement.
+- **Capture retries**: the per-thread watermark advances only after a successful response, so failed captures are retried. Narrow duplicate window: if the gateway persists a turn but the response is lost, the retry resends the same delta (message IDs are server-assigned).
 
 ## Troubleshooting
 
@@ -124,7 +134,7 @@ await mem.close()
 
 ## Testing
 
-Smoke tests run against a fake gateway (no stack or LLM needed):
+Smoke tests run against a fake gateway (no stack or LLM needed), split into six per-module files with 49 cases:
 
 ```bash
 cd adapters/semantic-kernel
