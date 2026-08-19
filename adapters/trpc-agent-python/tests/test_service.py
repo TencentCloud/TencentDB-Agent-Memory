@@ -231,6 +231,44 @@ async def test_save_key_fallback_to_config_identity(fake_gw):
     await service.close()
 
 
+async def test_save_key_without_slash_treated_as_user(fake_gw):
+    """A bare save_key (no ``/``) scopes the user to the whole key."""
+    gw, url = fake_gw
+    service = make_service(url, app_name="cfg-app")
+
+    await service.search_memory("just-a-user-id", "q")
+    payload = gw.payloads("/search/memories")[0]
+    assert payload["user_id"] == "just-a-user-id"
+    await service.close()
+
+
+async def test_store_session_skips_events_without_text(fake_gw):
+    """Events with no text parts are skipped; an all-empty delta captures
+    nothing but still advances the watermark."""
+    from trpc_agent_sdk.events import Event
+
+    gw, url = fake_gw
+    service = make_service(url)
+    session = make_session(pairs=0)
+    session.add_event(Event(invocation_id="i1", author="user", content=None))
+    session.add_event(Event(invocation_id="i2", author="agent", content=None))
+
+    await service.store_session(session)
+    assert gw.payloads("/capture") == []
+    assert service._captured_counts.get("s-1") == 2  # watermark advanced anyway
+    await service.close()
+
+
+async def test_end_session_fail_closed_raises(fake_gw):
+    gw, url = fake_gw
+    gw.fail_routes.add("/session/end")
+    service = make_service(url, fail_open=False)
+
+    with pytest.raises(Exception, match="500"):
+        await service.end_session(make_session())
+    await service.close()
+
+
 async def test_end_session_flushes(fake_gw):
     gw, url = fake_gw
     service = make_service(url)
