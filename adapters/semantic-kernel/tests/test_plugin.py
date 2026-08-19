@@ -59,6 +59,22 @@ async def test_conversation_search_invocation(fake_gw):
     await mem.close()
 
 
+async def test_memory_search_empty_results_message(fake_gw):
+    """A successful search with no hits returns the no-match message."""
+    gw, url = fake_gw
+    gw.search_results = ""
+    mem = TencentDBAgentMemory(TDAiConfig(gateway_url=url))
+    kernel = Kernel()
+    kernel.add_plugin(mem.as_plugin())
+    memory_search = kernel.get_function("TencentDBMemory", "memory_search")
+
+    result = await memory_search.invoke(
+        kernel=kernel, arguments=KernelArguments(query="unknown topic")
+    )
+    assert "no matching memories" in str(result)
+    await mem.close()
+
+
 async def test_tool_fail_open_returns_placeholder(fake_gw):
     gw, url = fake_gw
     gw.fail_routes.add("/search/memories")

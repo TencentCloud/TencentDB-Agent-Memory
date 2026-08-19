@@ -143,3 +143,36 @@ async def test_no_user_query_skips_recall(fake_gw):
     assert rendered == ""
     assert gw.payloads("/recall") == []  # gateway never called
     await mem.close()
+
+
+async def test_recall_empty_context_injects_nothing(fake_gw):
+    """A successful recall with empty content calls the gateway but leaves
+    the prompt untouched."""
+    gw, url = fake_gw
+    gw.recall_context = ""
+    gw.recall_prepend = ""
+    mem = TencentDBAgentMemory(TDAiConfig(gateway_url=url, recall_mode="append"))
+    kernel = Kernel()
+    mem.attach(kernel)
+
+    arguments = KernelArguments(input="What is my codename?")
+    rendered = await _run_render_filters(kernel, arguments)
+    assert rendered == ""
+    assert len(gw.payloads("/recall")) == 1  # gateway was called
+    await mem.close()
+
+
+async def test_recall_falls_back_to_prepend_context(fake_gw):
+    """When ``context`` is empty, ``prepend_context`` is used."""
+    gw, url = fake_gw
+    gw.recall_context = ""
+    gw.recall_prepend = "User prefers concise answers."
+    mem = TencentDBAgentMemory(TDAiConfig(gateway_url=url, recall_mode="append"))
+    kernel = Kernel()
+    mem.attach(kernel)
+
+    arguments = KernelArguments(input="How should you answer me?")
+    rendered = await _run_render_filters(kernel, arguments)
+    assert "concise answers" in rendered
+    assert "untrusted context" in rendered
+    await mem.close()

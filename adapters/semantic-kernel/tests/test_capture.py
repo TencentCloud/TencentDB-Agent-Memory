@@ -92,6 +92,47 @@ async def test_capture_fail_open_returns_none(fake_gw):
     await mem.close()
 
 
+async def test_capture_retries_after_failure(fake_gw):
+    """A failed capture is resent once the gateway recovers, exactly once."""
+    gw, url = fake_gw
+    gw.fail_routes.add("/capture")
+    mem = TencentDBAgentMemory(TDAiConfig(gateway_url=url, fail_open=True))
+    thread = _make_thread()
+
+    assert await mem.capture_thread(thread) is None  # reaches gateway, gets 500
+    gw.fail_routes.clear()  # gateway recovers
+    response = await mem.capture_thread(thread)  # resends the same delta
+    assert response is not None and response["l0_recorded"] == 2
+    captures = gw.payloads("/capture")
+    # Exactly two attempts — the failed one and the retry — with identical
+    # content (the watermark only advances on success).
+    assert len(captures) == 2
+    assert captures[0]["user_content"] == captures[1]["user_content"]
+    # A third call is a no-op (watermark advanced by the success).
+    assert await mem.capture_thread(thread) is None
+    assert len(gw.payloads("/capture")) == 2
+    await mem.close()
+
+
+async def test_capture_watermarks_isolated_per_thread(fake_gw):
+    """Two threads sharing one facade never leak capture deltas."""
+    gw, url = fake_gw
+    mem = TencentDBAgentMemory(TDAiConfig(gateway_url=url))
+    thread_a = _make_thread("t-a")
+    thread_b = _make_thread("t-b")
+
+    await mem.capture_thread(thread_a)
+    await mem.capture_thread(thread_b)  # b sends its own full pair
+    captures = gw.payloads("/capture")
+    assert len(captures) == 2
+    assert {c["session_id"] for c in captures} == {"t-a", "t-b"}
+    # Nothing new afterwards for either thread.
+    await mem.capture_thread(thread_a)
+    await mem.capture_thread(thread_b)
+    assert len(gw.payloads("/capture")) == 2
+    await mem.close()
+
+
 async def test_capture_fail_closed_raises(fake_gw):
     gw, url = fake_gw
     gw.fail_routes.add("/capture")

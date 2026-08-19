@@ -134,7 +134,7 @@ await mem.close()
 
 ## 测试
 
-冒烟测试基于假 gateway 运行（无需服务或 LLM），按模块拆分为 6 个文件、49 个用例：
+冒烟测试基于假 gateway 运行（无需服务或 LLM），按模块拆分为 6 个文件、54 个用例：
 
 ```bash
 cd adapters/semantic-kernel

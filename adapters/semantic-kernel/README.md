@@ -134,7 +134,7 @@ await mem.close()
 
 ## Testing
 
-Smoke tests run against a fake gateway (no stack or LLM needed), split into six per-module files with 49 cases:
+Smoke tests run against a fake gateway (no stack or LLM needed), split into six per-module files with 54 cases:
 
 ```bash
 cd adapters/semantic-kernel

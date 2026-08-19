@@ -18,6 +18,8 @@ class FakeGateway:
 
         self.requests: list[tuple[str, str, dict[str, Any] | None]] = []
         self.recall_context = "User's project codename is Apollo Lake."
+        self.recall_prepend = ""
+        self.search_results = "[mem] codename=Apollo Lake"
         self.fail_routes: set[str] = set()
         self.app = web.Application()
         self.app.router.add_get("/health", self._health)
@@ -72,14 +74,19 @@ class FakeGateway:
         self._record(request, body)
         return await self._reply(
             request,
-            {"context": self.recall_context, "strategy": "semantic", "memory_count": 1},
+            {
+                "context": self.recall_context,
+                "prepend_context": self.recall_prepend,
+                "strategy": "semantic",
+                "memory_count": 1 if (self.recall_context or self.recall_prepend) else 0,
+            },
         )
 
     async def _search_memories(self, request):
         body = await request.json()
         self._record(request, body)
         return await self._reply(
-            request, {"results": "[mem] codename=Apollo Lake", "total": 1, "strategy": "semantic"}
+            request, {"results": self.search_results, "total": 1, "strategy": "semantic"}
         )
 
     async def _search_conversations(self, request):
