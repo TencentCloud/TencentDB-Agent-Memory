@@ -639,13 +639,20 @@ remoteSkills.mode = "manual"
 
 ## 12. 命令和状态
 
-建议增加：
+已实现：
 
 | 命令 | 作用 |
 |---|---|
-| `/tdai-memory-status` | 显示 L0、Skill pending、dead-letter、cache 和 extraction 状态 |
-| `/tdai-memory-flush` | 手动 flush；支持只 flush `l0` 或 `skills` |
-| `/tdai-memory-sync-skills` | 预览、确认、下载并 reload |
+| `/tdai-memory-status` | 显示 L0、Skill pending、uncertain、dead-letter 状态 |
+| `/tdai-memory-flush` | 手动补投当前身份的普通记忆 outbox（L0）队列 |
+| `/tdai-memory-retry-skills` | 用户确认后显式重试 Skill pending/uncertain 记录（可能重复学习输入） |
+| `/tdai-memory-cleanup-skills` | 用户确认后删除当前身份的 `.dead` 记录，不动 `uncertain` |
+| `/tdai-memory-sync-skills` | 预览、确认、下载并 reload 为 Pi 原生技能 |
+
+设计建议、尚未实现：
+
+| 命令 | 作用 |
+|---|---|
 | `/tdai-memory-archive-skill` | 对指定 session 执行 force archive |
 | `/tdai-memory-doctor` | 检查认证、权限、Skill API、缓存和 outbox |
 

@@ -282,7 +282,8 @@ npm run e2e:skill -- --managed-core --env-file ../../deploy/global-images/.env
 - User Key 等同密码，不能贴到 issue、聊天记录、提交的 JSON 或截图中。
 - Team、Agent、User 一起决定数据范围；实验请使用单独 Agent。
 - TLS 证书校验不能关闭。本地开发请使用 loopback HTTP；HTTPS 请安装受信任证书。
-### 手动补偿命令
+
+## 手动补偿命令
 
 正常情况下，适配器会在后台自动投递本地队列。需要立即处理时，可以在 Pi 中使用：
 

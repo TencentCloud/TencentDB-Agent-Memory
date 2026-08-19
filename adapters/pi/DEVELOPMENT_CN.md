@@ -23,9 +23,9 @@
 
 ### 1.1 当前实现状态
 
-截至 2026-08-13，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏、跨进程基础 outbox（单进程串行投递、失败次数持久化与 `.dead` 隔离）、树分支与 fork 会话隔离、状态命令、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
+截至 2026-08-19，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏（含 GitHub/AWS/JWT/Slack 等平台令牌）、跨进程 outbox（原子 lease、持久化退避、`.dead` 隔离、at-least-once 离线补投）、树分支与 fork 会话隔离、状态命令、手动补偿命令（`/tdai-memory-flush`、`/tdai-memory-retry-skills`、`/tdai-memory-cleanup-skills`）、完整 Skill 双管线（五角色采集 → 服务端提炼 → 召回注入 → `/tdai-memory-sync-skills` 安全同步为 Pi 原生技能）、adapter CI（`.github/workflows/pr-ci.yml` 的 `adapter-pi` job）、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
 
-当前 P0 尚未完成：outbox 手动 flush 命令、完整 Skill 双管线与安全同步、adapter CI，以及完整故障矩阵。`/tdai-memory-setup` 已支持全局安全配置、身份验证、Team/Agent 选择或创建以及 L0-L3 只读权限检查；outbox 已具备跨进程原子 lease、持久化退避与 `.dead` 隔离；非空 L0/L1/L2/L3 的真实模型生成与 Pi hook 注入已有受管 E2E 脚本验证；它不等于本节其余故障场景已完成。下文章节描述最终目标；未完成项不能仅凭本文描述视为已经交付。
+`/tdai-memory-setup` 已支持全局安全配置、身份验证、Team/Agent 选择或创建以及 L0-L3 只读权限检查；非空 L0/L1/L2/L3 的真实模型生成与 Pi hook 注入已有受管 E2E 脚本验证。未实现项（如 `/tdai-memory-archive-skill` 显式 force-archive）仅出现在设计章节，不能视为已交付。
 
 ## 2. 问题与目标
 
