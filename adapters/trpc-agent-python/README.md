@@ -128,7 +128,6 @@ pytest
 
 ## Notes
 
-- **Companion adapters**: the Go counterpart (`adapters/trpc-agent-go`) wires the same gateway routes into trpc-agent-go's native integration; a Semantic Kernel adapter (`adapters/semantic-kernel`) is also available.
 - **Upstream**: this adapter is self-contained (subclasses the published PyPI package). Moving it into `trpc_agent_sdk/memory/` upstream remains a natural follow-up.
 - **Version**: verified with `trpc-agent-py` 1.1.17 and TencentDB Agent Memory v2 images (`feat/server_team` branch).
 

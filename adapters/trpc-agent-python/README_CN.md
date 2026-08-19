@@ -128,7 +128,6 @@ pytest
 
 ## 说明
 
-- **姊妹适配器**：Go 侧（`adapters/trpc-agent-go`）将同一组 gateway 路由接入 trpc-agent-go 官方集成；另有 Semantic Kernel 适配器（`adapters/semantic-kernel`）。
 - **上游化**：本适配器自包含（子类化已发布的 PyPI 包）。将来合入 `trpc_agent_sdk/memory/` 上游是自然的后续演进。
 - **版本**：已在 `trpc-agent-py` 1.1.17 与 TencentDB Agent Memory v2 镜像（`feat/server_team` 分支）上验证。
 
