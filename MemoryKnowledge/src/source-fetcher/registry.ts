@@ -7,13 +7,14 @@
 
 import type { ISourceFetcher, SourceType } from "./types.js";
 import { GitSourceFetcher } from "./git-fetcher.js";
+import { LocalSourceFetcher } from "./local-fetcher.js";
 
 export class SourceFetcherRegistry {
   private readonly fetchers = new Map<SourceType, ISourceFetcher>();
 
   constructor() {
     this.register(new GitSourceFetcher());
-    // 未来：this.register(new LocalSourceFetcher());
+    this.register(new LocalSourceFetcher()); // пилот-патч 2026-08-18: локальные git-репо
     // 未来：this.register(new FtpSourceFetcher());
   }
 
