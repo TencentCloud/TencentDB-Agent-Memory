@@ -70,7 +70,7 @@ function installExtension(): {
     isProjectTrusted: () => true,
     reload: vi.fn(),
     sessionManager: { getSessionId: () => "session-1", getBranch: () => [] },
-    ui: { notify: vi.fn(), setStatus: vi.fn() },
+    ui: { notify: vi.fn(), setStatus: vi.fn(), confirm: vi.fn().mockResolvedValue(true) },
   };
   const pi = {
     appendEntry: mocks.appendEntry,
@@ -106,6 +106,13 @@ beforeEach(() => {
 });
 
 describe("Pi extension lifecycle", () => {
+  it("registers manual flush and Skill recovery commands", () => {
+    const { commands } = installExtension();
+    expect(commands.has("tdai-memory-flush")).toBe(true);
+    expect(commands.has("tdai-memory-retry-skills")).toBe(true);
+    expect(commands.has("tdai-memory-cleanup-skills")).toBe(true);
+  });
+
   it("reloads Pi after interactive setup activates a verified global configuration", async () => {
     const { commands, ctx } = installExtension();
     const setup = commands.get("tdai-memory-setup");

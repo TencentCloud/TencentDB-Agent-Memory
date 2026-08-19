@@ -282,3 +282,27 @@ Uninstalling the adapter does not delete server-side memory — your data stays 
 - Treat a User Key as a password. Do not paste it into issues, chat logs, committed JSON, or screenshots.
 - Use a separate Agent for experiments; memory is scoped by Team, Agent, and User.
 - TLS verification cannot be disabled. Use loopback HTTP for local development, or install a trusted certificate for HTTPS.
+
+## Manual recovery commands
+
+Normally the adapter delivers the local queues in the background. When you need to act immediately, run this in Pi:
+
+```text
+/tdai-memory-flush
+```
+
+This only re-delivers the plain memory queue for the configured identity, and reports how many were delivered, still pending, dead, and invalid.
+
+Skill delivery never retries automatically by default: when a request times out or the connection drops, the server may already have accepted that batch, and sending it again could duplicate Skill-learning input. Once you have confirmed the server did not receive it — or you explicitly accept the duplication risk — run:
+
+```text
+/tdai-memory-retry-skills
+```
+
+If a Skill record was quarantined as `.json.dead` after a deterministic 4xx error, and you are sure the record is no longer needed, run:
+
+```text
+/tdai-memory-cleanup-skills
+```
+
+The cleanup command removes only `.dead` files belonging to the current endpoint, service, team, agent, and user identity. It never deletes `uncertain` files — those require a human decision on whether to retry.

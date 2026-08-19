@@ -1,9 +1,9 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TDAMError } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
-import { createSkillMessages, enqueueSkillTurn } from "../src/skill-capture.js";
+import { cleanupSkillDead, createSkillMessages, enqueueSkillTurn, retrySkillPending } from "../src/skill-capture.js";
 import { redactValue } from "../src/security.js";
 import type { LoadedConfig, SkillsOptions } from "../src/types.js";
 
@@ -215,6 +215,71 @@ describe("enqueueSkillTurn", () => {
     expect(await readdir(directory)).toHaveLength(0);
   });
 });
+
+describe("manual Skill recovery", () => {
+  it("retries an uncertain record and removes it after success", async () => {
+    conversationAdd.mockRejectedValueOnce(new Error("connection lost"));
+    const directory = await mkdtemp(join(tmpdir(), "tdai-skill-test-"));
+    directories.push(directory);
+
+    const first = await enqueueSkillTurn(config, "pi-session", [{ role: "user", content: "hello" }], { directory });
+    expect(first).toBe("uncertain");
+
+    conversationAdd.mockResolvedValueOnce({ status: "ok" });
+    const result = await retrySkillPending(config, { directory });
+
+    expect(result).toMatchObject({ retried: 1, delivered: 1, uncertain: 0, dead: 0 });
+    expect(conversationAdd).toHaveBeenCalledTimes(2);
+    expect((await readdir(directory)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
+  });
+
+  it("keeps an uncertain record when the explicit retry is still ambiguous", async () => {
+    conversationAdd.mockRejectedValueOnce(new Error("connection lost"));
+    const directory = await mkdtemp(join(tmpdir(), "tdai-skill-test-"));
+    directories.push(directory);
+
+    await enqueueSkillTurn(config, "pi-session", [{ role: "user", content: "hello" }], { directory });
+    conversationAdd.mockRejectedValueOnce(new Error("still offline"));
+
+    const result = await retrySkillPending(config, { directory });
+    expect(result).toMatchObject({ retried: 1, delivered: 0, uncertain: 1, dead: 0 });
+    const pending = (await readdir(directory)).filter((name) => name.endsWith(".json"));
+    expect(pending).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(directory, pending[0]!), "utf8"))).toMatchObject({ uncertain: true });
+  });
+
+  it("cleans only dead records belonging to the active identity", async () => {
+    conversationAdd.mockRejectedValueOnce(new TDAMError(40001, "invalid message", "req-current"));
+    const directory = await mkdtemp(join(tmpdir(), "tdai-skill-test-"));
+    directories.push(directory);
+
+    await enqueueSkillTurn(config, "pi-session", [{ role: "user", content: "current" }], { directory });
+    const otherScopeRecord = {
+      version: 1,
+      id: "other-record",
+      createdAt: "2026-08-19T00:00:00.000Z",
+      scope: JSON.stringify({ ...JSON.parse(configScope(config)), agentId: "other-agent" }),
+      sessionId: "other-session",
+      messages: [{ role: "user", content: "other" }],
+    };
+    await writeFile(join(directory, "other.json.dead"), `${JSON.stringify(otherScopeRecord)}\n`, "utf8");
+
+    const result = await cleanupSkillDead(config, { directory });
+    expect(result.removed).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(await readdir(directory)).toEqual(["other.json.dead"]);
+  });
+});
+
+function configScope(value: LoadedConfig): string {
+  return JSON.stringify({
+    endpoint: value.endpoint,
+    serviceId: value.serviceId,
+    teamId: value.teamId,
+    agentId: value.agentId,
+    userId: value.userId,
+  });
+}
 
 describe("redactValue", () => {
   it("redacts nested objects and arrays recursively", () => {

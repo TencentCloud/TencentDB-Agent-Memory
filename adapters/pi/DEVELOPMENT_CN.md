@@ -584,3 +584,10 @@ npm run e2e:l0-l3 -- --managed-core --env-file ../../deploy/global-images/.env
 2. 是否坚持“普通配置不保存明文密钥”，只接受环境变量或 key-file 引用。推荐坚持；本地部署可直接引用 `deploy/global-images/.admin-key`。
 
 除这两项外，生命周期、隔离、outbox、安全边界和测试门槛不建议降级。
+### 手动补偿命令
+
+| 命令 | 行为 |
+|---|---|
+| `/tdai-memory-flush` | 立即补投当前身份的普通记忆 pending 队列 |
+| `/tdai-memory-retry-skills` | 用户确认后，显式重试当前身份的 Skill pending/uncertain 记录，可能造成重复学习输入 |
+| `/tdai-memory-cleanup-skills` | 用户确认后，只删除当前身份的确定性失败 `.json.dead` 记录，不删除 `uncertain` |

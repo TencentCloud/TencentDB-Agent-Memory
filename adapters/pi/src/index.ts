@@ -4,7 +4,13 @@ import { createConversationMessages, lastSuccessfulAssistantText } from "./captu
 import { createClients, createSessionMemoryClient } from "./clients.js";
 import { loadConfig } from "./config.js";
 import { enqueueCapture, flushOutbox } from "./outbox.js";
-import { createSkillMessages, enqueueSkillTurn, type SkillToolCall } from "./skill-capture.js";
+import {
+  cleanupSkillDead,
+  createSkillMessages,
+  enqueueSkillTurn,
+  retrySkillPending,
+  type SkillToolCall,
+} from "./skill-capture.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { installSyncedSkill, listSyncCandidates } from "./skill-sync.js";
 import { injectRecall, recallMemory } from "./recall.js";
@@ -252,6 +258,115 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       ctx.ui.setStatus(STATUS_KEY, status.summary);
       const kind = status.kind === "ready" || status.kind === "disabled" ? "info" : status.kind === "offline" ? "warning" : "error";
       ctx.ui.notify(formatStatus(status), kind);
+    },
+  });
+
+  pi.registerCommand("tdai-memory-flush", {
+    description: "Immediately deliver pending memory captures",
+    handler: async (_args, ctx) => {
+      const loaded =
+        currentConfig ??
+        (await loadConfig({
+          cwd: ctx.cwd,
+          projectTrusted: ctx.isProjectTrusted(),
+        }));
+      if (!loaded.ok || !loaded.config.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: not configured");
+        ctx.ui.notify("Memory is not configured. Run /tdai-memory-setup first.", "error");
+        return;
+      }
+      const activeConfig = loaded.config;
+      ctx.ui.setStatus(STATUS_KEY, "memory: flushing");
+      try {
+        const result = await flushOutbox(activeConfig, async (record) => {
+          const memory = createSessionMemoryClient(activeConfig, record.sessionId);
+          await memory.addConversation({ messages: record.messages });
+        });
+        ctx.ui.setStatus(STATUS_KEY, result.pending > 0 ? "memory: pending" : "memory: flushed");
+        ctx.ui.notify(
+          `Memory flush complete: ${result.delivered} delivered, ${result.pending} pending, ${result.dead} dead, ${result.invalid} invalid.`,
+          result.dead > 0 || result.invalid > 0 ? "warning" : "info",
+        );
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: flush failed");
+        ctx.ui.notify(`Memory flush failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("tdai-memory-retry-skills", {
+    description: "Explicitly retry local Skill learning records",
+    handler: async (_args, ctx) => {
+      const loaded =
+        currentConfig ??
+        (await loadConfig({
+          cwd: ctx.cwd,
+          projectTrusted: ctx.isProjectTrusted(),
+        }));
+      if (!loaded.ok || !loaded.config.enabled || !loaded.config.skills.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skills disabled");
+        ctx.ui.notify("Skills are not enabled. Enable skills in the global configuration first.", "error");
+        return;
+      }
+      const activeConfig = loaded.config;
+      if (ctx.hasUI) {
+        const proceed = await ctx.ui.confirm(
+          "Retry Skill learning records",
+          "The server may already have accepted an uncertain record. Retrying can create duplicate Skill-learning input. Continue?",
+        );
+        if (!proceed) {
+          ctx.ui.notify("Skill retry cancelled.", "info");
+          return;
+        }
+      }
+      ctx.ui.setStatus(STATUS_KEY, "skills: retrying");
+      try {
+        const result = await retrySkillPending(activeConfig);
+        ctx.ui.setStatus(STATUS_KEY, result.uncertain > 0 ? "memory: skill uncertain" : "memory: skills retried");
+        ctx.ui.notify(
+          `Skill retry complete: ${result.delivered + result.archived} delivered, ${result.uncertain} uncertain, ${result.dead} dead.`,
+          result.uncertain > 0 || result.dead > 0 ? "warning" : "info",
+        );
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skill retry failed");
+        ctx.ui.notify(`Skill retry failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("tdai-memory-cleanup-skills", {
+    description: "Remove quarantined Skill learning records",
+    handler: async (_args, ctx) => {
+      const loaded =
+        currentConfig ??
+        (await loadConfig({
+          cwd: ctx.cwd,
+          projectTrusted: ctx.isProjectTrusted(),
+        }));
+      if (!loaded.ok || !loaded.config.enabled || !loaded.config.skills.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skills disabled");
+        ctx.ui.notify("Skills are not enabled. Nothing to clean up.", "error");
+        return;
+      }
+      const activeConfig = loaded.config;
+      if (ctx.hasUI) {
+        const proceed = await ctx.ui.confirm(
+          "Clean up dead Skill records",
+          "Remove locally quarantined Skill records that failed permanently? Uncertain records will be kept.",
+        );
+        if (!proceed) {
+          ctx.ui.notify("Skill cleanup cancelled.", "info");
+          return;
+        }
+      }
+      try {
+        const result = await cleanupSkillDead(activeConfig);
+        ctx.ui.setStatus(STATUS_KEY, "memory: skills cleaned");
+        ctx.ui.notify(`Skill cleanup complete: ${result.removed} dead record${result.removed === 1 ? "" : "s"} removed.`, "info");
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: skill cleanup failed");
+        ctx.ui.notify(`Skill cleanup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
     },
   });
 

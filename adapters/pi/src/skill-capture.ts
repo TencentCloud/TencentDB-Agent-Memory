@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SkillConversationMessage } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
 import { createClients } from "./clients.js";
@@ -114,7 +114,7 @@ export function createSkillMessages(input: SkillTurnInput): SkillConversationMes
 
 export type SkillDeliveryStatus = "delivered" | "archived" | "dead" | "uncertain";
 
-interface SkillPendingRecord {
+export interface SkillPendingRecord {
   version: typeof PENDING_VERSION;
   id: string;
   createdAt: string;
@@ -128,6 +128,20 @@ interface SkillPendingRecord {
 export interface SkillTurnOptions {
   directory?: string;
   now?: () => Date;
+}
+
+export interface SkillQueueResult {
+  retried: number;
+  delivered: number;
+  archived: number;
+  uncertain: number;
+  dead: number;
+  skipped: number;
+}
+
+export interface SkillCleanupResult {
+  removed: number;
+  skipped: number;
 }
 
 async function defaultDirectory(): Promise<string> {
@@ -170,6 +184,47 @@ async function writeRecord(path: string, record: SkillPendingRecord): Promise<vo
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
   await rename(temporary, path);
+}
+
+function parsePendingRecord(value: unknown): SkillPendingRecord | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Partial<SkillPendingRecord>;
+  if (
+    candidate.version !== PENDING_VERSION ||
+    typeof candidate.id !== "string" ||
+    typeof candidate.createdAt !== "string" ||
+    typeof candidate.scope !== "string" ||
+    typeof candidate.sessionId !== "string" ||
+    !Array.isArray(candidate.messages) ||
+    candidate.messages.length === 0
+  ) {
+    return undefined;
+  }
+  return candidate as SkillPendingRecord;
+}
+
+async function readPendingRecord(path: string): Promise<SkillPendingRecord | undefined> {
+  try {
+    return parsePendingRecord(JSON.parse(await readFile(path, "utf8")) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+async function listFiles(directory: string, suffix: string): Promise<string[]> {
+  try {
+    return (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith(suffix))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+function claimPath(path: string): string {
+  return `${path}.claim-${process.pid}-${randomUUID()}`;
 }
 
 async function settleWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
@@ -242,4 +297,91 @@ export async function enqueueSkillTurn(
     await writeRecord(target, { ...record, uncertain: true, lastError: safeMessage(error) });
     return "uncertain";
   }
+}
+
+/**
+ * Explicitly retry local Skill records. This is intentionally user-triggered:
+ * an ambiguous prior response may have been accepted by the server already,
+ * so a retry can duplicate the batch and should never happen automatically.
+ */
+export async function retrySkillPending(
+  config: LoadedConfig,
+  options: SkillTurnOptions = {},
+): Promise<SkillQueueResult> {
+  const directory = await directoryFor(options);
+  const expectedScope = scopeFor(config);
+  const result: SkillQueueResult = { retried: 0, delivered: 0, archived: 0, uncertain: 0, dead: 0, skipped: 0 };
+
+  for (const file of await listFiles(directory, ".json")) {
+    const path = join(directory, file);
+    const record = await readPendingRecord(path);
+    if (!record || record.scope !== expectedScope) {
+      result.skipped += 1;
+      continue;
+    }
+
+    const claimed = claimPath(path);
+    try {
+      await rename(path, claimed);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+
+    const claimedRecord = await readPendingRecord(claimed);
+    if (!claimedRecord || claimedRecord.scope !== expectedScope) {
+      result.skipped += 1;
+      await rename(claimed, path).catch(() => undefined);
+      continue;
+    }
+
+    result.retried += 1;
+    try {
+      const skill = createClients(config).skill;
+      const response = await settleWithin(
+        skill.conversationAdd({
+          session_id: claimedRecord.sessionId,
+          user_id: config.userId,
+          team_id: config.teamId,
+          agent_id: config.agentId,
+          messages: claimedRecord.messages,
+        }),
+        config.skills.flushTimeoutMs,
+      );
+      await rm(claimed, { force: true });
+      if (response.status === "archived") result.archived += 1;
+      else result.delivered += 1;
+    } catch (error) {
+      if (classifyError(error) === "dead") {
+        await rename(claimed, `${path}.dead`).catch(() => undefined);
+        result.dead += 1;
+      } else {
+        await writeRecord(claimed, { ...claimedRecord, uncertain: true, lastError: safeMessage(error) });
+        await rename(claimed, path).catch(() => undefined);
+        result.uncertain += 1;
+      }
+    }
+  }
+  return result;
+}
+
+/** Remove only quarantined, deterministic-failure records for the active scope. */
+export async function cleanupSkillDead(
+  config: LoadedConfig,
+  options: SkillTurnOptions = {},
+): Promise<SkillCleanupResult> {
+  const directory = await directoryFor(options);
+  const expectedScope = scopeFor(config);
+  const result: SkillCleanupResult = { removed: 0, skipped: 0 };
+  for (const file of await listFiles(directory, ".json.dead")) {
+    const path = join(directory, file);
+    const record = await readPendingRecord(path);
+    if (!record || record.scope !== expectedScope) {
+      result.skipped += 1;
+      continue;
+    }
+    await rm(path, { force: true });
+    result.removed += 1;
+  }
+  return result;
 }
