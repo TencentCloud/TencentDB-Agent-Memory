@@ -13,3 +13,9 @@ repo-root/
 
 # Internal handover notes, not part of the public package
 HANDOVER_CN.md
+
+# Dev-only docs and helper scripts kept local, not part of the upstream PR
+DEVELOPMENT_CN.md
+SKILLS_PIPELINE_DEVELOPMENT_CN.md
+scripts/check-skills.mjs
+scripts/make-skill.mjs
