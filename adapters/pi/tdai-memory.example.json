@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "endpoint": "http://127.0.0.1:8420",
+  "serviceId": "default",
+  "teamId": "team-example",
+  "agentId": "agt-example",
+  "userId": "usr-example",
+  "userKeyFile": "/path/to/.admin-key",
+  "allowProjectConfig": false,
+  "captureTools": false,
+  "timeoutMs": 3000,
+  "recall": {
+    "enabled": true,
+    "deadlineMs": 3000,
+    "l0Limit": 4,
+    "l1Limit": 6,
+    "l2Limit": 2,
+    "maxChars": 12000
+  }
+}

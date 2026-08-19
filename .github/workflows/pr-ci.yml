@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/server_team, develop_server_team, master]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
@@ -137,6 +137,41 @@ jobs:
           else
             echo "✅ Size OK"
           fi
+
+  # ── 4. Pi adapter (typecheck + unit + pack + load smoke) ──
+  # adapters/pi 是独立 npm 包（自带 lockfile），MemoryCore 的 install/pack
+  # job 都不覆盖它。这里只守"快速面"：npm ci 锁文件可复现性、类型检查、
+  # 单测、包内容、真实 Pi RPC 加载扩展。四个真实 Docker E2E
+  # （e2e:l0-l3 / e2e:setup / e2e:lifecycle / e2e:skill）需要 LLM 密钥，不进 PR CI。
+  adapter-pi:
+    name: Adapter · pi
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: adapters/pi
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: adapters/pi/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package contents
+        run: npm run pack:check
+
+      - name: Extension load smoke (real Pi RPC)
+        run: npm run verify:pi-load
 
   # ── 7. Skill queue isolation guard ─────────────────────────
   # 强约束：禁止 PR 触碰记忆模块红线文件（state/pipeline-worker/integrations/redis），

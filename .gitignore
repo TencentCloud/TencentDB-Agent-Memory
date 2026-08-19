@@ -34,6 +34,8 @@ install-plugin.sh
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
+!adapters/pi/package-lock.json
+.pi/tdai-memory.json
 test-offload.sh
 test-offload-mmd.sh
 test-offload-sessions.sh
@@ -110,6 +112,10 @@ MemoryCore/scripts/tests/
 
 # Backup files
 *.bak
+*.bak-*
+
+# IDE (JetBrains) local workspace
+.idea/
 
 # self-implement-wiki e2e 产物（人工查看用，不入库）
 docs/knowledge/self-implement-wiki/_e2e-output/
@@ -132,3 +138,6 @@ coverage/
 
 # Local project docs (generated, not for VCS)
 .local-docs/
+
+# Standalone Pi adapter repo (separate git repository, never commit into this tree)
+.standalone-pi-agent-memory-adapter/

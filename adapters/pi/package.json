@@ -1,0 +1,60 @@
+{
+  "name": "@tencentdb-agent-memory/pi-adapter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi.dev adapter for TencentDB Agent Memory",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "adapters/pi"
+  },
+  "keywords": [
+    "pi-package",
+    "tencentdb-agent-memory",
+    "agent-memory"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src/",
+    "scripts/",
+    "LICENSE",
+    "README.md",
+    "README_CN.md",
+    "tdai-memory.example.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "npm run typecheck && npm test",
+    "e2e:l0-l3": "node ./scripts/e2e-l0-l3.mjs",
+    "e2e:setup": "node ./scripts/e2e-setup.mjs",
+    "e2e:lifecycle": "node ./scripts/e2e-pi-lifecycle.mjs",
+    "e2e:skill": "node ./scripts/e2e-skill.mjs",
+    "pack:check": "npm pack --dry-run",
+    "verify:pi-load": "node ./scripts/verify-pi-load.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tencentdb-agent-memory/memory-sdk-ts-v2": "1.0.0-beta.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.1 <0.85",
+    "typebox": "^1.3.7"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@types/node": "22.19.19",
+    "typebox": "1.3.7",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.10"
+  }
+}

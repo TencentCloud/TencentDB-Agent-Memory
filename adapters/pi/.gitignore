@@ -1,0 +1,21 @@
+node_modules/
+coverage/
+*.tgz
+*.tsbuildinfo
+src/**/*.js
+test/**/*.js
+.e2e.local.json
+
+# Standalone-repo publication artifacts (live in the separate pi-agent-memory-adapter repo)
+OPENSOURCE_README.md
+OPENSOURCE_README_CN.md
+repo-root/
+
+# Internal handover notes, not part of the public package
+HANDOVER_CN.md
+
+# Dev-only docs and helper scripts kept local, not part of the upstream PR
+DEVELOPMENT_CN.md
+SKILLS_PIPELINE_DEVELOPMENT_CN.md
+scripts/check-skills.mjs
+scripts/make-skill.mjs
