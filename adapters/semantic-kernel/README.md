@@ -1,0 +1,142 @@
+# TencentDB Agent Memory — Semantic Kernel Adapter
+
+Give [Semantic Kernel](https://github.com/microsoft/semantic-kernel) (Python) agents persistent memory backed by TencentDB Agent Memory: every turn is captured into the L0 → L3 memory pipeline, and relevant memories are recalled or searchable on demand.
+
+Once wired in, your SK agent gets:
+
+- **Turn capture** — incremental user/assistant transcript streamed to the gateway (`POST /capture`)
+- **Automatic recall** — recalled memory context injected into every agent turn via a native `PROMPT_RENDERING` filter (`POST /recall`), with two configurable injection modes
+- **Retrieval tools** — a `KernelPlugin` exposing `memory_search` (long-term) and `conversation_search` (session-scoped) as kernel functions the model can call
+- **Session flush** — explicit `POST /session/end` at thread shutdown
+
+> Note: this targets Semantic Kernel itself. Microsoft Agent Framework (SK's successor) has a separate open integration (see PR #568 in this repository).
+
+## How it works
+
+```
+Semantic Kernel ChatCompletionAgent
+  ├─ PROMPT_RENDERING filter ─(POST /recall)──► memory context injected
+  ├─ TencentDBMemory plugin ──(POST /search/*)─► model-driven retrieval
+  └─ capture_thread(thread) ──(POST /capture)──► L0 → L3 pipeline
+                                               ▼
+                       Memory Core Gateway (port 8420)
+                        (capture · extract · store · recall)
+```
+
+The adapter talks to the **memory-core gateway** (`:8420` by default), which runs the memory engine (extraction, dedup, scenario distillation, profiling).
+
+## Prerequisites
+
+1. TencentDB Agent Memory running locally:
+
+   ```bash
+   cd TencentDB-Agent-Memory/deploy/global-images
+   cp .env.example .env && $EDITOR .env
+   ./start-all.sh
+   ```
+
+   Set `MEMORY_LLM_BASE_URL` / `MEMORY_LLM_API_KEY` / `MEMORY_LLM_MODEL` in `.env` — the memory engine uses this LLM for extraction and recall.
+
+2. Python 3.10+ with Semantic Kernel:
+
+   ```bash
+   pip install semantic-kernel
+   ```
+
+3. An OpenAI-compatible API key for your agent's chat model.
+
+## Installation
+
+```bash
+pip install ./adapters/semantic-kernel
+```
+
+Or copy the `tdai_sk/` package into your project (it has no local dependencies beyond `semantic-kernel` and `httpx`).
+
+## Quickstart
+
+```python
+from semantic_kernel.agents import ChatCompletionAgent
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.kernel import Kernel
+
+from tdai_sk import TDAiConfig, TencentDBAgentMemory
+
+mem = TencentDBAgentMemory(TDAiConfig(
+    app_name="my-app",
+    user_id="user-42",
+    gateway_url="http://127.0.0.1:8420",
+    api_key=os.environ.get("TDAI_GATEWAY_API_KEY", ""),
+))
+
+kernel = Kernel()
+kernel.add_service(OpenAIChatCompletion(ai_model_id="gpt-4o-mini"))
+mem.attach(kernel)                     # automatic recall filter
+
+agent = ChatCompletionAgent(
+    kernel=kernel,
+    name="assistant",
+    instructions="You are a concise assistant.",
+    plugins=[mem.as_plugin()],         # memory_search / conversation_search
+)
+
+response = await agent.get_response(messages="Remember: my codename is Apollo Lake.")
+await mem.capture_thread(response.thread)   # incremental capture
+# ... later, in a brand-new thread ...
+response = await agent.get_response(messages="What is my codename?")
+await mem.capture_thread(response.thread)
+await mem.end_session(response.thread)
+await mem.close()
+```
+
+## Recall injection modes
+
+`TDAiConfig.recall_mode` controls how recalled context reaches the prompt:
+
+| Mode | Behavior |
+|---|---|
+| `"append"` *(default)* | Recalled block is appended to the rendered instructions each turn. Zero configuration. |
+| `"template"` | Recalled block is written to the `{{TDaiMemory}}` template variable — place it explicitly in your instructions: `Relevant memory:\n{{TDaiMemory}}`. |
+| `"off"` | Automatic recall disabled (tools still work). |
+
+## Configuration reference
+
+| Field | Effect | Default |
+|---|---|---|
+| `gateway_url` | memory-core gateway URL | `http://127.0.0.1:8420` |
+| `api_key` | `Authorization: Bearer` key; required when gateway starts with `TDAI_GATEWAY_API_KEY` | `""` |
+| `app_name` / `user_id` | Identity scope for capture/recall | `"semantic-kernel-app"` / `"default-user"` |
+| `timeout` | Per-request HTTP timeout | `5.0` s |
+| `recall_mode` | `append` / `template` / `off` | `append` |
+| `memory_search_tool` | expose `memory_search` kernel function | `True` |
+| `conversation_search_tool` | expose `conversation_search` | `True` |
+| `fail_open` | memory errors logged-and-swallowed instead of raised | `True` |
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `GatewayError` on health check | Stack not running — start it and check `MEMORY_CORE_PORT` (8420). |
+| Gateway returns 401 | Gateway started with `TDAI_GATEWAY_API_KEY` — pass it via `TDAiConfig(api_key=...)`. |
+| No memory recalled in new threads | Extraction is asynchronous — wait a few seconds and retry; verify `recall_mode != "off"`. |
+| Model never calls the tools | Ensure `plugins=[mem.as_plugin()]` and function-calling is enabled (`FunctionChoiceBehavior.Auto()` is the agent default). |
+| Template mode renders `{{TDaiMemory}}` empty | The variable is only set when recall returns context; also ensure `recall_mode="template"` and `mem.attach(kernel)` was called. |
+
+## Testing
+
+Smoke tests run against a fake gateway (no stack or LLM needed):
+
+```bash
+cd adapters/semantic-kernel
+pip install -e ".[test]"
+pytest
+```
+
+## Notes
+
+- **Multi-tenant caution**: recall and `memory_search` read the gateway's shared long-term store; the gateway does not enforce per-user isolation on those paths. For shared deployments keep `recall_mode="off"` and disable `memory_search_tool`, or front the gateway with tenant isolation.
+- **Version**: verified with `semantic-kernel>=1.30` and TencentDB Agent Memory v2 images (`feat/server_team` branch).
+
+## License
+
+MIT, same as the main repository.
