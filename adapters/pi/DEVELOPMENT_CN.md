@@ -23,7 +23,7 @@
 
 ### 1.1 当前实现状态
 
-截至 2026-08-19，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏（含 GitHub/AWS/JWT/Slack 等平台令牌）、跨进程 outbox（原子 lease、持久化退避、`.dead` 隔离、at-least-once 离线补投）、树分支与 fork 会话隔离、状态命令、手动补偿命令（`/tdai-memory-flush`、`/tdai-memory-retry-skills`、`/tdai-memory-cleanup-skills`）、完整 Skill 双管线（五角色采集 → 服务端提炼 → 召回注入 → `/tdai-memory-sync-skills` 安全同步为 Pi 原生技能）、adapter CI（`.github/workflows/pr-ci.yml` 的 `adapter-pi` job）、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
+截至 2026-08-19，已经实现并验证：安全配置加载、官方 SDK client、自动 L0–L3 有界召回、settled-turn L0 采集、脱敏（含 GitHub/AWS/JWT/Slack 等平台令牌）、跨进程 outbox（原子 lease、持久化退避、`.dead` 隔离、at-least-once 离线补投）、树分支与 fork 会话隔离、状态命令、手动补偿命令（`/tdai-memory-flush`、`/tdai-memory-retry-skills`、`/tdai-memory-cleanup-skills`）、遗忘命令（`/tdai-memory-forget`，删除匹配的 L1 原子记忆与 L0 会话消息）、完整 Skill 双管线（五角色采集 → 服务端提炼 → 召回注入 → `/tdai-memory-sync-skills` 安全同步为 Pi 原生技能）、adapter CI（`.github/workflows/pr-ci.yml` 的 `adapter-pi` job）、Pi 包加载检查，以及真实 DeepSeek 写入与跨会话自动 L0 召回。
 
 `/tdai-memory-setup` 已支持全局安全配置、身份验证、Team/Agent 选择或创建以及 L0-L3 只读权限检查；非空 L0/L1/L2/L3 的真实模型生成与 Pi hook 注入已有受管 E2E 脚本验证。未实现项（如 `/tdai-memory-archive-skill` 显式 force-archive）仅出现在设计章节，不能视为已交付。
 

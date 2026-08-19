@@ -13,6 +13,7 @@ import {
 } from "./skill-capture.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { installSyncedSkill, listSyncCandidates } from "./skill-sync.js";
+import { deleteForgetCandidates, formatForgetCandidates, searchForgetCandidates } from "./forget.js";
 import { injectRecall, recallMemory } from "./recall.js";
 import { BRANCH_ENTRY_TYPE, createBranchId, memorySessionId, restoreBranchId } from "./session.js";
 import { runSetup } from "./setup.js";
@@ -366,6 +367,81 @@ export default function tdaiMemoryExtension(pi: ExtensionAPI): void {
       } catch (error) {
         ctx.ui.setStatus(STATUS_KEY, "memory: skill cleanup failed");
         ctx.ui.notify(`Skill cleanup failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+    },
+  });
+
+  pi.registerCommand("tdai-memory-forget", {
+    description: "Search and delete remembered facts and conversations",
+    handler: async (args, ctx) => {
+      const query = args.trim();
+      if (!query) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: forget usage");
+        ctx.ui.notify("Usage: /tdai-memory-forget <keyword> — searches memories and conversations to delete.", "warning");
+        return;
+      }
+      const loaded =
+        currentConfig ??
+        (await loadConfig({
+          cwd: ctx.cwd,
+          projectTrusted: ctx.isProjectTrusted(),
+        }));
+      if (!loaded.ok || !loaded.config.enabled) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: not configured");
+        ctx.ui.notify("Memory is not configured. Run /tdai-memory-setup first.", "error");
+        return;
+      }
+      const activeConfig = loaded.config;
+      const memory = createClients(activeConfig).memory;
+
+      ctx.ui.setStatus(STATUS_KEY, "memory: searching to forget");
+      let candidates;
+      try {
+        candidates = await settleWithin(searchForgetCandidates(memory, query), activeConfig.recall.deadlineMs);
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: forget failed");
+        ctx.ui.notify(`Forget search failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        return;
+      }
+      if (!candidates || candidates.length === 0) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: nothing to forget");
+        ctx.ui.notify(`No memories matched "${query}".`, "info");
+        return;
+      }
+
+      if (ctx.hasUI) {
+        const preview = formatForgetCandidates(candidates);
+        const proceed = await ctx.ui.confirm(
+          "Forget matching memories",
+          `Delete ${candidates.length} matching item${candidates.length === 1 ? "" : "s"} for "${query}"?\n\n${preview.join("\n")}`,
+        );
+        if (!proceed) {
+          ctx.ui.notify("Forget cancelled.", "info");
+          return;
+        }
+      } else {
+        // Destructive action requires an interactive confirmation; refuse in
+        // headless contexts rather than deleting without a human decision.
+        ctx.ui.setStatus(STATUS_KEY, "memory: forget needs confirmation");
+        ctx.ui.notify("Forget requires an interactive session to confirm deletion.", "warning");
+        return;
+      }
+
+      try {
+        const result = await settleWithin(deleteForgetCandidates(memory, candidates), activeConfig.recall.deadlineMs);
+        if (!result) {
+          ctx.ui.setStatus(STATUS_KEY, "memory: forget failed");
+          ctx.ui.notify("Forget timed out; no changes were reported. Check /tdai-memory-status.", "warning");
+          return;
+        }
+        ctx.ui.setStatus(STATUS_KEY, "memory: forgotten");
+        ctx.ui.notify(
+          `Forgot ${result.l1Deleted} memor${result.l1Deleted === 1 ? "y" : "ies"} and ${result.l0Deleted} conversation${result.l0Deleted === 1 ? "" : "s"}.`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.setStatus(STATUS_KEY, "memory: forget failed");
+        ctx.ui.notify(`Forget failed: ${error instanceof Error ? error.message : String(error)}`, "error");
       }
     },
   });

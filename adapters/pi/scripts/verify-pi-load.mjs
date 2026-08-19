@@ -55,6 +55,7 @@ function handleLine(line) {
     "tdai-memory-flush",
     "tdai-memory-retry-skills",
     "tdai-memory-cleanup-skills",
+    "tdai-memory-forget",
   ].filter((name) => !names.has(name));
   finish(missing.length === 0 ? undefined : new Error(`Missing command registrations: ${missing.map((name) => `/${name}`).join(", ")}`));
 }
