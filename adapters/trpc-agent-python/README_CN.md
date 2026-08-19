@@ -118,7 +118,7 @@ async for event in runner.run_async(
 
 ## 测试
 
-测试基于假 gateway 与真实的 `trpc_agent_sdk` 类运行（无需服务或 LLM）—— 5 个文件、34 个用例：
+测试基于假 gateway 与真实的 `trpc_agent_sdk` 类运行（无需服务或 LLM）—— 5 个文件、36 个用例：
 
 ```bash
 cd adapters/trpc-agent-python

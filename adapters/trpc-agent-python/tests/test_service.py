@@ -92,6 +92,53 @@ async def test_store_session_fail_open_swallows(fake_gw):
     await service.close()
 
 
+async def test_store_session_retries_after_failure(fake_gw):
+    """A failed capture is resent once the gateway recovers, exactly once."""
+    gw, url = fake_gw
+    gw.fail_routes.add("/capture")
+    service = make_service(url, fail_open=True)
+    session = make_session(pairs=1)
+
+    await service.store_session(session)  # reaches gateway, gets 500, swallowed
+    gw.fail_routes.clear()                # gateway recovers
+    await service.store_session(session)  # resends the same delta, succeeds
+    captures = gw.payloads("/capture")
+    # Exactly two attempts — the failed one and the retry — with identical
+    # content (the watermark only advances on success).
+    assert len(captures) == 2
+    assert captures[0]["user_content"] == captures[1]["user_content"]
+    assert captures[1]["user_content"] == "Remember fact 1: codename is Apollo Lake."
+    # And a third call is a no-op (watermark advanced by the success).
+    await service.store_session(session)
+    assert len(gw.payloads("/capture")) == 2
+    await service.close()
+
+
+async def test_watermarks_are_isolated_per_session(fake_gw):
+    """Two sessions sharing one service never leak capture deltas."""
+    gw, url = fake_gw
+    service = make_service(url)
+    session_a = make_session(session_id="a", pairs=1)
+    session_b = make_session(session_id="b", pairs=1)
+
+    await service.store_session(session_a)
+    # b's first capture must send its own full pair, not be skipped because
+    # a already captured a same-shaped delta.
+    await service.store_session(session_b)
+    captures = gw.payloads("/capture")
+    assert len(captures) == 2
+    assert {c["session_id"] for c in captures} == {"a", "b"}
+    # Growing a afterwards must not affect b.
+    session_a.add_event(make_event("user", "second question"))
+    session_a.add_event(make_event("agent", "second answer"))
+    await service.store_session(session_a)
+    await service.store_session(session_b)  # nothing new for b
+    captures = gw.payloads("/capture")
+    assert len(captures) == 3
+    assert captures[2]["session_id"] == "a"
+    await service.close()
+
+
 async def test_store_session_fail_closed_raises(fake_gw):
     gw, url = fake_gw
     gw.fail_routes.add("/capture")

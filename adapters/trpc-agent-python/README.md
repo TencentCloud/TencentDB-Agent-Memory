@@ -118,7 +118,7 @@ Pass a framework `MemoryServiceConfig` as the second constructor argument to con
 
 ## Testing
 
-Tests run against a fake gateway and real `trpc_agent_sdk` classes (no stack or LLM needed) — 34 cases across five files:
+Tests run against a fake gateway and real `trpc_agent_sdk` classes (no stack or LLM needed) — 36 cases across five files:
 
 ```bash
 cd adapters/trpc-agent-python

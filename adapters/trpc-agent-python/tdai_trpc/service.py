@@ -259,14 +259,8 @@ class TencentDBMemoryService(BaseMemoryService):
     # ------------------------------------------------------------------
 
     def _resolve_scope(self, session: Session) -> tuple[str, str]:
-        """Resolve (app_name, user_id) from the session, with config fallback."""
-        save_key = str(getattr(session, "save_key", "") or "")
-        session_id = str(getattr(session, "id", "") or "")
-        app_name, user_id = self._resolve_save_key(save_key)
-        # save_key does not carry the session id; keep it out of the app/user
-        # scope and use the framework session id for the session dimension.
-        del session_id
-        return app_name, user_id
+        """Resolve (app_name, user_id) from the session's save_key."""
+        return self._resolve_save_key(str(getattr(session, "save_key", "") or ""))
 
     def _resolve_save_key(self, save_key: str) -> tuple[str, str]:
         """Parse ``{app}/{user}`` save_key into (app, user).
