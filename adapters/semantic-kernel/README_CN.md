@@ -47,6 +47,14 @@ Semantic Kernel ChatCompletionAgent
 
 ## 安装
 
+直接从本仓库远程安装 —— 无需克隆源码：
+
+```bash
+pip install "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git#subdirectory=adapters/semantic-kernel"
+```
+
+或从本地克隆安装：
+
 ```bash
 pip install ./adapters/semantic-kernel
 ```

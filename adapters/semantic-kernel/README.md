@@ -47,6 +47,14 @@ The adapter talks to the **memory-core gateway** (`:8420` by default), which run
 
 ## Installation
 
+Install directly from this repository — no clone needed:
+
+```bash
+pip install "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git#subdirectory=adapters/semantic-kernel"
+```
+
+From a local clone instead:
+
 ```bash
 pip install ./adapters/semantic-kernel
 ```
