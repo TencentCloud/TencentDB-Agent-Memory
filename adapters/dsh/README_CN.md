@@ -42,13 +42,19 @@ DeepSeek Harness（Cordis 插件）
 
 ## 安装
 
-在本仓库克隆中执行：
+直接从本仓库远程安装 —— 无需克隆源码：
+
+```bash
+dsh plugin --profile host add "github:TencentCloud/TencentDB-Agent-Memory#path:adapters/dsh"
+```
+
+或从本地克隆安装（例如正在迭代适配器时）：
 
 ```bash
 dsh plugin --profile host add ./adapters/dsh
 ```
 
-该命令把包安装进 DSH profile；其 `dsh.bundle.patch` 声明（`cordis.patch.yml`）会自动将其激活为 profile 层。
+两种方式都会把包装进 DSH profile；其 `dsh.bundle.patch` 声明（`cordis.patch.yml`）会自动将其激活为 profile 层。
 
 ## 配置
 

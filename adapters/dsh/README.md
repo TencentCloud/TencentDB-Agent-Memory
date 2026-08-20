@@ -42,13 +42,19 @@ Identity: the configured app/user scope the gateway session_key (`base64url(app)
 
 ## Install
 
-From a clone of this repository:
+Install directly from this repository — no clone needed:
+
+```bash
+dsh plugin --profile host add "github:TencentCloud/TencentDB-Agent-Memory#path:adapters/dsh"
+```
+
+Or from a local clone (e.g., while iterating on the adapter):
 
 ```bash
 dsh plugin --profile host add ./adapters/dsh
 ```
 
-This installs the package into the DSH profile; its `dsh.bundle.patch` declaration (`cordis.patch.yml`) activates it as a profile layer automatically.
+Either way the package lands in the DSH profile; its `dsh.bundle.patch` declaration (`cordis.patch.yml`) activates it as a profile layer automatically.
 
 ## Configuration
 
