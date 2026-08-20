@@ -25,6 +25,13 @@ require_vars MEMORY_CORE_IMAGE MEMORY_CORE_PORT MEMORY_CORE_VOLUME
 MEMORY_CORE_GATEWAY_API_KEY="${MEMORY_CORE_GATEWAY_API_KEY-}"
 MEMORY_CORE_ADMIN_USERNAME="${MEMORY_CORE_ADMIN_USERNAME:-admin}"
 
+# 可移植 curl（Windows Git Bash 的 curl 在 /mingw64/bin/curl，不是 /usr/bin/curl）
+if command -v curl >/dev/null 2>&1; then
+  CURL="$(command -v curl)"
+else
+  CURL=/usr/bin/curl
+fi
+
 # admin user_key 持久化位置（宿主机侧；volume 数据被清后需一并删掉此文件）
 ADMIN_KEY_FILE="${MEMORY_CORE_ADMIN_KEY_FILE:-$SCRIPT_DIR/.admin-key}"
 
@@ -163,13 +170,14 @@ generate_user_key() {
 verify_user_key() {
   local key="$1"
   local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  code=$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
     "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
-    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
-  [[ "$code" == "200" ]]
+    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || true)
+  code="${code:-000}"
+  [[ "$code" == *"200"* ]]
 }
 
 info "初始化 admin user（username=${MEMORY_CORE_ADMIN_USERNAME}, key 持久化 → $ADMIN_KEY_FILE）..."
@@ -184,22 +192,23 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$("$CURL" -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
   "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
-  -d "$init_body" 2>/dev/null || echo "000")
+  -d "$init_body" 2>/dev/null || true)
+init_resp="${init_resp:-000}"
 
 case "$init_resp" in
-  200)
+  *200*)
     ok "admin user 已创建"
     # 落盘 key（把宿主机 file 的权限收紧）
     umask 077
     echo -n "$ADMIN_KEY" > "$ADMIN_KEY_FILE"
     ok "  admin user_key 已保存到 $ADMIN_KEY_FILE"
     ;;
-  409)
+  *409*)
     if [[ -s "$ADMIN_KEY_FILE" ]]; then
       ok "admin user 已存在（跳过 init-admin，用 $ADMIN_KEY_FILE 里的 key）"
     else

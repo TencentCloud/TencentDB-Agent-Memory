@@ -131,6 +131,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  externalGatewayUrl: "http://127.0.0.1:${PROXY_PORT}"
   injectors:
     - skill
     - knowledge
