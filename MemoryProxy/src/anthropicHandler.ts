@@ -272,6 +272,103 @@ function hasValidThinkingSignature(block: Record<string, unknown>): boolean {
   return /^[A-Za-z0-9+/=]+$/.test(sig);
 }
 
+/** Placeholder thinking text for DeepSeek tool-call replay. Must be non-empty. */
+const TOOL_CALL_THINKING_PLACEHOLDER = "[proxy tool-call thinking passback]";
+
+export type ThinkingPassbackTarget = {
+  url?: string;
+  model?: string;
+};
+
+/**
+ * DeepSeek Anthropic-compat thinking mode requires the previous assistant
+ * `content[].thinking` to be replayed after a tool-call turn (GitHub #990).
+ * Native Anthropic instead rejects unsigned / non-Anthropic signatures, so
+ * this path is only used for DeepSeek-like upstreams.
+ */
+export function requiresThinkingPassback(
+  target: ThinkingPassbackTarget,
+  body: Record<string, unknown>,
+): boolean {
+  const url = String(target.url ?? "").toLowerCase();
+  const model = String(target.model ?? body.model ?? "").toLowerCase();
+  return url.includes("deepseek") || model.includes("deepseek");
+}
+
+function contentHasToolUse(content: unknown[]): boolean {
+  return content.some((block) => {
+    const b = block as Record<string, unknown>;
+    return b.type === "tool_use";
+  });
+}
+
+function contentHasThinking(content: unknown[]): boolean {
+  return content.some((block) => {
+    const b = block as Record<string, unknown>;
+    return b.type === "thinking" || b.type === "redacted_thinking";
+  });
+}
+
+/**
+ * Ensure every assistant tool_use message carries a thinking block.
+ *
+ * DeepSeek returns 400 if thinking mode is on and the prior tool-call
+ * assistant turn has no `content[].thinking`. Session-init fake forms
+ * historically omitted it. Does not mutate `body`.
+ */
+export function ensureToolCallThinkingPassback(
+  body: Record<string, unknown>,
+): { body: Record<string, unknown>; injected: number } {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return { body, injected: 0 };
+
+  let injected = 0;
+  let changed = false;
+
+  const newMessages = messages.map((msg) => {
+    const m = msg as Record<string, unknown>;
+    if (m.role !== "assistant" || !Array.isArray(m.content)) return msg;
+    const content = m.content as unknown[];
+    if (!contentHasToolUse(content) || contentHasThinking(content)) return msg;
+
+    injected += 1;
+    changed = true;
+    return {
+      ...m,
+      content: [
+        { type: "thinking", thinking: TOOL_CALL_THINKING_PLACEHOLDER, signature: "" },
+        ...content,
+      ],
+    };
+  });
+
+  if (!changed) return { body, injected: 0 };
+  return { body: { ...body, messages: newMessages }, injected };
+}
+
+/**
+ * Prepare the Anthropic request body for a specific upstream.
+ *
+ * DeepSeek: skip Anthropic-signature stripping (those signatures are not
+ * DeepSeek's) and inject a thinking placeholder when a tool_use turn has none.
+ * Native Anthropic: keep stripping unsigned thinking blocks.
+ */
+export function prepareAnthropicUpstreamBody(
+  body: Record<string, unknown>,
+  target: { url: string; model: string; bodyOverrides: Record<string, unknown> | null },
+): { body: Record<string, unknown>; sanitizedCount: number } {
+  let result = body;
+  if (target.bodyOverrides) {
+    result = { ...result, ...target.bodyOverrides };
+  }
+  if (requiresThinkingPassback(target, result)) {
+    const ensured = ensureToolCallThinkingPassback(result);
+    return { body: ensured.body, sanitizedCount: 0 };
+  }
+  const sanitized = sanitizeThinkingBlocks(result);
+  return { body: sanitized.body, sanitizedCount: sanitized.removed };
+}
+
 /**
  * Sanitize `thinking` blocks across all assistant messages.
  *
@@ -317,12 +414,7 @@ function buildUpstreamBody(
   body: Record<string, unknown>,
   target: ForwardTarget,
 ): { body: Record<string, unknown>; sanitizedCount: number } {
-  let result = body;
-  if (target.bodyOverrides) {
-    result = { ...result, ...target.bodyOverrides };
-  }
-  const sanitized = sanitizeThinkingBlocks(result);
-  return { body: sanitized.body, sanitizedCount: sanitized.removed };
+  return prepareAnthropicUpstreamBody(body, target);
 }
 
 /**
@@ -1225,7 +1317,9 @@ export async function handleAnthropicMessages(
     delete originalHeaders["authorization"];
   }
 
-  const retryBody = sanitizeThinkingBlocks(body).body;
+  const retryBody = requiresThinkingPassback(target, body)
+    ? ensureToolCallThinkingPassback(body).body
+    : sanitizeThinkingBlocks(body).body;
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;

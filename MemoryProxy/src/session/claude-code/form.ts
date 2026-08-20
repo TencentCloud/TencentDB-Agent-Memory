@@ -31,6 +31,18 @@ export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
 /**
+ * Fake AskUserQuestion assistant 消息的占位 thinking。
+ *
+ * DeepSeek thinking 模式在 tool-call 之后硬校验：下一轮必须把
+ * `content[].thinking` 回传，否则 400
+ * `The content[].thinking in the thinking mode must be passed back to the API`
+ * （GitHub #990）。空 thinking 会被客户端丢掉，必须非空。
+ *
+ * 对齐 dsh/form.ts 的 REASONING_PLACEHOLDER。值本身不进真实模型生成。
+ */
+const SESSION_INIT_THINKING_PLACEHOLDER = "[proxy session-init form]";
+
+/**
  * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
  * Claude Code 的 AskUserQuestion 会给用户一个 "Other" 输入框，回复"跳过 / skip /
  * 不关联" 就走 SKIP_RE bypass；没识别到的自由文本会 unrecognized → 同样 bypass。
@@ -246,9 +258,23 @@ export function buildFormResponse(data: FormData): Response {
         },
       }));
 
+      // thinking 必须在 tool_use 之前。DeepSeek thinking 模式在 tool-call 后
+      // 要求回传 content[].thinking（#990）；无 thinking 的假表单会让下一轮 400。
       controller.enqueue(sse("content_block_start", {
         type: "content_block_start",
         index: 0,
+        content_block: { type: "thinking", thinking: "" },
+      }));
+      controller.enqueue(sse("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: SESSION_INIT_THINKING_PLACEHOLDER },
+      }));
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+
+      controller.enqueue(sse("content_block_start", {
+        type: "content_block_start",
+        index: 1,
         content_block: {
           type: "tool_use",
           id: toolUseId,
@@ -259,11 +285,11 @@ export function buildFormResponse(data: FormData): Response {
 
       controller.enqueue(sse("content_block_delta", {
         type: "content_block_delta",
-        index: 0,
+        index: 1,
         delta: { type: "input_json_delta", partial_json: inputJson },
       }));
 
-      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+      controller.enqueue(sse("content_block_stop", { type: "content_block_stop", index: 1 }));
 
       controller.enqueue(sse("message_delta", {
         type: "message_delta",
