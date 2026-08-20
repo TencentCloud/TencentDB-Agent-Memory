@@ -26,7 +26,7 @@ import type { IStateBackend } from "../core/state/types.js";
 import type { PipelineWorker } from "../services/pipeline-worker.js";
 import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
-import type { MemoryRecord } from "../core/record/l1-writer.js";
+import type { MemoryRecord, MemoryType } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 
 // ── Zod schemas (validated types + defaults) ──
@@ -1049,20 +1049,67 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
-  // Read existing record by primary key
+  // Read existing record by primary key. When absent, fall back to creating a
+  // new L1 note (upsert semantics): atomic notes are otherwise only produced by
+  // the L0→L1 extraction pipeline, which leaves no entry point for bulk import
+  // or seeding of historical memory. The new note is scoped to the request
+  // isolation triple (team/user/agent) and starts at version v1. An optional
+  // `type` (episodic | instruction | persona) may be supplied in the body and
+  // defaults to episodic.
   const existing = await store.queryL1Records({ recordIds: [id] });
+  const now = new Date().toISOString();
+  const iso = deps.requestIsolation;
   if (!existing || existing.length === 0) {
-    return errorEnvelope(404, `Atomic note not found: ${id}`, requestId);
+    const rawBody = body as Record<string, unknown> | undefined;
+    const requestedType =
+      typeof rawBody?.type === "string" ? (rawBody.type as MemoryType) : "episodic";
+    const created: MemoryRecord = {
+      id,
+      content,
+      type: requestedType,
+      priority: 50,
+      scene_name: background ?? "",
+      source_message_ids: [],
+      metadata: {},
+      timestamps: [],
+      createdAt: now,
+      updatedAt: now,
+      version: 0,
+      sessionKey: "",
+      sessionId: iso?.sessionId ?? "",
+      taskId: iso?.taskId,
+      teamId: iso?.teamId,
+      userId: iso?.userId,
+      agentId: iso?.agentId,
+    };
+    const embedding = deps.getEmbedding();
+    let emb: Float32Array | undefined;
+    if (embedding) {
+      try {
+        emb = await embedding.embed(content);
+      } catch (e) {
+        console.warn(`[v2-router] L1 embedding failed:`, e);
+      }
+    }
+    await store.upsertL1(created, emb);
+    await recordAudit(store, {
+      record_id: id,
+      layer: "L1",
+      action: "create",
+      iso,
+      version: 0,
+      requestId,
+      logger: deps.logger,
+    });
+    return successEnvelope<AtomicUpdateData>({ id, version: "v1", updated_at: now }, requestId);
   }
 
-  const now = new Date().toISOString();
   const record = existing[0];
 
   // Build update: content is always overwritten; background (scene_name) only if provided.
   // user_id / agent_id are preserved from the existing row — updates don't
   // re-derive them. If the caller supplied an isolation triple that does NOT
   // match the existing row, we treat it as a permission denial.
-  const iso = deps.requestIsolation;
   if (iso?.userId && record.user_id && record.user_id !== iso.userId) {
     return errorEnvelope(403, `Atomic note ${id} belongs to a different user`, requestId);
   }
