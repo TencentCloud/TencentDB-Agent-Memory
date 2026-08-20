@@ -14,6 +14,31 @@ defaults:
     working-directory: MemoryCore
 
 jobs:
+  # ── OpenCode adapter validation ────────────────────────────
+  opencode-adapter:
+    name: OpenCode Adapter
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: adapters/opencode
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: adapters/opencode/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and test
+        run: npm run check
+
+      - name: Validate package contents
+        run: npm run pack:check
+
   # ── 1. Install dependencies ────────────────────────────────
   install:
     name: Install
