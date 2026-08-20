@@ -27,8 +27,8 @@ import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, Tas
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
-import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 import type { PresetIdentity } from "./preset.js";
+import { isDshMetadataContent } from "./dsh-metadata.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -697,10 +697,11 @@ export class SessionStore {
     if (messages.length === 0) return undefined;
 
     // Count user messages and check for assistant/tool existence.
-    // dsh (deepseek-harness) 首帧 body 里塞 3 条**非用户输入**的 role=user 元数据:
+    // dsh (deepseek-harness) 首帧 body 里会塞入**非用户输入**的 role=user 元数据:
     //   - <system-reminder> 工作区指令
     //   - "Current runtime context." 快照
     //   - <available_skills> 列表
+    //   - <skill_content ...> 已加载 skill 的完整内容
     // 若原样计数 userCount>1 会把 dsh 首帧误判为"有历史",触发 markerless
     // one-shot bypass,session-init form 永远不弹。这里跳过 dsh 元数据 user 消息,
     // 只计"真用户输入"。见 docs/dsh-recon/2026-08-14-dsh-capture-analysis.md §2.3。
@@ -713,18 +714,8 @@ export class SessionStore {
         continue;
       }
       if (role !== "user") continue;
-      // dsh 元数据签名:content 是 str 且以已知锚点开头(dsh 内部固定文本)。
-      // 只在有明确签名时跳过,避免误伤客户端真用户输入。
       const c = (m as { content?: unknown }).content;
-      if (typeof c === "string") {
-        if (
-          c.startsWith("<system-reminder>") ||
-          isDshRuntimeContextSnapshot(c) ||
-          c.startsWith("<system-reminder>\nA skill is a reusable")
-        ) {
-          continue;
-        }
-      }
+      if (isDshMetadataContent(c)) continue;
       userCount++;
     }
 
