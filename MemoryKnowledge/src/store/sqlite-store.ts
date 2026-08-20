@@ -76,6 +76,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
           eq(knowledgeCodeGraph.teamId, input.team_id),
           eq(knowledgeCodeGraph.repoUrl, input.repo_url),
           eq(knowledgeCodeGraph.branch, input.branch),
+          this.cgManifestFileCond(input),
           isNull(knowledgeCodeGraph.deletedAt),
         ),
       )
@@ -95,6 +96,8 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
             repoName: input.repo_name ?? "",
             repoUrl: input.repo_url,
             branch: input.branch,
+            sourceType: input.source_type ?? "git",
+            manifestFile: input.manifest_file ?? null,
             ownerUserId: input.owner_user_id ?? null,
             userId: input.user_id ?? null,
             agentId: input.agent_id ?? null,
@@ -125,6 +128,7 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
               eq(knowledgeCodeGraph.teamId, input.team_id),
               eq(knowledgeCodeGraph.repoUrl, input.repo_url),
               eq(knowledgeCodeGraph.branch, input.branch),
+              this.cgManifestFileCond(input),
               isNull(knowledgeCodeGraph.deletedAt),
             ),
           )
@@ -134,6 +138,13 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       }
     }
     throw new Error("createCodeGraph: failed to allocate unique id");
+  }
+
+  /** manifest_file 幂等匹配条件：为 null 时要求同为 null，否则相等。 */
+  private cgManifestFileCond(input: CreateCodeGraphInput) {
+    return input.manifest_file
+      ? eq(knowledgeCodeGraph.manifestFile, input.manifest_file)
+      : isNull(knowledgeCodeGraph.manifestFile);
   }
 
   getCodeGraph(serviceId: string, teamId: string, codeGraphId: string): CodeGraphRow | null {
@@ -601,6 +612,8 @@ export class SqliteKnowledgeStore implements IKnowledgeStore {
       repo_name: r.repoName,
       repo_url: r.repoUrl,
       branch: r.branch,
+      source_type: r.sourceType,
+      manifest_file: r.manifestFile ?? null,
       commit_hash: r.commitHash,
       owner_user_id: r.ownerUserId,
       user_id: r.userId,

@@ -7,12 +7,14 @@
 
 import type { ISourceFetcher, SourceType } from "./types.js";
 import { GitSourceFetcher } from "./git-fetcher.js";
+import { RepoSourceFetcher } from "./repo-fetcher.js";
 
 export class SourceFetcherRegistry {
   private readonly fetchers = new Map<SourceType, ISourceFetcher>();
 
   constructor() {
     this.register(new GitSourceFetcher());
+    this.register(new RepoSourceFetcher());
     // 未来：this.register(new LocalSourceFetcher());
     // 未来：this.register(new FtpSourceFetcher());
   }
@@ -21,9 +23,13 @@ export class SourceFetcherRegistry {
     this.fetchers.set(fetcher.supportedType, fetcher);
   }
 
-  /** 根据 sourceUrl 自动探测协议类型，返回对应 fetcher；未注册则 throw。 */
-  resolve(sourceUrl: string): ISourceFetcher {
-    const type = this.detectType(sourceUrl);
+  /**
+   * 根据 sourceUrl（+ 可选显式 sourceType）返回对应 fetcher。
+   * 显式 sourceType 优先（repo-manifest 的 URL 也是 https，无法仅凭 URL 区分）；
+   * 否则按 URL 协议探测。未注册则 throw。
+   */
+  resolve(sourceUrl: string, sourceType?: SourceType): ISourceFetcher {
+    const type = sourceType ?? this.detectType(sourceUrl);
     const fetcher = this.fetchers.get(type);
     if (!fetcher) {
       throw new Error(`unsupported source type: ${type} (${sourceUrl})`);

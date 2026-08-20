@@ -24,6 +24,8 @@ export const knowledgeCodeGraph = sqliteTable(
     repoName: text("repo_name").notNull().default(""),
     repoUrl: text("repo_url").notNull(),
     branch: text("branch").notNull(),
+    sourceType: text("source_type").notNull().default("git"),
+    manifestFile: text("manifest_file"),
     commitHash: text("commit_hash"),
     ownerUserId: text("owner_user_id"),
     userId: text("user_id"),

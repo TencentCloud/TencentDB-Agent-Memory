@@ -92,6 +92,8 @@ export interface CodeGraphDetail {
   repo_name: string;
   repo_url: string;
   branch: string;
+  source_type: string;
+  manifest_file: string | null;
   commit_hash: string | null;
   service_url: string | null;
   summary: string | null;
@@ -182,6 +184,8 @@ export interface KnowledgeAssetItem {
   repo_name?: string;
   repo_url?: string;
   branch?: string;
+  source_type?: string;
+  manifest_file?: string | null;
   commit_hash?: string | null;
   stats?: { files: number; nodes: number; edges: number } | null;
   created_at?: string;
@@ -214,6 +218,8 @@ function assetItemToCode(item: KnowledgeAssetItem): CodeGraphDetail {
     repo_name: item.repo_name ?? item.name,
     repo_url: item.repo_url ?? '',
     branch: item.branch ?? 'main',
+    source_type: item.source_type ?? 'git',
+    manifest_file: item.manifest_file ?? null,
     commit_hash: item.commit_hash ?? null,
     service_url: null,
     summary: item.summary ?? null,
@@ -432,8 +438,22 @@ export const knowledgeApi = {
 
   code: {
     /** 创建（注册仓库） */
-    create: (teamId: string, repoUrl: string, branch?: string, repoName?: string): Promise<CodeGraphDetail> =>
-      panelPost('/code-graph/create', { team_id: teamId, repo_url: repoUrl, branch: branch ?? 'main', repo_name: repoName }),
+    create: (
+      teamId: string,
+      repoUrl: string,
+      branch?: string,
+      repoName?: string,
+      sourceType?: string,
+      manifestFile?: string,
+    ): Promise<CodeGraphDetail> =>
+      panelPost('/code-graph/create', {
+        team_id: teamId,
+        repo_url: repoUrl,
+        branch: branch ?? 'main',
+        repo_name: repoName,
+        source_type: sourceType ?? 'git',
+        manifest_file: manifestFile,
+      }),
 
     /** @deprecated 使用 teamAssets */
     list: async (teamId: string): Promise<CodeGraphDetail[]> => {

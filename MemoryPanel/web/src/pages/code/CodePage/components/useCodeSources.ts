@@ -8,7 +8,7 @@ import { knowledgeApi, type CodeGraphDetail } from '@/lib/knowledge-api';
 import { useTeams, useAgents } from '@/services';
 import { readAuth } from '@/components/LoginGate';
 import { tea } from '@/lib/tea-bridge';
-import { isValidGitHttpUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from './code-constants';
+import { isValidGitHttpUrl, isValidManifestUrl, formatRepoName, type ScopeTab, type StatusFilter, type SubView, type ViewMode } from './code-constants';
 
 export function useCodeSources() {
   const { t } = useTranslation();
@@ -29,6 +29,8 @@ export function useCodeSources() {
   const [showRegister, setShowRegister] = useState(false);
   const [formRepo, setFormRepo] = useState('');
   const [formBranch, setFormBranch] = useState('main');
+  const [formSourceType, setFormSourceType] = useState<'git' | 'repo-manifest'>('git');
+  const [formManifestFile, setFormManifestFile] = useState('default.xml');
   const [submitting, setSubmitting] = useState(false);
 
   // Allocate-to-agent dialog state
@@ -272,17 +274,36 @@ export function useCodeSources() {
   const handleRegister = async () => {
     const repo = formRepo.trim();
     if (!repo || !formBranch.trim() || !activeTeamId) return;
-    // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过
-    if (!isValidGitHttpUrl(repo)) {
+    const isManifest = formSourceType === 'repo-manifest';
+    // 防御性校验：按钮已按 validUrl 禁用，这里再挡一层防止绕过。
+    if (isManifest) {
+      if (!isValidManifestUrl(repo)) {
+        tea.notify.error(t('code.register.invalidManifestUrl'));
+        return;
+      }
+      if (!formManifestFile.trim()) {
+        tea.notify.error(t('code.register.manifestFileRequired'));
+        return;
+      }
+    } else if (!isValidGitHttpUrl(repo)) {
       tea.notify.error(t('code.register.invalidUrl'));
       return;
     }
     setSubmitting(true);
     try {
-      const detail = await knowledgeApi.code.create(activeTeamId, repo, formBranch.trim(), repo);
+      const detail = await knowledgeApi.code.create(
+        activeTeamId,
+        repo,
+        formBranch.trim(),
+        repo,
+        isManifest ? 'repo-manifest' : 'git',
+        isManifest ? formManifestFile.trim() : undefined,
+      );
       setShowRegister(false);
       setFormRepo('');
       setFormBranch('main');
+      setFormSourceType('git');
+      setFormManifestFile('default.xml');
       setScopeTab('team');
       setInFlight((prev) => [
         ...prev.filter((x) => x.code_graph_id !== detail.code_graph_id),
@@ -405,6 +426,10 @@ export function useCodeSources() {
     setFormRepo,
     formBranch,
     setFormBranch,
+    formSourceType,
+    setFormSourceType,
+    formManifestFile,
+    setFormManifestFile,
     submitting,
     setSubmitting,
     // allocate

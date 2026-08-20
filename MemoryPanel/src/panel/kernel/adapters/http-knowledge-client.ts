@@ -154,13 +154,23 @@ export class HttpKnowledgeClient implements KnowledgeClientPort {
 
   // ═══════════════ Code-Graph ═══════════════
 
-  async codeGraphCreate(teamId: string, repoUrl: string, branch?: string, userId?: string, repoName?: string): Promise<CodeGraphDetail> {
+  async codeGraphCreate(
+    teamId: string,
+    repoUrl: string,
+    branch?: string,
+    userId?: string,
+    repoName?: string,
+    sourceType?: string,
+    manifestFile?: string,
+  ): Promise<CodeGraphDetail> {
     return this.post('/v3/code-graph/create', {
       team_id: teamId,
       user_id: userId,
       repo_url: repoUrl,
       branch: branch ?? 'main',
       repo_name: repoName,
+      source_type: sourceType ?? 'git',
+      manifest_file: manifestFile,
     });
   }
 

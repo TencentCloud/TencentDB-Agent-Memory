@@ -6,7 +6,7 @@
  * 具体实现（如 GitSourceFetcher）依赖 simple-git，但该依赖不泄漏到本接口层。
  */
 
-export type SourceType = "git" | "local" | "ftp";
+export type SourceType = "git" | "local" | "ftp" | "repo-manifest";
 
 export interface FetchResult {
   /** 源码落盘的本地目录（绝对路径）。 */
@@ -17,6 +17,12 @@ export interface FetchResult {
   sourceType: SourceType;
 }
 
+/** 拉取/同步时的附加选项（按协议类型取用，其余忽略）。 */
+export interface FetchOptions {
+  /** repo-manifest 专用：manifest XML 文件路径（如 dev/main.xml）。 */
+  manifestFile?: string;
+}
+
 /**
  * 源码拉取器接口。实现者负责：
  *   1. 校验 sourceUrl 安全性（协议白名单、SSRF 等）
@@ -25,14 +31,25 @@ export interface FetchResult {
  *
  * 实现：
  *   - GitSourceFetcher：simple-git，第一版仅 public HTTPS（SSH/私有仓库鉴权见文档 005）
+ *   - RepoSourceFetcher：解析 repo manifest XML，按 project 逐个 clone 到同一目录树
  *   - LocalSourceFetcher / FtpSourceFetcher：未来扩展
  */
 export interface ISourceFetcher {
   /** 首次拉取：把源码下载到 localPath。 */
-  fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  fetch(
+    sourceUrl: string,
+    branch: string,
+    localPath: string,
+    options?: FetchOptions
+  ): Promise<FetchResult>;
 
   /** 增量同步：更新已存在的 localPath 到最新版本。 */
-  sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult>;
+  sync(
+    sourceUrl: string,
+    branch: string,
+    localPath: string,
+    options?: FetchOptions
+  ): Promise<FetchResult>;
 
   /** 校验 sourceUrl 是否合法（协议白名单 + SSRF 防护）。非法则 throw。 */
   validate(sourceUrl: string): void;

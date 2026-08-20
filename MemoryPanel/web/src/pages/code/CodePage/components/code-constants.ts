@@ -27,6 +27,12 @@ export function isValidGitHttpUrl(raw: string): boolean {
   return GIT_HTTP_URL_RE.test(raw.trim());
 }
 
+/** repo manifest 类型：manifests 仓库 URL 不需要 .git 后缀（如 .../manifests），只需合法 https 地址。 */
+const MANIFEST_HTTP_URL_RE = /^https?:\/\/[^\s/]+\.[^\s/]+\/[^\s]+$/i;
+export function isValidManifestUrl(raw: string): boolean {
+  return MANIFEST_HTTP_URL_RE.test(raw.trim());
+}
+
 /**
  * 从 Git URL 提取可读的仓库名称。
  *

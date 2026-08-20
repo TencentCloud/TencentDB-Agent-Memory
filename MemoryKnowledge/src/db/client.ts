@@ -56,6 +56,8 @@ export function migrate(_db: Db, raw: Database.Database): void {
       repo_name       TEXT NOT NULL DEFAULT '',
       repo_url        TEXT NOT NULL,
       branch          TEXT NOT NULL,
+      source_type     TEXT NOT NULL DEFAULT 'git',
+      manifest_file   TEXT,
       commit_hash     TEXT,
       owner_user_id   TEXT,
       user_id         TEXT,
@@ -156,8 +158,8 @@ export function migrate(_db: Db, raw: Database.Database): void {
   // so we check PRAGMA table_info first.
   addColumnIfMissing(raw, "knowledge_code_graph", "service_url", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph", "summary", "TEXT");
-  addColumnIfMissing(raw, "knowledge_wiki", "service_url", "TEXT");
-  addColumnIfMissing(raw, "knowledge_wiki", "summary", "TEXT");
+  addColumnIfMissing(raw, "knowledge_code_graph", "source_type", "TEXT NOT NULL DEFAULT 'git'");
+  addColumnIfMissing(raw, "knowledge_code_graph", "manifest_file", "TEXT");
   // service_id on audit tables is nullable → safe to add to existing dev DBs.
   addColumnIfMissing(raw, "knowledge_wiki_audit", "service_id", "TEXT");
   addColumnIfMissing(raw, "knowledge_code_graph_audit", "service_id", "TEXT");

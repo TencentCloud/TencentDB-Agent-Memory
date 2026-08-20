@@ -11,7 +11,7 @@
  */
 
 import simpleGit, { CleanOptions, ResetMode } from "simple-git";
-import type { ISourceFetcher, FetchResult, SourceType } from "./types.js";
+import type { ISourceFetcher, FetchResult, SourceType, FetchOptions } from "./types.js";
 
 /**
  * 内网 / 环回 / link-local 地址黑名单（标准网段）：
@@ -71,7 +71,12 @@ export class GitSourceFetcher implements ISourceFetcher {
     }
   }
 
-  async fetch(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  async fetch(
+    sourceUrl: string,
+    branch: string,
+    localPath: string,
+    _options?: FetchOptions,
+  ): Promise<FetchResult> {
     this.validate(sourceUrl);
     // 浅克隆单分支。注：git clone/fetch 不会拉取远端的 .git/hooks（hooks 是本地态），
     // 所以正常仓库 clone 出来不带可执行钩子；此处不再配置 core.hooksPath
@@ -84,7 +89,12 @@ export class GitSourceFetcher implements ISourceFetcher {
     return { localPath, version, sourceType: "git" };
   }
 
-  async sync(sourceUrl: string, branch: string, localPath: string): Promise<FetchResult> {
+  async sync(
+    sourceUrl: string,
+    branch: string,
+    localPath: string,
+    _options?: FetchOptions,
+  ): Promise<FetchResult> {
     this.validate(sourceUrl);
     const git = simpleGit(localPath);
     await git.fetch("origin", branch, { "--depth": 1 });
