@@ -21,6 +21,10 @@
  * Gateway
  * - Default endpoint: http://127.0.0.1:8420 (the memory-tencentdb Gateway sidecar).
  * - Override with the OPCODE_MEMORY_GATEWAY_URL environment variable.
+ * - Tenancy is supplied per request: team_id / agent_id / user_id go in the body,
+ *   while x-tdai-service-id goes in the header. `service_id` is an independent
+ *   setting (default "default"), overridable via OPCODE_MEMORY_SERVICE_ID — it is
+ *   NOT the same as agentId.
  * - API contract follows MemoryTencentdbSdkClient (MemoryCore/hermes-plugin/memory/memory_tencentdb/client.py):
  *   POST /v3/conversation/add and POST /v3/atomic/search.
  */
@@ -30,6 +34,7 @@ const DEFAULTS = {
   apiKey: "local",
   teamId: "default",
   agentId: "opencode",
+  serviceId: "default",
   userId: "default",
   timeoutMs: 10_000,
   captureRetries: 1,
@@ -47,6 +52,7 @@ export function loadConfig(env = process.env) {
     apiKey: env.OPCODE_MEMORY_API_KEY || DEFAULTS.apiKey,
     teamId: env.OPCODE_MEMORY_TEAM_ID || DEFAULTS.teamId,
     agentId: env.OPCODE_MEMORY_AGENT_ID || DEFAULTS.agentId,
+    serviceId: env.OPCODE_MEMORY_SERVICE_ID || DEFAULTS.serviceId,
     userId: env.OPCODE_MEMORY_USER_ID || DEFAULTS.userId,
     timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULTS.timeoutMs,
     captureRetries: DEFAULTS.captureRetries,
@@ -115,7 +121,7 @@ export async function gateway(cfg, path, body, { retries = 0 } = {}) {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${cfg.apiKey}`,
-          "x-tdai-service-id": cfg.agentId,
+          "x-tdai-service-id": cfg.serviceId,
         },
         body: JSON.stringify(body),
         signal: controller.signal,
