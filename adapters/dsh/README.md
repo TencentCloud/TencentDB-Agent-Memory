@@ -83,7 +83,7 @@ All configuration is environment-driven (evaluated in `cordis.patch.yml`):
 
 ## Testing
 
-Node's built-in test runner with a fake gateway (no stack or LLM needed) — 24 cases:
+Node's built-in test runner with a fake gateway (no stack or LLM needed) — 31 cases:
 
 ```bash
 cd adapters/dsh

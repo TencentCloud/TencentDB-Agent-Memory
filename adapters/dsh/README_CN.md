@@ -83,7 +83,7 @@ dsh plugin --profile host add ./adapters/dsh
 
 ## 测试
 
-基于 Node 内置 test runner 与假 gateway（无需服务或 LLM）—— 24 个用例：
+基于 Node 内置 test runner 与假 gateway（无需服务或 LLM）—— 31 个用例：
 
 ```bash
 cd adapters/dsh

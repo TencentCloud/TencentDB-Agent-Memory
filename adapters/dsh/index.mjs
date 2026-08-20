@@ -203,8 +203,10 @@ export function apply(ctx, config = {}) {
       try {
         await task
       } catch (error) {
-        // fail-open: the turn stays staged and is retried on the next flush.
+        // Fail-open: the turn stays staged and is retried on the next flush.
+        // Fail-closed: surface the error to the turn-stopping listener.
         log(`capture failed for turn ${turn}`, error)
+        if (!failOpen) throw error
       } finally {
         pending.delete(key)
       }

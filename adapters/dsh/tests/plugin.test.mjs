@@ -294,6 +294,151 @@ test('reject decisions and aborted signals skip recall', async () => {
   }
 })
 
+test('turn-stopping without a session id is a silent no-op', async () => {
+  const gw = new FakeGateway()
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url)
+    await ctx.emit('session/event', { id: 's-1' }, { type: 'turn/start', data: { turn: 1 } })
+    await ctx.emit('session/event', { id: 's-1' }, {
+      type: 'user/message',
+      data: { content: [{ type: 'text', text: 'q' }] },
+    })
+    await ctx.emit('agent/turn-stopping', {
+      agent: { session: { id: '' } }, // identity unresolved
+      turn: 1,
+      signal: new AbortController().signal,
+    })
+    assert.equal(gw.payloads('/capture').length, 0)
+  } finally {
+    await gw.close()
+  }
+})
+
+test('tool with missing query is rejected without a gateway call', async () => {
+  const gw = new FakeGateway()
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url)
+    const result = await ctx.tool('tdai_memory_search').execute({ limit: 5 })
+    assert.equal(result, 'query is required')
+    assert.equal(gw.payloads('/search/memories').length, 0)
+  } finally {
+    await gw.close()
+  }
+})
+
+test('tool limit is clamped into [1, 20]', async () => {
+  const gw = new FakeGateway()
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url)
+    await ctx.tool('tdai_memory_search').execute({ query: 'q', limit: 500 })
+    await ctx.tool('tdai_memory_search').execute({ query: 'q', limit: 0 })
+    const payloads = gw.payloads('/search/memories')
+    assert.deepEqual(payloads.map((p) => p.limit), [20, 5]) // 500→20, 0→default 5
+  } finally {
+    await gw.close()
+  }
+})
+
+test('recall failure raises when failOpen=false', async () => {
+  const gw = new FakeGateway()
+  gw.failRoutes.add('/recall')
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url, { failOpen: false })
+    await assert.rejects(() => drivePreStep(ctx))
+  } finally {
+    await gw.close()
+  }
+})
+
+test('capture failure raises when failOpen=false', async () => {
+  const gw = new FakeGateway()
+  gw.failRoutes.add('/capture')
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url, { failOpen: false })
+    // Stage one completed turn so the flush has work to fail on.
+    await ctx.emit('session/event', { id: 's-1' }, { type: 'turn/start', data: { turn: 1 } })
+    await ctx.emit('session/event', { id: 's-1' }, {
+      type: 'user/message',
+      data: { content: [{ type: 'text', text: 'q' }] },
+    })
+    await ctx.emit('session/event', { id: 's-1' }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'a' }] } },
+    })
+    await assert.rejects(() =>
+      ctx.emit('agent/turn-stopping', {
+        agent: fakeAgent('s-1'),
+        turn: 1,
+        signal: new AbortController().signal,
+      }))
+  } finally {
+    await gw.close()
+  }
+})
+
+test('oversized recall context is truncated to the text limit', async () => {
+  const gw = new FakeGateway()
+  gw.recallContext = 'x'.repeat(20000)
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url)
+    const decision = await drivePreStep(ctx)
+    const text = decision.messages[1].content[0].text
+    assert.ok(text.length < 12100) // 12000 limit + marker + ellipsis allowance
+    assert.ok(text.includes('…'))
+  } finally {
+    await gw.close()
+  }
+})
+
+test('staged turns are bounded to 16 per session under persistent outage', async () => {
+  const gw = new FakeGateway()
+  gw.failRoutes.add('/capture')
+  const url = await gw.listen()
+  try {
+    const ctx = makePlugin(url)
+    // Stage 20 completed turns while the gateway is down.
+    for (let turn = 1; turn <= 20; turn++) {
+      await ctx.emit('session/event', { id: 's-1' }, { type: 'turn/start', data: { turn } })
+      await ctx.emit('session/event', { id: 's-1' }, {
+        type: 'user/message',
+        data: { content: [{ type: 'text', text: `q${turn}` }] },
+      })
+      await ctx.emit('session/event', { id: 's-1' }, {
+        type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text: `a${turn}` }] } },
+      })
+      await ctx.emit('agent/turn-stopping', {
+        agent: fakeAgent('s-1'),
+        turn,
+        signal: new AbortController().signal,
+      })
+    }
+    gw.failRoutes.clear() // recover: only the most recent 16 turns retry
+    await ctx.emit('agent/turn-stopping', {
+      agent: fakeAgent('s-1'),
+      turn: 20,
+      signal: new AbortController().signal,
+    })
+    // Failed attempts during the outage also reached the gateway, so the
+    // retry batch is the LAST 16 capture requests (one per retained turn).
+    const all = gw.payloads('/capture')
+    const retried = all.slice(-16)
+    assert.equal(retried.length, 16)
+    assert.ok(retried.some((p) => p.user_content === 'q20')) // newest kept
+    assert.ok(!retried.some((p) => p.user_content === 'q1')) // oldest dropped
+    // And every retained turn was sent exactly once in the recovery batch.
+    assert.equal(new Set(retried.map((p) => p.user_content)).size, 16)
+  } finally {
+    await gw.close()
+  }
+})
+
 /** Drive the registered pre-step listener with a base enter decision. */
 async function drivePreStep(ctx) {
   const listeners = ctx.listeners.get('agent/pre-step')
