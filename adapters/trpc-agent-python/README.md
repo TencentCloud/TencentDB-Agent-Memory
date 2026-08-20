@@ -44,6 +44,14 @@ Identity follows the framework convention: the session's `save_key` (`{app}/{use
 
 ## Installation
 
+Install directly from this repository — no clone needed:
+
+```bash
+pip install "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git#subdirectory=adapters/trpc-agent-python"
+```
+
+From a local clone instead:
+
 ```bash
 pip install ./adapters/trpc-agent-python
 ```
