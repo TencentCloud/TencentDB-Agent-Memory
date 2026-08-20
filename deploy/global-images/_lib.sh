@@ -4,6 +4,14 @@
 
 set -euo pipefail
 
+# ── Windows / Git Bash (MSYS2) 兼容 ──────────────────────────────────────────
+# MSYS2 默认会把传给 Windows 程序（如 docker.exe）的 POSIX 风格路径（如
+# /data/config.yaml:ro）自动改写成 Windows 路径，导致 docker -v 挂载的目标路径
+# 被破坏（变成 \Git\data\config.yaml;ro 之类），容器内读不到挂载的配置文件。
+# 关闭该自动转换，让 -v 参数原样传给 docker。
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/.env}"
 
