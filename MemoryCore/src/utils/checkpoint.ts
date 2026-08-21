@@ -618,6 +618,7 @@ export class CheckpointManager {
     memoriesExtracted: number,
     cursorRecordedAtMs?: number,
     lastSceneName?: string,
+    options?: { countForPersona?: boolean },
   ): Promise<void> {
     let regressed = false;
     await this.mutate((cp) => {
@@ -639,7 +640,9 @@ export class CheckpointManager {
         state.last_scene_name = lastSceneName;
       }
       cp.total_memories_extracted += memoriesExtracted;
-      cp.memories_since_last_persona += memoriesExtracted;
+      if (options?.countForPersona !== false) {
+        cp.memories_since_last_persona += memoriesExtracted;
+      }
     });
     if (regressed) {
       this.logger.warn?.(
@@ -652,6 +655,23 @@ export class CheckpointManager {
       `[checkpoint] markL1ExtractionComplete session=${sessionKey}: ` +
       `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
       `lastScene="${lastSceneName ?? "(unchanged)"}"`,
+    );
+  }
+
+  /**
+   * Add newly extracted L1 memories to the profile-scoped persona counter.
+   *
+   * L1's cursor is session-scoped, while the L3 trigger is profile-scoped.
+   * Keeping this increment separate prevents a global checkpoint from being
+   * mistaken for the team+agent profile checkpoint during threshold checks.
+   */
+  async incrementMemoriesSinceLastPersona(memoriesExtracted: number): Promise<void> {
+    if (!Number.isFinite(memoriesExtracted) || memoriesExtracted <= 0) return;
+    await this.mutate((cp) => {
+      cp.memories_since_last_persona += memoriesExtracted;
+    });
+    this.logger.info(
+      `[checkpoint] incrementMemoriesSinceLastPersona extracted=${memoriesExtracted}`,
     );
   }
 
