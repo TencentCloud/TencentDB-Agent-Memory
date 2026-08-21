@@ -1,5 +1,5 @@
 /**
- * @tencentdb-agent-memory/pi-plugin — Pi coding-agent extension.
+ * @tencentdb-agent-memory/pi-tdai-client — Pi coding-agent extension.
  *
  * Routes Pi through the TDAI Memory Proxy. Config is env-only (Pi's
  * ExtensionAPI has no plugin config object). The extension carries only
