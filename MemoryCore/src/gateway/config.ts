@@ -444,15 +444,26 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   //             见 src/gateway/llm-resolver.ts 的 resolveEffectiveLlmConfig。
   const llmConfig = obj(fileConfig, "llm");
   const llmProxyConfig = obj(llmConfig, "proxy");
-  const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
+  // Hermes historically exposed MEMORY_TENCENTDB_LLM_* variables while the
+  // standalone Gateway used TDAI_LLM_*. Accept both names so the provider's
+  // child Gateway receives the credentials documented for its installation.
+  // The canonical TDAI_* variables win when both are present.
+  const rawLlmProvider =
+    env("TDAI_LLM_PROVIDER") ?? env("MEMORY_TENCENTDB_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
   const llm: StandaloneLLMConfig = {
-    baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
-    apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
-    model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
-    maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
-    timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    baseUrl:
+      env("TDAI_LLM_BASE_URL") ?? env("MEMORY_TENCENTDB_LLM_BASE_URL") ??
+      str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
+    apiKey: env("TDAI_LLM_API_KEY") ?? env("MEMORY_TENCENTDB_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
+    model: env("TDAI_LLM_MODEL") ?? env("MEMORY_TENCENTDB_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
+    maxTokens:
+      envInt("TDAI_LLM_MAX_TOKENS") ?? envInt("MEMORY_TENCENTDB_LLM_MAX_TOKENS") ??
+      num(llmConfig, "maxTokens") ?? 4096,
+    timeoutMs:
+      envInt("TDAI_LLM_TIMEOUT_MS") ?? envInt("MEMORY_TENCENTDB_LLM_TIMEOUT_MS") ??
+      num(llmConfig, "timeoutMs") ?? 120_000,
     provider: llmProvider,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
