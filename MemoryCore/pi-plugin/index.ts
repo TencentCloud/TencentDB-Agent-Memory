@@ -19,6 +19,24 @@ export default function (pi: ExtensionAPI) {
   const agentId = process.env.TDAI_AGENT_ID ?? "";
   const taskId = process.env.TDAI_TASK_ID ?? "";
 
+  // Fail fast at load: missing required identity surfaces a clear startup error
+  // naming the variable, rather than a confusing proxy-side 401/403 on first
+  // request with an empty Authorization / x-*-id.
+  const required: Record<string, string> = {
+    TDAI_USER_KEY: userKey,
+    TDAI_TEAM_ID: teamId,
+    TDAI_AGENT_ID: agentId,
+    TDAI_TASK_ID: taskId,
+  };
+  const missing = Object.keys(required).filter((k) => !required[k]);
+  if (missing.length > 0) {
+    throw new Error(
+      `pi-plugin: missing required env var(s): ${missing.join(", ")}. ` +
+        `Set TDAI_USER_KEY, TDAI_TEAM_ID, TDAI_AGENT_ID, TDAI_TASK_ID ` +
+        `(see MemoryCore/pi-plugin/README.md).`,
+    );
+  }
+
   // baseUrl MUST include /v1: the OpenAI-completions provider appends
   // /chat/completions but does NOT insert /v1. Including /v1 hits the
   // proxy's explicit /:agent/:spaceId/v1/chat/completions route.
