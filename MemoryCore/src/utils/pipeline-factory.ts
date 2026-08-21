@@ -387,6 +387,11 @@ export function createL1Runner(opts: {
   /** StorageAdapter for file operations (COS/local). */
   storage?: StorageAdapter;
   /**
+   * 可选：按 user_id 解析用户显示名（gateway 模式注入，查 metadata users）。
+   * 解析结果注入 L1 extraction prompt；未提供时沿用旧行为（prompt 兜底规则）。
+   */
+  resolveUserDisplayName?: (userId: string, instanceId?: string) => Promise<string | undefined>;
+  /**
    * 跨节点保护 checkpoint 读改写的分布式锁配置。
    * service 模式下必须提供，否则同 instance 的多节点并发会丢失 L1 游标。
    */
@@ -400,7 +405,7 @@ export function createL1Runner(opts: {
   hasFullBacklog: boolean;
   profileScopes: string[];
 }> {
-  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage, checkpointLock } = opts;
+  const { pluginDataDir, cfg, openclawConfig, vectorStore, embeddingService, logger, getInstanceId, llmRunner, storage, resolveUserDisplayName, checkpointLock } = opts;
   const config = openclawConfig as Record<string, unknown> | undefined;
 
   return async ({ sessionKey }) => {
@@ -591,6 +596,19 @@ export function createL1Runner(opts: {
           `${TAG} [l1] Group sessionId=${group.sessionId || "(empty)"}: ${group.messages.length} messages`,
         );
 
+        // 可选钩子必须失败安全：解析显示名只是 prompt 增强，任何异常都不能中断提取主流程。
+        // instanceId 来自本次 runner 调用不可变的 getInstanceId（service 多实例下不读共享可变状态）。
+        let userDisplayName: string | undefined;
+        if (resolveUserDisplayName) {
+          try {
+            userDisplayName = await resolveUserDisplayName(group.userId, getInstanceId?.());
+          } catch (err) {
+            logger.debug?.(
+              `${TAG} [l1] resolveUserDisplayName failed for ${group.userId}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
         const l1Result = await extractL1Memories({
           messages: group.messages,
           sessionKey,
@@ -599,6 +617,7 @@ export function createL1Runner(opts: {
           teamId: group.teamId,
           userId: group.userId,
           agentId: group.agentId,
+          userDisplayName,
           baseDir: pluginDataDir,
           config,
           options: {

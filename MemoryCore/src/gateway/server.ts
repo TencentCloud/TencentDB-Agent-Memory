@@ -405,6 +405,22 @@ export class TdaiGateway {
             });
         },
       },
+      // L1 提取注入权威用户显示名（issue #936）：查 metadata user 实体，查不到/异常
+      // 时回退 undefined → prompt 走「统一用『用户』」兜底规则，不影响提取主流程。
+      // instanceId 由 runner 显式传入（service 多实例下是每次任务的不可变值），
+      // 缺省回退构造时的 skillAssetInstanceId（standalone 固定 default）。
+      resolveUserDisplayName: async (userId: string, instanceId?: string) => {
+        try {
+          const metaSvc = await gatewayRef.ensureMetadataService(instanceId ?? skillAssetInstanceId);
+          const user = await metaSvc.getUserById(userId);
+          return user?.display_name || user?.username || undefined;
+        } catch (err) {
+          gatewayRef.logger.debug?.(
+            `[resolve-user-display-name] lookup failed for ${userId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return undefined;
+        }
+      },
     });
   }
 
@@ -2721,6 +2737,7 @@ export class TdaiGateway {
           store,
           embedding,
           storage ?? undefined,
+          instanceId,
           resolveCheckpointLock(instanceId),
         );
 

@@ -98,6 +98,11 @@ export async function extractL1Memories(params: {
   teamId?: string;
   userId?: string;
   agentId?: string;
+  /**
+   * 用户显示名（可选）。注入 extraction prompt，避免模型从消息文本猜测/编造称呼。
+   * 由上层按 userId 解析（gateway 查 metadata users）；未提供时 prompt 走兜底规则。
+   */
+  userDisplayName?: string;
   baseDir: string;
   config: unknown;
   options?: {
@@ -190,6 +195,7 @@ export async function extractL1Memories(params: {
       newMessages,
       backgroundMessages,
       previousSceneName: options.previousSceneName,
+      userDisplayName: params.userDisplayName,
       config,
       logger,
       model: options.model,
@@ -452,6 +458,8 @@ async function callLlmExtraction(params: {
   newMessages: ConversationMessage[];
   backgroundMessages: ConversationMessage[];
   previousSceneName?: string;
+  /** 用户显示名（可选）— 注入 system prompt，禁止模型猜测/编造称呼。 */
+  userDisplayName?: string;
   config: unknown;
   logger?: Logger;
   model?: string;
@@ -462,9 +470,12 @@ async function callLlmExtraction(params: {
   /** langfuse 上报身份四元组（team/user/agent/session）。 */
   traceContext?: TraceContext;
 }): Promise<SceneSegment[]> {
-  const { newMessages, backgroundMessages, previousSceneName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext } = params;
+  const { newMessages, backgroundMessages, previousSceneName, userDisplayName, config, logger, model, promptMode = "chat", memoryPrompt, llmRunner, traceContext } = params;
 
-  const systemPrompt = composeMemorySystemPrompt(getExtractMemoriesSystemPrompt(promptMode), memoryPrompt);
+  const systemPrompt = composeMemorySystemPrompt(
+    getExtractMemoriesSystemPrompt(promptMode, userDisplayName),
+    memoryPrompt,
+  );
   const userPrompt = formatExtractionPrompt({
     newMessages,
     backgroundMessages,
