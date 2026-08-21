@@ -1,0 +1,20 @@
+{
+  "name": "@tencentdb-agent-memory/pi-plugin",
+  "version": "0.1.0",
+  "description": "Pi coding-agent extension: routes Pi through the TDAI Memory Proxy with a dynamic per-session conversation id.",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tgz"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.2.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
