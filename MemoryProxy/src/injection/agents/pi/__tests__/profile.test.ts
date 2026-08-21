@@ -106,6 +106,8 @@ describe("PiProfile.applyAnchor()", () => {
     // MARKER should immediately follow the heading line (within the section)
     const afterHeading = rebuilt.slice(headingIdx, markerIdx);
     expect(afterHeading.length).toBeLessThan(rebuilt.length / 2);
+    // Surroundings preserved: stripping the marker line yields the un-injected rebuild.
+    expect(rebuilt.replace("MARKER\n", "")).toBe(rebuiltWithoutMarker());
   });
 
   it("inside_append: MARKER at the end of the Guidelines section", () => {
@@ -115,6 +117,8 @@ describe("PiProfile.applyAnchor()", () => {
     const headingIdx = rebuilt.indexOf("Guidelines:");
     const markerIdx = rebuilt.indexOf("MARKER");
     expect(markerIdx).toBeGreaterThan(headingIdx);
+    // Surroundings preserved.
+    expect(rebuilt.replace("\nMARKER", "")).toBe(rebuiltWithoutMarker());
   });
 
   it("preserves the Guidelines segment content on 'before'", () => {
@@ -122,6 +126,19 @@ describe("PiProfile.applyAnchor()", () => {
     const g = out.find((s) => s.key === "Guidelines");
     const gBase = baseSegments().find((s) => s.key === "Guidelines");
     expect(g!.rawText).toBe(gBase!.rawText);
+    // Surroundings preserved: the 'before' insertion adds "MARKER\n" before the section.
+    expect(profile.rebuild(out).replace("MARKER\n", "")).toBe(rebuiltWithoutMarker());
+  });
+
+  it("after: MARKER follows the section AND surroundings are preserved", () => {
+    const out = profile.applyAnchor(baseSegments(), { key: "Guidelines", relation: "after" }, "MARKER");
+    const rebuilt = profile.rebuild(out);
+    expect(rebuilt.split("MARKER").length - 1).toBe(1);
+    const headingIdx = rebuilt.indexOf("Guidelines:");
+    const markerIdx = rebuilt.indexOf("MARKER");
+    expect(markerIdx).toBeGreaterThan(headingIdx);
+    // Surroundings preserved: stripping the trailing marker line yields the un-injected rebuild.
+    expect(rebuilt.replace("\nMARKER", "")).toBe(rebuiltWithoutMarker());
   });
 
   it("degradation: anchoring to a missing key is a no-op (no throw, no insert, segments unchanged)", () => {
