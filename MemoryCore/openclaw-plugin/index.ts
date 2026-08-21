@@ -28,6 +28,12 @@ interface ServerConfig {
   agentId?: string;
   userId?: string;
   rejectUnauthorized?: boolean;
+  /**
+   * Optional per-agent isolation mapping: OpenClaw agent id → memory agentId.
+   * When an OpenClaw agent is not present in the mapping, fall back to the
+   * global `agentId` value above.
+   */
+  agentIdMapping?: Record<string, string>;
 }
 interface RecallConfig {
   maxResults?: number;
@@ -52,11 +58,45 @@ export default function register(api: any) {
   const capture = cfg.capture ?? {};
 
   const serverUrl = server.url || "http://127.0.0.1:8420";
-  const apiKey = server.apiKey || "local";
+  // apiKey may be a literal string, or already the materialized string value of a
+  // SecretRef at real gateway startup. Guard against an unresolved SecretRef
+  // object reaching register() (e.g. the CLI install-time load has no secrets runtime).
+  const apiKey = typeof server.apiKey === "string" ? server.apiKey : "local";
   const instanceId = server.instanceId || "default";
   const teamId = server.teamId || "default";
   const agentId = server.agentId || "default";
   const userId = server.userId || "default";
+  const agentIdMapping: Record<string, string> = server.agentIdMapping ?? {};
+
+  // Resolve the memory agentId for an OpenClaw agent: agentIdMapping wins, else
+  // fall back to the global `server.agentId`.
+  function effectiveAgentFor(openclawAgentId: string | undefined): string {
+    return (openclawAgentId && agentIdMapping[openclawAgentId]) || agentId;
+  }
+
+  // Return a client scoped to the effective memory agentId for the given OpenClaw
+  // agent, falling back to the global `agentId` when the agent is not mapped.
+  // Session scoping (when provided) is applied on top.
+  function scopedMemoryClient(openclawAgentId: string | undefined, sessionId: string | undefined): MemoryClient {
+    const effectiveAgentId = effectiveAgentFor(openclawAgentId);
+    const overrides: { agentId?: string; sessionId?: string } = {};
+    if (effectiveAgentId !== agentId) overrides.agentId = effectiveAgentId;
+    if (sessionId) overrides.sessionId = sessionId;
+    return Object.keys(overrides).length > 0 ? client.withIsolation(overrides) : client;
+  }
+
+  // toolCallId → effective memory agentId, recorded by before_tool_call (which
+  // has ctx.agentId). Tool execute handlers read their own toolCallId to scope.
+  const toolCallAgents = new Map<string, string>();
+
+  // Resolve a client scoped to the agent that currently owns the given tool call
+  // (as recorded by before_tool_call), falling back to the global agentId.
+  function scopedClientForTool(toolCallId: string | undefined): MemoryClient {
+    if (!toolCallId) return client;
+    const effAgent = toolCallAgents.get(toolCallId);
+    if (effAgent && effAgent !== agentId) return client.withIsolation({ agentId: effAgent });
+    return client;
+  }
   const recallMaxResults = recall.maxResults ?? 5;
   const includePersona = recall.includePersona !== false;
   const includeSceneNav = recall.includeSceneNav !== false;
@@ -109,8 +149,8 @@ export default function register(api: any) {
         },
         required: ["query"],
       },
-      async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleMemorySearch(client, params as any, api.logger);
+      async execute(toolCallId: string, params: Record<string, unknown>) {
+        return handleMemorySearch(scopedClientForTool(toolCallId), params as any, api.logger);
       },
     },
     { name: "tdai_memory_search" },
@@ -131,8 +171,8 @@ export default function register(api: any) {
         },
         required: ["query"],
       },
-      async execute(_toolCallId: string, params: Record<string, unknown>) {
-        return handleConversationSearch(client, params as any, api.logger);
+      async execute(toolCallId: string, params: Record<string, unknown>) {
+        return handleConversationSearch(scopedClientForTool(toolCallId), params as any, api.logger);
       },
     },
     { name: "tdai_conversation_search" },
@@ -190,10 +230,9 @@ export default function register(api: any) {
     }
 
     try {
-      // Scope L0/L1 recall to this session when sessionId is available
-      const sessionClient = ctx?.sessionId
-        ? client.withIsolation({ sessionId: ctx.sessionId })
-        : client;
+      // Scope recall to this OpenClaw agent (via agentIdMapping, fallback to
+      // global agentId) and session when available.
+      const sessionClient = scopedMemoryClient(ctx?.agentId, ctx?.sessionId);
 
       const result = await performRecall(sessionClient, {
         query: userText,
@@ -246,9 +285,9 @@ export default function register(api: any) {
       // or let it be overwritten on next before_prompt_build.
 
       try {
-        const sessionClient = ctx?.sessionId
-          ? client.withIsolation({ sessionId: ctx.sessionId })
-          : client;
+        // Scope capture to this OpenClaw agent (via agentIdMapping, fallback to
+        // global agentId) and session when available.
+        const sessionClient = scopedMemoryClient(ctx?.agentId, ctx?.sessionId);
 
         const result = await performCapture(
           sessionClient,
@@ -286,4 +325,19 @@ export default function register(api: any) {
   } else {
     api.logger.info?.(`${TAG} capture disabled by config`);
   }
+
+  // ── Per-agent tool scoping ─────────────────────────────────────────────
+  // OpenClaw does not surface the running agent to plugin tool `execute`
+  // handlers directly, so before_tool_call (which DOES receive ctx.agentId)
+  // records the effective agent keyed by toolCallId. The tool handlers read it
+  // via scopedClientForTool(...) to apply withIsolation({ agentId }). Fallback
+  // to the global agentId when not recorded.
+  api.on(
+    "before_tool_call",
+    (event: any, ctx: any) => {
+      const effAgent = effectiveAgentFor(ctx?.agentId);
+      if (event?.toolCallId) toolCallAgents.set(event.toolCallId, effAgent);
+    },
+    { matcher: ["tdai_memory_search", "tdai_conversation_search", "tdai_read_cos"] },
+  );
 }
