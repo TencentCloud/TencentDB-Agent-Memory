@@ -196,6 +196,7 @@ Anthropic Messages client:
 | `POST` | `/v3/instance/proxy-destroy` | ops endpoint: clear COS cache on instance destroy |
 | `GET/PUT/DELETE` | `/v3/admin/rate-limits` | query / modify per-instance × model TPM/QPM |
 | `GET`  | `/health` | runtime health check (includes `storage.effective`) |
+| `GET`  | `/models`, `/v1/models`, `/<agent>/<spaceId>/models` | OpenAI-compatible model discovery from `creditPricing.models` |
 | `GET`  | `/whoami` | API Key → keyId (plain text, handy with curl) |
 
 ## Configuration
