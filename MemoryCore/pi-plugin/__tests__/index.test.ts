@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Stub the env before importing the factory.
 const setters: Record<string, string> = {
@@ -16,13 +16,26 @@ describe("pi-plugin", () => {
   let registerProviderCalls: { name: string; cfg: any }[];
   let onCalls: { evt: string; h: any }[];
   let factory: any;
+  let originalEnv: Record<string, string | undefined> | undefined;
 
   beforeEach(async () => {
+    originalEnv = { ...process.env };
     for (const [k, v] of Object.entries(setters)) process.env[k] = v;
     registerProviderCalls = [];
     onCalls = [];
     vi.resetModules();
     factory = (await import("../index.js")).default;
+  });
+
+  afterEach(() => {
+    // Restore env so stubbed TDAI_* values never leak to later files in the
+    // test process (vitest worker isolation limits but does not prevent it).
+    if (originalEnv) {
+      for (const k of Object.keys(setters)) {
+        if (k in originalEnv) process.env[k] = originalEnv[k] as string;
+        else delete process.env[k];
+      }
+    }
   });
 
   it("registers a 'tdai' provider with /v1 baseUrl and static identity headers", () => {
@@ -70,5 +83,14 @@ describe("pi-plugin", () => {
     // tdai provider: must set
     hook(event, { model: { provider: "tdai" }, sessionManager: { getSessionId: () => "sess-123" } });
     expect(event.headers["x-conversation-id"]).toBe("pi-sess-123");
+  });
+
+  it("throws at load when a required env var is missing (fail fast)", async () => {
+    delete process.env.TDAI_TASK_ID;
+    vi.resetModules();
+    const failingFactory = (await import("../index.js")).default;
+    const api: any = { registerProvider: () => {}, on: () => {} };
+    expect(() => failingFactory(api)).toThrow(/TDAI_TASK_ID/);
+    expect(() => failingFactory(api)).toThrow(/pi-plugin: missing required/);
   });
 });
