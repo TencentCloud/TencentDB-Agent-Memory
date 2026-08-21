@@ -27,7 +27,10 @@
             "description": "Memory server URL"
           },
           "apiKey": {
-            "type": "string",
+            "type": [
+              "string",
+              "object"
+            ],
             "default": "local",
             "description": "API Key（Bearer）；local 模式可用 local"
           },
@@ -55,6 +58,13 @@
             "type": "boolean",
             "default": true,
             "description": "是否校验 HTTPS 证书。默认 true；仅自签证书测试环境需要显式设为 false"
+          },
+          "agentIdMapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "可选的按 OpenClaw agent id → memory agentId 隔离映射；未映射的 agent 回退到 server.agentId"
           }
         }
       },
@@ -90,6 +100,16 @@
           }
         }
       }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "server.apiKey",
+          "expected": "string"
+        }
+      ]
     }
   }
 }
