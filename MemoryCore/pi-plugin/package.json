@@ -1,9 +1,13 @@
 {
-  "name": "@tencentdb-agent-memory/pi-plugin",
+  "name": "@tencentdb-agent-memory/pi-tdai-client",
   "version": "0.1.0",
-  "description": "Pi coding-agent extension: routes Pi through the TDAI Memory Proxy with a dynamic per-session conversation id.",
+  "description": "Pi client for TencentDB Agent Memory v2 — routes Pi through the TDAI Memory Proxy for team memory (L3 persona, L2 scene index, L0 capture, on-demand L0/L1/L2 search).",
   "type": "module",
   "main": "index.ts",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["index.ts"]
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
