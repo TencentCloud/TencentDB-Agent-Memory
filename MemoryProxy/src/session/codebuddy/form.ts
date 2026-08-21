@@ -99,9 +99,17 @@ export interface FormData {
   taskPage?: number;
 }
 
+/** A single question rendered by the CodeBuddy `ask_followup_question` form. */
+export interface FollowupQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  multiSelect: boolean;
+}
+
 // ── Form Builder ───────────────────────────────────────────────────────────────
 
-function buildFollowupQuestionArgs(data: FormData): { title: string; questions: string } {
+function buildFollowupQuestionArgs(data: FormData): { title: string; questions: FollowupQuestion[] } {
   const { teams, stage, selectedTeamId, retry } = data;
 
   const title = retry
@@ -112,12 +120,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
         ? TEAM_FORM_TITLE
         : AGENT_TASK_FORM_TITLE;
 
-  const questions: Array<{
-    id: string;
-    question: string;
-    options: string[];
-    multiSelect: boolean;
-  }> = [];
+  const questions: FollowupQuestion[] = [];
 
   if (stage === "asset_confirm") {
     questions.push({
@@ -126,7 +129,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
       options: [ASSET_CONFIRM_YES, ASSET_CONFIRM_NO],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions };
   }
 
   if (stage === "team") {
@@ -138,7 +141,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
       ],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions };
   }
 
   // stage in { "agent_task" (CB one-shot), "agent_select" / "task_select"
@@ -146,7 +149,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   // codex form.ts 重渲染，不会调 CB `buildFollowupQuestionArgs`。分支保留
   // 是防御性兜底，让 CB fallback render 也能出合法结构。
   const team = teams.find((t) => t.team_id === selectedTeamId) ?? teams[0];
-  if (!team) return { title, questions: JSON.stringify(questions) };
+  if (!team) return { title, questions };
 
   const wantAgent = stage === "agent_task" || stage === "agent_select";
   const wantTask = stage === "agent_task" || stage === "task_select";
@@ -183,7 +186,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     }
   }
 
-  return { title, questions: JSON.stringify(questions) };
+  return { title, questions };
 }
 
 /**
@@ -221,7 +224,7 @@ function buildOpenAINonStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: FollowupQuestion[] },
 ): Response {
   return new Response(JSON.stringify({
     id,
@@ -255,7 +258,7 @@ function buildOpenAIStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: FollowupQuestion[] },
 ): Response {
   const encoder = new TextEncoder();
   const argsStr = JSON.stringify(args);
@@ -321,7 +324,7 @@ function buildAnthropicNonStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: FollowupQuestion[] },
 ): Response {
   return new Response(JSON.stringify({
     id: msgId,
@@ -346,7 +349,7 @@ function buildAnthropicStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: FollowupQuestion[] },
 ): Response {
   const encoder = new TextEncoder();
   const inputJson = JSON.stringify(args);
