@@ -98,6 +98,11 @@ export async function withL0Retry<T>(
  */
 function isRetryable(err: unknown): boolean {
   if (!err) return false;
+  const metadata = err as { retryable?: unknown; status?: unknown };
+  if (typeof metadata.retryable === "boolean") return metadata.retryable;
+  if (typeof metadata.status === "number") {
+    return metadata.status >= 500 || metadata.status === 408 || metadata.status === 429;
+  }
   const msg = err instanceof Error ? err.message : String(err);
   // 网络类：AbortError / ENOTFOUND / ECONNRESET / ETIMEDOUT / fetch failed
   if (/abort|econnreset|enotfound|etimedout|fetch failed|network|timeout/i.test(msg)) return true;
