@@ -1,4 +1,4 @@
-# @tencentdb-agent-memory/pi-plugin
+# @tencentdb-agent-memory/pi-tdai-client
 
 A [Pi](https://github.com/earendil-works/pi-coding-agent) extension that routes Pi
 through the [TencentDB Agent Memory v2](https://github.com/TencentCloud/TencentDB-Agent-Memory)
@@ -66,9 +66,13 @@ identity headers are wrong.
 - **Use the user's API key, not the admin key.** The proxy validates the
   `Authorization: Bearer` against the user's API key (panel → API Key). The
   admin/gateway key is for internal endpoints, not client routing.
-- **`x-task-id` is required.** Create a Task in the panel and link it to the
+- **`x-task-id` required.** Create a Task in the panel and link it to the
   Agent. Without all three of team + agent + task, session init falls back to
   an interactive flow Pi can't answer, and memory is bypassed.
+- **Missing env vars don't block Pi.** If a required env var is unset, the
+  extension logs a warning at load and skips registering the `tdai` provider —
+  Pi starts normally, just without the TDAI provider available. Set the vars
+  and restart Pi to enable it.
 - **Fall back to the CodeBuddy profile for debugging.** Set
   `TDAI_AGENT_SOURCE=codebuddy` to route through the existing, battle-tested
   CodeBuddy profile (injection still works; anchoring is coarser). Useful to

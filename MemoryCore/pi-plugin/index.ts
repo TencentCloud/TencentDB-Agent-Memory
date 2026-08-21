@@ -19,9 +19,9 @@ export default function (pi: ExtensionAPI) {
   const agentId = process.env.TDAI_AGENT_ID ?? "";
   const taskId = process.env.TDAI_TASK_ID ?? "";
 
-  // Fail fast at load: missing required identity surfaces a clear startup error
-  // naming the variable, rather than a confusing proxy-side 401/403 on first
-  // request with an empty Authorization / x-*-id.
+  // Graceful degradation: if required identity env vars are missing, warn and
+  // skip registration so Pi still starts. The user sees the warning at load
+  // and can fix the env. (A startup extension must not throw and block Pi.)
   const required: Record<string, string> = {
     TDAI_USER_KEY: userKey,
     TDAI_TEAM_ID: teamId,
@@ -30,11 +30,13 @@ export default function (pi: ExtensionAPI) {
   };
   const missing = Object.keys(required).filter((k) => !required[k]);
   if (missing.length > 0) {
-    throw new Error(
-      `pi-plugin: missing required env var(s): ${missing.join(", ")}. ` +
-        `Set TDAI_USER_KEY, TDAI_TEAM_ID, TDAI_AGENT_ID, TDAI_TASK_ID ` +
-        `(see MemoryCore/pi-plugin/README.md).`,
+    console.warn(
+      `[pi-tdai-client] Not registering the TDAI provider: missing required env var(s): ` +
+        `${missing.join(", ")}. Set TDAI_USER_KEY, TDAI_TEAM_ID, ` +
+        `TDAI_AGENT_ID, TDAI_TASK_ID (see MemoryCore/pi-plugin/README.md). ` +
+        `Pi will start without the TDAI provider.`,
     );
+    return;
   }
 
   // baseUrl MUST include /v1: the OpenAI-completions provider appends

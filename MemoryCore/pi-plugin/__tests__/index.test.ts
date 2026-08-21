@@ -85,12 +85,22 @@ describe("pi-plugin", () => {
     expect(event.headers["x-conversation-id"]).toBe("pi-sess-123");
   });
 
-  it("throws at load when a required env var is missing (fail fast)", async () => {
+  it("warns and skips registration when a required env var is missing (Pi still starts)", async () => {
     delete process.env.TDAI_TASK_ID;
     vi.resetModules();
     const failingFactory = (await import("../index.js")).default;
-    const api: any = { registerProvider: () => {}, on: () => {} };
-    expect(() => failingFactory(api)).toThrow(/TDAI_TASK_ID/);
-    expect(() => failingFactory(api)).toThrow(/pi-plugin: missing required/);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const registerProvider = vi.fn();
+    const on = vi.fn();
+    const api: any = { registerProvider, on };
+    // Must NOT throw — a startup extension must never block Pi from loading.
+    expect(() => failingFactory(api)).not.toThrow();
+    // Must NOT register the provider or hook when env is missing.
+    expect(registerProvider).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
+    // Must warn naming the missing var.
+    expect(warn.mock.calls[0]?.[0]).toMatch(/TDAI_TASK_ID/);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/pi-tdai-client/);
+    warn.mockRestore();
   });
 });
