@@ -59,6 +59,7 @@ import type {
 } from "../types.js";
 import { DEFAULT_PAGINATION } from "../pagination.js";
 import { buildChatMemoryAssetId } from "../utils/chat-memory-asset.js";
+import { DuplicateUserKeyError } from "./interface.js";
 
 const require = createRequire(import.meta.url);
 function requireNodeSqlite(): typeof import("node:sqlite") {
@@ -75,6 +76,12 @@ const PK_RETRY_LIMIT = 3;
 function isPkCollision(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /UNIQUE constraint failed: meta_\w+\.(user_id|team_id|agent_id|task_id|asset_id|acl_id|key_id)\b/.test(msg);
+}
+
+/** Returns true if the error is a SQLite UNIQUE constraint failure on meta_user_keys.key_value. */
+function isUserKeyValueCollision(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /UNIQUE constraint failed: meta_user_keys\.key_value\b/.test(msg);
 }
 
 function isStorePkCollision(err: unknown): boolean {
@@ -485,6 +492,11 @@ export class SqliteMetadataStore implements IMetadataStore {
         });
         return this.getUserById(userId)!;
       } catch (err) {
+        // 调用方显式指定 default_key_value 时命中 UNIQUE：翻译为业务错(HTTP 409)。
+        // 不 retry：随机 key_value 生成场景下 192bit 熵不可能碰撞，能到这里的只有显式指定。
+        if (isUserKeyValueCollision(err)) {
+          throw new DuplicateUserKeyError(defaultKeyValue);
+        }
         if (isPkCollision(err) && !input.user_id) continue;
         throw err;
       }

@@ -66,7 +66,35 @@ upstream:
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
+    # 注意：workbuddy / codebuddy / claude-code 等客户端不需要单独配 per-agent override，
+    # 它们的请求会自然落到外层 upstream.url + 鉴权走的 user_key，proxy 自动按 user_id
+    # 在内核拉取对应的 team/agent/task 上下文（不需要手动创建资源）。
+    # 用户资产（Team / Agent / Task / 用户授权）请在 MemoryPanel Web 面板里创建。
 
+
+# ──── 多客户端接入（workbuddy / codebuddy / claude-code 等） ───────────────────
+# MemoryProxy 不管理用户资产。Team / Agent / Task / 用户授权均在 MemoryPanel Web
+# 面板（端口 8123）创建。客户端接入流程：
+#
+#   1. 管理员在 MemoryPanel 里：
+#      - 创建 User，拿到 sk-mem-xxx 格式的 user_key
+#      - 创建 Team，把用户加为成员
+#      - 在 Team 下创建 Agent、Task
+#   2. 客户端配置（baseUrl 只需写到 {agent}/{spaceId}，客户端 SDK 自动拼接 API path）：
+#      - Base URL: http://<proxy-host>:8096/{agent}/{spaceId}
+#        例如: http://proxy.example.com:8096/workbuddy/mem-demo
+#              http://proxy.example.com:8080/codebuddy/default
+#      - API Key:  第 1 步拿到的 user_key（sk-mem-* 格式）
+#      - Model:    上游支持的模型名
+#   3. 客户端发第一条消息 → proxy 拦截 → verifyUserKey → listTeams → listAgents
+#      → listTasks → 交互式表单选择 team/agent/task → 注册 session → 每轮自动注入
+#      L2(agent) + L3(team) 记忆到 system prompt → 转发上游 LLM。
+#
+# 多用户天然隔离：listTeams(userId) 只返回该 user 所属的 team，listAgents
+# 按 user 维度二次过滤；不同 session_id 拥有独立的 session 状态机。
+#
+# 想跳过表单做联调：开启下方 debugForceIdentity / debugForceUserId（仅本地/E2E）。
+# 关闭后默认走完整表单交互，多用户场景下的标准生产路径。
 
 # ── 日志 ─────────────────────────────────────────────────────────────────────
 log:
@@ -485,6 +513,22 @@ sessionInit:
     agentHeader: "x-agent-id" # 携带 agent_id 的请求头名
     taskHeader: "x-task-id"  # 携带 task_id 的请求头名（可选）
     onMismatch: "form"       # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
+
+  # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
+  # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
+  # 的会话会**直接**注册为固定三元组，绕过所有表单/header 匹配逻辑；
+  # 生产环境务必保持注释状态。
+  # debugForceIdentity:
+  #   team_id: team-xxxxxxxxxx
+  #   agent_id: agt-xxxxxxxxxx
+  #   task_id: task-xxxxxxxxxx
+  # WorkBuddy 客户端的 auth/verify 没有真人身份 → 用下面这条把 userId 硬绑定到
+  # 一个真实的 kernel user_id（配合 upstream.agents.workbuddy.apiKey 中的
+  # x-tdai-user-key 用同一个 user 名下的 key）。生产环境保持注释。
+  # debugForceUserId: usr-xxxxxxxxxx
+  # 调试模式下输出详细诊断日志（请求 tools schema、system prompt 摘要等）。
+  # 仅本地/E2E 联调使用，生产环境务必保持 false 或不配置。默认关闭。
+  # debugVerboseLogging: false
 
 
 # ── TDAI Memory Gateway（core / openclaw-plugin） ────────────────────────────

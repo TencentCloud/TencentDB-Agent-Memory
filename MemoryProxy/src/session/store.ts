@@ -81,6 +81,16 @@ export class SessionStore {
   }
 
   /**
+   * 让 skill/memory bridge 拿到同一份 BindingRepo 实例。
+   *
+   * bridge L2 fallthrough 从这里拿 —— 保证 injection pipeline 装配时的 Kv/Redis
+   * 实例、单元测试注入的 mock 都能被 bridge 直接读到,不用重新构造。
+   */
+  getBindingRepo(): BindingRepo | undefined {
+    return this.bindingRepo;
+  }
+
+  /**
    * Associate a keyId with a full (userId, agentSource, sessionId) identity so
    * that later {@link set} / {@link delete} / {@link getOrRecover} calls can
    * route writes to `SessionRepo` / `BindingRepo` in the correct namespace.
@@ -153,17 +163,30 @@ export class SessionStore {
     // `await store.set(...)` return 时，L1 / L2a / L2b 三层都已 durable。
     // 每个 session 只会在初始化终态触发一次，成本可控。
     if (state.status === "initialized" && this.bindingRepo) {
+      // agentSource / userKey 现在存进 binding 内部字段(不再在 key 里),
+      // 让 bridge 只凭 (spaceId, sessionId) 就能反查回完整身份。
+      // 见 docs/design/2026-08-03-binding-flatten.md。
       const binding: SessionBinding = state.bypassed
-        ? { outcome: "bypassed", userId: state.userId, teamId: state.sessionInfo?.team_id, agentId: state.sessionInfo?.agent_id, taskId: state.sessionInfo?.task_id }
+        ? {
+            outcome: "bypassed",
+            userId: state.userId,
+            teamId: state.sessionInfo?.team_id,
+            agentId: state.sessionInfo?.agent_id,
+            taskId: state.sessionInfo?.task_id,
+            agentSource: id.agentSource,
+            userKey: state.sessionInfo?.user_key,
+          }
         : {
             outcome: "initialized",
             userId: state.sessionInfo?.user_id || state.userId,
             teamId: state.sessionInfo?.team_id,
             agentId: state.sessionInfo?.agent_id,
             taskId: state.sessionInfo?.task_id,
+            agentSource: id.agentSource,
+            userKey: state.sessionInfo?.user_key,
           };
       try {
-        await this.bindingRepo.putBinding(spaceOf(id), id.userId, id.agentSource, id.sessionId, binding);
+        await this.bindingRepo.putBinding(spaceOf(id), id.sessionId, binding);
       } catch (err) {
         console.warn(
           `[session] L2b binding write failed for ${keyId}: ` +
@@ -179,7 +202,7 @@ export class SessionStore {
     if (!id) return;
     this.repo?.deleteBySessionId(spaceOf(id), id.userId, id.agentSource, id.sessionId);
     void this.bindingRepo
-      ?.deleteBinding(spaceOf(id), id.userId, id.agentSource, id.sessionId)
+      ?.deleteBinding(spaceOf(id), id.sessionId)
       .catch(() => {});
   }
 
@@ -317,12 +340,7 @@ export class SessionStore {
     }
     let binding: SessionBinding | null;
     try {
-      binding = await this.bindingRepo.getBinding(
-        spaceOf(identity),
-        identity.userId,
-        identity.agentSource,
-        identity.sessionId,
-      );
+      binding = await this.bindingRepo.getBinding(spaceOf(identity), identity.sessionId);
     } catch {
       binding = null;
     }
@@ -334,7 +352,7 @@ export class SessionStore {
 
     // Async touch (refresh 30d TTL, don't await)
     void this.bindingRepo
-      .touchLastSeen(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId)
+      .touchLastSeen(spaceOf(identity), identity.sessionId)
       .catch(() => {});
 
     // Step 3.1: bypassed outcome → construct bypass state
@@ -384,10 +402,20 @@ export class SessionStore {
         identity.agentSource,
         identity.sessionId,
       );
-    } catch {
+    } catch (err) {
+      // 诊断: probeL2a 报错时也 log，之前静默吞掉导致多节点 L2 miss 无迹可循
+      console.log(
+        `[cache] session=${keyId} L2a probe error space=${spaceOf(identity)} user=${identity.userId} src=${identity.agentSource} sid=${identity.sessionId}: ${(err as Error).message}`,
+      );
       return undefined;
     }
-    if (!row) return undefined;
+    if (!row) {
+      // 诊断: 打出实际用来查的 4 段, 方便对着 COS 里的 key 手工比对
+      console.log(
+        `[cache] session=${keyId} L2a miss space=${spaceOf(identity)} user=${identity.userId} src=${identity.agentSource} sid=${identity.sessionId}`,
+      );
+      return undefined;
+    }
 
     // Zombie guard: pending forms past ttl are dropped (mirrors get()'s
     // in-memory ttl policy). Only pending — initialized sessions have no
@@ -452,7 +480,7 @@ export class SessionStore {
     // Step 4.1: user mismatch → invalidate binding
     if (binding.userId && identity.userId && binding.userId !== identity.userId) {
       console.log(`[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), invalidating`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId);
+      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
       return undefined;
     }
 
@@ -510,7 +538,7 @@ export class SessionStore {
     // Step 4.3: dispatch
     if (agentNotFound) {
       console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.userId, identity.agentSource, identity.sessionId);
+      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
       return undefined;
     }
     if (anyKernelError) {
@@ -527,8 +555,6 @@ export class SessionStore {
       // Update binding to drop taskId
       await this.bindingRepo?.putBinding(
         spaceOf(identity),
-        identity.userId,
-        identity.agentSource,
         identity.sessionId,
         { ...binding, taskId: undefined },
       );
@@ -536,12 +562,17 @@ export class SessionStore {
     }
 
     // Step 4.4: construct rebuilt state
+    // user_key / space_id 从 binding 恢复(2 段拍平后 binding 里也存了),
+    // 让 bridge L2 fallthrough 恢复出的 SessionInfo 字段完整,memory-bridge
+    // 恢复 chat_memory 检索时不再降级为 self-only。
     const sessionInfo: SessionInfo = {
       session_id: identity.sessionId,
       user_id: binding.userId || identity.userId,
       team_id: binding.teamId || "",
       agent_id: binding.agentId || "",
       task_id: taskDetail ? binding.taskId : undefined,
+      user_key: binding.userKey,
+      space_id: identity.spaceId,
       created_at: new Date().toISOString(),
     };
 
@@ -596,13 +627,36 @@ export class SessionStore {
     const messages = ctx.messages ?? [];
     if (messages.length === 0) return undefined;
 
-    // Count user messages and check for assistant/tool existence
+    // Count user messages and check for assistant/tool existence.
+    // dsh (deepseek-harness) 首帧 body 里塞 3 条**非用户输入**的 role=user 元数据:
+    //   - <system-reminder> 工作区指令
+    //   - "Current runtime context." 快照
+    //   - <available_skills> 列表
+    // 若原样计数 userCount>1 会把 dsh 首帧误判为"有历史",触发 markerless
+    // one-shot bypass,session-init form 永远不弹。这里跳过 dsh 元数据 user 消息,
+    // 只计"真用户输入"。见 docs/dsh-recon/2026-08-14-dsh-capture-analysis.md §2.3。
     let userCount = 0;
     let hasAssistantOrTool = false;
     for (const m of messages) {
       const role = (m.role as string) ?? "";
-      if (role === "user") userCount++;
-      if (role === "assistant" || role === "tool") hasAssistantOrTool = true;
+      if (role === "assistant" || role === "tool") {
+        hasAssistantOrTool = true;
+        continue;
+      }
+      if (role !== "user") continue;
+      // dsh 元数据签名:content 是 str 且以已知锚点开头(dsh 内部固定文本)。
+      // 只在有明确签名时跳过,避免误伤客户端真用户输入。
+      const c = (m as { content?: unknown }).content;
+      if (typeof c === "string") {
+        if (
+          c.startsWith("<system-reminder>") ||
+          c.startsWith("Current runtime context.") ||
+          c.startsWith("<system-reminder>\nA skill is a reusable")
+        ) {
+          continue;
+        }
+      }
+      userCount++;
     }
 
     // Truly fresh: only one user message, no conversation yet

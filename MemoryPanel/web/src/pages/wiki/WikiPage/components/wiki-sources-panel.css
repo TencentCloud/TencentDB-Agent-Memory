@@ -49,6 +49,46 @@
   gap: 12px;
 }
 
+/* Wiki 列表骨架屏（首屏加载时展示占位卡片，风格与工作台/AgentGrid 骨架一致） */
+._asset-wiki-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+._asset-wiki-skeleton-card {
+  min-height: 160px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-container-default);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+._asset-wiki-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-tertiary-default) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _asset-wiki-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+._asset-wiki-skeleton-line--title { width: 50%; height: 16px; }
+._asset-wiki-skeleton-line--desc { width: 80%; }
+._asset-wiki-skeleton-line--meta { width: 60%; }
+
+@keyframes _asset-wiki-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 ._asset-wiki-card {
   display: flex;
   min-width: 0;
@@ -62,12 +102,14 @@
   cursor: pointer;
   transition:
     background-color 0.15s ease-in-out,
-    border-color 0.15s ease-in-out;
+    border-color 0.15s ease-in-out,
+    box-shadow 0.15s ease-in-out;
 }
 
 ._asset-wiki-card:hover {
   border-color: var(--tea-color-border-brand-default);
   background: var(--tea-color-bg-primary-hover);
+  box-shadow: var(--tea-shadow-sm);
 }
 
 ._asset-wiki-card-head,
@@ -194,7 +236,16 @@
   gap: 8px;
   margin-bottom: 12px;
   color: var(--tea-color-text-tertiary);
-  font-size: 13px;
+  font-size: 12px;
+}
+
+._wiki-detail-breadcrumb-sep {
+  color: var(--tea-color-text-disabled);
+}
+
+._wiki-detail-breadcrumb-current {
+  color: var(--tea-color-text-primary);
+  font-weight: 500;
 }
 
 ._wiki-detail-breadcrumb .tea-btn {
@@ -216,13 +267,21 @@
 }
 
 ._wiki-detail-header-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 ._wiki-detail-title {
   color: var(--tea-color-text-primary);
-  font-size: 16px;
+  font-size: 20px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 ._wiki-detail-header-actions {
@@ -765,6 +824,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* 多选上传大量文档时，列表在容器内滚动，避免撑高整个对话框/页面 */
+  max-height: 240px;
+  overflow-y: auto;
 }
 
 ._wiki-detail-upload-file {
@@ -841,6 +903,7 @@
 
 @media (max-width: 640px) {
   ._asset-wiki-grid,
+  ._asset-wiki-skeleton-grid,
   ._asset-wiki-stats,
   ._wiki-detail-overview-stats {
     grid-template-columns: minmax(0, 1fr);

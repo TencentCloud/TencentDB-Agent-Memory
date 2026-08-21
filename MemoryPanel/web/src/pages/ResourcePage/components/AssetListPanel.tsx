@@ -56,9 +56,7 @@ export function AssetListPanel<T>({
     <div className="_alp">
       <div className="_alp-header">
         <span className="_alp-title">{title}</span>
-        {!loading && count != null && (
-          <span className="_alp-count">{count}</span>
-        )}
+        {!loading && count != null && <span className="_alp-count">{count}</span>}
       </div>
 
       {loading ? (
@@ -122,6 +120,15 @@ export function AssetItemName({ children, title }: { children: ReactNode; title?
   );
 }
 
+/** 资产真实 id —— 弱化展示，附在名称旁，便于识别 ID 化命名的资产（name + id 组合） */
+export function AssetItemId({ children }: { children: ReactNode }) {
+  return (
+    <span className="_alp-item-id" title={typeof children === 'string' ? children : undefined}>
+      {children}
+    </span>
+  );
+}
+
 /** 描述文本（2 行截断） */
 export function AssetItemDesc({ children }: { children: ReactNode }) {
   return <p className="_alp-item-desc">{children}</p>;
@@ -133,7 +140,15 @@ export function AssetItemBadges({ children }: { children: ReactNode }) {
 }
 
 /** 纯文本徽章 — 替代亮色 Tag */
-export function AssetBadge({ icon, children, title }: { icon?: ReactNode; children: ReactNode; title?: string }) {
+export function AssetBadge({
+  icon,
+  children,
+  title,
+}: {
+  icon?: ReactNode;
+  children: ReactNode;
+  title?: string;
+}) {
   return (
     <span className="_alp-badge" title={title}>
       {icon}

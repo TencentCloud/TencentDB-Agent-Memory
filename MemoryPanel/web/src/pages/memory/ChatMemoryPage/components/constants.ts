@@ -14,11 +14,8 @@ export function useLayers(): LayerMeta[] {
 export function useScopeTabLabels(): Record<ScopeTab, string> {
   const { t } = useTranslation();
   return {
-    all: t('memory.scope.all'),
     team: t('memory.scope.team'),
     fixed: t('memory.scope.fixed'),
-    scope: t('memory.scope.scope'),
-    personal: t('memory.scope.personal'),
   };
 }
 
@@ -28,11 +25,8 @@ import i18n from '@/i18n';
 export const SCOPE_TAB_LABELS: Record<ScopeTab, string> = new Proxy({} as Record<ScopeTab, string>, {
   get(_target, prop: string) {
     const map: Record<string, string> = {
-      all: 'memory.scope.all',
       team: 'memory.scope.team',
       fixed: 'memory.scope.fixed',
-      scope: 'memory.scope.scope',
-      personal: 'memory.scope.personal',
     };
     const key = map[prop];
     return key ? i18n.t(key) : prop;

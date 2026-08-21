@@ -11,6 +11,8 @@
 
 /* ===== 面板容器 ===== */
 ._alp {
+  /* 撑满左栏高度（外层 _asset-split-sidebar 已限定视口高度），内容少也不留空 */
+  height: 100%;
   min-height: 480px;
   padding: 16px;
   border: 1px solid var(--tea-color-border-primary-default);
@@ -58,9 +60,10 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 640px;
-  overflow-y: auto;
+  /* 撑满卡片剩余高度并内部滚动（高度由外层 _alp 的 100% 约束），不再用固定 max-height */
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* ===== 空态 ===== */
@@ -167,6 +170,19 @@
   flex: 1;
 }
 
+/* 资产真实 id：弱化展示，附在名称旁（name + id 组合） */
+._alp-item-id {
+  flex-shrink: 0;
+  max-width: 45%;
+  font-size: 11px;
+  font-weight: 400;
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 描述：2 行截断 */
 ._alp-item-desc {
   margin: 4px 0 0;
@@ -224,11 +240,14 @@
 ._alp-item-time {
   margin-left: auto;
   white-space: nowrap;
+  /* 独立声明字号颜色，不再依赖 _alp-item-meta 行继承，保证放哪都统一 */
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
 }
 
 /* 等宽字体（user_id / agent_id 等唯一标识） */
 ._alp-mono {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-secondary);
 }
 

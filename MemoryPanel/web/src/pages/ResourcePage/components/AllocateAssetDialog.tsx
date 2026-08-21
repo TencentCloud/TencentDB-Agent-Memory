@@ -1,9 +1,6 @@
 /**
  * AllocateAssetDialog — 通用「资产分配到 Agent」弹窗。
  *
- * Tea 组件重构版：底层复用 `./Modal`（Tea Modal），Agent 选择器换成 Tea `Select`，
- * 错误/成功提示换成 Tea `Alert`。
- *
  * 与 AllocateSkillDialog 视觉对齐，但不限于 skill：用 assetType + assetLabel
  * 参数化标题，支持 wiki / code_graph / chat_memory 等任何挂载到 agent 固定
  * 资产的场景。

@@ -10,10 +10,11 @@ type JsonObject = Record<string, unknown>;
 
 type Role = "user" | "assistant";
 
-interface MemoryMessage {
+export interface MemoryMessage {
   role: Role;
   content: string;
   timestamp: string;
+  recordedAt?: string;
 }
 
 interface OpikProject {
@@ -59,6 +60,8 @@ interface CliOptions {
   serviceId: string;
   pageSize: number;
   maxTraces: number;
+  maxSessionMessages: number;
+  largeSessionStrategy: "tail" | "error";
   stateFile: string;
   resume: boolean;
   dryRun: boolean;
@@ -95,6 +98,10 @@ function usage(): string {
   --project <name>       只导入指定项目；可重复或逗号分隔，默认全部项目
   --page-size <n>        Opik 每页数量，默认 100
   --max-traces <n>       本次最多处理 Trace 数，0 表示不限，默认 0
+  --max-session-messages <n>
+                         单个目标 Session 最多导入的 L0 消息数，默认 40000；0 禁用保护
+  --large-session-strategy <tail|error>
+                         超限时仅导入去重后的末尾消息，或直接报错；默认 tail
 
 Memory Core：
   --memory-url <url>     Gateway 地址，默认 MEMORY_CORE_URL 或 http://127.0.0.1:8420
@@ -187,6 +194,8 @@ function parseCli(argv: string[]): CliOptions {
       "service-id": { type: "string" },
       "page-size": { type: "string" },
       "max-traces": { type: "string" },
+      "max-session-messages": { type: "string" },
+      "large-session-strategy": { type: "string" },
       "state-file": { type: "string" },
       "no-resume": { type: "boolean" },
       "dry-run": { type: "boolean" },
@@ -213,6 +222,10 @@ function parseCli(argv: string[]): CliOptions {
   const projectValues = (values.project as string[] | undefined) ?? [];
   const projects = projectValues.flatMap((item) => item.split(",")).map((item) => item.trim()).filter(Boolean);
   const dryRun = Boolean(values["dry-run"]);
+  const largeSessionStrategy = (values["large-session-strategy"] as string | undefined) ?? "tail";
+  if (largeSessionStrategy !== "tail" && largeSessionStrategy !== "error") {
+    throw new Error("--large-session-strategy 必须是 tail 或 error");
+  }
 
   if (!dryRun) required(process.env.MEMORY_CORE_API_KEY, "MEMORY_CORE_API_KEY");
 
@@ -228,6 +241,8 @@ function parseCli(argv: string[]): CliOptions {
     serviceId: required((values["service-id"] as string | undefined) ?? process.env.MEMORY_CORE_SERVICE_ID, "--service-id 或 MEMORY_CORE_SERVICE_ID"),
     pageSize: parsePositiveInt(values["page-size"] as string | undefined, 100, "--page-size"),
     maxTraces: parsePositiveInt(values["max-traces"] as string | undefined, 0, "--max-traces", true),
+    maxSessionMessages: parsePositiveInt(values["max-session-messages"] as string | undefined, 40_000, "--max-session-messages", true),
+    largeSessionStrategy,
     stateFile: resolvePath((values["state-file"] as string | undefined) ?? ".opik-memory-import-state.json"),
     resume: !values["no-resume"],
     dryRun,
@@ -352,16 +367,39 @@ function extractPrompt(value: unknown, keys: string[]): string | undefined {
   return contentToText(value);
 }
 
-function mergeMessages(input: MemoryMessage[], output: MemoryMessage[]): MemoryMessage[] {
-  const same = (a: MemoryMessage, b: MemoryMessage): boolean => a.role === b.role && a.content === b.content;
-  const maxOverlap = Math.min(input.length, output.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap--) {
-    const inputStart = input.length - overlap;
-    if (output.slice(0, overlap).every((message, index) => same(message, input[inputStart + index]!))) {
-      return [...input, ...output.slice(overlap)];
-    }
+function messageIdentity(message: MemoryMessage): string {
+  return `${message.role}\u0000${message.content}`;
+}
+
+function startsWithMessages(messages: MemoryMessage[], prefix: MemoryMessage[]): boolean {
+  return prefix.length <= messages.length
+    && prefix.every((message, index) => messageIdentity(message) === messageIdentity(messages[index]!));
+}
+
+export function mergeMessages(input: MemoryMessage[], output: MemoryMessage[]): MemoryMessage[] {
+  if (input.length === 0) return [...output];
+  if (output.length === 0) return [...input];
+  if (startsWithMessages(output, input)) return [...input, ...output.slice(input.length)];
+  if (startsWithMessages(input, output)) return [...input];
+
+  const pattern = output.map(messageIdentity);
+  const prefixTable = new Array<number>(pattern.length).fill(0);
+  for (let index = 1, matched = 0; index < pattern.length; index++) {
+    while (matched > 0 && pattern[index] !== pattern[matched]) matched = prefixTable[matched - 1]!;
+    if (pattern[index] === pattern[matched]) matched++;
+    prefixTable[index] = matched;
   }
-  return [...input, ...output];
+
+  let overlap = 0;
+  // 重叠不可能超过 output 长度；只扫描 input 尾部，避免大量独立 Trace 时退化为 O(n²)。
+  const inputStart = Math.max(0, input.length - output.length);
+  for (let index = inputStart; index < input.length; index++) {
+    const identity = messageIdentity(input[index]!);
+    while (overlap > 0 && identity !== pattern[overlap]) overlap = prefixTable[overlap - 1]!;
+    if (identity === pattern[overlap]) overlap++;
+    if (overlap === pattern.length && index < input.length - 1) overlap = prefixTable[overlap - 1]!;
+  }
+  return [...input, ...output.slice(overlap)];
 }
 
 function bestMessageArray(value: unknown, fallbackTimestamp: string, includeSystem: boolean): MemoryMessage[] {
@@ -392,6 +430,17 @@ function chunk<T>(items: T[], size: number): T[][] {
   return chunks;
 }
 
+export function assignMonotonicRecordedAt(messages: MemoryMessage[]): MemoryMessage[] {
+  let previousMs = -1;
+  return messages.map((message) => {
+    const parsedMs = Date.parse(message.timestamp);
+    const candidateMs = Number.isFinite(parsedMs) ? parsedMs : previousMs + 1;
+    const recordedAtMs = Math.max(candidateMs, previousMs + 1);
+    previousMs = recordedAtMs;
+    return { ...message, recordedAt: new Date(recordedAtMs).toISOString() };
+  });
+}
+
 function stableHash(value: unknown, length = 20): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, length);
 }
@@ -400,6 +449,64 @@ function buildSessionId(project: OpikProject, trace: OpikTrace): string {
   const source = trace.thread_id?.trim() || trace.id;
   const readable = source.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 48) || "trace";
   return `opik:${project.id}:${readable}:${stableHash(source, 12)}`;
+}
+
+export interface TraceImportEntry {
+  traceId: string;
+  sessionId: string;
+  messages: MemoryMessage[];
+}
+
+export interface LargeSessionPlan {
+  sourceSessionId: string;
+  targetSessionId: string;
+  traceIds: string[];
+  sourceMessageCount: number;
+  uniqueMessageCount: number;
+  droppedMessageCount: number;
+  messages: MemoryMessage[];
+}
+
+export function buildLargeSessionPlans(
+  entries: TraceImportEntry[],
+  maxSessionMessages: number,
+  strategy: "tail" | "error",
+): LargeSessionPlan[] {
+  if (maxSessionMessages === 0) return [];
+  const grouped = new Map<string, TraceImportEntry[]>();
+  for (const entry of entries) {
+    const group = grouped.get(entry.sessionId) ?? [];
+    group.push(entry);
+    grouped.set(entry.sessionId, group);
+  }
+
+  const plans: LargeSessionPlan[] = [];
+  for (const [sourceSessionId, group] of grouped) {
+    const sourceMessageCount = group.reduce((total, entry) => total + entry.messages.length, 0);
+    if (sourceMessageCount <= maxSessionMessages) continue;
+
+    let uniqueMessages: MemoryMessage[] = [];
+    for (const entry of group) uniqueMessages = mergeMessages(uniqueMessages, entry.messages);
+    if (strategy === "error") {
+      throw new Error(
+        `Session ${sourceSessionId} 预计写入 ${sourceMessageCount} 条 L0（跨 Trace 去重后 ${uniqueMessages.length} 条），`
+        + `超过安全上限 ${maxSessionMessages}`,
+      );
+    }
+
+    const tailMessages = uniqueMessages.slice(-maxSessionMessages);
+    const snapshotHash = stableHash(tailMessages.map((message) => [message.role, message.content, message.timestamp]), 8);
+    plans.push({
+      sourceSessionId,
+      targetSessionId: `${sourceSessionId}:t${maxSessionMessages}:${snapshotHash}`,
+      traceIds: group.map((entry) => entry.traceId),
+      sourceMessageCount,
+      uniqueMessageCount: uniqueMessages.length,
+      droppedMessageCount: Math.max(0, uniqueMessages.length - tailMessages.length),
+      messages: assignMonotonicRecordedAt(tailMessages),
+    });
+  }
+  return plans;
 }
 
 function loadState(path: string, resume: boolean): ImportState {
@@ -543,7 +650,12 @@ class MemoryCoreClient {
       user_id: this.opts.userId,
       ...(this.opts.taskId ? { task_id: this.opts.taskId } : {}),
       session_id: sessionId,
-      messages,
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+        recorded_at: message.recordedAt ?? message.timestamp,
+      })),
     });
     return response.data?.accepted_ids?.length ?? response.data?.total_count ?? 0;
   }
@@ -593,46 +705,96 @@ async function main(): Promise<void> {
   let importedMessages = 0;
   let writeCount = 0;
 
-  outer: for (const project of selected) {
+  for (const project of selected) {
     const traces = await opik.traces(project);
-    console.log(`[project] ${project.name} (${project.id}) traces=${traces.length}`);
-    for (const trace of traces) {
-      if (opts.maxTraces > 0 && seenTraces >= opts.maxTraces) break outer;
-      seenTraces++;
+    const remainingTraceCount = opts.maxTraces > 0 ? Math.max(0, opts.maxTraces - seenTraces) : traces.length;
+    const selectedTraces = traces.slice(0, remainingTraceCount);
+    if (selectedTraces.length === 0) {
+      if (opts.maxTraces > 0 && seenTraces >= opts.maxTraces) break;
+      continue;
+    }
+    seenTraces += selectedTraces.length;
+    console.log(`[project] ${project.name} (${project.id}) traces=${traces.length} selected=${selectedTraces.length}`);
+
+    const entries: TraceImportEntry[] = [];
+    for (const trace of selectedTraces) {
       const messages = extractMessages(trace, opts.includeSystem);
       if (messages.length === 0) {
         skippedTraces++;
         console.warn(`[skip] project=${project.name} trace=${trace.id} 原始 input/output 中没有可导入对话`);
         continue;
       }
+      entries.push({ traceId: trace.id, sessionId: buildSessionId(project, trace), messages });
+    }
 
-      const batches = chunk(messages, MAX_MESSAGES_PER_REQUEST);
-      const sessionId = buildSessionId(project, trace);
-      let wroteTrace = false;
+    const largeSessionPlans = buildLargeSessionPlans(entries, opts.maxSessionMessages, opts.largeSessionStrategy);
+    const largeSessionIds = new Set(largeSessionPlans.map((plan) => plan.sourceSessionId));
+
+    // 超大 Session 先写去重后的最新尾部，且写入独立快照 Session，避免单 Session 超过 L1 安全阈值。
+    for (const plan of largeSessionPlans) {
+      console.warn(
+        `[large-session] source=${plan.sourceSessionId} target=${plan.targetSessionId} traces=${plan.traceIds.length} `
+        + `projected=${plan.sourceMessageCount} unique=${plan.uniqueMessageCount} kept=${plan.messages.length} dropped=${plan.droppedMessageCount}`,
+      );
+      const batches = chunk(plan.messages, MAX_MESSAGES_PER_REQUEST);
+      let wrotePlan = false;
       for (let index = 0; index < batches.length; index++) {
         const batch = batches[index]!;
-        const checkpointKey = `${project.id}:${trace.id}:${stableHash(batch)}:${index}`;
+        const checkpointKey = `large:v1:${project.id}:${stableHash(plan.targetSessionId)}:${stableHash(batch)}:${index}`;
         if (opts.resume && state.completed[checkpointKey]) continue;
         if (opts.dryRun) {
-          console.log(`[dry-run] project=${project.name} trace=${trace.id} session=${sessionId} batch=${index + 1}/${batches.length} messages=${batch.length}`);
+          console.log(`[dry-run] project=${project.name} session=${plan.targetSessionId} batch=${index + 1}/${batches.length} messages=${batch.length}`);
           continue;
         }
 
-        const accepted = await memory.add(sessionId, batch);
-        if (accepted !== batch.length) throw new Error(`Memory Core 接收数量不一致: trace=${trace.id} expected=${batch.length} accepted=${accepted}`);
+        const accepted = await memory.add(plan.targetSessionId, batch);
+        if (accepted !== batch.length) {
+          throw new Error(`Memory Core 接收数量不一致: session=${plan.targetSessionId} expected=${batch.length} accepted=${accepted}`);
+        }
+        state.completed[checkpointKey] = { imported_at: new Date().toISOString(), accepted };
+        saveState(opts.stateFile, state);
+        importedMessages += accepted;
+        writeCount++;
+        wrotePlan = true;
+        console.log(`[import] project=${project.name} session=${plan.targetSessionId} batch=${index + 1}/${batches.length} accepted=${accepted}`);
+        if (opts.waitEvery > 0 && writeCount % opts.waitEvery === 0) {
+          await memory.waitForIdle("l1", `write-${writeCount}`);
+        }
+      }
+      if (wrotePlan) importedTraces += plan.traceIds.length;
+    }
+
+    // 未超限的 Session 保持原有逐 Trace 写入和断点键，兼容已有导入状态。
+    for (const entry of entries) {
+      if (largeSessionIds.has(entry.sessionId)) continue;
+      const sourceBatches = chunk(entry.messages, MAX_MESSAGES_PER_REQUEST);
+      const batches = chunk(assignMonotonicRecordedAt(entry.messages), MAX_MESSAGES_PER_REQUEST);
+      let wroteTrace = false;
+      for (let index = 0; index < batches.length; index++) {
+        const batch = batches[index]!;
+        const checkpointKey = `${project.id}:${entry.traceId}:${stableHash(sourceBatches[index]!)}:${index}`;
+        if (opts.resume && state.completed[checkpointKey]) continue;
+        if (opts.dryRun) {
+          console.log(`[dry-run] project=${project.name} trace=${entry.traceId} session=${entry.sessionId} batch=${index + 1}/${batches.length} messages=${batch.length}`);
+          continue;
+        }
+
+        const accepted = await memory.add(entry.sessionId, batch);
+        if (accepted !== batch.length) throw new Error(`Memory Core 接收数量不一致: trace=${entry.traceId} expected=${batch.length} accepted=${accepted}`);
         state.completed[checkpointKey] = { imported_at: new Date().toISOString(), accepted };
         saveState(opts.stateFile, state);
         importedMessages += accepted;
         writeCount++;
         wroteTrace = true;
-        console.log(`[import] project=${project.name} trace=${trace.id} batch=${index + 1}/${batches.length} accepted=${accepted}`);
-
+        console.log(`[import] project=${project.name} trace=${entry.traceId} batch=${index + 1}/${batches.length} accepted=${accepted}`);
         if (opts.waitEvery > 0 && writeCount % opts.waitEvery === 0) {
           await memory.waitForIdle("l1", `write-${writeCount}`);
         }
       }
       if (wroteTrace) importedTraces++;
     }
+
+    if (opts.maxTraces > 0 && seenTraces >= opts.maxTraces) break;
   }
 
   if (!opts.dryRun && opts.finalWait && writeCount > 0) await memory.waitForIdle("all", "final");

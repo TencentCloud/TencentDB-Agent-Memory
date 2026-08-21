@@ -124,7 +124,7 @@
 }
 
 ._memory-mono-inline {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* ===== Agent grid ===== */
@@ -209,7 +209,7 @@
 
 ._memory-agent-card-id {
   margin-top: 2px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
 }
@@ -253,7 +253,7 @@
   gap: 4px;
   border-radius: 2px;
   padding: 2px 8px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   background: var(--tea-color-bg-secondary-default);
   color: var(--tea-color-text-secondary);
 }
@@ -282,7 +282,7 @@
 }
 
 ._memory-mounted-chip-label {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
   overflow: hidden;
@@ -291,7 +291,7 @@
 }
 
 ._memory-mounted-chip-count {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   color: var(--tea-color-text-secondary);
 }
@@ -472,7 +472,7 @@
   background: var(--tea-color-bg-secondary-default);
   padding: 4px 8px;
   font-size: 12px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -735,7 +735,7 @@
 }
 
 ._memory-mono-textarea.tea-input {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* ===== 原子能力工具条 + Collapse ===== */
@@ -756,11 +756,23 @@
   color: var(--tea-color-text-tertiary);
 }
 
+._memory-asset-toolbar-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
 ._memory-asset-loading {
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
   padding: 12px 0;
   text-align: center;
+}
+
+/* Skill 分组只读说明 */
+._memory-asset-readonly-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  padding: 4px 0 8px;
 }
 
 ._memory-asset-toolbar-btn {
@@ -823,7 +835,7 @@
 }
 
 ._memory-collapse-group-title {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 500;
   color: var(--tea-color-text-primary);
@@ -833,6 +845,55 @@
   margin-left: 4px;
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
+}
+
+/* ============================================================
+ * 折叠组骨架（详情弹窗打开时资产绑定在加载时使用）
+ * 复用 _memory-agents-skeleton-shimmer keyframes，视觉风格统一
+ * ============================================================ */
+
+/* count 数字区骨架占位（保留 label/title 等结构，避免布局抖动） */
+._memory-collapse-group-count--loading {
+  display: inline-block;
+  width: 64px;
+  height: 12px;
+  margin-left: 4px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 标题占位（仅在「整个资产区 loading」骨架卡片中使用） */
+._memory-collapse-group-title-skeleton {
+  display: inline-block;
+  width: 80px;
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 整个资产区加载中容器：保留「加载中」提示 + 4 个折叠组轮廓 */
+._memory-asset-section-loading ._memory-asset-loading {
+  margin-bottom: 12px;
+}
+
+/* 折叠组加载态：禁用 hover 反馈 */
+._memory-collapse-group--loading ._memory-collapse-group-header {
+  cursor: default;
+  opacity: 0.7;
 }
 
 ._memory-collapse-group-body {
@@ -887,7 +948,7 @@
 ._memory-asset-check-item-slug {
   flex-shrink: 0;
   margin-left: auto;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
 }
@@ -1026,7 +1087,7 @@
 
 ._memory-agents-card-id {
   color: var(--tea-color-text-tertiary);
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -1107,7 +1168,9 @@
 }
 
 /* Agent 卡片骨架屏（首屏加载时展示 4 个占位卡）
-   风格与 AssetListPanel 的 _alp-skeleton 一致：浅灰底 + shimmer 横扫动画 */
+   1:1 对齐真实 _memory-agents-card 的 6 个区块（head / id / desc / owner / stats / actions），
+   含 padding(12px) / border-radius(4px) / gap(8px) 等关键尺寸，避免「骨架 → 真实卡」的视觉跳变。
+   浅灰底 + shimmer 横扫动画。 */
 ._memory-agents-skeleton-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -1115,34 +1178,166 @@
 }
 
 ._memory-agents-skeleton-card {
-  border: 1px solid var(--tea-color-border, #e7e7e7);
-  border-radius: 8px;
-  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  background: var(--tea-color-bg-container, #fff);
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  /* 加载编排：骨架卡淡入上移，由 JS 注入 animationDelay 逐张错峰 */
+  opacity: 0;
+  animation: _memory-agents-skeleton-card-in 0.35s ease-out forwards;
 }
 
+@keyframes _memory-agents-skeleton-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 通用 shimmer 线条 */
 ._memory-agents-skeleton-line {
   height: 12px;
   border-radius: 4px;
   background: linear-gradient(
     90deg,
-    var(--tea-color-bg-secondary, #f5f5f5) 0%,
-    var(--tea-color-bg-tertiary, #ececec) 50%,
-    var(--tea-color-bg-secondary, #f5f5f5) 100%
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-tertiary-default) 50%,
+    var(--tea-color-bg-secondary-default) 100%
   );
   background-size: 200% 100%;
   animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
 }
 
-._memory-agents-skeleton-line--name { width: 40%; height: 16px; }
-._memory-agents-skeleton-line--id   { width: 60%; }
-._memory-agents-skeleton-line--desc { width: 80%; }
-._memory-agents-skeleton-line--meta { width: 50%; }
+/* 1. head：名称（左，加粗 14px 视觉用 16px 条）+ chevron（右，方块） */
+._memory-agents-skeleton-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+._memory-agents-skeleton-line--name {
+  flex: 0 1 40%;
+  height: 16px;
+}
+
+._memory-agents-skeleton-line--chevron {
+  margin-left: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+/* 2. id：等宽小字 */
+._memory-agents-skeleton-line--id {
+  width: 60%;
+}
+
+/* 3. desc：两行（对齐真实 min-height 40px / line-height 20px） */
+._memory-agents-skeleton-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 40px;
+}
+
+._memory-agents-skeleton-line--desc-short {
+  width: 70%;
+}
+
+/* 4. owner 行：label（窄条）+ pill（圆角胶囊） */
+._memory-agents-skeleton-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+._memory-agents-skeleton-line--owner-label {
+  width: 40px;
+}
+
+._memory-agents-skeleton-line--owner-tag {
+  width: 64px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+/* 5. stats：2 列 4 个 chip（对齐真实 _memory-agents-stats） */
+._memory-agents-skeleton-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+._memory-agents-skeleton-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._memory-agents-skeleton-line--chip-label {
+  width: 48px;
+  height: 12px;
+}
+
+._memory-agents-skeleton-line--chip-count {
+  width: 14px;
+  height: 12px;
+}
+
+/* 6. actions：右对齐删除按钮（对齐真实 border-top + min-height 28px） */
+._memory-agents-skeleton-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 28px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--tea-color-border-secondary-default);
+}
+
+._memory-agents-skeleton-line--action {
+  width: 40px;
+}
 
 @keyframes _memory-agents-skeleton-shimmer {
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
+}
+
+/* ============================================================
+ * 计数 chip 骨架（counts 在加载时使用）
+ * 与整卡片骨架复用同套 shimmer keyframes，视觉一致。
+ * ============================================================ */
+._memory-mounted-chip-count--loading {
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 列表视图的 assets 列占位：counts 在加载时整行显示「—」，并保持高度稳定，避免行高闪动 */
+._memory-agents-list-assets--loading {
+  color: var(--tea-color-text-tertiary);
 }

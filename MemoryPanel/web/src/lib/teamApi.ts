@@ -76,6 +76,7 @@ export {
   chatMemoryApi,
   type ChatMemoryBlock,
   type ChatMemoryLayerItem,
+  type ChatMemorySearchHit,
 } from './api/chat-memory';
 
 // ── 共享类型（从 types.ts 透传） ──

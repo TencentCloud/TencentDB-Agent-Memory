@@ -32,7 +32,7 @@ function joinAllTextBlocks(content: unknown): string | null {
 
 export const defaultAdapter: AgentAdapter = {
   agentKind: "unknown",
-  classifyRequest() {
+  classifyRequest(_body?, _path?, _headers?) {
     return "main";
   },
   extractUserText(content) {

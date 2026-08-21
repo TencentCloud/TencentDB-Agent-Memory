@@ -1,8 +1,6 @@
 /**
- * AgentGrid —— team 内 Agent 管理。
- *
- * 视觉与 Memory 项目的 Agents 页面保持一致：Tea Card / ActionPanel、
- * 搜索与 Owner 筛选、卡片/列表视图切换；权限与数据仍完全沿用当前真实后端链路。
+ * AgentGrid —— team 内 Agent 管理：卡片/列表视图、搜索与 Owner 筛选。
+ * 权限与数据走真实后端链路。
  */
 
 import { useCallback, useMemo, useState } from 'react';
@@ -16,10 +14,32 @@ import {
   ViewModuleIcon,
 } from 'tea-icons-react';
 import { canManageAsset, type Team, type Agent as StoreAgent } from '@/services';
+import { useDisplayNameResolver, useUserDisplayName } from '@/services/user-profile-store';
 import { emptyMountedCounts, type AgentMountedCounts } from './types';
 import { Mounted } from './shared';
 
 const { scrollable } = Table.addons;
+
+/**
+ * Agent owner 标签：可见文本显示 display_name（缓存未命中先回退 id），
+ * title 保留 user_id 供排查。抽子组件是 Rules of Hooks 要求（不能在 .map 里循环调 hook）。
+ */
+function AgentOwnerTag({ ownerId, isMe }: { ownerId: string; isMe: boolean }) {
+  const { t } = useTranslation();
+  const name = useUserDisplayName(ownerId);
+  if (!ownerId) {
+    return <span className="_memory-agents-owner-tag">{t('agentGrid.card.ownerUnset')}</span>;
+  }
+  return (
+    <span
+      className={`_memory-agents-owner-tag${isMe ? ' _memory-agents-owner-tag--me' : ''}`}
+      title={ownerId}
+    >
+      {name || ownerId}
+      {isMe && t('agentGrid.owner.you')}
+    </span>
+  );
+}
 
 type ViewMode = 'card' | 'list';
 
@@ -27,6 +47,7 @@ export default function AgentGrid({
   activeTeam,
   agents,
   agentsLoading,
+  countsLoading,
   mountedCounts,
   currentUser,
   isAdmin: _isAdmin,
@@ -38,6 +59,8 @@ export default function AgentGrid({
   activeTeam: Team;
   agents: StoreAgent[];
   agentsLoading: boolean;
+  /** agent-overview/bootstrap 计数是否仍在加载：未返回时保持骨架屏，不提前跳出加载态 */
+  countsLoading: boolean;
   mountedCounts: Record<string, AgentMountedCounts>;
   currentUser: string;
   /** 保留接口兼容；admin 不再有特殊权限。 */
@@ -57,7 +80,11 @@ export default function AgentGrid({
   });
   const handleSetViewMode = useCallback((mode: ViewMode) => {
     setViewMode(mode);
-    try { localStorage.setItem('agentGrid.viewMode', mode); } catch {}
+    try {
+      localStorage.setItem('agentGrid.viewMode', mode);
+    } catch {
+      /* localStorage 不可用则忽略 */
+    }
   }, []);
 
   const ownerOptions = useMemo(() => {
@@ -65,6 +92,9 @@ export default function AgentGrid({
     const agentOwnerIds = agents.map((agent) => agent.owner_user_id).filter(Boolean);
     return Array.from(new Set([...memberIds, ...agentOwnerIds]));
   }, [activeTeam.members, agents]);
+
+  // user_id → display_name 解析（筛选下拉 / tooltip 等批量场景；与 owner 标签同套缓存）
+  const resolveUserName = useDisplayNameResolver();
 
   const filteredAgents = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
@@ -95,11 +125,12 @@ export default function AgentGrid({
       <button
         type="button"
         className={`_memory-agents-name-trigger${editable ? ' _memory-agents-name-trigger--editable' : ''}`}
+        data-guide={editable ? 'agent-name-editable' : undefined}
         onClick={() => editable && onEditAgent(agent)}
         disabled={!editable}
         title={editable
           ? t('agentGrid.card.edit.tooltip.can')
-          : t('agentGrid.card.edit.tooltip.cannot', { owner: agent.owner_user_id || t('agentGrid.card.ownerUnset') })}
+          : t('agentGrid.card.edit.tooltip.cannot', { owner: agent.owner_user_id ? resolveUserName(agent.owner_user_id) : t('agentGrid.card.ownerUnset') })}
       >
         <span className="_memory-agents-name" title={agent.name}>{agent.name}</span>
         {editable && <ChevronRightIcon size={compact ? 12 : 14} className="_memory-agents-chevron" />}
@@ -108,22 +139,17 @@ export default function AgentGrid({
   }
 
   function renderOwner(agent: StoreAgent) {
-    const ownerIsMe = agent.owner_user_id === currentUser;
-    return (
-      <span className={`_memory-agents-owner-tag${ownerIsMe ? ' _memory-agents-owner-tag--me' : ''}`}>
-        {agent.owner_user_id || t('agentGrid.card.ownerUnset')}{ownerIsMe && t('agentGrid.owner.you')}
-      </span>
-    );
+    return <AgentOwnerTag ownerId={agent.owner_user_id} isMe={agent.owner_user_id === currentUser} />;
   }
 
-  function renderAssets(agent: StoreAgent) {
+  function renderAssets(agent: StoreAgent, countsLoading = false) {
     const counts = mountedCounts[agent.agent_id] ?? emptyMountedCounts();
     return (
       <div className="_memory-agents-stats">
-        <Mounted label="skills" count={counts.skills} />
-        <Mounted label="code_graph" count={counts.code_graph} />
-        <Mounted label="llm_wiki" count={counts.llm_wiki} />
-        <Mounted label="chat_memory" count={counts.chat_memory} />
+        <Mounted label="skills" count={counts.skills} loading={countsLoading} />
+        <Mounted label="code_graph" count={counts.code_graph} loading={countsLoading} />
+        <Mounted label="llm_wiki" count={counts.llm_wiki} loading={countsLoading} />
+        <Mounted label="chat_memory" count={counts.chat_memory} loading={countsLoading} />
       </div>
     );
   }
@@ -150,6 +176,7 @@ export default function AgentGrid({
               type="primary"
               onClick={onCreateAgent}
               title={t('agentGrid.create.tooltip')}
+              data-guide="create-agent"
             >
               <AddIcon size={12} /> {t('agentGrid.create')}
             </Button>
@@ -168,7 +195,7 @@ export default function AgentGrid({
                   appearance="button"
                   options={[
                     { value: '', text: t('agentGrid.allOwners') },
-                    ...ownerOptions.map((ownerId) => ({ value: ownerId, text: ownerId })),
+                    ...ownerOptions.map((ownerId) => ({ value: ownerId, text: resolveUserName(ownerId) })),
                   ]}
                   matchButtonWidth
                 />
@@ -186,16 +213,51 @@ export default function AgentGrid({
         />
       </Table.ActionPanel>
 
+      {/* 加载编排两段式：
+          1) 首屏 agents 还没回来 → 4 个骨架卡占位（不知道实际数量，按视觉预设 4 张）
+          2) agents 已就绪 → 立刻渲染真实卡片，counts 还在加载时只在「资产计数 chip」显示骨架占位
+            —— 不再用整网格骨架覆盖，避免「4 骨架 → 1 真实卡」的过渡突兀 */}
       {agentsLoading && agents.length === 0 ? (
         viewMode === 'card' ? (
-          // 卡片视图骨架屏：4 个占位卡 + shimmer 动画，风格与 AssetListPanel 一致
+          // 卡片视图骨架屏：4 个占位卡 + shimmer 动画，风格与 AssetListPanel 一致；
+          // 卡片逐张错峰入场（60ms 步进，编排式加载），骨架卡不闪切
           <div className="_memory-agents-skeleton-grid" aria-label="loading">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="_memory-agents-skeleton-card">
-                <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--name" />
+              <div
+                key={i}
+                className="_memory-agents-skeleton-card"
+                style={{ animationDelay: `${i * 60}ms` }}
+              >
+                {/* 1. head：名称 + chevron，对齐真实 _memory-agents-card-head */}
+                <div className="_memory-agents-skeleton-head">
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--name" />
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--chevron" />
+                </div>
+                {/* 2. id：等宽小字，对齐 _memory-agents-card-id */}
                 <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--id" />
-                <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--desc" />
-                <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--meta" />
+                {/* 3. desc：两行，对齐 _memory-agents-card-desc（min-height 40px） */}
+                <div className="_memory-agents-skeleton-desc">
+                  <div className="_memory-agents-skeleton-line" />
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--desc-short" />
+                </div>
+                {/* 4. owner 行：label + pill，对齐 _memory-agents-owner-row */}
+                <div className="_memory-agents-skeleton-owner">
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--owner-label" />
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--owner-tag" />
+                </div>
+                {/* 5. stats：2 列 4 个 mounted chip，对齐 _memory-agents-stats */}
+                <div className="_memory-agents-skeleton-stats">
+                  {[0, 1, 2, 3].map((j) => (
+                    <div key={j} className="_memory-agents-skeleton-chip">
+                      <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--chip-label" />
+                      <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--chip-count" />
+                    </div>
+                  ))}
+                </div>
+                {/* 6. actions：右对齐删除按钮，对齐 _memory-agents-card-actions */}
+                <div className="_memory-agents-skeleton-actions">
+                  <div className="_memory-agents-skeleton-line _memory-agents-skeleton-line--action" />
+                </div>
               </div>
             ))}
           </div>
@@ -215,7 +277,11 @@ export default function AgentGrid({
           {filteredAgents.map((agent) => {
             const editable = canEdit(agent);
             return (
-              <div key={agent.agent_id} className={`_memory-agents-card${editable ? ' _memory-agents-card--editable' : ''}`}>
+              <div
+                key={agent.agent_id}
+                className={`_memory-agents-card${editable ? ' _memory-agents-card--editable' : ''}`}
+                data-guide={editable ? 'agent-card-editable' : undefined}
+              >
                 <div className="_memory-agents-card-head">{renderName(agent)}</div>
                 <div className="_memory-agents-card-id">{t('agentGrid.card.id', { id: agent.agent_id })}</div>
                 <div className="_memory-agents-card-desc">{agent.description || t('common.noDescription')}</div>
@@ -224,7 +290,8 @@ export default function AgentGrid({
                   {renderOwner(agent)}
                   {!editable && <span className="_memory-agents-readonly">{t('agentGrid.card.readonly')}</span>}
                 </div>
-                {renderAssets(agent)}
+                {/* 资产计数区：counts 还在加载时只把 4 个数字换成小骨架占位，主体立刻可见 */}
+                {renderAssets(agent, countsLoading)}
                 <div className="_memory-agents-card-actions">
                   <Button
                     type="text"
@@ -253,7 +320,7 @@ export default function AgentGrid({
             },
             {
               key: 'owner',
-              header: 'Owner',
+              header: t('agentGrid.table.owner'),
               width: 160,
               render: (agent: StoreAgent) => renderOwner(agent),
             },
@@ -262,6 +329,10 @@ export default function AgentGrid({
               header: t('agentGrid.table.assets'),
               render: (agent: StoreAgent) => {
                 const counts = mountedCounts[agent.agent_id] ?? emptyMountedCounts();
+                // 列表视图同样：counts 在加载时用「—」占位，而不是整行消失
+                if (countsLoading) {
+                  return <span className="_memory-agents-list-assets _memory-agents-list-assets--loading">—</span>;
+                }
                 return (
                   <span className="_memory-agents-list-assets">
                     skills×{counts.skills} · code_graph×{counts.code_graph} · llm_wiki×{counts.llm_wiki} · chat_memory×{counts.chat_memory}

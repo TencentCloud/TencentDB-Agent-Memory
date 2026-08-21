@@ -1,36 +1,23 @@
 /**
  * TeamManagementPanel — 团队管理。
  *
- * Tea 组件重构版：弹窗统一走 `./Modal`（Tea Modal 外壳），输入控件统一换成
- * Tea `Input`/`Input.TextArea`/`Select`/`Checkbox`/`Collapse`，破坏性操作
- * 统一走 `tea.confirm`/`tea.notify`，emoji 图标换成 `tea-icons-react`。
- *
- * 承担 PRD §3.2 / §5 / §6 描述的「Team + 成员 + Agent」管理：
+ * 承担「Team + 成员 + Agent」管理：
  *   - 顶部是当前 team 概览 + team 级操作（新建 Team / 新建 Agent）
  *   - 中部是当前 team 的成员管理：按 user_id 添加 / 删除成员
  *   - 下部是当前 team 的 Agent 卡片网格：新建 / 编辑 / 删除
  *
- * 数据存储（链路 A，后端持久化）：
- *   - team/members/agent 均走 @/lib/teamApi（POST /api/v1/meta/team-member/add 等）；
+ * 数据存储（后端持久化）：
+ *   - team/members/agent 均走 @/lib/teamApi；
  *   - 写操作成功后统一调用 invalidateBackendCache()，驱动 useTeams/useAgents 重新拉取；
- *   - Agent 的 icon / accent / role_prompt / rules_prompt / skills / code_graphs /
- *     llm_wikis / chat_memories 等后端 schema 还没有的展示字段，序列化进
- *     agent.metadata_json 的 "ui" namespace（见 services/backendStore.ts）。
+ *   - 后端 schema 还没有的展示字段，序列化进 agent.metadata_json 的 "ui" namespace。
  *
  * 已知限制（如实反映后端当前能力，不做假 UI）：
  *   - Agent owner 由后端在创建时固定为当前登录用户，暂不支持转交；
- *   - Team 删除接口后端尚未稳定支持，本面板暂不提供（按钮点击后提示联系管理员）；
- *   - skills / code_graphs / llm_wikis / chat_memories 全部走真实后端 API
+ *   - Team 删除接口后端尚未稳定支持，本面板暂不提供。
  *
  * 文件拆分（本文件仅保留组合/编排逻辑，具体实现见同目录下）：
- *   - types.ts            共享类型 + 纯函数（AgentCard/MountableAsset/权限判定等）
- *   - useAgentAssets.ts   数据 hooks（团队资产列表、agent 已挂载资产计数）
- *   - shared.tsx          公共展示组件（LightField/CollapseGroup/AssetCheckList/Mounted）
- *   - AgentGrid.tsx        Agent 卡片网格
- *   - MemberSection.tsx    成员列表 + 添加/新建成员弹窗
- *   - CreateTeamDialog.tsx 新建 Team 弹窗
- *   - CreateAgentDialog.tsx 新建 Agent 弹窗
- *   - AgentEditDialog.tsx  编辑/查看 Agent 弹窗
+ *   - types.ts / useAgentAssets.ts / shared.tsx / AgentGrid.tsx / MemberSection.tsx /
+ *     CreateTeamDialog.tsx / CreateAgentDialog.tsx / AgentEditDialog.tsx
  */
 
 import { useState, useMemo } from 'react';
@@ -48,6 +35,7 @@ import {
 } from '@/services';
 import { teamsApi, agentsApi, skillApi } from '@/lib/teamApi';
 import { knowledgeApi } from '@/lib/knowledge-api';
+import { useDisplayNameResolver } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
 import { getErrorMessage } from '@/lib/error-message';
 import './team-management-panel.css';
@@ -90,7 +78,7 @@ export default function TeamManagementPanel({
   // 只取当前 team 的 agent — agent 严格归属 team，不会跨 team 显示
   const { agents: allAgents, loading: agentsLoading } = useAgents(activeTeamId);
   const { t } = useTranslation();
-  // Agent 可见性（PRD §6.1/§10）：
+  // Agent 可见性：
   //   - 全局 admin / 当前 team 的 admin(owner)：可见 team 内全部 agent
   //   - 普通成员：只能看到自己 owner（创建）的 agent
   const canSeeAllAgents = !!activeTeam && (_isAdmin || isTeamAdmin(activeTeam, currentUser));
@@ -98,7 +86,9 @@ export default function TeamManagementPanel({
     if (!activeTeam || canSeeAllAgents) return allAgents;
     return allAgents.filter((a) => a.owner_user_id === currentUser);
   }, [allAgents, activeTeam, canSeeAllAgents, currentUser]);
-  const mountedCounts = useAgentMountedCounts(activeTeamId, agents);
+  const { counts: mountedCounts, countsLoading } = useAgentMountedCounts(activeTeamId, agents);
+  // 通知文案里展示 display_name 而非 user_id（复用全局缓存，幂等无额外请求）
+  const resolveUserName = useDisplayNameResolver();
 
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showCreateTeam, setShowCreateTeam] = useState(false);
@@ -177,7 +167,7 @@ export default function TeamManagementPanel({
       )
     ) {
       tea.notify.error(
-        t('team.deleteAgent.noPermission', { name: agent.name, id: agent.agent_id, teamName: activeTeam.name, owner: agent.owner_user_id || t('team.deleteAgent.ownerUnset') }),
+        t('team.deleteAgent.noPermission', { name: agent.name, id: agent.agent_id, teamName: activeTeam.name, owner: agent.owner_user_id ? resolveUserName(agent.owner_user_id) : t('team.deleteAgent.ownerUnset') }),
       );
       return;
     }
@@ -309,6 +299,7 @@ export default function TeamManagementPanel({
               activeTeam={activeTeam}
               agents={agents}
               agentsLoading={agentsLoading}
+              countsLoading={countsLoading}
               mountedCounts={mountedCounts}
               currentUser={currentUser}
               isAdmin={_isAdmin}

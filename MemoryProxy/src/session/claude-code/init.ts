@@ -16,6 +16,7 @@ import type {
   SessionInitState,
   SessionRegistrationData,
   TaskDetail,
+  TaskInTeam,
   TeamOption,
 } from "../types.js";
 import { DEFAULT_TASK_LABEL } from "../types.js";
@@ -30,6 +31,7 @@ import { resolvePresetIdentity, type PresetIdentity } from "../preset.js";
 
 import { buildFormResponse, FormData, MORE_LABEL } from "./form.js";
 import { computePagination } from "./pagination.js";
+import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
 import {
   extractFromOptionText,
   extractTeamFromOptionText,
@@ -119,7 +121,7 @@ async function fetchTeamsAndAgents(
         metadataClient.listAgents(t.team_id, userId),
         metadataClient.listTasks(t.team_id),
       ]);
-      const tasks = tasksRaw.map((tk) => ({
+      const tasks: TaskInTeam[] = tasksRaw.map((tk) => ({
         task_id: tk.task_id,
         task_name: tk.title,
       }));
@@ -227,7 +229,7 @@ async function advanceFromTeamPicked(
       cachedTeams,
       bypassed: true,
     } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true };
   }
 
   // Only 1 agent — pick it, then decide task step.
@@ -306,7 +308,7 @@ async function advanceFromAgentPicked(
       taskDetail: null,
       bypassed: true,
     } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true };
   }
   if (team.tasks.length === 1) {
     const taskId = team.tasks[0].task_id;
@@ -437,7 +439,7 @@ async function completeRegistration(
       `[session-init:cc] session=${compositeKey} no user_id available → bypass`,
     );
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true };
   }
   // 新增契约：只有 team + agent + task 三者齐全才注入。task_id 缺失一律 bypass —
   // 覆盖 0-task team、header 只带 team+agent、debugForceIdentity 不带 task 等场景。
@@ -461,7 +463,7 @@ async function completeRegistration(
       taskDetail: null,
       bypassed: true,
     } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true };
   }
   const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
   if (!regData) {
@@ -469,7 +471,7 @@ async function completeRegistration(
       `[session-init:cc] session=${compositeKey} agent=${resolved.agent_id} not bound to any team → bypass`,
     );
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
+    return { intercepted: false, bypassed: true };
   }
 
   let agentDetail: AgentDetail | null = null;
@@ -557,7 +559,44 @@ async function completeRegistration(
 
 // ── Main Handler ───────────────────────────────────────────────────────────────
 
+/**
+ * 顶层入口 wrapper：装饰 handleSessionInitInner，在完成后发一条埋点
+ * （仅当 prev !== initialized && after === initialized 时）。
+ *
+ * 埋点装饰绝不改动状态机；失败/异常静默，业务链路零感知。
+ * 详见 docs/design/2026-08-03-internal-usage-telemetry-plan.md §7.2。
+ */
 export async function handleSessionInit(
+  sessionKey: string,
+  userId: string | null,
+  messages: MessageArr,
+  config: SessionInitConfig,
+  store: SessionStore,
+  reqCtx: SessionRequestContext,
+  metadataClient?: MetadataClient,
+  userKey?: string,
+  spaceId?: string,
+  presetIdentity?: PresetIdentity,
+): Promise<SessionInitResult> {
+  const compositeKey = `claude-code:${sessionKey}`;
+  const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
+  try {
+    return await handleSessionInitInner(
+      sessionKey, userId, messages, config, store, reqCtx,
+      metadataClient, userKey, spaceId, presetIdentity,
+    );
+  } finally {
+    // 无论正常/异常返回都尝试发一次埋点；装饰器内部自吞异常。
+    emitSessionInitTelemetryIfCompleted({
+      store,
+      compositeKey,
+      prevStatus,
+      agentSource: "claude-code",
+    });
+  }
+}
+
+async function handleSessionInitInner(
   sessionKey: string,
   userId: string | null,
   messages: MessageArr,
@@ -659,7 +698,7 @@ export async function handleSessionInit(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true };
     }
     if (!metadataClient) {
       console.warn(
@@ -675,7 +714,7 @@ export async function handleSessionInit(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true };
     }
 
     let teams: TeamOption[];
@@ -697,7 +736,7 @@ export async function handleSessionInit(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true };
     }
 
     const totalAgents = teams.reduce((acc, t) => acc + t.agents.length, 0);
@@ -717,7 +756,7 @@ export async function handleSessionInit(
         taskDetail: null,
         bypassed: true,
       } as SessionInitState);
-      return { intercepted: false, bypassed: true, justRegistered: true };
+      return { intercepted: false, bypassed: true };
     }
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
@@ -739,7 +778,7 @@ export async function handleSessionInit(
             taskDetail: null,
             bypassed: true,
           } as SessionInitState);
-          return { intercepted: false, bypassed: true, justRegistered: true };
+          return { intercepted: false, bypassed: true };
         }
         console.warn(`[session-init:cc] session=${compositeKey} preset mismatch → fallback to form`);
         // fall through to the normal asset_confirm flow below
@@ -832,7 +871,7 @@ export async function handleSessionInit(
         bypassed: true,
       } as SessionInitState);
       console.log(`[session-init:cc] session=${compositeKey} user chose no-asset → bypass`);
-      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true };
     }
 
     if (choice === true) {
@@ -876,7 +915,7 @@ export async function handleSessionInit(
     // 未识别 → bypass (保留 form 对话原样)
     console.warn(`[session-init:cc] session=${compositeKey} asset-confirm unrecognized, bypassing`);
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true };
   }
 
   // ── Case 1.5: Awaiting team selection ─────────────────────────────────────
@@ -902,7 +941,7 @@ export async function handleSessionInit(
     console.warn(`[session-init:cc] session=${compositeKey} team-select unrecognized, bypassing`);
     // bypass: 保留 form 对话原样, 不删。
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true };
   }
 
   // ── Case 2: Awaiting agent selection ─────────────────────────────────────
@@ -967,7 +1006,7 @@ export async function handleSessionInit(
       } as SessionInitState;
       await store.set(compositeKey, bypassState);
       console.log(`[session-init:cc] session=${compositeKey} user chose skip-agent → bypass`);
-      return { intercepted: false, messages: stripped as Record<string, unknown>[], bypassed: true, justRegistered: true };
+      return { intercepted: false, messages: stripped as Record<string, unknown>[], bypassed: true };
     }
 
     if (extracted && extracted.agent_id) {
@@ -978,7 +1017,7 @@ export async function handleSessionInit(
           `[session-init:cc] session=${compositeKey} team ${selectedTeamId} not in cache → bypass`,
         );
         await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-        return { intercepted: false, bypassed: true, justRegistered: true };
+        return { intercepted: false, bypassed: true };
       }
       // Delegate to shared cascade — auto-selects the sole task when tasks.length === 1.
       return advanceFromAgentPicked(
@@ -990,7 +1029,7 @@ export async function handleSessionInit(
     console.warn(`[session-init:cc] session=${compositeKey} agent-select unrecognized, bypassing`);
     // bypass: 保留 form 对话原样, 不删。
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true, justRegistered: true };
+    return { intercepted: false, messages: messages as Record<string, unknown>[], bypassed: true };
   }
 
   // ── Case 2.5: Awaiting task selection ─────────────────────────────────────

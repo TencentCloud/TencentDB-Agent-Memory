@@ -30,10 +30,17 @@ export const zhCN = {
   'header.sync.title': '实时同步已连接',
   'header.settings': '设置',
   'header.profile': '我的资料',
+  'header.replayGuide': '回顾引导',
   'header.logout': '退出登录',
   'header.profile.caption': '我的资料',
   'header.profile.username': '用户名',
+  'header.profile.usernameHint': '团队成员识别你的名字',
+  'header.profile.userId': '用户 ID',
   'header.profile.userIdHint': '发给团队管理员用于邀请你加入 Team',
+  'header.profile.instance': '所属实例',
+  'header.profile.role.admin': '管理员',
+  'header.profile.role.member': '普通成员',
+  'header.profile.role.reviewer': '审核员',
   'header.profile.close': '关闭',
   'header.brand': 'Memory Hub',
 
@@ -280,6 +287,7 @@ export const zhCN = {
   'wiki.detail.overview.emptyPageList': '暂无页面',
   'wiki.detail.graph.clickToView': '点击节点查看内容',
   'wiki.detail.graph.loading': '加载图谱组件…',
+  'wiki.detail.notFound': '该 Wiki 已不存在，可能已被删除。',
   'wiki.detail.pages.all': '全部 {{count}}',
   'wiki.detail.pages.selectPage': '选择左侧页面查看内容',
   'wiki.detail.pages.delete': '删除',
@@ -353,7 +361,7 @@ export const zhCN = {
   'code.noAgent': '未选择 Agent',
   'code.card.id': 'ID：{{id}}',
   'code.card.branch': '分支 {{branch}}',
-  'code.detail.breadcrumb': 'Code_Graph',
+  'code.detail.breadcrumb': 'Code 图谱',
   'code.detail.branch': '分支 {{branch}}',
   'code.detail.sync': '同步',
   'code.detail.files': '文件',
@@ -428,6 +436,10 @@ export const zhCN = {
   'skills.fork.tooltip.personal.empty': '请先选中一条 skill',
   'skills.import': '导入 Skill',
   'skills.import.tooltip.noAgent': '当前 team 暂无 agent，请先创建 agent',
+  'skills.export': '导出 Skill',
+  'skills.export.tooltip.empty': '请先选择一个 Skill',
+  'skills.export.partial': '部分文件导出失败：{warnings}',
+  'skills.export.timeout': '导出超时，请稍后重试',
   'skills.tag.private': '私密',
   'skills.tag.shared': '共享',
   'skills.delete.own': '彻底删除我的 Skill（不可恢复）',
@@ -463,6 +475,40 @@ export const zhCN = {
   'skills.detail.noFiles': '无附属文件。',
   'skills.detail.readFailed': '读取失败：{{msg}}',
   'skills.detail.binaryFile': '二进制文件 ({{size}} bytes)，base64 已省略。',
+  // —— 编辑正文（updateSkill）——
+  'skills.detail.edit': '编辑',
+  'skills.detail.save': '保存',
+  'skills.detail.cancel': '取消',
+  'skills.detail.saving': '保存中…',
+  'skills.detail.editBodyHint': '编辑完整 SKILL.md（含 frontmatter）。保存后版本号 +1。',
+  'skills.detail.saveSuccess': 'Skill 已更新',
+  'skills.detail.emptyContent': '内容不能为空',
+  // —— 文件管理（writeSkillFiles / removeSkillFiles）——
+  'skills.detail.addFile': '新建文件',
+  'skills.detail.deleteFile': '删除',
+  'skills.detail.editFile': '编辑',
+  'skills.detail.newFileTitle': '新建资源文件',
+  'skills.detail.filePathLabel': '文件路径',
+  'skills.detail.filePathPlaceholder': '如 scripts/run.sh',
+  'skills.detail.fileContentLabel': '文件内容',
+  'skills.detail.fileSaved': '文件已保存',
+  'skills.detail.fileDeleted': '文件已删除',
+  'skills.detail.deleteFileConfirm': '确定删除文件「{{path}}」？',
+  'skills.detail.deleteFileDesc': '删除后不可恢复，且会使 skill 版本号 +1。',
+  'skills.detail.deleteFileOk': '删除',
+  'skills.detail.deleteFileCancel': '取消',
+  'skills.detail.binaryEditHint': '二进制文件不支持在线编辑。',
+  'skills.detail.filePathRequired': '请填写文件路径',
+  // —— 版本历史（listSkillVersions）——
+  'skills.detail.versions': '历史版本',
+  'skills.detail.versionsLoad': '查看历史版本',
+  'skills.detail.versionsEmpty': '暂无历史版本。',
+  'skills.detail.versionCurrent': '当前',
+  'skills.detail.versionView': '查看',
+  'skills.detail.versionColVersion': '版本',
+  'skills.detail.versionColTime': '更新时间',
+  'skills.detail.versionColActions': '操作',
+  'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
   'skills.ownerTag.title': 'owner user: {{name}}（{{id}}）',
   'skills.ownerTag.you': '（你）',
   'skills.agentTag.title': 'owner agent: {{name}}（{{id}}）',
@@ -555,6 +601,7 @@ export const zhCN = {
   'memory.allocate.disabled': '请先选中一条记忆块',
   'memory.allocate.privateDisabled': '该记忆已被 owner 设为私密，无法再分配给其他 Agent',
   'memory.import': '导入记忆',
+  'memory.import.tooltip.noAgent': '当前 team 暂无 agent，请先创建 agent',
   'memory.blockList': '记忆块',
   'memory.blockCount': '{{filtered}} 条',
   'memory.empty.filtered': '没有匹配的记忆块。',
@@ -583,6 +630,11 @@ export const zhCN = {
   'memory.notify.loadFailed': '加载记忆块失败',
   'memory.notify.layerFailed': '加载层数据失败',
   'memory.notify.l2Failed': '加载 L2 原文失败',
+  'memory.notify.editSuccess': '已保存',
+  'memory.notify.editFailed': '保存失败',
+  'memory.notify.copied': '已复制',
+  'memory.notify.copyFailed': '复制失败',
+  'memory.notify.searchFailed': '搜索失败',
   'memory.confirm.private': '设为私密后，其他 Agent 将不能再使用这条记忆',
   'memory.confirm.private.desc': '如需再次共享，随时可以改回团队可见。',
   'memory.confirm.private.ok': '设为私密',
@@ -591,12 +643,31 @@ export const zhCN = {
   'memory.detail.uploadedBy': '上传：{{user}}',
   'memory.detail.updated': '更新：{{time}}',
   'memory.detail.noL0': '该记忆块未保留 L0 对话原文。',
+  'memory.detail.noL0InRange': '当前时间范围内没有 L0 对话原文，可调整右上角的时间筛选范围试试。',
+  'memory.detail.emptyLayerInRange': '当前时间范围内在 {{layer}} 层暂无条目，可调整右上角的时间筛选范围试试。',
+  'memory.detail.rangeTooLarge': '记忆条数过多，建议缩短筛选的时间范围',
   'memory.detail.loadMore': '加载更早的对话',
   'memory.detail.allLoaded': '已加载全部对话',
   'memory.detail.pageInfo': '第 {{page}} / {{total}} 页 · 当前 {{current}} 条 / 共 {{total2}} 条',
   'memory.detail.prevPage': '上一页',
   'memory.detail.nextPage': '下一页',
+  'memory.detail.edit': '编辑',
+  'memory.detail.moreActions': '更多操作',
+  'memory.detail.editTitle': '编辑 {{layer}} 内容',
+  'memory.detail.save': '保存',
+  'memory.detail.cancel': '取消',
+  'memory.detail.search': '搜索',
+  'memory.detail.searchPlaceholder': '按语义搜索本记忆…',
+  'memory.detail.searchPlaceholderL0': '按语义搜索本记忆的 L0 对话原文…',
+  'memory.detail.searchPlaceholderL1': '按语义搜索本记忆的 L1 原子记忆…',
+  'memory.detail.clearSearch': '清除',
+  'memory.detail.searchResultCount': '{{count}} 条相关结果',
+  'memory.detail.searchEmpty': '未找到相关记忆，换个关键词试试',
+  'memory.detail.searchScore': '相关度 {{score}}',
   'memory.detail.clickToLoad': '点击加载该层内容',
+  'memory.detail.modeBrowse': '浏览',
+  'memory.detail.modeSearch': '搜索',
+  'memory.detail.searchPrompt': '输入关键词按语义搜索本记忆，搜索结果按相关度排序（不受时间范围限制）。',
   'memory.detail.emptyLayer': '该记忆块在 {{layer}} 层暂无条目。可由 curator / 高层提炼后写入。',
   'memory.detail.loading': '加载中…',
   'memory.detail.collapseBody': '收起原文',
@@ -790,6 +861,8 @@ export const zhCN = {
   'agentEdit.assets.loading': '加载团队资产中…',
   'agentEdit.assets.label': '原子能力',
   'agentEdit.assets.hint': '只读 · 资源绑定请在创建或者对应资源管理页面修改设置',
+  'agentEdit.assets.editHint': '勾选或取消可直接绑定/解绑资产，点「保存修改」后生效',
+  'agentEdit.assets.skillReadonly': '技能绑定为独立副本，请在「创建 Agent」或技能管理页调整',
   'agentEdit.cancel': '取消',
   'agentEdit.save': '保存修改',
   'agentEdit.notify.nameRequired': 'Agent 名称不能为空。',
@@ -864,6 +937,12 @@ export const zhCN = {
   'addMember.error.self': '不能添加自己；如需调整角色，请由其他 team admin 操作。',
   'addMember.error.emptyName': '请输入用户名。',
   'addMember.error.invalidName': '用户名仅支持英文字母、数字、下划线，不能包含其他符号或空格。',
+  'addMember.error.emptyKey': '已开启自定义 User_Key，请填写要下发给用户的 key。',
+  'addMember.customKey.label': '自定义 User_Key',
+  'addMember.customKey.hint': '默认关闭时由后端自动生成一次性 key；开启后由你手动指定用户初始 key。',
+  'addMember.customKey.value': 'User_Key',
+  'addMember.customKey.placeholder': '例如 sk-mem-xxxxxxxxxxxxxxxx',
+  'addMember.customKey.valueHint': '将作为该用户的默认 User_Key；不可与已有用户的 key 重复，否则创建会被拒绝。',
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': '用户创建成功',
@@ -947,6 +1026,7 @@ export const zhCN = {
   'graph.colorMode.community': '社区',
   'graph.hideStructural': '隐藏结构',
   'graph.hideStructural.title': '隐藏结构性节点',
+  'graph.clearSearch': '清空搜索',
   'graph.stats': '{{nodes}} nodes · {{edges}} edges',
 
   // ===== ImportBlockDialog (sample JSON) =====
@@ -1110,4 +1190,63 @@ export const zhCN = {
   'error.timeout': '请求超时，请稍后重试。',
   'error.emptyResponse': '服务返回为空，请稍后重试。',
   'error.fallback': '操作失败，请稍后重试。',
+
+  // ===== 资产分栏布局 =====
+  'assetSplit.resizer.label': '拖拽调整左右栏宽度',
+
+  // ===== Onboarding 首次使用引导（Tea Guide） =====
+  'onboarding.skip': '跳过引导',
+  'onboarding.prev': '上一步',
+  'onboarding.next': '下一步',
+  'onboarding.start': '开始使用',
+  'onboarding.finish': '完成',
+  // 欢迎（startContent，按角色区分）
+  'onboarding.guide.start.admin.title': '欢迎使用 TDAI 面板',
+  'onboarding.guide.start.admin.desc':
+    '你是管理员：负责团队与成员的组织管理。接下来将带你了解面板核心能力，按「下一步」开始。',
+  'onboarding.guide.start.member.title': '欢迎使用 TDAI 面板',
+  'onboarding.guide.start.member.desc':
+    '你是团队成员：可在团队内管理 Agent 与资产。接下来将带你了解面板核心能力，按「下一步」开始。',
+  // 登录身份（Admin / Member 共有）
+  'onboarding.guide.login.title': '你的登录身份',
+  'onboarding.guide.login.desc':
+    '你已通过 user_key 登录。右上角可查看「我的资料」、切换语言或退出登录；资产归属与权限均以当前登录身份为准。',
+  // Admin：新建/切换团队
+  'onboarding.guide.team.title': '新建 / 切换团队',
+  'onboarding.guide.team.desc':
+    '点击左上角切换当前团队。团队是资产、Agent 和 Task 的主要边界；作为管理员，你可以在这里新建团队。',
+  // Admin：新建成员，发放 user key（member 无此权限）
+  'onboarding.guide.memberAdmin.title': '新建成员，发放 user_key',
+  'onboarding.guide.memberAdmin.desc':
+    '作为管理员，你可以在「成员管理」中新建用户账号并发放专属 user_key（仅展示一次），也可以把已有用户拉入团队。普通成员无法创建用户，只能邀请已有用户。',
+  // Member：邀请成员（不能创建用户）
+  'onboarding.guide.member.title': '邀请团队成员',
+  'onboarding.guide.member.desc':
+    '在「成员管理」中可按 user_id 邀请已有用户加入当前团队（你无法创建新用户账号，创建用户需管理员操作）。请让对方在「我的资料」里复制 user_id 发给你。',
+  // Agent 管理（Admin 与 Member 一致，均可编辑）
+  'onboarding.guide.agent.title': '创建并编辑 Agent',
+  'onboarding.guide.agent.desc':
+    '点击「新建 Agent」创建 Agent，可编辑自己的 Agent 并为其绑定 Wiki / Code / Skill / Chat Memory 等资产；他人创建的 Agent 为只读。Admin 与 Member 的操作能力一致。',
+  // 点击 Agent 卡片进入编辑弹窗绑定资产（无 Agent 时回退到新建按钮，文案同步兼容）
+  'onboarding.guide.agentBind.title': '点击 Agent 卡片，绑定团队资产',
+  'onboarding.guide.agentBind.desc':
+    '点击你自己创建的 Agent 卡片（或名称）打开编辑弹窗：在「资源能力」区勾选 Wiki / CodeGraph / Chat Memory 团队资产，保存后立即生效。还没有 Agent？先点「新建 Agent」创建一个，再回来点击它绑定资产。Skill 需在 Skill 页导入时指定归属 Agent。',
+  // Member：key 管理
+  'onboarding.guide.apikey.title': '管理你的 User_Key',
+  'onboarding.guide.apikey.desc':
+    '在「User_Key 管理」中创建用于外部客户端接入的密钥（如 CodeBuddy / ClaudeCode CLI）。key 明文仅展示一次，请复制并妥善保存。',
+  // 资产创建与分配（Admin 与 Member 一致；每个资产页都跳入介绍。
+  // 文案统一按「是什么 → 怎么导入 → 怎么使用」三段展开，帮首次用户建立完整心智）
+  'onboarding.guide.asset.wiki.title': 'Wiki 知识库：团队文档资产',
+  'onboarding.guide.asset.wiki.desc':
+    '是什么：沉淀团队共享文档的知识库。怎么导入：点击「新建 Wiki」创建知识库 → 进入详情上传 Markdown 文件（.md/.txt，支持多选与拖拽）→ 手动触发「知识抽取」生成可检索的知识页面。怎么用：在 Wiki 卡片点「分配给 Agent」，或在 Agent 编辑弹窗勾选；绑定后 Agent 对话时即可检索引用这些文档。',
+  'onboarding.guide.asset.code.title': 'CodeGraph：团队代码资产',
+  'onboarding.guide.asset.code.desc':
+    '是什么：对团队代码仓库建立的索引与调用关系图谱。怎么导入：点击「注册仓库」，粘贴 Git HTTPS 地址，系统自动完成索引构建。怎么用：「分配给 Agent」后，Agent 对话时可直接检索代码、探索调用链，回答仓库相关问题。',
+  'onboarding.guide.asset.skill.title': 'Skill：先分清「团队资产」与「Agent 资产」',
+  'onboarding.guide.asset.skill.desc':
+    '归属：本页有「团队资产」「Agent 资产」两个 tab。团队资产 = 团队共用池，成员都能使用和配置；Agent 资产 = 绑定给某个 Agent 的技能，随该 Agent 可用。导入：点「导入 Skill」（需先创建 Agent），技能默认归属选中的 Agent。使用：绑定后 Agent 命中技能场景即按 SKILL.md 执行；在「Agent 资产」里可对你自己 owner 的技能切换「共享 / 私密」。',
+  'onboarding.guide.asset.memory.title': 'Chat Memory：先分清「团队资产」与「Agent 资产」',
+  'onboarding.guide.asset.memory.desc':
+    '归属：本页同样分「团队资产」「Agent 资产」两个 tab。团队资产 = 团队共享的记忆池；Agent 资产 = 绑定给某个 Agent 的记忆，含每个 Agent 自带的私有记忆。导入：点「导入记忆」，把历史对话导入为 L0，系统自动蒸馏出 L1~L3 分层记忆并挂到指定 Agent。使用：绑定后 Agent 跨会话记住你的偏好与结论；在「Agent 资产」里可对你自己导入的记忆切换「共享 / 私密」。',
 };

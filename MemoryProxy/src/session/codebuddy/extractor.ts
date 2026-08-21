@@ -119,14 +119,20 @@ export function extractTeamFromOptionText(
     teamText = xml.teamAnswer ?? null;
   }
 
-  // 检测"本次不关联"→ bypass
-  if (teamText && (teamText.includes(SKIP_LABEL) || SKIP_RE.test(teamText.trim()))) {
-    return BYPASS_MARKER;
-  }
-
   // 匹配策略（team 选项 label 格式: "team名 (id尾8位)"）
   const hay = teamText ?? content;
   const trimmed = hay.trim();
+
+  // 检测"本次不关联" / SKIP_RE → bypass。
+  // (P1-4) 早期只对 XML 解析出的 teamText 判 SKIP_RE, 非 XML content 走不到;
+  // 真 codex CLI 里 codexFormAnswersAsMessages 把 JSON 答案抽成裸 content
+  // (如 "跳过"), 结果 SKIP_RE 永远不触发 → 走到普通 team 名匹配 → 未命中 →
+  // 被上层 (init.ts pending_team_select) 当"未识别"计 attemptCount, 3 次才
+  // maxRetries 强制 bypass。对齐 extractAgentOnly (line 293) /
+  // extractTaskOnly (line 324) 的姿势: 在正式匹配前无条件测 SKIP_RE。
+  if (SKIP_RE.test(trimmed) || trimmed.includes(SKIP_LABEL)) {
+    return BYPASS_MARKER;
+  }
 
   const exactFull = cachedTeams.find(
     (t) => `${t.team_name} (${t.team_id.slice(-8)})` === trimmed,
@@ -256,6 +262,73 @@ export function extractFromOptionText(
   }
 
   return { agent_id: agentId, task_id: taskId };
+}
+
+// ── codex-only 单题提取器 ─────────────────────────────────────────────────────
+//
+// 2026-08-08 codex session-init 重构：拆分 pending_agent_task 为独立的
+// pending_agent_select + pending_task_select 后，每一步都只提取一个字段。
+// 复用 matchAgentInTeam / matchTaskInTeam 上面的模糊匹配（含 label/name/
+// suffix/substring 兜底），保证 codex handler 传下来的 "AgentName (xxxxxxxx)"
+// 之类原样 label 也能命中。
+//
+// CB 客户端老路径（一发同时问 agent+task）继续走 extractFromOptionText，不
+// 触碰这两个新函数。
+
+/**
+ * 仅从纯文本 answer 里识别一个 agent_id（codex 单 agent_select stage）。
+ *
+ * 返回：
+ *   - BYPASS_MARKER：用户显式表达"跳过/不关联"
+ *   - agent_id：命中候选
+ *   - null：未识别
+ */
+export function extractAgentOnly(
+  content: string,
+  cachedTeams: TeamOption[],
+  selectedTeamId?: string,
+): string | typeof BYPASS_MARKER | null {
+  const team = selectedTeamId
+    ? cachedTeams.find((t) => t.team_id === selectedTeamId)
+    : cachedTeams.length === 1
+      ? cachedTeams[0]
+      : null;
+  if (!team) return null;
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  if (SKIP_RE.test(trimmed) || trimmed.includes(SKIP_LABEL)) return BYPASS_MARKER;
+  return matchAgentInTeam(trimmed, team);
+}
+
+/**
+ * 仅从纯文本 answer 里识别一个 task_id（codex 单 task_select stage）。
+ *
+ * 返回：
+ *   - BYPASS_MARKER：用户显式表达"跳过/不关联"（此处的"不关联任务"由 defaultTaskId
+ *     虚拟条目命中 matchTaskInTeam 走返回 task_id 分支，而不会跑到 BYPASS 分支）
+ *   - task_id：命中候选
+ *   - null：未识别
+ */
+export function extractTaskOnly(
+  content: string,
+  cachedTeams: TeamOption[],
+  selectedTeamId?: string,
+): string | typeof BYPASS_MARKER | null {
+  const team = selectedTeamId
+    ? cachedTeams.find((t) => t.team_id === selectedTeamId)
+    : cachedTeams.length === 1
+      ? cachedTeams[0]
+      : null;
+  if (!team) return null;
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+  // 先尝试匹配真实/虚拟 task 条目（虚拟条目由 fetchTeamsAndAgents 头部注入,
+  // label="本次不关联任务"命中后返回的是 defaultTaskId，符合"跳过 task 但保
+  // 留 agent"契约，不当作 BYPASS）。
+  const matched = matchTaskInTeam(trimmed, team);
+  if (matched) return matched;
+  if (SKIP_RE.test(trimmed) || trimmed.includes(SKIP_LABEL)) return BYPASS_MARKER;
+  return null;
 }
 
 // ── Structured / LLM fallback ──────────────────────────────────────────────────

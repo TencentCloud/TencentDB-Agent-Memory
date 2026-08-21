@@ -1,15 +1,148 @@
 /**
  * ChatMemoryPanel — Memory 页面特有样式。
  *
- * 通用列表容器 / 分栏布局 / 骨架屏 / 选中态 已由
+ * 通用列表容器 / 分栏布局 / 骨架屏 已由
  * ResourcePage/components/asset-list-panel.css 统一提供。
- * 此处仅保留 Memory 特有的样式。
+ * 此处：
+ *   1. 在 _asset-memory-page 作用域下把通用 ALP 列表项改写为「无边框纯背景卡片」样式
+ *      （对齐 Skills 页成熟风格：无边框 + 圆角 + 纯背景，hover 浅灰、选中浅蓝）
+ *   2. 提供 Memory 专属的卡片内部 4 行结构样式（标题+计数 / id / 作者+时间·解绑 / 共享·私密）
  */
 
 ._asset-memory-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* ============================================================
+ * Memory 页面下：把通用 ALP 列表项改写为「无边框纯背景卡片」
+ * （对齐项目 Skills 页 `_memory-personal-asset` 的成熟风格：
+ *   无边框 + 圆角 + 纯背景；hover 浅灰、选中浅蓝）
+ * 仅作用于本页面，不影响 Skills 等复用同一面板的页面。
+ *
+ * 关键：AssetListPanel 结构是 li > button，视觉必须只落在 button 上
+ * （li 保持透明），否则 button 的直角背景会盖住 li 圆角 → 四角被覆盖。
+ * ============================================================ */
+._asset-memory-page ._alp-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* li：去掉 ALP 默认下分隔线，只做圆角定位，不承载背景/边框 */
+._asset-memory-page ._alp-item {
+  border-bottom: none;
+  border-radius: 8px;
+}
+
+/* 视觉全部落在 button：圆角 + 纯背景，hover/选中色统一由 button 呈现 */
+._asset-memory-page ._alp-item-btn {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background-color: var(--tea-color-bg-primary-default);
+  transition: background-color 0.15s ease-in-out;
+}
+
+._asset-memory-page ._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-secondary-default);
+}
+
+._asset-memory-page ._alp-item--selected ._alp-item-btn {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._asset-memory-page ._alp-item--selected ._alp-item-btn:hover {
+  background-color: var(--tea-color-bg-brand-lighten-default);
+}
+
+._asset-memory-page ._alp-item--disabled {
+  opacity: 0.6;
+}
+
+/* ============================================================
+ * Memory 卡片内部 4 行结构
+ * ============================================================ */
+
+/* 第 1 行：标题 + 蓝色计数徽章 */
+._memory-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+
+._memory-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 右上角蓝色计数徽章（如 L0 消息数） */
+._memory-card-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--tea-color-text-brand-default);
+  background-color: var(--tea-color-bg-brand-lighten-default);
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+/* 第 2 行：资产真实 id，等宽灰色 */
+._memory-card-id {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 第 3 行：用户名 + 时间 / 解绑（复用通用 AssetItemBadges 容器，与 Skills 页同构）
+   时间戳走通用 ._alp-item-time（已声明 12px / secondary + margin-left:auto 靠右），
+   此处只对 memory 特有部分做覆盖。 */
+
+/* 用户名徽章：与时间戳统一字号（覆盖通用 ._alp-badge 的 11px） */
+._memory-card ._alp-badge {
+  font-size: 12px;
+}
+
+/* 「解绑」红色链接文字按钮：靠右对齐（对齐 AssetItemTime 的 margin-left:auto） */
+._memory-card-unbind {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--tea-color-text-warning-default);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s ease-in-out;
+}
+
+._memory-card-unbind:hover {
+  opacity: 0.75;
+  text-decoration: underline;
+}
+
+/* 第 4 行：共享/私密切换 */
+._memory-card-scope {
+  margin-top: 10px;
 }
 
 /* ===== Memory 特有：已私密警告徽章 ===== */
@@ -32,27 +165,6 @@
   margin-left: 6px;
 }
 
-/* ===== Memory 特有：解绑按钮 ===== */
-._memory-block-item-unbind {
-  position: absolute;
-  right: 8px;
-  top: 8px;
-  z-index: 10;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  color: var(--tea-color-text-secondary);
-  background: var(--tea-color-bg-secondary-default);
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out;
-}
-
-._memory-block-item-unbind:hover {
-  background: var(--tea-color-bg-primary-default);
-  color: var(--tea-color-text-primary);
-}
-
 /* ===== 详情面板容器 ===== */
 ._memory-detail-panel {
   min-height: 480px;
@@ -72,7 +184,17 @@
 
 /* ===== BlockDetail 头部 ===== */
 ._memory-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
+}
+
+/* 左侧标题 + meta 信息列，占据剩余宽度 */
+._memory-detail-header-info {
+  min-width: 0;
+  flex: 1;
 }
 
 ._memory-detail-title {
@@ -81,6 +203,22 @@
   color: var(--tea-color-text-primary);
   line-height: 1.4;
   word-break: break-all;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+._memory-detail-title-name {
+  font-weight: 600;
+}
+
+/* 名字旁弱化展示的真实 id */
+._memory-detail-title-id {
+  font-size: 12px;
+  font-weight: 400;
+  font-family: var(--font-mono);
+  color: var(--tea-color-text-tertiary);
 }
 
 ._memory-detail-meta {
@@ -100,7 +238,7 @@
 }
 
 ._memory-detail-mono {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-secondary);
 }
 
@@ -126,7 +264,9 @@
   border-radius: 6px;
   background: var(--tea-color-bg-primary-default);
   cursor: pointer;
-  transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out;
+  transition:
+    background-color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out;
   font: inherit;
   color: inherit;
 }
@@ -157,7 +297,7 @@
 
 ._memory-detail-layer-count {
   font-size: 11px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   color: var(--tea-color-text-tertiary);
 }
 
@@ -181,16 +321,61 @@
 ._memory-detail {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  /* 撑满右栏高度（外层 _asset-split-detail 已限定视口高度），内部body滚动，头部固定 */
+  height: 100%;
   min-height: 0;
+  /* 卡片外框：与左栏列表（_alp）、Skills 右栏详情（_memory-skill-detail-card）视觉统一 */
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+}
+
+/* 详情空态：同样套卡片外框并撑满高度，避免"贴边灰底"与留白 */
+._memory-detail-empty-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 480px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+  font-size: 13px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* 窄屏堆叠布局下（AssetSplitLayout 取消高度限制），卡片也回归文档流高度 */
+@media (max-width: 960px) {
+  ._memory-detail {
+    height: auto;
+    min-height: 480px;
+  }
+
+  ._memory-detail-empty-card {
+    height: auto;
+  }
 }
 
 /* ===== 层内容区 ===== */
+/* 唯一滚动容器：L1/L2/L3 列表在此滚动；L0 由内部 _memory-chat-scroll 自管滚动锚点，
+   两者不会同时出现（互斥渲染），故不会产生双层滚动条 */
 ._memory-detail-body {
   flex: 1;
   min-height: 200px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+}
+
+/* L0 聊天滚动容器：需自管"滚到底 / 加载更早"的锚点，作为独立滚动容器 */
+._memory-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 ._memory-detail-skeleton {
@@ -207,8 +392,187 @@
 }
 
 @keyframes _memory-detail-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 通用骨架元素：圆角矩形 + 呼吸动画（行级文字骨架用） */
+._memory-detail-skel-line {
+  height: 12px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+}
+
+._memory-detail-skel-line--xs {
+  width: 60px;
+  height: 10px;
+}
+
+/* ===== 进入 L0（聊天流）的加载骨架 ===== */
+._memory-detail-skeleton--l0 {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 4px;
+}
+
+._memory-detail-skel-chat-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+._memory-detail-skel-chat-row--user {
+  flex-direction: row-reverse;
+}
+
+._memory-detail-skel-chat-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+}
+
+._memory-detail-skel-chat-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+  max-width: 70%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+}
+
+/* flex column 子项默认按 content 尺寸收缩（无文字内容 → 0 宽），
+   显式 width: 100% 让骨架线撑满气泡列宽，避免气泡被压窄成竖条。 */
+._memory-detail-skel-chat-bubble ._memory-detail-skel-line {
+  width: 100%;
+}
+
+._memory-detail-skel-chat-row--user ._memory-detail-skel-chat-bubble {
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+
+/* system 行（居中通栏胶囊） */
+._memory-detail-skel-chat-system {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+}
+
+/* ===== 进入 L1/L2/L3（原子记忆）的加载骨架 ===== */
+._memory-detail-skeleton--l1,
+._memory-detail-skeleton--l2,
+._memory-detail-skeleton--l3 {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+._memory-detail-skel-atomic {
+  /* 与真实 _memory-detail-atomic-item 一致：padding 12px 14px，圆角 8px，浅边 + 微阴影 */
+  padding: 12px 14px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+}
+
+/* 进入 L2 时只有标题行：去掉底部 padding / 阴影，让卡片高度贴合 head 实际高度 */
+._memory-detail-skel-atomic--headonly {
+  padding-bottom: 12px;
+}
+
+._memory-detail-skel-atomic--headonly ._memory-detail-skel-atomic-head {
+  padding-bottom: 0;
+  box-shadow: none;
+}
+
+._memory-detail-skel-atomic-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* head 不再占 margin-bottom；间距由 body 的 padding-top + head 的 box-shadow 1px 承担，
+     与真实条目 head(padding-bottom: 8px) + body(margin-top: 8px) 的 16px 呼吸空间对齐 */
+  padding-bottom: 8px;
+  box-shadow: 0 1px 0 var(--tea-color-border-secondary-default);
+}
+
+._memory-detail-skel-block {
+  background: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+._memory-detail-skel-block--layer {
+  flex-shrink: 0;
+  /* 真实 _memory-detail-atomic-layer 高度 ≈ 16px（10px 字号 + 3+3 padding + 2 line-height） */
+  width: 24px;
+  height: 16px;
+}
+
+/* 头部层级徽章配色（与真实原子条目 _memory-detail-atomic-layer--* 对齐） */
+._memory-detail-skel-block--layer._memory-detail-skel-block--brand {
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+._memory-detail-skel-block--layer._memory-detail-skel-block--success {
+  background: var(--tea-color-bg-success-lighten-default);
+}
+._memory-detail-skel-block--layer._memory-detail-skel-block--warning {
+  background: var(--tea-color-bg-warning-lighten-default);
+}
+
+._memory-detail-skel-block--title {
+  flex: 1;
+  min-width: 60px;
+  /* 真实标题 13px 字号 + 1.5 line-height ≈ 19.5px；骨架用 16px 居中 */
+  height: 16px;
+}
+
+._memory-detail-skel-block--time {
+  flex-shrink: 0;
+  width: 56px;
+  height: 12px;
+}
+
+._memory-detail-skel-block--more {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+}
+
+._memory-detail-skel-block--chevron {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+._memory-detail-skel-body {
+  /* 与真实 body 区对齐：margin-top: 8px + padding-top: 8px = 16px 间距（上沿分隔由 head box-shadow 提供） */
+  margin-top: 8px;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* L3 正文骨架首行高一点，贴合 MarkdownView 标题级字号 */
+._memory-detail-skeleton--l3 ._memory-detail-skel-body {
+  padding-top: 8px;
 }
 
 ._memory-detail-empty {
@@ -218,121 +582,249 @@
   color: var(--tea-color-text-tertiary);
 }
 
-/* ===== L0 对话原文（聊天气泡式） ===== */
-/* 撑满层内容区剩余高度；视口高度兜底封顶，避免左栏很短时整页被拉得过长 */
-._memory-detail-l0-scroll {
-  flex: 1;
-  min-height: 200px;
-  max-height: calc(100vh - 320px);
-  overflow-y: auto;
+._memory-detail-empty--warn {
+  color: var(--tea-color-text-warning, #e6a23c);
 }
 
-._memory-detail-l0-more {
+/* ===== 时间筛选器（L0 / L1，使用 Tea RangePicker）===== */
+/* 置于详情头部右上角，随标题行顶部对齐，不随内容宽度收缩 */
+._memory-detail-timefilter {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ===== 浏览 / 搜索 模式切换（详情头部右上角）===== */
+._memory-detail-mode {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* 分段控件容器：两个互斥按钮 */
+._memory-detail-mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--tea-color-bg-secondary, #f2f3f5);
+  border: 1px solid var(--tea-color-border, #e5e6eb);
+}
+
+._memory-detail-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 12px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--tea-color-text-secondary, #86909c);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+._memory-detail-mode-btn:hover:not(:disabled):not(._memory-detail-mode-btn--active) {
+  color: var(--tea-color-text-primary, #1d2129);
+}
+
+._memory-detail-mode-btn--active {
+  background: var(--tea-color-bg-primary, #fff);
+  color: var(--tea-color-primary, #0052d9);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+._memory-detail-mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== L0 对话原文（IM 聊天布局：头像 + 气泡）===== */
+/*顶部「加载更早」区 */
+._memory-chat-more {
   display: flex;
   justify-content: center;
-  padding: 2px 0 10px;
+  padding: 4px 0 14px;
 }
 
-._memory-detail-l0-more-btn {
-  border: none;
-  background: none;
-  padding: 0;
+._memory-chat-more-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 999px;
+  background: var(--tea-color-bg-primary-default);
   cursor: pointer;
   font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  transition:
+    background-color 0.15s ease-in-out,
+    color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out;
+}
+
+._memory-chat-more-btn:hover {
   color: var(--tea-color-text-brand-default);
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-brand-lighten-default);
 }
 
-._memory-detail-l0-more-btn:hover {
-  text-decoration: underline;
+._memory-chat-more-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
 }
 
-._memory-detail-l0-more-text {
+._memory-chat-more-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--tea-color-border-primary-default);
+  border-top-color: var(--tea-color-text-brand-default);
+  border-radius: 50%;
+  animation: _memory-chat-spin 0.7s linear infinite;
+}
+
+@keyframes _memory-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+._memory-chat-more-end {
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
 }
 
-._memory-detail-l0-list {
+/* 消息流：整体纵向排布，行间距稍大让气泡有呼吸感 */
+._memory-chat-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 18px;
+  padding: 4px 2px;
 }
 
-._memory-detail-l0-row {
+/* 单行：主体左右分列，assistant 左、user 右 */
+._memory-chat-row {
   display: flex;
+  align-items: flex-start;
+  max-width: 100%;
 }
 
-._memory-detail-l0-row--user {
+._memory-chat-row--user {
   justify-content: flex-end;
 }
 
-._memory-detail-l0-row--assistant {
-  justify-content: flex-start;
-}
-
-._memory-detail-l0-row--system {
-  justify-content: stretch;
-}
-
-/* 气泡：assistant 左对齐白底，user 右对齐品牌浅色，system 通栏提示条 */
-._memory-detail-l0-bubble {
-  max-width: 85%;
+/* 主体：meta（角色 + 时间）在气泡上方，气泡随行左右靠 */
+._memory-chat-main {
   min-width: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--tea-color-border-primary-default);
-  background: var(--tea-color-bg-primary-default);
-  border-radius: 2px 8px 8px 8px;
-}
-
-._memory-detail-l0-row--user ._memory-detail-l0-bubble {
-  background: var(--tea-color-bg-brand-lighten-default);
-  border-color: transparent;
-  border-radius: 8px 2px 8px 8px;
-}
-
-._memory-detail-l0-row--system ._memory-detail-l0-bubble {
-  max-width: 100%;
-  width: 100%;
-  background: var(--tea-color-bg-warning-lighten-default);
-  border-color: transparent;
-  border-radius: 6px;
-}
-
-._memory-detail-l0-bubble-head {
+  max-width: 85%;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-chat-row--user ._memory-chat-main {
+  align-items: flex-end;
+}
+
+._memory-chat-meta {
+  display: flex;
+  align-items: baseline;
   gap: 8px;
-  margin-bottom: 4px;
+  padding: 0 2px;
 }
 
-._memory-detail-l0-role {
-  flex-shrink: 0;
+._memory-chat-row--user ._memory-chat-meta {
+  flex-direction: row-reverse;
+}
+
+._memory-chat-role {
   font-size: 10px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-weight: 600;
-  text-transform: uppercase;
+  font-family: var(--font-mono);
+  font-weight: 700;
   letter-spacing: 0.4px;
+  color: var(--tea-color-text-secondary);
 }
 
-._memory-detail-l0-role--user { color: var(--tea-color-text-brand-default); }
-._memory-detail-l0-role--system { color: var(--tea-color-text-warning-default); }
-._memory-detail-l0-role--assistant { color: var(--tea-color-text-secondary); }
-
-._memory-detail-l0-time {
-  flex-shrink: 0;
+._memory-chat-time {
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
   white-space: nowrap;
 }
 
-._memory-detail-l0-body {
+/* 气泡：柔和圆角 + 细边+ 轻阴影 + hover 抬升；尾部小缺角贴合头像侧 */
+._memory-chat-bubble {
+  position: relative;
+  max-width: 100%;
+  padding: 9px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  background: var(--tea-color-bg-primary-default);
+  box-shadow: var(--tea-shadow-xs);
+  transition: box-shadow 0.15s ease-in-out;
+}
+
+._memory-chat-bubble:hover {
+  box-shadow: var(--tea-shadow-sm);
+}
+
+/* assistant / tool：左侧，左上角收一个尖角贴向头像 */
+._memory-chat-bubble--assistant,
+._memory-chat-bubble--tool {
+  border-top-left-radius: 3px;
+}
+
+/* user：右侧，品牌浅底、无边、右上角收尖角 */
+._memory-chat-bubble--user {
+  border-top-right-radius: 3px;
+  border-color: transparent;
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+
+._memory-chat-body {
   margin: 0;
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--tea-color-text-primary);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
+}
+
+/* system：居中通栏胶囊提示 */
+._memory-chat-system {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 90%;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--tea-color-bg-secondary-default);
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+._memory-chat-system svg {
+  flex-shrink: 0;
+}
+
+._memory-chat-system-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+._memory-chat-system-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 /* ===== L1/L2/L3 原子列表 ===== */
@@ -342,35 +834,63 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
-/* 条目卡片：标题行与正文同处一张白底卡片，避免「标题浮在灰底、正文另起白盒」的割裂感 */
+/* 条目卡片：标题行与正文同处一张白底卡片，避免「标题浮在灰底、正文另起白盒」的割裂感。
+   li 自身不设内边距——间距全部交给 head（12px）与正文区（expand-inner / md）各自负责，
+   这样收起态（只有 head）时卡片高度恰好贴合 head，不会因 li padding 与 head margin
+   叠加/抵消不当导致标题贴顶或卡片偏矮。 */
 ._memory-detail-atomic-item {
-  padding: 10px 12px;
+  padding: 0;
   border: 1px solid var(--tea-color-border-primary-default);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--tea-color-bg-primary-default);
-  transition: border-color 0.15s ease-in-out;
+  box-shadow: var(--tea-shadow-xs);
+  /* 不要在此设 overflow:hidden——它会让 head 的 position:sticky 吸顶失效
+     （overflow 会将 li 变成 sticky 的滚动容器，而 li 本身无额外滚动空间，故无法吸附）。
+     head 现已与卡片边缘对齐、无越界溢出，无需裁切；圆角由 head 自身的 border-radius 保证。 */
+  transition:
+    border-color 0.15s ease-in-out,
+    box-shadow 0.15s ease-in-out;
 }
 
 ._memory-detail-atomic-item:hover {
-  border-color: var(--tea-color-border-secondary-default);
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: var(--tea-shadow-sm);
 }
 
-/* 标题行：层级徽章 + 标题 + 右侧（loading/时间/展开箭头） */
+/* 标题行：层级徽章 + 标题 + 右侧（loading/时间/展开箭头）。
+   作为条目头部 sticky 固定：滚动时当前可见记忆的标题行吸顶，便于长列表中定位。
+   sticky 范围受每条记忆卡片（li）约束——当该记忆滚出视口时头部随之释放，不会被下一条顶住。
+   li 无内边距，head 自带 12px padding 并与卡片边缘对齐，故无需负 margin。
+   顶部圆角继承 li 的 8px，避免白底方块遮住卡片左上/右上角。
+   分隔线（底部 box-shadow）不在这里画——只有有正文时（--with-body）才显示，
+   L2 未展开时下方无内容，直接展示标题、无横线。
+   注：L0 聊天流走独立滚动容器（_memory-chat-scroll），不经过此列表，故天然不受影响。 */
 ._memory-detail-atomic-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  margin: 0;
+  padding: 12px;
+  background: var(--tea-color-bg-primary-default);
+  border-radius: 8px 8px 0 0;
+}
+
+/* 有正文时：head 底部画 1px 分隔线，衔接下方正文（或加载骨架）。
+   L2 未展开（无正文）不加此 class，故无横线；展开 / 加载中才加。 */
+._memory-detail-atomic-head--with-body {
+  box-shadow: 0 1px 0 var(--tea-color-border-secondary-default);
 }
 
 ._memory-detail-atomic-head--btn {
-  width: 100%;
   border: none;
-  background: none;
-  padding: 0;
   font: inherit;
   color: inherit;
   text-align: left;
@@ -384,7 +904,7 @@
 ._memory-detail-atomic-layer {
   flex-shrink: 0;
   font-size: 10px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
   line-height: 1;
   padding: 3px 5px;
@@ -435,6 +955,24 @@
   color: var(--tea-color-text-tertiary);
 }
 
+/* 正文行骨架（多行堆叠，仿 MarkdownView 的文本行形态）。
+   用于 L2 展开加载正文 / L1、L3 加载正文时，标题保持真实展示，仅正文区进入骨架。
+   分隔线由 head 的 box-shadow 承担，此处不重复。 */
+._memory-detail-atomic-body-skel {
+  margin-top: 8px;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+._memory-detail-atomic-body-skel-line {
+  height: 12px;
+  border-radius: 4px;
+  background-color: var(--tea-color-bg-secondary-default);
+  animation: _memory-detail-pulse 1.5s ease-in-out infinite;
+}
+
 ._memory-detail-atomic-time {
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
@@ -446,15 +984,33 @@
   transition: transform 0.15s ease-in-out;
 }
 
+/* chevron 独立可点击区域：扩大热区、给出手势与 hover 反馈 */
+._memory-detail-atomic-chevron-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+._memory-detail-atomic-chevron-btn:hover {
+  background-color: var(--tea-color-bg-secondary-default);
+}
+
+._memory-detail-atomic-chevron-btn:hover ._memory-detail-atomic-chevron {
+  color: var(--tea-color-text-secondary);
+}
+
 ._memory-detail-atomic-chevron--open {
   transform: rotate(180deg);
 }
 
-/* 正文区：与标题行同属一张卡片，用细分隔线衔接层级 */
+/* 正文区：与标题行同属一张卡片。head 的 box-shadow 1px 已作为正文上分隔线，
+   此处不再重复 border-top，避免双线。 */
 ._memory-detail-atomic-body {
   margin: 8px 0 0;
-  padding-top: 8px;
-  border-top: 1px solid var(--tea-color-border-secondary-default);
+  padding: 8px 12px 12px;
   font-size: 13px;
   line-height: 1.6;
   color: var(--tea-color-text-primary);
@@ -463,17 +1019,38 @@
   font-family: inherit;
 }
 
-/* L2/L3 正文使用共享 MarkdownView（bare 变体），此处仅补条目内衔接 */
+/* L2 正文逐渐展开/收起：外层 grid 0fr↔1fr 过渡高度，配合透明度淡入淡出。
+   内容常驻 DOM（未展开时 0fr 高度为 0），展开时高度与透明度一起平滑过渡。 */
+._memory-detail-atomic-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.25s ease-out,
+    opacity 0.25s ease-out;
+}
+
+._memory-detail-atomic-expand--open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* 内层裁剪容器：0fr 时裁掉内容，保证高度为 0 且正文不溢出 */
+._memory-detail-atomic-expand-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* L2/L3 正文使用共享 MarkdownView（bare 变体），head 已画分隔线，此处不重复 border-top。
+   li 无内边距，正文自带左右/底部 12px 内边距，顶部 8px 与 head 分隔线留白。 */
 ._memory-detail-atomic-md {
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--tea-color-border-secondary-default);
+  padding: 8px 12px 12px;
 }
 
 ._memory-detail-atomic-no-body {
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--tea-color-border-secondary-default);
+  padding: 8px 12px 12px;
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
 }
@@ -484,6 +1061,7 @@
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  padding: 0 12px 12px;
   font-size: 11px;
   color: var(--tea-color-text-tertiary);
 }
@@ -497,40 +1075,81 @@
   font-weight: 500;
 }
 
-/* ===== 分页器 ===== */
+/* ===== 分页器（与任务看板一致，居中的 Tea Pagination） ===== */
 ._memory-detail-pager {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: center;
   margin-top: 12px;
+}
+
+/* ===== L1 语义搜索框 ===== */
+._memory-detail-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+._memory-detail-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+._memory-detail-search-count {
   font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  white-space: nowrap;
+}
+
+._memory-detail-search-score {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 原子条目操作入口（三个点下拉：编辑 / 复制）===== */
+/* 三点按钮容器：位于时间右侧，阻止冒泡避免触发 L2 折叠 */
+._memory-detail-atomic-actions {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 三点触发按钮（tea Button type=text）：紧凑尺寸，与时间/chevron 对齐 */
+._memory-detail-atomic-more.tea-btn {
+  min-width: auto;
+  height: 20px;
+  padding: 0 4px;
+  line-height: 1;
   color: var(--tea-color-text-tertiary);
 }
 
-._memory-detail-pager-btns {
-  display: flex;
-  gap: 8px;
-}
-
-._memory-detail-pager-btn {
-  padding: 4px 12px;
-  border: 1px solid var(--tea-color-border-primary-default);
-  border-radius: 4px;
-  background: var(--tea-color-bg-primary-default);
-  cursor: pointer;
-  font-size: 12px;
+._memory-detail-atomic-more.tea-btn:hover {
   color: var(--tea-color-text-primary);
-  transition: background-color 0.15s ease-in-out;
 }
 
-._memory-detail-pager-btn:hover:not(:disabled) {
-  background-color: var(--tea-color-bg-secondary-default);
+/* L2 展开加载态：复用 chat spinner 动画，占位与 chevron 相同 */
+._memory-detail-atomic-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
-._memory-detail-pager-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+/* ===== 编辑 Modal ===== */
+._memory-detail-edit-name {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  word-break: break-all;
+}
+
+._memory-detail-edit-textarea,
+._memory-detail-edit-textarea textarea {
+  width: 100%;
+  min-height: 360px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 /* 内容区域 — 无边框，纯背景 + 圆角 */
@@ -618,7 +1237,7 @@
 
 ._cm-personal-asset-id {
   margin-top: 4px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--tea-color-text-tertiary);
   overflow: hidden;

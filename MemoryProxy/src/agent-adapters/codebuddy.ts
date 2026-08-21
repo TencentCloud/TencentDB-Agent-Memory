@@ -35,7 +35,7 @@ import type { AgentAdapter } from "./types.js";
 export const codebuddyAdapter: AgentAdapter = {
   agentKind: "codebuddy",
 
-  classifyRequest() {
+  classifyRequest(_body?, _path?, _headers?) {
     // 抓包实证：CB 请求无 cache_control marker、tools 稳定 26 个，没有 CC 的
     // fork/sidequery 分流特征。所有请求都是主对话，走完整 (injection + L0 + skill)。
     return "main";

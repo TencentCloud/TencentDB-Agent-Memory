@@ -1,7 +1,11 @@
 /**
  * Guard Adapter — minimal bridge between host project and @context-proxy/cost-guard.
  *
- * This is the ONLY file in the host that imports from the cost-guard package.
+ * This file and its sibling `request-prepare-adapter.ts` are the only two in
+ * the host that import the cost-guard package: this one owns the *routing* half
+ * (where a request goes), the sibling owns the *request-preparation* half (an
+ * optional rewrite of the outgoing body). Keep every other module free of it.
+ *
  * It maps host's ProxyConfig → GuardConfig and injects host's log/opik as GuardDeps.
  *
  * **Graceful degradation**: If the private extension package is not available
@@ -39,8 +43,9 @@ interface RetryTarget {
 /**
  * ForwardTarget — the generic forwarding instruction returned by the extension.
  *
- * The host only understands transport-level fields; any routing semantics the
- * extension may attach are ignored and never surfaced.
+ * The host understands the transport-level fields plus the two accounting
+ * values below (`turnSeq`, `routedFrom`); every other routing semantic the
+ * extension may attach is ignored and never surfaced.
  */
 export interface ForwardTarget {
   url: string;
@@ -56,6 +61,16 @@ export interface ForwardTarget {
    * collision-free.
    */
   turnSeq: number;
+  /**
+   * The model the client asked for, when the extension chose to forward to a
+   * different one. "" = forwarded as requested, which is also what every
+   * passthrough returns.
+   *
+   * Carried for cost accounting only: `credit_saved` prices one usage record
+   * twice, once under this model and once under the model actually called. The
+   * host never makes a forwarding decision from it.
+   */
+  routedFrom: string;
 }
 
 /** resolveForwardTarget 的输入参数。 */
@@ -95,6 +110,8 @@ export interface ForwardTargetRequest {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let CostGuardClass: any = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let extensionModule: any = null;
 let setDebugFn: ((enabled: boolean) => void) | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let resolveAgentProfileFn: ((ctx: any, pinned?: string) => any) | null = null;
@@ -106,6 +123,7 @@ let costGuardAvailable = false;
 const COST_GUARD_MODULE = "@context-proxy/cost-guard";
 try {
   const mod = await import(/* @vite-ignore */ COST_GUARD_MODULE);
+  extensionModule = mod;
   CostGuardClass = mod.CostGuard;
   setDebugFn = mod.setAnalyzerDebug;
   resolveAgentProfileFn = mod.resolveAgentProfile;
@@ -129,6 +147,31 @@ export function setExtensionDebug(enabled: boolean): void {
   }
 }
 
+/**
+ * Start the private management listener using opaque extension options. The
+ * host neither parses MongoDB settings nor owns the control-plane protocol.
+ */
+export async function startPrivateControlPlane(config: ProxyConfig): Promise<boolean> {
+  if (!extensionModule || typeof extensionModule.startManagedControlPlane !== "function") return false;
+  const requestPrepare = config.costGuard.options.requestPrepare;
+  const compressorEnabled = Boolean(
+    requestPrepare &&
+    typeof requestPrepare === "object" &&
+    !Array.isArray(requestPrepare) &&
+    (requestPrepare as Record<string, unknown>).enabled === true,
+  );
+  return extensionModule.startManagedControlPlane(
+    config.costGuard.options,
+    { routerEnabled: config.costGuard.enabled, compressorEnabled },
+  ) as Promise<boolean>;
+}
+
+/** Stop the private management listener during host shutdown. */
+export async function shutdownPrivateControlPlane(): Promise<void> {
+  if (!extensionModule || typeof extensionModule.shutdownManagedControlPlane !== "function") return;
+  await extensionModule.shutdownManagedControlPlane();
+}
+
 // ─── Singleton CostGuard instance ────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,6 +192,10 @@ function getCostGuard(config: ProxyConfig): unknown {
     const options: Record<string, unknown> = { ...config.costGuard.options };
     const extraOptions = options.badcaseCollector;
     delete options.badcaseCollector;
+    // Belongs to the request-preparation adapter, not the router. Dropping it
+    // keeps credentials nested inside it out of a component that has no use
+    // for them.
+    delete options.requestPrepare;
     const guardConfig = {
       ...options,
       enabled: config.costGuard.enabled,
@@ -264,6 +311,7 @@ function buildPassthroughTarget(req: ForwardTargetRequest): ForwardTarget {
     bodyOverrides: null,
     retryTarget: null,
     turnSeq: 0,
+    routedFrom: "",
   };
 }
 
@@ -357,7 +405,9 @@ export async function resolveForwardTarget(
     log.debug("guard_adapter.passthrough", { reason: "extension_unavailable", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
-  if (!config.costGuard.enabled) {
+  // Preserve the historical master switch unless the private control plane is
+  // configured to make a request-specific activation decision.
+  if (!config.costGuard.enabled && config.costGuard.options.controlPlane === undefined) {
     log.debug("guard_adapter.passthrough", { reason: "extension_disabled", requestPath: req.requestPath });
     return buildPassthroughTarget(req);
   }
@@ -369,7 +419,12 @@ export async function resolveForwardTarget(
     bodyOverrides: Record<string, unknown> | null;
     retryTarget: RetryTarget | null;
     turnSeq?: number;
+    logMeta?: Record<string, unknown>;
   };
+
+  // The extension stamps `logMeta.routedFrom` only when it forwarded to a model
+  // other than the requested one; the rest of that blob stays opaque.
+  const routedFrom = raw.logMeta?.routedFrom;
 
   return {
     url: raw.url,
@@ -378,6 +433,7 @@ export async function resolveForwardTarget(
     bodyOverrides: raw.bodyOverrides ?? null,
     retryTarget: raw.retryTarget ?? null,
     turnSeq: raw.turnSeq ?? 0,
+    routedFrom: typeof routedFrom === "string" ? routedFrom : "",
   };
 }
 

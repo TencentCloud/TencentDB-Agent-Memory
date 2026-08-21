@@ -28,6 +28,8 @@ export interface PutObjectOptions {
   contentType?: string;
   /** Custom metadata key-value pairs. */
   metadata?: Record<string, string>;
+  /** Object tags used by COS lifecycle rules. Ignored by local filesystem storage. */
+  tags?: Record<string, string>;
 }
 
 /** A retrieved storage object. */

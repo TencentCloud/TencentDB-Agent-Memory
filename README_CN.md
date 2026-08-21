@@ -14,7 +14,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[安装](#安装) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
+[安装](#安装) · [支持的 Agent](#所有-agent-共享同一个-memory-server) · [项目简介](#tencentdb-agent-memory-是什么) · [团队玩法](#一种玩法给一个人的公司组一支会成长的-agent-队伍) · [技术实现](#技术实现) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [English](./README.md) · [**简体中文**](./README_CN.md)
 
@@ -50,6 +50,29 @@ $EDITOR .env       # 填入两组 LLM 参数（memory 组 + proxy 组）
 
 如果你已经在用旧版（v1.x / v0.x），希望把存量数据迁到 v2.0.0+，我们提供了一个数据迁移工具：
 用法和参数详见 [**数据迁移工具（v2 → v3）**](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)。全新安装可跳过。
+
+## 所有 Agent 共享同一个 Memory Server
+
+一套 Proxy，协议不变，零代码接入——把 Agent 的 base URL 指向 Proxy 即可，不需要插件、Hook 或 MCP Server。
+
+<table>
+<tr>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-deepseek-harness-dsh"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-claude-code"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-codex"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-codebuddy"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
+</tr>
+<tr>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-workbuddy"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-hermes"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#通过-proxy-使用-openclaw"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL_CN.md#其他平台接入通用"><sub><b>更多框架适配中...</b></sub></a></td>
+</tr>
+</table>
+
+各客户端具体配置步骤见 [**INSTALL_CN.md**](./INSTALL_CN.md)。
+
+没看到你常用的 Agent？[通用接入指南](./INSTALL_CN.md#其他平台接入通用) 可以试试自己动手适配——也欢迎直接提 PR 为它加上原生支持，参见 [**CONTRIBUTING_CN.md**](./CONTRIBUTING_CN.md)。
 
 # TencentDB Agent Memory 是什么？
 
@@ -258,10 +281,10 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 - Wiki 和 CodeGraph 异步构建，需要等待一定时间处理才能 `ready`。
 - CodeGraph 当前首先支持公开 HTTPS 仓库；私有仓库和 SSH 凭证接入仍在完善。
 - Hub 已支持人工绑定资产；全自动记忆路由仍在迭代。
-- 当前提供 OpenClaw、Hermes、Claude Code、CodeBuddy 和 SDK 接入；更广泛的跨框架迁移仍在 Roadmap 中。
 
 ## 相关文档
 
+- [路线图](./ROADMAP_CN.md)（接下来要做什么）
 - [完整安装指南](./INSTALL_CN.md)（Memory Core + Hub + Proxy 一键部署）
 - [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
 - [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
@@ -297,7 +320,7 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 - 💡 **有想法想交流？** 欢迎在 [GitHub Discussions](https://github.com/Tencent/TencentDB-Agent-Memory/discussions) 发起讨论。
 - 🛠️ **想贡献代码？** 请先阅读 [CONTRIBUTING.md](./CONTRIBUTING_CN.md)。
 - 💬 **想加入交流群？** 扫码加入 **Agent Memory 微信社群**，与早期开发者直接对话。
-<p align="center"><img src="https://github.com/user-attachments/assets/df46d340-572e-4d08-849a-ba25e9e990e1" width="200" alt="Agent Memory 微信社群二维码" />
+<p align="center"><img src="https://github.com/user-attachments/assets/3d762dc0-3e51-4a63-8ded-1ad60c4fe612" width="200" alt="Agent Memory 微信社群二维码" />
 
 ---
 
@@ -335,5 +358,16 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
   </tr>
 </table>
 
+---
+
+## Star 趋势
+
+<p align="center">
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
+</p>
+
+---
 
 [MIT](./LICENSE) © TencentDB Agent Memory Team

@@ -2,7 +2,7 @@ import type { ChatMemoryLayerItem } from '@/lib/teamApi';
 
 export type MemoryLayer = 'L0' | 'L1' | 'L2' | 'L3';
 
-export type ScopeTab = 'all' | 'team' | 'fixed' | 'scope' | 'personal';
+export type ScopeTab = 'team' | 'fixed';
 
 export type LayerTone = 'default' | 'brand' | 'success' | 'warning';
 
@@ -42,6 +42,8 @@ export interface MemoryBlock {
     L3: AtomicItem[];
   };
   layerCounts: Partial<Record<MemoryLayer, number>>;
+  /** L0 在当前时间筛选下是否已加载到最早（「加载更早」无新增数据时置位，用于隐藏入口） */
+  l0Ended?: boolean;
 }
 
 export interface AgentOption {

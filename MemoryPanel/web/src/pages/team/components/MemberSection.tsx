@@ -1,10 +1,10 @@
 /**
  * MemberSection —— team 成员列表 + 移除操作。
- * AddMemberDialog / CreatedUserKeyModal —— 添加已有用户 / 新建用户弹窗（拆自 TeamManagementPanel）。
+ * AddMemberDialog / CreatedUserKeyModal —— 添加已有用户 / 新建用户弹窗。
  */
 
 import { useState } from 'react';
-import { Alert, Button, Copy, Form, Input, Modal, Segment, Select, Tag } from 'tea-component';
+import { Alert, Button, Copy, Form, Input, Modal, Segment, Select, Switch, Tag } from 'tea-component';
 import { useTranslation } from 'react-i18next';
 import { AddIcon, CloseIcon } from 'tea-icons-react';
 import { isTeamAdmin, invalidateBackendCache, type Team } from '@/services';
@@ -61,12 +61,12 @@ export function MemberSection({
           </div>
         </div>
         {canAddMember && (
-          <Button onClick={onAdd} title={t('member.add.tooltip')}>
+          <Button onClick={onAdd} title={t('member.add.tooltip')} data-guide="add-member">
             <AddIcon size={14} /> {t('member.add')}
           </Button>
         )}
       </div>
-      <div className="_memory-member-grid">
+      <div className="_memory-member-grid" data-guide="members-list">
         {team.members.map((m) => {
           const isOwner = team.owner_user_id === m.user_id;
           const canRemove = canRemoveMember(team, m.user_id, currentUser, _globalAdmin);
@@ -180,6 +180,9 @@ export function AddMemberDialog({
 
   // 新建用户表单
   const [newUsername, setNewUsername] = useState('');
+  // 自定义 user_key 开关（仅新建用户模式生效）：默认关 → 内核自动生成；开启 → 走 user/create-with-key
+  const [customKeyEnabled, setCustomKeyEnabled] = useState(false);
+  const [customKey, setCustomKey] = useState('');
 
   const canGrantAdmin = isTeamAdmin(team, currentUser) || _globalAdmin;
   // user/create 须 system_admin 权限（见 docs/api/metadata-api.md §1.4），
@@ -222,16 +225,25 @@ export function AddMemberDialog({
       setError(t('addMember.error.invalidName'));
       return;
     }
+    // 自定义 key 模式下额外校验 user_key 非空
+    const trimmedKey = customKey.trim();
+    if (customKeyEnabled && !trimmedKey) {
+      setError(t('addMember.error.emptyKey'));
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
-      // Step 1: 创建用户（meta/user/create → 内核透明代理）
-      // 内核 user/create 已自动生成 default_user_key，无需再调 user-key/create
-      const created = await usersApi.create({
-        username,
-        auth_provider: 'api_key',
-        external_id: username,
-      });
+      // Step 1: 创建用户
+      //   - 默认走 meta/user/create（内核自动生成 default_user_key）
+      //   - 开启「自定义 user_key」→ 走 meta/user/create-with-key，把 key 交给内核作为默认 key
+      const created = customKeyEnabled
+        ? await usersApi.createWithKey({ username, user_key: trimmedKey })
+        : await usersApi.create({
+            username,
+            auth_provider: 'api_key',
+            external_id: username,
+          });
       const keyValue = created.default_user_key ?? '';
       // Step 3: 自动加入当前 team
       await membersApi.add(team.team_id, { user_id: created.user_id, role });
@@ -253,7 +265,9 @@ export function AddMemberDialog({
   const canSubmit =
     mode === 'existing'
       ? userId.trim().length > 0
-      : newUsername.trim().length > 0 && /^[A-Za-z0-9_]+$/.test(newUsername.trim());
+      : newUsername.trim().length > 0 &&
+        /^[A-Za-z0-9_]+$/.test(newUsername.trim()) &&
+        (!customKeyEnabled || customKey.trim().length > 0);
 
   async function handleSubmit() {
     if (mode === 'existing') await submitExisting();
@@ -333,6 +347,43 @@ export function AddMemberDialog({
               )}
             </div>
           </Form.Item>
+
+          {/*
+            自定义 user_key 开关：
+            - 关（默认）：走 user/create，内核自动生成 default_user_key（现有行为）
+            - 开：走 user/create-with-key，把用户指定的 key 作为默认 key
+          */}
+          <Form.Item label={t('addMember.customKey.label')}>
+            <div>
+              <Switch
+                value={customKeyEnabled}
+                onChange={(v) => {
+                  setCustomKeyEnabled(v);
+                  setError(null);
+                  if (!v) setCustomKey('');
+                }}
+              />
+              <div className="_memory-field-hint">{t('addMember.customKey.hint')}</div>
+            </div>
+          </Form.Item>
+
+          {customKeyEnabled && (
+            <Form.Item label={t('addMember.customKey.value')} required>
+              <div>
+                <Input
+                  size="full"
+                  value={customKey}
+                  onChange={(v) => {
+                    setCustomKey(v);
+                    setError(null);
+                  }}
+                  onPressEnter={() => void handleSubmit()}
+                  placeholder={t('addMember.customKey.placeholder')}
+                />
+                <div className="_memory-field-hint">{t('addMember.customKey.valueHint')}</div>
+              </div>
+            </Form.Item>
+          )}
         </>
       )}
 

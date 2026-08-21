@@ -194,6 +194,12 @@ export class TcvdbClient {
     return true;
   }
 
+  async dropDatabase(dbName?: string): Promise<void> {
+    const name = dbName ?? this.database;
+    await this.request("/database/drop", { database: name });
+    this.logger?.info(`${TAG} Database dropped: ${name}`);
+  }
+
   // ── Collection operations ───────────────────────────────
 
   async createCollection(params: Record<string, unknown>): Promise<void> {

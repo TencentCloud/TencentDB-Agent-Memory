@@ -46,6 +46,8 @@ export const DEFAULT_PIPELINE_STATE: PipelineSessionState = {
 // ============================
 
 export interface TimerEntry {
+  /** Present for local timers so expiry callbacks preserve Instance routing. */
+  instanceId?: string;
   member: string;
   fireAtMs: number;
 }
@@ -81,7 +83,8 @@ export interface CaptureAtomicParams {
   /** 同 TaskPayload.teamId / agentId — 决定 buffer + state 的 hash slot 归属。 */
   teamId?: string;
   agentId?: string;
-  messageJson: string;
+  /** Optional message payload for callers that still use StateBackend buffering. */
+  messageJson?: string;
   threshold: number;
   fireAtMs: number;
   timerMember: string;

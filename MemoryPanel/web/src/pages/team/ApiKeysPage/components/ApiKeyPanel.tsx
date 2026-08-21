@@ -185,6 +185,7 @@ export default function ApiKeyPanel() {
                 setShowCreate(true);
                 setNewExpiresAt(null);
               }}
+              data-guide="create-key"
             >
               <AddIcon size={14} />
               {t('apiKey.create')}
@@ -287,7 +288,7 @@ export default function ApiKeyPanel() {
       <Card>
         <Card.Body title={t('apiKey.endpoint.title')}>
           {auth?.instance_name && (
-            <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--text-weak)' }}>
+            <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--tea-color-text-secondary)' }}>
               {t('apiKey.endpoint.current')}
               <code>{auth.instance_name}</code>
               <span style={{ opacity: 0.6, marginLeft: 6 }}>({auth.instance_id})</span>
@@ -309,6 +310,19 @@ export default function ApiKeyPanel() {
               const endpoints: Array<{ label: string; url: string }> = [
                 { label: 'CodeBuddy', url: `${base}/codebuddy/${iid}` },
                 { label: 'Claude Code', url: `${base}/claude-code/${iid}` },
+                // WorkBuddy 走 /workbuddy/<spaceId>（spaceId=instance_id，与 codebuddy 对称）。
+                // 网页版底层 OpenAI ChatCompletions、桌面版 Responses API，proxy 均已适配。
+                { label: 'WorkBuddy', url: `${base}/workbuddy/${iid}` },
+                // codex 用 OpenAI Responses API（POST /v1/responses）；proxy 侧
+                // 同时注册了 v1/无v1 两种路径，惯例用不带 /v1 的 base，客户端
+                // config.toml 里 base_url 直接填这个地址即可，wire_api="responses"。
+                { label: 'Codex', url: `${base}/codex/${iid}` },
+                // dsh (deepseek-harness) — DeepSeek 官方 agent harness,Web UI 会话
+                // 走 OpenAI Chat Completions。**尾巴不带 /v1** —— dsh 客户端
+                // hardcoded 拼 ${baseURL}/chat/completions,与 CB 同族;proxy 侧
+                // 路由 /dsh/{spaceId}/chat/completions 已对齐。用户填的 baseURL
+                // 直接是这里的地址,不要在后面再加 /v1。
+                { label: 'DeepSeek Harness (dsh)', url: `${base}/dsh/${iid}` },
                 { label: 'OpenClaw', url: `${base}/openclaw/default` },
                 { label: 'Hermes', url: `${base}/hermes/default` },
               ];

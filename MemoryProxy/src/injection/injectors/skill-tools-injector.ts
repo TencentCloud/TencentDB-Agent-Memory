@@ -74,8 +74,8 @@ export function renderSkillToolsBlock(
   const readTools = [
     `  <tool name="skill_search">`,
     `    path: ${bridge}/search`,
-    `    body: {"query": "描述你要找什么 skill 的关键词（必填，>=1字符）", "top_k": 10, "mode": "hybrid"}`,
-    `    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索 top-K 匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。`,
+    `    body: {"query": "描述你要找什么 skill 的关键词（必填，>=1字符）"}`,
+    `    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。`,
     `  </tool>`,
     "",
     // 暂时下线：<available_skills> 块已经注入 agent 自带的 skill 列表，功能重叠。
@@ -87,21 +87,21 @@ export function renderSkillToolsBlock(
     // `  </tool>`,
     // "",
     `  <tool name="skill_view">`,
-    `    path: ${bridge}/get`,
-    `    body: {"skill_id": "skl-xxx", "include_content": true, "include_manifest": true}`,
-    `    use:  查看云端 skill 的 SKILL.md 全文 + 资源目录树（不返字节；要文件字节请用 skill_files_read）`,
+    `    path: ${bridge}/get-by-name`,
+    `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
+    `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 \`- name: description\` 那个 name，或 skill_search 结果里的 name 字段。`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_read">`,
     `    path: ${bridge}/files/read`,
     `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh", "encoding": "utf-8|base64"}`,
-    `    use:  读取单个资源文件内容。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
+    `    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
     `  </tool>`,
     "",
     `  <tool name="skill_extract">`,
     `    path: ${bridge}/extract`,
-    `    body: {"reason": "?可选，简要说明为什么觉得当前对话值得提取为 skill"}`,
-    `    use:  请求从当前对话中提取 skill（异步任务，由后台 agent 执行创建）。proxy 自动收集对话上下文，你只需传 reason 即可。`,
+    `    body: {"reason": "?可选，简要说明为什么觉得当前对话值得提取为 skill（写清楚有助于后台抽取器识别边界）"}`,
+    `    use:  立即归档当前对话触发一次 skill 抽取（异步任务，由后台 agent 分析对话内容生成 skill）。proxy 从 session 拿身份 + 用 core 侧累积的对话缓冲，你不用传 messages。适合在"用户已经跑通一段完整流程、值得复用"时主动触发。`,
     `  </tool>`,
   ];
 
@@ -147,6 +147,19 @@ export function renderSkillToolsBlock(
     ? "错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见："
     : "注意：当前仅开放只读操作。如需创建/修改 skill 请联系管理员。\n错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见：";
 
+  const readErrors = [
+    "- 40001 参数校验失败：body 字段缺失/格式错，看 message 里具体字段名。",
+    "- 40101 session not initialized：session 未识别（很可能你在错误的 conversation 环境用了这个工具）。",
+    "- 40401 SKILL_NOT_FOUND：skill 不存在或不属于你所在的 agent；先用 skill_search 找同类 skill。",
+    "- 50301 upstream unavailable：core 侧临时不可达，稍后重试。",
+  ];
+  const writeErrors = [
+    "- 40301 SKILL_NOT_OWNER：你不是 owner，无法修改。",
+    "- 40901 SKILL_VERSION_STALE：版本过期，先 skill_view 拿最新版本再写。",
+    "- 42201 SKILL_NAME_DUPLICATE：同 team 重名。",
+    "- 42202 SKILL_PATCH_NOT_UNIQUE：old_string 不唯一，传 replace_all=true。",
+  ];
+
   return [
     "<skill_tools>",
     "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
@@ -163,10 +176,8 @@ export function renderSkillToolsBlock(
     ...(allowLlmWrite ? writeTools : []),
     "",
     note,
-    "- 40301 SKILL_NOT_OWNER：你不是 owner，无法修改。",
-    "- 40901 SKILL_VERSION_STALE：版本过期，先 skill_view 拿最新版本再写。",
-    "- 42201 SKILL_NAME_DUPLICATE：同 team 重名。",
-    "- 42202 SKILL_PATCH_NOT_UNIQUE：old_string 不唯一，传 replace_all=true。",
+    ...readErrors,
+    ...(allowLlmWrite ? writeErrors : []),
     "</skill_tools>",
   ].join("\n");
 }

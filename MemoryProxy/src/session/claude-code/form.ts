@@ -30,6 +30,14 @@ export const ASSET_CONFIRM_YES = "是，关联团队资产";
 export const ASSET_CONFIRM_NO = "否，本次不关联";
 export const ASSET_CONFIRM_FORM_TITLE = "会话初始化 — 是否关联团队资产";
 
+/**
+ * 附在每步 question 文末的通用备注：告诉用户"选择跳过 = 本次 session init 跳过、不注入任何团队资产"。
+ * Claude Code 的 AskUserQuestion 会给用户一个 "Other" 输入框，回复"跳过 / skip /
+ * 不关联" 就走 SKIP_RE bypass；没识别到的自由文本会 unrecognized → 同样 bypass。
+ * 文案与 workbuddy/codex/codebuddy/dsh 五端统一，避免多客户端表述漂移。
+ */
+const SKIP_HINT = '（如选择"跳过"选项，本次 session init 将跳过，不注入任何团队资产）';
+
 // 分页布局统一走 pagination.ts；此处仅用其常量。
 const CC_MAX_OPTIONS = CC_MAX_OPTIONS_SHARED;
 
@@ -79,7 +87,7 @@ function buildAskUserQuestionArgs(data: FormData): { questions: CCAskQuestion[] 
 
   if (stage === "asset_confirm") {
     questions.push({
-      question: titlePrefix + "本次对话是否要关联团队资产？",
+      question: titlePrefix + "本次对话是否要关联团队资产？" + SKIP_HINT,
       header: "关联资产",
       options: [
         { label: ASSET_CONFIRM_YES, description: "选择 Team / Agent / Task，注入团队上下文" },
@@ -111,7 +119,7 @@ function buildAskUserQuestionArgs(data: FormData): { questions: CCAskQuestion[] 
       );
     }
     questions.push({
-      question: titlePrefix + "请选择本次会话所属的 Team：",
+      question: titlePrefix + "请选择本次会话所属的 Team：" + SKIP_HINT,
       header: "Team",
       options: teamOpts.slice(0, CC_MAX_OPTIONS),
       multiSelect: false,
@@ -155,7 +163,7 @@ function buildAskUserQuestionArgs(data: FormData): { questions: CCAskQuestion[] 
 
     const pageSuffix = page.totalPages > 1 ? `（第 ${pageIndex + 1}/${page.totalPages} 页）` : "";
     questions.push({
-      question: titlePrefix + `请选择「${team.team_name}」下要使用的 Agent${pageSuffix}：`,
+      question: titlePrefix + `请选择「${team.team_name}」下要使用的 Agent${pageSuffix}：` + SKIP_HINT,
       header: page.totalPages > 1 ? `Agent ${pageIndex + 1}/${page.totalPages}`.slice(0, 12) : "Agent",
       options: combinedOptions.slice(0, CC_MAX_OPTIONS),
       multiSelect: false,
@@ -198,7 +206,7 @@ function buildAskUserQuestionArgs(data: FormData): { questions: CCAskQuestion[] 
 
     const taskPageSuffix = page.totalPages > 1 ? `（第 ${taskPageIndex + 1}/${page.totalPages} 页）` : "";
     questions.push({
-      question: titlePrefix + `请选择「${team.team_name}」下要关联的任务${taskPageSuffix}：`,
+      question: titlePrefix + `请选择「${team.team_name}」下要关联的任务${taskPageSuffix}：` + SKIP_HINT,
       header: page.totalPages > 1 ? `Task ${taskPageIndex + 1}/${page.totalPages}`.slice(0, 12) : "Task",
       options: taskOpts.slice(0, CC_MAX_OPTIONS),
       multiSelect: false,

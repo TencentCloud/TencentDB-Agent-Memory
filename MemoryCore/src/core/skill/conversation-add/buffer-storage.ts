@@ -21,6 +21,14 @@
 import type { StorageAdapter } from "../../storage/adapter.js";
 
 export interface SessionKey {
+  /**
+   * 2026-07-30: 新增 instance_id, 为的是让 trigger.archive 构造 AgentTuple
+   * 时能塞进队列, worker 出队后按 instance_id 动态解析对应 instance 的
+   * CoS/VDB/LLM 资源。buffer-storage 内部 (sessionDir/agentDir/tasksKey)
+   * 不使用 instance_id (那部分由 CosStorageBackend 的 per-instance prefix
+   * 提供), 仅作为 tuple 归属信息透传。
+   */
+  instance_id: string;
   space_id: string;
   user_id: string;
   team_id: string;
@@ -28,12 +36,11 @@ export interface SessionKey {
   session_id: string;
 }
 
-export interface AgentTuple {
-  space_id: string;
-  user_id: string;
-  team_id: string;
-  agent_id: string;
-}
+// AgentTuple 5 段类型从 agent-task-queue 单源导出, 这里 re-export 让老导入路径继续可用。
+// buffer-storage 里的 agentDir/tasksKey 只用 user/team/agent (instance/space 由上层
+// StorageAdapter 的 per-instance prefix 提供), 但类型保持一致以便跨模块传递。
+export type { AgentTuple } from "./agent-task-queue.js";
+import type { AgentTuple } from "./agent-task-queue.js";
 
 /** meta.json 结构（§4.2）。只放计数器。 */
 export interface SessionMeta {

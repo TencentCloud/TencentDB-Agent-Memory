@@ -27,6 +27,12 @@ export interface KnowledgeItem {
   user_id: string | null;
   repo_url?: string;
   branch?: string;
+  /**
+   * Repo slug (`<org>/.../<repo>`) used as the anchor hint the agent matches
+   * against the local workspace. Optional — derived from `repo_url` when the
+   * backend does not supply it.
+   */
+  repo_slug?: string;
   created_at: string;
   updated_at: string;
 }

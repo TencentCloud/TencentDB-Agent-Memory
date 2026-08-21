@@ -215,7 +215,7 @@ export default function ImportSkillDialog(props: {
               : undefined,
         };
 
-        // 后端 2026-07-17 起 extract 恒走 archive → agent 队列 → worker 异步链路,
+        // 后端 extract 恒走 archive → agent 队列 → worker 异步链路,
         // 永远返回 task_id (没有 sync candidates 分支了)。前端拿到 task_id 即
         // 视为"已受理"，提示预计出结果时间后关闭弹窗；结果由 SkillCoreSink 异步
         // 写入 skill 表，用户回列表刷新即可看到。

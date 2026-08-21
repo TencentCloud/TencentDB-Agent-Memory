@@ -1,5 +1,5 @@
 /**
- * TeamManagementPanel 拆分出的公共类型 + 纯函数。
+ * 公共类型 + 纯函数。
  * 无 React 依赖，方便被 hooks / 各 Dialog 子模块共用。
  */
 

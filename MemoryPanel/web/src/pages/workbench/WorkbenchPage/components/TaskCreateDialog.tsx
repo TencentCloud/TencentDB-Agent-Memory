@@ -1,8 +1,5 @@
 /**
- * TaskCreateDialog — 按 PRD §7 实现的「新建 Task」弹窗。
- *
- * Tea 组件重构版：底层复用全站统一的 `./Modal`（Tea Modal），
- * 输入控件换成 Tea `Input`/`Input.TextArea`，错误提示换成 Tea `Alert`。
+ * TaskCreateDialog — 「新建 Task」弹窗。
  *
  * 必填字段（前端校验）：
  *   - title         任务标题

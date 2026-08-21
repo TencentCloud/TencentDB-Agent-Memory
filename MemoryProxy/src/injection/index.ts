@@ -88,6 +88,16 @@ export { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 // Claude Code
 export { ClaudeCodeProfile } from "./agents/claude-code/index.js";
 
+// WorkBuddy — independent client (structurally XML-tag, wire protocol OpenAI/Responses).
+// Deliberately kept as a distinct namespace with duplicated logic; no cross-imports
+// from codebuddy/codex/claude-code.
+export {
+  WorkbuddyProfile,
+  parseWorkbuddySystemPrompt,
+  isWorkbuddyPrompt,
+  WORKBUDDY_KNOWN_TAGS,
+} from "./agents/workbuddy/index.js";
+
 // ── Pipeline Factory ──────────────────────────────────────────────────────────
 
 import os from "os";
@@ -106,6 +116,7 @@ import type { ProtocolAdapter } from "./adapters/interface.js";
 import type { AgentProfile } from "./agents/interface.js";
 import { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 import { ClaudeCodeProfile } from "./agents/claude-code/index.js";
+import { WorkbuddyProfile } from "./agents/workbuddy/profile.js";
 import { getHookCacheRepo, setHookCacheRepo, type HookCacheRepo } from "../db/hookCacheRepo.js";
 import { getSessionRepo, setSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import { getRedisClient } from "../db/redis-client.js";
@@ -360,6 +371,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     agentProfiles: new Map<string, AgentProfile>([
       ["codebuddy", new CodeBuddyProfile()],
       ["claude-code", new ClaudeCodeProfile()],
+      ["workbuddy", new WorkbuddyProfile()],
       // ["cursor", new CursorProfile()],
     ]),
     // Legacy fallback: scan system prompt content (for backward compat).
@@ -367,6 +379,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
       const agentProfiles: AgentProfile[] = [
         new CodeBuddyProfile(),
         new ClaudeCodeProfile(),
+        new WorkbuddyProfile(),
       ];
       return (systemText: string) =>
         agentProfiles.find((p) => p.detect(systemText)) ?? null;

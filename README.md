@@ -14,7 +14,7 @@
 [![Hermes](https://img.shields.io/badge/Hermes-Gateway-7B61FF)](https://hermes-agent.nousresearch.com/docs/)
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dJQM6mKMF)
 
-[Installation](#installation) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
+[Installation](#installation) · [Supported Agents](#all-agents-share-the-same-memory-server) · [What is it?](#what-is-tencentdb-agent-memory) · [Team Play](#one-play-style-build-a-growing-agent-team-for-a-one-person-company) · [Technical Implementation](#technical-implementation) · [Benchmark](#benchmark) · [Roadmap](#roadmap)
 
 [**English**](./README.md) · [简体中文](./README_CN.md)
 
@@ -50,6 +50,29 @@ If you're already on an older release (v1.x / v0.x) and want to bring your exist
 
 See [**Data Migration Tool (v2 → v3)**](./MemoryCore/scripts/migrate-v2-to-v3/README.md) for full usage and flags. New installations can skip this.
 
+## All Agents Share the Same Memory Server
+
+One Proxy, unchanged protocol, zero-code integration — point the Agent's base URL to the Proxy and it's done. No plugin, hook, or MCP server is required.
+
+<table>
+<tr>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-deepseek-harness-dsh"><img src="./assets/images/agents/dsh.png" width="48" height="48" /><br /><sub><b>DeepSeek Harness</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-claude-code"><img src="./assets/images/agents/claude-code.png" width="48" height="48" /><br /><sub><b>Claude Code</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codex"><img src="./assets/images/agents/codex.png" width="48" height="48" /><br /><sub><b>Codex</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-codebuddy"><img src="./assets/images/agents/codebuddy.png" width="48" height="48" /><br /><sub><b>CodeBuddy</b></sub></a></td>
+</tr>
+<tr>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-workbuddy"><img src="./assets/images/agents/workbuddy.png" width="48" height="48" /><br /><sub><b>WorkBuddy</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-hermes"><img src="./assets/images/agents/hermes.png" width="48" height="48" /><br /><sub><b>Hermes</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-openclaw"><img src="./assets/images/agents/openclaw.png" width="48" height="48" /><br /><sub><b>OpenClaw</b></sub></a></td>
+<td align="center" width="140"><a href="./INSTALL.md#using-proxy-with-other-platforms-generic"><sub><b>More frameworks coming soon...</b></sub></a></td>
+</tr>
+</table>
+
+See [**INSTALL.md**](./INSTALL.md) for the exact configuration steps of each client.
+
+Don't see your favorite Agent? You can try adapting it yourself with the [Generic integration guide](./INSTALL.md#using-proxy-with-other-platforms-generic) — and we'd love a PR adding native support for it. See [**CONTRIBUTING.md**](./CONTRIBUTING.md) to get started.
+
 # What is TencentDB Agent Memory?
 
 We started from a practical question: **How do you reduce repetitive work when using Agents?**
@@ -76,7 +99,7 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 - Each Agent automatically gets its own memory when created — no need to re-introduce yourself next time.
 - L0 Conversation → L1 Atom → L2 Scenario → L3 Persona — raw conversations are distilled layer by layer.
 
-<img width="" src="assets/images/chat_memory.cn.png" alt="image.png" />
+<img width="" src="assets/images/chat_memory.png" alt="image.png" />
 
 > "Don't refactor the old auth module — mobile is still using it." — Context this costly shouldn't depend on humans repeating it every time.
 
@@ -86,7 +109,7 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 - A Skill isn't just a prompt snippet; it has versions, resource files, trigger boundaries, execution steps, and validation rules.
 - Personal Skills are private by default; after review, they can be shared with the team and assigned to other Agents.
 
-<img width="" src="assets/images/skill.cn.png" alt="image.png" />
+<img width="" src="assets/images/skill.png" alt="image.png" />
 
 > Troubleshooting, code review, release checklists — learn it once, and the whole team can use it.
 
@@ -94,10 +117,10 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 
 - **Wiki** turns product docs, design specs, and ops runbooks into structured pages with a link graph. (Inspired by Karpathy's LLM knowledge base.)
 
-<img src="./assets/images/wiki.cn.png" alt="image.png" />
+<img src="./assets/images/wiki.png" alt="image.png" />
 
 - **CodeGraph** indexes code symbols, files, call relationships, and impact paths.
-<img width="" src="assets/images/codegraph.cn.png" alt="image.png" />
+<img width="" src="assets/images/codegraph.png" alt="image.png" />
 
 - Agents can search, read, inspect callers/callees, and perform impact analysis before modifying code.
 
@@ -110,7 +133,7 @@ Existing information → Reusable memory assets → Fewer turns → Less rework 
 - `private` belongs strictly to the Owner; `team` is visible to all team members; `restricted` grants precise access via User / Role / Agent ACLs.
 - Two role layers: **global System Admin** manages users and teams (creating teams, adding members) and can also use Wiki, CodeGraph, Skill, and other asset management features; **Team-level roles** include Admin (team manager) and Member (regular member), responsible for asset collaboration and access control within a team. Asset ownership is tracked via Owner — the Owner automatically has management permissions for their assets.
 
-<img width="" src="assets/images/asset.cn.png" alt="image.png" />
+<img width="" src="assets/images/asset.png" alt="image.png" />
 
 
 ## Cold Start: Load the Save File, Then Get to Work
@@ -256,10 +279,10 @@ PersonaMem tests whether an Agent can correctly understand and apply user inform
 - Wiki and CodeGraph are built asynchronously; allow some processing time before they reach `ready` status.
 - CodeGraph currently prioritizes public HTTPS repositories; support for private repositories and SSH credentials is still being refined.
 - The Hub supports manual asset binding; fully automated memory routing is still under iteration.
-- TencentDB Agent Memory currently supports OpenClaw, Hermes, Claude Code, CodeBuddy, and SDK integration; broader cross-framework migration is on the roadmap.
 
 ## Related Documentation
 
+- [Roadmap](./ROADMAP.md) (what we're building next)
 - [Full Installation Guide](./INSTALL.md) (Memory Core + Hub + Proxy one-click deployment)
 - [Roadmap](./ROADMAP.md) (what we're building next; 中文: [ROADMAP_CN.md](./ROADMAP_CN.md))
 - [Data Migration Tool (v2 → v3)](./MemoryCore/scripts/migrate-v2-to-v3/README.md) (if you're on an older release and want to migrate existing data)
@@ -333,5 +356,16 @@ We welcome contributions of all kinds — bug reports, feature suggestions, docu
   </tr>
 </table>
 
+---
+
+## Star History
+
+<p align="center">
+  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
+    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  </a>
+</p>
+
+---
 
 [MIT](./LICENSE) © TencentDB Agent Memory Team

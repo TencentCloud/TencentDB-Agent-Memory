@@ -458,7 +458,7 @@ export async function syncLocalProfilesToStore(
   logger: Logger,
   storage?: StorageAdapter,
   options?: ProfileScopeOptions,
-): Promise<void> {
+): Promise<ProfileRecord[]> {
   const localProfiles = await listLocalProfiles(dataDir, storage, options);
   const localIds = new Set(localProfiles.map((profile) => profile.id));
 
@@ -479,6 +479,7 @@ export async function syncLocalProfilesToStore(
     await store.deleteProfiles(deletedIds);
     logger.info(`[memory-tdai][profile-sync] Deleted ${deletedIds.length} stale profile(s)`);
   }
+  return syncRecords;
 }
 
 export async function ensureL2L3Local(

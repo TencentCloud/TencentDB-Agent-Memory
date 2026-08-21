@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Button, Form, Modal, Select, Text } from 'tea-component';
 import { type AgentOption } from './types';
+import './allocate-memory-dialog.css';
 
 export type MemorySource = 'team' | 'personal';
 
@@ -50,9 +51,17 @@ export function AllocateMemoryDialog({
         <Form>
           <Form.Item label={t('allocMemory.descLabel')}><Form.Text>{description}</Form.Text></Form.Item>
           {agents.length === 0 ? (
-            <Alert type="warning">
-              {t('allocMemory.noAgents')}<br />{t('allocMemory.noAgents.reason1')}<br />{t('allocMemory.noAgents.reason2')}<br />{t('allocMemory.noAgents.reason3')}
-            </Alert>
+            <div className="_alloc-memory-alert">
+              <Alert type="warning">
+                {t('allocMemory.noAgents')}
+                <br />
+                {t('allocMemory.noAgents.reason1')}
+                <br />
+                {t('allocMemory.noAgents.reason2')}
+                <br />
+                {t('allocMemory.noAgents.reason3')}
+              </Alert>
+            </div>
           ) : (
             <Form.Item label={t('allocMemory.agent')} required>
               <Select size="full" value={agentId} onChange={setAgentId} placeholder={t('allocMemory.agent.placeholder')}

@@ -75,6 +75,16 @@ import {
   SessionRequestContext as CCSessionRequestContext,
   SessionInitResult as CCSessionInitResult,
 } from "./claude-code/init.js";
+import {
+  buildFormResponse as buildWorkBuddyFormResponse,
+  FormData as WBFormData,
+  FormStage as WBFormStage,
+} from "./workbuddy/form.js";
+import {
+  buildFormResponse as buildDshFormResponse,
+  FormData as DshFormData,
+  FormStage as DshFormStage,
+} from "./dsh/form.js";
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
@@ -103,28 +113,91 @@ export async function handleSessionInit(
   if (agentSource === "claude-code") {
     return ccHandle(
       sessionKey, userId, messages, config, store,
-      // protocol MUST be forwarded — without it, applyArtifactsAndContext
-      // takes the openai path (injects <session_context> into messages as a
-      // role=system message) instead of the anthropic path (returns
-      // systemAppend that anthropicHandler merges into body.system). The
-      // openai path currently only works because AnthropicAdapter.serialize()
-      // hoists role=system back onto body.system as a safety net; but forwarding
-      // the correct protocol keeps intent and implementation aligned and
-      // survives `injection.enabled=false` where no adapter runs.
-      { stream: reqCtx.stream, modelId: reqCtx.modelId, protocol: reqCtx.protocol },
+      // 直接透传整个 reqCtx，避免手抠字段时把新加字段（如 codex 的
+      // codexAnswerInput）漏掉。protocol MUST be forwarded — without it,
+      // applyArtifactsAndContext takes the openai path (injects
+      // <session_context> into messages as a role=system message) instead of
+      // the anthropic path (returns systemAppend that anthropicHandler merges
+      // into body.system). The openai path currently only works because
+      // AnthropicAdapter.serialize() hoists role=system back onto body.system
+      // as a safety net; forwarding the correct protocol keeps intent and
+      // implementation aligned and survives `injection.enabled=false`.
+      reqCtx,
       metadataClient,
       userKey,
       spaceId,
       presetIdentity,
     );
   }
-  return cbHandle(
+  // 同上：整个 reqCtx 透传给 CB 状态机。codexHandler 会把 body.input[] 塞在
+  // reqCtx.codexAnswerInput 里，供 CB 状态机内部的 codex-only pre-checks 段
+  // （session/codebuddy/init.ts 里 detectCodexDefaultGate + detectCodexMore）
+  // 识别 Default gate 与 MORE 翻页。手抠字段会把它丢掉 → codex 分页失效。
+  const result = await cbHandle(
     sessionKey, userId, messages, config, store,
-    { stream: reqCtx.stream, modelId: reqCtx.modelId, protocol: reqCtx.protocol },
+    reqCtx,
     metadataClient,
     userKey,
     spaceId,
     presetIdentity,
     agentSource,
   );
+
+  // WorkBuddy 客户端复用 CB 状态机（uninitialized → pending_team → pending_agent_task
+  // → initialized 全套流程），但 form 渲染需要用 CC 的 `AskUserQuestion` shape +
+  // OpenAI chat/completions SSE tool_calls 传输（WB 客户端是 CC tool 语义 +
+  // OpenAI 协议的混合体，抓包 [wb-ask-user-schema] 已实证）。
+  //
+  // 参照 codex 的模式（`session/codex/form.ts::buildFormResponse`），这里在 CB
+  // 状态机产出 formData 后**外层重渲染**：丢掉 result.response（CB 的
+  // ask_followup_question SSE），改用 workbuddy/form.ts 生成 AskUserQuestion SSE。
+  // 好处：CB 状态机代码零改动，10 处 intercepted 站点无需逐个分派。
+  if (agentSource === "workbuddy" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const wbFd: WBFormData = {
+      teams: cbFd.teams,
+      // CB 状态机的 stage 值 (asset_confirm | team | agent_select | task_select |
+      // agent_task) 与 WB form 的 FormStage 完全一致；直接透传。
+      stage: cbFd.stage as WBFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      // CB 携带的翻页字段有 teamPage / agentPage / taskPage（codex 透传用），
+      // WB form 用单个 pageIndex —— 根据当前 stage 挑对应页码。
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildWorkBuddyFormResponse(wbFd);
+  }
+
+  // dsh (deepseek-harness) 客户端复用 CB 状态机 + 自己的 ask_user_question 载体。
+  // 与 workbuddy 完全对称：CB 状态机产出 formData 后外层重渲染 response,不共用
+  // CB 的 ask_followup_question(dsh preset 挂的是 dsh 原生 ask_user_question,
+  // 抓包实证 fixtures/dsh-tool-catalog-schema.json)。stage 值完全一致直接透传;
+  // dsh form 用 CC-shape 的单一 pageIndex,同 workbuddy 挑分页字段。
+  if (agentSource === "dsh" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const dshFd: DshFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as DshFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildDshFormResponse(dshFd);
+  }
+
+  return result;
 }

@@ -19,6 +19,8 @@ import type { MemoryRecord } from "../record/l1-writer.js";
 import type { EmbeddingProviderInfo } from "./embedding.js";
 import type { Logger } from "../types.js";
 import type { IsolationFilter } from "./isolation.js";
+import type { MemoryPromptStore } from "../memory-prompt/types.js";
+import type { MemoryGenerationRefStore } from "../memory-generation-log/types.js";
 
 // Re-export so consumers can import everything from types.ts
 export type { MemoryRecord, EmbeddingProviderInfo };
@@ -425,6 +427,29 @@ export interface BatchDeleteResult {
   failed: Array<{ id: string; reason: string }>;
 }
 
+/**
+ * 按隔离维度清空某个 memory 下的全部内容（不删除资产本身）。
+ *
+ * 语义约定（见 `/v3/chat-memory/clear`）：
+ *   - 至少要给 teamId + agentId，否则实现必须直接拒绝（避免误删全库）；
+ *   - 不带 sessionId：清空该 (team, agent) 下所有 session 的数据；
+ *   - 只删内容行（L0/L1 + 向量 / FTS 附属行），不动 meta_* 资产表。
+ */
+export interface MemoryContentClearFilter {
+  teamId: string;
+  agentId: string;
+  /** 可选：进一步收窄到单个 user。缺省表示该 agent 下所有 user。 */
+  userId?: string;
+}
+
+/** 清空结果：各层实际删除行数。 */
+export interface MemoryContentClearResult {
+  l0Deleted: number;
+  l1Deleted: number;
+  /** L2/L3 profile 行数（VDB / sqlite profiles 表）。 */
+  profilesDeleted: number;
+}
+
 export type KnowledgeType = "wiki" | "code-graph";
 
 export interface KnowledgeEntity {
@@ -523,7 +548,7 @@ export interface AuditQueryFilter {
   offset?: number;
 }
 
-export interface IMemoryStore {
+export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStore {
   // ── Capabilities ───────────────────────────────────────────
 
   /**
@@ -638,6 +663,16 @@ export interface IMemoryStore {
    * Used by v2 API `/conversation/delete` (session mode).
    */
   deleteL0BySession?(sessionId: string, filter?: IsolationFilter): MaybePromise<number>;
+
+  /**
+   * 清空某个 (team, agent) 下的全部记忆内容：L0 + L1 + L2/L3 profile 行，
+   * 连同它们的向量 / FTS 附属数据。**不触碰** meta_* 资产表 —— 资产 ID、
+   * 归属、绑定、ACL、可见性、名称全部保留。
+   *
+   * 用于 `/v3/chat-memory/clear`。幂等：已清空的 memory 再次调用返回全 0。
+   * 实现必须校验 filter.teamId / filter.agentId 非空，否则抛错拒绝执行。
+   */
+  clearMemoryContent?(filter: MemoryContentClearFilter): MaybePromise<MemoryContentClearResult>;
 
   // ── Entity metadata (Team / User / Agent / Task) ───────────
   createTeam?(input: Omit<TeamEntity, "created_at" | "updated_at" | "status" | "user_ids" | "agent_ids" | "task_ids"> & { team_id?: string; status?: TeamStatus }): MaybePromise<TeamEntity>;

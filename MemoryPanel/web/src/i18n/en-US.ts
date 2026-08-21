@@ -30,10 +30,17 @@ export const enUS = {
   'header.sync.title': 'Real-time sync is connected',
   'header.settings': 'Settings',
   'header.profile': 'My Profile',
+  'header.replayGuide': 'Replay Guide',
   'header.logout': 'Log Out',
   'header.profile.caption': 'My Profile',
   'header.profile.username': 'Username',
+  'header.profile.usernameHint': 'How teammates identify you',
+  'header.profile.userId': 'User ID',
   'header.profile.userIdHint': 'Share with your team admin to get invited to a Team',
+  'header.profile.instance': 'Instance',
+  'header.profile.role.admin': 'Administrator',
+  'header.profile.role.member': 'Member',
+  'header.profile.role.reviewer': 'Reviewer',
   'header.profile.close': 'Close',
   'header.brand': 'Memory Hub',
 
@@ -291,6 +298,7 @@ export const enUS = {
   'wiki.detail.overview.emptyPageList': 'No pages',
   'wiki.detail.graph.clickToView': 'Click a node to view content',
   'wiki.detail.graph.loading': 'Loading graph component…',
+  'wiki.detail.notFound': 'This Wiki no longer exists. It may have been removed.',
   'wiki.detail.pages.all': 'All {{count}}',
   'wiki.detail.pages.selectPage': 'Select a page on the left to view content',
   'wiki.detail.pages.delete': 'Delete',
@@ -364,7 +372,7 @@ export const enUS = {
   'code.noAgent': 'No Agent Selected',
   'code.card.id': 'ID: {{id}}',
   'code.card.branch': 'Branch {{branch}}',
-  'code.detail.breadcrumb': 'Code_Graph',
+  'code.detail.breadcrumb': 'Code Graph',
   'code.detail.branch': 'Branch {{branch}}',
   'code.detail.sync': 'Sync',
   'code.detail.files': 'Files',
@@ -442,6 +450,10 @@ export const enUS = {
   'skills.fork.tooltip.personal.empty': 'Please select a skill first',
   'skills.import': 'Import Skill',
   'skills.import.tooltip.noAgent': 'No agent in the current team. Please create an agent first.',
+  'skills.export': 'Export Skill',
+  'skills.export.tooltip.empty': 'Please select a skill first',
+  'skills.export.partial': 'Some files failed to export: {warnings}',
+  'skills.export.timeout': 'Export timed out, please try again later',
   'skills.tag.private': 'Private',
   'skills.tag.shared': 'Shared',
   'skills.delete.own': 'Permanently delete my Skill (irreversible)',
@@ -479,6 +491,40 @@ export const enUS = {
   'skills.detail.noFiles': 'No attached files.',
   'skills.detail.readFailed': 'Read failed: {{msg}}',
   'skills.detail.binaryFile': 'Binary file ({{size}} bytes), base64 omitted.',
+  // —— Edit content (updateSkill) ——
+  'skills.detail.edit': 'Edit',
+  'skills.detail.save': 'Save',
+  'skills.detail.cancel': 'Cancel',
+  'skills.detail.saving': 'Saving…',
+  'skills.detail.editBodyHint': 'Edit the full SKILL.md (including frontmatter). Saving bumps the version by 1.',
+  'skills.detail.saveSuccess': 'Skill updated',
+  'skills.detail.emptyContent': 'Content cannot be empty',
+  // —— File management (writeSkillFiles / removeSkillFiles) ——
+  'skills.detail.addFile': 'Add file',
+  'skills.detail.deleteFile': 'Delete',
+  'skills.detail.editFile': 'Edit',
+  'skills.detail.newFileTitle': 'Add resource file',
+  'skills.detail.filePathLabel': 'File path',
+  'skills.detail.filePathPlaceholder': 'e.g. scripts/run.sh',
+  'skills.detail.fileContentLabel': 'File content',
+  'skills.detail.fileSaved': 'File saved',
+  'skills.detail.fileDeleted': 'File deleted',
+  'skills.detail.deleteFileConfirm': 'Delete file "{{path}}"?',
+  'skills.detail.deleteFileDesc': 'This cannot be undone and bumps the skill version by 1.',
+  'skills.detail.deleteFileOk': 'Delete',
+  'skills.detail.deleteFileCancel': 'Cancel',
+  'skills.detail.binaryEditHint': 'Binary files cannot be edited online.',
+  'skills.detail.filePathRequired': 'Please enter a file path',
+  // —— Version history (listSkillVersions) ——
+  'skills.detail.versions': 'Version history',
+  'skills.detail.versionsLoad': 'View version history',
+  'skills.detail.versionsEmpty': 'No version history.',
+  'skills.detail.versionCurrent': 'Current',
+  'skills.detail.versionView': 'View',
+  'skills.detail.versionColVersion': 'Version',
+  'skills.detail.versionColTime': 'Updated at',
+  'skills.detail.versionColActions': 'Actions',
+  'skills.detail.versionCaption': 'v{{version}} · SKILL.md',
   'skills.ownerTag.title': 'owner user: {{name}} ({{id}})',
   'skills.ownerTag.you': ' (you)',
   'skills.agentTag.title': 'owner agent: {{name}} ({{id}})',
@@ -574,6 +620,7 @@ export const enUS = {
   'memory.allocate.privateDisabled':
     'This memory has been set to private by its owner and cannot be allocated to other Agents',
   'memory.import': 'Import Memory',
+  'memory.import.tooltip.noAgent': 'No agent in the current team. Please create an agent first.',
   'memory.blockList': 'Memory Blocks',
   'memory.blockCount': '{{filtered}} items',
   'memory.empty.filtered': 'No matching memory blocks.',
@@ -605,6 +652,8 @@ export const enUS = {
   'memory.notify.loadFailed': 'Failed to load memory blocks',
   'memory.notify.layerFailed': 'Failed to load layer data',
   'memory.notify.l2Failed': 'Failed to load L2 content',
+  'memory.notify.copied': 'Copied',
+  'memory.notify.copyFailed': 'Copy failed',
   'memory.confirm.private':
     'After setting to private, other Agents will no longer be able to use this memory',
   'memory.confirm.private.desc': 'You can switch back to team-visible at any time.',
@@ -614,6 +663,11 @@ export const enUS = {
   'memory.detail.uploadedBy': 'Uploaded: {{user}}',
   'memory.detail.updated': 'Updated: {{time}}',
   'memory.detail.noL0': 'This memory block has no L0 conversation history.',
+  'memory.detail.noL0InRange':
+    'No L0 conversation history in the current time range. Try adjusting the time filter in the top-right corner.',
+  'memory.detail.emptyLayerInRange':
+    'No items in the {{layer}} layer for the current time range. Try adjusting the time filter in the top-right corner.',
+  'memory.detail.rangeTooLarge': 'Too many memories. Narrow the time range.',
   'memory.detail.loadMore': 'Load earlier messages',
   'memory.detail.allLoaded': 'All messages loaded',
   'memory.detail.pageInfo': 'Page {{page}} / {{total}} · {{current}} of {{total2}} items',
@@ -626,6 +680,8 @@ export const enUS = {
   'memory.detail.collapseBody': 'Collapse',
   'memory.detail.expandBody': 'Expand',
   'memory.detail.noBody': 'No content.',
+  'memory.detail.edit': 'Edit',
+  'memory.detail.moreActions': 'More actions',
   'memory.layer.L0.label': 'L0 · Raw Conversation',
   'memory.layer.L0.short': 'Raw Conversation',
   'memory.layer.L0.desc': 'Original conversation / tool call flow, no compression',
@@ -825,6 +881,10 @@ export const enUS = {
   'agentEdit.assets.label': 'Capabilities',
   'agentEdit.assets.hint':
     'Read-only · Configure resource bindings during creation or from the corresponding resource management page',
+  'agentEdit.assets.editHint':
+    'Check or uncheck to bind/unbind assets directly, then click "Save" to apply',
+  'agentEdit.assets.skillReadonly':
+  'Skill bindings are independent copies. Adjust them when creating an Agent or on the Skill management page',
   'agentEdit.cancel': 'Cancel',
   'agentEdit.save': 'Save Changes',
   'agentEdit.notify.nameRequired': 'Agent name cannot be empty.',
@@ -904,6 +964,15 @@ export const enUS = {
   'addMember.error.emptyName': 'Please enter a username.',
   'addMember.error.invalidName':
     'Username only supports letters, numbers, and underscores. No other symbols or spaces.',
+  'addMember.error.emptyKey':
+    'Custom User_Key is enabled — please enter the key you want to assign to the user.',
+  'addMember.customKey.label': 'Custom User_Key',
+  'addMember.customKey.hint':
+    'Off (default): the backend auto-generates a one-time key. On: you supply the initial key manually.',
+  'addMember.customKey.value': 'User_Key',
+  'addMember.customKey.placeholder': 'e.g. sk-mem-xxxxxxxxxxxxxxxx',
+  'addMember.customKey.valueHint':
+    "Will become the user's default User_Key. Must not collide with an existing user's key, otherwise creation is rejected.",
 
   // ===== CreatedUserKeyModal =====
   'createdUserKey.caption': 'User Created Successfully',
@@ -990,6 +1059,7 @@ export const enUS = {
   'graph.colorMode.community': 'Community',
   'graph.hideStructural': 'Hide Structural',
   'graph.hideStructural.title': 'Hide structural nodes',
+  'graph.clearSearch': 'Clear search',
   'graph.stats': '{{nodes}} nodes · {{edges}} edges',
 
   // ===== ImportBlockDialog (sample JSON) =====
@@ -1157,4 +1227,64 @@ export const enUS = {
   'error.timeout': 'Request timed out. Please try again later.',
   'error.emptyResponse': 'The server returned an empty response. Please try again later.',
   'error.fallback': 'Operation failed. Please try again later.',
+
+  // ===== Asset split layout =====
+  'assetSplit.resizer.label': 'Drag to resize the sidebar and detail panels',
+
+  // ===== Onboarding =====
+  'onboarding.skip': 'Skip',
+  'onboarding.prev': 'Back',
+  'onboarding.next': 'Next',
+  'onboarding.start': 'Get started',
+  'onboarding.finish': 'Finish',
+  // Welcome (startContent, role-specific)
+  'onboarding.guide.start.admin.title': 'Welcome to TDAI Panel',
+  'onboarding.guide.start.admin.desc':
+    'You are an administrator: you manage teams and members. Let\'s walk through the core features — click "Next" to begin.',
+  'onboarding.guide.start.member.title': 'Welcome to TDAI Panel',
+  'onboarding.guide.start.member.desc':
+    'You are a team member: you can manage Agents and assets within the team. Let\'s walk through the core features — click "Next" to begin.',
+  // Login identity (shared by Admin / Member)
+  'onboarding.guide.login.title': 'Your login identity',
+  'onboarding.guide.login.desc':
+    'You are signed in with a user_key. Use the top-right menu to view your profile, switch language, or log out; ownership and permissions are based on your current identity.',
+  // Admin: create / switch team
+  'onboarding.guide.team.title': 'Create / switch team',
+  'onboarding.guide.team.desc':
+    'Click the top-left corner to switch the active team. A team is the primary boundary of assets, Agents and Tasks; as an administrator you can create new teams here.',
+  // Admin: create members and issue user_key (not available to member)
+  'onboarding.guide.memberAdmin.title': 'Create members and issue user_key',
+  'onboarding.guide.memberAdmin.desc':
+    'As an administrator you can create new user accounts in "Members" and issue a one-time user_key (shown only once), or invite existing users into the team. Regular members cannot create users — they can only invite existing ones.',
+  // Member: invite teammates (cannot create users)
+  'onboarding.guide.member.title': 'Invite team members',
+  'onboarding.guide.member.desc':
+    'In "Members" you can invite existing users into the current team by user_id (you cannot create new user accounts — that requires an administrator). Ask them to copy their user_id from "My Profile".',
+  // Agent management (same for Admin and Member, both can edit)
+  'onboarding.guide.agent.title': 'Create and edit Agents',
+  'onboarding.guide.agent.desc':
+    'Click "Create Agent" to create an Agent. You can edit your own Agents and bind Wiki / Code / Skill / Chat Memory assets; Agents created by others are read-only. Admin and Member have the same capabilities.',
+  // Click an Agent card to open the edit dialog and bind assets
+  // (falls back to the "Create Agent" button when the user has none — copy covers both cases)
+  'onboarding.guide.agentBind.title': 'Click an Agent card to bind team assets',
+  'onboarding.guide.agentBind.desc':
+    'Click an Agent card you own (or its name) to open the edit dialog: tick Wiki / CodeGraph / Chat Memory team assets in the "Capabilities" section and save — bindings take effect immediately. No Agent yet? Click "Create Agent" first, then come back and click it. Skills are bound by choosing the owning Agent when importing on the Skill page.',
+  // Member: key management
+  'onboarding.guide.apikey.title': 'Manage your User_Keys',
+  'onboarding.guide.apikey.desc':
+    'Create keys in "User_Key management" for external clients (e.g. CodeBuddy / ClaudeCode CLI). The plaintext key is shown only once — copy and store it safely.',
+  // Create and allocate assets (same for Admin and Member; each asset page is visited.
+  // Each description follows "what it is → how to import → how to use" for first-time users)
+  'onboarding.guide.asset.wiki.title': 'Wiki: team document assets',
+  'onboarding.guide.asset.wiki.desc':
+    'What: a knowledge base for shared team documents. Import: click "Create Wiki" → open it and upload Markdown files (.md/.txt, multi-select & drag-drop supported) → trigger "Extract" to build searchable knowledge pages. Use: click "Allocate to Agent" on a Wiki card, or tick it in the Agent edit dialog — bound Agents can then retrieve and cite these documents in chat.',
+  'onboarding.guide.asset.code.title': 'CodeGraph: team code assets',
+  'onboarding.guide.asset.code.desc':
+    'What: an index and call graph built over team code repositories. Import: click "Register repo" and paste a Git HTTPS URL — indexing runs automatically. Use: once allocated to an Agent, the Agent can search code and explore call chains in chat to answer repo-related questions.',
+  'onboarding.guide.asset.skill.title': 'Skill: tell apart "Team assets" vs "Agent assets"',
+  'onboarding.guide.asset.skill.desc':
+    'Ownership: this page has two tabs — "Team assets" (a shared pool every member can use and configure) and "Agent assets" (skills bound to a specific Agent, usable by that Agent). Import: click "Import Skill" (create an Agent first) — the skill is bound to the chosen Agent. Use: once bound, the Agent follows the SKILL.md playbook when a matching scenario arises; in "Agent assets" you can toggle "Shared / Private" for skills you own.',
+  'onboarding.guide.asset.memory.title': 'Chat Memory: tell apart "Team assets" vs "Agent assets"',
+  'onboarding.guide.asset.memory.desc':
+    'Ownership: this page has two tabs — "Team assets" (a shared memory pool) and "Agent assets" (memory bound to a specific Agent, including each Agent\'s built-in private memory). Import: click "Import memory" to bring history in as L0; the system distills L1~L3 layers and attaches them to the chosen Agent. Use: bound Agents remember your preferences and conclusions across sessions; in "Agent assets" you can toggle "Shared / Private" for memory you imported.',
 };

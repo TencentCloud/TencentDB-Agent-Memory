@@ -5,7 +5,7 @@
  * This file re-exports everything from the generated baseline, then adds
  * hand-written overrides that OpenAPI cannot express:
  *   - safePath refine (path traversal prevention)
- *   - conversationDelete mutual exclusion refine
+ *   - conversationDelete / atomicDelete 批量删除上限 + 去重 + 至少一项校验
  *   - Generic ApiResponseEnvelope<T> interface
  *   - formatZodError utility
  */
@@ -29,7 +29,6 @@ export {
   atomicDetailSchema,
   atomicUpdateRequestSchema,
   atomicUpdateDataSchema,
-  atomicDeleteRequestSchema,
   atomicDeleteDataSchema,
   atomicQueryRequestSchema,
   atomicQueryDataSchema,
@@ -61,7 +60,6 @@ export type {
   ConversationDeleteData,
   AtomicUpdateRequest,
   AtomicUpdateData,
-  AtomicDeleteRequest,
   AtomicDeleteData,
   AtomicQueryRequest,
   ScenarioListRequest,
@@ -102,7 +100,6 @@ import {
   scenarioReadRequestSchema as _scenarioReadRequestSchema,
   scenarioWriteRequestSchema as _scenarioWriteRequestSchema,
   scenarioRmRequestSchema as _scenarioRmRequestSchema,
-  conversationDeleteRequestSchema as _conversationDeleteRequestSchema,
 } from "./generated/schemas.js";
 
 // ============================
@@ -281,22 +278,63 @@ export const scenarioRmRequestSchema = z.object({ path: safePath });
 export type ScenarioRmRequest = z.infer<typeof scenarioRmRequestSchema>;
 
 // ============================
-// Override: conversation delete mutual exclusion
+// Override: L0 / L1 batch delete
 // ============================
 
-/** conversationDelete with mutual exclusion refine. */
+/** L0 单次批量删除上限：message_ids 5000 条、session_ids 100 条。 */
+export const L0_DELETE_MESSAGE_IDS_MAX = 5000;
+export const L0_DELETE_SESSION_IDS_MAX = 100;
+/** L1 单次批量删除上限。 */
+export const L1_DELETE_IDS_MAX = 5000;
+
+/** 去重 + 丢弃空串，保持原顺序。 */
+const dedupeIdList = (ids: string[]): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+};
+
+/**
+ * conversationDelete：message_ids / session_ids 至少填一个，可同时填。
+ *
+ * 兼容旧调用方：保留单数 `session_id`，解析后归一到 `session_ids`，
+ * 所以handler 只需处理 `session_ids` 一条路径。
+ */
 export const conversationDeleteRequestSchema = z.object({
-  message_ids: z.array(z.string()).min(1).max(100).optional(),
+  message_ids: z.array(z.string()).min(1).max(L0_DELETE_MESSAGE_IDS_MAX).optional(),
+  session_ids: z.array(z.string()).min(1).max(L0_DELETE_SESSION_IDS_MAX).optional(),
+  /** @deprecated 改用 `session_ids`；仍支持以兼容现网调用方。*/
   session_id: z.string().optional(),
+}).transform((data) => {
+  const messageIds = dedupeIdList(data.message_ids ?? []);
+  const sessionIds = dedupeIdList([
+    ...(data.session_ids ?? []),
+    ...(data.session_id !== undefined ? [data.session_id] : []),
+  ]);
+  return { message_ids: messageIds, session_ids: sessionIds };
 }).refine(
-  (data) => {
-    const hasIds = data.message_ids !== undefined && data.message_ids.length > 0;
-    const hasSession = data.session_id !== undefined && data.session_id.trim().length > 0;
-    return hasIds || hasSession;
-  },
-  { message: "At least one of message_ids or session_id must be provided" },
+  (data) => data.message_ids.length > 0 || data.session_ids.length > 0,
+  { message: "At least one of message_ids or session_ids must be provided" },
+).refine(
+  (data) => data.session_ids.length <= L0_DELETE_SESSION_IDS_MAX,
+  { message: `session_ids must contain at most ${L0_DELETE_SESSION_IDS_MAX} items` },
 );
 export type ConversationDeleteRequest = z.infer<typeof conversationDeleteRequestSchema>;
+
+/** atomicDelete：ids 必填，单次至多 5000 条，自动去重。 */
+export const atomicDeleteRequestSchema = z.object({
+  ids: z.array(z.string()).min(1).max(L1_DELETE_IDS_MAX),
+}).transform((data) => ({ ids: dedupeIdList(data.ids) })).refine(
+  (data) => data.ids.length > 0,
+  { message: "ids must contain at least one non-empty id" },
+);
+export type AtomicDeleteRequest = z.infer<typeof atomicDeleteRequestSchema>;
 
 // ============================
 // Tenancy isolation extension

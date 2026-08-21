@@ -9,13 +9,13 @@
 
 import type { MemCommandConfig } from "../types.js";
 import type { MemCommandContext, MemCommandResult } from "./types.js";
-import { parseMemCommand, type ParsedMemCommand } from "./parser.js";
+import { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 import { buildMemResponse } from "./response-builder.js";
 import { executeHelp } from "./commands/help.js";
 import { executeSync } from "./commands/sync.js";
 import { executeCreateSkill } from "./commands/create-skill.js";
 
-export { parseMemCommand, type ParsedMemCommand } from "./parser.js";
+export { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 export { buildMemResponse } from "./response-builder.js";
 export type { MemCommandContext, MemCommandResult } from "./types.js";
 export { getHelpText } from "./commands/help.js";

@@ -17,6 +17,8 @@ import type { LLMRunner, Logger, TraceContext } from "../types.js";
 import { buildTraceParams } from "../types.js";
 import type { StorageAdapter } from "../storage/adapter.js";
 import { StoragePaths } from "../storage/types.js";
+import type { ResolvedMemoryPrompt } from "../memory-prompt/types.js";
+import { composeMemorySystemPrompt } from "../memory-prompt/composer.js";
 
 const TAG = "[memory-tdai] [persona]";
 
@@ -26,6 +28,7 @@ export class PersonaGenerator {
   private logger: Logger | undefined;
   private backupCount: number;
   private promptMode: MemoryPromptMode;
+  private memoryPrompt: ResolvedMemoryPrompt | undefined;
   private instanceId: string | undefined;
   private storage: StorageAdapter | undefined;
   private traceContext: TraceContext | undefined;
@@ -36,6 +39,8 @@ export class PersonaGenerator {
     model?: string;
     /** Prompt family for L3 generation (default: chat). */
     promptMode?: MemoryPromptMode;
+    /** Resolved custom strategy. Undefined preserves the current system prompt exactly. */
+    memoryPrompt?: ResolvedMemoryPrompt;
     backupCount?: number;
     logger?: Logger;
     /** Plugin instance ID for metric reporting (optional) */
@@ -54,6 +59,7 @@ export class PersonaGenerator {
     this.dataDir = opts.dataDir;
     this.logger = opts.logger;
     this.promptMode = opts.promptMode ?? "chat";
+    this.memoryPrompt = opts.memoryPrompt;
     this.backupCount = opts.backupCount ?? 3;
     this.instanceId = opts.instanceId;
     this.storage = opts.storage;
@@ -164,7 +170,7 @@ export class PersonaGenerator {
       ? StoragePaths.checkpoint
       : await (async () => { const path = await import("node:path"); return path.default.join(this.dataDir, ".metadata", "recall_checkpoint.json"); })();
 
-    const { systemPrompt, userPrompt } = buildPersonaPrompt({
+    const { systemPrompt: baseSystemPrompt, userPrompt } = buildPersonaPrompt({
       mode,
       promptMode: this.promptMode,
       currentTime: new Date().toISOString(),
@@ -177,6 +183,7 @@ export class PersonaGenerator {
       personaFilePath,
       checkpointPath,
     });
+    const systemPrompt = composeMemorySystemPrompt(baseSystemPrompt, this.memoryPrompt);
 
     // 7. Backup before LLM run (LLM writes persona.md via tools)
     const bm = new BackupManager(this.storage

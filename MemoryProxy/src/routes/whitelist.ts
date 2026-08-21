@@ -87,6 +87,69 @@ export const WHITELIST_ENDPOINTS: readonly WhitelistEndpoint[] = [
     supportsStream: false,
     isPrimary: false,
   },
+  // ── Codex Responses API 端点（由 codexHandler 处理）──────────────
+  // 主端点：见 codexHandler.ts；上游拼接靠这里防止 joinUrl 走 fallback
+  // 兜底到 /chat/completions（错误协议）。
+  //
+  // 两组条目对应 base_url 带 /v1 与不带 /v1 两种客户端写法，见 server.ts 的
+  // codex 路由注释。matchWhitelistEndpoint 按 pathSuffix 长度降序匹配，
+  // /v1/responses 会优先于 /responses 命中，保证语义清晰。
+  {
+    pathSuffix: "/v1/responses",
+    upstreamEndpoint: "/responses",
+    protocol: "openai",
+    supportsStream: true,
+    isPrimary: true,
+  },
+  {
+    pathSuffix: "/v1/responses/compact",
+    upstreamEndpoint: "/responses/compact",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
+    pathSuffix: "/v1/memories/trace_summarize",
+    upstreamEndpoint: "/memories/trace_summarize",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
+    pathSuffix: "/v1/realtime/calls",
+    upstreamEndpoint: "/realtime/calls",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
+    pathSuffix: "/responses",
+    upstreamEndpoint: "/responses",
+    protocol: "openai",
+    supportsStream: true,
+    isPrimary: true,
+  },
+  {
+    pathSuffix: "/responses/compact",
+    upstreamEndpoint: "/responses/compact",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
+    pathSuffix: "/memories/trace_summarize",
+    upstreamEndpoint: "/memories/trace_summarize",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
+  {
+    pathSuffix: "/realtime/calls",
+    upstreamEndpoint: "/realtime/calls",
+    protocol: "openai",
+    supportsStream: false,
+    isPrimary: false,
+  },
 ] as const;
 
 /** 按长度降序排列的缓存，避免每次匹配都重新排序。 */
@@ -97,13 +160,19 @@ const SORTED_BY_SUFFIX_LEN: readonly WhitelistEndpoint[] = [...WHITELIST_ENDPOIN
 /** `/proxy/{spaceId}` 前缀正则：仅剥离一层，避免误伤路径中的 "proxy" 字面量。 */
 const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
 /**
- * Agent 前缀正则：匹配 `/{agent}[/{spaceId}]/v1/...` 两种形态。
+ * Agent 前缀正则：匹配 `/{agent}[/{spaceId}]/{v1|responses|...}` 形态。
  *   - `/claude-code/v1/messages`              → 剥 `/claude-code`
  *   - `/claude-code/{spaceId}/v1/messages`    → 剥 `/claude-code/{spaceId}`
- * lookahead `(?=/v1/)` 确保白名单入口 `/v1/messages` 自身不会被误剥。
- * agent 段限定为已知名字，避免误伤路径中恰好有 "v1" 字面量的其它请求。
+ *   - `/codex/{spaceId}/responses`            → 剥 `/codex/{spaceId}`（codex 客户端
+ *     不像 CC/CB 那样自拼 /v1/，源码 endpoint 常量就是 /responses，因此 base_url
+ *     不带 /v1 时前缀后紧接的就是 /responses 或 /memories 等）
+ * lookahead 允许 `/v1/`、`/responses`、`/responses/`、`/memories/`、`/realtime/`
+ * 后紧邻，其中 `/v1/` 必须带尾斜杠避免误伤未来出现的 `/v1foo` 之类；responses
+ * 等 codex 端点允许尾斜杠可选（如 `/responses` 是完整路径）。
+ * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
+ * 段——agent 段限定为已知名字）。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|cursor|anthropic|openai)(?:\/[^/]+)?(?=\/v1\/)/i;
+const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。

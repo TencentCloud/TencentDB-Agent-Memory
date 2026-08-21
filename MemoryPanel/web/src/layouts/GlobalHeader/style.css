@@ -122,3 +122,64 @@
   background: var(--tea-color-bg-secondary-hover);
   color: var(--tea-color-text-primary);
 }
+
+/* ===== Profile Modal：tea Avatar + Justify + 描述型分块 ===== */
+
+._memory-profile-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+._memory-profile-identity-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+._memory-profile-identity-name {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-profile-identity-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+._memory-profile-divider {
+  height: 1px;
+  background: var(--tea-color-border-secondary-default);
+  margin: 16px 0;
+}
+
+._memory-profile-section {
+  margin-bottom: 12px;
+}
+
+._memory-profile-section:last-child {
+  margin-bottom: 0;
+}
+
+._memory-profile-section-label {
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+._memory-profile-section-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 16px;
+}

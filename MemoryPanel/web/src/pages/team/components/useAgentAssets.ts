@@ -1,5 +1,5 @@
 /**
- * TeamManagementPanel 拆分出的数据 hooks：
+ * 数据 hooks：
  *   - loadAgentOverview / syncChatMemoryBindings：单次调用的资产总览接口
  *   - useTeamAssets：拉取团队级 skill/code_graph/wiki/chat_memory 列表
  *   - useAgentMountedCounts：批量拉取各 agent 已挂载资产数量，并在
@@ -76,42 +76,55 @@ export function useTeamAssets(teamId: string) {
   return { loading, skills, codeGraphs, wikis, chatMemories };
 }
 
-export function useAgentMountedCounts(teamId: string | null, agents: StoreAgent[]): Record<string, AgentMountedCounts> {
+export function useAgentMountedCounts(
+  teamId: string | null,
+  agents: StoreAgent[],
+): { counts: Record<string, AgentMountedCounts>; countsLoading: boolean } {
   const [counts, setCounts] = useState<Record<string, AgentMountedCounts>>({});
+  const [countsLoading, setCountsLoading] = useState(true);
   const agentsKey = useMemo(() => agents.map((a) => a.agent_id).join('|'), [agents]);
 
   // list 计数直接用后端 agent-overview/bootstrap 的 counts —— 它读的是真实源
   // （skill 表 owner_agent_id + agent-fixed-asset 表），与详情弹窗、运行时一致。
   // 不再用 metadata_json.ui 做 fallback：.ui 是已废弃的影子存储，会导致展示≠真实。
-  const fetchCounts = useCallback(() => {
-    if (!teamId || agents.length === 0) return;
+  // silent=true 的刷新（BACKEND_REFRESH_EVENT）不翻转 loading，避免操作后整屏骨架闪烁。
+  const load = useCallback((silent: boolean) => {
+    if (!teamId || agents.length === 0) {
+      setCounts({});
+      setCountsLoading(false);
+      return () => {};
+    }
+    if (!silent) setCountsLoading(true);
     let cancelled = false;
-    loadAgentOverview(teamId, agents.map((agent) => agent.agent_id)).then((overview) => {
-      if (!cancelled) setCounts(overview.counts);
-    }).catch(() => {});
-    return () => { cancelled = true; };
+    loadAgentOverview(teamId, agents.map((agent) => agent.agent_id))
+      .then((overview) => {
+        if (!cancelled) setCounts(overview.counts);
+      })
+      .catch(() => {
+        if (!cancelled) setCounts({});
+      })
+      .finally(() => {
+        if (!cancelled) setCountsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId, agentsKey]);
 
+  // 初始 / agent 变更加载：翻转 countsLoading，驱动骨架屏覆盖整个 bootstrap 加载期
   useEffect(() => {
-    let cancelled = false;
-    if (!teamId || agents.length === 0) { setCounts({}); return () => { cancelled = true; }; }
-    loadAgentOverview(teamId, agents.map((agent) => agent.agent_id)).then((overview) => {
-      if (!cancelled) setCounts(overview.counts);
-    }).catch(() => {
-      if (!cancelled) setCounts({});
-    });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teamId, agentsKey]);
+    return load(false);
+  }, [load]);
 
-  // 保存后 invalidateBackendCache() 会广播 BACKEND_REFRESH_EVENT，需要重新拉 counts
+  // 保存后 invalidateBackendCache() 会广播 BACKEND_REFRESH_EVENT，静默重新拉 counts，
+  // 保留旧值原地更新，不闪骨架屏
   useEffect(() => {
     if (!teamId || agents.length === 0) return;
-    const handler = () => { fetchCounts(); };
+    const handler = () => { load(true); };
     window.addEventListener('tdai-memory.backend-refresh', handler);
     return () => window.removeEventListener('tdai-memory.backend-refresh', handler);
-  }, [fetchCounts, teamId, agents.length]);
+  }, [load, teamId, agents.length]);
 
-  return counts;
+  return { counts, countsLoading };
 }
