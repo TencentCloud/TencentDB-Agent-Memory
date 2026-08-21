@@ -56,9 +56,11 @@ export function registerKnowledgeCodeGraphRoutes(api: Hono, deps: PanelDeps): vo
     if ('error' in gate) return gate.error;
     const branch = str(body, 'branch') ?? undefined;
     const repoName = str(body, 'repo_name') ?? undefined;
+    const sourceType = str(body, 'source_type') ?? undefined;
+    const manifestFile = str(body, 'manifest_file') ?? undefined;
     const kc = deps.knowledgeClientFactory(ctx.instanceId);
     try {
-      const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName);
+      const detail = await kc.codeGraphCreate(teamId, repoUrl, branch, gate.userId, repoName, sourceType, manifestFile);
       // stash owner key 供 status-callback ready 时以 owner 身份注册 meta asset
       // （callback 是 S2S、无 user_key；详见 knowledge-task-registry.ts）
       if (ctx.userKey) {

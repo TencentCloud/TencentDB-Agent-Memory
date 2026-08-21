@@ -35,6 +35,10 @@ export interface CodeGraphBuildContext {
   teamId: string;
   repoUrl: string;
   branch: string;
+  /** 源码类型：git（默认）| repo-manifest。决定 worker 选哪个 fetcher。 */
+  sourceType: string;
+  /** repo-manifest 专用：manifest XML 文件路径（如 dev/main.xml）。 */
+  manifestFile: string | null;
   /** 该资产的本地工作目录（checkout + 索引落此）。 */
   dir: string;
   /** worker 可调用以更新细粒度内部状态（cloning → indexing）。 */
@@ -87,6 +91,8 @@ export interface CreateCodeGraphParams {
   team_id: string;
   repo_url: string;
   branch: string;
+  source_type?: string;
+  manifest_file?: string;
   repo_name?: string;
   owner_user_id?: string;
   user_id?: string;
@@ -268,7 +274,15 @@ export class CodeGraphService {
 
   private enqueueBuild(row: CodeGraphRow): void {
     this.queue.enqueue(row.code_graph_id, () =>
-      this.runBuild(row.service_id, row.code_graph_id, row.team_id, row.repo_url, row.branch),
+      this.runBuild(
+        row.service_id,
+        row.code_graph_id,
+        row.team_id,
+        row.repo_url,
+        row.branch,
+        row.source_type,
+        row.manifest_file,
+      ),
     );
   }
 
@@ -278,6 +292,8 @@ export class CodeGraphService {
     teamId: string,
     repoUrl: string,
     branch: string,
+    sourceType: string,
+    manifestFile: string | null,
   ): Promise<void> {
     // 入口检查点：pending 期间被删 → 直接跳过，不置 processing、不建图。
     if (this.isDeleted(serviceId, codeGraphId)) {
@@ -296,6 +312,8 @@ export class CodeGraphService {
         teamId,
         repoUrl,
         branch,
+        sourceType,
+        manifestFile,
         dir: this.dirFor(serviceId, teamId, codeGraphId),
         setInternalStatus: (s) =>
           this.store.updateCodeGraphStatus(serviceId, codeGraphId, { status: "processing", internal_status: s }),

@@ -22,7 +22,7 @@ function pickReqFields(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== 'object') return {};
   const b = body as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'repo_url', 'branch', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
+  for (const k of ['wiki_id', 'code_graph_id', 'knowledge_id', 'wiki_ids', 'code_graph_ids', 'knowledge_ids', 'team_id', 'repo_url', 'branch', 'source_type', 'manifest_file', 'filename', 'filenames', 'refs', 'tool_name', 'query', 'path']) {
     if (k in b) out[k] = b[k];
   }
   return out;

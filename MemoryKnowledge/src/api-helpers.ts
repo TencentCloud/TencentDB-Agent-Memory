@@ -143,6 +143,8 @@ export interface CodeGraphDetail {
   repo_name: string;
   repo_url: string;
   branch: string;
+  source_type: string;
+  manifest_file: string | null;
   commit_hash: string | null;
   service_url: string | null;
   summary: string | null;
@@ -171,6 +173,8 @@ export function toCodeGraphDetail(row: CodeGraphRow): CodeGraphDetail {
     repo_name: row.repo_name,
     repo_url: row.repo_url,
     branch: row.branch,
+    source_type: row.source_type,
+    manifest_file: row.manifest_file,
     commit_hash: row.commit_hash,
     service_url: row.service_url ?? null,
     summary: row.summary ?? null,

@@ -34,6 +34,8 @@ export interface CodeGraphRow {
   repo_name: string;
   repo_url: string;
   branch: string;
+  source_type: string;
+  manifest_file: string | null;
   commit_hash: string | null;
   owner_user_id: string | null;
   user_id: string | null;
@@ -58,6 +60,8 @@ export interface CreateCodeGraphInput {
   team_id: string;
   repo_url: string;
   branch: string;
+  source_type?: string;
+  manifest_file?: string;
   repo_name?: string;
   owner_user_id?: string;
   user_id?: string;

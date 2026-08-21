@@ -188,6 +188,15 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
     if (typeof repoUrl !== "string" || !repoUrl) return c.json(wrapError(400, "repo_url is required"), 400);
 
     const branch = typeof body.branch === "string" && body.branch ? body.branch : "main";
+    const sourceType =
+      typeof body.source_type === "string" && body.source_type === "repo-manifest"
+        ? "repo-manifest"
+        : "git";
+    const manifestFile =
+      typeof body.manifest_file === "string" && body.manifest_file ? body.manifest_file : undefined;
+    if (sourceType === "repo-manifest" && !manifestFile) {
+      return c.json(wrapError(400, "manifest_file is required when source_type is repo-manifest"), 400);
+    }
     const repoName = typeof body.repo_name === "string" ? body.repo_name : undefined;
 
     const { row, existed } = cgService.create({
@@ -195,6 +204,8 @@ export function createCodeGraphRoutes(deps: CodeGraphRouteDeps): Hono {
       team_id: idFields.team_id,
       repo_url: repoUrl,
       branch,
+      source_type: sourceType,
+      manifest_file: manifestFile,
       repo_name: repoName,
       owner_user_id: idFields.user_id,
       user_id: idFields.user_id,

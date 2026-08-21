@@ -110,6 +110,17 @@ $DOCKER run -d --name "$CONTAINER" \
   "$MEMORY_HUB_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 120
+
+# 注入宿主机 git 凭证，让容器内 code-graph 能 clone 私有 gerrit。
+# 容器基于 node:22-slim，默认无任何 git 认证配置，匿名访问私有 gerrit（/a/ 前缀）会 401。
+# 用 exec 写入而非 bind mount：单文件 bind mount 会让 git store helper 写回时报 EBUSY；exec 写出的容器内真实文件则无此问题。
+if [[ -f "${HOME}/.git-credentials" ]]; then
+  $DOCKER exec -i "$CONTAINER" sh -c 'umask 077; cat > /root/.git-credentials' < "${HOME}/.git-credentials"
+  $DOCKER exec "$CONTAINER" git config --global credential.helper store
+else
+  warn "未找到 ${HOME}/.git-credentials，容器内将无法 clone 私有 git 仓库"
+fi
+
 ok "memory-hub 已启动"
 ok "  Panel UI  → http://localhost:${PANEL_PORT}/"
 ok "  KS Health → http://localhost:${KNOWLEDGE_PORT}/health"

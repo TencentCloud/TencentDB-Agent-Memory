@@ -10,7 +10,7 @@ import { knowledgeApi } from '@/lib/knowledge-api';
 import { tea } from '@/lib/tea-bridge';
 import AllocateAssetDialog from '@/pages/ResourcePage/components/AllocateAssetDialog';
 import { AssetPageHeader } from '@/pages/ResourcePage/components/AssetPageHeader';
-import { formatRepoName, formatShortTime, isValidGitHttpUrl, type ScopeTab, type StatusFilter, type ViewMode } from './code-constants';
+import { formatRepoName, formatShortTime, isValidGitHttpUrl, isValidManifestUrl, type ScopeTab, type StatusFilter, type ViewMode } from './code-constants';
 import { CodeOwnerLabel, statusLabel } from './code-ui';
 import { useCodeSources } from './useCodeSources';
 import { CodeDetailView } from './code-detail-view';
@@ -47,6 +47,10 @@ export default function CodeSourcesPanel() {
     setFormRepo,
     formBranch,
     setFormBranch,
+    formSourceType,
+    setFormSourceType,
+    formManifestFile,
+    setFormManifestFile,
     submitting,
     // allocate
     allocateTarget,
@@ -433,10 +437,12 @@ export default function CodeSourcesPanel() {
       {showRegister &&
         (() => {
           const trimmedRepo = formRepo.trim();
+          const isManifest = formSourceType === 'repo-manifest';
           const isSsh = trimmedRepo.startsWith('git@');
-          const validUrl = isValidGitHttpUrl(trimmedRepo);
+          const validUrl = isManifest ? isValidManifestUrl(trimmedRepo) : isValidGitHttpUrl(trimmedRepo);
           // 已输入内容、非 SSH、但又不是合法 http(s) 地址 → 提示格式错误。
           const showUrlError = !!trimmedRepo && !isSsh && !validUrl;
+          const manifestReady = !isManifest || !!formManifestFile.trim();
           return (
             <Modal
               visible
@@ -447,12 +453,30 @@ export default function CodeSourcesPanel() {
             >
               <Modal.Body>
                 <Form>
-                  <Form.Item label={t('code.register.gitUrl')} required extra={t('code.register.gitUrlExtra')}>
+                  <Form.Item label={t('code.register.sourceType')} required>
+                    <Segment
+                      value={formSourceType}
+                      onChange={(value) => setFormSourceType(value as 'git' | 'repo-manifest')}
+                      options={[
+                        { value: 'git', text: t('code.register.sourceTypeGit') },
+                        { value: 'repo-manifest', text: t('code.register.sourceTypeManifest') },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('code.register.gitUrl')}
+                    required
+                    extra={isManifest ? t('code.register.manifestUrlExtra') : t('code.register.gitUrlExtra')}
+                  >
                     <Input
                       size="full"
                       value={formRepo}
                       onChange={setFormRepo}
-                      placeholder="https://gitlab.example.com/namespace/repo.git"
+                      placeholder={
+                        isManifest
+                          ? 'https://gerrit.example.com/a/platform/manifests'
+                          : 'https://gitlab.example.com/namespace/repo.git'
+                      }
                     />
                   </Form.Item>
                   {isSsh && (
@@ -462,7 +486,19 @@ export default function CodeSourcesPanel() {
                   )}
                   {showUrlError && (
                     <Form.Item>
-                      <Alert type="error">{t('code.register.invalidUrl')}</Alert>
+                      <Alert type="error">
+                        {isManifest ? t('code.register.invalidManifestUrl') : t('code.register.invalidUrl')}
+                      </Alert>
+                    </Form.Item>
+                  )}
+                  {isManifest && (
+                    <Form.Item label={t('code.register.manifestFile')} required>
+                      <Input
+                        size="full"
+                        value={formManifestFile}
+                        onChange={setFormManifestFile}
+                        placeholder="dev/main.xml"
+                      />
                     </Form.Item>
                   )}
                   <Form.Item label={t('code.register.branch')} required>
@@ -479,7 +515,7 @@ export default function CodeSourcesPanel() {
                 <Button
                   type="primary"
                   onClick={handleRegister}
-                  disabled={submitting || !formBranch.trim() || !validUrl}
+                  disabled={submitting || !formBranch.trim() || !validUrl || !manifestReady}
                   loading={submitting}
                 >
                   {submitting ? t('code.register.submitting') : t('code.register.submit')}

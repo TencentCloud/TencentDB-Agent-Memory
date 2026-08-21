@@ -117,19 +117,28 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
 
   // ── Real code-graph worker: fetch/sync via SourceFetcher + index ──
   const realCodeWorker: CodeGraphWorker = async (ctx) => {
-    const { dir, repoUrl, branch, codeGraphId, setInternalStatus } = ctx;
+    const { dir, repoUrl, branch, codeGraphId, setInternalStatus, sourceType, manifestFile } = ctx;
 
     // Resolve protocol-specific fetcher (validates url: https-only + SSRF blocklist).
-    const fetcher = fetcherRegistry.resolve(repoUrl);
+    // repo-manifest 的 URL 也是 https，无法仅凭 URL 区分，故显式传入 sourceType。
+    const fetcher = fetcherRegistry.resolve(
+      repoUrl,
+      sourceType === "repo-manifest" ? "repo-manifest" : undefined,
+    );
+    const fetchOptions = { manifestFile: manifestFile ?? undefined };
 
-    const isExistingRepo = existsSync(join(dir, ".git"));
+    // 单 git 仓库用 .git 判断增量；repo-manifest 用 .codegraph 索引库判断（其根目录无 .git）。
+    const isExistingRepo =
+      sourceType === "repo-manifest"
+        ? existsSync(join(dir, ".codegraph"))
+        : existsSync(join(dir, ".git"));
     let didIncrementalSync = false;
     let version: string | null = null;
 
     if (isExistingRepo) {
       try {
         setInternalStatus("fetching");
-        const res = await fetcher.sync(repoUrl, branch, dir);
+        const res = await fetcher.sync(repoUrl, branch, dir, fetchOptions);
         version = res.version;
 
         setInternalStatus("indexing");
@@ -151,7 +160,7 @@ export function createKnowledgeModule(config: KnowledgeModuleConfig): KnowledgeM
     if (!didIncrementalSync) {
       mkdirSync(dir, { recursive: true });
       setInternalStatus("cloning");
-      const res = await fetcher.fetch(repoUrl, branch, dir);
+      const res = await fetcher.fetch(repoUrl, branch, dir, fetchOptions);
       version = res.version;
 
       setInternalStatus("indexing");
