@@ -274,7 +274,7 @@ Open [http://localhost:8125](http://localhost:8125).
 
 ## Using Proxy with Agents
 
-The Proxy supports 8 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
+The Proxy supports 9 agent clients. **Full setup instructions, adaptation details, and FAQs** for each agent are in the [`agents/`](./agents/) directory:
 
 | Agent | Config method | Docs |
 |-------|---------------|------|
@@ -286,6 +286,7 @@ The Proxy supports 8 agent clients. **Full setup instructions, adaptation detail
 | **OpenCode** | `~/.config/opencode/opencode.json` | [`agents/opencode/`](./agents/opencode/) |
 | **Hermes** | `~/.hermes/config.yaml` + header preselect | [`agents/hermes/`](./agents/hermes/) |
 | **OpenClaw** | `~/.openclaw/openclaw.json` + header preselect | [`agents/openclaw/`](./agents/openclaw/) |
+| **Pi** | `pi-plugin` extension (env vars) | [`MemoryCore/pi-plugin/`](./MemoryCore/pi-plugin/) |
 | **Other platforms** | Header preselect (generic) | [`agents/README.md`](./agents/README.md) |
 
 The proxy pipeline in order: `auth` (validates user_key) → `sessionInit`
@@ -293,6 +294,42 @@ The proxy pipeline in order: `auth` (validates user_key) → `sessionInit`
 knowledge blended into the system prompt) → forward to the upstream LLM.
 
 Disable the full pipeline (passthrough only): `PROXY_FULL_STACK=0 ./start-proxy.sh`.
+
+## Using Proxy with Pi
+
+[Pi](https://github.com/earendil-works/pi-coding-agent) is an open-source AI coding-agent harness. Pi is a first-class agent-source (`pi`) — its system prompts use a label-line format (`Available tools:`, `Guidelines:`) that is distinct from Claude Code (markdown headings) and CodeBuddy (XML tags), so the proxy ships a dedicated `PiProfile` parser. By installing the `pi-plugin` extension and pointing Pi at a custom `tdai` provider, Pi chat requests route through the Proxy for team memory — L3 persona, L2 scene index, L0 conversation capture, and on-demand L0/L1/L2 search.
+
+### Connection
+
+Point Pi at the Proxy via the `pi-plugin` extension:
+
+```text
+http://<proxy-host>:<port>/pi/<spaceId>/v1
+```
+
+- `<agent-source>`: `pi` (first-class)
+- `<spaceId>`: memory instance ID (`default` for local deployments)
+- The `/v1` suffix is required in the base URL: the OpenAI-completions provider appends `/chat/completions` but does not insert `/v1`, so including `/v1` makes the request hit the Proxy's explicit `/:agent/:spaceId/v1/chat/completions` route.
+
+### Setup
+
+1. Install the pi-plugin (see [`MemoryCore/pi-plugin/README.md`](./MemoryCore/pi-plugin/README.md)).
+2. Set the env vars (no secrets in files): `TDAI_PROXY_URL`, `TDAI_SPACE_ID`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`, `TDAI_USER_KEY`, `TDAI_MODEL`, and optionally `TDAI_TASK_ID`.
+3. Load the extension: `pi -e /path/to/pi-plugin` (or auto-discover from `~/.pi/agent/extensions/`).
+4. Run: `pi --provider tdai --model <model>`.
+
+### Required Headers
+
+Injected automatically by the `pi-plugin` extension:
+
+| Header | Source |
+|---|---|
+| `Authorization: Bearer` | `TDAI_USER_KEY` (the user's API key, not the admin/gateway key) |
+| `x-team-id` / `x-agent-id` | env vars (static per host) |
+| `x-task-id` | `TDAI_TASK_ID` — **optional**. Omit for broad recall across the agent's memories; set to narrow recall to a task. A stale/unknown `task_id` is dropped (not a hard mismatch), so it never blocks registration. (See [`Known limitation: x-task-id`](#known-limitation-x-task-id) for the header preselect agents that still require it.) |
+| `x-conversation-id` | dynamic per Pi session (extension `before_provider_headers` hook) |
+
+Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
 
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
