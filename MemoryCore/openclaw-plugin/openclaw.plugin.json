@@ -97,6 +97,22 @@
             "type": "boolean",
             "default": true,
             "description": "是否启用自动对话捕获 (L0)"
+          },
+          "excludeSessions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "隐身session：按 sessionKey glob 模式排除，不写入 L0（如 *:incognito-*）"
+          },
+          "excludeAgents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "按 agentId glob 模式排除，不写入 L0（如 bench-*）"
           }
         }
       }

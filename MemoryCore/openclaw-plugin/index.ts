@@ -42,6 +42,15 @@ interface RecallConfig {
 }
 interface CaptureConfig {
   enabled?: boolean;
+  /**
+   * Session key glob patterns to exclude from L0 capture ("stealth" sessions).
+   * Supports `*` and `?` wildcards, e.g. ["*:incognito-*"].
+   */
+  excludeSessions?: string[];
+  /**
+   * Agent id glob patterns to exclude from L0 capture, e.g. ["bench-*"].
+   */
+  excludeAgents?: string[];
 }
 interface PluginConfig {
   server?: ServerConfig;
@@ -102,6 +111,26 @@ export default function register(api: any) {
   const includeSceneNav = recall.includeSceneNav !== false;
   const captureEnabled = capture.enabled !== false;
   const rejectUnauthorized = server.rejectUnauthorized !== false;
+  const excludeSessions: string[] = capture.excludeSessions ?? [];
+  const excludeAgents: string[] = capture.excludeAgents ?? [];
+
+  // Simple glob match supporting * and ? wildcards.
+  function globMatch(pattern: string, value: string): boolean {
+    if (pattern === "*") return true;
+    const escaped = pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".");
+    return new RegExp(`^${escaped}$`).test(value);
+  }
+
+  // "Stealth" filter: sessions/agents matching the exclusion lists are never
+  // captured to L0 (and their prompts are not cached at before_prompt_build).
+  function shouldSkipCapture(sessionKey: string | undefined, agentId: string | undefined): boolean {
+    if (sessionKey && excludeSessions.some((p) => globMatch(p, sessionKey))) return true;
+    if (agentId && excludeAgents.some((p) => globMatch(p, agentId))) return true;
+    return false;
+  }
 
   // ── Initialize v3 SDK ──
   // Isolation (team/agent/user) is required by Gateway /v3/*; sessionId may be
@@ -222,9 +251,10 @@ export default function register(api: any) {
     const userText = event?.prompt;
     if (!userText) return;
 
-    // Cache original prompt for agent_end (only if capture is enabled — it is
-    // the only consumer; recall doesn't need this data).
-    if (captureEnabled) {
+    // Cache original prompt for agent_end (only if capture is enabled AND the
+    // session is not stealth-excluded — it is the only consumer; recall doesn't
+    // need this data).
+    if (captureEnabled && !shouldSkipCapture(sessionKey, ctx?.agentId)) {
       const messageCount = Array.isArray(event?.messages) ? event.messages.length : 0;
       pendingOriginalPrompts.set(sessionKey, { text: userText, messageCount });
     }
@@ -277,6 +307,14 @@ export default function register(api: any) {
       }
       if (messages.length === 0) {
         api.logger.debug?.(`${TAG} [agent_end] event.messages is empty, skip capture`);
+        return;
+      }
+
+      // Stealth sessions/agents are never written to L0.
+      if (shouldSkipCapture(sessionKey, ctx?.agentId)) {
+        api.logger.info(
+          `${TAG} [agent_end] session matches excludeSessions/excludeAgents, skip capture`,
+        );
         return;
       }
 
