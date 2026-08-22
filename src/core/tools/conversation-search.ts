@@ -117,6 +117,7 @@ export async function executeConversationSearch(params: {
   // ── Determine available capabilities ──
   const hasEmbedding = !!embeddingService;
   const hasFts = vectorStore.isFtsAvailable();
+  const searchFilter = sessionFilter ? { sessionKey: sessionFilter } : undefined;
 
   if (!hasEmbedding && !hasFts) {
     logger?.warn?.(`${TAG} Neither EmbeddingService nor FTS5 available — cannot search`);
@@ -146,7 +147,7 @@ export async function executeConversationSearch(params: {
           return [];
         }
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = await vectorStore.searchL0Fts(ftsQuery, candidateK);
+        const ftsResults = await vectorStore.searchL0Fts(ftsQuery, candidateK, searchFilter);
         logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
         return ftsResults.map((r) => ({
           id: r.record_id,
@@ -173,7 +174,7 @@ export async function executeConversationSearch(params: {
         logger?.debug?.(
           `${TAG} [hybrid-vec] Embedding OK, dims=${queryEmbedding.length}, searching top-${candidateK}...`,
         );
-        const vecResults: L0SearchResult[] = await vectorStore.searchL0Vector(queryEmbedding, candidateK, query);
+        const vecResults: L0SearchResult[] = await vectorStore.searchL0Vector(queryEmbedding, candidateK, query, searchFilter);
         logger?.debug?.(`${TAG} [hybrid-vec] Vector search returned ${vecResults.length} candidates`);
         return vecResults.map((r) => ({
           id: r.record_id,

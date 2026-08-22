@@ -75,6 +75,11 @@ export interface L1QueryFilter {
   updatedAfter?: string;
 }
 
+/** Filter options for L0 search operations. */
+export interface L0SearchFilter {
+  sessionKey?: string;
+}
+
 /** Row shape returned by L1 query methods. */
 export interface L1RecordRow {
   record_id: string;
@@ -292,8 +297,8 @@ export interface IMemoryStore {
 
   // ── L0 Search ────────────────────────────────────────────
 
-  searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string): MaybePromise<L0SearchResult[]>;
-  searchL0Fts(ftsQuery: string, limit?: number): MaybePromise<L0FtsResult[]>;
+  searchL0Vector(queryEmbedding: Float32Array, topK?: number, queryText?: string, filter?: L0SearchFilter): MaybePromise<L0SearchResult[]>;
+  searchL0Fts(ftsQuery: string, limit?: number, filter?: L0SearchFilter): MaybePromise<L0FtsResult[]>;
 
   pullProfiles?(): Promise<ProfileRecord[]>;
   syncProfiles?(records: ProfileSyncRecord[]): Promise<void>;
