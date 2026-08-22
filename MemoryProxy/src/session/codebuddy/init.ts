@@ -376,15 +376,13 @@ export async function completeRegistration(
     await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
     return { intercepted: false, bypassed: true, justRegistered: true };
   }
-  // 与 CC 侧一致：只有 team + agent + task 三者齐全才注入。task_id 缺失一律 bypass。
-  // CodeBuddy 的 team+agent+task 在同一 form 里提交，用户如果没选 task 就走 bypass。
-  if (!resolved.task_id) {
-    console.warn(
-      `[session-init:cb] session=${compositeKey} agent=${resolved.agent_id} without task → bypass (task required for injection)`,
-    );
-    await store.set(compositeKey, { status: "initialized", bypassed: true } as SessionInitState);
-    return { intercepted: false, bypassed: true, justRegistered: true };
-  }
+  // task_id is OPTIONAL for registration: the kernel treats task as an
+  // optional business dimension (isolation.ts), so a header-identity agent
+  // with team+agent but no task (or a stale task) still registers and gets
+  // memory — recall just broadens across the agent's memories instead of
+  // narrowing to a task. The interactive "本次不关联任务" / defaultTaskId path
+  // also lands here with task_id = defaultTaskId (a virtual value). Do NOT
+  // bypass when task_id is missing/undefined.
   const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
   if (!regData) {
     console.warn(
@@ -801,7 +799,15 @@ async function handleSessionInitInner(
         console.warn(`[session-init:cb] session=${compositeKey} preset mismatch → fallback to form`);
         // fall through to the normal asset_confirm flow below
       } else if (pr.canRegister) {
-        // team + agent resolved → register directly (task optional)
+        // team + agent resolved → register directly (task optional). A missing
+        // task_id yields undefined → broad recall across the agent's memories;
+        // a stale (unknown) task_id was already dropped by resolvePresetIdentity
+        // (not echoed back) — warn so the operator can re-point the client.
+        if (presetIdentity?.taskId && !pr.taskId) {
+          console.warn(
+            `[session-init:cb] session=${compositeKey} preset task_id="${presetIdentity.taskId}" not found in team=${pr.teamId} → registering without a task (broad recall)`,
+          );
+        }
         console.log(
           `[session-init:cb] session=${compositeKey} preset hit team=${pr.teamId} agent=${pr.agentId} task=${pr.taskId ?? "-"} → register directly`,
         );
