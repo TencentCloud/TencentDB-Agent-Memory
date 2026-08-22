@@ -607,6 +607,41 @@ Edit `~/.openclaw/openclaw.json`, add a provider under `models.providers`:
 - `headers`: must include `x-team-id`, `x-agent-id`, `x-task-id`, `x-conversation-id`. `x-task-id` is required in the current version (see [Known limitation: x-task-id](#known-limitation-x-task-id))
 - `models[].id`: must match the model ID configured in the Proxy upstream
 
+## Using Proxy with Pi
+
+[Pi](https://github.com/earendil-works/pi-coding-agent) is an open-source AI coding-agent harness. By installing the `pi-plugin` extension and pointing Pi at a custom `tdai` provider, Pi chat requests route through the Proxy for team memory capabilities — L3 persona, L2 scene index, L0 conversation capture, and on-demand L0/L1/L2 search. Pi is a first-class agent-source (`pi`).
+
+### Connection
+
+Point Pi at the Proxy via the `pi-plugin` extension:
+
+```text
+http://<proxy-host>:<port>/pi/<spaceId>/v1
+```
+
+- `<agent-source>`: `pi` (first-class)
+- `<spaceId>`: memory instance ID (`default` for local deployments)
+- The `/v1` suffix is required in the base URL: the OpenAI-completions provider appends `/chat/completions` but does not insert `/v1`, so including `/v1` makes the request hit the Proxy's explicit `/:agent/:spaceId/v1/chat/completions` route.
+
+### Setup
+
+1. Install the pi-plugin (see `MemoryCore/pi-plugin/README.md`).
+2. Set the env vars (no secrets in files): `TDAI_PROXY_URL`, `TDAI_SPACE_ID`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`, `TDAI_TASK_ID`, `TDAI_USER_KEY`, `TDAI_MODEL`.
+3. Load the extension: `pi -e /path/to/pi-plugin` (or auto-discover from `~/.pi/agent/extensions/`).
+4. Run: `pi --provider tdai --model <model>`.
+
+### Required Headers
+
+Injected automatically by the `pi-plugin` extension:
+
+| Header | Source |
+|---|---|
+| `Authorization: Bearer` | `TDAI_USER_KEY` (the user's API key, not the admin/gateway key) |
+| `x-team-id` / `x-agent-id` / `x-task-id` | env vars (static per host) |
+| `x-conversation-id` | dynamic per Pi session (extension `before_provider_headers` hook) |
+
+`x-task-id` is required in the current version (see [Known limitation: x-task-id](#known-limitation-x-task-id)).
+
 ## Using Proxy with Other Platforms (Generic)
 
 Beyond ClaudeCode / CodeBuddy / WorkBuddy / Codex / Hermes / OpenClaw, any OpenAI-compatible platform or custom-built agent can connect to the Proxy to access team memory capabilities.
