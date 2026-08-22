@@ -55,14 +55,19 @@ export interface ContextMessage {
  */
 export interface AgentTool {
   name: string;
-  description: string;
-  parameters: Record<string, unknown>; // JSON Schema
+  description?: string;
+  parameters?: Record<string, unknown>; // JSON Schema
   /**
    * Prompt-cache breakpoint marker (Anthropic `cache_control`), carried through
    * the parse→serialize round-trip so upstream prompt caching keeps working.
    * Sits at the same level as `input_schema` in the wire format.
    */
   cacheControl?: unknown;
+  /**
+   * Catch-all for provider-specific or unknown fields (e.g. Anthropic server tools).
+   * Preserved during parse/serialize round-trips for lossless forwarding.
+   */
+  custom?: Record<string, unknown>;
 }
 
 // ── Context Metadata ──────────────────────────────────────────────────────────
