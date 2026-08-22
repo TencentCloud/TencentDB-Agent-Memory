@@ -8,6 +8,7 @@
 import { readMmd, writeMmd, deleteMmd, type StorageContext } from "../storage.js";
 import type { OffloadStateManager } from "../state-manager.js";
 import type { PluginLogger, TaskJudgment } from "../types.js";
+import { sanitizeMmdFilename, sanitizeMmdLabel } from "../mmd-path.js";
 
 /**
  * Normalize a raw L1.5 judgment response (from backend)
@@ -35,7 +36,8 @@ export async function handleTaskTransition(
   judgment: TaskJudgment,
   logger: PluginLogger,
 ): Promise<void> {
-  const currentMmd = stateManager.getActiveMmdFile();
+  const rawCurrentMmd = stateManager.getActiveMmdFile();
+  const currentMmd = rawCurrentMmd ? sanitizeMmdFilename(rawCurrentMmd) : null;
 
   const ctx = stateManager.ctx;
 
@@ -68,29 +70,31 @@ export async function handleTaskTransition(
   const createNewMmd = async (label: string) => {
     const num = await stateManager.nextMmdNumber();
     const paddedNum = String(num).padStart(3, "0");
-    const filename = `${paddedNum}-${label}.mmd`;
+    const safeLabel = sanitizeMmdLabel(label);
+    const filename = `${paddedNum}-${safeLabel}.mmd`;
     logger.debug?.(`[context-offload] L1.5: Creating new MMD: ${filename} (replacing ${currentMmd ?? "(none)"})`);
     await cleanupIfEmptyShell(currentMmd);
-    stateManager.setActiveMmd(filename, label);
-    const initialMmd = `flowchart TD\n    ${paddedNum}-N1["${label}"]\n`;
+    stateManager.setActiveMmd(filename, safeLabel);
+    const initialMmd = `flowchart TD\n    ${paddedNum}-N1["${safeLabel}"]\n`;
     await writeMmd(ctx, filename, initialMmd);
     logger.debug?.(`[context-offload] L1.5: New MMD created and activated: ${filename}`);
   };
 
   const reactivateMmd = async (contFile: string) => {
-    logger.debug?.(`[context-offload] L1.5: Reactivating MMD: ${contFile} (current=${currentMmd ?? "(none)"})`);
-    if (currentMmd && currentMmd !== contFile) {
+    const safeContFile = sanitizeMmdFilename(contFile);
+    logger.debug?.(`[context-offload] L1.5: Reactivating MMD: ${safeContFile} (current=${currentMmd ?? "(none)"})`);
+    if (currentMmd && currentMmd !== safeContFile) {
       await cleanupIfEmptyShell(currentMmd);
     }
-    const mmdId = contFile.replace(/^\d+-/, "").replace(/\.mmd$/, "");
-    stateManager.setActiveMmd(contFile, mmdId);
-    const existing = await readMmd(ctx, contFile);
+    const mmdId = sanitizeMmdLabel(safeContFile.replace(/^\d+-/, "").replace(/\.mmd$/, ""));
+    stateManager.setActiveMmd(safeContFile, mmdId);
+    const existing = await readMmd(ctx, safeContFile);
     if (existing === null) {
-      const prefixMatch = contFile.match(/^(\d+)-/);
+      const prefixMatch = safeContFile.match(/^(\d+)-/);
       const prefix = prefixMatch ? prefixMatch[1] : "000";
       const initialMmd = `flowchart TD\n    ${prefix}-N1["${mmdId}"]\n`;
-      await writeMmd(ctx, contFile, initialMmd);
-      logger.warn(`[context-offload] L1.5: Reactivated MMD file was missing, wrote initial template: ${contFile}`);
+      await writeMmd(ctx, safeContFile, initialMmd);
+      logger.warn(`[context-offload] L1.5: Reactivated MMD file was missing, wrote initial template: ${safeContFile}`);
     }
   };
 
@@ -99,11 +103,12 @@ export async function handleTaskTransition(
     if (judgment.isContinuation && judgment.continuationMmdFile) {
       await reactivateMmd(judgment.continuationMmdFile);
     } else if (judgment.isLongTask && judgment.newTaskLabel) {
+      const newTaskLabel = sanitizeMmdLabel(judgment.newTaskLabel);
       const currentLabel = currentMmd
         ? currentMmd.replace(/^\d+-/, "").replace(/\.mmd$/, "")
         : null;
-      if (currentLabel !== judgment.newTaskLabel) {
-        await createNewMmd(judgment.newTaskLabel);
+      if (currentLabel !== newTaskLabel) {
+        await createNewMmd(newTaskLabel);
       }
     } else if (judgment.isContinuation && !judgment.continuationMmdFile) {
       if (!currentMmd) {
@@ -120,11 +125,12 @@ export async function handleTaskTransition(
         await reactivateMmd(judgment.continuationMmdFile);
       }
     } else if (judgment.isLongTask && judgment.newTaskLabel) {
+      const newTaskLabel = sanitizeMmdLabel(judgment.newTaskLabel);
       const currentLabel = currentMmd
         ? currentMmd.replace(/^\d+-/, "").replace(/\.mmd$/, "")
         : null;
-      if (currentLabel !== judgment.newTaskLabel) {
-        await createNewMmd(judgment.newTaskLabel);
+      if (currentLabel !== newTaskLabel) {
+        await createNewMmd(newTaskLabel);
       }
     }
   }
