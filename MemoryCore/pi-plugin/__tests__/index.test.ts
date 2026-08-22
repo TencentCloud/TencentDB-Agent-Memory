@@ -86,7 +86,7 @@ describe("pi-plugin", () => {
   });
 
   it("warns and skips registration when a required env var is missing (Pi still starts)", async () => {
-    delete process.env.TDAI_TASK_ID;
+    delete process.env.TDAI_TEAM_ID;
     vi.resetModules();
     const failingFactory = (await import("../index.js")).default;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -99,8 +99,28 @@ describe("pi-plugin", () => {
     expect(registerProvider).not.toHaveBeenCalled();
     expect(on).not.toHaveBeenCalled();
     // Must warn naming the missing var.
-    expect(warn.mock.calls[0]?.[0]).toMatch(/TDAI_TASK_ID/);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/TDAI_TEAM_ID/);
     expect(warn.mock.calls[0]?.[0]).toMatch(/pi-tdai-client/);
     warn.mockRestore();
+  });
+
+  it("registers WITHOUT x-task-id when TDAI_TASK_ID is absent (task-optional)", async () => {
+    delete process.env.TDAI_TASK_ID;
+    vi.resetModules();
+    const tasklessFactory = (await import("../index.js")).default;
+    const registerProviderCalls: { name: string; cfg: any }[] = [];
+    const onCalls: { evt: string; h: any }[] = [];
+    const api: any = {
+      registerProvider: (name: string, cfg: any) => registerProviderCalls.push({ name, cfg }),
+      on: (evt: string, h: any) => onCalls.push({ evt, h }),
+    };
+    // Must NOT throw and MUST still register (task is optional).
+    expect(() => tasklessFactory(api)).not.toThrow();
+    expect(registerProviderCalls).toHaveLength(1);
+    const { cfg } = registerProviderCalls[0];
+    expect(cfg.headers["x-team-id"]).toBe("team-azqo3jvm25");
+    expect(cfg.headers["x-agent-id"]).toBe("agt-ea0b0wybln");
+    // No x-task-id header when task is absent → proxy registers with broad recall.
+    expect(cfg.headers["x-task-id"]).toBeUndefined();
   });
 });
