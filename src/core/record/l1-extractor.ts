@@ -324,7 +324,6 @@ async function callLlmExtraction(params: {
       prompt: userPrompt,
       systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
       taskId: "l1-extraction",
-      timeoutMs: 180_000,
     });
   } else {
     // Fallback: create CleanContextRunner (OpenClaw path)
