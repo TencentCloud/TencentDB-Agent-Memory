@@ -208,6 +208,24 @@ node --import tsx src/gateway/server.ts
 | `MEMORY_TENCENTDB_GATEWAY_PORT`   | `8420`              | Gateway port (must be 1..65535; invalid values fall back) |
 | `MEMORY_TENCENTDB_GATEWAY_CMD`    | —                   | If set, the provider auto-starts the Gateway with this command. If unset, the provider auto-discovers `src/gateway/server.ts` next to the checkout or under `$HOME` (see Option A above) |
 | `MEMORY_TENCENTDB_LOG_DIR`        | `~/.hermes/logs/memory_tencentdb` | Where the supervisor writes `gateway.stdout.log` / `gateway.stderr.log` |
+| `MEMORY_TENCENTDB_TEAM_ID`        | `default`           | TencentDB Team scope used when Hermes does not pass `team_id`; an explicit Hermes value takes precedence |
+| `MEMORY_TENCENTDB_AGENT_ID`       | `default`           | TencentDB Agent scope used when Hermes does not pass `agent_id`; an explicit Hermes value takes precedence |
+| `MEMORY_TENCENTDB_USER_KEY`       | —                   | Principal-owned TencentDB user key sent as `x-tdai-user-key`; it must resolve to Hermes' `user_id` |
+
+For a remote multi-user Gateway, create each TencentDB user with the same stable `user_id` that
+Hermes supplies, add that user as an active member of the selected Team, and keep the selected Agent
+active in that Team. The Gateway rejects a user key paired with another `user_id`, an inactive or
+missing Team membership, or an Agent outside the requested Team before any v3 L0-L3 handler runs.
+Do not put the service-wide Gateway key in an agent-controlled Runtime; use the per-user key above.
+If neither a user key nor configured service authentication is present, v3 L0-L3 fails closed even
+when the Gateway's legacy optional authentication setting is otherwise disabled.
+
+Managed Hermes distributions may supply Gateway host/port and Team/Agent scope through
+`HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST`,
+`HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT`,
+`HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID`, and
+`HERMES_MANAGED_TENCENTDB_MEMORY_AGENT_ID`. These aliases take precedence over the corresponding
+`MEMORY_TENCENTDB_*` variables; the per-user key deliberately has no managed alias.
 
 ### Gateway data directory (owned by the Gateway, not this provider)
 

@@ -13,6 +13,15 @@ team_id / agent_id / user_id tenancy isolation.
 Config via environment variables:
   MEMORY_TENCENTDB_GATEWAY_HOST — Gateway host (default: 127.0.0.1)
   MEMORY_TENCENTDB_GATEWAY_PORT — Gateway port (default: 8420)
+  MEMORY_TENCENTDB_TEAM_ID      — TencentDB Team scope when Hermes does not
+                                  provide ``team_id`` (default: default)
+  MEMORY_TENCENTDB_AGENT_ID     — TencentDB Agent scope when Hermes does not
+                                  provide ``agent_id`` (default: default)
+  MEMORY_TENCENTDB_USER_KEY     — Principal-owned TencentDB user key used to
+                                  authenticate v3 L0-L3 requests
+  HERMES_MANAGED_TENCENTDB_MEMORY_* — Optional managed aliases for Gateway,
+                                  Team and Agent values; these take precedence
+                                  over the corresponding Principal variables
   MEMORY_TENCENTDB_GATEWAY_CMD  — Command to start the Gateway (optional; if
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
@@ -83,13 +92,25 @@ _DEFAULT_AGENT_ID = "default"
 _DEFAULT_USER_ID = "default"
 
 
+def _first_environment_value(*names: str) -> Optional[str]:
+    """Return the first non-empty trimmed environment value."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
     """Resolve MEMORY_TENCENTDB_GATEWAY_PORT with validation."""
-    raw = os.environ.get("MEMORY_TENCENTDB_GATEWAY_PORT")
-    if raw is None or not raw.strip():
+    raw = _first_environment_value(
+        "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT",
+        "MEMORY_TENCENTDB_GATEWAY_PORT",
+    )
+    if raw is None:
         return default
     try:
-        port = int(raw.strip())
+        port = int(raw)
     except ValueError:
         logger.warning(
             "Invalid MEMORY_TENCENTDB_GATEWAY_PORT=%r (not an integer); "
@@ -109,11 +130,10 @@ def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
 
 def _resolve_gateway_host(default: str = _DEFAULT_GATEWAY_HOST) -> str:
     """Resolve MEMORY_TENCENTDB_GATEWAY_HOST, trimming whitespace."""
-    raw = os.environ.get("MEMORY_TENCENTDB_GATEWAY_HOST")
-    if raw is None:
-        return default
-    host = raw.strip()
-    return host or default
+    return _first_environment_value(
+        "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST",
+        "MEMORY_TENCENTDB_GATEWAY_HOST",
+    ) or default
 
 
 def _resolve_gateway_api_key() -> Optional[str]:
@@ -126,6 +146,29 @@ def _resolve_gateway_api_key() -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _resolve_user_key() -> Optional[str]:
+    """Read the Principal-owned TencentDB user key from the environment."""
+    return _first_environment_value("MEMORY_TENCENTDB_USER_KEY")
+
+
+def _resolve_tenancy_id(
+    explicit: Any,
+    *,
+    env_var: str,
+    managed_env_var: Optional[str] = None,
+    default: str,
+) -> str:
+    """Resolve an explicit Hermes scope before its deployment fallback."""
+    if explicit is not None:
+        value = str(explicit).strip()
+        if value:
+            return value
+    value = _first_environment_value(*((managed_env_var,) if managed_env_var else ()), env_var)
+    if value:
+        return value
+    return default
 
 
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
@@ -518,10 +561,12 @@ class MemoryTencentdbProvider(MemoryProvider):
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
         client = MemoryTencentdbSdkClient(
             base_url=f"http://{host}:{port}",
             timeout=2,
             api_key=api_key,
+            user_key=user_key,
             service_id="default",
         )
         try:
@@ -534,23 +579,36 @@ class MemoryTencentdbProvider(MemoryProvider):
         """Start or connect to the Gateway sidecar.
 
         v3: accepts team_id, agent_id, user_id for tenancy isolation.
-        All default to "default".
+        Team and Agent IDs fall back to their deployment environment variables;
+        all tenancy IDs retain "default" as the compatibility fallback.
         """
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", _DEFAULT_USER_ID)
-        self._team_id = kwargs.get("team_id", _DEFAULT_TEAM_ID)
-        self._agent_id = kwargs.get("agent_id", _DEFAULT_AGENT_ID)
+        self._team_id = _resolve_tenancy_id(
+            kwargs.get("team_id"),
+            env_var="MEMORY_TENCENTDB_TEAM_ID",
+            managed_env_var="HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID",
+            default=_DEFAULT_TEAM_ID,
+        )
+        self._agent_id = _resolve_tenancy_id(
+            kwargs.get("agent_id"),
+            env_var="MEMORY_TENCENTDB_AGENT_ID",
+            managed_env_var="HERMES_MANAGED_TENCENTDB_MEMORY_AGENT_ID",
+            default=_DEFAULT_AGENT_ID,
+        )
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
         gateway_cmd = os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or _discover_gateway_cmd()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
 
         self._supervisor = GatewaySupervisor(
             host=host,
             port=port,
             gateway_cmd=gateway_cmd,
             api_key=api_key,
+            user_key=user_key,
         )
 
         self._initialized = True
@@ -966,6 +1024,29 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "secret": True,
                 "required": False,
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY",
+            },
+            {
+                "key": "team_id",
+                "description": "TencentDB Team scope when Hermes omits team_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_TEAM_ID",
+            },
+            {
+                "key": "user_key",
+                "description": (
+                    "Principal-owned TencentDB user key used to authenticate "
+                    "v3 L0-L3 requests. It must resolve to the same user_id "
+                    "that Hermes supplies during provider initialization."
+                ),
+                "secret": True,
+                "required": True,
+                "env_var": "MEMORY_TENCENTDB_USER_KEY",
+            },
+            {
+                "key": "agent_id",
+                "description": "TencentDB Agent scope when Hermes omits agent_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_AGENT_ID",
             },
             {
                 "key": "llm_api_key",
