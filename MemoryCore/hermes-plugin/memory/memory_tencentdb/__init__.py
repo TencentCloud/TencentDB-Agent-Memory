@@ -13,6 +13,10 @@ team_id / agent_id / user_id tenancy isolation.
 Config via environment variables:
   MEMORY_TENCENTDB_GATEWAY_HOST — Gateway host (default: 127.0.0.1)
   MEMORY_TENCENTDB_GATEWAY_PORT — Gateway port (default: 8420)
+  MEMORY_TENCENTDB_TEAM_ID      — TencentDB Team scope when Hermes does not
+                                  provide ``team_id`` (default: default)
+  MEMORY_TENCENTDB_AGENT_ID     — TencentDB Agent scope when Hermes does not
+                                  provide ``agent_id`` (default: default)
   MEMORY_TENCENTDB_GATEWAY_CMD  — Command to start the Gateway (optional; if
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
@@ -126,6 +130,25 @@ def _resolve_gateway_api_key() -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _resolve_tenancy_id(
+    explicit: Any,
+    *,
+    env_var: str,
+    default: str,
+) -> str:
+    """Resolve an explicit Hermes scope before its deployment fallback."""
+    if explicit is not None:
+        value = str(explicit).strip()
+        if value:
+            return value
+    raw = os.environ.get(env_var)
+    if raw is not None:
+        value = raw.strip()
+        if value:
+            return value
+    return default
 
 
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
@@ -534,12 +557,21 @@ class MemoryTencentdbProvider(MemoryProvider):
         """Start or connect to the Gateway sidecar.
 
         v3: accepts team_id, agent_id, user_id for tenancy isolation.
-        All default to "default".
+        Team and Agent IDs fall back to their deployment environment variables;
+        all tenancy IDs retain "default" as the compatibility fallback.
         """
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", _DEFAULT_USER_ID)
-        self._team_id = kwargs.get("team_id", _DEFAULT_TEAM_ID)
-        self._agent_id = kwargs.get("agent_id", _DEFAULT_AGENT_ID)
+        self._team_id = _resolve_tenancy_id(
+            kwargs.get("team_id"),
+            env_var="MEMORY_TENCENTDB_TEAM_ID",
+            default=_DEFAULT_TEAM_ID,
+        )
+        self._agent_id = _resolve_tenancy_id(
+            kwargs.get("agent_id"),
+            env_var="MEMORY_TENCENTDB_AGENT_ID",
+            default=_DEFAULT_AGENT_ID,
+        )
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
@@ -966,6 +998,18 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "secret": True,
                 "required": False,
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY",
+            },
+            {
+                "key": "team_id",
+                "description": "TencentDB Team scope when Hermes omits team_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_TEAM_ID",
+            },
+            {
+                "key": "agent_id",
+                "description": "TencentDB Agent scope when Hermes omits agent_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_AGENT_ID",
             },
             {
                 "key": "llm_api_key",

@@ -208,6 +208,8 @@ node --import tsx src/gateway/server.ts
 | `MEMORY_TENCENTDB_GATEWAY_PORT`   | `8420`              | Gateway port (must be 1..65535; invalid values fall back) |
 | `MEMORY_TENCENTDB_GATEWAY_CMD`    | —                   | If set, the provider auto-starts the Gateway with this command. If unset, the provider auto-discovers `src/gateway/server.ts` next to the checkout or under `$HOME` (see Option A above) |
 | `MEMORY_TENCENTDB_LOG_DIR`        | `~/.hermes/logs/memory_tencentdb` | Where the supervisor writes `gateway.stdout.log` / `gateway.stderr.log` |
+| `MEMORY_TENCENTDB_TEAM_ID`        | `default`           | TencentDB Team scope used when Hermes does not pass `team_id`; an explicit Hermes value takes precedence |
+| `MEMORY_TENCENTDB_AGENT_ID`       | `default`           | TencentDB Agent scope used when Hermes does not pass `agent_id`; an explicit Hermes value takes precedence |
 
 ### Gateway data directory (owned by the Gateway, not this provider)
 
