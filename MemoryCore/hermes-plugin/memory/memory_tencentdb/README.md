@@ -220,6 +220,13 @@ Do not put the service-wide Gateway key in an agent-controlled Runtime; use the 
 If neither a user key nor configured service authentication is present, v3 L0-L3 fails closed even
 when the Gateway's legacy optional authentication setting is otherwise disabled.
 
+Managed Hermes distributions may supply Gateway host/port and Team/Agent scope through
+`HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST`,
+`HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT`,
+`HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID`, and
+`HERMES_MANAGED_TENCENTDB_MEMORY_AGENT_ID`. These aliases take precedence over the corresponding
+`MEMORY_TENCENTDB_*` variables; the per-user key deliberately has no managed alias.
+
 ### Gateway data directory (owned by the Gateway, not this provider)
 
 The L0~L3 data directory is resolved **inside the Gateway** (`src/gateway/config.ts`),

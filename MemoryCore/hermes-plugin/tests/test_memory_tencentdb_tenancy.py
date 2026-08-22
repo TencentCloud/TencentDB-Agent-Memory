@@ -62,6 +62,38 @@ class TenancyEnvironmentResolutionTest(unittest.TestCase):
 
         self.assertEqual(resolved, "agent-from-environment")
 
+    def test_managed_scope_precedes_principal_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID": "team-managed",
+                "MEMORY_TENCENTDB_TEAM_ID": "team-principal",
+            },
+            clear=False,
+        ):
+            resolved = provider_module._resolve_tenancy_id(
+                None,
+                env_var="MEMORY_TENCENTDB_TEAM_ID",
+                managed_env_var="HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID",
+                default="default",
+            )
+
+        self.assertEqual(resolved, "team-managed")
+
+    def test_managed_gateway_location_precedes_principal_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST": "managed.internal",
+                "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT": "9443",
+                "MEMORY_TENCENTDB_GATEWAY_HOST": "principal.invalid",
+                "MEMORY_TENCENTDB_GATEWAY_PORT": "1234",
+            },
+            clear=False,
+        ):
+            self.assertEqual(provider_module._resolve_gateway_host(), "managed.internal")
+            self.assertEqual(provider_module._resolve_gateway_port(), 9443)
+
     def test_default_is_retained_when_both_sources_are_empty(self) -> None:
         with patch.dict(
             os.environ,
