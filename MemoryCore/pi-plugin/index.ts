@@ -22,22 +22,33 @@ export default function (pi: ExtensionAPI) {
   // Graceful degradation: if required identity env vars are missing, warn and
   // skip registration so Pi still starts. The user sees the warning at load
   // and can fix the env. (A startup extension must not throw and block Pi.)
+  // NOTE: TDAI_TASK_ID is OPTIONAL — task_id is an optional business dimension
+  // in the TDAI kernel (MemoryCore/src/core/store/isolation.ts), and the proxy
+  // registers from team+agent alone (broad recall when task is absent).
   const required: Record<string, string> = {
     TDAI_USER_KEY: userKey,
     TDAI_TEAM_ID: teamId,
     TDAI_AGENT_ID: agentId,
-    TDAI_TASK_ID: taskId,
   };
   const missing = Object.keys(required).filter((k) => !required[k]);
   if (missing.length > 0) {
     console.warn(
       `[pi-tdai-client] Not registering the TDAI provider: missing required env var(s): ` +
         `${missing.join(", ")}. Set TDAI_USER_KEY, TDAI_TEAM_ID, ` +
-        `TDAI_AGENT_ID, TDAI_TASK_ID (see MemoryCore/pi-plugin/README.md). ` +
+        `TDAI_AGENT_ID (see MemoryCore/pi-plugin/README.md). ` +
+        `TDAI_TASK_ID is optional. ` +
         `Pi will start without the TDAI provider.`,
     );
     return;
   }
+
+  // Only send x-task-id when explicitly set; an absent/stale task makes the
+  // proxy register with broad recall (no task filter) instead of failing.
+  const headers: Record<string, string> = {
+    "x-team-id": teamId,
+    "x-agent-id": agentId,
+  };
+  if (taskId) headers["x-task-id"] = taskId;
 
   // baseUrl MUST include /v1: the OpenAI-completions provider appends
   // /chat/completions but does NOT insert /v1. Including /v1 hits the
@@ -47,11 +58,7 @@ export default function (pi: ExtensionAPI) {
     baseUrl: `${proxyBase}/${agentSource}/${spaceId}/v1`,
     api: "openai-completions",
     apiKey: userKey,
-    headers: {
-      "x-team-id": teamId,
-      "x-agent-id": agentId,
-      "x-task-id": taskId,
-    },
+    headers,
     models: [
       {
         id: model,
