@@ -88,6 +88,41 @@ class TenancyEnvironmentResolutionTest(unittest.TestCase):
                 "default",
             )
 
+    def test_user_key_is_trimmed_from_principal_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"MEMORY_TENCENTDB_USER_KEY": "  sk-mem-principal  "},
+            clear=False,
+        ):
+            self.assertEqual(
+                provider_module._resolve_user_key(),
+                "sk-mem-principal",
+            )
+
+    def test_user_key_authenticates_gateway_requests(self) -> None:
+        client = provider_module.MemoryTencentdbSdkClient(
+            base_url="http://memory.example",
+            user_key="sk-mem-principal",
+        )
+
+        headers = client._build_headers(content_type=True)
+
+        self.assertEqual(headers["Authorization"], "Bearer sk-mem-principal")
+        self.assertEqual(headers["x-tdai-user-key"], "sk-mem-principal")
+        self.assertEqual(headers["x-tdai-service-id"], "default")
+
+    def test_service_key_compatibility_is_retained(self) -> None:
+        client = provider_module.MemoryTencentdbSdkClient(
+            base_url="http://memory.example",
+            api_key="gateway-service-key",
+            user_key="sk-mem-principal",
+        )
+
+        headers = client._build_headers(content_type=False)
+
+        self.assertEqual(headers["Authorization"], "Bearer gateway-service-key")
+        self.assertEqual(headers["x-tdai-user-key"], "sk-mem-principal")
+
 
 if __name__ == "__main__":
     unittest.main()

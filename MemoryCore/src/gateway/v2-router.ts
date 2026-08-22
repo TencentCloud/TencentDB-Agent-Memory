@@ -28,6 +28,8 @@ import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
+import { authenticateV3, extractUserKeyHeader } from "../metadata/router/auth.js";
+import type { MetadataService } from "../metadata/service/metadata-service.js";
 
 // ── Zod schemas (validated types + defaults) ──
 import {
@@ -127,24 +129,27 @@ const V3_PREFIX = "/v3";
  *
  * 返回缺失字段列表（空数组表示全齐）。
  */
+function resolveV3IsolationField(
+  body: Record<string, unknown> | undefined,
+  headers: Record<string, string | string[] | undefined>,
+  bodyKey: string,
+  headerKey: string,
+): string {
+  const rawHeader = headers[headerKey] ?? headers[headerKey.toLowerCase()];
+  const header = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  const value = (body?.[bodyKey] as string | undefined) ?? header ?? "";
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function collectV3Missing(
   _subpath: string,
   body: Record<string, unknown> | undefined,
   headers: Record<string, string | string[] | undefined>,
 ): string[] {
-  const headerStr = (k: string): string | undefined => {
-    const raw = headers[k] ?? headers[k.toLowerCase()];
-    if (Array.isArray(raw)) return raw[0];
-    return typeof raw === "string" ? raw : undefined;
-  };
-  const get = (bodyKey: string, headerKey: string): string => {
-    const v = (body?.[bodyKey] as string | undefined) ?? headerStr(headerKey) ?? "";
-    return typeof v === "string" ? v.trim() : "";
-  };
   const missing: string[] = [];
-  if (!get("team_id", "x-tdai-team-id")) missing.push("team_id");
-  if (!get("agent_id", "x-tdai-agent-id")) missing.push("agent_id");
-  if (!get("user_id", "x-tdai-user-id")) missing.push("user_id");
+  if (!resolveV3IsolationField(body, headers, "team_id", "x-tdai-team-id")) missing.push("team_id");
+  if (!resolveV3IsolationField(body, headers, "agent_id", "x-tdai-agent-id")) missing.push("agent_id");
+  if (!resolveV3IsolationField(body, headers, "user_id", "x-tdai-user-id")) missing.push("user_id");
   // session_id 不再强制：底层 handler 在缺 session 时按 (team,agent,user) 聚合查询。
   return missing;
 }
@@ -170,6 +175,55 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/write",
   "/core/count",
 ]);
+
+/** True only for the existing v3 L0-L3 data-plane routes. */
+export function isV3DataPlanePath(pathname: string): boolean {
+  if (!pathname.startsWith(`${V3_PREFIX}/`)) return false;
+  return V3_ALLOWED_SUBPATHS.has(pathname.slice(V3_PREFIX.length));
+}
+
+type V3DataPlaneMetadataService = Pick<
+  MetadataService,
+  "isConfiguredMemorySystemUserKey" | "verifyAuth" | "getTeamMember" | "getAgentById"
+>;
+
+export interface V3DataPlaneScope {
+  userId: string;
+  teamId: string;
+  agentId: string;
+}
+
+export type V3DataPlaneAuthorization =
+  | { ok: true; userId: string }
+  | { ok: false; status: 401 | 403; reason: string };
+
+/** Authenticate a user key and bind it to one existing Team/Agent/user scope. */
+export async function authorizeV3DataPlaneScope(
+  userKey: string,
+  requested: V3DataPlaneScope,
+  service: V3DataPlaneMetadataService,
+): Promise<V3DataPlaneAuthorization> {
+  const auth = await authenticateV3(userKey, service as MetadataService);
+  const authenticatedUserId = auth.ctx?.userId;
+  if (!auth.ok || !authenticatedUserId) {
+    return { ok: false, status: 401, reason: auth.reason ?? "invalid_user_key" };
+  }
+  if (requested.userId !== authenticatedUserId) {
+    return { ok: false, status: 403, reason: "user_id_mismatch" };
+  }
+
+  const membership = await service.getTeamMember(requested.teamId, authenticatedUserId);
+  if (!membership || membership.status !== "active") {
+    return { ok: false, status: 403, reason: "not_team_member" };
+  }
+
+  const agent = await service.getAgentById(requested.agentId);
+  if (!agent || agent.status !== "active" || agent.team_id !== requested.teamId) {
+    return { ok: false, status: 403, reason: "agent_scope_mismatch" };
+  }
+
+  return { ok: true, userId: authenticatedUserId };
+}
 
 /**
  * 写一条审计事件到 store.appendAudit。失败不阻塞主请求（容忍 audit 丢失）。
@@ -558,6 +612,51 @@ export async function handleV2Route(
   if (!auth) return true;
 
   try {
+    const headers = (req.headers ?? {}) as Record<string, string | string[] | undefined>;
+    const userKey = isV3DataPlanePath(pathname) ? extractUserKeyHeader(req.headers) : "";
+    let body: unknown;
+    if (userKey) {
+      const bodyStart = Date.now();
+      body = method === "GET"
+        ? Object.fromEntries(new URL(req.url ?? pathname, "http://localhost").searchParams.entries())
+        : await parseJsonBody(req);
+      perfMark("parseJsonBody", `dur=${Date.now() - bodyStart}ms len=${req.headers["content-length"] ?? "?"}`);
+
+      const v3Subpath = pathname.slice(V3_PREFIX.length);
+      const missing = collectV3Missing(v3Subpath, body as Record<string, unknown> | undefined, headers);
+      if (missing.length > 0) {
+        sendJson(res, 422, errorEnvelope(
+          422,
+          `/v3 user-key authorization requires ${missing.join(", ")}`,
+          requestId,
+        ));
+        return true;
+      }
+      if (!deps.getMetadataService) {
+        sendJson(res, 503, errorEnvelope(503, "Metadata service not available", requestId));
+        return true;
+      }
+
+      const metadata = await deps.getMetadataService(auth.serviceId);
+      const authorization = await authorizeV3DataPlaneScope(
+        userKey,
+        {
+          userId: resolveV3IsolationField(body as Record<string, unknown>, headers, "user_id", "x-tdai-user-id"),
+          teamId: resolveV3IsolationField(body as Record<string, unknown>, headers, "team_id", "x-tdai-team-id"),
+          agentId: resolveV3IsolationField(body as Record<string, unknown>, headers, "agent_id", "x-tdai-agent-id"),
+        },
+        metadata,
+      );
+      if (!authorization.ok) {
+        sendJson(res, authorization.status, errorEnvelope(
+          authorization.status,
+          `${authorization.status === 401 ? "unauthorized" : "forbidden"}: ${authorization.reason}`,
+          requestId,
+        ));
+        return true;
+      }
+    }
+
     // Pre-resolve per-request store/storage (service mode → per-instance, standalone → core singleton)
     const resolveStart = Date.now();
     const resolved = await resolveStoreForRequest(auth, deps);
@@ -572,11 +671,13 @@ export async function handleV2Route(
       getStorage: () => resolvedStorage,
     };
 
-    const bodyStart = Date.now();
-    const body = method === "GET"
-      ? Object.fromEntries(new URL(req.url ?? pathname, "http://localhost").searchParams.entries())
-      : await parseJsonBody(req);
-    perfMark("parseJsonBody", `dur=${Date.now() - bodyStart}ms len=${req.headers["content-length"] ?? "?"}`);
+    if (!userKey) {
+      const bodyStart = Date.now();
+      body = method === "GET"
+        ? Object.fromEntries(new URL(req.url ?? pathname, "http://localhost").searchParams.entries())
+        : await parseJsonBody(req);
+      perfMark("parseJsonBody", `dur=${Date.now() - bodyStart}ms len=${req.headers["content-length"] ?? "?"}`);
+    }
 
     // Tenancy isolation — pulled from body (preferred) or x-tdai-* headers
     // and attached to the per-request deps so handlers can persist
@@ -589,7 +690,6 @@ export async function handleV2Route(
     //
     // /v3 走严格校验：必须同时提供 team_id + agent_id + user_id + session_id，
     // 缺任意一个直接 422，且不走 legacyCompatMode 退化。
-    const headers = (req.headers ?? {}) as Record<string, string | string[] | undefined>;
     const isoLegacyCompat = isV3 ? false : (deps.isolationConfig?.legacyCompatMode ?? false);
     const isoResolved = resolveIsolation(body as Record<string, unknown> | undefined, headers, {
       legacyCompatMode: isoLegacyCompat,

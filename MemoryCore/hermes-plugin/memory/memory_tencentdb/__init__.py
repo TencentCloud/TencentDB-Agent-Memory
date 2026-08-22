@@ -17,6 +17,8 @@ Config via environment variables:
                                   provide ``team_id`` (default: default)
   MEMORY_TENCENTDB_AGENT_ID     — TencentDB Agent scope when Hermes does not
                                   provide ``agent_id`` (default: default)
+  MEMORY_TENCENTDB_USER_KEY     — Principal-owned TencentDB user key used to
+                                  authenticate v3 L0-L3 requests
   MEMORY_TENCENTDB_GATEWAY_CMD  — Command to start the Gateway (optional; if
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
@@ -130,6 +132,14 @@ def _resolve_gateway_api_key() -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _resolve_user_key() -> Optional[str]:
+    """Read the Principal-owned TencentDB user key from the environment."""
+    raw = os.environ.get("MEMORY_TENCENTDB_USER_KEY")
+    if raw is None:
+        return None
+    return raw.strip() or None
 
 
 def _resolve_tenancy_id(
@@ -541,10 +551,12 @@ class MemoryTencentdbProvider(MemoryProvider):
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
         client = MemoryTencentdbSdkClient(
             base_url=f"http://{host}:{port}",
             timeout=2,
             api_key=api_key,
+            user_key=user_key,
             service_id="default",
         )
         try:
@@ -577,12 +589,14 @@ class MemoryTencentdbProvider(MemoryProvider):
         port = _resolve_gateway_port()
         gateway_cmd = os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or _discover_gateway_cmd()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
 
         self._supervisor = GatewaySupervisor(
             host=host,
             port=port,
             gateway_cmd=gateway_cmd,
             api_key=api_key,
+            user_key=user_key,
         )
 
         self._initialized = True
@@ -1004,6 +1018,17 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "description": "TencentDB Team scope when Hermes omits team_id",
                 "default": "default",
                 "env_var": "MEMORY_TENCENTDB_TEAM_ID",
+            },
+            {
+                "key": "user_key",
+                "description": (
+                    "Principal-owned TencentDB user key used to authenticate "
+                    "v3 L0-L3 requests. It must resolve to the same user_id "
+                    "that Hermes supplies during provider initialization."
+                ),
+                "secret": True,
+                "required": True,
+                "env_var": "MEMORY_TENCENTDB_USER_KEY",
             },
             {
                 "key": "agent_id",

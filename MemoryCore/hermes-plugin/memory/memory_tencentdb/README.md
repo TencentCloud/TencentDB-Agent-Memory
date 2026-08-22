@@ -210,6 +210,13 @@ node --import tsx src/gateway/server.ts
 | `MEMORY_TENCENTDB_LOG_DIR`        | `~/.hermes/logs/memory_tencentdb` | Where the supervisor writes `gateway.stdout.log` / `gateway.stderr.log` |
 | `MEMORY_TENCENTDB_TEAM_ID`        | `default`           | TencentDB Team scope used when Hermes does not pass `team_id`; an explicit Hermes value takes precedence |
 | `MEMORY_TENCENTDB_AGENT_ID`       | `default`           | TencentDB Agent scope used when Hermes does not pass `agent_id`; an explicit Hermes value takes precedence |
+| `MEMORY_TENCENTDB_USER_KEY`       | —                   | Principal-owned TencentDB user key sent as `x-tdai-user-key`; it must resolve to Hermes' `user_id` |
+
+For a remote multi-user Gateway, create each TencentDB user with the same stable `user_id` that
+Hermes supplies, add that user as an active member of the selected Team, and keep the selected Agent
+active in that Team. The Gateway rejects a user key paired with another `user_id`, an inactive or
+missing Team membership, or an Agent outside the requested Team before any v3 L0-L3 handler runs.
+Do not put the service-wide Gateway key in an agent-controlled Runtime; use the per-user key above.
 
 ### Gateway data directory (owned by the Gateway, not this provider)
 
