@@ -217,6 +217,8 @@ Hermes supplies, add that user as an active member of the selected Team, and kee
 active in that Team. The Gateway rejects a user key paired with another `user_id`, an inactive or
 missing Team membership, or an Agent outside the requested Team before any v3 L0-L3 handler runs.
 Do not put the service-wide Gateway key in an agent-controlled Runtime; use the per-user key above.
+If neither a user key nor configured service authentication is present, v3 L0-L3 fails closed even
+when the Gateway's legacy optional authentication setting is otherwise disabled.
 
 ### Gateway data directory (owned by the Gateway, not this provider)
 

@@ -57,7 +57,12 @@ import { StorePool } from "../core/store/store-pool.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
-import { handleV2Route, errorEnvelope, isV3DataPlanePath, makeRequestId } from "./v2-router.js";
+import {
+  handleV2Route,
+  errorEnvelope,
+  makeRequestId,
+  selectV3DataPlaneAuthMode,
+} from "./v2-router.js";
 import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
@@ -897,8 +902,21 @@ export class TdaiGateway {
       if (pathname.startsWith("/v2/") || pathname.startsWith("/v3/")) {
         const rawUserKey = req.headers["x-tdai-user-key"];
         const userKey = Array.isArray(rawUserKey) ? rawUserKey[0] : rawUserKey;
-        const usesV3UserKeyAuth = isV3DataPlanePath(pathname) && !!userKey?.trim();
-        if (!usesV3UserKeyAuth && !this.checkAuthForV2(req, res)) return;
+        const v3AuthMode = selectV3DataPlaneAuthMode(
+          pathname,
+          userKey ?? "",
+          !!this.config.server.apiKey,
+        );
+        if (v3AuthMode === "reject") {
+          const requestId = makeRequestId();
+          sendJson(res, 401, errorEnvelope(
+            401,
+            "Unauthorized: v3 data plane requires a user key or configured service authentication",
+            requestId,
+          ));
+          return;
+        }
+        if (v3AuthMode !== "user_key" && !this.checkAuthForV2(req, res)) return;
       }
 
       const v2Deps: V2RouterDeps = {

@@ -182,6 +182,19 @@ export function isV3DataPlanePath(pathname: string): boolean {
   return V3_ALLOWED_SUBPATHS.has(pathname.slice(V3_PREFIX.length));
 }
 
+export type V3DataPlaneAuthMode = "user_key" | "service_key" | "reject" | "not_applicable";
+
+/** Select the only two authenticated paths accepted by v3 L0-L3. */
+export function selectV3DataPlaneAuthMode(
+  pathname: string,
+  userKey: string,
+  serviceKeyConfigured: boolean,
+): V3DataPlaneAuthMode {
+  if (!isV3DataPlanePath(pathname)) return "not_applicable";
+  if (userKey.trim()) return "user_key";
+  return serviceKeyConfigured ? "service_key" : "reject";
+}
+
 type V3DataPlaneMetadataService = Pick<
   MetadataService,
   "isConfiguredMemorySystemUserKey" | "verifyAuth" | "getTeamMember" | "getAgentById"

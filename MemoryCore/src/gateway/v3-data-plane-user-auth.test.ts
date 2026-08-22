@@ -3,6 +3,7 @@ import {
   authorizeV3DataPlaneScope,
   handleV2Route,
   isV3DataPlanePath,
+  selectV3DataPlaneAuthMode,
 } from "./v2-router.js";
 
 function metadataService(overrides: Record<string, unknown> = {}) {
@@ -23,6 +24,17 @@ describe("v3 data-plane per-user authorization", () => {
     expect(isV3DataPlanePath("/v3/core/read")).toBe(true);
     expect(isV3DataPlanePath("/v3/meta/team/get")).toBe(false);
     expect(isV3DataPlanePath("/v3/skill/query")).toBe(false);
+  });
+
+  it("fails closed when neither per-user nor configured service auth exists", () => {
+    expect(selectV3DataPlaneAuthMode("/v3/conversation/add", "sk-user-1", false))
+      .toBe("user_key");
+    expect(selectV3DataPlaneAuthMode("/v3/conversation/add", "", true))
+      .toBe("service_key");
+    expect(selectV3DataPlaneAuthMode("/v3/conversation/add", "", false))
+      .toBe("reject");
+    expect(selectV3DataPlaneAuthMode("/v3/meta/team/get", "", false))
+      .toBe("not_applicable");
   });
 
   it("accepts a user in the requested active team and agent scope", async () => {
