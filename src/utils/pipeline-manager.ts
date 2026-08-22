@@ -233,7 +233,9 @@ export class MemoryPipelineManager {
   // Unified session filter (internal sessions + excludeAgents)
   private readonly sessionFilter: SessionFilter;
 
-  // Lifecycle
+  // Lifecycle. `closing` rejects new public work while shutdown flush is
+  // still allowed to advance in-flight L1 output through L2/L3.
+  private closing = false;
   private destroyed = false;
 
   /** Plugin instance ID for metric reporting (set externally after async init). */
@@ -302,7 +304,7 @@ export class MemoryPipelineManager {
    * Sessions with pending counts will be immediately re-enqueued.
    */
   start(restoredStates?: Record<string, PipelineSessionState>): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.closing) return;
 
     if (restoredStates) {
       let skipped = 0;
@@ -381,7 +383,7 @@ export class MemoryPipelineManager {
    *   stops chatting), L1 runs with whatever has been buffered.
    */
   async notifyConversation(sessionKey: string, messages: CapturedMessage[]): Promise<void> {
-    if (this.destroyed) return;
+    if (this.destroyed || this.closing) return;
     if (this.sessionFilter.shouldSkip(sessionKey)) return;
 
     const state = this.getOrCreateState(sessionKey);
@@ -469,7 +471,7 @@ export class MemoryPipelineManager {
    * have produced any captures.
    */
   async flushSession(sessionKey: string): Promise<void> {
-    if (this.destroyed) return;
+    if (this.destroyed || this.closing) return;
     if (this.sessionFilter.shouldSkip(sessionKey)) return;
 
     const timers = this.sessionTimers.get(sessionKey);
@@ -507,14 +509,14 @@ export class MemoryPipelineManager {
 
   /**
    * Graceful shutdown with timeout protection:
-   * 1. Mark destroyed, stop accepting new work
+   * 1. Enter closing mode, stop accepting new public work
    * 2. Attempt to flush pending L1/L2/L3 work within DESTROY_TIMEOUT_MS
    * 3. If flush times out or fails, persist current state for recovery on next startup
-   * 4. Pending work is never lost — it will be recovered via checkpoint on next start()
+   * 4. Mark destroyed. Pending work after timeout will be recovered via checkpoint on next start()
    */
   async destroy(): Promise<void> {
-    if (this.destroyed) return;
-    this.destroyed = true;
+    if (this.destroyed || this.closing) return;
+    this.closing = true;
 
     this.logger?.info(
       `${TAG} Destroying pipeline (timeout=${this.DESTROY_TIMEOUT_MS}ms)...`,
@@ -549,6 +551,8 @@ export class MemoryPipelineManager {
       );
     }
 
+    this.destroyed = true;
+    this.closing = false;
     this.logger?.info(`${TAG} Pipeline destroyed`);
   }
 
@@ -581,12 +585,13 @@ export class MemoryPipelineManager {
       }
     }
 
-    // Step 4: Wait for all remaining queues to drain
-    this.logger?.debug?.(`${TAG} Waiting for queues to drain (l2=${this.l2Queue.size}, l3=${this.l3Queue.size})`);
-    await Promise.all([
-      this.l2Queue.onIdle(),
-      this.l3Queue.onIdle(),
-    ]);
+    // Step 4: Wait for L2 first, then L3. L2 completion may enqueue L3,
+    // so checking the L3 queue before L2 has drained can miss shutdown work.
+    this.logger?.debug?.(`${TAG} Waiting for L2 queue to drain (size=${this.l2Queue.size})`);
+    await this.l2Queue.onIdle();
+
+    this.logger?.debug?.(`${TAG} Waiting for L3 queue to drain (size=${this.l3Queue.size})`);
+    await this.l3Queue.onIdle();
   }
 
   // ============================
@@ -791,7 +796,7 @@ export class MemoryPipelineManager {
    * Sets T = now + l2MaxInterval (unconditional, replaces any pending timer).
    */
   private armL2MaxInterval(sessionKey: string): void {
-    if (this.destroyed) return;
+    if (this.destroyed || this.closing) return;
 
     const timers = this.getOrCreateTimers(sessionKey);
     const fireAt = Date.now() + this.l2MaxIntervalMs;
