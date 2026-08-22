@@ -448,10 +448,16 @@ export class TdaiCore {
     }
 
     const l1LlmRunner = useStandaloneRunner
-      ? runnerFactory.createRunner({ enableTools: false })
+      ? runnerFactory.createRunner({
+          enableTools: false,
+          ...(this.cfg.extraction.model ? { modelRef: this.cfg.extraction.model } : {}),
+        })
       : undefined;
     const l2l3LlmRunner = useStandaloneRunner
-      ? runnerFactory.createRunner({ enableTools: true })
+      ? runnerFactory.createRunner({
+          enableTools: true,
+          ...(this.cfg.persona.model ? { modelRef: this.cfg.persona.model } : {}),
+        })
       : undefined;
 
     // L1 runner
