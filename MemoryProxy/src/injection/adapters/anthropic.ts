@@ -182,14 +182,27 @@ export class AnthropicAdapter implements ProtocolAdapter {
   }
 
   private parseTool(raw: Record<string, unknown>): AgentTool {
+    const { name, description, input_schema, cache_control, ...rest } = raw;
     const tool: AgentTool = {
-      name: (raw.name as string) ?? "unknown",
-      description: (raw.description as string) ?? "",
-      parameters: (raw.input_schema as Record<string, unknown>) ?? {},
+      name: (name as string) ?? "unknown",
     };
-    if (raw.cache_control !== undefined) {
-      tool.cacheControl = raw.cache_control;
+    
+    if (description !== undefined) {
+      tool.description = description as string;
     }
+    
+    if (input_schema !== undefined) {
+      tool.parameters = input_schema as Record<string, unknown>;
+    }
+
+    if (cache_control !== undefined) {
+      tool.cacheControl = cache_control;
+    }
+    
+    if (Object.keys(rest).length > 0) {
+      tool.custom = rest;
+    }
+    
     return tool;
   }
 
@@ -278,12 +291,24 @@ export class AnthropicAdapter implements ProtocolAdapter {
   private serializeTool(tool: AgentTool): Record<string, unknown> {
     const out: Record<string, unknown> = {
       name: tool.name,
-      description: tool.description,
-      input_schema: tool.parameters,
     };
+    
+    if (tool.description !== undefined) {
+      out.description = tool.description;
+    }
+    
+    if (tool.parameters !== undefined) {
+      out.input_schema = tool.parameters;
+    }
+    
     if (tool.cacheControl !== undefined) {
       out.cache_control = tool.cacheControl;
     }
+    
+    if (tool.custom) {
+      Object.assign(out, tool.custom);
+    }
+    
     return out;
   }
 }

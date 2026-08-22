@@ -148,12 +148,31 @@ export class OpenAIAdapter implements ProtocolAdapter {
   }
 
   private parseTool(raw: Record<string, unknown>): AgentTool {
-    const fn = raw.function as Record<string, unknown> | undefined;
-    return {
-      name: (fn?.name as string) ?? (raw.name as string) ?? "unknown",
-      description: (fn?.description as string) ?? (raw.description as string) ?? "",
-      parameters: (fn?.parameters as Record<string, unknown>) ?? (raw.parameters as Record<string, unknown>) ?? {},
+    const fn = (raw.function as Record<string, unknown>) ?? {};
+    const { name, description, parameters, ...restFn } = fn;
+    const { type, function: _fn, ...restRaw } = raw;
+    
+    const tool: AgentTool = {
+      name: (name as string) ?? (raw.name as string) ?? "unknown",
     };
+
+    if (description !== undefined || raw.description !== undefined) {
+      tool.description = (description as string) ?? (raw.description as string);
+    }
+
+    if (parameters !== undefined || raw.parameters !== undefined) {
+      tool.parameters = (parameters as Record<string, unknown>) ?? (raw.parameters as Record<string, unknown>);
+    }
+    
+    const custom: Record<string, unknown> = {};
+    if (Object.keys(restRaw).length > 0) custom.restRaw = restRaw;
+    if (Object.keys(restFn).length > 0) custom.restFn = restFn;
+    
+    if (Object.keys(custom).length > 0) {
+      tool.custom = custom;
+    }
+    
+    return tool;
   }
 
   // ── Private: serialize helpers ──────────────────────────────────────────────
@@ -244,13 +263,31 @@ export class OpenAIAdapter implements ProtocolAdapter {
   }
 
   private serializeTool(tool: AgentTool): Record<string, unknown> {
-    return {
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
+    const fnOut: Record<string, unknown> = {
+      name: tool.name,
     };
+    
+    if (tool.description !== undefined) {
+      fnOut.description = tool.description;
+    }
+    
+    if (tool.parameters !== undefined) {
+      fnOut.parameters = tool.parameters;
+    }
+    
+    if (tool.custom?.restFn) {
+      Object.assign(fnOut, tool.custom.restFn);
+    }
+
+    const out: Record<string, unknown> = {
+      type: "function",
+      function: fnOut,
+    };
+    
+    if (tool.custom?.restRaw) {
+      Object.assign(out, tool.custom.restRaw);
+    }
+    
+    return out;
   }
 }
