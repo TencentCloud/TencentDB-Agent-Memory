@@ -764,6 +764,7 @@ export async function handleChatCompletions(
       const recovered = await store.getOrRecover(compositeKey, identity, {
         metadataClient,
         messages: body.messages as Array<Record<string, unknown>> ?? [],
+        presetIdentity,
       });
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;

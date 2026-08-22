@@ -27,6 +27,7 @@ import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, Tas
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
+import type { PresetIdentity } from "./preset.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -54,6 +55,13 @@ export interface RecoveryContext {
   metadataClient?: MetadataClient;
   /** Full message history for fallback recovery via form-envelope scan. */
   messages?: Record<string, unknown>[];
+  /**
+   * Identity pre-parsed from request headers (x-team-id/x-agent-id/x-task-id).
+   * When present, history-scan is skipped: header-identity agents (e.g. Pi)
+   * carry no interactive form markers, so scanning would unconditionally bypass
+   * them. Instead we defer to handleSessionInit (the headerAutoSelect path).
+   */
+  presetIdentity?: PresetIdentity;
 }
 
 export class SessionStore {
@@ -624,6 +632,17 @@ export class SessionStore {
     identity: SessionIdentity,
     ctx: RecoveryContext,
   ): Promise<SessionInitState | undefined> {
+    // Header-identity agents (e.g. Pi) carry identity in request headers, not
+    // interactive picker forms — so their history has no form markers and the
+    // scan below would unconditionally bypass them. When the caller already
+    // parsed a preset identity from headers, defer to handleSessionInit (the
+    // headerAutoSelect path) by returning undefined instead of bypassing.
+    if (ctx.presetIdentity) {
+      console.log(
+        `[session-recover] ${keyId} preset identity present → defer to handleSessionInit (skip history-scan)`,
+      );
+      return undefined;
+    }
     const messages = ctx.messages ?? [];
     if (messages.length === 0) return undefined;
 
