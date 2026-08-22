@@ -154,7 +154,7 @@ export default function register(api: OpenClawPluginApi) {
 
   // ─── Full / discovery mode: complete runtime initialization ───
   pluginStartTimestamp = Date.now();
-  setPreferredEmbeddedAgentRuntime(api.runtime.agent);
+  setPreferredEmbeddedAgentRuntime(api.runtime.agent, (api.runtime as any)?.version);
   // Reset reporter singleton so config changes take effect on hot-reload.
   resetReporter();
   const _require = createRequire(import.meta.url);
