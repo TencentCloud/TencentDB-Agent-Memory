@@ -9,6 +9,20 @@
 
 模型请求仍走 Cursor 原生供应商链路，因此 Cursor Free 的 Auto 模型也能使用，不需要自定义模型或修改 OpenAI Base URL。
 
+## 模型与套餐兼容性
+
+本适配器有意让模型请求继续走 Cursor 原生供应商链路。Cursor Free 账号可能只能使用 **Auto** 模型，具名模型是否可用取决于用户的 Cursor 套餐和账号权限；本适配器不会绕过这些限制。
+
+本适配器使用 Cursor 公开的 Agent Hooks 和 MCP 接口，而不是替换 Cursor 的模型 endpoint：
+
+- Hook 运行在 Cursor 的会话和 Agent 生命周期节点；
+- `sessionStart` 在 Agent 开始工作前召回 TencentDB Agent Memory；
+- `beforeSubmitPrompt` 与 `afterAgentResponse` 捕获并配对完整对话；
+- MCP 工具允许当前 Agent 主动召回和搜索记忆；
+- 模型请求仍由 Cursor 根据用户选择的供应商发送。
+
+采用这个设计，可以让没有具名模型权限的 Cursor Free/Auto 用户使用记忆能力，不依赖某个具体模型供应商，不要求把 Cursor 的模型 endpoint 替换为 TencentDB Proxy，也不会修改 Cursor 的账号、计费、模型权限或供应商配置。用户套餐允许时，具名模型同样可以使用本适配器；具体模型是否可用仍由 Cursor 决定。
+
 ## 前置条件
 
 - 支持 Agent Hooks 和本地插件的 Cursor

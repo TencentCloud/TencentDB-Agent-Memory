@@ -9,6 +9,20 @@ This adapter gives Cursor cross-session TencentDB Agent Memory without routing m
 
 Model requests still use Cursor's native provider path. The adapter therefore works with Cursor Free/Auto; it does not require a custom model or OpenAI Base URL override.
 
+## Model and plan compatibility
+
+This adapter intentionally keeps model requests on Cursor's native provider path. Cursor Free accounts may be restricted to the **Auto** model, while named models depend on the user's Cursor plan and account permissions. The adapter does not bypass these restrictions.
+
+The integration uses Cursor's public Agent Hooks and MCP interfaces instead of replacing Cursor's model endpoint:
+
+- Hooks run at Cursor session and agent lifecycle boundaries.
+- `sessionStart` recalls TencentDB Agent Memory before the agent starts working.
+- `beforeSubmitPrompt` and `afterAgentResponse` capture and pair the completed turn.
+- MCP tools let the active agent explicitly recall and search memory.
+- Cursor continues to send model requests through the provider selected in Cursor.
+
+This design works for Cursor Free/Auto without named-model access, remains independent of the selected model provider, avoids requiring a TencentDB model proxy endpoint, and does not change Cursor account, billing, entitlement, or provider configuration. Named models can use the adapter when the user's Cursor plan makes them available; model availability remains controlled by Cursor.
+
 ## Requirements
 
 - Cursor with Agent Hooks and local plugin support
