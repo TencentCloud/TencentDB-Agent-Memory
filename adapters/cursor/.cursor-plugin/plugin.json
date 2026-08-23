@@ -1,0 +1,35 @@
+{
+  "name": "tencentdb-agent-memory",
+  "version": "0.1.0",
+  "description": "Cross-session memory for Cursor through TencentDB Agent Memory hooks and MCP tools.",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  },
+  "license": "MIT",
+  "keywords": ["cursor", "memory", "tencentdb", "mcp"],
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./mcp.json",
+  "rules": "./rules",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "TDAI_GATEWAY_URL": {
+        "type": "string",
+        "title": "TDAI Gateway URL",
+        "description": "TencentDB Agent Memory Gateway base URL.",
+        "default": "http://127.0.0.1:8420"
+      },
+      "TDAI_GATEWAY_API_KEY": {
+        "type": "string",
+        "title": "TDAI Gateway API key",
+        "description": "Optional Bearer token configured by the Gateway operator."
+      },
+      "TDAI_CURSOR_AGENT_ID": {
+        "type": "string",
+        "title": "Memory agent ID",
+        "description": "Stable memory scope shared by Cursor conversations.",
+        "default": "cursor"
+      }
+    }
+  }
+}
