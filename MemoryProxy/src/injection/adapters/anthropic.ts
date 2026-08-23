@@ -185,15 +185,9 @@ export class AnthropicAdapter implements ProtocolAdapter {
     const { name, description, input_schema, cache_control, ...rest } = raw;
     const tool: AgentTool = {
       name: (name as string) ?? "unknown",
+      description: (description as string) ?? "",
+      parameters: (input_schema as Record<string, unknown>) ?? {},
     };
-    
-    if (description !== undefined) {
-      tool.description = description as string;
-    }
-    
-    if (input_schema !== undefined) {
-      tool.parameters = input_schema as Record<string, unknown>;
-    }
 
     if (cache_control !== undefined) {
       tool.cacheControl = cache_control;
@@ -291,15 +285,9 @@ export class AnthropicAdapter implements ProtocolAdapter {
   private serializeTool(tool: AgentTool): Record<string, unknown> {
     const out: Record<string, unknown> = {
       name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
     };
-    
-    if (tool.description !== undefined) {
-      out.description = tool.description;
-    }
-    
-    if (tool.parameters !== undefined) {
-      out.input_schema = tool.parameters;
-    }
     
     if (tool.cacheControl !== undefined) {
       out.cache_control = tool.cacheControl;
@@ -307,6 +295,11 @@ export class AnthropicAdapter implements ProtocolAdapter {
     
     if (tool.custom) {
       Object.assign(out, tool.custom);
+      // Remove hallucinated fields for Anthropic server tools (which define a custom 'type')
+      if (typeof tool.custom.type === "string") {
+        delete out.description;
+        delete out.input_schema;
+      }
     }
     
     return out;

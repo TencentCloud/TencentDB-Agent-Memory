@@ -55,8 +55,8 @@ export interface ContextMessage {
  */
 export interface AgentTool {
   name: string;
-  description?: string;
-  parameters?: Record<string, unknown>; // JSON Schema
+  description: string;
+  parameters: Record<string, unknown>; // JSON Schema
   /**
    * Prompt-cache breakpoint marker (Anthropic `cache_control`), carried through
    * the parse→serialize round-trip so upstream prompt caching keeps working.

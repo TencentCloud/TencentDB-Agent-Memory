@@ -62,8 +62,8 @@ describe("AnthropicAdapter tool lossless forwarding", () => {
     // Verify AgentTool structure represents it cleanly
     const tool = parsed.tools![0];
     expect(tool.name).toBe("web_search");
-    expect(tool.description).toBeUndefined();
-    expect(tool.parameters).toBeUndefined();
+    expect(tool.description).toBe("");
+    expect(tool.parameters).toEqual({});
     expect(tool.custom).toBeDefined();
     expect(tool.custom?.type).toBe("web_search_20250305");
     expect(tool.custom?.max_uses).toBe(5);
