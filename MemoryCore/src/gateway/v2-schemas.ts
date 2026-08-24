@@ -146,6 +146,7 @@ export function digestConversationAddPayload(request: Pick<ConversationAddReques
   const normalized = {
     messages: request.messages.map((message) => ({
       content: message.content,
+      recorded_at: message.recorded_at ?? null,
       role: message.role,
       timestamp: message.timestamp ?? null,
     })),

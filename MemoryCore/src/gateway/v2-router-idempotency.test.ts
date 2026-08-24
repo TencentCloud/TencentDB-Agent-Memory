@@ -46,10 +46,10 @@ describe("conversation add idempotency contract", () => {
 
   it("digests the normalized payload without its idempotency key", () => {
     expect(digestConversationAddPayload({ ...request, idempotency_key: "turn-1" })).toBe(
-      "7393f98ee3fd81dcae482a29a7465f2c3268431b561843b763eae91018719d9f",
+      "a0ff7418e47523b72d298b3489ce8a2ff8acf214663e8db0351936483daf72e6",
     );
     expect(digestConversationAddPayload({ ...request, idempotency_key: "turn-2" })).toBe(
-      "7393f98ee3fd81dcae482a29a7465f2c3268431b561843b763eae91018719d9f",
+      "a0ff7418e47523b72d298b3489ce8a2ff8acf214663e8db0351936483daf72e6",
     );
   });
 
@@ -58,6 +58,19 @@ describe("conversation add idempotency contract", () => {
     const changed = digestConversationAddPayload({
       ...request,
       messages: [{ ...request.messages[0], content: "goodbye" }],
+    });
+
+    expect(changed).not.toBe(original);
+  });
+
+  it("does not reuse a digest when a message recorded_at changes", () => {
+    const original = digestConversationAddPayload({
+      ...request,
+      messages: [{ ...request.messages[0], recorded_at: "2026-08-24T00:01:00.000Z" }],
+    });
+    const changed = digestConversationAddPayload({
+      ...request,
+      messages: [{ ...request.messages[0], recorded_at: "2026-08-24T00:02:00.000Z" }],
     });
 
     expect(changed).not.toBe(original);
