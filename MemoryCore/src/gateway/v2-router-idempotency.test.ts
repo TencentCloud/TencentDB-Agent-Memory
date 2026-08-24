@@ -1,10 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  ClaimConversationAddInput,
+  ConversationAddClaim,
+  ConversationReceipt,
+  IMemoryStore,
+  L0Record,
+} from "../core/store/types.js";
+import { handleConversationAdd, type V2RouterDeps } from "./v2-router.js";
 import {
   buildConversationIdempotencyScope,
   conversationAddRequestSchema,
   digestConversationAddPayload,
   serializeConversationIdempotencyScope,
+  type V2AuthContext,
 } from "./v2-schemas.js";
+
+vi.mock("../core/report/metric-tracking-recall.js", () => ({
+  reportRecallMetrics: vi.fn(),
+}));
 
 describe("conversation add idempotency contract", () => {
   const request = {
@@ -87,5 +100,163 @@ describe("conversation add idempotency contract", () => {
     });
 
     expect(utcWithoutMilliseconds).toBe(utcWithMilliseconds);
+  });
+});
+
+describe("conversation add idempotency router", () => {
+  const auth: V2AuthContext = { apiKey: "api-key", serviceId: "service-1" };
+  const body = {
+    session_id: "session-1",
+    idempotency_key: "turn-1",
+    messages: [{ role: "user" as const, content: "hello", timestamp: "2026-08-24T00:00:00.000Z" }],
+  };
+
+  function depsFor(store: Partial<IMemoryStore>, overrides: Partial<V2RouterDeps> = {}): V2RouterDeps {
+    return {
+      getStore: () => store as IMemoryStore,
+      getEmbedding: () => undefined,
+      getStorage: () => undefined,
+      logger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      deployMode: "service",
+      requestIsolation: {
+        teamId: "team-1",
+        userId: "user-1",
+        agentId: "agent-1",
+        sessionId: "session-1",
+      },
+      notifyPipeline: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
+  function receiptFor(input: ClaimConversationAddInput, acceptedIds: string[], status: ConversationReceipt["status"] = "pending"): ConversationReceipt {
+    return {
+      receiptId: "receipt-1",
+      scope: { ...input.scope },
+      payloadDigest: input.payloadDigest,
+      acceptedIds,
+      status,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+  }
+
+  it("replays the first accepted IDs without writing or notifying again", async () => {
+    let saved: { receipt: ConversationReceipt; outboxEvent: Extract<ConversationAddClaim, { status: "claimed" }>["outboxEvent"] } | undefined;
+    const upsertL0 = vi.fn();
+    const notifyPipeline = vi.fn().mockResolvedValue(undefined);
+    const ackConversationOutbox = vi.fn().mockResolvedValue(true);
+    const store: Partial<IMemoryStore> = {
+      upsertL0,
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => {
+        if (saved) return { status: "replay", ...saved };
+        saved = {
+          receipt: receiptFor(input, input.records.map((record: L0Record) => record.id)),
+          outboxEvent: {
+            eventId: "event-1",
+            receiptId: "receipt-1",
+            serviceId: input.scope.serviceId,
+            sessionId: input.scope.sessionId,
+            rounds: input.pipelineRounds,
+            teamId: input.scope.teamId,
+            agentId: input.scope.agentId,
+            status: "pending",
+            createdAtMs: 1,
+          },
+        };
+        return { status: "claimed", ...saved };
+      }),
+      readConversationAddReceipt: vi.fn(async () => null),
+      ackConversationOutbox,
+    };
+
+    const first = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+    const second = await handleConversationAdd(body, auth, "req-2", depsFor(store, { notifyPipeline }));
+
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(second.data).toEqual(first.data);
+    expect(upsertL0).not.toHaveBeenCalled();
+    expect(notifyPipeline).toHaveBeenCalledTimes(1);
+    expect(ackConversationOutbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects the same key with a different payload", async () => {
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      claimConversationAdd: vi.fn(async () => ({ status: "conflict" })),
+    };
+    const notifyPipeline = vi.fn();
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+
+    expect(response.code).toBe(409);
+    expect(response.message).toMatch(/idempotency/i);
+    expect(store.upsertL0).not.toHaveBeenCalled();
+    expect(notifyPipeline).not.toHaveBeenCalled();
+  });
+
+  it("rejects keyed requests when the store has no atomic idempotency capability", async () => {
+    const store: Partial<IMemoryStore> = { upsertL0: vi.fn() };
+    const notifyPipeline = vi.fn();
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+
+    expect(response.code).toBe(503);
+    expect(response.message).toMatch(/idempotency/i);
+    expect(store.upsertL0).not.toHaveBeenCalled();
+    expect(notifyPipeline).not.toHaveBeenCalled();
+  });
+
+  it("keeps the outbox pending when post-commit pipeline notification fails", async () => {
+    const notifyPipeline = vi.fn().mockRejectedValue(new Error("pipeline down"));
+    const ackConversationOutbox = vi.fn();
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => ({
+        status: "claimed",
+        receipt: receiptFor(input, input.records.map((record: L0Record) => record.id)),
+        outboxEvent: {
+          eventId: "event-1",
+          receiptId: "receipt-1",
+          serviceId: input.scope.serviceId,
+          sessionId: input.scope.sessionId,
+          rounds: input.pipelineRounds,
+          teamId: input.scope.teamId,
+          agentId: input.scope.agentId,
+          status: "pending",
+          createdAtMs: 1,
+        },
+      })),
+      ackConversationOutbox,
+    };
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, { notifyPipeline }));
+
+    expect(response.code).toBe(0);
+    expect(notifyPipeline).toHaveBeenCalledTimes(1);
+    expect(ackConversationOutbox).not.toHaveBeenCalled();
+  });
+
+  it("preserves the legacy unkeyed write path", async () => {
+    const upsertL0 = vi.fn().mockResolvedValue(true);
+    const notifyPipeline = vi.fn().mockResolvedValue(undefined);
+    const store: Partial<IMemoryStore> = { upsertL0 };
+
+    const response = await handleConversationAdd(
+      { session_id: "session-1", messages: body.messages },
+      auth,
+      "req-1",
+      depsFor(store, { notifyPipeline }),
+    );
+
+    expect(response.code).toBe(0);
+    expect(upsertL0).toHaveBeenCalledTimes(1);
+    expect(notifyPipeline).toHaveBeenCalledTimes(1);
   });
 });
