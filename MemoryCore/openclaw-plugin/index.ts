@@ -16,6 +16,7 @@ import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
 import { handleConversationSearch } from "./src/tools/conversation-search.js";
 import { handleReadCos } from "./src/tools/read-cos.js";
+import { createRemoteMemoryRuntime } from "./src/memory-capability.js";
 
 const TAG = "[memory-client]";
 
@@ -159,6 +160,25 @@ export default function register(api: any) {
     `recall(persona=${includePersona},sceneNav=${includeSceneNav},max=${recallMaxResults}), ` +
     `capture=${captureEnabled}, cosRead=on, rejectUnauthorized=${rejectUnauthorized}`,
   );
+
+  // ── OpenClaw 统一记忆插槽（kind: memory + registerMemoryCapability）──
+  // 设置界面"记忆"区块（引擎/搜索）与 memory.search / doctor.memory.status RPC
+  // 依赖本 capability 提供统一 runtime；缺失时界面显示 unavailable。
+  try {
+    api.registerMemoryCapability?.({
+      runtime: createRemoteMemoryRuntime({
+        client,
+        resolveScopedClient: scopedMemoryClient,
+        resolveRemoteAgentId: effectiveAgentFor,
+        logger: api.logger,
+      }),
+    });
+    api.logger.info?.(`${TAG} Registered memory capability (kind=memory, unified search runtime)`);
+  } catch (err) {
+    api.logger.warn?.(
+      `${TAG} Failed to register memory capability: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
 
