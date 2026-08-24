@@ -10,8 +10,9 @@
  *   - formatZodError utility
  */
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
-import { DEFAULT_ISOLATION_ID } from "../core/store/types.js";
+import { DEFAULT_ISOLATION_ID, type ConversationIdempotencyScope } from "../core/store/types.js";
 
 // ============================
 // Re-export all generated schemas as-is
@@ -110,8 +111,48 @@ import {
 export const conversationAddRequestSchema = z.object({
   session_id: z.string().min(1).default(DEFAULT_ISOLATION_ID),
   messages: z.array(_conversationItemSchema).min(1).max(100),
+  // Opaque client retry token. It intentionally permits common UUID/ULID and
+  // turn identifiers while excluding whitespace and path-like separators.
+  idempotency_key: z.string().min(1).max(256).regex(/^[A-Za-z0-9._:-]+$/).optional(),
 });
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;
+
+/** Build the complete receipt identity for a keyed conversation-add request. */
+export function buildConversationIdempotencyScope(scope: ConversationIdempotencyScope): ConversationIdempotencyScope {
+  return { ...scope };
+}
+
+/**
+ * Stable, inspectable representation used as the input to the store's scope
+ * hash. Field order is fixed so every backend derives the same identity.
+ */
+export function serializeConversationIdempotencyScope(scope: ConversationIdempotencyScope): string {
+  return [
+    ["service_id", scope.serviceId],
+    ["team_id", scope.teamId],
+    ["agent_id", scope.agentId],
+    ["user_id", scope.userId],
+    ["session_id", scope.sessionId],
+    ["idempotency_key", scope.idempotencyKey],
+  ].map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join("&");
+}
+
+/**
+ * SHA-256 over the semantic conversation-add payload. The idempotency key is
+ * deliberately excluded: it selects a receipt, while this digest detects a
+ * conflicting reuse of that receipt.
+ */
+export function digestConversationAddPayload(request: Pick<ConversationAddRequest, "session_id" | "messages">): string {
+  const normalized = {
+    messages: request.messages.map((message) => ({
+      content: message.content,
+      role: message.role,
+      timestamp: message.timestamp ?? null,
+    })),
+    session_id: request.session_id,
+  };
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
 
 // ============================
 // Count endpoints (sdk-v3.yaml)
