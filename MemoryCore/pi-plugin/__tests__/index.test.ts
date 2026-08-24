@@ -88,23 +88,47 @@ describe("pi-plugin", () => {
     expect(event.headers["x-conversation-id"]).toBe("pi-sess-123");
   });
 
-  it("warns and skips registration when a required env var is missing (Pi still starts)", async () => {
-    delete process.env.TDAI_TEAM_ID;
+  it("warns and skips registration when TDAI_USER_KEY is missing (Pi still starts)", async () => {
+    delete process.env.TDAI_USER_KEY;
     vi.resetModules();
     const failingFactory = (await import("../index.js")).default;
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const registerProvider = vi.fn();
+    const registerTool = vi.fn();
     const on = vi.fn();
-    const api: any = { registerProvider, registerTool: () => {}, on };
+    const api: any = { registerProvider, registerTool, on };
     // Must NOT throw — a startup extension must never block Pi from loading.
     expect(() => failingFactory(api)).not.toThrow();
-    // Must NOT register the provider or hook when env is missing.
+    // Must NOT register the provider, tool, or hook when USER_KEY is missing.
     expect(registerProvider).not.toHaveBeenCalled();
+    expect(registerTool).not.toHaveBeenCalled();
     expect(on).not.toHaveBeenCalled();
     // Must warn naming the missing var.
-    expect(warn.mock.calls[0]?.[0]).toMatch(/TDAI_TEAM_ID/);
+    expect(warn.mock.calls[0]?.[0]).toMatch(/TDAI_USER_KEY/);
     expect(warn.mock.calls[0]?.[0]).toMatch(/pi-tdai-client/);
     warn.mockRestore();
+  });
+
+  it("registers WITHOUT identity headers in interactive mode (team/agent unset)", async () => {
+    delete process.env.TDAI_TEAM_ID;
+    delete process.env.TDAI_AGENT_ID;
+    delete process.env.TDAI_TASK_ID;
+    vi.resetModules();
+    const interactiveFactory = (await import("../index.js")).default;
+    const registerProviderCalls: { name: string; cfg: any }[] = [];
+    const api: any = {
+      registerProvider: (name: string, cfg: any) => registerProviderCalls.push({ name, cfg }),
+      registerTool: () => {},
+      on: () => {},
+    };
+    // Must NOT throw and MUST still register (interactive mode — no preset).
+    expect(() => interactiveFactory(api)).not.toThrow();
+    expect(registerProviderCalls).toHaveLength(1);
+    const { cfg } = registerProviderCalls[0];
+    // No identity headers sent → proxy falls back to the interactive picker.
+    expect(cfg.headers["x-team-id"]).toBeUndefined();
+    expect(cfg.headers["x-agent-id"]).toBeUndefined();
+    expect(cfg.headers["x-task-id"]).toBeUndefined();
   });
 
   it("registers WITHOUT x-task-id when TDAI_TASK_ID is absent (task-optional)", async () => {

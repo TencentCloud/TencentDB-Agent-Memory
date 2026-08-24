@@ -22,35 +22,28 @@ export default function (pi: ExtensionAPI) {
   const agentId = process.env.TDAI_AGENT_ID ?? "";
   const taskId = process.env.TDAI_TASK_ID ?? "";
 
-  // Graceful degradation: if required identity env vars are missing, warn and
-  // skip registration so Pi still starts. The user sees the warning at load
-  // and can fix the env. (A startup extension must not throw and block Pi.)
-  // NOTE: TDAI_TASK_ID is OPTIONAL — task_id is an optional business dimension
-  // in the TDAI kernel (MemoryCore/src/core/store/isolation.ts), and the proxy
-  // registers from team+agent alone (broad recall when task is absent).
-  const required: Record<string, string> = {
-    TDAI_USER_KEY: userKey,
-    TDAI_TEAM_ID: teamId,
-    TDAI_AGENT_ID: agentId,
-  };
-  const missing = Object.keys(required).filter((k) => !required[k]);
-  if (missing.length > 0) {
+  // Graceful degradation: if TDAI_USER_KEY is missing, warn and skip
+  // registration so Pi still starts. (A startup extension must not throw and
+  // block Pi.) TDAI_TEAM_ID / TDAI_AGENT_ID / TDAI_TASK_ID are OPTIONAL in
+  // interactive mode: when unset, the proxy sends a Team→Agent→Task form on
+  // turn 1 and the registered `ask_followup_question` tool renders a TUI
+  // picker. Set them only to skip the picker (CI, scripts, fixed context).
+  // TDAI_TASK_ID additionally narrows recall to a specific task when set.
+  if (!userKey) {
     console.warn(
-      `[pi-tdai-client] Not registering the TDAI provider: missing required env var(s): ` +
-        `${missing.join(", ")}. Set TDAI_USER_KEY, TDAI_TEAM_ID, ` +
-        `TDAI_AGENT_ID (see MemoryCore/pi-plugin/README.md). ` +
-        `TDAI_TASK_ID is optional. ` +
-        `Pi will start without the TDAI provider.`,
+      `[pi-tdai-client] Not registering the TDAI provider: missing required env var ` +
+        `TDAI_USER_KEY (the user's API key, panel → API Key — NOT the admin/gateway key). ` +
+        `Pi will start without the TDAI provider. See MemoryCore/pi-plugin/README.md.`,
     );
     return;
   }
 
-  // Only send x-task-id when explicitly set; an absent/stale task makes the
-  // proxy register with broad recall (no task filter) instead of failing.
-  const headers: Record<string, string> = {
-    "x-team-id": teamId,
-    "x-agent-id": agentId,
-  };
+  // Static identity headers — only the ones that are set. When team/agent are
+  // absent, no preset is sent and the proxy falls back to the interactive
+  // picker. x-task-id is sent only when set (broad recall when absent).
+  const headers: Record<string, string> = {};
+  if (teamId) headers["x-team-id"] = teamId;
+  if (agentId) headers["x-agent-id"] = agentId;
   if (taskId) headers["x-task-id"] = taskId;
 
   // baseUrl MUST include /v1: the OpenAI-completions provider appends
