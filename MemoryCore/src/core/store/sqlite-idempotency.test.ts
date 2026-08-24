@@ -61,6 +61,23 @@ function scopeHash(value: ConversationIdempotencyScope = scope): string {
   ].map(([name, field]) => `${name}=${encodeURIComponent(field)}`).join("&")).digest("hex");
 }
 
+function enableLegacyFtsResidues(store: VectorStore): void {
+  store.getRawDb().exec(`
+    CREATE TABLE l0_fts (
+      record_id TEXT NOT NULL,
+      session_key TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      team_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL
+    )
+  `);
+  // This runtime lacks FTS5. The recovery branch only needs the availability
+  // flag to exercise its real SQL validation and deletion against a legacy
+  // table shape.
+  (store as unknown as { ftsAvailable: boolean }).ftsAvailable = true;
+}
+
 describe("VectorStore conversation add idempotency", () => {
   const stores: VectorStore[] = [];
   const directories: string[] = [];
@@ -345,6 +362,57 @@ describe("VectorStore conversation add idempotency", () => {
     expect(store.claimConversationAdd(input())).toEqual({ status: "unsupported" });
     expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = 'legacy-receipt'").get()).toEqual({ status: "processing" });
     expect(store.getRawDb().prepare("SELECT service_id FROM conversation_add_outbox WHERE event_id = 'legacy-outbox'").get()).toEqual({ service_id: "other-service" });
+  });
+
+  it("does not delete any FTS residue when one duplicate record ID has another scope", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt", scopeHash(), scope.serviceId, scope.teamId, scope.agentId,
+      scope.userId, scope.sessionId, scope.idempotencyKey, "digest-1",
+      "[\"legacy-message\"]", "processing", 1, 1,
+    );
+    store.upsertL0({ ...input().records[0], id: "legacy-message" }, undefined);
+    enableLegacyFtsResidues(store);
+    const insertFts = store.getRawDb().prepare(`
+      INSERT INTO l0_fts (record_id, session_key, session_id, team_id, user_id, agent_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insertFts.run("legacy-message", scope.sessionId, scope.sessionId, scope.teamId, scope.userId, scope.agentId);
+    insertFts.run("legacy-message", scope.sessionId, scope.sessionId, scope.teamId, "other-user", scope.agentId);
+
+    expect(store.claimConversationAdd(input())).toEqual({ status: "unsupported" });
+    expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM l0_fts WHERE record_id = 'legacy-message'").get()).toEqual({ count: 2 });
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = 'legacy-receipt'").get()).toEqual({ status: "processing" });
+  });
+
+  it("cleans all same-scope duplicate FTS residues before reclaiming", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt", scopeHash(), scope.serviceId, scope.teamId, scope.agentId,
+      scope.userId, scope.sessionId, scope.idempotencyKey, "digest-1",
+      "[\"legacy-message\"]", "processing", 1, 1,
+    );
+    store.upsertL0({ ...input().records[0], id: "legacy-message" }, undefined);
+    enableLegacyFtsResidues(store);
+    const insertFts = store.getRawDb().prepare(`
+      INSERT INTO l0_fts (record_id, session_key, session_id, team_id, user_id, agent_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insertFts.run("legacy-message", scope.sessionId, scope.sessionId, scope.teamId, scope.userId, scope.agentId);
+    insertFts.run("legacy-message", scope.sessionId, scope.sessionId, scope.teamId, scope.userId, scope.agentId);
+
+    expect(store.claimConversationAdd(input({ records: [] })).status).toBe("claimed");
+    expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM l0_fts WHERE record_id = 'legacy-message'").get()).toEqual({ count: 0 });
   });
 
   it("does not reclaim a processing receipt when an accepted ID belongs to another isolation scope", () => {

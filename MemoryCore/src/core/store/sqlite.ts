@@ -3817,16 +3817,16 @@ export class VectorStore implements IMemoryStore {
         return false;
       }
       if (this.ftsAvailable) {
-        const fts = this.db.prepare(`
+        const ftsRows = this.db.prepare(`
           SELECT session_key, session_id, team_id, user_id, agent_id
           FROM l0_fts WHERE record_id = ?
-        `).get(recordId) as ConversationL0ScopeRow | undefined;
-        if (fts && !this.l0MatchesConversationReceipt(fts, receipt)) return false;
+        `).all(recordId) as ConversationL0ScopeRow[];
+        if (!ftsRows.every((fts) => this.l0MatchesConversationReceipt(fts, receipt))) return false;
       }
     }
 
     for (const recordId of uniqueIds) {
-      if (this.ftsAvailable) this.stmtL0FtsDelete.run(recordId);
+      if (this.ftsAvailable) this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?").run(recordId);
       if (this.vecTablesReady) this.stmtL0DeleteVec!.run(recordId);
       this.stmtL0DeleteMeta.run(recordId);
     }
