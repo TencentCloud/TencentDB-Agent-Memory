@@ -8,6 +8,9 @@
  * recipes) arrives server-side from the proxy. (Scope C.)
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { parseFormArgs, formatAnswerXml } from "./form.js";
+import { renderSessionInitPicker } from "./picker.js";
 
 export default function (pi: ExtensionAPI) {
   const proxyBase = process.env.TDAI_PROXY_URL ?? "http://127.0.0.1:8096";
@@ -85,5 +88,44 @@ export default function (pi: ExtensionAPI) {
     if (ctx.model?.provider !== "tdai") return;
     const sid = ctx.sessionManager.getSessionId();
     event.headers["x-conversation-id"] = `pi-${sid}`;
+  });
+
+  // Register the session-init picker tool. The proxy returns its form as an
+  // ask_followup_question tool_call with id `call_session_init_<ts>`; Pi
+  // executes this tool, we render a TUI picker, and return the answer as
+  // <question_answer> XML text. Pi sends that back as a role:"tool" message
+  // whose tool_call_id the proxy's getLastUserMessageText matches
+  // (/call_(wb_|dsh_)?session_init_/) → the answer is extracted. Zero proxy
+  // changes — reuses the existing CodeBuddy state machine for agentSource=pi.
+  pi.registerTool({
+    name: "ask_followup_question",
+    label: "TDAI Session Init",
+    description: "Renders the TDAI proxy's Team/Agent/Task picker. Invoked automatically on the first turn of a session when no preset identity (TDAI_TEAM_ID/TDAI_AGENT_ID/TDAI_TASK_ID) is set.",
+    parameters: Type.Object({
+      title: Type.String(),
+      questions: Type.String(),
+    }),
+    executionMode: "sequential",
+    async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+      // Guard: only handle the proxy's session-init tool calls.
+      if (!/^call_session_init_/.test(toolCallId)) {
+        return { content: [{ type: "text" as const, text: "ask_followup_question: not a session-init call (skipped)" }], details: { skipped: true } };
+      }
+      // params is the parsed function.arguments object (Pi parses against
+      // the parameters schema before calling execute). params.questions is
+      // the inner JSON string the proxy double-encoded; parseFormArgs decodes it.
+      const form = parseFormArgs(params);
+      if (!form) {
+        return { content: [{ type: "text" as const, text: "ask_followup_question: could not parse session-init form" }], details: { error: true } };
+      }
+      if (ctx.mode !== "tui") {
+        return { content: [{ type: "text" as const, text: "TDAI session-init requires interactive mode. Set TDAI_TEAM_ID/TDAI_AGENT_ID env vars for non-interactive use." }], details: { error: true } };
+      }
+      const answers = await renderSessionInitPicker(ctx, form);
+      if (!answers) {
+        return { content: [{ type: "text" as const, text: "User cancelled session init" }], details: { cancelled: true } };
+      }
+      return { content: [{ type: "text" as const, text: formatAnswerXml(answers) }], details: { answers } };
+    },
   });
 }
