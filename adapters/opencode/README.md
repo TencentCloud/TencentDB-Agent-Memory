@@ -96,6 +96,12 @@ for remote MemoryCore deployments.
 The duplicate guard is process-local. A restart immediately after the server accepts a capture can
 still repeat the final turn because `/v3/conversation/add` assigns message IDs server-side.
 
+Durable cross-restart idempotency is tracked in [issue #1087](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1087).
+[PR #1142](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/1142) proposes an optional
+server-side `idempotency_key` for `/v3/conversation/add`; this adapter can adopt that contract after
+it is merged. Until then, exactly-once capture is not guaranteed across process restarts or
+distributed backends.
+
 ## Security behavior
 
 - Recalled content is data, not instructions. Boundary markers inside stored memory are escaped.

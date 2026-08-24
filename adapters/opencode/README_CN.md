@@ -93,6 +93,11 @@ export TDAI_MEMORY_USER_ID="my-user"
 去重状态仅在当前进程内有效。如果服务端接受采集后 OpenCode 立即重启，最后一轮仍可能被重复
 采集，因为 `/v3/conversation/add` 的消息 ID 由服务端生成。
 
+跨重启的持久化幂等由 [issue #1087](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/1087)
+跟踪。[PR #1142](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/1142) 提议为
+`/v3/conversation/add` 增加服务端可选的 `idempotency_key`；该契约合并后，适配器再接入该能力。
+在此之前，跨进程重启或分布式后端场景不保证对话采集严格只写入一次。
+
 ## 安全行为
 
 - 召回内容属于数据，而不是指令；存储内容中的边界标记会被转义。
