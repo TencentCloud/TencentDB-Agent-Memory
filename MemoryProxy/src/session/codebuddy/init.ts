@@ -232,7 +232,7 @@ function detectWorkbuddyMorePage(
  * 这里在计数时跳过带 dsh 元数据签名的 user 消息(str content 且以已知锚点开头)。
  * 见 MemoryProxy/docs/dsh-recon/2026-08-14-dsh-capture-analysis.md §2.3。
  */
-function isFreshCBConversation(messages: MessageArr): boolean {
+function isFreshCBConversation(messages: MessageArr, agentSource: string): boolean {
   let userCount = 0;
   for (const m of messages) {
     const role = (m.role as string) ?? "";
@@ -240,6 +240,9 @@ function isFreshCBConversation(messages: MessageArr): boolean {
     if (role !== "user") continue;
     // dsh 元数据 user 消息不算真用户输入
     const c = (m as { content?: unknown }).content;
+    // Cursor Phase 0B first frame is system + metadata user(str) + real
+    // user(content blocks). Only the block-array user message is user input.
+    if (agentSource === "cursor" && typeof c === "string") continue;
     if (typeof c === "string") {
       if (
         c.startsWith("<system-reminder>") ||
@@ -662,7 +665,7 @@ async function handleSessionInitInner(
   }
 
   // ── Safety net: state 丢失但对话已有历史 → 跳过 init（避免会话中途重弹表单）──
-  if ((!state || state.status === "uninitialized") && !isFreshCBConversation(messages)) {
+  if ((!state || state.status === "uninitialized") && !isFreshCBConversation(messages, agentSource)) {
     console.warn(
       `[session-init:cb] session=${compositeKey} state lost but conversation has history, skipping init`,
     );
@@ -823,8 +826,8 @@ async function handleSessionInitInner(
         // only team resolved → jump straight to agent+task selection (skip
         // asset_confirm + team_select). codex 走两步 stage 拆分，先 agent_select；
         // CB 客户端保持老 pending_agent_task 一发同时问的语义。
-        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "pending_agent_select" : "pending_agent_task";
-        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "agent_select" : "agent_task";
+        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor") ? "pending_agent_select" : "pending_agent_task";
+        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor") ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
           status: nextStatus,
           keyId: sessionKey,
@@ -972,7 +975,7 @@ async function handleSessionInitInner(
         // 走 pending_agent_select。WB 的 form 本来就按 CC 风格拆开问，让它走
         // codex 分支，避免落到 legacy agent_task stage 后 form 里只问 agent
         // 却按老语义处理的语义歧义。
-        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh";
+        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor";
         const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
@@ -1065,8 +1068,8 @@ async function handleSessionInitInner(
 
     if (teamId && teamId !== BYPASS_MARKER) {
       // codex/WB 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh") ? "agent_select" : "agent_task";
+      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor") ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor") ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,

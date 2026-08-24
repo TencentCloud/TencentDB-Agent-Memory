@@ -13,6 +13,7 @@
  */
 
 import { resolveAgentAdapter } from "../agent-adapters/index.js";
+import { extractUserQueryText } from "../common/user-query-extractor.js";
 
 export interface ParsedMemCommand {
   /** 命令名（小写），如 "sync"、"create-skill"、"help" */
@@ -66,10 +67,33 @@ export function parseMemCommand(
   if (options?.checkFirst) {
     targetMsg = messages.find((m: any) => m && m.role === "user");
   } else {
-    targetMsg = messages[messages.length - 1];
+    // Agent clients (Cursor in particular) may append assistant/tool replay
+    // messages after the user's command. The contract is "last user message",
+    // not "last array element".
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidate = messages[index];
+      if (candidate && candidate.role === "user") {
+        targetMsg = candidate;
+        break;
+      }
+    }
   }
   if (!targetMsg || targetMsg.role !== "user") return null;
   const lastMsg = targetMsg;
+
+  // Cursor user content is a block array and can contain environment/replay
+  // blocks after the human query. A single "take the last text block" rule is
+  // insufficient for exact mem commands. Scan each text block after applying
+  // the shared wrapper cleaner, and stop only on an actual mem command.
+  if (agentSource === "cursor" && Array.isArray(lastMsg.content)) {
+    for (const block of lastMsg.content) {
+      if (!block || typeof block !== "object") continue;
+      const raw = (block as { type?: unknown; text?: unknown });
+      if (raw.type !== "text" || typeof raw.text !== "string") continue;
+      const parsed = parseCommandFromText(extractUserQueryText(raw.text));
+      if (parsed) return parsed;
+    }
+  }
 
   // 通过 adapter 按客户端规则提取纯文本
   const adapter = resolveAgentAdapter(agentSource);

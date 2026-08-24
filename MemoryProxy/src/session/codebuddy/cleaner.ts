@@ -75,7 +75,7 @@ export function getLastUserMessageText(messages: RawMessage[]): string {
     // （workbuddy/form.ts 里 TOOLCALL_PREFIX = "call_wb_session_init_"）、
     // dsh 的 `call_dsh_session_init_`（dsh/form.ts TOOLCALL_PREFIX）。
     const tcid = (messages[i] as any).tool_call_id as string | undefined;
-    if (role === "tool" && tcid && /call_(wb_|dsh_)?session_init_/.test(tcid)) {
+    if (role === "tool" && tcid && /call_(wb_|dsh_|cursor_)?session_init_/.test(tcid)) {
       return text;
     }
 

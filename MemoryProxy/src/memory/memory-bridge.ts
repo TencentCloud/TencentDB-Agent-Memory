@@ -140,7 +140,15 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
   // 通常是 bare sessionId。按候选前缀顺序探,命中即返回。
   const candidates = sessionId.includes(":")
     ? [sessionId]
-    : [sessionId, `codebuddy:${sessionId}`, `claude-code:${sessionId}`];
+    : [
+        sessionId,
+        `cursor:${sessionId}`,
+        `codebuddy:${sessionId}`,
+        `claude-code:${sessionId}`,
+        `dsh:${sessionId}`,
+        `workbuddy:${sessionId}`,
+        `codex:${sessionId}`,
+      ];
   for (const k of candidates) {
     const state = getSessionStore().get(k);
     if (state) {

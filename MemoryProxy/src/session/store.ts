@@ -647,6 +647,9 @@ export class SessionStore {
       // dsh 元数据签名:content 是 str 且以已知锚点开头(dsh 内部固定文本)。
       // 只在有明确签名时跳过,避免误伤客户端真用户输入。
       const c = (m as { content?: unknown }).content;
+      // Cursor's confirmed first frame includes a long string user metadata
+      // message followed by the real block-array user turn.
+      if (identity.agentSource === "cursor" && typeof c === "string") continue;
       if (typeof c === "string") {
         if (
           c.startsWith("<system-reminder>") ||

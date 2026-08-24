@@ -639,6 +639,17 @@ export async function handleChatCompletions(
     ? pathParts[0] : undefined;
   const agentSource = agentFromPath ?? "claude-code";
 
+  // Cursor strips DeepSeek's non-standard reasoning_content while replaying
+  // assistant tool calls. Restore a non-empty marker before session parsing,
+  // injection serialization, and upstream forwarding.
+  if (agentSource === "cursor") {
+    const { repairCursorReasoningContent } = await import("./agent-adapters/cursor.js");
+    const repaired = repairCursorReasoningContent(body);
+    if (repaired > 0) {
+      console.warn(`[cursor] repaired missing reasoning_content on ${repaired} assistant tool-call message(s)`);
+    }
+  }
+
   // ── Identity inspection ──────────────────────────────────────────────────
   const reqHeaders: Record<string, string> = {};
   for (const [k, v] of c.req.raw.headers.entries()) {
@@ -658,8 +669,11 @@ export async function handleChatCompletions(
   }
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const { resolveConversationId, resolveCursorConversationId } = await import("./session/session-key.js");
+  const headerConversationId = resolveConversationId(c);
+  const conversationId = headerConversationId ?? (
+    agentSource === "cursor" ? resolveCursorConversationId(body) : null
+  );
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
@@ -698,31 +712,29 @@ export async function handleChatCompletions(
   const { resolveAgentAdapter } = await import("./agent-adapters/index.js");
   const _adapter = resolveAgentAdapter(agentSource);
   const _requestKind = _adapter.classifyRequest(body as Record<string, unknown>, c.req.path, lcHeaders);
+  const isUnknown = agentSource === "cursor" && _requestKind === "auxiliary";
   const isAuxiliary = _requestKind === "auxiliary";
-  if (isAuxiliary) {
+  if (isUnknown) {
+    console.warn(`[request-classify] session=${sessionKey} agent=${agentSource} → unknown (fail-open passthrough; skip session-init/mem/injection/L0/skill)`);
+  } else if (isAuxiliary) {
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} → auxiliary (skip session-init/mem/injection/L0/skill)`);
   }
 
-  // ── dsh (deepseek-harness) CLI headless / no-preset bypass ──────────────
-  // dsh 客户端在 headless bundle 或未挂 ask-user preset 时,body.tools 里
-  // 不含 `ask_user_question` 工具。proxy 塞 fake `ask_user_question` tool_call
-  // 会被 dsh agent-loop 校验为 unknown tool 直接抛错。此时直接 bypass
-  // session-init 而非弹 form —— 没 UI 场景强弹表单没意义。
-  //
-  // 判定:agentSource=dsh 且 body.tools 非空且不含 ask_user_question。
-  // (tools 空数组表示纯对话/aux,不用兜底;tools 里就有 ask_user_question 说明
-  // 有 preset 挂 UI 工具,正常走 form。)
-  const _dshHeadless = agentSource === "dsh" && (() => {
+  // ── OpenAI-agent headless / no ask-user-tool bypass ─────────────────────
+  // Never inject a fake form tool_call when the client's current tool preset
+  // cannot execute that native UI tool.
+  const _dshHeadless = (agentSource === "dsh" || agentSource === "cursor") && (() => {
     const tools = (body as { tools?: unknown }).tools;
     if (!Array.isArray(tools) || tools.length === 0) return false;
+    const expectedTool = agentSource === "cursor" ? "AskQuestion" : "ask_user_question";
     return !tools.some((t) => {
       const fn = (t as { function?: { name?: string }; name?: string })?.function;
       const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
+      return n === expectedTool;
     });
   })();
   if (_dshHeadless) {
-    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+    console.log(`[request-classify] session=${sessionKey} agent=${agentSource} headless/no-preset (native ask-user tool absent) → bypass session-init, direct passthrough`);
   }
 
   // ── Session Init (before injection pipeline) ─────────────────────────────

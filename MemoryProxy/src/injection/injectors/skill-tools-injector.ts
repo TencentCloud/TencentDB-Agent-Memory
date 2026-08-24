@@ -162,8 +162,13 @@ export function renderSkillToolsBlock(
 
   return [
     "<skill_tools>",
-    "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
+    "以下是云端 skill 操作工具。**这些不是本地工具**，需要通过当前 shell 调用 proxy 的 skill-bridge 路径来执行。",
     "proxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。",
+    "",
+    "Shell 兼容（必须遵守）：",
+    "- 若 Shell 是 PowerShell，禁止使用 `curl` 或照抄 Bash curl 模板；优先使用 `Invoke-RestMethod` + `ConvertTo-Json -Compress`，不要创建临时文件或切换控制台编码。",
+    `- PowerShell skill_view 示例： Invoke-RestMethod -Method Post -Uri '${bridge}/get-by-name' -Headers @{'x-tdai-service-id'='${spaceId ?? "default"}';'x-conversation-id'='${sessionId ?? "<session-id>"}'} -ContentType 'application/json; charset=utf-8' -Body (@{skill_name='<skill-name>';include_content=$true;include_manifest=$true} | ConvertTo-Json -Compress)`,
+    "- Bash/zsh 才使用下面的 curl 模板。HTTP 4xx 直接报告，不要换 v1/v2、端口或路径盲目重试。",
     "",
     "调用模板：",
     `  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'`,
