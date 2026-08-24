@@ -166,6 +166,23 @@ interface ConversationOutboxRow {
   acknowledged_at_ms: number | null;
 }
 
+interface ConversationL0ScopeRow {
+  session_key: string;
+  session_id: string;
+  team_id: string;
+  user_id: string;
+  agent_id: string;
+}
+
+interface ConversationOutboxRecoveryRow {
+  event_id: string;
+  service_id: string;
+  session_id: string;
+  team_id: string;
+  agent_id: string;
+  status: string;
+}
+
 const TAG = "[memory-tdai][sqlite]";
 
 /** Persisted metadata about the embedding provider used to generate stored vectors. */
@@ -3769,25 +3786,42 @@ export class VectorStore implements IMemoryStore {
     )) {
       return false;
     }
+
+    // The outbox has no user_id, so its receipt_id relationship plus every
+    // scope-bearing event field must agree with the canonical receipt before
+    // it is safe to delete. Acknowledged events may have already notified the
+    // pipeline and are not safe to replay as a fresh claim.
+    const outboxRows = this.db.prepare(`
+      SELECT event_id, service_id, session_id, team_id, agent_id, status
+      FROM conversation_add_outbox WHERE receipt_id = ?
+    `).all(receipt.receipt_id) as ConversationOutboxRecoveryRow[];
+    if (!outboxRows.every((outbox) =>
+      outbox.service_id === receipt.service_id &&
+      outbox.session_id === receipt.session_id &&
+      outbox.team_id === receipt.team_id &&
+      outbox.agent_id === receipt.agent_id &&
+      outbox.status === "pending",
+    )) {
+      return false;
+    }
+
     for (const recordId of uniqueIds) {
       const l0 = this.db.prepare(`
         SELECT session_key, session_id, team_id, user_id, agent_id
         FROM l0_conversations WHERE record_id = ?
-      `).get(recordId) as {
-        session_key: string;
-        session_id: string;
-        team_id: string;
-        user_id: string;
-        agent_id: string;
-      } | undefined;
-      if (l0 && (
-        l0.session_key !== receipt.session_id ||
-        l0.session_id !== receipt.session_id ||
-        l0.team_id !== receipt.team_id ||
-        l0.user_id !== receipt.user_id ||
-        l0.agent_id !== receipt.agent_id
-      )) {
+      `).get(recordId) as ConversationL0ScopeRow | undefined;
+      // A vec0 row has no isolation fields and an FTS row is only trustworthy
+      // when its canonical L0 counterpart is present. Never remove either
+      // side table without this proof of ownership.
+      if (!l0 || !this.l0MatchesConversationReceipt(l0, receipt)) {
         return false;
+      }
+      if (this.ftsAvailable) {
+        const fts = this.db.prepare(`
+          SELECT session_key, session_id, team_id, user_id, agent_id
+          FROM l0_fts WHERE record_id = ?
+        `).get(recordId) as ConversationL0ScopeRow | undefined;
+        if (fts && !this.l0MatchesConversationReceipt(fts, receipt)) return false;
       }
     }
 
@@ -3799,6 +3833,14 @@ export class VectorStore implements IMemoryStore {
     this.db.prepare("DELETE FROM conversation_add_outbox WHERE receipt_id = ?").run(receipt.receipt_id);
     this.db.prepare("DELETE FROM conversation_add_receipts WHERE receipt_id = ?").run(receipt.receipt_id);
     return true;
+  }
+
+  private l0MatchesConversationReceipt(row: ConversationL0ScopeRow, receipt: ConversationReceiptRow): boolean {
+    return row.session_key === receipt.session_id &&
+      row.session_id === receipt.session_id &&
+      row.team_id === receipt.team_id &&
+      row.user_id === receipt.user_id &&
+      row.agent_id === receipt.agent_id;
   }
 
   private hasSqliteTable(name: string): boolean {
