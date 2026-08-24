@@ -3559,12 +3559,13 @@ export class VectorStore implements IMemoryStore {
         "SELECT * FROM conversation_add_receipts WHERE scope_hash = ?",
       ).get(scopeHash) as ConversationReceiptRow | undefined;
 
+      if (existing && existing.payload_digest !== input.payloadDigest) {
+        this.db.exec("COMMIT");
+        return { status: "conflict" };
+      }
+
       if (existing && existing.status !== "processing") {
         const receipt = this.toConversationReceipt(existing);
-        if (receipt.payloadDigest !== input.payloadDigest) {
-          this.db.exec("COMMIT");
-          return { status: "conflict" };
-        }
         const outbox = this.db.prepare(
           "SELECT * FROM conversation_add_outbox WHERE receipt_id = ?",
         ).get(receipt.receiptId) as ConversationOutboxRow | undefined;
@@ -3577,11 +3578,14 @@ export class VectorStore implements IMemoryStore {
       }
 
       // A `processing` row can only originate from an older interrupted
-      // implementation. It never represents a committed admission here, so
-      // reclaiming it is safe and preserves retry availability.
+      // implementation. It never represents a committed admission here, but
+      // it may have left recognizable L0/outbox remnants. Reclaim only after
+      // those remnants are cleared in this same transaction.
       if (existing) {
-        this.db.prepare("DELETE FROM conversation_add_outbox WHERE receipt_id = ?").run(existing.receipt_id);
-        this.db.prepare("DELETE FROM conversation_add_receipts WHERE receipt_id = ?").run(existing.receipt_id);
+        if (!this.clearLegacyProcessingConversationAdmission(existing)) {
+          this.db.exec("COMMIT");
+          return { status: "unsupported" };
+        }
       }
 
       const now = Date.now();
@@ -3704,16 +3708,20 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const event = this.db.prepare(
-        "SELECT receipt_id FROM conversation_add_outbox WHERE event_id = ?",
-      ).get(eventId) as { receipt_id: string } | undefined;
-      if (!event) {
+        "SELECT receipt_id, status FROM conversation_add_outbox WHERE event_id = ?",
+      ).get(eventId) as { receipt_id: string; status: string } | undefined;
+      if (!event || event.status !== "pending") {
         this.db.exec("COMMIT");
         return false;
       }
       const receipt = this.db.prepare(
-        "SELECT receipt_id FROM conversation_add_receipts WHERE receipt_id = ?",
-      ).get(event.receipt_id) as { receipt_id: string } | undefined;
+        "SELECT receipt_id, status FROM conversation_add_receipts WHERE receipt_id = ?",
+      ).get(event.receipt_id) as { receipt_id: string; status: string } | undefined;
       if (!receipt) throw new Error(`conversation outbox ${eventId} references a missing receipt`);
+      if (receipt.status !== "pending") {
+        this.db.exec("COMMIT");
+        return false;
+      }
 
       const now = Date.now();
       this.ackConversationOutboxInTransaction(eventId, event.receipt_id, now);
@@ -3736,6 +3744,67 @@ export class VectorStore implements IMemoryStore {
       "UPDATE conversation_add_outbox SET status = 'acknowledged', acknowledged_at_ms = ? WHERE event_id = ?",
     ).run(now, eventId);
     this.completeConversationAddInTransaction(receiptId, now);
+  }
+
+  /**
+   * Clear the only remnants a legacy non-atomic `processing` admission can
+   * identify. A malformed accepted-ID payload cannot be cleaned safely, so
+   * the caller retains the receipt and reports `unsupported` instead.
+   */
+  private clearLegacyProcessingConversationAdmission(receipt: ConversationReceiptRow): boolean {
+    let acceptedIds: unknown;
+    try {
+      acceptedIds = JSON.parse(receipt.accepted_ids_json);
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(acceptedIds) || !acceptedIds.every((id) => typeof id === "string")) {
+      return false;
+    }
+
+    const uniqueIds = [...new Set(acceptedIds)];
+    if (uniqueIds.length > 0 && (
+      (this.hasSqliteTable("l0_fts") && !this.ftsAvailable) ||
+      (this.hasSqliteTable("l0_vec") && !this.vecTablesReady)
+    )) {
+      return false;
+    }
+    for (const recordId of uniqueIds) {
+      const l0 = this.db.prepare(`
+        SELECT session_key, session_id, team_id, user_id, agent_id
+        FROM l0_conversations WHERE record_id = ?
+      `).get(recordId) as {
+        session_key: string;
+        session_id: string;
+        team_id: string;
+        user_id: string;
+        agent_id: string;
+      } | undefined;
+      if (l0 && (
+        l0.session_key !== receipt.session_id ||
+        l0.session_id !== receipt.session_id ||
+        l0.team_id !== receipt.team_id ||
+        l0.user_id !== receipt.user_id ||
+        l0.agent_id !== receipt.agent_id
+      )) {
+        return false;
+      }
+    }
+
+    for (const recordId of uniqueIds) {
+      if (this.ftsAvailable) this.stmtL0FtsDelete.run(recordId);
+      if (this.vecTablesReady) this.stmtL0DeleteVec!.run(recordId);
+      this.stmtL0DeleteMeta.run(recordId);
+    }
+    this.db.prepare("DELETE FROM conversation_add_outbox WHERE receipt_id = ?").run(receipt.receipt_id);
+    this.db.prepare("DELETE FROM conversation_add_receipts WHERE receipt_id = ?").run(receipt.receipt_id);
+    return true;
+  }
+
+  private hasSqliteTable(name: string): boolean {
+    return this.db.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+    ).get(name) !== undefined;
   }
 
   private writeL0ForConversationAdmission(record: L0Record): void {

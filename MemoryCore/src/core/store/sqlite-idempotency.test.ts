@@ -50,6 +50,17 @@ function input(overrides: Partial<ClaimConversationAddInput> = {}): ClaimConvers
   };
 }
 
+function scopeHash(value: ConversationIdempotencyScope = scope): string {
+  return createHash("sha256").update([
+    ["service_id", value.serviceId],
+    ["team_id", value.teamId],
+    ["agent_id", value.agentId],
+    ["user_id", value.userId],
+    ["session_id", value.sessionId],
+    ["idempotency_key", value.idempotencyKey],
+  ].map(([name, field]) => `${name}=${encodeURIComponent(field)}`).join("&")).digest("hex");
+}
+
 describe("VectorStore conversation add idempotency", () => {
   const stores: VectorStore[] = [];
   const directories: string[] = [];
@@ -190,14 +201,7 @@ describe("VectorStore conversation add idempotency", () => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       "legacy-receipt",
-      createHash("sha256").update([
-        ["service_id", scope.serviceId],
-        ["team_id", scope.teamId],
-        ["agent_id", scope.agentId],
-        ["user_id", scope.userId],
-        ["session_id", scope.sessionId],
-        ["idempotency_key", scope.idempotencyKey],
-      ].map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join("&")).digest("hex"),
+      scopeHash(),
       scope.serviceId,
       scope.teamId,
       scope.agentId,
@@ -221,5 +225,175 @@ describe("VectorStore conversation add idempotency", () => {
       status: "pending",
     });
     expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM conversation_add_receipts").get()).toEqual({ count: 1 });
+  });
+
+  it("conflicts when a legacy processing receipt has a different digest", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt",
+      scopeHash(),
+      scope.serviceId,
+      scope.teamId,
+      scope.agentId,
+      scope.userId,
+      scope.sessionId,
+      scope.idempotencyKey,
+      "digest-1",
+      "[]",
+      "processing",
+      1,
+      1,
+    );
+
+    expect(store.claimConversationAdd(input({ payloadDigest: "different-digest" }))).toEqual({ status: "conflict" });
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = ?").get("legacy-receipt")).toEqual({ status: "processing" });
+  });
+
+  it("removes identifiable legacy processing L0, FTS, and outbox remnants before reclaiming", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt",
+      scopeHash(),
+      scope.serviceId,
+      scope.teamId,
+      scope.agentId,
+      scope.userId,
+      scope.sessionId,
+      scope.idempotencyKey,
+      "digest-1",
+      "[\"legacy-message\"]",
+      "processing",
+      1,
+      1,
+    );
+    store.upsertL0({
+      ...input().records[0],
+      id: "legacy-message",
+      messageText: "legacy partial message",
+    }, undefined);
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_outbox (
+        event_id, receipt_id, service_id, session_id, rounds, team_id, agent_id,
+        status, created_at_ms, acknowledged_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+    `).run("legacy-outbox", "legacy-receipt", scope.serviceId, scope.sessionId, 2, scope.teamId, scope.agentId, 1);
+
+    const claim = store.claimConversationAdd(input());
+
+    expect(claim.status).toBe("claimed");
+    expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM l0_conversations WHERE record_id = 'legacy-message'").get()).toEqual({ count: 0 });
+    if (store.isFtsAvailable()) {
+      expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM l0_fts WHERE record_id = 'legacy-message'").get()).toEqual({ count: 0 });
+    }
+    expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM conversation_add_outbox WHERE event_id = 'legacy-outbox'").get()).toEqual({ count: 0 });
+  });
+
+  it("does not reclaim a processing receipt when an accepted ID belongs to another isolation scope", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt",
+      scopeHash(),
+      scope.serviceId,
+      scope.teamId,
+      scope.agentId,
+      scope.userId,
+      scope.sessionId,
+      scope.idempotencyKey,
+      "digest-1",
+      "[\"legacy-message\"]",
+      "processing",
+      1,
+      1,
+    );
+    store.upsertL0({
+      ...input().records[0],
+      id: "legacy-message",
+      userId: "other-user",
+    }, undefined);
+
+    expect(store.claimConversationAdd(input())).toEqual({ status: "unsupported" });
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = 'legacy-receipt'").get()).toEqual({ status: "processing" });
+    expect(store.getRawDb().prepare("SELECT user_id FROM l0_conversations WHERE record_id = 'legacy-message'").get()).toEqual({ user_id: "other-user" });
+  });
+
+  it("does not reclaim a processing receipt when an unavailable vector residue cannot be cleaned", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt",
+      scopeHash(),
+      scope.serviceId,
+      scope.teamId,
+      scope.agentId,
+      scope.userId,
+      scope.sessionId,
+      scope.idempotencyKey,
+      "digest-1",
+      "[\"legacy-message\"]",
+      "processing",
+      1,
+      1,
+    );
+    // dimensions=0 deliberately has no vec0 handle; this table models an
+    // old vector residue that this store instance cannot clean safely.
+    store.getRawDb().exec("CREATE TABLE l0_vec (record_id TEXT PRIMARY KEY)");
+    store.getRawDb().prepare("INSERT INTO l0_vec (record_id) VALUES (?)").run("legacy-message");
+
+    expect(store.claimConversationAdd(input())).toEqual({ status: "unsupported" });
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = 'legacy-receipt'").get()).toEqual({ status: "processing" });
+    expect(store.getRawDb().prepare("SELECT COUNT(*) AS count FROM l0_vec WHERE record_id = 'legacy-message'").get()).toEqual({ count: 1 });
+  });
+
+  it("refuses to acknowledge an outbox attached to a processing receipt", () => {
+    const store = createStore();
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_receipts (
+        receipt_id, scope_hash, service_id, team_id, agent_id, user_id, session_id,
+        idempotency_key, payload_digest, accepted_ids_json, status, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "legacy-receipt",
+      scopeHash(),
+      scope.serviceId,
+      scope.teamId,
+      scope.agentId,
+      scope.userId,
+      scope.sessionId,
+      scope.idempotencyKey,
+      "digest-1",
+      "[]",
+      "processing",
+      1,
+      1,
+    );
+    store.getRawDb().prepare(`
+      INSERT INTO conversation_add_outbox (
+        event_id, receipt_id, service_id, session_id, rounds, team_id, agent_id,
+        status, created_at_ms, acknowledged_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL)
+    `).run("legacy-outbox", "legacy-receipt", scope.serviceId, scope.sessionId, 2, scope.teamId, scope.agentId, 1);
+
+    expect(store.ackConversationOutbox("legacy-outbox")).toBe(false);
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_receipts WHERE receipt_id = 'legacy-receipt'").get()).toEqual({ status: "processing" });
+    expect(store.getRawDb().prepare("SELECT status FROM conversation_add_outbox WHERE event_id = 'legacy-outbox'").get()).toEqual({ status: "pending" });
   });
 });
