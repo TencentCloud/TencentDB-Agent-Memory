@@ -189,6 +189,7 @@ describe("conversation add idempotency router", () => {
   it("rejects the same key with a different payload", async () => {
     const store: Partial<IMemoryStore> = {
       upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => null),
       claimConversationAdd: vi.fn(async () => ({ status: "conflict" })),
     };
     const notifyPipeline = vi.fn();
@@ -218,6 +219,7 @@ describe("conversation add idempotency router", () => {
     const ackConversationOutbox = vi.fn();
     const store: Partial<IMemoryStore> = {
       upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => null),
       claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => ({
         status: "claimed",
         receipt: receiptFor(input, input.records.map((record: L0Record) => record.id)),

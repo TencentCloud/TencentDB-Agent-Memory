@@ -698,32 +698,30 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   const payloadDigest = idempotency_key ? digestConversationAddPayload(parsed.data) : undefined;
 
   if (idempotencyScope) {
-    if (!store.claimConversationAdd) {
+    if (!store.claimConversationAdd || !store.readConversationAddReceipt) {
       return errorEnvelope(
         503,
         "Store does not support transactional conversation idempotency for keyed requests",
         requestId,
       );
     }
-    if (store.readConversationAddReceipt) {
-      const receipt = await store.readConversationAddReceipt(idempotencyScope);
-      if (receipt) {
-        if (receipt.payloadDigest !== payloadDigest) {
-          return errorEnvelope(
-            409,
-            "Idempotency key already used with a different conversation payload",
-            requestId,
-          );
-        }
-        return successEnvelope<ConversationAddData>(
-          {
-            accepted_ids: receipt.acceptedIds,
-            accepted_versions: receipt.acceptedIds.map(() => "v1"),
-            total_count: receipt.acceptedIds.length,
-          },
+    const receipt = await store.readConversationAddReceipt(idempotencyScope);
+    if (receipt) {
+      if (receipt.payloadDigest !== payloadDigest) {
+        return errorEnvelope(
+          409,
+          "Idempotency key already used with a different conversation payload",
           requestId,
         );
       }
+      return successEnvelope<ConversationAddData>(
+        {
+          accepted_ids: receipt.acceptedIds,
+          accepted_versions: receipt.acceptedIds.map(() => "v1"),
+          total_count: receipt.acceptedIds.length,
+        },
+        requestId,
+      );
     }
   }
 
