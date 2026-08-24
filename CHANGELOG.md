@@ -9,6 +9,22 @@
 
 ---
 
+## [Unreleased]
+
+### 🔐 安全与兼容性
+
+- **Breaking — MemoryCore v3 L0–L3 数据面默认关闭匿名访问。** 调用方必须发送
+  可绑定到请求 `user_id` 的 `x-tdai-user-key`，或由 Gateway 显式配置
+  `server.apiKey` / `TDAI_GATEWAY_API_KEY` 并继续使用 service Bearer。`/v2`
+  和其他现有路由的鉴权行为不变。依赖无鉴权 v3 L0–L3 的部署必须在升级前配置
+  上述任一凭据。
+- Hermes Memory Provider 支持通过
+  `MEMORY_TENCENTDB_GATEWAY_SCHEME=https` 访问启用 TLS 的 Gateway；远程多用户
+  Gateway 必须使用 HTTPS（Gateway 本身不终止 TLS 时应由反向代理或负载均衡器
+  提供）。`GET /health` 不再携带 service key 或 user key。
+
+---
+
 ## [2.0.1-beta.1] — 2026-08-13
 
 ### 🧠 冷启动开箱即用 · 默认 Agent + 预置 Skill

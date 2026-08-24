@@ -66,6 +66,7 @@ import {
 import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
+import { extractUserKeyHeader } from "../metadata/router/auth.js";
 import { MetadataService } from "../metadata/service/metadata-service.js";
 import { ConfigParamService } from "../metadata/service/config-param-service.js";
 import { loadDefaultRegistry } from "../metadata/config/param-registry.js";
@@ -900,11 +901,10 @@ export class TdaiGateway {
       // authorization inside handleV2Route instead; that path validates the
       // requested user/team/agent scope before resolving memory storage.
       if (pathname.startsWith("/v2/") || pathname.startsWith("/v3/")) {
-        const rawUserKey = req.headers["x-tdai-user-key"];
-        const userKey = Array.isArray(rawUserKey) ? rawUserKey[0] : rawUserKey;
+        const userKey = extractUserKeyHeader(req.headers);
         const v3AuthMode = selectV3DataPlaneAuthMode(
           pathname,
-          userKey ?? "",
+          userKey,
           !!this.config.server.apiKey,
         );
         if (v3AuthMode === "reject") {

@@ -35,6 +35,8 @@ describe("v3 data-plane per-user authorization", () => {
       .toBe("reject");
     expect(selectV3DataPlaneAuthMode("/v3/meta/team/get", "", false))
       .toBe("not_applicable");
+    expect(selectV3DataPlaneAuthMode("/v2/conversation/add", "sk-user-1", false))
+      .toBe("not_applicable");
   });
 
   it("accepts a user in the requested active team and agent scope", async () => {

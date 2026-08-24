@@ -76,12 +76,18 @@ class MemoryTencentdbSdkClient:
             logger.debug("memory-tencentdb Gateway %s failed: %s", path, e)
             raise
 
-    def _get(self, path: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+    def _get(
+        self,
+        path: str,
+        timeout: Optional[int] = None,
+        *,
+        authenticated: bool = True,
+    ) -> Dict[str, Any]:
         """Make a GET request to the Gateway."""
         url = f"{self._base_url}{path}"
         req = urllib.request.Request(
             url,
-            headers=self._build_headers(content_type=False),
+            headers=self._build_headers(content_type=False) if authenticated else {},
             method="GET",
         )
         try:
@@ -106,8 +112,8 @@ class MemoryTencentdbSdkClient:
     # -- API methods ----------------------------------------------------------
 
     def health(self, timeout: int = 3) -> Dict[str, Any]:
-        """Check if the Gateway is healthy."""
-        return self._get("/health", timeout=timeout)
+        """Check if the Gateway is healthy without transmitting credentials."""
+        return self._get("/health", timeout=timeout, authenticated=False)
 
     # ── v3: conversation (L0) ────────────────────────────────────────────────
 

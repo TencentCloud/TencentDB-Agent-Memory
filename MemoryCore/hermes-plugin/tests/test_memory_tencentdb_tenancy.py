@@ -6,7 +6,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "memory"
@@ -86,13 +86,25 @@ class TenancyEnvironmentResolutionTest(unittest.TestCase):
             {
                 "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST": "managed.internal",
                 "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT": "9443",
+                "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_SCHEME": "https",
                 "MEMORY_TENCENTDB_GATEWAY_HOST": "principal.invalid",
                 "MEMORY_TENCENTDB_GATEWAY_PORT": "1234",
+                "MEMORY_TENCENTDB_GATEWAY_SCHEME": "http",
             },
             clear=False,
         ):
             self.assertEqual(provider_module._resolve_gateway_host(), "managed.internal")
             self.assertEqual(provider_module._resolve_gateway_port(), 9443)
+            self.assertEqual(provider_module._resolve_gateway_scheme(), "https")
+
+    def test_https_gateway_url_is_supported(self) -> None:
+        supervisor = provider_module.GatewaySupervisor(
+            host="memory.example",
+            port=443,
+            scheme="https",
+        )
+
+        self.assertEqual(supervisor._base_url, "https://memory.example:443")
 
     def test_default_is_retained_when_both_sources_are_empty(self) -> None:
         with patch.dict(
@@ -154,6 +166,28 @@ class TenancyEnvironmentResolutionTest(unittest.TestCase):
 
         self.assertEqual(headers["Authorization"], "Bearer gateway-service-key")
         self.assertEqual(headers["x-tdai-user-key"], "sk-mem-principal")
+
+    def test_health_check_does_not_transmit_credentials(self) -> None:
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"status":"ok"}'
+        client = provider_module.MemoryTencentdbSdkClient(
+            base_url="https://memory.example",
+            api_key="gateway-service-key",
+            user_key="sk-mem-principal",
+        )
+
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            self.assertEqual(client.health(), {"status": "ok"})
+
+        request = urlopen.call_args.args[0]
+        self.assertIsNone(request.get_header("Authorization"))
+        self.assertIsNone(request.get_header("X-tdai-user-key"))
+
+    def test_user_key_schema_is_optional_for_service_bearer_compatibility(self) -> None:
+        schema = provider_module.MemoryTencentdbProvider().get_config_schema()
+        user_key = next(item for item in schema if item["key"] == "user_key")
+
+        self.assertFalse(user_key["required"])
 
 
 if __name__ == "__main__":
