@@ -5,11 +5,22 @@ through the [TencentDB Agent Memory v2](https://github.com/TencentCloud/TencentD
 proxy for team memory: L3 persona, L2 scene index, L0 conversation capture, and
 on-demand L0/L1/L2 search.
 
-The plugin carries **only routing + a dynamic per-session `x-conversation-id`
-header**. All memory capability is delivered server-side by the proxy
-(injected into the system prompt and captured from the response). This keeps
-the extension minimal and keeps memory logic in one place. (Scope: routing +
-header; no client-side recall/capture.)
+The plugin carries **routing + a dynamic per-session `x-conversation-id` header + an interactive Team/Agent/Task picker**. All memory capability is delivered server-side by the proxy (injected into the system prompt and captured from the response). This keeps the extension minimal and keeps memory logic in one place. (Scope: routing + header + picker; no client-side recall/capture.)
+
+## Interactive session init (default)
+
+On the **first turn of each new Pi session**, if no preset identity is set (see
+below), the proxy sends a Team → Agent → Task form and this plugin renders it as
+a Pi-native TUI menu: `↑↓` to navigate, `Enter` to select, `Esc` to cancel. Pick
+once and the session is bound for its lifetime — the chosen team's memory (L3
+persona, L2 scene index) is injected and the conversation is captured (L0).
+
+This matches the Claude Code / CodeBuddy UX. The picking is **manual**, by
+design — which team/agent a piece of work belongs to is a human-intent decision,
+not auto-inferred from your prompt.
+
+Requires interactive mode (the default `pi` TUI). In `pi -p` / RPC / non-TUI
+modes the picker cannot render; set the preset env vars instead (below).
 
 ## Prerequisites
 
@@ -26,17 +37,29 @@ header; no client-side recall/capture.)
 | `TDAI_PROXY_URL` | no | `http://127.0.0.1:8096` | proxy host:port |
 | `TDAI_SPACE_ID` | no | `default` | memory instance id |
 | `TDAI_AGENT_SOURCE` | no | `pi` | first-class path; set `codebuddy` to fall back to the CodeBuddy profile for debugging |
-| `TDAI_TEAM_ID` | **yes** | — | from the panel (Team) |
-| `TDAI_AGENT_ID` | **yes** | — | from the panel (Agent) |
+| `TDAI_TEAM_ID` | no | — | **preset fallback** — set to skip the interactive picker (CI, scripts, fixed-context users). From the panel (Team) |
+| `TDAI_AGENT_ID` | no | — | **preset fallback** — same as team. From the panel (Agent) |
 | `TDAI_TASK_ID` | no | — | optional; from the panel (Task linked to the agent). When set, recall narrows to that task; when absent, recall is broad across the agent's memories |
 | `TDAI_USER_KEY` | **yes** | — | the **user's** API key (panel → API Key), NOT the admin/gateway key |
 | `TDAI_MODEL` | no | `glm-5.2-vision` | must match a model the proxy forwards to |
 
 Set these in your shell or Pi's env block; the plugin reads them at load.
 
+**Default usage is interactive:** set only `TDAI_USER_KEY` (and optionally
+`TDAI_MODEL`), leave the identity vars unset, and pick Team/Agent/Task on the
+first turn of each session. Set `TDAI_TEAM_ID`/`TDAI_AGENT_ID`/`TDAI_TASK_ID`
+only when you want to skip the picker (CI, scripts, a fixed context).
+
 ## Install / load
 
-Quick test (throwaway load):
+Quick test (throwaway load, interactive mode — no identity env vars):
+
+```bash
+TDAI_USER_KEY=<your-user-key> \
+  pi -e ./MemoryCore/pi-plugin --provider tdai --model glm-5.2-vision
+```
+
+Or with a fixed identity (skips the picker):
 
 ```bash
 TDAI_USER_KEY=<your-user-key> TDAI_TEAM_ID=<...> TDAI_AGENT_ID=<...> \
@@ -65,6 +88,7 @@ identity headers are wrong.
 
 ## Troubleshooting
 
+- **Interactive mode is the default.** With no `TDAI_TEAM_ID`/`TDAI_AGENT_ID`/`TDAI_TASK_ID` set, the first turn of a new session shows a Team → Agent → Task picker (↑↓ + Enter). The session binds to your pick for its lifetime. Requires interactive (TUI) mode.
 - **Use the user's API key, not the admin key.** The proxy validates the
   `Authorization: Bearer` against the user's API key (panel → API Key). The
   admin/gateway key is for internal endpoints, not client routing.
@@ -72,7 +96,9 @@ identity headers are wrong.
   recall). Set `TDAI_TASK_ID` only to narrow recall to a specific Task. A
   stale/unknown task id is dropped with a warning and recall broadens — it
   does not block memory.
-- **Missing env vars don't block Pi.** If a required env var is unset, the
+- **Non-interactive mode needs the preset env vars.** `pi -p` / RPC / non-TUI
+  modes cannot render the picker. Set `TDAI_TEAM_ID`/`TDAI_AGENT_ID` to skip it.
+- **Missing required env vars don't block Pi.** If `TDAI_USER_KEY` is unset, the
   extension logs a warning at load and skips registering the `tdai` provider —
   Pi starts normally, just without the TDAI provider available. Set the vars
   and restart Pi to enable it.
