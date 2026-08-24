@@ -75,4 +75,17 @@ describe("conversation add idempotency contract", () => {
 
     expect(changed).not.toBe(original);
   });
+
+  it("normalizes equivalent message recorded_at formats before digesting", () => {
+    const utcWithoutMilliseconds = digestConversationAddPayload({
+      ...request,
+      messages: [{ ...request.messages[0], recorded_at: "2026-08-24T00:01:00Z" }],
+    });
+    const utcWithMilliseconds = digestConversationAddPayload({
+      ...request,
+      messages: [{ ...request.messages[0], recorded_at: "2026-08-24T00:01:00.000Z" }],
+    });
+
+    expect(utcWithoutMilliseconds).toBe(utcWithMilliseconds);
+  });
 });
