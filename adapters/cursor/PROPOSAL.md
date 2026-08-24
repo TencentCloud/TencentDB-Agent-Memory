@@ -1,80 +1,78 @@
-# Cursor Pro TencentDB Proxy routing proposal
+# Cursor custom-endpoint integration with the existing MemoryProxy
 
-## Background and Cursor plan differences
+## Status and hypothesis to validate
 
-Cursor Free currently provides the built-in `Auto` model, but does not provide an OpenAI-compatible custom Base URL configuration. Cursor Pro is the plan that opens custom model endpoint capabilities. This difference determines which integration path can be used:
+This document is an integration proposal and validation plan. It does not include runtime code.
 
-- Cursor Free/Auto uses the existing public Hooks + MCP adapter.
-- Cursor Pro may additionally use a TencentDB Proxy as a custom OpenAI-compatible model endpoint.
+The key hypothesis is that an eligible Cursor account can configure an OpenAI-compatible custom endpoint, Base URL, and API key. Whether this capability is restricted to Cursor Pro, available on other plans, or subject to account-specific entitlements must be verified with real accounts before the documentation defines a Free/Pro boundary.
 
-## Current Cursor Free adapter
+## Scope
 
-The current Cursor Free/Auto adapter uses MCP and public Agent Hooks. It can capture completed conversations and read or write TencentDB memory:
+MemoryProxy already implements authentication, session registration, identity isolation, memory injection, provider forwarding, streaming, and conversation recording for supported agents such as Claude Code, Codex, and CodeBuddy. This proposal does not redesign those gateway capabilities.
 
-- Hooks capture prompts and responses at Cursor lifecycle events.
-- `sessionStart` can recall context for a new session.
-- MCP tools provide explicit memory status, recall, memory search, and conversation search.
+The Cursor-specific work is to:
 
-This integration does not put TencentDB in Cursor's model-request path. Memory recall therefore depends on the model or agent actively calling the MCP tools; it is not directly injected into every model request by TencentDB.
+1. document how to point Cursor's custom OpenAI-compatible endpoint to the existing MemoryProxy;
+2. determine how Cursor supplies the headers and stable identifiers required by MemoryProxy;
+3. validate Cursor request, response, streaming, and model-provider compatibility;
+4. record the tested configuration and results in English and Chinese.
 
-## Proposed Cursor Pro path
+## Relationship to the Hooks + MCP adapter
 
-Cursor Pro's custom OpenAI-compatible endpoint can be configured to point to TencentDB Proxy. This allows all model traffic for that Cursor configuration to pass through the Proxy:
+PR [#1138](https://github.com/TencentCloud/TencentDB-Agent-Memory/pull/1138) proposes the Cursor Hooks + MCP adapter. It captures conversations and provides explicit memory recall and search without placing MemoryProxy in the model-request path. Recall through that path depends on the agent calling an MCP tool.
 
-```text
-Cursor Pro
-  -> TencentDB Memory Proxy (OpenAI-compatible Base URL)
-      -> configured model provider
-      <- provider response or stream
-  <- Cursor-compatible response or stream
-```
+This document is a companion to #1138, not a replacement for it. If #1138 is merged, Hooks + MCP remains the usable Cursor Free/Auto path. Custom-endpoint Proxy routing is an optional extension for accounts where the endpoint capability is available. Any Proxy-specific runtime changes must be developed and reviewed separately and must not be mixed into the #1138 adapter code.
 
-At the gateway layer, TencentDB Proxy can inject relevant memory into the request before forwarding it to the selected provider. This provides request-time memory enhancement while preserving Cursor's model selection experience through the Proxy's provider routing configuration.
+## Proposed configuration with the existing Proxy
 
-## Proposed operation flow
+The user would configure Cursor with:
 
-1. The user configures TencentDB Proxy as Cursor's OpenAI-compatible Base URL and enters the Proxy API key.
-2. Cursor sends a model request to the Proxy using its compatible request protocol.
-3. The Proxy authenticates the request and maps it to a TencentDB memory identity.
-4. The Proxy resolves the configured provider and model route.
-5. The Proxy recalls relevant TencentDB memory and injects the resulting context into the model request.
-6. The Proxy forwards the enhanced request to the selected model provider.
-7. The Proxy returns the provider's response or stream to Cursor without breaking supported fields.
-8. The Proxy captures the completed user/assistant turn and persists it into TencentDB memory.
+- Base URL: `http://<proxy-host>:<port>/<agent-source>/<spaceId>`;
+- API key: the TencentDB business user's `user_key`;
+- a model name supported by the configured upstream provider.
 
-Provider API keys should be managed by the Proxy deployment. They should not be embedded in the adapter or committed to the repository.
+MemoryProxy then receives the OpenAI-compatible request, performs its existing authentication and session flow, injects recalled memory, forwards the request to the configured provider, returns the response or stream, and records the completed conversation.
 
-## Identity and session mapping
+The current generic Proxy contract also requires `x-team-id`, `x-agent-id`, `x-task-id`, and `x-conversation-id`. A central validation item is whether Cursor can attach these custom headers. If it cannot, the test must determine whether MemoryProxy's existing interactive/default task flow is sufficient or whether a small, separately reviewed Cursor-specific adapter is required.
 
-The proposed mapping is:
+The current list of supported `<agent-source>` values does not include `cursor`. Initial testing may use a documented compatible source only for protocol validation; production support should add and review an explicit Cursor source rather than permanently impersonating another client.
 
-| TencentDB field | Proposed source |
+## Identity and turn mapping
+
+The intended field sources are:
+
+| MemoryProxy field | Source to validate |
 | --- | --- |
-| `user_key` | Authenticated TencentDB account |
-| `team_id` | Configured team or project scope |
-| `agent_id` | Stable Cursor adapter identifier |
-| `task_id` | Current Cursor task or conversation scope |
-| `session_id` | Cursor conversation or session identifier |
+| `user_key` | Cursor custom-endpoint API key, sent as `Authorization: Bearer ...` |
+| `team_id` | `x-team-id`, configured from the TencentDB admin panel |
+| `agent_id` | `x-agent-id`, configured from the TencentDB admin panel |
+| `task_id` | `x-task-id`, configured from the TencentDB admin panel; it is not a per-turn generation ID |
+| `session_id` | Cursor `conversation_id`, sent as `x-conversation-id` if Cursor exposes and forwards it |
+| turn pairing | Cursor `generation_id`, as used by #1138; it must not replace the stable session ID |
 
-If Cursor forwards a stable conversation identifier, the Proxy should preserve it as `session_id`. If it does not, the integration needs an explicit session-id setting or another client-side identifier that remains stable for the conversation. A display name alone should not be treated as a stable session identity.
+The main unknown is whether Cursor exposes `conversation_id` and `generation_id` to custom-endpoint requests or permits them to be forwarded as headers/body metadata. If it does not, the Proxy path needs a documented fallback that does not conflate a task, session, and individual generation.
 
-## Required validation before implementation
+## User-visible behavior and trade-offs
 
-The following items require testing with Cursor Pro and the official environment:
+- The #1138 Hooks path is fail-open: a memory outage does not block normal Cursor model use.
+- The Proxy path is naturally fail-closed: if MemoryProxy is unavailable, model requests routed through it fail.
+- Routing through MemoryProxy sends the complete model traffic—including prompts, selected code/context, tool data, and responses—through the configured gateway. Users must be informed of this data flow and should review the gateway's privacy, access-control, logging, and retention policies.
 
-- Custom OpenAI-compatible endpoint acceptance and configuration behavior;
-- Compatibility of non-streaming and streaming request/response schemas;
-- Authentication header forwarding and API-key semantics;
-- Forwarding of tool-call, reasoning-content, usage, and related response fields;
-- Availability and stability of a Cursor conversation or session ID;
-- Retry, timeout, cancellation, and error propagation behavior;
-- Compatibility with multiple model providers and provider-specific parameters;
-- Any additional Cursor restrictions on custom endpoints, models, or routing.
+## Validation plan and results
 
-## Relationship to the existing adapter
+No runtime results are claimed yet. The following matrix must be completed with real account plan/version details, Cursor version, Proxy version, provider, model, observed result, and evidence:
 
-Hooks + MCP remain the formal, usable Cursor Free/Auto implementation. They continue to provide conversation capture and explicit memory read/write without changing Cursor's native model-provider path.
+- [ ] Confirm which Cursor plans/accounts expose custom OpenAI-compatible Base URL configuration.
+- [ ] Confirm Base URL path construction and whether Cursor appends `/v1/chat/completions` correctly.
+- [ ] Verify non-streaming request and response schemas.
+- [ ] Verify streaming request and response schemas and stream termination.
+- [ ] Verify `Authorization` and support for required custom identity headers.
+- [ ] Verify tool-call request/response fields and multi-step tool execution.
+- [ ] Verify reasoning-content and usage fields without loss or schema errors.
+- [ ] Verify availability and stability of `conversation_id` and `generation_id`.
+- [ ] Verify retry, timeout, cancellation, disconnect, and upstream error propagation.
+- [ ] Verify multiple providers and provider-specific model parameters.
+- [ ] Record any additional Cursor restrictions on custom endpoints, models, certificates, or routing.
+- [ ] Confirm session registration, memory injection, response delivery, and conversation persistence in MemoryProxy.
 
-Proxy routing is an optional extension path for Cursor Pro accounts that can configure a custom model endpoint. Pro routing logic should be developed and reviewed independently and must not be mixed into the existing Free/Auto adapter code.
-
-This document is a design proposal for review and future iteration. The corresponding runtime code has not been developed. I do not have a Cursor Pro account, so I cannot complete local end-to-end testing of this logic.
+This proposal is provided for review and subsequent iterative implementation. I do not have access to an account with the required custom-endpoint capability, so I cannot currently complete the local end-to-end validation above.
