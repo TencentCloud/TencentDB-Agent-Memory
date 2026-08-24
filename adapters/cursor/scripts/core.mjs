@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -137,8 +137,9 @@ export async function gatewayRequest(route, body, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || 8000);
   try {
+    const method = options.method || "POST";
     const response = await (options.fetch || fetch)(`${cfg.gatewayUrl}${route}`, {
-      method: "POST", headers, body: JSON.stringify(body), signal: controller.signal,
+      method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal,
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`Gateway ${response.status}: ${text.slice(0, 300)}`);
@@ -153,7 +154,37 @@ export async function gatewayRequest(route, body, options = {}) {
 }
 
 function stateFile(cfg) { return path.join(cfg.stateDir, "state.json"); }
+function stateLock(cfg) { return path.join(cfg.stateDir, "state.lock"); }
 function emptyState() { return { version: 1, conversations: {} }; }
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+/** Serialize read-modify-write state updates across Cursor hook processes. */
+export async function withStateLock(cfg, operation, options = {}) {
+  await mkdir(cfg.stateDir, { recursive: true });
+  const lock = stateLock(cfg);
+  const timeoutMs = options.timeoutMs || 12000;
+  const staleMs = options.staleMs || 30000;
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      await mkdir(lock);
+      break;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - (await stat(lock)).mtimeMs > staleMs) {
+          await rm(lock, { recursive: true });
+          continue;
+        }
+      } catch (statError) { if (statError?.code !== "ENOENT") throw statError; }
+      if (Date.now() - startedAt >= timeoutMs) throw new Error("Timed out waiting for Cursor state lock");
+      await wait(25);
+    }
+  }
+  try { return await operation(); }
+  finally { await rm(lock, { recursive: true, force: true }); }
+}
 
 export function pruneState(state, now = Date.now(), pendingTtlMs = 7 * 86400000, capturedTtlMs = 30 * 86400000) {
   for (const [conversationId, conv] of Object.entries(state.conversations || {})) {
@@ -187,35 +218,39 @@ function conversation(state, id) {
 }
 
 export async function rememberPrompt(input, cfg = config()) {
-  const state = pruneState(await readState(cfg));
-  const conv = conversation(state, input.conversation_id);
-  conv.pending[input.generation_id] = { prompt: input.prompt, createdAt: Date.now() };
-  await writeState(state, cfg);
+  return withStateLock(cfg, async () => {
+    const state = pruneState(await readState(cfg));
+    const conv = conversation(state, input.conversation_id);
+    conv.pending[input.generation_id] = { prompt: input.prompt, createdAt: Date.now() };
+    await writeState(state, cfg);
+  });
 }
 
 export async function captureResponse(input, cfg = config(), request = gatewayRequest) {
-  const state = pruneState(await readState(cfg));
-  const conv = conversation(state, input.conversation_id);
-  const generationId = input.generation_id;
-  if (conv.captured[generationId]) return { duplicate: true };
-  const pending = conv.pending[generationId];
-  if (!pending?.prompt || !input.text) return { skipped: true, reason: "unpaired turn" };
-  const prompt = input.prompt || pending.prompt;
-  const fingerprint = createHash("sha256").update(`${input.conversation_id}\0${generationId}\0${prompt}\0${input.text}`).digest("hex");
-  await request("/capture", {
-    user_content: prompt,
-    assistant_content: input.text,
-    session_key: cfg.sessionKey,
-    session_id: input.conversation_id,
-    messages: [
-      { role: "user", content: prompt, generation_id: generationId },
-      { role: "assistant", content: input.text, generation_id: generationId },
-    ],
-  }, { config: cfg });
-  delete conv.pending[generationId];
-  conv.captured[generationId] = { fingerprint, capturedAt: Date.now() };
-  await writeState(state, cfg);
-  return { captured: true, fingerprint };
+  return withStateLock(cfg, async () => {
+    const state = pruneState(await readState(cfg));
+    const conv = conversation(state, input.conversation_id);
+    const generationId = input.generation_id;
+    if (conv.captured[generationId]) return { duplicate: true };
+    const pending = conv.pending[generationId];
+    if (!pending?.prompt || !input.text) return { skipped: true, reason: "unpaired turn" };
+    const prompt = input.prompt || pending.prompt;
+    const fingerprint = createHash("sha256").update(`${input.conversation_id}\0${generationId}\0${prompt}\0${input.text}`).digest("hex");
+    await request("/capture", {
+      user_content: prompt,
+      assistant_content: input.text,
+      session_key: cfg.sessionKey,
+      session_id: input.conversation_id,
+      messages: [
+        { role: "user", content: prompt, generation_id: generationId },
+        { role: "assistant", content: input.text, generation_id: generationId },
+      ],
+    }, { config: cfg });
+    delete conv.pending[generationId];
+    conv.captured[generationId] = { fingerprint, capturedAt: Date.now() };
+    await writeState(state, cfg);
+    return { captured: true, fingerprint };
+  });
 }
 
 export async function sessionRecall(input, cfg = config(), request = gatewayRequest) {

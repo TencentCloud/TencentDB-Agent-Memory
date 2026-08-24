@@ -14,10 +14,8 @@ function content(value) { return { content: [{ type: "text", text: typeof value 
 
 async function call(name, args = {}) {
   if (name === "memory_status") {
-    const headers = cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : undefined;
-    const response = await fetch(`${cfg.gatewayUrl}/health`, { headers });
-    if (!response.ok) throw new Error(`Gateway ${response.status}: ${(await response.text()).slice(0, 300)}`);
-    return content({ ...(await response.json()), gateway_url: cfg.gatewayUrl, session_key: cfg.sessionKey });
+    const health = await gatewayRequest("/health", undefined, { config: cfg, method: "GET" });
+    return content({ ...health, gateway_url: cfg.gatewayUrl, session_key: cfg.sessionKey });
   }
   if (name === "memory_recall") return content((await gatewayRequest("/recall", { query: args.query, session_key: cfg.sessionKey }, { config: cfg })).context || "No relevant memory found.");
   if (name === "memory_search") return content((await gatewayRequest("/search/memories", { query: args.query, limit: args.limit, type: args.type, scene: args.scene }, { config: cfg })).results || "No memories found.");
@@ -41,7 +39,10 @@ process.stdin.on("data", async chunk => {
       if (message.method === "initialize") result = { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "tencentdb-agent-memory-cursor", version: "0.1.0" } };
       else if (message.method === "tools/list") result = { tools };
       else if (message.method === "tools/call") result = await call(message.params?.name, message.params?.arguments);
-      else throw new Error(`Method not found: ${message.method}`);
+      else {
+        if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } });
+        continue;
+      }
       if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, result });
     } catch (error) {
       if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } });

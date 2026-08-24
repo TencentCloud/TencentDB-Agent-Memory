@@ -57,6 +57,8 @@ The resulting Gateway `session_key` is `agent:<agent-id>:cursor`; the original C
 
 > `TDAI_GATEWAY_API_KEY` is a Gateway Bearer token, not a MemoryProxy business-user `user_key`. Never commit or publish credentials; rotate any credential that has been exposed.
 
+> Cursor may include `user_email` in Hook payloads. When present, the adapter sends it to the configured Gateway as `user_id` for recall and session finalization. Treat a remote Gateway as a PII processor and review its privacy and retention policy before use.
+
 ## MCP tools
 
 - `memory_status`: Gateway health and current scope

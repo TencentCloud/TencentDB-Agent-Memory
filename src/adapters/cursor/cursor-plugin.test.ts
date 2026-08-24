@@ -95,6 +95,18 @@ describe("Cursor adapter", () => {
     expect(state.conversations["conv-1"].captured["gen-1"]).toBeTruthy();
   });
 
+  it("serializes concurrent state updates from multiple Composer processes", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "tdai-cursor-"));
+    const cfg = testConfig(stateDir);
+    await Promise.all([
+      rememberPrompt({ conversation_id: "conv-a", generation_id: "gen-a", prompt: "alpha" }, cfg),
+      rememberPrompt({ conversation_id: "conv-b", generation_id: "gen-b", prompt: "beta" }, cfg),
+    ]);
+    const state = JSON.parse(await readFile(path.join(stateDir, "state.json"), "utf8"));
+    expect(state.conversations["conv-a"].pending["gen-a"].prompt).toBe("alpha");
+    expect(state.conversations["conv-b"].pending["gen-b"].prompt).toBe("beta");
+  });
+
   it("retains a pending turn when the Gateway is unavailable", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "tdai-cursor-"));
     const cfg = testConfig(stateDir);
@@ -124,5 +136,18 @@ describe("Cursor adapter", () => {
     await expect(gatewayRequest("/recall", { query: "q", session_key: cfg.sessionKey }, {
       config: cfg, fetch: fakeFetch,
     })).rejects.toThrow("EmbeddingService is unavailable");
+  });
+
+  it("aborts a hanging Gateway health request", async () => {
+    const cfg = testConfig("unused");
+    const hangingFetch = vi.fn((_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+    await expect(gatewayRequest("/health", undefined, {
+      config: cfg, fetch: hangingFetch, method: "GET", timeoutMs: 10,
+    })).rejects.toMatchObject({ name: "AbortError" });
+    expect(hangingFetch).toHaveBeenCalledWith("http://gateway.test/health", expect.objectContaining({
+      method: "GET", signal: expect.any(AbortSignal),
+    }));
   });
 });

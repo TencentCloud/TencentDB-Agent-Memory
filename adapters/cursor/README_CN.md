@@ -67,6 +67,8 @@ Gateway 中的 `session_key` 为 `agent:<agent-id>:cursor`，Cursor 原始 `conv
 
 > `TDAI_GATEWAY_API_KEY` 是 Gateway Bearer Token，不等同于 MemoryProxy 的业务用户 `user_key`。不要把任何密钥提交到仓库或粘贴到公开 Issue/PR；已暴露的密钥应立即轮换。
 
+> Cursor 的 Hook 数据可能包含 `user_email`。该字段存在时，适配器会将其作为 `user_id` 发送到配置的 Gateway，用于记忆召回和会话结束处理。远程 Gateway 会因此处理个人身份信息（PII），使用前请确认其隐私与数据保留策略。
+
 ## MCP 工具
 
 - `memory_status`：检查 Gateway 和当前记忆范围；

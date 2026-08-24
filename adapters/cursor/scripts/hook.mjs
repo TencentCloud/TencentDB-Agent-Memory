@@ -30,7 +30,11 @@ try {
     await captureResponse(input, cfg);
     process.stdout.write("{}");
   } else if (event === "sessionEnd") {
-    await gatewayRequest("/session/end", { session_key: cfg.sessionKey, user_id: input.user_email || undefined }, { config: cfg });
+    await gatewayRequest("/session/end", {
+      session_key: cfg.sessionKey,
+      session_id: input.conversation_id || input.session_id,
+      user_id: input.user_email || undefined,
+    }, { config: cfg });
     process.stdout.write("{}");
   } else {
     process.stdout.write("{}");
