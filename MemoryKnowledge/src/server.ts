@@ -139,12 +139,18 @@ async function startServer(): Promise<void> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
-// Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void startServer().catch((err) => {
+export async function runServer(): Promise<void> {
+  try {
+    await startServer();
+  } catch (err) {
     log.error("Knowledge service failed to start", {
       error: err instanceof Error ? err.message : String(err),
     });
-    process.exitCode = 1;
-  });
+    process.exit(1);
+  }
+}
+
+// Start server when run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  void runServer();
 }
