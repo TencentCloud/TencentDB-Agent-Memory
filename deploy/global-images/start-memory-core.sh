@@ -16,6 +16,11 @@ source "$SCRIPT_DIR/_lib.sh"
 load_env
 require_vars MEMORY_CORE_IMAGE MEMORY_CORE_PORT MEMORY_CORE_VOLUME
 
+CURL="${CURL:-curl}"
+if ! command -v "$CURL" >/dev/null 2>&1; then
+  die "curl not found; install curl or set CURL=/path/to/curl"
+fi
+
 # ── Gateway 内部管理凭据 ─────────────────────────────────────────
 # 用 ${VAR-default}（不是 :-default）：允许 .env 里显式设为空字符串来关闭 Bearer gate。
 #
@@ -162,13 +167,20 @@ generate_user_key() {
 
 verify_user_key() {
   local key="$1"
-  local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  local code curl_rc=0
+  local curl_error_file="/tmp/auth-verify.$$.err"
+  code=$("$CURL" -sS -o /dev/null -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
     "http://localhost:${MEMORY_CORE_PORT}/v3/meta/auth/verify" \
-    -d "$(printf '{"user_key":"%s"}' "$key")" 2>/dev/null || echo "000")
+    -d "$(printf '{"user_key":"%s"}' "$key")" 2>"$curl_error_file") || curl_rc=$?
+  if (( curl_rc != 0 )); then
+    warn "auth/verify curl failed (exit=${curl_rc}): $(head -c 200 "$curl_error_file" 2>/dev/null)"
+    rm -f "$curl_error_file"
+    return 1
+  fi
+  rm -f "$curl_error_file"
   [[ "$code" == "200" ]]
 }
 
@@ -184,12 +196,20 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_curl_error_file="/tmp/init-admin.$$.err"
+init_curl_rc=0
+init_resp=$("$CURL" -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
   "http://localhost:${MEMORY_CORE_PORT}/v3/internal/meta/user/init-admin" \
-  -d "$init_body" 2>/dev/null || echo "000")
+  -d "$init_body" 2>"$init_curl_error_file") || init_curl_rc=$?
+
+if (( init_curl_rc != 0 )); then
+  warn "init-admin curl failed (exit=${init_curl_rc}): $(head -c 200 "$init_curl_error_file" 2>/dev/null)"
+  init_resp="000"
+fi
+rm -f "$init_curl_error_file"
 
 case "$init_resp" in
   200)
