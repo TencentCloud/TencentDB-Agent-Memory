@@ -28,7 +28,7 @@ This report maps the real Cursor acceptance run to the maintainer's completion c
 | Normal memory recall | Passed | Real Cursor UI recalled existing L1 instructions concerning the CURSOR marker. |
 | Langfuse `agent_source:cursor` | Passed | Real streaming generations show `agent_source:cursor`, `protocol:openai`, and `stream` tags. |
 | Auxiliary requests bypass form/injection/archive | Not observed in this client run | No title-generation or compaction request reached the custom endpoint. Unknown non-`messages[]` shapes use the established no-side-effect auxiliary passthrough and emit a Cursor warning; unit coverage verifies this fail-open classification. A live auxiliary fixture must not be claimed until Cursor emits one. |
-| Test suite | Passed for the complete discoverable suite in this checkout | Node.js 22 container: 6 test files passed, 12 tests passed. The checkout contains exactly those six `*.test.ts`/`*.spec.ts` files. The full suite also passed twice consecutively after making the persistent-session integration test use a per-run anchor. |
+| Test suite | Passed for the complete discoverable suite in this checkout | 6 test files passed, 15 tests passed after boundary regression coverage was added. The checkout contains exactly those six `*.test.ts`/`*.spec.ts` files. |
 
 ## Type-check status
 
@@ -58,3 +58,10 @@ The Cursor mem-command implementation originally exposed an ES target mismatch t
 ## Honest limitation
 
 The temporary Quick Tunnel is acceptance infrastructure, not a production deployment recommendation. The real Cursor run did not emit a classifiable auxiliary request, so this report records that item as not observed rather than manufacturing evidence.
+
+The confirmed Cursor Proxy ingress also supplied no conversation-specific
+header. The deterministic fallback is stable for the observed conversation,
+but two fresh conversations from the same account with identical first user
+turns resolve to the same fallback ID. This protocol boundary is covered by a
+regression test and must not be described as guaranteed cross-conversation
+isolation unless Cursor later exposes a stable identifier.

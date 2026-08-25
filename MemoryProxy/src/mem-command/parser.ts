@@ -66,10 +66,9 @@ export function parseMemCommand(
   let targetMsg: any;
   if (options?.checkFirst) {
     targetMsg = messages.find((m: any) => m && m.role === "user");
-  } else {
-    // Agent clients (Cursor in particular) may append assistant/tool replay
-    // messages after the user's command. The contract is "last user message",
-    // not "last array element".
+  } else if (agentSource === "cursor") {
+    // Cursor replays assistant/tool messages after the latest user command.
+    // Keep the historic last-array-element behavior for every other client.
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const candidate = messages[index];
       if (candidate && candidate.role === "user") {
@@ -77,6 +76,8 @@ export function parseMemCommand(
         break;
       }
     }
+  } else {
+    targetMsg = messages[messages.length - 1];
   }
   if (!targetMsg || targetMsg.role !== "user") return null;
   const lastMsg = targetMsg;

@@ -142,12 +142,9 @@ function loadSessionIdsL1(sessionId: string): SessionIdFields | null {
     ? [sessionId]
     : [
         sessionId,
-        `cursor:${sessionId}`,
         `codebuddy:${sessionId}`,
         `claude-code:${sessionId}`,
-        `dsh:${sessionId}`,
-        `workbuddy:${sessionId}`,
-        `codex:${sessionId}`,
+        `cursor:${sessionId}`,
       ];
   for (const k of candidates) {
     const state = getSessionStore().get(k);

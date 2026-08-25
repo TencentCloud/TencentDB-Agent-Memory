@@ -17,4 +17,12 @@ describe("parseMemCommand", () => {
 
     expect(parsed).toMatchObject({ command: "help", args: "", rawMessage: "mem:help" });
   });
+
+  it("preserves the historic last-element behavior for non-Cursor clients", () => {
+    const parsed = parseMemCommand({ messages: [
+      { role: "user", content: "mem:help" },
+      { role: "assistant", content: "already answered" },
+    ] }, "codebuddy");
+    expect(parsed).toBeNull();
+  });
 });

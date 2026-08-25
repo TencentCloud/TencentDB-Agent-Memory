@@ -14,6 +14,7 @@ Confirmed findings:
 
 - Cursor's custom endpoint uses OpenAI Chat Completions with `messages[]`, `tools[]`, streaming, and `stream_options.include_usage`.
 - No stable conversation-specific HTTP header was observed. The adapter derives a stable fallback from the account-scoped root `user` plus the first content-block user message.
+- The fallback cannot distinguish two fresh conversations from the same account when their complete first user turns are identical; this is documented as a protocol limitation rather than guaranteed isolation.
 - Cursor's native UI tool is `AskQuestion` with `questions[].{id,prompt,options,allow_multiple}` and `options[].{id,label}`.
 - Cursor displayed ten explicit options plus `Other...`; pagination is not needed for the current four-stage form.
 - Cursor replays assistant tool calls without DeepSeek's non-standard `reasoning_content`; the adapter repairs that field without overwriting real reasoning content.
@@ -29,7 +30,8 @@ The Free IDE-side Connect/Protobuf capture is explicitly documented as non-autho
 - Repairs missing `reasoning_content` on Cursor assistant tool-call replay.
 - Makes mem-command parsing robust to Cursor's replay ordering and multi-block user content.
 - Adds Cursor-aware Memory/Skill Bridge session-key candidates.
-- Uses PowerShell-native `Invoke-RestMethod` guidance for injected bridge tools to avoid `curl` alias/quoting failures on Windows.
+- Uses Cursor-only PowerShell-native `Invoke-RestMethod` guidance for injected bridge tools, leaving existing clients' injected instructions unchanged.
+- Preserves existing non-Cursor mem parsing and bridge lookup precedence; the shared CodeBuddy state-machine branches are gated by `agentSource === "cursor"`.
 - Removes the superseded Cursor sidecar files from the upstream change.
 
 ## Real E2E result
@@ -53,10 +55,10 @@ Executed in the project's Node.js 22 runtime:
 
 ```text
 Test Files  6 passed (6)
-Tests       12 passed (12)
+Tests       15 passed (15)
 ```
 
-The complete discoverable suite passed twice consecutively. The Cursor flow integration test uses a per-run conversation anchor so a persistent dev session store cannot pollute repeat runs.
+The complete discoverable suite passes after adding boundary regression coverage. The Cursor flow integration test uses a per-run conversation anchor so a persistent dev session store cannot pollute repeat runs.
 
 `npm run typecheck` still reports six pre-existing errors in the Anthropic/Codex/config/storage surfaces. The Cursor-introduced ES target mismatch found during this work was fixed; no remaining type-check error points to a Cursor-added file or Cursor-specific changed line. See `notes/e2e-acceptance.md` for the exact list.
 

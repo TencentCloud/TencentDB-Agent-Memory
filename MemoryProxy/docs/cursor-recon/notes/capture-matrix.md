@@ -16,6 +16,17 @@
 | Root `user` body field | Same account hash | Same account hash | Same account hash | Yes | No | Account identity, not conversation identity |
 | Message-history shape | 3 messages | 5 messages | 3 messages | Evolves | Resets | Usable for fresh/history detection, not a stable ID by itself |
 
+### Conversation fallback boundary
+
+Because the confirmed Proxy ingress exposes no conversation-specific header,
+the adapter derives a deterministic fallback from the account-scoped `user`
+field and the first real user turn. This is stable while one conversation
+history grows and separates conversations whose first turns differ. It cannot
+distinguish two fresh conversations from the same account when their complete
+first user turns are identical. Until Cursor exposes a stable conversation
+identifier, deployments should treat that rare collision as a known protocol
+limitation rather than as guaranteed session isolation.
+
 ## First-frame metadata
 
 | Message index | Role | Stable signature | Present in later turns? | Classification |
