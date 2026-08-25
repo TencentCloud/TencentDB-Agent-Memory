@@ -44,6 +44,7 @@ const env = {
   OPCODE_MEMORY_API_KEY: "test-key",
   OPCODE_MEMORY_TEAM_ID: "team-x",
   OPCODE_MEMORY_AGENT_ID: "agent-y",
+  OPCODE_MEMORY_SERVICE_ID: "svc-a",
   OPCODE_MEMORY_USER_ID: "user-z",
   OPCODE_MEMORY_TIMEOUT_MS: "2000",
 };
@@ -127,7 +128,7 @@ test("session.idle persists the transcript via /v3/conversation/add", async () =
     const call = calls[0];
     assert.equal(call.method, "POST");
     assert.equal(call.url, "/v3/conversation/add");
-    assert.equal(call.headers["x-tdai-service-id"], "agent-y");
+    assert.equal(call.headers["x-tdai-service-id"], "svc-a");
     assert.equal(call.headers.authorization, "Bearer test-key");
     assert.equal(call.body.team_id, "team-x");
     assert.equal(call.body.session_id, "ses_123");
