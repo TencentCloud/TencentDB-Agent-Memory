@@ -27,6 +27,7 @@ import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, Tas
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
+import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -699,7 +700,7 @@ export class SessionStore {
       if (typeof c === "string") {
         if (
           c.startsWith("<system-reminder>") ||
-          c.startsWith("Current runtime context.") ||
+          isDshRuntimeContextSnapshot(c) ||
           c.startsWith("<system-reminder>\nA skill is a reusable")
         ) {
           continue;
