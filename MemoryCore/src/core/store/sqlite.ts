@@ -402,6 +402,7 @@ export class VectorStore implements IMemoryStore {
   private stmtQueryBySessionKeySince!: StatementSync;
   private stmtQueryAll!: StatementSync;
   private stmtQueryAllSince!: StatementSync;
+  private stmtQueryByRecordId!: StatementSync;
 
   // Prepared statements — L0 (initialized in init())
   private stmtL0UpsertMeta!: StatementSync;
@@ -1235,6 +1236,11 @@ export class VectorStore implements IMemoryStore {
       ORDER BY updated_time ASC
     `);
 
+    this.stmtQueryByRecordId = this.db.prepare(`
+      SELECT ${l1QueryCols} FROM l1_records
+      WHERE record_id = ?
+    `);
+
     this.stmtL1QueryMigrationCursor = this.db.prepare(`
       SELECT ${l1QueryCols} FROM l1_records
       WHERE record_id > ?
@@ -1789,12 +1795,16 @@ export class VectorStore implements IMemoryStore {
       return [];
     }
     try {
-      const { sessionKey, sessionId, taskId, updatedAfter } = filter ?? {};
+      const { sessionKey, sessionId, taskId, updatedAfter, recordIds } = filter ?? {};
 
       let raw: Record<string, unknown>[];
 
-      // Priority: sessionId > sessionKey (sessionId is more specific)
-      if (sessionId && updatedAfter) {
+      // Priority: recordIds (primary-key lookup) > sessionId > sessionKey
+      if (recordIds && recordIds.length > 0) {
+        raw = recordIds
+          .map((id) => this.stmtQueryByRecordId.get(id) as Record<string, unknown> | undefined)
+          .filter((row): row is Record<string, unknown> => row !== undefined);
+      } else if (sessionId && updatedAfter) {
         raw = this.stmtQueryBySessionIdSince.all(sessionId, updatedAfter) as Record<string, unknown>[];
       } else if (sessionId) {
         raw = this.stmtQueryBySessionId.all(sessionId) as Record<string, unknown>[];
