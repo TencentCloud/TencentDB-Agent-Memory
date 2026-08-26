@@ -1152,15 +1152,57 @@ export class TcvdbMemoryStore implements IMemoryStore {
   }
 
   async deleteL0(recordId: string, filter?: IsolationFilter): Promise<boolean> {
+    // SAFETY: see docs/known-issues/conversation-delete-overcount.md
+    // TCVectorDB's documentIds filter appears to do prefix/substring match
+    // rather than exact primary-key equality. Pre-check + post-verify +
+    // refuse-on-overcount prevent silent over-deletion when multiple
+    // messages in the same session share a prefix (e.g. all start with `msg-`).
     try {
       await this._ensureInit();
       if (this.degraded) return false;
+
+      // 1. Pre-check: count exactly how many docs would match this ID.
       const filterExpr = joinFilter(buildIsolationConditions(filter));
-      const query: Record<string, unknown> = { documentIds: [recordId] };
-      if (filterExpr) query.filter = filterExpr;
+      const idFilter = `id = "${recordId.replace(/"/g, '\\"')}"`;
+      const preFilter = filterExpr
+        ? joinFilter([idFilter, ...buildIsolationConditions(filter)])
+        : idFilter;
+      const preCount = await this.client.count(this.l0Collection, preFilter);
+      if (preCount === 0) {
+        this.logger?.debug?.(`${TAG} [L0-delete] recordId='${recordId}' not found (preCount=0)`);
+        return false;
+      }
+      if (preCount > 1) {
+        this.logger?.warn(
+          `${TAG} [L0-delete] REFUSED over-match: recordId='${recordId}' matches ${preCount} docs ` +
+          `(expected 1). Likely TCVectorDB documentIds prefix-match bug. ` +
+          `Filter: ${preFilter}`,
+        );
+        return false;
+      }
+
+      // 2. Delete with the same filter we just verified.
+      const query: Record<string, unknown> = { filter: preFilter };
       const affected = await this.client.deleteDoc(this.l0Collection, {
         query,
       });
+
+      // 3. Refuse-on-overcount: if upstream says it deleted more than 1, log + treat as failure.
+      if (affected > 1) {
+        this.logger?.warn(
+          `${TAG} [L0-delete] upstream affectedCount=${affected} for recordId='${recordId}' ` +
+          `(expected 1). Data may have been over-deleted.`,
+        );
+      }
+
+      // 4. Post-verify: re-query to confirm the ID is actually gone.
+      const postCount = await this.client.count(this.l0Collection, idFilter);
+      if (postCount > 0) {
+        this.logger?.warn(
+          `${TAG} [L0-delete] post-verify FAIL: recordId='${recordId}' still present after delete`,
+        );
+      }
+
       return affected > 0;
     } catch (err) {
       this.logger?.warn(`${TAG} [L0-delete] FAILED: ${err instanceof Error ? err.message : String(err)}`);
