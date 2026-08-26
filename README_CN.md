@@ -368,8 +368,8 @@ TencentDB Agent Memory 的设计站在开源社区的肩膀上：
 ## Star 趋势
 
 <p align="center">
-  <a href="https://www.star-history.com/#Tencent/TencentDB-Agent-Memory&Date">
-    <img src="https://github.com/user-attachments/assets/16753a90-8bc9-471b-819e-311947ed94f7" alt="Star History Chart" width="600" />
+  <a href="https://star-history.dera.page/#TencentCloud/TencentDB-Agent-Memory&Date">
+    <img src="https://star-history.dera.page/svg?repos=TencentCloud/TencentDB-Agent-Memory&type=Date" alt="Star History Chart" width="600" />
   </a>
 </p>
 
