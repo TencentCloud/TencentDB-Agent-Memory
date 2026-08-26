@@ -39,6 +39,7 @@ import {
 } from "./extractor.js";
 import { getLastUserMessageText } from "./cleaner.js";
 import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
+import { isDshRuntimeContextSnapshot } from "../../common/user-query-extractor.js";
 import {
   CODEX_MORE_LABEL,
   DEFAULT_GATE_PREFIX,
@@ -258,7 +259,7 @@ function isFreshCBConversation(messages: MessageArr): boolean {
     if (typeof c === "string") {
       if (
         c.startsWith("<system-reminder>") ||
-        c.startsWith("Current runtime context.")
+        isDshRuntimeContextSnapshot(c)
       ) {
         continue;
       }

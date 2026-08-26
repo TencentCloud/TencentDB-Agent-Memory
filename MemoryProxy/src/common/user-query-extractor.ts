@@ -10,8 +10,9 @@
  *
  * 抽取语义（按优先级排列）：
  *
- *   0) CC 客户端内部 prompt / tool_result 伪装 / session-init 回执整条丢弃
- *      → 返回 ""，调用方据此决定本轮不写 L0 / 不进 skill buffer
+ *   0) CC 客户端内部 prompt / tool_result 伪装 / session-init 回执，
+ *      以及 DSH 纯文本 `Current runtime context.` 快照 → 整条丢弃，返回 ""，
+ *      调用方据此决定本轮不写 L0 / 不进 skill buffer
  *
  *   1) 显式 `<user_query>...</user_query>` 块（CodeBuddy 标准 + CC 部分模板）
  *      → 只提取块内 join，即便同条消息同时含 session-init 表单也不受影响
@@ -76,6 +77,17 @@ function isClaudeCodeInternalPrompt(text: string): boolean {
 }
 
 /**
+ * DSH 把运行环境快照作为独立 `role=user` 消息追加在真实提问之后。
+ * 固定开头，与 session-init 跳过逻辑同一锚点，避免 L0 把 harness 元数据
+ * 当成用户输入。真实用户提问不会以这段英文开头。
+ */
+export const DSH_RUNTIME_CONTEXT_PREFIX = "Current runtime context.";
+
+export function isDshRuntimeContextSnapshot(text: string): boolean {
+  return text.trimStart().startsWith(DSH_RUNTIME_CONTEXT_PREFIX);
+}
+
+/**
  * 从原始 user content 文本抽取用户真实键入。
  *
  * 返回空字符串意味着"这条 user message 全是 harness 噪声"，调用方应据此
@@ -89,6 +101,9 @@ export function extractUserQueryText(raw: string): string {
   //    这是最高优先级：即便同时含 <user_query> 也整条判定为非人类输入。
   //    真实用户输入不会命中这些锚定在开头/整串的模式。
   if (isClaudeCodeInternalPrompt(raw)) return "";
+  // DSH runtime-context 快照：纯文本、无 XML wrapper，必须整条丢弃，
+  // 否则 extractLatestUserMessage 从后往前扫会把它当成真实提问写入 L0。
+  if (isDshRuntimeContextSnapshot(raw)) return "";
 
   // 1) 优先：显式 <user_query> 块（即便同一条消息里还夹着 session-init 问答，
   //    也只取真实 query，用户输入完整保留）。
