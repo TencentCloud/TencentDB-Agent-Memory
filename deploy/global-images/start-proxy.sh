@@ -73,6 +73,12 @@ fi
 
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
+# Gateway externo que se inyecta a los agentes (URL accesible DESDE el host macOS).
+# Si no esta definida, se deriva del puerto del proxy — evita divergencia entre vars.
+# Vacia => el proxy autocalcula una URL interna de Docker inaccesible desde el host
+# (incidente 2026-08-26); por eso .env de este deploy la define explicitamente.
+PROXY_EXTERNAL_GATEWAY_URL="${PROXY_EXTERNAL_GATEWAY_URL:-http://127.0.0.1:${PROXY_PORT}}"
+
 info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
@@ -131,6 +137,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL}"
   injectors:
     - skill
     - knowledge
