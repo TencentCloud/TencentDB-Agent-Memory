@@ -58,7 +58,7 @@ cp .env.example .env && $EDITOR .env
 ## 提交流程
 
 1. Fork 仓库
-2. 从 `master` 或最新的 `develop_*` 分支切出 feature 分支
+2. 从你要提交的目标分支切出 feature 分支（见下方[分支说明](#分支说明)）
    ```bash
    git checkout -b fix/xxx-issue
    ```
@@ -68,9 +68,21 @@ cp .env.example .env && $EDITOR .env
    npm test          # 或 pnpm test
    ```
 4. 提交（Conventional Commits + DCO 签名，见下文）
-5. 推到 fork，发起 PR 到 `develop_server_team` 或 `master`（按维护者最新
-   指示）
+5. 推到 fork，发起 PR 到对应的目标分支（见下方[分支说明](#分支说明)）
 6. 通过 CI + Review 后合并
+
+### 分支说明
+
+仓库维护三条长期分支：
+
+| 分支 | 说明 |
+|------|------|
+| `feat/server_team` | 默认分支 |
+| `feat/server` | |
+| `main` | CI（`.github/workflows/pr-ci.yml`）目前只在这条分支上触发 |
+
+请提到你的改动实际所属的分支，并在 PR 描述里说明是否同样适用于另外两条 ——
+目前三条分支都需要时，改动是分别落到每条分支上的。
 
 ## Commit 规范
 
