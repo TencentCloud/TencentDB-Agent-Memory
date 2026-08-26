@@ -52,6 +52,7 @@ import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js"
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
+import { isSessionInitToolCallId } from "./session/claude-code/form.js";
 import {
   enforceRateLimit,
   isRateLimitExceededError,
@@ -312,6 +313,84 @@ export function sanitizeThinkingBlocks(
 }
 
 /**
+ * Strip session-init form artifacts from the message history before forwarding.
+ *
+ * Root cause (PR #963): sessionInit synthesizes an `AskUserQuestion` tool_use
+ * response whose id carries the `toolu_cc_session_init_` prefix. That synthetic
+ * tool_use has NO thinking block. When the client later replies with its
+ * tool_result, the assistant + tool messages get retained in the history and
+ * forwarded upstream. DeepSeek's Anthropic-compatible endpoint (extended
+ * thinking mode) rejects any assistant tool_use that lacks a signed thinking
+ * block → HTTP 400 `The content[].thinking in the thinking mode must be passed
+ * back to the API.`
+ *
+ * This drops synthetic session-init messages while leaving real conversation
+ * messages untouched:
+ *   - assistant messages containing a session-init tool_use → dropped
+ *   - user/tool messages whose tool_result references a session-init id → block
+ *     removed (real text blocks kept)
+ *   - everything else → identity
+ */
+export function stripSessionInitArtifacts(
+  body: Record<string, unknown>,
+): { body: Record<string, unknown>; removed: number } {
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return { body, removed: 0 };
+
+  let removed = 0;
+  const out: unknown[] = [];
+
+  for (const raw of messages) {
+    const msg = raw as Record<string, unknown>;
+    const content = msg.content;
+    if (typeof msg.role !== "string") {
+      out.push(raw);
+      continue;
+    }
+
+    // Assistant: drop the whole message if it carries a session-init tool_use.
+    if (msg.role === "assistant" && Array.isArray(content)) {
+      const hasInitToolUse = (content as unknown[]).some((b) => {
+        const blk = b as Record<string, unknown>;
+        return blk.type === "tool_use" && isSessionInitToolCallId(String(blk.id ?? ""));
+      });
+      if (hasInitToolUse) {
+        removed += 1;
+        continue;
+      }
+      out.push(raw);
+      continue;
+    }
+
+    // User / tool: strip tool_result blocks that reference a session-init id,
+    // keep the rest of the content (real text blocks survive).
+    if ((msg.role === "user" || msg.role === "tool") && Array.isArray(content)) {
+      const newContent = (content as unknown[]).filter((b) => {
+        const blk = b as Record<string, unknown>;
+        if (blk.type !== "tool_result") return true;
+        if (isSessionInitToolCallId(String(blk.tool_use_id ?? ""))) {
+          removed += 1;
+          return false;
+        }
+        return true;
+      });
+      if (newContent.length === (content as unknown[]).length) {
+        out.push(raw);
+      } else if (newContent.length > 0) {
+        out.push({ ...msg, content: newContent });
+      }
+      // All content removed → drop the message entirely.
+      continue;
+    }
+
+    out.push(raw);
+  }
+
+  if (removed === 0) return { body, removed: 0 };
+  return { body: { ...body, messages: out }, removed };
+}
+
+/**
  * Build upstream body from original body + cost guard overrides.
  */
 function buildUpstreamBody(
@@ -323,7 +402,8 @@ function buildUpstreamBody(
     result = { ...result, ...target.bodyOverrides };
   }
   const sanitized = sanitizeThinkingBlocks(result);
-  return { body: sanitized.body, sanitizedCount: sanitized.removed };
+  const stripped = stripSessionInitArtifacts(sanitized.body);
+  return { body: stripped.body, sanitizedCount: sanitized.removed };
 }
 
 /**
@@ -1381,7 +1461,7 @@ export async function handleAnthropicMessages(
     delete originalHeaders["authorization"];
   }
 
-  const retryBody = sanitizeThinkingBlocks(body).body;
+  const retryBody = stripSessionInitArtifacts(sanitizeThinkingBlocks(body).body).body;
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
