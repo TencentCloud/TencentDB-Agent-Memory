@@ -84,6 +84,24 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  agents:
+    # OpenAI 协议 Agent —— 需要单独的 OpenAI 端点
+    workbuddy:
+      url: "${PROXY_UPSTREAM_OPENAI_URL:-${PROXY_UPSTREAM_URL//anthropic/openai}}"
+      apiKey: "${PROXY_UPSTREAM_OPENAI_API_KEY:-${PROXY_UPSTREAM_API_KEY}}"
+    codebuddy:
+      url: "${PROXY_UPSTREAM_OPENAI_URL:-${PROXY_UPSTREAM_URL//anthropic/openai}}"
+      apiKey: "${PROXY_UPSTREAM_OPENAI_API_KEY:-${PROXY_UPSTREAM_API_KEY}}"
+    dsh:
+      url: "${PROXY_UPSTREAM_OPENAI_URL:-${PROXY_UPSTREAM_URL//anthropic/openai}}"
+      apiKey: "${PROXY_UPSTREAM_OPENAI_API_KEY:-${PROXY_UPSTREAM_API_KEY}}"
+    opencode:
+      url: "${PROXY_UPSTREAM_OPENAI_URL:-${PROXY_UPSTREAM_URL//anthropic/openai}}"
+      apiKey: "${PROXY_UPSTREAM_OPENAI_API_KEY:-${PROXY_UPSTREAM_API_KEY}}"
+    # Responses API Agent（/v1/responses）
+    codex:
+      url: "${PROXY_UPSTREAM_OPENAI_URL:-${PROXY_UPSTREAM_URL//anthropic/openai}}"
+      apiKey: "${PROXY_UPSTREAM_OPENAI_API_KEY:-${PROXY_UPSTREAM_API_KEY}}"
 
 log:
   file: ""
@@ -140,13 +158,22 @@ redis:
   enabled: false
 YAML
 
+PROXY_VOLUME="${PROXY_VOLUME:-tdai-proxy-data}"
+# 确保 proxy 数据卷存在（session 状态、SQLite 等）
+if ! $DOCKER volume inspect "$PROXY_VOLUME" >/dev/null 2>&1; then
+  info "创建 proxy 数据卷 $PROXY_VOLUME"
+  $DOCKER volume create "$PROXY_VOLUME" >/dev/null
+fi
+
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
+  --restart unless-stopped \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  -v "$PROXY_VOLUME:/data/tdai-memory-proxy" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90
