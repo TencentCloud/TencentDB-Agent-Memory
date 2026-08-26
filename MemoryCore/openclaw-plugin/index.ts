@@ -11,6 +11,7 @@
  */
 
 import { MemoryClient, createMemoryFileReader } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
+import { isAgentAllowed, type AgentFilterConfig } from "./src/agent-filter.js";
 import { performRecall } from "./src/hooks/recall.js";
 import { performCapture } from "./src/hooks/capture.js";
 import { handleMemorySearch } from "./src/tools/memory-search.js";
@@ -41,6 +42,7 @@ interface PluginConfig {
   server?: ServerConfig;
   recall?: RecallConfig;
   capture?: CaptureConfig;
+  agentFilter?: AgentFilterConfig;
 }
 
 // Matches OpenClaw plugin register() signature: export default function register(api)
@@ -50,6 +52,7 @@ export default function register(api: any) {
   const server = cfg.server ?? {};
   const recall = cfg.recall ?? {};
   const capture = cfg.capture ?? {};
+  const agentFilter = cfg.agentFilter ?? {};
 
   const serverUrl = server.url || "http://127.0.0.1:8420";
   const apiKey = server.apiKey || "local";
@@ -62,6 +65,16 @@ export default function register(api: any) {
   const includeSceneNav = recall.includeSceneNav !== false;
   const captureEnabled = capture.enabled !== false;
   const rejectUnauthorized = server.rejectUnauthorized !== false;
+
+  const shouldHandleAgent = (ctx: any): boolean =>
+    isAgentAllowed(ctx?.agentId, agentFilter);
+
+  const registerScopedTool = (tool: any, options: any) => {
+    api.registerTool(
+      (ctx: any) => (shouldHandleAgent(ctx) ? tool : null),
+      options,
+    );
+  };
 
   // ── Initialize v3 SDK ──
   // Isolation (team/agent/user) is required by Gateway /v3/*; sessionId may be
@@ -93,7 +106,7 @@ export default function register(api: any) {
 
   // ── Register Tools (same pattern as extensions/memory-tencentdb/index.ts) ──
 
-  api.registerTool(
+  registerScopedTool(
     {
       name: "tdai_memory_search",
       label: "Memory Search",
@@ -116,7 +129,7 @@ export default function register(api: any) {
     { name: "tdai_memory_search" },
   );
 
-  api.registerTool(
+  registerScopedTool(
     {
       name: "tdai_conversation_search",
       label: "Conversation Search",
@@ -138,7 +151,7 @@ export default function register(api: any) {
     { name: "tdai_conversation_search" },
   );
 
-  api.registerTool(
+  registerScopedTool(
     {
       name: "tdai_read_cos",
       label: "Read Memory File",
@@ -176,6 +189,13 @@ export default function register(api: any) {
   const sessionCursors = new Map<string, number>();
 
   api.on("before_prompt_build", async (event: any, ctx: any) => {
+    if (!shouldHandleAgent(ctx)) {
+      api.logger.debug?.(
+        `${TAG} [before_prompt_build] skipped agent=${ctx?.agentId ?? "(unknown)"}`,
+      );
+      return;
+    }
+
     const sessionKey = ctx?.sessionKey;
     if (!sessionKey) return;
 
@@ -217,6 +237,13 @@ export default function register(api: any) {
   if (captureEnabled) {
     api.logger.info?.(`${TAG} Registering agent_end hook for auto-capture`);
     api.on("agent_end", async (event: any, ctx: any) => {
+      if (!shouldHandleAgent(ctx)) {
+        api.logger.debug?.(
+          `${TAG} [agent_end] skipped agent=${ctx?.agentId ?? "(unknown)"}`,
+        );
+        return;
+      }
+
       const startMs = Date.now();
       const sessionKey = ctx?.sessionKey;
       const messages = (event?.messages ?? []) as unknown[];
