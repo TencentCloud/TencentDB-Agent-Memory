@@ -730,25 +730,45 @@ export async function handleChatCompletions(
   if (_dshHeadless) {
     console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
   }
+  // ── Pi 零代码 / 无 Form 策略 ────────────────────────────────────────────
+  //
+  // Pi 只通过 `~/.pi/agent/models.json` 即可把 OpenAI-compatible 模型指向
+  // MemoryProxy，不需要扩展。依赖两项 Pi 原生配置：
+  //
+  //   1. Provider `headers` 携带静态 Team / Agent / Task preset；
+  //   2. `compat.sendSessionAffinityHeaders=true` + `openrouter` 格式发送
+  //      逐会话 `x-session-id`，现有 resolveConversationId() 已原生支持。
+  //
+  // Pi 没有内置 question tool。若 Proxy 伪造 Form tool_call，未安装扩展的客户端会
+  // 按 unknown tool 失败，也违背零代码接入约束。因此 Pi 在所有运行模式都按无 Form
+  // 客户端处理：完整 preset 仍走共享状态机直接注册，已有终态 binding 仍可恢复并
+  // 注入；其余初始化结果只 bypass 当前请求，绝不能持久化到整个 Session。
+  const _piNoForm = agentSource === "pi";
+  let _piRequestBypassed = false;
 
   // ── mem:session-reset pre-hook ──
   // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
   // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
   // 直接返回"不支持"文案。
   const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
-  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
+  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless || _piNoForm;
   if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
       console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
-      const msg = _headerOnlyAgents.has(agentSource)
+      let msg = _headerOnlyAgents.has(agentSource)
         ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
           + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
           + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
         : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
           + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
           + "请在带 ask_user_question preset 的 dsh 环境下使用。";
+      if (_piNoForm) {
+        msg = "mem:session-reset 不支持 Pi 客户端。\n\n"
+          + "Pi 通过 models.json 中的 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n"
+          + "请修改 Pi Provider 的静态请求头后，新建会话以切换 Team / Agent / Task。";
+      }
       return buildMemResponse(msg, {
         protocol: "openai",
         stream: isStream,
@@ -756,7 +776,7 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_piNoForm && !_headerOnlyAgents.has(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
@@ -868,7 +888,17 @@ export async function handleChatCompletions(
       const needsPrewarm =
         recovered?.__recoverySource === "l2b" ||
         recovered?.__recoverySource === "history-scan";
-      if (recovered && isTerminalState) {
+      const hasCompletePreset = Boolean(presetIdentity?.teamId && presetIdentity.agentId && presetIdentity.taskId);
+      if (_piNoForm && !isTerminalState && !hasCompletePreset) {
+        // 静态身份不完整时，无 Form 客户端不可能完成注册。这里不进入状态机，否则
+        // Pi 后续轮次会持续消耗 retry，最终把 bypass 错误持久化到整个 Session。
+        _piRequestBypassed = true;
+        injectedSkipped = true;
+        initResult = {
+          intercepted: false,
+          messages: (body.messages as Array<Record<string, unknown>>) ?? [],
+        };
+      } else if (recovered && isTerminalState) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
         // 用户对话永远保留原样，包括 session_init form 交互 — 不做任何删除。
@@ -924,19 +954,39 @@ export async function handleChatCompletions(
           spaceId,
           presetIdentity,
         );
+        if (
+          _piNoForm &&
+          !isTerminalState &&
+          !initResult.intercepted &&
+          (initResult.bypassed || !initResult.sessionInfo)
+        ) {
+          // preset 无效或资产列表为空时，状态机可能不返回 Form 而直接落 bypass；
+          // Pi 同样必须把该结果限制在当前请求，并恢复进入状态机前的状态。
+          if (recovered) await store.set(compositeKey, recovered);
+          else store.delete(compositeKey);
+          _piRequestBypassed = true;
+          injectedSkipped = true;
+        }
       }
 
       // Case 1: Fake form returned → must not forward
       if (initResult.intercepted && initResult.response) {
-        return initResult.response;
+        if (!_piNoForm) return initResult.response;
+        // Header 字段齐全但校验失败时仍可能产出 Form。Pi 无法执行该 Form，因此恢复
+        // 请求前状态，避免无 UI 流量消耗 retry 或覆盖已进行中的交互状态。
+        if (recovered) await store.set(compositeKey, recovered);
+        else store.delete(compositeKey);
+        _piRequestBypassed = true;
+        injectedSkipped = true;
+        console.log(`[session-init] session=${sessionKey} pi no-form → suppressing interactive form for this request`);
       }
 
       console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} resetFlow=${(initResult as any).resetFlow} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
       // 见 anthropicHandler 对称位置：只在真正走 sessionInit state machine 时继承。
-      if (wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
+      if (!_piRequestBypassed && wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
 
       // Case 1.5: Bypass path → skip ALL injection hooks
-      if (initResult.bypassed) {
+      if (!_piRequestBypassed && initResult.bypassed) {
         injectedSkipped = true;
         console.log(`[session-init] session=${sessionKey} bypassed → skipping all injection`);
         if (initResult.resetFlow) {
@@ -944,7 +994,7 @@ export async function handleChatCompletions(
         }
       }
 
-      if (!initResult.bypassed && initResult.sessionInfo) {
+      if (!_piRequestBypassed && !initResult.bypassed && initResult.sessionInfo) {
         try {
           const { fetchAssetCapabilities } = await import("./tdai/capabilities.js");
           assetCapabilities = await fetchAssetCapabilities({
@@ -1008,6 +1058,7 @@ export async function handleChatCompletions(
       // the pipeline ran before the cache was populated, silently injecting
       // zero blocks for the entire first turn.
       if (
+        !_piRequestBypassed &&
         !initResult.bypassed &&
         initResult.justRegistered &&
         initResult.sessionInfo &&
@@ -1039,12 +1090,12 @@ export async function handleChatCompletions(
       }
 
       // Case 2: Messages were cleaned → update body
-      if (initResult.messages) {
+      if (!_piRequestBypassed && initResult.messages) {
         body = { ...body, messages: initResult.messages };
         messages = initResult.messages as unknown[];
       }
 
-      sessionInfo = initResult.sessionInfo as Record<string, unknown> | null | undefined;
+      sessionInfo = _piRequestBypassed ? undefined : initResult.sessionInfo as Record<string, unknown> | null | undefined;
       // Belt-and-suspenders: also restore on the local `sessionInfo` alias.
       // In practice this is the same object reference as
       // `initResult.sessionInfo` (already restored above), but the second
@@ -1108,7 +1159,7 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_piRequestBypassed) {
     const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1221,7 +1272,7 @@ export async function handleChatCompletions(
   }
 
   // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  const tdaiClient = isAuxiliary || _dshHeadless || _piRequestBypassed || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1577,7 +1628,7 @@ export async function handleChatCompletions(
       sessionKeyForSkill: sessionKey,
       agentSource,
       isAuxiliary,
-      isDshHeadless: _dshHeadless,
+      skipExtraction: _dshHeadless || _piRequestBypassed,
       sessionInfo,
       lf,
       spaceId,
@@ -1787,7 +1838,7 @@ export async function handleChatCompletions(
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
   // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
+  if (!isAuxiliary && !_dshHeadless && !_piRequestBypassed && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1890,9 +1941,12 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
-  isDshHeadless: boolean;
+  /**
+   * main 请求仍需纯透传时为 true：包括缺少 question tool 的 dsh，以及没有可恢复
+   * binding 或完整 Header preset 的 Pi。下游 L0 / Skill 写入必须复用转发前的同一
+   * 判定，避免出现“未注入但仍回流”的半开启状态。
+   */
+  skipExtraction: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2208,7 +2262,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
     // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    if (!ctx.isAuxiliary && !ctx.skipExtraction && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2220,7 +2274,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (!ctx.isAuxiliary && !ctx.skipExtraction) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 

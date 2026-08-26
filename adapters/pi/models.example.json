@@ -1,0 +1,35 @@
+{
+  "providers": {
+    "tdai-memory": {
+      "baseUrl": "http://127.0.0.1:8096/pi/<space-id>/v1",
+      "api": "openai-completions",
+      "apiKey": "$TDAI_MEMORY_USER_KEY",
+      "authHeader": true,
+      "headers": {
+        "x-team-id": "$TDAI_MEMORY_TEAM_ID",
+        "x-agent-id": "$TDAI_MEMORY_AGENT_ID",
+        "x-task-id": "$TDAI_MEMORY_TASK_ID"
+      },
+      "compat": {
+        "sendSessionAffinityHeaders": true,
+        "sessionAffinityFormat": "openrouter"
+      },
+      "models": [
+        {
+          "id": "<upstream-model-id>",
+          "name": "<upstream-model-id> via TencentDB Agent Memory",
+          "reasoning": false,
+          "input": ["text", "image"],
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    }
+  }
+}
