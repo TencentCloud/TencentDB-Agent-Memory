@@ -631,6 +631,7 @@ export const enUS = {
     'This memory has been set to private by its owner and cannot be allocated to other Agents',
   'memory.import': 'Import Memory',
   'memory.import.tooltip.noAgent': 'No agent in the current team. Please create an agent first.',
+  'memory.refresh': 'Refresh',
   'memory.blockList': 'Memory Blocks',
   'memory.blockCount': '{{filtered}} items',
   'memory.empty.filtered': 'No matching memory blocks.',
