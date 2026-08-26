@@ -566,6 +566,13 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   isDegraded(): boolean;
   getCapabilities(): StoreCapabilities;
   close(): void;
+  /**
+   * Whether close() has been called. Optional: only stores holding closable
+   * resources (e.g. SQLite) implement it. Used by initStores() to detect a
+   * cached store that was closed outside the normal reset path (restart /
+   * compaction races) and re-initialize instead of reusing a dead handle.
+   */
+  isClosed?(): boolean;
 
   // ── L1 Write ─────────────────────────────────────────────
 

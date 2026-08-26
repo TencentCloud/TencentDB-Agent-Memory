@@ -245,12 +245,31 @@ export interface StoreInitResult {
 const _storeInitCache = new Map<string, Promise<StoreInitResult>>();
 
 /**
+ * Whether a cached init result is no longer usable and must be rebuilt:
+ * - the init failed (the catch path in _doInitStores returns
+ *   `vectorStore: undefined`), or
+ * - the store was closed after it entered the cache (restart / compaction
+ *   races that bypass the gateway_stop → resetStores path).
+ */
+function isStaleBundle(bundle: StoreInitResult): boolean {
+  const store = bundle.vectorStore;
+  if (!store) return true;
+  if (typeof store.isClosed === "function" && store.isClosed()) return true;
+  return false;
+}
+
+/**
  * Initialize store backend and (optionally) EmbeddingService.
  *
  * **Once-async semantics per dataDir**: the first call for a given
  * `pluginDataDir` creates the store and caches the result; subsequent
  * calls with the same dir return the cached Promise immediately.
  * Call `resetStores()` during shutdown to clear the cache.
+ *
+ * **Self-healing**: a failed init bundle is evicted once it resolves so the
+ * next call retries initialization, and a cached bundle whose store was
+ * closed behind our back is transparently rebuilt (see issue #1155).
+ * Concurrent callers still share the same in-flight promise.
  *
  * Supports both SQLite (sync init) and TCVDB (async init) backends.
  */
@@ -260,10 +279,29 @@ export function initStores(
   logger: PipelineLogger,
 ): Promise<StoreInitResult> {
   const key = pluginDataDir;
-  if (!_storeInitCache.has(key)) {
-    _storeInitCache.set(key, _doInitStores(cfg, pluginDataDir, logger));
+  const cached = _storeInitCache.get(key);
+  if (cached) {
+    return cached.then((bundle) => {
+      if (!isStaleBundle(bundle)) return bundle;
+      // Only evict if the cache still points at this exact promise, so a
+      // concurrent rebuild is never clobbered.
+      if (_storeInitCache.get(key) === cached) _storeInitCache.delete(key);
+      logger.warn?.(
+        `${TAG} Cached store for "${key}" is unusable (failed init or closed store) — re-initializing`,
+      );
+      return initStores(cfg, pluginDataDir, logger);
+    });
   }
-  return _storeInitCache.get(key)!;
+  const promise = _doInitStores(cfg, pluginDataDir, logger);
+  _storeInitCache.set(key, promise);
+  // A failed bundle is still delivered to current callers (unchanged failure
+  // semantics), but it is evicted afterwards so the next call retries.
+  void promise.then((bundle) => {
+    if (isStaleBundle(bundle) && _storeInitCache.get(key) === promise) {
+      _storeInitCache.delete(key);
+    }
+  });
+  return promise;
 }
 
 /**
