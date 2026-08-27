@@ -5,10 +5,10 @@ import { extractUserQueryText } from "../common/user-query-extractor.js";
 /**
  * 从最后一条 user 消息中抽取「真正的用户提问」，写入 L0。
  *
- * 背景：CodeBuddy / Claude Code 等编码 agent 的 user 消息里除了真实问题，
- * 还塞了大量 harness 上下文（<additional_data> 打开的文件、current_time、
- * <system_reminder> 等）。如果把整条消息原样写进 L0，记忆会被这些噪声污染，
- * 而且每轮都不一样、检索价值极低。因此这里只保留 <user_query> 正文。
+ * 背景：CodeBuddy / Claude Code / DSH 等编码 agent 的 user 消息里除了真实问题，
+ * 还塞了大量 harness 上下文（<additional_data>、current_time、<system_reminder>、
+ * DSH 的 `Current runtime context.` 快照等）。如果把整条消息原样写进 L0，记忆
+ * 会被这些噪声污染，而且每轮都不一样、检索价值极低。因此这里只保留真实提问。
  *
  * 抽取算法在 `common/user-query-extractor.ts` 内实现（tdai / mem-command /
  * codebuddy adapter 共用同一份，避免语义漂移）；本模块只负责"取最后一条

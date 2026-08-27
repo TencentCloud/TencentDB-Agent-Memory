@@ -123,6 +123,30 @@
   color: var(--tea-color-text-primary);
 }
 
+/* ===== 使用说明按钮 ===== */
+._memory-global-header-guide-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tea-color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+._memory-global-header-guide-btn:hover {
+  background: var(--tea-color-bg-secondary-hover);
+  color: var(--tea-color-text-primary);
+}
+
+._memory-global-header-guide-btn.is-active {
+  background: var(--tea-color-bg-brand-lighten-default);
+  color: var(--tea-color-text-brand-default);
+  font-weight: 500;
+}
+
 /* ===== Profile Modal：tea Avatar + Justify + 描述型分块 ===== */
 
 ._memory-profile-identity {
@@ -182,4 +206,18 @@
   margin-top: 6px;
   font-size: 11px;
   line-height: 16px;
+}
+
+/* 修复 tea InputAdornment 默认 display:inline-block 导致的 Input 撑不开
+   （历史上 InputAdornment + size="full" 的 Input 实际宽度按内容收缩，
+   右侧 Copy 图标被孤立悬空）。改为块级容器并让内部 Input 自适应。 */
+._memory-profile-input-adornment {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+._memory-profile-input-adornment > input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
 }

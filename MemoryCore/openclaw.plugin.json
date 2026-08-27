@@ -150,7 +150,8 @@
           "apiKey": { "type": "string", "description": "API Key" },
           "model": { "type": "string", "default": "gpt-4o", "description": "模型名称（如 gpt-4o, deepseek-v3, claude-sonnet-4-6）" },
           "maxTokens": { "type": "number", "default": 4096, "description": "最大输出 token 数" },
-          "timeoutMs": { "type": "number", "default": 120000, "description": "请求超时（毫秒）" }
+          "timeoutMs": { "type": "number", "default": 120000, "description": "请求超时（毫秒）" },
+          "stream": { "type": "boolean", "default": false, "description": "是否用流式请求(streamText)调用上游。默认 false(非流式)。个别只接受流式请求的 OpenAI 兼容上游需置 true。⚠️ 仅在启用独立 LLM(llm.enabled=true)时生效；未启用时走 OpenClaw host runner，此开关被忽略。" }
         }
       },
       "offload": {
@@ -161,6 +162,7 @@
           "mode": { "type": "string", "enum": ["local", "backend", "client", "collect"], "description": "Offload 运行模式：local（本地 LLM 处理）、backend（走 backendUrl 远端 v1 服务）、client（复用 server.url 远端 offload v2 服务）、collect（仅数据采集，不压缩）。未设置时自动推导：有 backendUrl → backend，有 server.url → client，否则 → local" },
           "model": { "type": "string", "description": "【local 模式】Offload 使用的 LLM 模型（格式: provider/model），未填写时使用 openclaw 默认模型" },
           "temperature": { "type": "number", "default": 0.2, "description": "【local 模式】LLM 温度参数" },
+          "stream": { "type": "boolean", "default": false, "description": "【仅 mode=local 生效】是否用流式请求(streamText)调用上游。默认 false(非流式)。个别只接受流式请求的 OpenAI 兼容上游需置 true。backend/client/collect 模式由远端 offload server 主导调用，此开关被忽略。" },
           "forceTriggerThreshold": { "type": "number", "default": 4, "description": "【local 模式】累积多少个 tool pair 后强制触发 L1" },
           "dataDir": { "type": "string", "description": "【local 模式】自定义数据目录（绝对路径），默认 ~/.openclaw/context-offload" },
           "defaultContextWindow": { "type": "number", "default": 200000, "description": "默认上下文窗口大小" },

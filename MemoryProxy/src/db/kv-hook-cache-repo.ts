@@ -41,29 +41,29 @@ function keyOf(
 export class KvHookCacheRepo implements HookCacheRepo {
   constructor(private readonly storage: ProxyStorage) {}
 
-  put(
+  async put(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
     hookId: string,
     blocks: ContextBlock[],
-  ): void {
-    this.storage
+  ): Promise<void> {
+    await this.storage
       .putJSON(keyOf(spaceId, userId, agentSource, sessionId, hookId), blocks)
       .catch(() => { /* silent */ });
   }
 
-  putMany(
+  async putMany(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
     entries: HookCacheEntry[],
-  ): void {
+  ): Promise<void> {
     if (entries.length === 0) return;
     // 并发 PUT —— 保持 wall-clock ≈ 单次 PUT，而不是 N 倍串行
-    void Promise.all(
+    await Promise.all(
       entries.map((e) =>
         this.storage
           .putJSON(keyOf(spaceId, userId, agentSource, sessionId, e.hookId), e.blocks)
@@ -116,13 +116,13 @@ export class KvHookCacheRepo implements HookCacheRepo {
     }
   }
 
-  clearBySession(
+  async clearBySession(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
-  ): void {
-    this.storage
+  ): Promise<void> {
+    await this.storage
       .delPrefix(hookDir(spaceId, userId, agentSource, sessionId))
       .catch(() => { /* silent */ });
   }

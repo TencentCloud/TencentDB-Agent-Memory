@@ -289,6 +289,11 @@ PersonaMem 检验Agent 能否在长期交互后正确理解和运用用户信息
 - [Roadmap](./ROADMAP_CN.md)（我们接下来在做什么；English: [ROADMAP.md](./ROADMAP.md)）
 - [数据迁移工具（v2 → v3）](./MemoryCore/scripts/migrate-v2-to-v3/README_CN.md)（如果在用旧版并想迁移存量数据）
 - [Knowledge OpenAPI](./MemoryKnowledge/openapi.yaml)
+- **API 文档**：
+  - [Memory Core v3 API](./MemoryCore/v3-api-memorycore-doc.md)
+  - [Memory Knowledge v3 API](./MemoryKnowledge/v3-api-memoryknowledge-doc.md)
+  - [Memory Proxy v3 API](./MemoryProxy/v3-api-memoryproxy-doc.md)
+  - [Memory Panel API](./MemoryPanel/panel-api-doc.md)
 - [贡献指南](./CONTRIBUTING_CN.md)
 
 Agent Memory 还没有标准答案。Bug、文档、Benchmark、新框架适配，或者一个你觉得更好玩的 Memory Hub 用法，都欢迎。

@@ -6,14 +6,15 @@
  */
 import { createHashRouter, type RouteObject } from 'react-router-dom';
 import { ConsoleLayout } from '@/layouts/ConsoleLayout';
-import { WorkbenchPage } from '@/pages/workbench/WorkbenchPage';
-import { WikiPage } from '@/pages/wiki/WikiPage';
-import { CodePage } from '@/pages/code/CodePage';
-import { SkillsPage } from '@/pages/skills/SkillsPage';
-import { ChatMemoryPage } from '@/pages/memory/ChatMemoryPage';
-import { MembersPage } from '@/pages/team/MembersPage';
-import { AgentsPage } from '@/pages/team/AgentsPage';
-import { ApiKeysPage } from '@/pages/team/ApiKeysPage';
+import { WorkbenchPage } from '@/pages/WorkbenchPage';
+import { WikiPage } from '@/pages/WikiPage';
+import { CodePage } from '@/pages/CodePage';
+import { SkillsPage } from '@/pages/SkillsPage';
+import { ChatMemoryPage } from '@/pages/ChatMemoryPage';
+import { MembersPage } from '@/pages/MembersPage';
+import { AgentsPage } from '@/pages/AgentsPage';
+import { ApiKeysPage } from '@/pages/ApiKeysPage';
+import { GuidePage } from '@/pages/GuidePage';
 
 export const routes: RouteObject[] = [
   {
@@ -28,6 +29,7 @@ export const routes: RouteObject[] = [
       { path: 'team/members', element: <MembersPage /> },
       { path: 'team/agents', element: <AgentsPage /> },
       { path: 'team/api-keys', element: <ApiKeysPage /> },
+      { path: 'guide', element: <GuidePage /> },
     ],
   },
 ];

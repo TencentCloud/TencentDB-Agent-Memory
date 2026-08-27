@@ -48,6 +48,8 @@ export const META_ACTIONS = [
   'agent/delete',
   'agent/list',
   'agent/archive',
+  'agent/set-default-template',
+  'agent/get-default-template',
   'task/create',
   'task/get',
   'task/update',

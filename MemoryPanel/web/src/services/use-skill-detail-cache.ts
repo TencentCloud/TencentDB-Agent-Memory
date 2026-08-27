@@ -16,7 +16,7 @@
  */
 
 import { useRef, useState, useCallback } from 'react';
-import { getSkill } from '@/lib/skill-api';
+import { getSkill } from '@/lib/api/skill-api';
 
 export interface CachedSkillDetail {
   version: number;

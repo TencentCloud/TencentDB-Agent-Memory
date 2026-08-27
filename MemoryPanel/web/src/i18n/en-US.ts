@@ -26,6 +26,7 @@ export const enUS = {
   'menu.desc.api_keys': 'Manage your API keys for external clients',
 
   // ===== GlobalHeader =====
+  'header.guide': 'Guide',
   'header.sync': 'Live Sync',
   'header.sync.title': 'Real-time sync is connected',
   'header.settings': 'Settings',
@@ -60,11 +61,20 @@ export const enUS = {
   'teamSwitcher.cancel': 'Cancel',
   'teamSwitcher.create': 'Create',
   'teamSwitcher.newTeam': 'New Team',
+  'teamSwitcher.edit.tooltip': 'Edit the current team name / description (owner / admin only)',
+  'teamSwitcher.delete.tooltip':
+    'Delete the current team (owner / admin only; cascades to members/agents/tasks/assets)',
+  'teamSwitcher.delete.confirm': 'Delete team "{{name}}"?',
+  'teamSwitcher.delete.desc':
+    'This cascades to {{members}} members, {{agents}} agents, and all tasks and assets under the team. This cannot be undone.',
 
   // ===== LoginGate =====
-  'login.welcome': 'Welcome Back',
+  'login.welcome': 'Memory Hub',
   'login.subtitle': 'Please select a memory instance and enter your user_key to log in.',
   'login.tagline': 'Centrally manage Agent memory, skills, and knowledge assets',
+  'login.field.instance': 'Memory Instance',
+  'login.field.userKey': 'User Key',
+  'login.footer': 'TencentDB · AI Memory Hub',
   'login.placeholder.instance': 'Loading memory instances…',
   'login.placeholder.instanceError': 'Load failed, please refresh and retry',
   'login.placeholder.userKey': 'user_key, e.g. sk-mem-xxxxxxxxxxxxxxxx',
@@ -789,10 +799,14 @@ export const enUS = {
   'team.loading': 'Loading…',
   'team.empty.hint': 'Please select a team in the top right, or create a new team to get started.',
   'team.createTeam': 'New Team',
+  'team.editTeam': 'Edit Team',
+  'team.editTeam.tooltip': 'Edit the current team name / description (owner or admin only)',
   'team.deleteTeam': 'Delete Current Team',
-  'team.deleteTeam.tooltip': 'Team deletion is not yet stably supported on the backend',
-  'team.deleteTeam.notify':
-    'Team deletion is not yet stably supported on the backend. Please contact your admin.',
+  'team.deleteTeam.tooltip':
+    'Delete the current team and all its members / agents / tasks / assets (owner or admin only)',
+  'team.deleteTeam.confirm': 'Delete team "{{name}}"?',
+  'team.deleteTeam.desc':
+    'This cascades to {{members}} members, {{agents}} agents, and all tasks and assets under the team. This cannot be undone.',
   'team.memberCount': '{{count}} members',
   'team.emptyTeam.title': "You Don't Belong to Any Team Yet",
   'team.emptyTeam.desc':
@@ -817,6 +831,15 @@ export const enUS = {
   'createTeam.desc.placeholder': 'Briefly describe the team scope and goals',
   'createTeam.submit': 'Create',
   'createTeam.cancel': 'Cancel',
+
+  // ===== EditTeamDialog =====
+  'editTeam.caption': 'Edit Team · {{name}}',
+  'editTeam.name': 'Name',
+  'editTeam.name.placeholder': 'e.g. tdai-memory · backend team',
+  'editTeam.desc': 'Description',
+  'editTeam.desc.placeholder': 'Briefly describe the team scope and goals',
+  'editTeam.submit': 'Save',
+  'editTeam.cancel': 'Cancel',
 
   // ===== CreateAgentDialog =====
   'createAgent.caption': 'Create Agent',
@@ -922,6 +945,29 @@ export const enUS = {
   'agentGrid.table.actions': 'Actions',
   'agentGrid.table.delete': 'Delete',
   'agentGrid.owner.you': ' (you)',
+
+  // ===== DefaultAgentTemplate (admin only) =====
+  'defaultAgent.title': 'Default Agent Template',
+  'defaultAgent.desc':
+    'When a new member joins the team, their dedicated default Agent is auto-created from this template. Only team-public assets (visibility=team) can be selected; changes apply to members joining later.',
+  'defaultAgent.empty': 'Not configured yet · Configure to auto-create a default Agent for new members',
+  'defaultAgent.create': 'New Default Agent',
+  'defaultAgent.create.tooltip': 'Configure the default Agent template for the current team',
+  'defaultAgent.create.caption': 'New Default Agent Template',
+  'defaultAgent.create.desc':
+    'Configure the default Agent template for the current team: new members get a dedicated Agent auto-created from this template when they join.',
+  'defaultAgent.create.submit': 'Create',
+  'defaultAgent.edit': 'Edit Config',
+  'defaultAgent.edit.tooltip': 'Edit the default Agent template for the current team',
+  'defaultAgent.edit.caption': 'Edit Default Agent Template',
+  'defaultAgent.edit.desc':
+    'Overwrite the current team\u2019s default Agent template. Only affects members joining later; existing Agents are unaffected.',
+  'defaultAgent.save': 'Save Config',
+  'defaultAgent.name': 'Default Agent name *',
+  'defaultAgent.name.hint': 'New members get their dedicated default Agent created with this name.',
+  'defaultAgent.assets.label': 'Team-public assets: ',
+  'defaultAgent.assets.hint': 'Only team-public assets (visibility=team) are selectable',
+  'defaultAgent.notify.saved': 'Default Agent template saved.',
 
   // ===== MemberSection =====
   'member.title': 'Members ({{count}})',
@@ -1287,4 +1333,188 @@ export const enUS = {
   'onboarding.guide.asset.memory.title': 'Chat Memory: tell apart "Team assets" vs "Agent assets"',
   'onboarding.guide.asset.memory.desc':
     'Ownership: this page has two tabs — "Team assets" (a shared memory pool) and "Agent assets" (memory bound to a specific Agent, including each Agent\'s built-in private memory). Import: click "Import memory" to bring history in as L0; the system distills L1~L3 layers and attaches them to the chosen Agent. Use: bound Agents remember your preferences and conclusions across sessions; in "Agent assets" you can toggle "Shared / Private" for memory you imported.',
+
+  // ===== GuidePage =====
+  'guide.back': 'Back',
+  'guide.brand': 'Memory Hub · Getting Started',
+  'guide.title': 'Getting Started',
+  'guide.subtitle': 'Complete the quick setup first, then use best practices to turn team experience into reusable engineering assets.',
+  'guide.tabs.aria': 'Guide categories',
+  'guide.copy': 'Copy',
+  'guide.copied': 'Copied',
+  'guide.copyFailed': 'Copy failed, please select and copy manually',
+  'guide.copyCmd': 'Copy command',
+  'guide.copyPrompt': 'Copy prompt',
+  'guide.copyScript': 'Copy script',
+  'guide.copyConfig': 'Copy config',
+
+  // Main tabs
+  'guide.quick.title': 'Quick Setup',
+  'guide.quick.sub': 'Configure IDEs & import history',
+  'guide.practice.title': 'Best Practices',
+  'guide.practice.sub': 'Team Coding & personal multi-Agent',
+
+  // Three-step stepper
+  'guide.step.download.title': 'Download config pack',
+  'guide.step.download.sub': 'Get the agents scripts & Skill',
+  'guide.step.ide.title': 'Connect your IDE',
+  'guide.step.ide.sub': 'Configure Proxy & model',
+  'guide.step.history.title': 'Import history',
+  'guide.step.history.sub': 'Share memory & Skills',
+  'guide.step.prev': 'Back',
+  'guide.step.next': 'Next',
+  'guide.step.done': '✓ Quick setup complete',
+  'guide.step.navAria': 'Quick setup step navigation',
+
+  // Package download
+  'guide.download.title': 'Download the config pack first',
+  'guide.download.desc': 'After downloading and extracting, run the commands below from a location containing the agents directory.',
+  'guide.download.button': 'Download config pack (ZIP)',
+
+  // Quick setup sub tabs
+  'guide.quick.tabs.aria': 'Quick setup content',
+  'guide.quick.ide.title': 'IDE Setup',
+  'guide.quick.ide.sub': 'Configure Proxy & model',
+  'guide.quick.history.title': 'Import History',
+  'guide.quick.history.sub': 'Share memory and Skills across Agents',
+  'guide.quick.history.desc': 'Run the script from the repo root to import historical Sessions and Skills from local IDEs, so multiple Agents share existing memory and capabilities.',
+  'guide.quick.history.sources': 'Sources such as {{sources}} are supported; replace the target Team and Agent IDs before running.',
+  'guide.quick.history.dupHint': ' If you already chose to import at the end of the script setup, no need to run again.',
+
+  // Preparation
+  'guide.proxyHint.reading': 'Reading the local Proxy address…',
+  'guide.proxyHint.fromInstance': 'Read from local instance "{{name}}"',
+  'guide.proxyHint.defaultHost': 'Instance has no address configured; using current host and default port 8096',
+  'guide.proxyHint.noInstance': 'No instance found; using current host and default port 8096',
+  'guide.proxyHint.readFailed': 'Failed to read; using current host and default port 8096',
+  'guide.prepare.reading': 'Reading…',
+  'guide.proxyFallback': '<Proxy address>',
+  'guide.modelFallback': '<model ID>',
+  'guide.prepare.proxy': '1. Proxy',
+  'guide.prepare.mode': '2. Mode',
+  'guide.prepare.key': '3. API Key',
+  'guide.prepare.keyLink': 'Same Key as the login panel — get it from the API Key page',
+  'guide.mode.default': 'Default',
+  'guide.mode.analyse': 'Analyse',
+  'guide.mode.analyseHint': 'Analyse mode forwards requests normally while also analyzing how recalled assets contributed, and returns the result in the reply',
+  'guide.mode.analyseNotice':
+    'Note: the script / Skill method only writes the Default address. For Analyse, copy the /analyse endpoint from the manual config below and paste it into your IDE config file.',
+
+  // Setup methods
+  'guide.method.aria': 'Quick setup method',
+  'guide.method.skill.title': 'Option 1: Skill-based',
+  'guide.method.skill.sub': 'Recommended · guided by your Agent',
+  'guide.method.skill.step1': 'Prepare the Skill at the repo root',
+  'guide.method.skill.step2': 'Send the prompt below to your Agent',
+  'guide.method.skill.hint': 'The Agent probes the environment and Proxy, then writes the config via the bundled script, and asks whether to import local Skills and chat history.',
+  'guide.method.script.title': 'Option 2: Script-based',
+  'guide.method.script.sub': 'Run the interactive wizard in your terminal',
+  'guide.method.script.step1': 'Run at the repo root',
+  'guide.method.script.hint': 'The script scans existing configs, checks the Proxy and writes the selected IDE; finally you may import local Skills and chat history.',
+
+  // Manual config
+  'guide.manual.expand': 'Can\'t run commands? Configure manually',
+  'guide.manual.collapse': 'Collapse manual config',
+  'guide.manual.title': 'Manual Configuration',
+  'guide.manual.model': 'Model ID',
+  'guide.manual.modelHint': 'Must be lowercase',
+  'guide.manual.fileHint': 'Write to',
+
+  // Best practices
+  'guide.practice.team.title': 'Team Coding',
+  'guide.practice.team.sub': 'Collaborate and share experience',
+  'guide.practice.personal.title': 'Personal OPC',
+  'guide.practice.personal.sub': 'One person, multiple Agents',
+  'guide.practice.linksAria': 'related pages',
+  'guide.practice.related': 'Related',
+  'guide.diagram.multiIde': 'Multiple IDEs',
+  'guide.diagram.sessionSkill': 'Session + Skill',
+  'guide.diagram.members': 'Team members',
+  'guide.diagram.userAgent': 'User + Agent',
+  'guide.diagram.assets': 'Shared asset library',
+  'guide.diagram.assetSet': 'Memory · Skill · Wiki',
+  'guide.diagram.memorySkill': 'Memory + Skills',
+  'guide.diagram.reuse': 'Cross-end reuse',
+  'guide.diagram.reuseSub': 'Keep updating',
+  'guide.diagram.uniAccess': 'Unified access',
+  'guide.diagram.agents': 'Dedicated Agents',
+  'guide.diagram.agentsSub': 'Research · Dev · Review',
+  'guide.diagram.relay': 'Relay anywhere',
+  'guide.diagram.relaySub': 'No need to re-explain context',
+  'guide.rules.multi': 'Multi-end',
+  'guide.rules.share': 'Share',
+  'guide.rules.govern': 'Govern',
+  'guide.rules.multiTeamDesc': 'Same identity across IDEs',
+  'guide.rules.shareDesc': 'Open to team after validation',
+  'guide.rules.governDesc': 'Update the original asset, avoid duplicates',
+  'guide.rules.multiPersonalDesc': 'Share one history of memory',
+  'guide.rules.agents': 'Multi-Agent',
+  'guide.rules.agentsDesc': 'Each role reads its needed assets',
+  'guide.rules.reuse': 'Keep reusing',
+  'guide.rules.reuseDesc': 'Write experience back to Memory and Skills',
+
+  // Guide replay
+  'guide.replay.title': 'Frontend Guide Replay',
+  'guide.replay.desc': 'Replay the step-by-step first-run guide to quickly get familiar with pages and actions.',
+  'guide.replay.button': 'Replay Guide',
+  'guide.replayStarted': 'The guide will restart — please follow the prompts.',
+
+  // Best practice steps (Team Coding)
+  'guide.practice.team.step1.title': 'Unified identity',
+  'guide.practice.team.step1.short': 'One team identity across all IDEs',
+  'guide.practice.team.step1.point1': 'Admin creates a dedicated User and Key for each member',
+  'guide.practice.team.step1.point2': 'Members use their own Key in Claude Code, CodeBuddy, etc.',
+  'guide.practice.team.step1.point3': 'Don\'t create a User per IDE — that splits memory and permissions',
+  'guide.practice.team.step2.title': 'Import history',
+  'guide.practice.team.step2.short': 'Merge experience from all IDEs into one place',
+  'guide.practice.team.step2.point1': 'Import existing Sessions and Skills from different IDEs',
+  'guide.practice.team.step2.point2': 'Recall past decisions, preferences, and lessons after switching IDEs',
+  'guide.practice.team.step2.point3': 'Exclude keys, private info, and unrelated chats before import',
+  'guide.practice.team.step3.title': 'Share assets',
+  'guide.practice.team.step3.short': 'Let the team reuse validated experience',
+  'guide.practice.team.step3.point1': 'Write project facts, decisions, and pitfalls to Memory',
+  'guide.practice.team.step3.point2': 'Turn stable, repeatable processes into Skills',
+  'guide.practice.team.step3.point3': 'Put general docs and long-term knowledge in Wiki, then make them team-visible once correct',
+  'guide.practice.team.step4.title': 'Keep governing',
+  'guide.practice.team.step4.short': 'Use, validate, update',
+  'guide.practice.team.step4.point1': 'Members and Agents recall the same team assets from any IDE',
+  'guide.practice.team.step4.point2': 'Update the original asset when stale or wrong — don\'t create duplicate versions',
+  'guide.practice.team.step4.point3': 'Use Analyse to see whether recalled assets actually helped the reply',
+
+  // Best practice steps (Personal OPC)
+  'guide.practice.personal.step1.title': 'Connect multiple IDEs',
+  'guide.practice.personal.step1.short': 'Switch tools without losing context',
+  'guide.practice.personal.step1.point1': 'Use the same Proxy and personal Key across your common IDEs',
+  'guide.practice.personal.step1.point2': 'Import historical Sessions and Skills to keep your workflow',
+  'guide.practice.personal.step1.point3': 'Experience gained in any IDE enters the same memory system',
+  'guide.practice.personal.step2.title': 'Divide Agents',
+  'guide.practice.personal.step2.short': 'Independent roles, share assets on demand',
+  'guide.practice.personal.step2.point1': 'Create Agents by duty: research, dev, test, review',
+  'guide.practice.personal.step2.point2': 'Give each Agent only the assets its role needs',
+  'guide.practice.personal.step2.point3': 'General Memory and Skills can be shared by multiple Agents',
+  'guide.practice.personal.step3.title': 'Relay across ends',
+  'guide.practice.personal.step3.short': 'Continue smoothly between IDEs and Agents',
+  'guide.practice.personal.step3.point1': 'Write research conclusions to Memory so a dev Agent can recall them in another IDE',
+  'guide.practice.personal.step3.point2': 'Turn test methods into Skills that later Agents follow',
+  'guide.practice.personal.step3.point3': 'Handoffs rely on shared assets, not copying full chats',
+  'guide.practice.personal.step4.title': 'Maintain assets',
+  'guide.practice.personal.step4.short': 'Keep reusable content, clean the noise',
+  'guide.practice.personal.step4.point1': 'Keep rationale, working solutions, failure causes, and acceptance methods',
+  'guide.practice.personal.step4.point2': 'Update stale facts in Memory, mature processes in Skills',
+  'guide.practice.personal.step4.point3': 'Don\'t save small talk, guesses, keys, or personal sensitive info',
+
+  // Manual config notes
+  'guide.manual.note.claude': 'Start claude directly — it reads env from settings.json',
+  'guide.manual.note.codebuddy': 'Select the proxy-memory-agent model in the CodeBuddy dialog',
+  'guide.manual.note.codex': 'Switch to Plan mode (Shift+Tab) to pick Team→Agent→Task before the first chat, then switch back to Agent mode',
+  'guide.manual.note.workbuddy': 'Select this model in the WorkBuddy custom model list',
+  'guide.manual.note.dsh.0': 'Two files must both be configured',
+  'guide.manual.note.dsh.1': 'Permissions required: chmod 700 ~/.dsh, chmod 600 ~/.dsh/.credentials.yaml',
+  'guide.manual.note.dsh.2': 'Launch: dsh (CLI) or dsh web --port 3080 (Web UI)',
+  'guide.manual.note.hermes.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
+  'guide.manual.note.hermes.1': 'x-conversation-id identifies the current session — change it for each new conversation',
+  'guide.manual.note.hermes.2': 'x-task-id is required in the current version; use "no-task" when there is none',
+  'guide.manual.note.openclaw.0': 'Header preselect required: team-id / agent-id / task-id / conversation-id',
+  'guide.manual.note.openclaw.1': 'x-conversation-id identifies the current session — change it for each new conversation',
+  'guide.manual.note.openclaw.2': 'x-task-id is required in the current version; use "no-task" when there is none',
 };

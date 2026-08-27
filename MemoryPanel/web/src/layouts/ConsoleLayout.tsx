@@ -69,11 +69,16 @@ export function ConsoleLayout() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [openPages, setOpenPages] = useState<PageId[]>(() => [activePage]);
+  // 使用说明页为独立页（自带返回按钮与页头），不占用多标签页栏
+  const isGuide = location.pathname === '/guide';
+
+  const [openPages, setOpenPages] = useState<PageId[]>(() => (isGuide ? [] : [activePage]));
 
   useEffect(() => {
+    // /guide 独立页不把 workbench_board 等页面追加进标签栏，避免返回时多出标签
+    if (isGuide) return;
     setOpenPages((prev) => (prev.includes(activePage) ? prev : [...prev, activePage]));
-  }, [activePage]);
+  }, [activePage, isGuide]);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -97,6 +102,13 @@ export function ConsoleLayout() {
     resetOnboarding(currentUserId);
     setOnboardingVisible(true);
   }, [currentUserId]);
+
+  // GuidePage 底部「引导回放」通过自定义事件触发与「我的资料 → 回顾引导」一致的链路
+  useEffect(() => {
+    const onReplay = () => handleReplayOnboarding();
+    window.addEventListener('tdai-replay-onboarding', onReplay);
+    return () => window.removeEventListener('tdai-replay-onboarding', onReplay);
+  }, [handleReplayOnboarding]);
 
   const navigateTo = useCallback(
     (id: PageId) => {
@@ -187,12 +199,14 @@ export function ConsoleLayout() {
             </Menu>
           </Sider>
           <Content>
-            <TabBar
-              pages={openPages}
-              activePage={activePage}
-              onNavigate={navigateTo}
-              onClose={closePage}
-            />
+            {!isGuide && (
+              <TabBar
+                pages={openPages}
+                activePage={activePage}
+                onNavigate={navigateTo}
+                onClose={closePage}
+              />
+            )}
             <Content.Body className="_memory-content-body">
               {/* key 绑定 pathname：路由切换时重挂载页面帧，触发 _page-enter 过渡，保持跨页连续性 */}
               <main key={location.pathname} className="_memory-page-frame">

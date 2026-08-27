@@ -81,6 +81,41 @@ export interface TaskEntity {
   source_type?: string;
 }
 
+/**
+ * /v3/meta/task/create 请求入参。
+ *
+ * 权限约束（内核）：caller 必须是 team 活跃成员，且 creator_user_id 强制 == caller。
+ * mem:create-task 命令层已经保证 creator_user_id = sessionInfo.user_id，不允许伪造。
+ */
+export interface CreateTaskInput {
+  team_id: string;
+  creator_user_id: string;
+  title: string;
+  description?: string;
+  status?: string;
+  source_type?: string;
+  /** 可选：由调用方指定 task_id；缺省时内核自动生成。mem 命令族不传，交给内核生成。 */
+  task_id?: string;
+  /**
+   * 可选：关联的 Agent。TAPD 需求：mem:create-task 需要"关联当前 Agent"。
+   * 内核会把它写进 task 的 agent_ids 或元数据字段（具体行为由内核决定，proxy 只透传）。
+   */
+  agent_id?: string;
+}
+
+/**
+ * /v3/meta/task/update 请求入参。
+ *
+ * 权限约束（内核）：caller 必须 == task.creator_user_id。
+ * mem:update-task 命令层在调用本 API 前会先做 owner-check，非 creator 时直接返错，
+ * 不会走到这里（见需求 Q4 决策 B —— 不越权改核心权限模型）。
+ */
+export interface UpdateTaskPatch {
+  /** 标题按需求约定不允许更新，此处仅描述 / 状态可改。 */
+  description?: string;
+  status?: string;
+}
+
 export interface FixedAssetItem {
   asset_id: string;
   asset_type: string;
@@ -263,6 +298,41 @@ export class MetadataClient {
   /** Get a single task by ID. Throws NotFoundError on 404. */
   async getTask(taskId: string): Promise<TaskEntity> {
     return this.getOne<TaskEntity>("/v3/meta/task/get", { task_id: taskId }, "task");
+  }
+
+  /**
+   * Create a new task under a team.
+   *
+   * mem:create-task 命令族入口。约束见 `CreateTaskInput` 注释：
+   *   - creator_user_id 必须 == 当前 caller
+   *   - team_id 必须是 caller 的活跃 team
+   * 内核 envelope 直接返回落盘后的 TaskEntity（含生成的 task_id）。
+   */
+  async createTask(input: CreateTaskInput): Promise<TaskEntity> {
+    const body: Record<string, unknown> = {
+      team_id: input.team_id,
+      creator_user_id: input.creator_user_id,
+      title: input.title,
+    };
+    if (input.description !== undefined) body.description = input.description;
+    if (input.status !== undefined) body.status = input.status;
+    if (input.source_type !== undefined) body.source_type = input.source_type;
+    if (input.task_id !== undefined) body.task_id = input.task_id;
+    if (input.agent_id !== undefined) body.agent_id = input.agent_id;
+    return this.fetch<TaskEntity>("/v3/meta/task/create", body);
+  }
+
+  /**
+   * Patch an existing task's description / status. Title is immutable per 产品需求。
+   *
+   * 调用方需先做 owner-check（caller == creator）；本方法不做二次校验，
+   * 内核会以 401/403 拒绝非 creator。
+   */
+  async updateTask(taskId: string, patch: UpdateTaskPatch): Promise<TaskEntity> {
+    const body: Record<string, unknown> = { task_id: taskId };
+    if (patch.description !== undefined) body.description = patch.description;
+    if (patch.status !== undefined) body.status = patch.status;
+    return this.fetch<TaskEntity>("/v3/meta/task/update", body);
   }
 
   /**

@@ -910,8 +910,59 @@ export async function handleWorkbuddyEndpoint(
   let injectionSkipped = false;
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
 
   const input = Array.isArray(body.input) ? body.input : [];
+
+  // ── mem:session-reset pre-hook ──
+  if (config.memCommand?.enabled) {
+    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
+    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
+      const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+      const { workbuddyAdapter } = await import("./agent-adapters/workbuddy.js");
+      const userText = workbuddyAdapter.extractUserText(input) ?? "";
+      const memCmd = parseCommandFromText(userText);
+      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+        const { getSessionStore } = await import("./session/store.js");
+        const store = getSessionStore();
+        const compositeKey = `codex:${sessionKey}`;
+        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+
+        // ── 强制归档旧 agent 的 skill buffer（best-effort）──
+        const oldState = store.get(compositeKey);
+        if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
+          const si = oldState.sessionInfo as Record<string, string>;
+          if (si.space_id && si.user_id && si.team_id && si.agent_id) {
+            import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
+              const client = getCoreSkillClient(config.coreSkill!);
+              client.forceArchive(
+                {
+                  space_id: si.space_id,
+                  user_id: si.user_id,
+                  team_id: si.team_id,
+                  agent_id: si.agent_id,
+                  session_id: sessionKey,
+                  task_id: si.task_id || undefined,
+                  reason: "session-reset",
+                },
+                { serviceId: si.space_id },
+              ).then((res) => {
+                console.log(`[session-reset] force-archive old buffer: status=${res.status} session=${sessionKey} agent=${si.agent_id}`);
+              }).catch((err) => {
+                console.warn(`[session-reset] force-archive failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }).catch(() => {});
+          }
+        }
+
+        const resetEpoch = Date.now();
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        const bindingRepo = store.getBindingRepo();
+        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
+        console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
+      }
+    }
+  }
 
   if (config.sessionInit?.enabled && sessionId) {
     try {
@@ -941,6 +992,10 @@ export async function handleWorkbuddyEndpoint(
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
       const isTerminalState = recovered?.status === "initialized";
+      // Recovery hit source 决定是否需要 prewarm（详见 handler.ts 对称位置注释）。
+      const needsPrewarm =
+        recovered?.__recoverySource === "l2b" ||
+        recovered?.__recoverySource === "history-scan";
 
       if (recovered && isTerminalState) {
         // Recovered from L2b/L2a — skip form, apply context
@@ -963,7 +1018,7 @@ export async function handleWorkbuddyEndpoint(
           agentDetail: recovered.agentDetail,
           taskDetail: recovered.taskDetail,
           bypassed: recovered.bypassed,
-          justRegistered: true,
+          justRegistered: needsPrewarm,
         };
       } else {
         // Run the state machine — reuses CB's handleSessionInit with
@@ -1028,10 +1083,14 @@ export async function handleWorkbuddyEndpoint(
       if ((initResult as any).bypassReason === "default-gate") {
         pipe.info("WORKBUDDY_GATE", "Default mode gate detected → notify user (first hit)");
         const { buildMemResponse } = await import("./mem-command/response-builder.js");
-        const gateText =
-          "检测到未开启 Plan 模式，本次会话跳过资产注入。" +
-          "如需管理 Skill / Task / Agent，请切到 Plan 模式后重新开启新会话。" +
-          "本次消息将直接由 LLM 回答。";
+        // reset 场景下的 gate: 换成针对性文案,详见 codexHandler 同名段
+        const gateText = (initResult as any).resetFlow
+          ? "⚠️ mem:session-reset 需要 Plan 模式支持。\n\n"
+            + "workbuddy 客户端当前不在 Plan 模式，无法弹出资产选择表单。\n"
+            + "请切到 Plan 模式后再执行 mem:session-reset。"
+          : "检测到未开启 Plan 模式，本次会话跳过资产注入。"
+            + "如需管理 Skill / Task / Agent，请切到 Plan 模式后重新开启新会话。"
+            + "本次消息将直接由 LLM 回答。";
         return buildMemResponse(gateText, {
           protocol: "responses",
           stream: isStream,
@@ -1044,6 +1103,9 @@ export async function handleWorkbuddyEndpoint(
         console.log(
           `[workbuddy] session=${sessionKey} bypassed (reason=${(initResult as any).bypassReason ?? "unknown"}) → skipping injection`,
         );
+        if (initResult.resetFlow) {
+          _resetFlowResult = { agentName: "", agentIdShort: "", teamId: "", bypassed: true };
+        }
       }
 
       if (!initResult.bypassed && initResult.sessionInfo) {
@@ -1065,10 +1127,33 @@ export async function handleWorkbuddyEndpoint(
         }
       }
 
+      // Prewarm 前置短路：mem-command 命中的 turn 不走 forward、不消费 hook-cache，
+      // 若照常 prewarm 会白花 2-3s + 3 次网络请求。见 handler.ts 对称位置详注。
+      let memCommandPending = false;
+      if (config.memCommand?.enabled) {
+        try {
+          const userTextPeek = workbuddyAdapter.extractUserText(input);
+          if (userTextPeek) {
+            const { parseCommandFromText, isMemCommandAllowed } = await import("./mem-command/index.js");
+            const peek = parseCommandFromText(userTextPeek);
+            if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+              memCommandPending = true;
+              console.log(`[workbuddy] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
+            }
+          }
+        } catch (err) {
+          console.warn(
+            "[workbuddy] pre-prewarm peek failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+
       if (
         !initResult.bypassed &&
         initResult.justRegistered &&
         initResult.sessionInfo &&
+        !memCommandPending &&
         config.injection?.enabled &&
         (config.injection.injectors?.length ?? 0) > 0
       ) {
@@ -1078,12 +1163,13 @@ export async function handleWorkbuddyEndpoint(
             keyId: sessionKey,
             userId: userId || "anonymous",
             agentSource,
+            spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
             agentDetail: initResult.agentDetail ?? null,
             taskDetail: initResult.taskDetail ?? null,
             assetCapabilities,
             callerUserKey: callerUserKey ?? undefined,
-          });
+          }, { clearBefore: true });
         } catch (err) {
           console.warn(
             "[workbuddy] prewarm error:",
@@ -1098,6 +1184,17 @@ export async function handleWorkbuddyEndpoint(
       }
       cachedAgentDetail = initResult.agentDetail ?? null;
       cachedTaskDetail = initResult.taskDetail ?? null;
+
+      if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
+        _resetFlowResult = {
+          agentName: initResult.agentDetail?.name ?? "未知",
+          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          taskName: initResult.taskDetail?.name,
+        };
+      }
     } catch (err: unknown) {
       console.error(
         "[workbuddy] session-init error:",
@@ -1108,16 +1205,43 @@ export async function handleWorkbuddyEndpoint(
     }
   }
 
+  // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
+  if (_resetFlowResult) {
+    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const lines = bypassed
+      ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
+      : [
+          "✅ 已重新绑定团队资产",
+          "",
+          `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
+          teamId ? `- **Team**: ${teamId}` : null,
+          taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
+          "",
+          "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
+        ].filter(Boolean);
+    const text = (lines as string[]).join("\n");
+
+    const { buildMemResponse } = await import("./mem-command/response-builder.js");
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    return buildMemResponse(text, {
+      protocol: "responses",
+      stream: isStream,
+      requestId: `mem-reset-${Date.now()}`,
+    });
+  }
+
   // ── 8. mem-command intercept ────────────────────────────────────────────
   if (config.memCommand?.enabled) {
     const userText = workbuddyAdapter.extractUserText(input);
     if (userText) {
-      const { parseCommandFromText, isMemCommandAllowed, executeMemCommand, buildMemResponse } =
+      const { parseCommandFromText, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } =
         await import("./mem-command/index.js");
       // ⚠️ 不用 parseMemCommand(body, "workbuddy") —— 它只解 body.messages[] (CC/CB 形态),
       // WorkBuddy 用的是 Responses API (body.input[])，传进去永远返 null → 命令静默透传给 LLM。
       // 改用 parseCommandFromText(userText) 直接解析用户文本。对齐 codexHandler 的做法。
-      const memCmd = parseCommandFromText(userText);
+      let memCmd = parseCommandFromText(userText);
+      // session-reset 已由 pre-hook 处理，跳过防止重复执行
+      if (memCmd?.command === "session-reset") memCmd = null;
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
         if (!sessionInfo || injectionSkipped) {
           const errText = `⚠️ 会话未初始化，命令不可用。请先完成 session 初始化（选择 Team/Agent）后重试。`;
@@ -1127,7 +1251,7 @@ export async function handleWorkbuddyEndpoint(
             requestId: `mem-cmd-${Date.now()}`,
           });
           console.log(
-            `[workbuddy] mem-command cmd=${memCmd.command} session=${sessionKey} blocked: session not initialized`,
+            `[workbuddy] mem-command cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} blocked: session not initialized`,
           );
           return errResponse;
         }
@@ -1145,6 +1269,10 @@ export async function handleWorkbuddyEndpoint(
           protocol: "responses",
           stream: isStream,
           args: memCmd.args,
+          // task 命令族用最近对话生成草稿。Responses API body.input[] 结构：
+          //   { type:"message", role, content:[{type:"input_text"|"output_text", text}] }
+          // extractSimpleMessages 已内置对该形态的识别，转成 {role, content} 极简格式。
+          bodyMessages: extractSimpleMessages(input),
         });
 
         // ── TDAI L0 write + Skill extraction (fire-and-forget) ──
@@ -1203,6 +1331,9 @@ export async function handleWorkbuddyEndpoint(
           );
         }
 
+        console.log(
+          `[workbuddy] mem-command cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} success=${memResult.success}`,
+        );
         return memResult.response;
       }
     }

@@ -1,0 +1,32 @@
+/**
+ * 通用资产展示小组件样式（StatusTag / OwnerLabel）。
+ *
+ * 原 code-ui 的 _codedetail-status / _codedetail-status-hint（见
+ * code-sources-panel.css）收敛到此，供 Wiki / Code 等资产页共用。
+ */
+._asset-status {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  min-width: 0;
+}
+
+._asset-status .tea-tag {
+  flex-shrink: 0;
+}
+
+._asset-status-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* OwnerLabel 的默认「你」标记（调用方也可注入自己的 class） */
+._owner-label-you {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-brand-default);
+}

@@ -1,0 +1,913 @@
+/**
+ * GuidePage 使用说明页样式
+ * 明亮简洁风格，颜色走 Tea Design Token，命令块用等宽字体。
+ */
+
+.guide-page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 24px 48px;
+  color: var(--tea-color-text-primary);
+}
+
+/* ===== 页头 ===== */
+.guide-titlebar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--tea-color-border-primary-default);
+}
+
+.guide-back {
+  border: none;
+  background: transparent;
+  color: var(--tea-color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.guide-back:hover {
+  color: var(--tea-color-text-primary);
+}
+
+.guide-titlebar h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 30px;
+}
+
+.guide-titlebar p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--tea-color-text-secondary);
+  line-height: 20px;
+}
+
+.guide-brand {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== 主 tab ===== */
+.guide-main-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.guide-main-tabs button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.guide-main-tabs button b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-main-tabs button small {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-main-tabs button.active {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+.guide-main-tabs button:hover {
+  border-color: var(--tea-color-border-brand-default);
+}
+
+/* ===== 内容区 ===== */
+.guide-surface {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 10px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 20px;
+}
+
+/* ===== 快速接入步骤条（三步流程）===== */
+.guide-stepper {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.guide-stepper > li {
+  margin: 0;
+}
+
+.guide-stepper button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.guide-stepper button:hover {
+  border-color: var(--tea-color-border-brand-default);
+}
+
+.guide-stepper-badge {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--tea-color-bg-secondary-hover);
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.guide-stepper > li.current button {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+.guide-stepper > li.current .guide-stepper-badge {
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+}
+
+.guide-stepper > li.done button {
+  border-color: var(--tea-color-border-primary-default);
+}
+
+.guide-stepper > li.done .guide-stepper-badge {
+  background: var(--tea-color-bg-brand-lighten-default);
+  color: var(--tea-color-text-brand-default);
+}
+
+.guide-stepper-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guide-stepper-meta b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-stepper-meta small {
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 步骤导航（上一步 / 下一步）===== */
+.guide-step-nav {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--tea-color-border-primary-default);
+}
+
+.guide-step-nav button {
+  padding: 7px 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.guide-step-nav button:hover {
+  border-color: var(--tea-color-border-brand-default);
+  color: var(--tea-color-text-primary);
+}
+
+.guide-step-nav .guide-step-next {
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  font-weight: 500;
+}
+
+.guide-step-nav .guide-step-next:hover {
+  opacity: 0.9;
+  color: var(--tea-color-text-on-bg-brand-default);
+}
+
+.guide-step-done {
+  font-size: 13px;
+  color: var(--tea-color-text-success);
+  font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .guide-stepper {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== 配置包下载 ===== */
+.guide-package-download {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--tea-color-bg-secondary-hover);
+  margin-bottom: 16px;
+}
+
+.guide-package-download b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-package-download small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-package-download a {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.guide-package-download a:hover {
+  opacity: 0.9;
+}
+
+/* ===== 准备信息区 ===== */
+.guide-prepare {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.guide-prepare-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.guide-prepare-row > b {
+  min-width: 72px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-prepare-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-primary);
+  background: var(--tea-color-bg-secondary-hover);
+  padding: 4px 8px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.guide-prepare-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-mode-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.guide-mode-item > b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-mode-item > small {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* Analyse 模式提示：脚本配不出 /analyse，需手动配置（醒目但不刺眼） */
+.guide-mode-notice {
+  color: var(--tea-color-text-warning) !important;
+  line-height: 18px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-warning);
+}
+
+.guide-mode-options {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.guide-mode-options button {
+  padding: 5px 14px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.guide-mode-options button.active {
+  border-color: var(--tea-color-border-brand-default);
+  color: var(--tea-color-text-primary);
+  font-weight: 600;
+}
+
+.guide-key-link {
+  border: none;
+  background: transparent;
+  color: var(--tea-color-text-brand-default);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ===== 接入方式二选一 ===== */
+.guide-method-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.guide-method-picker button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.guide-method-picker button b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-method-picker button small {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-method-picker button.active {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+/* ===== 命令块 ===== */
+.guide-command {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin: 8px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.guide-command.primary {
+  background: var(--tea-color-bg-secondary-hover);
+}
+
+.guide-command.secondary {
+  background: var(--tea-color-bg-secondary-hover);
+}
+
+.guide-setup-steps p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+
+.guide-setup-steps p b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  font-size: 11px;
+}
+
+.guide-run-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  line-height: 18px;
+}
+
+/* ===== 复制按钮 ===== */
+.guide-copy {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guide-copy:hover {
+  border-color: var(--tea-color-border-brand-default);
+  color: var(--tea-color-text-primary);
+}
+
+/* ===== 手动配置 ===== */
+.guide-manual-entry {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.guide-manual-entry button {
+  border: none;
+  background: transparent;
+  color: var(--tea-color-text-brand-default);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 10px;
+}
+
+.guide-manual-panel {
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+}
+
+.guide-manual-panel h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.guide-ide-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.guide-ide-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.guide-ide-list button b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-ide-list button small {
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+  word-break: break-all;
+}
+
+.guide-ide-list button.active {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+.guide-manual-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.guide-manual-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.guide-manual-fields label b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-manual-fields label input {
+  padding: 8px 10px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-primary);
+}
+
+.guide-manual-fields label small {
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-code-card {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.guide-code-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--tea-color-border-primary-default);
+  background: var(--tea-color-bg-secondary-hover);
+}
+
+.guide-code-card header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.guide-code-card header p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-code-card pre {
+  margin: 0;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-manual-notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  line-height: 20px;
+}
+
+/* ===== 获取历史数据 ===== */
+.guide-history h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.guide-history > p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--tea-color-text-secondary);
+  line-height: 20px;
+}
+
+/* ===== 最佳实践 ===== */
+.guide-practice-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.guide-practice-tabs button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.guide-practice-tabs button b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-practice-tabs button small {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-practice-tabs button.active {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+.guide-practice-diagram {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.guide-practice-diagram > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--tea-color-bg-secondary-hover);
+  text-align: center;
+}
+
+.guide-practice-diagram > div strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-practice-diagram > div span {
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-practice-diagram > div.focus {
+  background: var(--tea-color-bg-brand-lighten-default);
+  border: 1px solid var(--tea-color-border-brand-default);
+}
+
+.guide-practice-diagram > i {
+  align-self: center;
+  font-style: normal;
+  color: var(--tea-color-text-tertiary);
+  font-size: 16px;
+}
+
+.guide-practice-step-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.guide-practice-step-tabs button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.guide-practice-step-tabs button span {
+  font-size: 11px;
+  color: var(--tea-color-text-brand-default);
+  font-weight: 600;
+}
+
+.guide-practice-step-tabs button b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-practice-step-tabs button small {
+  font-size: 11px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-practice-step-tabs button.active {
+  border-color: var(--tea-color-border-brand-default);
+  box-shadow: 0 0 0 1px var(--tea-color-border-brand-default);
+}
+
+.guide-practice-detail {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 20px;
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.guide-practice-detail > div small {
+  font-size: 11px;
+  color: var(--tea-color-text-brand-default);
+  font-weight: 600;
+}
+
+.guide-practice-detail > div h2 {
+  margin: 4px 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.guide-practice-detail > div p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tea-color-text-secondary);
+  line-height: 20px;
+}
+
+.guide-practice-detail ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 24px;
+  color: var(--tea-color-text-primary);
+}
+
+.guide-practice-links {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--tea-color-border-primary-default);
+}
+
+.guide-practice-links span {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+.guide-practice-links button {
+  border: none;
+  background: transparent;
+  color: var(--tea-color-text-brand-default);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.guide-practice-links button:hover {
+  text-decoration: underline;
+}
+
+.guide-practice-rules {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.guide-practice-rules p {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  line-height: 18px;
+}
+
+.guide-practice-rules p b {
+  display: block;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  margin-bottom: 4px;
+}
+
+/* ===== 引导回放 ===== */
+.guide-replay {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+  padding: 16px 20px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 10px;
+  background: var(--tea-color-bg-primary-default);
+}
+
+.guide-replay h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.guide-replay p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  line-height: 18px;
+}
+
+.guide-replay-btn {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.guide-replay-btn:hover {
+  opacity: 0.9;
+}
+
+/* ===== 窄屏适配 ===== */
+@media (max-width: 720px) {
+  .guide-practice-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-practice-step-tabs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .guide-practice-rules {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-titlebar {
+    flex-direction: column;
+  }
+}

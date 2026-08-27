@@ -1,0 +1,398 @@
+/**
+ * asset-card.css —— Wiki / Code 资产列表页共享的「卡片网格 + 骨架屏 + 统计条 +
+ * 工具栏 + 表格行」样式。
+ *
+ * 原分散在 wiki-sources-panel.css（._asset-wiki-*）与 code-sources-panel.css
+ * （._codelist-*）中，两者结构几乎镜像。此处合并为一份公共样式，选择器同时
+ * 覆盖两组类名；各页面仅保留自己的差异化覆盖（如 code 的 mono 名称、不同断点）。
+ */
+
+/* ============================================================
+   页面外层
+   ============================================================ */
+._asset-wiki-page,
+._asset-code-page,
+._wiki-detail-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+._asset-wiki-content-card,
+._asset-code-content-card {
+  --card-body-padding: 16px;
+}
+
+/* ============================================================
+   统计条（MetricsBoard 一行）
+   ============================================================ */
+._asset-wiki-stats,
+._asset-code-stats,
+._wiki-detail-overview-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+/* ============================================================
+   工具栏
+   ============================================================ */
+._asset-wiki-toolbar,
+._asset-code-toolbar,
+._codelist-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+._asset-wiki-toolbar,
+._asset-code-toolbar {
+  justify-content: flex-end;
+}
+
+/* 工具栏 SearchBox 最小宽度，避免 placeholder 文字被截断。
+   实际类名是 .tea-form--search / .tea-search（旧版 .tea-searchbox 是错的）。 */
+._asset-wiki-toolbar .tea-form--search,
+._asset-wiki-toolbar .tea-search {
+  flex: 1 1 200px;
+  min-width: 200px;
+  max-width: 100%;
+}
+
+._asset-code-toolbar .tea-form--search,
+._asset-code-toolbar .tea-search {
+  flex: 1 1 240px;
+  min-width: 240px;
+  max-width: 100%;
+}
+
+/* ============================================================
+   空态
+   ============================================================ */
+._asset-wiki-empty,
+._asset-code-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 44px 16px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ============================================================
+   卡片网格（Wiki / Code 各自的列宽保持原值）
+   ============================================================ */
+._asset-wiki-grid,
+._asset-wiki-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+._codelist-grid,
+._codelist-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+/* ============================================================
+   骨架屏（首屏加载时展示占位卡片，风格与工作台/AgentGrid 骨架一致）
+   ============================================================ */
+._asset-wiki-skeleton-card,
+._codelist-skeleton-card {
+  padding: 16px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 8px;
+  background: var(--tea-color-bg-container-default);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+._asset-wiki-skeleton-card {
+  min-height: 160px;
+}
+
+._codelist-skeleton-card {
+  min-height: 184px;
+}
+
+._asset-wiki-skeleton-line,
+._codelist-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-tertiary-default) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _asset-card-shimmer 1.4s ease-in-out infinite;
+}
+
+._asset-wiki-skeleton-line--title,
+._codelist-skeleton-line--title { width: 50%; height: 16px; }
+._asset-wiki-skeleton-line--desc,
+._codelist-skeleton-line--desc { width: 80%; }
+._asset-wiki-skeleton-line--meta,
+._codelist-skeleton-line--meta { width: 60%; }
+
+@keyframes _asset-card-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================================
+   卡片主体
+   ============================================================ */
+._asset-wiki-card,
+._codelist-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out,
+    box-shadow 0.15s ease-in-out;
+}
+
+._asset-wiki-card {
+  min-height: 160px;
+}
+
+._codelist-card {
+  min-height: 184px;
+}
+
+._asset-wiki-card:hover,
+._codelist-card:hover {
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-primary-hover);
+  box-shadow: var(--tea-shadow-sm);
+}
+
+._codelist-card.is-selected {
+  background: var(--tea-color-bg-brand-lighten-default);
+  border-color: var(--tea-color-border-brand-default);
+}
+
+/* ── 卡片 head（图标 + 名称 + chevron） ── */
+._asset-wiki-card-head,
+._codelist-card-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--tea-color-text-brand-default);
+}
+
+._codelist-card-name-trigger {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+._asset-wiki-card-name,
+._codelist-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tea-color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Code 仓库名用等宽字体（页面差异化覆盖） */
+._codelist-card-name {
+  font-family: var(--font-mono);
+}
+
+._asset-wiki-card-chevron,
+._codelist-card-chevron {
+  flex-shrink: 0;
+  color: var(--tea-color-text-tertiary);
+  opacity: 0.6;
+  transition:
+    opacity 0.15s ease-in-out,
+    transform 0.15s ease-in-out,
+    color 0.15s ease-in-out;
+}
+
+._asset-wiki-card:hover ._asset-wiki-card-chevron,
+._codelist-card:hover ._codelist-card-chevron,
+._codelist-card-name-trigger:hover ._codelist-card-chevron {
+  color: var(--tea-color-text-brand-default);
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* ── meta 行（状态 + 时间/分支） ── */
+._asset-wiki-card-meta,
+._codelist-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+}
+
+/* ── owner / id 行 ── */
+._asset-wiki-card-owner,
+._asset-wiki-card-id,
+._codelist-card-owner,
+._codelist-card-id {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._asset-wiki-card-owner,
+._codelist-card-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+._asset-wiki-card-id,
+._asset-wiki-id,
+._codelist-card-id,
+._codelist-id {
+  font-family: Consolas, Monaco, 'Courier New', monospace;
+}
+
+._codelist-card-meta-you {
+  margin-left: 4px;
+  color: var(--tea-color-text-brand-default);
+}
+
+/* ── actions 行 ── */
+._asset-wiki-actions,
+._codelist-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  margin-top: auto;
+  border-top: 1px solid var(--tea-color-border-secondary-default);
+}
+
+/* ============================================================
+   表格行（列表视图）
+   ============================================================ */
+._asset-wiki-row-name,
+._codelist-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tea-color-text-primary);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+._asset-wiki-row-name:hover,
+._codelist-row-name:hover {
+  color: var(--tea-color-text-brand-default);
+}
+
+._asset-wiki-row-name span,
+._codelist-row-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._asset-wiki-id,
+._codelist-id {
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+/* ── 图标 + 文字行内对齐 ── */
+._asset-wiki-inline-icon,
+._codelist-inline-icon,
+._codedetail-inline-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+._asset-wiki-inline-icon svg,
+._codelist-inline-icon svg,
+._codedetail-inline-icon svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   响应式（保持各页原有断点）
+   ============================================================ */
+@media (max-width: 960px) {
+  ._asset-wiki-stats,
+  ._wiki-detail-overview-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  ._asset-code-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  ._asset-code-toolbar {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  ._asset-wiki-grid,
+  ._asset-wiki-skeleton-grid,
+  ._asset-wiki-stats,
+  ._wiki-detail-overview-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  ._asset-wiki-toolbar,
+  ._wiki-detail-header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  ._asset-code-stats {
+    grid-template-columns: 1fr;
+  }
+
+  ._codelist-grid,
+  ._codelist-skeleton-grid {
+    grid-template-columns: 1fr;
+  }
+}

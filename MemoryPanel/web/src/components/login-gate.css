@@ -1,19 +1,228 @@
 /**
- * LoginGate 登录表单样式补丁（右侧表单区域布局，视觉细节交给 Tea 组件本身）。
+ * LoginGate 登录页样式 —— 单列居中的明亮极简风格。
+ *
+ * 视觉基调：接近纯白的柔和渐变底 + 点阵波纹动效（Canvas）+ 居中毛玻璃卡片。
+ * 目标是"简洁明亮"：弱化装饰、强化内容层级（logo → 标题 → 表单 → 主按钮）。
+ *
+ * 说明：登录页是独立全屏场景，不套 ConsoleLayout，因此这里直接写死明亮基调色，
+ * 不使用控制台的 Tea 背景 token；文字与描边仍尽量走 Tea token 保持一致性。
+ * 深色模式下整体转为深底浅字（见文件末尾 .dark 分支）。
  */
 
-._tdai-login-form {
+._tdai-login {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  overflow-y: auto;
+  /* 顶部微冷白 → 底部略暖白的柔和渐变，营造"光从上方来"的明亮感 */
+  background:
+    radial-gradient(120% 80% at 50% -10%, #ffffff 0%, #f7f9fc 45%, #eef2f7 100%);
+}
+
+/* ===== 动效背景层 ===== */
+._tdai-login-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+._tdai-login-bg-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 中心加一层柔光，让卡片区域更亮、四周自然收敛（避免点阵抢视觉） */
+/* 中心加一层柔光，让卡片区域更亮、四周自然收敛。
+   注意：伪元素绘制在 canvas 之上，透明度过高会直接盖掉点阵动效
+   （之前中心用 0.92 白，点阵几乎完全不可见）。表单可读性由卡片自身的
+   毛玻璃底色保证，这里只做很弱的提亮。 */
+._tdai-login-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    56% 44% at 50% 44%,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0.24) 45%,
+    rgba(255, 255, 255, 0) 76%
+  );
+}
+
+/* ===== 内容区 ===== */
+._tdai-login-main {
+  position: relative;
+  z-index: 1;
+  margin: auto;
+  width: 100%;
+  max-width: 440px;
+  padding: 48px 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  align-items: center;
+}
+
+._tdai-login-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 36px 36px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(12px) saturate(1.1);
+  -webkit-backdrop-filter: blur(12px) saturate(1.1);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 12px 32px -8px rgba(16, 24, 40, 0.1),
+    0 32px 64px -24px rgba(16, 24, 40, 0.12);
+}
+
+._tdai-login-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+._tdai-login-title {
+  margin: 20px 0 0;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 32px;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+  text-align: center;
+}
+
+._tdai-login-subtitle {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: #64748b;
+  text-align: center;
+}
+
+/* ===== 表单 ===== */
+._tdai-login-form {
+  width: 100%;
+  margin-top: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* 表单内元素统一左对齐（卡片本身是 center 对齐的） */
+  align-items: stretch;
+  text-align: left;
+}
+
+._tdai-login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+._tdai-login-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  color: #334155;
 }
 
 ._tdai-login-hint {
-  margin-top: 4px;
+  margin: 0;
   font-size: 12px;
-  color: var(--tea-color-text-tertiary);
+  line-height: 18px;
+  color: #94a3b8;
 }
 
+._tdai-login-alert .tea-alert {
+  margin: 0;
+}
+
+/* 主按钮：加高、圆角、深色实底，贴合参考稿的"大号主行动按钮" */
 ._tdai-login-submit.tea-btn {
   width: 100%;
+  height: 42px;
+  margin-top: 2px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+._tdai-login-footer {
+  margin: 20px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+/* Tea 表单控件在本页统一撑满宽度（Select 的 button 外观默认按内容宽度） */
+._tdai-login-form .tea-form-control,
+._tdai-login-form .tea-dropdown,
+._tdai-login-form .tea-select {
+  width: 100%;
+}
+
+._tdai-login-form .tea-input {
+  width: 100%;
+}
+
+/* ===== 窄屏适配 ===== */
+@media (max-width: 480px) {
+  ._tdai-login-main {
+    padding: 24px 16px;
+  }
+
+  ._tdai-login-card {
+    padding: 32px 20px 28px;
+    border-radius: 14px;
+  }
+
+  ._tdai-login-title {
+    font-size: 21px;
+    line-height: 28px;
+  }
+}
+
+/* ===== 深色模式 ===== */
+.dark ._tdai-login {
+  background: radial-gradient(120% 80% at 50% -10%, #131c2e 0%, #0f172a 45%, #0b1120 100%);
+}
+
+.dark ._tdai-login-bg::after {
+  background: radial-gradient(
+    56% 44% at 50% 44%,
+    rgba(15, 23, 42, 0.5) 0%,
+    rgba(15, 23, 42, 0.24) 45%,
+    rgba(15, 23, 42, 0) 76%
+  );
+}
+
+.dark ._tdai-login-card {
+  border-color: rgba(148, 163, 184, 0.16);
+  background: rgba(23, 33, 54, 0.72);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 12px 32px -8px rgba(0, 0, 0, 0.36),
+    0 32px 64px -24px rgba(0, 0, 0, 0.44);
+}
+
+.dark ._tdai-login-title {
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.dark ._tdai-login-subtitle {
+  color: #94a3b8;
+}
+
+.dark ._tdai-login-label {
+  color: #cbd5e1;
+}
+
+.dark ._tdai-login-hint,
+.dark ._tdai-login-footer {
+  color: #64748b;
 }

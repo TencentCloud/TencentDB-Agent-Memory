@@ -30,6 +30,8 @@ export interface PanelConfig {
     sync: boolean;
     proxyBaseUrl: string;
   };
+  /** 默认 Agent 模板文件的本地存储目录根（存 Panel 本地，按 {dir}/{instanceId}/{team_id}/template.json）。 */
+  agentTemplateDir: string;
 }
 
 function envBool(key: string, fallback: boolean): boolean {
@@ -62,5 +64,6 @@ export function loadPanelConfig(): PanelConfig {
       sync: envBool('KNOWLEDGE_LLM_BINDING_SYNC', true),
       proxyBaseUrl: env('KNOWLEDGE_LLM_PROXY_BASE_URL', 'http://127.0.0.1:8096'),
     },
+    agentTemplateDir: env('TDAI_AGENT_TEMPLATE_DIR', './data/agent-templates'),
   };
 }

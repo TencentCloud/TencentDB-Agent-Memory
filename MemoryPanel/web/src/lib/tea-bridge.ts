@@ -140,3 +140,37 @@ export const tea = {
       cancelText: t('teaBridge.confirm.cancel'),
     }),
 };
+
+/**
+ * 「确认后执行」帮助函数 —— 收敛各资产页大量重复的
+ * `tea.confirm(...) → if (!ok) return → try/catch → tea.notify.error` 样板。
+ *
+ * 用户确认后执行 action；action 抛错时默认走 tea.notify.error(err)
+ * （可传 onError 自定义错误提示，如带 i18n 兜底文案）。
+ *
+ * @returns 用户是否确认并成功执行（取消 / 执行失败均为 false）
+ */
+export async function confirmThenRun(
+  opts: {
+    message: string;
+    description?: string;
+    okText?: string;
+    cancelText?: string;
+  },
+  action: () => Promise<void> | void,
+  onError?: (err: unknown) => void,
+): Promise<boolean> {
+  const ok = await tea.confirm(opts);
+  if (!ok) return false;
+  try {
+    await action();
+    return true;
+  } catch (err) {
+    if (onError) {
+      onError(err);
+    } else {
+      tea.notify.error(err);
+    }
+    return false;
+  }
+}

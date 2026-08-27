@@ -117,6 +117,7 @@ import type { AgentProfile } from "./agents/interface.js";
 import { CodeBuddyProfile } from "./agents/codebuddy/profile.js";
 import { ClaudeCodeProfile } from "./agents/claude-code/index.js";
 import { WorkbuddyProfile } from "./agents/workbuddy/profile.js";
+import { PiProfile } from "./agents/pi/index.js";
 import { getHookCacheRepo, setHookCacheRepo, type HookCacheRepo } from "../db/hookCacheRepo.js";
 import { getSessionRepo, setSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import { getRedisClient } from "../db/redis-client.js";
@@ -127,6 +128,7 @@ import { KvSessionRepo } from "../db/kv-session-repo.js";
 import { KvHookCacheRepo } from "../db/kv-hook-cache-repo.js";
 import { KvBindingRepo } from "../db/kv-binding-repo.js";
 import { getProxyStorage, getEffectiveBackend } from "../storage/factory.js";
+import { FsStorage } from "../storage/fs-storage.js";
 import { getSessionStore } from "../session/store.js";
 import type { HookRegistry, PrewarmInput } from "./types.js";
 import { prewarmAll, type PrewarmOptions, type PrewarmResult } from "./prewarm.js";
@@ -190,6 +192,41 @@ export function tryActivateRedis(config: ProxyConfig): boolean {
   } catch (err) {
     console.warn("[injection] Redis unavailable, falling back to SQLite:", err instanceof Error ? err.message : String(err));
     return false;
+  }
+}
+
+/**
+ * session binding 必须始终持久化，不存在纯内存运行模式。
+ *
+ * 如果 storage 和 redis 都未激活（bindingRepo 仍为 undefined），
+ * 用 fs 自动创建一个 KvBindingRepo 兜底。
+ *
+ * 默认路径: ~/.memory-tencentdb/proxy-state/ （与 MemoryCore 的
+ * ~/.memory-tencentdb/memory-tdai/ 同级，保持项目数据聚拢）。
+ * 可通过 config.storage.fs.fsRoot 或环境变量 PROXY_DATA_DIR 覆盖。
+ *
+ * 降级机制: fs 创建失败（权限不足、磁盘满等）→ 打 warn 回退到内存逻辑，
+ * 不阻断 proxy 启动。用户可在线使用但 proxy 重启后需重新 session-init。
+ */
+export function ensureBindingRepoPersistent(config: ProxyConfig): void {
+  const store = getSessionStore();
+  if (store.getBindingRepo()) return; // 已有（storage/redis 激活过了）
+
+  const home = process.env.HOME || process.env.USERPROFILE || "/tmp";
+  const defaultFsRoot = `${home}/.memory-tencentdb/proxy-state`;
+  const fsRoot = process.env.PROXY_DATA_DIR || config.storage?.fs?.fsRoot || defaultFsRoot;
+
+  try {
+    const fsStorage = new FsStorage(fsRoot);
+    store.setBindingRepo(new KvBindingRepo(fsStorage));
+    console.log(`[injection] bindingRepo fallback → fs (${fsRoot})`);
+  } catch (err) {
+    // 降级: fs 不可用时回退到内存逻辑，不阻断启动。
+    // proxy 可正常运行，但重启后 binding 丢失 → 用户需重新 session-init。
+    console.warn(
+      `[injection] fs bindingRepo at ${fsRoot} failed: ${(err as Error).message}. ` +
+      `Falling back to in-memory — session bindings will NOT persist across restarts.`,
+    );
   }
 }
 
@@ -319,10 +356,14 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   }
 
   // ── Asset Reflection (内部效果评估) ─────────────────────────────────────
-  // 默认关闭（markerOptIn=false）—— 生产 pod 完全跳过 register，零性能开销。
-  // 开启后即使 register，只有请求 URL 带 `/analyse` marker 才真 emit 块。
-  // Tag 列表由本节点上"实际 register 了的资产 injector"派生，避免让 LLM 反思
-  // 一个本节点根本没接入的资产。
+  // 默认开启（markerOptIn=true）—— 未配置 assetReflection 的 pod 也 register
+  // 本 injector。register 只是加进 registry，marker 未命中时 execute() 直接
+  // 返回 []，正常请求 prompt 完全不变；只有请求 URL 带 `/analyse` marker
+  // 才真 emit 块。Tag 列表由本节点上"实际 register 了的资产 injector"派生，
+  // 避免让 LLM 反思一个本节点根本没接入的资产。
+  //
+  // 显式配 markerOptIn=false 时 injector 不 register，且 server.ts 顶部 gate
+  // 会把任何带 `/analyse/` 段的请求 404 拒。
   if (config.injection?.assetReflection?.markerOptIn) {
     const registeredIds = new Set(registry.getAll().map((h) => h.id));
     const activeAssetTags: string[] = [];
@@ -353,6 +394,10 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     tryActivateRedis(config);
   }
 
+  // session binding 必须始终持久化 — 不存在纯内存模式。
+  // 如果 storage 和 redis 都未激活，用 fs 作为 bindingRepo 兜底。
+  ensureBindingRepoPersistent(config);
+
   const hookCacheRepo = tryLoadHookCacheRepo();
 
   // Observer: prefer Langfuse (injection spans under LLM trace) when enabled;
@@ -372,6 +417,7 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
       ["codebuddy", new CodeBuddyProfile()],
       ["claude-code", new ClaudeCodeProfile()],
       ["workbuddy", new WorkbuddyProfile()],
+      ["pi", new PiProfile()],
       // ["cursor", new CursorProfile()],
     ]),
     // Legacy fallback: scan system prompt content (for backward compat).

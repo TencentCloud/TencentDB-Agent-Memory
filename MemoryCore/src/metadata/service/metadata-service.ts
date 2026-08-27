@@ -181,6 +181,8 @@ export interface ListWithDetailParams {
   touch_usage?: boolean;
   limit?: number;
   offset?: number;
+  /** 可选类型过滤：只返回列表中匹配的 asset_type；省略 / 空数组 = 不过滤。 */
+  asset_types?: Array<"skill" | "llm_wiki" | "code_graph" | "chat_memory">;
 }
 
 export interface AgentFixedAssetDetailResult {
@@ -824,36 +826,6 @@ export class MetadataService {
     // 核心操作：将用户加入 Team
     const result = await this.store.addTeamMember({ ...input, role: reqRole });
 
-    // 辅助操作：自动创建默认 Agent（失败不阻塞，已有则跳过）
-    try {
-      const user = await this.getUserById(input.user_id);
-      const agentName = user?.username
-        ? `${DEFAULT_AGENT_NAME}-${user.username}`
-        : DEFAULT_AGENT_NAME;
-      const agents = await this.store.listAgentsByTeam(input.team_id, null, {
-        owner_user_id: input.user_id,
-        name: agentName,
-        status: "active",
-      });
-      if (agents.items.length === 0) {
-        await this.createAgent({
-          team_id: input.team_id,
-          owner_user_id: input.user_id,
-          name: agentName,
-          description: DEFAULT_AGENT_DESCRIPTION,
-          prompt: DEFAULT_AGENT_PROMPT,
-          metadata_json: DEFAULT_AGENT_METADATA_JSON,
-          visibility: "team",
-          status: "active",
-        });
-      }
-    } catch (err) {
-      console.warn(
-        `[addTeamMember] 默认 Agent 创建失败，已跳过 (user=${input.user_id} team=${input.team_id})`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-
     return result;
   }
 
@@ -1454,7 +1426,10 @@ export class MetadataService {
     if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${params.agent_id}`);
 
     const pagination = this.pag(params);
-    const bindingPage = await this.store.listAgentFixedAssets(params.agent_id, pagination);
+    const assetTypes = params.asset_types && params.asset_types.length > 0
+      ? params.asset_types
+      : undefined;
+    const bindingPage = await this.store.listAgentFixedAssets(params.agent_id, pagination, { assetTypes });
     const items: AgentAssetView[] = [];
 
     for (const b of bindingPage.items) {
@@ -1684,6 +1659,20 @@ export class MetadataService {
     return agent;
   }
 
+  /**
+   * agent 固定资产写操作的权限：owner 本人，或该 agent 所属团队的 team admin。
+   * 用于冷启动「admin 代新用户挂载默认 Agent 资产」等场景（参照 asset 的
+   * assertCallerIsAssetOwnerOrTeamAdmin 先例，放通 team admin）。
+   */
+  private async assertCallerIsAgentOwnerOrTeamAdmin(ctx: V3AuthContext, agentId: string): Promise<AgentEntity> {
+    const agent = await this.getAgentById(agentId);
+    if (!agent) throw new MetadataError("agent_not_found", `agent not found: ${agentId}`);
+    const callerId = this.requireCallerId(ctx);
+    if (agent.owner_user_id === callerId) return agent;
+    await this.assertCallerIsTeamAdmin(ctx, agent.team_id);
+    return agent;
+  }
+
   private async assertCallerIsTaskCreator(ctx: V3AuthContext, taskId: string): Promise<TaskEntity> {
     const task = await this.getTaskById(taskId);
     if (!task) throw new MetadataError("task_not_found", `task not found: ${taskId}`);
@@ -1777,7 +1766,11 @@ export class MetadataService {
   async createAgentForCaller(input: CreateAgentInput, ctx: V3AuthContext): Promise<AgentEntity> {
     await this.assertTeamExists(input.team_id);
     await this.requireActiveTeamMember(ctx, input.team_id);
-    this.assertCallerIsResourceOwner(ctx, input.owner_user_id);
+    // owner 本人，或该 team 的 team admin（admin 代新用户创建默认 Agent）
+    const callerId = this.requireCallerId(ctx);
+    if (input.owner_user_id !== callerId) {
+      await this.assertCallerIsTeamAdmin(ctx, input.team_id);
+    }
     return this.createAgent(input);
   }
 
@@ -1969,7 +1962,7 @@ export class MetadataService {
     bindings: FixedAssetBindingInput[],
     ctx: V3AuthContext,
   ): Promise<void> {
-    await this.assertCallerIsAgentOwner(ctx, agentId);
+    await this.assertCallerIsAgentOwnerOrTeamAdmin(ctx, agentId);
     return this.setAgentFixedAssets(agentId, bindings);
   }
 

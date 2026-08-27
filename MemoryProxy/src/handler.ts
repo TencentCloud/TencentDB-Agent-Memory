@@ -27,6 +27,7 @@ import {
   resolveForwardTarget,
   resolveSessionKey,
   resolveLatestUserQuery,
+  reportAnalyzerTrace,
   type ForwardTarget,
 } from "./guard-adapter.js";
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
@@ -737,11 +738,85 @@ export async function handleChatCompletions(
     console.log(`[request-classify] session=${sessionKey} agent=${agentSource} headless/no-preset (native ask-user tool absent) → bypass session-init, direct passthrough`);
   }
 
+  // ── mem:session-reset pre-hook ──
+  // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
+  // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
+  // 直接返回"不支持"文案。
+  const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
+  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
+  if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
+    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
+    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
+      const { buildMemResponse } = await import("./mem-command/response-builder.js");
+      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
+      const msg = _headerOnlyAgents.has(agentSource)
+        ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
+          + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
+          + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
+        : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
+          + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
+          + "请在带 ask_user_question preset 的 dsh 环境下使用。";
+      return buildMemResponse(msg, {
+        protocol: "openai",
+        stream: isStream,
+        requestId: `mem-reset-unsupported-${Date.now()}`,
+      });
+    }
+  }
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
+    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
+      const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
+      const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
+      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+        const { getSessionStore } = await import("./session/store.js");
+        const store = getSessionStore();
+        const compositeKey = `${agentSource}:${sessionKey}`;
+        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+
+        // ── 强制归档旧 agent 的 skill buffer（best-effort）──
+        // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
+        const oldState = store.get(compositeKey);
+        if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
+          const si = oldState.sessionInfo as Record<string, string>;
+          if (si.space_id && si.user_id && si.team_id && si.agent_id) {
+            import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
+              const client = getCoreSkillClient(config.coreSkill!);
+              client.forceArchive(
+                {
+                  space_id: si.space_id,
+                  user_id: si.user_id,
+                  team_id: si.team_id,
+                  agent_id: si.agent_id,
+                  session_id: sessionKey,
+                  task_id: si.task_id || undefined,
+                  reason: "session-reset",
+                },
+                { serviceId: si.space_id },
+              ).then((res) => {
+                console.log(`[session-reset] force-archive old buffer: status=${res.status} session=${sessionKey} agent=${si.agent_id}`);
+              }).catch((err) => {
+                console.warn(`[session-reset] force-archive failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }).catch(() => {});
+          }
+        }
+
+        const resetEpoch = Date.now();
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        const bindingRepo = store.getBindingRepo();
+        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
+        console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
+      }
+    }
+  }
+
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
@@ -776,6 +851,7 @@ export async function handleChatCompletions(
       const recovered = await store.getOrRecover(compositeKey, identity, {
         metadataClient,
         messages: body.messages as Array<Record<string, unknown>> ?? [],
+        presetIdentity,
       });
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
@@ -791,6 +867,15 @@ export async function handleChatCompletions(
       // L2b recovery 分支 justRegistered=true 只是 prewarm 信号，走 recovered 分支时
       // wentThroughSessionInitStateMachine=false 会自然过滤掉，不进 sessionJustRegistered。
       let wentThroughSessionInitStateMachine = false;
+      // Recovery hit source 决定是否需要 prewarm：
+      //   - l1 / l2a：本 pod 内存 + storage 都热 —— hook-cache 大概率也在，跳过 prewarm；
+      //   - l2b / history-scan：跨 pod 冷启 / 从 binding 重建 —— hook-cache 可能已过期，需 refill。
+      // 之前无条件 `justRegistered: true` 会导致 L1 hit terminal 的常态轮次每次都跑一遍
+      // skill/knowledge/tdai-memory 网络请求（~2s + 3 次外部调用），且 knowledge 首次
+      // timeout 概率被反复放大。这里按 recovery source 精确判断。
+      const needsPrewarm =
+        recovered?.__recoverySource === "l2b" ||
+        recovered?.__recoverySource === "history-scan";
       if (recovered && isTerminalState) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
@@ -813,17 +898,34 @@ export async function handleChatCompletions(
           agentDetail: recovered.agentDetail,
           taskDetail: recovered.taskDetail,
           bypassed: recovered.bypassed,
-          justRegistered: true, // triggers prewarm to refill hook cache
+          justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
       } else {
+        // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
+        // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
         wentThroughSessionInitStateMachine = true;
+        // 检测客户端 ask_followup_question schema 里 questions 字段是否声明为 array。
+        // CB v1.106+ 声明为 array 且做 type check；老版本无 schema 或 questions 无 type 声明。
+        let questionsAsArray = true; // 默认新版
+        const clientTools = Array.isArray(body.tools) ? body.tools as unknown[] : [];
+        const afqTool = clientTools.find((t: any) =>
+          t?.function?.name === "ask_followup_question" || t?.name === "ask_followup_question"
+        ) as Record<string, unknown> | undefined;
+        if (afqTool) {
+          const params = (afqTool as any).function?.parameters ?? (afqTool as any).parameters;
+          const qType = params?.properties?.questions?.type;
+          questionsAsArray = qType === "array";
+        } else if (clientTools.length === 0) {
+          // 无 tools 定义（极老客户端或 non-CB agent），保守走 string
+          questionsAsArray = false;
+        }
         initResult = await handleSessionInit(
           sessionKey,
           userId || null,
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "openai" },
+          { stream: isStream, modelId: modelId as string, protocol: "openai", questionsAsArray },
           agentSource,
           metadataClient,
           kernelUserKey,
@@ -837,7 +939,7 @@ export async function handleChatCompletions(
         return initResult.response;
       }
 
-      console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
+      console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} resetFlow=${(initResult as any).resetFlow} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
       // 见 anthropicHandler 对称位置：只在真正走 sessionInit state machine 时继承。
       if (wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
 
@@ -845,6 +947,9 @@ export async function handleChatCompletions(
       if (initResult.bypassed) {
         injectedSkipped = true;
         console.log(`[session-init] session=${sessionKey} bypassed → skipping all injection`);
+        if (initResult.resetFlow) {
+          _resetFlowResult = { agentName: "", agentIdShort: "", teamId: "", bypassed: true };
+        }
       }
 
       if (!initResult.bypassed && initResult.sessionInfo) {
@@ -877,6 +982,35 @@ export async function handleChatCompletions(
         spaceId,
       );
 
+      // Prewarm 前置短路：mem-command 命中的 turn 不 forward 上游、也不消费
+      // hook-cache，若照常 prewarm 会白白多花 2-3s + 3 次网络请求（knowledge
+      // 33% timeout 会被放大）。这里先做纯字符串解析（<1ms、无副作用），
+      // 命中就置 memCommandPending 让 prewarm 分支短路；实际 mem-command 执行
+      // 仍在下方原位置进行，L0 write / skill extract / langfuse 全部保留。
+      //
+      // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
+      // checkFirst 场景可安全复用。
+      let memCommandPending = false;
+      if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+        try {
+          const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
+          let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
+          if (!peek && sessionJustRegistered) {
+            peek = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
+          }
+          if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+            memCommandPending = true;
+            console.log(`[hook-cache] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
+          }
+        } catch (err) {
+          console.warn(
+            "[mem-command] pre-prewarm peek failed:",
+            err instanceof Error ? err.message : String(err),
+          );
+          // peek 失败不阻塞主链路，退化为原有行为（正常 prewarm）。
+        }
+      }
+
       // Case 2 success → await prewarm so the first-turn pipeline always
       // hits the cache. A fire-and-forget void() here caused the bug where
       // the pipeline ran before the cache was populated, silently injecting
@@ -885,6 +1019,7 @@ export async function handleChatCompletions(
         !initResult.bypassed &&
         initResult.justRegistered &&
         initResult.sessionInfo &&
+        !memCommandPending &&
         config.injection?.enabled &&
         (config.injection.injectors?.length ?? 0) > 0
       ) {
@@ -894,13 +1029,13 @@ export async function handleChatCompletions(
             keyId: sessionKey,
             userId: userId || "anonymous",
             agentSource,
+            spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
             agentDetail: initResult.agentDetail ?? null,
             taskDetail: initResult.taskDetail ?? null,
             assetCapabilities,
-            // 透传 caller 的 sk-mem key，用于 prewarm 阶段 TDAI ACL 校验（x-tdai-user-key）
             callerUserKey: apiKey ?? undefined,
-          });
+          }, { clearBefore: true });
         } catch (err) {
           console.warn(
             "[hook-cache] handler prewarm error:",
@@ -924,11 +1059,48 @@ export async function handleChatCompletions(
       // call is a no-op and guards against future refactors that copy
       // the object between these two lines.
       restoreSessionSpaceId(sessionInfo, spaceId);
+
+      // 记录 resetFlow 信息到外层，session-init 块结束后用于返回确认响应
+      if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
+        _resetFlowResult = {
+          agentName: initResult.agentDetail?.name ?? "未知",
+          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          taskName: initResult.taskDetail?.name,
+        };
+      }
     } catch (err: unknown) {
       console.error("[session-init] Error in handleSessionInit:", err instanceof Error ? err.message : String(err));
       sessionInfo = undefined;
       injectedSkipped = true;
     }
+  }
+
+  // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
+  if (_resetFlowResult) {
+    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const lines = bypassed
+      ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
+      : [
+          "✅ 已重新绑定团队资产",
+          "",
+          `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
+          teamId ? `- **Team**: ${teamId}` : null,
+          taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
+          "",
+          "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
+        ].filter(Boolean);
+    const text = (lines as string[]).join("\n");
+
+    const { buildMemResponse } = await import("./mem-command/response-builder.js");
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    return buildMemResponse(text, {
+      protocol: "openai",
+      stream: isStream,
+      requestId: `mem-reset-${Date.now()}`,
+    });
   }
 
   // ── mem: command intercept ────────────────────────────────────────────────
@@ -945,7 +1117,7 @@ export async function handleChatCompletions(
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
   if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
-    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse } = await import("./mem-command/index.js");
+    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
     // Session init 状态机在本 turn 完成终态（初始化 or bypass）时，最后一条
@@ -955,6 +1127,8 @@ export async function handleChatCompletions(
     if (!memCmd && sessionJustRegistered) {
       memCmd = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
     }
+    // session-reset 已经在 pre-hook 处理过，跳过防止重复执行，详见 anthropicHandler 同名段
+    if (memCmd?.command === "session-reset") memCmd = null;
     if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
       // 会话未初始化时，命令不可用（同 anthropic 侧提示）
       if (!sessionInfo || injectedSkipped) {
@@ -964,7 +1138,7 @@ export async function handleChatCompletions(
           stream: isStream,
           requestId: `mem-cmd-${Date.now()}`,
         });
-        console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} blocked: session not initialized`);
+        console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} blocked: session not initialized`);
         return errResponse;
       }
       const memResult = await executeMemCommand(memCmd, {
@@ -978,6 +1152,8 @@ export async function handleChatCompletions(
         protocol: "openai",
         stream: isStream,
         args: memCmd.args,
+        // task 命令族用最近对话生成草稿。OpenAI/CC/CB 协议直接从 body.messages 取。
+        bodyMessages: extractSimpleMessages(body.messages),
         // OpenAI 协议无 extended thinking 概念，恒 false
       });
 
@@ -1019,7 +1195,7 @@ export async function handleChatCompletions(
         }
       }
 
-      console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} success=${memResult.success}`);
+      console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} success=${memResult.success}`);
 
       // Langfuse: 上报 mem-command（跟 anthropicHandler 对称）。
       //   lf 在 L955 才构造，这里 inline 推导 turnSeq → traceId。
@@ -1145,6 +1321,8 @@ export async function handleChatCompletions(
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
   pipe.requestReceived(messages.length, isStream);
+  if (target.logLine) pipe.info("COST_GUARD", target.logLine);
+  if (target.logLineExtra) pipe.info("COST_GUARD_DETAIL", target.logLineExtra);
 
   // ── Trace-level tags ──
   // agent_source 标明客户端族群（codebuddy / claude-code / codex / …），供
@@ -1169,9 +1347,22 @@ export async function handleChatCompletions(
     userId: keyId,
     sessionId: sessionKey,
     tags: traceTags,
-    routeTags: [],
+    routeTags: target.tags,
     userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
+  if (target.analyzerTrace) {
+    reportAnalyzerTrace(config, target.analyzerTrace, {
+      traceId,
+      langfuseTraceId: lf.traceId,
+      traceName: lf.traceName,
+      traceTags: lf.tags,
+      keyId: `${keyId}:${sessionKey}`,
+      sessionKey,
+      turnSeq,
+      startTime,
+      spaceId,
+    });
+  }
 
   // ── Langfuse debug metadata (only when config.langfuse.debug=true) ────────
   // CB / cursor / windsurf 走 OpenAI 协议命中本 handler；开 debug 时把请求
@@ -1197,7 +1388,7 @@ export async function handleChatCompletions(
     name: `${target.model} / ${keyId}`,
     startTime,
     input: { messages: flattenMessagesForOpik(messages) },
-    tags: traceTags,
+    tags: [...traceTags, ...target.tags],
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1320,6 +1511,14 @@ export async function handleChatCompletions(
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
   const routedFrom = retried ? "" : target.routedFrom;
+  // `routedFrom` is also present in cost-guard's opaque logMeta. Keep the
+  // normalized post-retry value authoritative so fallback requests never book
+  // savings or carry stale route attribution.
+  const { routedFrom: _ignoredRoutedFrom, ...routeLogMeta } = target.logMeta;
+  const responseLogMeta = {
+    ...routeLogMeta,
+    ...(retried ? { retrySuccess: true } : {}),
+  };
 
   // ── Streaming response ───────────────────────────────────────────────────
   if (isStream) {
@@ -1342,6 +1541,7 @@ export async function handleChatCompletions(
         upstreamUrl: target.url,
         stream: true,
         usage: { error: true, status: upstreamResp.status, body: errText.slice(0, 500) },
+        ...responseLogMeta,
         routedFrom,
         spaceId,
         upstreamRequestId,
@@ -1375,7 +1575,7 @@ export async function handleChatCompletions(
       startTime,
       inputMessages: messages,
       retried,
-      logMeta: retried ? { retrySuccess: true } : {},
+      logMeta: responseLogMeta,
       routedFrom,
       tdaiClient,
       tdaiIdentity,
@@ -1422,7 +1622,7 @@ export async function handleChatCompletions(
     // non-JSON upstream response
   }
 
-  const logMeta = retried ? { retrySuccess: true } : {};
+  const logMeta = responseLogMeta;
 
   // Report the completed response to the extension (same signal the streaming
   // path emits from its tap). Fire-and-forget.
@@ -1502,10 +1702,10 @@ export async function handleChatCompletions(
       stream: false,
       usage,
       extensionStats: preparedStats ?? undefined,
+      ...logMeta,
       routedFrom,
       spaceId,
       upstreamRequestId,
-      ...logMeta,
     });
 
     const outputMessages = assistantMessage ? [assistantMessage] : [];
@@ -1902,6 +2102,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           stream: true,
           usage: lastUsage,
           extensionStats: ctx.preparedStats ?? undefined,
+          ...ctx.logMeta,
           routedFrom: ctx.routedFrom,
           spaceId,
           upstreamRequestId,

@@ -28,7 +28,14 @@ export type CcRequestKind = "main" | "fork" | "sidequery";
  * 等价原有链路。
  */
 export function classifyCcRequest(body: Record<string, unknown>): CcRequestKind {
-  const msgs = Array.isArray(body.messages) ? (body.messages as unknown[]) : [];
+  const rawMsgs = Array.isArray(body.messages) ? (body.messages as unknown[]) : [];
+  // Filter out non-conversation messages (e.g. role:"system" injected by some CC
+  // versions into the messages array). Only user/assistant participate in the
+  // cache_control marker position logic that distinguishes main from fork.
+  const msgs = rawMsgs.filter((m) => {
+    const role = (m as { role?: string })?.role;
+    return role === "user" || role === "assistant";
+  });
   const n = msgs.length;
   const markerIdx = findLastCacheControlIndex(msgs);
 

@@ -39,7 +39,14 @@ export interface CostGuardConfig {
   anthropicUpstream?: {
     url: string;
   };
-  /** Opaque private options, forwarded to the extension as-is. */
+  /**
+   * Opaque private options, forwarded to the extension as-is.
+   *
+   * Known keys the current cost-guard build understands (still untyped here):
+   * `taskArchiveEnabled`, `compress*` / `gate*`, `judge` (enabled, baseUrl,
+   * timeouts, everyNToolTurns, latch*), `requestPrepare`, `controlPlane`,
+   * analyze/cheap model fields, `agents` (per-agent cheap overrides).
+   */
   options: Record<string, unknown>;
 }
 
@@ -164,6 +171,24 @@ export interface LangfuseConfig {
    *      Langfuse 存储成本增加。**线上默认关闭**，只在排障时打开。
    */
   debug?: boolean;
+
+  // ── 批量上报调优（防高并发丢 span）──
+
+  /**
+   * 内存队列最大深度（超出即丢弃）。
+   * 映射 OTel BatchSpanProcessor 的 maxQueueSize。默认 8192。
+   */
+  maxQueueSize: number;
+  /**
+   * 每批导出的最大 span 数。
+   * 映射 LangfuseSpanProcessor 的 flushAt / OTel maxExportBatchSize。默认 256。
+   */
+  flushAt: number;
+  /**
+   * 定时 flush 间隔（秒）。
+   * 映射 LangfuseSpanProcessor 的 flushInterval / OTel scheduledDelayMillis。默认 2。
+   */
+  flushInterval: number;
 }
 
 /** Session initialization configuration. */
@@ -248,7 +273,7 @@ export interface SessionInitConfig {
    * 该 task_id 不需要在控制面元数据中真实存在——仅作为标签记录，不影响
    * 检索隔离（主维度为 team/user/agent/session）。
    *
-   * 若未配置，task_select 阶段不会出现"跳过"选项。
+   * 默认 "default"（开启）。若想关闭，在 YAML 中配为空字符串 `defaultTaskId: ""`。
    */
   defaultTaskId?: string;
   headerAutoSelect?: {
@@ -533,6 +558,18 @@ export interface MemCommandConfig {
    * 例如 ["sync", "help"] 表示只允许 mem:sync 和 mem:help，其他命令不识别。
    */
   allowedCommands: string[];
+  /**
+   * mem:create-task / mem:update-task 使用的 LLM 草稿生成器配置。可选。
+   * 未配置或 enabled=false 时，task 命令族会返回"未配置 task_draft"错误。
+   * 结构与 packages/cost-guard 的 LLMInferConfig 保持形状一致。
+   */
+  taskDraft?: {
+    enabled: boolean;
+    model: string;
+    url: string;
+    apiKey: string;
+    timeoutMs: number;
+  };
 }
 
 /** Context injection configuration. */
@@ -560,7 +597,9 @@ export interface InjectionConfig {
    */
   externalGatewayUrl?: string;
   /**
-   * 资产反思模式（内部效果评估用）。**默认关闭**，跟外部用户无关。
+   * 资产反思模式（内部效果评估用）。**默认开启**——为了让运营方零配置即可
+   * 用 URL marker 观测资产注入效果。marker 本身仍是 opt-in：不带 `/analyse/`
+   * 段的请求完全无感。
    *
    * 开启后，请求路径带 `/analyse` marker（结构同 `/cost-guard`：夹在
    * `/{agent}/{spaceId}` 之后，如 `/codebuddy/default/analyse/v1/messages`）
@@ -570,9 +609,9 @@ export interface InjectionConfig {
    * marker 段列表由本节点上实际注册的资产 injector 决定（skill /
    * tdai-memory / knowledge），一个都没注册时 injector 不 emit 任何块。
    *
-   * 语义完全对齐 `costGuard.markerOptIn`：
-   *   - `false`（默认）：injector 不 register，零性能开销
-   *   - `true`：injector register，仅当 URL 带 `/analyse/` 段时才 emit 块
+   * 姿势对齐 `costGuard.markerOptIn`，但 default 相反：
+   *   - `true`（默认）：injector register；仅当 URL 带 `/analyse/` 段时才 emit 块
+   *   - `false`：injector 不 register 且顶部 gate 把 `/analyse/` 段 404 拒
    */
   assetReflection?: {
     markerOptIn: boolean;
@@ -768,6 +807,9 @@ export interface RawYamlConfig {
     publicKey?: string;
     secretKey?: string;
     debug?: boolean;
+    maxQueueSize?: number;
+    flushAt?: number;
+    flushInterval?: number;
   };
   creditReport?: { url?: string; timeoutMs?: number };
   creditPricing?: { models?: Partial<CreditPricingEntry>[] };
@@ -834,6 +876,21 @@ export interface RawYamlConfig {
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {
     apiKey?: string;
+  };
+  /**
+   * mem: 命令族配置（含 create-task / update-task 的 LLM 草稿生成器）。
+   * 与 ProxyConfig.memCommand 对应；未配置则命令族按默认禁用行为。
+   */
+  memCommand?: {
+    enabled?: boolean;
+    allowedCommands?: unknown[];
+    taskDraft?: {
+      enabled?: unknown;
+      model?: unknown;
+      url?: unknown;
+      apiKey?: unknown;
+      timeoutMs?: unknown;
+    };
   };
 }
 

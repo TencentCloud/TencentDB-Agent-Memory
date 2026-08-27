@@ -18,7 +18,7 @@
 
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { generateText, tool, stepCountIs, jsonSchema } from "ai";
+import { generateText, streamText, tool, stepCountIs, jsonSchema } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { report } from "../../core/report/reporter.js";
 import type {
@@ -100,6 +100,15 @@ export interface StandaloneLLMConfig {
     /** 是否用 memory systemUser.userKey 作为 Authorization（默认 true）。 */
     useMemorySystemUserKey?: boolean;
   };
+  /**
+   * 是否用流式请求(streamText)调用上游。默认 false(generateText 非流式)。
+   * 个别 OpenAI 兼容上游只接受流式请求时置 true。
+   *
+   * ⚠️ 仅 StandaloneLLMRunner(含 gateway/local/knowledge-ingest)路径生效;
+   * OpenClaw host runner 不使用此 runner,该开关被忽略。不会把增量 token
+   * 透传给调用方,只是"以流式协议请求上游后等待完整文本"的兼容层。
+   */
+  stream?: boolean;
 }
 
 // ============================
@@ -160,7 +169,7 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
         try {
           await fsPromises.mkdir(path.dirname(resolved), { recursive: true });
           await fsPromises.writeFile(resolved, args.content, "utf-8");
-          logger?.debug?.(`${TAG} write: "${args.path}" → ${args.content.length} chars`);
+          logger?.debug?.(`${TAG} write: "${args.path}" → ${Buffer.byteLength(args.content, "utf8")} bytes`);
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -202,10 +211,16 @@ function createSandboxedTools(workspaceDir: string, logger?: Logger) {
             if (!content.includes(edit.oldText)) {
               return JSON.stringify({ error: `oldText not found in file "${args.path}": ${edit.oldText.slice(0, 80)}` });
             }
-            content = content.replace(edit.oldText, edit.newText);
+            // Pass a replacer function so `$&`, `$'`, "$`", `$1`, `$$` in newText are
+            // inserted literally. A plain string replacement would expand them as
+            // special patterns -- `$'` (matched substring's suffix) duplicates the rest
+            // of the file on every edit, growing scene blocks exponentially.
+            content = content.replace(edit.oldText, () => edit.newText);
           }
           await fsPromises.writeFile(resolved, content, "utf-8");
-          logger?.debug?.(`${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${content.length} chars`);
+          logger?.debug?.(
+            `${TAG} edit: "${args.path}" → ${args.edits.length} replacement(s), ${Buffer.byteLength(content, "utf8")} bytes`,
+          );
           return JSON.stringify({ success: true });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -241,6 +256,7 @@ export class StandaloneLLMRunner implements LLMRunner {
   private config: StandaloneLLMConfig;
   private model: string;
   private enableTools: boolean;
+  private stream: boolean;
   private logger?: Logger;
 
   /**
@@ -254,11 +270,13 @@ export class StandaloneLLMRunner implements LLMRunner {
     config: StandaloneLLMConfig;
     model?: string;
     enableTools?: boolean;
+    stream?: boolean;
     logger?: Logger;
   }) {
     this.config = opts.config;
     this.model = opts.model ?? opts.config.model;
     this.enableTools = opts.enableTools ?? false;
+    this.stream = opts.stream ?? opts.config.stream ?? false;
     this.logger = opts.logger;
   }
 
@@ -318,7 +336,7 @@ export class StandaloneLLMRunner implements LLMRunner {
         ? AbortSignal.any([timeoutSignal, params.abortSignal])
         : timeoutSignal;
 
-      const result = await generateText({
+      const callParams = {
         model: provider.chat(this.model),
         system: params.systemPrompt,
         prompt: params.prompt,
@@ -335,28 +353,53 @@ export class StandaloneLLMRunner implements LLMRunner {
           functionId: params.taskId,
           metadata: buildTelemetryMetadata(params),
         },
-      });
+      };
 
-      const text = (result.text ?? "").trim();
+      // stream=true → streamText(给只吃流式的上游);否则 generateText。
+      // 读 totalUsage 而不是单 step 的 usage —— tool-call 多 step 时后者只报最后一步,
+      // 会漏掉前序工具调用请求的用量,导致 credit 计费偏低。
+      // ai@6.0.164 的字段是 inputTokens/outputTokens/totalTokens。
+      const { text, usage, steps } = this.stream
+        ? await (async () => {
+            const streamResult = streamText(callParams);
+            return {
+              text: ((await streamResult.text) ?? "").trim(),
+              usage: await streamResult.totalUsage,
+              steps: await streamResult.steps,
+            };
+          })()
+        : await (async () => {
+            const genResult = await generateText(callParams);
+            return {
+              text: (genResult.text ?? "").trim(),
+              usage: genResult.totalUsage,
+              steps: genResult.steps,
+            };
+          })();
+
       const totalMs = Date.now() - runStartMs;
 
       // 暴露 token usage 到 side-channel（供 MetricTrackingRunner 读取）
-      if (result.usage) {
+      // AI SDK 用 inputTokens/outputTokens,我们的内部 LLMUsage 沿用旧命名
+      // promptTokens/completionTokens 以匹配 MetricTrackingRunner。
+      if (usage) {
+        const promptTokens = usage.inputTokens ?? 0;
+        const completionTokens = usage.outputTokens ?? 0;
         this.lastUsage = {
-          promptTokens: result.usage.promptTokens ?? 0,
-          completionTokens: result.usage.completionTokens ?? 0,
-          totalTokens: (result.usage.promptTokens ?? 0) + (result.usage.completionTokens ?? 0),
+          promptTokens,
+          completionTokens,
+          totalTokens: usage.totalTokens ?? promptTokens + completionTokens,
         };
       } else {
         this.lastUsage = undefined;
       }
 
       this.logger?.debug?.(
-        `${TAG} run() completed: ${totalMs}ms, steps=${result.steps.length}, output=${text.length} chars`,
+        `${TAG} run() completed: ${totalMs}ms, steps=${steps.length}, output=${text.length} chars`,
       );
 
       // Log each step's activity (tool calls + text output)
-      for (const step of result.steps) {
+      for (const step of steps) {
         const calls = step.toolCalls ?? [];
         const textLen = step.text?.length ?? 0;
         if (calls.length > 0) {

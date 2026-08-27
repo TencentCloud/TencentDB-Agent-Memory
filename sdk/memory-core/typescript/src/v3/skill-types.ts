@@ -125,6 +125,34 @@ export interface SkillGetRequest extends SkillIdFields {
   include_manifest?: boolean;
 }
 
+// ── /v3/skill/get-by-name ──
+/**
+ * `POST /v3/skill/get-by-name` — locate a skill by `(team_id, agent_id,
+ * skill_name)` instead of its internal `skl-xxx` id.
+ *
+ * Unlike the other CRUD endpoints (which extend the all-optional
+ * `SkillIdFields`), `team_id` and `agent_id` are REQUIRED here — the
+ * schema (`getByNameRequestSchema`) returns 40001 when either is missing.
+ * `skill_name` matches the `<available_skills>` block's `- name:` entry,
+ * so agents can fetch a skill's full body in a single call.
+ *
+ * Returns the same `SkillDetail` shape as `/v3/skill/get` (40401 when no
+ * skill with that name exists for the agent).
+ */
+export interface SkillGetByNameRequest extends SkillIdFields {
+  /** Required. */
+  team_id: string;
+  /** Required. */
+  agent_id: string;
+  /** Required. 1–64 chars; unique per (team_id, agent_id). */
+  skill_name: string;
+  version?: number;
+  /** Default true. */
+  include_content?: boolean;
+  /** Default true. */
+  include_manifest?: boolean;
+}
+
 // ── /v3/skill/list ──
 export interface SkillListFilters {
   owner_agent_id?: string;
@@ -202,6 +230,26 @@ export interface SkillFileContent {
   size_bytes: number;
   mime_type: string;
   version: number;
+}
+
+// ── /v3/skill/export ──
+export interface SkillExportRequest extends SkillIdFields {
+  skill_id: string;
+  /** Target version; defaults to head. */
+  version?: number;
+  /** Only `"zip"` is supported by the schema. */
+  format?: "zip";
+}
+export interface SkillExportData {
+  /** ZIP archive bytes, base64-encoded. */
+  zip_base64: string;
+  /** `${name}.zip`. */
+  filename: string;
+  name: string;
+  version: number;
+  file_count: number;
+  total_bytes: number;
+  warnings: string[];
 }
 
 // ── /v3/skill/listing ──
@@ -357,17 +405,19 @@ export interface SkillConversationAddData {
  * thresholds (see `MemoryCore/src/gateway/skill-handlers.ts` +
  * `forceArchiveRequestSchema`).
  *
- * All isolation ids are REQUIRED. `space_id` follows the same
- * convention as `/extract` / `/conversation/add`: optional at the
- * schema layer, server falls back to `auth.serviceId`. Constructor
- * defaults are NOT merged in — callers pass ids explicitly.
+ * All isolation ids are REQUIRED. Unlike `/extract` and
+ * `/conversation/add` (where `space_id` is optional and falls back to
+ * `auth.serviceId`), `forceArchiveRequestSchema` makes `space_id` a
+ * REQUIRED field — pass it explicitly. Constructor defaults are NOT
+ * merged in — callers pass ids explicitly.
  *
  * `reason` (≤ 2000 chars) and `task_id` are optional; `task_id` is
  * forwarded to `archive.task.task_ref_id` when an archive is produced.
  */
 export interface SkillConversationForceArchiveRequest {
   session_id: string;
-  space_id?: string;
+  /** Required by `forceArchiveRequestSchema`. */
+  space_id: string;
   user_id: string;
   team_id: string;
   agent_id: string;

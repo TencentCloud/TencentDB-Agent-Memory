@@ -1992,12 +1992,13 @@ export class TdaiGateway {
     );
 
     const llmRunner = new StandaloneLLMRunner({
-      config: Object.fromEntries([
-        ["baseUrl", effective.baseUrl],
-        ["apiKey", effective.apiKey],
-        ["model", effective.model ?? "default"],
-        ["timeoutMs", effective.timeoutMs ?? 120_000],
-      ]) as import("../adapters/standalone/llm-runner.js").StandaloneLLMConfig,
+      config: {
+        baseUrl: effective.baseUrl,
+        apiKey: effective.apiKey,
+        model: effective.model ?? "default",
+        timeoutMs: effective.timeoutMs ?? 120_000,
+        stream: effective.stream ?? false,
+      },
     });
     const cfg = this.core.getResolvedSkillConfig();
     return new SkillExtractorClass({

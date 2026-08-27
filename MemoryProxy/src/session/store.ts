@@ -27,6 +27,8 @@ import type { SessionInitState, SessionInitStatus, SessionInfo, AgentDetail, Tas
 import { getSessionRepo, type SessionRepo } from "../db/sessionRepo.js";
 import type { BindingRepo, SessionBinding } from "../db/binding-repo.js";
 import type { MetadataClient } from "../meta/client.js";
+import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
+import type { PresetIdentity } from "./preset.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -54,6 +56,13 @@ export interface RecoveryContext {
   metadataClient?: MetadataClient;
   /** Full message history for fallback recovery via form-envelope scan. */
   messages?: Record<string, unknown>[];
+  /**
+   * Identity pre-parsed from request headers (x-team-id/x-agent-id/x-task-id).
+   * When present, history-scan is skipped: header-identity agents (e.g. Pi)
+   * carry no interactive form markers, so scanning would unconditionally bypass
+   * them. Instead we defer to handleSessionInit (the headerAutoSelect path).
+   */
+  presetIdentity?: PresetIdentity;
 }
 
 export class SessionStore {
@@ -124,6 +133,26 @@ export class SessionStore {
   }
 
   /**
+   * 把 recovery source 挂到 state 的**非可枚举**字段上——handler 侧读取
+   * `state.__recoverySource` 语义不变，但 `deepEqual` / `JSON.stringify` /
+   * `Object.keys` 都不会看到这一枚 transient marker，避免测试断言"恢复后
+   * state 与原 state 完全等价"因新增字段挂掉。
+   */
+  private tagRecoverySource<T extends SessionInitState>(
+    state: T,
+    src: NonNullable<SessionInitState["__recoverySource"]>,
+  ): T {
+    const copy = { ...state } as T;
+    Object.defineProperty(copy, "__recoverySource", {
+      value: src,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    return copy;
+  }
+
+  /**
    * L1 write + L2a await write-through + L2b fire-and-forget binding。
    *
    * ⚠ 契约：`await store.set(...)` 完成时，L2a repo 已被 await（成功或静默失败）。
@@ -135,6 +164,32 @@ export class SessionStore {
    * "小纸条"型持久化，用于长睡对话唤醒；写延迟不影响 pending 状态跨节点恢复。
    */
   async set(keyId: string, state: SessionInitState): Promise<void> {
+    // `__recoverySource` is a transient hint produced by getOrRecover() only,
+    // and must not leak into L1/L2a/L2b persistence. Strip it defensively here
+    // so future callers who forward a getOrRecover() result into set() don't
+    // pollute the repo (业务 caller 目前都从 store.get() 拿 state，本身没有该
+    // 字段；这里是最后一道兜底).
+    if (state.__recoverySource !== undefined) {
+      const { __recoverySource: _drop, ...clean } = state;
+      void _drop;
+      state = clean as SessionInitState;
+    }
+    // resetFlow / resetEpoch 自动继承 —— pre-hook 写入这两个字段后,form 流程会
+    // 经过多次 state 转换（pending_asset_confirm → pending_team_select → ...）,
+    // 每次转换点若手工 new 一个 state 对象很容易漏掉这俩字段,导致 completeRegistration
+    // 拿到 resetFlow=undefined,handler 侧就无法识别"这是 reset 引导的完成回合"→
+    // 请求被透传给 LLM 产生幻觉响应。
+    // 保守做法：只在新 state 未显式声明这俩字段（值为 undefined）时,从旧 state
+    // 继承一次。显式传 false / 具体值的 caller 不会被覆盖。
+    const prev = this.states.get(keyId);
+    if (prev) {
+      if (state.resetFlow === undefined && prev.resetFlow !== undefined) {
+        state = { ...state, resetFlow: prev.resetFlow };
+      }
+      if (state.resetEpoch === undefined && prev.resetEpoch !== undefined) {
+        state = { ...state, resetEpoch: prev.resetEpoch };
+      }
+    }
     this.states.set(keyId, state);
     const id = this.identities.get(keyId);
     if (!id) {
@@ -294,14 +349,11 @@ export class SessionStore {
     // 读到最新状态。L1 pending 命中作为 L2a 失败/miss 时的 last-resort fallback
     // 保留（见 Step 2 后的分支），保证同 pod 场景下 L2a 尚未落盘时不倒退。
     //
-    // 代价：pending_* 每轮多一次 storage GET（~1-2ms Redis / ~50ms COS）。
-    // pending 轮次只在初始化 form 阶段出现，每个 session 顶多 2-4 次，可接受；
-    // initialized 快路径仍是纯内存零 IO。
+    // 代价：每轮多一次 storage GET（~50ms COS）。
+    // 多节点无状态设计：L1 仅作为 L2a miss 时的降级 fallback（COS 抖动），
+    // 不作为权威源。session-reset 可能在任意 pod 执行，L1 initialized 不可信。
     const l1 = this.get(keyId);
-    if (l1 && l1.status === "initialized") {
-      console.log(`[cache] session=${keyId} L1 hit (terminal)`);
-      return l1;
-    }
+    // 不对 initialized 做 L1 短路 —— 一律走 L2a 拿权威状态。
 
     // Step 2: L2a SessionRepo (Redis / SQLite / ProxyStorage) — full SessionInitState.
     // Startup `hydrateFromDb()` covers the single-node case, but in multi-node
@@ -313,30 +365,34 @@ export class SessionStore {
     if (this.repo) {
       const l2a = await this.probeL2a(keyId, identity);
       if (l2a) {
-        console.log(`[cache] session=${keyId} L2a hit → promote L1${l1 ? " (override stale L1)" : ""}`);
-        return l2a;
+        // 只有 L1 存在**且**status 不同才算真"override stale L1"。相同 status
+        // 只是 L2a 权威读回来复核一遍，属正常路径（pending_* 每轮都会走 L2a
+        // probe），日志里没必要拉警报，之前的无条件 "override stale L1" 会误
+        // 导观察者以为有一致性问题。
+        const stale = l1 && l1.status !== l2a.status ? " (override stale L1)" : "";
+        console.log(`[cache] session=${keyId} L2a hit → promote L1${stale}`);
+        return this.tagRecoverySource(l2a, "l2a");
       }
     }
 
-    // Step 2.5: L1 pending 命中 + L2a miss 的兜底。
+    // Step 2.5: L2a miss 时的 L1 降级兜底。
     //
-    // 触发路径：同 pod 内 pending_* 轮次之间 —— L2a 已经在上一轮 `set()` 里
-    // await 落盘，probeL2a 应该命中；但若 L2a 真的 miss（storage 抖动 / 后端
-    // 短暂不可用 / 极端时序），继续走 L2b 只会拿到 undefined（binding 只在
+    // L2a(COS) 抖动 / 短暂不可用时，继续走 L2b 只能拿到 binding（只在
     // initialized 写），最终 `tryHistoryScan` 无条件 bypass —— 反而更糟。
-    // 这里回退到 L1 pending 是 "宁可用略旧但合理的状态" 的取舍。
+    // 这里回退到 L1 是 "宁可用略旧但可用的状态" 的 graceful degradation。
     //
     // zombie / user-mismatch 已在 `this.get()` 与 `probeL2a` 内部各自 invalidate，
     // 走到这里的 l1 一定是 fresh + user 匹配的。
     if (l1) {
-      console.log(`[cache] session=${keyId} L1 hit (pending, L2a miss fallback)`);
-      return l1;
+      console.log(`[cache] session=${keyId} L1 fallback (L2a miss, status=${l1.status})`);
+      return this.tagRecoverySource(l1, "l1");
     }
 
     // Step 3: L2b Binding
     if (!this.bindingRepo) {
       console.log(`[cache] session=${keyId} miss (no bindingRepo) → history-scan`);
-      return this.tryHistoryScan(keyId, identity, ctx);
+      const scanned = await this.tryHistoryScan(keyId, identity, ctx);
+      return scanned ? this.tagRecoverySource(scanned, "history-scan") : undefined;
     }
     let binding: SessionBinding | null;
     try {
@@ -346,7 +402,8 @@ export class SessionStore {
     }
     if (!binding) {
       console.log(`[cache] session=${keyId} miss (no binding) → history-scan`);
-      return this.tryHistoryScan(keyId, identity, ctx);
+      const scanned = await this.tryHistoryScan(keyId, identity, ctx);
+      return scanned ? this.tagRecoverySource(scanned, "history-scan") : undefined;
     }
     console.log(`[cache] session=${keyId} L2b binding hit outcome=${binding.outcome} → rebuild`);
 
@@ -368,11 +425,12 @@ export class SessionStore {
         taskDetail: null,
       };
       await this.set(keyId, state);
-      return state;
+      return this.tagRecoverySource(state, "l2b");
     }
 
     // Step 3.2: initialized outcome → rebuild via kernel
-    return this.rebuildFromBinding(keyId, identity, binding, ctx);
+    const rebuilt = await this.rebuildFromBinding(keyId, identity, binding, ctx);
+    return rebuilt ? this.tagRecoverySource(rebuilt, "l2b") : undefined;
   }
 
   /**
@@ -624,6 +682,17 @@ export class SessionStore {
     identity: SessionIdentity,
     ctx: RecoveryContext,
   ): Promise<SessionInitState | undefined> {
+    // Header-identity agents (e.g. Pi) carry identity in request headers, not
+    // interactive picker forms — so their history has no form markers and the
+    // scan below would unconditionally bypass them. When the caller already
+    // parsed a preset identity from headers, defer to handleSessionInit (the
+    // headerAutoSelect path) by returning undefined instead of bypassing.
+    if (ctx.presetIdentity) {
+      console.log(
+        `[session-recover] ${keyId} preset identity present → defer to handleSessionInit (skip history-scan)`,
+      );
+      return undefined;
+    }
     const messages = ctx.messages ?? [];
     if (messages.length === 0) return undefined;
 
@@ -653,7 +722,7 @@ export class SessionStore {
       if (typeof c === "string") {
         if (
           c.startsWith("<system-reminder>") ||
-          c.startsWith("Current runtime context.") ||
+          isDshRuntimeContextSnapshot(c) ||
           c.startsWith("<system-reminder>\nA skill is a reusable")
         ) {
           continue;
@@ -716,37 +785,12 @@ export class SessionStore {
       }
     }
 
-    if (foundBypass && !foundAgentId) {
-      // User chose bypass: construct bypass state
-      const state: SessionInitState = {
-        status: "initialized",
-        keyId,
-        startedAt: Date.now(),
-        attemptCount: 0,
-        bypassed: true,
-        sessionInfo: null,
-        agentDetail: null,
-        taskDetail: null,
-      };
-      this.states.set(keyId, state);
-      console.log(`[session-recover] ${keyId} history scan → bypass (form found, no agent selected)`);
-      return state;
-    }
-
     if (!foundAgentId) {
-      // Has history but can't extract anything → one-shot bypass, don't re-pop form
-      console.log(`[session-recover] ${keyId} history scan → one-shot bypass (conversation exists but no form markers found)`);
-      const state: SessionInitState = {
-        status: "initialized",
-        keyId,
-        startedAt: Date.now(),
-        attemptCount: 0,
-        bypassed: true,
-        sessionInfo: null,
-        agentDetail: null,
-        taskDetail: null,
-      };
-      return state;
+      // 无论是"历史里选了否"还是"完全没有 form marker"，只要无法恢复 agent
+      // 身份就视为未初始化 → 返回 undefined 让上层走 session-init 弹表单。
+      // 与 mem:session-reset 语义对齐：session 未 initialized = 必须 init。
+      console.log(`[session-recover] ${keyId} history scan → no agent marker, treating as uninitialized`);
+      return undefined;
     }
 
     // Found agent_id in history — try kernel rebuild (same as L2b hit path)
