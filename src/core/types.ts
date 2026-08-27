@@ -81,6 +81,15 @@ export interface LLMRunParams {
   workspaceDir?: string;
   /** Plugin instance ID for metric reporting (optional). */
   instanceId?: string;
+  /**
+   * Force the model to write its result via the `write_to_file` tool instead of
+   * emitting it as plain text. Only honoured by tool-enabled standalone runs.
+   * Used by L3 persona generation: large prompts make some OpenAI-compatible
+   * models (e.g. Moonshot) prefer a text answer over a tool call; forcing the
+   * tool guarantees the file is written by the model, with the text fallback
+   * still acting as a safety net.
+   */
+  forceWriteTool?: boolean;
 }
 
 /**

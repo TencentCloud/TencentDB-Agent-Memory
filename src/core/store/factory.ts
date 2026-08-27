@@ -101,6 +101,22 @@ export function createStoreBundle(
           sendDimensions: config.embedding.sendDimensions,
           maxInputChars: config.embedding.maxInputChars,
         }, logger);
+      } else if (config.embedding.provider !== "none" && config.embedding.provider !== "local") {
+        // A remote embedding provider was configured but the service was NOT
+        // created. The usual cause is an empty/unresolved apiKey (e.g.
+        // ${OPENAI_API_KEY} not present in the gateway process environment),
+        // which otherwise SILENTLY disables semantic search — hybrid search
+        // degrades to keyword-only with no error. Surface it at WARN so the
+        // misconfiguration is diagnosable instead of mysterious.
+        const why = !config.embedding.apiKey
+          ? "apiKey is empty (is the provider API key resolved in this process's environment?)"
+          : !config.embedding.enabled
+            ? "embedding.enabled=false (config validation failed)"
+            : "unknown reason";
+        logger?.warn?.(
+          `${TAG} Embedding provider '${config.embedding.provider}' is configured but the EmbeddingService was NOT initialised: ${why}. ` +
+          `Semantic search will fall back to keyword-only.`,
+        );
       }
 
       // dimensions from config (0 when provider="none" → vec0 deferred)
