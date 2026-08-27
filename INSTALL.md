@@ -80,6 +80,7 @@ org structure in the panel and (b) pick them from within an agent session.
 > | Codex | [`agents/codex/`](./agents/codex/) |
 > | DeepSeek Harness | [`agents/dsh/`](./agents/dsh/) |
 > | OpenCode | [`agents/opencode/`](./agents/opencode/) |
+> | Pi | [`agents/pi/`](./agents/pi/) |
 > | Hermes / OpenClaw / Others | [`agents/README.md`](./agents/README.md) |
 
 ---
@@ -313,10 +314,12 @@ http://<proxy-host>:<port>/pi/<spaceId>/v1
 
 ### Setup
 
-1. Install the pi-plugin (see [`MemoryCore/pi-plugin/README.md`](./MemoryCore/pi-plugin/README.md)).
-2. Set the env vars (no secrets in files): `TDAI_PROXY_URL`, `TDAI_SPACE_ID`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`, `TDAI_USER_KEY`, `TDAI_MODEL`, and optionally `TDAI_TASK_ID`.
-3. Load the extension: `pi -e /path/to/pi-plugin` (or auto-discover from `~/.pi/agent/extensions/`).
-4. Run: `pi --provider tdai --model <model>`.
+1. Install the pi-plugin (see [`MemoryCore/pi-plugin/README.md`](./MemoryCore/pi-plugin/README.md)) — symlink or copy `MemoryCore/pi-plugin` into `~/.pi/agent/extensions/` for auto-discovery.
+2. Set `TDAI_USER_KEY` (required — the business user's `sk-mem-...` from the panel → API Key, **not** the admin key). Optionally set `TDAI_PROXY_URL` (default `http://127.0.0.1:8096`), `TDAI_SPACE_ID` (default `default`), `TDAI_MODEL` (default `glm-5.2-vision`).
+3. **Interactive mode (default): leave `TDAI_TEAM_ID` / `TDAI_AGENT_ID` / `TDAI_TASK_ID` unset.** On the first turn of every new Pi session the proxy emits a Team → Agent → Task picker, rendered as a Pi-native TUI menu by the extension's `ask_followup_question` tool (see [Session init](#pi-session-init) below). Pick with ↑↓ + Enter; the binding is reused for the rest of that Pi process.
+4. **Static mode (opt-in, for CI / scripts / a fixed context): set `TDAI_TEAM_ID` + `TDAI_AGENT_ID` (+ optional `TDAI_TASK_ID`).** The extension sends them as identity headers and the proxy skips the picker (`register directly`).
+5. Load the extension: `pi -e /path/to/pi-plugin` (or auto-discover from `~/.pi/agent/extensions/`).
+6. Run: `pi --provider tdai --model <model>`.
 
 ### Required Headers
 
@@ -324,12 +327,16 @@ Injected automatically by the `pi-plugin` extension:
 
 | Header | Source |
 |---|---|
-| `Authorization: Bearer` | `TDAI_USER_KEY` (the user's API key, not the admin/gateway key) |
-| `x-team-id` / `x-agent-id` | env vars (static per host) |
-| `x-task-id` | `TDAI_TASK_ID` — **optional**. Omit for broad recall across the agent's memories; set to narrow recall to a task. A stale/unknown `task_id` is dropped (not a hard mismatch), so it never blocks registration. (See [`Known limitation: x-task-id`](#known-limitation-x-task-id) for the header preselect agents that still require it.) |
+| `Authorization: Bearer` | `TDAI_USER_KEY` (the user's API key, not the admin/gateway key) — **always** |
+| `x-team-id` / `x-agent-id` | `TDAI_TEAM_ID` / `TDAI_AGENT_ID` — **only when set** (static preset). Omit for the interactive picker |
+| `x-task-id` | `TDAI_TASK_ID` — **optional**. Omit for broad recall across the agent's memories; set to narrow recall to a task. A stale/unknown `task_id` is dropped (not a hard mismatch), so it never blocks registration |
 | `x-conversation-id` | dynamic per Pi session (extension `before_provider_headers` hook) |
 
-Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
+### Pi session init
+
+Unlike Claude Code / CodeBuddy, Pi has **no built-in form tool**, so the extension registers a custom `ask_followup_question` tool. When the proxy returns its session-init form as a fake `ask_followup_question` tool call, Pi executes that tool, the extension renders a TUI menu (`↑↓` navigate • `Enter` select • `Esc` cancel), and the answer goes back as `<question_answer>` XML. This reuses the proxy's CodeBuddy state machine unchanged (`agentSource=pi` falls into the default branch) — zero proxy changes. Non-TUI mode (`pi -p` / RPC) can't render the picker; use the static env preset there. See [`agents/pi/`](./agents/pi/) for the full protocol.
+
+Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). Only `TDAI_USER_KEY` is strictly required; if it is missing, the plugin warns at load and skips registration so Pi still starts.
 
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
