@@ -1,0 +1,286 @@
+{
+  "scoring_version": 2,
+  "generated_at": "2026-08-26T13:05:52.672Z",
+  "limitation": "Controlled tool-routing benchmark without production traffic; it does not represent the production distribution.",
+  "scoring_notes": {
+    "false_call": "Counts attempted Memory/Skill/Knowledge bridge calls only; ordinary non-cloud Bash calls are reported separately.",
+    "endpoint": "Expected contract paths are matched against the suffix of the full proxy URL path.",
+    "retries": "When a logical job has multiple JSONL attempts, only the latest attempt is scored."
+  },
+  "by_variant": {
+    "baseline": {
+      "runs": 360,
+      "valid_runs": 360,
+      "failed_runs": 0,
+      "unique_cases": 120,
+      "effective_call_rate": 0.8222222222222222,
+      "false_call_rate": 0.4888888888888889,
+      "non_cloud_bash_call_rate": 0.08333333333333333,
+      "family_selection_accuracy": 1,
+      "tool_selection_accuracy": 0.9666666666666667,
+      "endpoint_accuracy": 1,
+      "body_accuracy": 1,
+      "protocol_accuracy": 0.8555555555555555,
+      "mean_prompt_tokens": 4876.633333333333,
+      "mean_prompt_chars": 11410.55
+    },
+    "candidate": {
+      "runs": 360,
+      "valid_runs": 360,
+      "failed_runs": 0,
+      "unique_cases": 120,
+      "effective_call_rate": 0.9333333333333333,
+      "false_call_rate": 0.3277777777777778,
+      "non_cloud_bash_call_rate": 0.08333333333333333,
+      "family_selection_accuracy": 1,
+      "tool_selection_accuracy": 0.9944444444444445,
+      "endpoint_accuracy": 1,
+      "body_accuracy": 1,
+      "protocol_accuracy": 0.9388888888888889,
+      "mean_prompt_tokens": 2494.633333333333,
+      "mean_prompt_chars": 5515.55
+    }
+  },
+  "by_category": {
+    "memory-positive": {
+      "baseline": {
+        "runs": 75,
+        "valid_runs": 75,
+        "failed_runs": 0,
+        "unique_cases": 25,
+        "effective_call_rate": 1,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 1,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 1,
+        "mean_prompt_tokens": 4884.72,
+        "mean_prompt_chars": 11429.44
+      },
+      "candidate": {
+        "runs": 75,
+        "valid_runs": 75,
+        "failed_runs": 0,
+        "unique_cases": 25,
+        "effective_call_rate": 0.9866666666666667,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 1,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 0.9866666666666667,
+        "mean_prompt_tokens": 2502.72,
+        "mean_prompt_chars": 5534.44
+      }
+    },
+    "skill-positive": {
+      "baseline": {
+        "runs": 60,
+        "valid_runs": 60,
+        "failed_runs": 0,
+        "unique_cases": 20,
+        "effective_call_rate": 0.5666666666666667,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 1,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 0.5666666666666667,
+        "mean_prompt_tokens": 4866.5,
+        "mean_prompt_chars": 11380
+      },
+      "candidate": {
+        "runs": 60,
+        "valid_runs": 60,
+        "failed_runs": 0,
+        "unique_cases": 20,
+        "effective_call_rate": 0.8333333333333334,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 1,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 0.8333333333333334,
+        "mean_prompt_tokens": 2484.5,
+        "mean_prompt_chars": 5485
+      }
+    },
+    "knowledge-positive": {
+      "baseline": {
+        "runs": 45,
+        "valid_runs": 45,
+        "failed_runs": 0,
+        "unique_cases": 15,
+        "effective_call_rate": 0.8666666666666667,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 0.8666666666666667,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 1,
+        "mean_prompt_tokens": 4865.133333333333,
+        "mean_prompt_chars": 11380
+      },
+      "candidate": {
+        "runs": 45,
+        "valid_runs": 45,
+        "failed_runs": 0,
+        "unique_cases": 15,
+        "effective_call_rate": 0.9777777777777777,
+        "false_call_rate": null,
+        "non_cloud_bash_call_rate": null,
+        "family_selection_accuracy": 1,
+        "tool_selection_accuracy": 0.9777777777777777,
+        "endpoint_accuracy": 1,
+        "body_accuracy": 1,
+        "protocol_accuracy": 1,
+        "mean_prompt_tokens": 2483.133333333333,
+        "mean_prompt_chars": 5485
+      }
+    },
+    "coding-negative": {
+      "baseline": {
+        "runs": 75,
+        "valid_runs": 75,
+        "failed_runs": 0,
+        "unique_cases": 25,
+        "effective_call_rate": null,
+        "false_call_rate": 0.4,
+        "non_cloud_bash_call_rate": 0.04,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 4863.36,
+        "mean_prompt_chars": 11380
+      },
+      "candidate": {
+        "runs": 75,
+        "valid_runs": 75,
+        "failed_runs": 0,
+        "unique_cases": 25,
+        "effective_call_rate": null,
+        "false_call_rate": 0.26666666666666666,
+        "non_cloud_bash_call_rate": 0.02666666666666667,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 2481.36,
+        "mean_prompt_chars": 5485
+      }
+    },
+    "context-profile-negative": {
+      "baseline": {
+        "runs": 45,
+        "valid_runs": 45,
+        "failed_runs": 0,
+        "unique_cases": 15,
+        "effective_call_rate": null,
+        "false_call_rate": 0.2,
+        "non_cloud_bash_call_rate": 0,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 4923.8,
+        "mean_prompt_chars": 11541.8
+      },
+      "candidate": {
+        "runs": 45,
+        "valid_runs": 45,
+        "failed_runs": 0,
+        "unique_cases": 15,
+        "effective_call_rate": null,
+        "false_call_rate": 0,
+        "non_cloud_bash_call_rate": 0,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 2541.8,
+        "mean_prompt_chars": 5646.8
+      }
+    },
+    "trap-negative": {
+      "baseline": {
+        "runs": 60,
+        "valid_runs": 60,
+        "failed_runs": 0,
+        "unique_cases": 20,
+        "effective_call_rate": null,
+        "false_call_rate": 0.8166666666666667,
+        "non_cloud_bash_call_rate": 0.2,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 4866.5,
+        "mean_prompt_chars": 11380.15
+      },
+      "candidate": {
+        "runs": 60,
+        "valid_runs": 60,
+        "failed_runs": 0,
+        "unique_cases": 20,
+        "effective_call_rate": null,
+        "false_call_rate": 0.65,
+        "non_cloud_bash_call_rate": 0.21666666666666667,
+        "family_selection_accuracy": null,
+        "tool_selection_accuracy": null,
+        "endpoint_accuracy": null,
+        "body_accuracy": null,
+        "protocol_accuracy": null,
+        "mean_prompt_tokens": 2484.5,
+        "mean_prompt_chars": 5485.15
+      }
+    }
+  },
+  "prompt_token_reduction": 0.48845173241102124,
+  "paired_cluster_bootstrap": {
+    "effective_call_rate": {
+      "difference": 0.11111111111111112,
+      "ci95": [
+        0.05555555555555555,
+        0.17222222222222225
+      ],
+      "clusters": 60
+    },
+    "false_call_rate": {
+      "difference": -0.16111111111111112,
+      "ci95": [
+        -0.2388888888888889,
+        -0.08888888888888888
+      ],
+      "clusters": 60
+    },
+    "tool_selection_accuracy": {
+      "difference": 0.027777777777777776,
+      "ci95": [
+        0,
+        0.061111111111111116
+      ],
+      "clusters": 60
+    }
+  },
+  "acceptance": {
+    "effective_call_non_inferior": true,
+    "tool_selection_drop_within_2pp": true,
+    "false_call_point_estimate_improves": true,
+    "false_call_ci_not_clearly_worse": true,
+    "prompt_tokens_reduced_at_least_20pct": true,
+    "coding_negative_false_calls_not_higher": true
+  },
+  "errors": []
+}

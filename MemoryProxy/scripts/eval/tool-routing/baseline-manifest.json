@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "git_commit": "97f94654280b2932c35ba4806a491999ed244cc9",
+  "fixture_id": "controlled-v1",
+  "captured_at": "2026-08-25",
+  "blocks": {
+    "memory_tools": { "chars": 3053, "bytes": 4265, "sha256": "95e693e6e1d4e6aa7d015b78ea6c750d59f9a6016780fbe67367f69624cd8913" },
+    "memory_guide": { "chars": 1430, "bytes": 2532, "sha256": "27320366527e0ab1a83bde7f0d1c9adb6294206a530b2269275ddfe92bcebfd6" },
+    "skill_ro": { "chars": 2263, "bytes": 3537, "sha256": "11cff1b263021c10b5c1e9bfe31f512cc794e717e39e76520e20c7bbbbb349f6" },
+    "available": { "chars": 1716, "bytes": 1930, "sha256": "217edcde85c516e04b12817cc800097e472abae22d5d7d126aaa52381141d4ba" },
+    "knowledge": { "chars": 2669, "bytes": 4473, "sha256": "9be0ec406042bd517a8fff4e8a98476fa88fb9128e5492f407872df950b8abe3" }
+  },
+  "note": "Controlled fixture snapshot; provider token counts are captured only during live runs."
+}
