@@ -58,15 +58,23 @@ and paste your `sk-mem-...` user_key when prompted. Keys are stored locally in `
 
 1. Launch `opencode` in any project directory.
 2. Open the model picker (`/models`) — you should see **TencentDB Agent Memory / claude-sonnet-4 (via Memory Proxy)**.
-3. Select it and send a first message. The proxy triggers the session picker: choose your **Team → Agent → Task** with arrow keys + Enter.
+3. Select it and send a first message. The proxy triggers the session picker, rendered through OpenCode's native `question` tool: choose your **Team → Agent → Task** with arrow keys + Enter. If the picker appears as plain text (or you see `invalid [tool=...]`), the request was misrouted — check that `options.baseURL` starts with `/opencode/`, not `/codebuddy/`.
 4. From this turn on, memory for the bound agent is injected automatically. Ask the agent what it remembers from previous sessions to confirm.
+
+You can also sanity-check the shipped config at any time:
+
+```bash
+node adapters/opencode/validate.js
+```
+
+It parses `opencode.json` and fails if `options.baseURL` does not route through `/opencode/` (e.g. it still points at `/codebuddy/`).
 
 ## Configuration reference
 
 | Field | Value | Notes |
 |---|---|---|
 | `npm` | `@ai-sdk/openai-compatible` | OpenCode loads this AI SDK package for the custom provider |
-| `options.baseURL` | `http://127.0.0.1:8096/codebuddy/default` | Proxy OpenAI-compatible endpoint. `default` is the memory space ID (`x-tdai-service-id`); change it if you run multiple spaces |
+| `options.baseURL` | `http://127.0.0.1:8096/opencode/default/v1` | Proxy's OpenCode route family. The `/opencode/` prefix makes the proxy classify the request as `agentSource=opencode` (required for the native `question`-based session picker). `default` is the memory space ID (`x-tdai-service-id`); change it if you run multiple spaces |
 | `options.headers` | `x-tdai-service-id: default` | Explicit service ID header for multi-space deployments |
 | `models.<id>` | must equal `PROXY_UPSTREAM_MODEL` | Otherwise the proxy rejects the model with an upstream mismatch |
 | Auth | via `/connect tencentdb-agent-memory` | Bearer token = business user's `sk-mem-...` user_key |
@@ -83,7 +91,7 @@ and paste your `sk-mem-...` user_key when prompted. Keys are stored locally in `
 
 ## Notes
 
-- **Endpoint prefix**: this adapter currently reuses the proxy's OpenAI-compatible endpoint (`/codebuddy/<spaceId>`), which is protocol-identical for any OpenAI-compatible client. When a dedicated `/opencode/<spaceId>` prefix lands upstream, only `options.baseURL` needs to change.
+- **Endpoint prefix**: use the OpenCode-prefixed route family that already ships on `feat/server_team` — main path `POST /opencode/<spaceId>/v1/chat/completions` (bare-tail variant `/opencode/<spaceId>/chat/completions` when `baseURL` omits `/v1`), plus `/opencode/<spaceId>/cost-guard|analyse/v1` marker routes. The first path segment is how the proxy classifies `agentSource`; pointing OpenCode at `/codebuddy/<spaceId>` would classify it as `codebuddy` and break the native `question`-based session-init form (`MemoryProxy/src/session/opencode/form.ts`).
 - **Data flow**: only prompts/completions transit the proxy; memory data stays in your local SQLite (memory-core) unless you configure otherwise.
 - **Version**: tested with OpenCode ≥ 0.6 and TencentDB Agent Memory v3 (`feat/server_team` branch, v2.0.0 images).
 
