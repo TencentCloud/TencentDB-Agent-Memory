@@ -78,6 +78,12 @@ import type { MemorySystemUserConfig } from "../metadata/system-user.js";
 import { validateLlmProviderConfig, LlmResolveError } from "./llm-resolver.js";
 import type { StandaloneLLMConfig } from "../adapters/standalone/llm-runner.js";
 import { resolveStandaloneLlmForRuntime } from "../adapters/standalone/llm-provider-resolver.js";
+import {
+  applyLlmRequestOptions,
+  assertPromptWithinContext,
+  probeLlmCapabilities,
+  type LLMCapabilityStatus,
+} from "../adapters/standalone/llm-capabilities.js";
 import { resolveReportedCredit } from "./quota-credit-policy.js";
 import {
   initApiTraceConfig,
@@ -284,6 +290,14 @@ export class TdaiGateway {
   private startTime = Date.now();
   /** Guards against concurrent / repeated stop() invocations (e.g. multiple SIGINT). */
   private stopPromise: Promise<void> | null = null;
+  private llmCapabilityStatus: LLMCapabilityStatus = {
+    state: "unchecked",
+    backend: "openai-compatible",
+    model: "unknown",
+    reasoning: {},
+    extraBodyKeys: [],
+    detail: "gateway has not started",
+  };
 
   // ── Integrated services (Scanner + Worker) ──
   private stateBackend: IStateBackend | null = null;
@@ -505,6 +519,21 @@ export class TdaiGateway {
         throw new Error(`[LLM] provider 配置校验失败: ${err.message}`);
       }
       throw err;
+    }
+
+    this.llmCapabilityStatus = await probeLlmCapabilities(this.config.llm);
+    if (this.llmCapabilityStatus.effectiveContextWindow) {
+      this.config.llm.effectiveContextWindow = this.llmCapabilityStatus.effectiveContextWindow;
+      this.config.memory.llm.effectiveContextWindow = this.llmCapabilityStatus.effectiveContextWindow;
+    }
+    const llmSummary = `${this.llmCapabilityStatus.state}: ${this.llmCapabilityStatus.detail}`;
+    if (this.llmCapabilityStatus.state === "degraded") {
+      this.logger.warn(`[LLM] ${llmSummary}`);
+      if (this.config.llm.startupProbe?.strict) {
+        throw new Error(`[LLM] strict startup capability probe failed: ${this.llmCapabilityStatus.detail}`);
+      }
+    } else {
+      this.logger.info(`[LLM] ${llmSummary}`);
     }
 
     const metadataStoreCfg = validateMetadataStartupConfig(
@@ -1373,14 +1402,16 @@ export class TdaiGateway {
   }
 
   private handleHealth(res: http.ServerResponse): void {
+    const vectorReady = !!this.core.getVectorStore();
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: vectorReady && this.llmCapabilityStatus.state !== "degraded" ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
+        vectorStore: vectorReady,
         embeddingService: !!this.core.getEmbeddingService(),
       },
+      llm: this.llmCapabilityStatus,
       // Integrated services status
       services: {
         timerScanner: this.timerScanner?.getMetrics() ?? null,
@@ -1992,13 +2023,7 @@ export class TdaiGateway {
     );
 
     const llmRunner = new StandaloneLLMRunner({
-      config: {
-        baseUrl: effective.baseUrl,
-        apiKey: effective.apiKey,
-        model: effective.model ?? "default",
-        timeoutMs: effective.timeoutMs ?? 120_000,
-        stream: effective.stream ?? false,
-      },
+      config: { ...effective },
     });
     const cfg = this.core.getResolvedSkillConfig();
     return new SkillExtractorClass({
@@ -2979,18 +3004,28 @@ export class TdaiGateway {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), params.timeoutMs ?? 30000);
         try {
+          const systemPrompt = params.messages
+            .filter((message) => message.role === "system")
+            .map((message) => message.content)
+            .join("\n");
+          const prompt = params.messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .join("\n");
+          assertPromptWithinContext(systemPrompt, prompt, effective, params.max_tokens);
+          const requestBody = applyLlmRequestOptions({
+            model: effective.model || params.model,
+            messages: params.messages,
+            temperature: params.temperature,
+            max_tokens: params.max_tokens,
+          }, effective);
           const response = await fetch(`${effective.baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               Authorization: `Bearer ${effective.apiKey}`,
             },
-            body: JSON.stringify({
-              model: effective.model || params.model,
-              messages: params.messages,
-              temperature: params.temperature,
-              max_tokens: params.max_tokens,
-            }),
+            body: JSON.stringify(requestBody),
             signal: controller.signal,
           });
           clearTimeout(timer);
