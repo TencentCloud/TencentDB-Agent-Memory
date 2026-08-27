@@ -259,12 +259,22 @@ export async function performAutoCapture(params: {
         const tBgStart = performance.now();
         try {
           const texts = bgSnapshot.map((r) => r.content);
-          const embeddings = await bgEmbeddingService.embedBatch(texts);
+          const settled = bgEmbeddingService.embedBatchSettled
+            ? await bgEmbeddingService.embedBatchSettled(texts)
+            : (await bgEmbeddingService.embedBatch(texts)).map((embedding) => ({ embedding }));
 
           let bgUpdated = 0;
           for (let i = 0; i < bgSnapshot.length; i++) {
+            const embedding = settled[i]?.embedding;
+            if (!embedding) {
+              bgLogger?.warn?.(
+                `${TAG} [L0-vec-index-bg] Embedding unavailable for ${bgSnapshot[i].recordId}; `
+                + `source row retained for backfill (${settled[i]?.error ?? "unknown error"})`,
+              );
+              continue;
+            }
             try {
-              const ok = await bgVectorStore.updateL0Embedding!(bgSnapshot[i].recordId, embeddings[i]);
+              const ok = await bgVectorStore.updateL0Embedding!(bgSnapshot[i].recordId, embedding);
               if (ok) bgUpdated++;
             } catch (err) {
               bgLogger?.warn?.(

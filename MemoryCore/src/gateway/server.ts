@@ -1373,13 +1373,17 @@ export class TdaiGateway {
   }
 
   private handleHealth(res: http.ServerResponse): void {
+    const vectorStore = this.core.getVectorStore();
+    const embeddingService = this.core.getEmbeddingService();
     const response: HealthResponse = {
-      status: this.core.getVectorStore() ? "ok" : "degraded",
+      status: vectorStore && embeddingService?.getHealth?.().state !== "degraded" ? "ok" : "degraded",
       version: VERSION,
       uptime: Math.floor((Date.now() - this.startTime) / 1000),
       stores: {
-        vectorStore: !!this.core.getVectorStore(),
-        embeddingService: !!this.core.getEmbeddingService(),
+        vectorStore: !!vectorStore,
+        embeddingService: !!embeddingService,
+        embeddingHealth: embeddingService?.getHealth?.(),
+        vectorCoverage: vectorStore?.getVectorCoverage?.(),
       },
       // Integrated services status
       services: {

@@ -2291,6 +2291,31 @@ export class VectorStore implements IMemoryStore {
     }
   }
 
+  /** Report source persistence and vector-index completeness independently. */
+  getVectorCoverage(): {
+    l0: { sourceRows: number; vectorRows: number; coverage: number };
+    l1: { sourceRows: number; vectorRows: number; coverage: number };
+  } {
+    const count = (table: string): number => {
+      try {
+        return Number((this.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count);
+      } catch {
+        return 0;
+      }
+    };
+    const layer = (sourceRows: number, vectorRows: number) => ({
+      sourceRows,
+      vectorRows,
+      coverage: sourceRows === 0 ? 1 : Math.min(1, vectorRows / sourceRows),
+    });
+    const l0Source = count("l0_conversations");
+    const l1Source = count("l1_records");
+    return {
+      l0: layer(l0Source, this.vecTablesReady ? count("l0_vec") : 0),
+      l1: layer(l1Source, this.vecTablesReady ? count("l1_vec") : 0),
+    };
+  }
+
   /**
    * Re-embed all existing L1 and L0 texts with a new embedding function.
    *

@@ -14,6 +14,7 @@
  */
 
 import type { Logger } from "../types.js";
+import { tiktokenCount } from "../../offload/context-token-tracker.js";
 
 // ============================
 // Types
@@ -41,6 +42,12 @@ export interface OpenAIEmbeddingConfig {
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). */
   maxInputChars?: number;
+  /** Token-aware input budget. Takes precedence over maxInputChars when set. */
+  maxInputTokens?: number;
+  /** Retry count for 429, 5xx, network, and timeout failures (default: 2). */
+  maxRetries?: number;
+  /** Initial exponential-backoff delay in milliseconds (default: 500). */
+  retryBaseDelayMs?: number;
   /** Timeout per API call in milliseconds (default: 10000). */
   timeoutMs?: number;
 }
@@ -73,6 +80,11 @@ export interface EmbeddingService {
   embed(text: string, options?: EmbeddingCallOptions): Promise<Float32Array>;
   /** Get embeddings for multiple texts (batched API call) */
   embedBatch(texts: string[], options?: EmbeddingCallOptions): Promise<Float32Array[]>;
+  /** Per-item result path for durable ingestion; successful items survive sibling failures. */
+  embedBatchSettled?(
+    texts: string[],
+    options?: EmbeddingCallOptions,
+  ): Promise<Array<{ embedding?: Float32Array; error?: string }>>;
   /** Return the configured vector dimensions */
   getDimensions(): number;
   /** Return provider + model identifiers for change detection */
@@ -92,6 +104,18 @@ export interface EmbeddingService {
   startWarmup(): void;
   /** Optional: release resources (model memory, GPU, etc.) on shutdown */
   close?(): void | Promise<void>;
+  /** Safe operational state; never includes credentials or input text. */
+  getHealth?(): EmbeddingHealth;
+}
+
+export type EmbeddingFailureCategory = "rate_limit" | "server" | "timeout" | "network" | "response";
+
+export interface EmbeddingHealth {
+  state: "ready" | "degraded" | "initializing";
+  requests: number;
+  failures: number;
+  retries: number;
+  lastError?: { category: EmbeddingFailureCategory; at: string };
 }
 
 /**
@@ -365,8 +389,8 @@ export class LocalEmbeddingService implements EmbeddingService {
 /** Max texts per batch (OpenAI limit is 2048, we use a safe value) */
 const MAX_BATCH_SIZE = 256;
 
-/** Max retries for API calls */
-const MAX_RETRIES = 0;
+/** Default retries for transient API calls. */
+const DEFAULT_MAX_RETRIES = 2;
 /** Default timeout per API call in milliseconds */
 const DEFAULT_API_TIMEOUT_MS = 10_000;
 
@@ -408,8 +432,12 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly providerName: string;
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
+  private readonly maxInputTokens?: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
   private readonly timeoutMs: number;
   private readonly logger?: Logger;
+  private health: EmbeddingHealth = { state: "ready", requests: 0, failures: 0, retries: 0 };
 
   constructor(config: OpenAIEmbeddingConfig, logger?: Logger) {
     if (!config.apiKey) {
@@ -432,6 +460,15 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.providerName = config.provider || "openai";
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
+    this.maxInputTokens = config.maxInputTokens && config.maxInputTokens > 0
+      ? Math.floor(config.maxInputTokens)
+      : undefined;
+    this.maxRetries = Number.isInteger(config.maxRetries) && config.maxRetries! >= 0
+      ? Math.min(config.maxRetries!, 10)
+      : DEFAULT_MAX_RETRIES;
+    this.retryBaseDelayMs = config.retryBaseDelayMs && config.retryBaseDelayMs > 0
+      ? Math.floor(config.retryBaseDelayMs)
+      : 500;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
     this.logger = logger;
   }
@@ -454,6 +491,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     // nothing to do — remote API is stateless
   }
 
+  getHealth(): EmbeddingHealth {
+    return { ...this.health, lastError: this.health.lastError ? { ...this.health.lastError } : undefined };
+  }
+
   async embed(text: string, options?: EmbeddingCallOptions): Promise<Float32Array> {
     const [result] = await this.embedBatch([text], options);
     return result;
@@ -463,9 +504,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     if (texts.length === 0) return [];
 
     // Truncate texts exceeding maxInputChars limit
-    const processedTexts = this.maxInputChars
-      ? texts.map((t) => this.truncateInput(t))
-      : texts;
+    const processedTexts = texts.map((text) => this.truncateInput(text));
 
     // Split into sub-batches if needed
     if (processedTexts.length > MAX_BATCH_SIZE) {
@@ -481,11 +520,46 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     return this._callApi(processedTexts, options?.timeoutMs);
   }
 
+  async embedBatchSettled(
+    texts: string[],
+    options?: EmbeddingCallOptions,
+  ): Promise<Array<{ embedding?: Float32Array; error?: string }>> {
+    const processedTexts = texts.map((text) => this.truncateInput(text));
+    const results: Array<{ embedding?: Float32Array; error?: string }> = [];
+    for (const text of processedTexts) {
+      try {
+        const [embedding] = await this._callApi([text], options?.timeoutMs);
+        results.push({ embedding });
+      } catch (error) {
+        results.push({ error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return results;
+  }
+
   /**
    * Truncate input text to stay within the configured maxInputChars limit.
    * Logs a warning when truncation occurs.
    */
   private truncateInput(text: string): string {
+    if (this.maxInputTokens) {
+      const originalTokens = tiktokenCount(text);
+      if (originalTokens <= this.maxInputTokens) return text;
+      const chars = Array.from(text);
+      let low = 0;
+      let high = chars.length;
+      while (low < high) {
+        const mid = Math.ceil((low + high) / 2);
+        if (tiktokenCount(chars.slice(0, mid).join("")) <= this.maxInputTokens) low = mid;
+        else high = mid - 1;
+      }
+      const truncated = chars.slice(0, low).join("");
+      this.logger?.warn?.(
+        `${TAG} Input truncated from ${originalTokens} to ${tiktokenCount(truncated)} tokens `
+        + `(maxInputTokens=${this.maxInputTokens}, chars=${text.length}->${truncated.length})`,
+      );
+      return truncated;
+    }
     if (!this.maxInputChars || text.length <= this.maxInputChars) return text;
     this.logger?.warn?.(
       `${TAG} Input truncated from ${text.length} to ${this.maxInputChars} chars (maxInputChars limit)`,
@@ -494,6 +568,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   }
 
   private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+    this.health.requests++;
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
@@ -518,7 +593,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
     // Retry loop with timeout
     let lastError: Error | undefined;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutOverride ?? this.timeoutMs);
@@ -542,6 +617,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
               throw err;
             }
             lastError = err;
+            if (attempt < this.maxRetries) {
+              this.recordRetry(resp.status === 429 ? "rate_limit" : "server", attempt, resp.status);
+              await this.delayForRetry(attempt, resp.headers.get("retry-after"));
+            }
             continue;
           }
 
@@ -553,26 +632,82 @@ export class OpenAIEmbeddingService implements EmbeddingService {
 
           // Sort by index to ensure correct order, then sanitize+normalize for consistency with local provider
           const sorted = [...json.data].sort((a, b) => a.index - b.index);
-          return sorted.map((d) => sanitizeAndNormalize(d.embedding));
+          if (sorted.length !== texts.length) {
+            throw new Error(`Embedding API returned ${sorted.length} vectors for ${texts.length} inputs`);
+          }
+          const vectors = sorted.map((item, index) => {
+            if (!Array.isArray(item.embedding) || item.embedding.length !== this.dims) {
+              throw new Error(
+                `Embedding vector ${index} has dimension ${item.embedding?.length ?? "invalid"}; expected ${this.dims}`,
+              );
+            }
+            if (item.embedding.some((value) => !Number.isFinite(value))) {
+              throw new Error(`Embedding vector ${index} contains non-finite values`);
+            }
+            const vector = sanitizeAndNormalize(item.embedding);
+            if (!vector.some((value) => value !== 0)) {
+              throw new Error(`Embedding vector ${index} has zero magnitude`);
+            }
+            return vector;
+          });
+          this.health.state = "ready";
+          return vectors;
         } finally {
           clearTimeout(timeoutId);
         }
       } catch (err) {
         // Non-retryable errors (4xx client errors) — rethrow immediately
         if (err instanceof EmbeddingApiError && err.isClientError()) {
+          this.recordFailure("response");
           throw err;
         }
         lastError = err instanceof Error ? err : new Error(String(err));
         // AbortError = timeout, retry
-        if (attempt < MAX_RETRIES) {
-          // Exponential backoff: 500ms, 1000ms
-          const delay = 500 * (attempt + 1);
-          await new Promise((r) => setTimeout(r, delay));
+        if (attempt < this.maxRetries) {
+          const category = this.classifyError(lastError);
+          this.recordRetry(category, attempt);
+          await this.delayForRetry(attempt);
         }
       }
     }
 
+    this.recordFailure(this.classifyError(lastError));
     throw lastError ?? new Error("Embedding API call failed after retries");
+  }
+
+  private classifyError(error: Error | undefined): EmbeddingFailureCategory {
+    if (error instanceof EmbeddingApiError) {
+      return error.httpStatus === 429 ? "rate_limit" : "server";
+    }
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") return "timeout";
+    if (error instanceof SyntaxError || error?.message.includes("vector")) return "response";
+    return "network";
+  }
+
+  private recordRetry(
+    category: EmbeddingFailureCategory,
+    attempt: number,
+    status?: number,
+  ): void {
+    this.health.retries++;
+    this.logger?.warn?.(
+      `${TAG} transient embedding failure category=${category}${status ? ` status=${status}` : ""}; `
+      + `retry=${attempt + 1}/${this.maxRetries}`,
+    );
+  }
+
+  private recordFailure(category: EmbeddingFailureCategory): void {
+    this.health.state = "degraded";
+    this.health.failures++;
+    this.health.lastError = { category, at: new Date().toISOString() };
+  }
+
+  private async delayForRetry(attempt: number, retryAfter?: string | null): Promise<void> {
+    const parsedRetryAfter = retryAfter && /^\d+$/.test(retryAfter)
+      ? Number(retryAfter) * 1000
+      : undefined;
+    const delay = Math.min(parsedRetryAfter ?? this.retryBaseDelayMs * (2 ** attempt), 30_000);
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 }
 

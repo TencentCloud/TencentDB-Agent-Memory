@@ -565,6 +565,11 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   init(providerInfo?: EmbeddingProviderInfo): MaybePromise<StoreInitResult>;
   isDegraded(): boolean;
   getCapabilities(): StoreCapabilities;
+  /** Optional synchronous coverage snapshot for health endpoints. */
+  getVectorCoverage?(): {
+    l0: { sourceRows: number; vectorRows: number; coverage: number };
+    l1: { sourceRows: number; vectorRows: number; coverage: number };
+  };
   close(): void;
 
   // ── L1 Write ─────────────────────────────────────────────

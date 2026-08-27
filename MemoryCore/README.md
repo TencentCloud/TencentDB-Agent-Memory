@@ -215,6 +215,27 @@ Configuration templates:
 - `tdai-gateway.yaml`: default Standalone + Skill configuration.
 - `tdai-gateway.proxy.yaml`: LLM access through an OpenAI-compatible proxy.
 
+For remote embeddings, prefer a token budget below the model's active context
+instead of relying on character counts. Transient failures are retried with a
+bounded exponential backoff, while permanent 4xx responses fail immediately:
+
+```yaml
+embedding:
+  provider: openai
+  baseUrl: http://127.0.0.1:11434/v1
+  apiKey: local
+  model: bge-m3
+  dimensions: 1024
+  sendDimensions: false
+  maxInputTokens: 7680   # leave margin below an 8192-token model context
+  maxRetries: 2
+  retryBaseDelayMs: 500
+```
+
+`/health` reports remote embedding failures and L0/L1 vector coverage separately
+from durable source-row counts. Missing vectors can be replayed into existing
+record IDs; source rows are not duplicated.
+
 ## Storage and isolation
 
 - Memory and metadata are stored in SQLite.
