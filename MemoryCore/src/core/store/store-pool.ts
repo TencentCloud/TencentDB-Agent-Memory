@@ -379,6 +379,9 @@ export class StorePool {
         baseUrl: embCfg.baseUrl,
         apiKey: embCfg.apiKey,
         model: embCfg.model,
+        schemaIdentity: embCfg.schemaIdentity,
+        modelRevision: embCfg.modelRevision,
+        normalization: embCfg.normalization,
         dimensions: embCfg.dimensions,
         maxInputChars: embCfg.maxInputChars,
       }, this.logger as StoreLogger);

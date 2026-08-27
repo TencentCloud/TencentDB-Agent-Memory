@@ -28,6 +28,12 @@ export interface OpenAIEmbeddingConfig {
   apiKey: string;
   /** Model name (required — must be specified by user) */
   model: string;
+  /** Stable vector-schema identity, independent of the serving/runtime alias. */
+  schemaIdentity?: string;
+  /** Optional immutable model revision included in schema identity. */
+  modelRevision?: string;
+  /** Vector normalization contract (default: l2-v1). */
+  normalization?: string;
   /** Output dimensions (required — must match the chosen model) */
   dimensions: number;
   /**
@@ -61,6 +67,10 @@ export interface EmbeddingProviderInfo {
   provider: string;
   /** Model identifier (e.g. "embeddinggemma-300m", "text-embedding-3-large") */
   model: string;
+  /** Stable identity of the vector-producing model; defaults to model for compatibility. */
+  schemaIdentity?: string;
+  modelRevision?: string;
+  normalization?: string;
 }
 
 export interface EmbeddingCallOptions {
@@ -406,6 +416,9 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   private readonly dims: number;
   private readonly sendDimensions: boolean;
   private readonly providerName: string;
+  private readonly schemaIdentity?: string;
+  private readonly modelRevision?: string;
+  private readonly normalization: string;
   private readonly proxyUrl?: string;
   private readonly maxInputChars?: number;
   private readonly timeoutMs: number;
@@ -430,6 +443,9 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     this.dims = config.dimensions;
     this.sendDimensions = config.sendDimensions ?? true;
     this.providerName = config.provider || "openai";
+    this.schemaIdentity = config.schemaIdentity?.trim() || undefined;
+    this.modelRevision = config.modelRevision?.trim() || undefined;
+    this.normalization = config.normalization?.trim() || "l2-v1";
     this.proxyUrl = config.proxyUrl?.trim() || undefined;
     this.maxInputChars = config.maxInputChars && config.maxInputChars > 0 ? config.maxInputChars : undefined;
     this.timeoutMs = config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_API_TIMEOUT_MS;
@@ -441,7 +457,13 @@ export class OpenAIEmbeddingService implements EmbeddingService {
   }
 
   getProviderInfo(): EmbeddingProviderInfo {
-    return { provider: this.providerName, model: this.model };
+    return {
+      provider: this.providerName,
+      model: this.model,
+      schemaIdentity: this.schemaIdentity,
+      modelRevision: this.modelRevision,
+      normalization: this.normalization,
+    };
   }
 
   /** Remote embedding is always ready (stateless HTTP). */
