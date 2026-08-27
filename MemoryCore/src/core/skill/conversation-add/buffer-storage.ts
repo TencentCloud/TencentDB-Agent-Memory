@@ -120,6 +120,24 @@ export interface AgentDeadTasksDoc {
 }
 
 /** data-current / archive 缓存内容。使用 { messages: [...] } 而不是纯 JSONL，简化读写。 */
+export interface SkillConversationIdempotencyResult {
+  status: "ok" | "archived";
+  archived?: {
+    task_id: string;
+    archived_at_ms: number;
+    archive_key: string;
+    reason: "tool_calls" | "bytes" | "compressed" | "oversize";
+  };
+}
+
+export interface SkillConversationIdempotencyReceipt {
+  version: 1;
+  key_hash: string;
+  payload_digest: string;
+  result: SkillConversationIdempotencyResult;
+  created_at_ms: number;
+}
+
 export interface BufferedMessages {
   messages: Array<Record<string, unknown>>;
 }
@@ -165,6 +183,57 @@ export class SkillBufferStorage {
 
   archiveKey(sess: SessionKey, archivedAtMs: number): string {
     return `${this.sessionDir(sess)}/data-${archivedAtMs}.jsonl`;
+  }
+
+  idempotentArchiveKey(sess: SessionKey, keyHash: string): string {
+    return `${this.sessionDir(sess)}/data-idem-${keyHash}.jsonl`;
+  }
+
+  private idempotencyReceiptKey(sess: SessionKey, keyHash: string): string {
+    return `${this.sessionDir(sess)}/idempotency-${keyHash}.json`;
+  }
+
+  async readIdempotencyReceipt(sess: SessionKey, keyHash: string): Promise<SkillConversationIdempotencyReceipt | null> {
+    const raw = await this.storage.readFile(this.idempotencyReceiptKey(sess, keyHash));
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as SkillConversationIdempotencyReceipt;
+      return parsed?.version === 1 && parsed.key_hash === keyHash ? parsed : null;
+    } catch { return null; }
+  }
+
+  async writeIdempotencyReceipt(sess: SessionKey, receipt: SkillConversationIdempotencyReceipt): Promise<void> {
+    await this.storage.writeFile(this.idempotencyReceiptKey(sess, receipt.key_hash), JSON.stringify(receipt));
+  }
+
+  async findIdempotencyMarker(sess: SessionKey, keyHash: string): Promise<{
+    kind: "current" | "archive";
+    archiveKey?: string;
+    archivedAtMs?: number;
+    messages: Array<Record<string, unknown>>;
+  } | null> {
+    const marker = (messages: Array<Record<string, unknown>>) => messages.some((message) => {
+      const metadata = message.metadata;
+      return !!metadata && typeof metadata === "object" && (metadata as Record<string, unknown>).tdai_idempotency_key_hash === keyHash;
+    });
+    const current = await this.readCurrent(sess);
+    if (marker(current.messages)) return { kind: "current", messages: current.messages };
+
+    const entries = await this.storage.readdir(this.sessionDir(sess), ".jsonl");
+    for (const entry of entries) {
+      if (entry.key.endsWith("data-current.jsonl")) continue;
+      const archived = await this.readArchive(entry.key);
+      if (archived && marker(archived.messages)) {
+        const match = entry.key.match(/data-(\d+)\.jsonl$/);
+        return {
+          kind: "archive",
+          archiveKey: entry.key,
+          archivedAtMs: match ? Number(match[1]) : undefined,
+          messages: archived.messages,
+        };
+      }
+    }
+    return null;
   }
 
   tasksKey(agent: AgentTuple): string {

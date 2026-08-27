@@ -3697,7 +3697,7 @@ export class VectorStore implements IMemoryStore {
     try {
       const row = this.db.prepare(
         "SELECT * FROM conversation_add_receipts WHERE receipt_id = ?",
-      ).get(receiptId) as ConversationReceiptRow | undefined;
+      ).get(receiptId) as unknown as ConversationReceiptRow | undefined;
       if (!row || row.status === "processing") {
         this.db.exec("COMMIT");
         return null;
@@ -3710,7 +3710,7 @@ export class VectorStore implements IMemoryStore {
       this.ackConversationOutboxInTransaction(outbox.event_id, receiptId, now);
       const completed = this.db.prepare(
         "SELECT * FROM conversation_add_receipts WHERE receipt_id = ?",
-      ).get(receiptId) as ConversationReceiptRow;
+      ).get(receiptId) as unknown as ConversationReceiptRow;
       this.db.exec("COMMIT");
       return this.toConversationReceipt(completed);
     } catch (err) {
@@ -3794,7 +3794,7 @@ export class VectorStore implements IMemoryStore {
     const outboxRows = this.db.prepare(`
       SELECT event_id, service_id, session_id, team_id, agent_id, status
       FROM conversation_add_outbox WHERE receipt_id = ?
-    `).all(receipt.receipt_id) as ConversationOutboxRecoveryRow[];
+    `).all(receipt.receipt_id) as unknown as ConversationOutboxRecoveryRow[];
     if (!outboxRows.every((outbox) =>
       outbox.service_id === receipt.service_id &&
       outbox.session_id === receipt.session_id &&
@@ -3820,7 +3820,7 @@ export class VectorStore implements IMemoryStore {
         const ftsRows = this.db.prepare(`
           SELECT session_key, session_id, team_id, user_id, agent_id
           FROM l0_fts WHERE record_id = ?
-        `).all(recordId) as ConversationL0ScopeRow[];
+      `).all(recordId) as unknown as ConversationL0ScopeRow[];
         if (!ftsRows.every((fts) => this.l0MatchesConversationReceipt(fts, receipt))) return false;
       }
     }

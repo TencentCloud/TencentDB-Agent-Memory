@@ -57,6 +57,8 @@ export interface TriggerArchiveInput {
    * 会带上，方便按 req_id 过滤 handler + trigger + worker 全链路。缺省不影响功能。
    */
   perfRequestId?: string;
+  /** Stable request identity for retry-safe archive/task creation. */
+  idempotencyKeyHash?: string;
 }
 
 export interface TriggerArchiveResult {
@@ -107,13 +109,17 @@ export class SkillTriggerService {
 
     // ① 生成标识
     const archivedAtMs = this.now();
-    const archiveKey = this.buffer.archiveKey(session, archivedAtMs);
+    const archiveKey = input.idempotencyKeyHash
+      ? this.buffer.idempotentArchiveKey(session, input.idempotencyKeyHash)
+      : this.buffer.archiveKey(session, archivedAtMs);
     // 前缀 `skill-extract-task-` 是内部 anchor（跟业务侧 task_id 明确区分）。
     // 一次归档 = 一个 SkillTaskEntry.task_id；handler 侧 `[skill-perf] phase=trigger.enqueueAgent
     // task_id=…` 与 worker 侧 `[skill-perf] kind=worker phase=consume.*` 共用同一
     // 值，grep 一次拉全 handler + worker 双段耗时。老数据前缀 `task-` 会被
     // worker 自然消费掉，无迁移风险（filter 按 task_id 值等价比较，不解析前缀）。
-    const taskId = `skill-extract-task-${randomUUID().slice(0, 8)}`;
+    const taskId = input.idempotencyKeyHash
+      ? `skill-extract-task-${input.idempotencyKeyHash.slice(0, 16)}`
+      : `skill-extract-task-${randomUUID().slice(0, 8)}`;
     const agent: AgentTuple = {
       // 2026-07-30 instance_id 塞进 tuple; worker pool 从队列出来后按此路由
       // 到对应 instance 的资源。不给或空会直接抛。
@@ -194,16 +200,19 @@ export class SkillTriggerService {
           existing_tasks: doc.tasks.length,
         });
 
-        doc.tasks.push(entry);
-        doc.updated_at_ms = archivedAtMs;
+        const alreadyRegistered = doc.tasks.some((task) => task.task_id === taskId);
+        if (!alreadyRegistered) {
+          doc.tasks.push(entry);
+          doc.updated_at_ms = archivedAtMs;
 
-        const t0Write = Date.now();
-        await this.buffer.writeTasks(agent, doc);
-        obsLogger.info("skill.trigger.write_tasks", {
-          req_id: rid, task_id: taskId, instance_id: instanceId,
-          dur_ms: Date.now() - t0Write,
-          total_tasks: doc.tasks.length,
-        });
+          const t0Write = Date.now();
+          await this.buffer.writeTasks(agent, doc);
+          obsLogger.info("skill.trigger.write_tasks", {
+            req_id: rid, task_id: taskId, instance_id: instanceId,
+            dur_ms: Date.now() - t0Write,
+            total_tasks: doc.tasks.length,
+          });
+        }
 
         const t0Enq = Date.now();
         const enqueued = await this.queue.enqueueAgent(agent);

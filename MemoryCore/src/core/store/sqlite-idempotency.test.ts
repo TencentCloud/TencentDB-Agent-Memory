@@ -62,6 +62,9 @@ function scopeHash(value: ConversationIdempotencyScope = scope): string {
 }
 
 function enableLegacyFtsResidues(store: VectorStore): void {
+  // Newer Node SQLite builds may initialize the production FTS table during
+  // VectorStore.init(); replace it with the legacy residue shape used here.
+  store.getRawDb().exec("DROP TABLE IF EXISTS l0_fts");
   store.getRawDb().exec(`
     CREATE TABLE l0_fts (
       record_id TEXT NOT NULL,
