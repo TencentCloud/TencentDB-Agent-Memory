@@ -6,7 +6,8 @@
  *
  * 各点详见：
  *   - types.ts —— AgentAdapter 接口 + 三个适配点的说明
- *   - claude-code.ts —— CC 特化实现（当前唯一有源码/抓包依据的客户端）
+ *   - claude-code.ts —— CC 特化实现
+ *   - pi.ts —— Pi OpenAI-compatible 请求与内部摘要分流
  *   - codebuddy.ts —— CB stub（沿用 default 行为，等抓包再补 CB 特化）
  *   - default.ts —— unknown 兜底
  */
@@ -18,6 +19,7 @@ import { codexAdapter } from "./codex.js";
 import { workbuddyAdapter } from "./workbuddy.js";
 import { dshAdapter } from "./dsh.js";
 import { opencodeAdapter } from "./opencode.js";
+import { piAdapter } from "./pi.js";
 import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
@@ -36,6 +38,8 @@ export function resolveAgentAdapter(agentSource: string): AgentAdapter {
       return dshAdapter;
     case "opencode":
       return opencodeAdapter;
+    case "pi":
+      return piAdapter;
     default:
       return defaultAdapter;
   }

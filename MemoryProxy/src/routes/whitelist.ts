@@ -166,13 +166,15 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  *   - `/codex/{spaceId}/responses`            → 剥 `/codex/{spaceId}`（codex 客户端
  *     不像 CC/CB 那样自拼 /v1/，源码 endpoint 常量就是 /responses，因此 base_url
  *     不带 /v1 时前缀后紧接的就是 /responses 或 /memories 等）
+ *   - `/pi/{spaceId}/v1/chat/completions`      → 剥 `/pi/{spaceId}`（Pi 的自定义
+ *     provider 仍使用标准 OpenAI Chat Completions 路径，Proxy 只需识别客户端前缀）
  * lookahead 允许 `/v1/`、`/responses`、`/responses/`、`/memories/`、`/realtime/`
  * 后紧邻，其中 `/v1/` 必须带尾斜杠避免误伤未来出现的 `/v1foo` 之类；responses
  * 等 codex 端点允许尾斜杠可选（如 `/responses` 是完整路径）。
  * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
  * 段——agent 段限定为已知名字）。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|pi|anthropic|openai)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。

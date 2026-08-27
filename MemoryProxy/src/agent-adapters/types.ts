@@ -9,6 +9,8 @@
  *     marker 位置上跟主对话不同 (n-2 vs n-1)。
  *   - CodeBuddy (openai 协议): user content 常是字符串，可能夹杂 CB 内部
  *     标签 —— 结构和 CC 差异大。
+ *   - Pi (openai 协议): 主循环与内部摘要共用 chat/completions；适配器按已验证的
+ *     两消息摘要 envelope 分流，避免摘要请求触发注入、L0 与 skill 副作用。
  *   - 其他（cursor / windsurf / 自定义 SDK）: 未研究。
  *
  * proxy 里三个地方需要按客户端适配：
@@ -20,7 +22,7 @@
  * 只是**取用户输入的规则**和**分类规则**按 agent 适配。
  */
 
-export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "unknown";
+export type AgentKind = "claude-code" | "codebuddy" | "codex" | "workbuddy" | "dsh" | "opencode" | "pi" | "unknown";
 
 export type RequestKind = "main" | "fork" | "sidequery" | "auxiliary";
 

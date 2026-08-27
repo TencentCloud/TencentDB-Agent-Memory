@@ -565,7 +565,11 @@ export async function handleAnthropicMessages(
     ? _pathPartsEarly[0] : undefined;
   const agentAdapter = resolveAgentAdapter(_agentFromPathEarly ?? "claude-code");
   const ccRoutingEnabled = config.ccRequestRouting?.enabled === true;
-  const requestKind: CcRequestKind = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  const classifiedRequest = ccRoutingEnabled ? agentAdapter.classifyRequest(body) : "main";
+  // auxiliary 当前只用于 OpenAI handler 中的 Pi 内部摘要。Anthropic 路由没有对应
+  // 分支，且 Pi Chat Completions 不会进入此 handler；若未来 adapter 意外在这里
+  // 返回 auxiliary，保守按 main 处理，避免扩宽 CcRequestKind 影响既有 CC 分流。
+  const requestKind: CcRequestKind = classifiedRequest === "auxiliary" ? "main" : classifiedRequest;
 
   // ── Model gate: reject requests whose `model` is not a registered display name ──
   // 价目表已配置时，客户端 `model` 必须匹配某条 entry 的 `modelName`（展示名，

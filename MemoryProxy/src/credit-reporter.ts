@@ -69,12 +69,12 @@ export function extractSpaceIdFromPath(path: string): string | null {
   // /proxy/<spaceId>/...
   let match = /^\/?proxy\/([^/?]+)(?:\/|$)/.exec(safePath);
   if (match) return match[1] || null;
-  // /<agent>/<spaceId>/...  (e.g. /claude-code/mem-example001/v1/messages)
+  // /<agent>/<spaceId>/...，例如 CC 的 /v1/messages 或 Pi 的 /v1/chat/completions。
   match = /^\/[^/]+\/([^/?]+)(?:\/|$)/.exec(safePath);
   if (match) {
     const agent = safePath.split("/").filter(Boolean)[0] ?? "";
     // Only capture spaceId when the first segment looks like an agent name
-    if (/^(claude-code|codebuddy|codex|cursor|hermes|openclaw|workbuddy|dsh|opencode)$/i.test(agent)) {
+    if (/^(claude-code|codebuddy|codex|cursor|hermes|openclaw|workbuddy|dsh|opencode|pi)$/i.test(agent)) {
       return match[1] || null;
     }
   }
