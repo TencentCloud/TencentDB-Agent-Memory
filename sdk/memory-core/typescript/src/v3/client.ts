@@ -9,6 +9,8 @@ import type {
   V3AtomicQueryRequest,
   V3AtomicSearchData,
   V3AtomicSearchRequest,
+  V3AtomicCreateData,
+  V3AtomicCreateRequest,
   V3AtomicUpdateData,
   V3AtomicUpdateRequest,
   V3ChatMemoryClearData,
@@ -274,6 +276,19 @@ export class MemoryClient {
       content: params.content,
       background: params.background,
     }));
+  }
+
+  /**
+   * Batch create L1 atomic memories. Each record gets a server-generated
+   * record_id. Bypasses L0→L1 distillation — for user-driven imports
+   * (markdown notes, JSON arrays, file uploads). Single batch ≤ 500 records.
+   */
+  createMemories(params: V3AtomicCreateRequest): Promise<V3AtomicCreateData> {
+    return this.http.post(`${V3}/atomic/create`, {
+      ...this.iso.baseBody(),
+      session_id: this.iso.resolveSession(params.session_id),
+      records: params.records,
+    });
   }
 
   queryAtomic(params: V3AtomicQueryRequest = {}): Promise<V3AtomicQueryData> {

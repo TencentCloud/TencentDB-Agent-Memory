@@ -115,6 +115,7 @@ MemoryCore/scripts/tests/
 docs/knowledge/self-implement-wiki/_e2e-output/
 
 # Development databases and runtime data (never commit)
+data/
 data/skills.db
 data/tdai-memory.db
 **/data/vectors.db
@@ -125,6 +126,10 @@ data/tdai-memory.db
 **/data/knowledge.db-wal
 **/data/_wiki_engines/
 **/data/mem-*/
+
+# MemoryPanel local config (contains real user keys, never commit)
+MemoryPanel/config/metadata-instances.json
+MemoryPanel/.env
 
 # Test coverage output
 coverage/
