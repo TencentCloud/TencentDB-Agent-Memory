@@ -35,6 +35,12 @@ upstream:
   # 若非空，则替换所有转发请求中的 Authorization: Bearer <apiKey>。
   # 留空则透传客户端原始 API Key。
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
+  # 是否启用「客户端 Authorization 原样透传到上游」模式。
+  # true 时配合 auth.userKeyHeader 使用：user_key 移到专用 header 鉴权，
+  # Authorization（公司网关 key sk-corp-*）原样透传到上游 LLM，不覆盖。
+  # 典型场景：公司有 AI 网关，每同事填自己的网关 key，既用网关计费/审计，又用记忆注入。
+  # 默认 false（向后兼容：effectiveApiKey 走 agent 三态解析）。
+  # passthroughClientAuth: true
 
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
@@ -376,6 +382,13 @@ auth:
   enabled: true            # 是否启用鉴权
   url: "http://kernel.example.com:8420"   # 内核鉴权服务 base URL（自动拼接 /v3/meta/auth/verify）
   timeoutMs: 5000          # 鉴权请求超时（毫秒）
+  # 鉴权用 header 名。配置后，proxy 从该 header 读取 user_key（sk-mem-*）做鉴权，
+  # 客户端的 Authorization（如公司网关 key sk-corp-*）原样透传到上游 LLM，不覆盖。
+  # 留空（默认）→ 走老路径（Authorization Bearer 即 user_key），向后兼容。
+  # 典型场景：公司有自己的 AI 网关，每个同事填自己的网关 key 转发到公司网关，
+  # 既不丢失网关的计费/审计能力，又能用上 MemoryProxy 的记忆注入。
+  # 客户端配置：apiKey=sk-corp-xxx, headers: {x-mem-user-key: sk-mem-xxx}
+  # userKeyHeader: "x-mem-user-key"
 
 
 # ── Admin / Ops 端点鉴权（服务级 shared secret） ─────────────────────────────

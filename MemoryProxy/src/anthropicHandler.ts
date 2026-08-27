@@ -65,6 +65,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "connection",
   // 内部身份头只给 proxy/session-init 使用，不能透传给上游模型服务。
   "x-tdai-user-key",
+  // Auth-decoupling header — never forward to upstream (prevents user_key leak)
+  "x-mem-user-key",
 ]);
 
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -248,8 +250,18 @@ export function flattenAnthropicMessagesForOpik(
   return result;
 }
 
-/** Extract Anthropic API key from request headers (x-api-key or Authorization Bearer). */
-function extractApiKey(c: Context): string {
+/**
+ * Extract Anthropic API key from request headers (x-api-key or Authorization Bearer).
+ *
+ * When `userKeyHeader` is configured, that header takes priority — it carries
+ * the user_key (sk-mem-*) for auth verification, freeing x-api-key /
+ * Authorization to carry the corporate gateway key for upstream passthrough.
+ */
+function extractApiKey(c: Context, userKeyHeader?: string): string {
+  if (userKeyHeader) {
+    const v = c.req.header(userKeyHeader) ?? c.req.header(userKeyHeader.toLowerCase()) ?? "";
+    if (v) return v;
+  }
   const xApiKey = c.req.header("x-api-key");
   if (xApiKey) return xApiKey;
 
@@ -533,7 +545,11 @@ export async function handleAnthropicMessages(
   // Verify BEFORE parsing the body so a rejected caller never triggers body
   // parsing or the alias-gate. `earlyVerify.userId` is reused later for
   // both the systemUser short-circuit and the normal pipeline.
-  const earlyApiKey = extractApiKey(c);
+  //
+  // When `auth.userKeyHeader` is configured, the user_key (sk-mem-*) moves to
+  // that header, freeing x-api-key / Authorization to carry the corporate
+  // gateway key for upstream passthrough.
+  const earlyApiKey = extractApiKey(c, config.auth.userKeyHeader);
   const earlySpaceId = extractSpaceIdFromPath(c.req.path) ?? "";
   const earlyVerify = await verifyUserKey(earlyApiKey, earlySpaceId);
   if (earlyVerify.rejected) {
@@ -633,7 +649,10 @@ export async function handleAnthropicMessages(
   inspectAndRecord("POST", c.req.path, reqHeaders, body as Record<string, unknown>, agentSource);
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
-  const apiKey = extractApiKey(c);
+  // Use the user_key (from userKeyHeader or x-api-key/Authorization) for keyId
+  // tracking, NOT the corporate gateway key that may live in x-api-key when
+  // passthroughClientAuth is enabled.
+  const apiKey = extractApiKey(c, config.auth.userKeyHeader);
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
 
   // ── Lowercased headers for agent profile detection + session key ──────────
@@ -1324,9 +1343,15 @@ export async function handleAnthropicMessages(
   // The presence of an entry (case b/c) is what cuts the global fallback —
   // this is the switch that lets one proxy serve mixed server-key / client-key
   // agents from a single config.
-  const effectiveApiKey = agentUpstreamEntry
-    ? (agentUpstreamEntry.apiKey ?? "")
-    : config.upstream.apiKey;
+  //
+  // `passthroughClientAuth` overrides all three cases: when true, the client's
+  // Authorization / x-api-key (e.g. a corporate gateway key sk-corp-*) is
+  // passthrough'd to the upstream LLM untouched. Pairs with `auth.userKeyHeader`.
+  const effectiveApiKey = config.upstream.passthroughClientAuth
+    ? ""
+    : agentUpstreamEntry
+      ? (agentUpstreamEntry.apiKey ?? "")
+      : config.upstream.apiKey;
   const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
 
   // Optional private preparation stage. It rewrites `body` / `messages` in

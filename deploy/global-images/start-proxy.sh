@@ -10,6 +10,10 @@
 #
 # 需要以下 proxy 组参数（写在 .env）：
 #   PROXY_UPSTREAM_URL / PROXY_UPSTREAM_API_KEY / PROXY_UPSTREAM_MODEL
+#
+# 可选 per-user 透传参数（写在 .env）：
+#   PROXY_USER_KEY_HEADER=x-mem-user-key       # 鉴权用 header 名
+#   PROXY_PASSTHROUGH_CLIENT_AUTH=1            # 1=透传客户端 Authorization 到上游
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,7 +77,17 @@ fi
 
 bool() { [[ "$1" == "1" ]] && echo "true" || echo "false"; }
 
-info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI))"
+# ── Per-user 透传（可选）──────────────────────────────────────────
+# PROXY_USER_KEY_HEADER: 鉴权用 header 名（如 x-mem-user-key）。配置后
+#   proxy 从该 header 读 user_key(sk-mem-*),客户端的 Authorization
+#   (公司网关 key) 原样透传到上游,不覆盖。
+# PROXY_PASSTHROUGH_CLIENT_AUTH=1: 强制透传客户端 Authorization 到上游。
+#   两个配合使用:用户_key 移到专用 header 鉴权,Authorization 留给公司网关 key。
+#   不配时走老路径(Authorization 既是 user_key 又透传/覆盖),向后兼容。
+PROXY_USER_KEY_HEADER="${PROXY_USER_KEY_HEADER:-}"
+PROXY_PASSTHROUGH_CLIENT_AUTH="${PROXY_PASSTHROUGH_CLIENT_AUTH:-0}"
+
+info "生成 proxy config → $CONFIG_FILE  (auth=$(bool $PROXY_ENABLE_AUTH) session-init=$(bool $PROXY_ENABLE_SESSION_INIT) tdai=$(bool $PROXY_ENABLE_TDAI) per-user=$(bool $PROXY_PASSTHROUGH_CLIENT_AUTH))"
 cat > "$CONFIG_FILE" <<YAML
 # 由 start-proxy.sh 自动生成 —— 每次启动覆盖，请不要手动改。
 server:
@@ -84,6 +98,7 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+$([[ "$PROXY_PASSTHROUGH_CLIENT_AUTH" == "1" ]] && echo "  passthroughClientAuth: true")
 
 log:
   file: ""
@@ -111,6 +126,7 @@ auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)
   url: "http://memory-core:8420"
   timeoutMs: 5000
+$([[ -n "$PROXY_USER_KEY_HEADER" ]] && echo "  userKeyHeader: \"${PROXY_USER_KEY_HEADER}\"")
 
 sessionInit:
   enabled: $(bool $PROXY_ENABLE_SESSION_INIT)
@@ -152,3 +168,7 @@ $DOCKER run -d --name "$CONTAINER" \
 wait_healthy "$CONTAINER" 90
 ok "proxy 已启动 → http://localhost:${PROXY_PORT}/"
 ok "  用法：把 coding agent 的 API base 指向 http://localhost:${PROXY_PORT}"
+if [[ "$PROXY_PASSTHROUGH_CLIENT_AUTH" == "1" ]]; then
+  ok "  per-user 透传已启用：客户端 Authorization 原样透传到上游"
+  ok "  客户端需配 header ${PROXY_USER_KEY_HEADER:-x-mem-user-key}: sk-mem-xxx 做 MemoryProxy 鉴权"
+fi

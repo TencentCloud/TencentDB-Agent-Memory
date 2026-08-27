@@ -8,7 +8,7 @@ const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
-  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
+  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {}, passthroughClientAuth: false },
   log: {
     file: "",
     verbose: false,
@@ -140,6 +140,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: false,
     url: "",
     timeoutMs: 5000,
+    userKeyHeader: "",
   },
   systemUsers: [],
   admin: { apiKey: "" },
@@ -282,6 +283,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         DEFAULT_CONFIG.upstream.url,
       apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
       agents: parseUpstreamAgents(yaml.upstream?.agents),
+      passthroughClientAuth:
+        yaml.upstream?.passthroughClientAuth ??
+        DEFAULT_CONFIG.upstream.passthroughClientAuth,
     },
     log: {
       file: overrides.logFile ?? yaml.log?.file ?? DEFAULT_CONFIG.log.file,
@@ -474,6 +478,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
+      userKeyHeader: yaml.auth?.userKeyHeader ?? DEFAULT_CONFIG.auth.userKeyHeader,
     },
     // Entries without a non-empty userId are silently dropped — matching is
     // by userId now, and an empty userId would otherwise collide with

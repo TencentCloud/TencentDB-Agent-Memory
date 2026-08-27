@@ -62,6 +62,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "transfer-encoding",
   "connection",
   "x-tdai-user-key",
+  // Auth-decoupling header — never forward to upstream (prevents user_key leak)
+  "x-mem-user-key",
 ]);
 
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -820,12 +822,14 @@ export async function handleWorkbuddyEndpoint(
   const path = c.req.path;
 
   // ── 1. Auth ──────────────────────────────────────────────────────────────
+  // When `auth.userKeyHeader` is configured, the user_key (sk-mem-*) moves to
+  // that header, freeing Authorization / x-api-key to carry the corporate
+  // gateway key for upstream passthrough.
   const rawAuth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
   const rawXApiKey = c.req.header("x-api-key") ?? "";
-  const apiKey =
-    extractBearerToken(rawAuth) ??
-    rawXApiKey ??
-    "";
+  const apiKey = config.auth.userKeyHeader
+    ? (c.req.header(config.auth.userKeyHeader) ?? c.req.header(config.auth.userKeyHeader.toLowerCase()) ?? "")
+    : (extractBearerToken(rawAuth) ?? rawXApiKey ?? "");
   const spaceId = extractSpaceIdFromPath(path) ?? "";
   const { userId, rejected: userKeyRejected, rejectReason } = await verifyUserKey(
     apiKey,

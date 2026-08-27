@@ -107,9 +107,14 @@ export function extractClientIdentity(
   body?: Record<string, unknown>,
   agentSource = "claude-code",
 ): ClientIdentity {
-  // Extract API key
+  // Extract API key — prefer the auth-decoupling header (x-mem-user-key) when
+  // present, because `passthroughClientAuth` mode puts the user_key (sk-mem-*)
+  // there and leaves Authorization for the corporate gateway key. The user_key
+  // carries the client-type prefix (ck_ / sk-mem- / sk-ant-) used below for
+  // identity detection; the corporate key does not.
+  const userKeyHeaderVal = headers["x-mem-user-key"] ?? headers["X-Mem-User-Key"] ?? "";
   const authHeader = headers["authorization"] ?? headers["Authorization"] ?? "";
-  const apiKey = extractBearer(authHeader);
+  const apiKey = userKeyHeaderVal || extractBearer(authHeader);
 
   // Parse API key structure: prefix.secret
   let apiKeyPrefix: string | null = null;
@@ -395,12 +400,25 @@ export function inspectAndRecord(
     }
   }
 
+  // Sanitize sensitive headers before logging — x-mem-user-key and
+  // authorization carry user_key / corporate gateway key material that
+  // must never land in inspection logs verbatim.
+  const sanitizedHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    const lk = k.toLowerCase();
+    if (lk === "x-mem-user-key" || lk === "authorization" || lk === "x-api-key") {
+      sanitizedHeaders[k] = v ? `${v.slice(0, 8)}***` : v;
+    } else {
+      sanitizedHeaders[k] = v;
+    }
+  }
+
   const inspection: RequestInspection = {
     timestamp: new Date().toISOString(),
     method,
     path,
     identity,
-    allHeaders: headers,
+    allHeaders: sanitizedHeaders,
     bodyMeta: {
       model: typeof body.model === "string" ? body.model : null,
       messageCount: messages.length,

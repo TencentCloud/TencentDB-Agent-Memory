@@ -429,6 +429,13 @@ export interface ProxyConfig {
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
      */
     agents: Record<string, AgentUpstreamEntry>;
+    /**
+     * When true, the client's Authorization header is passthrough'd to the
+     * upstream LLM untouched, regardless of agent config. Pairs with
+     * `auth.userKeyHeader`: the user_key moves to a dedicated header, freeing
+     * Authorization to carry the corporate gateway key. Default: false.
+     */
+    passthroughClientAuth?: boolean;
   };
   log: {
     file: string;    // JSONL path; empty string disables file logging
@@ -645,6 +652,14 @@ export interface AuthConfig {
   url: string;
   /** Request timeout in ms. Default: 5000. */
   timeoutMs: number;
+  /**
+   * Header name for extracting the user_key (sk-mem-*) used for auth verification.
+   * When set, the proxy reads the user_key from this header instead of Authorization,
+   * allowing the client's Authorization (e.g. a corporate gateway key) to be
+   * passthrough'd to the upstream LLM untouched. Empty/undefined → legacy path
+   * (Authorization Bearer is the user_key). Default: "".
+   */
+  userKeyHeader?: string;
 }
 
 /**
@@ -731,6 +746,9 @@ export interface RawYamlConfig {
     apiKey?: string;
     /** Per-agent override map. See `AgentUpstreamEntry`. */
     agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    /** When true, the client's Authorization header is passthrough'd to the
+     * upstream LLM untouched. Pairs with `auth.userKeyHeader`. */
+    passthroughClientAuth?: boolean;
   };
   log?: {
     file?: string;
@@ -872,6 +890,10 @@ export interface RawYamlConfig {
     enabled?: boolean;
     url?: string;
     timeoutMs?: number;
+    /** Header name for extracting the user_key (sk-mem-*) used for auth
+     * verification. When set, Authorization is freed to carry a corporate
+     * gateway key that gets passthrough'd to the upstream LLM. */
+    userKeyHeader?: string;
   };
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {

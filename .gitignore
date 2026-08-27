@@ -136,3 +136,7 @@ coverage/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# Local runtime data (never commit)
+data/
+deploy/global-images/.admin-key.bak.*

@@ -37,7 +37,7 @@ import { tryReportCreditFromPath, extractSpaceIdFromPath } from "./credit-report
 import { resolveModelId, isModelInPricing } from "./pricing.js";
 import { inspectAndRecord } from "./identity.js";
 import { writeFailedReportRaw } from "./clickhouse.js";
-import { verifyUserKey } from "./auth.js";
+import { verifyUserKey, extractUserKeyFromRequest } from "./auth.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
@@ -203,6 +203,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  // Auth-decoupling header — never forward to upstream (prevents user_key leak)
+  "x-mem-user-key",
 ]);
 
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -450,8 +452,11 @@ export async function handleChatCompletions(
   // Verify BEFORE parsing the body so a rejected caller never triggers body
   // parsing or the alias-gate. `earlyVerify.userId` is reused later for
   // both the systemUser short-circuit and the normal pipeline.
-  const earlyAuthHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const earlyApiKey = extractBearerToken(earlyAuthHeader);
+  //
+  // When `auth.userKeyHeader` is configured, the user_key (sk-mem-*) moves to
+  // that header, freeing Authorization to carry the corporate gateway key
+  // (sk-corp-*) which gets passthrough'd to the upstream LLM untouched.
+  const earlyApiKey = extractUserKeyFromRequest(c, config.auth.userKeyHeader);
   const earlySpaceId = extractSpaceIdFromPath(c.req.path) ?? "";
   const earlyVerify = await verifyUserKey(earlyApiKey, earlySpaceId);
   if (earlyVerify.rejected) {
@@ -648,8 +653,10 @@ export async function handleChatCompletions(
   inspectAndRecord("POST", c.req.path, reqHeaders, body as Record<string, unknown>, agentSource);
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
-  const authHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const apiKey = extractBearerToken(authHeader);
+  // Use the user_key (from userKeyHeader or Authorization) for keyId tracking,
+  // NOT the corporate gateway key that may live in Authorization when
+  // passthroughClientAuth is enabled.
+  const apiKey = extractUserKeyFromRequest(c, config.auth.userKeyHeader);
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
 
   // ── Lowercased headers for agent profile detection + session key ──────────
@@ -1279,9 +1286,17 @@ export async function handleChatCompletions(
   //   (c) entry present, apiKey non-empty  → agent.apiKey (server-side key)
   // Presence of an entry (case b/c) cuts the global fallback — that's what
   // lets one proxy serve mixed server-key / client-key agents at once.
-  const effectiveApiKey = agentUpstreamEntry
-    ? (agentUpstreamEntry.apiKey ?? "")
-    : config.upstream.apiKey;
+  //
+  // `passthroughClientAuth` overrides all three cases: when true, the client's
+  // Authorization (e.g. a corporate gateway key sk-corp-*) is passthrough'd
+  // to the upstream LLM untouched. Pairs with `auth.userKeyHeader`, which
+  // moves the user_key (sk-mem-*) to a dedicated header so Authorization is
+  // free to carry the corporate key.
+  const effectiveApiKey = config.upstream.passthroughClientAuth
+    ? ""
+    : agentUpstreamEntry
+      ? (agentUpstreamEntry.apiKey ?? "")
+      : config.upstream.apiKey;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
   const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";

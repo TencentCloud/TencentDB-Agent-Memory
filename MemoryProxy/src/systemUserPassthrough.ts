@@ -72,6 +72,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  // Auth-decoupling header — never forward to upstream (prevents user_key leak)
+  "x-mem-user-key",
 ]);
 
 /** Response headers that would confuse the client if forwarded verbatim. */
