@@ -52,14 +52,27 @@ only when you want to skip the picker (CI, scripts, a fixed context).
 
 ## Install / load
 
-Quick test (throwaway load, interactive mode — no identity env vars):
+**From the Pi package gallery** (once published under `@tencentdb-agent-memory`):
+
+```bash
+pi install npm:@tencentdb-agent-memory/pi-tdai-client
+```
+
+Then run (interactive mode — no identity env vars, the picker fires on turn 1):
+
+```bash
+export TDAI_USER_KEY=<your-user-key>
+pi --provider tdai --model glm-5.2-vision
+```
+
+**Quick test** (throwaway load, from a checkout of this repo):
 
 ```bash
 TDAI_USER_KEY=<your-user-key> \
   pi -e ./MemoryCore/pi-plugin --provider tdai --model glm-5.2-vision
 ```
 
-Or with a fixed identity (skips the picker):
+**Fixed identity** (skips the picker — for CI / scripts / a fixed context):
 
 ```bash
 TDAI_USER_KEY=<your-user-key> TDAI_TEAM_ID=<...> TDAI_AGENT_ID=<...> \
@@ -69,7 +82,7 @@ TDAI_USER_KEY=<your-user-key> TDAI_TEAM_ID=<...> TDAI_AGENT_ID=<...> \
 (Add `TDAI_TASK_ID=<...>` only if you want task-scoped recall.)
 
 Auto-discover (global): symlink or copy into `~/.pi/agent/extensions/` and Pi
-loads it on startup.
+loads it on startup. Or use `pi install` (above) for npm-managed install.
 
 ## Verify (integration gate)
 

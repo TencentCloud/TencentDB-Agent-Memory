@@ -17,6 +17,26 @@
     "test": "vitest run",
     "clean": "rm -rf dist *.tgz"
   },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/TencentCloud/TencentDB-Agent-Memory#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "MemoryCore/pi-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/TencentCloud/TencentDB-Agent-Memory/issues"
+  },
+  "files": [
+    "index.ts",
+    "form.ts",
+    "picker.ts",
+    "README.md",
+    "package.json",
+    "tsconfig.json",
+    "vitest.config.ts",
+    "__tests__/"
+  ],
   "devDependencies": {
     "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^22.0.0",
@@ -25,6 +45,16 @@
     "vitest": "^3.2.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": false },
+    "@earendil-works/pi-tui": { "optional": false },
+    "typebox": { "optional": false }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
