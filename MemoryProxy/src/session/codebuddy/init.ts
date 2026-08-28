@@ -354,8 +354,16 @@ function applyArtifactsAndContext(
   config: SessionInitConfig,
 ): MessageArr {
   // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
-  // 现在**永远保留** session_init form 交互, 不做任何删除。
-  const injected = injectSessionContextWithToggles(messages, agentDetail, taskDetail, config, sessionKey);
+  // 状态机解析必须保留 form 交互原文；转发上游时 codex 路径由 codexHandler
+  // 调用 stripCodexFormArtifacts 剥离（session/codex/form.ts），此处不做删除。
+  const injected = injectSessionContextWithToggles(
+    messages,
+    agentDetail,
+    taskDetail,
+    config,
+    sessionKey,
+    team ?? null,
+  );
   if (injected !== messages) {
     const finalRoles = (injected as unknown[]).map((m: any) => m.role);
     console.log(
@@ -558,6 +566,22 @@ async function handleSessionInitInner(
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
+
+  // ── 跳过状态自愈（评审意见：bypass + header 预选可解析 → 自动重绑）──────
+  // bypass 会话（用户跳过 / gate 截断）若新一轮请求带完整 team/agent header，
+  // 清掉 bypass 状态重新走 preset 注册，避免「被动跳过」长期锁死记忆能力。
+  if (
+    state?.bypassed === true &&
+    presetIdentity &&
+    presetIdentity.teamId &&
+    presetIdentity.agentId &&
+    config.headerAutoSelect?.enabled
+  ) {
+    await store.delete(compositeKey);
+    console.log(
+      `[session-init:cb] session=${compositeKey} bypass self-heal → rebind via preset headers (team=${presetIdentity.teamId} agent=${presetIdentity.agentId})`,
+    );
+  }
 
   // ── codex-only pre-checks: Default gate + MORE 分页 ───────────────────────
   //

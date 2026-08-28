@@ -15,6 +15,8 @@ export interface TdaiIdentitySource {
   sessionKey?: string | null;
   /** 请求发起者 user_key（来自 Authorization: Bearer；ACL 校验用）。 */
   userKey?: string | null;
+  /** thread 维度（评审意见 1）：task 之下的主题分组。 */
+  threadId?: string | null;
 }
 
 /**
@@ -31,8 +33,9 @@ export function deriveTdaiIdentity(source: TdaiIdentitySource): TdaiIdentity | n
   const sessionId = pickString(session?.session_id) ?? pickString(source.sessionKey);
   const taskId = pickString(session?.task_id);
   const userKey = pickString(source.userKey);
+  const threadId = pickString(source.threadId);
   if (!teamId || !userId || !agentId || !sessionId) return null;
-  return { teamId, userId, agentId, sessionId, taskId, userKey };
+  return { teamId, userId, agentId, sessionId, taskId, userKey, threadId };
 }
 
 export function getTdaiIdentity(custom: Record<string, unknown> | undefined): TdaiIdentity | null {
@@ -40,6 +43,7 @@ export function getTdaiIdentity(custom: Record<string, unknown> | undefined): Td
   return deriveTdaiIdentity({
     sessionInfo: custom?.session as Record<string, unknown> | null | undefined,
     userKey,
+    threadId: custom?.threadId as string | null | undefined,
   });
 }
 

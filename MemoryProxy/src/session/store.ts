@@ -354,6 +354,18 @@ export class SessionStore {
     // 不作为权威源。session-reset 可能在任意 pod 执行，L1 initialized 不可信。
     const l1 = this.get(keyId);
     // 不对 initialized 做 L1 短路 —— 一律走 L2a 拿权威状态。
+    // 空间隔离（评审意见 9 落地）：恢复出的会话若属于不同 spaceId → 视为新会话，
+    // 避免跨内核实例/项目误共享身份与记忆。只做"跨空间拦截"，不短路正常会话
+    // （L1 是否权威由上游的"一律走 L2a"决定，此处不恢复旧短路行为）。
+    if (l1 && l1.status === "initialized") {
+      const l1Session = (l1 as { sessionInfo?: { space_id?: string } | null }).sessionInfo;
+      if (identity.spaceId && l1Session?.space_id && l1Session.space_id !== identity.spaceId) {
+        console.log(
+          `[cache] session=${keyId} space mismatch (stored=${l1Session.space_id} req=${identity.spaceId}) → treat as new session`,
+        );
+        return undefined;
+      }
+    }
 
     // Step 2: L2a SessionRepo (Redis / SQLite / ProxyStorage) — full SessionInitState.
     // Startup `hydrateFromDb()` covers the single-node case, but in multi-node
