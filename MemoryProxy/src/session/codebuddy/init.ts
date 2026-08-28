@@ -103,6 +103,10 @@ export interface SessionInitResult {
    * 常量供跨 handler 判定即可。
    */
   bypassReason?: "default-gate";
+  /** mem:session-reset 触发时标记本次 init 是 reset 流程（跨 handler 判定用）。 */
+  resetFlow?: boolean;
+  /** mem:session-reset 触发的时间戳，跨节点一致性校验用。 */
+  resetEpoch?: number;
   /**
    * Anthropic-only: pre-built `<session_context>` string the caller must
    * append to `body.system` (the ClaudeCode init module populates this;
@@ -352,6 +356,7 @@ function applyArtifactsAndContext(
   taskDetail: TaskDetail | null | undefined,
   sessionKey: string,
   config: SessionInitConfig,
+  team?: { id?: string; name?: string } | null,
 ): MessageArr {
   // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
   // 状态机解析必须保留 form 交互原文；转发上游时 codex 路径由 codexHandler

@@ -37,6 +37,7 @@ import {
   type KnowledgeItem,
 } from "../../knowledge/core-client.js";
 import type { CoreSkillConfig } from "../../types.js";
+import { renderPlatformHint } from "../shell-template.js";
 
 const TAG = "[knowledge-tools-injector]";
 

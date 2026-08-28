@@ -16,6 +16,24 @@ export interface TdaiMemoryConfig {
   l1Limit: number;
   l2Limit: number;
   timeoutMs: number;
+
+  /** 自动召回注入预算（字符数），超出后按相关性截断，防止 prompt 膨胀。 */
+  recallCharBudget?: number;
+  /** 意图注入模式：keyword / llm / hybrid（默认）。 */
+  intentMode?: "keyword" | "llm" | "hybrid";
+  /** bypass 会话的 L0 写入策略：skip（默认）/ write-scoped / write。 */
+  bypassWritePolicy?: "skip" | "write-scoped" | "write";
+  /** bypass 会话的 L1 读取策略：none（默认）/ self-only / default。 */
+  bypassReadPolicy?: "none" | "self-only" | "default";
+  /** 意图向量检索（教学模板 RAG）：配置后语义层优先用 embedding。 */
+  intentEmbedding?: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+    dimensions: number;
+    minScore: number;
+    timeoutMs: number;
+  };
 }
 
 export interface TdaiIdentity {

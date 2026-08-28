@@ -983,10 +983,6 @@ export interface RawYamlConfig {
     enabled?: boolean;
     extractors?: string[];
   };
-  memCommand?: {
-    enabled?: boolean;
-    allowedCommands?: string[];
-  };
   /**
    * 上下文压缩（Context Offloading 最小版）：Proxy 转发上游前压缩早期轮次，
    * 只保留最近 keepRounds 轮，降低长任务单次上游 token 成本。
@@ -1067,13 +1063,13 @@ export interface RawYamlConfig {
    */
   memCommand?: {
     enabled?: boolean;
-    allowedCommands?: unknown[];
+    allowedCommands?: string[];
     taskDraft?: {
-      enabled?: unknown;
-      model?: unknown;
-      url?: unknown;
-      apiKey?: unknown;
-      timeoutMs?: unknown;
+      enabled?: boolean;
+      model?: string;
+      url?: string;
+      apiKey?: string;
+      timeoutMs?: number;
     };
   };
 }
@@ -1087,6 +1083,7 @@ export interface RequestLogEntry {
   sessionKey?: string; // conversationId || keyId — per-conversation isolation key
   upstreamUrl: string;
   stream: boolean;
+  traceId?: string;
   temperature?: number;
   maxTokens?: number;
   routedFrom?: string;     // original model if routing was applied

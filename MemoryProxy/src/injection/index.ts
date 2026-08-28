@@ -119,6 +119,7 @@ import { TdaiToolsInjector } from "./injectors/tdai-tools-injector.js";
 import { TdaiL1RecallInjector } from "./injectors/tdai-l1-recall-injector.js";
 import { TdaiIntentToolsInjector } from "./injectors/tdai-intent-tools-injector.js";
 import { KnowledgeToolsInjector } from "./injectors/knowledge-tools-injector.js";
+import { TdaiClient } from "../tdai/client.js";
 import { AssetReflectionInjector } from "./injectors/asset-reflection-injector.js";
 import type { ProtocolAdapter } from "./adapters/interface.js";
 import type { AgentProfile } from "./agents/interface.js";

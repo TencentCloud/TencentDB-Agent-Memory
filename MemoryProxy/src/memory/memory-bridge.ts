@@ -64,6 +64,8 @@ interface SessionIdFields {
   user_id: string;
   team_id: string;
   agent_id: string;
+  /** 客户端来源（claude-code / codex / workbuddy 等），供遥测使用。 */
+  agent_source?: string;
   session_id: string;
   task_id?: string;
   user_key?: string;

@@ -133,6 +133,28 @@ function extractLatestCodexUserMessage(input: unknown): TdaiMessage | null {
   return { role: "user", content: trimmed };
 }
 
+/** 按 team_id 从元数据补齐团队名（walked-through 分支 [Team] 只有 id 时用）。 */
+async function resolveTeamName(
+  metadataClient: {
+    listTeams: (userId: string) => Promise<Array<{ team_id: string; name?: string }>>;
+  },
+  userId: string,
+  teamId: string,
+): Promise<{ id: string; name?: string }> {
+  try {
+    const teams = await metadataClient.listTeams(userId);
+    const hit = teams.find((t) => t.team_id === teamId);
+    return { id: teamId, name: hit?.name };
+  } catch {
+    return { id: teamId };
+  }
+}
+
+/** 团队名是否缺失（info 为 null 或未填 name）。 */
+function teamNameMissing(info: { id: string; name?: string } | null): boolean {
+  return info === null || info.name === undefined;
+}
+
 // ── Codex session state (exported for unit tests) ────────────────────────────
 
 export interface CodexSessionState {
@@ -469,6 +491,7 @@ export async function handleCodexEndpoint(
   // 造同款 block 并预填到合成 system message 前面。
   let cachedAgentDetail: unknown = null;
   let cachedTaskDetail: unknown = null;
+  let resolvedTeamInfo: { id: string; name?: string } | null = null;
 
   const input = Array.isArray(body.input) ? body.input : [];
 
@@ -489,7 +512,7 @@ export async function handleCodexEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -768,10 +791,10 @@ export async function handleCodexEndpoint(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -780,13 +803,9 @@ export async function handleCodexEndpoint(
       // agent/task 描述瞎猜团队名（如把"test team"猜成"Session Init 测试团队"）。
       // 这里从元数据按 team_id 查一次补齐 name，保证三客户端口径一致。
       const resolvedTeamId = (initResult.sessionInfo as { team_id?: string } | undefined)?.team_id;
-      if (resolvedTeamId && (!cachedTeamInfo || !cachedTeamInfo.name)) {
-        try {
-          const teams = await metadataClient.listTeams(userId || "");
-          const hit = teams.find((t) => t.team_id === resolvedTeamId);
-          cachedTeamInfo = { id: resolvedTeamId, name: hit?.name };
-        } catch {
-          if (!cachedTeamInfo) cachedTeamInfo = { id: resolvedTeamId };
+      if (typeof resolvedTeamId === "string" && resolvedTeamId.length > 0) {
+        if (teamNameMissing(resolvedTeamInfo)) {
+          resolvedTeamInfo = await resolveTeamName(metadataClient, userId || "", resolvedTeamId);
         }
       }
     } catch (err: unknown) {

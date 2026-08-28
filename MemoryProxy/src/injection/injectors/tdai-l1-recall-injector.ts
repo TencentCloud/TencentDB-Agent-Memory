@@ -39,6 +39,8 @@ export class TdaiL1RecallInjector implements InjectionHook {
     private coreSkillCfg: Pick<CoreSkillConfig, "endpoint" | "serviceToken" | "serviceId" | "timeoutMs"> | null = null,
     private perAgentLimit: number | undefined = undefined,
     private globalTopK = 5,
+    /** 注入预算（字符数）：按相关性依次加入，超出即截断，防止 prompt 再次膨胀。 */
+    private charBudget = 2000,
     /**
      * ACL 校验客户端，通常与 `client` 是同一个 TdaiClient 实例。传入后每个
      * fixed-asset ctx 都会走 acl/check(read) 过滤。为 null 时保留旧行为。
@@ -150,9 +152,13 @@ export class TdaiL1RecallInjector implements InjectionHook {
           ? "self"
           : `from ${m.fromAgentName ?? m.fromAgentId}`;
       const score = typeof m.score === "number" ? ` score=${m.score.toFixed(3)}` : "";
-      lines.push(`${i + 1}. [${m.type ?? "memory"}] [${fromTag}${score}] ${m.content}`);
+      const content = m.content.length > 200 ? `${m.content.slice(0, 200)}…` : m.content;
+      const line = `${i + 1}. [${m.type ?? "memory"}] [${fromTag}${score}] ${content}`;
+      if (line.length > budget) break;
+      lines.push(line);
+      budget -= line.length;
     }
-    lines.push("</tdai_recalled_l1_memories>");
+    lines.push(CLOSE);
 
     return [
       {
