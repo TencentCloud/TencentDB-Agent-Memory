@@ -65,6 +65,16 @@ function positiveInt(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
+function boundedEffectiveContext(
+  config: LLMProbeConfig,
+  probedContextWindow?: number,
+): number | undefined {
+  const configured = positiveInt(config.contextWindow);
+  const probed = positiveInt(probedContextWindow);
+  if (configured && probed) return Math.min(configured, probed);
+  return configured ?? probed;
+}
+
 function nativeRoot(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "").replace(/\/v1$/i, "");
 }
@@ -275,7 +285,11 @@ export async function probeLlmCapabilities(
     }
 
     status.state = "ready";
-    status.effectiveContextWindow = effectiveContextWindow ?? status.configuredContextWindow;
+    // Native model metadata may advertise the training maximum rather than
+    // the operator/runtime cap (for example Ollama's model_info context
+    // length while OLLAMA_CONTEXT_LENGTH is lower). Never let a probe widen
+    // the configured safety boundary.
+    status.effectiveContextWindow = boundedEffectiveContext(config, effectiveContextWindow);
     status.effectiveInputBudgetTokens = effectiveBudget(config, status.effectiveContextWindow);
     const contextError = contextConfigurationError(config, status.effectiveContextWindow);
     if (contextError) {

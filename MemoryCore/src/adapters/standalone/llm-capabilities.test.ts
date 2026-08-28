@@ -112,6 +112,34 @@ describe("standalone local LLM capabilities", () => {
     });
   });
 
+  it("never widens an operator context cap to an Ollama model training limit", async () => {
+    const endpoint = await startEndpoint((req) => {
+      if (req.url === "/api/show") {
+        return {
+          body: {
+            model_info: { "qwen35.context_length": 262144 },
+            capabilities: ["completion", "thinking"],
+          },
+        };
+      }
+      return { body: chatResponse("qwen3.6:27b") };
+    });
+    const capability = await probeLlmCapabilities({
+      baseUrl: endpoint.baseUrl,
+      apiKey: "ollama",
+      model: "qwen3.6:27b",
+      maxTokens: 2048,
+      backend: "ollama",
+      contextWindow: 8192,
+    });
+    expect(capability).toMatchObject({
+      state: "ready",
+      configuredContextWindow: 8192,
+      effectiveContextWindow: 8192,
+      effectiveInputBudgetTokens: 6144,
+    });
+  });
+
   it("probes llama.cpp and applies Jinja reasoning/template options", async () => {
     const endpoint = await startEndpoint((req) => {
       if (req.url === "/health") return { body: { status: "ok" } };
