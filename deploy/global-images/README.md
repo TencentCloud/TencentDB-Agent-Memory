@@ -93,7 +93,7 @@ cd TencentDB-Agent-Memory/deploy/global-images
 | `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1` |
 | `MEMORY_LLM_API_KEY` | 上述端点的 API Key | `sk-xxxxxxxx` |
 | `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat` |
-| `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai` | `openai` |
+| `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai`。注意：`anthropic` 仅对 hub/knowledge 生效，memory-core 需 OpenAI 兼容端点（Anthropic 用 `https://api.anthropic.com/v1` + `openai`） | `openai` |
 
 ### proxy 组（proxy 使用）
 
