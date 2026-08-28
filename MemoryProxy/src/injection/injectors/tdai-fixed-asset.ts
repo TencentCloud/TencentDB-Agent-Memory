@@ -50,6 +50,8 @@ export async function resolveFixedAssetCtxs(
   ctx: AgentContext,
   identity: TdaiIdentity,
   client: MetadataClient | null,
+  /** 显式读共享授权（评审意见 2）：并入「可访问命名空间集 = 自己 ∪ grants」。 */
+  grantsProvider?: (() => Promise<Array<{ teamId: string; agentId: string }>>) | null,
 ): Promise<FixedAssetCtx[]> {
   const custom = (ctx.metadata.custom ?? {}) as Record<string, unknown>;
   const cached = custom[CACHE_KEY] as FixedAssetCtx[] | undefined;
@@ -115,6 +117,25 @@ export async function resolveFixedAssetCtxs(
   } catch (err) {
     // Silently degrade: inject only self
     console.warn("[fixed-asset] kernel error, injecting only self:", (err as Error).message);
+  }
+
+  // ── 显式 grant 并入（读共享）：grant 指定的 agent 可读，优先于借入上限 ──
+  const grants = grantsProvider ? await grantsProvider() : null;
+  if (grants && grants.length > 0) {
+    const existingIds = new Set(result.map((c) => c.agentId));
+    for (const g of grants) {
+      if (!g.teamId || !g.agentId) continue;
+      if (g.agentId === (result[0]?.agentId ?? identity.agentId)) continue;
+      if (existingIds.has(g.agentId)) continue;
+      result.push({
+        teamId: g.teamId,
+        userId: identity.userId,
+        agentId: g.agentId,
+        agentName: g.agentId,
+        isSelf: false,
+      });
+      existingIds.add(g.agentId);
+    }
   }
 
   custom[CACHE_KEY] = result;

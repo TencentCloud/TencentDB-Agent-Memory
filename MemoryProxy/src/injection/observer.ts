@@ -30,6 +30,8 @@ export interface HookResult {
   durationMs: number;
   error?: string;
   cacheStrategy?: string;
+  /** 注入块来源摘要（source / 条数 / recipe / 召回来源等），供 Opik 溯源。 */
+  sources?: Record<string, unknown> | undefined;
 }
 
 // ── Observer interface ────────────────────────────────────────────────────────
@@ -99,6 +101,135 @@ export class NoopInjectionObserver implements InjectionObserver {
   onHookDone(_hook: InjectionHook, _point: InjectionPoint, _blocks: ContextBlock[], _durationMs: number, _cacheStrategy?: string): void { /* noop */ }
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onHookError(_hook: InjectionHook, _point: InjectionPoint, _error: Error, _durationMs: number): void { /* noop */ }
+}
+
+// ── Stats collector ──────────────────────────────────────────────────────────
+
+/** 单次管线运行的注入统计（供 Opik trace metadata / 观测面板使用）。 */
+export interface InjectionRunStats {
+  hookCount: number;
+  totalBlockCount: number;
+  errorCount: number;
+  durationMs: number;
+  /** 每个 hook 的明细（hookId / 注入点 / block 数 / 缓存策略）。 */
+  hooks: Array<{
+    hookId: string;
+    point: string;
+    blockCount: number;
+    durationMs: number;
+    error?: string;
+    cacheStrategy?: string;
+    /** 注入来源摘要（溯源 / 证据链，见文档 6.2）。 */
+    sources?: Record<string, unknown> | undefined;
+  }>;
+}
+
+/**
+ * 按 traceId 缓存最近一次管线运行统计。
+ *
+ * handler 在创建 Opik trace 时用 `consumeInjectionStats(traceId)` 取出并
+ * 附带进 metadata；取出即删除，避免长期驻留内存（异常路径由 cap 兜底）。
+ * 线程模型：Node 单线程 + 同步 Map 读写，无竞态。
+ */
+const STATS_BY_TRACE = new Map<string, InjectionRunStats>();
+const MAX_STATS_ENTRIES = 4096;
+
+export function consumeInjectionStats(traceId: string): InjectionRunStats | null {
+  const stats = STATS_BY_TRACE.get(traceId) ?? null;
+  STATS_BY_TRACE.delete(traceId);
+  return stats;
+}
+
+/**
+ * 注入统计采集观察者 —— 与既有 observer 组合使用，只做记录不做任何输出。
+ * 通过 `CompositeInjectionObserver` 与 Logging / Langfuse observer 并行挂载。
+ */
+export class StatsInjectionObserver implements InjectionObserver {
+  onPipelineStart(): void { /* 无需记录 start */ }
+
+  onPipelineEnd(_meta: AgentContextMetadata, durationMs: number, results: HookResult[]): void {
+    try {
+      const stats: InjectionRunStats = {
+        hookCount: results.length,
+        totalBlockCount: results.reduce((sum, r) => sum + r.blockCount, 0),
+        errorCount: results.filter((r) => r.error).length,
+        durationMs,
+        hooks: results.map((r) => ({
+          hookId: r.hookId,
+          point: r.point,
+          blockCount: r.blockCount,
+          durationMs: r.durationMs,
+          error: r.error,
+          cacheStrategy: r.cacheStrategy,
+          sources: r.sources,
+        })),
+      };
+      STATS_BY_TRACE.set(_meta.traceId, stats);
+      if (STATS_BY_TRACE.size > MAX_STATS_ENTRIES) {
+        // 防内存驻留：只清最旧条目（Map 保持插入序）。
+        const overflow = STATS_BY_TRACE.size - MAX_STATS_ENTRIES;
+        for (let i = 0; i < overflow; i++) {
+          const first = STATS_BY_TRACE.keys().next();
+          if (first.done) break;
+          STATS_BY_TRACE.delete(first.value);
+        }
+      }
+    } catch { /* observer must never throw */ }
+  }
+
+  onPipelineError(meta: AgentContextMetadata, error: Error): void {
+    try {
+      STATS_BY_TRACE.set(meta.traceId, {
+        hookCount: 0,
+        totalBlockCount: 0,
+        errorCount: 1,
+        durationMs: 0,
+        hooks: [{ hookId: "pipeline", point: "pipeline", blockCount: 0, durationMs: 0, error: error.message }],
+      });
+    } catch { /* observer must never throw */ }
+  }
+
+  onHookStart(): void { /* 明细在 onPipelineEnd 统一聚合 */ }
+  onHookDone(): void { /* 明细在 onPipelineEnd 统一聚合 */ }
+  onHookError(): void { /* 明细在 onPipelineEnd 统一聚合 */ }
+}
+
+/**
+ * 组合观察者 —— 把多个 observer 串起来，任一失败不影响其它。
+ */
+export class CompositeInjectionObserver implements InjectionObserver {
+  constructor(private readonly observers: InjectionObserver[]) {}
+
+  onPipelineStart(meta: AgentContextMetadata): void {
+    for (const o of this.observers) {
+      try { o.onPipelineStart(meta); } catch { /* isolate */ }
+    }
+  }
+  onPipelineEnd(meta: AgentContextMetadata, durationMs: number, results: HookResult[]): void {
+    for (const o of this.observers) {
+      try { o.onPipelineEnd(meta, durationMs, results); } catch { /* isolate */ }
+    }
+  }
+  onPipelineError(meta: AgentContextMetadata, error: Error): void {
+    for (const o of this.observers) {
+      try { o.onPipelineError(meta, error); } catch { /* isolate */ }
+    }
+  }
+  onHookStart(hook: InjectionHook, point: InjectionPoint): void {
+    for (const o of this.observers) {
+      try { o.onHookStart(hook, point); } catch { /* isolate */ }
+    }
+  }
+  onHookDone(hook: InjectionHook, point: InjectionPoint, blocks: ContextBlock[], durationMs: number, cacheStrategy?: string): void {
+    for (const o of this.observers) {
+      try { o.onHookDone(hook, point, blocks, durationMs, cacheStrategy); } catch { /* isolate */ }
+    }
+  }
+  onHookError(hook: InjectionHook, point: InjectionPoint, error: Error, durationMs: number): void {
+    for (const o of this.observers) {
+      try { o.onHookError(hook, point, error, durationMs); } catch { /* isolate */ }
+    }
+  }
 }
 
 // ── Logging implementation ────────────────────────────────────────────────────

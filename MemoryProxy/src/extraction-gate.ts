@@ -44,6 +44,18 @@ export function isExtractionAllowed(config: ProxyConfig, asset: string): boolean
 }
 
 /**
+ * bypass 会话（跳过 Session Init / 缺 task 预选）的 L0 写入是否允许。
+ * 策略见 types.ts TdaiMemoryConfig.bypassWritePolicy：
+ *   skip（默认）→ 不写，防无归属内容混入共享记忆；
+ *   write-scoped / write → 允许写（scope 由调用方标记）。
+ */
+export function isMemoryWriteAllowed(config: ProxyConfig, bypassed: boolean): boolean {
+  if (!bypassed) return true;
+  const policy = config.tdai?.memory?.bypassWritePolicy ?? "skip";
+  return policy === "write" || policy === "write-scoped";
+}
+
+/**
  * Emit a structured debug event when the gate blocks an extraction call.
  * Call this in the *else* branch of `isExtractionAllowed`. No-ops when the
  * asset would have been allowed anyway (defensive: prevents misleading

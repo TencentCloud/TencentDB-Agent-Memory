@@ -30,6 +30,8 @@ import type {
   PrewarmInput,
 } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
+import { resolveInjectionTuning } from "../tuning.js";
+import type { InjectionTuningConfig } from "../../types.js";
 import {
   CoreSkillClient,
   getCoreSkillClient,
@@ -42,6 +44,8 @@ const TAG = "[skill-injector]";
 export interface SkillInjectorConfig {
   /** Core skill client config; passed to `getCoreSkillClient(config)`. */
   coreSkill: CoreSkillConfig;
+  /** 注入微调（A/B）：availableSkills=false 时不注入 <available_skills> 包装段。 */
+  tuning?: InjectionTuningConfig;
 }
 
 /**
@@ -60,24 +64,12 @@ export interface SkillInjectorConfig {
  */
 const SKILL_LISTING_HEADER =
   "## Skills (mandatory)\n"
-  + "Before replying, scan the skills below. If a skill matches or is even partially relevant "
-  + "to your task, you MUST load it by calling the `skill_view` skill-bridge tool "
-  + "(see the `<skill_tools>` block above for the exact curl recipe) and follow its instructions. "
-  + "Err on the side of loading — it is always better to have context you don't need "
-  + "than to miss critical steps, pitfalls, or established workflows. "
-  + "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
-  + "and proven workflows that outperform general-purpose approaches. Load the skill "
-  + "even if you think you could handle the task with basic tools like web_search or terminal. "
-  + "Skills also encode the user's preferred approach, conventions, and quality standards "
-  + "for tasks like code review, planning, and testing — load them even for tasks you "
-  + "already know how to do, because the skill defines how it should be done here.\n"
-  + "If a skill has issues, fix it with the `skill_patch` skill-bridge tool.\n"
-  + "After difficult/iterative tasks, offer to save the approach as a new skill "
-  + "(`skill_create`). If a skill you loaded was missing steps, had wrong commands, "
-  + "or needed pitfalls you discovered, update it before finishing.\n";
+  + "回复前先扫一遍下方 skill 列表：**仅当任务与某 skill 相关时**，才用 `skill_view` "
+  + "（curl 姿势见上方 <skill_tools>）加载并按指示执行；无关任务不要加载，避免浪费上下文。\n"
+  + "skill 有问题用 `skill_patch` 修；跑通复杂流程后主动用 `skill_create` 归档。\n";
 
 const SKILL_LISTING_FOOTER =
-  "\nOnly proceed without loading a skill if genuinely none are relevant to the task.";
+  "\n只有确实没有任何相关 skill 时才直接作答。";
 
 /**
  * Wrap the pre-rendered `<available_skills>` listing from plugin into a
@@ -93,11 +85,9 @@ const SKILL_LISTING_FOOTER =
 export function wrapAvailableSkillsBlock(listing: string): string {
   return [
     SKILL_LISTING_HEADER,
-    "以下是你（当前 agent）自带的云端 skill 列表。这些 skill 存储在你的 agent 名下，",
-    "优先使用它们完成任务。如果你觉得自带的 skill 不够，可以用 skill_search 工具",
-    "在团队的 skill 库中检索更多（跨 agent 共享）。",
+    "以下是你（当前 agent）自带的云端 skill（<available_skills>）。不够用时用 skill_search 找团队共享的。",
     "",
-    "**重要：这些 skill 存储在云端，不能使用 read_file / tool_use 直接访问，\n必须用 Bash 执行 curl 调用上方 <skill_tools> 块中的 skill-bridge 工具。**",
+    "**重要：这些 skill 在云端，用 Bash 执行 curl 走 skill-bridge（见 <skill_tools>），不要用 read_file / tool_use。**",
     "",
     listing,
     SKILL_LISTING_FOOTER,
@@ -150,6 +140,7 @@ function buildListingQuery(input: PrewarmInput): string | undefined {
  */
 export class SkillInjector implements InjectionHook {
   id = "skill-injector";
+  cacheVersion = "2";
   point = "system.before_tools" as const;
   /** Lands before the "skills" region (CodeBuddy: `<agent_skills>`). */
   anchor: AnchorTarget = { slot: "skills", relation: "before" };
@@ -188,6 +179,8 @@ export class SkillInjector implements InjectionHook {
     const custom = ctx.metadata.custom as Record<string, unknown> | undefined;
     const caps = custom?.assetCapabilities as { skill?: boolean } | undefined;
     if (caps?.skill === false) return [];
+    const t = resolveInjectionTuning(this.config.tuning, ctx.metadata.agentSource);
+    if (t.availableSkills === false) return [];
     const session = custom?.session as {
       team_id?: string;
       agent_id?: string;
@@ -211,6 +204,8 @@ export class SkillInjector implements InjectionHook {
    */
   async prewarm(input: PrewarmInput): Promise<ContextBlock[]> {
     if (input.assetCapabilities?.skill === false) return [];
+    const t = resolveInjectionTuning(this.config.tuning, undefined);
+    if (t.availableSkills === false) return [];
     const ids = input.sessionInfo;
     // Build search query from agent description + task description
     // so listing semantically matches relevant skills (FTS BM25).

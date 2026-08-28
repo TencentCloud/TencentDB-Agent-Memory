@@ -47,6 +47,12 @@ export interface InjectionPipelineOptions {
    * If omitted, ALL hooks run as if `cacheStrategy="none"` (legacy behavior).
    */
   hookCacheRepo?: HookCacheRepo;
+  /**
+   * 注入总预算（字符数）：所有注入块累计超过该值时，按注入顺序裁剪
+   * （先跳过后续块，最后一块可截断）。0 / undefined = 不裁剪（默认）。
+   * 用于「上下文不是越多越好」的总量控制（文档 2.3.3 / 题目二）。
+   */
+  maxInjectionChars?: number;
 }
 
 /**
@@ -57,6 +63,7 @@ export class InjectionPipeline {
   private detectAgent?: (systemText: string) => AgentProfile | null;
   private hookCacheRepo?: HookCacheRepo;
   private observer: InjectionObserver;
+  private maxInjectionChars?: number;
 
   constructor(
     private registry: HookRegistry,
@@ -67,6 +74,7 @@ export class InjectionPipeline {
     this.agentProfiles = options.agentProfiles;
     this.detectAgent = options.detectAgent;
     this.hookCacheRepo = options.hookCacheRepo;
+    this.maxInjectionChars = options.maxInjectionChars;
     this.observer = observer ?? new NoopInjectionObserver();
   }
 
@@ -185,6 +193,7 @@ export class InjectionPipeline {
     const agentSource = ctx.metadata.agentSource || "claude-code";
     const spaceId = ctx.metadata.spaceId ?? "";
     const results: HookResult[] = [];
+    let injectedChars = 0;
 
     for (const point of executionOrder) {
       const hooks = this.registry.getHooks(point);
@@ -197,13 +206,30 @@ export class InjectionPipeline {
           const blocks = await this.resolveHookBlocks(hook, ctx, spaceId, userId, agentSource, sessionId);
           const durationMs = Date.now() - hookStartMs;
 
-          if (blocks.length > 0) {
+          // ── 注入总预算：超出按顺序裁剪（跳过后续块 / 截断最后一块）──────
+          let finalBlocks = blocks;
+          // 总预算只约束静态 system 块；user.before 动态块（自动召回/意图 recipe）
+          // 优先保留 —— 它们已受 l1Limit / recallCharBudget / 单条 recipe 控制。
+          if (
+            this.maxInjectionChars &&
+            this.maxInjectionChars > 0 &&
+            blocks.length > 0 &&
+            point !== "user.before"
+          ) {
+            const budgeted = this.applyBudget(blocks, injectedChars, this.maxInjectionChars);
+            injectedChars = budgeted.used;
+            finalBlocks = budgeted.blocks;
+          } else {
+            injectedChars += blocks.reduce((s, b) => s + (typeof b.content === "string" ? b.content.length : 200), 0);
+          }
+
+          if (finalBlocks.length > 0) {
             // 💡 显式打印注入成功的日志和文本前 120 字符预览，极大方便开发者排查和联调
             console.log(
-              `[injection] ✓ Hook "${hook.id}" successfully injected ${blocks.length} block(s) ` +
+              `[injection] ✓ Hook "${hook.id}" successfully injected ${finalBlocks.length} block(s) ` +
               `at point "${point}" (cacheStrategy=${hook.cacheStrategy ?? "none"})`
             );
-            for (const b of blocks) {
+            for (const b of finalBlocks) {
               if (b.type === "text") {
                 const preview = b.content.replace(/\s+/g, " ").slice(0, 120);
                 console.log(`[injection]   → text preview: "${preview}..."`);
@@ -211,20 +237,21 @@ export class InjectionPipeline {
                 console.log(`[injection]   → custom tool: "${b.metadata?.tool_name}"`);
               }
             }
-            this.applyInjection(ctx, hook, point, blocks);
+            this.applyInjection(ctx, hook, point, finalBlocks);
           }
 
           // ── Observer: hook done ─────────────────────────────────────────
           safeCall(() =>
-            this.observer.onHookDone(hook, point, blocks, durationMs, hook.cacheStrategy),
+            this.observer.onHookDone(hook, point, finalBlocks, durationMs, hook.cacheStrategy),
           );
 
           results.push({
             hookId: hook.id,
             point,
-            blockCount: blocks.length,
+            blockCount: finalBlocks.length,
             durationMs,
             cacheStrategy: hook.cacheStrategy ?? "none",
+            sources: this.summarizeBlockSources(finalBlocks),
           });
         } catch (err) {
           const durationMs = Date.now() - hookStartMs;
@@ -254,12 +281,58 @@ export class InjectionPipeline {
     return results;
   }
 
+  /**
+   * 从注入块 metadata 提取可观测的来源摘要（溯源 / 证据链）：
+   * source / 条数 / mode / L3/L2 计数 / intent recipe / L1 召回来源。
+   */
+  private summarizeBlockSources(blocks: ContextBlock[]): Record<string, unknown> | undefined {
+    if (blocks.length === 0) return undefined;
+    const summary: Record<string, unknown> = {};
+    for (const b of blocks) {
+      const m = b.metadata ?? {};
+      const pick: Record<string, unknown> = {};
+      for (const k of ["source", "count", "skillCount", "mode", "l3Count", "l2IndexCount", "agentCount"]) {
+        if (m[k] !== undefined) pick[k] = m[k];
+      }
+      const ck = m.cacheKey;
+      if (typeof ck === "string" && ck.startsWith("tdai-intent-tools:")) {
+        pick.recipes = ck.slice("tdai-intent-tools:".length).split("+");
+      }
+      if (Array.isArray(m.sources) && m.sources.length > 0) {
+        pick.recallSources = m.sources;
+      }
+      const key = String(m.source ?? "block");
+      if (Object.keys(pick).length > 0) summary[key] = pick;
+    }
+    return Object.keys(summary).length > 0 ? summary : undefined;
+  }
+
+  /**
+   * 按总预算裁剪注入块：优先保留先注入的块（静态前缀优先），
+   * 最后一个可容纳的文本块允许截断。返回裁剪后的块与新的累计字符数。
+   */
+  private applyBudget(
+    blocks: ContextBlock[],
+    injectedChars: number,
+    maxChars: number,
+  ): { blocks: ContextBlock[]; used: number } {
+    return applyInjectionBudget(blocks, injectedChars, maxChars);
+  }
+
   /** Read `session_id` from metadata.custom.session (set in handler.ts). */
   private getSessionId(ctx: AgentContext): string | null {
     const custom = ctx.metadata.custom as Record<string, unknown> | undefined;
     const session = custom?.session as Record<string, unknown> | undefined;
     const sid = session?.session_id;
     return typeof sid === "string" && sid.length > 0 ? sid : null;
+  }
+
+  /**
+   * 缓存 key = hook.id + cacheVersion（内容版本化）：模板文本迭代后旧会话
+   * 的长尾缓存自动失效，避免「部署了新模板、老会话仍命中旧内容」。
+   */
+  private cacheKeyOf(hook: InjectionHook): string {
+    return hook.cacheVersion ? `${hook.id}:v${hook.cacheVersion}` : hook.id;
   }
 
   /**
@@ -282,7 +355,13 @@ export class InjectionPipeline {
     }
 
     if (strategy === "session_init") {
-      const cached = await this.hookCacheRepo.get(spaceId, userId, agentSource, sessionId, hook.id);
+      const cached = await this.hookCacheRepo.get(
+        spaceId,
+        userId,
+        agentSource,
+        sessionId,
+        this.cacheKeyOf(hook),
+      );
       if (cached !== null) {
         console.log(`[hook-cache] session=${sessionId} hook=${hook.id} hit blocks=${cached.length}`);
         return cached;
@@ -320,7 +399,13 @@ export class InjectionPipeline {
     }
 
     // strategy === "hybrid"
-    const cached = await this.hookCacheRepo.get(spaceId, userId, agentSource, sessionId, hook.id) ?? [];
+    const cached = await this.hookCacheRepo.get(
+      spaceId,
+      userId,
+      agentSource,
+      sessionId,
+      this.cacheKeyOf(hook),
+    ) ?? [];
     const fresh = await hook.execute(ctx);
     if (cached.length === 0) return fresh;
     if (fresh.length === 0) return cached;
@@ -540,4 +625,35 @@ function mergeBlocks(cached: ContextBlock[], fresh: ContextBlock[]): ContextBloc
     }
   }
   return out;
+}
+
+/**
+ * 注入总预算裁剪（纯函数，便于单测）：
+ * 按注入顺序保留块，超出 maxChars 的后续块跳过，最后一个可容纳的文本块截断。
+ */
+export function applyInjectionBudget(
+  blocks: ContextBlock[],
+  injectedChars: number,
+  maxChars: number,
+): { blocks: ContextBlock[]; used: number } {
+  const out: ContextBlock[] = [];
+  let used = injectedChars;
+  for (const b of blocks) {
+    const len = typeof b.content === "string" ? b.content.length : 200;
+    if (used + len <= maxChars) {
+      out.push(b);
+      used += len;
+      continue;
+    }
+    if (typeof b.content === "string" && used < maxChars) {
+      const slice = b.content.slice(0, maxChars - used);
+      out.push({ ...b, content: `${slice}\n…[injection budget: truncated]` });
+      used = maxChars;
+    }
+    console.warn(
+      `[injection] budget: ${blocks.length - out.length} block(s) skipped after ${maxChars} chars total`,
+    );
+    break;
+  }
+  return { blocks: out, used };
 }

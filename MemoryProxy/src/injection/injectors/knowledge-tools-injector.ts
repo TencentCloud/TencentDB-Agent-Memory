@@ -140,6 +140,7 @@ export function renderKnowledgeToolsBlock(
   resources: KnowledgeItem[],
   serviceId: string,
   telemetryContext: KnowledgeTelemetryContext = {},
+  tools?: Array<{ name?: unknown; function?: { name?: unknown } }>,
 ): string | null {
   if (!resources || resources.length === 0) return null;
 
@@ -175,6 +176,7 @@ export function renderKnowledgeToolsBlock(
 
   return [
     "<knowledge_tools>",
+    renderPlatformHint(tools),
     "**团队知识库资源**：code-graph 是仓库的预建代码索引（符号 / 调用图 / 结构），wiki 是工程设计文档。两类各有判据，见下。",
     "",
     "## code-graph：何时调",
@@ -277,6 +279,7 @@ export class KnowledgeToolsInjector implements InjectionHook {
         agentSource: ctx.metadata.agentSource,
         spaceId: ids.spaceId ?? undefined,
       },
+      ctx.tools,
     );
   }
 
@@ -298,6 +301,7 @@ export class KnowledgeToolsInjector implements InjectionHook {
         agentSource: input.agentSource,
         spaceId: input.sessionInfo.space_id,
       },
+      undefined,
     );
   }
 
@@ -328,6 +332,7 @@ export class KnowledgeToolsInjector implements InjectionHook {
     assetCapabilities: AssetCapabilityFlags | undefined,
     phase: "prewarm" | "execute",
     telemetryContext: KnowledgeTelemetryContext,
+    tools?: Array<{ name?: unknown; function?: { name?: unknown } }>,
   ): Promise<ContextBlock[]> {
     try {
       const client = this.clientOverride ?? getCoreKnowledgeClient(this.config.coreSkill);
@@ -355,7 +360,7 @@ export class KnowledgeToolsInjector implements InjectionHook {
       resources = filterResourcesByCapabilities(resources, assetCapabilities);
       // 注入 prompt 里给 LLM 用的 service-id 也要是 spaceId（LLM 拿它调 KS 的 tools/list|call）。
       const injectionServiceId = spaceId || this.config.coreSkill.serviceId;
-      const content = renderKnowledgeToolsBlock(resources, injectionServiceId, telemetryContext);
+      const content = renderKnowledgeToolsBlock(resources, injectionServiceId, telemetryContext, tools);
       if (!content) return [];
       return [{
         type: "text",

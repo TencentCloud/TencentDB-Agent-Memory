@@ -58,8 +58,14 @@ export { HookRegistryImpl } from "./registry.js";
 export { InjectionPipeline } from "./pipeline.js";
 
 // Observer (injection pipeline observability)
-export type { InjectionObserver, HookResult } from "./observer.js";
-export { NoopInjectionObserver, LoggingInjectionObserver } from "./observer.js";
+export type { InjectionObserver, HookResult, InjectionRunStats } from "./observer.js";
+export {
+  NoopInjectionObserver,
+  LoggingInjectionObserver,
+  CompositeInjectionObserver,
+  StatsInjectionObserver,
+  consumeInjectionStats,
+} from "./observer.js";
 
 // Prewarm runner
 export { prewarmAll } from "./prewarm.js";
@@ -110,6 +116,8 @@ import { SkillInjector } from "./injectors/skill-injector.js";
 import { SkillToolsInjector } from "./injectors/skill-tools-injector.js";
 import { TdaiProfileMemoryInjector } from "./injectors/tdai-profile-memory-injector.js";
 import { TdaiToolsInjector } from "./injectors/tdai-tools-injector.js";
+import { TdaiL1RecallInjector } from "./injectors/tdai-l1-recall-injector.js";
+import { TdaiIntentToolsInjector } from "./injectors/tdai-intent-tools-injector.js";
 import { KnowledgeToolsInjector } from "./injectors/knowledge-tools-injector.js";
 import { AssetReflectionInjector } from "./injectors/asset-reflection-injector.js";
 import type { ProtocolAdapter } from "./adapters/interface.js";
@@ -132,7 +140,14 @@ import { FsStorage } from "../storage/fs-storage.js";
 import { getSessionStore } from "../session/store.js";
 import type { HookRegistry, PrewarmInput } from "./types.js";
 import { prewarmAll, type PrewarmOptions, type PrewarmResult } from "./prewarm.js";
-import { LoggingInjectionObserver, NoopInjectionObserver, LangfuseInjectionObserver } from "./observer.js";
+import {
+  CompositeInjectionObserver,
+  LangfuseInjectionObserver,
+  LoggingInjectionObserver,
+  NoopInjectionObserver,
+  StatsInjectionObserver,
+} from "./observer.js";
+import { initGrants, getGrants } from "../tdai/grants-fetcher.js";
 
 // ... (rest)
 
@@ -253,6 +268,15 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
   // Register configured injectors. Each injector reads its own kernel config
   // (`coreSkill`, `tdai`, ...); there is no shared external endpoint anymore.
   const injectors = config.injection?.injectors ?? [];
+  // 注入微调（A/B）：default 全局 + perAgent 覆盖，传给各 injector 运行时解析。
+  const injectionTuning = config.injection?.tuning;
+  // grant 控制面拉取（TTL 缓存）；静态 grants 作为 fallback。
+  initGrants({
+    endpoint: config.tdai?.grantsEndpoint,
+    ttlSeconds: config.tdai?.grantsTtlSeconds ?? 60,
+    fallback: config.tdai?.grants ?? [],
+  });
+  const grantsProvider = () => getGrants();
 
   // proxyBaseUrl 在 skill-tools-injector 和 tdai-tools-injector 之间共享。
   //
@@ -301,14 +325,16 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // When coreSkill is unconfigured (no serviceToken), the searchSkills call
     // will fail and the injector silently degrades to no <cloud_skills> block.
     registry.register(
-      new SkillInjector({ coreSkill: config.coreSkill }),
+      new SkillInjector({ coreSkill: config.coreSkill, tuning: injectionTuning }),
     );
 
     // Always inject the curl-recipe `<skill_tools>` block alongside the
     // dynamic `<cloud_skills>` block. Even when there are no skills to
     // recommend, the LLM still needs to know how to create / search them.
     const allowLlmWrite = config.skillRuntime?.allowLlmWrite ?? false;
-    registry.register(new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite }));
+    registry.register(
+      new SkillToolsInjector({ proxyBaseUrl: proxyBaseUrl!, allowLlmWrite, tuning: injectionTuning }),
+    );
   }
 
   if (injectors.includes("knowledge")) {
@@ -342,15 +368,60 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
     // fixed-asset-agents（self + 借入≤2）通过内核 MetadataClient 获取；
     // 内核不可达时 injector 自动降级为"只查当前 agent 的记忆"。
     if (config.tdai.memory.injectL2L3) {
-      registry.register(new TdaiProfileMemoryInjector(tdaiBaseConfig, config.coreSkill));
+      registry.register(
+        new TdaiProfileMemoryInjector(tdaiBaseConfig, config.coreSkill, injectionTuning, grantsProvider),
+      );
     }
-    // 注意：L0/L1 不再每轮自动召回注入到 user prompt（会破坏 KV/prompt cache）。
-    // 改为只在 system prompt 暴露只读工具（见 TdaiToolsInjector），借助 system
-    // prompt cache 复用。L1 recall injector 已下线，recallL1 配置保留但不再注册。
-    // 配套 profile-memory-injector：L2 仅注入 path 索引；LLM 通过 Bash curl
-    // <proxy>/memory-bridge/v3/* 调用只读工具。proxy 自动注入身份。
-    // proxyBaseUrl 复用 skill-tools-injector 算出来的（同一 host:port）。
-    if (typeof proxyBaseUrl !== "undefined") {
+    // 记忆检索策略二选一（recallL1 为开关）：
+    //
+    // 1) recallL1 = true —— Proxy 自动召回：每轮由 Proxy 直接检索 L1 记忆并注入
+    //    <tdai_recalled_l1_memories>，LLM 无需掌握 memory-bridge 调用方式。
+    //    该模式不再注入 <tdai_memory_tools>（约 15k token，占系统提示 43.6%），
+    //    是 token 优化的关键路径。
+    // 2) recallL1 = false —— 保留旧行为：注入只读工具教学模板，LLM 按需自行调用。
+    //
+    // 注：自动召回注入的是"每轮 query 相关的命中结果"，体积随 topK 控制；
+    // 相比静态教学模板，净 token 显著下降（详见首周报告第八章 8.4）。
+    const enableAutoRecall = config.tdai.memory.recallL1 === true;
+    if (enableAutoRecall) {
+      const recallClient = new TdaiClient(tdaiBaseConfig);
+      registry.register(
+        new TdaiL1RecallInjector(
+          recallClient,
+          config.coreSkill,
+          config.tdai.memory.l1Limit,
+          config.tdai.memory.l1Limit ?? 5,
+          config.tdai.memory.recallCharBudget ?? 2000,
+          undefined,
+          injectionTuning,
+          grantsProvider,
+          config.tdai.memory.bypassReadPolicy ?? "none",
+        ),
+      );
+      if (typeof proxyBaseUrl !== "undefined") {
+        // 动态裁剪教学模板：按本轮意图只注入相关 recipe（正确路径），
+        // 避免模型猜错 memory-bridge URL（曾出现 /memory/...、/skill-bridge/... 404/401）。
+        // 阶段三：hybrid = 关键词快路径 + LLM 语义分类（复用上游 chat 端点），失败自动回退。
+        const intentModel =
+          (config.creditPricing?.models ?? []).find((m) => !!m.name)?.name ?? "";
+        registry.register(
+          new TdaiIntentToolsInjector({
+            proxyBaseUrl,
+            classifier: {
+              mode: config.tdai.memory.intentMode ?? "hybrid",
+              baseUrl: config.upstream.url,
+              apiKey: config.upstream.apiKey,
+              model: intentModel,
+              maxTokens: 256,
+              timeoutMs: 3000,
+            },
+            embedding: config.tdai.memory.intentEmbedding,
+            tuning: injectionTuning,
+          }),
+        );
+      }
+      console.log("[injection] auto-recall L1 enabled + intent-based memory tools (dynamic) — static teaching template disabled");
+    } else if (typeof proxyBaseUrl !== "undefined") {
       registry.register(new TdaiToolsInjector({ proxyBaseUrl }));
     }
   }
@@ -402,14 +473,17 @@ function buildPipelineBundle(config: ProxyConfig): PipelineBundle {
 
   // Observer: prefer Langfuse (injection spans under LLM trace) when enabled;
   // fall back to structured logging when log level ≤ info; else noop.
-  const observer = config.langfuse?.enabled
+  // 始终叠加 StatsInjectionObserver：handler 创建 Opik trace 时读取注入统计。
+  const baseObserver = config.langfuse?.enabled
     ? new LangfuseInjectionObserver()
     : (config.log?.level === "debug" || config.log?.level === "info")
       ? new LoggingInjectionObserver()
       : new NoopInjectionObserver();
+  const observer = new CompositeInjectionObserver([baseObserver, new StatsInjectionObserver()]);
 
   const pipeline = new InjectionPipeline(registry, adapters, {
     hookCacheRepo,
+    maxInjectionChars: config.injection?.maxTotalChars,
     // Agent profile registry — lookup by URL path prefix (agentSource).
     // Adding a new agent only adds a line here. The legacy detectAgent
     // (content-scanning) is kept as fallback for un-prefixed paths.

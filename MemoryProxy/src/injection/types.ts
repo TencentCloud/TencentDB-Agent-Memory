@@ -327,6 +327,11 @@ export interface PrewarmInput {
 export interface InjectionHook {
   /** Unique hook identifier. */
   id: string;
+  /**
+   * 内容版本号：模板文本迭代后递增，使 session_init 缓存 key 变化、
+   * 旧会话长尾缓存自动失效（配合 pipeline.cacheKeyOf 使用）。
+   */
+  cacheVersion?: string;
   /** Injection point where this hook operates (always required, used as fallback). */
   point: InjectionPoint;
   /**

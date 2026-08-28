@@ -37,6 +37,9 @@ import type {
   PrewarmInput,
 } from "../types.js";
 import { HOOK_PRIORITY } from "../types.js";
+import { renderPlatformHint } from "../shell-template.js";
+import { resolveInjectionTuning } from "../tuning.js";
+import type { InjectionTuningConfig } from "../../types.js";
 
 export interface SkillToolsInjectorConfig {
   /**
@@ -50,6 +53,8 @@ export interface SkillToolsInjectorConfig {
    * 显式设为 true 后注入全部 10 个工具。
    */
   allowLlmWrite?: boolean;
+  /** 注入微调（A/B）：skillTools=false 时不注入本块。 */
+  tuning?: InjectionTuningConfig;
 }
 
 /**
@@ -61,6 +66,7 @@ export function renderSkillToolsBlock(
   allowLlmWrite = true,
   sessionId?: string,
   spaceId?: string,
+  tools?: Array<{ name?: unknown; function?: { name?: unknown } }>,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/skill-bridge/v3/skill`;
@@ -75,7 +81,7 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_search">`,
     `    path: ${bridge}/search`,
     `    body: {"query": "描述你要找什么 skill 的关键词（必填，>=1字符）"}`,
-    `    use:  在**你在团队中有权限访问**的 skill 中按关键词 + 语义检索匹配项（跨 agent，但**不含**其他人设置为私密的 skill —— 与前端「团队资产」tab 展示一致）。query 必须是非空字符串，建议写 2-5 个相关关键词。当你觉得自己自带的 skill 不够用时，用它发现团队里其他可用的 skill。返回条数由服务端固定，若结果不理想请换一组关键词重试，不要在 body 里加 top_k/mode 等其它字段（会被忽略）。`,
+    `    use: 发现团队可用 skill（跨 agent，不含他人私密项）；自带 skill 不够时用它`,
     `  </tool>`,
     "",
     // 暂时下线：<available_skills> 块已经注入 agent 自带的 skill 列表，功能重叠。
@@ -89,19 +95,19 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_view">`,
     `    path: ${bridge}/get-by-name`,
     `    body: {"skill_name": "<skill 名字>", "include_content": true, "include_manifest": true}`,
-    `    use:  **打开一个 skill 的入口**：拿到 SKILL.md 全文 + 资源目录树（manifest）。想读某个资源文件的字节，必须先调这个工具从 manifest 里挑出 path，再用 skill_files_read。skill_name 用 <available_skills> 里 \`- name: description\` 那个 name，或 skill_search 结果里的 name 字段。`,
+    `    use: 打开 skill 拿 SKILL.md 全文 + 资源清单；读文件前必调`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_read">`,
     `    path: ${bridge}/files/read`,
     `    body: {"skill_id": "skl-xxx", "path": "scripts/run.sh", "encoding": "utf-8|base64"}`,
-    `    use:  读取单个资源文件内容。**必须先调 skill_view 拿 manifest**，从里面挑出 skill_id + path，本工具才能定位。默认返回 JSON 信封（含 base64/utf-8 编码的字节）。\n    若需下载到本地：在 curl 末尾加 -o <本地路径>，proxy 会返回原始字节直接写入文件，不进上下文。下载的脚本需 chmod +x 后再执行。`,
+    `    use: 读取单个资源文件（先 skill_view 拿 skill_id + path）`,
     `  </tool>`,
     "",
     `  <tool name="skill_extract">`,
     `    path: ${bridge}/extract`,
-    `    body: {"reason": "?可选，简要说明为什么觉得当前对话值得提取为 skill（写清楚有助于后台抽取器识别边界）"}`,
-    `    use:  立即归档当前对话触发一次 skill 抽取（异步任务，由后台 agent 分析对话内容生成 skill）。proxy 从 session 拿身份 + 用 core 侧累积的对话缓冲，你不用传 messages。适合在"用户已经跑通一段完整流程、值得复用"时主动触发。`,
+    `    body: {"reason": "?可选说明"}`,
+    `    use: 把已跑通的流程归档为 skill（异步；proxy 自动取对话缓冲）`,
     `  </tool>`,
   ];
 
@@ -109,65 +115,50 @@ export function renderSkillToolsBlock(
     `  <tool name="skill_create">`,
     `    path: ${bridge}/create`,
     `    body: {"name": "string", "content": "SKILL.md 全文（含 frontmatter）", "resources": "?可选数组"}`,
-    `    use:  新建 skill；owner 自动 = 当前 agent`,
+    `    use: 新建 skill（owner=当前 agent）`,
     `  </tool>`,
     "",
     `  <tool name="skill_update">`,
     `    path: ${bridge}/update`,
     `    body: {"skill_id": "skl-xxx", "content": "新 SKILL.md"}`,
-    `    use:  替换 SKILL.md（version+1）`,
+    `    use: 整体替换 SKILL.md`,
     `  </tool>`,
     "",
     `  <tool name="skill_patch">`,
     `    path: ${bridge}/patch`,
     `    body: {"skill_id": "skl-xxx", "old_string": "...", "new_string": "...", "replace_all": false}`,
-    `    use:  SKILL.md 子串替换（避免大 diff）`,
+    `    use: 局部替换（小片段修改用）`,
     `  </tool>`,
     "",
     `  <tool name="skill_delete">`,
     `    path: ${bridge}/delete`,
     `    body: {"skill_id": "skl-xxx"}`,
-    `    use:  软删（archived；不递增版本）`,
+    `    use: 软删`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_write">`,
     `    path: ${bridge}/files/write`,
     `    body: {"skill_id": "skl-xxx", "files": [{"path": "scripts/x.sh", "content": "...", "encoding": "utf-8", "is_executable": true}]}`,
-    `    use:  增/改资源文件（version+1）`,
+    `    use: 增/改资源文件`,
     `  </tool>`,
     "",
     `  <tool name="skill_files_remove">`,
     `    path: ${bridge}/files/remove`,
     `    body: {"skill_id": "skl-xxx", "paths": ["scripts/old.sh"]}`,
-    `    use:  删资源文件（version+1）`,
+    `    use: 删资源文件`,
     `  </tool>`,
   ];
 
   const note = allowLlmWrite
-    ? "错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见："
-    : "注意：当前仅开放只读操作。如需创建/修改 skill 请联系管理员。\n错误处理：响应是 `{code, message, request_id, data?}` 信封；`code != 0` 表示业务错。常见：";
-
-  const readErrors = [
-    "- 40001 参数校验失败：body 字段缺失/格式错，看 message 里具体字段名。",
-    "- 40101 session not initialized：session 未识别（很可能你在错误的 conversation 环境用了这个工具）。",
-    "- 40401 SKILL_NOT_FOUND：skill 不存在或不属于你所在的 agent；先用 skill_search 找同类 skill。",
-    "- 50301 upstream unavailable：core 侧临时不可达，稍后重试。",
-  ];
-  const writeErrors = [
-    "- 40301 SKILL_NOT_OWNER：你不是 owner，无法修改。",
-    "- 40901 SKILL_VERSION_STALE：版本过期，先 skill_view 拿最新版本再写。",
-    "- 42201 SKILL_NAME_DUPLICATE：同 team 重名。",
-    "- 42202 SKILL_PATCH_NOT_UNIQUE：old_string 不唯一，传 replace_all=true。",
-  ];
+    ? "错误处理：响应为 {code,message}，code!=0 即业务错（40001 参数错 / 40101 会话未初始化 / 40401 不存在 / 40301 非 owner / 40901 版本过期）。"
+    : "当前仅开放只读；创建/修改请先联系管理员。错误处理：{code,message}，code!=0 即业务错。";
 
   return [
     "<skill_tools>",
-    "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
-    "proxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。",
-    "",
-    "调用模板：",
-    `  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'`,
-    `  其中 <bridge> = ${bridge}`,
+    "云端 skill 工具：用 shell 执行 curl 命中 skill-bridge（身份/鉴权由 proxy 注入，body 只传业务字段）。",
+    renderPlatformHint(tools),
+    `调用：curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'（用客户端注册的 shell 工具执行；Windows PowerShell 下命令以 curl.exe 开头）`,
+    `其中 <bridge> = ${bridge}`,
     "",
     "可用工具：",
     "",
@@ -176,8 +167,6 @@ export function renderSkillToolsBlock(
     ...(allowLlmWrite ? writeTools : []),
     "",
     note,
-    ...readErrors,
-    ...(allowLlmWrite ? writeErrors : []),
     "</skill_tools>",
   ].join("\n");
 }
@@ -191,6 +180,7 @@ export function renderSkillToolsBlock(
  */
 export class SkillToolsInjector implements InjectionHook {
   id = "skill-tools-injector";
+  cacheVersion = "2";
   point = "system.before_tools" as const;
   /** Place ahead of `<available_skills>` (which uses slot=skills, before). */
   anchor: AnchorTarget = { slot: "skills", relation: "before" };
@@ -205,11 +195,15 @@ export class SkillToolsInjector implements InjectionHook {
   async execute(ctx: AgentContext): Promise<ContextBlock[]> {
     const caps = ctx.metadata.custom?.assetCapabilities as { skill?: boolean } | undefined;
     if (caps?.skill === false) return [];
+    const t = resolveInjectionTuning(this.config.tuning, ctx.metadata.agentSource);
+    if (t.skillTools === false) return [];
     return this.renderBlocks(ctx);
   }
 
   async prewarm(input: PrewarmInput): Promise<ContextBlock[]> {
     if (input.assetCapabilities?.skill === false) return [];
+    const t = resolveInjectionTuning(this.config.tuning, undefined);
+    if (t.skillTools === false) return [];
     return this.renderBlocks(undefined, input.sessionInfo.session_id, input.sessionInfo.space_id);
   }
 
@@ -231,7 +225,7 @@ export class SkillToolsInjector implements InjectionHook {
       }
     }
 
-    const content = renderSkillToolsBlock(this.config.proxyBaseUrl, allowLlmWrite, sessionId, spaceId);
+    const content = renderSkillToolsBlock(this.config.proxyBaseUrl, allowLlmWrite, sessionId, spaceId, ctx?.tools);
     return [{
       type: "text",
       content,

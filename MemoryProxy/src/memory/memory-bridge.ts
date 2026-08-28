@@ -29,6 +29,7 @@ import type { AgentContext } from "../injection/types.js";
 import { resolveFixedAssetCtxs, type FixedAssetCtx } from "../injection/injectors/tdai-fixed-asset.js";
 import type { TdaiIdentity } from "../tdai/types.js";
 import { emitBridgeToolCallTelemetry, emitBridgeRejectTelemetry, agentSourceFromSessionKey } from "./bridge-telemetry.js";
+import { auditMemoryAccess } from "../audit.js";
 
 const TAG = "[memory-bridge]";
 
@@ -51,6 +52,13 @@ const ALLOWED_SUBPATHS = new Set<string>([
   "scenario/ls",          // L2 场景列表（path 索引）
   "scenario/read",        // L2 按 path 读全文
 ]);
+
+/** memory-bridge 只读访问动作分类（供审计使用；纯函数可测）。 */
+export function classifyBridgeAction(sub: string): "search" | "query" | "read" {
+  if (sub.includes("search")) return "search";
+  if (sub.includes("query") || sub.endsWith("/ls")) return "query";
+  return "read";
+}
 
 interface SessionIdFields {
   user_id: string;
@@ -471,6 +479,16 @@ export function createMemoryBridgeHandler(
       const responseData: Record<string, unknown> = isConversationSearch
         ? { messages: truncated, searched_agents: searchedAgents }
         : { items: truncated, searched_agents: searchedAgents };
+      const action = classifyBridgeAction(sub);
+      auditMemoryAccess({
+        actorUser: ids?.user_id,
+        actorAgent: ids?.agent_id,
+        action,
+        target: `${ids?.team_id ?? "?"}:${ids?.agent_id ?? "?"}${ids?.task_id ? `:${ids.task_id}` : ""}`,
+        result: `sub=${sub} multi ok=${okCount} ${resultKey}=${collected.length}`,
+        sessionKey,
+        scope: "normal",
+      });
       return new Response(JSON.stringify({
         code: 0,
         message: "ok",
@@ -495,6 +513,19 @@ export function createMemoryBridgeHandler(
     const respText = upstream.text;
     const elapsed = (deps.now ?? Date.now)() - t0;
     console.log(`${TAG} sub=${sub} status=${upstream.status} elapsed=${elapsed}ms`);
+
+    // 审计（评审意见 5/6 扩展）：memory-bridge 只读访问事件（search/query/read）
+    const action = classifyBridgeAction(sub);
+    auditMemoryAccess({
+      actorUser: ids?.user_id,
+      actorAgent: ids?.agent_id,
+      action,
+      target: `${ids?.team_id ?? "?"}:${ids?.agent_id ?? "?"}${ids?.task_id ? `:${ids.task_id}` : ""}`,
+      result: `sub=${sub} status=${upstream.status}`,
+      sessionKey,
+      traceId: c.req.header("x-trace-id") ?? undefined,
+      scope: "normal",
+    });
 
     return new Response(respText, {
       status: upstream.status,
