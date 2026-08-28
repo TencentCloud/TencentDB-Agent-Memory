@@ -1,6 +1,7 @@
-/** Core request handler: intercept → forward → parse usage → log. */
+﻿/** Core request handler: intercept → forward → parse usage → log. */
 
 import type { Context } from "hono";
+import { getLogLevel } from "./report/log.js";
 import { createHash } from "node:crypto";
 import { writeLog, createPipeline } from "./logger.js";
 import {
@@ -21,6 +22,7 @@ import {
   buildLangfuseInputChat,
   buildRequestDebugMetadata,
 } from "./common/langfuse-debug.js";
+import { chatToAnthropic as chatToAnthropicReq, anthropicJsonToChatJson, createAnthropicSseToChatSse } from "./common/chat-anthropic-compat.js";
 import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
 import {
@@ -45,9 +47,11 @@ import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
+import { consumeInjectionStats } from "./injection/observer.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { compactMessages } from "./common/context-compaction.js";
 import {
   enforceRateLimit,
   isRateLimitExceededError,
@@ -72,6 +76,7 @@ function createTdaiClient(config: ProxyConfig, spaceId?: string): TdaiClient | n
     injectL2L3: config.tdai.memory.injectL2L3,
     l1Limit: config.tdai.memory.l1Limit,
     l2Limit: config.tdai.memory.l2Limit,
+    recallCharBudget: config.tdai.memory.recallCharBudget,
     timeoutMs: config.tdai.memory.timeoutMs,
   });
 }
@@ -198,6 +203,44 @@ function flattenMessagesForOpik(messages: unknown[]): unknown[] {
   return result;
 }
 
+/**
+ * 汇总一轮消息中的工具交互，供 Opik metadata 使用：
+ *   - toolCalls：assistant 消息里声明过的工具名（去重，保持出现顺序）
+ *   - toolResults：role=tool 的结果消息条数
+ * 覆盖 OpenAI Chat（top-level tool_calls）与 Anthropic（content blocks）两种形态。
+ */
+function summarizeToolInteraction(messages: unknown[]): { toolCalls: string[]; toolResults: number } {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  let toolResults = 0;
+  for (const raw of messages) {
+    const m = raw as Record<string, unknown>;
+    if (m.role === "tool") toolResults++;
+
+    const tcs = m.tool_calls;
+    if (Array.isArray(tcs)) {
+      for (const tc of tcs) {
+        const t = tc as Record<string, unknown>;
+        const fn = t.function as Record<string, unknown> | undefined;
+        if (fn?.name && !seen.has(String(fn.name))) {
+          seen.add(String(fn.name));
+          names.push(String(fn.name));
+        }
+      }
+    }
+
+    if (Array.isArray(m.content)) {
+      for (const block of m.content as Array<Record<string, unknown>>) {
+        if (block.type === "tool_use" && block.name && !seen.has(String(block.name))) {
+          seen.add(String(block.name));
+          names.push(String(block.name));
+        }
+      }
+    }
+  }
+  return { toolCalls: names, toolResults };
+}
+
 const SKIP_REQUEST_HEADERS = new Set([
   "host",
   "content-length",
@@ -257,7 +300,7 @@ function buildUpstreamBody(
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
@@ -275,7 +318,15 @@ function buildUpstreamHeaders(
   // empty/undefined → passthrough (client's own Authorization survives).
   // cost-guard's `target.authHeaders` still gets to override everything.
   if (effectiveApiKey && !target.authHeaders) {
-    headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    const agent = c.req.path.split("/")[1] ?? "claude-code";
+    if (config.upstream.agents[agent]?.chatToAnthropic === true) {
+      // TRACK 05A：转成 Anthropic 后上游要 x-api-key + anthropic-version。
+      headers["x-api-key"] = effectiveApiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      delete headers["authorization"];
+    } else {
+      headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    }
   }
 
   if (target.authHeaders) {
@@ -619,7 +670,7 @@ export async function handleChatCompletions(
   const isStream = body.stream === true;
 
   // [debug] Log last 3 message roles and content types to diagnose session-init issues
-  if (config.sessionInit?.enabled && messages.length > 2) {
+  if (getLogLevel() === "debug" && config.sessionInit?.enabled && messages.length > 2) {
     const tail = messages.slice(-3);
     const summary = tail.map((m: any, idx: number) => {
       const role = m.role;
@@ -659,8 +710,8 @@ export async function handleChatCompletions(
   }
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const { resolveEffectiveConversationId, isNamespaceArchived } = await import("./session/session-key.js");
+  const { conversationId, threadId } = resolveEffectiveConversationId(c, keyId, config);
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
@@ -806,12 +857,23 @@ export async function handleChatCompletions(
 
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
+  let sessionBypassed = false;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  if (getLogLevel() === "debug") console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId} resetFlow=${(initResult as any)?.resetFlow}`);
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+    // 生命周期隔离（评审意见 6）：命名空间已归档 → 不恢复旧会话（旧记忆不进活跃检索）
+    const archived = isNamespaceArchived(config, {
+      spaceId,
+      teamId: lcHeaders[config.sessionInit?.headerAutoSelect?.teamHeader ?? "x-team-id"],
+      agentId: lcHeaders[config.sessionInit?.headerAutoSelect?.agentHeader ?? "x-agent-id"],
+    });
+    if (archived) {
+      injectedSkipped = true;
+      console.log(`[session-init] session=${sessionKey} namespace archived → skip recovery/injection`);
+    } else {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
@@ -831,7 +893,9 @@ export async function handleChatCompletions(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = `${agentSource}:${sessionKey}`;
+ const compositeKey = config.sessionInit?.threadIsolation?.enabled && threadId
+   ? `${agentSource}:${sessionKey}:${threadId}`
+   : `${agentSource}:${sessionKey}`;
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（`u=anonymous` 走独立命名空间，天然与
       // 有 userId 的请求隔离）。参见 §4.4 边界处理。
@@ -872,8 +936,9 @@ export async function handleChatCompletions(
       if (recovered && isTerminalState) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system message carries agent/task context again.
-        // 用户对话永远保留原样，包括 session_init form 交互 — 不做任何删除。
-        const { injectSessionContextWithToggles } = await import("./session/context-injector.js");
+        // 用户真实对话保留原样；codex 的假表单交互由 codexHandler 转发前剥离
+        // （session/codex/form.ts::stripCodexFormArtifacts），这里不做删除。
+        const { injectSessionContextWithToggles, resolveTeamCtxInfo } = await import("./session/context-injector.js");
         const inMsgs = (body.messages as Array<Record<string, unknown>>) ?? [];
         const outMsgs = recovered.bypassed
           ? inMsgs
@@ -932,12 +997,13 @@ export async function handleChatCompletions(
         return initResult.response;
       }
 
-      console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} resetFlow=${(initResult as any).resetFlow} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
+      if (getLogLevel() === "debug") console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} resetFlow=${(initResult as any).resetFlow} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
       // 见 anthropicHandler 对称位置：只在真正走 sessionInit state machine 时继承。
       if (wentThroughSessionInitStateMachine && initResult.justRegistered) sessionJustRegistered = true;
 
       // Case 1.5: Bypass path → skip ALL injection hooks
       if (initResult.bypassed) {
+        sessionBypassed = true;
         injectedSkipped = true;
         console.log(`[session-init] session=${sessionKey} bypassed → skipping all injection`);
         if (initResult.resetFlow) {
@@ -958,7 +1024,7 @@ export async function handleChatCompletions(
             timeoutMs: config.tdai.memory.timeoutMs,
           });
           console.log(`[asset-capability] user=${(initResult.sessionInfo as { user_id?: string }).user_id ?? "-"} flags=${JSON.stringify(assetCapabilities)}`);
-        } catch (err) {
+    } catch (err) {
           console.warn(`[asset-capability] resolve failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
@@ -1069,6 +1135,7 @@ export async function handleChatCompletions(
       sessionInfo = undefined;
       injectedSkipped = true;
     }
+    }
   }
 
   // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
@@ -1157,6 +1224,7 @@ export async function handleChatCompletions(
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
         userId: userId || null,
         sessionKey,
+        threadId: threadId ?? null,
       });
       if (tdaiClientForMem && tdaiIdentityForMem && isExtractionAllowed(config, "tdai-memory")) {
         const userMsg = { role: "user" as const, content: memCmd.rawMessage };
@@ -1229,6 +1297,7 @@ export async function handleChatCompletions(
         sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
         userId: userId || null,
         sessionKey,
+        threadId: threadId ?? null,
       });
   const tdaiUserMessage = extractLatestUserMessage(messages);
 
@@ -1257,6 +1326,8 @@ export async function handleChatCompletions(
               session: sessionInfo,
               assetCapabilities,
               userKey: apiKey || undefined,
+              threadId: threadId ?? undefined,
+              bypassed: sessionBypassed,
             }
           : undefined,
       });
@@ -1285,7 +1356,10 @@ export async function handleChatCompletions(
     : config.upstream.apiKey;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
-  const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  if (config.upstream.agents[agentFromPath ?? ""]?.chatToAnthropic === true) {
+    forwardEndpoint = "/v1/messages";
+  }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
   // turn counting. ClickHouse keeps the raw session_key (it has its own
@@ -1375,6 +1449,21 @@ export async function handleChatCompletions(
   });
 
   // ── Opik: create trace ───────────────────────────────────────────────────
+  // 结构化 metadata：身份 / 会话 / 注入统计 / 工具交互，让 Opik trace 一屏可读。
+  const opikTraceMetadata = {
+    agent_source: agentSource,
+    protocol: "openai",
+    session_key: sessionKey,
+    space_id: spaceId ?? "",
+    conversation_id: lcHeaders["x-conversation-id"] ?? "",
+    user_id: userId ?? "anonymous",
+    model: target.model,
+    stream: isStream,
+    turn_seq: turnSeq,
+    request_path: c.req.path,
+    injection: consumeInjectionStats(traceId) ?? undefined,
+    tool_interaction: summarizeToolInteraction(messages),
+  };
   const forkTraceId = opikCreateTrace(config, {
     traceId,
     projectName: keyId,
@@ -1382,6 +1471,7 @@ export async function handleChatCompletions(
     startTime,
     input: { messages: flattenMessagesForOpik(messages) },
     tags: [...traceTags, ...target.tags],
+    metadata: opikTraceMetadata,
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1420,7 +1510,28 @@ export async function handleChatCompletions(
     lf,
   });
 
-  const upstreamBody = buildUpstreamBody(body, target);
+  let upstreamBody = buildUpstreamBody(body, target);
+  // ── 上下文压缩（Context Offloading 最小版）：长任务上游 token 控制 ──
+  // 客户端侧历史不受影响，只在转发上游前压缩早期轮次（保留最近 keepRounds 轮）。
+  const compaction = config.contextCompaction;
+  if (compaction?.enabled && Array.isArray(body.messages)) {
+    const result = compactMessages(
+      body.messages as Array<Record<string, unknown>>,
+      compaction.keepRounds ?? 5,
+    );
+    if (result.droppedRounds > 0) {
+      upstreamBody = buildUpstreamBody({ ...body, messages: result.messages }, target);
+      pipe.info(
+        "CONTEXT_COMPACTION",
+        `messages ${result.originalCount} → ${result.messages.length} (dropped ${result.droppedRounds} rounds)`,
+      );
+    }
+  }
+  // TRACK 05A：WorkBuddy 指向 Anthropic 风格上游时，Chat 请求 → Anthropic 后再转发。
+  if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+    upstreamBody = chatToAnthropicReq(upstreamBody);
+    pipe.info("PROTOCOL", "workbuddy chat→anthropic (chatToAnthropic)");
+  }
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
   // default upstream (never the alternate route), so its apiKey must be applied
@@ -1586,21 +1697,31 @@ export async function handleChatCompletions(
       langfuseDebug,
       debugMetadata,
       preparedStats,
+      opikTraceMetadata,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    const convertedStream = config.upstream.agents[agentSource]?.chatToAnthropic === true
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToChatSse({ model: effectiveModel }))
+      : upstreamResp.body;
+    const tappedStream = convertedStream.pipeThrough(passthrough);
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
 
   // ── Non-streaming response ───────────────────────────────────────────────
-  const respText = await upstreamResp.text();
+  let respText = await upstreamResp.text();
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
   try {
-    const respJson = JSON.parse(respText) as Record<string, unknown>;
+    let respJson = JSON.parse(respText) as Record<string, unknown>;
+    if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+      respJson = anthropicJsonToChatJson(respJson);
+      // 转换后必须回写 respText：handler.ts 非流式路径从不重新序列化
+      // respJson，不回写会把上游的 Anthropic JSON 直接返回给 Chat 客户端。
+      respText = JSON.stringify(respJson);
+    }
     if (respJson.usage && typeof respJson.usage === "object") {
       usage = respJson.usage as Record<string, unknown>;
     }
@@ -1735,6 +1856,7 @@ export async function handleChatCompletions(
       outputMessage: assistantMessage,
       model: effectiveModel,
       usage,
+      metadata: opikTraceMetadata,
       tags: [
         "non-stream",
         ...(retried ? ["retry"] : []),
@@ -1907,6 +2029,8 @@ interface TapContext {
   debugMetadata: Record<string, unknown>;
   /** Opaque counters from the request-preparation stage; null when it didn't run. */
   preparedStats: Record<string, unknown> | null;
+  /** Opik trace metadata（身份 / 会话 / 注入统计 / 工具交互），流式 span 复用。 */
+  opikTraceMetadata?: Record<string, unknown>;
 }
 
 /** Accumulated tool call state during SSE streaming. */
@@ -1986,7 +2110,7 @@ function mergeToolCallDeltas(
  *  while extracting usage/content/tool_calls from SSE events in-band.
  */
 function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, Uint8Array> {
-  const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId } = ctx;
+  const { config, modelId, keyId, sessionKey, upstreamUrl, traceId, forkTraceId, startTime, inputMessages, retried, logMeta, pipe, lf, spaceId, upstreamRequestId, opikTraceMetadata } = ctx;
 
   const decoder = new TextDecoder();
   let sseBuf = "";
@@ -2133,6 +2257,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
           outputMessage,
           model: modelId,
           usage: lastUsage,
+          metadata: opikTraceMetadata,
           tags: [
             "stream",
             ...(retried ? ["retry"] : []),

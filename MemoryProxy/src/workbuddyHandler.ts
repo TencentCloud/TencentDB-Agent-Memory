@@ -314,6 +314,7 @@ function createWorkbuddyTdaiClient(config: ProxyConfig): TdaiClient | null {
     injectL2L3: config.tdai.memory.injectL2L3,
     l1Limit: config.tdai.memory.l1Limit,
     l2Limit: config.tdai.memory.l2Limit,
+    recallCharBudget: config.tdai.memory.recallCharBudget,
     timeoutMs: config.tdai.memory.timeoutMs,
   });
 }

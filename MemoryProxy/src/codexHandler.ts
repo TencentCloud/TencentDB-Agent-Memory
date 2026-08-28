@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Codex Responses API handler.
  *
  * Handles `POST /v1/responses` + 3 aux endpoints (`/responses/compact`,
@@ -26,18 +26,40 @@
  */
 
 import type { Context } from "hono";
+import { getLogLevel } from "./report/log.js";
 import type { ProxyConfig } from "./types.js";
-import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
+import {
+  apiKeyToKeyId,
+  extractBearerToken,
+  opikCreateLlmSpan,
+  opikCreateTrace,
+  opikUpdateTrace,
+  uuidv7,
+} from "./opik.js";
+import { consumeInjectionStats } from "./injection/observer.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
 import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { codexAdapter } from "./agent-adapters/codex.js";
+import { resolveOrCreateSessionId } from "./session/auto-session.js";
+import { isNamespaceArchived } from "./session/session-key.js";
+import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+} from "./common/responses-chat-compat.js";
+import {
+  responsesToAnthropic,
+  createAnthropicSseToResponsesSse,
+  anthropicJsonToResponsesJson,
+} from "./common/responses-anthropic-compat.js";
 import {
   DEFAULT_GATE_PREFIX,
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
+  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
@@ -91,6 +113,7 @@ function createCodexTdaiClient(config: ProxyConfig, spaceId?: string): TdaiClien
     injectL2L3: config.tdai.memory.injectL2L3,
     l1Limit: config.tdai.memory.l1Limit,
     l2Limit: config.tdai.memory.l2Limit,
+    recallCharBudget: config.tdai.memory.recallCharBudget,
     timeoutMs: config.tdai.memory.timeoutMs,
   });
 }
@@ -231,6 +254,60 @@ export function injectCodexAssets(
   return { ...body, input: newInput };
 }
 
+/**
+ * 把 user.before 注入内容（自动召回 / 意图 RAG recipe）追加到 codex body 最后
+ * 一条 user 消息的 content[]，保持"贴近用户输入"语义，同时不改变 developer
+ * 前缀（避免破坏 Codex 侧缓存）。找不到 user 消息时原样返回。
+ */
+function injectCodexUserAssets(
+  body: Record<string, unknown>,
+  assets: CodexInjectionInput,
+): Record<string, unknown> {
+  const input = body.input;
+  if (!Array.isArray(input) || input.length === 0) return body;
+  const injectionBlock = buildCodexInjectionBlock(assets);
+  const newInput = [...input];
+  for (let i = input.length - 1; i >= 0; i--) {
+    const m = input[i] as Record<string, unknown> | null | undefined;
+    if (!m || typeof m !== "object") continue;
+    if (m.type !== "message" || m.role !== "user") continue;
+    const content = m.content;
+    if (!Array.isArray(content)) continue;
+    newInput[i] = { ...m, content: [...content, injectionBlock] };
+    return { ...body, input: newInput };
+  }
+  return body;
+}
+
+/** 统计 codex input[] 里的工具调用（function_call）与工具结果（function_call_output）。 */
+function summarizeCodexToolInteraction(input: unknown): { toolCalls: string[]; toolResults: number } {
+  if (!Array.isArray(input)) return { toolCalls: [], toolResults: 0 };
+  const toolCalls: string[] = [];
+  let toolResults = 0;
+  for (const item of input) {
+    const it = item as Record<string, unknown> | null;
+    if (!it || typeof it !== "object") continue;
+    if (it.type === "function_call") {
+      const name = typeof it.name === "string" ? it.name : "";
+      if (name) toolCalls.push(name);
+    } else if (it.type === "function_call_output") {
+      toolResults++;
+    }
+  }
+  return { toolCalls, toolResults };
+}
+
+/** Opik trace 上报上下文（main 对话请求构造；aux 直通请求为 null）。 */
+interface CodexOpikCtx {
+  traceId: string;
+  forkTraceId: string;
+  projectName: string;
+  metadata: Record<string, unknown>;
+  startTime: string;
+  input: unknown;
+  model: string;
+}
+
 // ── Upstream request helpers ─────────────────────────────────────────────────
 
 function buildUpstreamHeaders(
@@ -320,7 +397,7 @@ export async function handleCodexEndpoint(
                   t?.name === "request_user_input",
     );
     if (rui) {
-      console.log("[codex-debug] request_user_input tool schema:", JSON.stringify(rui));
+      if (getLogLevel() === "debug") console.log("[codex-debug] request_user_input tool schema:", JSON.stringify(rui));
     }
   } catch {}
 
@@ -341,11 +418,13 @@ export async function handleCodexEndpoint(
   if (isAuxiliary) {
     pipe.info("CODEX_AUX", `auxiliary request → passthrough (path=${path})`);
     // aux 不上报 langfuse（跟 CC/CB 对齐——sidequery/fork 类 aux 不算真对话轮）
-    return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null);
+    return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null, null);
   }
 
   // ── 6. Session ID extraction ───────────────────────────────────────────────
-  const sessionId = extractCodexSessionId(headers, body);
+  const rawSessionId = extractCodexSessionId(headers, body);
+  const autoSession = resolveOrCreateSessionId(rawSessionId, keyId, config.sessionInit?.autoConversationId);
+  const sessionId = autoSession.sessionId || rawSessionId;
   const sessionKey = sessionId ?? `${keyId}:${traceId}`;
   const agentSource = "codex";
   const isStream = body.stream !== false;
@@ -380,6 +459,7 @@ export async function handleCodexEndpoint(
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectionSkipped = false;
+  let sessionBypassed = false;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   // 存 initResult 的 agent/task detail 供 § 9 注入阶段构造 <session_context>。
@@ -449,7 +529,15 @@ export async function handleCodexEndpoint(
   // 负责把 body.input[] 透传给 reqCtx.codexAnswerInput 让状态机自己识别 gate/MORE。
   // 首次 Default gate 命中会拿到 initResult.bypassReason === "default-gate", 由
   // 本 handler 返一次 Plan 模式提示；后续同 session 请求 bypass 稳态透传。
-  if (config.sessionInit?.enabled && sessionId) {
+  // 生命周期隔离（评审意见 6）：命名空间已归档 → 不恢复旧会话
+  const archivedNamespace = config.sessionInit?.enabled && sessionId
+    ? isNamespaceArchived(config, {
+        spaceId,
+        teamId: headers[config.sessionInit?.headerAutoSelect?.teamHeader ?? "x-team-id"],
+        agentId: headers[config.sessionInit?.headerAutoSelect?.agentHeader ?? "x-agent-id"],
+      })
+    : false;
+  if (config.sessionInit?.enabled && sessionId && !archivedNamespace) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
@@ -457,7 +545,9 @@ export async function handleCodexEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `${agentSource}:${sessionKey}`;
+ const compositeKey = config.sessionInit?.threadIsolation?.enabled && headers["x-thread-id"]
+   ? `${agentSource}:${sessionKey}:${headers["x-thread-id"]}`
+   : `${agentSource}:${sessionKey}`;
       const identity = {
         userId: userId || "anonymous",
         agentSource,
@@ -514,7 +604,7 @@ export async function handleCodexEndpoint(
         const rawOutputs = input
           .filter((it: any) => it?.type === "function_call_output")
           .map((it: any) => ({ call_id: it.call_id, output_preview: String(it.output ?? "").slice(0, 200) }));
-        if (rawOutputs.length > 0) {
+        if (getLogLevel() === "debug" && rawOutputs.length > 0) {
           console.log(`[codex-debug] session=${sessionKey} function_call_outputs=${JSON.stringify(rawOutputs)} synth_msgs=${JSON.stringify(synthesizedMessages).slice(0, 500)}`);
         }
         initResult = await handleSessionInit(
@@ -590,6 +680,7 @@ export async function handleCodexEndpoint(
 
       if (initResult.justRegistered) sessionJustRegistered = true;
       if (initResult.bypassed) {
+        sessionBypassed = true;
         injectionSkipped = true;
         console.log(`[codex] session=${sessionKey} bypassed → skipping all injection`);
         if (initResult.resetFlow) {
@@ -673,7 +764,6 @@ export async function handleCodexEndpoint(
       // handleSessionInit 返回，字段都是 SessionInitResult 里的 agent/taskDetail。
       cachedAgentDetail = initResult.agentDetail ?? null;
       cachedTaskDetail = initResult.taskDetail ?? null;
-
       // 记录 resetFlow 到外层供块外返回确认响应
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
@@ -684,6 +774,20 @@ export async function handleCodexEndpoint(
             ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
+      }
+      // 团队名兜底：walked-through（全新会话走表单）分支不会像 recovered 分支那样
+      // 从 cachedTeams 拿到 team name，导致 [Team] 只注入 id、模型只能靠
+      // agent/task 描述瞎猜团队名（如把"test team"猜成"Session Init 测试团队"）。
+      // 这里从元数据按 team_id 查一次补齐 name，保证三客户端口径一致。
+      const resolvedTeamId = (initResult.sessionInfo as { team_id?: string } | undefined)?.team_id;
+      if (resolvedTeamId && (!cachedTeamInfo || !cachedTeamInfo.name)) {
+        try {
+          const teams = await metadataClient.listTeams(userId || "");
+          const hit = teams.find((t) => t.team_id === resolvedTeamId);
+          cachedTeamInfo = { id: resolvedTeamId, name: hit?.name };
+        } catch {
+          if (!cachedTeamInfo) cachedTeamInfo = { id: resolvedTeamId };
+        }
       }
     } catch (err: unknown) {
       console.error("[codex] session-init error:", err instanceof Error ? err.message : String(err));
@@ -867,13 +971,20 @@ export async function handleCodexEndpoint(
       // The pipeline's OpenAI adapter reads `body.messages` and injects
       // text into the system message. We use a single system message as
       // the injection target; all injected text ends up there.
+      //
+      // 注意：user 消息必须放**真实用户文本**而非占位符 "." —— 自动召回与
+      // 意图 RAG 注入器靠 getLastUserMessage/extractUserQueryText 取 query，
+      // 占位符会让它们拿到空信号而提前返回（Codex 的 RAG 因此一直不生效）。
+      // 下游只读 system 消息的注入结果，真实文本不会泄漏到最终转发 body。
+      const codexUserText = extractLatestCodexUserMessage(input)?.content ?? ".";
       const syntheticBody: Record<string, unknown> = {
         messages: [
           { role: "system", content: sessionContextBlock ?? "" },
-          { role: "user", content: "." },
+          { role: "user", content: codexUserText },
         ],
         model: modelId,
       };
+      const userContentBefore = codexUserText;
 
       const injectedBody = await pipeline.process(syntheticBody, {
         protocol: "openai",
@@ -887,7 +998,7 @@ export async function handleCodexEndpoint(
         sessionKey,
         turnSeq: 0,
         requestPath: c.req.path,
-        custom: { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities },
+        custom: { session: sessionInfo, userKey: callerUserKey ?? undefined, assetCapabilities, threadId: headers["x-thread-id"] ?? undefined, bypassed: sessionBypassed },
       });
 
       // Extract injected content from the synthetic body's system message.
@@ -895,6 +1006,15 @@ export async function handleCodexEndpoint(
       const injectedMessages = injectedBody.messages as Array<Record<string, unknown>> | undefined;
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
+
+      // 提取 user.before 注入（自动召回结果 + 意图 recipe）：管线把注入块
+      // 前置到 user 消息内容，扣除原始文本即得到注入部分。
+      const userAfter =
+        typeof injectedMessages?.[1]?.content === "string" ? (injectedMessages[1].content as string) : "";
+      const userInjectedText =
+        userAfter.length > userContentBefore.length
+          ? userAfter.slice(0, userAfter.length - userContentBefore.length)
+          : "";
 
       if (injectedText.length > 0) {
         // Pipeline 产出的 injectedText 已经是**成品 XML 文本**（含
@@ -906,11 +1026,57 @@ export async function handleCodexEndpoint(
         // 否则模型看到的会是转义字符（`&lt;user_memory&gt;`）读不出结构。
         body = injectCodexAssets(body, { raw: injectedText });
       }
+      if (userInjectedText.length > 0) {
+        // 召回/意图注入属于 user.before 语义：追加到最后的 user 消息，
+        // 保持 developer 前缀稳定（不破坏 Codex 侧缓存）。
+        body = injectCodexUserAssets(body, { raw: userInjectedText });
+      }
     } catch (err: unknown) {
       console.error("[codex] injection pipeline error:", err instanceof Error ? err.message : String(err));
       // Degrade gracefully: forward without injection
     }
   }
+
+  // ── 9b. Opik trace（调用链路 / 注入统计 / 工具交互可观测）───────────────
+  // main 对话请求（非 aux）才上报；aux 直通不占 trace 名额。
+  const opikTraceMetadata = {
+    agent_source: agentSource,
+    protocol: "responses",
+    session_key: sessionKey,
+    space_id: spaceId,
+    conversation_id: sessionId ?? "",
+    user_id: userId ?? "anonymous",
+    model: modelId,
+    stream: isStream,
+    turn_seq: turnSeq,
+    request_path: c.req.path,
+    injection: consumeInjectionStats(traceId) ?? undefined,
+    tool_interaction: summarizeCodexToolInteraction(input),
+  };
+  const forkTraceId = opikCreateTrace(config, {
+    traceId,
+    projectName: keyId,
+    name: `${modelId} / ${keyId}`,
+    startTime,
+    input: { input },
+    tags: lf.tags,
+    metadata: opikTraceMetadata,
+    forkProjectName: "request_log",
+    forkMetadata: {
+      keyId,
+      modelId,
+      stream: isStream,
+    },
+  });
+  const opikCtx: CodexOpikCtx = {
+    traceId,
+    forkTraceId,
+    projectName: keyId,
+    metadata: opikTraceMetadata,
+    startTime,
+    input,
+    model: modelId,
+  };
 
   // ── 10. Build archive ctx (skill + tdai L0), forward, tap for hooks ──────
   //
@@ -931,7 +1097,7 @@ export async function handleCodexEndpoint(
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx, opikCtx);
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -1075,16 +1241,38 @@ async function forwardToUpstream(
   pipe: ReturnType<typeof createPipeline>,
   lf: LangfuseTurnContext | null,
   archiveCtx: CodexArchiveCtx | null = null,
+  opikCtx: CodexOpikCtx | null = null,
 ): Promise<Response> {
   // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
   // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
   // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
   const agentUpstreamEntry = config.upstream.agents?.["codex"];
+  // Chat Completions 兼容模式（upstream.agents.codex.chatCompletions: true）：
+  // 智谱 GLM 等上游只实现 /chat/completions。开启后把 Codex 的 Responses
+  // 请求翻译成 chat 格式转发，并把上游 chat SSE 翻译回 Responses SSE。
+  const chatCompat =
+    (agentUpstreamEntry as { chatCompletions?: boolean } | undefined)?.chatCompletions ===
+    true;
+  // TRACK 05B：Codex（Responses 客户端）→ Anthropic 风格上游。
+  // 开启后把 /v1/responses 翻译成 Anthropic /v1/messages 转发，并把上游
+  // Anthropic SSE 翻译回 Responses SSE（组合 Responses↔Chat↔Anthropic）。
+  const responsesToAnthropicCompat =
+    (agentUpstreamEntry as { responsesToAnthropic?: boolean } | undefined)
+      ?.responsesToAnthropic === true;
   const upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  const upstreamUrl = joinUrl(upstreamBase, c.req.path);
+  const upstreamPath = chatCompat
+    ? "/chat/completions"
+    : responsesToAnthropicCompat
+      ? "/messages"
+      : c.req.path;
+  const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
+  if (responsesToAnthropicCompat) {
+    // Anthropic 兼容上游要求版本头；Authorization Bearer 与 chat 路径一致
+    upstreamHeaders["anthropic-version"] = "2023-06-01";
+  }
   // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
   // 否则透传客户端 Bearer。
   if (agentUpstreamEntry) {
@@ -1095,6 +1283,33 @@ async function forwardToUpstream(
   }
 
   pipe.forwardStart(upstreamUrl);
+
+  // ── 智谱 glm 系列 token 参数上限截断（防止 [1210] max_tokens 参数非法） ──
+  // 智谱 Anthropic / OpenAI 兼容端点统一限制：数值范围 [1, 32768]
+  // Codex/Responses API 还可能使用 max_output_tokens / max_completion_tokens，一并兜底。
+  const ZHIPU_MAX_TOKENS_CEIL = 32768;
+  const safeBody: Record<string, unknown> = { ...body };
+  for (const k of ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const) {
+    const v = safeBody[k];
+    if (typeof v === "number" && v > ZHIPU_MAX_TOKENS_CEIL) {
+      safeBody[k] = ZHIPU_MAX_TOKENS_CEIL;
+    }
+  }
+  // ── 转发前剥离 codex session-init 假表单（function_call + output + 工具声明）──
+  // request_user_input 是 Codex 客户端内部工具，上游模型（GLM）拿不到 schema，
+  // 会模仿历史里的 function_call 生成非法调用（同 Claude Code AskUserQuestion
+  // 的 "Invalid tool parameters" 问题）。表单交互只属于 session-init 内部管线。
+  const strippedBody = stripCodexFormArtifacts(safeBody);
+  let forwardedBody: Record<string, unknown>;
+  if (chatCompat) {
+    forwardedBody = responsesBodyToChat(strippedBody, { model: modelId });
+  } else if (responsesToAnthropicCompat) {
+    forwardedBody = responsesToAnthropic(strippedBody, { model: modelId });
+    pipe.info("PROTOCOL", "codex responses→anthropic (responsesToAnthropic)");
+  } else {
+    forwardedBody = strippedBody;
+  }
+  const bodyStr = JSON.stringify(forwardedBody);
 
   let upstreamResp: Response;
   try {
@@ -1170,6 +1385,64 @@ async function forwardToUpstream(
     });
   }
 
+  // ── 兼容模式：把上游响应翻译回 Responses API ──
+  // chatCompat：上游 chat SSE/JSON → Responses；responsesToAnthropic：
+  // 上游 Anthropic SSE/JSON →（Chat）→ Responses。
+  if (chatCompat || responsesToAnthropicCompat) {
+    const contentType = upstreamResp.headers.get("content-type") ?? "";
+    const isSSE = contentType.includes("text/event-stream");
+    const sseHeaders = filterResponseHeaders(upstreamResp.headers);
+    sseHeaders.set("content-type", "text/event-stream");
+
+    if (isSSE && upstreamResp.body) {
+      const transformed = responsesToAnthropicCompat
+        ? upstreamResp.body.pipeThrough(
+            createAnthropicSseToResponsesSse({ model: modelId }),
+          )
+        : upstreamResp.body.pipeThrough(
+            createChatSseToResponses({ model: modelId }),
+          );
+      const needTap = Boolean(lf) || Boolean(archiveCtx);
+      if (!needTap) {
+        return new Response(transformed, {
+          status: upstreamResp.status,
+          headers: sseHeaders,
+        });
+      }
+      const [passStream, tapStream] = transformed.tee();
+      consumeCodexStream(tapStream, {
+        lf,
+        modelId,
+        startTime,
+        upstreamUrl,
+        inputBody: body,
+        pipe,
+        archiveCtx,
+        config,
+        opikCtx,
+      });
+      return new Response(passStream, {
+        status: upstreamResp.status,
+        headers: sseHeaders,
+      });
+    }
+
+    // 非 SSE：chat JSON → Responses JSON（上游统一 stream:true，此为兜底）
+    const rawText = await upstreamResp.text();
+    try {
+      const json = JSON.parse(rawText) as Record<string, unknown>;
+      const responsesJson = responsesToAnthropicCompat
+        ? anthropicJsonToResponsesJson(json, { model: modelId })
+        : chatJsonToResponses(json, { model: modelId });
+      return c.json(responsesJson);
+    } catch {
+      return new Response(rawText, {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    }
+  }
+
   // 2xx: aux 场景 (lf=null && archiveCtx=null) 直接透传不 tap; 主对话场景 tap
   // 一份用于 langfuse 上报 + skill/L0 归档 hook (P1-P2 gap 修复)。
   // 只要有 lf 或 archiveCtx 任一非空就必须 tee 一份 tap 流。
@@ -1190,6 +1463,8 @@ async function forwardToUpstream(
     inputBody: body,
     pipe,
     archiveCtx,
+    config,
+    opikCtx,
   });
 
   return new Response(rawClientStream, {
@@ -1243,6 +1518,9 @@ export interface CodexTapContext {
   upstreamUrl: string;
   inputBody: Record<string, unknown>;
   pipe: ReturnType<typeof createPipeline>;
+  config: ProxyConfig;
+  /** Opik trace 上报上下文；aux 场景为 null。 */
+  opikCtx?: CodexOpikCtx | null;
   /**
    * skill 归档 + TDAI L0 write hook 上下文;
    * null 表示当前请求不需要触发归档 (aux / session 未初始化 / bypass)。
@@ -1261,7 +1539,7 @@ export interface CodexTapContext {
  * 失败静默——埋点绝不影响业务链路。
  */
 export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: CodexTapContext): void {
-  const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx } = ctx;
+  const { lf, modelId, startTime, upstreamUrl, inputBody, pipe, archiveCtx, config, opikCtx } = ctx;
 
   (async () => {
     const decoder = new TextDecoder();
@@ -1321,6 +1599,47 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
           });
         } catch (lfErr: unknown) {
           pipe.error("LANGFUSE_SPAN", lfErr);
+        }
+      }
+
+      // ── Opik: LLM span + trace 收尾（调用链路 / Token 可观测）──────────
+      if (config && opikCtx) {
+        try {
+          const outputMessage = outputText
+            ? { role: "assistant", content: outputText }
+            : toolUseCount > 0
+              ? { role: "assistant", content: `[${toolUseCount} tool call(s)]` }
+              : null;
+          const usageObj = Object.keys(usage).length > 0 ? usage : {};
+          opikCreateLlmSpan(config, {
+            traceId: opikCtx.traceId,
+            projectName: opikCtx.projectName,
+            name: opikCtx.model,
+            startTime: opikCtx.startTime,
+            endTime,
+            inputMessages: Array.isArray(opikCtx.input) ? opikCtx.input : [opikCtx.input],
+            outputMessage,
+            model: opikCtx.model,
+            usage: usageObj,
+            metadata: opikCtx.metadata,
+            forkProjectName: "request_log",
+            forkTraceId: opikCtx.forkTraceId,
+            forkMetadata: {
+              keyId: opikCtx.projectName,
+              modelId: opikCtx.model,
+              stream: true,
+              upstreamUrl,
+            },
+          });
+          opikUpdateTrace(config, {
+            traceId: opikCtx.traceId,
+            projectName: opikCtx.projectName,
+            endTime,
+            output: outputMessage ?? {},
+            usage: usageObj,
+          });
+        } catch (opikErr: unknown) {
+          pipe.error("OPIK_SPAN", opikErr);
         }
       }
 
