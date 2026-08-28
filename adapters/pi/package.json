@@ -21,7 +21,6 @@
   "files": [
     "src/",
     "scripts/",
-    "LICENSE",
     "README.md",
     "README_CN.md",
     "tdai-memory.example.json"
