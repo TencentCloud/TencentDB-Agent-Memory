@@ -849,6 +849,72 @@ async function handleSessionInitInner(
         //
         // opencode 说明：opencode 客户端原生 `question` tool 每次只能弹一个题，
         // 无法承载"同时问 agent+task"的语义，必须拆 stage（同 codex/wb/dsh）。
+        // 已预选的 Team 若仅有一个 Agent，也必须继续级联自动选择；否则
+        // OpenCode 会收到单选项 agent_select，而其 `question` form 会拒绝该页。
+        const selectedTeam = teams.find((team) => team.team_id === pr.teamId);
+        if (selectedTeam?.agents.length === 1) {
+          const soloAgent = selectedTeam.agents[0];
+          const nextState: SessionInitState = {
+            status: "pending_agent_select",
+            keyId: sessionKey,
+            startedAt: Date.now(),
+            attemptCount: 0,
+            userId,
+            cachedTeams: teams,
+            selectedTeamId: pr.teamId,
+            selectedAgentId: soloAgent.agent_id,
+          };
+          console.log(
+            `[session-init:cb] session=${compositeKey} preset team=${pr.teamId} only-agent=${soloAgent.agent_id} auto-select`,
+          );
+
+          if (selectedTeam.tasks.length === 0) {
+            await store.set(compositeKey, {
+              ...nextState,
+              status: "initialized",
+              sessionInfo: null,
+              agentDetail: null,
+              taskDetail: null,
+              bypassed: true,
+            } as SessionInitState);
+            console.log(
+              `[session-init:cb] session=${compositeKey} preset team has 0 tasks → bypass`,
+            );
+            return { intercepted: false, bypassed: true, justRegistered: true };
+          }
+
+          if (selectedTeam.tasks.length === 1) {
+            const soleTaskId = selectedTeam.tasks[0].task_id;
+            console.log(
+              `[session-init:cb] session=${compositeKey} preset auto-select single task=${soleTaskId} → completeRegistration`,
+            );
+            return completeRegistration(
+              { agent_id: soloAgent.agent_id, task_id: soleTaskId },
+              nextState, teams, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
+          }
+
+          await store.set(compositeKey, {
+            ...nextState,
+            status: "pending_task_select",
+          });
+          console.log(
+            `[session-init:cb] session=${compositeKey} preset → pending_task_select (tasks=${selectedTeam.tasks.length})`,
+          );
+          const fd: FormData = {
+            teams,
+            stage: "task_select",
+            selectedTeamId: pr.teamId,
+            selectedAgentId: soloAgent.agent_id,
+            stream: reqCtx.stream,
+            questionsAsArray: reqCtx.questionsAsArray,
+            modelId: reqCtx.modelId,
+            protocol: reqCtx.protocol,
+          };
+          return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+        }
+
         const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
