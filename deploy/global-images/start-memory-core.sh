@@ -9,6 +9,9 @@
 # 重复执行会先移除旧容器再启新的，volume 数据保留 —— admin user_key 也随之保留。
 
 set -euo pipefail
+# 与 start-proxy.sh 一致：禁用 MSYS 的 POSIX→Windows 路径自动转换，
+# 否则 docker -v 的冒号会被误判成盘符，挂载源被拼成 `xxx;D` 导致数据目录挂空。
+export MSYS_NO_PATHCONV=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
@@ -122,7 +125,7 @@ skill:
 YAML
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+$DOCKER run -d --name "$CONTAINER" --restart always \
   --network "$NETWORK" \
   --network-alias memory-core \
   -p "${MEMORY_CORE_PORT}:8420" \

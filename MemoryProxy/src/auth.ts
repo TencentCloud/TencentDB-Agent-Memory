@@ -115,6 +115,11 @@ export async function verifyUserKey(userKey: string, serviceId: string): Promise
       ? `auth service timeout (${config.timeoutMs}ms)`
       : `auth service error: ${err instanceof Error ? err.message : String(err)}`;
     log.warn("auth.verify.error", { error: reason, serviceId });
+    // 失败语义（评审意见 2）：fail-closed（默认）拒绝；fail-open 仅限本地联调
+    if (config.failPolicy === "fail-open") {
+      log.warn("auth.verify.failOpen", { serviceId, reason });
+      return { userId: "", rejected: false };
+    }
     return { userId: "", rejected: true, rejectReason: reason };
   }
 }

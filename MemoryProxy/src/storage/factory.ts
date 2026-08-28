@@ -35,6 +35,12 @@ export interface StorageConfig {
   backend: ProxyStorageType;
   /** `ttl/` 前缀下对象的生存期（天）。只对 ttl 前缀生效。 */
   ttlDays: number;
+  /** 命名空间级归档规则（评审意见 6）：命中 spaceId 的会话 key 定期清理。 */
+  archiveNamespaces?: Array<{
+    spaceId?: string;
+    teamId?: string;
+    agentId?: string;
+  }>;
 
   cos: {
     /**
@@ -297,10 +303,19 @@ function startSweeperIfNeeded(storage: ProxyStorage, config: StorageConfig): voi
   if (storage.type !== "sqlite") return;
   if (_sweepTimer) return; // already running
   const ttlMs = config.ttlDays * 86400 * 1000;
+  const archiveRules = config.archiveNamespaces ?? [];
   const run = () => {
     try {
       // 只清 ttl bucket；nottl 永久保留（与 COS lifecycle rule 的语义一致）。
       (storage as SqliteStorage).sweep({ ttlMs });
+      // 生命周期隔离：归档命名空间的会话 key 定期清理（删 A 不影响 B）
+      for (const r of archiveRules) {
+        if (r.spaceId) {
+          (storage as SqliteStorage).delPrefix(`ttl/${r.spaceId}/`).catch(() => {
+            /* gc 失败不阻断 */
+          });
+        }
+      }
     } catch (err) {
       console.warn(`${TAG} sweeper error: ${err instanceof Error ? err.message : String(err)}`);
     }

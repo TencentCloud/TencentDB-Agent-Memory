@@ -73,6 +73,12 @@ export interface StorageConfig {
    * 默认 7 天，与 COS lifecycle rule 的粒度对齐（COS 天级扫描）。
    */
   ttlDays: number;
+  /** 命名空间级归档规则（评审意见 6）：命中即视为已归档，会话不恢复。 */
+  archiveNamespaces?: Array<{
+    spaceId?: string;
+    teamId?: string;
+    agentId?: string;
+  }>;
 
   cos: {
     /**
@@ -288,6 +294,23 @@ export interface SessionInitConfig {
     /** header 值在用户可见列表中查不到时：'form' 回退交互表单（默认）| 'bypass' 直接跳过 session init。 */
     onMismatch: "form" | "bypass";
   };
+  /**
+   * 会话锁自动生成（无自带会话 ID 的客户端）：
+   * enabled=true 时缺失会话 header 由服务端生成不可预测锁并续接（默认 30 分钟 TTL）。
+   */
+  autoConversationId?: {
+    enabled?: boolean;
+    ttlMinutes?: number;
+    strategy?: "per-key" | "per-key-msg";
+  };
+  /**
+   * thread 层隔离：enabled=true 时 x-thread-id 进入会话复合键
+   * （agentSource:sessionKey:threadId），task 之下按主题分组。
+   * 默认 false（保持现有会话键不变，向后兼容）。
+   */
+  threadIsolation?: {
+    enabled?: boolean;
+  };
 }
 
 export interface TdaiConfig {
@@ -295,6 +318,19 @@ export interface TdaiConfig {
   endpoint: string;
   apiKey: string;
   serviceId: string;
+  /**
+   * 显式读共享授权（评审意见 2）：当前会话可额外读取的命名空间列表。
+   * 每项 { teamId, agentId }；查询/召回时并入「可访问命名空间集 = 自己 ∪ grants」。
+   * 权威来源仍在控制面，这里是 Proxy 侧的静态授权表（或由控制面下发）。
+   */
+  grants?: Array<{
+    teamId: string;
+    agentId: string;
+  }>;
+  /** 控制面授权接口 URL（GET，返回 [{teamId, agentId}]）；未配则用 grants 静态表。 */
+  grantsEndpoint?: string;
+  /** grant 拉取缓存 TTL（秒），默认 60（评审意见 4：撤销传播延迟）。 */
+  grantsTtlSeconds?: number;
   memory: {
     enabled: boolean;
     /** Master switch for all TDAI memory prompt injection. */
@@ -304,6 +340,34 @@ export interface TdaiConfig {
     injectL2L3: boolean;
     l1Limit: number;
     l2Limit: number;
+    /** 自动召回注入预算（字符数），超出后按相关性截断，防止 prompt 再次膨胀。 */
+    recallCharBudget: number;
+  /** 意图注入模式：keyword（关键词快路径）/ llm（LLM 语义分类）/ hybrid（先关键词后 LLM，默认）。 */
+  intentMode?: "keyword" | "llm" | "hybrid";
+  /**
+   * bypass 会话（用户跳过 Session Init / 缺 task 预选）的 L0 写入策略：
+   *   - skip（默认）：不写入，防止无归属内容混入共享记忆；
+   *   - write-scoped：写入但保持无 task 归属（记录在案，不进 task 维度检索）；
+   *   - write：与正常会话一致写入。
+   * 对应 Session 隔离设计文档「bypass 写入语义」。
+   */
+  bypassWritePolicy?: "skip" | "write-scoped" | "write";
+  /**
+   * bypass 会话的 L1 读取策略（评审意见：bypass 只定义了写、没定义读）：
+   *   - none（默认）：不召回（当前行为，最保守——无归属会话不读用户记忆）；
+   *   - self-only：只召回当前 agent 自己的 L1（不跨借入/grant）；
+   *   - default：与正常会话一致召回（不推荐，等于 bypass 可读全部授权范围）。
+   */
+  bypassReadPolicy?: "none" | "self-only" | "default";
+    /** 意图向量检索（教学模板 RAG）：配置后语义层优先用 embedding，LLM 分类降级为兜底。 */
+    intentEmbedding?: {
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      dimensions: number;
+      minScore: number;
+      timeoutMs: number;
+    };
     timeoutMs: number;
   };
 }
@@ -400,8 +464,10 @@ export interface SkillRuntimeConfig {
  * itself is protocol-agnostic.
  */
 export interface AgentUpstreamEntry {
-  /** Target upstream base URL. Required. */
-  url: string;
+  /** Target upstream base URL. 缺省时回退到全局 upstream.url（如仅配置 chatCompletions 开关时）。 */
+  url?: string;
+  /** Per-agent 上游模型名覆盖。缺省沿用全局模型映射（pricing 别名 → PROXY_UPSTREAM_MODEL）。 */
+  model?: string;
   /**
    * Per-agent apiKey. When set (non-empty):
    *   - OpenAI: `Authorization: Bearer <apiKey>` is injected
@@ -411,6 +477,22 @@ export interface AgentUpstreamEntry {
    * that fallback only applies when this agent has no entry at all.
    */
   apiKey?: string;
+  /**
+   * Responses API → Chat Completions 兼容开关（默认 false）。
+   * 仅对 WorkBuddy / Codex 这类走 OpenAI Responses API 的客户端有意义：
+   * 开启后 handler 会把 /v1/responses 请求翻译成上游的 /chat/completions，
+   * 并把上游 chat SSE 翻译回 Responses SSE。用于智谱 GLM 等只实现
+   * Chat Completions 的上游。
+   */
+  chatCompletions?: boolean;
+  /** Anthropic 请求 → OpenAI Chat：Claude Code 指向 OpenAI 风格上游时开启（TRACK 05A）。 */
+  anthropicToChat?: boolean;
+  /** OpenAI Chat 请求 → Anthropic：WorkBuddy 指向 Anthropic 风格上游时开启（TRACK 05A）。 */
+  chatToAnthropic?: boolean;
+  /** Responses 请求 → Anthropic：Codex 指向 Anthropic 风格上游时开启（TRACK 05B）。 */
+  responsesToAnthropic?: boolean;
+  /** Anthropic 请求 → Responses：Claude Code 指向 Responses 风格上游时开启（TRACK 05B）。 */
+  anthropicToResponses?: boolean;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -429,6 +511,15 @@ export interface ProxyConfig {
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
      */
     agents: Record<string, AgentUpstreamEntry>;
+    /**
+     * 上游协议能力自动探测：启动时探测各 agent 上游支持 OpenAI Chat /
+     * Responses / Anthropic 中的哪些协议，自动生成转换标志
+     * （客户端原生协议优先；显式配置的转换标志优先于探测结果）。默认关闭。
+     */
+    autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+    };
   };
   log: {
     file: string;    // JSONL path; empty string disables file logging
@@ -472,6 +563,15 @@ export interface ProxyConfig {
   creditPricing: CreditPricingConfig;  // NEW: model pricing for credit calculation
   injection: InjectionConfig;
   extraction: ExtractionConfig;
+  /**
+   * 上下文压缩（Context Offloading 最小版）：转发上游前压缩早期轮次，
+   * 只保留最近 keepRounds 轮，降低长任务单次上游 token 成本。默认关闭。
+   */
+  contextCompaction?: {
+    enabled?: boolean;
+    keepRounds?: number;
+    summarize?: boolean;
+  };
   sessionInit: SessionInitConfig;
   tdai: TdaiConfig;
   coreSkill: CoreSkillConfig;
@@ -616,6 +716,37 @@ export interface InjectionConfig {
   assetReflection?: {
     markerOptIn: boolean;
   };
+  /**
+   * 注入总预算（字符数）：所有注入块累计超过时按注入顺序裁剪
+   * （0 = 不裁剪，默认）。用于总量控制，防止多注入器叠加把 prompt 撑大。
+   */
+  maxTotalChars?: number;
+  /**
+   * 注入微调（A/B 实验用）：按客户端覆盖各注入块开关与预算。
+   * `default` 为全局默认，`perAgent[<agentSource>]` 按客户端覆盖；
+   * 缺省字段表示「不覆盖，沿用默认/全局配置」。
+   */
+  tuning?: InjectionTuningConfig;
+}
+
+/** 单客户端注入微调开关。 */
+export interface InjectionTuningOverrides {
+  /** 注入 <skill_tools>（skill 工具 curl 模板）。 */
+  skillTools?: boolean;
+  /** 注入 <available_skills> 包装指令段（skill 列表本身来自内核）。 */
+  availableSkills?: boolean;
+  /** <memory-tools-guide> 策略：always=固定注入 / on-intent=命中记忆意图才注入 / off=不注入。 */
+  memoryToolsGuide?: "always" | "on-intent" | "off";
+  /** 注入 <tdai_profile_memory>（L3 画像 + L2 场景索引）。 */
+  profileMemory?: boolean;
+  /** L1 自动召回字符预算（覆盖全局 tdai.memory.recallCharBudget）。 */
+  recallCharBudget?: number;
+}
+
+/** 注入微调配置：default 全局默认 + perAgent 按客户端覆盖。 */
+export interface InjectionTuningConfig {
+  default?: InjectionTuningOverrides;
+  perAgent?: Record<string, InjectionTuningOverrides>;
 }
 
 /**
@@ -645,6 +776,13 @@ export interface AuthConfig {
   url: string;
   /** Request timeout in ms. Default: 5000. */
   timeoutMs: number;
+  /**
+   * 鉴权服务不可达/超时时的失败语义（评审意见 2）：
+   *   - fail-closed（默认）：拒绝请求（隔离成立的前提）；
+   *   - fail-open：放行（仅限本地零配置/联调，启用 auth 时强烈不建议）。
+   * 注：auth.enabled=false 时始终透传（本地零配置模式），与 failPolicy 无关。
+   */
+  failPolicy?: "fail-closed" | "fail-open";
 }
 
 /**
@@ -729,8 +867,15 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+    autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+    };
     /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    agents?: Record<
+      string,
+      { url?: string; apiKey?: string; chatCompletions?: boolean; anthropicToChat?: boolean; chatToAnthropic?: boolean; responsesToAnthropic?: boolean; anthropicToResponses?: boolean } | null | undefined
+    >;
   };
   log?: {
     file?: string;
@@ -767,6 +912,11 @@ export interface RawYamlConfig {
     enabled?: boolean;
     backend?: "cos" | "sqlite" | "fs" | "memory";
     ttlDays?: number;
+    archiveNamespaces?: Array<{
+      spaceId?: string;
+      teamId?: string;
+      agentId?: string;
+    }>;
     cos?: {
       rootPrefix?: string;
       endpointDomain?: string;
@@ -823,16 +973,43 @@ export interface RawYamlConfig {
     assetReflection?: {
       markerOptIn?: boolean;
     };
+    maxTotalChars?: number;
+    tuning?: {
+      default?: Record<string, unknown>;
+      perAgent?: Record<string, Record<string, unknown>>;
+    };
   };
   extraction?: {
     enabled?: boolean;
     extractors?: string[];
+  };
+  memCommand?: {
+    enabled?: boolean;
+    allowedCommands?: string[];
+  };
+  /**
+   * 上下文压缩（Context Offloading 最小版）：Proxy 转发上游前压缩早期轮次，
+   * 只保留最近 keepRounds 轮，降低长任务单次上游 token 成本。
+   * 默认关闭（保持客户端历史原样透传）。
+   */
+  contextCompaction?: {
+    enabled?: boolean;
+    keepRounds?: number;
+    summarize?: boolean;
   };
   sessionInit?: {
     enabled?: boolean;
     maxRetries?: number;
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
+    autoConversationId?: {
+      enabled?: boolean;
+      ttlMinutes?: number;
+      strategy?: string;
+    };
+    threadIsolation?: {
+      enabled?: boolean;
+    };
     defaultTaskId?: string;
     debugForceIdentity?: {
       team_id?: string;
@@ -854,6 +1031,12 @@ export interface RawYamlConfig {
     endpoint?: string;
     apiKey?: string;
     serviceId?: string;
+    grants?: Array<{
+      teamId?: string;
+      agentId?: string;
+    }>;
+    grantsEndpoint?: string;
+    grantsTtlSeconds?: number;
     memory?: Partial<TdaiConfig["memory"]>;
   };
   /**
@@ -872,6 +1055,7 @@ export interface RawYamlConfig {
     enabled?: boolean;
     url?: string;
     timeoutMs?: number;
+    failPolicy?: string;
   };
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {

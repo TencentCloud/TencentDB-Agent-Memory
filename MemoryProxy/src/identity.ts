@@ -429,20 +429,5 @@ export function inspectAndRecord(
       : ""),
   );
 
-  // [DEBUG-CC-SESSION] 临时调试：打印 Claude Code SDK 注入的 session id 值，
-  // 用于验证「同一次 claude 启动多次请求同 id / 不同启动不同 id」。验证完即移除。
-  {
-    const ccSid =
-      identity.customHeaders["x-claude-code-session-id"] ??
-      identity.customHeaders["X-Claude-Code-Session-Id"];
-    const xApp =
-      identity.customHeaders["x-app"] ?? identity.customHeaders["X-App"];
-    if (ccSid || xApp) {
-      console.error(
-        `[debug-cc] x-claude-code-session-id=${ccSid ?? "none"} x-app=${xApp ?? "none"}`,
-      );
-    }
-  }
-
   return identity;
 }

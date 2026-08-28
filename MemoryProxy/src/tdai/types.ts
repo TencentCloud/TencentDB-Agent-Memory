@@ -24,8 +24,10 @@ export interface TdaiIdentity {
   agentId: string;
   /** Conversation/session dimension for L0/L1 only. */
   sessionId: string;
-  /** Task dimension for L0/L1 only. */
-  taskId?: string;
+    /** Task dimension for L0/L1 only. */
+    taskId?: string;
+    /** Thread dimension（评审意见 1）：task 之下的主题分组；L0/L1 可选过滤。 */
+    threadId?: string;
   /**
    * 请求发起者 user_key（原始 `sk-mem-...`）。用于 tdai `/v3/meta/*` 路由的
    * Layer 3 用户鉴权（`x-tdai-user-key` header）—— ACL 校验路径必须。

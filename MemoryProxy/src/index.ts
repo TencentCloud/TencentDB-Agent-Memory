@@ -32,6 +32,7 @@ import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
+import { applyAutoDetect } from "./upstream/capability-probe.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
@@ -57,6 +58,18 @@ initLangfuse(config).catch((err: unknown) => {
 
 // ── Initialize auth client (user_key verification + user_id resolution) ──────
 initAuth(config.auth);
+
+// ── 上游协议能力自动探测（可选）：启动时探测各 agent 上游协议并生成转换标志 ──
+// 显式配置的转换标志优先；探测失败降级（保持原直连行为，不阻塞启动）。
+if (config.upstream.autoDetect?.enabled) {
+  try {
+    await applyAutoDetect(config);
+  } catch (err: unknown) {
+    log.warn("upstream.probe.error", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 // ── Register internal service accounts (bypass whole pipeline on match) ──────
 initSystemUsers(config.systemUsers);

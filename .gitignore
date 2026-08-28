@@ -7,6 +7,16 @@ workspace/
 # Environment variables
 .env
 
+# Local deployment secrets / generated state (never commit)
+*.bak*
+deploy/global-images/.admin-key
+deploy/global-images/.proxy-config/
+deploy/global-images/.panel-data*
+deploy/global-images/.memory-core-data/
+deploy/global-images/.claude/
+# 本地启动脚本（含个人环境变量），不随 PR 发布
+deploy/global-images/run-claude.sh
+
 # Test caches
 __tests__/soak/.model-cache/
 
