@@ -2,15 +2,19 @@
 /**
  * TencentDB Agent Memory — OpenCode MCP Adapter
  *
- * A minimal MCP stdio server that exposes TencentDB Agent Memory tools
- * to OpenCode via the Model Context Protocol (MCP).
+ * A lightweight MCP stdio server that exposes TencentDB Agent Memory
+ * search/recall tools to OpenCode via the Model Context Protocol (MCP).
  *
  * How it works:
- *   OpenCode <--stdio--> this server <--HTTP--> TencentDB Gateway
+ *   OpenCode <--stdio--> this server <--HTTP--> TencentDB v3 Gateway
  *
  * Tools exposed:
- *   - tdai_memory_search        Search long-term memory (L1/L2/L3)
- *   - tdai_conversation_search  Search raw conversation history (L0)
+ *   - tdai_memory_search        Search atomic L1/L2 long-term memory (/v3/atomic/search)
+ *   - tdai_conversation_search  Search raw conversation history (/v3/conversation/search)
+ *
+ * Note: This adapter provides explicit recall tools via MCP. It does not
+ * automatically hook OpenCode session lifecycle events or perform background
+ * transcript capture.
  *
  * Related:
  *   - Issue #926: https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/926
@@ -20,11 +24,13 @@
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const GATEWAY_URL = (process.env.TDAI_GATEWAY_URL ?? "http://localhost:8420").replace(/\/$/, "");
-const ADMIN_KEY   = process.env.TDAI_ADMIN_KEY ?? "";
-const AGENT_ID    = process.env.TDAI_AGENT_ID  ?? "opencode";
-const TEAM_ID     = process.env.TDAI_TEAM_ID   ?? "default";
-const USER_ID     = process.env.TDAI_USER_ID   ?? "default";
+const GATEWAY_URL  = (process.env.TDAI_GATEWAY_URL ?? "http://localhost:8420").replace(/\/$/, "");
+const API_KEY      = process.env.TDAI_MEMORY_API_KEY ?? process.env.TDAI_ADMIN_KEY ?? process.env.TDAI_API_KEY ?? "";
+const SERVICE_ID   = process.env.TDAI_MEMORY_SERVICE_ID ?? process.env.TDAI_SERVICE_ID ?? "default";
+const AGENT_ID     = process.env.TDAI_AGENT_ID  ?? "opencode";
+const TEAM_ID      = process.env.TDAI_TEAM_ID   ?? "default";
+const USER_ID      = process.env.TDAI_USER_ID   ?? "default";
+const TASK_ID      = process.env.TDAI_TASK_ID   ?? undefined;
 const RECALL_LIMIT = parseInt(process.env.TDAI_RECALL_LIMIT ?? "5", 10);
 const TIMEOUT_MS   = parseInt(process.env.TDAI_TIMEOUT_MS   ?? "5000", 10);
 
@@ -34,9 +40,9 @@ const TOOLS = [
   {
     name: "tdai_memory_search",
     description:
-      "Search TencentDB Agent Memory for relevant past facts, user preferences, " +
-      "project context, or distilled knowledge. Use this before starting any task " +
-      "to recall what the agent already knows.",
+      "Search TencentDB Agent Memory for relevant atomic memory records (L1/L2), " +
+      "user preferences, project context, and past decisions. Use this before starting " +
+      "any task to recall what the agent already knows.",
     inputSchema: {
       type: "object",
       properties: {
@@ -55,7 +61,7 @@ const TOOLS = [
   {
     name: "tdai_conversation_search",
     description:
-      "Search raw conversation history stored in TencentDB Agent Memory. " +
+      "Search raw conversation history stored in TencentDB Agent Memory (L0). " +
       "Use when you need to find what was discussed in a specific past session " +
       "or verify earlier instructions.",
     inputSchema: {
@@ -78,29 +84,43 @@ const TOOLS = [
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
 /**
- * Makes an HTTP request to the TencentDB gateway.
+ * Makes an HTTP POST request to the TencentDB v3 gateway.
+ * Conforms to the v3 gateway contract:
+ *   - Headers: Authorization (Bearer token), x-tdai-service-id
+ *   - Body: tenant isolation fields (team_id, agent_id, user_id, task_id) in snake_case
+ *
  * Fail-open: returns { items: [], error: <reason> } on any network / gateway error
  * so OpenCode never crashes due to a memory lookup failure.
  *
- * @param {string} path  - API path, e.g. "/v3/memory/recall"
- * @param {object} body  - JSON body to POST
+ * @param {string} path  - API path, e.g. "/v3/atomic/search"
+ * @param {object} payload - query parameters to merge with tenant context
  * @returns {Promise<object>} Parsed JSON response or error envelope
  */
-async function gatewayRequest(path, body) {
+async function gatewayRequest(path, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  const requestBody = {
+    team_id: TEAM_ID,
+    agent_id: AGENT_ID,
+    user_id: USER_ID,
+    ...(TASK_ID ? { task_id: TASK_ID } : {}),
+    ...payload,
+  };
+
+  const headers = {
+    "Content-Type": "application/json",
+    "x-tdai-service-id": SERVICE_ID,
+  };
+  if (API_KEY) {
+    headers["Authorization"] = `Bearer ${API_KEY}`;
+  }
 
   try {
     const res = await fetch(`${GATEWAY_URL}${path}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${ADMIN_KEY}`,
-        "X-Agent-Id": AGENT_ID,
-        "X-Team-Id": TEAM_ID,
-        "X-User-Id": USER_ID,
-      },
-      body: JSON.stringify(body),
+      headers,
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
     clearTimeout(timer);
@@ -121,43 +141,43 @@ async function gatewayRequest(path, body) {
 // ── Tool handlers ─────────────────────────────────────────────────────────────
 
 /**
- * Formats gateway memory items into readable plain text for OpenCode.
- * @param {Array<object>} items
+ * Formats gateway memory items or raw results into readable plain text for OpenCode.
+ * @param {Array<object>|string} items
  * @returns {string}
  */
 function formatMemoryItems(items) {
+  if (typeof items === "string") return items;
   if (!Array.isArray(items) || items.length === 0) return "(no memories found)";
   return items
     .map((item, i) => {
       const score = item.score != null ? ` [score: ${item.score.toFixed(3)}]` : "";
-      const content = item.content ?? item.text ?? item.summary ?? JSON.stringify(item);
+      const content = item.content ?? item.text ?? item.summary ?? item.memory ?? JSON.stringify(item);
       return `${i + 1}.${score}\n${content}`;
     })
     .join("\n\n");
 }
 
 /**
+ * Handles tdai_memory_search via v3 atomic search endpoint (/v3/atomic/search).
  * @param {{ query: string; limit?: number }} args
  * @returns {Promise<{ content: Array<{ type: string; text: string }> }>}
  */
 async function handleMemorySearch(args) {
   const limit = typeof args.limit === "number" ? args.limit : RECALL_LIMIT;
-  const result = await gatewayRequest("/v3/memory/recall", {
+  const result = await gatewayRequest("/v3/atomic/search", {
     query: args.query,
     limit,
-    agentId: AGENT_ID,
-    teamId: TEAM_ID,
-    userId: USER_ID,
   });
 
   const text = result.error
     ? `[tdai_memory_search] Warning: ${result.error}\n(memory search failed gracefully)`
-    : `[tdai_memory_search] Results for: "${args.query}"\n\n${formatMemoryItems(result.items ?? result.data ?? [])}`;
+    : `[tdai_memory_search] Results for: "${args.query}"\n\n${formatMemoryItems(result.items ?? result.data ?? result.results ?? [])}`;
 
   return { content: [{ type: "text", text }] };
 }
 
 /**
+ * Handles tdai_conversation_search via v3 conversation search endpoint (/v3/conversation/search).
  * @param {{ query: string; limit?: number }} args
  * @returns {Promise<{ content: Array<{ type: string; text: string }> }>}
  */
@@ -166,14 +186,11 @@ async function handleConversationSearch(args) {
   const result = await gatewayRequest("/v3/conversation/search", {
     query: args.query,
     limit,
-    agentId: AGENT_ID,
-    teamId: TEAM_ID,
-    userId: USER_ID,
   });
 
   const text = result.error
     ? `[tdai_conversation_search] Warning: ${result.error}\n(conversation search failed gracefully)`
-    : `[tdai_conversation_search] Results for: "${args.query}"\n\n${formatMemoryItems(result.items ?? result.data ?? [])}`;
+    : `[tdai_conversation_search] Results for: "${args.query}"\n\n${formatMemoryItems(result.items ?? result.data ?? result.results ?? [])}`;
 
   return { content: [{ type: "text", text }] };
 }
@@ -285,4 +302,4 @@ process.stdin.on("end", () => process.exit(0));
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT",  () => process.exit(0));
 
-process.stderr.write(`[tdai-mcp] OpenCode adapter started — gateway: ${GATEWAY_URL}, agent: ${AGENT_ID}\n`);
+process.stderr.write(`[tdai-mcp] OpenCode adapter started — gateway: ${GATEWAY_URL}, service: ${SERVICE_ID}, agent: ${AGENT_ID}\n`);

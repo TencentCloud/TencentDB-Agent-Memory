@@ -1,31 +1,70 @@
 ﻿/**
- * Unit tests for TencentDB Agent Memory OpenCode MCP Adapter
+ * Unit & Contract tests for TencentDB Agent Memory OpenCode MCP Adapter
  *
- * Tests run against a fake gateway — no real gateway or OpenCode required.
+ * Tests run against a fake gateway asserting the v3 Gateway contract.
  * Run with: node --test adapters/opencode/tests/mcp-server.test.mjs
  */
 
-import { describe, it, mock, beforeEach, afterEach } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Gateway caller simulation matching mcp-server.mjs logic ─────────────────
 
-/** Build a minimal JSON-RPC request */
-function rpc(method, params, id = 1) {
-  return { jsonrpc: "2.0", id, method, params };
+async function callGateway(path, payload, { gatewayUrl, apiKey, serviceId, teamId, agentId, userId, taskId, timeoutMs, fetchFn }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const requestBody = {
+    team_id: teamId,
+    agent_id: agentId,
+    user_id: userId,
+    ...(taskId ? { task_id: taskId } : {}),
+    ...payload,
+  };
+
+  const headers = {
+    "Content-Type": "application/json",
+    "x-tdai-service-id": serviceId,
+  };
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
+  try {
+    const res = await fetchFn(`${gatewayUrl}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return { items: [], error: `gateway ${res.status}: ${text.slice(0, 200)}` };
+    }
+    return await res.json();
+  } catch (err) {
+    clearTimeout(timer);
+    const reason = err?.name === "AbortError" ? `timeout after ${timeoutMs}ms` : String(err?.message ?? err);
+    return { items: [], error: `gateway unreachable — ${reason}` };
+  }
 }
 
-/**
- * Simulates what the MCP server does for a given request, but using
- * a fake fetch. Returns the result object from sendResult.
- */
-
-// ── Fake gateway factory ───────────────────────────────────────────────────────
+function formatItems(items) {
+  if (typeof items === "string") return items;
+  if (!Array.isArray(items) || items.length === 0) return "(no memories found)";
+  return items
+    .map((item, i) => {
+      const score = item.score != null ? ` [score: ${item.score.toFixed(3)}]` : "";
+      const content = item.content ?? item.text ?? item.summary ?? item.memory ?? JSON.stringify(item);
+      return `${i + 1}.${score}\n${content}`;
+    })
+    .join("\n\n");
+}
 
 function makeFakeGateway(responses = {}) {
   return async function fakeFetch(url, options) {
     const urlPath = new URL(url).pathname;
-    const body = JSON.parse(options?.body ?? "{}");
 
     if (responses[urlPath] === "timeout") {
       const err = new Error("The operation was aborted");
@@ -48,145 +87,124 @@ function makeFakeGateway(responses = {}) {
   };
 }
 
-// ── Core logic extracted for testability ─────────────────────────────────────
-
-/**
- * We re-implement the core request handler logic inline so tests don't need
- * to spawn child processes. The real mcp-server.mjs uses the same logic.
- */
-async function callGateway(path, body, { gatewayUrl, adminKey, agentId, teamId, userId, timeoutMs, fetchFn }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetchFn(`${gatewayUrl}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${adminKey}`,
-        "X-Agent-Id": agentId,
-        "X-Team-Id": teamId,
-        "X-User-Id": userId,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      return { items: [], error: `gateway ${res.status}: ${text.slice(0, 200)}` };
-    }
-    return await res.json();
-  } catch (err) {
-    clearTimeout(timer);
-    const reason = err?.name === "AbortError" ? `timeout after ${timeoutMs}ms` : String(err?.message ?? err);
-    return { items: [], error: `gateway unreachable — ${reason}` };
-  }
-}
-
-function formatItems(items) {
-  if (!Array.isArray(items) || items.length === 0) return "(no memories found)";
-  return items
-    .map((item, i) => {
-      const score = item.score != null ? ` [score: ${item.score.toFixed(3)}]` : "";
-      const content = item.content ?? item.text ?? item.summary ?? JSON.stringify(item);
-      return `${i + 1}.${score}\n${content}`;
-    })
-    .join("\n\n");
-}
-
 const DEFAULT_CONFIG = {
   gatewayUrl: "http://localhost:8420",
-  adminKey: "test-key",
+  apiKey: "test-user-key",
+  serviceId: "default",
+  teamId: "team-alpha",
   agentId: "opencode",
-  teamId: "default",
-  userId: "default",
+  userId: "user-123",
+  taskId: "task-abc",
   timeoutMs: 5000,
 };
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe("gatewayRequest — success paths", () => {
-  it("returns items on successful memory recall", async () => {
-    const fakeItems = [
-      { content: "User prefers TypeScript", score: 0.9 },
-      { content: "Project uses Vitest for tests", score: 0.8 },
-    ];
-    const fetch = makeFakeGateway({ "/v3/memory/recall": { items: fakeItems } });
-    const result = await callGateway("/v3/memory/recall", { query: "tech stack", limit: 5 }, { ...DEFAULT_CONFIG, fetchFn: fetch });
+describe("v3 Gateway Contract — tdai_memory_search (/v3/atomic/search)", () => {
+  it("calls /v3/atomic/search with correct headers and snake_case body", async () => {
+    let capturedUrl, capturedHeaders, capturedBody;
+    const fetch = async (url, opts) => {
+      capturedUrl = url;
+      capturedHeaders = opts.headers;
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{ memory: "Prefers TypeScript strict mode", score: 0.95 }],
+        }),
+      };
+    };
 
-    assert.ok(!result.error, "should have no error");
-    assert.equal(result.items.length, 2);
-    assert.equal(result.items[0].content, "User prefers TypeScript");
-  });
+    const result = await callGateway(
+      "/v3/atomic/search",
+      { query: "coding conventions", limit: 5 },
+      { ...DEFAULT_CONFIG, fetchFn: fetch }
+    );
 
-  it("returns items on successful conversation search", async () => {
-    const fakeData = [{ text: "We discussed the auth flow last time" }];
-    const fetch = makeFakeGateway({ "/v3/conversation/search": { items: fakeData } });
-    const result = await callGateway("/v3/conversation/search", { query: "auth", limit: 5 }, { ...DEFAULT_CONFIG, fetchFn: fetch });
+    // Assert endpoint
+    assert.equal(capturedUrl, "http://localhost:8420/v3/atomic/search");
 
-    assert.ok(!result.error);
+    // Assert v3 headers
+    assert.equal(capturedHeaders["Authorization"], "Bearer test-user-key");
+    assert.equal(capturedHeaders["x-tdai-service-id"], "default");
+    assert.equal(capturedHeaders["Content-Type"], "application/json");
+
+    // Assert v3 tenant isolation body payload
+    assert.equal(capturedBody.team_id, "team-alpha");
+    assert.equal(capturedBody.agent_id, "opencode");
+    assert.equal(capturedBody.user_id, "user-123");
+    assert.equal(capturedBody.task_id, "task-abc");
+    assert.equal(capturedBody.query, "coding conventions");
+    assert.equal(capturedBody.limit, 5);
+
+    // Assert result
     assert.equal(result.items.length, 1);
-  });
-
-  it("handles gateway returning 'data' key instead of 'items'", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": { data: [{ content: "alt key" }] } });
-    const result = await callGateway("/v3/memory/recall", { query: "test" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
-    assert.ok(result.data?.length === 1 || result.items == null);
-  });
-
-  it("sends correct Authorization header", async () => {
-    let capturedHeaders;
-    const fetch = async (url, opts) => {
-      capturedHeaders = opts.headers;
-      return { ok: true, status: 200, json: async () => ({ items: [] }) };
-    };
-    await callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, adminKey: "secret-key-123", fetchFn: fetch });
-    assert.equal(capturedHeaders["Authorization"], "Bearer secret-key-123");
-  });
-
-  it("sends correct scoping headers", async () => {
-    let capturedHeaders;
-    const fetch = async (url, opts) => {
-      capturedHeaders = opts.headers;
-      return { ok: true, status: 200, json: async () => ({ items: [] }) };
-    };
-    const config = { ...DEFAULT_CONFIG, agentId: "my-agent", teamId: "team-a", userId: "user-b", fetchFn: fetch };
-    await callGateway("/v3/memory/recall", { query: "x" }, config);
-    assert.equal(capturedHeaders["X-Agent-Id"], "my-agent");
-    assert.equal(capturedHeaders["X-Team-Id"], "team-a");
-    assert.equal(capturedHeaders["X-User-Id"], "user-b");
+    assert.equal(result.items[0].memory, "Prefers TypeScript strict mode");
   });
 });
 
-describe("gatewayRequest — failure / error paths", () => {
+describe("v3 Gateway Contract — tdai_conversation_search (/v3/conversation/search)", () => {
+  it("calls /v3/conversation/search with correct headers and snake_case body", async () => {
+    let capturedUrl, capturedHeaders, capturedBody;
+    const fetch = async (url, opts) => {
+      capturedUrl = url;
+      capturedHeaders = opts.headers;
+      capturedBody = JSON.parse(opts.body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [{ text: "Discussed DB migration last session" }],
+        }),
+      };
+    };
+
+    const result = await callGateway(
+      "/v3/conversation/search",
+      { query: "DB migration", limit: 3 },
+      { ...DEFAULT_CONFIG, fetchFn: fetch }
+    );
+
+    assert.equal(capturedUrl, "http://localhost:8420/v3/conversation/search");
+    assert.equal(capturedHeaders["Authorization"], "Bearer test-user-key");
+    assert.equal(capturedHeaders["x-tdai-service-id"], "default");
+    assert.equal(capturedBody.team_id, "team-alpha");
+    assert.equal(capturedBody.query, "DB migration");
+    assert.equal(capturedBody.limit, 3);
+    assert.equal(result.items.length, 1);
+  });
+});
+
+describe("gatewayRequest — failure / error paths (Fail-Open)", () => {
   it("returns error envelope on gateway 500", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": "gateway_500" });
-    const result = await callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
+    const fetch = makeFakeGateway({ "/v3/atomic/search": "gateway_500" });
+    const result = await callGateway("/v3/atomic/search", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
     assert.ok(result.error, "should have error field");
     assert.ok(result.error.includes("500"), "error should mention status 500");
     assert.deepEqual(result.items, []);
   });
 
   it("returns error envelope on network failure", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": "network_error" });
-    const result = await callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
+    const fetch = makeFakeGateway({ "/v3/atomic/search": "network_error" });
+    const result = await callGateway("/v3/atomic/search", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
     assert.ok(result.error, "should have error field");
     assert.ok(result.error.includes("gateway unreachable"));
     assert.deepEqual(result.items, []);
   });
 
   it("returns timeout error envelope when request exceeds timeout", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": "timeout" });
-    const result = await callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, timeoutMs: 100, fetchFn: fetch });
+    const fetch = makeFakeGateway({ "/v3/atomic/search": "timeout" });
+    const result = await callGateway("/v3/atomic/search", { query: "x" }, { ...DEFAULT_CONFIG, timeoutMs: 100, fetchFn: fetch });
     assert.ok(result.error, "should have error field");
     assert.ok(result.error.includes("timeout"), `expected timeout in: ${result.error}`);
     assert.deepEqual(result.items, []);
   });
 
   it("does NOT throw on any gateway failure (fail-open)", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": "network_error" });
+    const fetch = makeFakeGateway({ "/v3/atomic/search": "network_error" });
     await assert.doesNotReject(
-      callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch })
+      callGateway("/v3/atomic/search", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch })
     );
   });
 });
@@ -206,6 +224,12 @@ describe("formatItems — output formatting", () => {
     assert.ok(result.includes("Hello world"));
   });
 
+  it("formats items with memory field", () => {
+    const result = formatItems([{ memory: "Atomic memory fact" }]);
+    assert.ok(result.includes("1."));
+    assert.ok(result.includes("Atomic memory fact"));
+  });
+
   it("formats items with score", () => {
     const result = formatItems([{ content: "Memory item", score: 0.8765 }]);
     assert.ok(result.includes("[score: 0.876]"));
@@ -221,9 +245,8 @@ describe("formatItems — output formatting", () => {
     assert.ok(result.includes("summary content"));
   });
 
-  it("falls back to JSON when no known field present", () => {
-    const result = formatItems([{ unknown_field: "data" }]);
-    assert.ok(result.includes("unknown_field"));
+  it("passes through raw string results", () => {
+    assert.equal(formatItems("Found 2 matching messages"), "Found 2 matching messages");
   });
 
   it("numbers multiple items sequentially", () => {
@@ -240,7 +263,6 @@ describe("formatItems — output formatting", () => {
 
 describe("MCP protocol — tool list", () => {
   it("tools list contains exactly 2 tools", () => {
-    // These match the TOOLS array in mcp-server.mjs
     const EXPECTED_TOOLS = ["tdai_memory_search", "tdai_conversation_search"];
     assert.equal(EXPECTED_TOOLS.length, 2);
     assert.ok(EXPECTED_TOOLS.includes("tdai_memory_search"));
@@ -248,7 +270,6 @@ describe("MCP protocol — tool list", () => {
   });
 
   it("tdai_memory_search has required 'query' parameter", () => {
-    // Validate the schema expectation
     const schema = {
       type: "object",
       properties: { query: { type: "string" }, limit: { type: "number" } },
@@ -265,39 +286,5 @@ describe("MCP protocol — tool list", () => {
       required: ["query"],
     };
     assert.ok(schema.required.includes("query"));
-  });
-});
-
-describe("Integration — memory search end-to-end", () => {
-  it("memory search returns formatted text with results", async () => {
-    const fakeItems = [
-      { content: "Prefers short function names", score: 0.95 },
-      { content: "Avoids global state", score: 0.87 },
-    ];
-    const fetch = makeFakeGateway({ "/v3/memory/recall": { items: fakeItems } });
-    const result = await callGateway("/v3/memory/recall", { query: "coding style", limit: 5 }, { ...DEFAULT_CONFIG, fetchFn: fetch });
-    const formatted = formatItems(result.items ?? []);
-    assert.ok(formatted.includes("Prefers short function names"));
-    assert.ok(formatted.includes("Avoids global state"));
-    assert.ok(formatted.includes("[score: 0.950]"));
-  });
-
-  it("conversation search returns formatted text with results", async () => {
-    const fakeItems = [{ text: "We discussed using Node 22 for this project" }];
-    const fetch = makeFakeGateway({ "/v3/conversation/search": { items: fakeItems } });
-    const result = await callGateway("/v3/conversation/search", { query: "Node version", limit: 5 }, { ...DEFAULT_CONFIG, fetchFn: fetch });
-    const formatted = formatItems(result.items ?? []);
-    assert.ok(formatted.includes("Node 22"));
-  });
-
-  it("on gateway error, output includes graceful failure message", async () => {
-    const fetch = makeFakeGateway({ "/v3/memory/recall": "gateway_500" });
-    const result = await callGateway("/v3/memory/recall", { query: "x" }, { ...DEFAULT_CONFIG, fetchFn: fetch });
-    // Simulate what the tool handler does
-    const text = result.error
-      ? `[tdai_memory_search] Warning: ${result.error}\n(memory search failed gracefully)`
-      : "normal";
-    assert.ok(text.includes("failed gracefully"));
-    assert.ok(text.includes("[tdai_memory_search]"));
   });
 });

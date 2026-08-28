@@ -1,11 +1,11 @@
 ﻿# TencentDB Agent Memory — OpenCode Adapter
 
-This adapter integrates [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) into [OpenCode](https://opencode.ai), giving the OpenCode coding agent persistent long-term memory across sessions.
+This adapter integrates [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory) into [OpenCode](https://opencode.ai), exposing explicit memory recall tools to the OpenCode coding agent via the Model Context Protocol (MCP).
 
-Once installed, OpenCode will automatically:
-- **Recall** relevant past experiences before each session
-- **Capture** conversations and distill them into structured memory (L0 → L1 → L2 → L3)
-- **Expose** two read-only search tools: `tdai_memory_search` and `tdai_conversation_search`
+### Scope & Capabilities
+
+- **Explicit Recall & Search:** Exposes `tdai_memory_search` (atomic memory search via `/v3/atomic/search`) and `tdai_conversation_search` (raw dialogue search via `/v3/conversation/search`).
+- **No Background Capture:** This MCP adapter is an on-demand search surface. It does **not** automatically hook OpenCode `session.idle` events to capture transcripts in the background, nor does it perform automatic system prompt injection.
 
 ---
 
@@ -37,14 +37,18 @@ Add the TencentDB memory MCP server to your OpenCode configuration (`~/.config/o
       "args": ["<path-to-this-adapter>/mcp-server.mjs"],
       "env": {
         "TDAI_GATEWAY_URL": "http://localhost:8420",
-        "TDAI_ADMIN_KEY": "your-admin-key"
+        "TDAI_MEMORY_API_KEY": "your-user-key",
+        "TDAI_MEMORY_SERVICE_ID": "default",
+        "TDAI_TEAM_ID": "default",
+        "TDAI_AGENT_ID": "opencode",
+        "TDAI_USER_ID": "default"
       }
     }
   }
 }
 ```
 
-Replace `<path-to-this-adapter>` with the absolute path to this directory, and `your-admin-key` with your gateway admin key.
+Replace `<path-to-this-adapter>` with the absolute path to this directory, and `your-user-key` with your user/business key.
 
 ### Step 2 — Add memory instructions via OpenCode Rules
 
@@ -53,9 +57,9 @@ Create or append to `AGENTS.md` in your project root (or `~/.config/opencode/AGE
 ```markdown
 ## Memory Instructions
 
-You have access to two memory tools:
-- `tdai_memory_search`: Search long-term memory for relevant facts, preferences, or context
-- `tdai_conversation_search`: Search raw past conversation history
+You have access to two TencentDB memory tools:
+- `tdai_memory_search`: Search long-term atomic memory (L1/L2) for relevant facts, conventions, or past decisions
+- `tdai_conversation_search`: Search raw past conversation history (L0)
 
 Before starting any task, call `tdai_memory_search` with the task description to recall relevant context.
 ```
@@ -68,17 +72,17 @@ Start OpenCode and run `/tools` — you should see `tdai_memory_search` and `tda
 
 ## How It Works
 
-The adapter is a thin MCP stdio server that proxies tool calls to the TencentDB Agent Memory gateway HTTP API. All memory extraction and storage (L0→L3 pipeline) is handled by the gateway.
+The adapter is a thin MCP stdio server that proxies tool calls to the TencentDB Agent Memory v3 Gateway HTTP API with tenant isolation parameters.
 
 ```
 OpenCode session
   |
   +-- [tool call] tdai_memory_search("task description")
-  |     --> GET /v3/memory/recall { query, limit }
-  |     <-- returns ranked memory snippets
+  |     --> POST /v3/atomic/search { team_id, agent_id, user_id, query, limit }
+  |     <-- returns ranked atomic memory records
   |
   +-- [tool call] tdai_conversation_search("keyword")
-        --> GET /v3/conversation/search { query, limit }
+        --> POST /v3/conversation/search { team_id, agent_id, user_id, query, limit }
         <-- returns matching conversation excerpts
 ```
 
@@ -89,10 +93,12 @@ OpenCode session
 | Environment Variable | Default | Description |
 |---|---|---|
 | `TDAI_GATEWAY_URL` | `http://localhost:8420` | Memory gateway base URL |
-| `TDAI_ADMIN_KEY` | _(required)_ | Gateway admin API key |
+| `TDAI_MEMORY_API_KEY` | `""` | User or business API key (sent via `Authorization: Bearer <key>`) |
+| `TDAI_MEMORY_SERVICE_ID` | `default` | Service / space identifier (sent via `x-tdai-service-id`) |
 | `TDAI_AGENT_ID` | `opencode` | Agent identifier for memory scoping |
 | `TDAI_TEAM_ID` | `default` | Team identifier for memory scoping |
 | `TDAI_USER_ID` | `default` | User identifier for memory scoping |
+| `TDAI_TASK_ID` | `""` | Optional task identifier for memory scoping |
 | `TDAI_RECALL_LIMIT` | `5` | Max memory items to recall per search |
 | `TDAI_TIMEOUT_MS` | `5000` | HTTP request timeout in milliseconds |
 
@@ -104,7 +110,7 @@ OpenCode session
 node --test adapters/opencode/tests/mcp-server.test.mjs
 ```
 
-Tests run against a fake gateway — no external services required.
+Tests run against a mock gateway verifying the v3 contract — no external services required.
 
 ---
 
