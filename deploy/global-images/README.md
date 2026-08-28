@@ -90,9 +90,9 @@ cd TencentDB-Agent-Memory/deploy/global-images
 
 | 变量 | 说明 | 示例 |
 |---|---|---|
-| `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1` |
+| `MEMORY_LLM_BASE_URL` | OpenAI 兼容 base URL | `https://api.deepseek.com/v1`（也可用 OrcaRouter `https://api.orcarouter.ai/v1`） |
 | `MEMORY_LLM_API_KEY` | 上述端点的 API Key | `sk-xxxxxxxx` |
-| `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat` |
+| `MEMORY_LLM_MODEL` | 模型 ID | `deepseek-chat`（OrcaRouter 用 `vendor/model`，如 `anthropic/claude-opus-4.8`） |
 | `MEMORY_LLM_PROTOCOL` | `openai` 或 `anthropic`，默认 `openai` | `openai` |
 
 ### proxy 组（proxy 使用）
@@ -101,9 +101,9 @@ proxy 接到用户请求后转发到这组端点。
 
 | 变量 | 说明 | 示例 |
 |---|---|---|
-| `PROXY_UPSTREAM_URL` | 转发目标 base URL | `https://api.deepseek.com/v1` |
-| `PROXY_UPSTREAM_API_KEY` | 转发用 API Key | `sk-xxxxxxxx` |
-| `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-chat` |
+| `PROXY_UPSTREAM_URL` | 转发目标 base URL | `https://api.deepseek.com/v1`（也可用 OrcaRouter `https://api.orcarouter.ai/v1`） |
+| `PROXY_UPSTREAM_API_KEY` | 转发用 API Key | `sk-xxxxxxxx`（OrcaRouter key 以 `sk-orca-` 开头） |
+| `PROXY_UPSTREAM_MODEL` | 面向用户的模型 ID | `deepseek-chat`（OrcaRouter 用 `vendor/model`，如 `anthropic/claude-opus-4.8`） |
 
 > 两组可以填相同值（都指向同一个 LLM），也可以完全不同：例如 memory 组用便宜模型做 embedding，proxy 组用强模型做主对话。
 
