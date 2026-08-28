@@ -54,6 +54,8 @@ interface OpikTraceInput {
   startTime: string; // ISO 8601
   input: Record<string, unknown>;
   tags?: string[];
+  /** 结构化上下文（agent / session / 注入统计 / 工具交互等），原样写入 trace.metadata。 */
+  metadata?: Record<string, unknown>;
   /** Fork to a second project (e.g. "request_log"). Uses a separate trace ID. */
   forkProjectName?: string;
   /** Metadata attached to forked trace. */
@@ -79,6 +81,8 @@ interface OpikLlmSpan {
   model: string;
   usage: Record<string, unknown>;
   tags?: string[];            // optional tags for categorisation
+  /** 结构化上下文，原样写入 span.metadata。 */
+  metadata?: Record<string, unknown>;
   /** Fork to a second project (e.g. "request_log"). Requires forkTraceId. */
   forkProjectName?: string;
   /** Independent trace ID for the forked span (different from main traceId). */
@@ -119,7 +123,7 @@ export function opikCreateTrace(
   if (!config.opik.enabled || !config.opik.url) return "";
 
   const baseUrl = config.opik.url.replace(/\/$/, "");
-  const url = `${baseUrl}/api/v1/private/traces`;
+  const url = `${baseUrl}/v1/private/traces`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
 
@@ -132,6 +136,9 @@ export function opikCreateTrace(
   };
   if (input.tags && input.tags.length > 0) {
     traceBody.tags = input.tags;
+  }
+  if (input.metadata && Object.keys(input.metadata).length > 0) {
+    traceBody.metadata = input.metadata;
   }
 
   fireCreateTrace(url, headers, traceBody);
@@ -170,7 +177,7 @@ export function opikUpdateTrace(
 ): void {
   if (!config.opik.enabled || !config.opik.url) return;
 
-  const url = `${config.opik.url.replace(/\/$/, "")}/api/v1/private/traces/${update.traceId}`;
+  const url = `${config.opik.url.replace(/\/$/, "")}/v1/private/traces/${update.traceId}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
 
@@ -225,7 +232,7 @@ export function opikCreateLlmSpan(
   if (!config.opik.enabled || !config.opik.url) return;
 
   const baseUrl = config.opik.url.replace(/\/$/, "");
-  const url = `${baseUrl}/api/v1/private/spans`;
+  const url = `${baseUrl}/v1/private/spans`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (config.opik.apiKey) headers["Authorization"] = `Bearer ${config.opik.apiKey}`;
 
@@ -260,6 +267,9 @@ export function opikCreateLlmSpan(
   };
   if (span.tags && span.tags.length > 0) {
     body.tags = span.tags;
+  }
+  if (span.metadata && Object.keys(span.metadata).length > 0) {
+    body.metadata = span.metadata;
   }
 
   fireCreateLlmSpan(url, headers, body);

@@ -1,5 +1,6 @@
 import type { TdaiClient } from "./client.js";
 import type { TdaiIdentity, TdaiMessage } from "./types.js";
+import { auditMemoryAccess } from "../audit.js";
 import { extractUserQueryText } from "../common/user-query-extractor.js";
 
 /**
@@ -31,6 +32,15 @@ export function extractLatestUserMessage(messages: unknown[]): TdaiMessage | nul
 
 export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity | null, userMessage: TdaiMessage | null, assistantContent: string | null | undefined): Promise<void> {
   if (!identity || !userMessage) return;
+  auditMemoryAccess({
+    actorUser: identity.userId,
+    actorAgent: identity.agentId,
+    action: "write",
+    target: `${identity.teamId}:${identity.agentId}${identity.taskId ? `:${identity.taskId}` : ""}${identity.threadId ? `:${identity.threadId}` : ""}`,
+    result: "l0",
+    sessionKey: identity.sessionId,
+    scope: identity.taskId ? "normal" : "no-task",
+  });
   const messages: TdaiMessage[] = [userMessage];
   if (assistantContent?.trim()) {
     messages.push({ role: "assistant", content: assistantContent });
