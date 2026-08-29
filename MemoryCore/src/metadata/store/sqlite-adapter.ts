@@ -1429,7 +1429,28 @@ export class SqliteMetadataStore implements IMetadataStore {
     );
   }
 
-  listAgentFixedAssets(agentId: string, pagination?: PaginationParams | null): ListPage<FixedAssetBindingEntity> {
+  listAgentFixedAssets(
+    agentId: string,
+    pagination?: PaginationParams | null,
+    filter?: { assetTypes?: readonly string[] },
+  ): ListPage<FixedAssetBindingEntity> {
+    const types = filter?.assetTypes ?? [];
+    if (types.length > 0) {
+      // JOIN meta_assets 做类型过滤，避免"分页在前、类型过滤在后"截断
+      const placeholders = types.map(() => "?").join(",");
+      const base = `FROM meta_agent_fixed_assets b
+        INNER JOIN meta_assets a ON a.asset_id = b.asset_id
+        WHERE b.agent_id = ? AND a.asset_type IN (${placeholders})`;
+      const params: SQLInputValue[] = [agentId, ...types];
+      return this.selectList(
+        `SELECT COUNT(*) AS c ${base}`,
+        params,
+        `SELECT b.* ${base} ORDER BY b.priority DESC, b.created_at DESC`,
+        params,
+        pagination,
+        (r) => r as unknown as FixedAssetBindingEntity,
+      );
+    }
     const base = "FROM meta_agent_fixed_assets WHERE agent_id = ?";
     return this.selectList(
       `SELECT COUNT(*) AS c ${base}`,

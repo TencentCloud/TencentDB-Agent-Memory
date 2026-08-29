@@ -121,6 +121,60 @@ redis:
   db: 0                    # Redis 数据库编号
   ttlSeconds: 1800         # 注入与 Skill 缓存 TTL（秒），默认 1800（30 分钟）
   # injectionTtlSeconds: 3600  # 注入层 hook 缓存 TTL（秒），默认复用 ttlSeconds
+  # CostGuard 会话态（cg:sess:* / arch: / judge-*）也走这份 Redis。
+  # 多实例部署必须开启，否则 task archive / judge latch 无法跨进程共享。
+
+
+# ── Cost Guard（可选私有路由扩展；未初始化 submodule 时整段无感透传） ────────
+# 宿主只解析 enabled / markerOptIn / agentProfile / anthropicUpstream。
+# 其余字段原样放进 options，交给 @context-proxy/cost-guard。
+#
+# 当前扩展会用到的 options（缺省时的行为）：
+#   taskArchiveEnabled  省略 = true。每个新 user turn 多一次同步 gate LLM。
+#   judge.enabled       省略 = false。开启后需配 baseUrl；宿主负责 HTTP 调用。
+#   compress* / gate*   省略则回退到 analyze 模型。
+#   requestPrepare      CCR 压缩门面，与路由开关相互独立。
+costGuard:
+  enabled: false
+  markerOptIn: false       # true = 仅 /{agent}/{spaceId}/cost-guard/... 走路由
+  agentProfile: auto
+  # anthropicUpstream:
+  #   url: "https://anthropic-upstream.example.com"
+  # analyzeModel: "deepseek-v4-flash"
+  # analyzeUrl: "https://analyzer.example.com/v1/chat/completions"
+  # analyzeApiKey: ""
+  # analyzeProtocol: openai
+  # analyzeTimeout: 30000
+  # cheapModel: "deepseek-v4-pro"
+  # cheapUrl: ""
+  # cheapApiKey: ""
+  # cheapProtocol: openai
+  # toolLoopDegradeStrategy: none
+  # agents:                  # 按 URL 第一段 agentName 覆盖 cheap 配置
+  #   claude-code:
+  #     cheapModel: "claude-haiku"
+  #     cheapUrl: "https://cheap.example.com"
+  # taskArchiveEnabled: true
+  # compressModel: "deepseek-v4-flash"  # selector + merge；省略回退 analyze*
+  # compressUrl: "https://analyzer.example.com/v1/chat/completions"
+  # compressApiKey: ""
+  # compressProtocol: openai
+  # compressTimeout: 30000
+  # gateModel: "deepseek-v4-flash"      # 同步关键路径；省略回退 compress*
+  # gateUrl: "https://analyzer.example.com/v1/chat/completions"
+  # gateTimeout: 8000
+  # judge:
+  #   enabled: false
+  #   baseUrl: "http://judge.example.com"
+  #   userTurnTimeoutMs: 25000
+  #   agentTurnTimeoutMs: 10000
+  #   everyNToolTurns: 5
+  #   latchTtlSeconds: 0
+  #   latchMaxTurns: 0
+  # controlPlane:            # 此 block 存在即启用；关闭时请整段省略
+  #   port: 18097
+  # requestPrepare:
+  #   enabled: false
 
 
 # ── Memory 实例 × 实际模型 Input TPM / QPM 限流 ──────────────────────────────
@@ -446,21 +500,22 @@ injection:
   #   /memory-bridge/**  → proxy /memory-bridge/**
   externalGatewayUrl: "https://gateway.example.com"
 
-  # ── 资产反思模式（内部效果评估用；默认关闭） ─────────────────────────────
-  # 结构完全对齐 costGuard.markerOptIn：
-  #   markerOptIn=false（默认）：AssetReflectionInjector 不 register，零性能开销。
-  #                              外部用户请求 prompt 完全不变。
-  #   markerOptIn=true：AssetReflectionInjector 会 register，但只有请求 URL 带
-  #                     `/analyse` marker（结构同 `/cost-guard`：夹在
-  #                     `/{agent}/{spaceId}` 之后，如
-  #                     `/codebuddy/default/analyse/v1/messages`）才 emit
-  #                     `<asset_reflection>` 块到 system prompt 末尾，指导
-  #                     agent 点评「本轮调用过哪些云端资产工具、各自起没起到
-  #                     作用」。
+  # ── 资产反思模式（内部效果评估用；默认开启） ─────────────────────────────
+  # 结构与 costGuard.markerOptIn 姿势对齐,但 default 相反:
+  #   markerOptIn=true（默认）：AssetReflectionInjector 会 register。marker 仍是
+  #                             opt-in——只有请求 URL 带 `/analyse` 段（结构同
+  #                             `/cost-guard`:夹在 `/{agent}/{spaceId}` 之后,如
+  #                             `/codebuddy/default/analyse/v1/messages`）才 emit
+  #                             `<asset_reflection>` 块到 system prompt 末尾,指导
+  #                             agent 点评「本轮调用过哪些云端资产工具、各自
+  #                             起没起到作用」。不带 marker 的正常请求完全无感。
+  #   markerOptIn=false：AssetReflectionInjector 不 register,且顶部 gate 把任何
+  #                       带 `/analyse/` 段的请求直接 404,零性能开销。适合确认
+  #                       不需要资产反思能力的部署显式关掉。
   # tag 列表由本节点上实际 register 的资产 injector 决定（skill / tdai-memory /
-  # knowledge），一个都没启用时 injector 恒不 emit。
+  # knowledge）,一个都没启用时 injector 恒不 emit。
   assetReflection:
-    markerOptIn: false
+    markerOptIn: true
 
 
 # ── 提取（写侧：把每轮对话/工具调用回流到内核） ─────────────────────────────
@@ -641,7 +696,7 @@ memCommand:
 # 关闭时所有请求视为 main，走完全等价老链路。
 # 详见 docs/design/2026-07-30-cc-request-routing-plan.md
 ccRequestRouting:
-  enabled: false                   # 默认关闭。启用前建议先跑一段"分类识别但不改路径"的观察期。
+  enabled: true                    # 默认开启。关闭时所有请求强制 main，title-gen 并发会撞 session-init state 导致 bypass。
 
 
 # ── Per-Agent 上游路由 ─────────────────────────────────────────────────────

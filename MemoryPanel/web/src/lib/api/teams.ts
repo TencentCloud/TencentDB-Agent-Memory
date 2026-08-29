@@ -32,8 +32,13 @@ export const teamsApi = {
   update: (teamId: string, data: { name?: string; description?: string }) =>
     metaPost<Team>('team/update', { team_id: teamId, ...data }),
 
-  /** 删除 team（meta team/delete） */
-  delete: (teamId: string) => metaPost<{ ok: boolean }>('team/delete', { team_id: teamId }),
+  /**
+   * 删除 team（meta team/delete）。
+   * 注意：后端 schema 要求 `team_ids` 数组（一次可删多个），传单数 `team_id`
+   * 会被 zod 静默 strip 后因缺 `team_ids` 校验失败 → 400。删除为级联操作，
+   * 会一并删除该 team 的成员、agent、task 与全部资产。
+   */
+  delete: (teamId: string) => metaPost<{ ok: boolean }>('team/delete', { team_ids: [teamId] }),
 };
 
 export const membersApi = {

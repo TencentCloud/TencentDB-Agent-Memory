@@ -63,6 +63,7 @@ trap cleanup INT TERM EXIT
 export API_PREFIX="${API_PREFIX:-/v3}"
 export KNOWLEDGE_DATA_DIR="${KNOWLEDGE_DATA_DIR:-/data/knowledge}"
 export KNOWLEDGE_DB_PATH="${KNOWLEDGE_DB_PATH:-/data/knowledge/knowledge.db}"
+export TDAI_AGENT_TEMPLATE_DIR="${TDAI_AGENT_TEMPLATE_DIR:-/data/knowledge/agent-templates}"
 export KNOWLEDGE_PUBLIC_BASE_URL="${KS_PUBLIC_URL}"
 export TMC_CALLBACK_URL="${TMC_CALLBACK_URL:-http://127.0.0.1:${PANEL_PORT}}"
 

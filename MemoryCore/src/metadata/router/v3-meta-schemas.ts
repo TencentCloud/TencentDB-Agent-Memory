@@ -294,6 +294,13 @@ export const fixedAssetListWithDetailSchema = z.object({
   agent_id: nonEmpty,
   apply_visibility_filter: z.boolean().optional(),
   touch_usage: z.boolean().optional(),
+  /**
+   * 可选类型过滤：只返回 asset_type 在该列表中的绑定。
+   * 传空数组或省略 = 不过滤（返回全部类型）。
+   * 用于 caller 明确只需要某几类资产（如 proxy knowledge-tools-injector
+   * 只需 llm_wiki + code_graph），避免在混合列表分页外的类型被截断。
+   */
+  asset_types: z.array(assetType).optional(),
 }).merge(paginationInputSchema);
 
 /** agent_ids 去重；1–100。 */

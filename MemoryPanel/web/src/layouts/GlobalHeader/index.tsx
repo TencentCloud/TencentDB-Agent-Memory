@@ -8,7 +8,6 @@ import { useState } from 'react';
 import {
   Avatar,
   Button,
-  Card,
   Copy,
   Dropdown,
   Input,
@@ -21,6 +20,7 @@ import {
 } from 'tea-component';
 import { SettingIcon } from 'tea-icons-react';
 import { useTranslation } from 'react-i18next';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { type TeamRole } from '@/services/useCurrentRole';
 import { TeamSwitcher } from './TeamSwitcher';
@@ -48,6 +48,8 @@ export function GlobalHeader({
   onLogout: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -68,6 +70,15 @@ export function GlobalHeader({
         <span className="_memory-global-header-sync-dot" />
         {t('header.sync')}
       </span> */}
+
+        {/* 使用说明：进入独立引导页；当前在该页时展示激活态 */}
+        <button
+          type="button"
+          className={`_memory-global-header-guide-btn${location.pathname === '/guide' ? ' is-active' : ''}`}
+          onClick={() => navigate('/guide')}
+        >
+          {t('header.guide')}
+        </button>
 
         <LanguageSwitcher />
 
@@ -210,7 +221,7 @@ function ProfileModal({
           <Text theme="label" parent="div" className="_memory-profile-section-label">
             {t('header.profile.userId')}
           </Text>
-          <InputAdornment after={<Copy text={currentUserId} />}>
+          <InputAdornment after={<Copy text={currentUserId} />} className="_memory-profile-input-adornment">
             <Input value={currentUserId} readonly size="full" />
           </InputAdornment>
           <Text theme="weak" parent="div" className="_memory-profile-section-hint">
@@ -223,11 +234,7 @@ function ProfileModal({
           <Text theme="label" parent="div" className="_memory-profile-section-label">
             {t('header.profile.username')}
           </Text>
-          <Card>
-            <Card.Body>
-              <Text parent="div">{currentUser}</Text>
-            </Card.Body>
-          </Card>
+          <Input value={currentUser} readonly size="full" />
           <Text theme="weak" parent="div" className="_memory-profile-section-hint">
             {t('header.profile.usernameHint')}
           </Text>
@@ -239,14 +246,12 @@ function ProfileModal({
             <Text theme="label" parent="div" className="_memory-profile-section-label">
               {t('header.profile.instance')}
             </Text>
-            <Card>
-              <Card.Body>
-                <Justify
-                  left={<Text parent="div">{instanceName}</Text>}
-                  right={<Tag size="sm" variant="outlined">{currentUserId.split('-')[0]}</Tag>}
-                />
-              </Card.Body>
-            </Card>
+            <InputAdornment
+              after={<Tag size="sm" variant="outlined">{currentUserId.split('-')[0]}</Tag>}
+              className="_memory-profile-input-adornment"
+            >
+              <Input value={instanceName} readonly size="full" />
+            </InputAdornment>
           </div>
         )}
       </Modal.Body>

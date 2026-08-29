@@ -1,0 +1,128 @@
+/* code-sources-panel.css — Code_Graph 详情页（_codedetail-）特有样式 + 差异化覆盖。
+ *
+ * 视觉对齐 Memory 项目的 Code.css：颜色全部走 Tea Design Token（--tea-color-*），
+ * 间距/圆角/字号取设计白名单，className 统一 _codedetail- 前缀，避免与 Tea 内置
+ * 类名冲突。
+ *
+ * 列表页的页面外层 / 统计条 / 工具栏 / 骨架屏 / 卡片网格等公共结构已收敛到
+ * ResourcePage/components/asset-card.css（与 Wiki 页共用），此处仅保留
+ * Code 特有的列表差异（branch 列 / 删除按钮）与详情页样式。
+ */
+
+/* ── 列表页差异化：branch 列（纵向 stack） ── */
+._codelist-branch {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+._codelist-delete-action:not(.is-disabled),
+._codelist-delete-action:not(.is-disabled):hover {
+  color: var(--tea-color-text-error-default);
+}
+
+/* ============================================================
+   详情页（CodeDetailPanel / subView=detail）
+   ============================================================ */
+
+._codedetail-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 返回面包屑 */
+._codedetail-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+._codedetail-breadcrumb-sep {
+  color: var(--tea-color-text-disabled);
+}
+._codedetail-breadcrumb-current {
+  color: var(--tea-color-text-primary);
+  font-weight: 500;
+}
+
+._codedetail-header-body {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+._codedetail-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+._codedetail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+._codedetail-title {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+._codedetail-mono {
+  font-family: var(--font-mono);
+}
+._codedetail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+._codedetail-error {
+  margin: 0;
+}
+
+/* ── 统计（MetricsBoard 一行） ── */
+._codedetail-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+._codedetail-stats > * {
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+
+/* ── 仓库信息 ── */
+._codedetail-info-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  align-items: baseline;
+}
+
+/* ── 代码搜索 / 代码探索 ── */
+._codedetail-hint {
+  margin-bottom: 8px;
+  line-height: 18px;
+}
+._codedetail-search-row {
+  margin-bottom: 12px;
+}
+._codedetail-result-box {
+  max-height: 400px;
+  overflow: auto;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 16px;
+}

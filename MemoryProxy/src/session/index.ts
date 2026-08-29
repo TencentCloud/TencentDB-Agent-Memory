@@ -85,6 +85,11 @@ import {
   FormData as DshFormData,
   FormStage as DshFormStage,
 } from "./dsh/form.js";
+import {
+  buildFormResponse as buildOpencodeFormResponse,
+  FormData as OCFormData,
+  FormStage as OCFormStage,
+} from "./opencode/form.js";
 
 // Re-export the types under their old names for backward compat
 export type SessionRequestContext = CBSessionRequestContext & Partial<CCSessionRequestContext>;
@@ -197,6 +202,37 @@ export async function handleSessionInit(
       modelId: reqCtx.modelId,
     };
     result.response = buildDshFormResponse(dshFd);
+  }
+
+  // opencode 客户端（sst/opencode CLI，Bun 打包二进制）在 agent-loop 里维护一个
+  // 硬白名单 tools 集合：`bash, edit, glob, grep, invalid, question, read,
+  // skill, task, todowrite, webfetch, write`。任何名字不在白名单里的 tool_call
+  // 都会被客户端拒收并渲染成 `invalid [tool=xxx, error=Model tried to call
+  // unavailable tool]`（抓包 2026-08-19 实证：CB 的 `ask_followup_question`
+  // 被拒 3 次后 CB 状态机 abandon → 走 bypass）。
+  //
+  // 解决：与 workbuddy / dsh 完全对称——CB 状态机产出 formData 后**外层重渲染**，
+  // 换成 opencode 原生 `question` 工具的 tool_call SSE。stage 值直接透传，
+  // 分页字段按当前 stage 挑对应页码。
+  //
+  // 详见：session/opencode/form.ts 头部注释（schema 依据 / 三处 shape 差异）。
+  if (agentSource === "opencode" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const ocFd: OCFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as OCFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex:
+        cbFd.stage === "team" ? cbFd.teamPage
+        : cbFd.stage === "agent_select" ? cbFd.agentPage
+        : cbFd.stage === "task_select" ? cbFd.taskPage
+        : 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildOpencodeFormResponse(ocFd);
   }
 
   return result;

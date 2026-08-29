@@ -36,6 +36,11 @@ export interface LlmConfig {
   maxTokens: number;
   /** LLM request timeout in ms. Defaults to 1200000 (20min) — reasoning 模型需要更长时间。 */
   timeoutMs: number;
+  /**
+   * 是否用流式请求(streamText)调用上游。默认 false(非流式)。
+   * 个别只接受流式请求的兼容上游需置 true。per-instance binding 不覆盖此字段(部署级开关)。
+   */
+  stream?: boolean;
 }
 
 export interface ClickHouseTelemetryConfig {
@@ -164,6 +169,7 @@ export function loadConfig(): ServiceConfig {
       baseUrl: env("LLM_BASE_URL", ""),
       maxTokens: envInt("LLM_MAX_TOKENS", 32768),
       timeoutMs: envInt("LLM_TIMEOUT_MS", 1200000),
+      stream: process.env.LLM_STREAM === "true",
     },
   };
 }

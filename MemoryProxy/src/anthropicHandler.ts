@@ -28,6 +28,7 @@ import {
   resolveForwardTarget,
   resolveSessionKey,
   resolveLatestUserQuery,
+  reportAnalyzerTrace,
   type ForwardTarget,
 } from "./guard-adapter.js";
 import { hasCostGuardMarker, matchWhitelistEndpoint } from "./routes/whitelist.js";
@@ -667,11 +668,62 @@ export async function handleAnthropicMessages(
     getInjectionPipeline(config);
   }
 
+  // ── mem:session-reset pre-hook ──
+  let _isSessionResetFlow = false;
+  if (config.memCommand?.enabled && requestKind === "main") {
+    const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
+    if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
+      const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
+      const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
+      if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
+        const { getSessionStore } = await import("./session/store.js");
+        const store = getSessionStore();
+        const compositeKey = `${agentSource}:${sessionKey}`;
+        store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
+
+        // ── 强制归档旧 agent 的 skill buffer（best-effort）──
+        const oldState = store.get(compositeKey);
+        if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
+          const si = oldState.sessionInfo as Record<string, string>;
+          if (si.space_id && si.user_id && si.team_id && si.agent_id) {
+            import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
+              const client = getCoreSkillClient(config.coreSkill!);
+              client.forceArchive(
+                {
+                  space_id: si.space_id,
+                  user_id: si.user_id,
+                  team_id: si.team_id,
+                  agent_id: si.agent_id,
+                  session_id: sessionKey,
+                  task_id: si.task_id || undefined,
+                  reason: "session-reset",
+                },
+                { serviceId: si.space_id },
+              ).then((res) => {
+                console.log(`[session-reset] force-archive old buffer: status=${res.status} session=${sessionKey} agent=${si.agent_id}`);
+              }).catch((err) => {
+                console.warn(`[session-reset] force-archive failed (best-effort): ${err instanceof Error ? err.message : String(err)}`);
+              });
+            }).catch(() => {});
+          }
+        }
+
+        const resetEpoch = Date.now();
+        await store.set(compositeKey, { status: "uninitialized", keyId: sessionKey, startedAt: resetEpoch, attemptCount: 0, userId: userId || "anonymous", resetEpoch, resetFlow: true });
+        const bindingRepo = store.getBindingRepo();
+        if (bindingRepo) await bindingRepo.deleteBinding(spaceId, sessionKey).catch(() => {});
+        _isSessionResetFlow = true;
+        console.log(`[mem-command:pre] session-reset session=${sessionKey} → falling through to pop form`);
+      }
+    }
+  }
+
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
   let injectedSkipped = !conversationId;
   let sessionJustRegistered = false;
+  let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
   console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped}`);
   // CC 分流：SIDEQUERY 完全跳过 session-init（独立小请求无对话概念）。
   //          FORK 允许走 L2b recovery 复用 MAIN 已建的 session，但不进 form 交互路径
@@ -698,6 +750,7 @@ export async function handleAnthropicMessages(
       const recovered = await store.getOrRecover(compositeKey, identity, {
         metadataClient,
         messages: body.messages as Array<Record<string, unknown>> ?? [],
+        presetIdentity,
       });
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
@@ -718,6 +771,10 @@ export async function handleAnthropicMessages(
       // justRegistered=true 只是为了触发下游 prewarm，与状态机无关，那里
       // wentThroughSessionInitStateMachine=false 会自然过滤掉。
       let wentThroughSessionInitStateMachine = false;
+      // Recovery hit source 决定是否需要 prewarm（见 handler.ts 对称位置详注）。
+      const needsPrewarm =
+        recovered?.__recoverySource === "l2b" ||
+        recovered?.__recoverySource === "history-scan";
       if (recovered && isTerminalState) {
         // Recovery hit: keep original messages, only re-inject <session_context>
         // so this turn's system prompt carries agent/task context again.
@@ -743,7 +800,7 @@ export async function handleAnthropicMessages(
           agentDetail: recovered.agentDetail,
           taskDetail: recovered.taskDetail,
           bypassed: recovered.bypassed,
-          justRegistered: true, // triggers prewarm to refill hook cache
+          justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
       } else if (requestKind === "fork") {
         // FORK 借用 MAIN 已建的 session。L2b 未命中说明 MAIN 尚未完成 init —— 罕见情况，
@@ -772,7 +829,7 @@ export async function handleAnthropicMessages(
         return initResult.response;
       }
 
-      console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
+      console.log(`[injection-debug] initResult session=${sessionKey} intercepted=${initResult.intercepted} bypassed=${initResult.bypassed} justRegistered=${initResult.justRegistered} resetFlow=${initResult.resetFlow} hasSessionInfo=${!!initResult.sessionInfo} hasAgentDetail=${!!initResult.agentDetail}`);
       // sessionJustRegistered 用于 mem-command 的 checkFirst fallback（session init 最后
       // 一步"pending_task_select → initialized"那一 turn，把用户最开始的 mem: 命令补执行）。
       // **关键**：只在真正走 handleSessionInit state machine 的分支才继承 justRegistered；
@@ -783,6 +840,10 @@ export async function handleAnthropicMessages(
       if (initResult.bypassed) {
         injectedSkipped = true;
         console.log(`[session-init] session=${sessionKey} bypassed → skipping all injection`);
+        // reset 流程中用户选了"跳过" → 也需要返回确认文案，不转发 LLM
+        if (initResult.resetFlow) {
+          _resetFlowResult = { agentName: "", agentIdShort: "", teamId: "", bypassed: true };
+        }
       }
 
       if (!initResult.bypassed && initResult.sessionInfo) {
@@ -803,6 +864,29 @@ export async function handleAnthropicMessages(
         }
       }
 
+      // Prewarm 前置短路：mem-command 命中的 turn 不 forward 上游、也不消费
+      // hook-cache，若照常 prewarm 会白白多花 2-3s + 3 次网络请求。见 handler.ts
+      // 对称位置详注。fork/sidequery 不做短路（requestKind === "main" 才生效）。
+      let memCommandPending = false;
+      if (config.memCommand?.enabled && requestKind === "main") {
+        try {
+          const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
+          let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
+          if (!peek && sessionJustRegistered) {
+            peek = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
+          }
+          if (peek && isMemCommandAllowed(config.memCommand, peek.command)) {
+            memCommandPending = true;
+            console.log(`[hook-cache] prewarm skipped: mem-command pending (cmd=${peek.command}) session=${sessionKey}`);
+          }
+        } catch (err) {
+          console.warn(
+            "[mem-command] pre-prewarm peek failed (anthropic):",
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+
       // Await prewarm so the first-turn pipeline always hits the cache.
       // A fire-and-forget void() here caused the bug where the pipeline
       // ran before the cache was populated, silently injecting zero
@@ -811,22 +895,29 @@ export async function handleAnthropicMessages(
         !initResult.bypassed &&
         initResult.justRegistered &&
         initResult.sessionInfo &&
+        !memCommandPending &&
         config.injection?.enabled &&
         (config.injection.injectors?.length ?? 0) > 0
       ) {
         try {
           const mod = await import("./injection/index.js");
+          // resetFlow=true 时必须 clearBefore:session-reset 切了 agent,
+          // 旧 agent 的 skill/wiki/knowledge 缓存要先清掉再写新的,
+          // 否则残留旧 agent 的注入内容。
+          // 始终 clearBefore:首次 init 缓存为空 clear 是 no-op;
+          // reset-flow 时清旧 agent 缓存是必要的。统一语义更安全。
           await mod.prewarmFromConfig(config, {
             keyId: sessionKey,
             userId: userId || "anonymous",
             agentSource,
+            spaceId,
             sessionInfo: initResult.sessionInfo as import("./session/types.js").SessionInfo,
             agentDetail: initResult.agentDetail ?? null,
             taskDetail: initResult.taskDetail ?? null,
             assetCapabilities,
             // 透传 caller 的 sk-mem key，用于 prewarm 阶段 TDAI ACL 校验（x-tdai-user-key）
             callerUserKey: callerUserKey ?? undefined,
-          });
+          }, { clearBefore: true });
         } catch (err) {
           console.warn(
             "[hook-cache] handler prewarm error (anthropic):",
@@ -859,11 +950,54 @@ export async function handleAnthropicMessages(
       if (sessionInfo && !sessionInfo.space_id && spaceId) {
         sessionInfo.space_id = spaceId;
       }
+
+      // 记录 resetFlow 到外层供块外返回确认响应
+      if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
+        _resetFlowResult = {
+          agentName: initResult.agentDetail?.name ?? "未知",
+          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          taskName: initResult.taskDetail?.name,
+        };
+      }
     } catch (err: unknown) {
       console.error("[session-init] Error in handleSessionInit (anthropic):", err instanceof Error ? err.message : String(err));
       sessionInfo = undefined;
       injectedSkipped = true;
     }
+  }
+
+  // ── mem:session-reset 完成确认 ─────────────────────────────────────────────
+  // session-reset 的交互流程：pre-hook 改 state → form 弹出 → 用户答完 form →
+  // completeRegistration → prewarm → 到这里。此时用户的原始消息 "mem:session-reset"
+  // 还在 body.messages 里,如果不拦截会被转发到 LLM,产生不可控输出。
+  // 命令执行已经完成（新 agent 已绑定、缓存已刷新）→ 返回确认文案,不走 LLM。
+  if (_resetFlowResult) {
+    const { agentName, agentIdShort, teamId, taskName, bypassed } = _resetFlowResult;
+    const lines = bypassed
+      ? ["✅ 已跳过团队资产关联", "", "后续对话不注入任何团队资产（Skill / 记忆 / Knowledge）。"]
+      : [
+          "✅ 已重新绑定团队资产",
+          "",
+          `- **Agent**: ${agentName}${agentIdShort ? ` (${agentIdShort})` : ""}`,
+          teamId ? `- **Team**: ${teamId}` : null,
+          taskName ? `- **Task**: ${taskName}` : "- **Task**: 未关联",
+          "",
+          "后续对话将使用新 Agent 的 Skill、记忆和知识资产。",
+        ].filter(Boolean);
+    const text = (lines as string[]).join("\n");
+
+    const { buildMemResponse } = await import("./mem-command/response-builder.js");
+    const thinkingEnabled = !!(body as Record<string, unknown>).thinking;
+    console.log(`[mem-command:session-reset] completed: bypassed=${!!bypassed} agent=${agentName} (${agentIdShort})`);
+    return buildMemResponse(text, {
+      protocol: "anthropic",
+      stream: isStream,
+      requestId: `mem-reset-${Date.now()}`,
+      thinking: thinkingEnabled,
+    });
   }
 
   // ── mem: command intercept ────────────────────────────────────────────────
@@ -879,7 +1013,7 @@ export async function handleAnthropicMessages(
   // CC 分流：FORK/SIDEQUERY 是 CC 客户端内部构造的请求，last_user 不会以 `mem:` 开头，
   //          且伪造响应会破坏 fork 请求依赖 MAIN 的 cache 假设。跳过拦截。
   if (config.memCommand?.enabled && requestKind === "main") {
-    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse } = await import("./mem-command/index.js");
+    const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
     // session init 状态机在本 turn 完成终态（初始化 or bypass）时，最后一条
@@ -889,6 +1023,11 @@ export async function handleAnthropicMessages(
     if (!memCmd && sessionJustRegistered) {
       memCmd = parseMemCommand(body as Record<string, unknown>, agentSource, { checkFirst: true });
     }
+    // session-reset 已经在 pre-hook 处理过 (state 改成 uninitialized 后走 session-init 弹 form
+    // → 用户答完 form → completeRegistration 触发 _resetFlowResult return 确认响应)。
+    // checkFirst=true 会匹配到历史里的原始 "mem:session-reset"，若不跳过就会走 executeMemCommand
+    // 再执行一次 reset，把刚完成的绑定又打回 uninitialized，形成"reset → form → reset → form"死循环。
+    if (memCmd?.command === "session-reset") memCmd = null;
     if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
       // bypass 优化：会话未初始化时，命令不可用
       if (!sessionInfo || injectedSkipped) {
@@ -900,7 +1039,7 @@ export async function handleAnthropicMessages(
           requestId: `mem-cmd-${Date.now()}`,
           thinking: thinkingEnabled,
         });
-        console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} blocked: session not initialized`);
+        console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} blocked: session not initialized`);
         return errResponse;
       }
       // 检测请求是否开启了 extended thinking（Anthropic 协议）
@@ -917,6 +1056,9 @@ export async function handleAnthropicMessages(
         stream: isStream,
         args: memCmd.args,
         thinking: thinkingEnabled,
+        // task 命令族用最近对话生成草稿。Anthropic 消息 content 可能是数组，
+        // extractSimpleMessages 会合并所有 text 段落。
+        bodyMessages: extractSimpleMessages((body as Record<string, unknown>).messages),
       });
 
       // Step 20: L0 写入 — 保证对话时间线完整。
@@ -965,7 +1107,7 @@ export async function handleAnthropicMessages(
       }
 
       // Step 18: observability
-      console.log(`[mem-command] cmd=${memCmd.command} session=${sessionKey} success=${memResult.success}`);
+      console.log(`[mem-command] cmd=${memCmd.command} args="${truncateArgs(memCmd.args)}" session=${sessionKey} success=${memResult.success}`);
 
       // Step 17: Langfuse — 上报 mem-command 为一个 generation observation。
       //   mem 命令拦截在 Langfuse context 构造之前 (lf 在 L1088 才声明), 这里
@@ -1090,6 +1232,8 @@ export async function handleAnthropicMessages(
   // ── Create pipeline logger ──────────────────────────────────────────────
   const pipe = createPipeline(config, traceId, target.model);
   pipe.requestReceived(messages.length, isStream);
+  if (target.logLine) pipe.info("COST_GUARD", target.logLine);
+  if (target.logLineExtra) pipe.info("COST_GUARD_DETAIL", target.logLineExtra);
   if (ccRoutingEnabled) {
     console.log(`[cc-routing] session=${sessionKey} kind=${requestKind} msgs=${messages.length}`);
   }
@@ -1120,9 +1264,22 @@ export async function handleAnthropicMessages(
     userId: keyId,
     sessionId: sessionKey,
     tags: traceTags,
-    routeTags: [],
+    routeTags: target.tags,
     userQuery: resolveLatestUserQuery(config, lcHeaders, c.req.path, body, messages),
   };
+  if (target.analyzerTrace) {
+    reportAnalyzerTrace(config, target.analyzerTrace, {
+      traceId,
+      langfuseTraceId: lf.traceId,
+      traceName: lf.traceName,
+      traceTags: lf.tags,
+      keyId: `${keyId}:${sessionKey}`,
+      sessionKey,
+      turnSeq,
+      startTime,
+      spaceId,
+    });
+  }
 
   // ── Langfuse debug metadata (only when config.langfuse.debug=true) ────────
   // 抓 CB / CC 客户端指纹用；关闭时恒返回 {}，不污染线上 metadata。
@@ -1147,7 +1304,7 @@ export async function handleAnthropicMessages(
     name: `${target.model} / ${keyId}`,
     startTime,
     input: { messages: flattenAnthropicMessagesForOpik(messages, body.system) },
-    tags: traceTags,
+    tags: [...traceTags, ...target.tags],
     forkProjectName: "request_log",
     forkMetadata: {
       keyId,
@@ -1280,6 +1437,11 @@ export async function handleAnthropicMessages(
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
   const routedFrom = retried ? "" : target.routedFrom;
+  const { routedFrom: _ignoredRoutedFrom, ...routeLogMeta } = target.logMeta;
+  const responseLogMeta = {
+    ...routeLogMeta,
+    ...(retried ? { retrySuccess: true } : {}),
+  };
 
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
@@ -1302,6 +1464,7 @@ export async function handleAnthropicMessages(
         upstreamUrl: target.url,
         stream: true,
         usage: { error: true, status: upstreamResp.status, body: errText.slice(0, 500) },
+        ...responseLogMeta,
         routedFrom,
         spaceId,
         upstreamRequestId,
@@ -1338,7 +1501,7 @@ export async function handleAnthropicMessages(
       inputMessages: messages,
       system: body.system,
       retried,
-      logMeta: retried ? { retrySuccess: true } : {},
+      logMeta: responseLogMeta,
       routedFrom,
       pipe,
       sessionKeyForSkill: sessionKey,
@@ -1456,7 +1619,7 @@ export async function handleAnthropicMessages(
     // non-JSON response
   }
 
-  const logMeta = retried ? { retrySuccess: true } : {};
+  const logMeta = responseLogMeta;
 
   if (usage) {
     await recordInputTokenUsage({
@@ -1478,10 +1641,10 @@ export async function handleAnthropicMessages(
       stream: false,
       usage,
       extensionStats: preparedStats ?? undefined,
+      ...logMeta,
       routedFrom,
       spaceId,
       upstreamRequestId,
-      ...logMeta,
     });
 
     opikCreateLlmSpan(config, {

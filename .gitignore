@@ -132,3 +132,7 @@ coverage/
 
 # Local project docs (generated, not for VCS)
 .local-docs/
+
+# Local-only: parity snapshots & runtime configs (never commit)
+MemoryProxy/.archive-tmp/
+z_config/

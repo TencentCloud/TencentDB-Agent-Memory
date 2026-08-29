@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     rotate: { maxSizeBytes: 100 * 1024 * 1024, backupLimit: 10 },
   },
   opik: { enabled: false, url: "", apiKey: "", stripRequestLogContent: false },
-  langfuse: { enabled: false, host: "", publicKey: "", secretKey: "", debug: false },
+  langfuse: { enabled: false, host: "", publicKey: "", secretKey: "", debug: false, maxQueueSize: 8192, flushAt: 256, flushInterval: 2 },
   clickhouse: {
     enabled: false,
     url: "",
@@ -60,7 +60,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
       },
     },
     sqlite: { dbPath: "" },
-    fs: { fsRoot: "/var/lib/context-proxy/storage" },
+    fs: { fsRoot: "" },  // 空串 → ensureBindingRepoPersistent 用 ~/.memory-tencentdb/proxy-state/
   },
   costGuard: {
     enabled: false,
@@ -76,7 +76,10 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   injection: {
     enabled: false,
     injectors: ["skill", "knowledge", "tdai-memory"],
-    assetReflection: { markerOptIn: false },
+    // markerOptIn 默认 true —— 未配置时也开启 `/analyse` URL marker，让
+    // AssetReflectionInjector 被注册。marker 仍是 opt-in（不带 `/analyse/` 段
+    // 的请求完全无感），只是把「必须显式开启」的负担从运营侧移除。
+    assetReflection: { markerOptIn: true },
   },
   // Extraction (write-side) defaults to fully permissive so that a config
   // without the `extraction:` block behaves identically to the pre-gate
@@ -90,6 +93,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     maxRetries: 3,
     injectAgentContext: true,
     injectTaskContext: true,
+    defaultTaskId: "default",
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -140,7 +144,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
   systemUsers: [],
   admin: { apiKey: "" },
   memCommand: { enabled: false, allowedCommands: [] },
-  ccRequestRouting: { enabled: false },
+  ccRequestRouting: { enabled: true },
   workbuddyRequestRouting: { enabled: true },
 };
 
@@ -309,6 +313,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       publicKey: yaml.langfuse?.publicKey ?? DEFAULT_CONFIG.langfuse.publicKey,
       secretKey: yaml.langfuse?.secretKey ?? DEFAULT_CONFIG.langfuse.secretKey,
       debug: yaml.langfuse?.debug ?? DEFAULT_CONFIG.langfuse.debug,
+      maxQueueSize: yaml.langfuse?.maxQueueSize ?? DEFAULT_CONFIG.langfuse.maxQueueSize,
+      flushAt: yaml.langfuse?.flushAt ?? DEFAULT_CONFIG.langfuse.flushAt,
+      flushInterval: yaml.langfuse?.flushInterval ?? DEFAULT_CONFIG.langfuse.flushInterval,
     },
     clickhouse: {
       enabled: yaml.clickhouse?.enabled ?? DEFAULT_CONFIG.clickhouse.enabled,
@@ -398,9 +405,9 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     maxRetries: yaml.sessionInit?.maxRetries ?? DEFAULT_CONFIG.sessionInit.maxRetries,
     injectAgentContext: yaml.sessionInit?.injectAgentContext ?? DEFAULT_CONFIG.sessionInit.injectAgentContext,
     injectTaskContext: yaml.sessionInit?.injectTaskContext ?? DEFAULT_CONFIG.sessionInit.injectTaskContext,
-    defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string" && yaml.sessionInit.defaultTaskId.trim()
-      ? yaml.sessionInit.defaultTaskId.trim()
-      : undefined,
+    defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string"
+      ? (yaml.sessionInit.defaultTaskId.trim() || undefined)   // empty string → disabled
+      : DEFAULT_CONFIG.sessionInit.defaultTaskId,
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
       teamHeader: (yaml.sessionInit?.headerAutoSelect?.teamHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.teamHeader).toLowerCase(),
@@ -497,6 +504,26 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       allowedCommands: Array.isArray(yaml.memCommand?.allowedCommands)
         ? yaml.memCommand.allowedCommands.filter((c: unknown) => typeof c === "string")
         : DEFAULT_CONFIG.memCommand.allowedCommands,
+      // taskDraft 是可选段。仅当 yaml 里显式提供时才注入 —— 未配置时字段缺席，
+      // task 命令族会返回明确的 "未配置" 错误（见 task-draft-generator.ts）。
+      // 环境变量兜底：TDAI_TASK_DRAFT_API_KEY 覆盖 yaml.apiKey，方便部署时不落
+      // 秘钥到配置文件（对齐 admin.apiKey 的 env 优先做法）。
+      ...(yaml.memCommand?.taskDraft
+        ? {
+            taskDraft: {
+              enabled: Boolean(yaml.memCommand.taskDraft.enabled),
+              model: String(yaml.memCommand.taskDraft.model ?? ""),
+              url: String(yaml.memCommand.taskDraft.url ?? ""),
+              apiKey:
+                (process.env.TDAI_TASK_DRAFT_API_KEY ?? "").trim() ||
+                String(yaml.memCommand.taskDraft.apiKey ?? ""),
+              timeoutMs:
+                typeof yaml.memCommand.taskDraft.timeoutMs === "number"
+                  ? yaml.memCommand.taskDraft.timeoutMs
+                  : 20000,
+            },
+          }
+        : {}),
     },
     ccRequestRouting: {
       enabled:

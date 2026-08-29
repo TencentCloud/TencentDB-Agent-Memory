@@ -34,7 +34,7 @@ else
 fi
 
 # 已知安全的占位字符串，命中即视为非泄漏
-PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"'
+PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"|task-draft-generator'
 
 # 需要豁免的路径（示例代码 / 已知 demo 密码 / gitignored 本地文件）
 EXEMPT_PATH='node_modules/|/dist/|/build/|\.example\.|/docs/|README\.md|\.md:|\.test\.|__tests__/'

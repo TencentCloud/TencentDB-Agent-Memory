@@ -1,0 +1,1406 @@
+/**
+ * TeamManagementPanel 样式补丁 — 版式、间距，颜色统一走 Tea Design Token。
+ */
+
+._memory-team-mgmt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+._memory-panel-card {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 12px;
+}
+
+/* ===== Header ===== */
+._memory-team-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+._memory-team-header-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+._memory-team-header-avatar {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+._memory-team-header-meta {
+  min-width: 0;
+}
+
+._memory-team-header-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+._memory-team-header-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-team-header-count {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-team-header-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-team-header-empty-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-team-header-ops {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ===== Section (members / agents) 通用头部 ===== */
+._memory-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+._memory-section-header-info {
+  min-width: 0;
+}
+
+._memory-section-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+._memory-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+}
+
+._memory-section-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-mono-inline {
+  font-family: var(--font-mono);
+}
+
+/* ===== Agent grid ===== */
+._memory-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  ._memory-agent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1280px) {
+  ._memory-agent-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+._memory-agent-grid-empty {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-agent-card {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition:
+    box-shadow 0.15s,
+    border-color 0.15s;
+}
+
+._memory-agent-card--clickable {
+  cursor: pointer;
+}
+._memory-agent-card--clickable:hover {
+  box-shadow: var(--tea-shadow-sm);
+  border-color: var(--tea-color-border-brand-default);
+}
+
+._memory-agent-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+._memory-agent-card-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+
+._memory-agent-card-name-wrap {
+  min-width: 0;
+  flex: 1;
+}
+
+._memory-agent-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-agent-card-id {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-agent-card-delete {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  border: none;
+  background: transparent;
+  color: var(--tea-color-text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+}
+._memory-agent-card-delete:hover:not(:disabled) {
+  color: var(--tea-color-text-error-default);
+}
+._memory-agent-card-delete:disabled {
+  color: var(--tea-color-text-disabled);
+  cursor: not-allowed;
+}
+
+._memory-agent-card-desc {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  line-height: 18px;
+}
+
+._memory-agent-card-owner-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  margin-top: -4px;
+}
+
+._memory-agent-card-owner-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 2px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  background: var(--tea-color-bg-secondary-default);
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-agent-card-owner-value--me {
+  background: var(--tea-color-bg-warning-lighten-default);
+  color: var(--tea-color-text-warning-default);
+  border: 1px solid var(--tea-color-border-warning-default);
+}
+
+._memory-agent-card-mounted-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  font-size: 12px;
+}
+
+._memory-mounted-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 4px 8px;
+}
+
+._memory-mounted-chip-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-mounted-chip-count {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--tea-color-text-secondary);
+}
+
+/* ===== Empty team state ===== */
+._memory-empty-team {
+  border: 1px dashed var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 40px 24px;
+  text-align: center;
+}
+
+._memory-empty-team-icon {
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-empty-team-title {
+  margin-top: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-empty-team-desc {
+  margin: 4px auto 0;
+  max-width: 380px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  line-height: 18px;
+}
+
+._memory-empty-team-cta.tea-btn {
+  margin-top: 16px;
+}
+
+/* ===== Members ===== */
+._memory-member-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (min-width: 640px) {
+  ._memory-member-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1024px) {
+  ._memory-member-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1280px) {
+  ._memory-member-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+._memory-member-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 8px 12px;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+._memory-member-card--clickable {
+  cursor: pointer;
+}
+._memory-member-card--clickable:hover {
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+
+._memory-member-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--tea-color-bg-secondary-default);
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-member-avatar--owner {
+  background: var(--tea-color-bg-warning-lighten-default);
+  color: var(--tea-color-text-warning-default);
+}
+
+._memory-member-info {
+  flex: 1;
+  min-width: 0;
+}
+
+._memory-member-id {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-member-me-tag {
+  font-size: 12px;
+  color: var(--tea-color-text-brand-default);
+}
+
+._memory-member-role {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-member-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  overflow: hidden;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+._memory-member-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+._memory-member-edit-btn,
+._memory-member-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+._memory-member-edit-btn:hover {
+  color: var(--tea-color-text-brand-default);
+  background: var(--tea-color-bg-brand-lighten-default);
+}
+._memory-member-remove-btn:hover:not(:disabled) {
+  color: var(--tea-color-text-error-default);
+}
+._memory-member-remove-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===== UserProfileDialog ===== */
+._memory-userid-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+._memory-userid-code {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+._memory-userid-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-desc-count {
+  margin-top: 4px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-desc-readonly {
+  min-height: 60px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--tea-color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+._memory-desc-empty {
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== 通用表单元素 ===== */
+._memory-field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-form-error {
+  border: 1px solid var(--tea-color-border-error-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-error-lighten-default);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--tea-color-text-error-default);
+}
+
+._memory-modal-footer-split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+._memory-modal-footer-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-modal-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+._memory-form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ===== CreateAgentDialog: 目标 team 提示条 ===== */
+._memory-target-team-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+  padding: 8px 12px;
+}
+
+._memory-target-team-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--tea-color-bg-brand-default);
+  color: var(--tea-color-text-on-bg-brand-default);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+._memory-target-team-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+._memory-target-team-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-target-team-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+._memory-target-team-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--tea-color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-target-team-hint {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  text-align: right;
+  line-height: 14px;
+}
+
+/* ===== 套用模板 ===== */
+._memory-template-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--tea-color-border-brand-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-brand-lighten-default);
+  padding: 8px 12px;
+}
+
+._memory-template-box-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+._memory-template-box-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tea-color-text-brand-default);
+}
+
+._memory-template-box-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-brand-default);
+  opacity: 0.85;
+}
+
+._memory-template-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+._memory-template-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 9999px;
+  padding: 4px 4px 4px 8px;
+  font-size: 12px;
+  background: var(--tea-color-bg-primary-default);
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-template-chip--active {
+  border-color: var(--tea-color-border-brand-default);
+  color: var(--tea-color-text-brand-default);
+}
+
+._memory-template-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  font-size: 12px;
+}
+
+._memory-template-chip-close {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--tea-color-text-tertiary);
+}
+._memory-template-chip-close:hover {
+  color: var(--tea-color-text-error-default);
+}
+
+._memory-template-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed var(--tea-color-border-brand-default);
+  border-radius: 9999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--tea-color-text-brand-default);
+  cursor: pointer;
+}
+
+._memory-template-save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--tea-color-border-brand-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 8px 12px;
+}
+
+._memory-template-save-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-template-save-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ===== LightField ===== */
+._memory-light-field {
+  display: block;
+}
+
+._memory-light-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--tea-color-text-secondary);
+  margin-bottom: 4px;
+}
+
+._memory-light-field-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  margin-bottom: 4px;
+  line-height: 14px;
+}
+
+._memory-mono-textarea.tea-input {
+  font-family: var(--font-mono);
+}
+
+/* ===== 原子能力工具条 + Collapse ===== */
+._memory-asset-section {
+  border-top: 1px solid var(--tea-color-border-primary-default);
+  padding-top: 12px;
+}
+
+._memory-asset-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+._memory-asset-toolbar-label {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-asset-toolbar-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+._memory-asset-loading {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  padding: 12px 0;
+  text-align: center;
+}
+
+/* Skill 分组只读说明 */
+._memory-asset-readonly-hint {
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  padding: 4px 0 8px;
+}
+
+._memory-asset-toolbar-btn {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 2px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+  cursor: pointer;
+}
+._memory-asset-toolbar-btn:hover {
+  color: var(--tea-color-text-brand-default);
+  border-color: var(--tea-color-border-brand-default);
+}
+
+._memory-collapse-group-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-collapse-group {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+._memory-collapse-group:last-child {
+  margin-bottom: 0;
+}
+
+._memory-collapse-group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+._memory-collapse-group-header:hover {
+  background: var(--tea-color-bg-secondary-hover);
+}
+
+._memory-collapse-group-chevron {
+  flex-shrink: 0;
+  color: var(--tea-color-text-tertiary);
+  transition: transform 0.15s;
+}
+._memory-collapse-group-chevron--open {
+  transform: rotate(90deg);
+}
+
+._memory-collapse-group-icon {
+  display: inline-flex;
+  color: var(--tea-color-text-secondary);
+}
+
+._memory-collapse-group-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--tea-color-text-primary);
+}
+
+._memory-collapse-group-count {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ============================================================
+ * 折叠组骨架（详情弹窗打开时资产绑定在加载时使用）
+ * 复用 _memory-agents-skeleton-shimmer keyframes，视觉风格统一
+ * ============================================================ */
+
+/* count 数字区骨架占位（保留 label/title 等结构，避免布局抖动） */
+._memory-collapse-group-count--loading {
+  display: inline-block;
+  width: 64px;
+  height: 12px;
+  margin-left: 4px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 标题占位（仅在「整个资产区 loading」骨架卡片中使用） */
+._memory-collapse-group-title-skeleton {
+  display: inline-block;
+  width: 80px;
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 整个资产区加载中容器：保留「加载中」提示 + 4 个折叠组轮廓 */
+._memory-asset-section-loading ._memory-asset-loading {
+  margin-bottom: 12px;
+}
+
+/* 折叠组加载态：禁用 hover 反馈 */
+._memory-collapse-group--loading ._memory-collapse-group-header {
+  cursor: default;
+  opacity: 0.7;
+}
+
+._memory-collapse-group-body {
+  border-top: 1px solid var(--tea-color-border-primary-default);
+  background: var(--tea-color-bg-primary-default);
+  padding: 8px 12px;
+}
+
+._memory-asset-check-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+._memory-asset-check-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tea-color-text-tertiary);
+  margin-bottom: 4px;
+}
+
+._memory-asset-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+._memory-asset-check-item {
+  padding: 2px 0;
+}
+
+._memory-asset-check-item-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+._memory-asset-check-item-title {
+  font-size: 12px;
+  color: var(--tea-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-asset-check-item-slug {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== Agents 管理页：与 Memory项目的 Tea Card / ActionPanel 版式对齐 ===== */
+._memory-agents-panel {
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  padding: 16px;
+}
+
+._memory-agents-section-head {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  margin-bottom: 12px;
+}
+
+._memory-agents-section-title {
+  margin: 0;
+  color: var(--tea-color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+._memory-agents-section-subtitle {
+  margin-top: 2px;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+._memory-agents-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Agent 列表工具栏内的 SearchBox：英文 placeholder（"Search agent name / description / ID"）
+   较长，tea 默认宽度在窄容器中会被截断。给一个最小宽度确保完整显示。
+   tea-component 实际类名：外层 .tea-form--search、内层 .tea-search。 */
+._memory-agents-toolbar .tea-form--search,
+._memory-agents-toolbar .tea-search {
+  min-width: 280px;
+  max-width: 100%;
+}
+
+._memory-agents-empty {
+  border: 1px dashed var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+._memory-agents-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+._memory-agents-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  transition:
+    background-color 0.15s ease-in-out,
+    border-color 0.15s ease-in-out;
+}
+
+._memory-agents-card--editable:hover {
+  border-color: var(--tea-color-border-brand-default);
+  background: var(--tea-color-bg-primary-hover);
+}
+
+._memory-agents-card-head {
+  min-width: 0;
+}
+
+._memory-agents-name-trigger {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tea-color-text-primary);
+  text-align: left;
+}
+
+._memory-agents-name-trigger--editable {
+  cursor: pointer;
+}
+
+._memory-agents-name-trigger:disabled {
+  cursor: default;
+}
+
+._memory-agents-name {
+  overflow: hidden;
+  flex: 1 1 auto;
+  color: var(--tea-color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+._memory-agents-chevron {
+  flex: 0 0 auto;
+  color: var(--tea-color-text-tertiary);
+  opacity: 0.6;
+  transition:
+    color 0.15s ease-in-out,
+    opacity 0.15s ease-in-out,
+    transform 0.15s ease-in-out;
+}
+
+._memory-agents-name-trigger--editable:hover ._memory-agents-chevron {
+  color: var(--tea-color-text-brand-default);
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+._memory-agents-card-id {
+  color: var(--tea-color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+._memory-agents-card-desc,
+._memory-agents-list-description,
+._memory-agents-list-assets {
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+}
+
+._memory-agents-card-desc {
+  min-height: 40px;
+  line-height: 20px;
+}
+
+._memory-agents-owner-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+._memory-agents-readonly {
+  color: var(--tea-color-text-tertiary);
+}
+
+/* Owner 标签：简洁 pill，与 Memory 详情徽章同一风格（浅色底 + 同色文字） */
+._memory-agents-owner-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--tea-color-text-secondary);
+  background-color: var(--tea-color-bg-secondary-default);
+  white-space: nowrap;
+}
+
+._memory-agents-owner-tag--me {
+  color: var(--tea-color-text-brand-default);
+  background-color: var(--tea-color-bg-brand-lighten-default);
+  font-weight: 500;
+}
+
+._memory-agents-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+._memory-agents-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 28px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--tea-color-border-secondary-default);
+}
+
+@media (max-width: 767px) {
+  ._memory-agents-panel {
+    padding: 12px;
+  }
+
+  ._memory-agents-toolbar {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  ._memory-agents-toolbar .tea-form--search,
+  ._memory-agents-toolbar .tea-search {
+    flex: 1 1 180px;
+  }
+}
+
+/* Agent 卡片骨架屏（首屏加载时展示 4 个占位卡）
+   1:1 对齐真实 _memory-agents-card 的 6 个区块（head / id / desc / owner / stats / actions），
+   含 padding(12px) / border-radius(4px) / gap(8px) 等关键尺寸，避免「骨架 → 真实卡」的视觉跳变。
+   浅灰底 + shimmer 横扫动画。 */
+._memory-agents-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+._memory-agents-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-primary-default);
+  /* 加载编排：骨架卡淡入上移，由 JS 注入 animationDelay 逐张错峰 */
+  opacity: 0;
+  animation: _memory-agents-skeleton-card-in 0.35s ease-out forwards;
+}
+
+@keyframes _memory-agents-skeleton-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 通用 shimmer 线条 */
+._memory-agents-skeleton-line {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-tertiary-default) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 1. head：名称（左，加粗 14px 视觉用 16px 条）+ chevron（右，方块） */
+._memory-agents-skeleton-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+._memory-agents-skeleton-line--name {
+  flex: 0 1 40%;
+  height: 16px;
+}
+
+._memory-agents-skeleton-line--chevron {
+  margin-left: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+/* 2. id：等宽小字 */
+._memory-agents-skeleton-line--id {
+  width: 60%;
+}
+
+/* 3. desc：两行（对齐真实 min-height 40px / line-height 20px） */
+._memory-agents-skeleton-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 40px;
+}
+
+._memory-agents-skeleton-line--desc-short {
+  width: 70%;
+}
+
+/* 4. owner 行：label（窄条）+ pill（圆角胶囊） */
+._memory-agents-skeleton-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+._memory-agents-skeleton-line--owner-label {
+  width: 40px;
+}
+
+._memory-agents-skeleton-line--owner-tag {
+  width: 64px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+/* 5. stats：2 列 4 个 chip（对齐真实 _memory-agents-stats） */
+._memory-agents-skeleton-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+._memory-agents-skeleton-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--tea-color-border-primary-default);
+  border-radius: 4px;
+  background: var(--tea-color-bg-secondary-default);
+}
+
+._memory-agents-skeleton-line--chip-label {
+  width: 48px;
+  height: 12px;
+}
+
+._memory-agents-skeleton-line--chip-count {
+  width: 14px;
+  height: 12px;
+}
+
+/* 6. actions：右对齐删除按钮（对齐真实 border-top + min-height 28px） */
+._memory-agents-skeleton-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 28px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--tea-color-border-secondary-default);
+}
+
+._memory-agents-skeleton-line--action {
+  width: 40px;
+}
+
+@keyframes _memory-agents-skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================================
+ * 计数 chip 骨架（counts 在加载时使用）
+ * 与整卡片骨架复用同套 shimmer keyframes，视觉一致。
+ * ============================================================ */
+._memory-mounted-chip-count--loading {
+  display: inline-block;
+  width: 18px;
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(
+    90deg,
+    var(--tea-color-bg-secondary-default) 0%,
+    var(--tea-color-bg-secondary-hover) 50%,
+    var(--tea-color-bg-secondary-default) 100%
+  );
+  background-size: 200% 100%;
+  animation: _memory-agents-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+/* 列表视图的 assets 列占位：counts 在加载时整行显示「—」，并保持高度稳定，避免行高闪动 */
+._memory-agents-list-assets--loading {
+  color: var(--tea-color-text-tertiary);
+}
+
+/* ===== DefaultAgentTemplateSection（默认 Agent 模板，仅 admin 可见）===== */
+._memory-default-agent-section {
+  padding: 14px 16px;
+}
+
+._memory-default-agent-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+._memory-default-agent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+._memory-default-agent-title {
+  color: var(--tea-color-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+._memory-default-agent-desc {
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+._memory-default-agent-actions {
+  flex-shrink: 0;
+}
+
+._memory-default-agent-body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+._memory-default-agent-placeholder {
+  color: var(--tea-color-text-tertiary);
+  font-size: 12px;
+}
+
+._memory-default-agent-name {
+  color: var(--tea-color-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+._memory-default-agent-detail {
+  color: var(--tea-color-text-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

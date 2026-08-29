@@ -5,7 +5,7 @@
  * 外层由 ConsoleLayout 的 Content.Body 包裹，这里作为直接子节点。
  */
 import type { ReactNode } from 'react';
-import './page-style.css';
+import './styles/page-style.css';
 
 export function ResourcePage({ children }: { children: ReactNode }) {
   return (

@@ -1,10 +1,10 @@
 /**
- * v3 SkillClient — thin wrapper around the 15 `/v3/skill/*` endpoints
+ * v3 SkillClient — thin wrapper around the 17 `/v3/skill/*` endpoints
  * defined by `src/gateway/skill-handlers.ts`:
  *
- *   create / update / patch / delete / get / list / search / versions
- *   files/write / files/remove / files/read / listing / extract
- *   conversation/add / conversation/force-archive
+ *   create / update / patch / delete / get / get-by-name / list / search
+ *   versions / files/write / files/remove / files/read / export / listing
+ *   extract / conversation/add / conversation/force-archive
  *
  * Unlike v3 `MemoryClient`, skill isolation fields for the CRUD/file/
  * listing/search endpoints are *all optional* at the schema layer (see
@@ -34,12 +34,15 @@ import type {
   SkillDeleteData,
   SkillDeleteRequest,
   SkillDetail,
+  SkillExportData,
+  SkillExportRequest,
   SkillExtractData,
   SkillExtractRequest,
   SkillFileContent,
   SkillFilesReadRequest,
   SkillFilesRemoveRequest,
   SkillFilesWriteRequest,
+  SkillGetByNameRequest,
   SkillGetRequest,
   SkillIdFields,
   SkillListData,
@@ -248,6 +251,26 @@ export class SkillClient {
     return this.http.post(`${V3}/get`, body);
   }
 
+  /**
+   * `POST /v3/skill/get-by-name` — fetch a skill by name in one call.
+   *
+   * `team_id` and `agent_id` are REQUIRED (schema returns 40001 when
+   * missing); unlike the CRUD endpoints, constructor defaults are NOT
+   * merged in for these two — pass them explicitly. Returns the same
+   * `SkillDetail` shape as `get` (40401 when the name doesn't exist).
+   */
+  getByName(params: SkillGetByNameRequest): Promise<SkillDetail> {
+    const body = stripUndefined({
+      ...this.ids(params),
+      skill_name: params.skill_name,
+      version: params.version,
+      include_content: params.include_content,
+      include_manifest: params.include_manifest,
+    });
+    validateRequiredStrings(body, ["team_id", "agent_id"], "getByName");
+    return this.http.post(`${V3}/get-by-name`, body);
+  }
+
   /** `POST /v3/skill/list` — head rows for the team, paginated. */
   list(params: SkillListRequest = {}): Promise<SkillListData> {
     const body = stripUndefined({
@@ -316,6 +339,17 @@ export class SkillClient {
       encoding: params.encoding,
     });
     return this.http.post(`${V3}/files/read`, body);
+  }
+
+  /** `POST /v3/skill/export` — download the skill (SKILL.md + resources) as a ZIP. */
+  exportSkill(params: SkillExportRequest): Promise<SkillExportData> {
+    const body = stripUndefined({
+      ...this.ids(params),
+      skill_id: params.skill_id,
+      version: params.version,
+      format: params.format,
+    });
+    return this.http.post(`${V3}/export`, body);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -394,7 +428,8 @@ export class SkillClient {
    *
    * Like `conversationAdd`, isolation fields are REQUIRED and this SDK
    * validates them locally rather than merging constructor defaults.
-   * `space_id` is optional — server falls back to `auth.serviceId`.
+   * Unlike `conversationAdd`, `space_id` is also REQUIRED here — the
+   * schema (`forceArchiveRequestSchema`) declares it non-optional.
    *
    * Returns `{ status: "empty" }` when the buffer has nothing to archive
    * (no messages appended since the last archive), or
@@ -417,7 +452,7 @@ export class SkillClient {
     });
     validateRequiredStrings(
       body,
-      ["session_id", "user_id", "team_id", "agent_id"],
+      ["session_id", "space_id", "user_id", "team_id", "agent_id"],
       "conversationForceArchive",
     );
     return this.http.post(`${V3}/conversation/force-archive`, body);

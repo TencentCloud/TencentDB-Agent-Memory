@@ -399,6 +399,13 @@ export async function migrateSchema(
     );
   }
 
+  // tool_call_logs：补 reject_reason 列 (存量表由本次上线时通过 ALTER 加齐)
+  migrations.push({
+    table: TOOL_CALL_TABLE,
+    column: "reject_reason",
+    type: "LowCardinality(String) DEFAULT ''",
+  });
+
   let ok = 0;
   let failed = 0;
   for (const m of migrations) {
@@ -926,6 +933,8 @@ export async function shutdownClickHouse(): Promise<void> {
 const TOOL_CALL_BODY_MAX_BYTES = 512;
 /** bypass_reason 截断长度（防止 log 文案改动导致列基数爆炸） */
 const BYPASS_REASON_MAX_CHARS = 128;
+/** reject_reason 截断长度（与 bypass_reason 对称；LowCardinality 保基数稳） */
+const REJECT_REASON_MAX_CHARS = 128;
 /** 表名（DDL + insert 共用） */
 const SESSION_INIT_TABLE = "session_init_logs";
 const TOOL_CALL_TABLE = "tool_call_logs";
@@ -996,6 +1005,15 @@ export interface ToolCallLogInput {
   upstreamStatus?: number;
   /** upstream 耗时毫秒（意图侧填 0） */
   elapsedMs?: number;
+  /**
+   * 前置校验失败原因（proxy 层拒绝了请求, 没能打到上游）。
+   * 空串 = 请求进入了 upstream fetch 阶段（成功或 4xx/5xx 都走此路径）。
+   * 非空 = 前置早退（枚举: unknown_path / subpath_forbidden / method_not_allowed /
+   * content_type_invalid / missing_conversation_id / session_not_initialized /
+   * write_ops_disabled / body_not_object / invalid_json_body）。
+   * 与 session_init.bypass_reason 对称, 均截断到 REJECT_REASON_MAX_CHARS。
+   */
+  rejectReason?: string;
 }
 
 /** ClickHouse `tool_call_logs` 表一行的最终形态。 */
@@ -1016,6 +1034,7 @@ export interface ToolCallLogRow {
   request_body_hash: string;
   upstream_status: number;
   elapsed_ms: number;
+  reject_reason: string;
   source_tag: string;
   host: string;
 }
@@ -1067,6 +1086,7 @@ export function buildToolCallLogRow(input: ToolCallLogInput): ToolCallLogRow {
     request_body_hash: bodyHash16(body),
     upstream_status: input.upstreamStatus ?? 0,
     elapsed_ms: input.elapsedMs ?? 0,
+    reject_reason: (input.rejectReason ?? "").slice(0, REJECT_REASON_MAX_CHARS),
     source_tag: "proxy",
     host: HOST_ID,
   };
@@ -1307,6 +1327,8 @@ export function toolCallTableDdl(): string {
     "  request_body_hash FixedString(16) DEFAULT '',",
     "  upstream_status UInt16 DEFAULT 0,",
     "  elapsed_ms UInt32 DEFAULT 0,",
+    // proxy 前置校验失败原因; 上游已响应/异常时为空串; 与 session_init.bypass_reason 对称。
+    "  reject_reason LowCardinality(String) DEFAULT '',",
     "  source_tag LowCardinality(String) DEFAULT 'proxy',",
     "  host LowCardinality(String)",
     ") ENGINE = MergeTree()",

@@ -69,8 +69,13 @@ interface BackendState {
 
   // actions
   fetchTeams: () => Promise<void>;
-  /** 强制重新拉取 team 列表（忽略 teamsLoaded 缓存，保留 in-flight 去重） */
-  refreshTeams: () => Promise<void>;
+  /**
+   * 强制重新拉取 team 列表（忽略 teamsLoaded 缓存，保留 in-flight 去重）。
+   * `silent: true` 时不在 UI 层翻转 teamsLoading —— 用于下拉框展开等后台保新鲜
+   * 场景，避免 TeamManagementPanel 等消费方因 teamsLoading=true 而整体进入
+   * loading 占位（表现为"点一下下拉框页面就刷新"）。
+   */
+  refreshTeams: (opts?: { silent?: boolean }) => Promise<void>;
   fetchAgents: (teamId: string) => Promise<Agent[]>;
   fetchTasks: (teamId: string, params?: { limit?: number; offset?: number; force?: boolean }) => Promise<Task[]>;
   setActiveTeamId: (teamId: string | null) => void;
@@ -101,13 +106,17 @@ export const useBackendStore = create<BackendState>((set, get) => ({
     await get().refreshTeams();
   },
 
-  refreshTeams: async () => {
+  refreshTeams: async (opts?: { silent?: boolean }) => {
     const state = get();
     // in-flight 去重：多个组件同时挂载时只发一次
     if (state.inflightTeams) { await state.inflightTeams; return; }
 
+    const silent = opts?.silent === true;
     const promise = (async () => {
-      set({ teamsLoading: true });
+      // 静默刷新不翻转 teamsLoading —— 消费方（TeamManagementPanel 等）依赖它
+      // 显示 loading 占位；下拉框展开这类后台保新鲜场景翻转它会导致
+      // "点一下下拉框整个页面闪成 loading 再恢复"。
+      if (!silent) set({ teamsLoading: true });
       try {
         const backendTeams = await teamsApi.list();
         // 批量拉 members（N+1 → N，但这是后端 API 限制，无批量接口）

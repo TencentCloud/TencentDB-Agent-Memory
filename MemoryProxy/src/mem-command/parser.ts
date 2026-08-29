@@ -38,6 +38,11 @@ const MEM_COMMANDS_ARGS: Record<string, boolean> = {
   help: false,
   sync: false,
   "create-skill": true,
+  // task 命令族：args 语义与 create-skill 对齐 —— 作为 LLM 生成 title/description
+  // 的额外提示（reason）；空 args 表示纯从近 30 条上下文自动生成。
+  "create-task": true,
+  "update-task": true,
+  "session-reset": false,
 };
 
 /**

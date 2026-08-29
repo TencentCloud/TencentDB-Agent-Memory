@@ -457,6 +457,13 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
     },
+    // env 存在时直接用 env 解析(可显式关闭 yaml);
+    // env 未设置才回退 yaml,与其他 LLM 字段语义一致。
+    stream: (() => {
+      const envVal = env("TDAI_LLM_STREAM");
+      if (envVal !== undefined) return envVal === "true";
+      return bool(llmConfig, "stream") ?? false;
+    })(),
   };
 
   // Memory config (reuse the plugin's parseConfig for full compatibility)

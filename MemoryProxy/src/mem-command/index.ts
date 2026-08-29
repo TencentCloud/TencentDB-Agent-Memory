@@ -14,21 +14,33 @@ import { buildMemResponse } from "./response-builder.js";
 import { executeHelp } from "./commands/help.js";
 import { executeSync } from "./commands/sync.js";
 import { executeCreateSkill } from "./commands/create-skill.js";
+import { executeCreateTask } from "./commands/create-task.js";
+import { executeUpdateTask } from "./commands/update-task.js";
+import { executeSessionReset } from "./commands/session-reset.js";
 
 export { parseMemCommand, parseCommandFromText, type ParsedMemCommand } from "./parser.js";
 export { buildMemResponse } from "./response-builder.js";
-export type { MemCommandContext, MemCommandResult } from "./types.js";
+export type { MemCommandContext, MemCommandResult, MemCommandName, MemCommandMessage } from "./types.js";
 export { getHelpText } from "./commands/help.js";
+export { extractSimpleMessages, truncateArgs } from "./utils.js";
 
 /** 已知命令列表 */
-const KNOWN_COMMANDS = new Set(["sync", "create-skill", "help"]);
+const KNOWN_COMMANDS = new Set([
+  "sync",
+  "create-skill",
+  "create-task",
+  "update-task",
+  "session-reset",
+  "help",
+]);
 
 /**
  * 检查 memCommand 功能是否启用，且命令是否在白名单中。
  */
 export function isMemCommandAllowed(config: MemCommandConfig, command: string): boolean {
   if (!config.enabled) return false;
-  // 白名单为空 = 全部允许
+  // session-reset 豁免白名单(session 管理命令)
+  if (command === "session-reset") return true;
   if (config.allowedCommands.length === 0) return true;
   return config.allowedCommands.includes(command);
 }
@@ -60,6 +72,12 @@ export async function executeMemCommand(
       return executeSync(ctx);
     case "create-skill":
       return executeCreateSkill(ctx);
+    case "create-task":
+      return executeCreateTask(ctx);
+    case "update-task":
+      return executeUpdateTask(ctx);
+    case "session-reset":
+      return executeSessionReset(ctx);
     default: {
       const text = `❌ 未知命令：\`mem:${cmd.command}\``;
       return {

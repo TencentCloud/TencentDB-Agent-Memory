@@ -97,11 +97,22 @@ export interface FormData {
   teamPage?: number;
   agentPage?: number;
   taskPage?: number;
+  /**
+   * true = questions 传真 array（CB v1.106+）；false = 传 JSON string（老版本）。
+   * 未设置时默认 true。
+   */
+  questionsAsArray?: boolean;
 }
 
 // ── Form Builder ───────────────────────────────────────────────────────────────
 
-function buildFollowupQuestionArgs(data: FormData): { title: string; questions: string } {
+/**
+ * CB v1.106+ 的 ask_followup_question schema 要求 `questions` 是真 array（不再接受
+ * JSON 字符串）。老版本（v1.105-）则期望 questions 为 JSON string。
+ * 通过 FormData.questionsAsArray 判断走哪条路径，默认 true（新版）。
+ */
+function buildFollowupQuestionArgs(data: FormData): { title: string; questions: Array<Record<string, unknown>> | string } {
+  const asArray = data.questionsAsArray !== false;
   const { teams, stage, selectedTeamId, retry } = data;
 
   const title = retry
@@ -126,7 +137,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
       options: [ASSET_CONFIRM_YES, ASSET_CONFIRM_NO],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions: asArray ? questions : JSON.stringify(questions) };
   }
 
   if (stage === "team") {
@@ -138,7 +149,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
       ],
       multiSelect: false,
     });
-    return { title, questions: JSON.stringify(questions) };
+    return { title, questions: asArray ? questions : JSON.stringify(questions) };
   }
 
   // stage in { "agent_task" (CB one-shot), "agent_select" / "task_select"
@@ -146,7 +157,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
   // codex form.ts 重渲染，不会调 CB `buildFollowupQuestionArgs`。分支保留
   // 是防御性兜底，让 CB fallback render 也能出合法结构。
   const team = teams.find((t) => t.team_id === selectedTeamId) ?? teams[0];
-  if (!team) return { title, questions: JSON.stringify(questions) };
+  if (!team) return { title, questions: asArray ? questions : JSON.stringify(questions) };
 
   const wantAgent = stage === "agent_task" || stage === "agent_select";
   const wantTask = stage === "agent_task" || stage === "task_select";
@@ -183,7 +194,7 @@ function buildFollowupQuestionArgs(data: FormData): { title: string; questions: 
     }
   }
 
-  return { title, questions: JSON.stringify(questions) };
+  return { title, questions: asArray ? questions : JSON.stringify(questions) };
 }
 
 /**
@@ -221,7 +232,7 @@ function buildOpenAINonStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   return new Response(JSON.stringify({
     id,
@@ -255,7 +266,7 @@ function buildOpenAIStreamingResponse(
   created: number,
   model: string,
   toolCallId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   const encoder = new TextEncoder();
   const argsStr = JSON.stringify(args);
@@ -321,7 +332,7 @@ function buildAnthropicNonStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   return new Response(JSON.stringify({
     id: msgId,
@@ -346,7 +357,7 @@ function buildAnthropicStreamingResponse(
   msgId: string,
   model: string,
   toolUseId: string,
-  args: { title: string; questions: string },
+  args: { title: string; questions: string | Array<Record<string, unknown>> },
 ): Response {
   const encoder = new TextEncoder();
   const inputJson = JSON.stringify(args);

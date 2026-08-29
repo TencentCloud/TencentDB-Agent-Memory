@@ -174,6 +174,15 @@ export async function metaPost<T>(action: string, body: Record<string, unknown> 
   });
 }
 
+/**
+ * 分页拉取 meta list 全部 items（内核 DEFAULT_PAGINATION = {limit: 20}，
+ * 不传 limit 只会拿到前 20 条，列表类读取必须用本工具拿全量）。
+ *
+ * offset 必须按 limit 步进，**不能**按 `items.length` 步进：带过滤语义的接口
+ * （如 agent-fixed-asset/list-with-detail，total 是过滤前总数、items 是过滤后集合）
+ * 的 `items.length < limit`，按 items.length 推进会让下一页从错误位置重新开始，
+ * 造成条目重复；整页被过滤时更会提前 break 漏掉尾部数据。
+ */
 export async function metaListAll<T>(action: string, body: Record<string, unknown>): Promise<T[]> {
   const items: T[] = [];
   let offset = 0;
@@ -183,9 +192,20 @@ export async function metaListAll<T>(action: string, body: Record<string, unknow
       limit: META_PAGE_SIZE,
       offset,
     });
-    items.push(...page.items);
-    offset += page.items.length;
-    if (page.items.length === 0 || offset >= page.total) break;
+    const batch = page.items ?? [];
+    items.push(...batch);
+    const total = typeof page.total === 'number' ? page.total : undefined;
+    if (batch.length === 0) {
+      // 空页：通常代表已到末尾。但带过滤语义的接口中间页可能整页为空
+      // （total 仍是过滤前总数），此时继续推进以免漏拉后续有效数据。
+      if (total !== undefined && offset + META_PAGE_SIZE < total) {
+        offset += META_PAGE_SIZE;
+        continue;
+      }
+      break;
+    }
+    offset += META_PAGE_SIZE;
+    if (total !== undefined && offset >= total) break;
   }
   return items;
 }

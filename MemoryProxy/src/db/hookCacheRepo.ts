@@ -32,14 +32,14 @@ export interface HookCacheRepo {
     sessionId: string,
     hookId: string,
     blocks: ContextBlock[],
-  ): void;
+  ): void | Promise<void>;
   putMany(
     spaceId: string,
     userId: string,
     agentSource: string,
     sessionId: string,
     entries: HookCacheEntry[],
-  ): void;
+  ): void | Promise<void>;
   get(
     spaceId: string,
     userId: string,
@@ -58,7 +58,7 @@ export interface HookCacheRepo {
     userId: string,
     agentSource: string,
     sessionId: string,
-  ): void;
+  ): void | Promise<void>;
 }
 
 /** Sqlite 后端下用的复合 session id —— 与 SessionRepo 一致，多加一段 spaceId. */

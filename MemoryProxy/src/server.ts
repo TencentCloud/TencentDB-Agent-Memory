@@ -304,6 +304,23 @@ export function createApp(config: ProxyConfig): Hono {
     app.post("/dsh/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
+  // opencode cost-guard / analyse marker 路由 —— 与 CC/CB/Codex/dsh 完全对称。
+  // opencode 客户端走标准 OpenAI Chat Completions（POST /v1/chat/completions），
+  // 路径形态与 CB/dsh 同族；因此 marker 段的路由形态与 dsh 一致：
+  //   /opencode/{spaceId}/cost-guard/v1/chat/completions
+  //   /opencode/{spaceId}/cost-guard/chat/completions（客户端 base 不带 /v1 时）
+  // 未显式注册这些 5 段路径时，会 fall through 到 catch-all POST /*，marker 静默失效。
+  // Router 分流已经在 handler.ts 里通过 agentName=agentFromPath("opencode") 传给
+  // resolveForwardTarget，只要路由能命中，Router 就能按 agentSource=opencode 分支决策。
+  if (config.costGuard.markerOptIn) {
+    app.post("/opencode/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+  if (config.injection?.assetReflection?.markerOptIn) {
+    app.post("/opencode/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/opencode/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+
   app.post("/:agent/:spaceId/v1/messages", (c) => handleAnthropicMessages(c, config));
   app.post("/:agent/:spaceId/v1/messages/count_tokens", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/:agent/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
