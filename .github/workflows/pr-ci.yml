@@ -41,6 +41,9 @@ jobs:
   adapter-pr-policy:
     name: Adapter PR policy
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +61,45 @@ jobs:
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Validate bilingual adapter guides
+        if: steps.adapter.outputs.changed == 'true'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const { existsSync } = require("node:fs");
+
+          const base = process.env.BASE_SHA ?? "";
+          const head = process.env.HEAD_SHA ?? "";
+          const changedFiles = execFileSync(
+            "git",
+            ["diff", "--name-only", base, head, "--", "adapters/"],
+            { encoding: "utf8" },
+          )
+            .split(/\r?\n/)
+            .map((file) => file.replaceAll("\\", "/").trim())
+            .filter(Boolean);
+          const adapterDirs = [...new Set(
+            changedFiles
+              .map((file) => file.split("/").slice(0, 2).join("/"))
+              .filter((dir) => /^adapters\/[^/]+$/.test(dir)),
+          )];
+          const missing = adapterDirs.flatMap((dir) =>
+            ["README.md", "README_CN.md"]
+              .filter((name) => !existsSync(`${dir}/${name}`))
+              .map((name) => `${dir}/${name}`),
+          );
+          if (missing.length > 0) {
+            console.error("Every changed adapter must include both language guides.");
+            for (const file of missing) console.error(`Missing: ${file}`);
+            process.exit(1);
+          }
+          console.log(`Validated bilingual guides for ${adapterDirs.length} adapter(s).`);
+          NODE
 
       - name: Validate adapter PR title
         if: steps.adapter.outputs.changed == 'true'
