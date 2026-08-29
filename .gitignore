@@ -146,3 +146,6 @@ coverage/
 # Local-only: parity snapshots & runtime configs (never commit)
 MemoryProxy/.archive-tmp/
 z_config/
+
+# 本地恢复的个人文档（含真实 ID，仅供本地查阅，不进 PR）
+MemoryProxy/docs/

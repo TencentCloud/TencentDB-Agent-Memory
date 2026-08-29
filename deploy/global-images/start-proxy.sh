@@ -12,6 +12,9 @@
 #   PROXY_UPSTREAM_URL / PROXY_UPSTREAM_API_KEY / PROXY_UPSTREAM_MODEL
 
 set -euo pipefail
+# 与 start-memory-core.sh 一致：禁用 MSYS 的 POSIX→Windows 路径自动转换；
+# 否则 docker -v 的冒号会被误判成盘符，挂载源被拼成 `xxx;D`，config 挂载失效。
+export MSYS_NO_PATHCONV=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
@@ -83,7 +86,9 @@ PROXY_MODEL_ALIAS_CLIENT="${PROXY_MODEL_ALIAS_CLIENT:-claude-sonnet-*}"
 # ── 前缀通配家族：Claude-sonnet / haiku / opus / fable 全系列，升级大版本自动命中 ──
 WILDCARD_FAMILIES="claude-sonnet-* claude-haiku-* claude-opus-* claude-fable-*"
 # ── 精确兜底：历史常见版本，即便通配逻辑没加载也能用 ──
-FIXED_ALIASES="claude-sonnet-4-5 claude-sonnet-5 claude-haiku-3-5 claude-opus-4 claude-fable-1"
+# 常见客户端模型名统一映射到上游 PROXY_UPSTREAM_MODEL（glm-4.5-air）：
+# Claude 系 + Codex/DeepSeek 系 + 智谱系 + 通义系
+FIXED_ALIASES="claude-sonnet-4-5 claude-sonnet-5 claude-sonnet-5.1 claude-sonnet-6 claude-haiku-3-5 claude-haiku-4 claude-opus-4 claude-opus-5 claude-fable-1 deepseek-v4-flash deepseek-v4-pro deepseek-chat deepseek-reasoner glm-4.5 glm-4.6v glm-4.6 qwen3.8-flash qwen-max"
 ALL_ENTRIES=""
 # 上游模型自身条目：WorkBuddy 等客户端直接发送上游模型名（使用者自定义）时，
 # 必须能在定价表中命中，否则报 "not a registered display name" 错误。
@@ -133,9 +138,11 @@ PROXY_WORKBUDDY_CHAT_COMPLETIONS="${PROXY_WORKBUDDY_CHAT_COMPLETIONS:-0}"
 PROXY_WORKBUDDY_CHAT_TO_ANTHROPIC="${PROXY_WORKBUDDY_CHAT_TO_ANTHROPIC:-0}"
 PROXY_WORKBUDDY_AGENTS_LINES=""
 if [[ "$PROXY_WORKBUDDY_CHAT_COMPLETIONS" == "1" ]]; then
-  PROXY_WORKBUDDY_AGENTS_LINES="  agents:
+PROXY_WORKBUDDY_AGENTS_LINES="  agents:
     workbuddy:
-      chatCompletions: true"
+      chatCompletions: true
+      url: \"${PROXY_UPSTREAM_URL}\"
+      apiKey: \"${PROXY_UPSTREAM_API_KEY}\""
 elif [[ "$PROXY_WORKBUDDY_CHAT_TO_ANTHROPIC" == "1" ]]; then
   # TRACK 05A：WorkBuddy（Chat）→ Anthropic 风格上游
   PROXY_WORKBUDDY_AGENTS_LINES="  agents:
@@ -380,57 +387,7 @@ $DOCKER run -d --name "$CONTAINER" --restart always \
   -e "TDAI_INTENT_EMBEDDING_MODEL=${TDAI_INTENT_EMBEDDING_MODEL:-}" \
   -v "$CONFIG_FILE:/data/config.yaml" \
   -v "$PROXY_DATA_VOLUME:/data/tdai-memory-proxy" \
-  -v "$PROXY_SRC_DIR/pricing.ts:/app/src/pricing.ts" \
-  -v "$PROXY_SRC_DIR/anthropicHandler.ts:/app/src/anthropicHandler.ts" \
-  -v "$PROXY_SRC_DIR/codexHandler.ts:/app/src/codexHandler.ts" \
-  -v "$PROXY_SRC_DIR/common/langfuse-debug.ts:/app/src/common/langfuse-debug.ts" \
-  -v "$PROXY_SRC_DIR/injection/shell-template.ts:/app/src/injection/shell-template.ts" \
-  -v "$PROXY_SRC_DIR/injection/tuning.ts:/app/src/injection/tuning.ts" \
-  -v "$PROXY_SRC_DIR/audit.ts:/app/src/audit.ts" \
-  -v "$PROXY_SRC_DIR/injection/pipeline.ts:/app/src/injection/pipeline.ts" \
-  -v "$PROXY_SRC_DIR/injection/index.ts:/app/src/injection/index.ts" \
-  -v "$PROXY_SRC_DIR/extraction-gate.ts:/app/src/extraction-gate.ts" \
-  -v "$PROXY_SRC_DIR/tdai/recorder.ts:/app/src/tdai/recorder.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/tdai-l1-recall-injector.ts:/app/src/injection/injectors/tdai-l1-recall-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/tdai-fixed-asset.ts:/app/src/injection/injectors/tdai-fixed-asset.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/tdai-tools-injector.ts:/app/src/injection/injectors/tdai-tools-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/tdai-intent-tools-injector.ts:/app/src/injection/injectors/tdai-intent-tools-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/skill-tools-injector.ts:/app/src/injection/injectors/skill-tools-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/skill-injector.ts:/app/src/injection/injectors/skill-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/tdai-profile-memory-injector.ts:/app/src/injection/injectors/tdai-profile-memory-injector.ts" \
-  -v "$PROXY_SRC_DIR/injection/injectors/knowledge-tools-injector.ts:/app/src/injection/injectors/knowledge-tools-injector.ts" \
-  -v "$PROXY_SRC_DIR/session/types.ts:/app/src/session/types.ts" \
-  -v "$PROXY_SRC_DIR/session/session-key.ts:/app/src/session/session-key.ts" \
-  -v "$PROXY_SRC_DIR/session/auto-session.ts:/app/src/session/auto-session.ts" \
-  -v "$PROXY_SRC_DIR/session/store.ts:/app/src/session/store.ts" \
-  -v "$PROXY_SRC_DIR/tdai/identity.ts:/app/src/tdai/identity.ts" \
-  -v "$PROXY_SRC_DIR/tdai/grants-fetcher.ts:/app/src/tdai/grants-fetcher.ts" \
-  -v "$PROXY_SRC_DIR/memory/memory-bridge.ts:/app/src/memory/memory-bridge.ts" \
-  -v "$PROXY_SRC_DIR/session/codebuddy/init.ts:/app/src/session/codebuddy/init.ts" \
-  -v "$PROXY_SRC_DIR/session/codebuddy/cleaner.ts:/app/src/session/codebuddy/cleaner.ts" \
-  -v "$PROXY_SRC_DIR/session/claude-code/init.ts:/app/src/session/claude-code/init.ts" \
-  -v "$PROXY_SRC_DIR/session/claude-code/cleaner.ts:/app/src/session/claude-code/cleaner.ts" \
-  -v "$PROXY_SRC_DIR/session/claude-code/form.ts:/app/src/session/claude-code/form.ts" \
-  -v "$PROXY_SRC_DIR/session/codex/form.ts:/app/src/session/codex/form.ts" \
-  -v "$PROXY_SRC_DIR/session/context-injector.ts:/app/src/session/context-injector.ts" \
-  -v "$PROXY_SRC_DIR/workbuddyHandler.ts:/app/src/workbuddyHandler.ts" \
-  -v "$PROXY_SRC_DIR/handler.ts:/app/src/handler.ts" \
-  -v "$PROXY_SRC_DIR/config.ts:/app/src/config.ts" \
-  -v "$PROXY_SRC_DIR/storage/factory.ts:/app/src/storage/factory.ts" \
-  -v "$PROXY_SRC_DIR/opik.ts:/app/src/opik.ts" \
-  -v "$PROXY_SRC_DIR/injection/observer.ts:/app/src/injection/observer.ts" \
-  -v "$PROXY_SRC_DIR/common/responses-chat-compat.ts:/app/src/common/responses-chat-compat.ts" \
-  -v "$PROXY_SRC_DIR/common/chat-anthropic-compat.ts:/app/src/common/chat-anthropic-compat.ts" \
-  -v "$PROXY_SRC_DIR/common/responses-anthropic-compat.ts:/app/src/common/responses-anthropic-compat.ts" \
-  -v "$PROXY_SRC_DIR/common/context-compaction.ts:/app/src/common/context-compaction.ts" \
-  -v "$PROXY_SRC_DIR/common/sse-usage.ts:/app/src/common/sse-usage.ts" \
-  -v "$PROXY_SRC_DIR/upstream/capability-probe.ts:/app/src/upstream/capability-probe.ts" \
-  -v "$PROXY_SRC_DIR/index.ts:/app/src/index.ts" \
-  -v "$PROXY_SRC_DIR/agent-adapters/openclaw.ts:/app/src/agent-adapters/openclaw.ts" \
-  -v "$PROXY_SRC_DIR/agent-adapters/hermes.ts:/app/src/agent-adapters/hermes.ts" \
-  -v "$PROXY_SRC_DIR/agent-adapters/index.ts:/app/src/agent-adapters/index.ts" \
-  -v "$PROXY_SRC_DIR/agent-adapters/types.ts:/app/src/agent-adapters/types.ts" \
-  -v "$PROXY_SRC_DIR/identity.ts:/app/src/identity.ts" \
+  -v "$PROXY_SRC_DIR:/app/src" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90

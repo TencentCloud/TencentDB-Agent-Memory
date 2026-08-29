@@ -27,6 +27,11 @@ import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { workbuddyAdapter } from "./agent-adapters/workbuddy.js";
 import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+} from "./common/responses-chat-compat.js";
+import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
 } from "./common/workbuddy-injection.js";
@@ -490,10 +495,16 @@ async function forwardToUpstream(
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
   // 未配置时回退到全局 config.upstream.{url,apiKey}。
   const perAgent = (config.upstream as unknown as {
-    agents?: { workbuddy?: { url?: string; apiKey?: string } };
+    agents?: { workbuddy?: { url?: string; apiKey?: string; chatCompletions?: boolean } };
   }).agents?.workbuddy;
+  // Chat Completions 兼容模式（upstream.agents.workbuddy.chatCompletions: true）：
+  // 智谱 GLM 等上游只实现 /chat/completions。开启后把 WorkBuddy 的 Responses
+  // 请求翻译成 chat 格式转发，并把上游 chat 响应翻译回 Responses。
+  const chatCompat = perAgent?.chatCompletions === true;
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
-  const upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
+  const upstreamPath = chatCompat
+    ? "/chat/completions"
+    : c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
   const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
 
   const headers = buildUpstreamHeaders(c, config);
@@ -502,7 +513,8 @@ async function forwardToUpstream(
     headers["authorization"] = `Bearer ${perAgent.apiKey}`;
     delete headers["x-api-key"];
   }
-  const bodyStr = JSON.stringify(body);
+  const forwardedBody = chatCompat ? responsesBodyToChat(body, { model: modelId }) : body;
+  const bodyStr = JSON.stringify(forwardedBody);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
   pipe.forwardStart(upstreamUrl);
@@ -589,6 +601,51 @@ async function forwardToUpstream(
   }
 
   // Non-SSE or no langfuse ctx → passthrough
+  // ── chatCompat：把上游 chat 响应翻译回 Responses API ──
+  if (chatCompat) {
+    const sseHeaders = new Headers(respHeaders);
+    sseHeaders.set("content-type", "text/event-stream");
+    if (isSSE && upstreamResp.body) {
+      const transformed = upstreamResp.body.pipeThrough(
+        createChatSseToResponses({ model: modelId }),
+      );
+      if (!lf) {
+        return new Response(transformed, {
+          status: upstreamResp.status,
+          headers: sseHeaders,
+        });
+      }
+      const [passStream, tapStream] = transformed.tee();
+      void consumeWorkbuddyStream(tapStream, {
+        startTime,
+        modelId,
+        keyId,
+        traceId,
+        lf,
+        config,
+        pipe,
+        archiveCtx,
+        inputBody: body,
+        upstreamUrl,
+      });
+      return new Response(passStream, {
+        status: upstreamResp.status,
+        headers: sseHeaders,
+      });
+    }
+    // 非 SSE：chat JSON → Responses JSON（上游统一 stream:true，此为兜底）
+    const rawText = await upstreamResp.text();
+    try {
+      const json = JSON.parse(rawText) as Record<string, unknown>;
+      return c.json(chatJsonToResponses(json, { model: modelId }));
+    } catch {
+      return new Response(rawText, {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      });
+    }
+  }
+
   if (!isSSE || !upstreamResp.body || !lf) {
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
@@ -823,10 +880,7 @@ export async function handleWorkbuddyEndpoint(
   // ── 1. Auth ──────────────────────────────────────────────────────────────
   const rawAuth = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
   const rawXApiKey = c.req.header("x-api-key") ?? "";
-  const apiKey =
-    extractBearerToken(rawAuth) ??
-    rawXApiKey ??
-    "";
+  const apiKey = extractBearerToken(rawAuth) || rawXApiKey || "";
   const spaceId = extractSpaceIdFromPath(path) ?? "";
   const { userId, rejected: userKeyRejected, rejectReason } = await verifyUserKey(
     apiKey,

@@ -502,7 +502,8 @@ export async function handleChatCompletions(
   // parsing or the alias-gate. `earlyVerify.userId` is reused later for
   // both the systemUser short-circuit and the normal pipeline.
   const earlyAuthHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const earlyApiKey = extractBearerToken(earlyAuthHeader);
+  const earlyApiKey =
+    extractBearerToken(earlyAuthHeader) || c.req.header("x-api-key") || "";
   const earlySpaceId = extractSpaceIdFromPath(c.req.path) ?? "";
   const earlyVerify = await verifyUserKey(earlyApiKey, earlySpaceId);
   if (earlyVerify.rejected) {
@@ -700,7 +701,7 @@ export async function handleChatCompletions(
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
   const authHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
-  const apiKey = extractBearerToken(authHeader);
+  const apiKey = extractBearerToken(authHeader) || c.req.header("x-api-key") || "";
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
 
   // ── Lowercased headers for agent profile detection + session key ──────────

@@ -379,8 +379,8 @@ export async function handleCodexEndpoint(
 
   // ── 1. Auth ────────────────────────────────────────────────────────────────
   const apiKey =
-    extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ??
-    c.req.header("x-api-key") ??
+    extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ||
+    c.req.header("x-api-key") ||
     "";
 
   const spaceId = extractSpaceIdFromPath(path) ?? "";
@@ -1335,7 +1335,7 @@ async function forwardToUpstream(
     upstreamResp = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders,
-      body: JSON.stringify(body),
+      body: bodyStr,
     });
   } catch (err: unknown) {
     pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
