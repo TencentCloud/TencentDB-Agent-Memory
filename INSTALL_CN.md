@@ -322,6 +322,60 @@ sessionInit:
 会跟着 session-init 请求写到日志 / 埋点里,后续追 trace 时能看到它标记
 着"这条会话主动跳过了 Task 绑定"。
 
+## 可选能力：`sessionInit.autoDefault`（静默默认）+ `initTimeoutMs`（超时收敛）
+
+**问题背景。** 每次开新会话,main agent 与 sub-agent(子代理 = 也是一个全新
+session)都要手选 team/agent/task;而且交互式表单在等待用户答复时会挂着会话。
+如果你希望用户**无明确选择意图时直接以默认值完成初始化**(不再弹表单、
+不再等回复),用下面这一对配置。
+
+**`sessionInit.autoDefault` —— 静默默认。**
+
+```yaml
+sessionInit:
+  enabled: true
+  maxRetries: 3
+  injectAgentContext: true
+  injectTaskContext: true
+  defaultTaskId: "no-task"
+  headerAutoSelect:
+    enabled: true
+    teamHeader: "x-team-id"
+    agentHeader: "x-agent-id"
+    taskHeader: "x-task-id"
+    onMismatch: "form"
+  autoDefault:
+    enabled: true        # false（默认）= 维持原交互表单流程，零行为变化
+    teamId: ""           # 默认 team_id；留空 = 取用户可见列表第一个 team
+    agentId: ""          # 默认 agent_id；留空 = 取所选 team 第一个 agent
+    taskId: ""           # 默认 task_id；留空 = 不关联任务（记为 defaultTaskId 虚拟项）
+    onUnresolved: "skip" # 默认值无法解析时：skip=跳过初始化直接放行（默认）| form=退化为交互表单
+```
+
+**行为与优先级。**
+
+- 开启后,状态机在"要弹 asset_confirm 之前"判断:若 `autoDefault.enabled`
+  且能解析出 `(team, agent)` → **直接调用既有 `completeRegistration` 注册并
+  注入记忆,不再弹任何交互表单**。main agent 与 sub-agent 一视同仁——
+  sub-agent 也是一个全新 session key,天然走同一路径,因此**无需识别父/子会话、
+  也不需要 DSH 侧携带 parent session header**。
+- 优先级:`headerAutoSelect`(header 显式身份)优先;`autoDefault` 兜底
+  "无 header、无明确意图"的开新会话场景。想换绑定 → 用 `mem:session-reset`。
+- `taskId` 不填 → 记作 `defaultTaskId` 虚拟项("本次不关联任务",kernel 不
+  `getTask`、不注入 `[Task]` 块);填真实 task_id → 按真实任务注入。
+
+**`sessionInit.initTimeoutMs` —— 超时收敛(毫秒,默认 `900000` = 15 分钟)。**
+
+状态机是**请求驱动**的:用户挂在 pending 表单上迟迟不答复时,proxy 侧不会有
+新请求进来(turn 挂起发生在 DSH 侧;本次**不改 DSH 核心**,因此无法主动解除
+挂起的 turn)。它的价值在于:超时后**下一次**请求(用户回来 / sub-agent 继续
+推进)到达时,状态机发现距 `startedAt` 已超过 `initTimeoutMs`,则**不再弹表单
+/ 解析答复**,直接以 `autoDefault` 默认值完成注册并注入记忆,让这条真实消息被
+正常处理——避免反复弹表单、避免会话初始化长期悬在 pending。
+
+> 注意:`initTimeoutMs` 仅在 `autoDefault.enabled=true` 时生效;关闭时维持既有
+> store `DEFAULT_TTL_MS`(30min)只负责丢弃过期 pending、不负责"收敛到默认值"。
+
 > 💡 覆写提醒(同 `/analyse` marker):走 `deploy/global-images/start-proxy.sh`
 > 的话,生成的 `config.yaml` 每次启动都会被覆盖——要么改脚本里 YAML 模板
 > 加上 `defaultTaskId`,要么用 `PROXY_CONFIG_DIR` 指到你自己维护的

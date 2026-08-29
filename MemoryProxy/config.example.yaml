@@ -569,6 +569,28 @@ sessionInit:
     taskHeader: "x-task-id"  # 携带 task_id 的请求头名（可选）
     onMismatch: "form"       # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
 
+  # ── 静默默认（autoDefault）────────────────────────────────────────────────
+  # main agent 与 sub-agent（子代理 = 也是全新会话）每次开新会话都要手选
+  # team/agent/task，且 ask 表单等待用户回复会把会话初始化挂起。开启后：
+  #   用户无明确选择意图时，直接以默认值完成注册并**注入记忆**，不再弹交互表单。
+  #   主会话与 sub-agent 一视同仁——sub-agent 也是一个全新 session key，天然走同路径，
+  #   因此无需单独判别父/子会话，也不需要 DSH 侧携带 parent session header。
+  # 优先级：headerAutoSelect（header 显式身份）优先；autoDefault 兜底"无 header、
+  # 无明确意图"的开新会话场景。想换绑定 → 用 mem:session-reset。
+  autoDefault:
+    enabled: false           # false（默认）= 维持原交互表单流程，零行为变化
+    teamId: ""               # 默认 team_id；留空 = 取用户可见列表第一个 team
+    agentId: ""              # 默认 agent_id；留空 = 取所选 team 第一个 agent
+    taskId: ""               # 默认 task_id；留空 = 不关联任务（记为 defaultTaskId 虚拟项）
+    onUnresolved: "skip"     # 默认值无法解析时：skip=跳过初始化直接放行（默认）| form=退化为交互表单
+
+  # 交互式初始化表单的超时收敛时长（毫秒）。默认 900000（15 分钟）。
+  # 用户挂在 pending 表单上迟迟不答复时，proxy 侧不会有新请求进来（turn 挂起发生在
+  # DSH 侧，本次不动 DSH 核心），因此这里无法主动解除挂起，而是：超时后**下一次**
+  # 请求（用户回来 / sub-agent 继续推进）到达时，直接以 autoDefault 默认值完成注册，
+  # 不再反复弹表单。仅 autoDefault.enabled=true 时生效。
+  initTimeoutMs: 900000
+
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
   # 的会话会**直接**注册为固定三元组，绕过所有表单/header 匹配逻辑；

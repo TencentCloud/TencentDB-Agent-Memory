@@ -288,6 +288,51 @@ export interface SessionInitConfig {
     /** header 值在用户可见列表中查不到时：'form' 回退交互表单（默认）| 'bypass' 直接跳过 session init。 */
     onMismatch: "form" | "bypass";
   };
+  /**
+   * 交互式初始化表单的「静默默认」机制（自 2026-08 引入，解决 main agent / sub-agent
+   * 每次开新会话都要手选 team/agent/task 的摩擦，以及 ask 表单等待用户回复导致的
+   * 会话初始化挂起）。
+   *
+   * 核心语义：**用户没有明确选择意图时，直接以默认值完成注册，不弹交互表单**。
+   *
+   * 行为（对齐 slot 已确认的产品方向）：
+   * - `enabled=true` 且能解析出 `(team, agent)` → 状态机在"要弹 asset_confirm 之前"
+   *   直接调 `completeRegistration`，注入记忆、不透传表单。主会话与 sub-agent（新会话）
+   *   一视同仁——sub-agent 也是一个全新 session key，同样走默认值静默注册。
+   * - `enabled=false` / 解析失败（onUnresolved="form"）→ 完全维持原交互表单流程。
+   *
+   * 与 `headerAutoSelect`（header 显式身份）的优先级：header 优先（客户端已明确指定），
+   * autoDefault 作为「无 header、无明确意图」时的兜底。
+   */
+  autoDefault?: {
+    /** 是否启用静默默认。默认 false（保持现状，走表单）。 */
+    enabled: boolean;
+    /** 默认 team_id。缺省时取用户可见列表的第一个 team。 */
+    teamId?: string;
+    /** 默认 agent_id。缺省时取所选 team 的第一个 agent。 */
+    agentId?: string;
+    /**
+     * 默认 task_id。缺省/空字符串 = 不关联任务（记作 config.defaultTaskId 虚拟项，
+     * kernel 不 getTask，注入时 task 段为空、记忆走 broad recall）。
+     * 指定真实 task_id 时按真实任务注入。
+     */
+    taskId?: string;
+    /** 默认值无法解析（如 team/agent 不存在、无可用 agent）时：'skip'=跳过初始化直接放行 | 'form'=退化为交互表单。默认 'skip'。 */
+    onUnresolved?: "skip" | "form";
+  };
+  /**
+   * 交互式初始化表单的「超时收敛」时长（毫秒）。默认 15 分钟。
+   *
+   * 状态机是**请求驱动**的：用户挂在一个 pending 表单上迟迟不答复时，proxy 侧不会有
+   * 新请求进来，因此这里无法"主动解除 DSH 已挂起的 turn"。它的生效方式是：超时后
+   * **下一次**请求（用户终于回来、或 sub-agent 继续推进）到达时，状态机发现距
+   * `startedAt` 已超过本时长，则**不再弹表单 / 解析答复**，直接以 `autoDefault`
+   * 的默认值完成注册并注入记忆，让这条真实消息被正常处理。
+   *
+   * 仅当 `autoDefault.enabled` 为 true 时生效；否则维持现状（store 里既有的
+   * `DEFAULT_TTL_MS` 只负责丢弃过期 pending，不负责"收敛到默认值"）。
+   */
+  initTimeoutMs?: number;
 }
 
 export interface TdaiConfig {
@@ -848,6 +893,14 @@ export interface RawYamlConfig {
       taskHeader?: string;
       onMismatch?: "form" | "bypass";
     };
+    autoDefault?: {
+      enabled?: boolean;
+      teamId?: string;
+      agentId?: string;
+      taskId?: string;
+      onUnresolved?: "skip" | "form";
+    };
+    initTimeoutMs?: number;
   };
   tdai?: {
     enabled?: boolean;

@@ -101,6 +101,11 @@ export const DEFAULT_CONFIG: ProxyConfig = {
       taskHeader: "x-task-id",
       onMismatch: "form",
     },
+    autoDefault: {
+      enabled: false,
+      onUnresolved: "skip",
+    },
+    initTimeoutMs: 15 * 60 * 1000,
     // debugForceIdentity intentionally omitted — must be explicitly set in yaml
     // to activate the bypass path.
   },
@@ -415,6 +420,22 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       taskHeader: (yaml.sessionInit?.headerAutoSelect?.taskHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.taskHeader).toLowerCase(),
       onMismatch: yaml.sessionInit?.headerAutoSelect?.onMismatch ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.onMismatch,
     },
+    autoDefault: {
+      enabled: yaml.sessionInit?.autoDefault?.enabled ?? DEFAULT_CONFIG.sessionInit.autoDefault!.enabled,
+      teamId: typeof yaml.sessionInit?.autoDefault?.teamId === "string" && yaml.sessionInit.autoDefault.teamId.trim()
+        ? yaml.sessionInit.autoDefault.teamId.trim()
+        : undefined,
+      agentId: typeof yaml.sessionInit?.autoDefault?.agentId === "string" && yaml.sessionInit.autoDefault.agentId.trim()
+        ? yaml.sessionInit.autoDefault.agentId.trim()
+        : undefined,
+      taskId: typeof yaml.sessionInit?.autoDefault?.taskId === "string" && yaml.sessionInit.autoDefault.taskId.trim()
+        ? yaml.sessionInit.autoDefault.taskId.trim()
+        : undefined,
+      onUnresolved: yaml.sessionInit?.autoDefault?.onUnresolved ?? DEFAULT_CONFIG.sessionInit.autoDefault!.onUnresolved,
+    },
+    initTimeoutMs: typeof yaml.sessionInit?.initTimeoutMs === "number" && yaml.sessionInit.initTimeoutMs > 0
+      ? yaml.sessionInit.initTimeoutMs
+      : DEFAULT_CONFIG.sessionInit.initTimeoutMs,
     debugForceIdentity: yaml.sessionInit?.debugForceIdentity
       && typeof yaml.sessionInit.debugForceIdentity === "object"
       && typeof (yaml.sessionInit.debugForceIdentity as Record<string, unknown>).team_id === "string"

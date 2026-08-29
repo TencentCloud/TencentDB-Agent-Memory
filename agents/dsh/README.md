@@ -100,6 +100,29 @@ proxy 生成 form 响应时需要填入非空 `reasoning_content` 占位。
 2. 用户输入 "跳过" / "skip"
 3. 在 asset_confirm 选"否"
 
+### 3.6.1 静默默认（autoDefault）与超时收敛（initTimeoutMs）
+
+dsh 主会话与 sub-agent（子代理 = 也是全新 session）每次开新会话都会走这套
+初始化表单。如果希望用户**无明确选择意图时直接以默认值完成注册**（不弹表单、
+不等回复），在 proxy `config.yaml` 的 `sessionInit` 段开启：
+
+```yaml
+sessionInit:
+  autoDefault:
+    enabled: true        # 开：不弹表单，直接以默认 (team, agent) 注册并注入记忆
+    teamId: ""           # 默认 team_id；留空 = 取第一个可见 team
+    agentId: ""          # 默认 agent_id；留空 = 取所选 team 第一个 agent
+    taskId: ""           # 留空 = 不关联任务（记 defaultTaskId 虚拟项）
+    onUnresolved: "skip" # 默认值无法解析时：skip=放行 | form=回退表单
+  initTimeoutMs: 900000  # 默认 15 分钟；pending 超时后下一次交互直接收敛到默认值
+```
+
+- **sub-agent 无需 DSH 侧改动**：sub-agent 也是一个全新 session key，天然走
+  `autoDefault` 静默注册路径——不需要识别父/子会话，也不需要 DSH 携带
+  parent session header。
+- 想换绑定 → 用 `mem:session-reset`。详见 [`INSTALL_CN.md`](../../INSTALL_CN.md)
+  的 `sessionInit.autoDefault` 一节。
+
 ### 3.7 首次会话 —— 选 Team → Agent → Task
 
 启动 Web UI：
