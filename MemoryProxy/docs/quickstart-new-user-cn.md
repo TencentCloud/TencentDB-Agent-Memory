@@ -92,7 +92,7 @@ docker logs tdai-proxy --since 2m | grep -E "tdai-l1-recall|audit.memory-access"
 ```bash
 # 1) 启动自托管 Opik（backend 8080 / frontend 5173）
 cd deploy
-docker compose -f opik-compose.yml up -d
+docker compose -f opik-compose.yml --profile opik up -d
 
 # 2) .env 开启并重启 proxy
 #    PROXY_OPIK_ENABLED=1
@@ -100,7 +100,7 @@ docker compose -f opik-compose.yml up -d
 cd deploy/global-images && ./start-proxy.sh
 
 # 3) 查看 trace（项目名 = 你的 userId）
-curl "http://127.0.0.1:8080/v1/private/traces?project_name=<userId>&page=1&size=5"
+curl "http://127.0.0.1:5173/api/v1/private/traces?project_name=<userId>&page=1&size=5"
 # UI：http://127.0.0.1:5173
 ```
 

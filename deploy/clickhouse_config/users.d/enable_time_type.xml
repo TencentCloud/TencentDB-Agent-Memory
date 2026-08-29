@@ -1,0 +1,11 @@
+<clickhouse>
+    <!-- ClickHouse 25.8 made the experimental Time/Time64 type opt-in. Migration
+         000030_add_project_configs_table creates a Time column (dropped later by 000036),
+         so fresh installs need this enabled to replay the migration chain. This is a
+         profile (users.d) setting, not a server (config.d) setting. -->
+    <profiles>
+        <default>
+            <enable_time_time64_type>1</enable_time_time64_type>
+        </default>
+    </profiles>
+</clickhouse>

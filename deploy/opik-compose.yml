@@ -1,0 +1,488 @@
+name: opik
+
+services:
+  mysql:
+    image: mysql:8.4.2
+    pull_policy: always
+    hostname: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: opik
+      MYSQL_DATABASE: opik
+      MYSQL_USER: opik
+      MYSQL_PASSWORD: opik
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent" ]
+      timeout: 1s
+      interval: 1s
+      retries: 300
+    volumes:
+      - mysql:/var/lib/mysql/:type=volume,source=~/opik/mysql
+
+  redis:
+    image: redis:7.2.4-alpine3.19
+    pull_policy: always
+    hostname: redis
+    command: redis-server --requirepass opik
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "6379" ]
+      interval: 2s
+      timeout: 4s
+      retries: 20
+      start_period: 30s
+    volumes:
+      - redis-data:/data
+
+  clickhouse-init:
+    image: alpine:latest
+    volumes:
+      - ./clickhouse_config:/clickhouse_config_files
+      - clickhouse-config:/config
+    command: |
+      sh -c "
+        cp -r /clickhouse_config_files/* /config/ &&
+        chown -R 1000:1000 /config
+      "
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3.16.16-alpine
+    pull_policy: always
+    hostname: clickhouse
+    environment:
+      CLICKHOUSE_DB: opik
+      CLICKHOUSE_USER: opik
+      CLICKHOUSE_PASSWORD: opik
+      # Enables SQL-driven Access Control and Account Management:
+      # https://clickhouse.com/docs/en/operations/access-rights#enabling-access-control
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse:/var/lib/clickhouse/:type=volume,source=~/opik/clickhouse/data
+      - clickhouse-server:/var/log/clickhouse-server/:type=volume,source=~/opik/clickhouse/logs
+      - clickhouse-config:/etc/clickhouse-server/config.d
+      - ./clickhouse_config/users.d/enable_time_type.xml:/etc/clickhouse-server/users.d/enable_time_type.xml
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://127.0.0.1:8123/ping" ]
+      interval: 1s
+      timeout: 1s
+      retries: 300
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+
+  zookeeper:
+    image: zookeeper:3.9.4
+    pull_policy: always
+    hostname: zookeeper
+    user: root
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        # Create data directory if it doesn't exist (for fresh installations)
+        # We use /bitnami/zookeeper/data path for compatibility with upgrades from Bitnami images
+        # Fresh installs need this directory created, while upgrades already have it with existing data
+        mkdir -p /bitnami/zookeeper/data
+        chown -R zookeeper:zookeeper /bitnami/zookeeper
+        # Run the original entrypoint as zookeeper user
+        exec gosu zookeeper /docker-entrypoint.sh zkServer.sh start-foreground
+    environment:
+      JVMFLAGS: "-Xmx512m"
+      ZOO_4LW_COMMANDS_WHITELIST: "srvr,ruok"
+      # Use Bitnami-compatible data directory for seamless migration from Bitnami images
+      # Both dataDir and dataLogDir point to the same location (Bitnami stored both together)
+      ZOO_DATA_DIR: /bitnami/zookeeper/data
+      ZOO_DATA_LOG_DIR: /bitnami/zookeeper/data
+    healthcheck:
+      test: [ "CMD-SHELL", "echo ruok | nc localhost 2181 | grep -q imok" ]
+      interval: 1s
+      timeout: 1s
+      retries: 300
+    volumes:
+      # Mount to /bitnami/zookeeper for compatibility with existing Bitnami installations
+      # Bitnami stored data at /bitnami/zookeeper/data, so ZOO_DATA_DIR points there
+      - zookeeper:/bitnami/zookeeper
+
+  minio:
+    image: minio/minio:RELEASE.2025-03-12T18-04-18Z
+    pull_policy: always
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+    command: server --console-address ":9090" /data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 1s
+      timeout: 10s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - minio-data:/data
+
+  mc:
+    image: minio/mc:RELEASE.2025-03-12T17-29-24Z
+    pull_policy: always
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10s;
+      /usr/bin/mc alias set s3 http://minio:9000 ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE} ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY} --api S3v4 ;
+      /usr/bin/mc mb --ignore-existing s3/public;
+      /usr/bin/mc anonymous set download s3/public/;
+      "
+
+  backend:
+    image: ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-latest}
+    pull_policy: ${OPIK_BACKEND_PULL_POLICY:-always}
+    profiles:
+      - backend
+      - opik
+      - opik-otel
+    build:
+      context: ../../apps/opik-backend
+      dockerfile: Dockerfile
+      args:
+        OPIK_VERSION: ${OPIK_VERSION:-latest}
+    hostname: backend
+    command: [ "bash", "-c", "./run_db_migrations.sh && ./provision_agent_insights_readonly_user.sh && ./entrypoint.sh" ]
+    environment:
+      # WARNING: Do not set OPIK_VERSION as env var here. It's a multi-stage build, so build and runtime values can differ.
+      DOCKER_BUILDKIT: 1
+      # Persistent anonymous installation ID passed from launcher script
+      OPIK_ANONYMOUS_ID: ${OPIK_ANONYMOUS_ID:-}
+      STATE_DB_PROTOCOL: "jdbc:mysql://"
+      STATE_DB_URL: "mysql:3306/opik?createDatabaseIfNotExist=true&rewriteBatchedStatements=true&connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true"
+      STATE_DB_DATABASE_NAME: opik
+      STATE_DB_USER: opik
+      STATE_DB_PASS: opik
+      ANALYTICS_DB_MIGRATIONS_URL: "jdbc:clickhouse://clickhouse:8123"
+      ANALYTICS_DB_MIGRATIONS_USER: opik
+      ANALYTICS_DB_MIGRATIONS_PASS: opik
+      ANALYTICS_DB_PROTOCOL: "HTTP"
+      ANALYTICS_DB_HOST: "clickhouse"
+      ANALYTICS_DB_PORT: 8123
+      ANALYTICS_DB_DATABASE_NAME: opik
+      ANALYTICS_DB_USERNAME: opik
+      ANALYTICS_DB_PASS: opik
+      # Ollie / Agent Insights read-only freeform SQL (default off). When true, the backend provisions the restricted
+      # read-only user (provision_agent_insights_readonly_user.sh, after migrations) and connects as it.
+      TOGGLE_OLLIE_ENABLED: ${TOGGLE_OLLIE_ENABLED:-"false"}
+      # Self-hosted deployments legitimately point custom-provider token auth at internal gateways;
+      # the application default is "strict" (SSRF guard) for non-self-hosted deployments.
+      LLM_PROVIDER_TOKEN_AUTH_DESTINATION_GUARD: ${LLM_PROVIDER_TOKEN_AUTH_DESTINATION_GUARD:-"relaxed"}
+      ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_USER: ${ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_USER:-comet_readonly_freeform_sql_user}
+      ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_PASS: ${ANALYTICS_DB_READ_ONLY_FREEFORM_SQL_PASS:-opik}
+      # Traces cutover knobs (data-migrations/traces-local-v2-cutover). Default off / unset; the operator sets these
+      # for the backfill-to-cutover window.
+      ANALYTICS_DB_DATA_MODEL_TRACE_DELETION_EVENTS_CAPTURE_ENABLED: ${ANALYTICS_DB_DATA_MODEL_TRACE_DELETION_EVENTS_CAPTURE_ENABLED:-false}
+      ANALYTICS_DB_DATA_MODEL_SPAN_DELETION_EVENTS_CAPTURE_ENABLED: ${ANALYTICS_DB_DATA_MODEL_SPAN_DELETION_EVENTS_CAPTURE_ENABLED:-false}
+      # ClickHouse async_insert tuning (optional; unset keeps the ClickHouse/server defaults).
+      ANALYTICS_DB_ASYNC_INSERT_BUSY_TIMEOUT_MAX_MS: ${ANALYTICS_DB_ASYNC_INSERT_BUSY_TIMEOUT_MAX_MS:-}
+      ANALYTICS_DB_ASYNC_INSERT_BUSY_TIMEOUT_MIN_MS: ${ANALYTICS_DB_ASYNC_INSERT_BUSY_TIMEOUT_MIN_MS:-}
+      ANALYTICS_DB_ASYNC_INSERT_MAX_DATA_SIZE: ${ANALYTICS_DB_ASYNC_INSERT_MAX_DATA_SIZE:-}
+      # Flip TRACE_COLUMNS_NON_NULLABLE to true in lockstep with the EXCHANGE (the successor's end_time/ttft are
+      # non-nullable sentinel columns; a null bind would be rejected). The SPAN sibling is for the later spans cutover.
+      ANALYTICS_DB_DATA_MODEL_TRACE_COLUMNS_NON_NULLABLE: ${ANALYTICS_DB_DATA_MODEL_TRACE_COLUMNS_NON_NULLABLE:-false}
+      ANALYTICS_DB_DATA_MODEL_SPAN_COLUMNS_NON_NULLABLE: ${ANALYTICS_DB_DATA_MODEL_SPAN_COLUMNS_NON_NULLABLE:-false}
+      # Flip TRACES_DISTRIBUTED_WRAP_ENABLED to true in lockstep with applying the Distributed wrap: it routes trace
+      # delete/retention mutations to traces_local, since a Distributed traces rejects mutations.
+      ANALYTICS_DB_DATA_MODEL_TRACES_DISTRIBUTED_WRAP_ENABLED: ${ANALYTICS_DB_DATA_MODEL_TRACES_DISTRIBUTED_WRAP_ENABLED:-false}
+      # Readiness probes for the Hyperscale topology, both off for the single-node Compose stack: the cluster probe
+      # checks the Distributed cluster definition is visible, the cold-storage probe checks the cold_s3 tiered disk.
+      ANALYTICS_DB_CLUSTER_HEALTH_CHECK_ENABLED: ${ANALYTICS_DB_CLUSTER_HEALTH_CHECK_ENABLED:-false}
+      ANALYTICS_DB_COLD_STORAGE_DISK_HEALTH_CHECK_ENABLED: ${ANALYTICS_DB_COLD_STORAGE_DISK_HEALTH_CHECK_ENABLED:-false}
+      # UUIDv7 ingestion validation. Off by default; the window mirrors the chart's
+      # databaseAnalytics.uuidV7ValidationWindow (24h) and is inert while ENABLED is false. AUDIT_ONLY counts and
+      # logs out-of-window ids instead of rejecting them with HTTP 400.
+      UUID_VALIDATION_ENABLED: ${UUID_VALIDATION_ENABLED:-false}
+      UUID_VALIDATION_AUDIT_ONLY: ${UUID_VALIDATION_AUDIT_ONLY:-false}
+      UUID_VALIDATION_WINDOW: ${UUID_VALIDATION_WINDOW:-24h}
+      # Rows per INSERT into the deletion_events_local bridge (used only while the capture flags above are on).
+      ANALYTICS_DB_DATA_MODEL_DELETION_EVENTS_INSERT_BATCH_SIZE: ${ANALYTICS_DB_DATA_MODEL_DELETION_EVENTS_INSERT_BATCH_SIZE:-1000}
+      # ClickHouse partition-health observability (OPIK-6904): polls system.parts plus the lightweight-delete mask
+      # and publishes opik.clickhouse.partition.* gauges. Off by default.
+      PARTITION_METRICS_ENABLED: ${PARTITION_METRICS_ENABLED:-false}
+      PARTITION_METRICS_INTERVAL: ${PARTITION_METRICS_INTERVAL:-5m}
+      PARTITION_METRICS_LWD_TABLES: ${PARTITION_METRICS_LWD_TABLES:-traces,spans}
+      JAVA_OPTS: "-Dliquibase.propertySubstitutionEnabled=true -XX:+UseG1GC -XX:MaxRAMPercentage=80.0"
+      REDIS_URL: redis://:opik@redis:6379/
+      OPIK_OTEL_SDK_ENABLED: ${OPIK_OTEL_SDK_ENABLED:-false}
+      OTEL_INSTRUMENTATION_HTTP_SERVER_CAPTURE_REQUEST_HEADERS: ${OTEL_INSTRUMENTATION_HTTP_SERVER_CAPTURE_REQUEST_HEADERS:-Comet-Workspace,x-opik-debug-sdk-version}
+      OTEL_INSTRUMENTATION_HTTP_SERVER_EMIT_EXPERIMENTAL_TELEMETRY: ${OTEL_INSTRUMENTATION_HTTP_SERVER_EMIT_EXPERIMENTAL_TELEMETRY:-true}
+      OTEL_VERSION: 2.16.0
+      OTEL_PROPAGATORS: "tracecontext,baggage,b3"
+      OTEL_EXPERIMENTAL_EXPORTER_OTLP_RETRY_ENABLED: true
+      OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION: BASE2_EXPONENTIAL_BUCKET_HISTOGRAM
+      OTEL_EXPERIMENTAL_RESOURCE_DISABLED_KEYS: process.command_args
+      OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: delta
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-grpc}
+      OPIK_USAGE_REPORT_ENABLED: ${OPIK_USAGE_REPORT_ENABLED:-true}
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
+      IS_MINIO: true
+      S3_URL: http://minio:9000
+      PYTHON_EVALUATOR_URL: ${PYTHON_EVALUATOR_URL:-http://python-backend:${PYTHON_BACKEND_PORT:-8000}}
+      TOGGLE_OPIK_AI_ENABLED: ${TOGGLE_OPIK_AI_ENABLED:-"false"}
+      TOGGLE_GUARDRAILS_ENABLED: ${TOGGLE_GUARDRAILS_ENABLED:-"false"}
+      TOGGLE_WELCOME_WIZARD_ENABLED: ${TOGGLE_WELCOME_WIZARD_ENABLED:-"true"}
+      LLM_MODEL_REGISTRY_DEFAULT_RESOURCE: ${LLM_MODEL_REGISTRY_DEFAULT_RESOURCE:-llm-models-default.yaml}
+      LLM_MODEL_REGISTRY_LOCAL_OVERRIDE_PATH: ${LLM_MODEL_REGISTRY_LOCAL_OVERRIDE_PATH:-}
+      LLM_MODEL_REGISTRY_REMOTE_ENABLED: ${LLM_MODEL_REGISTRY_REMOTE_ENABLED:-"false"}
+      LLM_MODEL_REGISTRY_REMOTE_URL: ${LLM_MODEL_REGISTRY_REMOTE_URL:-}
+      LLM_MODEL_REGISTRY_REFRESH_INTERVAL_SECONDS: ${LLM_MODEL_REGISTRY_REFRESH_INTERVAL_SECONDS:-300}
+      CORS: ${CORS:-false}
+      ATTACHMENTS_STRIP_MIN_SIZE: ${ATTACHMENTS_STRIP_MIN_SIZE:-256000}
+      JACKSON_MAX_STRING_LENGTH: ${JACKSON_MAX_STRING_LENGTH:-104857600}
+    ports:
+      - "8080:8080" # Opik backend API (fixed host port for proxy tracing)
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health-check" ]
+      interval: 1s
+      timeout: 600s
+      retries: 600
+      start_period: 1s
+    depends_on:
+      mysql:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    tmpfs:
+      - /tmp
+
+  python-backend:
+    image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-latest}
+    # change to 'build' when developing python-backend
+    pull_policy: ${PYTHON_BACKEND_PULL_POLICY:-always}
+    profiles:
+      - backend
+      - opik
+      - local-be-fe
+      - local-be
+    build:
+      context: ../../apps/opik-python-backend
+      dockerfile: Dockerfile
+    hostname: python-backend
+    privileged: true # Required for Docker-in-Docker, so it can launch containers
+    environment:
+      OPIK_OTEL_SDK_ENABLED: false
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_VERSION: 2.16.0
+      PYTHON_CODE_EXECUTOR_IMAGE_TAG: ${OPIK_VERSION:-latest}
+      PYTHON_CODE_EXECUTOR_STRATEGY: ${PYTHON_CODE_EXECUTOR_STRATEGY:-process}
+      PYTHON_CODE_EXECUTOR_CONTAINERS_NUM: 5
+      PYTHON_CODE_EXECUTOR_EXEC_TIMEOUT_IN_SECS: 3
+      PYTHON_CODE_EXECUTOR_ALLOW_NETWORK: "false"
+      PYTHON_CODE_EXECUTOR_CPU_SHARES: 512
+      PYTHON_CODE_EXECUTOR_MEM_LIMIT: "256m"
+      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      OPIK_REVERSE_PROXY_URL: ${OPIK_REVERSE_PROXY_URL:-http://frontend:${NGINX_PORT:-5173}/api}
+      PYTHON_BACKEND_PORT: ${PYTHON_BACKEND_PORT:-8000}
+      # Redis Configuration
+      REDIS_URL: redis://:opik@redis:6379/0
+      RQ_WORKER_ENABLED: ${RQ_WORKER_ENABLED:-true}
+      # Optimization Studio parallel processing (default: 5)
+      OPTSTUDIO_MAX_CONCURRENT_JOBS: ${OPTSTUDIO_MAX_CONCURRENT_JOBS:-5}
+      # Optimization Studio log level (DEBUG, INFO, WARNING, ERROR) - default INFO
+      OPTSTUDIO_LOG_LEVEL: ${OPTSTUDIO_LOG_LEVEL:-INFO}
+      # Default max output tokens for optimizer LLM calls (default: 8192)
+      OPTSTUDIO_LLM_MAX_TOKENS: ${OPTSTUDIO_LLM_MAX_TOKENS:-8192}
+      # TTL for failed RQ jobs in Redis in seconds (default: 86400 = 1 day)
+      RQ_WORKER_TTL_FAILURE: ${RQ_WORKER_TTL_FAILURE:-86400}
+      # Opik SDK Configuration
+      OPIK_URL_OVERRIDE: ${OPIK_URL_OVERRIDE:-http://backend:8080}
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "if [ -f /opt/opik-python-backend/src/opik_backend/healthcheck.py ]; then wget --spider --quiet http://127.0.0.1:$${PYTHON_BACKEND_PORT:-8000}/healthcheck; else exit 0; fi" ]
+      interval: 2s
+      timeout: 60s
+      retries: 30
+      start_period: 2s
+    tmpfs:
+      - /var/lib/docker
+
+  # Default variant: the published GPU-capable image, which runs on CPU when no
+  # GPU is present (torch falls back). For GPU acceleration run it standalone with
+  # `docker run --gpus all`. Use the guardrails-backend-cpu service for a slim,
+  # multi-arch CPU-only image built from source.
+  guardrails-backend:
+    image: ghcr.io/comet-ml/opik/opik-guardrails-backend:${OPIK_VERSION:-latest}
+    pull_policy: ${OPIK_GUARDRAILS_BACKEND_PULL_POLICY:-always}
+    profiles:
+      - guardrails
+    build:
+      context: ../../apps/opik-guardrails-backend
+      dockerfile: Dockerfile
+    hostname: guardrails
+    environment:
+      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      HF_TOKEN: ${HF_TOKEN:-}
+      OPIK_GUARDRAILS_PROMPT_INJECTION_BASE_MODEL: ${OPIK_GUARDRAILS_PROMPT_INJECTION_BASE_MODEL:-}
+      OPIK_GUARDRAILS_PROMPT_INJECTION_MODEL: ${OPIK_GUARDRAILS_PROMPT_INJECTION_MODEL:-}
+      OPIK_GUARDRAILS_ADAPTERS_DIR: /adapters
+    volumes:
+      # Directory of trained custom guardrail models, shared with wherever you run
+      # training. Point OPIK_GUARDRAILS_ADAPTERS_HOST_DIR at your trained models.
+      - ${OPIK_GUARDRAILS_ADAPTERS_HOST_DIR:-./guardrails-adapters}:/adapters
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "wget --spider --quiet http://127.0.0.1:5000/healthcheck" ]
+      interval: 2s
+      timeout: 60s
+      retries: 30
+      start_period: 10s
+
+  # CPU-only variant (slim multi-arch image, no GPU or NVIDIA toolkit required).
+  # There is no published CPU image, so it is always built from source. Shares the
+  # `guardrails` hostname with the GPU service; only one of the two runs at a time
+  # (mutually exclusive profiles).
+  guardrails-backend-cpu:
+    pull_policy: build
+    profiles:
+      - guardrails-cpu
+    build:
+      context: ../../apps/opik-guardrails-backend
+      dockerfile: Dockerfile.cpu
+    hostname: guardrails
+    environment:
+      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      HF_TOKEN: ${HF_TOKEN:-}
+      OPIK_GUARDRAILS_PROMPT_INJECTION_BASE_MODEL: ${OPIK_GUARDRAILS_PROMPT_INJECTION_BASE_MODEL:-}
+      OPIK_GUARDRAILS_PROMPT_INJECTION_MODEL: ${OPIK_GUARDRAILS_PROMPT_INJECTION_MODEL:-}
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "wget --spider --quiet http://127.0.0.1:5000/healthcheck" ]
+      interval: 2s
+      timeout: 60s
+      retries: 30
+      start_period: 10s
+
+  demo-data-generator:
+    image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-latest}
+    pull_policy: always
+    profiles:
+      - opik
+      - local-be-fe
+      - local-be
+    build:
+      context: ../../apps/opik-python-backend
+      dockerfile: Dockerfile
+    hostname: demo-data-generator
+    environment:
+      CREATE_DEMO_DATA: ${CREATE_DEMO_DATA:-true}
+      PYTHON_BACKEND_URL: ${PYTHON_BACKEND_URL:-http://python-backend:${PYTHON_BACKEND_PORT:-8000}}
+    command: [ "sh", "-c", "./demo_data_entrypoint.sh" ]
+    depends_on:
+      frontend:
+        condition: service_healthy
+      python-backend:
+        condition: service_healthy
+    tmpfs:
+      - /var/lib/docker
+
+  frontend:
+    image: ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-latest}
+    pull_policy: ${OPIK_FRONTEND_PULL_POLICY:-always}
+    profiles:
+      - opik
+      - local-be
+      - opik-otel
+    build:
+      context: ../../apps/opik-frontend
+      dockerfile: Dockerfile
+      args:
+        OPIK_VERSION: ${OPIK_VERSION:-latest}
+    #   cache_from:
+    #     - alpine:latest
+    #     - nginx:1.29.3-alpine-otel
+    #     - node:20.19.5-alpine3.22
+    #     - type=local,src=./.cache
+      # cache_to:
+      #   - type=local,dest=./.cache
+    hostname: frontend
+    ports:
+      - "${NGINX_PORT:-5173}:${NGINX_PORT:-5173}" # Frontend server port (configurable via NGINX_PORT env var)
+    volumes:
+      - ./nginx_${OPIK_FRONTEND_FLAVOR:-default}_local.conf:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      # The following dependency on otel-collector is required only when distributed tracing is enabled (OTEL_TRACE=on).
+      # Uncomment to ensure frontend waits for otel-collector to be healthy before starting.
+      # otel-collector:
+      #   condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl --fail --fail-early http://localhost:${NGINX_PORT:-5173}/health" ]
+      interval: 1s
+      timeout: 30s
+      retries: 10
+      start_period: 1s
+    environment:
+      OPIK_VERSION: ${OPIK_VERSION:-latest}
+      NGINX_PORT: ${NGINX_PORT:-5173}
+      NGINX_CONF_SUFFIX: ${NGINX_CONF_SUFFIX:-local}
+      OTEL_TRACE: ${OTEL_TRACE:-off}
+      OTEL_COLLECTOR_HOST: ${OTEL_COLLECTOR_HOST:-otel-collector}
+      OTEL_COLLECTOR_PORT: ${OTEL_COLLECTOR_PORT:-4317}
+      # NGINX_EXTRA_ACCESS_LOG: access_log syslog:server=otel-collector:5140 logger-json;
+      # NGINX_EXTRA_ERROR_LOG: error_log syslog:server=otel-collector:5140 error;
+
+  # Jaeger - receives traces via OTLP
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    profiles:
+      - opik-otel
+    hostname: jaeger
+    ports:
+      - "16686:16686" # UI
+      - "14317:4317"   # OTLP gRPC
+      - "14318:4318"   # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:14269/" ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.139.0
+    profiles:
+      - opik-otel
+    hostname: otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
+      - ./otel_data:/otel_data
+    healthcheck:
+      test: [ "CMD", "/otelcol-contrib", "validate", "--config=/etc/otelcol-contrib/config.yaml" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8888:8888" # Prometheus metrics
+      - "13133:13133" # health_check
+      - "55679:55679" # zpages
+      - "5140:5140/udp" # syslog
+    depends_on:
+      jaeger:
+        condition: service_healthy
+
+networks:
+  default:
+
+volumes:
+  clickhouse:
+  clickhouse-server:
+  clickhouse-config:
+  mysql:
+  zookeeper:
+  redis-data:
+  minio-data:
