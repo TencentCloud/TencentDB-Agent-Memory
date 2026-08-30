@@ -160,10 +160,20 @@ generate_user_key() {
   echo "sk-mem-${raw}"
 }
 
+# Native Windows curl cannot write MSYS paths when Docker path conversion is
+# disabled for this script. Keep shell-facing and curl-facing paths separate.
+CURL_SINK=/dev/null
+INIT_ADMIN_TMP="/tmp/init-admin.$$"
+INIT_ADMIN_CURL_TMP="$INIT_ADMIN_TMP"
+if [[ -n "${MSYSTEM:-}" ]]; then
+  CURL_SINK=NUL
+  INIT_ADMIN_CURL_TMP="$(cygpath -w "$INIT_ADMIN_TMP")"
+fi
+
 verify_user_key() {
   local key="$1"
   local code
-  code=$(/usr/bin/curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+  code=$(curl -sS -o "$CURL_SINK" -w "%{http_code}" --max-time 5 \
     -X POST -H "Content-Type: application/json" \
     -H "x-tdai-service-id: default" \
     ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
@@ -184,7 +194,7 @@ fi
 
 init_body=$(printf '{"username":"%s","user_key":"%s"}' \
   "$MEMORY_CORE_ADMIN_USERNAME" "$ADMIN_KEY")
-init_resp=$(/usr/bin/curl -sS -o /tmp/init-admin.$$ -w "%{http_code}" \
+init_resp=$(curl -sS -o "$INIT_ADMIN_CURL_TMP" -w "%{http_code}" \
   -X POST -H "Content-Type: application/json" \
   ${MEMORY_CORE_GATEWAY_API_KEY:+-H "Authorization: Bearer ${MEMORY_CORE_GATEWAY_API_KEY}"} \
   -H "x-tdai-service-id: default" \
@@ -210,10 +220,10 @@ case "$init_resp" in
     ;;
   *)
     warn "init-admin 返回 HTTP=${init_resp}，可能需要手动排查："
-    cat /tmp/init-admin.$$ 2>/dev/null; echo
+    cat "$INIT_ADMIN_TMP" 2>/dev/null; echo
     ;;
 esac
-rm -f /tmp/init-admin.$$
+rm -f "$INIT_ADMIN_TMP"
 
 # ── 校验 admin key 可用 ─────────────────────────────────────────
 if [[ -s "$ADMIN_KEY_FILE" ]]; then
