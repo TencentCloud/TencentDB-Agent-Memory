@@ -297,9 +297,10 @@ sessionInit:
     taskHeader: "x-task-id"
     onMismatch: "form"
   autoConversationId:
-    enabled: ${PROXY_AUTO_CONVERSATION_ID:-false}
+    enabled: ${PROXY_AUTO_CONVERSATION_ID:-true}
     ttlMinutes: ${PROXY_AUTO_CONVERSATION_TTL:-30}
-    strategy: per-key
+    strategy: ${PROXY_AUTO_CONVERSATION_STRATEGY:-per-key}
+  taskMissingPolicy: ${PROXY_TASK_MISSING_POLICY:-skip}
   threadIsolation:
     enabled: ${PROXY_THREAD_ISOLATION:-false}
 

@@ -282,6 +282,14 @@ export interface SessionInitConfig {
    * 默认 "default"（开启）。若想关闭，在 YAML 中配为空字符串 `defaultTaskId: ""`。
    */
   defaultTaskId?: string;
+  /**
+   * 缺省 task 时的注册策略（header 预选路径 team+agent 命中但未带 x-task-id）：
+   * - "skip"   （默认）：不绑定 task，仅注入 Agent 级记忆（broad recall）
+   * - "default"        ：用 defaultTaskId 占位（等效"本次不关联任务"）
+   * - "reject"         ：缺 task 视为 mismatch（走 onMismatch / bypass）
+   * 显式传入的无效 task_id 一律按 mismatch 处理（非静默忽略）。
+   */
+  taskMissingPolicy?: "skip" | "default" | "reject";
   headerAutoSelect?: {
     /** 是否启用 header 自动预选。默认 true。 */
     enabled: boolean;
@@ -1007,6 +1015,7 @@ export interface RawYamlConfig {
       enabled?: boolean;
     };
     defaultTaskId?: string;
+    taskMissingPolicy?: "skip" | "default" | "reject";
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;

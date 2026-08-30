@@ -103,9 +103,10 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     maxRetries: 3,
     injectAgentContext: true,
     injectTaskContext: true,
-    autoConversationId: { enabled: false, ttlMinutes: 30, strategy: "per-key" },
+    autoConversationId: { enabled: true, ttlMinutes: 30, strategy: "per-key" },
     threadIsolation: { enabled: false },
     defaultTaskId: "default",
+    taskMissingPolicy: "skip",
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -547,6 +548,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string"
       ? (yaml.sessionInit.defaultTaskId.trim() || undefined)   // empty string → disabled
       : DEFAULT_CONFIG.sessionInit.defaultTaskId,
+    taskMissingPolicy: yaml.sessionInit?.taskMissingPolicy === "reject"
+      ? "reject"
+      : yaml.sessionInit?.taskMissingPolicy === "default"
+        ? "default"
+        : "skip",
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
       teamHeader: (yaml.sessionInit?.headerAutoSelect?.teamHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.teamHeader).toLowerCase(),

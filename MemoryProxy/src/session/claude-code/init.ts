@@ -749,7 +749,7 @@ async function handleSessionInitInner(
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
     if (presetIdentity && config.headerAutoSelect?.enabled) {
-      const pr = resolvePresetIdentity(teams, presetIdentity);
+      const pr = resolvePresetIdentity(teams, presetIdentity, config);
 
       if (pr.hadMismatch) {
         if (config.headerAutoSelect.onMismatch === "bypass") {

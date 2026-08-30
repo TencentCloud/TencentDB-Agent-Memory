@@ -711,8 +711,13 @@ export async function handleChatCompletions(
   }
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveEffectiveConversationId, isNamespaceArchived } = await import("./session/session-key.js");
-  const { conversationId, threadId } = resolveEffectiveConversationId(c, keyId, config);
+  const { resolveEffectiveConversationId, isNamespaceArchived, firstUserMessageFingerprint } = await import("./session/session-key.js");
+  const { conversationId, threadId } = resolveEffectiveConversationId(
+    c,
+    keyId,
+    config,
+    firstUserMessageFingerprint(body.messages),
+  );
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────

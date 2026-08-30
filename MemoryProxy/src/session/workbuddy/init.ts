@@ -341,7 +341,7 @@ export async function handleWorkbuddySessionInit(
     return bypassResult("kernel-error");
   }
 
-  const resolution = resolvePresetIdentity(teams, preset);
+  const resolution = resolvePresetIdentity(teams, preset, config);
   if (!resolution.canRegister) {
     // 校验失败：header 值与用户可见 team/agent/task 不一致 → 长期 bypass
     // （客户端下一轮请求还是会带同一 header，重试无益）

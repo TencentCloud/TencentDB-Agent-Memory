@@ -41,6 +41,8 @@ export interface PresetResolution {
    * back to the interactive form (or bypass) per `headerAutoSelect.onMismatch`.
    */
   hadMismatch: boolean;
+  /** 为什么 mismatch："invalid-team" | "invalid-agent" | "invalid-task" | "task-required"。 */
+  mismatchReason?: string;
 }
 
 /**
@@ -77,6 +79,7 @@ export function parsePresetIdentity(
 export function resolvePresetIdentity(
   teams: TeamOption[],
   preset: PresetIdentity,
+  config?: SessionInitConfig,
 ): PresetResolution {
   const res: PresetResolution = { canRegister: false, hadMismatch: false };
   if (!preset.teamId) return res;
@@ -85,6 +88,7 @@ export function resolvePresetIdentity(
   if (!team) {
     // Unknown team → don't trust anything from this header set.
     res.hadMismatch = true;
+    res.mismatchReason = "invalid-team";
     return res;
   }
   res.teamId = team.team_id;
@@ -92,26 +96,32 @@ export function resolvePresetIdentity(
   if (preset.agentId) {
     const agent = team.agents.find((a) => a.agent_id === preset.agentId);
     if (agent) res.agentId = agent.agent_id;
-    else res.hadMismatch = true;
+    else {
+      res.hadMismatch = true;
+      res.mismatchReason = "invalid-agent";
+    }
   }
 
   if (preset.taskId) {
     const task = team.tasks.find((t) => t.task_id === preset.taskId);
     if (task) res.taskId = task.task_id;
-    // A stale/unknown task_id does NOT flip hadMismatch: task_id is an
-    // optional business dimension in the kernel (isolation.ts: "taskId is
-    // an optional business dimension for L0/L1 filtering"). An absent or
-    // stale task must not block registration — it just means recall is
-    // broadened across all of the agent's memories. Only an unknown team or
-    // unknown agent is a real identity mismatch (they're the mandatory
-    // dimensions); a task mismatch is silently dropped with a caller-side
-    // warning instead. See PR feat/task-optional-memory.
+    else {
+      // 显式传入的无效 task_id → 视为 mismatch（走 onMismatch），非静默忽略。
+      res.hadMismatch = true;
+      res.mismatchReason = "invalid-task";
+    }
+  } else {
+    // 未提供 task：按 taskMissingPolicy 决定注册行为
+    const policy = config?.taskMissingPolicy ?? "skip";
+    if (policy === "default" && config?.defaultTaskId) {
+      res.taskId = config.defaultTaskId; // 占位 task（等效"本次不关联任务"）
+    } else if (policy === "reject") {
+      res.hadMismatch = true;
+      res.mismatchReason = "task-required";
+    }
   }
 
-  // team + agent resolved → register directly. task_id is OPTIONAL: a
-  // missing/stale task yields undefined taskId (broad recall), not a block.
-  // This matches the kernel's own semantics and the interactive "本次不关联
-  // 任务" / defaultTaskId path.
+  // team + agent resolved → register directly；task 按策略（skip/default/reject）。
   res.canRegister = !!res.agentId && !res.hadMismatch;
   return res;
 }

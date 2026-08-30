@@ -44,6 +44,7 @@ import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { codexAdapter } from "./agent-adapters/codex.js";
 import { resolveOrCreateSessionId } from "./session/auto-session.js";
+import { firstUserMessageFingerprint } from "./session/session-key.js";
 import { isNamespaceArchived } from "./session/session-key.js";
 import {
   responsesBodyToChat,
@@ -445,7 +446,12 @@ export async function handleCodexEndpoint(
 
   // ── 6. Session ID extraction ───────────────────────────────────────────────
   const rawSessionId = extractCodexSessionId(headers, body);
-  const autoSession = resolveOrCreateSessionId(rawSessionId, keyId, config.sessionInit?.autoConversationId);
+  const autoSession = resolveOrCreateSessionId(
+    rawSessionId,
+    keyId,
+    config.sessionInit?.autoConversationId,
+    firstUserMessageFingerprint(body.input),
+  );
   const sessionId = autoSession.sessionId || rawSessionId;
   const sessionKey = sessionId ?? `${keyId}:${traceId}`;
   const agentSource = "codex";
