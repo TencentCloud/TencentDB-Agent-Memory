@@ -56,6 +56,12 @@ export function isAuthEnabled(): boolean {
  * When auth is enabled, the principle is:
  * **Any result that is NOT valid=true with a user_id → reject the request.**
  *
+ * The request carries `Authorization: Bearer <gatewayApiKey>` when
+ * `auth.gatewayApiKey` is configured — the gateway's shared secret
+ * (TDAI_GATEWAY_API_KEY / server.apiKey). Without it, a gateway with its
+ * Bearer gate enabled rejects these calls with 401 and session-init breaks;
+ * sending it lets operators enable the gateway key while proxy auth stays on.
+ *
  * @param userKey - The client's API key (user_key)
  * @param serviceId - The service/instance ID from request path spaceId (used as x-tdai-service-id)
  *
@@ -73,12 +79,16 @@ export async function verifyUserKey(userKey: string, serviceId: string): Promise
   if (!userKey) return { userId: "", rejected: true, rejectReason: "missing user_key" };
 
   try {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "x-tdai-service-id": serviceId,
+    };
+    if (config.gatewayApiKey) {
+      headers["authorization"] = `Bearer ${config.gatewayApiKey}`;
+    }
     const fetchOpts: RequestInit = {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-tdai-service-id": serviceId,
-      },
+      headers,
       body: JSON.stringify({ user_key: userKey }),
     };
     if (config.timeoutMs > 0) {

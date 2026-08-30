@@ -645,6 +645,13 @@ export interface AuthConfig {
   url: string;
   /** Request timeout in ms. Default: 5000. */
   timeoutMs: number;
+  /**
+   * Gateway shared secret (TDAI_GATEWAY_API_KEY / server.apiKey) sent as
+   * `Authorization: Bearer` on auth/verify calls. Optional: when empty,
+   * no Authorization header is sent (legacy behaviour — requires the
+   * gateway to run with its Bearer gate disabled).
+   */
+  gatewayApiKey?: string;
 }
 
 /**
@@ -872,6 +879,7 @@ export interface RawYamlConfig {
     enabled?: boolean;
     url?: string;
     timeoutMs?: number;
+    gatewayApiKey?: string;
   };
   systemUsers?: Partial<SystemUserEntry>[];
   admin?: {
