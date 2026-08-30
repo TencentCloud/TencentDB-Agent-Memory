@@ -1,7 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import { compactMessages } from "../common/context-compaction.js";
-import { resolveOrCreateSessionId } from "../session/auto-session.js";
+import {
+  resolveOrCreateSessionId,
+  messageFingerprint,
+  __setAutoSessionNow,
+  __resetAutoSessionForTests,
+} from "../session/auto-session.js";
+import { firstUserMessageFingerprint } from "../session/session-key.js";
 import { resolvePresetIdentity } from "../session/preset.js";
+import { extractCodexSessionId } from "../codexHandler.js";
 import type { TeamOption } from "../session/types.js";
 import { initGrants, getGrants } from "../tdai/grants-fetcher.js";
 import { resolveInjectionTuning } from "../injection/tuning.js";
@@ -214,5 +221,258 @@ describe("resolvePresetIdentity taskMissingPolicy", () => {
     expect(r.canRegister).toBe(false);
     expect(r.hadMismatch).toBe(true);
     expect(r.mismatchReason).toBe("invalid-task");
+  });
+
+  it("per-agent：openclaw/hermes 放宽，其他客户端严格（全局 reject）", () => {
+    const cfg = {
+      enabled: true,
+      taskMissingPolicy: "reject",
+      taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
+    } as never;
+    const openclaw = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "openclaw",
+    );
+    expect(openclaw.canRegister).toBe(true);
+    const hermes = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "hermes",
+    );
+    expect(hermes.canRegister).toBe(true);
+    const claude = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "claude-code",
+    );
+    expect(claude.canRegister).toBe(false);
+    expect(claude.mismatchReason).toBe("task-required");
+  });
+
+  it("per-agent：全局 default 时 openclaw 仍可被 per-agent 覆盖为 skip", () => {
+    const cfg = {
+      enabled: true,
+      taskMissingPolicy: "default",
+      defaultTaskId: "default-task",
+      taskMissingPolicyByAgent: { openclaw: "skip" },
+    } as never;
+    const openclaw = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "openclaw",
+    );
+    expect(openclaw.canRegister).toBe(true);
+    expect(openclaw.taskId).toBeUndefined();
+    // 未配置 agent 的客户端（如 codex）走全局 default → 用占位 task
+    const codex = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "codex",
+    );
+    expect(codex.canRegister).toBe(true);
+    expect(codex.taskId).toBe("default-task");
+  });
+
+  it("未知 agentSource 走全局策略", () => {
+    const cfg = {
+      enabled: true,
+      taskMissingPolicy: "reject",
+      taskMissingPolicyByAgent: { openclaw: "skip" },
+    } as never;
+    const unknown = resolvePresetIdentity(
+      teams,
+      { teamId: "team-a", agentId: "agt-1" },
+      cfg,
+      "future-agent",
+    );
+    expect(unknown.canRegister).toBe(false);
+    expect(unknown.mismatchReason).toBe("task-required");
+  });
+});
+
+describe("auto-session TTL / 多窗口 / 容量（可注入时钟）", () => {
+  beforeEach(() => {
+    __resetAutoSessionForTests();
+    __setAutoSessionNow(() => 1_000_000);
+  });
+  afterAll(() => {
+    __resetAutoSessionForTests();
+    __setAutoSessionNow(() => Date.now());
+  });
+
+  it("per-key：30 分钟无活跃后新会话（滑动窗口 TTL）", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    const a = resolveOrCreateSessionId(null, "tk-ttl", cfg);
+    __setAutoSessionNow(() => 1_000_000 + 31 * 60_000); // 直接 31 分钟后
+    const c = resolveOrCreateSessionId(null, "tk-ttl", cfg);
+    expect(c.sessionId).not.toBe(a.sessionId);
+  });
+
+  it("per-key：TTL 内活跃会刷新 lastSeen（滑动窗口语义）", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    const a = resolveOrCreateSessionId(null, "tk-ttl2", cfg);
+    __setAutoSessionNow(() => 1_000_000 + 29 * 60_000);
+    const b = resolveOrCreateSessionId(null, "tk-ttl2", cfg);
+    expect(b.sessionId).toBe(a.sessionId); // 29 分钟处活跃 → 续接
+    __setAutoSessionNow(() => 1_000_000 + 29 * 60_000 + 31 * 60_000);
+    const c = resolveOrCreateSessionId(null, "tk-ttl2", cfg);
+    expect(c.sessionId).not.toBe(a.sessionId); // 距上次活跃 31 分钟 → 新会话
+  });
+
+  it("created/resumed 语义：首次 created，续接 resumed", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    const a = resolveOrCreateSessionId(null, "tk-cr", cfg);
+    expect(a.reused).toBeFalsy();
+    const b = resolveOrCreateSessionId(null, "tk-cr", cfg);
+    expect(b.sessionId).toBe(a.sessionId);
+    expect(b.reused).toBe(true);
+  });
+
+  it("per-key-msg：同指纹 resumed，新指纹 created", () => {
+    const cfg = { enabled: true, ttlMinutes: 30, strategy: "per-key-msg" } as const;
+    const a = resolveOrCreateSessionId(null, "tk-msgcr", cfg, "fp-x");
+    expect(a.reused).toBeFalsy();
+    const b = resolveOrCreateSessionId(null, "tk-msgcr", cfg, "fp-x");
+    expect(b.reused).toBe(true);
+    const c = resolveOrCreateSessionId(null, "tk-msgcr", cfg, "fp-y");
+    expect(c.reused).toBeFalsy();
+  });
+
+  it("per-key-msg：同指纹续接同一窗口，不同指纹各自分窗", () => {
+    const cfg = { enabled: true, ttlMinutes: 30, strategy: "per-key-msg" } as const;
+    const a1 = resolveOrCreateSessionId(null, "tk-msg", cfg, "fp-a");
+    const a2 = resolveOrCreateSessionId(null, "tk-msg", cfg, "fp-a");
+    expect(a2.sessionId).toBe(a1.sessionId);
+    const b1 = resolveOrCreateSessionId(null, "tk-msg", cfg, "fp-b");
+    expect(b1.sessionId).not.toBe(a1.sessionId);
+  });
+
+  it("per-key-msg：窗口上限 8，超出后最旧窗口被淘汰", () => {
+    const cfg = { enabled: true, ttlMinutes: 30, strategy: "per-key-msg" } as const;
+    const first = resolveOrCreateSessionId(null, "tk-cap", cfg, "fp-0");
+    for (let i = 1; i < 9; i++) {
+      resolveOrCreateSessionId(null, "tk-cap", cfg, `fp-${i}`);
+    }
+    // fp-0 已被挤出：再次请求 → 新会话（旧窗口丢失）
+    const again = resolveOrCreateSessionId(null, "tk-cap", cfg, "fp-0");
+    expect(again.sessionId).not.toBe(first.sessionId);
+    // 仍在窗口内的 fp-8 续接
+    const last = resolveOrCreateSessionId(null, "tk-cap", cfg, "fp-8");
+    expect(last.sessionId).toMatch(/^auto-tk-cap-/);
+  });
+
+  it("per-key-msg：窗口 TTL 过期后同指纹开新窗", () => {
+    const cfg = { enabled: true, ttlMinutes: 30, strategy: "per-key-msg" } as const;
+    const a = resolveOrCreateSessionId(null, "tk-msgttl", cfg, "fp-x");
+    __setAutoSessionNow(() => 1_000_000 + 31 * 60_000);
+    const b = resolveOrCreateSessionId(null, "tk-msgttl", cfg, "fp-x");
+    expect(b.sessionId).not.toBe(a.sessionId);
+  });
+
+  it("per-key：超过容量上限时清理过期项（防内存无界增长）", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    // 灌入 2048 个 key（MAX_ENTRIES），全部在 t0 创建
+    for (let i = 0; i < 2048; i++) {
+      resolveOrCreateSessionId(null, `tk-lru-${i}`, cfg);
+    }
+    const oldSid = resolveOrCreateSessionId(null, "tk-lru-0", cfg).sessionId;
+    // 全部过期后新增一个 key → 触发容量清理
+    __setAutoSessionNow(() => 1_000_000 + 31 * 60_000);
+    resolveOrCreateSessionId(null, "tk-lru-new", cfg);
+    const after = resolveOrCreateSessionId(null, "tk-lru-0", cfg).sessionId;
+    expect(after).not.toBe(oldSid); // 旧项已被清理，重新生成
+  });
+
+  it("指纹：确定性、空文本与非 ASCII 稳定", () => {
+    expect(messageFingerprint("hello")).toBe(messageFingerprint("hello"));
+    expect(messageFingerprint("")).toBe(messageFingerprint(""));
+    expect(messageFingerprint("你好，世界")).toBe(messageFingerprint("你好，世界"));
+    expect(messageFingerprint("a")).not.toBe(messageFingerprint("b"));
+  });
+
+  it("并发交错：两个 key 交替请求互不串扰", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    const x1 = resolveOrCreateSessionId(null, "conc-x", cfg);
+    const y1 = resolveOrCreateSessionId(null, "conc-y", cfg);
+    const x2 = resolveOrCreateSessionId(null, "conc-x", cfg);
+    const y2 = resolveOrCreateSessionId(null, "conc-y", cfg);
+    expect(x2.sessionId).toBe(x1.sessionId);
+    expect(y2.sessionId).toBe(y1.sessionId);
+    expect(x1.sessionId).not.toBe(y1.sessionId);
+  });
+});
+
+describe("firstUserMessageFingerprint（跨协议首条用户消息指纹）", () => {
+  it("空消息 / 无 user → undefined", () => {
+    expect(firstUserMessageFingerprint([])).toBeUndefined();
+    expect(firstUserMessageFingerprint([{ role: "system", content: "s" }])).toBeUndefined();
+    expect(firstUserMessageFingerprint(undefined)).toBeUndefined();
+  });
+
+  it("OpenAI Chat：string content", () => {
+    const fp = firstUserMessageFingerprint([
+      { role: "system", content: "s" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ]);
+    expect(fp).toBe(messageFingerprint("hello"));
+  });
+
+  it("Anthropic：text block 数组", () => {
+    const fp = firstUserMessageFingerprint([
+      { role: "user", content: [{ type: "text", text: "你好" }] },
+    ]);
+    expect(fp).toBe(messageFingerprint("你好"));
+  });
+
+  it("Responses：input_text block 数组", () => {
+    const fp = firstUserMessageFingerprint([
+      { role: "user", content: [{ type: "input_text", text: "fix it" }] },
+    ]);
+    expect(fp).toBe(messageFingerprint("fix it"));
+  });
+
+  it("只取第一条 user 消息（忽略 system/assistant）", () => {
+    const fp = firstUserMessageFingerprint([
+      { role: "system", content: "sys" },
+      { role: "user", content: "first" },
+      { role: "user", content: "second" },
+    ]);
+    expect(fp).toBe(messageFingerprint("first"));
+  });
+});
+
+describe("extractCodexSessionId（codex 路径显式会话 header 对齐 resolveConversationId）", () => {
+  it("session-id header 优先", () => {
+    expect(extractCodexSessionId({ "session-id": "s1" }, {})).toBe("s1");
+  });
+
+  it("x-conversation-id 被识别（此前被忽略 → autoConversationId 错误接管）", () => {
+    expect(extractCodexSessionId({ "x-conversation-id": "s2" }, {})).toBe("s2");
+  });
+
+  it("x-thread-id / x-chat-id 也被识别", () => {
+    expect(extractCodexSessionId({ "x-thread-id": "t1" }, {})).toBe("t1");
+    expect(extractCodexSessionId({ "x-chat-id": "c1" }, {})).toBe("c1");
+  });
+
+  it("header 缺失时回落 body.client_metadata.session_id", () => {
+    expect(
+      extractCodexSessionId({}, { client_metadata: { session_id: "m1" } }),
+    ).toBe("m1");
+  });
+
+  it("全部缺失 → null（交由 autoConversationId 接管）", () => {
+    expect(extractCodexSessionId({}, {})).toBeNull();
+  });
+
+  it("空字符串 header 视为缺失", () => {
+    expect(extractCodexSessionId({ "x-conversation-id": "" }, {})).toBeNull();
   });
 });

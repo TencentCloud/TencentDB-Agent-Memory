@@ -290,6 +290,8 @@ export interface SessionInitConfig {
    * 显式传入的无效 task_id 一律按 mismatch 处理（非静默忽略）。
    */
   taskMissingPolicy?: "skip" | "default" | "reject";
+  /** 按客户端覆盖 taskMissingPolicy（如 openclaw/hermes=skip，其余走全局默认）。 */
+  taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
   headerAutoSelect?: {
     /** 是否启用 header 自动预选。默认 true。 */
     enabled: boolean;
@@ -1016,6 +1018,7 @@ export interface RawYamlConfig {
     };
     defaultTaskId?: string;
     taskMissingPolicy?: "skip" | "default" | "reject";
+    taskMissingPolicyByAgent?: Record<string, "skip" | "default" | "reject">;
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;

@@ -106,7 +106,9 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     autoConversationId: { enabled: true, ttlMinutes: 30, strategy: "per-key" },
     threadIsolation: { enabled: false },
     defaultTaskId: "default",
-    taskMissingPolicy: "skip",
+    // 全局默认严格（缺 task 走 mismatch）；仅无法弹表单的客户端按 agent 放宽
+    taskMissingPolicy: "reject",
+    taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -552,7 +554,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       ? "reject"
       : yaml.sessionInit?.taskMissingPolicy === "default"
         ? "default"
-        : "skip",
+        : DEFAULT_CONFIG.sessionInit.taskMissingPolicy,
+    taskMissingPolicyByAgent: {
+      ...DEFAULT_CONFIG.sessionInit.taskMissingPolicyByAgent,
+      ...(yaml.sessionInit?.taskMissingPolicyByAgent ?? {}),
+    },
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
       teamHeader: (yaml.sessionInit?.headerAutoSelect?.teamHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.teamHeader).toLowerCase(),

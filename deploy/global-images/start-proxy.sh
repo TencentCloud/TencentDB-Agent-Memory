@@ -300,7 +300,10 @@ sessionInit:
     enabled: ${PROXY_AUTO_CONVERSATION_ID:-true}
     ttlMinutes: ${PROXY_AUTO_CONVERSATION_TTL:-30}
     strategy: ${PROXY_AUTO_CONVERSATION_STRATEGY:-per-key}
-  taskMissingPolicy: ${PROXY_TASK_MISSING_POLICY:-skip}
+  taskMissingPolicy: ${PROXY_TASK_MISSING_POLICY:-reject}
+  taskMissingPolicyByAgent:
+    openclaw: ${PROXY_TASK_MISSING_POLICY_OPENCLAW:-skip}
+    hermes: ${PROXY_TASK_MISSING_POLICY_HERMES:-skip}
   threadIsolation:
     enabled: ${PROXY_THREAD_ISOLATION:-false}
 
@@ -312,7 +315,7 @@ costGuard:
 injection:
   enabled: true
   # 注入微调（A/B）：default 全局默认 + perAgent 按客户端覆盖（见 .env 注释）
-  maxTotalChars: ${PROXY_INJECTION_MAX_TOTAL_CHARS:-0}
+  maxTotalChars: ${PROXY_INJECTION_MAX_TOTAL_CHARS:-4000}
   tuning:
     default:
       memoryToolsGuide: "${PROXY_INJECTION_GUIDE:-always}"

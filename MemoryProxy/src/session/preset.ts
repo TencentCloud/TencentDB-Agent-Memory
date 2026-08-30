@@ -80,6 +80,7 @@ export function resolvePresetIdentity(
   teams: TeamOption[],
   preset: PresetIdentity,
   config?: SessionInitConfig,
+  agentSource?: string,
 ): PresetResolution {
   const res: PresetResolution = { canRegister: false, hadMismatch: false };
   if (!preset.teamId) return res;
@@ -111,8 +112,11 @@ export function resolvePresetIdentity(
       res.mismatchReason = "invalid-task";
     }
   } else {
-    // 未提供 task：按 taskMissingPolicy 决定注册行为
-    const policy = config?.taskMissingPolicy ?? "skip";
+    // 未提供 task：按 agent 级覆盖 → 全局 taskMissingPolicy 决定注册行为
+    const policy =
+      config?.taskMissingPolicyByAgent?.[agentSource ?? ""] ??
+      config?.taskMissingPolicy ??
+      "skip";
     if (policy === "default" && config?.defaultTaskId) {
       res.taskId = config.defaultTaskId; // 占位 task（等效"本次不关联任务"）
     } else if (policy === "reject") {
