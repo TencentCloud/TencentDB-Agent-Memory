@@ -2,8 +2,9 @@ name: opik
 
 services:
   mysql:
+    restart: unless-stopped
     image: mysql:8.4.2
-    pull_policy: always
+    pull_policy: missing
     hostname: mysql
     environment:
       MYSQL_ROOT_PASSWORD: opik
@@ -19,8 +20,9 @@ services:
       - mysql:/var/lib/mysql/:type=volume,source=~/opik/mysql
 
   redis:
+    restart: unless-stopped
     image: redis:7.2.4-alpine3.19
-    pull_policy: always
+    pull_policy: missing
     hostname: redis
     command: redis-server --requirepass opik
     healthcheck:
@@ -43,8 +45,9 @@ services:
         chown -R 1000:1000 /config
       "
   clickhouse:
+    restart: unless-stopped
     image: clickhouse/clickhouse-server:26.3.16.16-alpine
-    pull_policy: always
+    pull_policy: missing
     hostname: clickhouse
     environment:
       CLICKHOUSE_DB: opik
@@ -74,8 +77,9 @@ services:
         condition: service_completed_successfully
 
   zookeeper:
+    restart: unless-stopped
     image: zookeeper:3.9.4
-    pull_policy: always
+    pull_policy: missing
     hostname: zookeeper
     user: root
     entrypoint:
@@ -107,8 +111,9 @@ services:
       - zookeeper:/bitnami/zookeeper
 
   minio:
+    restart: unless-stopped
     image: minio/minio:RELEASE.2025-03-12T18-04-18Z
-    pull_policy: always
+    pull_policy: missing
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-THAAIOSFODNN7EXAMPLE}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-LESlrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}
@@ -124,7 +129,7 @@ services:
 
   mc:
     image: minio/mc:RELEASE.2025-03-12T17-29-24Z
-    pull_policy: always
+    pull_policy: missing
     depends_on:
       - minio
     entrypoint: >
@@ -136,8 +141,9 @@ services:
       "
 
   backend:
+    restart: unless-stopped
     image: ghcr.io/comet-ml/opik/opik-backend:${OPIK_VERSION:-latest}
-    pull_policy: ${OPIK_BACKEND_PULL_POLICY:-always}
+    pull_policy: ${OPIK_BACKEND_PULL_POLICY:-missing}
     profiles:
       - backend
       - opik
@@ -259,9 +265,10 @@ services:
       - /tmp
 
   python-backend:
+    restart: unless-stopped
     image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-latest}
     # change to 'build' when developing python-backend
-    pull_policy: ${PYTHON_BACKEND_PULL_POLICY:-always}
+    pull_policy: ${PYTHON_BACKEND_PULL_POLICY:-missing}
     profiles:
       - backend
       - opik
@@ -314,7 +321,7 @@ services:
   # multi-arch CPU-only image built from source.
   guardrails-backend:
     image: ghcr.io/comet-ml/opik/opik-guardrails-backend:${OPIK_VERSION:-latest}
-    pull_policy: ${OPIK_GUARDRAILS_BACKEND_PULL_POLICY:-always}
+    pull_policy: ${OPIK_GUARDRAILS_BACKEND_PULL_POLICY:-missing}
     profiles:
       - guardrails
     build:
@@ -364,7 +371,7 @@ services:
 
   demo-data-generator:
     image: ghcr.io/comet-ml/opik/opik-python-backend:${OPIK_VERSION:-latest}
-    pull_policy: always
+    pull_policy: missing
     profiles:
       - opik
       - local-be-fe
@@ -386,8 +393,9 @@ services:
       - /var/lib/docker
 
   frontend:
+    restart: unless-stopped
     image: ghcr.io/comet-ml/opik/opik-frontend:${OPIK_VERSION:-latest}
-    pull_policy: ${OPIK_FRONTEND_PULL_POLICY:-always}
+    pull_policy: ${OPIK_FRONTEND_PULL_POLICY:-missing}
     profiles:
       - opik
       - local-be
@@ -434,6 +442,7 @@ services:
 
   # Jaeger - receives traces via OTLP
   jaeger:
+    restart: unless-stopped
     image: jaegertracing/all-in-one:latest
     profiles:
       - opik-otel
@@ -451,6 +460,7 @@ services:
       retries: 3
 
   otel-collector:
+    restart: unless-stopped
     image: otel/opentelemetry-collector-contrib:0.139.0
     profiles:
       - opik-otel
