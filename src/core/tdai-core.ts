@@ -22,6 +22,7 @@
 import type {
   HostAdapter,
   Logger,
+  LLMRunner,
   LLMRunnerFactory,
   RecallResult,
   CaptureResult,
@@ -78,6 +79,9 @@ export class TdaiCore {
   private logger: Logger;
   private dataDir: string;
   private runnerFactory: LLMRunnerFactory;
+  private standaloneRunnerFactory?: LLMRunnerFactory;
+  private taskSelectorRunner?: LLMRunner;
+  private taskSelectorRunnerInitialized = false;
   private sessionFilter: SessionFilter;
   private instanceId?: string;
 
@@ -253,6 +257,7 @@ export class TdaiCore {
       logger: this.logger,
       vectorStore: this.vectorStore,
       embeddingService: this.embeddingService,
+      taskSelectorRunner: this.getTaskSelectorRunner(),
     });
 
     return result ?? {};
@@ -431,21 +436,9 @@ export class TdaiCore {
     // When standalone runner is active, create LLM runners from the factory.
     // If cfg.llm is configured AND we're in OpenClaw mode, build a dedicated
     // StandaloneLLMRunnerFactory from cfg.llm to override the host runner.
-    let runnerFactory = this.runnerFactory;
-    if (useStandaloneRunner && this.cfg.llm.enabled && this.hostAdapter.hostType === "openclaw") {
-      runnerFactory = new StandaloneLLMRunnerFactory({
-        config: {
-          baseUrl: this.cfg.llm.baseUrl,
-          apiKey: this.cfg.llm.apiKey,
-          model: this.cfg.llm.model,
-          maxTokens: this.cfg.llm.maxTokens,
-          timeoutMs: this.cfg.llm.timeoutMs,
-          disableThinking: this.cfg.llm.disableThinking,
-        },
-        logger: this.logger,
-      });
-      this.logger.debug?.(`${TAG} Using standalone LLM override: model=${this.cfg.llm.model}, baseUrl=${this.cfg.llm.baseUrl}`);
-    }
+    const runnerFactory = useStandaloneRunner
+      ? this.getEffectiveRunnerFactory()
+      : this.runnerFactory;
 
     const l1LlmRunner = useStandaloneRunner
       ? runnerFactory.createRunner({ enableTools: false })
@@ -498,6 +491,46 @@ export class TdaiCore {
     });
 
     this.logger.debug?.(`${TAG} Pipeline runners wired`);
+  }
+
+  private getEffectiveRunnerFactory(): LLMRunnerFactory {
+    if (!this.cfg.llm.enabled || this.hostAdapter.hostType !== "openclaw") {
+      return this.runnerFactory;
+    }
+
+    if (!this.standaloneRunnerFactory) {
+      this.standaloneRunnerFactory = new StandaloneLLMRunnerFactory({
+        config: {
+          baseUrl: this.cfg.llm.baseUrl,
+          apiKey: this.cfg.llm.apiKey,
+          model: this.cfg.llm.model,
+          maxTokens: this.cfg.llm.maxTokens,
+          timeoutMs: this.cfg.llm.timeoutMs,
+          disableThinking: this.cfg.llm.disableThinking,
+        },
+        logger: this.logger,
+      });
+      this.logger.debug?.(`${TAG} Using standalone LLM override: model=${this.cfg.llm.model}, baseUrl=${this.cfg.llm.baseUrl}`);
+    }
+    return this.standaloneRunnerFactory;
+  }
+
+  private getTaskSelectorRunner(): LLMRunner | undefined {
+    if (!this.cfg.recall.taskSelector.enabled) return undefined;
+    if (this.taskSelectorRunnerInitialized) return this.taskSelectorRunner;
+
+    this.taskSelectorRunnerInitialized = true;
+    try {
+      this.taskSelectorRunner = this.getEffectiveRunnerFactory().createRunner({
+        modelRef: this.cfg.recall.taskSelector.model,
+        enableTools: false,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Task-aware recall selector unavailable; using retrieval ranking: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return this.taskSelectorRunner;
   }
 
   private ensureSchedulerStarted(): Promise<void> {
