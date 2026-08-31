@@ -1,0 +1,21 @@
+{
+  "name": "tencentdb-memory",
+  "version": "0.1.0",
+  "description": "Automatic TencentDB Agent Memory recall and capture for Codex",
+  "author": {
+    "name": "TencentDB Agent Memory Team"
+  },
+  "interface": {
+    "displayName": "TencentDB Agent Memory",
+    "shortDescription": "Recall and capture memory in Codex.",
+    "longDescription": "Connects Codex lifecycle hooks to the TDAI Gateway for automatic memory recall and conversation capture.",
+    "developerName": "TencentDB Agent Memory Team",
+    "category": "Productivity",
+    "capabilities": [
+      "Recall",
+      "Capture"
+    ],
+    "defaultPrompt": "Recall relevant memory before responding."
+  },
+  "hooks": "./hooks/hooks.json"
+}
