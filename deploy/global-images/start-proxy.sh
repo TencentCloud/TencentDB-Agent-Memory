@@ -129,15 +129,23 @@ costGuard:
 
 # 打开 skill + knowledge + tdai-memory 三个注入器；
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
+# externalGatewayUrl：注入块里 mem 检索地址（<skill_tools>/<tdai_memory_tools> 里的
+# proxy base）。不配时 fallback 容器自身网卡 IP（如 172.20.x.x）——宿主机上的
+# agent 访问不通，必须显式配客户端可达地址。
 injection:
   enabled: true
+  externalGatewayUrl: "${PROXY_EXTERNAL_GATEWAY_URL:-}"
   injectors:
     - skill
     - knowledge
     - tdai-memory
 
+# redis：session binding 持久化（bridge L2 兜底）+ 限流。
+# 默认关；开时确保 tdai-redis 容器在同一网络（docker run --network tdai-memory-stack）。
 redis:
-  enabled: false
+  enabled: $(bool "${PROXY_REDIS_ENABLED:-0}")
+  host: "${PROXY_REDIS_HOST:-tdai-redis}"
+  port: "${PROXY_REDIS_PORT:-6379}"
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
