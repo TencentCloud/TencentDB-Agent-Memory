@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli python3 -m tdai_memory_cli.hook session-start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli python3 -m tdai_memory_cli.hook prefetch",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_HOOK_LOG=<home>/.codex/tdai-memory/logs/hooks.jsonl PYTHONPATH=<repo>/packages/tdai-memory-cli python3 -m tdai_memory_cli.hook sync-turn",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
