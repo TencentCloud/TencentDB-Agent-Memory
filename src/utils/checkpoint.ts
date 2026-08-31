@@ -84,7 +84,9 @@ export interface Checkpoint {
   last_captured_timestamp: number;
   /** Total messages processed across all time */
   total_processed: number;
+  /** Total-message watermark covered by the last successful persona generation. */
   last_persona_at: number;
+  /** ISO scene-update watermark covered by the last successful persona generation. */
   last_persona_time: string;
   request_persona_update: boolean;
   persona_update_reason: string;
@@ -142,6 +144,13 @@ const DEFAULT_CHECKPOINT: Checkpoint = {
 export interface CheckpointLogger {
   info(msg: string): void;
   warn?(msg: string): void;
+}
+
+/** Snapshot of the memory counter covered by one persona generation run. */
+export interface PersonaGenerationCoverage {
+  memoriesSinceLastPersona: number;
+  /** ISO watermark captured before reading scene data for this generation. */
+  sceneUpdatedThrough: string;
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
@@ -301,11 +310,34 @@ export class CheckpointManager {
   // Persona methods (L3)
   // ============================
 
-  async markPersonaGenerated(totalProcessed: number): Promise<void> {
+  /**
+   * Mark persona generation complete.
+   *
+   * When `coverage` is supplied, only memories present at generation start are
+   * consumed. L1 memories extracted while the persona model is running remain
+   * pending for the next trigger. Omitting it preserves the legacy clear-all
+   * behavior for external callers.
+   */
+  async markPersonaGenerated(
+    totalProcessed: number,
+    coverage?: PersonaGenerationCoverage,
+  ): Promise<void> {
     await this.mutate((cp) => {
       cp.last_persona_at = totalProcessed;
-      cp.last_persona_time = new Date().toISOString();
-      cp.memories_since_last_persona = 0;
+      cp.last_persona_time = coverage && Number.isFinite(Date.parse(coverage.sceneUpdatedThrough))
+        ? coverage.sceneUpdatedThrough
+        : new Date().toISOString();
+      if (coverage) {
+        const coveredMemories = Number.isFinite(coverage.memoriesSinceLastPersona)
+          ? Math.max(0, Math.trunc(coverage.memoriesSinceLastPersona))
+          : 0;
+        cp.memories_since_last_persona = Math.max(
+          0,
+          cp.memories_since_last_persona - coveredMemories,
+        );
+      } else {
+        cp.memories_since_last_persona = 0;
+      }
       cp.request_persona_update = false;
       cp.persona_update_reason = "";
     });
