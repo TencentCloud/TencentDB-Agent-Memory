@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { atomicWriteFile } from "../../utils/atomic-write.js";
 import type { IMemoryStore, ProfileRecord, ProfileSyncRecord } from "../store/types.js";
 import { readSceneIndex, syncSceneIndex } from "../scene/scene-index.js";
 import { generateSceneNavigation, stripSceneNavigation } from "../scene/scene-navigation.js";
@@ -58,7 +59,7 @@ async function refreshPersonaNavigation(dataDir: string): Promise<void> {
   const index = await readSceneIndex(dataDir);
   const nav = generateSceneNavigation(index);
   const finalContent = nav ? `${body}\n\n${nav}\n` : `${body}\n`;
-  await fs.writeFile(personaPath, finalContent, "utf-8");
+  await atomicWriteFile(personaPath, finalContent);
 }
 
 export async function listLocalProfiles(dataDir: string): Promise<ProfileRecord[]> {

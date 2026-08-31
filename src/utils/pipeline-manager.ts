@@ -80,6 +80,8 @@ import type { PipelineSessionState } from "./checkpoint.js";
 import { SessionFilter } from "./session-filter.js";
 import { ManagedTimer } from "./managed-timer.js";
 import { SerialQueue } from "./serial-queue.js";
+import { PASSTHROUGH_LIMITER } from "./async-semaphore.js";
+import type { ConcurrencyLimiter } from "./async-semaphore.js";
 import { report } from "../core/report/reporter.js";
 import type { Logger } from "../core/types.js";
 
@@ -138,6 +140,14 @@ export interface PipelineConfig {
      */
     sessionActiveWindowHours: number;
   };
+
+  /**
+   * Max time (ms) `destroy()` waits to flush pending L1/L2/L3 work before
+   * persisting state and closing. Default: 2000 — tuned to stay under the live
+   * gateway's 3s gateway_stop hook. Offline callers (seed) raise it so the
+   * final L2/L3 flush isn't cut off mid-run.
+   */
+  destroyTimeoutMs?: number;
 }
 
 /** Result returned by the L1 runner. */
@@ -233,6 +243,14 @@ export class MemoryPipelineManager {
   // Unified session filter (internal sessions + excludeAgents)
   private readonly sessionFilter: SessionFilter;
 
+  /**
+   * Gate around L1/L2/L3 runner execution. In multi-tenant mode every core
+   * shares ONE limiter so total concurrent extraction across all accounts is
+   * bounded (design §8.4 #5). Defaults to a passthrough (no bound) — correct
+   * for single-tenant, where one core can't fan out.
+   */
+  private readonly extractionLimiter: ConcurrencyLimiter;
+
   // Lifecycle
   private destroyed = false;
 
@@ -247,7 +265,12 @@ export class MemoryPipelineManager {
   /** Counter for GC scheduling. */
   private notifyCounter = 0;
 
-  constructor(config: PipelineConfig, logger?: Logger, sessionFilter?: SessionFilter) {
+  constructor(
+    config: PipelineConfig,
+    logger?: Logger,
+    sessionFilter?: SessionFilter,
+    extractionLimiter?: ConcurrencyLimiter,
+  ) {
     this.l1IdleTimeoutMs = config.l1.idleTimeoutSeconds * 1000;
     this.everyNConversations = config.everyNConversations;
     this.enableWarmup = config.enableWarmup;
@@ -255,8 +278,10 @@ export class MemoryPipelineManager {
     this.l2MinIntervalMs = config.l2.minIntervalSeconds * 1000;
     this.l2MaxIntervalMs = config.l2.maxIntervalSeconds * 1000;
     this.sessionActiveWindowMs = config.l2.sessionActiveWindowHours * 60 * 60 * 1000;
+    this.DESTROY_TIMEOUT_MS = config.destroyTimeoutMs ?? 2_000;
     this.logger = logger;
     this.sessionFilter = sessionFilter ?? new SessionFilter();
+    this.extractionLimiter = extractionLimiter ?? PASSTHROUGH_LIMITER;
 
     this.logger?.debug?.(
       `${TAG} Initialized: everyNConversations=${config.everyNConversations}, ` +
@@ -500,10 +525,11 @@ export class MemoryPipelineManager {
 
   /**
    * Maximum time (ms) to wait for pipeline flush during destroy.
-   * Must be shorter than the gateway_stop hook timeout (3 s) to leave
-   * headroom for VectorStore / EmbeddingService cleanup that runs after.
+   * Live default (2 s) must stay shorter than the gateway_stop hook timeout
+   * (3 s) to leave headroom for VectorStore / EmbeddingService cleanup that
+   * runs after. Offline callers (seed) override via `config.destroyTimeoutMs`.
    */
-  private readonly DESTROY_TIMEOUT_MS = 2_000;
+  private readonly DESTROY_TIMEOUT_MS: number;
 
   /**
    * Graceful shutdown with timeout protection:
@@ -690,12 +716,17 @@ export class MemoryPipelineManager {
       return;
     }
 
+    const l1Runner = this.l1Runner;
     try {
-      await this.l1Runner({
-        sessionKey,
-        msg: buffer,
-        bg_msg: [], // reserved for future use
-      });
+      // Gate L1 extraction (LLM-bearing) through the shared limiter so that, in
+      // multi-tenant mode, concurrent L1 runs across all accounts stay capped.
+      await this.extractionLimiter.run(() =>
+        l1Runner({
+          sessionKey,
+          msg: buffer,
+          bg_msg: [], // reserved for future use
+        }),
+      );
 
       this.logger?.debug?.(
         `${TAG} [${sessionKey}] L1 complete: processed ${buffer.length} messages`,
@@ -882,10 +913,12 @@ export class MemoryPipelineManager {
     );
 
     const cursor = state.last_extraction_updated_time || undefined;
+    const l2Runner = this.l2Runner;
 
     let result: L2RunnerResult | void;
     try {
-      result = await this.l2Runner(sessionKey, cursor);
+      // Shared-limiter gated (see runL1) — caps L2 fan-out across accounts.
+      result = await this.extractionLimiter.run(() => l2Runner(sessionKey, cursor));
     } catch (err) {
       this.logger?.error(
         `${TAG} [${sessionKey}] L2 runner failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
@@ -988,9 +1021,11 @@ export class MemoryPipelineManager {
       return;
     }
 
+    const l3Runner = this.l3Runner;
     this.logger?.debug?.(`${TAG} L3 running`);
     try {
-      await this.l3Runner();
+      // Shared-limiter gated (see runL1) — caps L3 fan-out across accounts.
+      await this.extractionLimiter.run(() => l3Runner());
       this.logger?.debug?.(`${TAG} L3 complete`);
     } catch (err) {
       this.logger?.error(
