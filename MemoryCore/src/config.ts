@@ -126,6 +126,12 @@ export interface EmbeddingConfig {
   proxyUrl?: string;
   /** Max input text length in characters before truncation (default: 5000). Texts exceeding this limit are truncated with a warning. */
   maxInputChars: number;
+  /** Token-aware input budget. When set, takes precedence over maxInputChars. */
+  maxInputTokens?: number;
+  /** Retries for transient remote failures (default: 2). */
+  maxRetries: number;
+  /** Initial exponential retry delay in milliseconds (default: 500). */
+  retryBaseDelayMs: number;
   /** Timeout per embedding API call in milliseconds (default: 10000). */
   timeoutMs: number;
   /** Override timeoutMs for recall-path embedding calls (user-facing, should be shorter). Falls back to timeoutMs. */
@@ -608,6 +614,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       conflictRecallTopK: num(embeddingGroup, "conflictRecallTopK") ?? 5,
       proxyUrl: embeddingProxyUrl,
       maxInputChars: num(embeddingGroup, "maxInputChars") ?? 5000,
+      maxInputTokens: num(embeddingGroup, "maxInputTokens"),
+      maxRetries: num(embeddingGroup, "maxRetries") ?? 2,
+      retryBaseDelayMs: num(embeddingGroup, "retryBaseDelayMs") ?? 500,
       timeoutMs: num(embeddingGroup, "timeoutMs") ?? 10_000,
       recallTimeoutMs: num(embeddingGroup, "recallTimeoutMs") ?? undefined,
       captureTimeoutMs: num(embeddingGroup, "captureTimeoutMs") ?? undefined,

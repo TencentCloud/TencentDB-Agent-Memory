@@ -105,8 +105,11 @@
           "dimensions": { "type": "number", "description": "向量维度（必填，需与所选模型匹配）" },
           "sendDimensions": { "type": "boolean", "default": true, "description": "是否在请求体中携带 dimensions 字段。默认 true（兼容 OpenAI text-embedding-3-* 的 Matryoshka 截断）。当目标服务为 BGE-M3 等不支持自定义维度的固定维度模型时，请设为 false，否则会被服务端以 HTTP 400 拒绝（'does not support matryoshka representation'）。" },
           "conflictRecallTopK": { "type": "number", "default": 5, "description": "冲突检测时召回 Top-K 数" },
-          "maxInputChars": { "type": "number", "default": 5000, "description": "Embedding 输入文本最大字符数，超出时截断并打印警告日志（默认 5000，适合大多数模型的 token 上限）" },
-          "timeoutMs": { "type": "number", "default": 10000, "description": "单次 embedding API 调用超时（毫秒），超时后该次请求中止且不重试" },
+          "maxInputChars": { "type": "number", "default": 5000, "description": "Embedding 输入文本最大字符数（仅在未配置 maxInputTokens 时使用）" },
+          "maxInputTokens": { "type": "number", "description": "Embedding 输入 token 上限；优先于 maxInputChars，应低于模型上下文并预留特殊 token 余量" },
+          "maxRetries": { "type": "number", "default": 2, "description": "429、5xx、超时及网络错误的最大重试次数" },
+          "retryBaseDelayMs": { "type": "number", "default": 500, "description": "指数退避初始延迟（毫秒）" },
+          "timeoutMs": { "type": "number", "default": 10000, "description": "单次 embedding API 调用超时（毫秒）" },
           "recallTimeoutMs": { "type": "number", "description": "recall 路径 embedding 超时（毫秒），覆盖 timeoutMs。用户等待中，建议设短一些（如 3000）" },
           "captureTimeoutMs": { "type": "number", "description": "capture 路径 embedding 超时（毫秒），覆盖 timeoutMs。后台运行，可设长一些（如 15000）" }
         }

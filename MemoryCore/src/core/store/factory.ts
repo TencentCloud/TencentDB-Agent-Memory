@@ -107,6 +107,10 @@ export function createStoreBundle(
           dimensions: config.embedding.dimensions,
           sendDimensions: config.embedding.sendDimensions,
           maxInputChars: config.embedding.maxInputChars,
+          maxInputTokens: config.embedding.maxInputTokens,
+          maxRetries: config.embedding.maxRetries,
+          retryBaseDelayMs: config.embedding.retryBaseDelayMs,
+          timeoutMs: config.embedding.timeoutMs,
         }, logger);
       }
 

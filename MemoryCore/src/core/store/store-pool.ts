@@ -380,7 +380,12 @@ export class StorePool {
         apiKey: embCfg.apiKey,
         model: embCfg.model,
         dimensions: embCfg.dimensions,
+        sendDimensions: embCfg.sendDimensions,
         maxInputChars: embCfg.maxInputChars,
+        maxInputTokens: embCfg.maxInputTokens,
+        maxRetries: embCfg.maxRetries,
+        retryBaseDelayMs: embCfg.retryBaseDelayMs,
+        timeoutMs: embCfg.timeoutMs,
       }, this.logger as StoreLogger);
     }
 
