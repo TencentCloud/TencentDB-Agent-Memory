@@ -28,6 +28,97 @@ const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search �
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
 
+// Session-level recall deduplication cache
+// Key: sessionKey, Value: Map of memory content hash -> turn number when injected
+const sessionRecallCache = new Map<string, Map<string, number>>();
+const MAX_CACHE_SESSIONS = 1000;
+
+/**
+ * Clean expired entries from session recall cache.
+ */
+function cleanSessionRecallCache(currentTurn: number, ttlTurns: number): void {
+  if (sessionRecallCache.size > MAX_CACHE_SESSIONS) {
+    // Remove oldest sessions
+    const entries = [...sessionRecallCache.entries()];
+    const toRemove = entries.slice(0, entries.length - MAX_CACHE_SESSIONS);
+    for (const [key] of toRemove) {
+      sessionRecallCache.delete(key);
+    }
+  }
+
+  // Clean expired entries within each session
+  for (const [sessionKey, turnMap] of sessionRecallCache) {
+    for (const [hash, turn] of turnMap) {
+      if (currentTurn - turn > ttlTurns) {
+        turnMap.delete(hash);
+      }
+    }
+    if (turnMap.size === 0) {
+      sessionRecallCache.delete(sessionKey);
+    }
+  }
+}
+
+/**
+ * Deduplicate memory lines against session cache.
+ * Returns only new (not previously injected) memories.
+ *
+ * @param mode - "skip" removes duplicates, "reminder" replaces with short reminder
+ */
+function deduplicateMemories(
+  memoryLines: string[],
+  sessionKey: string,
+  currentTurn: number,
+  ttlTurns: number,
+  mode: "skip" | "reminder",
+  logger?: Logger,
+): string[] {
+  if (!sessionKey || memoryLines.length === 0) {
+    return memoryLines;
+  }
+
+  cleanSessionRecallCache(currentTurn, ttlTurns);
+
+  let sessionCache = sessionRecallCache.get(sessionKey);
+  if (!sessionCache) {
+    sessionCache = new Map();
+    sessionRecallCache.set(sessionKey, sessionCache);
+  }
+
+  const result: string[] = [];
+  let duplicateCount = 0;
+
+  for (const line of memoryLines) {
+    // Use a more robust hash: extract key content
+    const match = line.match(/^-\s+\[([^\]]+)\]\s+(.+?)(?:\s*\(活动时间:.*\))?$/);
+    const contentKey = match ? match[2].trim().substring(0, 80) : line.substring(0, 80);
+
+    if (!sessionCache.has(contentKey)) {
+      // New memory - add to result and cache
+      result.push(line);
+      sessionCache.set(contentKey, currentTurn);
+    } else {
+      // Duplicate memory
+      duplicateCount++;
+      if (mode === "reminder") {
+        // Reminder mode: add a short reminder instead of full content
+        const type = match ? match[1].split("|")[0] : "memory";
+        result.push(`- [${type}] (已召回，详见历史)`);
+      }
+      // Skip mode: don't add anything
+    }
+  }
+
+  if (duplicateCount > 0) {
+    logger?.debug?.(
+      `${TAG} Session dedup (${mode}): ${memoryLines.length} -> ${result.length} memories ` +
+      `(${duplicateCount} duplicates, ${mode === "reminder" ? "replaced with reminder" : "skipped"})`,
+    );
+  }
+
+  return result;
+}
+
 /**
  * Memory tools usage guide — injected at the end of memory context so the
  * main agent knows how to actively retrieve deeper information.
@@ -108,8 +199,9 @@ async function performAutoRecallInner(params: {
   logger?: Logger;
   vectorStore?: IMemoryStore;
   embeddingService?: EmbeddingService;
+  currentTurn?: number;
 }): Promise<RecallResult | undefined> {
-  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService } = params;
+  const { userText, cfg, pluginDataDir, logger, vectorStore, embeddingService, currentTurn = 0 } = params;
   const tRecallStart = performance.now();
 
   // Search relevant memories (L1 layer) — skip only when userText is empty/undefined
@@ -126,6 +218,18 @@ async function performAutoRecallInner(params: {
     memoryLines = searchResult.lines;
     searchTiming = searchResult.timing;
     memoryLines = applyRecallBudget(memoryLines, cfg.recall, logger);
+
+    // Apply session-level deduplication if enabled
+    if (cfg.recall.dedupeEnabled && memoryLines.length > 0) {
+      memoryLines = deduplicateMemories(
+        memoryLines,
+        params.sessionKey,
+        currentTurn,
+        cfg.recall.dedupeTtlTurns,
+        cfg.recall.dedupeMode,
+        logger,
+      );
+    }
 
     // Extract structured RecalledMemory from formatted lines for metric reporting
     recalledL1Memories = memoryLines.map((line) => {
@@ -204,9 +308,12 @@ async function performAutoRecallInner(params: {
   // Dynamic part: L1 relevant memories (changes every turn) → prependContext (user prompt)
   let prependContext: string | undefined;
   if (memoryLines.length > 0) {
-    prependContext =
-      `<relevant-memories>\n以下是当前对话召回的相关记忆，不代表当前任务进程，仅作为参考：\n\n${memoryLines.join(RECALL_LINE_SEPARATOR)}\n</relevant-memories>`;
+    // Use lightweight pointer to prevent context bloat
+    // Replace full memory content with a short pointer
+    // Use static content to maintain cache stability
+    prependContext = `<memory-omitted reason="prevent_context_bloat" />`;
   }
+  // If no memories, don't inject anything (no prependContext)
 
   // Append memory tools usage guide to the stable part so the agent knows
   // how to actively retrieve deeper context when the injected snippets
@@ -231,9 +338,30 @@ async function performAutoRecallInner(params: {
     return undefined;
   }
 
+  // Split stable content for CACHE_BOUNDARY placement
+  // persona goes to prependSystemContext (before CACHE_BOUNDARY)
+  // scene navigation and tools guide go to appendSystemContext (after CACHE_BOUNDARY)
+  let prependSystemContext: string | undefined;
+  let finalAppendSystemContext: string | undefined;
+
+  if (personaContent) {
+    prependSystemContext = `<user-persona>\n${personaContent}\n</user-persona>`;
+  }
+
+  const otherStableParts: string[] = [];
+  if (sceneNavigation) {
+    otherStableParts.push(`<scene-navigation>\n${sceneNavigation}\n</scene-navigation>`);
+  }
+  if (stableParts.length > 0 || prependContext) {
+    otherStableParts.push(MEMORY_TOOLS_GUIDE);
+  }
+
+  finalAppendSystemContext = otherStableParts.length > 0 ? otherStableParts.join("\n\n") : undefined;
+
   return {
     prependContext,
-    appendSystemContext,
+    appendSystemContext: finalAppendSystemContext,
+    prependSystemContext,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
