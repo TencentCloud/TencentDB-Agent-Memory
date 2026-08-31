@@ -162,6 +162,38 @@ export const chatMemoryApi = {
       session_id: params.sessionId,
     }),
 
+  /** 导入个人记忆到 L1 atomic（走 /v3/atomic/create） */
+  importMemories: (params: {
+    teamId: string;
+    agentId: string;
+    records: Array<{
+      content: string;
+      type?: string;
+      scene_name?: string;
+      priority?: number;
+      metadata?: Record<string, unknown>;
+    }>;
+    dedup?: {
+      enabled: boolean;
+      threshold?: number;
+      mode?: 'skip' | 'update';
+    };
+  }) =>
+    chatMemoryCall<{
+      imported: boolean;
+      format?: string;
+      created: number;
+      ids: string[];
+      skipped?: number;
+      updated?: number;
+      truncated?: number;
+    }>('import-memories', {
+      team_id: params.teamId,
+      agent_id: params.agentId,
+      records: params.records,
+      dedup: params.dedup,
+    }),
+
   /** 编辑单层记忆内容（Owner-only）：
    *  L1 传 id=记录主键 + content；L2 传 id=文件路径 + content（可选 summary）；
    *  L3 只传 content（整份 core persona 覆盖写）。 */

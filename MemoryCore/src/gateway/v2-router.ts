@@ -27,6 +27,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
+import { generateMemoryId } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 
 // ── Zod schemas (validated types + defaults) ──
@@ -37,6 +38,7 @@ import {
   conversationDeleteRequestSchema,
   conversationCountRequestSchema,
   atomicUpdateRequestSchema,
+  atomicCreateRequestSchema,
   atomicQueryRequestSchema,
   atomicSearchRequestSchema,
   atomicDeleteRequestSchema,
@@ -77,6 +79,7 @@ import {
   type CountData,
   type AtomicDetail,
   type AtomicUpdateData,
+  type AtomicCreateData,
   type AtomicQueryData,
   type AtomicSearchData,
   type AtomicSearchHit,
@@ -157,6 +160,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/conversation/delete",
   "/conversation/count",
   "/atomic/update",
+  "/atomic/create",
   "/atomic/query",
   "/atomic/search",
   "/atomic/delete",
@@ -417,6 +421,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/conversation/delete": handleConversationDelete,
   "/conversation/count": handleConversationCount,
   "/atomic/update": handleAtomicUpdate,
+  "/atomic/create": handleAtomicCreate,
   "/atomic/query": handleAtomicQuery,
   "/atomic/search": handleAtomicSearch,
   "/atomic/delete": handleAtomicDelete,
@@ -1108,6 +1113,210 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   });
 
   return successEnvelope<AtomicUpdateData>({ id, version: `v${updatedVersion}`, updated_at: now }, requestId);
+}
+
+/**
+ * Batch create L1 atomic memories. Each record gets a server-generated
+ * record_id (`m_{timestamp}_{randomHex}`). Bypasses L0→L1 distillation —
+ * for user-driven imports (markdown notes, JSON arrays, file uploads).
+ *
+ * Isolation (team/agent/user) is enforced by the V3 router's collectV3Missing
+ * check; here we propagate the resolved isolation into each MemoryRecord.
+ *
+ * Optional dedup: when `dedup.enabled` is true, each record is searched
+ * against existing L1 (vector or FTS) before write. Hits above `threshold`
+ * are skipped (or updated if `mode === "update"`). Single batch ≤ 500 records.
+ */
+async function handleAtomicCreate(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = atomicCreateRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { records, dedup } = parsed.data;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+
+  const iso = deps.requestIsolation;
+  const embedding = deps.getEmbedding();
+  const now = new Date().toISOString();
+
+  // Dedup config (defaults: disabled)
+  const dedupEnabled = dedup?.enabled === true;
+  const dedupThreshold = dedup?.threshold ?? 0.85;
+  const dedupMode = dedup?.mode ?? "skip";
+
+  // Isolation filter for dedup search (team+user+agent, no session — cross-session)
+  const dedupFilter = iso ? {
+    ...(iso.teamId ? { teamId: iso.teamId } : {}),
+    ...(iso.userId ? { userId: iso.userId } : {}),
+    ...(iso.agentId ? { agentId: iso.agentId } : {}),
+  } : undefined;
+
+  const ids: string[] = [];
+  let created = 0;
+  let skipped = 0;
+  let updated = 0;
+
+  for (const rec of records) {
+    // ── Dedup check ──────────────────────────────────────────────
+    if (dedupEnabled) {
+      let hit: { record_id: string; score: number; content: string } | null = null;
+
+      // Try vector search first (needs embedding)
+      if (embedding) {
+        try {
+          const emb = await embedding.embed(rec.content);
+          const results = await store.searchL1Vector(emb, 1, rec.content, dedupFilter);
+          if (results.length > 0 && results[0].score >= dedupThreshold) {
+            hit = { record_id: results[0].record_id, score: results[0].score, content: results[0].content };
+          }
+        } catch (e) {
+          console.warn(`[v2-router] L1 dedup vector search failed:`, e);
+        }
+      }
+
+      // Fallback to FTS if no vector hit or no embedding
+      if (!hit) {
+        try {
+          const ftsResults = await store.searchL1Fts(rec.content, 1, dedupFilter);
+          if (ftsResults.length > 0 && ftsResults[0].score >= dedupThreshold) {
+            hit = { record_id: ftsResults[0].record_id, score: ftsResults[0].score, content: ftsResults[0].content };
+          }
+        } catch (e) {
+          console.warn(`[v2-router] L1 dedup FTS search failed:`, e);
+        }
+      }
+
+      // Fallback: exact content match via queryL1Records (works without
+      // vector/FTS). This catches exact duplicates even in standalone mode
+      // where embedding and FTS5 are unavailable.
+      if (!hit) {
+        try {
+          // queryL1Records with isolation filter — fetch all user's records
+          // and compare content locally. For dedup we only need exact match.
+          const existing = await store.queryL1Records(dedupFilter);
+          if (existing && existing.length > 0) {
+            const exactMatch = existing.find(r => r.content === rec.content);
+            if (exactMatch) {
+              hit = { record_id: exactMatch.record_id, score: 1.0, content: exactMatch.content };
+            }
+          }
+        } catch (e) {
+          console.warn(`[v2-router] L1 dedup exact match fallback failed:`, e);
+        }
+      }
+
+      if (hit) {
+        if (dedupMode === "skip") {
+          ids.push("");  // empty string marks skipped
+          skipped++;
+          await recordAudit(store, {
+            record_id: hit.record_id,
+            layer: "L1",
+            action: "dedup_skip",
+            iso,
+            version: 0,
+            requestId,
+            logger: deps.logger,
+          });
+          continue;
+        } else {
+          // update mode: overwrite the existing record's content
+          const existing = await store.queryL1Records({ recordIds: [hit.record_id] });
+          if (existing && existing.length > 0) {
+            const existingRecord = existing[0];
+            const updatedVersion = (existingRecord.version ?? 0) + 1;
+            const updatedRecord: MemoryRecord = {
+              id: hit.record_id,
+              content: rec.content,
+              type: (rec.type ?? "persona") as any,
+              priority: rec.priority ?? 50,
+              scene_name: rec.scene_name ?? existingRecord.scene_name ?? "",
+              source_message_ids: [],
+              metadata: rec.metadata ?? {},
+              timestamps: [...(existingRecord.timestamp_str ? [existingRecord.timestamp_str] : []), now],
+              createdAt: existingRecord.created_time,
+              updatedAt: now,
+              version: updatedVersion,
+              sessionKey: existingRecord.session_key ?? "",
+              sessionId: existingRecord.session_id ?? iso?.sessionId ?? "",
+              taskId: existingRecord.task_id ?? iso?.taskId,
+              teamId: existingRecord.team_id ?? iso?.teamId,
+              userId: existingRecord.user_id ?? iso?.userId,
+              agentId: existingRecord.agent_id ?? iso?.agentId,
+            };
+            let emb: Float32Array | undefined;
+            if (embedding) {
+              try { emb = await embedding.embed(rec.content); }
+              catch (e) { console.warn(`[v2-router] L1 dedup update embedding failed:`, e); }
+            }
+            await store.upsertL1(updatedRecord, emb);
+            ids.push(hit.record_id);
+            updated++;
+            await recordAudit(store, {
+              record_id: hit.record_id,
+              layer: "L1",
+              action: "dedup_update",
+              iso,
+              version: updatedVersion,
+              requestId,
+              logger: deps.logger,
+            });
+            continue;
+          }
+          // If existing record not found (race), fall through to create
+        }
+      }
+    }
+
+    // ── Create new record ────────────────────────────────────────
+    const id = generateMemoryId();
+    const record: MemoryRecord = {
+      id,
+      content: rec.content,
+      type: rec.type ?? "persona",
+      priority: rec.priority ?? 50,
+      scene_name: rec.scene_name ?? "",
+      source_message_ids: [],
+      metadata: rec.metadata ?? {},
+      timestamps: [now],
+      createdAt: now,
+      updatedAt: now,
+      version: 0,
+      sessionKey: "",
+      sessionId: iso?.sessionId ?? "",
+      taskId: iso?.taskId,
+      teamId: iso?.teamId,
+      userId: iso?.userId,
+      agentId: iso?.agentId,
+    };
+
+    let emb: Float32Array | undefined;
+    if (embedding) {
+      try { emb = await embedding.embed(rec.content); }
+      catch (e) { console.warn(`[v2-router] L1 create embedding failed for record ${id}:`, e); }
+    }
+
+    await store.upsertL1(record, emb);
+    ids.push(id);
+    created++;
+
+    await recordAudit(store, {
+      record_id: id,
+      layer: "L1",
+      action: "create",
+      iso,
+      version: 0,
+      requestId,
+      logger: deps.logger,
+    });
+  }
+
+  return successEnvelope<AtomicCreateData>({
+    created: created + updated,
+    ids,
+    ...(skipped > 0 ? { skipped } : {}),
+    ...(updated > 0 ? { updated } : {}),
+  }, requestId);
 }
 
 async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
