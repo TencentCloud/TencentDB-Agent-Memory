@@ -2,6 +2,8 @@
  * TDAI Gateway — Request/Response types for the HTTP API.
  */
 
+import type { EmbeddingMigrationStatus } from "../core/store/types.js";
+
 // ============================
 // Common
 // ============================
@@ -22,6 +24,7 @@ export interface HealthResponse {
   stores: {
     vectorStore: boolean;
     embeddingService: boolean;
+    embeddingMigration?: EmbeddingMigrationStatus;
   };
   /** Integrated services status (only present when state_backend is configured) */
   services?: {
