@@ -47,7 +47,7 @@ import {
   createL3Runner,
 } from "../utils/pipeline-factory.js";
 import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
-import { CheckpointManager } from "../utils/checkpoint.js";
+import { CheckpointManager, recalibrateCheckpointFromStore } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
 
@@ -409,6 +409,15 @@ export class TdaiCore {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
+      if (this.vectorStore) {
+        try {
+          await recalibrateCheckpointFromStore(this.dataDir, this.vectorStore, this.logger);
+        } catch (err) {
+          this.logger.warn(
+            `${TAG} Checkpoint recalibration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
     } catch (err) {
       this.logger.warn(
