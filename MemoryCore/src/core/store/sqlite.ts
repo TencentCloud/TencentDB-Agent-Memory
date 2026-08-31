@@ -41,6 +41,8 @@ import type {
   L0CountFilter,
   L0PaginatedFilter,
   L0PaginatedResult,
+  L0TaskActivityFilter,
+  L0TaskActivityResult,
   L1CountFilter,
   L1PaginatedFilter,
   L1PaginatedResult,
@@ -799,6 +801,7 @@ export class VectorStore implements IMemoryStore {
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_agent_session ON l0_conversations(user_id, agent_id, session_id)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_user_recorded  ON l0_conversations(user_id, recorded_at)");
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_agent_recorded ON l0_conversations(agent_id, recorded_at)");
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_l0_task_activity ON l0_conversations(team_id, task_id, user_id, agent_id, session_id, timestamp)");
 
     // L0 vector virtual table (cosine distance, same dimensions as L1) — deferred when dimensions=0
     if (this.dimensions > 0) {
@@ -2609,6 +2612,63 @@ export class VectorStore implements IMemoryStore {
       this.logger?.warn(`[sqlite] queryL0Paginated failed: ${err instanceof Error ? err.message : String(err)}`);
       return { rows: [], total: 0 };
     }
+  }
+
+  aggregateL0TaskActivity(filter: L0TaskActivityFilter): L0TaskActivityResult {
+    if (this.degraded) return { items: [], completeness: "partial", truncated: false, scanned_records: 0 };
+    if (!filter.teamId || filter.taskIds.length === 0) {
+      throw new Error("teamId and at least one taskId are required");
+    }
+
+    const taskIds = [...new Set(filter.taskIds)];
+    const conditions = ["team_id = ?", `task_id IN (${taskIds.map(() => "?").join(", ")})`];
+    const params: SQLInputValue[] = [filter.teamId, ...taskIds];
+    if (filter.userId !== undefined) {
+      conditions.push("user_id = ?");
+      params.push(filter.userId);
+    }
+    if (filter.timeStartMs !== undefined) {
+      conditions.push("timestamp >= ?");
+      params.push(filter.timeStartMs);
+    }
+    if (filter.timeEndMs !== undefined) {
+      conditions.push("timestamp <= ?");
+      params.push(filter.timeEndMs);
+    }
+
+    const where = conditions.join(" AND ");
+    const rows = this.db.prepare(`
+      SELECT team_id, task_id, user_id, agent_id,
+             COUNT(DISTINCT session_id) AS session_count,
+             COUNT(*) AS l0_message_count,
+             MIN(timestamp) AS first_seen_ms,
+             MAX(timestamp) AS last_seen_ms
+      FROM l0_conversations
+      WHERE ${where}
+      GROUP BY team_id, task_id, user_id, agent_id
+      ORDER BY task_id, user_id, agent_id
+    `).all(...params) as Array<{
+      team_id: string; task_id: string; user_id: string; agent_id: string;
+      session_count: number; l0_message_count: number; first_seen_ms: number; last_seen_ms: number;
+    }>;
+
+    const scanned = this.db.prepare(`SELECT COUNT(*) AS count FROM l0_conversations WHERE ${where}`)
+      .get(...params) as { count: number };
+    return {
+      items: rows.map((row) => ({
+        team_id: row.team_id,
+        task_id: row.task_id,
+        user_id: row.user_id,
+        agent_id: row.agent_id,
+        session_count: row.session_count,
+        l0_message_count: row.l0_message_count,
+        ...(row.first_seen_ms > 0 ? { first_seen_at: new Date(row.first_seen_ms).toISOString() } : {}),
+        ...(row.last_seen_ms > 0 ? { last_seen_at: new Date(row.last_seen_ms).toISOString() } : {}),
+      })),
+      completeness: "complete",
+      truncated: false,
+      scanned_records: scanned.count,
+    };
   }
 
   /**
