@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import type { StandaloneLLMCapabilityConfig } from "./adapters/standalone/llm-capabilities.js";
+
 // ============================
 // Type definitions
 // ============================
@@ -199,7 +201,7 @@ export interface ReportConfig {
  *
  * Leave undefined (default) to use the host's native LLM mechanism.
  */
-export interface StandaloneLLMOverrideConfig {
+export interface StandaloneLLMOverrideConfig extends StandaloneLLMCapabilityConfig {
   /** Enable standalone LLM mode (default: false). When false, uses host LLM. */
   enabled: boolean;
   /** OpenAI-compatible API base URL (e.g. "https://api.openai.com/v1"). */
@@ -637,6 +639,8 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     },
     llm: (() => {
       const llmGroup = obj(c, "llm");
+      const reasoningGroup = obj(llmGroup, "reasoning");
+      const startupProbeGroup = obj(llmGroup, "startupProbe");
       const rawProvider = str(llmGroup, "provider");
       const provider: "openai" | "proxy" =
         rawProvider === "proxy" ? "proxy" : "openai";
@@ -648,6 +652,23 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
         model: str(llmGroup, "model") ?? "gpt-4o",
         maxTokens: num(llmGroup, "maxTokens") ?? 4096,
         timeoutMs: num(llmGroup, "timeoutMs") ?? 120_000,
+        backend: (() => {
+          const value = str(llmGroup, "backend");
+          return value === "ollama" || value === "llama.cpp" ? value : "openai-compatible";
+        })(),
+        contextWindow: num(llmGroup, "contextWindow"),
+        inputBudgetTokens: num(llmGroup, "inputBudgetTokens"),
+        extraBody: obj(llmGroup, "extraBody"),
+        reasoning: {
+          enabled: bool(reasoningGroup, "enabled"),
+          effort: str(reasoningGroup, "effort"),
+          format: str(reasoningGroup, "format"),
+        },
+        startupProbe: {
+          enabled: bool(startupProbeGroup, "enabled"),
+          strict: bool(startupProbeGroup, "strict") ?? false,
+          timeoutMs: num(startupProbeGroup, "timeoutMs") ?? 5_000,
+        },
         provider,
         stream: bool(llmGroup, "stream") ?? false,
         proxy: {

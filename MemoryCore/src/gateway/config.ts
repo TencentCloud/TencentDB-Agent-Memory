@@ -444,15 +444,37 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   //             见 src/gateway/llm-resolver.ts 的 resolveEffectiveLlmConfig。
   const llmConfig = obj(fileConfig, "llm");
   const llmProxyConfig = obj(llmConfig, "proxy");
+  const llmReasoningConfig = obj(llmConfig, "reasoning");
+  const llmStartupProbeConfig = obj(llmConfig, "startupProbe");
   const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
+  const rawLlmBackend = env("TDAI_LLM_BACKEND") ?? str(llmConfig, "backend");
+  const backend = rawLlmBackend === "ollama" || rawLlmBackend === "llama.cpp"
+    ? rawLlmBackend
+    : "openai-compatible";
   const llm: StandaloneLLMConfig = {
     baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
     apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    backend,
+    contextWindow: envInt("TDAI_LLM_CONTEXT_WINDOW") ?? num(llmConfig, "contextWindow"),
+    inputBudgetTokens: envInt("TDAI_LLM_INPUT_BUDGET_TOKENS") ?? num(llmConfig, "inputBudgetTokens"),
+    extraBody: obj(llmConfig, "extraBody"),
+    reasoning: {
+      enabled: envBool("TDAI_LLM_REASONING_ENABLED") ?? bool(llmReasoningConfig, "enabled"),
+      effort: env("TDAI_LLM_REASONING_EFFORT") ?? str(llmReasoningConfig, "effort"),
+      format: env("TDAI_LLM_REASONING_FORMAT") ?? str(llmReasoningConfig, "format"),
+    },
+    startupProbe: {
+      enabled: envBool("TDAI_LLM_STARTUP_PROBE") ?? bool(llmStartupProbeConfig, "enabled"),
+      strict: envBool("TDAI_LLM_STARTUP_PROBE_STRICT") ?? bool(llmStartupProbeConfig, "strict") ?? false,
+      timeoutMs: envInt("TDAI_LLM_STARTUP_PROBE_TIMEOUT_MS")
+        ?? num(llmStartupProbeConfig, "timeoutMs")
+        ?? 5_000,
+    },
     provider: llmProvider,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
@@ -488,16 +510,10 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
     !memory.llm.enabled && llm.baseUrl && (llm.apiKey || llm.provider === "proxy");
   if (shouldSpliceLlm) {
     memory.llm = {
+      ...llm,
       enabled: true,
-      baseUrl: llm.baseUrl,
-      apiKey: llm.apiKey,
-      model: llm.model,
       maxTokens: llm.maxTokens ?? 4096,
       timeoutMs: llm.timeoutMs ?? 120_000,
-      provider: llm.provider,
-      proxy: {
-        useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,
-      },
     };
   }
 
@@ -829,6 +845,13 @@ function envInt(key: string): number | undefined {
   if (!v) return undefined;
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function envBool(key: string): boolean | undefined {
+  const v = env(key)?.toLowerCase();
+  if (v === "true" || v === "1" || v === "yes") return true;
+  if (v === "false" || v === "0" || v === "no") return false;
+  return undefined;
 }
 
 function obj(c: Record<string, unknown>, key: string): Record<string, unknown> {
