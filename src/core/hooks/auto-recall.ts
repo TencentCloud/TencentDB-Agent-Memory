@@ -10,6 +10,7 @@
  * - L2 scene navigation (full injection, LLM decides relevance)
  */
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatForLLM } from "../../utils/time.js";
@@ -21,12 +22,22 @@ import type { IMemoryStore, L1SearchResult, L1FtsResult } from "../store/types.j
 import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService, EmbeddingCallOptions } from "../store/embedding.js";
 import { sanitizeText } from "../../utils/sanitize.js";
-import type { Logger } from "../types.js";
+import type { Logger, RecallContextParts } from "../types.js";
 
 const TAG = "[memory-tdai] [recall]";
 const RECALL_TRUNCATION_SUFFIX = "…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）";
 const MIN_TRUNCATED_RECALL_LINE_CHARS = 40;
 const RECALL_LINE_SEPARATOR = "\n";
+
+function sha256Text(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function isCacheDebugEnabled(): boolean {
+  const value = process.env.TDAI_CACHE_DEBUG ?? process.env.TDAI_EXPERIMENT_CACHE_DEBUG;
+  return value === "1" || value === "true" || value === "yes";
+}
 
 /**
  * Memory tools usage guide — injected at the end of memory context so the
@@ -59,6 +70,10 @@ export interface RecallResult {
   prependContext?: string;
   /** Stable recall context appended to system prompt (persona, scene nav, tools guide — cacheable) */
   appendSystemContext?: string;
+  /** Structured stable/dynamic context contract for cache-boundary-aware hosts. */
+  contextParts?: RecallContextParts;
+  /** Optional cache diagnostics, emitted only when TDAI_CACHE_DEBUG is enabled. */
+  cacheDebug?: Record<string, unknown>;
 
   // ── Metric payload (for pendingRecallCache in index.ts) ──
   /** L1 memories that were recalled (with scores), for metric reporting */
@@ -216,6 +231,23 @@ async function performAutoRecallInner(params: {
   }
 
   const appendSystemContext = stableParts.length > 0 ? stableParts.join("\n\n") : undefined;
+  const contextParts: RecallContextParts = {};
+  if (appendSystemContext) {
+    contextParts.stable = {
+      content: appendSystemContext,
+      placement: "system",
+      cachePolicy: "cacheable",
+      persist: false,
+    };
+  }
+  if (prependContext) {
+    contextParts.dynamic = {
+      content: prependContext,
+      placement: "user",
+      cachePolicy: "ephemeral",
+      persist: false,
+    };
+  }
 
   const totalMs = performance.now() - tRecallStart;
   logger?.info(
@@ -227,6 +259,31 @@ async function performAutoRecallInner(params: {
     `scene=${(tSceneEnd - tSceneStart).toFixed(0)}ms(${sceneNavigation ? "loaded" : "none"})`,
   );
 
+  const stableContextSha256 = sha256Text(appendSystemContext);
+  const dynamicContextSha256 = sha256Text(prependContext);
+  const cacheDebug = isCacheDebugEnabled() ? {
+    mode: process.env.TDAI_STABLE_PREFIX_MODE ?? process.env.TDAI_EXPERIMENT_STABLE_PREFIX_MODE ?? "current",
+    stableContextChars: appendSystemContext?.length ?? 0,
+    dynamicContextChars: prependContext?.length ?? 0,
+    stableContextSha256,
+    dynamicContextSha256,
+    stablePlacementTarget: "system-context-fallback",
+    dynamicPersistPolicy: "never",
+    appendSystemContextChars: appendSystemContext?.length ?? 0,
+    prependContextChars: prependContext?.length ?? 0,
+    appendSystemContextSha256: stableContextSha256,
+    prependContextSha256: dynamicContextSha256,
+    personaChars: personaContent?.length ?? 0,
+    sceneNavigationChars: sceneNavigation?.length ?? 0,
+    memoryToolsGuideChars: stableParts.includes(MEMORY_TOOLS_GUIDE) ? MEMORY_TOOLS_GUIDE.length : 0,
+    recalledL1Count: memoryLines.length,
+    searchStrategy: effectiveStrategy,
+  } : undefined;
+
+  if (cacheDebug) {
+    logger?.info(`${TAG} cache-debug ${JSON.stringify(cacheDebug)}`);
+  }
+
   if (!appendSystemContext && !prependContext) {
     return undefined;
   }
@@ -234,9 +291,11 @@ async function performAutoRecallInner(params: {
   return {
     prependContext,
     appendSystemContext,
+    contextParts,
     recalledL1Memories,
     recalledL3Persona: personaContent ?? null,
     recallStrategy: effectiveStrategy,
+    cacheDebug,
   };
 }
 

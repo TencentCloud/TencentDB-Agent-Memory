@@ -18,6 +18,7 @@ import http from "node:http";
 import { URL } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { TdaiCore } from "../core/tdai-core.js";
+import { buildRecallResponse } from "./recall-response.js";
 import { StandaloneHostAdapter } from "../adapters/standalone/host-adapter.js";
 import { loadGatewayConfig } from "./config.js";
 import type { GatewayConfig } from "./config.js";
@@ -382,11 +383,7 @@ export class TdaiGateway {
 
     this.logger.info(`Recall completed in ${elapsed}ms: context=${(result.appendSystemContext?.length ?? 0)} chars`);
 
-    const response: RecallResponse = {
-      context: result.appendSystemContext ?? "",
-      strategy: result.recallStrategy,
-      memory_count: result.recalledL1Memories?.length ?? 0,
-    };
+    const response: RecallResponse = buildRecallResponse(result);
     sendJson(res, 200, response);
   }
 
