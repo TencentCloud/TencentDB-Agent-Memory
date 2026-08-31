@@ -584,11 +584,13 @@ export default function register(api: OpenClawPluginApi) {
           pendingRecallEndTimestamps.set(resolvedSessionKey, Date.now());
         }
 
-        if (result?.appendSystemContext || result?.prependContext) {
+        if (result?.appendSystemContext || result?.prependContext || result?.prependSystemContext) {
           const appendLen = result.appendSystemContext?.length ?? 0;
           const prependLen = result.prependContext?.length ?? 0;
+          const prependSysLen = result.prependSystemContext?.length ?? 0;
           api.logger.info(
             `${TAG} [before_prompt_build] Recall complete (${elapsedMs}ms), ` +
+            `prependSystemContext=${prependSysLen} chars (cached), ` +
             `appendSystemContext=${appendLen} chars, prependContext=${prependLen} chars`,
           );
         } else {
