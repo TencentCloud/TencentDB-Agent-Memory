@@ -611,6 +611,7 @@ export const zhCN = {
   'memory.allocate.privateDisabled': '该记忆已被 owner 设为私密，无法再分配给其他 Agent',
   'memory.import': '导入记忆',
   'memory.import.tooltip.noAgent': '当前 team 暂无 agent，请先创建 agent',
+  'memory.refresh': '刷新',
   'memory.blockList': '记忆块',
   'memory.blockCount': '{{filtered}} 条',
   'memory.empty.filtered': '没有匹配的记忆块。',

@@ -137,6 +137,13 @@ export default function ChatMemoryPanel(
               );
             })()}
             <Button
+              onClick={() => fetchBlocks()}
+              loading={blocksLoading}
+              disabled={blocksLoading}
+            >
+              {t('memory.refresh')}
+            </Button>
+            <Button
               type="primary"
               onClick={() => setShowImport(true)}
               disabled={ownedTeamAgents.length === 0}
