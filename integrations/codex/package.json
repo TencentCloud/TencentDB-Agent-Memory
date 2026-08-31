@@ -1,0 +1,5 @@
+{
+  "name": "@tencentdb-agent-memory/codex-adapter",
+  "private": true,
+  "type": "module"
+}
