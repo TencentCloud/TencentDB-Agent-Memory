@@ -50,6 +50,13 @@ import { MemoryPipelineManager } from "../utils/pipeline-manager.js";
 import { CheckpointManager } from "../utils/checkpoint.js";
 import { SessionFilter } from "../utils/session-filter.js";
 import { StandaloneLLMRunnerFactory } from "../adapters/standalone/llm-runner.js";
+import { readConversationRecords } from "./conversation/l0-recorder.js";
+import { readMemoryRecords, queryMemoryRecords } from "./record/l1-reader.js";
+import { formatLocalDate } from "../utils/time.js";
+import type { DirtyTier } from "../utils/checkpoint.js";
+import type { L0Record } from "./store/types.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 const TAG = "[memory-tdai] [core]";
 
@@ -153,7 +160,11 @@ export class TdaiCore {
       // Wire runners after store is ready (or after store init fails — runners
       // still work in degraded mode with JSONL fallback and no embedding)
       this.storeReady
-        .then(() => this.wirePipelineRunners())
+        .then(async () => {
+          // Recovery check: after store init, before wiring pipeline runners
+          await this.runRecoveryIfNeeded();
+          this.wirePipelineRunners();
+        })
         .catch((err) => {
           this.logger.error(`${TAG} Store init failed; wiring pipeline runners in degraded mode: ${err instanceof Error ? err.message : String(err)}`);
           this.wirePipelineRunners();
@@ -230,6 +241,15 @@ export class TdaiCore {
     }
 
     resetStores(this.dataDir);
+
+    // Mark shutdown clean only if all cleanup steps succeeded
+    try {
+      const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+      await checkpoint.markShutdownClean();
+    } catch (err) {
+      this.logger.warn(`${TAG} Failed to mark shutdown clean: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     this.logger.debug?.(`${TAG} TDAI Core destroyed`);
   }
 
@@ -500,6 +520,245 @@ export class TdaiCore {
     this.logger.debug?.(`${TAG} Pipeline runners wired`);
   }
 
+  // ============================
+  // Recovery from dirty state
+  // ============================
+
+  /**
+   * Run recovery if last shutdown was not clean.
+   * Called after store init, before wiring pipeline runners.
+   */
+  private async runRecoveryIfNeeded(): Promise<void> {
+    const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+    const cp = await checkpoint.read();
+    if (cp.last_shutdown_clean) {
+      // Zero-cost fast path: skip recovery, but immediately reset to false
+      // so a crash in this run won't falsely skip recovery next time.
+      await checkpoint.markShutdownDirty();
+      return;
+    }
+    await this.recoverFromDirtyState(checkpoint);
+  }
+
+  /**
+   * Main recovery orchestrator: process all dirty sessions, recalibrate counters.
+   */
+  private async recoverFromDirtyState(checkpoint: CheckpointManager): Promise<void> {
+    const cp = await checkpoint.read();
+
+    const dirtyL0Sessions = checkpoint.getDirtySessions(cp, "l0");
+    const dirtyL1Sessions = checkpoint.getDirtySessions(cp, "l1");
+
+    if (dirtyL0Sessions.length === 0 && dirtyL1Sessions.length === 0) {
+      this.logger.debug?.(`${TAG} Recovery: no dirty sessions found, skipping`);
+      await this.recalibrateCount(checkpoint);
+      return;
+    }
+
+    this.logger.info(
+      `${TAG} Recovery: dirty_l0=[${dirtyL0Sessions.join(",")}], dirty_l1=[${dirtyL1Sessions.join(",")}]`,
+    );
+
+    for (const sessionKey of dirtyL0Sessions) {
+      const tiers = checkpoint.getDirtyTiers(cp, "l0", sessionKey);
+      await this.recoverSession(checkpoint, "l0", sessionKey, tiers);
+    }
+
+    for (const sessionKey of dirtyL1Sessions) {
+      const tiers = checkpoint.getDirtyTiers(cp, "l1", sessionKey);
+      await this.recoverSession(checkpoint, "l1", sessionKey, tiers);
+    }
+
+    // Recalibrate global counters unconditionally
+    await this.recalibrateCount(checkpoint);
+
+    this.logger.info(`${TAG} Recovery complete`);
+  }
+
+  /**
+   * Three-rule decision tree for recovery of a single session+layer.
+   *
+   * Rule 1 (j ∧ s ∧ c): all tiers dirty → clear markers, self-heal
+   * Rule 2: at least one data tier clean → repair dirty tier(s), fix cursor if needed
+   * Rule 3 (j ∧ s ∧ ¬c): both data tiers dirty, checkpoint clean → cursor repair only
+   */
+  private async recoverSession(
+    checkpoint: CheckpointManager,
+    layer: "l0" | "l1",
+    sessionKey: string,
+    dirtyTiers: DirtyTier[],
+  ): Promise<void> {
+    const j = dirtyTiers.includes("jsonl");
+    const s = dirtyTiers.includes("sqlite");
+    const c = dirtyTiers.includes("checkpoint");
+
+    this.logger.info(
+      `${TAG} Recovery ${layer}: session=${sessionKey}, dirty=[${dirtyTiers.join(",")}]`,
+    );
+
+    // Rule 1: all three dirty → clear markers, normal flow self-heals
+    if (j && s && c) {
+      await checkpoint.clearAllDirtyTiers(layer, sessionKey);
+      return;
+    }
+
+    // Rule 3: both data tiers dirty, checkpoint clean → cursor repair only
+    if (j && s && !c) {
+      await this.recalibrateCursorFromStore(checkpoint, layer, sessionKey);
+      return;
+    }
+
+    // Rule 2: at least one data tier clean → repair the dirty tier(s)
+    if (j && !s) {
+      // jsonl dirty, sqlite clean → restore jsonl from sqlite
+      await this.repairJsonlFromSqlite(layer, sessionKey);
+    }
+    if (s && !j) {
+      // sqlite dirty, jsonl clean → restore sqlite from jsonl
+      await this.repairSqliteFromJsonl(layer, sessionKey);
+    }
+    if (c) {
+      // checkpoint dirty → recalibrate cursor from store (clears markers internally)
+      await this.recalibrateCursorFromStore(checkpoint, layer, sessionKey);
+    } else {
+      // No cursor fix needed → just clear remaining markers
+      await checkpoint.clearAllDirtyTiers(layer, sessionKey);
+    }
+  }
+
+  /**
+   * Repair sqlite store from jsonl files (jsonl is clean source, sqlite is dirty).
+   * L0: readConversationRecords → expand messages[] → upsertL0 (deferred embedding, no embeddingService)
+   * L1: readMemoryRecords → upsertL1 (embeddingService degraded if undefined)
+   */
+  private async repairSqliteFromJsonl(layer: "l0" | "l1", sessionKey: string): Promise<void> {
+    if (!this.vectorStore) return;
+
+    let synced = 0;
+    if (layer === "l0") {
+      const conversationRecords = await readConversationRecords(sessionKey, this.dataDir, this.logger);
+      for (const conv of conversationRecords) {
+        for (const msg of conv.messages) {
+          const l0Record: L0Record = {
+            id: msg.id,
+            sessionKey: conv.sessionKey,
+            sessionId: conv.sessionId || "",
+            role: msg.role,
+            messageText: msg.content,
+            recordedAt: conv.recordedAt,
+            timestamp: msg.timestamp,
+          };
+          await this.vectorStore.upsertL0(l0Record);
+          synced++;
+        }
+      }
+    } else {
+      const records = await readMemoryRecords(sessionKey, this.dataDir, this.logger);
+      for (const r of records) {
+        const embedding = this.embeddingService
+          ? await this.embeddingService.embed(r.content)
+          : undefined;
+        await this.vectorStore.upsertL1(r, embedding);
+        synced++;
+      }
+    }
+    this.logger.info(`${TAG} repairSqliteFromJsonl ${layer}: session=${sessionKey}, synced=${synced}`);
+  }
+
+  /**
+   * Repair jsonl files from sqlite store (sqlite is clean source, jsonl is dirty).
+   * L0: queryL0ForL1 (snake_case) → convert to camelCase jsonl records → append to shard file
+   * L1: queryMemoryRecords (already camelCase) → directly append to shard file
+   */
+  private async repairJsonlFromSqlite(layer: "l0" | "l1", sessionKey: string): Promise<void> {
+    if (!this.vectorStore) return;
+
+    const dir = layer === "l0" ? "conversations" : "records";
+    let appended = 0;
+
+    if (layer === "l0") {
+      const rows = await this.vectorStore.queryL0ForL1(sessionKey);
+      for (const row of rows) {
+        const jsonlLine = {
+          id: row.record_id,
+          sessionKey: row.session_key,
+          sessionId: row.session_id || "",
+          role: row.role,
+          content: row.message_text,
+          recordedAt: row.recorded_at,
+          timestamp: row.timestamp,
+        };
+        const date = formatLocalDate(new Date(row.recorded_at));
+        const filePath = path.join(this.dataDir, dir, `${date}.jsonl`);
+        await fs.appendFile(filePath, JSON.stringify(jsonlLine) + "\n", "utf-8");
+        appended++;
+      }
+    } else {
+      const records = await queryMemoryRecords(this.vectorStore, { sessionKey });
+      for (const r of records) {
+        const date = formatLocalDate(new Date(r.createdAt));
+        const filePath = path.join(this.dataDir, dir, `${date}.jsonl`);
+        await fs.appendFile(filePath, JSON.stringify(r) + "\n", "utf-8");
+        appended++;
+      }
+    }
+    this.logger.info(`${TAG} repairJsonlFromSqlite ${layer}: session=${sessionKey}, appended=${appended}`);
+  }
+
+  /**
+   * Recalibrate cursor from store MAX queries (no full scan).
+   * Falls back to clearAllDirtyTiers if store methods unavailable or no data.
+   */
+  private async recalibrateCursorFromStore(
+    checkpoint: CheckpointManager,
+    layer: "l0" | "l1",
+    sessionKey: string,
+  ): Promise<void> {
+    if (!this.vectorStore) {
+      await checkpoint.clearAllDirtyTiers(layer, sessionKey);
+      return;
+    }
+
+    let maxTs = 0;
+    let lastScene: string | undefined;
+
+    if (layer === "l0") {
+      maxTs = await this.vectorStore.getL0MaxTimestampBySession!(sessionKey);
+    } else {
+      const stats = await this.vectorStore.getL1StatsBySession!(sessionKey);
+      maxTs = stats.maxTimestamp;
+      lastScene = stats.lastSceneName;
+    }
+
+    if (maxTs > 0) {
+      await checkpoint.recalibrateCursor(sessionKey, layer, maxTs, lastScene);
+    } else {
+      await checkpoint.clearAllDirtyTiers(layer, sessionKey);
+    }
+  }
+
+  /**
+   * Recalibrate global L0/L1 counters from actual store counts.
+   */
+  private async recalibrateCount(checkpoint: CheckpointManager): Promise<void> {
+    if (!this.vectorStore) return;
+
+    try {
+      const [actualL0, actualL1] = await Promise.all([
+        this.vectorStore.countL0(),
+        this.vectorStore.countL1(),
+      ]);
+      await checkpoint.recalibrateCounts({
+        l0ConversationsCount: actualL0,
+        totalMemoriesExtracted: actualL1,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `${TAG} Recovery: recalibrateCounts failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   private ensureSchedulerStarted(): Promise<void> {
     // Fast path: already started (or starting) — every concurrent caller
     // awaits the same in-flight promise.  The promise is kept around as a
@@ -514,6 +773,23 @@ export class TdaiCore {
     this.schedulerStartPromise = (async () => {
       try {
         const checkpoint = new CheckpointManager(this.dataDir, this.logger);
+        if (this.vectorStore && !this.vectorStore.isDegraded()) {
+          try {
+            const [actualL0, actualL1] = await Promise.all([
+              this.vectorStore.countL0(),
+              this.vectorStore.countL1(),
+            ]);
+            await checkpoint.recalibrateCounts({
+              l0ConversationsCount: actualL0,
+              totalMemoriesExtracted: actualL1,
+            });
+          } catch (err) {
+            this.logger.warn(
+              `${TAG} Checkpoint recalibration failed on scheduler start (non-fatal): ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         const cp = await checkpoint.read();
         scheduler.start(checkpoint.getAllPipelineStates(cp));
         this.logger.debug?.(`${TAG} Scheduler started`);

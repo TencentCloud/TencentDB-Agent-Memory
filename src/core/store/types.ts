@@ -306,6 +306,13 @@ export interface IMemoryStore {
     onProgress?: (done: number, total: number, layer: "L1" | "L0") => void,
   ): Promise<{ l1Count: number; l0Count: number }>;
 
+  // ── Recovery helpers (optional) ─────────────────────────
+
+  /** Get max timestamp for L0 records by session. */
+  getL0MaxTimestampBySession?(sessionKey: string): MaybePromise<number>;
+  /** Get max timestamp and last scene name for L1 records by session. */
+  getL1StatsBySession?(sessionKey: string): MaybePromise<{ maxTimestamp: number; lastSceneName?: string }>;
+
   // ── FTS (always sync — cached flag) ──────────────────────
 
   isFtsAvailable(): boolean;
