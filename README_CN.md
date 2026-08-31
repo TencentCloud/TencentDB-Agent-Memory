@@ -145,6 +145,8 @@ openclaw plugins install @tencentdb-agent-memory/memory-tencentdb
 openclaw gateway restart
 ```
 
+普通安装不会修改 OpenClaw 运行时文件。运行时 patch 仅用于可选的短期记忆压缩，需要用户显式执行。
+
 > 升级插件请优先使用 OpenClaw 原生更新命令，该方式可以避免因语义化版本范围导致插件禁用：
 > ```bash
 > openclaw plugins update @tencentdb-agent-memory/memory-tencentdb
@@ -196,13 +198,15 @@ openclaw gateway restart
 
 #### 步骤 2 —— 执行 patch 脚本
 
-为保证最佳效果，请执行以下 patch 脚本。该脚本会注入 `after-tool-call` 消息钩子，让工具调用结果能被正确卸载与回溯：
+为保证短期记忆压缩的最佳效果，请主动执行以下 patch 脚本。该脚本会注入 `after-tool-call` 消息钩子，让工具调用结果能被正确卸载与回溯：
 
 ```bash
 bash scripts/openclaw-after-tool-call-messages.patch.sh
 ```
 
-> 💡 patch 每次 OpenClaw 安装只需执行一次。升级 OpenClaw 后建议重新执行以确保钩子生效。
+如果你确实希望 npm `postinstall` 阶段自动执行同一个 patch，请在安装时显式设置 `MEMORY_TENCENTDB_APPLY_OPENCLAW_PATCH=1`。
+
+> 💡 patch 每次 OpenClaw 安装只需执行一次。升级 OpenClaw 后建议重新执行以确保钩子生效。长期记忆的采集、提取和召回不依赖该 patch。
 
 
 ### 2. Hermes
