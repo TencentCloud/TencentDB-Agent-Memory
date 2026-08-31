@@ -1,0 +1,17 @@
+{
+  "name": "memory-tencentdb-issue-120-benchmark",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "doctor": "node scripts/doctor.mjs",
+    "benchmark:offline": "node scripts/layout-benchmark.mjs",
+    "benchmark:provider": "node scripts/provider-benchmark.mjs",
+    "benchmark:openclaw": "node scripts/openclaw-provider-benchmark.mjs",
+    "openclaw:local:setup": "bash scripts/setup-openclaw-local.sh",
+    "test": "node --test tests/*.test.mjs"
+  }
+}

@@ -1,0 +1,19 @@
+FROM node:24.15.0-bookworm-slim
+
+ARG OPENCLAW_VERSION=2026.5.28
+
+RUN npm install --global "openclaw@${OPENCLAW_VERSION}"
+
+WORKDIR /opt/memory-tencentdb
+COPY package.json ./
+RUN npm install --ignore-scripts --omit=optional
+
+COPY . .
+RUN npm run build
+
+ENV OPENCLAW_HOME=/state/home \
+    OPENCLAW_STATE_DIR=/state/runtime \
+    OPENCLAW_CONFIG_PATH=/state/runtime/openclaw.json
+RUN mkdir -p /state/home /state/runtime /results
+
+CMD ["bash", "benchmarks/prompt-cache/scripts/openclaw-smoke.sh"]

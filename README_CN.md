@@ -440,12 +440,29 @@ export MEMORY_TENCENTDB_GATEWAY_API_KEY="<与 Gateway 同一份密钥>"
 | `recall.maxResults` | `5` | 每次召回条数 |
 | `recall.maxCharsPerMemory` | `0` | 单条 L1 记忆注入的最大字符数；`0` 表示不限制 |
 | `recall.maxTotalRecallChars` | `0` | 每轮 auto-recall 注入的 L1 记忆总字符预算；`0` 表示不限制 |
+| `recall.historyMode` | `"persist-dedup"` | `"persist-dedup"` 将版本化 Recall ledger 写入 session history，并按 memory ID/revision 去重；`"strip"` 保持旧的写入前清理行为 |
+| `recall.maxSessionRecallChars` | `32000` | 单个 session 已持久化 Recall ledger 的硬上限；达到上限后停止新的自动注入，compaction 删除旧 ledger 后可恢复 |
 | `pipeline.everyNConversations` | `5` | 每 N 轮对话触发一次 L1 记忆提取 |
 | `extraction.maxMemoriesPerSession` | `20` | 单次 L1 最多提取多少条 |
 | `persona.triggerEveryN` | `50` | 每 N 条新记忆触发用户画像生成 |
 | `offload.enabled` | `false` | 是否启用短期记忆压缩 |
 
 </details>
+
+### Recall 历史与 Prompt Cache
+
+默认情况下，自动召回的 L1 记忆会以版本化
+`<relevant-memories data-ledger-version="1">` 区块追加到当前用户消息末尾，
+并原样写入 OpenClaw session history，使下一轮 provider 请求能够按
+append-only transcript 重放。相同 memory ID 的同一内容 revision 只注入一次；
+不同 record ID 的相同内容也会二次去重；记录更新后会追加新 revision，并标记
+其替代的旧 revision。
+
+这是有意的历史格式变化，因此原始 OpenClaw session history 中可以看到 ledger。
+L0 capture 仍使用 hook 缓存的原始用户文本，不会把 Recall 内容反馈给记忆提取。
+如需旧行为，可将 `recall.historyMode` 设为 `"strip"`。达到
+`recall.maxSessionRecallChars` 后不会修改已持久化历史，只停止新的自动 Recall；
+主动 memory search 工具仍可正常使用。
 
 <details>
 <summary><b>🟡 Level 2 · 进阶调优</b>（长任务 / 长 Session 场景）</summary>
