@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tdai-memory": {
+      "command": "<ABSOLUTE_NODE_PATH>",
+      "args": [
+        "<ABSOLUTE_ADAPTER_PATH>/src/mcp/server.js",
+        "--workspace",
+        "<ABSOLUTE_WORKSPACE_PATH>"
+      ],
+      "env": {
+        "TDAI_MEMORY_API_KEY": "${TDAI_MEMORY_API_KEY}"
+      },
+      "disabled": false
+    }
+  }
+}

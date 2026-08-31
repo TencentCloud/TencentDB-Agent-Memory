@@ -1,11 +1,13 @@
-import { loadConfig as defaultLoadConfig } from './core/config.js';
+import { resolveConfig } from './core/config.js';
 import { pathToFileURL } from 'node:url';
 import { KiroIdeHookAssistantProvider } from './core/assistant-response-provider.js';
 import { CaptureService } from './core/capture-service.js';
+import { ArchiveService } from './core/archive-service.js';
 import { normalizeHookEvent } from './core/event-normalizer.js';
 import { GatewayClient } from './core/gateway-client.js';
 import { Outbox } from './core/outbox.js';
 import { RecallService } from './core/recall-service.js';
+import { UnifiedQueryService } from './core/query-service.js';
 import { TurnStore } from './core/turn-store.js';
 import { handlePostToolUse } from './hooks/post-tool-use.js';
 import { handlePromptSubmit } from './hooks/prompt-submit.js';
@@ -14,15 +16,43 @@ import { handleStop } from './hooks/stop.js';
 const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const expectedEvent = { recall: 'UserPromptSubmit', 'post-tool-use': 'PostToolUse', stop: 'Stop' };
 const safe = () => ({ exitCode: 0, stdout: '' });
+const defaultLoadConfig = async (env, workspace) => (await resolveConfig({ env, workspace })).config;
 
 const defaultDependencies = (config) => {
   const gatewayClient = new GatewayClient(config);
-  const outbox = new Outbox({ stateDir: config.stateDir, gatewayClient });
+  const queryService = new UnifiedQueryService({ gatewayClient });
+  let archiveService;
+  const outbox = new Outbox({
+    stateDir: config.stateDir,
+    gatewayClient,
+    shouldProcess: async (item) => !archiveService || archiveService.isForceOperationCurrent(item),
+    onAcknowledged: async (item, response) => {
+      if (!archiveService) return;
+      if (item.version === 2 && item.operation_type === 'force_archive') {
+        await archiveService.recordForceOutcome({
+          sessionId: item.session_id,
+          archiveGeneration: item.archive_generation,
+          response,
+        });
+        return;
+      }
+      if (['ok', 'archived'].includes(response?.status)) {
+        await archiveService.recordCaptureOutcome({
+          sessionId: item.session_id,
+          captureId: item.operation_id ?? item.capture_id,
+          response,
+        });
+      }
+    },
+  });
+  const turnStore = new TurnStore({ stateDir: config.stateDir });
+  archiveService = new ArchiveService({ config, turnStore, outbox });
   return {
     outbox,
-    turnStore: new TurnStore({ stateDir: config.stateDir }),
-    recallService: new RecallService({ gatewayClient, config }),
-    captureService: new CaptureService({ config, gatewayClient, outbox }),
+    turnStore,
+    archiveService,
+    recallService: new RecallService({ queryService, config }),
+    captureService: new CaptureService({ config, gatewayClient, outbox, archiveService }),
     assistantResponseProvider: new KiroIdeHookAssistantProvider(),
   };
 };
@@ -53,9 +83,10 @@ export async function runCli({
     const event = normalizeHookEvent(raw);
     const command = argv[0];
     if (event.eventName !== expectedEvent[command]) return safe();
-    const config = loadConfig(env);
+    const config = await loadConfig(env, event.cwd);
     const dependencies = createDependencies(config);
     try { await dependencies.outbox.flush({ maxItems: 3, budgetMs: 1500 }); } catch { /* fail open */ }
+    try { await dependencies.archiveService?.considerSessionIdle(event.sessionId); } catch { /* fail open */ }
 
     if (config.captureEnabled === false) {
       if (command !== 'recall') return safe();

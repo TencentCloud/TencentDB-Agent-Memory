@@ -42,7 +42,7 @@ test('keeps failed work with fixed backoff, skips future work, and acknowledges 
     time = new Date('2026-08-14T08:00:01.000Z'); online = true;
     assert.deepEqual(await outbox.flush(), { processed: 1, acknowledged: 1, deferred: 0, failed: 0 });
     await assert.rejects(readFile(outbox.outboxPath(id()), 'utf8'), { code: 'ENOENT' });
-    assert.equal(JSON.parse(await readFile(outbox.markerPath(id()), 'utf8')).capture_id, id());
+    assert.equal(JSON.parse(await readFile(outbox.markerPath(id()), 'utf8')).operation_id, id());
   });
 });
 
@@ -126,4 +126,68 @@ test('propagates lock and marker persistence errors even when they advance the c
     outbox.writeMarkerUnlocked = async () => { clock = 10; throw new Error('marker-write'); };
     await assert.rejects(outbox.flush({ budgetMs: 10 }), (error) => error instanceof OutboxError && error.message === 'Outbox persistence failed');
   });
+});
+
+test('acknowledgement reconciliation is retried from marker plus outbox without resending Gateway data', async () => {
+  await withStateDir(async (stateDir) => {
+    let gatewayCalls = 0;
+    let reconciliationCalls = 0;
+    let failReconciliation = true;
+    const outbox = new Outbox({
+      stateDir,
+      gatewayClient: { skillConversationAdd: async () => { gatewayCalls += 1; return { status: 'ok' }; } },
+      onAcknowledged: async (item, result) => {
+        reconciliationCalls += 1;
+        assert.equal(item.operation_id, id());
+        assert.deepEqual(result, { status: 'ok' });
+        if (failReconciliation) throw new Error('metadata-write');
+      },
+    });
+    await outbox.enqueue(envelope());
+    await assert.rejects(outbox.flush(), OutboxError);
+    assert.equal(await outbox.hasMarker(id()), true);
+    await readFile(outbox.outboxPath(id()), 'utf8');
+
+    failReconciliation = false;
+    assert.equal((await outbox.flush()).acknowledged, 1);
+    assert.equal(gatewayCalls, 1);
+    assert.equal(reconciliationCalls, 2);
+    await assert.rejects(readFile(outbox.outboxPath(id()), 'utf8'), { code: 'ENOENT' });
+  });
+});
+
+test('acknowledgement runs after releasing the operation lock', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'kiro-outbox-ack-lock-'));
+  try {
+    let outbox;
+    let reentered = false;
+    outbox = new Outbox({
+      stateDir, lockTimeoutMs: 100, lockRetryMs: 5,
+      gatewayClient: { skillConversationAdd: async () => ({ status: 'ok' }) },
+      onAcknowledged: async (item) => outbox.withLock(item.operation_id, async () => { reentered = true; }),
+    });
+    const item = envelope('a');
+    await outbox.enqueue(item);
+    const result = await outbox.flush({ maxItems: 1, budgetMs: 500 });
+    assert.equal(result.acknowledged, 1);
+    assert.equal(reentered, true);
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
+});
+
+test('a stale durable force operation is deleted locally before any Gateway send', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'kiro-outbox-stale-force-'));
+  try {
+    let calls = 0;
+    const outbox = new Outbox({
+      stateDir,
+      shouldProcess: async (item) => item.operation_type !== 'force_archive',
+      gatewayClient: { forceArchive: async () => { calls += 1; return { status: 'empty' }; } },
+    });
+    const operation = { operation_id: `op_sha256_${'d'.repeat(64)}`, operation_type: 'force_archive', session_id: 'session', archive_generation: 0, last_successful_capture_id: null, payload: { sessionId: 'session', reason: 'idle' } };
+    await outbox.enqueueOperation(operation);
+    const result = await outbox.flush({ maxItems: 1, budgetMs: 500 });
+    assert.equal(result.acknowledged, 1);
+    assert.equal(calls, 0);
+    assert.equal(await outbox.readItemUnlocked(operation.operation_id, true), null);
+  } finally { await rm(stateDir, { recursive: true, force: true }); }
 });

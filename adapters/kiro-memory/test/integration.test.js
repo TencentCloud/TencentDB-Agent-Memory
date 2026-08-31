@@ -49,8 +49,13 @@ const startGateway = async (respond) => {
   };
 };
 
+const atomicHit = (content, id = 'atomic') => ({
+  id, type: 'fact', content, created_at: '2026-08-16T00:00:00.000Z',
+  updated_at: '2026-08-16T00:00:01.000Z', score: 1,
+});
+
 const successfulGatewayResponse = (request) => {
-  if (request.path === '/v3/atomic/search') return { body: { code: 0, data: { items: [{ content: 'historical fact' }] } } };
+  if (request.path === '/v3/atomic/search') return { body: { code: 0, data: { items: [atomicHit('historical fact')] } } };
   if (request.path === '/v3/core/read') return { body: { code: 0, data: { content: 'core fact' } } };
   if (request.path === '/v3/skill/conversation/add') return { body: { code: 0, data: { status: 'archived', archived: { task_id: request.body.task_id, archived_at_ms: 1, archive_key: 'archive-key', reason: 'tool_calls' } } } };
   return { status: 404, body: { code: 1, data: {} } };
@@ -249,7 +254,7 @@ test('recovers an old outbox item after restart before creating a new normalized
       assert.equal(recovered.exitCode, 0);
       assert.equal(recovered.status, 'turn_created');
       assert.equal(recovered.turnId, 'turn-new-1');
-      assert.equal(await restartedOutbox.hasMarker(pending.capture_id), true);
+      assert.equal(await restartedOutbox.hasMarker(pending.operation_id), true);
       assert.deepEqual(await jsonFiles(join(stateDir, 'outbox')), []);
       const secondPrompt = await handlePromptSubmit(await prompt('session-recovery-followup', { prompt: 'another prompt' }), restarted);
       assert.equal(secondPrompt.exitCode, 0);
@@ -267,7 +272,7 @@ test('recovers an old outbox item after restart before creating a new normalized
 test('recalls cross-session memory without sending a session filter to the gateway', async () => {
   await withStateDir(async (stateDir) => {
     const gateway = await startGateway((request) => {
-      if (request.path === '/v3/atomic/search') return { body: { code: 0, data: { items: [{ content: 'memory created in Session A' }] } } };
+      if (request.path === '/v3/atomic/search') return { body: { code: 0, data: { items: [atomicHit('memory created in Session A', 'session-a-memory')] } } };
       if (request.path === '/v3/core/read') return { body: { code: 0, data: { content: null } } };
       return successfulGatewayResponse(request);
     });

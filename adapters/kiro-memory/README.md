@@ -1,60 +1,49 @@
 # TencentDB Agent Memory adapter for Kiro
 
-## Scope and limits
+Phase 2 connects Kiro IDE v1 hooks and an MCP server to TencentDB Agent Memory. It supports automatic recall, observable Full L0 capture, conversation and skill search, durable outbox retry, force-archive coordination, diagnostics, and state maintenance. It does not support Kiro Web, Mobile, or Crew.
 
-This Phase 1 adapter supports **Kiro IDE v1 Hook** only. It does not support Kiro Web, Mobile, Crew, MCP installation, or Full L0 capture. `UserPromptSubmit` emits automatic Recall context to stdout; that content is marked untrusted by the Recall service. `PostToolUse` stores sanitized observed tool traces. On `Stop`, when the IDE has no usable assistant response, the adapter writes only an observed Skill Conversation; the Phase 1 assistant provider always returns `null` even if stdin contains `assistant_response`.
+Real Kiro IDE E2E against a local probe Gateway has been executed in this environment. The remote Gateway E2E has not been executed and must not be treated as passed. The automated suite validates the adapter contracts. Official hook documentation: https://kiro.dev/docs/hooks/.
 
-The local test evidence at this baseline is 89/89 before these delivery tests. Real Kiro IDE + remote Gateway E2E has not been executed in this environment and must not be treated as passed.
+## Configuration
 
-Official contract: [Kiro hooks](https://kiro.dev/docs/hooks/) and [hook actions](https://kiro.dev/docs/hooks/actions/). The installed v1 file is `{ "version": "v1", "hooks": [...] }`: each item has `name`, PascalCase `trigger`, `action: { "type": "command", "command": "..." }`, `timeout: 5`, and `enabled: true`; only `PostToolUse` has `matcher: "*"`. The Gateway/SDK contract is documented in this repository's `sdk/` and `MemoryProxy/` directories.
+Use Node.js 20+. Configuration precedence is `environment > project > user > defaults`. Project config is `.kiro/settings/tdai-memory.json`; user config is `~/.kiro/settings/tdai-memory.json`. Both use strict Config v2 JSON. Keep the API Key only in `TDAI_MEMORY_API_KEY`; never store it in JSON, hooks, receipts, logs, or MCP output.
 
-## Prerequisites and configuration
+| Environment variable | Purpose |
+| --- | --- |
+| `TDAI_MEMORY_GATEWAY_URL` | Gateway HTTP(S) URL |
+| `TDAI_MEMORY_SERVICE_ID` | Required service identifier |
+| `TDAI_MEMORY_USER_ID` | Required memory user identifier |
+| `TDAI_MEMORY_API_KEY` | Optional bearer credential; environment only |
+| `TDAI_MEMORY_TEAM_ID` | Optional team scope |
+| `TDAI_MEMORY_STATE_DIR` | Absolute local state directory |
+| `TDAI_MEMORY_CAPTURE_ENABLED` | Enable observable capture |
+| `TDAI_MEMORY_RECALL_ENABLED` | Enable automatic recall |
+| `TDAI_MEMORY_SKILL_RECALL_ENABLED` | Include skill search in recall |
+| `TDAI_MEMORY_MCP_MAX_OUTPUT_CHARS` | MCP character budget |
 
-Use Node.js 20 or newer and configure the Gateway before installation. `TDAI_MEMORY_SERVICE_ID` is required and is different from `TDAI_MEMORY_TEAM_ID`. The API key is optional. Never put real URL credentials, API keys, or tokens in a hook JSON file.
+Input limits are 128KiB for hook events, 8KiB per observed tool trace, and 32KiB for normalized recall text. Gateway failures are fail-open for hooks: durable work enters the local `outbox`; no secret or raw diagnostic content is printed.
 
-| Variable | Required | Default / purpose |
-| --- | --- | --- |
-| `TDAI_MEMORY_GATEWAY_URL` | yes | HTTP(S) Gateway URL, without query, fragment, or userinfo |
-| `TDAI_MEMORY_SERVICE_ID` | yes | Gateway service identifier |
-| `TDAI_MEMORY_USER_ID` | yes | Memory user identifier |
-| `TDAI_MEMORY_API_KEY` | no | Optional Bearer credential |
-| `TDAI_MEMORY_TEAM_ID` | no | `default` |
-| `TDAI_MEMORY_AGENT_ID` | no | `kiro` |
-| `TDAI_MEMORY_STATE_DIR` | no | `~/.kiro/tdai-memory` |
-| `TDAI_MEMORY_RECALL_ENABLED` | no | `true` |
-| `TDAI_MEMORY_CAPTURE_ENABLED` | no | `true` |
-| `TDAI_MEMORY_TIMEOUT_MS` | no | `2500`, maximum `3000` |
-| `TDAI_MEMORY_MAX_RECALL_RESULTS` | no | `5` |
-| `TDAI_MEMORY_MAX_CONTEXT_CHARS` | no | `6000` |
-| `TDAI_MEMORY_LOG_LEVEL` | no | `warn` |
-| `TDAI_MEMORY_CONVERSATION_RECALL_ENABLED` | no | `false` |
+## Install and operate
 
-## Install, uninstall, and doctor
-
-From this adapter directory, install into a Kiro workspace:
-
-```sh
-node scripts/install.mjs --project /path/to/workspace
-node scripts/doctor.mjs --project /path/to/workspace
-node scripts/uninstall.mjs --project /path/to/workspace
+```powershell
+node scripts/install.mjs --project C:\path\to\project
+node scripts/doctor.mjs --project C:\path\to\project
+node scripts/status.mjs --project C:\path\to\project
+node scripts/health.mjs --project C:\path\to\project --json
 ```
 
-The installer validates configuration without writing any environment value, stages a secret-free `.kiro/tdai-memory-install.json` receipt first, then creates `.kiro/hooks/tdai-memory.json`. It publishes complete, fsynced temporary files with atomic no-replace links; a concurrent different receipt or hook is preserved and installation fails safely, while concurrent identical installs are idempotent. A crash can leave only the matching staged receipt; the next install safely resumes hook creation. The deterministic `.kiro/.tdai-memory-uninstall/` transaction also coordinates installation with uninstall across processes: installation refuses while that recoverable transaction exists and validates the receipt again after hook publication to compensate safely for a transaction that began between checks. Resume uninstall before retrying install after an interrupted uninstall. The uninstaller accepts only regular files and a receipt owned by this exact adapter path; symlinks, directories, special objects, and non-regular transaction artifacts are refused without being loaded as hooks. It moves accepted files to non-JSON quarantine names before validating the hash. Successful cleanup deletes the hook quarantine before the receipt quarantine, so an interrupted uninstall resumes safely on the next run. Failed validation restores by hard-link without replacement; if an original path is occupied, both the new file and quarantine backup are retained. Files concurrently created at the original paths are never removed, and `.kiro/hooks` and other hooks are never deleted. `doctor.mjs` is offline and reports only check names and pass/fail; it checks Node, config schema, CLI, installed hook schema, receipt, and hash. It does not inspect `stateDir` or repair/report leftover session locks.
+Installation owns only `.kiro/hooks/tdai-memory.json`, the `tdai-memory` entry in `.kiro/settings/mcp.json`, and its receipt. It installs `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks while preserving unrelated settings. Do not add `autoApprove`; each MCP tool remains subject to Kiro's normal approval policy. Remove owned integration with `node scripts/uninstall.mjs --project C:\path\to\project`.
 
-## Manual hook template
+If the project is already open in Kiro and the installed server does not appear under MCP Servers, run `Developer: Reload Window` once from the command palette. The PostToolUse hook intentionally omits `matcher`; Kiro's v1 hook schema treats an omitted matcher as all tools.
 
-Use [templates/hooks.json.example](templates/hooks.json.example) only after replacing `<ADAPTER_ROOT>` with an absolute adapter path. It is v1 JSON with exactly three ordered hook items: `UserPromptSubmit`, `PostToolUse` matcher `*`, and `Stop`, all enabled with a five-second timeout and `action.type: "command"`. The installer is safer than manual editing: it encodes the absolute CLI file URL as Base64 and runs fixed code through a quoted `process.execPath`; the generated shell command never contains the adapter path itself. The placeholder template is for ordinary manually quoted paths only and is not a claim of safety for every shell metacharacter. It contains no URL, token, or credential.
+The MCP server exposes `tdai_memory_search`, `tdai_conversation_search`, and `tdai_memory_status`. Start it manually with `npm run mcp -- --workspace C:\path\to\project` when troubleshooting.
 
-## Data flow, safety, and recovery
+## Upgrade and maintenance
 
-Each Hook invokes `node src/cli.js recall|post-tool-use|stop`. The CLI reads at most 4MiB stdin, normalizes the event, requires the command/event match, best-effort flushes up to three historical outbox items within 1500ms, and then dispatches real services. Recall is the only stdout output. PostToolUse and Stop have empty stdout. Hook errors, bad JSON, config, network, and state failures are fail-open (`exit 0`, quiet stderr, safe empty stdout).
+Run `node scripts/migrate.mjs --project C:\path\to\project` when status reports legacy state. Migration is resumable and non-destructive: it verifies copied objects, publishes a manifest last, and will not automatically delete the source state. See [UPGRADE.md](./UPGRADE.md).
 
-Sensitive fields and common credentials are redacted before persistence. Input is limited to 8KiB, tool result to 32KiB, and a complete Turn to 128KiB. Captures are stored in a durable outbox and retried with bounded backoff; `captureEnabled=false` still flushes historical outbox but does not create Turns and makes post-tool-use/stop NOOP. `recallEnabled=false` returns empty Recall.
+`node scripts/maintenance.mjs --project C:\path\to\project` produces a dry-run plan. Apply only a reviewed, unchanged plan with `--apply`; changed or special objects are skipped or reported, never blindly deleted. Both `status.mjs` and `health.mjs` perform a bounded Gateway probe; status is human-readable while health emits one JSON document. `doctor.mjs` remains offline and verifies configuration plus installed artifacts.
 
-Known limitation: a crash can leave a session lock. The adapter will not automatically delete that lock; subsequent operations safely time out. Doctor intentionally does not inspect `stateDir` or repair/report locks.
+## Safety and limits
 
-## Testing and troubleshooting
-
-Run `npm.cmd test` on Windows or `npm test` elsewhere. Test coverage includes CLI fail-open behavior, template shape, installer conflict/receipt protection, uninstall protection, doctor, core flow, sanitization, outbox recovery, and duplicate Stop handling.
-
-If installation fails, verify required variables are present without printing their values, then run doctor. If Recall is empty, check `TDAI_MEMORY_RECALL_ENABLED` and Gateway reachability. If captures remain pending, retain the state directory and let a later Hook flush the outbox. If doctor reports a modified hook, review the user change instead of running uninstall; uninstall intentionally refuses it.
+Recall text is untrusted context, not instructions. Capture records observable user prompts, tool traces, and available assistant output; it does not invent unavailable IDE content. Hook delivery is fail-open, while retries are bounded and non-retryable failures require manual review. Phase 2 does not silently downgrade state or configuration and will not automatically delete migration sources or quarantine contents.

@@ -141,7 +141,10 @@ test('sends exact v3 atomic/core requests and unwraps their data without a sessi
   const server = await startServer(async (request, response) => {
     requests.push(await readRequest(request));
     if (request.url === '/v3/atomic/search') {
-      json(response, 200, { code: 0, data: { items: [{ content: 'atomic' }] } });
+      json(response, 200, { code: 0, data: { items: [{
+        id: 'atomic-1', type: 'fact', content: 'atomic', created_at: '2026-08-16T00:00:00.000Z',
+        updated_at: '2026-08-16T00:00:01.000Z', score: 1,
+      }] } });
       return;
     }
     json(response, 200, { code: 0, data: { content: 'core' } });
@@ -153,7 +156,7 @@ test('sends exact v3 atomic/core requests and unwraps their data without a sessi
       TDAI_MEMORY_AGENT_ID: 'agent-a',
       TDAI_MEMORY_USER_ID: 'user-a',
     }));
-    assert.deepEqual(await client.atomicSearch('recall query', 3), { items: [{ content: 'atomic' }] });
+    assert.deepEqual((await client.atomicSearch('recall query', 3)).items.map((item) => item.content), ['atomic']);
     assert.deepEqual(await client.coreRead(), { content: 'core' });
 
     assert.deepEqual(requests.map((entry) => entry.method), ['POST', 'POST']);
@@ -318,11 +321,20 @@ test('enforces recall result and per-item limits in server order', async () => {
     },
   });
   const result = await service.recall('current prompt');
-  assert.equal(result.includes(`1. ${'a'.repeat(1500)}`), true);
-  assert.equal(result.includes(`2. ${'b'.repeat(1500)}`), true);
+  assert.match(result, new RegExp(`1\\. a+<TRUNCATED original_chars=2000>`));
+  assert.match(result, new RegExp(`2\\. b+<TRUNCATED original_chars=2000>`));
   assert.equal(result.includes('ignored third result'), false);
   assert.equal(result.includes('a'.repeat(1501)), false);
   assert.equal(result.includes('b'.repeat(1501)), false);
+});
+
+test('recall truncation preserves Unicode boundaries and includes framing in the total budget', () => {
+  const service = new RecallService({ config: { maxRecallResults: 1, maxContextChars: 512 } });
+  const output = service.format({ hits: [{ source: 'atomic', content: '😀'.repeat(500) }], coreContent: null });
+  assert.equal([...output].length <= 512, true);
+  assert.equal(output.includes('\uFFFD'), false);
+  assert.match(output, /<TRUNCATED original_chars=500>/);
+  assert.equal(output.endsWith('\n</TDAI_MEMORY_CONTEXT>'), true);
 });
 
 test('enforces the total-context budget while keeping its boundary intact', async () => {
@@ -340,7 +352,7 @@ test('enforces the total-context budget while keeping its boundary intact', asyn
   assert.equal(result.endsWith('\n</TDAI_MEMORY_CONTEXT>'), true);
 });
 
-test('fails open without output for disabled recall, invalid input, empty memory, gateway errors, and malformed data', async () => {
+test('fails open for invalid input and malformed data while retaining partial source success', async () => {
   let calls = 0;
   const disabled = new RecallService({
     config: { recallEnabled: false, maxRecallResults: 5, maxContextChars: 6000 },
@@ -355,7 +367,7 @@ test('fails open without output for disabled recall, invalid input, empty memory
   const cases = [
     { atomicSearch: async () => ({ items: [] }), coreRead: async () => ({ content: null }), prompt: null },
     { atomicSearch: async () => ({ items: [] }), coreRead: async () => ({ content: null }), prompt: 'prompt' },
-    { atomicSearch: async () => { throw new Error('network body must not print'); }, coreRead: async () => ({ content: 'core' }), prompt: 'prompt' },
+    { atomicSearch: async () => { throw new Error('network body must not print'); }, coreRead: async () => ({ content: 'core' }), prompt: 'prompt', expected: '[Core Memory]\ncore' },
     { atomicSearch: async () => ({ items: [{ content: 1 }] }), coreRead: async () => ({ content: null }), prompt: 'prompt' },
   ];
   for (const item of cases) {
@@ -363,6 +375,8 @@ test('fails open without output for disabled recall, invalid input, empty memory
       config: { recallEnabled: true, maxRecallResults: 5, maxContextChars: 6000 },
       gatewayClient: { atomicSearch: item.atomicSearch, coreRead: item.coreRead },
     });
-    assert.equal(await service.recall(item.prompt), '');
+    const output = await service.recall(item.prompt);
+    if (item.expected) assert.equal(output.includes(item.expected), true);
+    else assert.equal(output, '');
   }
 });

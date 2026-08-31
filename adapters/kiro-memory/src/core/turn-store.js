@@ -31,10 +31,10 @@ const isIsoTimestamp = (value) => (
   && new Date(value).toISOString() === value
 );
 
-const isValidTurn = (turn, sessionId, turnId) => (
+export const isValidTurn = (turn, sessionId, turnId) => (
   turn !== null
   && typeof turn === 'object'
-  && turn.version === 1
+  && (turn.version === 1 || turn.version === 2)
   && turn.turn_id === turnId
   && turn.session_id === sessionId
   && (!Object.hasOwn(turn, 'cwd') || typeof turn.cwd === 'string')
@@ -51,6 +51,12 @@ const isValidTurn = (turn, sessionId, turnId) => (
   && turn.prompt_hash === `sha256:${sha256(turn.prompt)}`
   && (turn.capture_id === null || typeof turn.capture_id === 'string')
 );
+
+const upgradeTurn = (turn) => turn.version === 2 ? turn : {
+  ...turn,
+  version: 2,
+  tool_events: turn.tool_events.map((event) => Object.hasOwn(event, 'observed_at') ? event : { ...event, observed_at: null }),
+};
 
 export class TurnStore {
   constructor({
@@ -99,7 +105,7 @@ export class TurnStore {
       await this.assertTurnDoesNotExist(sessionId, turnId);
       const timestamp = this.now().toISOString();
       const turn = {
-        version: 1,
+        version: 2,
         turn_id: turnId,
         session_id: sessionId,
         ...(cwd === undefined ? {} : { cwd }),
@@ -138,7 +144,8 @@ export class TurnStore {
   async appendToolEvent(sessionId, toolEvent) {
     this.assertSessionId(sessionId, 'appendToolEvent');
     return this.withLock(sessionId, async () => {
-      const active = await this.getActiveTurn(sessionId);
+      const current = await this.getActiveTurn(sessionId);
+      const active = current === null ? null : upgradeTurn(current);
       if (active === null) return null;
       const eventCopy = structuredClone(toolEvent);
       active.tool_events.push(eventCopy);
@@ -150,7 +157,8 @@ export class TurnStore {
   async completeTurn(sessionId) {
     this.assertSessionId(sessionId, 'completeTurn');
     return this.withLock(sessionId, async () => {
-      const active = await this.getActiveTurn(sessionId);
+      const current = await this.getActiveTurn(sessionId);
+      const active = current === null ? null : upgradeTurn(current);
       if (active === null || active.lifecycle_status === 'completed') return active;
       active.lifecycle_status = 'completed';
       active.completed_at = this.now().toISOString();
@@ -186,7 +194,7 @@ export class TurnStore {
       throw new TurnStoreError('markCaptureStatus failed: capture_id');
     }
     return this.withLock(sessionId, async () => {
-      const turn = await this.readTurn(sessionId, turnId, 'markCaptureStatus');
+      const turn = upgradeTurn(await this.readTurn(sessionId, turnId, 'markCaptureStatus'));
       turn.capture_status = captureStatus;
       turn.capture_id = captureId;
       await this.writeTurn(sessionId, turn, 'markCaptureStatus');

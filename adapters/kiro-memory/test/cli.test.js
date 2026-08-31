@@ -26,7 +26,10 @@ const gateway = async () => {
   const server = createServer(async (request, response) => {
     let source = ''; for await (const chunk of request) source += chunk;
     const path = request.url;
-    const data = path === '/v3/atomic/search' ? { items: [{ content: 'child-memory' }] } : path === '/v3/core/read' ? { content: null } : { status: 'ok' };
+    const data = path === '/v3/atomic/search' ? { items: [{
+      id: 'child-atomic', type: 'fact', content: 'child-memory', created_at: '2026-08-16T00:00:00.000Z',
+      updated_at: '2026-08-16T00:00:01.000Z', score: 1,
+    }] } : path === '/v3/core/read' ? { content: null } : { status: 'ok' };
     response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify({ code: 0, data }));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });

@@ -6,7 +6,7 @@ const validFactoryValue = (value) => typeof value === 'string'
   && value.length > 0
   && /^[A-Za-z0-9._-]+$/.test(value);
 
-export async function handlePostToolUse(event, { turnStore, toolCallIdFactory = randomUUID } = {}) {
+export async function handlePostToolUse(event, { turnStore, toolCallIdFactory = randomUUID, now = () => new Date() } = {}) {
   const base = { exitCode: 0, stdout: '' };
   if (event?.eventName !== 'PostToolUse') return { ...base, status: 'invalid_event' };
   try {
@@ -18,6 +18,7 @@ export async function handlePostToolUse(event, { turnStore, toolCallIdFactory = 
       event,
       turn,
       toolCallId: `kiro-${turn.turn_id}-${factoryValue}`,
+      observedAt: now().toISOString(),
     });
     const updated = await turnStore.appendToolEvent(event.sessionId, trace);
     if (updated === null) throw new Error('append');

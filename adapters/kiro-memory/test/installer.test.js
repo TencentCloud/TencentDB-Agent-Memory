@@ -46,7 +46,7 @@ test('installer is idempotent, writes a secret-free receipt, and doctor verifies
     assert.equal(hook.version, 'v1');
     assert.equal(Array.isArray(hook.hooks), true);
     assert.deepEqual(hook.hooks.map((item) => item.trigger), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
-    assert.equal(hook.hooks[1].matcher, '*');
+    assert.equal(Object.hasOwn(hook.hooks[1], 'matcher'), false);
     assert.equal(hook.hooks[0].action.command.includes(process.execPath), true);
     const receipt = await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8');
     assert.equal(receipt.includes('installer-secret'), false);
@@ -145,7 +145,7 @@ test('uninstaller resumes after hook quarantine deletion fails', async () => {
     const unlinkQuarantine = async (path) => { if (!failed && path.endsWith('hook.quarantine')) { failed = true; throw new Error('hook-unlink'); } await fsUnlink(path); };
     await assert.rejects(uninstallProject({ project, unlinkQuarantine }), /hook-unlink/);
     const tx = join(project, '.kiro', '.tdai-memory-uninstall');
-    assert.equal(JSON.parse(await readFile(join(tx, 'receipt.quarantine'), 'utf8')).version, 1);
+    assert.equal(JSON.parse(await readFile(join(tx, 'receipt.quarantine'), 'utf8')).version, 2);
     await readFile(join(tx, 'hook.quarantine'), 'utf8');
     await uninstallProject({ project });
     await assert.rejects(readFile(join(tx, 'receipt.quarantine'), 'utf8'), { code: 'ENOENT' });
@@ -204,6 +204,25 @@ test('two concurrent uninstalls safely complete the same transaction', async () 
       await assert.rejects(readFile(join(project, '.kiro', 'hooks', 'tdai-memory.json'), 'utf8'), { code: 'ENOENT' });
     } finally { await rm(project, { recursive: true, force: true }); }
   }
+});
+
+test('uninstaller retries transient Windows EPERM while removing transaction evidence', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'kiro-uninstall-eperm-'));
+  try {
+    const env = safeEnv(join(project, 'state'));
+    await installProject({ project, env });
+    let failures = 0;
+    const transientUnlink = async (path) => {
+      if (path.endsWith('receipt.quarantine') && failures < 2) {
+        failures += 1;
+        const error = new Error('busy'); error.code = 'EPERM'; throw error;
+      }
+      await fsUnlink(path);
+    };
+    await uninstallProject({ project, unlinkQuarantine: transientUnlink });
+    assert.equal(failures, 2);
+    await assert.rejects(lstat(join(project, '.kiro', '.tdai-memory-uninstall')), { code: 'ENOENT' });
+  } finally { await rm(project, { recursive: true, force: true }); }
 });
 
 test('uninstaller refuses non-regular original and transaction objects without moving them', async () => {
@@ -269,16 +288,16 @@ test('installer compensates if uninstall starts after its transaction check and 
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
-test('installer compensation preserves a user hook created at the original path by concurrent uninstall', async () => {
+test('installer compensation preserves a user hook created by a concurrent writer', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro-lifecycle-user-hook-'));
   try {
     const env = safeEnv(join(project, 'state')); const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json'); const userHook = '{"user":true}\n';
     const installing = installProject({
       project,
       env,
-      afterHookPublished: async () => uninstallProject({ project, afterHookQuarantined: async () => { await writeFile(hookPath, userHook); } }),
+      afterHookPublished: async () => { await fsUnlink(hookPath); await writeFile(hookPath, userHook); },
     });
-    await assert.rejects(installing, /lifecycle/);
+    await assert.rejects(installing, /conflict/);
     assert.equal(await readFile(hookPath, 'utf8'), userHook);
     await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
   } finally { await rm(project, { recursive: true, force: true }); }
@@ -318,23 +337,15 @@ test('receipt rollback preserves a concurrent user file or directory at the orig
   for (const replacement of ['file', 'directory']) {
     const project = await mkdtemp(join(tmpdir(), `kiro-receipt-replace-${replacement}-`));
     try {
-      const env = safeEnv(join(project, 'state')); await installProject({ project, env });
+      const env = safeEnv(join(project, 'state'));
       const receiptPath = join(project, '.kiro', 'tdai-memory-install.json'); const userReceipt = '{"user":true}\n';
-      let continueInstall; const installReleased = new Promise((resolve) => { continueInstall = resolve; });
-      let initialChecked; const initialCheck = new Promise((resolve) => { initialChecked = resolve; });
       const installing = installProject({
         project,
         env,
-        afterInitialTransactionCheck: async () => { initialChecked(); await installReleased; },
         beforeReceiptRollback: async () => { await fsUnlink(receiptPath); if (replacement === 'file') await writeFile(receiptPath, userReceipt); else await mkdir(receiptPath); },
+        afterReceiptPublished: async () => { throw new Error('receipt-crash'); },
       });
-      await waitForBarrier(initialCheck);
-      let continueUninstall; const uninstallReleased = new Promise((resolve) => { continueUninstall = resolve; });
-      let receiptStaged; const staged = new Promise((resolve) => { receiptStaged = resolve; });
-      const uninstalling = uninstallProject({ project, afterReceiptStaged: async () => { receiptStaged(); await uninstallReleased; } });
-      await staged; continueInstall(); await assert.rejects(installing, /lifecycle/);
-      if (replacement === 'file') assert.equal(await readFile(receiptPath, 'utf8'), userReceipt); else assert.equal((await lstat(receiptPath)).isDirectory(), true);
-      continueUninstall(); await uninstalling;
+      await assert.rejects(installing, /receipt-crash/);
       if (replacement === 'file') assert.equal(await readFile(receiptPath, 'utf8'), userReceipt); else assert.equal((await lstat(receiptPath)).isDirectory(), true);
     } finally { await rm(project, { recursive: true, force: true }); }
   }
@@ -364,9 +375,7 @@ test('manual template is exact v1 hook JSON and contains no credential fields', 
   assert.equal(Array.isArray(template.hooks), true);
   assert.deepEqual(template.hooks.map((item) => item.trigger), ['UserPromptSubmit', 'PostToolUse', 'Stop']);
   assert.equal(template.hooks[0].name.startsWith('tdai-memory-'), true);
-  assert.equal(template.hooks[1].matcher, '*');
-  assert.equal(Object.hasOwn(template.hooks[0], 'matcher'), false);
-  assert.equal(Object.hasOwn(template.hooks[2], 'matcher'), false);
+  assert.equal(template.hooks.every((item) => Object.hasOwn(item, 'matcher') === false), true);
   assert.equal(template.hooks[1].timeout, 5);
   assert.equal(template.hooks.every((item) => Object.keys(item).every((key) => ['name', 'trigger', 'action', 'timeout', 'enabled', 'matcher'].includes(key)) && item.action.type === 'command'), true);
   assert.equal(JSON.stringify(template).toLowerCase().includes('token'), false);
@@ -395,7 +404,7 @@ test('shell quoting preserves hostile adapter paths without command injection', 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('installer rejects a hook claimed by a concurrent conflicting writer while preserving a recoverable staged receipt', async () => {
+test('installer rejects a hook claimed by a concurrent conflicting writer and rolls back its receipt', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro-install-race-'));
   try {
     const env = safeEnv(join(project, 'state'));
@@ -403,7 +412,7 @@ test('installer rejects a hook claimed by a concurrent conflicting writer while 
     const userHook = '{"owned":"by-user"}\n';
     await assert.rejects(installProject({ project, env, beforePublish: async () => { await writeFile(hookPath, userHook); } }), /conflict/);
     assert.equal(await readFile(hookPath, 'utf8'), userHook);
-    assert.equal(JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8')).version, 1);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
@@ -445,14 +454,14 @@ test('installer refuses a different staged receipt before creating a hook', asyn
   } finally { await rm(project, { recursive: true, force: true }); }
 });
 
-test('a staged receipt without a hook recovers on the next install, doctor, and uninstall', async () => {
+test('a crash after receipt publication rolls back all new artifacts and the next install recovers', async () => {
   const project = await mkdtemp(join(tmpdir(), 'kiro-staged-receipt-recovery-'));
   try {
     const env = safeEnv(join(project, 'state'));
     const hookPath = join(project, '.kiro', 'hooks', 'tdai-memory.json');
     await assert.rejects(installProject({ project, env, afterReceiptPublished: async () => { throw new Error('simulated-crash'); } }), /simulated-crash/);
     await assert.rejects(readFile(hookPath, 'utf8'), { code: 'ENOENT' });
-    assert.equal(JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8')).version, 1);
+    await assert.rejects(readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'), { code: 'ENOENT' });
     await installProject({ project, env });
     assert.equal(run('doctor', project, env).status, 0);
     assert.equal(run('uninstall', project, env).status, 0);
@@ -469,7 +478,7 @@ test('barriered concurrent installs publish one identical receipt without rename
       const afterReceiptPublished = async () => { arrived += 1; if (arrived === 2) release(); await barrier; };
       await Promise.all([installProject({ project, env, afterReceiptPublished }), installProject({ project, env, afterReceiptPublished })]);
       const receipt = JSON.parse(await readFile(join(project, '.kiro', 'tdai-memory-install.json'), 'utf8'));
-      assert.equal(receipt.version, 1);
+      assert.equal(receipt.version, 2);
     } finally { await rm(project, { recursive: true, force: true }); }
   }
 });
@@ -497,7 +506,7 @@ test('doctor rejects a hash-consistent hook with an invalid v1 action schema', a
     hook.hooks[0].action.type = 'unsafe';
     const source = `${JSON.stringify(hook, null, 2)}\n`;
     const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
-    receipt.hook_sha256 = createHash('sha256').update(source).digest('hex');
+    receipt.hook.sha256 = createHash('sha256').update(source).digest('hex');
     await writeFile(hookPath, source); await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
     assert.equal(run('doctor', project, env).status, 1);
   } finally { await rm(project, { recursive: true, force: true }); }
@@ -505,6 +514,9 @@ test('doctor rejects a hash-consistent hook with an invalid v1 action schema', a
 
 test('package exposes hook lifecycle commands', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.version, '2.0.0');
+  assert.equal(pkg.engines.node, '>=20');
+  assert.deepEqual(pkg.files, ['src/', 'scripts/', 'templates/', 'README.md', 'README_CN.md', 'UPGRADE.md', 'UPGRADE_CN.md']);
   assert.equal(pkg.scripts['install:hooks'], 'node scripts/install.mjs');
   assert.equal(pkg.scripts['uninstall:hooks'], 'node scripts/uninstall.mjs');
   assert.equal(pkg.scripts.doctor, 'node scripts/doctor.mjs');

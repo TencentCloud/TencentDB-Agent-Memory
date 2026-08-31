@@ -14,6 +14,7 @@ const turn = (overrides = {}) => ({
   turn_id: 'turn-1',
   session_id: 'session-1',
   prompt: '请读取 README',
+  created_at: '2026-08-16T00:00:00.000Z',
   lifecycle_status: 'completed',
   assistant_observation: { available: false, content: null },
   tool_events: [{
@@ -45,7 +46,7 @@ test('builds the exact observed tool trace payload without an assistant message'
   assert.deepEqual(payload, {
     session_id: 'session-1', team_id: 'team-1', user_id: 'user-1', agent_id: 'agent-1', task_id: 'turn-1',
     messages: [
-      { role: 'user', content: '请读取 README' },
+      { role: 'user', content: '请读取 README', timestamp: '2026-08-16T00:00:00.000Z' },
       { role: 'tool_call', tool_name: 'readFile', tool_call_id: 'call-1', content: '{"path":"README.md"}' },
       { role: 'tool_result', tool_name: 'readFile', tool_call_id: 'call-1', content: 'contents' },
     ],

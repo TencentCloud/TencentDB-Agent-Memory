@@ -31,7 +31,7 @@ test('creates and retrieves a turn using a hashed session directory', async () =
     });
 
     assert.deepEqual(created, {
-      version: 1,
+      version: 2,
       turn_id: 'turn-fixed',
       session_id: 'session-example',
       cwd: 'E:\\project',

@@ -22,18 +22,21 @@ const isTrace = (trace) => isObject(trace)
   && trace.tool_call.role === 'tool_call' && trace.tool_result.role === 'tool_result'
   && trace.tool_call.tool_call_id === trace.tool_call_id && trace.tool_result.tool_call_id === trace.tool_call_id
   && trace.tool_call.tool_name === trace.tool_name && trace.tool_result.tool_name === trace.tool_name
-  && typeof trace.tool_call.content === 'string' && typeof trace.tool_result.content === 'string';
+  && typeof trace.tool_call.content === 'string' && typeof trace.tool_result.content === 'string'
+  && (trace.observed_at === undefined || trace.observed_at === null
+    || (typeof trace.observed_at === 'string' && !Number.isNaN(Date.parse(trace.observed_at)) && new Date(trace.observed_at).toISOString() === trace.observed_at));
 
 export function buildSkillConversationPayload(turn, config) {
   if (!isObject(turn) || turn.lifecycle_status !== 'completed' || turn.assistant_observation?.available !== false || turn.assistant_observation?.content !== null || !Array.isArray(turn.tool_events) || turn.tool_events.length === 0 || typeof turn.session_id !== 'string' || typeof turn.turn_id !== 'string' || typeof turn.prompt !== 'string' || !turn.tool_events.every(isTrace)) {
     throw new CaptureServiceError('Turn is not eligible for observed capture');
   }
   if (!isObject(config) || !['teamId', 'userId', 'agentId'].every((key) => typeof config[key] === 'string' && config[key].length > 0)) throw new CaptureServiceError('Capture configuration is invalid');
-  const messages = [{ role: 'user', content: turn.prompt }];
+  const messages = [{ role: 'user', content: turn.prompt, timestamp: turn.created_at }];
   for (const trace of turn.tool_events) {
+    const timestamp = typeof trace.observed_at === 'string' ? { timestamp: trace.observed_at } : {};
     messages.push(
-      { role: 'tool_call', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_call.content },
-      { role: 'tool_result', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_result.content },
+      { role: 'tool_call', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_call.content, ...timestamp },
+      { role: 'tool_result', tool_name: trace.tool_name, tool_call_id: trace.tool_call_id, content: trace.tool_result.content, ...timestamp },
     );
   }
   return { session_id: turn.session_id, team_id: config.teamId, user_id: config.userId, agent_id: config.agentId, task_id: turn.turn_id, messages };
@@ -46,10 +49,11 @@ export function createCaptureId({ adapterVersion = ADAPTER_VERSION, sessionId, t
 }
 
 export class CaptureService {
-  constructor({ config, gatewayClient, outbox, now, adapterVersion = ADAPTER_VERSION } = {}) {
+  constructor({ config, gatewayClient, outbox, archiveService, now, adapterVersion = ADAPTER_VERSION } = {}) {
     if (!isObject(config)) throw new CaptureServiceError('Capture configuration is invalid');
     this.config = config;
     this.adapterVersion = adapterVersion;
+    this.archiveService = archiveService;
     this.outbox = outbox ?? new Outbox({ stateDir: config.stateDir, gatewayClient, now });
   }
 
@@ -59,7 +63,12 @@ export class CaptureService {
     const envelope = { capture_id: captureId, type: 'skill_conversation', session_id: turn.session_id, turn_id: turn.turn_id, payload };
     await this.outbox.enqueue(envelope);
     await this.outbox.flush({ maxItems: 3, budgetMs: 1_500 });
-    return { captureStatus: await this.outbox.hasMarker(captureId) ? 'partial_captured' : 'retry_pending', captureId };
+    const captured = await this.outbox.hasMarker(captureId);
+    if (captured && this.archiveService && typeof this.outbox.getMarker === 'function') {
+      const marker = await this.outbox.getMarker(captureId);
+      await this.archiveService.recordCaptureOutcome({ sessionId: turn.session_id, captureId, response: marker?.result });
+    }
+    return { captureStatus: captured ? 'partial_captured' : 'retry_pending', captureId };
   }
 
   async captureFullTurn() { throw new CaptureServiceError('Full turn capture is unsupported'); }

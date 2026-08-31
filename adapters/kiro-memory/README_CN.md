@@ -1,60 +1,49 @@
 # Kiro 的 TencentDB Agent Memory 适配器
 
-## 范围与限制
+Phase 2 将 Kiro IDE v1 hooks 与 MCP server 接入 TencentDB Agent Memory，支持自动召回、可观察的 Full L0 capture、会话与技能检索、持久化 `outbox` 重试、强制归档协调、诊断和状态维护。不支持 Kiro Web、Mobile 或 Crew。
 
-本 Phase 1 仅支持 **Kiro IDE v1 Hook**。不支持 Kiro Web、Mobile、Crew、MCP 安装，也不支持 Full L0 capture。`UserPromptSubmit` 会将自动 Recall 上下文输出到 stdout；Recall 服务会标记为不可信。`PostToolUse` 仅保存已脱敏的可观察 tool trace。`Stop` 时若 IDE 没有可用 assistant response，只写入 observed Skill Conversation；即使 stdin 带有 `assistant_response`，Phase 1 Provider 也固定返回 `null`。
+当前环境已执行真实 Kiro IDE + 本地探针 Gateway E2E；尚未执行 remote Gateway E2E，不能将远程验收宣称为已通过。本地自动化验证适配器契约。官方 hook 文档：https://kiro.dev/docs/hooks/。
 
-此前基线本地自动化证据为 89/89。真实 Kiro IDE + remote Gateway E2E 尚未在当前环境执行，不能宣称已通过。
+## 配置
 
-官方契约见 [Kiro hooks](https://kiro.dev/docs/hooks/) 与 [hook actions](https://kiro.dev/docs/hooks/actions/)。安装得到的 v1 文件为 `{ "version": "v1", "hooks": [...] }`：每项含 `name`、PascalCase `trigger`、`action: { "type": "command", "command": "..." }`、`timeout: 5` 和 `enabled: true`；仅 `PostToolUse` 含 `matcher: "*"`。Gateway/SDK 契约见本仓库 `sdk/` 和 `MemoryProxy/`。
+需要 Node.js 20+。配置优先级为 `environment > project > user > defaults`。项目配置为 `.kiro/settings/tdai-memory.json`，用户配置为 `~/.kiro/settings/tdai-memory.json`，两者均为严格的 Config v2 JSON。API Key only 可通过 `TDAI_MEMORY_API_KEY` 环境变量提供，禁止写入 JSON、hook、receipt、日志或 MCP 输出。
 
-## 前置条件与配置
+| 环境变量 | 用途 |
+| --- | --- |
+| `TDAI_MEMORY_GATEWAY_URL` | Gateway HTTP(S) 地址 |
+| `TDAI_MEMORY_SERVICE_ID` | 必填 service ID |
+| `TDAI_MEMORY_USER_ID` | 必填 memory user ID |
+| `TDAI_MEMORY_API_KEY` | 可选 bearer 凭据，仅限环境变量 |
+| `TDAI_MEMORY_TEAM_ID` | 可选 team scope |
+| `TDAI_MEMORY_STATE_DIR` | 本地状态绝对路径 |
+| `TDAI_MEMORY_CAPTURE_ENABLED` | 开启可观察 capture |
+| `TDAI_MEMORY_RECALL_ENABLED` | 开启自动 recall |
+| `TDAI_MEMORY_SKILL_RECALL_ENABLED` | recall 同时检索 skill |
+| `TDAI_MEMORY_MCP_MAX_OUTPUT_CHARS` | MCP 字符预算 |
 
-需要 Node.js 20+，并在安装前配置 Gateway。`TDAI_MEMORY_SERVICE_ID` 为必填，且不同于 `TDAI_MEMORY_TEAM_ID`；API key 可选。不要将真实 URL 凭据、API key 或 token 写入 hook JSON。
+hook 输入上限为 128KiB，单条可观察 tool trace 为 8KiB，归一化 recall 文本为 32KiB。Gateway 故障时 hook 采用 fail-open；需重试的工作写入本地 `outbox`，诊断不输出密钥或原始内容。
 
-| 变量 | 必填 | 默认值 / 用途 |
-| --- | --- | --- |
-| `TDAI_MEMORY_GATEWAY_URL` | 是 | HTTP(S) Gateway URL，不含 query、fragment、userinfo |
-| `TDAI_MEMORY_SERVICE_ID` | 是 | Gateway service ID |
-| `TDAI_MEMORY_USER_ID` | 是 | memory user ID |
-| `TDAI_MEMORY_API_KEY` | 否 | 可选 Bearer API key |
-| `TDAI_MEMORY_TEAM_ID` | 否 | `default` |
-| `TDAI_MEMORY_AGENT_ID` | 否 | `kiro` |
-| `TDAI_MEMORY_STATE_DIR` | 否 | `~/.kiro/tdai-memory` |
-| `TDAI_MEMORY_RECALL_ENABLED` | 否 | `true` |
-| `TDAI_MEMORY_CAPTURE_ENABLED` | 否 | `true` |
-| `TDAI_MEMORY_TIMEOUT_MS` | 否 | `2500`，最大 `3000` |
-| `TDAI_MEMORY_MAX_RECALL_RESULTS` | 否 | `5` |
-| `TDAI_MEMORY_MAX_CONTEXT_CHARS` | 否 | `6000` |
-| `TDAI_MEMORY_LOG_LEVEL` | 否 | `warn` |
-| `TDAI_MEMORY_CONVERSATION_RECALL_ENABLED` | 否 | `false` |
+## 安装与运维
 
-## 安装、卸载与 doctor
-
-在适配器目录执行：
-
-```sh
-node scripts/install.mjs --project /path/to/workspace
-node scripts/doctor.mjs --project /path/to/workspace
-node scripts/uninstall.mjs --project /path/to/workspace
+```powershell
+node scripts/install.mjs --project C:\path\to\project
+node scripts/doctor.mjs --project C:\path\to\project
+node scripts/status.mjs --project C:\path\to\project
+node scripts/health.mjs --project C:\path\to\project --json
 ```
 
-安装器会验证 config，但绝不把环境变量值写入文件；它先写入无 secret 的 `.kiro/tdai-memory-install.json` receipt，再创建 `.kiro/hooks/tdai-memory.json`。完整、已 fsync 的临时文件通过原子 no-replace link 发布：并发的不同 receipt 或 hook 会被保留且安全失败，并发相同安装可幂等成功。崩溃时最多遗留内容匹配、尚未启用 hook 的 staged receipt；下一次安装会安全继续创建 hook。确定性事务目录 `.kiro/.tdai-memory-uninstall/` 也用于跨进程协调安装与卸载：该可恢复事务存在时安装会拒绝执行；hook 发布后还会重新验证 receipt，并对发生在两次检查之间的卸载做安全补偿。卸载中断后应先续作卸载，再重试安装。卸载器仅接受 regular file，拒绝把符号链接、目录、特殊对象或 transaction 中的非 regular 对象当成 hook/receipt 加载；receipt 的 `adapter_path` 还必须精确属于当前适配器。通过校验的文件会移入非 JSON quarantine，再校验 hash。成功清理时先删除 hook quarantine，再删除 receipt quarantine，因此卸载中断后可由下次运行安全续作。校验失败时使用 hard-link no-replace 恢复；若原路径已被占用，新文件与 quarantine backup 都会保留。并发写入原路径的新文件不会被删除，`.kiro/hooks` 与其他 hook 也绝不会被删除。`doctor.mjs` 离线运行，只输出检查名称及 pass/fail，检查 Node、config schema、CLI、已安装 hook schema、receipt 和 hash；它不检查 `stateDir`，也不报告或修复遗留 session lock。
+安装器只拥有 `.kiro/hooks/tdai-memory.json`、`.kiro/settings/mcp.json` 中的 `tdai-memory` 条目和安装 receipt；它安装 `UserPromptSubmit`、`PostToolUse`、`Stop`，并保留其他设置。不要配置 `autoApprove`，MCP 工具继续遵循 Kiro 的常规审批。卸载使用 `node scripts/uninstall.mjs --project C:\path\to\project`。
 
-## 手工 Hook 模板
+如果项目已在 Kiro 中打开，而安装后的服务器没有出现在 MCP Servers 下，请从命令面板执行一次 `Developer: Reload Window`。PostToolUse hook 有意省略 `matcher`；Kiro v1 hook schema 会将省略 matcher 视为匹配所有工具。
 
-如需手工配置，使用 [templates/hooks.json.example](templates/hooks.json.example)，将 `<ADAPTER_ROOT>` 替换为绝对 adapter path。它是精确 v1 JSON，按顺序恰有 `UserPromptSubmit`、带 matcher `*` 的 `PostToolUse`、`Stop` 三项，全部 enabled、timeout 为 5 秒，且 `action.type` 为 `command`。安装器更安全：它将绝对 CLI file URL 编为 Base64，并由正确引用的 `process.execPath` 运行固定代码；生成的 shell command 不含 adapter path 原文。手工占位模板仅适用于常规、已正确引用的路径，不承诺覆盖所有 shell 元字符。模板不含 URL、token 或其他 credential。
+MCP 提供 `tdai_memory_search`、`tdai_conversation_search`、`tdai_memory_status`。排障时可运行 `npm run mcp -- --workspace C:\path\to\project`。
 
-## 数据流、安全与恢复
+## 升级与维护
 
-每个 Hook 调用 `node src/cli.js recall|post-tool-use|stop`。CLI 最多读取 4MiB stdin，完成 normalize，严格校验命令/事件匹配，先 best-effort flush 三个历史 outbox 项（1500ms），再调用真实服务。仅 Recall 写 stdout；PostToolUse/Stop stdout 为空。坏 JSON、config、网络和状态异常均 fail-open（exit 0、stderr 安静、stdout 安全为空）。
+当状态提示 legacy 时运行 `node scripts/migrate.mjs --project C:\path\to\project`。迁移可恢复且非破坏性：逐项校验复制结果，最后发布 manifest，并且 will not automatically delete 源状态。详见 [UPGRADE_CN.md](./UPGRADE_CN.md)。
 
-敏感字段和常见 credential 在落盘前脱敏。tool input 上限 8KiB，result 上限 32KiB，完整 Turn 上限 128KiB。capture 写入 durable outbox 并按有限 backoff retry。`captureEnabled=false` 仍会 flush 历史 outbox，但不会创建 Turn，post-tool-use/stop 为 NOOP；`recallEnabled=false` 则返回空 Recall。
+`node scripts/maintenance.mjs --project C:\path\to\project` 默认只生成 dry-run 计划；仅可用 `--apply` 应用已经审核且对象未变化的计划。特殊或变化对象只会跳过或报告。`status.mjs` 与 `health.mjs` 都执行有时限的 Gateway 探测；前者面向人，后者只输出一个 JSON 文档。`doctor.mjs` 保持离线并校验配置和安装产物。
 
-已知限制：进程崩溃可能遗留 session lock。适配器 will not automatically delete 该 lock，后续操作会安全超时；doctor 有意不检查 `stateDir`，也不报告或修复 lock。
+## 安全与边界
 
-## 测试与故障排查
-
-Windows 运行 `npm.cmd test`，其他环境运行 `npm test`。测试覆盖 CLI fail-open、模板 schema、安装冲突和 receipt 保护、卸载保护、doctor、核心 Hook 流程、脱敏、outbox recovery 和重复 Stop。
-
-安装失败时，请检查必填变量是否存在，但不要输出其值，然后运行 doctor。Recall 为空时，检查 `TDAI_MEMORY_RECALL_ENABLED` 与 Gateway 可达性。capture 处于 pending 时，保留 stateDir，后续 Hook 会继续 flush outbox。doctor 报告 hook 被修改时，请先审查用户改动；卸载器会刻意拒绝删除。
+Recall 文本是不可信上下文，不是指令。Capture 只记录能观察到的用户提示、工具轨迹及可获得的 assistant 输出，不伪造 IDE 未提供的内容。Hook 投递 fail-open，重试有界，不可重试错误进入人工处理。Phase 2 不会静默降级配置或状态，也不会自动删除迁移源或隔离内容。
