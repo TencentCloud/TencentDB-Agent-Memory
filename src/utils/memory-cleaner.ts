@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { IMemoryStore } from "../core/store/types.js";
+import { CheckpointManager } from "./checkpoint.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
@@ -12,6 +13,7 @@ export interface MemoryCleanerOptions {
   cleanTime: string;
   logger?: Logger;
   vectorStore?: IMemoryStore;
+  checkpointManager?: CheckpointManager;
 }
 
 interface CleanupStats {
@@ -33,14 +35,20 @@ export class LocalMemoryCleaner {
   private readonly timer: ManagedTimer;
   private destroyed = false;
   private vectorStore?: IMemoryStore;
+  private checkpointManager?: CheckpointManager;
 
   constructor(private readonly opts: MemoryCleanerOptions) {
     this.timer = new ManagedTimer("memory-tdai-cleaner", () => this.destroyed);
     this.vectorStore = opts.vectorStore;
+    this.checkpointManager = opts.checkpointManager;
   }
 
   setVectorStore(vectorStore: IMemoryStore | undefined): void {
     this.vectorStore = vectorStore;
+  }
+
+  setCheckpointManager(checkpointManager: CheckpointManager | undefined): void {
+    this.checkpointManager = checkpointManager;
   }
 
   start(): void {
@@ -163,6 +171,28 @@ export class LocalMemoryCleaner {
 
       if (removedL1 > 0 || removedL0 > 0) {
         total.changedFiles += 1;
+      }
+
+      // ── Recalibrate checkpoint counters after cleanup ──
+      if (this.checkpointManager && (removedL0 > 0 || removedL1 > 0)) {
+        try {
+          let currentL0 = 0;
+          let currentL1 = 0;
+          try { currentL0 = await vectorStore.countL0(); } catch { /* non-fatal */ }
+          try { currentL1 = await vectorStore.countL1(); } catch { /* non-fatal */ }
+          await this.checkpointManager.recalibrate({
+            total_processed: currentL0,
+            l0_conversations_count: currentL0,
+            total_memories_extracted: currentL1,
+          });
+          this.opts.logger?.info(
+            `${TAG} [Checkpoint] Recalibrated counters: total_processed=${currentL0}, l0_conversations_count=${currentL0}, total_memories_extracted=${currentL1}`,
+          );
+        } catch (err) {
+          this.opts.logger?.warn(
+            `${TAG} [Checkpoint] Failed to recalibrate counters: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
       // ── Post-delete: audit summary ──
