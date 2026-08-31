@@ -66,6 +66,13 @@ export interface EmbeddingProviderInfo {
 export interface EmbeddingCallOptions {
   /** Override the default timeout for this call (milliseconds). */
   timeoutMs?: number;
+  /**
+   * External signal to abort the in-flight embedding request.
+   * When set, the embedding call will be aborted if this signal fires
+   * (in addition to the built-in timeout). Used by auto-recall to cancel
+   * embedding work when the recall timeout expires.
+   */
+  abortSignal?: AbortSignal;
 }
 
 export interface EmbeddingService {
@@ -443,19 +450,35 @@ function truncateEmbeddingInputs(
  * services own body construction and response shape — this helper handles
  * fetch, abort-on-timeout, exponential backoff, and the `EmbeddingApiError`
  * non-retry rule for 4xx responses (except 429).
+ *
+ * When `callerSignal` is provided, the request is also aborted if the
+ * caller's signal fires (on top of the built-in timeout). This lets
+ * auto-recall cancel in-flight embedding work when the recall deadline
+ * expires, freeing the embedding API slot and HTTP connection.
  */
 async function postEmbeddingRequest(params: {
   fetchUrl: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
   timeoutMs: number;
+  callerSignal?: AbortSignal;
 }): Promise<unknown> {
-  const { fetchUrl, headers, body, timeoutMs } = params;
+  const { fetchUrl, headers, body, timeoutMs, callerSignal } = params;
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // If the caller already aborted (e.g. recall deadline passed during a
+    // previous retry), don't waste attempts — throw immediately.
+    if (callerSignal?.aborted) {
+      throw new DOMException("Embedding request aborted by caller", "AbortError");
+    }
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      // Combine the caller's signal with our internal timeout: if the
+      // caller aborts (e.g. recall deadline), cancel this request. The
+      // internal timeout signal is passed to fetch() directly below.
+      const onCallerAbort = () => controller.abort();
+      callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
       try {
         const resp = await fetch(fetchUrl, {
           method: "POST",
@@ -479,6 +502,7 @@ async function postEmbeddingRequest(params: {
         return await resp.json();
       } finally {
         clearTimeout(timeoutId);
+        callerSignal?.removeEventListener("abort", onCallerAbort);
       }
     } catch (err) {
       // Non-retryable errors (4xx client errors) — rethrow immediately
@@ -569,14 +593,18 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     if (processedTexts.length > MAX_BATCH_SIZE) {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
+        // Check for external abort between sub-batches to avoid wasted API calls
+        if (options?.abortSignal?.aborted) {
+          throw new DOMException("Embedding request aborted by caller", "AbortError");
+        }
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options?.timeoutMs, options?.abortSignal);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options?.timeoutMs, options?.abortSignal);
   }
 
   /**
@@ -591,7 +619,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
     return text.slice(0, this.maxInputChars);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+  private async _callApi(texts: string[], timeoutOverride?: number, abortSignal?: AbortSignal): Promise<Float32Array[]> {
     const body: Record<string, unknown> = {
       input: texts,
       model: this.model,
@@ -619,6 +647,7 @@ export class OpenAIEmbeddingService implements EmbeddingService {
       headers,
       body,
       timeoutMs: timeoutOverride ?? this.timeoutMs,
+      callerSignal: abortSignal,
     })) as OpenAIEmbeddingResponse;
 
     if (!json.data || !Array.isArray(json.data)) {
@@ -721,17 +750,20 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
     if (processedTexts.length > MAX_BATCH_SIZE) {
       const results: Float32Array[] = [];
       for (let i = 0; i < processedTexts.length; i += MAX_BATCH_SIZE) {
+        if (options?.abortSignal?.aborted) {
+          throw new DOMException("Embedding request aborted by caller", "AbortError");
+        }
         const chunk = processedTexts.slice(i, i + MAX_BATCH_SIZE);
-        const chunkResults = await this._callApi(chunk, options?.timeoutMs);
+        const chunkResults = await this._callApi(chunk, options?.timeoutMs, options?.abortSignal);
         results.push(...chunkResults);
       }
       return results;
     }
 
-    return this._callApi(processedTexts, options?.timeoutMs);
+    return this._callApi(processedTexts, options?.timeoutMs, options?.abortSignal);
   }
 
-  private async _callApi(texts: string[], timeoutOverride?: number): Promise<Float32Array[]> {
+  private async _callApi(texts: string[], timeoutOverride?: number, abortSignal?: AbortSignal): Promise<Float32Array[]> {
     // ZeroEntropy rejects requests without `input_type`. We default to
     // "query" because the recall hot path is the only caller of embed()
     // that returns a Float32Array; capture-side batches eventually feed
@@ -762,6 +794,7 @@ export class ZeroEntropyEmbeddingService implements EmbeddingService {
       headers,
       body,
       timeoutMs: timeoutOverride ?? this.timeoutMs,
+      callerSignal: abortSignal,
     })) as ZeroEntropyEmbeddingResponse;
 
     if (!json.results || !Array.isArray(json.results)) {
