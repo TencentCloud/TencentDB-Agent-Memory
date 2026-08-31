@@ -27,6 +27,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { Dirent } from "node:fs";
+import type { IMemoryStore } from "../core/store/types.js";
+
+const SHARD_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 
 // ============================
 // Types
@@ -145,6 +149,105 @@ export interface CheckpointLogger {
 }
 
 const noopLogger: CheckpointLogger = { info() {} };
+
+export interface CheckpointRecalibrateSources {
+  dataDir: string;
+  /** Prefer the active store for L1 because memory-cleaner deletes rows there first. */
+  vectorStore?: Pick<IMemoryStore, "countL1">;
+}
+
+export interface CheckpointRecalibrateResult {
+  adjusted: boolean;
+  totalMemoriesBefore: number;
+  totalMemoriesAfter: number;
+  l0ConversationsBefore: number;
+  l0ConversationsAfter: number;
+  memoriesSinceLastPersonaBefore: number;
+  memoriesSinceLastPersonaAfter: number;
+}
+
+async function readShardFiles(dirPath: string): Promise<Array<{ entry: Dirent; fullPath: string }>> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && SHARD_DATE_PATTERN.test(entry.name))
+    .map((entry) => ({ entry, fullPath: path.join(dirPath, entry.name) }));
+}
+
+export async function countL1RecordsFromJsonl(dataDir: string): Promise<number> {
+  const ids = new Set<string>();
+  const files = await readShardFiles(path.join(dataDir, "records"));
+
+  for (const { fullPath } of files) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(fullPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed) as { id?: unknown };
+        if (typeof parsed.id === "string" && parsed.id) {
+          ids.add(parsed.id);
+        }
+      } catch {
+        // Malformed rows cannot be trusted as active memories.
+      }
+    }
+  }
+
+  return ids.size;
+}
+
+export async function countL0CaptureRoundsFromJsonl(dataDir: string): Promise<number> {
+  const batches = new Set<string>();
+  const files = await readShardFiles(path.join(dataDir, "conversations"));
+
+  for (const { fullPath } of files) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(fullPath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const parsed = JSON.parse(trimmed) as { sessionKey?: unknown; recordedAt?: unknown };
+        if (typeof parsed.sessionKey === "string" && parsed.sessionKey &&
+            typeof parsed.recordedAt === "string" && parsed.recordedAt) {
+          batches.add(`${parsed.sessionKey}\0${parsed.recordedAt}`);
+        }
+      } catch {
+        // Ignore malformed rows.
+      }
+    }
+  }
+
+  return batches.size;
+}
+
+async function countActualL1Records(sources: CheckpointRecalibrateSources): Promise<number> {
+  if (sources.vectorStore) {
+    try {
+      const count = await Promise.resolve(sources.vectorStore.countL1());
+      if (Number.isFinite(count) && count >= 0) return count;
+    } catch {
+      // Store can be degraded during startup; fall back to JSONL shards.
+    }
+  }
+  return countL1RecordsFromJsonl(sources.dataDir);
+}
 
 // ============================
 // Per-file async lock
@@ -429,6 +532,70 @@ export class CheckpointManager {
       `extracted=${memoriesExtracted}, cursor=${cursorRecordedAtMs ?? "(unchanged)"}, ` +
       `lastScene="${lastSceneName ?? "(unchanged)"}"`,
     );
+  }
+
+  /**
+   * Reconcile monotonic checkpoint counters with the current persisted data.
+   *
+   * Normal capture/extraction only increments these counters. Cleanup paths can
+   * delete old L0/L1 data, so run this once at startup before restoring scheduler
+   * state to keep status and persona thresholds aligned with reality.
+   */
+  async recalibrate(sources: CheckpointRecalibrateSources): Promise<CheckpointRecalibrateResult> {
+    const [actualMemories, actualL0Rounds] = await Promise.all([
+      countActualL1Records(sources),
+      countL0CaptureRoundsFromJsonl(sources.dataDir),
+    ]);
+
+    let result: CheckpointRecalibrateResult = {
+      adjusted: false,
+      totalMemoriesBefore: 0,
+      totalMemoriesAfter: actualMemories,
+      l0ConversationsBefore: 0,
+      l0ConversationsAfter: actualL0Rounds,
+      memoriesSinceLastPersonaBefore: 0,
+      memoriesSinceLastPersonaAfter: 0,
+    };
+
+    await this.mutate((cp) => {
+      const memoryDrift = Math.max(0, cp.total_memories_extracted - actualMemories);
+      const nextMemoriesSinceLastPersona = Math.max(0, cp.memories_since_last_persona - memoryDrift);
+
+      result = {
+        adjusted:
+          cp.total_memories_extracted !== actualMemories ||
+          cp.l0_conversations_count !== actualL0Rounds ||
+          cp.memories_since_last_persona !== nextMemoriesSinceLastPersona,
+        totalMemoriesBefore: cp.total_memories_extracted,
+        totalMemoriesAfter: actualMemories,
+        l0ConversationsBefore: cp.l0_conversations_count,
+        l0ConversationsAfter: actualL0Rounds,
+        memoriesSinceLastPersonaBefore: cp.memories_since_last_persona,
+        memoriesSinceLastPersonaAfter: nextMemoriesSinceLastPersona,
+      };
+
+      if (!result.adjusted) return;
+
+      cp.total_memories_extracted = actualMemories;
+      cp.l0_conversations_count = actualL0Rounds;
+      cp.memories_since_last_persona = nextMemoriesSinceLastPersona;
+    });
+
+    if (result.adjusted) {
+      this.logger.warn?.(
+        `[checkpoint] recalibrate: ` +
+        `total_memories_extracted ${result.totalMemoriesBefore} -> ${result.totalMemoriesAfter}, ` +
+        `l0_conversations_count ${result.l0ConversationsBefore} -> ${result.l0ConversationsAfter}, ` +
+        `memories_since_last_persona ${result.memoriesSinceLastPersonaBefore} -> ${result.memoriesSinceLastPersonaAfter}`,
+      );
+    } else {
+      this.logger.info(
+        `[checkpoint] recalibrate: counters match data ` +
+        `(memories=${result.totalMemoriesAfter}, l0_rounds=${result.l0ConversationsAfter})`,
+      );
+    }
+
+    return result;
   }
 
   // ============================
