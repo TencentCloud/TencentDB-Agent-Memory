@@ -13,9 +13,55 @@
 
 import type { IStorageBackend, StorageObject, ListEntry, ListObjectsOptions, ListResult, PutObjectOptions } from "./types.js";
 
+/**
+ * Normalize a scoped storage key in a single pass: strip leading slashes,
+ * map backslashes to slashes, collapse duplicate slashes, and reject any
+ * ".." path-traversal segment. Returns the normalized key, or null if a
+ * ".." segment is present (caller throws). This replaces three chained
+ * regex replaces + a split, removing per-call allocation on the hot path.
+ */
+function normalizeScopedKey(key: string): string | null {
+  const n = key.length;
+  let out = "";
+  let prevSlash = false;
+  for (let i = 0; i < n; i++) {
+    const c = key.charCodeAt(i);
+    if (c === 0x5c /* \ */) {
+      if (!prevSlash) out += "/";
+      prevSlash = true;
+      continue;
+    }
+    if (c === 0x2f /* / */) {
+      if (!prevSlash) out += "/";
+      prevSlash = true;
+      continue;
+    }
+    prevSlash = false;
+    out += key[i];
+  }
+  // strip a single leading slash if the scan left one
+  if (out.length > 0 && out.charCodeAt(0) === 0x2f) out = out.slice(1);
+  // path-traversal check: any standalone ".." segment
+  const m = out.length;
+  let i = 0;
+  while (i < m) {
+    if (out.charCodeAt(i) === 0x2e /* . */ && out.charCodeAt(i + 1) === 0x2e) {
+      const after = out.charCodeAt(i + 2);
+      if (i + 2 === m || after === 0x2f) return null;
+    }
+    while (i < m && out.charCodeAt(i) !== 0x2f) i++;
+    if (i < m) i++;
+  }
+  return out;
+}
+
 class ScopedStorageBackend implements IStorageBackend {
   readonly type: "local" | "cos";
   private readonly prefix: string;
+  // Keys repeat heavily within a session (same record/persona/scene paths),
+  // so a small cache turns the normalize pass into an O(1) map lookup.
+  private readonly keyCache = new Map<string, string>();
+  private static readonly KEY_CACHE_CAP = 1024;
 
   constructor(private readonly base: IStorageBackend, prefix: string) {
     this.type = base.type;
@@ -27,10 +73,16 @@ class ScopedStorageBackend implements IStorageBackend {
     if (typeof key !== "string" || key.includes("\0") || key.startsWith("/") || key.startsWith("\\")) {
       throw new Error(`Invalid scoped storage key: ${JSON.stringify(key)}`);
     }
-    const normalized = key.replace(/^\/+/, "").replace(/\\+/g, "/").replace(/\/+/g, "/");
-    if (normalized.split("/").some((part) => part === "..")) {
+    const cached = this.keyCache.get(key);
+    if (cached !== undefined) return `${this.prefix}${cached}`;
+    const normalized = normalizeScopedKey(key);
+    if (normalized === null) {
       throw new Error(`Path traversal rejected in scoped storage key: ${key}`);
     }
+    if (this.keyCache.size >= ScopedStorageBackend.KEY_CACHE_CAP) {
+      this.keyCache.delete(this.keyCache.keys().next().value as string);
+    }
+    this.keyCache.set(key, normalized);
     return `${this.prefix}${normalized}`;
   }
 
