@@ -14,6 +14,7 @@ import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
+import { protocolStatsToPrometheus } from "./common/protocol-stats.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
@@ -101,6 +102,11 @@ export function createApp(config: ProxyConfig): Hono {
       },
     };
     return c.json(body, degraded ? 503 : 200);
+  });
+
+  // Prometheus 文本格式的协议转换性能指标（延迟分位数 + 上游缓存命中率）。
+  app.get("/metrics", (c) => {
+    return c.text(protocolStatsToPrometheus(), 200);
   });
 
   // Whoami: resolve API key → key ID (plain text, easy to use with curl)
