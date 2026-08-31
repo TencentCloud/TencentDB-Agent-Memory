@@ -18,6 +18,7 @@ import {
 
 export type PageId =
   | 'workbench_board'
+  | 'team_atlas'
   | 'wiki'
   | 'code'
   | 'skills'
@@ -44,6 +45,13 @@ export function usePageMeta(): Record<PageId, PageMeta> {
   const { t } = useTranslation();
   return {
     workbench_board: { id: 'workbench_board', label: t('menu.workbench_board'), desc: t('menu.desc.workbench_board'), group: t('menu.group.workbench'), order: 0, affix: true },
+    team_atlas: {
+      id: 'team_atlas',
+      label: t('menu.team_atlas'),
+      desc: t('menu.desc.team_atlas'),
+      group: t('menu.group.workbench'),
+      order: 1,
+    },
     wiki:            { id: 'wiki',            label: t('menu.wiki'), desc: t('menu.desc.wiki'), group: t('menu.group.assets'), order: 2 },
     code:            { id: 'code',            label: t('menu.code'), desc: t('menu.desc.code'), group: t('menu.group.assets'), order: 3 },
     skills:          { id: 'skills',          label: t('menu.skills'), desc: t('menu.desc.skills'), group: t('menu.group.assets'), order: 4 },
@@ -60,6 +68,26 @@ export const GROUP_ORDER_KEYS = ['workbench', 'organization', 'assets'] as const
 /** 每个页面在侧边栏菜单中的图标（Tea 官方图标，size 16） */
 export const ITEM_ICON: Record<PageId, JSX.Element> = {
   workbench_board: <DashboardIcon size={16} />,
+  team_atlas: (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="5" cy="12" r="2.5" />
+      <circle cx="12" cy="5" r="2.5" />
+      <circle cx="19" cy="12" r="2.5" />
+      <circle cx="12" cy="19" r="2.5" />
+      <path d="M6.8 10.2 10.2 6.8M13.8 6.8l3.4 3.4M17.2 13.8l-3.4 3.4M10.2 17.2l-3.4-3.4" />
+    </svg>
+  ),
   team_members: <UserIcon size={16} />,
   team_agents: <UsergroupIcon size={16} />,
   api_keys: <LockOnIcon size={16} />,

@@ -19,6 +19,7 @@ const { Body, Sider, Content } = Layout;
 /** 路由 path → PageId */
 const PATH_TO_PAGE: Record<string, PageId> = {
   '/': 'workbench_board',
+  '/atlas': 'team_atlas',
   '/wiki': 'wiki',
   '/code': 'code',
   '/skills': 'skills',
@@ -38,6 +39,7 @@ function legacyHashToPath(): string | null {
   const leaf = raw.split('/').filter(Boolean).pop();
   if (!leaf) return null;
   if (leaf === 'wiki') return '/wiki';
+  if (leaf === 'atlas' || leaf === 'team_atlas') return '/atlas';
   if (leaf === 'code') return '/code';
   if (leaf === 'skills' || leaf === 'skill') return '/skills';
   if (leaf === 'chat_memory' || leaf === 'memory' || leaf === 'chat-memory') return '/memory';
@@ -219,4 +221,3 @@ export function ConsoleLayout() {
     </div>
   );
 }
- 
