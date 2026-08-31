@@ -2,16 +2,15 @@
  * memory_search tool: Agent-callable tool for searching L1 memory records.
  *
  * Supports three search strategies with automatic degradation:
- *   1. **hybrid** (default) — FTS5 keyword + vector embedding in parallel,
+ *   1. **hybrid** (default) — keyword + vector embedding in parallel,
  *      merged via Reciprocal Rank Fusion (RRF).
  *   2. **embedding** — pure vector similarity (when FTS5 is unavailable).
- *   3. **fts** — pure FTS5 keyword search (when embedding is unavailable).
+ *   3. **fts** — pure backend keyword search (when embedding is unavailable).
  *
  * The tool is registered via `api.registerTool()` in index.ts.
  */
 
 import type { IMemoryStore, L1SearchResult } from "../store/types.js";
-import { buildFtsQuery } from "../store/sqlite.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { Logger } from "../types.js";
 
@@ -137,18 +136,12 @@ export async function executeMemorySearch(params: {
 
   // ── Run available search strategies in parallel ──
   const [ftsItems, vecItems] = await Promise.all([
-    // FTS5 keyword search
+    // Backend-native keyword search
     (async (): Promise<MemorySearchResultItem[]> => {
       if (!hasFts) return [];
       try {
-        const ftsQuery = buildFtsQuery(query);
-        if (!ftsQuery) {
-          logger?.debug?.(`${TAG} [hybrid-fts] No usable FTS tokens from query`);
-          return [];
-        }
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 query: "${ftsQuery}"`);
-        const ftsResults = await vectorStore.searchL1Fts(ftsQuery, candidateK);
-        logger?.debug?.(`${TAG} [hybrid-fts] FTS5 returned ${ftsResults.length} candidates`);
+        const ftsResults = await vectorStore.searchL1Keyword(query, candidateK);
+        logger?.debug?.(`${TAG} [hybrid-keyword] Returned ${ftsResults.length} candidates`);
         return ftsResults.map((r) => ({
           id: r.record_id,
           content: r.content,
@@ -161,7 +154,7 @@ export async function executeMemorySearch(params: {
         }));
       } catch (err) {
         logger?.warn?.(
-          `${TAG} [hybrid-fts] FTS5 search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+          `${TAG} [hybrid-keyword] Search failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
         );
         return [];
       }
