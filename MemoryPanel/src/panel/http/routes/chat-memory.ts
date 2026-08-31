@@ -75,7 +75,7 @@ function isRangeTooLarge(
 }
 
 // ── 内核 raw 类型（只列本文件用到的字段，避免依赖 SDK） ────────────
-interface AssetRaw {
+export interface AssetRaw {
   asset_id: string;
   team_id: string;
   asset_type: string;
@@ -1822,7 +1822,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
 /**
  * 从 chat_memory-{team_id}-{agent_id} 解出 team_id / agent_id
  * 依赖 agent id 以 `agt` 开头这一稳定前缀。
- */ function parseChatMemoryAssetId(
+ */ export function parseChatMemoryAssetId(
   assetId: string,
 ): { teamId: string; agentId: string } | null {
   if (!assetId.startsWith("chat_memory-")) return null;
@@ -2037,7 +2037,7 @@ async function isTeamMember(
  *   c) asset 已被绑定到 caller 名下某个 agent（借入关系）
  * 供 /chat-memory/layer 与 /chat-memory/search 复用，保证读口径一致。
  */
-async function authorizeChatMemoryRead(
+export async function authorizeChatMemoryRead(
   deps: PanelDeps,
   ctx: MetaCallContext,
   asset: AssetRaw,
