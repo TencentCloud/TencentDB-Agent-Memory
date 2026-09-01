@@ -164,6 +164,7 @@ export function renderSkillToolsBlock(
     "<skill_tools>",
     "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
     "proxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。",
+    "本段已在 session-init 完成后注入；只使用这里列出的 bridge 路径，不要猜测或探测 /openapi.json、/docs、/session/init、/team/options 等未列出的接口。",
     "",
     "调用模板：",
     `  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'`,
