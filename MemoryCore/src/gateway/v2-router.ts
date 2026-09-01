@@ -28,6 +28,7 @@ import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
+import { optionalQueryUserId } from "./query-isolation.js";
 
 // ── Zod schemas (validated types + defaults) ──
 import {
@@ -823,13 +824,16 @@ async function handleConversationQuery(body: unknown, _auth: V2AuthContext, requ
   // agent_id (via body or headers). session_id, if present, comes from the
   // request body and is already in `session_id`.
   const iso = deps.requestIsolation;
+  // Missing user_id resolves to the legacy default bucket for writes, but an
+  // aggregate read must not silently filter to that placeholder.
+  const userId = optionalQueryUserId(body as Record<string, unknown> | undefined, iso?.userId);
 
   // Use paginated query if available (AR-3), else fallback
   if (store.queryL0Paginated) {
     const result = await store.queryL0Paginated({
       sessionId: session_id,
       teamId: iso?.teamId,
-      userId: iso?.userId,
+      userId,
       agentId: iso?.agentId,
       taskId: iso?.taskId,
       timeStartMs: time_start ? new Date(time_start).getTime() : undefined,
@@ -858,7 +862,7 @@ async function handleConversationQuery(body: unknown, _auth: V2AuthContext, requ
   let filtered = session_id ? allRows.filter((r) => r.session_key === session_id || r.session_id === session_id) : allRows;
   // Tenancy isolation post-filter for the legacy path.
   if (iso?.teamId) filtered = filtered.filter((r) => r.team_id === iso.teamId);
-  if (iso?.userId) filtered = filtered.filter((r) => r.user_id === iso.userId);
+  if (userId) filtered = filtered.filter((r) => r.user_id === userId);
   if (iso?.agentId) filtered = filtered.filter((r) => r.agent_id === iso.agentId);
   if (iso?.taskId) filtered = filtered.filter((r) => r.task_id === iso.taskId);
   if (time_start) { const ms = new Date(time_start).getTime(); filtered = filtered.filter((r) => r.timestamp >= ms); }
@@ -888,11 +892,12 @@ async function handleConversationCount(body: unknown, _auth: V2AuthContext, requ
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
   const iso = deps.requestIsolation;
+  const userId = optionalQueryUserId(body as Record<string, unknown> | undefined, iso?.userId);
 
   const countFilter = {
     sessionId: session_id,
     teamId: iso?.teamId,
-    userId: iso?.userId,
+    userId: userId,
     agentId: iso?.agentId,
     taskId: iso?.taskId,
     timeStartMs: time_start ? new Date(time_start).getTime() : undefined,
@@ -1120,14 +1125,16 @@ async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId:
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
-  // Tenancy isolation — narrow the query by user_id / agent_id when supplied.
+  // L0/L1 Agent aggregate views omit user_id intentionally. Do not let the
+  // default write-isolation bucket become an accidental read filter.
   const iso = deps.requestIsolation;
+  const userId = optionalQueryUserId(body as Record<string, unknown> | undefined, iso?.userId);
 
   // Use paginated query if available
   if (store.queryL1Paginated) {
     const result = await store.queryL1Paginated({
       type, timeStart: time_start, timeEnd: time_end, limit, offset,
-      teamId: iso?.teamId, userId: iso?.userId, agentId: iso?.agentId, taskId: iso?.taskId,
+      teamId: iso?.teamId, userId, agentId: iso?.agentId, taskId: iso?.taskId,
     });
     const items: AtomicDetail[] = result.rows.map((r) => ({
       id: r.record_id, type: r.type, content: r.content,
@@ -1147,7 +1154,7 @@ async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId:
   let filtered = allRecords;
   if (type) filtered = filtered.filter((r) => r.type === type);
   if (iso?.teamId) filtered = filtered.filter((r) => r.team_id === iso.teamId);
-  if (iso?.userId) filtered = filtered.filter((r) => r.user_id === iso.userId);
+  if (userId) filtered = filtered.filter((r) => r.user_id === userId);
   if (iso?.agentId) filtered = filtered.filter((r) => r.agent_id === iso.agentId);
   if (iso?.taskId) filtered = filtered.filter((r) => r.task_id === iso.taskId);
   if (time_start) filtered = filtered.filter((r) => r.updated_time >= time_start);
@@ -1176,13 +1183,14 @@ async function handleAtomicCount(body: unknown, _auth: V2AuthContext, requestId:
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
   const iso = deps.requestIsolation;
+  const userId = optionalQueryUserId(body as Record<string, unknown> | undefined, iso?.userId);
 
   const total = await store.countL1({
     type,
     timeStart: time_start,
     timeEnd: time_end,
     teamId: iso?.teamId,
-    userId: iso?.userId,
+    userId: userId,
     agentId: iso?.agentId,
     taskId: iso?.taskId,
   });

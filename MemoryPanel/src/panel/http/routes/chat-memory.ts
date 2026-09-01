@@ -110,10 +110,11 @@ interface ListEnvelopeData<T> {
 interface MemoryBlockOut {
   id: string;
   title: string;
-  summary: string;
+  /** 列表端不提供分层统计；前端选中记忆块后按层实时读取。 */
+  summary?: string;
   uploaded_by_user_id: string;
   updated_at_ms: number;
-  layer_counts: { L0_messages: number; L1: number; L2: number; L3: number };
+  layer_counts?: { L0_messages: number; L1: number; L2: number; L3: number };
   scope?: "team" | "private";
   bound_agent_count?: number;
   agent_id?: string;
@@ -156,10 +157,8 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       const out: MemoryBlockOut[] = items.map((a) => ({
         id: a.asset_id,
         title: a.name,
-        summary: buildSummary(),
         uploaded_by_user_id: a.owner_user_id,
         updated_at_ms: toMs(a.updated_at),
-        layer_counts: emptyLayers(),
       }));
       return respondEnvelope(
         c,
@@ -290,13 +289,10 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
           return {
             id: it.asset_id,
             title: it.name,
-            summary: buildSummary(),
             uploaded_by_user_id: ownerUserId,
             updated_at_ms: toMs(updatedAt),
             // 透传给前端做灰化：team 正常显示，private 灰化 + 打"已被 owner 设为私密"标签
             scope: it.visibility === "private" ? "private" : "team",
-            // TEMP：本地测试展示用；生产应改为懒加载
-            layer_counts: emptyLayers(),
             agent_id: agentId,
           };
         }),
@@ -368,10 +364,8 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
           return {
             id: assetId,
             title: a.name, // ← 用 agent name 作为块标题，符合"一 agent 一块记忆"
-            summary: buildSummary(),
             uploaded_by_user_id: meUserId,
             updated_at_ms,
-            layer_counts: emptyLayers(),
             scope: visibility,
             agent_id: a.agent_id,
           };
@@ -414,11 +408,8 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       items.map(async (a) => ({
         id: a.asset_id,
         title: a.name,
-        summary: buildSummary(),
         uploaded_by_user_id: a.owner_user_id,
         updated_at_ms: toMs(a.updated_at),
-        // TEMP：本地测试展示用；生产应改为懒加载或前端点击时按需拉
-        layer_counts: emptyLayers(),
         scope: (a.visibility === "private" ? "private" : "team") as
           | "team"
           | "private",
@@ -472,10 +463,8 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       okEnvelope(c, {
         id: asset.asset_id,
         title: asset.name,
-        summary: buildSummary(),
         uploaded_by_user_id: asset.owner_user_id,
         updated_at_ms: toMs(asset.updated_at),
-        layer_counts: emptyLayers(),
         scope: asset.visibility === "private" ? "private" : "team",
       } satisfies MemoryBlockOut),
     );
@@ -1124,32 +1113,27 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
     );
     if (!canRead) return respondControlError(c, 403, "ASSET_NOT_ACCESSIBLE");
 
-    // chat_memory 数据是 asset owner 写入（用其 user_id 隔离），caller 未必是 owner
-    // （借入场景）。用 asset.owner_user_id 作为数据面 user_id。
-    const ownerUserId = asset.owner_user_id;
-
     const cred = toKernelCredentials(ctx, { timeoutMs: 15_000 });
 
-    // v3 严格 isolation：session_id 必填。管理面聚合场景传 'default'
-    const idFields = {
+    // 面板按一个 Agent 的记忆块展示数据，统计范围必须是 team + agent。
+    // asset owner 是控制面授权主体，而 L0/L1 的 user_id 是各客户端写入身份；
+    // 二者不同是常态。把 owner user_id 传到数据面会把绝大部分记录错误滤掉。
+    // L2/L3 本来也是 team + agent 聚合，不带 user/session 维度。
+    const memoryScope = {
       team_id: parsed.teamId,
       agent_id: parsed.agentId,
-      user_id: ownerUserId,
-      session_id: "default",
     };
 
     try {
       if (layer === "L0") {
-        // 关键：不传 session_id，tdai 会跨 session 聚合返 (team,user,agent) 全部消息
+        // 不传 user_id / session_id，tdai 会跨写入身份、跨 session 聚合该 Agent 全部消息。
         // tdai 返 { messages: [...], total } 而不是 { items: [...] }
-        const { session_id: _drop, ...noSid } = idFields;
-        void _drop;
 
         // 游标分页：before_ts → time_end（-1ms 排他）。
         // 内核 /v3/conversation/query 的 time_end 是 recorded_at_ms <= timeEndMs（含等），
         // 游标语义需要排他（< beforeTs），否则最后一条会被重复返回。
         // 减 1ms 把含等转为不含等。毫秒精度足够（同一 ms 的重复极少且前端有 id 去重兜底）。
-        const l0Query: Record<string, unknown> = { ...noSid };
+        const l0Query: Record<string, unknown> = { ...memoryScope };
         if (timeStart) l0Query.time_start = timeStart;
         // 游标上界（before_ts）与筛选上界（time_end）取更早者（交集）：翻页不能越出用户选定的时间范围。
         let l0TimeEnd = timeEnd;
@@ -1170,7 +1154,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         const env = await deps.kernelHttp.postEnvelope<{
           messages?: unknown[];
           total?: number;
-        }>("/v3/conversation/query", l0Query, cred);
+        }>("/v2/conversation/query", l0Query, cred);
         if (env.code !== 0) return respondEnvelope(c, env);
         const data = (env.data as {
           messages?: Array<Record<string, unknown>>;
@@ -1215,13 +1199,13 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       }
 
       if (layer === "L1") {
-        const l1Query: Record<string, unknown> = { ...idFields, limit, offset };
+        const l1Query: Record<string, unknown> = { ...memoryScope, limit, offset };
         if (timeStart) l1Query.time_start = timeStart;
         if (timeEnd) l1Query.time_end = timeEnd;
         const env = await deps.kernelHttp.postEnvelope<{
           items?: unknown[];
           total?: number;
-        }>("/v3/atomic/query", l1Query, cred);
+        }>("/v2/atomic/query", l1Query, cred);
         if (env.code !== 0) return respondEnvelope(c, env);
         const data = (env.data as {
           items?: Array<Record<string, unknown>>;
@@ -1266,7 +1250,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         if (requestedPath) {
           const readEnv = await deps.kernelHttp.postEnvelope<{
             content?: string | null;
-          }>("/v3/scenario/read", { ...idFields, path: requestedPath }, cred);
+          }>("/v3/scenario/read", { ...memoryScope, path: requestedPath }, cred);
           if (readEnv.code !== 0) return respondEnvelope(c, readEnv);
           const readData = readEnv.data as { content?: string | null } | null;
           const content =
@@ -1312,7 +1296,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         const env = await deps.kernelHttp.postEnvelope<{
           entries?: unknown[];
           total?: number;
-        }>("/v3/scenario/ls", idFields, cred);
+        }>("/v3/scenario/ls", memoryScope, cred);
         if (env.code !== 0) return respondEnvelope(c, env);
         const data = (env.data as {
           entries?: Array<Record<string, unknown>>;
@@ -1353,7 +1337,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         content?: string;
         version?: string;
         updated_at?: string;
-      }>("/v3/core/read", idFields, cred);
+      }>("/v3/core/read", memoryScope, cred);
       if (env.code !== 0) return respondEnvelope(c, env);
       const data =
         (env.data as {
@@ -1820,21 +1804,25 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
 }
 
 /**
- * 从 chat_memory-{team_id}-{agent_id} 解出 team_id / agent_id
- * 依赖 agent id 以 `agt` 开头这一稳定前缀。
- */ function parseChatMemoryAssetId(
+ * 从 chat_memory-{team_id}-{agent_id} 解出 team_id / agent_id。
+ * 支持元数据中的两类 Agent 标识：远程记录 ID（agt-*）及本地字符串 ID
+ * （例如 openclaw、hermes）。不支持的格式必须返回 null，避免误读其它资产。
+ */
+function parseChatMemoryAssetId(
   assetId: string,
 ): { teamId: string; agentId: string } | null {
   if (!assetId.startsWith("chat_memory-")) return null;
-  const idx = assetId.lastIndexOf("-agt");
-  if (idx < 0) return null;
   const inner = assetId.slice("chat_memory-".length);
   const dashAgt = inner.lastIndexOf("-agt");
-  if (dashAgt < 0) return null;
-  return {
-    teamId: inner.slice(0, dashAgt),
-    agentId: inner.slice(dashAgt + 1),
-  };
+  if (dashAgt >= 0) {
+    return {
+      teamId: inner.slice(0, dashAgt),
+      agentId: inner.slice(dashAgt + 1),
+    };
+  }
+  const localAgentMatch = inner.match(/^(team-[^-]+)-(.+)$/);
+  if (!localAgentMatch?.[1] || !localAgentMatch[2]) return null;
+  return { teamId: localAgentMatch[1], agentId: localAgentMatch[2] };
 }
 
 // ============================================================================
@@ -1921,13 +1909,6 @@ function isActive(a: AssetRaw): boolean {
   );
 }
 
-function emptyLayers(): MemoryBlockOut["layer_counts"] {
-  return { L0_messages: 0, L1: 0, L2: 0, L3: 0 };
-}
-
-function buildSummary(): string {
-  return "0 条 L1 · 0 条 L2 · 0 条 L3";
-}
 
 /**
  * 去掉 scenario markdown 的 META 头。
