@@ -132,6 +132,31 @@ describe("VectorStore conversation add idempotency", () => {
     });
   });
 
+  it("persists keyed L0 embeddings in the same admission transaction", () => {
+    const store = createStore();
+    const db = store.getRawDb();
+    db.exec("CREATE TABLE l0_vec (record_id TEXT PRIMARY KEY, embedding BLOB NOT NULL, recorded_at TEXT NOT NULL)");
+    const vectorInternals = store as unknown as {
+      vecTablesReady: boolean;
+      stmtL0DeleteVec: ReturnType<typeof db.prepare>;
+      stmtL0InsertVec: ReturnType<typeof db.prepare>;
+    };
+    vectorInternals.vecTablesReady = true;
+    vectorInternals.stmtL0DeleteVec = db.prepare("DELETE FROM l0_vec WHERE record_id = ?");
+    vectorInternals.stmtL0InsertVec = db.prepare("INSERT INTO l0_vec (record_id, embedding, recorded_at) VALUES (?, ?, ?)");
+    const keyedInput = input();
+    keyedInput.embeddings = new Map([
+      ["message-1", new Float32Array([1, 0])],
+      ["message-2", new Float32Array([0, 1])],
+    ]);
+
+    expect(store.claimConversationAdd(keyedInput).status).toBe("claimed");
+    expect(db.prepare("SELECT record_id FROM l0_vec ORDER BY record_id").all()).toEqual([
+      { record_id: "message-1" },
+      { record_id: "message-2" },
+    ]);
+  });
+
   it("replays the original IDs for a repeated scope and digest", () => {
     const store = createStore();
     const first = store.claimConversationAdd(input());

@@ -72,9 +72,12 @@ L1/L2/L3 与 Skill 学习需要 Gateway LLM Key；Embedding 默认关闭并使�
 
 ## 安装
 
-当前 PR 阶段采用源码安装，不依赖尚未发布的 npm 包，也不生成 `.tgz`。用户先按[用户使用说明](USER_GUIDE_CN.md)填写 Gateway `.env`，再把预置指令发给 OpenCode；OpenCode 按[源码自动安装任务书](SELF_INSTALL_CN.md)完成检查、构建、Gateway 启动、本地插件加载器和验收。
+当前 PR 阶段采用源码安装，不依赖尚未发布的 npm 包，也不生成 `.tgz`。
 
-本地加载器直接引用仓库中的 `adapters/opencode/dist/index.js`。因此移动或删除仓库后需要重新执行安装任务。
+- **Windows**：按[用户使用说明](USER_GUIDE_CN.md)填写 Gateway `.env`，再把预置指令发给 OpenCode；OpenCode 按[源码自动安装任务书](SELF_INSTALL_CN.md)完成检查、构建、Gateway 启动、本地插件加载器和验收。
+- **macOS/Linux**：先启动 Gateway，再构建适配器，把本地源码依赖安装到 OpenCode 的 XDG 配置目录，最后执行诊断命令。完整命令和验收步骤见[macOS/Linux 源码安装](USER_GUIDE_CN.md#macoslinux-源码安装)。
+
+Windows 本地加载器直接引用仓库中的 `adapters/opencode/dist/index.js`；macOS/Linux 通过指向同一工作区的 `file:` 依赖安装。因此移动或删除仓库后需要重新执行安装。
 
 ## 配置
 

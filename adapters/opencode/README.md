@@ -73,9 +73,12 @@ L1/L2/L3 and Skill learning require the Gateway LLM key. Embedding is disabled b
 
 ## Installation
 
-During PR review, installation works directly from source without an unpublished npm package or `.tgz`. The user fills in the Gateway `.env` from the [user guide](USER_GUIDE.md), then sends the prepared instruction to OpenCode. OpenCode follows the [source auto-install runbook](SELF_INSTALL.md) to check and build the adapter, start the Gateway, create the local plugin loader, and verify the result.
+During PR review, installation works directly from source without an unpublished npm package or `.tgz`.
 
-The local loader imports `adapters/opencode/dist/index.js` directly from this checkout. Rerun the installation task after moving or deleting the repository.
+- **Windows:** fill in the Gateway `.env` from the [user guide](USER_GUIDE.md), then send the prepared instruction to OpenCode. OpenCode follows the [source auto-install runbook](SELF_INSTALL.md) to check and build the adapter, start the Gateway, create the local plugin loader, and verify the result.
+- **macOS/Linux:** start a Gateway, build the adapter, install the local source dependency into OpenCode's XDG configuration directory, and run the diagnostic command. The [macOS/Linux source-install section](USER_GUIDE.md#macoslinux-source-installation) contains the complete commands and verification steps.
+
+The Windows local loader imports `adapters/opencode/dist/index.js` directly from this checkout; the macOS/Linux flow installs a `file:` dependency pointing to the same checkout. Rerun installation after moving or deleting the repository.
 
 ## Configuration
 

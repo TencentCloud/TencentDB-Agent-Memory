@@ -104,6 +104,12 @@ export interface ClaimConversationAddInput {
   scope: ConversationIdempotencyScope;
   payloadDigest: string;
   records: L0Record[];
+  /**
+   * Precomputed vectors keyed by L0 record ID. Capable stores must persist
+   * these in the same admission transaction as the receipt and metadata so a
+   * successful keyed write is immediately eligible for vector recall.
+   */
+  embeddings?: ReadonlyMap<string, Float32Array>;
   pipelineRounds: number;
 }
 

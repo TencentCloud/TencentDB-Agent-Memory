@@ -27,6 +27,7 @@ describe("turn delivery coordinator", () => {
     await Promise.all([coordinator.capture("s", messages), coordinator.capture("s", messages)]);
     expect(gateway.captureL0).toHaveBeenCalledTimes(1);
     expect(gateway.captureSkill).toHaveBeenCalledTimes(1);
+    expect((coordinator as unknown as { sessionChains: Map<string, Promise<void>> }).sessionChains.size).toBe(0);
   });
 
   it("recovers only the failed pipeline after restart", async () => {

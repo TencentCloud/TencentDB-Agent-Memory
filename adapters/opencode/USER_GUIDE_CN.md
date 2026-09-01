@@ -2,9 +2,11 @@
 
 [English](USER_GUIDE.md) | 简体中文
 
-当前适配器正在提交 PR，尚未发布到 npm。本说明采用“填写一个 `.env` 文件，然后让 OpenCode 自动安装”的源码安装方式，不需要 `npx`、`npm pack` 或 `.tgz`。
+当前适配器正在提交 PR，尚未发布到 npm。下面两套平台流程都直接从当前工作区安装，不需要 `npx`、`npm pack` 或 `.tgz`。
 
-## 你只需要做两步
+请按操作系统选择对应章节。Windows 自动安装器使用 `MemoryCore/.env.opencode.local`；macOS/Linux 使用 Gateway 常规的 YAML 与 Shell 配置，不会读取该文件。
+
+## Windows：两步自动安装
 
 ### 第一步：创建并填写 `.env`
 
@@ -58,11 +60,9 @@ Embedding 留空时使用 BM25 搜索。密钥只保存在 Gateway 服务端的 
 
 `TDAI_GATEWAY_DATA_DIR` 适合测试或需要完全独立记忆库的用户。可以填写绝对路径；自动安装会生成私有运行配置，不会修改仓库中的 Gateway YAML。
 
-macOS/Linux 用户在终端进入 `<仓库目录>/MemoryCore`，使用自己熟悉的本地编辑器创建同名文件即可，例如 `${EDITOR:-nano} .env.opencode.local`；文件内容相同。
-
 ### 第二步：把安装交给 OpenCode
 
-下面的源码自动安装流程目前在 Windows PowerShell 7 上完成了端到端验收。适配器运行本身支持 macOS/Linux，但这两个平台暂不应照搬本任务书中的 Windows 后台进程安装步骤。
+下面的源码自动安装流程目前在 Windows PowerShell 7 上完成了端到端验收。
 
 用 OpenCode 打开 `TencentDB-Agent-Memory` 仓库，把下面整句话发送给模型：
 
@@ -80,6 +80,32 @@ macOS/Linux 用户在终端进入 `<仓库目录>/MemoryCore`，使用自己熟�
 - 检查 Gateway、加载器和配置是否一致
 
 安装过程中不要关闭当前 OpenCode 任务。模型明确报告安装结果后，完全退出并重新打开 OpenCode。
+
+## macOS/Linux 源码安装
+
+以下命令直接从当前工作区安装适配器。此流程不要创建 `MemoryCore/.env.opencode.local`：它只供 Windows 安装器使用，下面的命令不会读取该文件。
+
+1. 安装 Node.js 22.16 或更高版本，按照仓库中的 [Gateway 快速启动说明](../../MemoryCore/README_CN.md#快速开始)和[配置说明](../../MemoryCore/README_CN.md#配置)完成配置并启动 Memory Gateway。该流程读取 `TDAI_GATEWAY_CONFIG` 以及同一 Shell 中导出的环境变量；LLM、Embedding、Skill、数据目录和端口都应在这里配置，不要写入 `.env.opencode.local`。继续前先确认实际 endpoint 的 `/health` 可访问。
+2. 在另一个终端中构建并测试适配器，然后把当前工作区注册到 OpenCode。快速启动的 Gateway 监听 `8420`；如果配置了其他端口，`--endpoint` 必须使用相同值：
+
+```bash
+cd "<仓库目录>/adapters/opencode"
+npm ci
+npm run check
+
+node ./bin/tdai-opencode.mjs install \
+  --scope global \
+  --package "file:$PWD" \
+  --endpoint http://127.0.0.1:8420
+
+opencode_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+npm install --prefix "$opencode_config_dir" --ignore-scripts
+node ./bin/tdai-opencode.mjs doctor --scope global
+```
+
+连接远程 Gateway 时，先在当前终端导出 `TDAI_MEMORY_API_KEY`、`TDAI_MEMORY_SERVICE_ID`、`TDAI_MEMORY_TEAM_ID`、`TDAI_MEMORY_AGENT_ID`、`TDAI_MEMORY_USER_ID`，再执行 `install`，并通过 `--endpoint` 传入 HTTPS Gateway 地址。安装器只会把凭据写入权限为 `0600` 的私密配置文件。
+
+`doctor` 的每一项都应显示 `PASS`。随后完全退出并重新打开 OpenCode。由于依赖指向当前工作区，移动仓库或拉取适配器更新后，需要重新执行 `npm run check` 和上面的两条安装命令。
 
 ## 重启后验收
 

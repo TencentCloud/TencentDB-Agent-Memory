@@ -2,9 +2,11 @@
 
 English | [简体中文](USER_GUIDE_CN.md)
 
-The adapter is currently under PR review and has not been published to npm. This guide uses a source installation: fill in one `.env` file, then let OpenCode perform the installation. It does not require `npx`, `npm pack`, or a `.tgz` archive.
+The adapter is currently under PR review and has not been published to npm. Both platform flows below install directly from this checkout; neither requires `npx`, `npm pack`, or a `.tgz` archive.
 
-## You only need two steps
+Choose the section for your platform. The Windows auto-installer uses `MemoryCore/.env.opencode.local`. The macOS/Linux flow uses the Gateway's normal YAML and shell configuration and does not read that file.
+
+## Windows: two-step automatic installation
 
 ### Step 1: create and fill in `.env`
 
@@ -58,11 +60,9 @@ When Embedding is empty, search uses BM25. Secrets remain only in the Gateway-si
 
 `TDAI_GATEWAY_DATA_DIR` is useful for tests or a fully separate memory store. It may be an absolute path; auto-install generates a private runtime configuration without modifying the repository's Gateway YAML.
 
-On macOS/Linux, enter `<repository-directory>/MemoryCore` and create the same file with a local editor, for example `${EDITOR:-nano} .env.opencode.local`; its contents are identical.
-
 ### Step 2: hand the installation to OpenCode
 
-The source auto-install flow below has completed end-to-end acceptance on Windows PowerShell 7. The adapter runtime itself supports macOS/Linux, but those platforms must not copy the task's Windows background-process installation steps yet.
+The source auto-install flow below has completed end-to-end acceptance on Windows PowerShell 7.
 
 Open the `TencentDB-Agent-Memory` repository in OpenCode and send this entire message to the model:
 
@@ -80,6 +80,32 @@ The model will automatically:
 - Verify that the Gateway, loader, and configuration agree
 
 Do not close the current OpenCode task during installation. After the model reports the real result, fully quit and reopen OpenCode.
+
+## macOS/Linux source installation
+
+These commands install the adapter from the current checkout. Do not create `MemoryCore/.env.opencode.local` for this flow: it is input to the Windows installer only and the commands below do not read it.
+
+1. Install Node.js 22.16 or newer. Configure and start a Memory Gateway using the repository's [Gateway quick start](../../MemoryCore/README.md#quick-start) and [configuration reference](../../MemoryCore/README.md#configuration). That flow reads `TDAI_GATEWAY_CONFIG` plus variables exported in the same shell. Configure LLM, Embedding, Skill, data directory, and port there—not in `.env.opencode.local`—then confirm the exact endpoint's `/health` response.
+2. In a second terminal, build and test the adapter, then register this checkout with OpenCode. The quick-start Gateway listens on `8420`; if you configured another port, use that same value for `--endpoint`:
+
+```bash
+cd "<repository-directory>/adapters/opencode"
+npm ci
+npm run check
+
+node ./bin/tdai-opencode.mjs install \
+  --scope global \
+  --package "file:$PWD" \
+  --endpoint http://127.0.0.1:8420
+
+opencode_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+npm install --prefix "$opencode_config_dir" --ignore-scripts
+node ./bin/tdai-opencode.mjs doctor --scope global
+```
+
+For a remote Gateway, export `TDAI_MEMORY_API_KEY`, `TDAI_MEMORY_SERVICE_ID`, `TDAI_MEMORY_TEAM_ID`, `TDAI_MEMORY_AGENT_ID`, and `TDAI_MEMORY_USER_ID` in this terminal before running `install`, and pass the HTTPS Gateway URL with `--endpoint`. The installer writes credentials only to the private configuration file and applies mode `0600`.
+
+Every `doctor` row must report `PASS`. Then fully quit and reopen OpenCode. Because the dependency points at this checkout, rerun `npm run check` and the two install commands after moving the repository or pulling adapter changes.
 
 ## Verify after restarting
 

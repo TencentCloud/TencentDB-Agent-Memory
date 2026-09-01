@@ -783,10 +783,22 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
 
   let idempotencyOutboxEventId: string | undefined;
   if (idempotencyScope && payloadDigest) {
+    const embeddings = new Map<string, Float32Array>();
+    const embedding = deps.getEmbedding();
+    if (embedding) {
+      for (const record of acceptedRecords) {
+        try {
+          embeddings.set(record.id, await embedding.embed(record.messageText));
+        } catch (e) {
+          console.warn(`[v2-router] L0 embedding failed:`, e);
+        }
+      }
+    }
     const claim = await store.claimConversationAdd!({
       scope: idempotencyScope,
       payloadDigest,
       records: acceptedRecords,
+      ...(embeddings.size > 0 ? { embeddings } : {}),
       pipelineRounds: rounds,
     });
     if (claim.status === "conflict") {

@@ -146,6 +146,44 @@ describe("conversation add idempotency router", () => {
     };
   }
 
+  it("passes generated embeddings into the atomic keyed admission", async () => {
+    let claimedInput: ClaimConversationAddInput | undefined;
+    const vector = new Float32Array([0.6, 0.8]);
+    const embed = vi.fn().mockResolvedValue(vector);
+    const store: Partial<IMemoryStore> = {
+      upsertL0: vi.fn(),
+      readConversationAddReceipt: vi.fn(async () => null),
+      claimConversationAdd: vi.fn(async (input: ClaimConversationAddInput): Promise<ConversationAddClaim> => {
+        claimedInput = input;
+        return {
+          status: "claimed",
+          receipt: receiptFor(input, input.records.map((record) => record.id)),
+          outboxEvent: {
+            eventId: "event-1",
+            receiptId: "receipt-1",
+            serviceId: input.scope.serviceId,
+            sessionId: input.scope.sessionId,
+            rounds: input.pipelineRounds,
+            teamId: input.scope.teamId,
+            agentId: input.scope.agentId,
+            status: "pending",
+            createdAtMs: 1,
+          },
+        };
+      }),
+      ackConversationOutbox: vi.fn().mockResolvedValue(true),
+    };
+
+    const response = await handleConversationAdd(body, auth, "req-1", depsFor(store, {
+      getEmbedding: () => ({ embed } as never),
+    }));
+
+    expect(response.code).toBe(0);
+    expect(embed).toHaveBeenCalledWith("hello");
+    expect(claimedInput?.embeddings?.get(claimedInput.records[0]!.id)).toBe(vector);
+    expect(store.upsertL0).not.toHaveBeenCalled();
+  });
+
   it("replays the first accepted IDs without writing or notifying again", async () => {
     let saved: { receipt: ConversationReceipt; outboxEvent: Extract<ConversationAddClaim, { status: "claimed" }>["outboxEvent"] } | undefined;
     const upsertL0 = vi.fn();

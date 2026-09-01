@@ -27,13 +27,13 @@ describe("Skill conversation idempotency", () => {
     };
     const handler = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never });
 
-    const first = await handler.handle(input());
-    const second = await handler.handle(input());
+    const [first, second] = await Promise.all([handler.handle(input()), handler.handle(input())]);
 
     expect(first).toEqual({ status: "ok" });
     expect(second).toEqual(first);
     expect(buffer.writeCurrent).toHaveBeenCalledTimes(1);
     expect(buffer.writeIdempotencyReceipt).toHaveBeenCalledTimes(1);
+    expect((handler as unknown as { sessionChains: Map<string, Promise<unknown>> }).sessionChains.size).toBe(0);
   });
 
   it("rejects reusing a key with a different payload", async () => {
@@ -49,5 +49,6 @@ describe("Skill conversation idempotency", () => {
     const handler = new SkillConversationAddHandler({ buffer: buffer as never, trigger: {} as never });
 
     await expect(handler.handle(input())).rejects.toBeInstanceOf(SkillIdempotencyConflictError);
+    expect((handler as unknown as { sessionChains: Map<string, Promise<unknown>> }).sessionChains.size).toBe(0);
   });
 });

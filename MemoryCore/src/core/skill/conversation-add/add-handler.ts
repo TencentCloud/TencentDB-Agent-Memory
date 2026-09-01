@@ -152,8 +152,13 @@ export class SkillConversationAddHandler {
     const sessionKey = [input.instance_id, input.space_id, input.user_id, input.team_id, input.agent_id, input.session_id].join("|");
     const previous = this.sessionChains.get(sessionKey) ?? Promise.resolve();
     const current = previous.then(() => this.handleOnce(input), () => this.handleOnce(input));
-    this.sessionChains.set(sessionKey, current.then(() => undefined, () => undefined));
-    return current;
+    const tail = current.then(() => undefined, () => undefined);
+    this.sessionChains.set(sessionKey, tail);
+    return current.finally(() => {
+      // A newer operation may already have replaced this tail while `current`
+      // was running. Only the owner of the current tail may remove the entry.
+      if (this.sessionChains.get(sessionKey) === tail) this.sessionChains.delete(sessionKey);
+    });
   }
 
   private async handleOnce(input: AddConversationInput): Promise<AddConversationResult> {

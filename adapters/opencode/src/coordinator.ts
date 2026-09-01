@@ -20,8 +20,13 @@ export class TurnCoordinator {
   private enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
     const previous = this.sessionChains.get(sessionId) ?? Promise.resolve();
     const current = previous.then(operation, operation);
-    this.sessionChains.set(sessionId, current.then(() => undefined, () => undefined));
-    return current;
+    const tail = current.then(() => undefined, () => undefined);
+    this.sessionChains.set(sessionId, tail);
+    return current.finally(() => {
+      // Do not delete a newer operation that was queued for this session while
+      // the current one was still in flight.
+      if (this.sessionChains.get(sessionId) === tail) this.sessionChains.delete(sessionId);
+    });
   }
 
   private async deliver(record: PendingDelivery): Promise<void> {

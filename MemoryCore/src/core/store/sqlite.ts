@@ -3629,7 +3629,9 @@ export class VectorStore implements IMemoryStore {
         now,
       );
 
-      for (const record of input.records) this.writeL0ForConversationAdmission(record);
+      for (const record of input.records) {
+        this.writeL0ForConversationAdmission(record, input.embeddings?.get(record.id));
+      }
 
       this.db.prepare(`
         INSERT INTO conversation_add_outbox (
@@ -3849,7 +3851,7 @@ export class VectorStore implements IMemoryStore {
     ).get(name) !== undefined;
   }
 
-  private writeL0ForConversationAdmission(record: L0Record): void {
+  private writeL0ForConversationAdmission(record: L0Record, embedding?: Float32Array): void {
     this.stmtL0UpsertMeta.run(
       record.id,
       record.sessionKey,
@@ -3879,6 +3881,16 @@ export class VectorStore implements IMemoryStore {
         record.recordedAt,
         record.timestamp,
       );
+    }
+    if (this.vecTablesReady) {
+      this.stmtL0DeleteVec!.run(record.id);
+      if (embedding && !embedding.every((value) => value === 0)) {
+        this.stmtL0InsertVec!.run(
+          record.id,
+          Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+          record.recordedAt,
+        );
+      }
     }
   }
 
