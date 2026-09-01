@@ -32,6 +32,7 @@ export const zhCN = {
   'atlas.mode.all': 'All',
   'atlas.showUnboundAssets': '显示未绑定到我的 Agent 的资产',
   'atlas.showOtherOwners': '显示其他成员内容',
+  'atlas.showArchivedAgents': '显示归档 Agent',
   'atlas.refresh': '刷新拓扑',
   'atlas.enterFullscreen': '全屏显示画布',
   'atlas.exitFullscreen': '恢复画布',

@@ -171,6 +171,27 @@ describe('Team Atlas projection and layout', () => {
     expect(projection.nodes.map((node) => node.id)).not.toEqual(expect.arrayContaining(['identity:team-a:user-2', 'agent:other', 'skill:other']));
   });
 
+  it('hides archived Agents by default and can reveal them for audit', () => {
+    const input = irWithNodes([
+      { id: 'agent:active', entity_id: 'active', type: 'agent', label: 'Active', team_id: 'team-a', status: 'active' },
+      { id: 'agent:archived', entity_id: 'archived', type: 'agent', label: 'Archived', team_id: 'team-a', status: 'inactive' },
+    ]);
+    input.edges.push(
+      { id: 'owns:active', type: 'owns', source: 'identity:team-a:user-1', target: 'agent:active' },
+      { id: 'owns:archived', type: 'owns', source: 'identity:team-a:user-1', target: 'agent:archived' },
+    );
+
+    const defaultProjection = projectAtlas(input);
+    expect(defaultProjection.nodes.some((node) => node.id === 'agent:active')).toBe(true);
+    expect(defaultProjection.nodes.some((node) => node.id === 'agent:archived')).toBe(false);
+    expect(defaultProjection.edges.some((edge) => edge.id === 'owns:archived')).toBe(false);
+    expect(
+      projectAtlas(input, { showArchivedAgents: true }).nodes.some(
+        (node) => node.id === 'agent:archived',
+      ),
+    ).toBe(true);
+  });
+
   it('sorts the current owner first and horizontally aligns each Identity with its first Agent', () => {
     const input = irWithNodes([
       { id: 'identity:team-a:user-2', entity_id: 'user-2', type: 'identity', label: 'A Other', team_id: 'team-a' },
@@ -208,7 +229,7 @@ describe('Team Atlas projection and layout', () => {
       { id: 'task:t', entity_id: 't', type: 'task', label: 'Task', team_id: 'team-a' },
     ]);
     input.edges.push({ id: 'member:other', type: 'member_of', source: 'team:team-a', target: 'identity:team-a:user-2' });
-    const layout = layoutAtlas(projectAtlas(input));
+    const layout = layoutAtlas(projectAtlas(input, { showArchivedAgents: true }));
     const agents = layout.nodes.filter((node) => node.type === 'agent').sort((a, b) => a.y - b.y);
     expect(agents.map((agent) => agent.id)).toEqual([
       'agent:mine-old',

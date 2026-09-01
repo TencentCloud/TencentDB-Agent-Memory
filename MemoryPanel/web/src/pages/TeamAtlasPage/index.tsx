@@ -91,6 +91,7 @@ export function TeamAtlasPage() {
   const [selectedTeamIds, setSelectedTeamIds] = useState<string[]>([]);
   const [showUnboundAssets, setShowUnboundAssets] = useState(true);
   const [showOtherOwners, setShowOtherOwners] = useState(true);
+  const [showArchivedAgents, setShowArchivedAgents] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusTeamId, setFocusTeamId] = useState<string | null>(null);
   const [focusAgentId, setFocusAgentId] = useState<string | null>(null);
@@ -187,6 +188,7 @@ export function TeamAtlasPage() {
             assetType,
             showUnboundAssets,
             showOtherOwners,
+            showArchivedAgents,
           })
         : null,
     [
@@ -198,6 +200,7 @@ export function TeamAtlasPage() {
       assetType,
       showUnboundAssets,
       showOtherOwners,
+      showArchivedAgents,
     ],
   );
   const layout = useMemo(() => (projection ? layoutAtlas(projection) : null), [projection]);
@@ -564,6 +567,17 @@ export function TeamAtlasPage() {
                 }}
               />
               <span>{t('atlas.showOtherOwners')}</span>
+            </label>
+            <label className="team-atlas-switch">
+              <input
+                type="checkbox"
+                checked={showArchivedAgents}
+                onChange={(event) => {
+                  setSelectedId(null);
+                  setShowArchivedAgents(event.target.checked);
+                }}
+              />
+              <span>{t('atlas.showArchivedAgents')}</span>
             </label>
             {(focusTeamId || focusAgentId) && (
               <button

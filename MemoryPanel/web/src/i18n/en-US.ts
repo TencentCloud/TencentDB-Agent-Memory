@@ -32,6 +32,7 @@ export const enUS = {
   'atlas.mode.all': 'All',
   'atlas.showUnboundAssets': 'Show assets not bound to my Agents',
   'atlas.showOtherOwners': 'Show other owners',
+  'atlas.showArchivedAgents': 'Show archived Agents',
   'atlas.refresh': 'Refresh topology',
   'atlas.enterFullscreen': 'Expand canvas',
   'atlas.exitFullscreen': 'Restore canvas',

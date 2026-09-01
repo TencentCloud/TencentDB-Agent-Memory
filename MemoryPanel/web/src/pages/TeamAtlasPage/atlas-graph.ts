@@ -345,6 +345,7 @@ export function projectAtlas(
     teamIds?: string[];
     showUnboundAssets?: boolean;
     showOtherOwners?: boolean;
+    showArchivedAgents?: boolean;
     maxNodes?: number;
   } = {},
 ): AtlasProjection {
@@ -365,6 +366,10 @@ export function projectAtlas(
   if (options.teamIds) {
     const teamIds = new Set(options.teamIds);
     nodes = nodes.filter((node) => node.team_id && teamIds.has(node.team_id));
+  }
+
+  if (options.showArchivedAgents !== true) {
+    nodes = nodes.filter((node) => node.type !== 'agent' || node.status !== 'inactive');
   }
 
   if (options.showUnboundAssets === false && !bindingEvidencePartial) {
