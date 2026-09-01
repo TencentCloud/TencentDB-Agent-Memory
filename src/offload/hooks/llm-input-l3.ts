@@ -1369,15 +1369,18 @@ async function fastPathReApply(messages: any[], stateManager: OffloadStateManage
     if (hasDeleted && isAssistantMessageWithToolUse(msg) && !isOnlyToolUseAssistant(msg)) {
       const content = msg.type === "message" ? msg.message?.content : msg.content;
       if (Array.isArray(content)) {
+        let stripped = false;
         for (let j = content.length - 1; j >= 0; j--) {
           const block = content[j] as any;
           if ((block.type === "tool_use" || block.type === "toolCall") && block.id) {
             const blockIdNorm = normalizeToolCallIdForLookup(block.id);
             if (stateManager.deletedOffloadIds.has(block.id) || stateManager.deletedOffloadIds.has(blockIdNorm)) {
               content.splice(j, 1);
+              stripped = true;
             }
           }
         }
+        if (stripped) invalidateTokenCache(msg);
       }
     }
     if (msg._offloaded) continue;
