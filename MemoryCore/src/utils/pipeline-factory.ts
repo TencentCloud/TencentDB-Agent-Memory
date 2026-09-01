@@ -636,6 +636,22 @@ export function createL1Runner(opts: {
             agentId: group.agentId,
             sessionId: group.sessionId,
           }));
+
+          // PersonaTrigger reads the team+agent profile checkpoint. The L1
+          // cursor checkpoint above is global/session-scoped, so mirror only
+          // the persona counter into the same scoped directory L3 will read.
+          const profileScope = buildIsolationScope({
+            teamId: group.teamId,
+            userId: group.userId,
+            agentId: group.agentId,
+          });
+          const profileCheckpoint = new CheckpointManager(
+            scopedDataDirForScope(pluginDataDir, profileScope),
+            logger,
+            scopedStorageForScope(storage, profileScope),
+            checkpointLock,
+          );
+          await profileCheckpoint.incrementMemoriesSinceLastPersona(l1Result.storedCount);
         }
         if (l1Result.lastSceneName) {
           lastSceneName = l1Result.lastSceneName;
@@ -645,7 +661,13 @@ export function createL1Runner(opts: {
       // Use maxRecordedAtMs (write time) of the **processed** slice as cursor —
       // always positive, TCVDB-safe. Boundary alignment guarantees we will not
       // skip same-ms siblings on the next round.
-      await checkpoint.markL1ExtractionComplete(sessionKey, totalStored, maxRecordedAtMs || undefined, lastSceneName);
+      await checkpoint.markL1ExtractionComplete(
+        sessionKey,
+        totalStored,
+        maxRecordedAtMs || undefined,
+        lastSceneName,
+        { countForPersona: false },
+      );
       logger.info(
         `${TAG} [l1] L1 complete: extracted=${totalExtracted}, stored=${totalStored} (${groups.length} group(s))`,
       );
