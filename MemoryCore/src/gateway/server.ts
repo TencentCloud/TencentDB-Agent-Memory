@@ -87,6 +87,7 @@ import {
 import { readApiTraceEnabled } from "../utils/env-config.js";
 import { makeSkillRouteTable } from "./skill-handlers.js";
 import type { SkillRouterDeps as SkillRouterDeps } from "./skill-handlers.js";
+import { resolveSkillInstance } from "./skill-instance-context.js";
 import {
   wireConversationAddHandler,
   RedisSkillAgentTaskQueue,
@@ -348,12 +349,12 @@ export class TdaiGateway {
     // （每个 SkillCore 只调它自己被挂上的钩子），ensureSkillAsset / deleteAssets
     // 幂等，即使叠加触发也无副作用。详见 SkillAssetHooks doc。
     //
-    // standalone 模式下 instanceId 固定为 "default"（见 start() 里的
-    // `this.config.instanceId ?? "default"`），闭包这里直接拿 default 即可；
-    // service 模式下这份 SkillCore 事实上不会被 v3/skill/* 走到，闭包的 default
-    // 只是占位（不 fire 就没影响）。
+    // HTTP skill routes resolve the instance lazily from their request context so a
+    // standalone gateway can honor each x-tdai-service-id. Calls that bypass those
+    // routes keep the configured/default instance; the service-mode singleton remains
+    // a placeholder because requests use per-instance SkillCore objects instead.
     const gatewayRef = this;
-    const skillAssetInstanceId = this.config.instanceId
+    const fallbackSkillAssetInstanceId = this.config.instanceId
       ?? (this.config.deployMode === "service" ? "__unset__" : "default");
     // Shared permit pool — memory PipelineWorker 用。skill 侧走
     // wireConversationAdd 内的 SkillConversationExtractWorker (agent 级串行 lock),
@@ -370,14 +371,16 @@ export class TdaiGateway {
         // handleCreate 兜底之外就是这里 —— 无论谁调 SkillCore.create 都能触发。
         onSkillCreated: async ({ skill_id, team_id, agent_id, name }) => {
           if (!team_id || !agent_id) return; // 无租户上下文 → 跳过（OpenClaw local scope 等）
-          const metaSvc = await gatewayRef.ensureMetadataService(skillAssetInstanceId);
+          const metaSvc = await gatewayRef.ensureMetadataService(
+            resolveSkillInstance(fallbackSkillAssetInstanceId),
+          );
           await metaSvc.ensureSkillAsset({ skill_id, team_id, agent_id, name });
         },
         // 读时自愈：fire-and-forget，异常吞掉。补历史 / 迁移 / 误删产生的孤儿 skill。
         onSkillAccessed: (skill) => {
           if (!skill.team_id || !skill.owner_agent_id) return;
           gatewayRef
-            .ensureMetadataService(skillAssetInstanceId)
+            .ensureMetadataService(resolveSkillInstance(fallbackSkillAssetInstanceId))
             .then((svc) => svc.ensureSkillAsset({
               skill_id: skill.skill_id,
               team_id: skill.team_id!,
@@ -394,7 +397,7 @@ export class TdaiGateway {
         // 归档级联：fire-and-forget，异常吞掉。二次 delete 会重触发钩子，最终收敛。
         onSkillArchived: ({ skill_id, team_id }) => {
           gatewayRef
-            .ensureMetadataService(skillAssetInstanceId)
+            .ensureMetadataService(resolveSkillInstance(fallbackSkillAssetInstanceId))
             .then((svc) => svc.deleteAssets([skill_id]))
             .catch((err: unknown) => {
               gatewayRef.logger.warn(
@@ -932,10 +935,8 @@ export class TdaiGateway {
         getResolvedSkillConfig: () => this.core.getResolvedSkillConfig(),
         quotaManager: this.quotaManager ?? undefined,
         logger: this.logger,
-        // Standalone 模式下 SkillCore 由 TdaiCore 全局构造（不带 onSkillCreated 钩子），
-        // handleCreate 用这个 dep 在 skill 创建成功后调 metaSvc.ensureSkillAsset()
-        // 完成 asset 登记 + agent fixed-asset 绑定。service 模式下 buildSkillCore 里
-        // 的 onSkillCreated 钩子做同样的事，两条路径都覆盖，ensureSkillAsset 本身幂等。
+        // Lifecycle hooks and handler fallbacks both resolve this request's instance.
+        // Registration is intentionally duplicated because ensureSkillAsset is idempotent.
         getMetadataService: (instanceId) => this.ensureMetadataService(instanceId),
       };
 

@@ -56,6 +56,7 @@ import type { CompressibleMessage } from "../core/skill/conversation-add/message
 import { trace } from "../core/report/trace.js";
 import { metricProducer } from "../core/report/kafka-metric-producer.js";
 import { obsLogger } from "../core/report/obs-logger.js";
+import { runWithSkillInstance } from "./skill-instance-context.js";
 
 const TAG = "[skill-handlers]";
 
@@ -101,9 +102,9 @@ export interface SkillRouterDeps {
    * 拿到 (per instance) 的 MetadataService。用于 handleCreate 成功后自动登记
    * skill 资产（asset_id === skill_id）并绑定到 owner agent 的 fixed-asset。
    *
-   * standalone 模式下 SkillCore 是 TdaiCore 全局构造的（不带钩子），所以由 handler
-   * 层做这个登记；service 模式下 buildSkillCore 里的 onSkillCreated 钩子会做同样的
-   * 事（幂等，重复调用无副作用）。两条路径都覆盖，保证前端管控页永远能看到 skill。
+   * Standalone routes establish a request-scoped instance for TdaiCore's lifecycle
+   * hooks, and this handler repeats the registration as an idempotent fallback.
+   * Service mode uses the per-instance SkillCore hook and the same fallback.
    *
    * 语义与 v2-router 里 handleConversationAdd 用同一 dep 自动登记 chat_memory 资产
    * 一致（详见 v2-router.ts:648 及 metadata-service.ts:ensureSkillAsset）。
@@ -295,8 +296,8 @@ export async function handleCreate(body: unknown, auth: V2AuthContext, requestId
     // ── 自动登记 skill 资产（asset_id === skill_id）+ 绑定到 owner agent 的 fixed-asset ──
     //
     // 为什么要在这里做：
-    //   - standalone 模式下 SkillCore 由 TdaiCore 全局构造（无 onSkillCreated 钩子）；
-    //   - 若不在这里补登记，asset/list-accessible / acl/* 等元数据层接口就查不到这个 skill，
+    //   - standalone 的全局 SkillCore hook 使用请求级 instance；这里仍做幂等兜底；
+    //   - 若不在这里补登记，asset/list-accessible / acl/* 等元数据层接口就可能查不到这个 skill，
     //     前端管控页的"团队资产 / 授权"链路完全断开。
     //
     // 与 service 模式的关系：
@@ -392,8 +393,8 @@ export async function handleDelete(body: unknown, _auth: V2AuthContext, requestI
     // 为什么在这里再做一次：
     //   - service 模式：buildSkillCore 里的 onSkillArchived 钩子已经调过一次；这里再
     //     调是幂等收敛（deleteAssets 对已不存在的 asset 视为成功，无副作用）。
-    //   - standalone 模式：SkillCore 由 TdaiCore 全局构造，未注入钩子（避免耦合
-    //     MetadataService 拉起时序）。handler 层这一次调用是唯一联动入口。
+    //   - standalone 模式：TdaiCore hook 与 handler 都使用请求级 instance；这里的
+    //     handler 调用是幂等兜底，保证删除路径最终收敛。
     //
     // 失败策略：fire-and-forget，warn 不回退 delete。二次 delete 会重触发 core 钩子
     // 与本次兜底，最终收敛。参考 handleCreate 里 ensureSkillAsset 的对称做法
@@ -1136,7 +1137,7 @@ export type SkillHandler = (
 ) => Promise<ApiResponseEnvelope>;
 
 export function makeSkillRouteTable(): Record<string, SkillHandler> {
-  return {
+  const routes: Record<string, SkillHandler> = {
     "/v3/skill/create": handleCreate,
     "/v3/skill/update": handleUpdate,
     "/v3/skill/patch": handlePatch,
@@ -1155,4 +1156,12 @@ export function makeSkillRouteTable(): Record<string, SkillHandler> {
     "/v3/skill/conversation/add": handleConversationAdd,
     "/v3/skill/conversation/force-archive": handleForceArchive,
   };
+
+  return Object.fromEntries(
+    Object.entries(routes).map(([path, handler]) => [
+      path,
+      (body: unknown, auth: V2AuthContext, requestId: string, deps: SkillRouterDeps) =>
+        runWithSkillInstance(auth.serviceId, () => handler(body, auth, requestId, deps)),
+    ]),
+  );
 }
