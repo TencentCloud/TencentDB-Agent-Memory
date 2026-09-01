@@ -174,7 +174,7 @@ describe('buildTeamAtlasIR', () => {
     });
   });
 
-  it('keeps inactive Agents visible with their creation time', () => {
+  it('keeps inactive Agents visible without active-state asset warnings', () => {
     const ir = buildTeamAtlasIR('user-1', [snapshot({
       agents: [{
         agent_id: 'agt-inactive',
@@ -190,6 +190,13 @@ describe('buildTeamAtlasIR', () => {
       status: 'inactive',
       metadata: { owner_user_id: 'user-1', created_at: '2026-08-26T00:00:00.000Z' },
     });
+    expect(ir.warnings).toContainEqual(expect.objectContaining({
+      code: 'TEAM_WITHOUT_AGENTS',
+      node_id: 'team:team-1',
+    }));
+    expect(ir.warnings.some((warning) =>
+      warning.code === 'AGENT_WITHOUT_REUSABLE_ASSETS' && warning.node_id === 'agent:agt-inactive'))
+      .toBe(false);
   });
 
   it('creates a separate member node for the same user in each team', () => {

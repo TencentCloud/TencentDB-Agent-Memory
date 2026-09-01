@@ -340,6 +340,9 @@ export function buildTeamAtlasIR(
     const team = snapshot.team;
     const tasks = snapshot.tasks.filter((item) => active(item.status));
     const agents = snapshot.agents;
+    // 归档 Agent 仍保留在 Atlas 中用于历史追溯，但不能参与当前可行动状态判断：
+    // archive 会清理其 Skill / Chat Memory，此时再提示“没有可复用资产”是必然噪声。
+    const activeAgents = agents.filter((item) => active(item.status));
     const assets = snapshot.assets.filter(
       (item) => active(item.status) && ACTIVE_ASSET_TYPES.has(item.asset_type),
     );
@@ -633,7 +636,7 @@ export function buildTeamAtlasIR(
     }
 
     if (snapshot.complete.tasks && tasks.length === 0) warnings.push({ code: 'TEAM_WITHOUT_TASKS', node_id: teamNode, message: `${team.name || team.team_id} has no active tasks` });
-    if (snapshot.complete.agents && agents.length === 0) warnings.push({ code: 'TEAM_WITHOUT_AGENTS', node_id: teamNode, message: `${team.name || team.team_id} has no active agents` });
+    if (snapshot.complete.agents && activeAgents.length === 0) warnings.push({ code: 'TEAM_WITHOUT_AGENTS', node_id: teamNode, message: `${team.name || team.team_id} has no active agents` });
     if (snapshot.complete.taskAgents) {
       for (const task of tasks) {
         const id = nodeId('task', task.task_id);
@@ -676,7 +679,7 @@ export function buildTeamAtlasIR(
       snapshot.complete.skills &&
       snapshot.complete.assets
     ) {
-      for (const agent of agents) {
+      for (const agent of activeAgents) {
         if (agent.owner_user_id !== userId) continue;
         const id = nodeId('agent', agent.agent_id);
         const ownsSkill = activeSkillOwnerIds.has(agent.agent_id);
