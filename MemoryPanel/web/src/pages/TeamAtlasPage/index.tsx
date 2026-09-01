@@ -24,13 +24,18 @@ import {
   directVisualNodeIds,
   edgeGeometry,
   formatAtlasCount,
+  isArchivedAgentRelation,
+  isArchivedAtlasAgent,
+  isAtlasAgentFactVisible,
   isAtlasNodeOwnedByCurrent,
   isAtlasActivationKey,
   isActiveAtlasTeam,
   layoutAtlas,
   projectAtlas,
   reconcileAtlasTeamSelection,
+  isRetainedArchivedConfiguration,
   summarizeAtlas,
+  teamAgentCounts,
   taskFactCounts,
   taskLineageEdgeIds,
 } from './atlas-graph';
@@ -61,7 +66,13 @@ const STATUS_CACHE_MS = 30_000;
 const MAX_SELECTED_TEAMS = 4;
 
 function nodeClass(node: TeamAtlasNode, owned: boolean): string {
-  return `team-atlas-node team-atlas-node--${node.type}${owned ? ' team-atlas-node--owned' : ''}`;
+  const archived = isArchivedAtlasAgent(node) ? ' team-atlas-node--archived' : '';
+  const unavailable =
+    typeof node.metadata?.identity_state === 'string' ||
+    typeof node.metadata?.agent_state === 'string'
+      ? ' team-atlas-node--unavailable'
+      : '';
+  return `team-atlas-node team-atlas-node--${node.type}${owned ? ' team-atlas-node--owned' : ''}${archived}${unavailable}`;
 }
 
 function statusText(status: ChatMemoryStatus | undefined): string {
@@ -226,8 +237,8 @@ export function TeamAtlasPage() {
   );
   const graphHeight = atlasGraphHeight(canvasSize.height, canvasViewportHeight, isCanvasFullscreen);
   const summaryCards = useMemo(
-    () => (ir ? summarizeAtlas(ir, selectedTeamIds) : []),
-    [ir, selectedTeamIds],
+    () => (ir ? summarizeAtlas(ir, selectedTeamIds, { showArchivedAgents }) : []),
+    [ir, selectedTeamIds, showArchivedAgents],
   );
 
   const fitCanvas = useCallback(() => {
@@ -342,11 +353,21 @@ export function TeamAtlasPage() {
           }))
       : [];
   const activeTaskCounts =
-    activeNode?.type === 'task' && ir ? taskFactCounts(ir, activeNode.entity_id) : null;
+    activeNode?.type === 'task' && ir
+      ? taskFactCounts(ir, activeNode.entity_id, { showArchivedAgents })
+      : null;
   const activeTaskActivities =
-    activeNode?.type === 'task'
-      ? activityFacts.filter((activity) => activity.task_id === activeNode.entity_id)
+    activeNode?.type === 'task' && ir
+      ? activityFacts.filter(
+          (activity) =>
+            activity.task_id === activeNode.entity_id &&
+            isAtlasAgentFactVisible(ir, activity.agent_id, showArchivedAgents),
+        )
       : [];
+  const activeTeamAgentCounts =
+    activeNode?.type === 'team' && ir
+      ? teamAgentCounts(ir, activeNode.entity_id, showArchivedAgents)
+      : null;
   const memoryEntry =
     activeNode?.type === 'chat_memory' ? statusCache.current.get(activeNode.entity_id) : undefined;
   void memoryVersion;
@@ -402,13 +423,13 @@ export function TeamAtlasPage() {
         return `${node.entity_id} ${String(node.metadata?.role ?? '—')}`;
       if (node.type === 'team') return `${t('atlas.owner')} ${shortId(owner)}`;
       if (node.type === 'task') {
-        const counts = ir ? taskFactCounts(ir, node.entity_id) : null;
+        const counts = ir ? taskFactCounts(ir, node.entity_id, { showArchivedAgents }) : null;
         return `${t('atlas.owner')} ${shortId(node.metadata?.creator_user_id)} · L0 ${formatAtlasCount(counts?.messages ?? 0, counts?.countsExact ?? true)}`;
       }
       if (node.type === 'agent') return `${t('atlas.owner')} ${shortId(owner)}`;
       return `${t('atlas.visibility')} ${String(node.metadata?.visibility ?? '—')} · ${t('atlas.owner')} ${shortId(owner)}`;
     },
-    [ir, layout, t],
+    [ir, layout, showArchivedAgents, t],
   );
 
   if (teamsLoading || loading)
@@ -574,7 +595,17 @@ export function TeamAtlasPage() {
                 checked={showArchivedAgents}
                 onChange={(event) => {
                   setSelectedId(null);
-                  setShowArchivedAgents(event.target.checked);
+                  const checked = event.target.checked;
+                  if (
+                    !checked &&
+                    focusAgentId &&
+                    ir.nodes.some(
+                      (node) => node.id === `agent:${focusAgentId}` && isArchivedAtlasAgent(node),
+                    )
+                  ) {
+                    setFocusAgentId(null);
+                  }
+                  setShowArchivedAgents(checked);
                 }}
               />
               <span>{t('atlas.showArchivedAgents')}</span>
@@ -753,10 +784,11 @@ export function TeamAtlasPage() {
                     ? ` team-atlas-edge--target-${targetNode.type}`
                     : '';
                   const active = activeEdgeIds.has(edge.id);
+                  const archivedRelation = isArchivedAgentRelation(edge, displayedNodes);
                   return (
                     <g
                       key={edge.id}
-                      className={`team-atlas-edge team-atlas-edge--${edge.type}${targetClass}${active ? ' is-active' : ''}`}
+                      className={`team-atlas-edge team-atlas-edge--${edge.type}${targetClass}${archivedRelation ? ' team-atlas-edge--archived' : ''}${active ? ' is-active' : ''}`}
                     >
                       <path d={geometry.path} markerEnd={`url(#atlas-arrow-${edge.type})`} />
                     </g>
@@ -935,10 +967,23 @@ export function TeamAtlasPage() {
                   </>
                 )}
               </dl>
-              {activeNode.type === 'team' && (
+              {activeNode.type === 'team' && activeTeamAgentCounts && (
                 <div className="team-atlas-passport-counts">
                   <span>Task {String(activeNode.metadata?.tasks ?? 0)}</span>
-                  <span>Agent {String(activeNode.metadata?.agents ?? 0)}</span>
+                  <span>
+                    Agent {activeTeamAgentCounts.displayed}
+                    {showArchivedAgents
+                      ? ` · ${t('atlas.agentBreakdown', {
+                          active: activeTeamAgentCounts.active,
+                          archived: activeTeamAgentCounts.archived,
+                        })}`
+                      : ''}
+                    {activeTeamAgentCounts.unavailable > 0
+                      ? ` · ${t('atlas.unavailableCount', {
+                          count: activeTeamAgentCounts.unavailable,
+                        })}`
+                      : ''}
+                  </span>
                   <span>Asset {String(activeNode.metadata?.assets ?? 0)}</span>
                 </div>
               )}
@@ -1015,6 +1060,9 @@ export function TeamAtlasPage() {
                         : ''}
                       {edge.metadata?.last_seen_at
                         ? ` · ${t('atlas.lastActivity')} ${String(edge.metadata.last_seen_at)}`
+                        : ''}
+                      {isRetainedArchivedConfiguration(edge, displayedNodes)
+                        ? ` · ${t('atlas.retainedArchivedRelation')}`
                         : ''}
                     </span>
                   ))}

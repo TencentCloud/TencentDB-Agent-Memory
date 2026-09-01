@@ -54,6 +54,14 @@ export interface AtlasSummaryCard {
   visible: number;
 }
 
+export interface AtlasTeamAgentCounts {
+  active: number;
+  archived: number;
+  unavailable: number;
+  displayed: number;
+  total: number;
+}
+
 const ASSET_TYPES = new Set<TeamAtlasNodeType>(['skill', 'llm_wiki', 'code_graph', 'chat_memory']);
 const TYPE_ORDER: Record<TeamAtlasNodeType, number> = {
   team: 0,
@@ -83,6 +91,65 @@ export function isAtlasNodeOwnedByCurrent(node: TeamAtlasNode, userId: string): 
     (node.type === 'team' || node.type === 'agent' || ASSET_TYPES.has(node.type)) &&
     node.metadata?.owner_user_id === userId
   );
+}
+
+export function isArchivedAtlasAgent(node: TeamAtlasNode): boolean {
+  return node.type === 'agent' && node.status === 'inactive';
+}
+
+function atlasLogicalNodeId(node: TeamAtlasNode & { logical_id?: string }): string {
+  return node.logical_id ?? node.id;
+}
+
+export function isArchivedAgentRelation(
+  edge: TeamAtlasEdge,
+  nodes: Array<TeamAtlasNode & { logical_id?: string }>,
+): boolean {
+  return nodes.some(
+    (node) =>
+      isArchivedAtlasAgent(node) &&
+      (atlasLogicalNodeId(node) === edge.source || atlasLogicalNodeId(node) === edge.target),
+  );
+}
+
+export function isRetainedArchivedConfiguration(
+  edge: TeamAtlasEdge,
+  nodes: Array<TeamAtlasNode & { logical_id?: string }>,
+): boolean {
+  return (
+    (edge.type === 'planned_for' || edge.type === 'fixed_binding') &&
+    isArchivedAgentRelation(edge, nodes)
+  );
+}
+
+export function isAtlasAgentFactVisible(
+  ir: TeamAtlasIR,
+  agentId: string,
+  showArchivedAgents = false,
+): boolean {
+  const agent = ir.nodes.find((node) => node.id === `agent:${agentId}`);
+  return !agent || showArchivedAgents || !isArchivedAtlasAgent(agent);
+}
+
+export function teamAgentCounts(
+  ir: TeamAtlasIR,
+  teamId: string,
+  showArchivedAgents = false,
+): AtlasTeamAgentCounts {
+  const agents = ir.nodes.filter((node) => node.type === 'agent' && node.team_id === teamId);
+  const archived = agents.filter(isArchivedAtlasAgent).length;
+  const unavailable = agents.filter(
+    (node) =>
+      node.metadata?.agent_state === 'unavailable' || node.metadata?.agent_state === 'unknown',
+  ).length;
+  const active = agents.length - archived - unavailable;
+  return {
+    active,
+    archived,
+    unavailable,
+    displayed: active + unavailable + (showArchivedAgents ? archived : 0),
+    total: agents.length,
+  };
 }
 
 const SUMMARY_TYPES: AtlasSummaryNodeType[] = [
@@ -170,6 +237,21 @@ function filterEdges(edges: TeamAtlasEdge[], nodes: TeamAtlasNode[]): TeamAtlasE
   return edges
     .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function filterArchivedAgentLifecycleNodes(nodes: TeamAtlasNode[]): TeamAtlasNode[] {
+  const hiddenArchivedAgentIds = new Set(
+    nodes.filter(isArchivedAtlasAgent).map((node) => node.entity_id),
+  );
+  return nodes.filter(
+    (node) =>
+      !isArchivedAtlasAgent(node) &&
+      !(
+        node.type === 'chat_memory' &&
+        typeof node.metadata?.owner_agent_id === 'string' &&
+        hiddenArchivedAgentIds.has(node.metadata.owner_agent_id)
+      ),
+  );
 }
 
 export function atlasInteractionEdges(edges: TeamAtlasEdge[]): TeamAtlasEdge[] {
@@ -368,8 +450,35 @@ export function projectAtlas(
     nodes = nodes.filter((node) => node.team_id && teamIds.has(node.team_id));
   }
 
+  let edges = ir.edges;
   if (options.showArchivedAgents !== true) {
-    nodes = nodes.filter((node) => node.type !== 'agent' || node.status !== 'inactive');
+    const hiddenArchivedAgentIds = new Set(
+      nodes.filter(isArchivedAtlasAgent).map((node) => node.entity_id),
+    );
+    const hiddenActivityIds = new Set(
+      ir.activities
+        .filter((activity) => hiddenArchivedAgentIds.has(activity.agent_id))
+        .map((activity) => activity.id),
+    );
+    edges = edges.filter((edge) => {
+      const activityIds = edge.metadata?.activity_ids;
+      return (
+        !Array.isArray(activityIds) ||
+        activityIds.length === 0 ||
+        activityIds.some((activityId) => !hiddenActivityIds.has(activityId))
+      );
+    });
+    nodes = filterArchivedAgentLifecycleNodes(nodes);
+    const retainedIds = new Set(nodes.map((node) => node.id));
+    nodes = nodes.filter((node) => {
+      if (node.type !== 'identity' || typeof node.metadata?.identity_state !== 'string')
+        return true;
+      return edges.some(
+        (edge) =>
+          (edge.source === node.id && retainedIds.has(edge.target)) ||
+          (edge.target === node.id && retainedIds.has(edge.source)),
+      );
+    });
   }
 
   if (options.showUnboundAssets === false && !bindingEvidencePartial) {
@@ -408,7 +517,7 @@ export function projectAtlas(
         .filter((node) => `${node.label} ${node.entity_id}`.toLocaleLowerCase().includes(query))
         .map((node) => node.id),
     );
-    const keep = connectedIds(ir.edges, queryMatches);
+    const keep = connectedIds(edges, queryMatches);
     for (const node of nodes) {
       if (keep.has(node.id) && node.team_id) keep.add(`team:${node.team_id}`);
     }
@@ -418,10 +527,13 @@ export function projectAtlas(
     nodes = nodes.filter((node) => node.type === options.assetType || !ASSET_TYPES.has(node.type));
   }
 
-  if (options.focusAgentId) {
+  const visibleFocusAgent = options.focusAgentId
+    ? nodes.some((node) => node.id === `agent:${options.focusAgentId}`)
+    : false;
+  if (options.focusAgentId && visibleFocusAgent) {
     const agentNodeId = `agent:${options.focusAgentId}`;
-    const ids = connectedIds(ir.edges, new Set([agentNodeId]));
-    for (const edge of ir.edges) {
+    const ids = connectedIds(edges, new Set([agentNodeId]));
+    for (const edge of edges) {
       if (edge.type === 'contains_task_l0' && ids.has(edge.source)) ids.add(edge.target);
     }
     const agent = ir.nodes.find((node) => node.id === agentNodeId);
@@ -510,14 +622,21 @@ export function projectAtlas(
     }
   }
 
-  return { nodes, edges: filterEdges(ir.edges, nodes), mode, truncated };
+  return { nodes, edges: filterEdges(edges, nodes), mode, truncated };
 }
 
-export function summarizeAtlas(ir: TeamAtlasIR, teamIds?: string[]): AtlasSummaryCard[] {
+export function summarizeAtlas(
+  ir: TeamAtlasIR,
+  teamIds?: string[],
+  options: { showArchivedAgents?: boolean } = {},
+): AtlasSummaryCard[] {
   const selectedTeams = teamIds ? new Set(teamIds) : null;
-  const visibleNodes = selectedTeams
+  const selectedNodes = selectedTeams
     ? ir.nodes.filter((node) => node.team_id && selectedTeams.has(node.team_id))
     : ir.nodes;
+  const visibleNodes = options.showArchivedAgents
+    ? selectedNodes
+    : filterArchivedAgentLifecycleNodes(selectedNodes);
   const userId = ir.scope.user_id;
   const ownAgentIds = new Set(
     visibleNodes
@@ -548,8 +667,17 @@ export function summarizeAtlas(ir: TeamAtlasIR, teamIds?: string[]): AtlasSummar
   });
 }
 
-export function taskFactCounts(ir: TeamAtlasIR, taskId: string) {
-  const activities = ir.activities.filter((activity) => activity.task_id === taskId);
+export function taskFactCounts(
+  ir: TeamAtlasIR,
+  taskId: string,
+  options: { showArchivedAgents?: boolean } = {},
+) {
+  const showArchivedAgents = options.showArchivedAgents === true;
+  const activities = ir.activities.filter(
+    (activity) =>
+      activity.task_id === taskId &&
+      isAtlasAgentFactVisible(ir, activity.agent_id, showArchivedAgents),
+  );
   const taskTeamId = ir.nodes.find(
     (node) => node.type === 'task' && node.entity_id === taskId,
   )?.team_id;
@@ -564,7 +692,13 @@ export function taskFactCounts(ir: TeamAtlasIR, taskId: string) {
     );
   return {
     plannedAgents: new Set(
-      ir.plans.filter((plan) => plan.task_id === taskId).map((plan) => plan.agent_id),
+      ir.plans
+        .filter(
+          (plan) =>
+            plan.task_id === taskId &&
+            isAtlasAgentFactVisible(ir, plan.agent_id, showArchivedAgents),
+        )
+        .map((plan) => plan.agent_id),
     ).size,
     activeUsers: new Set(activities.map((activity) => activity.user_id)).size,
     activeAgents: new Set(activities.map((activity) => activity.agent_id)).size,

@@ -470,6 +470,12 @@
 .team-atlas-edge--initialized_on.is-active > path {
   stroke-dasharray: 5 4;
 }
+.team-atlas-edge--archived > path,
+.team-atlas-edge--archived.is-active > path {
+  stroke-width: 1.2;
+  stroke-dasharray: 2 5;
+  opacity: 0.36;
+}
 .team-atlas-node {
   cursor: pointer;
   outline: none;
@@ -533,6 +539,18 @@
 }
 .team-atlas-node--owned rect {
   filter: drop-shadow(0 0 4px rgba(8, 125, 135, 0.24));
+}
+.team-atlas-node--archived {
+  opacity: 0.58;
+}
+.team-atlas-node--archived rect {
+  stroke-dasharray: 4 4;
+  filter: none;
+}
+.team-atlas-node--unavailable rect {
+  fill: #fff9ee;
+  stroke: #b47624;
+  stroke-dasharray: 3 3;
 }
 .team-atlas-node-type {
   fill: #678399;

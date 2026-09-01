@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { atlasCanvasSize, atlasFitArea, atlasFitViewport, atlasGraphHeight, atlasInteractionEdges, atlasManagementPath, createAtlasEpochGuard, createAtlasRequestGate, directRelationIds, directVisualNodeIds, edgeGeometry, edgePath, formatAtlasCount, isActiveAtlasTeam, isAtlasActivationKey, isAtlasNodeOwnedByCurrent, layoutAtlas, projectAtlas, reconcileAtlasTeamSelection, summarizeAtlas, taskFactCounts, type PositionedAtlasNode } from '../web/src/pages/TeamAtlasPage/atlas-graph.js';
+import {
+  atlasCanvasSize,
+  atlasFitArea,
+  atlasFitViewport,
+  atlasGraphHeight,
+  atlasInteractionEdges,
+  atlasManagementPath,
+  createAtlasEpochGuard,
+  createAtlasRequestGate,
+  directRelationIds,
+  directVisualNodeIds,
+  edgeGeometry,
+  edgePath,
+  formatAtlasCount,
+  isActiveAtlasTeam,
+  isArchivedAgentRelation,
+  isAtlasActivationKey,
+  isAtlasNodeOwnedByCurrent,
+  isRetainedArchivedConfiguration,
+  layoutAtlas,
+  projectAtlas,
+  reconcileAtlasTeamSelection,
+  summarizeAtlas,
+  taskFactCounts,
+  teamAgentCounts,
+  type PositionedAtlasNode,
+} from '../web/src/pages/TeamAtlasPage/atlas-graph.js';
 import type { TeamAtlasEdge } from '../web/src/lib/api/team-atlas.js';
 import type { TeamAtlasIR, TeamAtlasNode } from '../web/src/lib/api/team-atlas.js';
 
@@ -175,21 +201,76 @@ describe('Team Atlas projection and layout', () => {
     const input = irWithNodes([
       { id: 'agent:active', entity_id: 'active', type: 'agent', label: 'Active', team_id: 'team-a', status: 'active' },
       { id: 'agent:archived', entity_id: 'archived', type: 'agent', label: 'Archived', team_id: 'team-a', status: 'inactive' },
+      { id: 'identity:team-a:former', entity_id: 'former', type: 'identity', label: 'Former', team_id: 'team-a', status: 'missing', metadata: { identity_state: 'unavailable' } },
+      { id: 'chat_memory:archived', entity_id: 'archived-memory', type: 'chat_memory', label: 'Archived memory', team_id: 'team-a', status: 'logical', metadata: { owner_agent_id: 'archived' } },
+      { id: 'task:archived', entity_id: 'archived-task', type: 'task', label: 'Archived activity task', team_id: 'team-a' },
     ]);
     input.edges.push(
       { id: 'owns:active', type: 'owns', source: 'identity:team-a:user-1', target: 'agent:active' },
-      { id: 'owns:archived', type: 'owns', source: 'identity:team-a:user-1', target: 'agent:archived' },
+      { id: 'owns:archived', type: 'owns', source: 'identity:team-a:former', target: 'agent:archived' },
+      { id: 'records:archived', type: 'records_to', source: 'agent:archived', target: 'chat_memory:archived' },
+      { id: 'initialized:archived', type: 'initialized_by', source: 'identity:team-a:former', target: 'task:archived', metadata: { activity_ids: ['activity:archived'] } },
     );
+    input.activities.push({
+      id: 'activity:archived', team_id: 'team-a', task_id: 'archived-task', user_id: 'former', agent_id: 'archived',
+      l0_session_count: 0, l0_message_count: 0, participation_event_count: 1,
+      evidence: 'participation_only', state: 'initialized_no_dialogue', own_chat_memory_id: 'archived-memory',
+      chat_memory_registered: false, counts_exact: true,
+    });
 
     const defaultProjection = projectAtlas(input);
     expect(defaultProjection.nodes.some((node) => node.id === 'agent:active')).toBe(true);
     expect(defaultProjection.nodes.some((node) => node.id === 'agent:archived')).toBe(false);
+    expect(defaultProjection.nodes.some((node) => node.id === 'chat_memory:archived')).toBe(false);
+    expect(defaultProjection.nodes.some((node) => node.id === 'identity:team-a:former')).toBe(false);
     expect(defaultProjection.edges.some((edge) => edge.id === 'owns:archived')).toBe(false);
+    expect(defaultProjection.edges.some((edge) => edge.id === 'initialized:archived')).toBe(false);
+    const auditProjection = projectAtlas(input, { showArchivedAgents: true });
+    expect(auditProjection.nodes.map((node) => node.id)).toEqual(
+      expect.arrayContaining(['agent:archived', 'chat_memory:archived', 'identity:team-a:former']),
+    );
     expect(
-      projectAtlas(input, { showArchivedAgents: true }).nodes.some(
-        (node) => node.id === 'agent:archived',
+      projectAtlas(input, {
+        focusTeamId: 'team-a',
+        focusAgentId: 'archived',
+      }).mode,
+    ).toBe('team_detail');
+  });
+
+  it('applies the archived-Agent toggle to summaries, Task facts, and retained relations', () => {
+    const input = irWithNodes([
+      { id: 'agent:active', entity_id: 'active', type: 'agent', label: 'Active', team_id: 'team-a', status: 'active', metadata: { owner_user_id: 'user-1' } },
+      { id: 'agent:archived', entity_id: 'archived', type: 'agent', label: 'Archived', team_id: 'team-a', status: 'inactive', metadata: { owner_user_id: 'user-1' } },
+      { id: 'agent:missing', entity_id: 'missing', type: 'agent', label: 'Missing', team_id: 'team-a', status: 'missing', metadata: { agent_state: 'unavailable' } },
+      { id: 'task:t', entity_id: 't', type: 'task', label: 'Task', team_id: 'team-a' },
+    ]);
+    input.plans.push(
+      { id: 'plan:active', team_id: 'team-a', task_id: 't', agent_id: 'active' },
+      { id: 'plan:archived', team_id: 'team-a', task_id: 't', agent_id: 'archived' },
+    );
+    input.activities.push(
+      { id: 'activity:active', team_id: 'team-a', task_id: 't', user_id: 'user-1', agent_id: 'active', l0_session_count: 1, l0_message_count: 2, participation_event_count: 1, evidence: 'l0_and_participation', state: 'recorded_dialogue', own_chat_memory_id: 'active-memory', chat_memory_registered: true, counts_exact: true },
+      { id: 'activity:archived', team_id: 'team-a', task_id: 't', user_id: 'user-1', agent_id: 'archived', l0_session_count: 3, l0_message_count: 5, participation_event_count: 1, evidence: 'l0_and_participation', state: 'recorded_dialogue', own_chat_memory_id: 'archived-memory', chat_memory_registered: true, counts_exact: true },
+    );
+    const archivedEdge: TeamAtlasEdge = {
+      id: 'planned:archived',
+      type: 'planned_for',
+      source: 'agent:archived',
+      target: 'task:t',
+    };
+
+    expect(summarizeAtlas(input).find((card) => card.type === 'agent')).toMatchObject({ mine: 1, visible: 2 });
+    expect(
+      summarizeAtlas(input, undefined, { showArchivedAgents: true }).find(
+        (card) => card.type === 'agent',
       ),
-    ).toBe(true);
+    ).toMatchObject({ mine: 2, visible: 3 });
+    expect(taskFactCounts(input, 't')).toMatchObject({ plannedAgents: 1, activeAgents: 1, messages: 2 });
+    expect(taskFactCounts(input, 't', { showArchivedAgents: true })).toMatchObject({ plannedAgents: 2, activeAgents: 2, messages: 7 });
+    expect(teamAgentCounts(input, 'team-a')).toEqual({ active: 1, archived: 1, unavailable: 1, displayed: 2, total: 3 });
+    expect(teamAgentCounts(input, 'team-a', true).displayed).toBe(3);
+    expect(isArchivedAgentRelation(archivedEdge, input.nodes)).toBe(true);
+    expect(isRetainedArchivedConfiguration(archivedEdge, input.nodes)).toBe(true);
   });
 
   it('sorts the current owner first and horizontally aligns each Identity with its first Agent', () => {

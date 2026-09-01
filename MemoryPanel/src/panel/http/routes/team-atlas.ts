@@ -69,6 +69,8 @@ export interface TeamAtlasWarning {
     | 'TASK_WITHOUT_PARTICIPATION'
     | 'TASK_PARTICIPATION_UNASSIGNED_AGENT'
     | 'AGENT_WITHOUT_REUSABLE_ASSETS'
+    | 'IDENTITY_REFERENCE_UNAVAILABLE'
+    | 'AGENT_REFERENCE_UNAVAILABLE'
     | 'ASSET_NOT_BOUND';
   node_id?: string;
   source?: string;
@@ -364,6 +366,8 @@ export function buildTeamAtlasIR(
       }
     }
     const visibleNodeIds = new Set<string>();
+    const unavailableIdentityWarningIds = new Set<string>();
+    const unavailableAgentWarningIds = new Set<string>();
     const pushVisibleNode = (node: TeamAtlasNode): void => {
       pushNode(node);
       visibleNodeIds.add(node.id);
@@ -408,6 +412,63 @@ export function buildTeamAtlasIR(
       });
     }
 
+    const ensureReferencedIdentity = (referencedUserId: string): string => {
+      const id = memberNodeId(referencedUserId);
+      if (visibleNodeIds.has(id)) return id;
+      const unavailable = snapshot.complete.members;
+      pushVisibleNode({
+        id,
+        entity_id: referencedUserId,
+        type: 'identity',
+        label: `${unavailable ? 'Unavailable' : 'Unknown'} identity (${referencedUserId})`,
+        team_id: team.team_id,
+        status: unavailable ? 'missing' : 'unknown',
+        metadata: {
+          ...(unavailable ? { missing: true } : {}),
+          identity_state: unavailable ? 'unavailable' : 'unknown',
+          is_current: referencedUserId === userId,
+        },
+      });
+      if (unavailable && !unavailableIdentityWarningIds.has(id)) {
+        unavailableIdentityWarningIds.add(id);
+        warnings.push({
+          code: 'IDENTITY_REFERENCE_UNAVAILABLE',
+          node_id: id,
+          message: `Identity ${referencedUserId} is still referenced but is no longer an active Team member`,
+        });
+      }
+      return id;
+    };
+
+    const activeTaskIds = new Set(tasks.map((task) => task.task_id));
+    const referencedIdentityIds = new Set<string>([
+      team.owner_user_id,
+      ...tasks.flatMap((task) => (task.creator_user_id ? [task.creator_user_id] : [])),
+      ...agents.map((agent) => agent.owner_user_id),
+      ...snapshot.participationLogs
+        .filter((item) => activeTaskIds.has(item.task_id))
+        .map((item) => item.user_id),
+      ...snapshot.activityRows
+        .filter((item) => activeTaskIds.has(item.task_id))
+        .map((item) => item.user_id),
+    ]);
+    for (const referencedUserId of [...referencedIdentityIds].filter(Boolean).sort()) {
+      ensureReferencedIdentity(referencedUserId);
+    }
+
+    const teamOwnerNode = memberNodeId(team.owner_user_id);
+    const teamOwnerIsActiveMember = members.some((member) => member.user_id === team.owner_user_id);
+    if (!teamOwnerIsActiveMember && visibleNodeIds.has(teamOwnerNode)) {
+      edges.push({
+        id: edgeId('owns', teamOwnerNode, teamNode),
+        type: 'owns',
+        source: teamOwnerNode,
+        target: teamNode,
+        team_id: team.team_id,
+        metadata: { relation_kind: 'structural', lifecycle_gap: true },
+      });
+    }
+
     for (const task of tasks) {
       const id = nodeId('task', task.task_id);
       const lastParticipatedAt = lastParticipationAtByTask.get(task.task_id);
@@ -433,7 +494,7 @@ export function buildTeamAtlasIR(
         team_id: team.team_id,
         metadata: { relation_kind: 'configured' },
       });
-      const creatorNode = task.creator_user_id ? memberNodeId(task.creator_user_id) : '';
+      const creatorNode = task.creator_user_id ? ensureReferencedIdentity(task.creator_user_id) : '';
       if (visibleNodeIds.has(creatorNode)) {
         edges.push({
           id: edgeId('created_by', id, creatorNode),
@@ -459,11 +520,76 @@ export function buildTeamAtlasIR(
           created_at: agent.created_at ?? null,
         },
       });
-      const ownerNode = memberNodeId(agent.owner_user_id);
+      const ownerNode = ensureReferencedIdentity(agent.owner_user_id);
       if (visibleNodeIds.has(ownerNode)) {
-        edges.push({ id: edgeId('owns', ownerNode, id), type: 'owns', source: ownerNode, target: id, team_id: team.team_id });
+        const ownerHasLifecycleGap =
+          typeof nodeById.get(ownerNode)?.metadata?.identity_state === 'string';
+        edges.push({
+          id: edgeId('owns', ownerNode, id),
+          type: 'owns',
+          source: ownerNode,
+          target: id,
+          team_id: team.team_id,
+          metadata: ownerHasLifecycleGap
+            ? { relation_kind: 'structural', lifecycle_gap: true }
+            : { relation_kind: 'configured' },
+        });
       }
     }
+
+    const ensureReferencedAgent = (referencedAgentId: string, ownerUserId?: string): string => {
+      const id = nodeId('agent', referencedAgentId);
+      const existing = nodeById.get(id);
+      if (existing) {
+        if (ownerUserId && typeof existing.metadata?.agent_state === 'string') {
+          existing.metadata = { ...existing.metadata, owner_user_id: ownerUserId };
+          const ownerNode = ensureReferencedIdentity(ownerUserId);
+          edges.push({
+            id: edgeId('owns', ownerNode, id),
+            type: 'owns',
+            source: ownerNode,
+            target: id,
+            team_id: team.team_id,
+            metadata: { relation_kind: 'configured', lifecycle_gap: true },
+          });
+        }
+        return id;
+      }
+      const unavailable = snapshot.complete.agents;
+      pushVisibleNode({
+        id,
+        entity_id: referencedAgentId,
+        type: 'agent',
+        label: `${unavailable ? 'Unavailable' : 'Unknown'} agent (${referencedAgentId})`,
+        team_id: team.team_id,
+        status: unavailable ? 'missing' : 'unknown',
+        metadata: {
+          ...(unavailable ? { missing: true } : {}),
+          agent_state: unavailable ? 'unavailable' : 'unknown',
+          owner_user_id: ownerUserId ?? null,
+        },
+      });
+      if (ownerUserId) {
+        const ownerNode = ensureReferencedIdentity(ownerUserId);
+        edges.push({
+          id: edgeId('owns', ownerNode, id),
+          type: 'owns',
+          source: ownerNode,
+          target: id,
+          team_id: team.team_id,
+          metadata: { relation_kind: 'configured', lifecycle_gap: true },
+        });
+      }
+      if (unavailable && !unavailableAgentWarningIds.has(id)) {
+        unavailableAgentWarningIds.add(id);
+        warnings.push({
+          code: 'AGENT_REFERENCE_UNAVAILABLE',
+          node_id: id,
+          message: `Agent ${referencedAgentId} is still referenced but is no longer available`,
+        });
+      }
+      return id;
+    };
     for (const asset of assets) {
       const skill = asset.asset_type === 'skill' ? skillById.get(asset.asset_id) : undefined;
       pushVisibleNode({
@@ -484,9 +610,9 @@ export function buildTeamAtlasIR(
     }
 
     for (const link of snapshot.taskAgents.filter((item) => active(item.status))) {
-      const source = nodeId('agent', link.agent_id);
       const target = nodeId('task', link.task_id);
-      if (visibleNodeIds.has(source) && visibleNodeIds.has(target)) {
+      if (visibleNodeIds.has(target)) {
+        const source = ensureReferencedAgent(link.agent_id);
         plans.push({
           id: `plan:${team.team_id}:${link.task_id}:${link.agent_id}`,
           team_id: team.team_id,
@@ -527,14 +653,8 @@ export function buildTeamAtlasIR(
       const taskId = reference.task_id;
       const taskNode = nodeId('task', taskId);
       if (!visibleNodeIds.has(taskNode)) continue;
-      const identityNode = memberNodeId(reference.user_id);
-      const agentNode = nodeId('agent', reference.agent_id);
-      if (!nodeById.has(identityNode)) {
-        pushVisibleNode({ id: identityNode, entity_id: reference.user_id, type: 'identity', label: `Missing identity (${reference.user_id})`, team_id: team.team_id, status: 'missing', metadata: { missing: true, is_current: reference.user_id === userId } });
-      }
-      if (!nodeById.has(agentNode)) {
-        pushVisibleNode({ id: agentNode, entity_id: reference.agent_id, type: 'agent', label: `Missing agent (${reference.agent_id})`, team_id: team.team_id, status: 'missing', metadata: { missing: true, owner_user_id: reference.user_id } });
-      }
+      const identityNode = ensureReferencedIdentity(reference.user_id);
+      const agentNode = ensureReferencedAgent(reference.agent_id, reference.user_id);
 
       const ownMemoryId = `chat_memory-${team.team_id}-${reference.agent_id}`;
       const memoryNode = nodeId('chat_memory', ownMemoryId);
@@ -617,11 +737,11 @@ export function buildTeamAtlasIR(
     const boundAgentNodeIds = new Set<string>();
     const boundAssetNodeIds = new Set<string>();
     for (const binding of snapshot.fixedAssets) {
-      const source = nodeId('agent', binding.agent_id);
       const asset = assetByNodeId.get(nodeId(binding.asset_type as TeamAtlasNodeType, binding.asset_id));
       if (!asset) continue;
       const target = nodeId(asset.asset_type, asset.asset_id);
-      if (visibleNodeIds.has(source) && visibleNodeIds.has(target)) {
+      if (visibleNodeIds.has(target)) {
+        const source = ensureReferencedAgent(binding.agent_id);
         boundAgentNodeIds.add(source);
         boundAssetNodeIds.add(target);
         bindings.push({
@@ -631,7 +751,14 @@ export function buildTeamAtlasIR(
           asset_id: asset.asset_id,
           asset_type: asset.asset_type,
         });
-        edges.push({ id: edgeId('fixed_binding', source, target), type: 'fixed_binding', source, target, team_id: team.team_id });
+        edges.push({
+          id: edgeId('fixed_binding', source, target),
+          type: 'fixed_binding',
+          source,
+          target,
+          team_id: team.team_id,
+          metadata: { relation_kind: 'configured' },
+        });
       }
     }
 
@@ -707,7 +834,7 @@ export function buildTeamAtlasIR(
   const actualRelations = new Set<TeamAtlasRelation>(['used_in_session', 'records_to', 'contains_task_l0', 'initialized_by', 'initialized_on']);
   const plannedRelations = new Set<TeamAtlasRelation>(['owns', 'planned_for', 'fixed_binding']);
   const modeEdges = edges.filter((edge) =>
-    structuralRelations.has(edge.type) || mode === 'all' ||
+    structuralRelations.has(edge.type) || edge.metadata?.relation_kind === 'structural' || mode === 'all' ||
     (mode === 'actual' && actualRelations.has(edge.type)) ||
     (mode === 'planned' && plannedRelations.has(edge.type)),
   );

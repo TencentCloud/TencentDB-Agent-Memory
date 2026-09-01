@@ -199,6 +199,94 @@ describe('buildTeamAtlasIR', () => {
       .toBe(false);
   });
 
+  it('preserves owner and creator relationships with unavailable identity placeholders', () => {
+    const ir = buildTeamAtlasIR('viewer', [snapshot({
+      team: { team_id: 'team-1', name: 'Atlas', owner_user_id: 'former-owner' },
+      members: [],
+      tasks: [{ task_id: 'task-1', team_id: 'team-1', title: 'Ship Atlas', status: 'active', creator_user_id: 'former-creator' }],
+      agents: [{ agent_id: 'agt-1', team_id: 'team-1', owner_user_id: 'former-agent-owner', name: 'Codex', status: 'active' }],
+      taskAgents: [], participationLogs: [], activityRows: [], fixedAssets: [], skills: [], assets: [],
+    })], undefined, 'actual');
+
+    expect(ir.nodes.find((node) => node.id === 'identity:team-1:former-owner')).toMatchObject({
+      status: 'missing',
+      metadata: { identity_state: 'unavailable', missing: true },
+    });
+    expect(ir.nodes.find((node) => node.id === 'identity:team-1:former-creator')).toMatchObject({
+      status: 'missing',
+      metadata: { identity_state: 'unavailable', missing: true },
+    });
+    expect(ir.nodes.find((node) => node.id === 'identity:team-1:former-agent-owner')).toMatchObject({
+      status: 'missing',
+      metadata: { identity_state: 'unavailable', missing: true },
+    });
+    expect(ir.edges).toContainEqual(expect.objectContaining({
+      type: 'owns',
+      source: 'identity:team-1:former-owner',
+      target: 'team:team-1',
+      metadata: expect.objectContaining({ relation_kind: 'structural', lifecycle_gap: true }),
+    }));
+    expect(ir.edges).toContainEqual(expect.objectContaining({
+      type: 'created_by',
+      source: 'task:task-1',
+      target: 'identity:team-1:former-creator',
+    }));
+    expect(ir.edges).toContainEqual(expect.objectContaining({
+      type: 'owns',
+      source: 'identity:team-1:former-agent-owner',
+      target: 'agent:agt-1',
+      metadata: expect.objectContaining({ relation_kind: 'structural', lifecycle_gap: true }),
+    }));
+    expect(ir.warnings.filter((warning) => warning.code === 'IDENTITY_REFERENCE_UNAVAILABLE')).toHaveLength(3);
+  });
+
+  it('uses unknown lifecycle placeholders without false missing warnings for partial sources', () => {
+    const ir = buildTeamAtlasIR('user-1', [snapshot({
+      members: [],
+      agents: [],
+      participationLogs: [],
+      activityRows: [{
+        team_id: 'team-1', task_id: 'task-1', user_id: 'user-1', agent_id: 'agent-unknown',
+        session_count: 1, l0_message_count: 1,
+      }],
+      complete: { ...snapshot().complete, members: false, agents: false },
+      failedSources: ['team-member/list', 'agent/list'],
+    })]);
+
+    expect(ir.nodes.find((node) => node.id === 'identity:team-1:user-1')).toMatchObject({
+      status: 'unknown',
+      metadata: { identity_state: 'unknown' },
+    });
+    expect(ir.nodes.find((node) => node.id === 'agent:agent-unknown')).toMatchObject({
+      status: 'unknown',
+      metadata: { agent_state: 'unknown', owner_user_id: 'user-1' },
+    });
+    expect(ir.warnings.some((warning) => warning.code === 'IDENTITY_REFERENCE_UNAVAILABLE')).toBe(false);
+    expect(ir.warnings.some((warning) => warning.code === 'AGENT_REFERENCE_UNAVAILABLE')).toBe(false);
+  });
+
+  it('retains planned and fixed relationships to an unavailable Agent', () => {
+    const ir = buildTeamAtlasIR('user-1', [snapshot({
+      agents: [],
+      taskAgents: [{ task_id: 'task-1', agent_id: 'deleted-agent', status: 'active' }],
+      participationLogs: [], activityRows: [],
+      fixedAssets: [{ agent_id: 'deleted-agent', asset_id: 'skill-1', asset_type: 'skill' }],
+      skills: [],
+    })]);
+
+    expect(ir.nodes.find((node) => node.id === 'agent:deleted-agent')).toMatchObject({
+      status: 'missing',
+      metadata: { agent_state: 'unavailable', missing: true },
+    });
+    expect(ir.plans).toContainEqual(expect.objectContaining({ agent_id: 'deleted-agent' }));
+    expect(ir.bindings).toContainEqual(expect.objectContaining({ agent_id: 'deleted-agent' }));
+    expect(ir.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'planned_for', source: 'agent:deleted-agent' }),
+      expect.objectContaining({ type: 'fixed_binding', source: 'agent:deleted-agent' }),
+    ]));
+    expect(ir.warnings.filter((warning) => warning.code === 'AGENT_REFERENCE_UNAVAILABLE')).toHaveLength(1);
+  });
+
   it('creates a separate member node for the same user in each team', () => {
     const second = snapshot({
       team: { team_id: 'team-2', name: 'Beta', owner_user_id: 'user-1' },
