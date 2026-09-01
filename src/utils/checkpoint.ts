@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -179,10 +180,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -291,6 +294,90 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Reconcile the aggregate counters with the persisted L0/L1 data.
+   *
+   * Checkpoint counters are a cache for status and trigger decisions, not the
+   * source of truth. They can drift when data is removed outside the normal
+   * capture/extraction paths (for example by the cleaner or manual JSONL
+   * pruning). Prefer the active store because it represents live records; if
+   * no store is available, count non-empty JSONL lines as the degraded-mode
+   * fallback.
+   *
+   * Per-session cursors and pipeline state deliberately remain untouched:
+   * they describe processing progress, not the current number of records.
+   */
+  async recalibrate(vectorStore?: IMemoryStore): Promise<void> {
+    const useStore = vectorStore && !vectorStore.isDegraded() ? vectorStore : undefined;
+    const [storedL0, storedL1, jsonlL0, jsonlL1] = await Promise.all([
+      this.readStoreCount(useStore, "l0"),
+      this.readStoreCount(useStore, "l1"),
+      this.countJsonlRecords("conversations"),
+      this.countJsonlRecords("records"),
+    ]);
+
+    const l0Count = storedL0 ?? jsonlL0;
+    const l1Count = storedL1 ?? jsonlL1;
+    const checkpoint = await this.mutate((cp) => {
+      cp.l0_conversations_count = l0Count;
+      cp.total_memories_extracted = l1Count;
+      // A cleanup can only reduce the number of memories that remain since
+      // the last persona generation. Keep the counter in its valid range
+      // without changing the historical total_processed/persona marker.
+      cp.memories_since_last_persona = Math.min(cp.memories_since_last_persona, l1Count);
+    });
+
+    this.logger.info(
+      `[checkpoint] recalibrated: l0=${checkpoint.l0_conversations_count} ` +
+      `l1=${checkpoint.total_memories_extracted} ` +
+      `source=${useStore ? "store" : "jsonl"}`,
+    );
+  }
+
+  private async readStoreCount(
+    vectorStore: IMemoryStore | undefined,
+    layer: "l0" | "l1",
+  ): Promise<number | undefined> {
+    if (!vectorStore) return undefined;
+
+    try {
+      const count = await (layer === "l0" ? vectorStore.countL0() : vectorStore.countL1());
+      if (Number.isFinite(count) && count >= 0) return count;
+      this.logger.warn?.(`[checkpoint] Invalid ${layer.toUpperCase()} store count; using JSONL fallback`);
+    } catch (err) {
+      this.logger.warn?.(
+        `[checkpoint] Failed to count ${layer.toUpperCase()} records; using JSONL fallback: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return undefined;
+  }
+
+  private async countJsonlRecords(directory: "conversations" | "records"): Promise<number> {
+    const dirPath = path.join(this.dataDir, directory);
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0;
+    }
+
+    let count = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      try {
+        const contents = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+        count += contents.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] Failed to count JSONL file ${entry.name}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return count;
   }
 
   // ============================
@@ -449,8 +536,9 @@ export class CheckpointManager {
    *   - `{ maxTimestamp, messageCount }` to advance the cursor, or
    *   - `null` to leave the cursor unchanged (nothing captured).
    *
-   * L0 conversation count is also incremented inside the lock when messages
-   * are captured, removing the need for a separate `incrementL0ConversationCount()` call.
+   * L0 message count is also incremented inside the lock when messages are
+   * captured, removing the need for a separate counter update. Its unit is
+   * intentionally the same as the backing `l0_conversations` table.
    *
    * @param sessionKey   Per-session identifier
    * @param pluginStartTimestamp  Cold-start floor (used when no cursor exists yet)
@@ -479,8 +567,7 @@ export class CheckpointManager {
         // Global stats (aggregate only — not used for filtering)
         cp.last_captured_timestamp = Math.max(cp.last_captured_timestamp, result.maxTimestamp);
         cp.total_processed += result.messageCount;
-        // Increment L0 conversation count (was a separate mutate() call before)
-        cp.l0_conversations_count += 1;
+        cp.l0_conversations_count += result.messageCount;
       }
     });
   }

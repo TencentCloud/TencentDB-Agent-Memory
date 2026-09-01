@@ -5,6 +5,7 @@ import type { IMemoryStore } from "../core/store/types.js";
 import { ManagedTimer } from "./managed-timer.js";
 import type { Logger } from "../core/types.js";
 import { formatLocalDateTime, startOfLocalDay } from "./time.js";
+import { CheckpointManager } from "./checkpoint.js";
 
 export interface MemoryCleanerOptions {
   baseDir: string;
@@ -183,6 +184,19 @@ export class LocalMemoryCleaner {
     this.opts.logger?.info(
       `${TAG} Cleanup done: scannedFiles=${total.scannedFiles}, changedFiles=${total.changedFiles}, skippedNonShardFiles=${total.skippedNonShardFiles}, deleteFailedFiles=${total.deleteFailedFiles}`,
     );
+
+    // Reconcile even when this run did not remove anything: a user may have
+    // pruned JSONL files manually, or a prior cleanup could have been
+    // interrupted after deleting data but before updating the checkpoint.
+    try {
+      await new CheckpointManager(this.opts.baseDir, this.opts.logger).recalibrate(this.vectorStore);
+    } catch (err) {
+      // Cleanup itself has completed; a failed status reconciliation should
+      // not turn it into a failed maintenance run.
+      this.opts.logger?.warn(
+        `${TAG} Failed to recalibrate checkpoint: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
   }
 
