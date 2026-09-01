@@ -1,6 +1,6 @@
 /** Hono app factory — registers all routes. */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
@@ -15,6 +15,19 @@ import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
 import type { ProxyConfig } from "./types.js";
+
+function createModelListResponse(config: ProxyConfig) {
+  const seen = new Set<string>();
+  const data = (config.creditPricing?.models ?? []).flatMap((entry) => {
+    // The public request path accepts modelName when a pricing table is
+    // configured, so expose that alias instead of leaking the upstream ID.
+    const id = entry.modelName?.trim() || entry.name.trim();
+    if (!id || seen.has(id)) return [];
+    seen.add(id);
+    return [{ id, object: "model", owned_by: "memorydb" }];
+  });
+  return { object: "list", data };
+}
 
 export function createApp(config: ProxyConfig): Hono {
   const app = new Hono();
@@ -102,6 +115,15 @@ export function createApp(config: ProxyConfig): Hono {
     };
     return c.json(body, degraded ? 503 : 200);
   });
+
+  // OpenAI-compatible model discovery. Hermes and other clients probe both
+  // `<base>/models` and `<base>/v1/models`; support the same shapes for the
+  // agent/space base URL used by the proxy's chat routes.
+  const modelListHandler = (c: Context) => c.json(createModelListResponse(config));
+  app.get("/models", modelListHandler);
+  app.get("/v1/models", modelListHandler);
+  app.get("/:agent/:spaceId/models", modelListHandler);
+  app.get("/:agent/:spaceId/v1/models", modelListHandler);
 
   // Whoami: resolve API key → key ID (plain text, easy to use with curl)
   app.get("/whoami", (c) => {
