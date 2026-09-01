@@ -548,7 +548,8 @@ class MemoryTencentdbProvider(MemoryProvider):
 
         logger.info(
             "TDBMEM001 memory-tencentdb selected by Hermes: "
-            "memory.provider=memory_tencentdb; state=initializing; gateway_policy=%s. "
+            "memory.provider=memory_tencentdb; state=initializing; gateway_policy=%s; "
+            "runtime=watchdog,gateway,recall,capture,l0-l3. "
             "Hermes memory_enabled/user_profile_enabled flags are not lifecycle "
             "switches for this external provider. To disable it, unset or change "
             "memory.provider.",

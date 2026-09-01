@@ -72,6 +72,7 @@ class StartupObservabilityTest(unittest.TestCase):
                     "memory.provider=memory_tencentdb",
                     "state=initializing",
                     f"gateway_policy={policy}",
+                    "runtime=watchdog,gateway,recall,capture,l0-l3",
                     "memory_enabled/user_profile_enabled",
                     "not lifecycle switches",
                     "unset or change memory.provider",
