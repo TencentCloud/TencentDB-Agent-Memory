@@ -35,6 +35,9 @@ import { registerMemoryTdaiCli } from "./src/cli/index.js";
 import { initDataDirectories, resetStores } from "./src/utils/pipeline-factory.js";
 import { getOrCreateInstanceId, initReporter, report, resetReporter } from "./src/core/report/reporter.js";
 import { ensureL2L3Local } from "./src/core/profile/profile-sync.js";
+import { CheckpointManager } from "./src/utils/checkpoint.js";
+import { countL1JsonlLines, countL1JsonlLinesSince } from "./src/core/record/l1-reader.js";
+import { countL0JsonlStats } from "./src/core/conversation/l0-recorder.js";
 
 // Core abstractions (host-neutral)
 import { OpenClawHostAdapter } from "./src/adapters/openclaw/host-adapter.js";
@@ -271,7 +274,7 @@ export default function register(api: OpenClawPluginApi) {
   });
 
   // Initialize TdaiCore (async — store init, pipeline wiring)
-  const coreReady = core.initialize().then(() => {
+  const coreReady = core.initialize().then(async () => {
     // Keep cleaner's SQLite handle updated after store init
     memoryCleaner?.setVectorStore(core.getVectorStore());
 
@@ -281,6 +284,49 @@ export default function register(api: OpenClawPluginApi) {
       ensureL2L3Local(pluginDataDir, vs, api.logger).catch((err) => {
         api.logger.warn(`${TAG} Startup L2/L3 pull failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       });
+    }
+
+    // Startup recalibration: recompute the four global counters against
+    // authoritative data (issue #157). Must be awaited inside the coreReady
+    // chain — `agent_end` does `await coreReady` (see below), so the first
+    // agent_end cannot overtake recalibration. This keeps recalibration
+    // free of concurrency with the L2 repair path in pipeline-factory
+    // (which would otherwise Math.max the counters back to stale values).
+    try {
+      const cpManager = new CheckpointManager(pluginDataDir, api.logger);
+      const cp = await cpManager.read();
+      const lastPersonaTime = cp.last_persona_time ?? "";
+      const [totalMemoriesExtracted, l0Stats, memoriesSinceLastPersona] = await Promise.all([
+        countL1JsonlLines(pluginDataDir),
+        countL0JsonlStats(pluginDataDir),
+        countL1JsonlLinesSince(pluginDataDir, lastPersonaTime),
+      ]);
+      // Degraded fallback: when the store is unavailable, countL0() returns 0
+      // and would erase the real value — fall back to JSONL line count.
+      const vectorStore = core.getVectorStore();
+      const totalProcessed = vectorStore && !vectorStore.isDegraded()
+        ? await vectorStore.countL0()
+        : l0Stats.lines;
+      const { was } = await cpManager.recalibrate({
+        totalMemoriesExtracted,
+        l0ConversationsCount: l0Stats.captures,
+        totalProcessed,
+        memoriesSinceLastPersona,
+      });
+      if (was.total_memories_extracted !== totalMemoriesExtracted
+        || was.l0_conversations_count !== l0Stats.captures
+        || was.total_processed !== totalProcessed
+        || was.memories_since_last_persona !== memoriesSinceLastPersona) {
+        api.logger.info(
+          `${TAG} Checkpoint recalibrated: ` +
+          `total_memories_extracted ${was.total_memories_extracted}→${totalMemoriesExtracted}, ` +
+          `l0_conversations_count ${was.l0_conversations_count}→${l0Stats.captures}, ` +
+          `total_processed ${was.total_processed}→${totalProcessed}, ` +
+          `memories_since_last_persona ${was.memories_since_last_persona}→${memoriesSinceLastPersona}`,
+        );
+      }
+    } catch (err) {
+      api.logger.warn(`${TAG} Checkpoint recalibrate failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
     }
   }).catch((err) => {
     api.logger.error(`${TAG} Core init failed: ${err instanceof Error ? err.message : String(err)}`);
