@@ -743,13 +743,11 @@ export class VectorStore implements IMemoryStore {
     // ── FTS5 tables (best-effort — gracefully degrade if fts5 is not compiled in) ──
     // Schema v2: `content` column stores jieba-segmented text (for indexing),
     // `content_original` (UNINDEXED) stores the raw text (for display).
-    // If old v1 tables exist (no content_original column), drop + recreate.
+    // If an old v1 table exists (missing its raw-text column), drop + recreate.
     try {
-      // ── Migrate old FTS5 tables (v1 → v2) ──
-      // v1 tables stored raw text in the `content` column. v2 stores segmented
-      // text in `content` and raw text in `content_original` / `message_text_original`.
-      // FTS5 virtual tables don't support ALTER TABLE ADD COLUMN, so we must
-      // drop and recreate. The data will be repopulated by `rebuildFtsIndex()`.
+      // ── Migrate or recover FTS5 tables (v1 → v2) ──
+      // Inspect L1 and L0 independently so a missing or stale table cannot leave
+      // one layer silently unindexed. Recreated tables are repopulated below.
       const needsFtsRebuild = this.migrateFtsTablesIfNeeded();
 
       // L1 FTS5 virtual table (v2 schema)
@@ -2138,44 +2136,86 @@ export class VectorStore implements IMemoryStore {
   // ── FTS5 migration & rebuild ──────────────────────────────────────────────
 
   /**
-   * Detect old FTS5 v1 schema (no `content_original` column) and drop the
-   * tables so they can be recreated with the v2 schema.
+   * Detect missing or old FTS5 tables and drop stale tables so they can be
+   * recreated with the v2 schema.
    *
    * FTS5 virtual tables do NOT support `ALTER TABLE ADD COLUMN`, so the only
    * migration path is DROP + recreate + repopulate.
    *
-   * @returns `true` if migration was performed (= FTS index needs rebuilding).
+   * L1 and L0 are inspected independently. This matters after an interrupted
+   * migration or partial table loss: checking only L1 can leave a newly-created
+   * L0 index empty even though `l0_conversations` still contains records.
+   *
+   * @returns `true` if a missing/recreated FTS table has source rows to rebuild.
    * @internal
    */
   private migrateFtsTablesIfNeeded(): boolean {
     try {
-      // Check if l1_fts exists at all
-      const l1Exists = this.db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='l1_fts'")
-        .get();
-      if (!l1Exists) {
-        // Fresh install — tables will be created with v2 schema.
-        // Still need rebuild if there's existing data in l1_records.
-        const hasData = this.db.prepare("SELECT 1 FROM l1_records LIMIT 1").get();
-        return !!hasData;
+      const tables = [
+        {
+          name: "l1_fts",
+          source: "l1_records",
+          v2Column: "content_original",
+        },
+        {
+          name: "l0_fts",
+          source: "l0_conversations",
+          v2Column: "message_text_original",
+        },
+      ] as const;
+
+      let needsRebuild = false;
+      const tablesToDrop: Array<(typeof tables)[number]> = [];
+
+      for (const table of tables) {
+        const exists = !!this.db
+          .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?")
+          .get(table.name);
+        const hasSourceRows = !!this.db
+          .prepare(`SELECT 1 FROM ${table.source} LIMIT 1`)
+          .get();
+
+        if (!exists) {
+          if (hasSourceRows) {
+            needsRebuild = true;
+            this.logger?.info(
+              `${TAG} ${table.name} is missing while ${table.source} has data; scheduling FTS rebuild`,
+            );
+          }
+          continue;
+        }
+
+        // FTS5 virtual tables expose their declared columns through
+        // pragma_table_info, even though they cannot be altered in place.
+        const columns = this.db
+          .prepare(`SELECT name FROM pragma_table_info('${table.name}')`)
+          .all() as Array<{ name: string }>;
+        const hasV2Column = columns.some((column) => column.name === table.v2Column);
+        if (hasV2Column) continue;
+
+        tablesToDrop.push(table);
+        if (hasSourceRows) needsRebuild = true;
       }
 
-      // Check if the v2 column `content_original` exists.
-      // FTS5 tables appear in pragma_table_info with their column names.
-      const cols = this.db
-        .prepare("SELECT name FROM pragma_table_info('l1_fts')")
-        .all() as Array<{ name: string }>;
-      const hasV2Col = cols.some((c) => c.name === "content_original");
-
-      if (hasV2Col) {
-        return false; // Already v2 — no migration needed
+      if (tablesToDrop.length > 0) {
+        this.db.exec("BEGIN");
+        try {
+          for (const table of tablesToDrop) {
+            this.logger?.info(
+              `${TAG} Migrating ${table.name} from v1 to v2 (jieba segmented)`,
+            );
+            this.db.exec(`DROP TABLE IF EXISTS ${table.name}`);
+          }
+          this.db.exec("COMMIT");
+        } catch (err) {
+          try {
+            this.db.exec("ROLLBACK");
+          } catch { /* ignore rollback errors */ }
+          throw err;
+        }
       }
 
-      // v1 → v2: drop both FTS tables (data will be repopulated by rebuildFtsIndex)
-      this.logger?.info(`${TAG} Migrating FTS5 tables from v1 to v2 (jieba segmented)`);
-      this.db.exec("DROP TABLE IF EXISTS l1_fts");
-      this.db.exec("DROP TABLE IF EXISTS l0_fts");
-      return true;
+      return needsRebuild;
     } catch (err) {
       this.logger?.warn(
         `${TAG} FTS migration check failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
