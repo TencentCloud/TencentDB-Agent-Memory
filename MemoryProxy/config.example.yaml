@@ -488,6 +488,8 @@ creditPricing:
 injection:
   enabled: true             # 是否启用上下文注入（关闭后下方 injectors 列表全部失效）
   injectors: ["skill", "knowledge", "tdai-memory"]   # 要启用的注入器列表
+  # Skill 列表位置实验：session_init（默认）、every_queue、latest_only
+  # skillQueueStrategy: session_init
   # 对外统一 gateway 地址 —— LLM 生成的 <skill_tools> / <tdai_memory_tools>
   # 段里嵌的 curl URL 都以这个为 base。只填 gateway 域名，**不带端口**
   # （gateway 内部路由到 proxy pod 的端口由 ops 在 gateway 侧配，跟这里无关）。

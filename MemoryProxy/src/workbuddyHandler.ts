@@ -10,7 +10,7 @@
  *   - classifyWorkbuddyRequest：识别 main vs auxiliary 请求
  *   - extractWorkbuddySessionId：从 header / body 中提取 session id
  *   - detectWorkbuddyDefaultModeGate：识别客户端 Default mode gate 信号
- *   - injectWorkbuddyAssets：向 body.input[0].content[] 追加 `<tdai_injections>` wrapper
+ *   - injectWorkbuddyAssets：向最新 user queue 追加 `<tdai_injections>` wrapper
  *
  * 完整的 `handleWorkbuddyEndpoint(c, config)` 主 handler（含 auth / session-init /
  * mem-command / forward+langfuse tap）留到下一轮 server 路由接入时再补——
@@ -35,6 +35,13 @@ import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
 } from "./common/workbuddy-injection.js";
+import {
+  injectDynamicSkillQueue,
+  injectStableAssetBlock,
+  type SkillQueueStrategy,
+} from "./common/skill-queue-history.js";
+import { extractMarkedSkillQueueBlock } from "./common/skill-queue-markers.js";
+import { extractRecentUserQueues } from "./common/recent-user-queues.js";
 // WorkBuddy 走 Responses API，与 codex wire 完全一致 —— 弹窗骨架直接复用
 // session/codex/form.ts 的 buildFormResponse + codexFormAnswersAsMessages，
 // 状态机复用 CB 的 handleSessionInit(agentSource="codex")。这样 WorkBuddy
@@ -208,42 +215,36 @@ export function detectWorkbuddyDefaultModeGate(input: unknown): boolean {
 // ── Asset injection ──────────────────────────────────────────────────────────
 
 /**
- * Inject `<tdai_injections>` wrapper into WorkBuddy body.input[0].content[].
+ * Inject stable `<tdai_injections>` into the first Responses message.
  *
- * 与 codex 逻辑同构：把 pipeline 产出的完整 XML 文本挂到 developer message
- * (input[0]) 的 content 数组末尾。
+ * 动态 Skill queue 由 `injectWorkbuddyDynamicSkills` 单独处理。
  *
  * 防御性 short-circuit：
  *   - 无 input 或 input 不是数组 → 返回原 body
- *   - input[0] 不是 message → 返回原 body
- *   - input[0].content 不是数组 → 返回原 body
- *   （这些防御分支的意义：客户端非首帧时 input[0] 可能是 function_call 之类，
- *    只有第一轮 input[0] 才是 developer/user message；错注入 function_call 项
- *    的 content 会导致上游 400 或语义错乱。）
+ *   - 没有带数组 content 的 message → 返回原 body
+ *   （这些防御分支的意义：客户端历史中可能混有 function_call 等非消息项，
+ *    只能把内容追加到真实 user message，避免上游 400 或语义错乱。）
  *
- * 返回浅拷贝，不修改原 body（body → input → input[0] → content 全链路浅拷）。
+ * 返回浅拷贝，不修改原 body（body → input → message → content 全链路浅拷）。
  */
 export function injectWorkbuddyAssets(
   body: Record<string, unknown>,
   assets: WorkbuddyInjectionInput,
 ): Record<string, unknown> {
-  const input = body.input;
-  if (!Array.isArray(input) || input.length === 0) return body;
+  return injectStableAssetBlock(body, buildWorkbuddyInjectionBlock(assets));
+}
 
-  const devMsg = input[0] as Record<string, unknown> | null;
-  if (!devMsg || typeof devMsg !== "object") return body;
-  if (devMsg.type !== "message") return body;
-
-  const content = devMsg.content;
-  if (!Array.isArray(content)) return body;
-
-  const injectionBlock = buildWorkbuddyInjectionBlock(assets);
-
-  // Shallow-copy chain: body → input → input[0] → content
-  const newContent = [...content, injectionBlock];
-  const newDevMsg = { ...devMsg, content: newContent };
-  const newInput = [newDevMsg, ...input.slice(1)];
-  return { ...body, input: newInput };
+export async function injectWorkbuddyDynamicSkills(
+  body: Record<string, unknown>,
+  blockText: string,
+  strategy: SkillQueueStrategy,
+  identity: { spaceId: string; userId: string; agentSource: string; sessionId: string },
+  repo?: import("./db/hookCacheRepo.js").HookCacheRepo,
+): Promise<Record<string, unknown>> {
+  return injectDynamicSkillQueue(
+    body, blockText, strategy, identity, repo,
+    (text) => buildWorkbuddyInjectionBlock({ raw: text }),
+  );
 }
 
 // ── Human turn counting (langfuse 埋点辅助) ──────────────────────────────────
@@ -831,7 +832,7 @@ async function consumeWorkbuddyStream(
  *   7. Session init- 复用 CB 状态机 (handleSessionInit, agentSource="codex")
  *                   + codex form builder 渲染 Responses API SSE 弹窗
  *   8. Mem command - / 命令拦截（session 已注册时）
- *   9. Injection   - 通用 injection pipeline，注入到 body.input[0].content[]
+ *   9. Injection   - 通用 injection pipeline，注入到最新 user queue
  *   10. Forward    - 转发上游 + tap SSE 上报 langfuse
  */
 export async function handleWorkbuddyEndpoint(
@@ -902,6 +903,10 @@ export async function handleWorkbuddyEndpoint(
 
   const turnSeq = countHumanTurnsWorkbuddy(body.input);
   const userQuery = workbuddyAdapter.extractUserText(body.input) ?? "";
+  const skillListingQuery = extractRecentUserQueues(
+    body.input,
+    (content) => workbuddyAdapter.extractUserText([{ type: "message", role: "user", content }]),
+  );
   const lf: LangfuseTurnContext = {
     traceId: langfuseTurnTraceId(sessionKey, turnSeq),
     turnSeq,
@@ -1074,7 +1079,7 @@ export async function handleWorkbuddyEndpoint(
             // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
             codexAnswerInput: input,
           },
-          "codex", // ← 状态机 source: 复用 codex 分支
+          "codex", // 状态机 source: 复用 codex 分支
           metadataClient,
           apiKey,
           spaceId,
@@ -1391,7 +1396,7 @@ export async function handleWorkbuddyEndpoint(
     (config.injection.injectors?.length ?? 0) > 0
   ) {
     try {
-      const { getInjectionPipeline } = await import("./injection/index.js");
+      const { getInjectionPipeline, getSkillQueueHistoryRepo } = await import("./injection/index.js");
       const pipeline = getInjectionPipeline(config);
       const { buildSessionContextBlockWithToggles } = await import(
         "./session/context-injector.js"
@@ -1427,6 +1432,7 @@ export async function handleWorkbuddyEndpoint(
           session: sessionInfo,
           userKey: callerUserKey ?? undefined,
           assetCapabilities,
+          skillListingQuery,
         },
       });
 
@@ -1436,8 +1442,22 @@ export async function handleWorkbuddyEndpoint(
       const sysMsg = injectedMessages?.[0];
       const injectedText = typeof sysMsg?.content === "string" ? sysMsg.content : "";
 
+      const userMsg = injectedMessages?.[1];
+      const dynamicText = typeof userMsg?.content === "string"
+        ? extractMarkedSkillQueueBlock(userMsg.content)
+        : null;
+
       if (injectedText.length > 0) {
         body = injectWorkbuddyAssets(body, { raw: injectedText });
+      }
+      if (dynamicText) {
+        body = await injectWorkbuddyDynamicSkills(
+          body,
+          dynamicText,
+          config.injection.skillQueueStrategy ?? "session_init",
+          { spaceId, userId: userId || "anonymous", agentSource, sessionId: sessionKey },
+          getSkillQueueHistoryRepo(config),
+        );
       }
     } catch (err: unknown) {
       console.error(

@@ -594,6 +594,8 @@ export interface MemCommandConfig {
 export interface InjectionConfig {
   enabled: boolean;
   injectors: string[];  // List of injector names to enable (e.g. ["skill", "knowledge", "tdai-memory"])
+  /** Skill list placement experiment. Default keeps the historical session snapshot. */
+  skillQueueStrategy?: "session_init" | "every_queue" | "latest_only";
   /**
    * 对外统一 gateway 地址。LLM 生成的 curl 示例（<skill_tools> /
    * <tdai_memory_tools> 段里嵌的路径）都以这个 URL 为 base。
@@ -864,6 +866,7 @@ export interface RawYamlConfig {
     enabled?: boolean;
     endpoint?: string;
     injectors?: string[];
+    skillQueueStrategy?: "session_init" | "every_queue" | "latest_only";
     externalGatewayUrl?: string;
     assetReflection?: {
       markerOptIn?: boolean;
