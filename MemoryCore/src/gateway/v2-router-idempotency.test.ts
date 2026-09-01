@@ -8,7 +8,6 @@ import type {
 } from "../core/store/types.js";
 import { handleConversationAdd, type V2RouterDeps } from "./v2-router.js";
 import {
-  buildConversationIdempotencyScope,
   conversationAddRequestSchema,
   digestConversationAddPayload,
   serializeConversationIdempotencyScope,
@@ -43,14 +42,14 @@ describe("conversation add idempotency contract", () => {
   );
 
   it("serializes every scope dimension in a stable field order", () => {
-    const scope = buildConversationIdempotencyScope({
+    const scope = {
       serviceId: "service-1",
       teamId: "team-1",
       agentId: "agent-1",
       userId: "user-1",
       sessionId: "session-1",
       idempotencyKey: "turn-1",
-    });
+    };
 
     expect(serializeConversationIdempotencyScope(scope)).toBe(
       "service_id=service-1&team_id=team-1&agent_id=agent-1&user_id=user-1&session_id=session-1&idempotency_key=turn-1",

@@ -32,7 +32,6 @@ import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 // ── Zod schemas (validated types + defaults) ──
 import {
   conversationAddRequestSchema,
-  buildConversationIdempotencyScope,
   digestConversationAddPayload,
   conversationQueryRequestSchema,
   conversationSearchRequestSchema,
@@ -686,14 +685,14 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
   if (!store) return errorEnvelope(503, "Store not available", requestId);
 
   const idempotencyScope = idempotency_key
-    ? buildConversationIdempotencyScope({
+    ? {
       serviceId: auth.serviceId,
       teamId: iso?.teamId ?? DEFAULT_ISOLATION_ID,
       agentId: iso?.agentId ?? DEFAULT_ISOLATION_ID,
       userId: iso?.userId ?? DEFAULT_ISOLATION_ID,
       sessionId: session_id,
       idempotencyKey: idempotency_key,
-    })
+    }
     : undefined;
   const payloadDigest = idempotency_key ? digestConversationAddPayload(parsed.data) : undefined;
 

@@ -67,4 +67,16 @@ describe("OpenCode transcript capture", () => {
     ], 1000, 10000);
     expect(turns.map((turn) => [turn.user, turn.assistant])).toEqual([["first", "one"], ["second", "two"]]);
   });
+
+  it("keeps interleaved assistant runs scoped to their parent user", () => {
+    const turns = completedTurns("s", [
+      user("u1", "first"),
+      user("u2", "second"),
+      assistant("a1", "u1", [{ type: "text", text: "one" }]),
+      assistant("a2", "u2", [{ type: "text", text: "two" }]),
+    ], 1000, 10000);
+
+    expect(turns.map((turn) => [turn.user, turn.assistant])).toEqual([["first", "one"], ["second", "two"]]);
+    expect(turns[0]?.skillMessages.some((message) => message.content === "two")).toBe(false);
+  });
 });

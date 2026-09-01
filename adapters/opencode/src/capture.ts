@@ -35,70 +35,31 @@ function toolMessage(part: JsonRecord, timestamp: number, maxChars: number): Ski
   ];
 }
 
-function userFor(messages: OpenCodeMessage[], assistantIndex: number, parentId?: string): OpenCodeMessage | undefined {
-  if (parentId) {
-    const exact = messages.find((m) => m.info.role === "user" && m.info.id === parentId);
-    if (exact) return exact;
-  }
-  for (let i = assistantIndex - 1; i >= 0; i -= 1) if (messages[i]?.info.role === "user") return messages[i];
-  return undefined;
+interface TurnAccumulator {
+  userText: string;
+  trace: SkillMessage[];
 }
 
-function assistantRun(messages: OpenCodeMessage[], userIndex: number, finalIndex: number): OpenCodeMessage[] {
-  return messages.slice(userIndex + 1, finalIndex + 1).filter((m) => m.info.role === "assistant" && !m.info.error);
-}
-
-function completedTurnAt(
-  sessionId: string,
-  messages: OpenCodeMessage[],
-  finalIndex: number,
-  maxChars: number,
-  maxSkillBytes: number,
-): CapturedTurn | null {
-  const final = messages[finalIndex];
-  if (!final || !terminalAssistant(final)) return null;
-  const sourceId = typeof final.info.id === "string" ? final.info.id : "";
-  if (!sourceId) return null;
-  const parentId = typeof final.info.parentID === "string" ? final.info.parentID : undefined;
-  const user = userFor(messages, finalIndex, parentId);
-  if (!user) return null;
-  const userIndex = messages.indexOf(user);
-  const userText = textParts(user.parts, maxChars);
-  if (!userText) return null;
-
-  const trace: SkillMessage[] = [{ role: "user", content: userText, timestamp: timeOf(user.info) }];
-  const finalChunks: string[] = [];
-  for (const assistant of assistantRun(messages, userIndex, finalIndex)) {
-    const timestamp = timeOf(assistant.info);
-    let buffer: string[] = [];
-    const flush = (): void => {
-      const text = boundText(buffer.join("\n\n"), maxChars);
-      buffer = [];
-      if (!text) return;
-      trace.push({ role: "assistant", content: text, timestamp });
-      if (assistant === final) finalChunks.push(text);
-    };
-    for (const part of assistant.parts) {
-      if (part.type === "text" && part.synthetic !== true && typeof part.text === "string") buffer.push(part.text);
-      if (part.type === "tool") {
-        flush();
-        trace.push(...toolMessage(part, timestamp, maxChars));
-      }
-    }
-    flush();
-  }
-  const finalText = boundText(finalChunks.join("\n\n"), maxChars);
-  if (!finalText) return null;
-  const key = createHash("sha256").update(sessionId).update("\0").update(sourceId).digest("hex");
-  return {
-    key,
-    sessionId,
-    sourceId,
-    user: userText,
-    assistant: finalText,
-    capturedAtMs: timeOf(final.info),
-    skillMessages: boundSkillTrace(trace, maxSkillBytes),
+function appendAssistant(trace: SkillMessage[], assistant: OpenCodeMessage, maxChars: number): string {
+  const timestamp = timeOf(assistant.info);
+  const textChunks: string[] = [];
+  let buffer: string[] = [];
+  const flush = (): void => {
+    const text = boundText(buffer.join("\n\n"), maxChars);
+    buffer = [];
+    if (!text) return;
+    trace.push({ role: "assistant", content: text, timestamp });
+    textChunks.push(text);
   };
+  for (const part of assistant.parts) {
+    if (part.type === "text" && part.synthetic !== true && typeof part.text === "string") buffer.push(part.text);
+    if (part.type === "tool") {
+      flush();
+      trace.push(...toolMessage(part, timestamp, maxChars));
+    }
+  }
+  flush();
+  return boundText(textChunks.join("\n\n"), maxChars);
 }
 
 export function completedTurns(
@@ -107,10 +68,41 @@ export function completedTurns(
   maxChars: number,
   maxSkillBytes: number,
 ): CapturedTurn[] {
-  return messages.flatMap((_, index) => {
-    const turn = completedTurnAt(sessionId, messages, index, maxChars, maxSkillBytes);
-    return turn ? [turn] : [];
-  });
+  const turns: CapturedTurn[] = [];
+  const usersById = new Map<string, TurnAccumulator>();
+  let currentUser: TurnAccumulator | undefined;
+
+  for (const message of messages) {
+    if (message.info.role === "user") {
+      const userText = textParts(message.parts, maxChars);
+      currentUser = {
+        userText,
+        trace: userText ? [{ role: "user", content: userText, timestamp: timeOf(message.info) }] : [],
+      };
+      if (typeof message.info.id === "string") usersById.set(message.info.id, currentUser);
+      continue;
+    }
+    if (message.info.role !== "assistant" || message.info.error) continue;
+
+    const parentId = typeof message.info.parentID === "string" ? message.info.parentID : undefined;
+    const user = (parentId ? usersById.get(parentId) : undefined) ?? currentUser;
+    if (!user) continue;
+    const finalText = appendAssistant(user.trace, message, maxChars);
+    if (!terminalAssistant(message) || !user.userText || !finalText) continue;
+
+    const sourceId = typeof message.info.id === "string" ? message.info.id : "";
+    if (!sourceId) continue;
+    turns.push({
+      key: createHash("sha256").update(sessionId).update("\0").update(sourceId).digest("hex"),
+      sessionId,
+      sourceId,
+      user: user.userText,
+      assistant: finalText,
+      capturedAtMs: timeOf(message.info),
+      skillMessages: boundSkillTrace(user.trace, maxSkillBytes),
+    });
+  }
+  return turns;
 }
 
 export function latestCompletedTurn(

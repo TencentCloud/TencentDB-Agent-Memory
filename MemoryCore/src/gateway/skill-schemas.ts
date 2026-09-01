@@ -12,6 +12,7 @@
  */
 
 import { z } from "zod";
+import { conversationIdempotencyKeySchema } from "./conversation-idempotency-schema.js";
 
 // ═════════════════════════════════════════════════════════════════════
 //  公共片段
@@ -253,7 +254,7 @@ export const extractRequestSchema = z.object({
  */
 export const conversationAddRequestSchema = z.object({
   session_id: z.string().min(1).refine((v) => !v.includes("|"), "session_id must not contain '|'"),
-  idempotency_key: z.string().min(1).max(256).regex(/^[A-Za-z0-9._:-]+$/).optional(),
+  idempotency_key: conversationIdempotencyKeySchema,
   space_id: z.string().min(1)
     .refine((v) => !v.includes("|"), "space_id must not contain '|'")
     .optional(),

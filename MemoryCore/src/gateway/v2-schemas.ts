@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { DEFAULT_ISOLATION_ID, type ConversationIdempotencyScope } from "../core/store/types.js";
+import { conversationIdempotencyKeySchema } from "./conversation-idempotency-schema.js";
 
 // ============================
 // Re-export all generated schemas as-is
@@ -113,14 +114,9 @@ export const conversationAddRequestSchema = z.object({
   messages: z.array(_conversationItemSchema).min(1).max(100),
   // Opaque client retry token. It intentionally permits common UUID/ULID and
   // turn identifiers while excluding whitespace and path-like separators.
-  idempotency_key: z.string().min(1).max(256).regex(/^[A-Za-z0-9._:-]+$/).optional(),
+  idempotency_key: conversationIdempotencyKeySchema,
 });
 export type ConversationAddRequest = z.infer<typeof conversationAddRequestSchema>;
-
-/** Build the complete receipt identity for a keyed conversation-add request. */
-export function buildConversationIdempotencyScope(scope: ConversationIdempotencyScope): ConversationIdempotencyScope {
-  return { ...scope };
-}
 
 /**
  * Stable, inspectable representation used as the input to the store's scope

@@ -302,7 +302,7 @@ export class SkillConversationAddHandler {
         idempotencyKeyHash: keyHash,
       });
       obsLogger.info("skill.add_handler.trigger_archive", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Arch,
         task_id: archiveRes.taskId,
         archive_key: archiveRes.archiveKey,
@@ -329,7 +329,7 @@ export class SkillConversationAddHandler {
         this.buffer.writeMeta(sess, nextMeta),
       ]);
       obsLogger.info("skill.add_handler.write_back", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
         archived: true,
       });
@@ -363,7 +363,7 @@ export class SkillConversationAddHandler {
         this.buffer.writeMeta(sess, nextMeta),
       ]);
       obsLogger.info("skill.add_handler.write_back", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
         archived: false,
         tool_count: nextTool,
