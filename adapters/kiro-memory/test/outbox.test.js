@@ -120,17 +120,27 @@ test('does not send disk-tampered payloads and propagates local retry persistenc
 test('returns at the flush deadline for an uncooperative gateway without acknowledging later', async () => {
   await withStateDir(async (stateDir) => {
     let resolveGateway;
-    const outbox = new Outbox({ stateDir, gatewayClient: { skillConversationAdd: async () => new Promise((resolve) => { resolveGateway = resolve; }) } });
+    let gatewaySignal;
+    const outbox = new Outbox({ stateDir, gatewayClient: { skillConversationAdd: async (_payload, options) => {
+      gatewaySignal = options.signal;
+      return new Promise((resolve) => { resolveGateway = resolve; });
+    } } });
     await outbox.enqueue(envelope());
     const started = Date.now();
     const result = await outbox.flush({ budgetMs: 30 });
     assert.equal(Date.now() - started < 180, true);
     assert.equal(result.acknowledged, 0);
+    assert.equal(gatewaySignal.aborted, true);
     assert.equal(await outbox.hasMarker(id()), false);
-    assert.notEqual(await readFile(outbox.outboxPath(id()), 'utf8'), '');
+    const deferred = JSON.parse(await readFile(outbox.outboxPath(id()), 'utf8'));
+    assert.equal(deferred.attempt_count, 0);
+    assert.equal(deferred.next_retry_at, null);
     resolveGateway({ status: 'ok' });
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(await outbox.hasMarker(id()), false);
+    const unchanged = JSON.parse(await readFile(outbox.outboxPath(id()), 'utf8'));
+    assert.equal(unchanged.attempt_count, 0);
+    assert.equal(unchanged.next_retry_at, null);
   });
 });
 

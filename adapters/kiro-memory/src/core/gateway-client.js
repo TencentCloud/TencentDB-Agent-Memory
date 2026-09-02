@@ -224,8 +224,8 @@ export class GatewayClient {
     })) };
   }
 
-  async skillConversationAdd(payload, { timeoutMs } = {}) {
-    const data = await this.post('/v3/skill/conversation/add', payload, { timeoutMs });
+  async skillConversationAdd(payload, { timeoutMs, signal } = {}) {
+    const data = await this.post('/v3/skill/conversation/add', payload, { timeoutMs, signal });
     if (isObject(data) && Object.keys(data).length === 1 && data.status === 'ok') return data;
     if (
       isObject(data) && Object.keys(data).length === 2 && data.status === 'archived'
@@ -238,7 +238,7 @@ export class GatewayClient {
     throw invalidEnvelope();
   }
 
-  async forceArchive({ sessionId, reason, taskId } = {}, { timeoutMs } = {}) {
+  async forceArchive({ sessionId, reason, taskId } = {}, { timeoutMs, signal } = {}) {
     const body = {
       session_id: sessionId,
       space_id: this.config.serviceId,
@@ -248,7 +248,7 @@ export class GatewayClient {
     };
     if (reason !== undefined) body.reason = reason;
     if (taskId !== undefined) body.task_id = taskId;
-    const data = await this.post('/v3/skill/conversation/force-archive', body, { timeoutMs });
+    const data = await this.post('/v3/skill/conversation/force-archive', body, { timeoutMs, signal });
     if (isObject(data) && data.status === 'empty'
       && Object.keys(data).every((key) => ['status', 'message'].includes(key))
       && (data.message === undefined || typeof data.message === 'string')) return { status: 'empty' };

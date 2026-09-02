@@ -227,10 +227,11 @@ export class Outbox {
     if (timeoutMs <= 0) return { status: 'deadline' };
     const method = item.version === 2 && item.operation_type === 'force_archive' ? 'forceArchive' : 'skillConversationAdd';
     if (!this.gatewayClient || typeof this.gatewayClient[method] !== 'function') return { status: 'failed', retryable: true };
+    const controller = new AbortController();
     let timer;
-    const call = Promise.resolve().then(() => this.gatewayClient[method](item.payload, { timeoutMs }));
+    const call = Promise.resolve().then(() => this.gatewayClient[method](item.payload, { timeoutMs, signal: controller.signal }));
     const settled = call.then((response) => ({ status: 'ok', response }), (error) => ({ status: 'failed', retryable: error?.retryable !== false }));
-    const timedOut = new Promise((resolve) => { timer = setTimeout(() => resolve({ status: 'deadline' }), timeoutMs); });
+    const timedOut = new Promise((resolve) => { timer = setTimeout(() => { controller.abort(); resolve({ status: 'deadline' }); }, timeoutMs); });
     try { return await Promise.race([settled, timedOut]); } finally { clearTimeout(timer); }
   }
 
