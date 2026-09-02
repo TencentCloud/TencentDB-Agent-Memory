@@ -6,6 +6,7 @@ import test from 'node:test';
 
 import { Outbox, OutboxError } from '../src/core/outbox.js';
 import { OutboxDrainService } from '../src/core/outbox-drain-service.js';
+import { GatewayError } from '../src/core/gateway-client.js';
 
 const operationId = (suffix) => `cap_sha256_${suffix.repeat(64)}`;
 const item = (suffix, sessionId, overrides = {}) => ({
@@ -174,6 +175,51 @@ test('two drains and a Hook share the same per-session delivery lane', async () 
     ]);
     assert.equal(maximum, 1);
     assert.deepEqual([...calls.values()], [1, 1]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('a second drain rechecks manual review after acquiring a stale lane snapshot', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'kiro-drain-manual-race-'));
+  try {
+    let calls = 0;
+    const gatewayClient = { skillConversationAdd: async () => {
+      calls += 1;
+      throw new GatewayError('rejected', { retryable: false });
+    } };
+    const first = new Outbox({ stateDir, gatewayClient, lockTimeoutMs: 500, lockRetryMs: 2 });
+    const second = new Outbox({ stateDir, gatewayClient, lockTimeoutMs: 500, lockRetryMs: 2 });
+    await first.enqueue({
+      capture_id: operationId('a'), type: 'skill_conversation', session_id: 'shared-session', turn_id: 'turn-a',
+      payload: {
+        session_id: 'shared-session', team_id: 'team', user_id: 'user', agent_id: 'agent', task_id: 'turn-a',
+        messages: [
+          { role: 'user', content: 'a' },
+          { role: 'tool_call', tool_name: 'readFile', tool_call_id: 'call-a', content: '{}' },
+          { role: 'tool_result', tool_name: 'readFile', tool_call_id: 'call-a', content: 'ok' },
+        ],
+      },
+    });
+    let snapshots = 0;
+    let releaseSnapshots;
+    const snapshotsReady = new Promise((resolve) => { releaseSnapshots = resolve; });
+    for (const outbox of [first, second]) {
+      const listCandidates = outbox.listDrainCandidates.bind(outbox);
+      outbox.listDrainCandidates = async (deadline) => {
+        const candidates = await listCandidates(deadline);
+        snapshots += 1;
+        if (snapshots === 2) releaseSnapshots();
+        await snapshotsReady;
+        return candidates;
+      };
+    }
+    await Promise.all([
+      new OutboxDrainService({ outbox: first }).drain({ budgetMs: 1000 }),
+      new OutboxDrainService({ outbox: second }).drain({ budgetMs: 1000 }),
+    ]);
+    assert.equal(calls, 1);
+    assert.equal((await first.readItemUnlocked(operationId('a'))).manual_review, true);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

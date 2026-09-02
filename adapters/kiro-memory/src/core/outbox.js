@@ -216,6 +216,7 @@ export class Outbox {
     if (this.remaining(deadline) <= 0) return 'deferred';
     const item = await this.readItemUnlocked(captureId, true);
     if (item === null) return 'deferred';
+    if (item.manual_review === true) return 'deferred';
     if (item.next_retry_at !== null && Date.parse(item.next_retry_at) > this.now().getTime()) return 'deferred';
     if (!(await this.persist(() => this.shouldProcess(item)))) {
       await this.persist(() => this.deleteItem(captureId));
