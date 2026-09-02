@@ -526,6 +526,8 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | :--- | :--- |
 | OpenClaw plugin | Automatically captures, extracts, and recalls memory once installed |
 | Hermes Gateway adapter | `TdaiCore + HostAdapter`, decoupled from the host framework |
+| Codex MCP adapter | Five MCP tools backed by the existing Gateway |
+| Claude Code hooks | Automatic recall, capture, and flush on native lifecycle events |
 | Local backend | `SQLite + sqlite-vec`, ready to use out of the box |
 | Hybrid retrieval | BM25 + vector + RRF — supports both keyword and semantic recall |
 | Agent tools | `tdai_memory_search` / `tdai_conversation_search` |
@@ -537,6 +539,9 @@ Debugging no longer means probing an opaque database — it becomes a determinis
 | Document | Contents |
 | :--- | :--- |
 | [`scripts/README.memory-tencentdb-ctl.md`](./scripts/README.memory-tencentdb-ctl.md) | Operations & management tooling |
+| [`docs/adapters/architecture.md`](./docs/adapters/architecture.md) | Cross-platform architecture, data flows, and comparison |
+| [`docs/adapters/codex.md`](./docs/adapters/codex.md) | Codex STDIO MCP setup and verification |
+| [`docs/adapters/claude-code.md`](./docs/adapters/claude-code.md) | Claude Code hook plugin and reliability behavior |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Release notes and version history |
 | [`openclaw.plugin.json`](./openclaw.plugin.json) | OpenClaw plugin manifest and configuration schema |
 
