@@ -36,7 +36,12 @@ export interface RecallRequest {
 }
 
 export interface RecallResponse {
+  /** Backward-compatible context field used by existing Hermes clients. */
   context: string;
+  /** Dynamic L1 recall snippets intended to be prepended to the user prompt. */
+  prepend_context?: string;
+  /** Stable persona / scene / tool-guide context intended for the system prompt. */
+  append_system_context?: string;
   strategy?: string;
   memory_count?: number;
 }
