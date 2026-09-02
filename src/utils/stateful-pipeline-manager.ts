@@ -249,18 +249,23 @@ export class StatefulPipelineManager {
     // 取消 idle timer
     await this.stateBackend.removeTimer(effectiveInstanceId, `${sessionKey}:L1_idle`);
 
-    // 入队 flush task
+    // 入队 L1 task：会话结束强制提炼已累积的消息。
+    // 恢复旧版 MemoryPipelineManager 语义（"session ends → L1 fires with whatever
+    // messages have accumulated"）。此前这里入队的是 flush task，但 Worker 的
+    // executeFlush 只是再次调用 flushSession，整条路径不会触发 runL1 —— 等于
+    // 空转，还顺带取消了上面的 idle timer，导致闲时兜底提炼失效。
+    const now = Date.now();
     await this.stateBackend.enqueueTask({
-      id: `flush-${sessionKey}-${Date.now()}`,
-      type: "flush",
+      id: `L1-flush-${sessionKey}-${now}`,
+      type: "L1",
       instanceId: effectiveInstanceId,
       sessionId: sessionKey,
       priority: 0,
-      data: { instanceId: effectiveInstanceId },
-      createdAt: Date.now(),
+      data: { instanceId: effectiveInstanceId, ...serializeTraceContext() },
+      createdAt: now,
     });
 
-    this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: flush task enqueued`);
+    this.logger?.debug?.(`${TAG} [${sessionKey}] flushSession: L1 task enqueued (forced)`);
   }
 
   // ============================
