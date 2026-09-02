@@ -48,6 +48,30 @@ test('phase 2 searches reject malformed messages and skill hits safely', async (
   }
 });
 
+test('an upstream signal aborts an in-flight gateway search safely', async () => {
+  let fetchSignal;
+  const client = new GatewayClient(config, {
+    fetch: async (_url, options) => {
+      fetchSignal = options.signal;
+      return new Promise((_, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
+  });
+  const controller = new AbortController();
+  const pending = client.atomicSearch('query', 1, { timeoutMs: 2500, signal: controller.signal });
+  controller.abort();
+  await assert.rejects(
+    pending,
+    (error) => error instanceof GatewayError && error.message === 'Gateway request failed' && error.retryable === true,
+  );
+  assert.equal(fetchSignal.aborted, true);
+});
+
 test('health accepts the real MemoryProxy ok/degraded contract without sending identity headers', async () => {
   for (const [status, body, expected] of [
     [200, { status: 'ok', version: '0.2.0', storage: { enabled: true, requested: 'cos', effective: 'cos', degraded: false } }, 'ok'],

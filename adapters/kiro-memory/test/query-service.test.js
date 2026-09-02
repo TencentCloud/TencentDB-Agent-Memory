@@ -105,6 +105,38 @@ test('returns at the shared deadline when a selected source ignores its timeout'
   assert.deepEqual(result.degradedSources, ['skill']);
 });
 
+test('shared deadline aborts every unfinished source request', async () => {
+  const signals = [];
+  const never = (_query, _limit, { signal } = {}) => {
+    signals.push(signal);
+    return new Promise(() => {});
+  };
+  const service = new UnifiedQueryService({
+    gatewayClient: {
+      atomicSearch: never,
+      conversationSearch: never,
+      skillSearch: never,
+      coreRead: ({ signal } = {}) => {
+        signals.push(signal);
+        return new Promise(() => {});
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.query({
+      query: 'deadline',
+      sources: ['atomic', 'conversation', 'skill', 'core'],
+      resultLimit: 1,
+      charBudget: 512,
+      deadlineMs: 25,
+    }),
+    (error) => error instanceof QueryError && error.category === 'all_sources_failed',
+  );
+  assert.equal(signals.length, 4);
+  assert.equal(signals.every((signal) => signal instanceof AbortSignal && signal.aborted), true);
+});
+
 test('caps Core reservation at 1500 characters and truncates items on Unicode boundaries', async () => {
   const service = new UnifiedQueryService({ gatewayClient: {
     atomicSearch: async () => ({ items: [{ id: 'a', type: 'fact', content: `${'😀'.repeat(2000)}tail`, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z', score: 1 }] }),

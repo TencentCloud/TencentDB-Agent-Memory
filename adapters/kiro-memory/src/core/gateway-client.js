@@ -47,22 +47,27 @@ export class GatewayClient {
     this.fetch = options.fetch ?? globalThis.fetch;
   }
 
-  async post(path, body, { timeoutMs } = {}) {
-    const controller = new AbortController();
+  async post(path, body, { timeoutMs, signal } = {}) {
     const effectiveTimeoutMs = timeoutMs === undefined
       ? this.config.timeoutMs
       : Math.min(this.config.timeoutMs, timeoutMs);
     if (!Number.isFinite(effectiveTimeoutMs) || effectiveTimeoutMs <= 0) {
       throw new GatewayError('Gateway request failed', { retryable: true });
     }
-    const timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
-    const headers = {
-      'Content-Type': 'application/json',
-      'x-tdai-service-id': this.config.serviceId,
-    };
-    if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+    const controller = new AbortController();
+    const abortFromUpstream = () => controller.abort();
+    let timer;
 
     try {
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener('abort', abortFromUpstream, { once: true });
+      timer = setTimeout(() => controller.abort(), effectiveTimeoutMs);
+      const headers = {
+        'Content-Type': 'application/json',
+        'x-tdai-service-id': this.config.serviceId,
+      };
+      if (this.config.apiKey) headers.Authorization = `Bearer ${this.config.apiKey}`;
+
       let response;
       try {
         response = await this.fetch(`${this.config.gatewayUrl}${path}`, {
@@ -99,6 +104,7 @@ export class GatewayClient {
       return envelope.data;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abortFromUpstream);
     }
   }
 
@@ -129,14 +135,14 @@ export class GatewayClient {
     } finally { clearTimeout(timer); }
   }
 
-  async atomicSearch(query, limit, { timeoutMs } = {}) {
+  async atomicSearch(query, limit, { timeoutMs, signal } = {}) {
     const data = await this.post('/v3/atomic/search', {
       team_id: this.config.teamId,
       agent_id: this.config.agentId,
       user_id: this.config.userId,
       query,
       limit,
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
     if (
       !isObject(data)
       || !Array.isArray(data.items)
@@ -151,19 +157,19 @@ export class GatewayClient {
     return data;
   }
 
-  async coreRead({ timeoutMs } = {}) {
+  async coreRead({ timeoutMs, signal } = {}) {
     const data = await this.post('/v3/core/read', {
       team_id: this.config.teamId,
       agent_id: this.config.agentId,
       user_id: this.config.userId,
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
     if (!isObject(data) || !Object.hasOwn(data, 'content') || (typeof data.content !== 'string' && data.content !== null)) {
       throw invalidEnvelope();
     }
     return data;
   }
 
-  async conversationSearch(query, limit, { timeStart, timeEnd, timeoutMs } = {}) {
+  async conversationSearch(query, limit, { timeStart, timeEnd, timeoutMs, signal } = {}) {
     const body = {
       team_id: this.config.teamId,
       agent_id: this.config.agentId,
@@ -173,7 +179,7 @@ export class GatewayClient {
     };
     if (timeStart !== undefined) body.time_start = timeStart;
     if (timeEnd !== undefined) body.time_end = timeEnd;
-    const data = await this.post('/v3/conversation/search', body, { timeoutMs });
+    const data = await this.post('/v3/conversation/search', body, { timeoutMs, signal });
     if (!isObject(data) || !Array.isArray(data.messages) || data.messages.some((item) =>
       !isObject(item)
       || !['user', 'assistant', 'system'].includes(item.role)
@@ -188,7 +194,7 @@ export class GatewayClient {
     })) };
   }
 
-  async skillSearch(query, limit, { timeoutMs } = {}) {
+  async skillSearch(query, limit, { timeoutMs, signal } = {}) {
     const data = await this.post('/v3/skill/search', {
       team_id: this.config.teamId,
       agent_id: this.config.agentId,
@@ -196,7 +202,7 @@ export class GatewayClient {
       query,
       top_k: limit,
       mode: 'hybrid',
-    }, { timeoutMs });
+    }, { timeoutMs, signal });
     if (!isObject(data) || !Array.isArray(data.items) || data.items.some((item) =>
       !isObject(item) || typeof item.skill_id !== 'string' || !item.skill_id
       || typeof item.name !== 'string' || typeof item.description !== 'string'

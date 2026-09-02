@@ -51,24 +51,26 @@ export class UnifiedQueryService {
     if (!Number.isInteger(maxItemChars) || maxItemChars < 1 || maxItemChars > 3000) throw new QueryError('invalid_item_budget');
     if (!Number.isFinite(deadlineMs) || deadlineMs <= 0 || deadlineMs > 3000) throw new QueryError('invalid_deadline');
     const deadline = this.monotonicNow() + deadlineMs;
+    const controller = new AbortController();
     const bySource = {};
     let coreContent = null;
-    const degradedSources = [];
+    const degradedSources = new Set();
     const settledSources = new Set();
     let successes = 0;
     const remaining = () => Math.max(0, deadline - this.monotonicNow());
+    const requestOptions = () => ({ timeoutMs: remaining(), signal: controller.signal });
     const run = async (source) => {
       try {
-        if (source === 'atomic') bySource.atomic = atomicHits(await this.gatewayClient.atomicSearch(query, resultLimit, { timeoutMs: remaining() }));
-        if (source === 'conversation') bySource.conversation = conversationHits(await this.gatewayClient.conversationSearch(query, resultLimit, { timeStart, timeEnd, timeoutMs: remaining() }));
-        if (source === 'skill') bySource.skill = skillHits(await this.gatewayClient.skillSearch(query, resultLimit, { timeoutMs: remaining() }));
+        if (source === 'atomic') bySource.atomic = atomicHits(await this.gatewayClient.atomicSearch(query, resultLimit, requestOptions()));
+        if (source === 'conversation') bySource.conversation = conversationHits(await this.gatewayClient.conversationSearch(query, resultLimit, { ...requestOptions(), timeStart, timeEnd }));
+        if (source === 'skill') bySource.skill = skillHits(await this.gatewayClient.skillSearch(query, resultLimit, requestOptions()));
         if (source === 'core') {
-          const data = await this.gatewayClient.coreRead({ timeoutMs: remaining() });
+          const data = await this.gatewayClient.coreRead(requestOptions());
           coreContent = typeof data.content === 'string' && data.content.trim() ? data.content.trim() : null;
         }
         successes += 1;
       } catch {
-        degradedSources.push(source);
+        degradedSources.add(source);
       } finally {
         settledSources.add(source);
       }
@@ -76,15 +78,19 @@ export class UnifiedQueryService {
     const selectedSources = [...new Set(sources)];
     const tasks = selectedSources.map(run);
     let timer;
-    await Promise.race([
-      Promise.all(tasks),
-      new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs); }),
-    ]);
-    clearTimeout(timer);
-    for (const source of selectedSources) {
-      if (!settledSources.has(source) && !degradedSources.includes(source)) degradedSources.push(source);
+    try {
+      await Promise.race([
+        Promise.all(tasks),
+        new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
     }
-    degradedSources.sort((a, b) => [...validSources].indexOf(a) - [...validSources].indexOf(b));
+    for (const source of selectedSources) {
+      if (!settledSources.has(source)) degradedSources.add(source);
+    }
+    const sortedDegradedSources = [...degradedSources].sort((a, b) => [...validSources].indexOf(a) - [...validSources].indexOf(b));
     if (successes === 0) throw new QueryError('all_sources_failed');
 
     const fused = fuseRankedHits(bySource);
@@ -125,6 +131,6 @@ export class UnifiedQueryService {
       coreContent = truncateWithMarker(coreContent, charBudget);
       truncated = true;
     }
-    return { hits, coreContent, degradedSources, truncated };
+    return { hits, coreContent, degradedSources: sortedDegradedSources, truncated };
   }
 }
