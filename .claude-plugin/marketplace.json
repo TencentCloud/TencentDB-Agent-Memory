@@ -1,0 +1,28 @@
+{
+  "name": "tencentdb-agent-memory",
+  "owner": {
+    "name": "TencentCloud"
+  },
+  "metadata": {
+    "description": "Official integrations for TencentDB Agent Memory"
+  },
+  "plugins": [
+    {
+      "name": "tencentdb-agent-memory",
+      "source": "./claude-code-plugin",
+      "description": "Persistent, layered memory for Claude Code through the TencentDB Agent Memory Gateway",
+      "version": "0.3.6",
+      "author": {
+        "name": "TencentCloud"
+      },
+      "repository": "https://github.com/TencentCloud/TencentDB-Agent-Memory",
+      "license": "MIT",
+      "keywords": [
+        "memory",
+        "claude-code",
+        "agent-memory",
+        "tencentdb"
+      ]
+    }
+  ]
+}
