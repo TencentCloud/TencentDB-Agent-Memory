@@ -1,0 +1,4 @@
+id = "memory-tencentdb"
+name = "Memory (TencentDB)"
+version = "1.0.0"
+description = "Four-layer memory system for Whale (TencentDB Agent Memory)"

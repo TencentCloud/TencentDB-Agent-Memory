@@ -1,0 +1,11 @@
+[[hooks.SessionStart]]
+command = "python3 ${WHALE_PLUGIN_ROOT}/scripts/health.py"
+timeout = 5
+
+[[hooks.UserPromptSubmit]]
+command = "python3 ${WHALE_PLUGIN_ROOT}/scripts/recall.py"
+timeout = 15
+
+[[hooks.Stop]]
+command = "python3 ${WHALE_PLUGIN_ROOT}/scripts/capture.py"
+timeout = 30
