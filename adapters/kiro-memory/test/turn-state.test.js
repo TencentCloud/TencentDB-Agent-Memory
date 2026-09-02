@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { writeJsonAtomically, withSessionLock } from '../src/core/atomic-file.js';
+import { inspectSessionLock, writeJsonAtomically, withSessionLock } from '../src/core/atomic-file.js';
 import { sha256 } from '../src/core/hash.js';
 import { TurnStore, TurnStoreError } from '../src/core/turn-store.js';
 
@@ -283,6 +283,77 @@ test('serializes same-session mutations across TurnStore instances and preserves
 
     assert.equal(cleared, false);
     assert.equal((await storeA.getActiveTurn('session-1')).turn_id, newer.turn_id);
+  });
+});
+
+test('session locks publish a strict v2 owner lease and refresh its heartbeat', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.lease.lock');
+    let enterLock;
+    let releaseLock;
+    const entered = new Promise((resolve) => { enterLock = resolve; });
+    const heldLock = withSessionLock(lockPath, async () => {
+      enterLock();
+      await new Promise((resolve) => { releaseLock = resolve; });
+    }, {
+      timeoutMs: 200,
+      retryMs: 5,
+      staleAfterMs: 100,
+      heartbeatMs: 10,
+      currentHostname: 'test-host',
+    });
+    await entered;
+    const first = JSON.parse(await readFile(join(lockPath, 'owner'), 'utf8'));
+    assert.deepEqual(Object.keys(first).sort(), [
+      'created_at', 'heartbeat_at', 'hostname', 'owner_token', 'pid', 'version',
+    ]);
+    assert.equal(first.version, 2);
+    assert.equal(first.hostname, 'test-host');
+    assert.equal(first.pid, process.pid);
+    assert.equal(typeof first.owner_token, 'string');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const refreshed = JSON.parse(await readFile(join(lockPath, 'owner'), 'utf8'));
+    assert.equal(Date.parse(refreshed.heartbeat_at) > Date.parse(first.heartbeat_at), true);
+    releaseLock();
+    await heldLock;
+    await assert.rejects(readFile(join(lockPath, 'owner'), 'utf8'), { code: 'ENOENT' });
+  });
+});
+
+test('only an expired same-host owner with a dead pid is reclaimable', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.inspect.lock');
+    await mkdir(lockPath);
+    const owner = {
+      version: 2,
+      owner_token: 'owner-token',
+      pid: 12345,
+      hostname: 'test-host',
+      created_at: '2026-08-14T08:00:00.000Z',
+      heartbeat_at: '2026-08-14T08:00:01.000Z',
+    };
+    await writeFile(join(lockPath, 'owner'), `${JSON.stringify(owner)}\n`);
+    const options = {
+      staleAfterMs: 1_000,
+      nowMs: () => Date.parse('2026-08-14T08:01:00.000Z'),
+      currentHostname: 'test-host',
+    };
+    assert.deepEqual(await inspectSessionLock(lockPath, {
+      ...options, getProcessState: () => 'dead',
+    }), { status: 'stale_reclaimable' });
+    assert.deepEqual(await inspectSessionLock(lockPath, {
+      ...options, getProcessState: () => 'alive',
+    }), { status: 'active' });
+    assert.deepEqual(await inspectSessionLock(lockPath, {
+      ...options, getProcessState: () => 'unknown',
+    }), { status: 'stale_unverified' });
+    assert.deepEqual(await inspectSessionLock(lockPath, {
+      ...options, currentHostname: 'other-host', getProcessState: () => 'dead',
+    }), { status: 'stale_unverified' });
+    await writeFile(join(lockPath, 'owner'), `${JSON.stringify({
+      owner_token: 'legacy', pid: 12345, created_at: owner.created_at,
+    })}\n`);
+    assert.deepEqual(await inspectSessionLock(lockPath, options), { status: 'invalid' });
   });
 });
 
