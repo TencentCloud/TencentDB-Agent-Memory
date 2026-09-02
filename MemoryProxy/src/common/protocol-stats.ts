@@ -33,6 +33,8 @@ const MAX_SAMPLES = 4096;
 const DURATIONS = new Map<string, number[]>();
 const STREAMS = new Map<string, number>();
 const cache = { requests: 0, cacheHitRequests: 0, cachedTokens: 0, inputTokens: 0 };
+/** 丢弃参数计数：key = `${kind}\u0000${param}`；param 只允许转换器内的固定名（metadata 聚合计数）。 */
+const DROPPED = new Map<string, number>();
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
@@ -54,6 +56,12 @@ export function recordConversion(kind: string, durationMs: number): void {
 /** 记录一个流式转换实例（只计数，不做每帧耗时）。 */
 export function recordStream(kind: string): void {
   STREAMS.set(kind, (STREAMS.get(kind) ?? 0) + 1);
+}
+
+/** 记录一次“协议无对位参数”丢弃（无论调用方是否传 onDropped，均计入 /metrics）。 */
+export function recordDrop(kind: string, param: string): void {
+  const key = `${kind}\u0000${param}`;
+  DROPPED.set(key, (DROPPED.get(key) ?? 0) + 1);
 }
 
 /**
@@ -102,6 +110,7 @@ export function getProtocolStats(): ProtocolStatsSnapshot {
 export function resetProtocolStats(): void {
   DURATIONS.clear();
   STREAMS.clear();
+  DROPPED.clear();
   cache.requests = 0;
   cache.cacheHitRequests = 0;
   cache.cachedTokens = 0;
@@ -124,6 +133,14 @@ export function protocolStatsToPrometheus(): string {
   for (const [kind, n] of Object.entries(snap.streams)) {
     const safe = kind.replace(/[^a-zA-Z0-9_]/g, "_");
     lines.push(`tdai_conversion_stream_total{kind="${kind}"} ${n}`);
+  }
+  lines.push("# TYPE tdai_conversion_dropped_total counter");
+  for (const [key, n] of DROPPED) {
+    const sep = key.indexOf("\u0000");
+    const dropKind = key.slice(0, sep);
+    const param = key.slice(sep + 1).replace(/"/g, "");
+    const safeKind = dropKind.replace(/[^a-zA-Z0-9_]/g, "_");
+    lines.push(`tdai_conversion_dropped_total{kind="${safeKind}",param="${param}"} ${n}`);
   }
   lines.push(`# TYPE tdai_upstream_cache_hit_requests counter`);
   lines.push(`tdai_upstream_cache_hit_requests ${snap.cache.cacheHitRequests}`);

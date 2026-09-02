@@ -63,7 +63,11 @@ export function anthropicJsonToResponsesJson(
   json: Record<string, unknown>,
   opts?: CompatOpts,
 ): Record<string, unknown> {
-  return chatJsonToResponses(anthropicJsonToChatJson(json), opts ?? {});
+  // 两跳转换只计一次 usage：第一跳 suppress，最终 chat→responses 一跳落统计。
+  return chatJsonToResponses(
+    anthropicJsonToChatJson(json, { suppressUsageStat: true }),
+    opts ?? {},
+  );
 }
 
 /** 上游 Responses JSON → 客户端 Anthropic JSON（Responses → Chat → Anthropic）。 */
@@ -71,7 +75,10 @@ export function responsesJsonToAnthropicJson(
   json: Record<string, unknown>,
   opts?: CompatOpts,
 ): Record<string, unknown> {
-  return chatJsonToAnthropicJson(responsesJsonToChatJson(json, opts ?? {}));
+  // 两跳转换只计一次 usage：第一跳 suppress，最终 chat→anthropic 一跳落统计。
+  return chatJsonToAnthropicJson(
+    responsesJsonToChatJson(json, { ...(opts ?? {}), suppressUsageStat: true }),
+  );
 }
 
 // ── 流式 SSE ───────────────────────────────────────────────────────────────
