@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { Outbox, OutboxError } from '../src/core/outbox.js';
+import { Outbox, OutboxError, isValidOutboxMarker } from '../src/core/outbox.js';
 
 const id = (suffix = 'a') => `cap_sha256_${suffix.repeat(64)}`;
 const payload = (suffix = 'a') => ({ session_id: `session-${suffix}`, team_id: 'team', user_id: 'user', agent_id: 'agent', task_id: `turn-${suffix}`, messages: [
@@ -14,6 +14,27 @@ const payload = (suffix = 'a') => ({ session_id: `session-${suffix}`, team_id: '
 ] });
 const envelope = (suffix = 'a') => ({ capture_id: id(suffix), type: 'skill_conversation', session_id: `session-${suffix}`, turn_id: `turn-${suffix}`, payload: payload(suffix) });
 const withStateDir = async (run) => { const stateDir = await mkdtemp(join(tmpdir(), 'kiro-outbox-')); try { await run(stateDir); } finally { await rm(stateDir, { recursive: true, force: true }); } };
+
+test('writeMarker persists a canonical v2 operation marker', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'kiro-outbox-marker-v2-'));
+  try {
+    const outbox = new Outbox({ stateDir });
+    const input = envelope('c');
+    await outbox.writeMarker(input);
+
+    const marker = JSON.parse(await readFile(outbox.markerPath(input.capture_id), 'utf8'));
+    assert.equal(marker.version, 2);
+    assert.equal(marker.operation_id, input.capture_id);
+    assert.equal(marker.operation_type, 'skill_conversation');
+    assert.equal(marker.session_id, input.session_id);
+    assert.equal(marker.turn_id, input.turn_id);
+    assert.deepEqual(marker.result, { status: 'ok' });
+    assert.equal(Object.hasOwn(marker, 'capture_id'), false);
+    assert.equal(isValidOutboxMarker(marker, input.capture_id), true);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
 
 test('enqueues idempotently, preserves retry state, validates ids, and serializes concurrent calls', async () => {
   await withStateDir(async (stateDir) => {

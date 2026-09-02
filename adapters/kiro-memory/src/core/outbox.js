@@ -56,7 +56,6 @@ const validOperationItem = (item) => exactKeys(item, ['version', 'operation_id',
 const validAnyItem = (item) => validItem(item) || validOperationItem(item);
 export const isValidOutboxItem = validAnyItem;
 const idFor = (item) => item.version === 2 ? item.operation_id : item.capture_id;
-const markerFor = (item, now) => ({ version: 1, capture_id: item.capture_id, captured_at: now().toISOString(), type: item.type, session_id: item.session_id, turn_id: item.turn_id });
 
 export const isValidOutboxMarker = (marker, captureId) => {
   const validLegacy = exactKeys(marker, ['version', 'capture_id', 'captured_at', 'type', 'session_id', 'turn_id'])
@@ -119,6 +118,8 @@ export class Outbox {
   async writeMarker(envelope) { const item = this.toNewItem(envelope); return this.withLock(item.operation_id, async () => this.persist(() => this.writeMarkerUnlocked(item, { status: 'ok' }))); }
 
   async flush({ maxItems = 3, budgetMs = 1_500 } = {}) {
+    // Hook callers intentionally drain at most three FIFO items inside one shared latency budget.
+    // A higher-throughput background drain needs a separate rate-limit and ordering design.
     if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > 3 || !Number.isFinite(budgetMs) || budgetMs < 0) throw new OutboxError('Invalid flush options');
     const result = { processed: 0, acknowledged: 0, deferred: 0, failed: 0 };
     const deadline = this.monotonicNow() + budgetMs;
