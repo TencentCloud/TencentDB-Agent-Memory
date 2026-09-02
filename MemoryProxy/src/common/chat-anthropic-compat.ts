@@ -1029,6 +1029,8 @@ export function createChatSseToAnthropicSse(
   const finish = (stopReason?: string) => {
     if (finished) return;
     finished = true;
+    // 空内容 / 直接 EOF 也要先发 message_start，否则缺头的 Anthropic SSE 流是非法的。
+    ensureStarted();
     closeThinking();
     closeText();
     closeTools();

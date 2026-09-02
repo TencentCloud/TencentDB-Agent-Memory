@@ -781,3 +781,15 @@ describe("usage 缓存统计（chat/anthropic 各自字段语义）", () => {
     expect(snap.cache.inputTokens).toBe(200);
   });
 });
+describe("空内容 Chat 流 → Anthropic SSE 也必须先发 message_start", () => {
+  it("上游只发 finish_reason + [DONE]（无内容块）→ 输出含 message_start 且先于 message_delta", async () => {
+    const ts = createChatSseToAnthropicSse({ model: "m" });
+    const out = await runTransform(ts, [
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(out.indexOf('"type":"message_start"')).toBeGreaterThanOrEqual(0);
+    expect(out.indexOf('"type":"message_start"')).toBeLessThan(out.indexOf('"type":"message_delta"'));
+    expect(out).toContain('"type":"message_stop"');
+  });
+});
