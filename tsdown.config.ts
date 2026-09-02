@@ -11,7 +11,10 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "ai-sdk": "./src/adapters/ai-sdk/index.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",
