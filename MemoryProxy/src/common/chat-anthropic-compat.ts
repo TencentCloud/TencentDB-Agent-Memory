@@ -416,9 +416,13 @@ export function chatToAnthropic(
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.user === "string") out.metadata = { user_id: body.user };
   if (body.stream === true) out.stream = true;
-  const tools = chatToolsToAnthropic(body.tools);
+  // OpenAI tool_choice:"none" 在 Anthropic 无对位值：保留 tools 再省略 tool_choice 会
+  // 变成 auto（仍可能调用工具），语义反转。等价近似 = 不携带任何 tools ——
+  // Anthropic 没有工具列表就不会调用工具。
+  const noToolCalls = body.tool_choice === "none";
+  const tools = noToolCalls ? undefined : chatToolsToAnthropic(body.tools);
   if (tools) out.tools = tools;
-  else if (Array.isArray(body.functions)) {
+  else if (!noToolCalls && Array.isArray(body.functions)) {
     const fns = (body.functions as unknown[])
       .map((f) => {
         const r = asRecord(f);
@@ -449,15 +453,17 @@ export function chatToAnthropic(
       if (body[k] !== undefined) opts.onDropped(k);
     }
   }
-  let tc = chatToolChoiceToAnthropic(body.tool_choice);
-  if (body.parallel_tool_calls === false) {
-    if (tc === undefined || tc === "auto") {
-      tc = { type: "auto", disable_parallel_tool_use: true };
-    } else if (asRecord(tc)) {
-      (tc as Record<string, unknown>).disable_parallel_tool_use = true;
+  if (!noToolCalls) {
+    let tc = chatToolChoiceToAnthropic(body.tool_choice);
+    if (body.parallel_tool_calls === false) {
+      if (tc === undefined || tc === "auto") {
+        tc = { type: "auto", disable_parallel_tool_use: true };
+      } else if (asRecord(tc)) {
+        (tc as Record<string, unknown>).disable_parallel_tool_use = true;
+      }
     }
+    if (tc !== undefined) out.tool_choice = tc;
   }
-  if (tc !== undefined) out.tool_choice = tc;
   recordConversion("chat_to_anthropic", performance.now() - _t0);
   return out;
 }
@@ -540,10 +546,10 @@ export function chatJsonToAnthropicJson(
   const usage = asRecord(json.usage);
   recordCacheUsage({
     cached:
-      typeof usage?.cache_read_input_tokens === "number"
-        ? usage.cache_read_input_tokens
-        : 0,
-    input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
+      typeof usage?.cached_tokens === "number"
+        ? usage.cached_tokens
+        : (asRecord(usage?.prompt_tokens_details)?.cached_tokens as number | undefined) ?? 0,
+    input: typeof usage?.prompt_tokens === "number" ? usage.prompt_tokens : 0,
   });
   recordConversion("chat_json_to_anthropic_json", performance.now() - _t0);
   return {
@@ -602,11 +608,9 @@ export function anthropicJsonToChatJson(
   const usage = asRecord(json.usage);
   recordCacheUsage({
     cached:
-      typeof usage?.cached_tokens === "number"
-        ? usage.cached_tokens
-        : typeof (asRecord(usage?.prompt_tokens_details)?.cached_tokens) === "number"
-          ? (asRecord(usage?.prompt_tokens_details)?.cached_tokens as number)
-          : 0,
+      typeof usage?.cache_read_input_tokens === "number"
+        ? usage.cache_read_input_tokens
+        : 0,
     input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
   });
   recordConversion("anthropic_json_to_chat_json", performance.now() - _t0);
@@ -673,6 +677,11 @@ export function createAnthropicSseToChatSse(
   let textIndex = -1;
   let reasoningOpen = false;
   let toolStates = new Map<number, { id: string; name: string }>();
+  // Anthropic 的 content block index 与 chat 的 tool_calls 序号不是一回事：
+  // thinking/text 块也会占用 index。这里按 tool_use 出现顺序重映射为连续序号
+  // （0,1,2…），否则 OpenAI 客户端按 index 聚和会错位/丢调用。
+  const toolOrdinalByBlock = new Map<number, number>();
+  let nextToolOrdinal = 0;
   let stopReason: string | undefined;
   let usage: Record<string, unknown> | undefined;
   const toChatUsage = (u: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
@@ -756,10 +765,12 @@ export function createAnthropicSseToChatSse(
       const idx = typeof data.index === "number" ? data.index : -1;
       const block = asRecord(data.content_block);
       if (block?.type === "tool_use") {
+        const ordinal = nextToolOrdinal++;
         toolStates.set(idx, {
           id: typeof block.id === "string" ? block.id : `call_${randomId()}`,
           name: typeof block.name === "string" ? block.name : "",
         });
+        toolOrdinalByBlock.set(idx, ordinal);
         ensureStarted();
         emit(
           sseData({
@@ -769,7 +780,7 @@ export function createAnthropicSseToChatSse(
                 delta: {
                   tool_calls: [
                     {
-                      index: idx,
+                      index: toolOrdinalByBlock.get(idx)!,
                       id: toolStates.get(idx)!.id,
                       type: "function",
                       function: { name: toolStates.get(idx)!.name, arguments: "" },
@@ -799,6 +810,14 @@ export function createAnthropicSseToChatSse(
           }),
         );
       } else if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+        // 防御：极端情况下 start 帧丢失时按顺序补一个序号，避免把上游块 index 泄漏出去。
+        const ordinal =
+          toolOrdinalByBlock.get(idx) ??
+          (() => {
+            const o = nextToolOrdinal++;
+            toolOrdinalByBlock.set(idx, o);
+            return o;
+          })();
         ensureStarted();
         emit(
           sseData({
@@ -808,7 +827,7 @@ export function createAnthropicSseToChatSse(
                 delta: {
                   tool_calls: [
                     {
-                      index: idx,
+                      index: ordinal,
                       function: { name: null, arguments: delta.partial_json },
                     },
                   ],
