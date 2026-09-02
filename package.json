@@ -7,7 +7,8 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-codex": "./dist/codex-mcp.mjs"
   },
   "exports": {
     ".": {
@@ -49,6 +50,7 @@
     "hermes-plugin/",
     "openclaw.plugin.json",
     "README.md",
+    "docs/codex-adapter.md",
     "CHANGELOG.md",
     "LICENSE",
     "!src/**/*.test.ts",
@@ -58,6 +60,8 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "codex",
+    "mcp",
     "memory",
     "ai-memory",
     "long-term-memory",
@@ -76,6 +80,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.53",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@node-rs/jieba": "^2.0.1",
     "@tencentdb-agent-memory/tcvdb-text": "^0.1.1",
     "ai": "^6.0.164",

@@ -11,7 +11,10 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "codex-mcp": "./src/adapters/codex/mcp-server.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",
