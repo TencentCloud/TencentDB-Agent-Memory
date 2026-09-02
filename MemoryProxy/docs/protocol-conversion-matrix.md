@@ -1,7 +1,9 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，172/172 通过，含 `protocol-conformance.test.ts`、`sse.test.ts` 与 `sse-fuzz.test.ts`）。
+> 全量回归：`npm test`（vitest，80/80 通过：protocol-conformance 46、responses-anthropic-compat 10、
+> sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
+> 分支内全量：`npx tsc --noEmit` 0 错误。
 
 ## 架构
 
@@ -45,7 +47,7 @@ Responses ↔ Chat ↔ Anthropic
 | messages[assistant].tool_calls | → tool_use 块（含 reasoning 前置） | ✅ |
 | messages[assistant].function_call（legacy） | → tool_use 块 | ✅ |
 | tools[] / functions[]（legacy） | → tools[]（input_schema） | ✅ |
-| tool_choice none/auto/required/function:{name} | → 省略 / auto / any / tool:{name} | ✅ |
+| tool_choice none/auto/required/function:{name} | → none 时移除全部 tools（Anthropic 无 none，等价近似）；其余 auto / any / tool:{name} | ✅ |
 | parallel_tool_calls:false | → tool_choice.disable_parallel_tool_use | ✅ |
 | stop（string/array） | → stop_sequences | ✅ |
 | max_tokens / max_completion_tokens | → max_tokens | ✅ |
@@ -92,6 +94,8 @@ Responses ↔ Chat ↔ Anthropic
 | Chat chunk / [DONE] / error | Responses response.created / output_item / response.completed / error | ✅ |
 
 流式不变量（测试覆盖）：message_start 至多一次、每个块成对 open/stop、message_delta/message_stop 至多一次、错误帧后不再发 [DONE]/message_stop；
+**tool index 重映射**：Anthropic content block index（thinking/text 也会占位）→ chat tool_calls 连续序号 0..n-1，
+不会把上游块 index 泄漏成跳号；
 **错误透传对称**：Anthropic/Chat/Responses 三个方向的流式错误（error 事件 / 内联 error 帧 / response.failed）都会透传给客户端，不再静默吞掉。
 
 ## 设计决策与边界
@@ -114,6 +118,9 @@ Responses ↔ Chat ↔ Anthropic
   的 forward 路径），错误体不会进入转换器；转换器保持纯函数。
 - **usage 细分字段**（`cache_creation_input_tokens` / `completion_tokens_details.reasoning_tokens`）：
   对方协议无对位字段，保持聚合计数（output_tokens 已含 reasoning），不伪造细分。
+- **内容块级无对位字段**（Anthropic user 的 `cache_control` / `document`、Responses 的 custom tools、未知 content block 类型）：当前静默跳过；`onDropped` 只覆盖顶层参数，内容块级丢弃未逐块上报（如需要可再下沉到块级）。
+- **Responses→Chat 输出上限钳制**：`responses-chat-compat.ts` 对 `max_output_tokens` 保留智谱 32768 上限（`Math.min`），
+  超过 32768 的请求会被截断；该常量写在通用转换层，属厂商兼容性取舍，若需通用化应移到 per-upstream 配置。
 - **协议无对位参数**（logprobs / penalty / seed / top_k / thinking 等）：通过 `onDropped`
   显式上报，调用方可记录；默认静默但可观测。
 
@@ -121,7 +128,7 @@ Responses ↔ Chat ↔ Anthropic
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| protocol-conformance.test.ts | 39 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 |
+| protocol-conformance.test.ts | 46 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义 |
 | sse.test.ts | 8 | 解析器健壮性（LF/CRLF/紧凑/多 data/注释/跨 chunk/[DONE]） |
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |
