@@ -9,6 +9,7 @@ workspace/
 
 # Test caches
 __tests__/soak/.model-cache/
+.pytest_cache/
 
 # Python cache
 __pycache__/

@@ -1,0 +1,8 @@
+{
+  "instance_id": "pylint-dev__pylint-4551",
+  "repo": "pylint-dev/pylint",
+  "base_commit": "99589b08de8c5a2c6cc61e13a37420a868c80599",
+  "dataset": "princeton-nlp/SWE-bench_Verified",
+  "split": "test",
+  "testbed_image": "swebench/sweb.eval.x86_64.pylint-dev_1776_pylint-4551:latest"
+}
