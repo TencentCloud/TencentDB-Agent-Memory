@@ -95,6 +95,13 @@ export function loadConfig(env = process.env, options = {}) {
   });
 }
 
+export function normalizeRecallConfig(config = {}) {
+  const conversationRecallEnabled = typeof config.conversationRecallEnabled === 'boolean'
+    ? config.conversationRecallEnabled
+    : config.enableConversationRecall === true;
+  return Object.freeze({ ...config, conversationRecallEnabled });
+}
+
 const defaults = (home) => ({
   teamId: 'default',
   agentId: 'kiro',

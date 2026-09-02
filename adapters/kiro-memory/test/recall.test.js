@@ -337,6 +337,40 @@ test('recall truncation preserves Unicode boundaries and includes framing in the
   assert.equal(output.endsWith('\n</TDAI_MEMORY_CONTEXT>'), true);
 });
 
+test('canonical conversation recall setting wins over the Phase 1 alias', async () => {
+  let requestedSources;
+  const service = new RecallService({
+    config: {
+      recallEnabled: true,
+      conversationRecallEnabled: false,
+      enableConversationRecall: true,
+      skillRecallEnabled: false,
+      maxRecallResults: 1,
+      maxContextChars: 6000,
+      timeoutMs: 100,
+    },
+    queryService: {
+      async query(input) {
+        requestedSources = input.sources;
+        return { hits: [], coreContent: null, degradedSources: [], truncated: false };
+      },
+    },
+  });
+
+  assert.equal(await service.recall('current prompt'), '');
+  assert.deepEqual(requestedSources, ['atomic', 'core']);
+});
+
+test('legacy formatter is explicit and produces the canonical framed output', () => {
+  const service = new RecallService({ config: { maxRecallResults: 2, maxContextChars: 6000 } });
+  const output = service.formatLegacy(
+    { items: [{ content: ' first ' }, { content: 'second' }, { content: 'first' }] },
+    { content: 'core' },
+  );
+  assert.match(output, /\[Atomic Memories\]\n1\. first\n2\. second/);
+  assert.match(output, /\[Core Memory\]\ncore/);
+});
+
 test('enforces the total-context budget while keeping its boundary intact', async () => {
   const service = new RecallService({
     config: { recallEnabled: true, maxRecallResults: 1, maxContextChars: 512 },
