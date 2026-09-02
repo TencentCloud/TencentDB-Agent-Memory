@@ -3,6 +3,7 @@
  * 覆盖 chat-anthropic-compat 与 responses-chat-compat 的增量行为。
  */
 import { describe, it, expect } from "vitest";
+import { getProtocolStats, resetProtocolStats } from "../common/protocol-stats.js";
 import {
   anthropicToChat,
   chatToAnthropic,
@@ -657,5 +658,126 @@ describe("转换器确定性（同输入 → 字节一致输出，上游缓存�
     };
     expect(JSON.stringify(anthropicJsonToChatJson(anthJson)))
       .toBe(JSON.stringify(anthropicJsonToChatJson(anthJson)));
+  });
+});
+describe("流式 Anthropic tool_use → Chat tool_calls 序号重映射", () => {
+  // Anthropic 的 content block index 与 chat 的 tool_calls 序号不同（thinking/text 也占位），
+  // 这里验证上游块 index=1/2 的 tool_use 在 chat 端按出现顺序输出为 0/1。
+  function chatToolIndexes(out: string): number[] {
+    const idxs: number[] = [];
+    for (const frame of out.split(/\r?\n\r?\n/)) {
+      const m = frame.match(/^data: (.*)$/ms);
+      if (!m || m[1] === "[DONE]") continue;
+      try {
+        const evt = JSON.parse(m[1]) as {
+          choices?: Array<{ delta?: { tool_calls?: Array<{ index?: number }> } }>;
+        };
+        for (const c of evt.choices ?? []) {
+          for (const tc of c.delta?.tool_calls ?? []) idxs.push(tc.index ?? -1);
+        }
+      } catch {
+        /* skip malformed frame */
+      }
+    }
+    return idxs;
+  }
+
+  it("thinking(0) 先于 tool_use(1)：chat 端只出现连续 index 0", async () => {
+    const ts = createAnthropicSseToChatSse({ model: "m" });
+    const out = await runTransform(ts, [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"m","content":[]}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":\\"sz\\"}"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]);
+    expect(chatToolIndexes(out)).toEqual([0, 0]);
+    expect(out).toContain('"id":"toolu_1"');
+    expect(out).toContain('city');
+    expect(out).toContain('"finish_reason":"tool_calls"');
+    // 上游块 index=1 绝不能泄漏成 chat 的 tool_calls index=1
+    expect(out).not.toContain('"index":1');
+  });
+
+  it("text(0) + tool_use(1,2)：chat 端序号为 0,0,1,1", async () => {
+    const ts = createAnthropicSseToChatSse({ model: "m" });
+    const out = await runTransform(ts, [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"m","content":[]}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_a","name":"f_a","input":{}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_b","name":"f_b","input":{}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\\"x\\":1}"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ]);
+    expect(chatToolIndexes(out)).toEqual([0, 0, 1, 1]);
+    expect(out).toContain('"id":"toolu_a"');
+    expect(out).toContain('"id":"toolu_b"');
+    expect(out).not.toContain('"index":2');
+  });
+});
+
+describe("tool_choice none 语义（Anthropic 无 none → 移除全部 tools）", () => {
+  it("chat none：不携带 tools 且不设 tool_choice，避免反转成 auto", () => {
+    const out = chatToAnthropic({
+      model: "m",
+      messages: [],
+      tools: [{ type: "function", function: { name: "f", parameters: { type: "object", properties: {} } } }],
+      tool_choice: "none",
+    });
+    expect(out.tools).toBeUndefined();
+    expect(out.tool_choice).toBeUndefined();
+  });
+
+  it("chat none + parallel_tool_calls:false：不产生 disable_parallel_tool_use", () => {
+    const out = chatToAnthropic({
+      model: "m",
+      messages: [],
+      tools: [{ type: "function", function: { name: "f", parameters: { type: "object", properties: {} } } }],
+      tool_choice: "none",
+      parallel_tool_calls: false,
+    });
+    expect(out.tools).toBeUndefined();
+    expect(out.tool_choice).toBeUndefined();
+  });
+});
+
+describe("usage 缓存统计（chat/anthropic 各自字段语义）", () => {
+  it("chat usage（cached_tokens / prompt_tokens_details）计入缓存命中", () => {
+    resetProtocolStats();
+    chatJsonToAnthropicJson({
+      id: "x",
+      choices: [{ message: { role: "assistant", content: "a" } }],
+      usage: { prompt_tokens: 100, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 30 } },
+    });
+    const snap = getProtocolStats();
+    expect(snap.cache.requests).toBe(1);
+    expect(snap.cache.cacheHitRequests).toBe(1);
+    expect(snap.cache.cachedTokens).toBe(30);
+    expect(snap.cache.inputTokens).toBe(100);
+  });
+
+  it("anthropic usage（cache_read_input_tokens）计入缓存命中", () => {
+    resetProtocolStats();
+    anthropicJsonToChatJson({
+      id: "m",
+      type: "message",
+      role: "assistant",
+      model: "m",
+      content: [{ type: "text", text: "a" }],
+      usage: { input_tokens: 200, output_tokens: 80, cache_read_input_tokens: 60 },
+    });
+    const snap = getProtocolStats();
+    expect(snap.cache.requests).toBe(1);
+    expect(snap.cache.cacheHitRequests).toBe(1);
+    expect(snap.cache.cachedTokens).toBe(60);
+    expect(snap.cache.inputTokens).toBe(200);
   });
 });
