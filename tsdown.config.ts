@@ -11,13 +11,17 @@ function collectExternalDependencies(): string[] {
 }
 
 export default defineConfig({
-  entry: ["./index.ts"],
+  entry: {
+    index: "./index.ts",
+    "adapters/gateway-client": "./src/adapters/gateway-client/index.ts",
+    "adapters/mimo-code": "./src/adapters/mimo-code/index.ts",
+  },
   outDir: "./dist",
   format: "esm",
   platform: "node",
   clean: true,
   fixedExtension: true,
-  dts: false,
+  dts: true,
   sourcemap: false,
   deps: {
     neverBundle: (id) => {
