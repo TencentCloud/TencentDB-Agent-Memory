@@ -75,7 +75,7 @@ export interface MigrationPreflightSummary {
     l1Count: number;
     profileCount: number;
     manifestExists: boolean;
-    manifestStoreType: "sqlite" | "tcvdb" | null;
+    manifestStoreType: "sqlite" | "tcvdb" | "postgres" | null;
   };
   target: {
     url: string;
