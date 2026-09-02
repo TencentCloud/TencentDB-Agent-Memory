@@ -425,7 +425,9 @@ export async function readConversationRecords(
  * optionally filtered by a cursor timestamp (messages after the cursor).
  *
  * When `limit` is provided, only the **newest** `limit` messages are returned
- * (matching the DB path's `ORDER BY timestamp DESC LIMIT ?` behavior).
+ * (matching the DB path's newest-first LIMIT behavior; note the SQLite path
+ * now sorts by `recorded_at`, write time, while this file path sorts by the
+ * message's own `timestamp`).
  * Returned messages are always in chronological order (oldest → newest).
  *
  * NOTE: potential optimization — records are chronologically ordered (append-only JSONL),

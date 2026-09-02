@@ -87,18 +87,15 @@ rm_container_if_exists "$CONTAINER"
 # LLM_MODE=custom → 不走 memory 的 LLM proxy，而是 knowledge 直连用户提供的端点
 info "启动 memory-hub (image=$MEMORY_HUB_IMAGE, panel=$PANEL_PORT knowledge=$KNOWLEDGE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
-  --network "$NETWORK" \
-  --network-alias memory-hub \
+  --network host \
   --add-host=host.docker.internal:host-gateway \
-  -p "${PANEL_PORT}:8125" \
-  -p "${KNOWLEDGE_PORT}:8424" \
   -v "${PANEL_VOLUME}:/data/knowledge" \
   -e PANEL_PORT=8125 \
   -e KNOWLEDGE_PORT=8424 \
   -e KNOWLEDGE_PUBLIC_BASE_URL="$KNOWLEDGE_PUBLIC_BASE_URL" \
   -e REMOTE_INSTANCE_ID=default \
   -e REMOTE_INSTANCE_NAME=default \
-  -e REMOTE_INSTANCE_URL="http://memory-core:8420" \
+  -e REMOTE_INSTANCE_URL="http://127.0.0.1:8420" \
   -e REMOTE_INSTANCE_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
   -e REMOTE_INSTANCE_PROXY_URL="$MEMORY_HUB_PROXY_PUBLIC_URL" \
   -e LLM_MODE=custom \

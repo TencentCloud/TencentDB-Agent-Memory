@@ -84,6 +84,19 @@ server:
 upstream:
   url: "${PROXY_UPSTREAM_URL}"
   apiKey: "${PROXY_UPSTREAM_API_KEY}"
+  # 混合协议：Anthropic 协议客户端 (claude-code/hermes/openclaw) 走智谱 Anthropic
+  # 端点；OpenAI 协议客户端 (codex/omp/cursor) 走默认 upstream.url (智谱 OpenAI 端点)。
+  # codex/omp 不在 spaceId 白名单 (credit-reporter.ts)，须用 /proxy/<spaceId>/ 前缀路由。
+  agents:
+    claude-code:
+      url: "${PROXY_ANTHROPIC_UPSTREAM_URL:-https://open.bigmodel.cn/api/anthropic/v1}"
+      apiKey: "${PROXY_UPSTREAM_API_KEY}"
+    hermes:
+      url: "${PROXY_ANTHROPIC_UPSTREAM_URL:-https://open.bigmodel.cn/api/anthropic/v1}"
+      apiKey: "${PROXY_UPSTREAM_API_KEY}"
+    openclaw:
+      url: "${PROXY_ANTHROPIC_UPSTREAM_URL:-https://open.bigmodel.cn/api/anthropic/v1}"
+      apiKey: "${PROXY_UPSTREAM_API_KEY}"
 
 log:
   file: ""
@@ -93,7 +106,7 @@ log:
 # tdai 内核对接（用于 injection / skill / auth 拉取）
 tdai:
   enabled: $(bool $PROXY_ENABLE_TDAI)
-  endpoint: "http://memory-core:8420"
+  endpoint: "http://127.0.0.1:8420"
   apiKey: "${MEMORY_CORE_GATEWAY_API_KEY}"
   serviceId: default
   memory:
@@ -104,12 +117,22 @@ tdai:
     injectL2L3: true
 
 skill:
-  endpoint: "http://memory-core:8420"
+  endpoint: "http://127.0.0.1:8420"
   serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+
+# knowledge 注入器：shouldRegisterKnowledgeInjector() 要求 enabled=true 且
+# serviceToken 非空（config.ts:440）。仅写进 injection.injectors 列表是不够的 ——
+# 没有这个 block，config.knowledge 取 DEFAULT（enabled:false, token:""）→ 注入器
+# 永不注册 → <knowledge_tools> 块对所有 agent 都不产生（与 skill 注入器不对称的根因）。
+knowledge:
+  enabled: true
+  endpoint: "http://127.0.0.1:8420"
+  serviceToken: "${MEMORY_CORE_GATEWAY_API_KEY}"
+  serviceId: default
 
 auth:
   enabled: $(bool $PROXY_ENABLE_AUTH)
-  url: "http://memory-core:8420"
+  url: "http://127.0.0.1:8420"
   timeoutMs: 5000
 
 sessionInit:
@@ -127,6 +150,10 @@ sessionInit:
 costGuard:
   enabled: false
 
+creditReport:
+  url: ""
+  timeoutMs: 5000
+
 # 打开 skill + knowledge + tdai-memory 三个注入器；
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
@@ -142,10 +169,8 @@ YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
-  --network "$NETWORK" \
-  --network-alias proxy \
+  --network host \
   --add-host=host.docker.internal:host-gateway \
-  -p "${PROXY_PORT}:8096" \
   -v "$CONFIG_FILE:/data/config.yaml:ro" \
   "$PROXY_IMAGE" >/dev/null
 

@@ -17,7 +17,7 @@
  * Limits (locked in M3):
  *   - name      : 1..64 chars, ^[a-z0-9][a-z0-9-]*$
  *   - description: 1..1024 chars
- *   - body      : ≤50_000 chars
+ *   - body      : ≤150_000 chars (raised from M3 50_000 default)
  *   - resources[*].type ∈ {text, executable, binary}
  */
 
@@ -26,7 +26,7 @@ import type { SkillFile } from "./types.js";
 
 const NAME_MAX = 64;
 const DESCRIPTION_MAX = 1024;
-const BODY_MAX = 50_000;
+const BODY_MAX = 150_000; // ponytail: raised from 50_000 (M3 default) to fit large self-authored review/planning skills (max ~126k). Single control point for body length.
 const NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 const RESOURCE_TYPES = new Set(["text", "executable", "binary"]);
 

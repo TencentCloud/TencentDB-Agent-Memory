@@ -55,13 +55,10 @@ export interface PipelineWorkerConfig {
   /** 消费轮询间隔 ms (default: 200) */
   pollIntervalMs?: number;
   /**
-   * 锁 TTL ms (default: 600000 = 10min)。
+   * 锁 TTL ms (default: 240000 = 4min)。
    * 必须 ≥ 2 × max(LLM timeout)：默认 LLM timeout 是 120s，
-   * 留足buffer 保证即便续约 timer 因 GC / 事件循环阻塞错过 1-2 次
+   * 留 2x buffer 保证即便续约 timer 因 GC / 事件循环阻塞错过 1-2 次
    * tick，锁也不会过期被别人抢走。
-   *
-   * 同时决定锁冲突时的单轮退避窗口长度：海量导入下同agent 多 session
-   * 排队较长，窗口过短会频繁触发重新入队（见 MAX_LOCK_REQUEUE）。
    */
   lockTtlMs?: number;
   /** 锁续约间隔 ms (default: 30000 = TTL 的 1/8，避免续约失败) */
@@ -114,16 +111,6 @@ export interface DeadLetterEntry {
 }
 
 const TAG = "[pipeline-worker]";
-
-/**
- * 锁冲突后允许的最大重新入队次数。
- *
- * 海量导入场景下，同一 agent 可能有上千个 session 排队等同一把锁；
- * 单次退避窗口（lockTtlMs）不足以让所有任务拿到锁，因此超时后重新入队
- * 而不是丢弃。15 次配合 lockTtlMs 提供足够长的总重试窗口，
- * 同时防止异常情况下任务无限重排。
- */
-const MAX_LOCK_REQUEUE = 15;
 
 // ============================
 // PipelineWorker
@@ -179,7 +166,7 @@ export class PipelineWorker {
       workerId: config?.workerId ?? `worker-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       concurrency: config?.concurrency ?? 60,
       pollIntervalMs: config?.pollIntervalMs ?? 200,
-      lockTtlMs: config?.lockTtlMs ?? 600000,
+      lockTtlMs: config?.lockTtlMs ?? 240000,
       lockRenewIntervalMs: config?.lockRenewIntervalMs ?? 30000,
       maxRetries: config?.maxRetries ?? 3,
       retryBaseDelayMs: config?.retryBaseDelayMs ?? 5000,
@@ -379,59 +366,32 @@ export class PipelineWorker {
         delay = Math.min(delay * 3, 5000);
       }
       if (!acquired) {
-        // 退避窗口内没抢到锁：重新入队而不是丢弃。
-        //
-        // 为什么必须先 ACK 再以新 id 重投（而不是直接不 ACK 让 XPENDING 重投）：
-        // CR-1 已验证不ACK 会导致 stale recovery 无限重复认领同一 msgId，
-        // 耗尽 worker 槽位。这里 ACK 掉旧消息 + enqueue 一条新任务，
-        // 既保证不丢，又不依赖 pending 重投机制。
-        //
-        // lockRetryCount 防止无限循环：同一任务最多重排 MAX_LOCK_REQUEUE 次。
-        const retryCount = Number((task.data as Record<string, unknown> | undefined)?.lockRetryCount ?? 0);
-        const msgId = (task as any)._msgId;
-
-        if (retryCount < MAX_LOCK_REQUEUE) {
-          const requeued: TaskPayload = {
-            ...task,
-            id: `${task.id}-lr${retryCount + 1}`,
-            createdAt: Date.now(),
-            data: { ...(task.data ?? {}), lockRetryCount: retryCount + 1 },
-          };
-          delete (requeued as any)._msgId;
-
-          let enqueued = false;
-          try {
-            await this.backend.enqueueTask(requeued);
-            enqueued = true;
-          } catch (err) {
-            this.logger?.warn?.(
-              `${TAG} Lock conflict requeue failed [${task.type}] (task=${task.id}): ` +
-              (err instanceof Error ? err.message : String(err)),
-            );
-          }
-
-          if (enqueued) {
-            this.logger?.info?.(
-              `${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, ` +
-              `requeued as ${requeued.id} (attempt ${retryCount + 1}/${MAX_LOCK_REQUEUE})`,
-            );
-            if (msgId) {
-              try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
-            }
-            releasePermitOnce();
-            return;
-          }
-          // 重投失败则退回到丢弃路径，避免消息悬挂
-        } else {
-          this.logger?.error?.(
-            `${TAG} Lock conflict exhausted [${task.type}] (task=${task.id}): ${lockKey}, ` +
-            `dropping after ${retryCount} requeues`,
+        // 锁冲突超时：重入队而非丢弃（PR #553 Fix1）。
+        // 历史行为是直接 drop + ACK（见原 CR-1 注释），但 L1 drain 这类"靠上一批
+        // 入队下一批"的接力任务被丢弃后整条链会静默断裂，且没有任何监督者发现
+        // （Issue #549）。改为与执行失败一致的重试策略：ACK 当前消息（防止
+        // XPENDING 重投导致同一任务并行执行两次）→ 指数退避 → 重入队
+        // （lockRetryCount 递增），超限进死信。lockRetryCount 独立于 retryCount，
+        // 避免与执行失败计数混淆。
+        const lockRetryCount = (task.data?.lockRetryCount as number) ?? 0;
+        if (lockRetryCount < this.config.maxRetries) {
+          const lockDelay = this.config.retryBaseDelayMs * Math.pow(3, lockRetryCount);
+          this.logger?.warn?.(
+            `${TAG} Lock conflict timeout [${task.type}] (task=${task.id}): ${lockKey}, re-enqueue (lockRetry ${lockRetryCount + 1}/${this.config.maxRetries}, delay=${lockDelay}ms)`,
           );
+          const msgId = (task as any)._msgId;
+          if (msgId) {
+            try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
+          }
+          await this.sleep(lockDelay);
+          await this.reEnqueueLockRetry(task, lockRetryCount + 1);
+          this.metrics.tasksRetried++;
+        } else {
+          await this.moveToDeadLetter(task, "lock conflict timeout", lockRetryCount);
         }
-
-        if (msgId) {
-          try { await this.backend.ackTask(msgId); } catch { /* best effort */ }
-        }
+        // ponytail: PR 原始 diff 漏了这一行 —— permit 在函数入口(274)获取，
+        // finally@494 只覆盖锁获取后的 try 块；此 return 在 try 之前退出，
+        // 不补 releasePermitOnce 会泄漏并发许可，慢性耗尽 worker 槽。
         releasePermitOnce();
         return;
       }
@@ -788,6 +748,19 @@ export class PipelineWorker {
       ...task,
       id: `${task.type}-${task.sessionId}-retry${newRetryCount}-${Date.now()}`,
       data: { ...task.data, retryCount: newRetryCount },
+      createdAt: Date.now(),
+    });
+  }
+
+  /**
+   * 锁冲突超时后的重入队：与 reEnqueue 相同，但使用独立的 lockRetryCount 计数，
+   * 避免与执行失败的 retryCount 语义混淆。（PR #553 Fix1）
+   */
+  private async reEnqueueLockRetry(task: TaskPayload, newLockRetryCount: number): Promise<void> {
+    await this.backend.enqueueTask({
+      ...task,
+      id: `${task.type}-${task.sessionId}-lockretry${newLockRetryCount}-${Date.now()}`,
+      data: { ...task.data, lockRetryCount: newLockRetryCount },
       createdAt: Date.now(),
     });
   }

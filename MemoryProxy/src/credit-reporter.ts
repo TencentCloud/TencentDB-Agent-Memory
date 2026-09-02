@@ -311,6 +311,14 @@ export async function tryReportCreditFromPath(
   if (!spaceId || !usage || Object.keys(usage).length === 0) {
     return { attempted: false, ok: false };
   }
+  // Credit reporting disabled: an empty/unset endpoint URL means the deployment
+  // does not connect to a MemoryPlus billing service (e.g. start-proxy.sh writes
+  // `creditReport.url: ""`). Skip cleanly instead of letting fetch("") throw
+  // "Failed to parse URL from ''" — which otherwise surfaces as a CREDIT_REPORT
+  // pipe error on every response.
+  if (!config.url || !config.url.trim()) {
+    return { attempted: false, ok: false };
+  }
   const result = await reportCreditUsage(config, {
     SpaceId: spaceId,
     MemoryLevel: PROXY_MEMORY_LEVEL,
