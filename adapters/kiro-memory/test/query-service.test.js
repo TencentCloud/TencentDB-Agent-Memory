@@ -134,6 +134,7 @@ test('shared deadline aborts every unfinished source request', async () => {
     (error) => error instanceof QueryError && error.category === 'all_sources_failed',
   );
   assert.equal(signals.length, 4);
+  assert.equal(new Set(signals).size, 1);
   assert.equal(signals.every((signal) => signal instanceof AbortSignal && signal.aborted), true);
 });
 

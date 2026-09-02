@@ -81,7 +81,7 @@ export class UnifiedQueryService {
     try {
       await Promise.race([
         Promise.all(tasks),
-        new Promise((resolve) => { timer = setTimeout(resolve, deadlineMs); }),
+        new Promise((resolve) => { timer = setTimeout(resolve, remaining()); }),
       ]);
     } finally {
       clearTimeout(timer);
