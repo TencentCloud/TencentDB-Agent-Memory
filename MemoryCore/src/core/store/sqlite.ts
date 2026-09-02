@@ -200,6 +200,27 @@ const ZH_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Common English function words that add noise to FTS5 OR queries.
+ * Keep this list conservative: negation, quantity, identity, and domain
+ * words should remain searchable.
+ */
+// Keep this list conservative: technical, negation, and relational terms can
+// be meaningful search tokens in database, code, and requirements content.
+const EN_STOP_WORDS = new Set([
+  "a", "an", "the",
+  "is", "are", "was", "were", "be", "been", "being",
+  "do", "does", "did", "have", "has", "had",
+]);
+
+function isSearchableFtsToken(token: string): boolean {
+  if (!token) return false;
+  if (!/[\p{L}\p{N}]/u.test(token)) return false;
+  if (ZH_STOP_WORDS.has(token)) return false;
+  if (EN_STOP_WORDS.has(token.toLowerCase())) return false;
+  return true;
+}
+
+/**
  * Build an FTS5 MATCH query from raw text.
  *
  * When `@node-rs/jieba` is available, uses jieba's search-engine mode
@@ -230,14 +251,7 @@ export function buildFtsQuery(raw: string): string | null {
     tokens = jieba
       .cutForSearch(raw, true)
       .map((t) => t.trim())
-      .filter((t) => {
-        if (!t) return false;
-        // Remove pure whitespace / punctuation tokens
-        if (!/[\p{L}\p{N}]/u.test(t)) return false;
-        // Remove common Chinese stop-words to reduce noise
-        if (ZH_STOP_WORDS.has(t)) return false;
-        return true;
-      });
+      .filter(isSearchableFtsToken);
     // Deduplicate (cutForSearch may produce duplicates for sub-words)
     tokens = [...new Set(tokens)];
   } else {
@@ -246,7 +260,7 @@ export function buildFtsQuery(raw: string): string | null {
       raw
         .match(/[\p{L}\p{N}_]+/gu)
         ?.map((t) => t.trim())
-        .filter(Boolean) ?? [];
+        .filter(isSearchableFtsToken) ?? [];
   }
 
   if (tokens.length === 0) return null;
