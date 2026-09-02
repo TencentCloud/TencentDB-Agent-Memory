@@ -24,6 +24,7 @@
     "status": "node scripts/status.mjs",
     "health": "node scripts/health.mjs --json",
     "maintenance": "node scripts/maintenance.mjs",
+    "drain": "node scripts/drain.mjs",
     "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {

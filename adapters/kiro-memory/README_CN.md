@@ -30,6 +30,7 @@ node scripts/install.mjs --project C:\path\to\project
 node scripts/doctor.mjs --project C:\path\to\project
 node scripts/status.mjs --project C:\path\to\project
 node scripts/health.mjs --project C:\path\to\project --json
+node scripts/drain.mjs --project C:\path\to\project
 ```
 
 安装器只拥有 `.kiro/hooks/tdai-memory.json`、`.kiro/settings/mcp.json` 中的 `tdai-memory` 条目和安装 receipt；它安装 `UserPromptSubmit`、`PostToolUse`、`Stop`，并保留其他设置。不要配置 `autoApprove`，MCP 工具继续遵循 Kiro 的常规审批。卸载使用 `node scripts/uninstall.mjs --project C:\path\to\project`。
@@ -42,7 +43,7 @@ MCP 提供 `tdai_memory_search`、`tdai_conversation_search`、`tdai_memory_stat
 
 当状态提示 legacy 时运行 `node scripts/migrate.mjs --project C:\path\to\project`。迁移可恢复且非破坏性：逐项校验复制结果，最后发布 manifest，并且 will not automatically delete 源状态。详见 [UPGRADE_CN.md](./UPGRADE_CN.md)。
 
-Migration 最多扫描 `10,000` 个 JSON 对象。Maintenance 会报告 `stale lock`，但不会自动删除，因为仅凭存续时间无法证明持有进程已经退出。
+Migration 最多扫描 `10,000` 个 JSON 对象。`stale lock` 只有在租约过期、同机 owner PID（same-host owner PID）明确死亡时才会自动回收；owner 仍存活、状态未知、跨主机、legacy 或无效时都只报告并等待人工判断，绝不会仅凭时间删除。进程存活判定仅适用于本地 state 文件系统；NFS/SMB state root 不支持自动回收。
 
 `node scripts/maintenance.mjs --project C:\path\to\project` 默认只生成 dry-run 计划；仅可用 `--apply` 应用已经审核且对象未变化的计划。特殊或变化对象只会跳过或报告。`status.mjs` 与 `health.mjs` 都执行有时限的 Gateway 探测；前者面向人，后者只输出一个 JSON 文档。`doctor.mjs` 保持离线并校验配置和安装产物。
 
@@ -50,4 +51,6 @@ Migration 最多扫描 `10,000` 个 JSON 对象。Maintenance 会报告 `stale l
 
 Recall 文本是不可信上下文，不是指令。Capture 只记录能观察到的用户提示、工具轨迹及可获得的 assistant 输出，不伪造 IDE 未提供的内容。Hook 投递 fail-open，重试有界，不可重试错误进入人工处理。Phase 2 不会静默降级配置或状态，也不会自动删除迁移源或隔离内容。
 
-Hook 触发的 Outbox 按 FIFO 串行处理，并在 1500 ms flush 预算内保持 `maxItems=3`。该边界用于保护交互延迟和顺序；更高吞吐的后台 drain 需要单独设计限流策略。
+Hook 触发的 Outbox 仍按 FIFO 串行处理，并在 1500 ms flush 预算内保持 `maxItems=3`。积压处理可运行 `npm run drain -- --project C:\path\to\project`；它是一次性（one-shot）worker，不是 daemon，也不会安装或启动调度器。默认 `budget-ms` 为 30000，因此外部调度间隔应至少为 30 秒，并且不得短于实际配置的单次预算，避免无意义重叠。
+
+一次性 drain 在同一 session lane 内串行，默认跨 4 个 lane 并发；`--concurrency` 可将上限配置为 1–8。跨 session 不承诺全局严格 FIFO。lane 头部的 `manual review` 或尚未到期的 future retry 不会被绕过。API Key only 通过环境变量提供，禁止写入 drain 命令行。

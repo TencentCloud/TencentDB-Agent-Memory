@@ -13,7 +13,8 @@ const required = [
   'autoApprove', 'TDAI_MEMORY_SKILL_RECALL_ENABLED', 'TDAI_MEMORY_MCP_MAX_OUTPUT_CHARS',
   '.kiro/settings/tdai-memory.json', '~/.kiro/settings/tdai-memory.json',
   'https://kiro.dev/docs/hooks/',
-  'maxItems=3', 'stale lock', '10,000',
+  'maxItems=3', 'stale lock', '10,000', 'drain.mjs', 'one-shot', 'budget-ms', 'manual review',
+  'future retry', 'NFS/SMB', '--concurrency',
 ];
 
 test('English and Chinese guides document the same Phase 2 setup, safety, and limits', async () => {
@@ -22,7 +23,8 @@ test('English and Chinese guides document the same Phase 2 setup, safety, and li
     for (const text of required) assert.equal(source.includes(text), true, `${doc} lacks ${text}`);
     assert.equal(source.includes('Kiro Web'), true);
     assert.equal(source.includes('remote Gateway E2E'), true);
-    assert.equal(source.includes('will not automatically delete'), true);
+    assert.equal(source.includes('same-host owner PID'), true);
     assert.equal(source.includes('API Key only'), true);
+    assert.equal(source.includes(doc === 'README.md' ? 'global FIFO' : '全局严格 FIFO'), true);
   }
 });

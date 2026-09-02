@@ -18,7 +18,7 @@ const expectedEvent = { recall: 'UserPromptSubmit', 'post-tool-use': 'PostToolUs
 const safe = () => ({ exitCode: 0, stdout: '' });
 const defaultResolveRuntimeConfig = async (env, workspace) => (await resolveConfig({ env, workspace })).config;
 
-const defaultDependencies = (config) => {
+export const createRuntimeDependencies = (config) => {
   const gatewayClient = new GatewayClient(config);
   const queryService = new UnifiedQueryService({ gatewayClient });
   let archiveService;
@@ -75,7 +75,7 @@ const readInput = async (stdin) => {
 
 export async function runCli({
   argv = process.argv.slice(2), stdin = process.stdin, env = process.env,
-  resolveRuntimeConfig = defaultResolveRuntimeConfig, createDependencies = defaultDependencies,
+  resolveRuntimeConfig = defaultResolveRuntimeConfig, createDependencies = createRuntimeDependencies,
 } = {}) {
   try {
     if (!Array.isArray(argv) || argv.length !== 1 || !Object.hasOwn(expectedEvent, argv[0])) return safe();

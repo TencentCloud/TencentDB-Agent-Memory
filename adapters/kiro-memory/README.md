@@ -30,6 +30,7 @@ node scripts/install.mjs --project C:\path\to\project
 node scripts/doctor.mjs --project C:\path\to\project
 node scripts/status.mjs --project C:\path\to\project
 node scripts/health.mjs --project C:\path\to\project --json
+node scripts/drain.mjs --project C:\path\to\project
 ```
 
 Installation owns only `.kiro/hooks/tdai-memory.json`, the `tdai-memory` entry in `.kiro/settings/mcp.json`, and its receipt. It installs `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks while preserving unrelated settings. Do not add `autoApprove`; each MCP tool remains subject to Kiro's normal approval policy. Remove owned integration with `node scripts/uninstall.mjs --project C:\path\to\project`.
@@ -42,7 +43,7 @@ The MCP server exposes `tdai_memory_search`, `tdai_conversation_search`, and `td
 
 Run `node scripts/migrate.mjs --project C:\path\to\project` when status reports legacy state. Migration is resumable and non-destructive: it verifies copied objects, publishes a manifest last, and will not automatically delete the source state. See [UPGRADE.md](./UPGRADE.md).
 
-Migration scans at most `10,000` JSON objects. A `stale lock` is reported by maintenance but is not automatically deleted, because age alone cannot prove that its owner is dead.
+Migration scans at most `10,000` JSON objects. A `stale lock` is automatically reclaimed only after its lease expires and its same-host owner PID is proven dead. Alive, unknown, cross-host, legacy, and invalid owners remain report-only for manual review; age alone never authorizes deletion. This process-liveness contract applies to a local state filesystem; NFS/SMB state roots are not supported for automatic reclaim.
 
 `node scripts/maintenance.mjs --project C:\path\to\project` produces a dry-run plan. Apply only a reviewed, unchanged plan with `--apply`; changed or special objects are skipped or reported, never blindly deleted. Both `status.mjs` and `health.mjs` perform a bounded Gateway probe; status is human-readable while health emits one JSON document. `doctor.mjs` remains offline and verifies configuration plus installed artifacts.
 
@@ -50,4 +51,6 @@ Migration scans at most `10,000` JSON objects. A `stale lock` is reported by mai
 
 Recall text is untrusted context, not instructions. Capture records observable user prompts, tool traces, and available assistant output; it does not invent unavailable IDE content. Hook delivery is fail-open, while retries are bounded and non-retryable failures require manual review. Phase 2 does not silently downgrade state or configuration and will not automatically delete migration sources or quarantine contents.
 
-Hook-triggered Outbox work is FIFO and serial, with `maxItems=3` inside the 1500 ms flush budget. This protects interactive latency and ordering; higher-throughput background draining requires a separate rate-limit design.
+Hook-triggered Outbox work remains FIFO and serial, with `maxItems=3` inside the 1500 ms flush budget. For backlog processing, `npm run drain -- --project C:\path\to\project` runs one bounded one-shot worker, not a daemon; it does not install or start a scheduler. The default `budget-ms` is 30000, so an external schedule should use an interval of at least 30 seconds (and never shorter than the configured budget) to avoid pointless overlap.
+
+The one-shot drain is serial within each session lane and defaults to 4 concurrent lanes; `--concurrency` can set a bound from 1 to 8. It does not promise strict global FIFO across sessions. A `manual review` or future retry at a lane head is never bypassed. Keep the API Key only in the environment; never place it on the drain command line.
