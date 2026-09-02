@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+/**
+ * Cursor launcher for local MemoryCore v3 (promptMode=code, real dataDir).
+ * Must remain a Node executable so detached worker spawn(argv[1], ...) works.
+ */
+import { createCursorCliRuntime, main } from "../dist/src/cli.js";
+
+const defaults = {
+  MEMORY_TENCENTDB_GATEWAY_URL: "http://127.0.0.1:8420",
+  MEMORY_TENCENTDB_GATEWAY_API_KEY: "local-memorycore-v3",
+  MEMORY_TENCENTDB_SERVICE_ID: "default",
+  MEMORY_TENCENTDB_TEAM_ID: "default",
+  MEMORY_TENCENTDB_AGENT_ID: "default",
+  MEMORY_TENCENTDB_USER_ID: "default",
+  MEMORY_TENCENTDB_CURSOR_ROOT: `${process.env.HOME}/.memory-tencentdb/cursor`,
+  MEMORY_TENCENTDB_CURSOR_RECALL_TIMEOUT_MS: "2000",
+  MEMORY_TENCENTDB_CURSOR_ADAPTER: "tencentdb-memory-cursor-v1",
+};
+
+for (const [key, value] of Object.entries(defaults)) {
+  if (!process.env[key]) process.env[key] = value;
+}
+
+const runtime = createCursorCliRuntime({
+  executablePath: process.argv[1],
+});
+
+process.exitCode = await main(process.argv.slice(2), runtime);
