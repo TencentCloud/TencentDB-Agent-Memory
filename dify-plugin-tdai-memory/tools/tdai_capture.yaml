@@ -1,0 +1,70 @@
+identity:
+  name: tdai_capture
+  author: tencentdb-agent-memory
+  label:
+    en_US: Capture Conversation Turn
+    zh_Hans: 捕获对话轮次
+description:
+  human:
+    en_US: Store a completed user/assistant turn in TencentDB Agent Memory.
+    zh_Hans: 将完成的一轮用户/助手对话写入 TencentDB Agent Memory。
+  llm: Store a completed turn.
+parameters:
+  - name: user_content
+    type: string
+    required: true
+    label:
+      en_US: User Content
+      zh_Hans: 用户内容
+    human_description:
+      en_US: The user's original message.
+      zh_Hans: 用户原始消息。
+    llm_description: User message.
+    form: llm
+  - name: assistant_content
+    type: string
+    required: true
+    label:
+      en_US: Assistant Content
+      zh_Hans: 助手内容
+    human_description:
+      en_US: The assistant response.
+      zh_Hans: 助手回复。
+    llm_description: Assistant reply.
+    form: llm
+  - name: session_key
+    type: string
+    required: true
+    label:
+      en_US: Session Key
+      zh_Hans: 会话 Key
+    human_description:
+      en_US: Stable Dify conversation ID.
+      zh_Hans: 稳定的 Dify conversation_id。
+    llm_description: Stable session key.
+    form: llm
+  - name: session_id
+    type: string
+    required: false
+    label:
+      en_US: Session ID
+      zh_Hans: 会话 ID
+    human_description:
+      en_US: Optional sub-session identifier.
+      zh_Hans: 可选的子会话标识。
+    llm_description: Optional sub-session ID.
+    form: llm
+  - name: user_id
+    type: string
+    required: false
+    label:
+      en_US: User ID
+      zh_Hans: 用户 ID
+    human_description:
+      en_US: Optional end-user identifier.
+      zh_Hans: 可选的终端用户标识。
+    llm_description: Optional user ID.
+    form: llm
+extra:
+  python:
+    source: tools/tdai_capture.py

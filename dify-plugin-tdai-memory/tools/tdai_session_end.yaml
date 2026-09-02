@@ -1,0 +1,37 @@
+identity:
+  name: tdai_session_end
+  author: tencentdb-agent-memory
+  label:
+    en_US: End Memory Session
+    zh_Hans: 结束记忆会话
+description:
+  human:
+    en_US: Flush the current session buffer without stopping the Gateway.
+    zh_Hans: 刷新当前会话缓冲，不会停止 Gateway。
+  llm: End a memory session and flush buffered pipeline work.
+parameters:
+  - name: session_key
+    type: string
+    required: true
+    label:
+      en_US: Session Key
+      zh_Hans: 会话 Key
+    human_description:
+      en_US: Stable Dify conversation ID.
+      zh_Hans: 稳定的 Dify conversation_id。
+    llm_description: Session ID to flush.
+    form: llm
+  - name: user_id
+    type: string
+    required: false
+    label:
+      en_US: User ID
+      zh_Hans: 用户 ID
+    human_description:
+      en_US: Optional end-user identifier.
+      zh_Hans: 可选的终端用户标识。
+    llm_description: Optional user ID.
+    form: llm
+extra:
+  python:
+    source: tools/tdai_session_end.py

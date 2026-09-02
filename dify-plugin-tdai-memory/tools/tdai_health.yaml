@@ -1,0 +1,15 @@
+identity:
+  name: tdai_health
+  author: tencentdb-agent-memory
+  label:
+    en_US: Check Gateway Health
+    zh_Hans: 检查 Gateway 健康状态
+description:
+  human:
+    en_US: Check whether TencentDB Agent Memory Gateway is reachable.
+    zh_Hans: 检查 TencentDB Agent Memory Gateway 是否可访问。
+  llm: Check the local TencentDB Agent Memory Gateway health endpoint.
+parameters: []
+extra:
+  python:
+    source: tools/tdai_health.py
