@@ -1,7 +1,7 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，81/81 通过：protocol-conformance 47、responses-anthropic-compat 10、
+> 全量回归：`npm test`（vitest，85/85 通过：protocol-conformance 49、responses-anthropic-compat 12、
 > sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -130,9 +130,9 @@ Responses ↔ Chat ↔ Anthropic
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| protocol-conformance.test.ts | 47 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start |
+| protocol-conformance.test.ts | 49 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start/丢参计数 |
 | sse.test.ts | 8 | 解析器健壮性（LF/CRLF/紧凑/多 data/注释/跨 chunk/[DONE]） |
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |
-| responses-anthropic-compat.test.ts | 10 | 组合层两跳 |
+| responses-anthropic-compat.test.ts | 12 | 组合层两跳 + usage 单次统计 |
 | 其余（critical-paths / optimizations / …） | 109 | 回归 |
