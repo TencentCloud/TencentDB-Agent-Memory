@@ -27,6 +27,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import type { IMemoryStore } from "../core/store/types.js";
 
 // ============================
 // Types
@@ -179,10 +180,12 @@ async function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise<
 }
 
 export class CheckpointManager {
+  private dataDir: string;
   private filePath: string;
   private logger: CheckpointLogger;
 
   constructor(dataDir: string, logger?: CheckpointLogger) {
+    this.dataDir = dataDir;
     this.filePath = path.join(dataDir, ".metadata", "recall_checkpoint.json");
     this.logger = logger ?? noopLogger;
   }
@@ -291,6 +294,28 @@ export class CheckpointManager {
   /** Write a full checkpoint (acquires lock + atomic write). */
   async write(checkpoint: Checkpoint): Promise<void> {
     return withFileLock(this.filePath, () => this.writeRaw(checkpoint));
+  }
+
+  /**
+   * Recalculate storage-derived counters from the current source of truth.
+   *
+   * The two counters below are derived state: capture/extraction paths increment
+   * them, while cleanup/manual deletion/reset paths can remove the underlying
+   * records. Recalculation restores them from VectorStore when available, or
+   * from local JSONL shards as a fallback.
+   */
+  async recalculateCounters(vectorStore?: IMemoryStore): Promise<void> {
+    const counts = await this.readStorageCounts(vectorStore);
+    const cp = await this.mutate((cp) => {
+      cp.l0_conversations_count = counts.l0;
+      cp.total_memories_extracted = counts.l1;
+    });
+    this.logger.info(
+      `[checkpoint] recalculateCounters: ` +
+      `l0_conversations_count=${cp.l0_conversations_count}, ` +
+      `total_memories_extracted=${cp.total_memories_extracted}, ` +
+      `source=${counts.source}`,
+    );
   }
 
   // ============================
@@ -485,4 +510,62 @@ export class CheckpointManager {
     });
   }
 
+  private async readStorageCounts(
+    vectorStore?: IMemoryStore,
+  ): Promise<{ l0: number; l1: number; source: "vectorStore" | "jsonl" }> {
+    if (vectorStore && !vectorStore.isDegraded()) {
+      try {
+        const [l0, l1] = await Promise.all([
+          vectorStore.countL0(),
+          vectorStore.countL1(),
+        ]);
+        return { l0, l1, source: "vectorStore" };
+      } catch (err) {
+        this.logger.warn?.(
+          `[checkpoint] vectorStore count failed, falling back to JSONL: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    const [l0, l1] = await Promise.all([
+      countJsonLines(path.join(this.dataDir, "conversations")),
+      countJsonLines(path.join(this.dataDir, "records")),
+    ]);
+    return { l0, l1, source: "jsonl" };
+  }
+
+}
+
+async function countJsonLines(dirPath: string): Promise<number> {
+  let entries;
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".json")) continue;
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(dirPath, entry.name), "utf-8");
+    } catch {
+      continue;
+    }
+
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        JSON.parse(line);
+        count += 1;
+      } catch {
+        // Keep recalculation tolerant of partially corrupt local shards.
+      }
+    }
+  }
+  return count;
 }
