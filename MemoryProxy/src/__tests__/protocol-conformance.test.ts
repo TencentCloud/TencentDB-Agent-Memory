@@ -3,7 +3,7 @@
  * 覆盖 chat-anthropic-compat 与 responses-chat-compat 的增量行为。
  */
 import { describe, it, expect } from "vitest";
-import { getProtocolStats, resetProtocolStats } from "../common/protocol-stats.js";
+import { getProtocolStats, resetProtocolStats, protocolStatsToPrometheus } from "../common/protocol-stats.js";
 import {
   anthropicToChat,
   chatToAnthropic,
@@ -791,5 +791,24 @@ describe("空内容 Chat 流 → Anthropic SSE 也必须先发 message_start", (
     expect(out.indexOf('"type":"message_start"')).toBeGreaterThanOrEqual(0);
     expect(out.indexOf('"type":"message_start"')).toBeLessThan(out.indexOf('"type":"message_delta"'));
     expect(out).toContain('"type":"message_stop"');
+  });
+});
+describe("丢参始终计入 /metrics（无需调用方接线 onDropped）", () => {
+  it("chatToAnthropic 未传 onDropped：logprobs/seed 丢参进 prometheus 计数", () => {
+    resetProtocolStats();
+    chatToAnthropic({ model: "m", messages: [], logprobs: true, seed: 1 });
+    chatToAnthropic({ model: "m", messages: [], logprobs: true });
+    const out = protocolStatsToPrometheus();
+    expect(out).toContain('tdai_conversion_dropped_total{kind="chat_to_anthropic",param="logprobs"} 2');
+    expect(out).toContain('tdai_conversion_dropped_total{kind="chat_to_anthropic",param="seed"} 1');
+  });
+
+  it("anthropicToChat 未传 onDropped：top_k / metadata 丢参进计数（metadata 聚合）", () => {
+    resetProtocolStats();
+    anthropicToChat({ model: "m", messages: [], top_k: 5, metadata: { user_id: "u", custom: "x" } });
+    const out = protocolStatsToPrometheus();
+    expect(out).toContain('tdai_conversion_dropped_total{kind="anthropic_to_chat",param="top_k"} 1');
+    expect(out).toContain('tdai_conversion_dropped_total{kind="anthropic_to_chat",param="metadata"} 1');
+    expect(out).not.toContain('param="metadata.custom"');
   });
 });

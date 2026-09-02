@@ -10,7 +10,7 @@
  */
 
 import { createSseFrameParser } from "./sse.js";
-import { recordConversion, recordStream, recordCacheUsage } from "./protocol-stats.js";
+import { recordConversion, recordStream, recordCacheUsage, recordDrop } from "./protocol-stats.js";
 
 // ── 工具函数 ─────────────────────────────────────────────────────────────────
 
@@ -204,12 +204,19 @@ export function anthropicToChat(
   if (typeof body.top_p === "number") out.top_p = body.top_p;
   const md = asRecord(body.metadata);
   if (md && typeof md.user_id === "string") out.user = md.user_id;
-  if (opts.onDropped) {
-    if (body.top_k !== undefined) opts.onDropped("top_k");
-    if (body.thinking !== undefined) opts.onDropped("thinking");
-    if (md) {
-      for (const k of Object.keys(md)) {
-        if (k !== "user_id") opts.onDropped(`metadata.${k}`);
+  // 丢参始终计入 /metrics（recordDrop），不依赖调用方接线 onDropped；
+  // metadata 键名可能来自客户端，按聚合名 “metadata” 计数避免 label 基数失控。
+  const drop = (param: string): void => {
+    opts.onDropped?.(param);
+    recordDrop("anthropic_to_chat", param);
+  };
+  if (body.top_k !== undefined) drop("top_k");
+  if (body.thinking !== undefined) drop("thinking");
+  if (md) {
+    for (const k of Object.keys(md)) {
+      if (k !== "user_id") {
+        opts.onDropped?.(`metadata.${k}`);
+        recordDrop("anthropic_to_chat", "metadata");
       }
     }
   }
@@ -438,20 +445,22 @@ export function chatToAnthropic(
   }
   if (Array.isArray(body.stop)) out.stop_sequences = body.stop;
   else if (typeof body.stop === "string") out.stop_sequences = [body.stop];
-  if (opts.onDropped) {
-    for (const k of [
-      "logprobs",
-      "top_logprobs",
-      "logit_bias",
-      "presence_penalty",
-      "frequency_penalty",
-      "seed",
-      "n",
-      "response_format",
-      "stream_options",
-    ]) {
-      if (body[k] !== undefined) opts.onDropped(k);
-    }
+  const drop = (param: string): void => {
+    opts.onDropped?.(param);
+    recordDrop("chat_to_anthropic", param);
+  };
+  for (const k of [
+    "logprobs",
+    "top_logprobs",
+    "logit_bias",
+    "presence_penalty",
+    "frequency_penalty",
+    "seed",
+    "n",
+    "response_format",
+    "stream_options",
+  ]) {
+    if (body[k] !== undefined) drop(k);
   }
   if (!noToolCalls) {
     let tc = chatToolChoiceToAnthropic(body.tool_choice);
@@ -578,7 +587,7 @@ export function chatJsonToAnthropicJson(
 /** 上游 anthropic JSON → 客户端 chat JSON。 */
 export function anthropicJsonToChatJson(
   json: Record<string, unknown>,
-  opts: { preserveSignature?: boolean } = {},
+  opts: { preserveSignature?: boolean; suppressUsageStat?: boolean } = {},
 ): Record<string, unknown> {
   const _t0 = performance.now();
   const content = Array.isArray(json.content) ? (json.content as unknown[]) : [];
@@ -606,13 +615,16 @@ export function anthropicJsonToChatJson(
     }
   }
   const usage = asRecord(json.usage);
-  recordCacheUsage({
-    cached:
-      typeof usage?.cache_read_input_tokens === "number"
-        ? usage.cache_read_input_tokens
-        : 0,
-    input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
-  });
+  // suppressUsageStat：组合层（Responses↔Anthropic 两跳）只在最终一跳计一次 usage。
+  if (!opts.suppressUsageStat) {
+    recordCacheUsage({
+      cached:
+        typeof usage?.cache_read_input_tokens === "number"
+          ? usage.cache_read_input_tokens
+          : 0,
+      input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
+    });
+  }
   recordConversion("anthropic_json_to_chat_json", performance.now() - _t0);
   const message: Record<string, unknown> = { role: "assistant", content: textParts.join("\n") || null };
   if (reasoningParts.length > 0) message.reasoning_content = reasoningParts.join("\n");

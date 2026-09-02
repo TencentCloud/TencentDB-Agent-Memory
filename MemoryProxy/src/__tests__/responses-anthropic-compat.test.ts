@@ -7,6 +7,7 @@ import {
   createAnthropicSseToResponsesSse,
   createResponsesSseToAnthropicSse,
 } from "../common/responses-anthropic-compat.js";
+import { getProtocolStats, resetProtocolStats } from "../common/protocol-stats.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -430,5 +431,53 @@ describe("createResponsesSseToAnthropicSse（上游 Responses SSE → 客户端 
       output_tokens: 11,
     });
     expect((messageDelta?.data.delta as Record<string, unknown>).stop_reason).toBe("end_turn");
+  });
+});
+describe("组合层 JSON 响应 usage 只计一次", () => {
+  it("anthropic → responses 两跳：cache.requests=1 且字段正确", () => {
+    resetProtocolStats();
+    anthropicJsonToResponsesJson({
+      id: "m",
+      type: "message",
+      role: "assistant",
+      model: "m",
+      content: [{ type: "text", text: "a" }],
+      usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 30 },
+    });
+    const snap = getProtocolStats();
+    expect(snap.cache.requests).toBe(1);
+    expect(snap.cache.cacheHitRequests).toBe(1);
+    expect(snap.cache.cachedTokens).toBe(30);
+    expect(snap.cache.inputTokens).toBe(100);
+  });
+
+  it("responses → anthropic 两跳：cache.requests=1 且字段正确", () => {
+    resetProtocolStats();
+    responsesJsonToAnthropicJson({
+      id: "r",
+      object: "response",
+      created_at: 1,
+      status: "completed",
+      model: "m",
+      output: [
+        {
+          id: "m1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "a", annotations: [] }],
+        },
+      ],
+      usage: {
+        input_tokens: 200,
+        output_tokens: 80,
+        total_tokens: 280,
+        input_tokens_details: { cached_tokens: 60 },
+      },
+    });
+    const snap = getProtocolStats();
+    expect(snap.cache.requests).toBe(1);
+    expect(snap.cache.cacheHitRequests).toBe(1);
+    expect(snap.cache.cachedTokens).toBe(60);
+    expect(snap.cache.inputTokens).toBe(200);
   });
 });

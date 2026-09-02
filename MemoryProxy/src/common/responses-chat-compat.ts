@@ -1123,7 +1123,7 @@ export function createResponsesSseToChatSse(opts: {
  */
 export function responsesJsonToChatJson(
   json: Record<string, unknown>,
-  opts: { model?: string },
+  opts: { model?: string; suppressUsageStat?: boolean },
 ): Record<string, unknown> {
   const _t0 = performance.now();
   const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
@@ -1176,7 +1176,10 @@ export function responsesJsonToChatJson(
     (asRecord(usage.input_tokens_details)?.cached_tokens as number | undefined) ??
     (usage.cached_tokens as number | undefined) ??
     0;
-  recordCacheUsage({ cached, input: typeof usage.input_tokens === "number" ? usage.input_tokens : 0 });
+  // suppressUsageStat：组合层（Responses↔Anthropic 两跳）只在最终一跳计一次 usage。
+  if (!opts.suppressUsageStat) {
+    recordCacheUsage({ cached, input: typeof usage.input_tokens === "number" ? usage.input_tokens : 0 });
+  }
   recordConversion("responses_json_to_chat_json", performance.now() - _t0);
   const message: Record<string, unknown> = {
     role: "assistant",
