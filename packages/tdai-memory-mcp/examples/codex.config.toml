@@ -1,0 +1,23 @@
+# Example Codex MCP configuration snippet.
+# Replace the absolute path with this repository's local path.
+
+[mcp_servers.tdai-memory]
+command = "python3"
+args = ["-m", "tdai_memory_mcp"]
+default_tools_approval_mode = "auto"
+
+[mcp_servers.tdai-memory.env]
+PYTHONPATH = "/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-mcp"
+TDAI_GATEWAY_URL = "http://127.0.0.1:8420"
+TDAI_GATEWAY_API_KEY = ""
+TDAI_GATEWAY_AUTO_START = "1"
+TDAI_GATEWAY_CONFIG = "./packages/tdai-memory-mcp/examples/tdai-gateway-ollama.yaml"
+TDAI_GATEWAY_CWD = "/Users/bytedance/proj/TencentDB-Agent-Memory"
+TDAI_SESSION_KEY = "agent:mcp-codex"
+TDAI_USER_ID = "codex"
+
+[mcp_servers.tdai-memory.tools.tdai_memory_search]
+approval_mode = "approve"
+
+[mcp_servers.tdai-memory.tools.tdai_conversation_search]
+approval_mode = "approve"

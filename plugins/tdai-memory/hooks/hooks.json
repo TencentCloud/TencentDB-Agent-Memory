@@ -1,0 +1,41 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=SessionStart TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=1 TDAI_GATEWAY_CONFIG=/Users/bytedance/.codex/tdai-memory/tdai-gateway.yaml TDAI_DATA_DIR=/Users/bytedance/.codex/tdai-memory/data TDAI_GATEWAY_CWD=/Users/bytedance/proj/TencentDB-Agent-Memory TDAI_USER_ID=codex TDAI_HOOK_LOG=/Users/bytedance/.codex/tdai-memory/logs/hooks.jsonl TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 PYTHONPATH=/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-cli:/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook session-start",
+            "timeout": 60,
+            "statusMessage": "Starting TDAI memory Gateway"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=UserPromptSubmit TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=1 TDAI_GATEWAY_CONFIG=/Users/bytedance/.codex/tdai-memory/tdai-gateway.yaml TDAI_DATA_DIR=/Users/bytedance/.codex/tdai-memory/data TDAI_GATEWAY_CWD=/Users/bytedance/proj/TencentDB-Agent-Memory TDAI_USER_ID=codex TDAI_HOOK_LOG=/Users/bytedance/.codex/tdai-memory/logs/hooks.jsonl TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 PYTHONPATH=/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-cli:/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook prefetch",
+            "timeout": 30,
+            "statusMessage": "Prefetching TDAI memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "TDAI_MEMORY_HOOK_MARKER=Stop TDAI_GATEWAY_URL=http://127.0.0.1:8420 TDAI_GATEWAY_AUTO_START=1 TDAI_GATEWAY_CONFIG=/Users/bytedance/.codex/tdai-memory/tdai-gateway.yaml TDAI_DATA_DIR=/Users/bytedance/.codex/tdai-memory/data TDAI_GATEWAY_CWD=/Users/bytedance/proj/TencentDB-Agent-Memory TDAI_USER_ID=codex TDAI_HOOK_LOG=/Users/bytedance/.codex/tdai-memory/logs/hooks.jsonl TDAI_GATEWAY_RUNTIME_DIR=/Users/bytedance/.codex/tdai-memory/runtime TDAI_GATEWAY_LOG_DIR=/Users/bytedance/.codex/tdai-memory/logs TDAI_GATEWAY_IDLE_TIMEOUT_SECONDS=600 TDAI_GATEWAY_WATCHDOG_INTERVAL_SECONDS=30 PYTHONPATH=/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-cli:/Users/bytedance/proj/TencentDB-Agent-Memory/packages/tdai-memory-mcp python3 -m tdai_memory_cli.hook sync-turn",
+            "timeout": 60,
+            "statusMessage": "Capturing TDAI memory turn"
+          }
+        ]
+      }
+    ]
+  }
+}
