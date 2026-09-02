@@ -633,6 +633,7 @@ export async function handleCodexEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId: sessionCtx.threadId ?? null,
             // 把原始 input[] 交给 CB 状态机，用于识别 codex 客户端专属的
             // Default gate 字符串和 MORE 翻页标记。
             codexAnswerInput: input,

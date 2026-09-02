@@ -149,3 +149,19 @@ describe("sessionStage", () => {
     expect(a.sessionKey).toBe(b.sessionKey);
   });
 });
+describe("autoGenerate:false 的 raw auto-* 也要过签名校验", () => {
+  it("workbuddy 风格适配器收到伪造 auto ID → 回退兜底键，不把 raw 当会话键", async () => {
+    const adapter: SessionAdapter = {
+      extractRawSessionId: () => "auto-0011223344556677-00000000-0000-4000-8000-000000000000",
+      userMessages: (b) => b.messages,
+      fallbackSessionKey: () => "fb",
+      resolveThreadId: () => null,
+      resolveIdentity: (_ctx, keyId) => ({ keyId, userId: "", callerUserKey: null }),
+      autoGenerate: false,
+    };
+    const ctx = makeCtx();
+    await sessionStage(ctx, adapter);
+    expect(ctx.conversationId).toBeNull();
+    expect(ctx.sessionKey).toBe("fb");
+  });
+});

@@ -498,7 +498,12 @@ export async function handleAnthropicMessages(
           body.messages as Array<Record<string, unknown>> ?? [],
           config.sessionInit,
           store,
-          { stream: isStream, modelId: modelId as string, protocol: "anthropic" },
+          {
+            stream: isStream,
+            modelId: modelId as string,
+            protocol: "anthropic",
+            threadId: threadId ?? null,
+          },
           agentSource,
           metadataClient,
           apiKey,

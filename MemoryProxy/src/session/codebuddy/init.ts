@@ -19,7 +19,7 @@ import type {
   TeamOption,
 } from "../types.js";
 import { DEFAULT_TASK_LABEL } from "../types.js";
-import { SessionStore } from "../store.js";
+import { SessionStore, buildStoreSessionKey } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
 import { injectSessionContextWithToggles } from "../context-injector.js";
 import type { MetadataClient } from "../../meta/client.js";
@@ -58,6 +58,8 @@ export interface SessionRequestContext {
   stream: boolean;
   modelId: string;
   protocol?: "openai" | "anthropic";
+  /** thread 维度：threadIsolation 开启时进入 L1/状态机 store 键（持久层不承诺 thread 隔离）。 */
+  threadId?: string | null;
   /**
    * codex 客户端专属：codex 的答复不走 CB 兼容的 messages[]，而是塞在
    * `body.input[]` 里的 `function_call_output` 项。codexHandler 已经用
@@ -526,7 +528,13 @@ export async function handleSessionInit(
   presetIdentity?: PresetIdentity,
   agentSource: string = "codebuddy",
 ): Promise<SessionInitResult> {
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  // 键构造与 handler 侧一致（workbuddy→codex 别名 + threadIsolation 后缀）。
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     const result = await handleSessionInitInner(
@@ -567,7 +575,13 @@ async function handleSessionInitInner(
   presetIdentity?: PresetIdentity,
   agentSource: string = "codebuddy",
 ): Promise<SessionInitResult> {
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  // 键构造与 handler 侧一致（workbuddy→codex 别名 + threadIsolation 后缀）。
+  const compositeKey = buildStoreSessionKey({
+    agentSource,
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);

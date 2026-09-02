@@ -765,6 +765,7 @@ export async function handleWorkbuddyEndpoint(
             stream: isStream,
             modelId: modelId as string,
             protocol: "responses" as any,
+            threadId: sessionCtx.threadId ?? null,
             // 把原始 input[] 交给 CB 状态机识别 Default gate 与 MORE 翻页
             codexAnswerInput: input,
           },

@@ -20,7 +20,7 @@ import type {
   TeamOption,
 } from "../types.js";
 import { DEFAULT_TASK_LABEL } from "../types.js";
-import { SessionStore } from "../store.js";
+import { SessionStore, buildStoreSessionKey } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
 import {
   injectSessionContextWithToggles,
@@ -59,6 +59,8 @@ export interface SessionRequestContext {
    * injection stays effective).
    */
   protocol?: "openai" | "anthropic";
+  /** thread 维度：threadIsolation 开启时进入 L1/状态机 store 键（持久层不承诺 thread 隔离）。 */
+  threadId?: string | null;
 }
 
 export interface SessionInitResult {
@@ -568,7 +570,13 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  // 键构造与 handler 侧一致（threadIsolation 后缀），持久层（L2a/L2b）仍按 sessionId 收敛。
+  const compositeKey = buildStoreSessionKey({
+    agentSource: "claude-code",
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     return await handleSessionInitInner(
@@ -598,7 +606,13 @@ async function handleSessionInitInner(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  // 键构造与 handler 侧一致（threadIsolation 后缀），持久层（L2a/L2b）仍按 sessionId 收敛。
+  const compositeKey = buildStoreSessionKey({
+    agentSource: "claude-code",
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);

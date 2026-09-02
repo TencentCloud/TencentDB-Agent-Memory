@@ -317,8 +317,10 @@ export interface SessionInitConfig {
     maxWindowsTotal?: number;
   };
   /**
-   * thread 层隔离：enabled=true 时 x-thread-id 进入会话复合键
-   * （agentSource:sessionKey:threadId），task 之下按主题分组。
+   * thread 维度（默认关）：enabled=true 时 x-thread-id 进入 L1/状态机会话复合键
+   * （agentSource:sessionKey[:threadId]）并参与 auto-ID 签名 scope，用于进程内
+   * pending 分流与遥测/审计分组；持久层（L2a/L2b）键不含 thread，重启或
+   * 多副本后按 (space,user,agent,sessionId) 收敛，不承诺跨实例的 thread 级隔离。
    * 默认 false（保持现有会话键不变，向后兼容）。
    */
   threadIsolation?: {

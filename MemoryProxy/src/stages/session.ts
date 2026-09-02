@@ -75,8 +75,21 @@ export async function sessionStage(
   } else {
     const raw = adapter.extractRawSessionId(ctx.c, lcHeaders, ctx.body);
     if (adapter.autoGenerate === false) {
-      conversationId = raw;
       threadId = adapter.resolveThreadId(ctx.c);
+      conversationId = raw;
+      // workbuddy 自己不生成 auto ID；若客户端回传伪造/串用的 auto-* ID，仍要
+      // 过一遍签名校验，防止绕过签名把幽灵会话键塞进 store（与 DEFAULT/codex 对齐）。
+      if (raw && raw.startsWith("auto-")) {
+        const auto = resolveOrCreateSessionId(
+          raw,
+          keyId,
+          undefined,
+          firstUserMessageFingerprint(userMessages),
+          threadId ?? "",
+          statMeta,
+        );
+        if (auto.rejected) conversationId = null;
+      }
     } else {
       const auto = await resolveOrCreateSessionId(
         raw,

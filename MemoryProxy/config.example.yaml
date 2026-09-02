@@ -579,6 +579,9 @@ sessionInit:
   #                              #         多实例需共享 TDAI_SESSION_SIGNING_KEY
   #   deterministicBucketMinutes: 30  # 可选：钉住 epoch 桶宽（必须 ≥ ttlMinutes），
   #                                   # 只调 ttl 时不触发全量轮换
+  # threadIsolation:                  # 默认关：true = x-thread-id 进入 L1/状态机 store 键
+  #   enabled: false                  #   （含 auto-ID 签名 scope 与遥测分组）；持久层按
+  #                                   #   (space,user,agent,sessionId) 收敛，不承诺跨实例 thread 隔离
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
   # 的会话会**直接**注册为固定三元组，绕过所有表单/header 匹配逻辑；
