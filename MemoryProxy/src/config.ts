@@ -94,15 +94,22 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     injectAgentContext: true,
     injectTaskContext: true,
     defaultTaskId: "default",
+    taskMissingPolicy: "skip",
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
       agentHeader: "x-agent-id",
       taskHeader: "x-task-id",
-      onMismatch: "form",
+      onMismatch: "bypass",
     },
     // debugForceIdentity intentionally omitted — must be explicitly set in yaml
     // to activate the bypass path.
+  },
+  autoConversationId: {
+    enabled: true,
+    ttlMinutes: 30,
+    strategy: "per-key",
+    maxEntries: 10_000,
   },
   tdai: {
     enabled: false,
@@ -408,6 +415,11 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string"
       ? (yaml.sessionInit.defaultTaskId.trim() || undefined)   // empty string → disabled
       : DEFAULT_CONFIG.sessionInit.defaultTaskId,
+    taskMissingPolicy: yaml.sessionInit?.taskMissingPolicy === "default"
+      || yaml.sessionInit?.taskMissingPolicy === "reject"
+      || yaml.sessionInit?.taskMissingPolicy === "skip"
+      ? yaml.sessionInit.taskMissingPolicy
+      : DEFAULT_CONFIG.sessionInit.taskMissingPolicy,
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
       teamHeader: (yaml.sessionInit?.headerAutoSelect?.teamHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.teamHeader).toLowerCase(),
@@ -433,6 +445,20 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       : undefined,
     debugVerboseLogging: yaml.sessionInit?.debugVerboseLogging ?? false,
   },
+    autoConversationId: {
+      enabled: yaml.autoConversationId?.enabled ?? DEFAULT_CONFIG.autoConversationId.enabled,
+      ttlMinutes: typeof yaml.autoConversationId?.ttlMinutes === "number"
+        && yaml.autoConversationId.ttlMinutes > 0
+        ? yaml.autoConversationId.ttlMinutes
+        : DEFAULT_CONFIG.autoConversationId.ttlMinutes,
+      strategy: yaml.autoConversationId?.strategy === "per-key-msg"
+        ? "per-key-msg"
+        : "per-key",
+      maxEntries: typeof yaml.autoConversationId?.maxEntries === "number"
+        && yaml.autoConversationId.maxEntries > 0
+        ? Math.floor(yaml.autoConversationId.maxEntries)
+        : DEFAULT_CONFIG.autoConversationId.maxEntries,
+    },
     tdai: {
       enabled: yaml.tdai?.enabled ?? DEFAULT_CONFIG.tdai.enabled,
       endpoint: yaml.tdai?.endpoint ?? DEFAULT_CONFIG.tdai.endpoint,

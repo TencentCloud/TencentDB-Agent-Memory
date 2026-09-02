@@ -682,7 +682,14 @@ export async function handleAnthropicMessages(
 
 // ── Session key: prefer conversation header, fallback to agent profile ───────────
   const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const explicitConversationId = resolveConversationId(c);
+  const { resolveAutoConversationId } = await import("./session/auto-conversation.js");
+  const conversationId = resolveAutoConversationId({
+    explicitId: explicitConversationId,
+    keyScope: `${keyId}:${agentSource}`,
+    messages: Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [],
+    config: config.autoConversationId,
+  });
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────

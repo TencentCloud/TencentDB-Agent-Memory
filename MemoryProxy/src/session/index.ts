@@ -31,6 +31,7 @@ export { buildSessionInfo } from "./registrar.js";
 export { injectSessionContext, SESSION_CONTEXT_OPEN, SESSION_CONTEXT_CLOSE } from "./context-injector.js";
 export { parsePresetIdentity, resolvePresetIdentity } from "./preset.js";
 export type { PresetIdentity, PresetResolution } from "./preset.js";
+export { handleHeaderOnlySessionInit, isHeaderOnlyAgent } from "./header-only/init.js";
 
 // ── CodeBuddy 专属模块 ─────────────────────────────────────────────────────────
 
@@ -101,6 +102,7 @@ export type SessionInitResult = CBSessionInitResult;
  */
 import type { MetadataClient } from "../meta/client.js";
 import type { PresetIdentity } from "./preset.js";
+import { handleHeaderOnlySessionInit, isHeaderOnlyAgent } from "./header-only/init.js";
 
 export async function handleSessionInit(
   sessionKey: string,
@@ -128,6 +130,21 @@ export async function handleSessionInit(
       // as a safety net; forwarding the correct protocol keeps intent and
       // implementation aligned and survives `injection.enabled=false`.
       reqCtx,
+      metadataClient,
+      userKey,
+      spaceId,
+      presetIdentity,
+    );
+  }
+  if (isHeaderOnlyAgent(agentSource)) {
+    return handleHeaderOnlySessionInit(
+      sessionKey,
+      userId,
+      messages,
+      config,
+      store,
+      reqCtx,
+      agentSource,
       metadataClient,
       userKey,
       spaceId,

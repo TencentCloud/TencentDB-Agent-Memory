@@ -43,6 +43,7 @@ const CTX_CLOSE = "</session_context>";
 function buildContextBlock(
   agent: AgentDetail | null | undefined,
   task: TaskDetail | null | undefined,
+  includeMissingTaskNotice = true,
 ): string | null {
   if (!agent && !task) return null;
 
@@ -69,6 +70,11 @@ function buildContextBlock(
       lines.push("goal:");
       lines.push(task.goal);
     }
+  } else if (agent && includeMissingTaskNotice) {
+    lines.push("");
+    lines.push("[Task]");
+    lines.push("status: not_bound");
+    lines.push("hint: 如需任务级记忆请添加 x-task-id");
   }
 
   lines.push(CTX_CLOSE);
@@ -176,7 +182,14 @@ export function injectSessionContextWithToggles(
 
   const agentForCtx = injectAgent ? (agent ?? null) : null;
   const taskForCtx = injectTask ? (task ?? null) : null;
-  return injectSessionContext(messages, agentForCtx, taskForCtx);
+  const block = buildContextBlock(agentForCtx, taskForCtx, injectTask);
+  if (!block) return messages;
+
+  const sysIdx = messages.findIndex((m) => m.role === "system");
+  if (sysIdx === -1) return [{ role: "system", content: block }, ...messages];
+  const next = [...messages];
+  next[sysIdx] = appendToSystem(next[sysIdx], block);
+  return next;
 }
 
 /** Reset the warn-once dedup set. Test-only. */
@@ -210,7 +223,7 @@ export function buildSessionContextBlockWithToggles(
 
   const agentForCtx = injectAgent ? (agent ?? null) : null;
   const taskForCtx = injectTask ? (task ?? null) : null;
-  return buildContextBlock(agentForCtx, taskForCtx);
+  return buildContextBlock(agentForCtx, taskForCtx, injectTask);
 }
 
 // ── Anthropic system-field variant ────────────────────────────────────────────
@@ -258,7 +271,7 @@ export function injectSessionContextIntoAnthropicSystem(
 
   const agentForCtx = injectAgent ? (agent ?? null) : null;
   const taskForCtx = injectTask ? (task ?? null) : null;
-  const block = buildContextBlock(agentForCtx, taskForCtx);
+  const block = buildContextBlock(agentForCtx, taskForCtx, injectTask);
   if (!block) return system;
   return appendBlockToAnthropicSystem(system, block);
 }

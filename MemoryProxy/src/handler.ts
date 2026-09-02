@@ -47,6 +47,7 @@ import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
+import { isHeaderOnlyAgent } from "./session/header-only/init.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 import {
   enforceRateLimit,
@@ -660,7 +661,14 @@ export async function handleChatCompletions(
 
   // ── Session key: prefer conversation header, fallback to agent profile ───────────
   const { resolveConversationId } = await import("./session/session-key.js");
-  const conversationId = resolveConversationId(c);
+  const explicitConversationId = resolveConversationId(c);
+  const { resolveAutoConversationId } = await import("./session/auto-conversation.js");
+  const conversationId = resolveAutoConversationId({
+    explicitId: explicitConversationId,
+    keyScope: `${keyId}:${agentSource}`,
+    messages: Array.isArray(body.messages) ? body.messages as Array<{ role?: string; content?: unknown }> : [],
+    config: config.autoConversationId,
+  });
   const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
@@ -735,14 +743,13 @@ export async function handleChatCompletions(
   // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
   // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
   // 直接返回"不支持"文案。
-  const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
-  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
+  const _noFormAgent = isHeaderOnlyAgent(agentSource) || _dshHeadless;
   if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
       console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
-      const msg = _headerOnlyAgents.has(agentSource)
+      const msg = isHeaderOnlyAgent(agentSource)
         ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
           + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
           + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
@@ -756,7 +763,7 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !isHeaderOnlyAgent(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
@@ -894,8 +901,8 @@ export async function handleChatCompletions(
           justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
       } else {
-        // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
-        // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
+        // session/index.ts 在这里继续按客户端能力分流：OpenClaw/Hermes 只走
+        // header 校验与直接注册，永不进入 CodeBuddy/Claude Code 表单状态机。
         wentThroughSessionInitStateMachine = true;
         // 检测客户端 ask_followup_question schema 里 questions 字段是否声明为 array。
         // CB v1.106+ 声明为 array 且做 type check；老版本无 schema 或 questions 无 type 声明。
