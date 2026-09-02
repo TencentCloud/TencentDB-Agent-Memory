@@ -1,0 +1,25 @@
+{
+  "name": "memory-tencentdb-gemini",
+  "description": "TencentDB Agent Memory 的 Gemini CLI hooks 扩展",
+  "version": "0.1.0",
+  "settings": [
+    {
+      "name": "TDAI Gateway 地址",
+      "description": "memory-tencentdb Gateway 地址，例如 http://127.0.0.1:8420",
+      "envVar": "TDAI_GATEWAY_URL",
+      "sensitive": false
+    },
+    {
+      "name": "TDAI Gateway API Key",
+      "description": "可选 Bearer token，需与 Gateway 的 TDAI_GATEWAY_API_KEY 一致",
+      "envVar": "TDAI_GATEWAY_API_KEY",
+      "sensitive": true
+    },
+    {
+      "name": "TDAI Gateway 超时",
+      "description": "Hook 请求超时时间（毫秒）",
+      "envVar": "TDAI_GATEWAY_TIMEOUT_MS",
+      "sensitive": false
+    }
+  ]
+}
