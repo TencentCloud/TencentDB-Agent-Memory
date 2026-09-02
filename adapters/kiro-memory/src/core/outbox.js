@@ -1,7 +1,8 @@
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { withSessionLock, writeJsonAtomically } from './atomic-file.js';
+import { SessionLockTimeoutError, withSessionLock, writeJsonAtomically } from './atomic-file.js';
+import { sha256 } from './hash.js';
 
 const CAPTURE_ID = /^cap_sha256_[a-f0-9]{64}$/;
 const OPERATION_ID = /^(?:cap|op)_sha256_[a-f0-9]{64}$/;
@@ -86,6 +87,10 @@ export class Outbox {
   outboxPath(operationId) { assertOperationId(operationId); return join(this.stateDir, 'outbox', `${operationId}.json`); }
   markerPath(operationId) { assertOperationId(operationId); return join(this.stateDir, 'captured', `${operationId}.json`); }
   lockPath(operationId) { assertOperationId(operationId); return join(this.stateDir, 'outbox', '.locks', `${operationId}.lock`); }
+  deliveryLockPath(sessionId) {
+    if (!nonEmpty(sessionId)) throw new OutboxError('Invalid session id');
+    return join(this.stateDir, 'outbox', '.delivery-locks', `${sha256(sessionId)}.lock`);
+  }
   remaining(deadline) { return Math.max(0, deadline - this.monotonicNow()); }
 
   async enqueue(envelope) {
@@ -124,17 +129,28 @@ export class Outbox {
     const result = { processed: 0, acknowledged: 0, deferred: 0, failed: 0 };
     const deadline = this.monotonicNow() + budgetMs;
     const items = await this.listItems(deadline);
+    const blockedSessions = new Set();
     for (const item of items) {
       if (result.processed >= maxItems || this.remaining(deadline) <= 0) { result.deferred += 1; continue; }
-      if (item.manual_review === true || (item.next_retry_at !== null && Date.parse(item.next_retry_at) > this.now().getTime())) { result.deferred += 1; continue; }
+      if (blockedSessions.has(item.session_id)) { result.deferred += 1; continue; }
+      if (item.manual_review === true || (item.next_retry_at !== null && Date.parse(item.next_retry_at) > this.now().getTime())) {
+        blockedSessions.add(item.session_id);
+        result.deferred += 1;
+        continue;
+      }
       result.processed += 1;
       try {
-        const outcome = await this.process(idFor(item), deadline);
+        const outcome = await this.withDeliveryLaneUntil(
+          item.session_id,
+          deadline,
+          () => this.processOperation(idFor(item), deadline),
+        );
         if (outcome === 'acknowledged') result.acknowledged += 1;
         else if (outcome === 'failed') result.failed += 1;
         else if (outcome === 'deferred') result.deferred += 1;
+        if (outcome !== 'acknowledged') blockedSessions.add(item.session_id);
       } catch (error) {
-        if (error instanceof OutboxError && error.corrupt) { result.failed += 1; continue; }
+        if (error instanceof OutboxError && error.corrupt) { result.failed += 1; blockedSessions.add(item.session_id); continue; }
         throw error instanceof OutboxError ? error : new OutboxError('Outbox persistence failed');
       }
     }
@@ -249,6 +265,25 @@ export class Outbox {
       catch (error) { if (!(error instanceof OutboxError) || !error.corrupt) throw error; }
     }
     return items.sort((left, right) => left.created_at.localeCompare(right.created_at) || idFor(left).localeCompare(idFor(right)));
+  }
+
+  async listDrainCandidates(deadline) { return this.listItems(deadline); }
+  async processOperation(operationId, deadline) { assertOperationId(operationId); return this.process(operationId, deadline); }
+
+  async withDeliveryLaneUntil(sessionId, deadline, operation) {
+    if (typeof operation !== 'function') throw new OutboxError('Invalid delivery operation');
+    const remaining = Math.floor(this.remaining(deadline));
+    if (remaining <= 0) return 'deferred';
+    try {
+      return await withSessionLock(this.deliveryLockPath(sessionId), operation, {
+        ...this.lockOptions,
+        timeoutMs: remaining,
+        retryMs: Math.max(1, Math.min(20, remaining)),
+      });
+    } catch (error) {
+      if (error instanceof SessionLockTimeoutError) return 'deferred';
+      throw error instanceof OutboxError ? error : new OutboxError('Outbox persistence failed');
+    }
   }
 
   async readItemUnlocked(captureId, missingOk = false) {
