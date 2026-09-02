@@ -7,7 +7,8 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-claude-hook": "./claude-code-plugin/scripts/memory-hook.mjs"
   },
   "exports": {
     ".": {
@@ -47,6 +48,8 @@
     "scripts/openclaw-after-tool-call-messages.patch.sh",
     "scripts/setup-offload.sh",
     "hermes-plugin/",
+    "claude-code-plugin/",
+    "docs/claude-code-adapter.md",
     "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
@@ -58,6 +61,7 @@
   "keywords": [
     "openclaw",
     "openclaw-plugin",
+    "claude-code",
     "memory",
     "ai-memory",
     "long-term-memory",
