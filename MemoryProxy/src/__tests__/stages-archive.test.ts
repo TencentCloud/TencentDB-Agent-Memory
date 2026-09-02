@@ -442,3 +442,44 @@ describe("writeL0 写侧 fencing（store 归属校验）", () => {
     expect(client.addConversation).not.toHaveBeenCalled();
   });
 });
+describe("writeL0 fence 跨实例 binding 补查（L1 miss）", () => {
+  beforeEach(() => {
+    __resetSessionStoreForTests();
+    resetSessionStats();
+  });
+  afterAll(() => {
+    __resetSessionStoreForTests();
+  });
+
+  it("L1 miss 但 binding repo 命中 → fenceAllowed 且正常写入", async () => {
+    const store = getSessionStore();
+    store.setBindingRepo({
+      getBinding: vi.fn(async () => ({ outcome: "initialized" })),
+    } as never);
+    const client = makeFakeClient();
+    await writeL0({
+      ctx: makeCtx({ sessionKey: "sk", tdaiClient: client }),
+      assistantText: "answer",
+      l0Mode: "await",
+    });
+    expect(getSessionStats().fenceAllowed).toBe(1);
+    expect(getSessionStats().fenceMiss).toBe(0);
+    expect(client.addConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("L1 miss 且 binding repo 无记录 → fenceMiss，fail-open 不阻断 L0", async () => {
+    const store = getSessionStore();
+    store.setBindingRepo({
+      getBinding: vi.fn(async () => null),
+    } as never);
+    const client = makeFakeClient();
+    await writeL0({
+      ctx: makeCtx({ sessionKey: "sk2", tdaiClient: client }),
+      assistantText: "answer",
+      l0Mode: "await",
+    });
+    expect(getSessionStats().fenceMiss).toBe(1);
+    expect(getSessionStats().fenceAllowed).toBe(0);
+    expect(client.addConversation).toHaveBeenCalledTimes(1);
+  });
+});

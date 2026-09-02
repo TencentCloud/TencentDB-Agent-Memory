@@ -15,6 +15,8 @@ export interface SessionStatsSnapshot {
   fenceBlocked: number;
   /** archive 写侧 fence 命中 store 记录且放行的次数（有效性分母）。 */
   fenceAllowed: number;
+  /** fence 无绑定信息可校验（L1 miss 且 binding repo 无记录）——补全分母。 */
+  fenceMiss: number;
 }
 
 const stats: SessionStatsSnapshot = {
@@ -27,6 +29,7 @@ const stats: SessionStatsSnapshot = {
   scopeRejected: 0,
   fenceBlocked: 0,
   fenceAllowed: 0,
+  fenceMiss: 0,
 };
 
 export type SessionStatKind = keyof SessionStatsSnapshot;
@@ -46,6 +49,7 @@ function freshSnapshot(): SessionStatsSnapshot {
     scopeRejected: 0,
     fenceBlocked: 0,
     fenceAllowed: 0,
+    fenceMiss: 0,
   };
 }
 
@@ -103,6 +107,7 @@ export function resetSessionStats(): void {
   stats.scopeRejected = 0;
   stats.fenceBlocked = 0;
   stats.fenceAllowed = 0;
+  stats.fenceMiss = 0;
   byAgent.clear();
   bySpace.clear();
 }
@@ -127,6 +132,8 @@ export function sessionStatsToPrometheus(): string {
   lines.push(`tdai_auto_session_fence_blocked_total ${stats.fenceBlocked}`);
   lines.push("# TYPE tdai_auto_session_fence_allowed_total counter");
   lines.push(`tdai_auto_session_fence_allowed_total ${stats.fenceAllowed}`);
+  lines.push("# TYPE tdai_auto_session_fence_miss_total counter");
+  lines.push(`tdai_auto_session_fence_miss_total ${stats.fenceMiss}`);
   const reuse =
     stats.created + stats.resumed > 0
       ? stats.resumed / (stats.created + stats.resumed)

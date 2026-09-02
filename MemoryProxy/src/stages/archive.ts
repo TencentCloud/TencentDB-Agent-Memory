@@ -233,6 +233,7 @@ export async function writeL0(opts: L0WriteOptions): Promise<void> {
   }
   let drift = false;
   let found = false;
+  let bindingChecked = false;
   for (const ck of candidates) {
     const b = store.getBoundIdentity(ck);
     const l1 = b ? undefined : store.get(ck);
@@ -246,6 +247,21 @@ export async function writeL0(opts: L0WriteOptions): Promise<void> {
       break; // 首个命中的 store 键即该会话的真实归属键
     }
   }
+  // 第二道防线跨实例兜底：L1（进程内）miss 时，用 binding repo（多节点共享）
+  // 按 (spaceId, sessionId) 补查。binding 键本身按 space 命名空间化，能查到
+  // 即代表写侧 space 与该绑定同域；查不到则计 fenceMiss（无绑定信息，不拦截）。
+  if (!found) {
+    const bindingRepo = store.getBindingRepo();
+    if (bindingRepo) {
+      bindingChecked = true;
+      try {
+        const binding = await bindingRepo.getBinding(siSpace ?? "", ctx.sessionKey);
+        if (binding) found = true;
+      } catch {
+        /* binding 查询失败按无绑定信息处理，不阻断 L0（fail-open on unknown） */
+      }
+    }
+  }
   if (drift) {
     console.warn(
       `[archive-fence] L0 skipped: session ownership drift ` +
@@ -254,7 +270,11 @@ export async function writeL0(opts: L0WriteOptions): Promise<void> {
     recordSession("fenceBlocked");
     return;
   }
-  if (found) recordSession("fenceAllowed");
+  if (found) {
+    recordSession("fenceAllowed");
+  } else if (bindingChecked) {
+    recordSession("fenceMiss");
+  }
 
   const l0Promise = withL0Retry(() =>
     recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, opts.assistantText || null),
