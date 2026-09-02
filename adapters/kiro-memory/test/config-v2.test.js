@@ -49,7 +49,11 @@ test('resolves config field-by-field as environment over project over user over 
       maxRecallResults: 7,
     });
     const { config, provenance } = await resolveConfig({
-      env: { ...baseEnv, TDAI_MEMORY_TIMEOUT_MS: '1234' },
+      env: {
+        ...baseEnv,
+        TDAI_MEMORY_TIMEOUT_MS: '1234',
+        TDAI_MEMORY_CONVERSATION_RECALL_ENABLED: 'false',
+      },
       workspace: f.workspace,
       homedir: f.home,
     });
@@ -60,7 +64,8 @@ test('resolves config field-by-field as environment over project over user over 
     assert.equal(config.maxRecallResults, 7);
     assert.equal(config.timeoutMs, 1234);
     assert.equal(config.agentId, 'kiro');
-    assert.equal(config.conversationRecallEnabled, true);
+    assert.equal(config.conversationRecallEnabled, false);
+    assert.equal(Object.hasOwn(config, 'enableConversationRecall'), false);
     assert.equal(config.skillRecallEnabled, true);
     assert.equal(config.mcpMaxOutputChars, 12000);
     assert.equal(config.apiKey, undefined);

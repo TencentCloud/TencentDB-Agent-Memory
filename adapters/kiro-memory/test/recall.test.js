@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { ConfigError, loadConfig } from '../src/core/config.js';
+import { ConfigError, resolveConfig } from '../src/core/config.js';
 import { GatewayClient, GatewayError } from '../src/core/gateway-client.js';
 import { RecallService } from '../src/core/recall-service.js';
 
@@ -14,10 +14,18 @@ const requiredEnv = (overrides = {}) => ({
   ...overrides,
 });
 
-const configFor = (gatewayUrl, overrides = {}) => loadConfig(requiredEnv({
-  TDAI_MEMORY_GATEWAY_URL: gatewayUrl,
-  ...overrides,
-}), { homedir: () => 'C:/home/tester' });
+const missingConfig = async () => {
+  const error = new Error('missing');
+  error.code = 'ENOENT';
+  throw error;
+};
+
+const configFor = async (gatewayUrl, overrides = {}) => (await resolveConfig({
+  env: requiredEnv({ TDAI_MEMORY_GATEWAY_URL: gatewayUrl, ...overrides }),
+  workspace: 'C:/workspace/project',
+  homedir: 'C:/home/tester',
+  readFile: missingConfig,
+})).config;
 
 const startServer = async (handler) => {
   const server = createServer(handler);
@@ -46,8 +54,8 @@ const json = (response, status, value) => {
   response.end(JSON.stringify(value));
 };
 
-test('loads immutable recall configuration with documented defaults and explicit values', () => {
-  const defaults = loadConfig(requiredEnv(), { homedir: () => 'C:/home/tester' });
+test('loads immutable recall configuration with documented defaults and explicit values', async () => {
+  const defaults = await configFor('http://127.0.0.1:8080/');
   assert.deepEqual(defaults, {
     gatewayUrl: 'http://127.0.0.1:8080',
     apiKey: undefined,
@@ -60,14 +68,15 @@ test('loads immutable recall configuration with documented defaults and explicit
     timeoutMs: 2500,
     maxRecallResults: 5,
     maxContextChars: 6000,
+    mcpMaxOutputChars: 12000,
     stateDir: join('C:/home/tester', '.kiro', 'tdai-memory'),
     logLevel: 'warn',
-    enableConversationRecall: false,
+    conversationRecallEnabled: true,
+    skillRecallEnabled: true,
   });
   assert.equal(Object.isFrozen(defaults), true);
 
-  const explicit = loadConfig(requiredEnv({
-    TDAI_MEMORY_GATEWAY_URL: 'https://memory.example.test/root///',
+  const explicit = await configFor('https://memory.example.test/root///', {
     TDAI_MEMORY_API_KEY: 'not-printed',
     TDAI_MEMORY_TEAM_ID: 'team-a',
     TDAI_MEMORY_AGENT_ID: 'agent-a',
@@ -79,7 +88,7 @@ test('loads immutable recall configuration with documented defaults and explicit
     TDAI_MEMORY_STATE_DIR: 'D:/state',
     TDAI_MEMORY_LOG_LEVEL: 'debug',
     TDAI_MEMORY_CONVERSATION_RECALL_ENABLED: 'TRUE',
-  }), { homedir: () => 'unused' });
+  });
   assert.equal(explicit.gatewayUrl, 'https://memory.example.test/root');
   assert.equal(explicit.apiKey, 'not-printed');
   assert.equal(explicit.teamId, 'team-a');
@@ -91,10 +100,11 @@ test('loads immutable recall configuration with documented defaults and explicit
   assert.equal(explicit.maxContextChars, 512);
   assert.equal(explicit.stateDir, 'D:/state');
   assert.equal(explicit.logLevel, 'debug');
-  assert.equal(explicit.enableConversationRecall, true);
+  assert.equal(explicit.conversationRecallEnabled, true);
+  assert.equal(Object.hasOwn(explicit, 'enableConversationRecall'), false);
 });
 
-test('rejects invalid recall configuration without exposing supplied sensitive values', () => {
+test('rejects invalid recall configuration without exposing supplied sensitive values', async () => {
   const secret = 'sensitive-config-value';
   const invalids = [
     { TDAI_MEMORY_GATEWAY_URL: 'ftp://bad.example' },
@@ -109,14 +119,14 @@ test('rejects invalid recall configuration without exposing supplied sensitive v
   ];
 
   for (const override of invalids) {
-    assert.throws(
-      () => loadConfig(requiredEnv({ ...override, TDAI_MEMORY_API_KEY: secret })),
+    await assert.rejects(
+      configFor('http://127.0.0.1:8080/', { ...override, TDAI_MEMORY_API_KEY: secret }),
       (error) => error instanceof ConfigError && error.message.includes(secret) === false,
     );
   }
 });
 
-test('rejects gateway URL credentials, queries, and fragments without echoing them', () => {
+test('rejects gateway URL credentials, queries, and fragments without echoing them', async () => {
   const unsafeUrls = [
     { value: 'https://memory-user:memory-password@memory.example.test', secret: 'memory-password' },
     { value: 'https://memory.example.test/base?access_token=sensitive-query-token', secret: 'sensitive-query-token' },
@@ -124,11 +134,12 @@ test('rejects gateway URL credentials, queries, and fragments without echoing th
   ];
 
   for (const { value, secret } of unsafeUrls) {
-    assert.throws(
-      () => loadConfig(requiredEnv({ TDAI_MEMORY_GATEWAY_URL: value })),
+    await assert.rejects(
+      configFor(value),
       (error) => (
         error instanceof ConfigError
-        && error.message === 'TDAI_MEMORY_GATEWAY_URL must not include userinfo, query, or fragment'
+        && error.field === 'gatewayUrl'
+        && error.category === 'invalid_url'
         && error.message.includes(secret) === false
         && error.message.includes(value) === false
       ),
@@ -150,7 +161,7 @@ test('sends exact v3 atomic/core requests and unwraps their data without a sessi
     json(response, 200, { code: 0, data: { content: 'core' } });
   });
   try {
-    const client = new GatewayClient(configFor(server.url, {
+    const client = new GatewayClient(await configFor(server.url, {
       TDAI_MEMORY_API_KEY: 'test-key',
       TDAI_MEMORY_TEAM_ID: 'team-a',
       TDAI_MEMORY_AGENT_ID: 'agent-a',
@@ -181,7 +192,7 @@ test('does not send authorization when the optional api key is absent', async ()
     json(response, 200, { code: 0, data: { content: null } });
   });
   try {
-    await new GatewayClient(configFor(server.url)).coreRead();
+    await new GatewayClient(await configFor(server.url)).coreRead();
     assert.equal(headers.authorization, undefined);
     assert.equal(headers['x-tdai-service-id'], 'service-1');
   } finally {
@@ -205,7 +216,7 @@ test('safely rejects invalid gateway responses with precise retryability classif
     return json(response, status, { code: 9, message: sensitiveResponse });
   });
   try {
-    const config = configFor(server.url, { TDAI_MEMORY_API_KEY: 'private-key' });
+    const config = await configFor(server.url, { TDAI_MEMORY_API_KEY: 'private-key' });
     const client = new GatewayClient(config);
     for (const [status, retryable] of [[400, false], [401, false], [403, false], [404, false], [408, true], [429, true], [500, true], [502, true], [503, true], [504, true]]) {
       await assert.rejects(client.post(`/${status}`, {}), (error) => {
@@ -242,7 +253,7 @@ test('aborts a slow local gateway request before its response completes', async 
     setTimeout(() => json(response, 200, { code: 0, data: { content: null } }), 500);
   });
   try {
-    const client = new GatewayClient(configFor(server.url, { TDAI_MEMORY_TIMEOUT_MS: '80' }));
+    const client = new GatewayClient(await configFor(server.url, { TDAI_MEMORY_TIMEOUT_MS: '80' }));
     const startedAt = Date.now();
     await assert.rejects(client.coreRead(), (error) => error instanceof GatewayError && error.retryable === true);
     assert.equal(Date.now() - startedAt < 350, true);
@@ -258,7 +269,7 @@ test('keeps the timeout active while a gateway response body is still streaming'
     setTimeout(() => response.end('{"content":null}}'), 500);
   });
   try {
-    const client = new GatewayClient(configFor(server.url, { TDAI_MEMORY_TIMEOUT_MS: '80' }));
+    const client = new GatewayClient(await configFor(server.url, { TDAI_MEMORY_TIMEOUT_MS: '80' }));
     const startedAt = Date.now();
     await assert.rejects(client.coreRead(), (error) => error instanceof GatewayError && error.retryable === true);
     assert.equal(Date.now() - startedAt < 350, true);
@@ -274,7 +285,7 @@ test('classifies a terminated gateway response stream as a retryable safe failur
     setTimeout(() => response.socket.destroy(), 10);
   });
   try {
-    const client = new GatewayClient(configFor(server.url, { TDAI_MEMORY_API_KEY: 'private-key' }));
+    const client = new GatewayClient(await configFor(server.url, { TDAI_MEMORY_API_KEY: 'private-key' }));
     await assert.rejects(client.coreRead(), (error) => {
       assert.equal(error instanceof GatewayError, true);
       assert.equal(error.retryable, true);
@@ -337,13 +348,12 @@ test('recall truncation preserves Unicode boundaries and includes framing in the
   assert.equal(output.endsWith('\n</TDAI_MEMORY_CONTEXT>'), true);
 });
 
-test('canonical conversation recall setting wins over the Phase 1 alias', async () => {
+test('canonical conversation recall setting disables the conversation source', async () => {
   let requestedSources;
   const service = new RecallService({
     config: {
       recallEnabled: true,
       conversationRecallEnabled: false,
-      enableConversationRecall: true,
       skillRecallEnabled: false,
       maxRecallResults: 1,
       maxContextChars: 6000,

@@ -16,7 +16,7 @@ import { handleStop } from './hooks/stop.js';
 const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const expectedEvent = { recall: 'UserPromptSubmit', 'post-tool-use': 'PostToolUse', stop: 'Stop' };
 const safe = () => ({ exitCode: 0, stdout: '' });
-const defaultLoadConfig = async (env, workspace) => (await resolveConfig({ env, workspace })).config;
+const defaultResolveRuntimeConfig = async (env, workspace) => (await resolveConfig({ env, workspace })).config;
 
 const defaultDependencies = (config) => {
   const gatewayClient = new GatewayClient(config);
@@ -75,7 +75,7 @@ const readInput = async (stdin) => {
 
 export async function runCli({
   argv = process.argv.slice(2), stdin = process.stdin, env = process.env,
-  loadConfig = defaultLoadConfig, createDependencies = defaultDependencies,
+  resolveRuntimeConfig = defaultResolveRuntimeConfig, createDependencies = defaultDependencies,
 } = {}) {
   try {
     if (!Array.isArray(argv) || argv.length !== 1 || !Object.hasOwn(expectedEvent, argv[0])) return safe();
@@ -83,7 +83,7 @@ export async function runCli({
     const event = normalizeHookEvent(raw);
     const command = argv[0];
     if (event.eventName !== expectedEvent[command]) return safe();
-    const config = await loadConfig(env, event.cwd);
+    const config = await resolveRuntimeConfig(env, event.cwd);
     const dependencies = createDependencies(config);
     try { await dependencies.outbox.flush({ maxItems: 3, budgetMs: 1500 }); } catch { /* fail open */ }
     try { await dependencies.archiveService?.considerSessionIdle(event.sessionId); } catch { /* fail open */ }

@@ -41,7 +41,7 @@ test('CLI recall returns only recalled context and flushes once', async () => {
   const result = await runCli({
     argv: ['recall'],
     stdin: '{"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"p"}',
-    loadConfig: () => config,
+    resolveRuntimeConfig: () => config,
     createDependencies: () => ({
       outbox: { flush: async () => { flushes += 1; } },
       recallService: { recall: async () => '<TDAI_MEMORY_CONTEXT>safe</TDAI_MEMORY_CONTEXT>' },
@@ -55,7 +55,7 @@ test('CLI recall returns only recalled context and flushes once', async () => {
 
 test('CLI fails open for invalid JSON and mismatched command', async () => {
   for (const input of ['{', '{"hook_event_name":"Stop","session_id":"s"}']) {
-    const result = await runCli({ argv: ['recall'], stdin: input, loadConfig: () => { throw new Error('secret-value'); } });
+    const result = await runCli({ argv: ['recall'], stdin: input, resolveRuntimeConfig: () => { throw new Error('secret-value'); } });
     assert.deepEqual(result, { exitCode: 0, stdout: '' });
   }
 });
@@ -65,7 +65,7 @@ test('capture disabled recall does not create a Turn and ignores assistant respo
   const result = await runCli({
     argv: ['recall'],
     stdin: JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's', prompt: 'p', assistant_response: 'do not capture' }),
-    loadConfig: () => ({ ...config, captureEnabled: false }),
+    resolveRuntimeConfig: () => ({ ...config, captureEnabled: false }),
     createDependencies: () => ({
       outbox: { flush: async () => {} },
       recallService: { recall: async () => 'memory' },
