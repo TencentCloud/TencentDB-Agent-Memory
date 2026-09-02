@@ -1,0 +1,23 @@
+[build-system]
+requires = [
+  "hatchling>=1.27,<2",
+  "editables>=0.5,<1",
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "memory-tencentdb-pydantic-ai"
+version = "0.1.0"
+description = "PydanticAI adapter for TencentDB Agent Memory Gateway"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "pydantic-ai-slim[openai]>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = ["build>=1.2,<2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memory_tencentdb_pydantic_ai"]
