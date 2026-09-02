@@ -7,7 +7,8 @@
  * Directory structure:
  *   adapters/
  *   ├── openclaw/      — OpenClaw plugin host (in-process, runEmbeddedPiAgent)
- *   └── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   ├── standalone/    — Gateway / Hermes sidecar (HTTP, OpenAI-compatible API)
+ *   └── codex/         — Codex-style Gateway client adapter
  */
 
 // OpenClaw adapter
@@ -17,3 +18,14 @@ export type { OpenClawHostAdapterOptions, OpenClawLLMRunnerFactoryOptions } from
 // Standalone adapter
 export { StandaloneHostAdapter, StandaloneLLMRunner, StandaloneLLMRunnerFactory } from "./standalone/index.js";
 export type { StandaloneHostAdapterOptions, StandaloneLLMConfig, StandaloneLLMRunnerFactoryOptions } from "./standalone/index.js";
+
+// Codex adapter
+export { CodexMemoryAdapter, createCodexMemoryAdapterFromEnv } from "./codex/index.js";
+export type {
+  CodexCaptureTurnInput,
+  CodexConversationSearchInput,
+  CodexMemoryAdapterOptions,
+  CodexMemorySearchInput,
+  CodexRecallInput,
+  CodexSessionEndInput,
+} from "./codex/index.js";
