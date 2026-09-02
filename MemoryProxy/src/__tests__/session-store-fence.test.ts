@@ -105,3 +105,53 @@ describe("buildStoreSessionKey（store 复合键单点约定）", () => {
     ).toBe("codex:sk");
   });
 });
+describe("SessionStore L1 有界淘汰", () => {
+  it("超过 maxL1Entries 后按最近使用序淘汰最旧条目（不动持久层）", async () => {
+    const store = new SessionStore(30_000, undefined, undefined, 3);
+    const mk = (i: number) =>
+      ({
+        status: "initialized",
+        keyId: `c${i}`,
+        startedAt: 1_000_000,
+        attemptCount: 0,
+        userId: "u1",
+        sessionInfo: { user_id: "u1", space_id: "sp1" },
+      }) as SessionInitState;
+    for (let i = 0; i < 5; i++) {
+      store.bind(`claude-code:c${i}`, {
+        userId: "u1",
+        agentSource: "claude-code",
+        sessionId: `c${i}`,
+        spaceId: "sp1",
+      });
+      await store.set(`claude-code:c${i}`, mk(i));
+    }
+    const states = (store as unknown as { states: Map<string, SessionInitState> }).states;
+    expect(states.size).toBeLessThanOrEqual(3);
+    expect(store.get("claude-code:c0")).toBeUndefined();
+    expect(store.get("claude-code:c4")).toBeDefined();
+  });
+
+  it("刷新已存在 key 会移到最近使用，不被误淘汰", async () => {
+    const store = new SessionStore(30_000, undefined, undefined, 2);
+    const mk = (i: number) =>
+      ({
+        status: "initialized",
+        keyId: `c${i}`,
+        startedAt: 1_000_000,
+        attemptCount: 0,
+        userId: "u1",
+        sessionInfo: { user_id: "u1", space_id: "sp1" },
+      }) as SessionInitState;
+    store.bind("claude-code:a", { userId: "u1", agentSource: "claude-code", sessionId: "a", spaceId: "sp1" });
+    store.bind("claude-code:b", { userId: "u1", agentSource: "claude-code", sessionId: "b", spaceId: "sp1" });
+    await store.set("claude-code:a", mk(0));
+    await store.set("claude-code:b", mk(1));
+    // 刷新 a（移到最新）后再插入 c → 应淘汰 b
+    await store.set("claude-code:a", mk(0));
+    await store.set("claude-code:c", mk(2));
+    expect(store.get("claude-code:b")).toBeUndefined();
+    expect(store.get("claude-code:a")).toBeDefined();
+    expect(store.get("claude-code:c")).toBeDefined();
+  });
+});

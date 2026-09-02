@@ -31,6 +31,8 @@ import { isDshRuntimeContextSnapshot } from "../common/user-query-extractor.js";
 import type { PresetIdentity } from "./preset.js";
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000; // 30 minutes
+/** L1 状态缓存上限（仅内存；超限淘汰最旧，淘汰后由 L2a/L2b 恢复，不动持久层）。 */
+const MAX_L1_ENTRIES = 10_000;
 
 /**
  * Identity tuple used by every Repo call (SessionRepo / BindingRepo).
@@ -88,6 +90,7 @@ export class SessionStore {
   /** keyId → identity map — populated via {@link bind} to keep repo/binding writes user-namespaced. */
   private identities = new Map<string, SessionIdentity>();
   private ttlMs: number;
+  private readonly maxL1Entries: number;
   private repo?: SessionRepo;
   private bindingRepo?: BindingRepo;
   private recoveryInFlight = new Map<string, Promise<SessionInitState | undefined>>();
@@ -96,10 +99,12 @@ export class SessionStore {
     ttlMs: number = DEFAULT_TTL_MS,
     repo?: SessionRepo,
     bindingRepo?: BindingRepo,
+    maxL1Entries: number = MAX_L1_ENTRIES,
   ) {
     this.ttlMs = ttlMs;
     this.repo = repo;
     this.bindingRepo = bindingRepo;
+    this.maxL1Entries = maxL1Entries;
   }
 
   /** Attach BindingRepo late (called after Redis / storage activation). */
@@ -228,7 +233,10 @@ export class SessionStore {
         state = { ...state, resetEpoch: prev.resetEpoch };
       }
     }
+    // 刷新最近使用序（Map 更新不改变插入序），配合 trimL1 的“淘汰最旧”策略。
+    if (prev) this.states.delete(keyId);
     this.states.set(keyId, state);
+    this.trimL1();
     const id = this.identities.get(keyId);
     if (!id) {
       // No identity bound → this keyId is L1-only (anonymous session, tests
@@ -289,6 +297,19 @@ export class SessionStore {
     }
   }
 
+  /**
+   * L1 有界：超限按最近使用序淘汰最旧条目。只清内存，不动 L2a/L2b；
+   * initialized 终态淘汰后仍可由持久层恢复，pending 也已在 set() 内写过 L2a。
+   */
+  private trimL1(): void {
+    while (this.states.size > this.maxL1Entries) {
+      const oldest = this.states.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.states.delete(oldest);
+      this.identities.delete(oldest);
+    }
+  }
+
   delete(keyId: string): void {
     this.states.delete(keyId);
     const id = this.identities.get(keyId);
@@ -339,6 +360,7 @@ export class SessionStore {
       if (loaded > 0) {
         console.log(`[session-db] hydrated ${loaded} initialized session(s) from disk`);
       }
+      this.trimL1();
       return loaded;
     } catch (err) {
       console.warn(
