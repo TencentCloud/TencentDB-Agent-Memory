@@ -13,6 +13,11 @@
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./gateway-client": {
+      "types": "./dist/gateway-client.d.mts",
+      "import": "./dist/gateway-client.mjs",
+      "default": "./dist/gateway-client.mjs"
     }
   },
   "scripts": {
@@ -29,6 +34,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:pack-smoke": "node scripts/smoke-packed-adapters.mjs",
     "postinstall": "node scripts/postinstall.mjs"
   },
   "files": [
@@ -83,7 +89,7 @@
     "json5": "^2.2.3",
     "sqlite-vec": "0.1.7-alpha.2",
     "tsx": "^4.21.0",
-    "undici": "^8.1.0",
+    "undici": "8.1.0",
     "yaml": "^2.8.3",
     "zod": "^4.4.3"
   },
