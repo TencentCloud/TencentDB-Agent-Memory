@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 420" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
+  <rect width="700" height="420" fill="#ffffff"/>
+  <defs>
+    <marker id="arw" markerWidth="10" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#556"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="15" width="520" height="52" rx="6" fill="#eef3ff" stroke="#9fb4d8" stroke-width="1.5"/>
+  <text x="36" y="38" font-weight="bold" fill="#33476b">1 · Session file updated</text>
+  <text x="36" y="57" fill="#51648a">OpenCode / Codex: an assistant response is appended</text>
+  <line x1="280" y1="67" x2="280" y2="79" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="79" width="520" height="52" rx="6" fill="#eaf7ea" stroke="#8cc08c" stroke-width="1.5"/>
+  <text x="36" y="102" font-weight="bold" fill="#2f5a2f">2 · Adapter parses messages</text>
+  <text x="36" y="121" fill="#3f6b3f">parseNewMessages() → user + assistant pair</text>
+  <line x1="280" y1="131" x2="280" y2="143" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="143" width="520" height="52" rx="6" fill="#fff7e0" stroke="#e0bf66" stroke-width="1.5"/>
+  <text x="36" y="166" font-weight="bold" fill="#7a5c00">3 · Session Watcher: completed turn</text>
+  <text x="36" y="185" fill="#8a6a00">both roles present → ready to capture</text>
+  <line x1="280" y1="195" x2="280" y2="207" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="207" width="520" height="52" rx="6" fill="#f5ecf7" stroke="#c09bd0" stroke-width="1.5"/>
+  <text x="36" y="230" font-weight="bold" fill="#5e3a6e">4 · Gateway /capture</text>
+  <text x="36" y="249" fill="#6e4a7e">POST /capture { user_content, assistant_content, session_key }</text>
+  <line x1="280" y1="259" x2="280" y2="271" stroke="#556" stroke-width="1.5" marker-end="url(#arw)"/>
+
+  <rect x="20" y="271" width="520" height="52" rx="6" fill="#e3f4fd" stroke="#6aa8d8" stroke-width="1.5"/>
+  <text x="36" y="294" font-weight="bold" fill="#1f4f7a">5 · TdaiCore stores + pipelines</text>
+  <text x="36" y="313" fill="#2f5f8a">L0 JSONL + vector index → L1/L2/L3 scheduler notified</text>
+
+  <!-- Agent-unaware callout -->
+  <rect x="560" y="200" width="120" height="123" rx="6" fill="#fffbe6" stroke="#d8c060" stroke-width="1.5"/>
+  <text x="572" y="224" font-weight="bold" fill="#7a5c00">Agent-unaware</text>
+  <text x="572" y="246" fill="#8a6a00">No tool call.</text>
+  <text x="572" y="264" fill="#8a6a00">No hook.</text>
+  <text x="572" y="286" fill="#8a6a00">Agent writes</text>
+  <text x="572" y="302" fill="#8a6a00">sessions</text>
+  <text x="572" y="318" fill="#8a6a00">normally.</text>
+  <line x1="540" y1="297" x2="560" y2="261" stroke="#d8c060" stroke-width="1.2" stroke-dasharray="5,3" marker-end="url(#arw)"/>
+</svg>
