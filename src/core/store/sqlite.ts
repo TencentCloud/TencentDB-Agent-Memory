@@ -391,11 +391,13 @@ export class VectorStore implements IMemoryStore {
   // Prepared statements — FTS5 L1 (initialized in init())
   private stmtL1FtsInsert!: StatementSync;
   private stmtL1FtsDelete!: StatementSync;
+  private stmtL1FtsDeleteExpired!: StatementSync;
   private stmtL1FtsSearch!: StatementSync;
 
   // Prepared statements — FTS5 L0 (initialized in init())
   private stmtL0FtsInsert!: StatementSync;
   private stmtL0FtsDelete!: StatementSync;
+  private stmtL0FtsDeleteExpired!: StatementSync;
   private stmtL0FtsSearch!: StatementSync;
 
   /**
@@ -793,6 +795,14 @@ export class VectorStore implements IMemoryStore {
 
       this.stmtL1FtsDelete = this.db.prepare("DELETE FROM l1_fts WHERE record_id = ?");
 
+      this.stmtL1FtsDeleteExpired = this.db.prepare(`
+        DELETE FROM l1_fts
+        WHERE record_id IN (
+          SELECT record_id FROM l1_records
+          WHERE updated_time != '' AND updated_time < ?
+        )
+      `);
+
       this.stmtL1FtsSearch = this.db.prepare(`
         SELECT record_id, content_original AS content, type, priority, scene_name,
                session_key, session_id, timestamp_str, timestamp_start, timestamp_end,
@@ -811,6 +821,14 @@ export class VectorStore implements IMemoryStore {
       `);
 
       this.stmtL0FtsDelete = this.db.prepare("DELETE FROM l0_fts WHERE record_id = ?");
+
+      this.stmtL0FtsDeleteExpired = this.db.prepare(`
+        DELETE FROM l0_fts
+        WHERE record_id IN (
+          SELECT record_id FROM l0_conversations
+          WHERE recorded_at != '' AND recorded_at < ?
+        )
+      `);
 
       this.stmtL0FtsSearch = this.db.prepare(`
         SELECT record_id, message_text_original AS message_text, session_key, session_id, role, recorded_at, timestamp,
@@ -1274,7 +1292,7 @@ export class VectorStore implements IMemoryStore {
    * **Fault-tolerant**: returns 0 on failure.
    * TTL cleanup by updated_time.
    *
-   * Deletes expired rows from l1_records and matching vectors from l1_vec
+   * Deletes expired rows from l1_records and matching vector/FTS entries
    * in a single transaction to guarantee consistency.
    */
   deleteL1Expired(cutoffIso: string): number {
@@ -1305,6 +1323,11 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // Run before deleting metadata because the FTS predicate reads the
+        // expiring record IDs from l1_records.
+        if (this.ftsAvailable) {
+          this.stmtL1FtsDeleteExpired.run(cutoffIso);
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l1_vec WHERE updated_time != '' AND updated_time < ?",
@@ -1678,7 +1701,7 @@ export class VectorStore implements IMemoryStore {
   /**
    * TTL cleanup by recorded_at (ISO string) for L0 records.
    *
-   * Deletes expired rows from l0_conversations and matching vectors from l0_vec
+   * Deletes expired rows from l0_conversations and matching vector/FTS entries
    * in a single transaction to guarantee consistency.
    */
   deleteL0Expired(cutoffIso: string): number {
@@ -1710,6 +1733,11 @@ export class VectorStore implements IMemoryStore {
 
       this.db.exec("BEGIN");
       try {
+        // Run before deleting metadata because the FTS predicate reads the
+        // expiring record IDs from l0_conversations.
+        if (this.ftsAvailable) {
+          this.stmtL0FtsDeleteExpired.run(cutoffIso);
+        }
         if (this.vecTablesReady) {
           this.db.prepare(
             "DELETE FROM l0_vec WHERE recorded_at != '' AND recorded_at < ?",
