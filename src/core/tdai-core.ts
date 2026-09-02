@@ -409,11 +409,29 @@ export class TdaiCore {
       const stores = await initStores(this.cfg, this.dataDir, this.logger);
       this.vectorStore = stores.vectorStore;
       this.embeddingService = stores.embeddingService;
+      try {
+        await new CheckpointManager(this.dataDir, this.logger).recalculateCounters(this.vectorStore);
+      } catch (checkpointErr) {
+        this.logger.warn(
+          `${TAG} Checkpoint counter recalculation failed: ${
+            checkpointErr instanceof Error ? checkpointErr.message : String(checkpointErr)
+          }`,
+        );
+      }
       this.logger.debug?.(`${TAG} Stores initialized: backend=${this.cfg.storeBackend}, embedding=${this.cfg.embedding.provider}`);
     } catch (err) {
       this.logger.warn(
         `${TAG} Store init failed; recall/dedup degraded: ${err instanceof Error ? err.message : String(err)}`,
       );
+      try {
+        await new CheckpointManager(this.dataDir, this.logger).recalculateCounters();
+      } catch (checkpointErr) {
+        this.logger.warn(
+          `${TAG} Checkpoint counter recalculation failed: ${
+            checkpointErr instanceof Error ? checkpointErr.message : String(checkpointErr)
+          }`,
+        );
+      }
     }
   }
 
