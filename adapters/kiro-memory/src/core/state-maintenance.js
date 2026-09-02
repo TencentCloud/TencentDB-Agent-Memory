@@ -2,17 +2,23 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, rename } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { validateKnownStateObject } from './state-validation.js';
+import { inspectSessionLock } from './atomic-file.js';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const rel = (root, path) => relative(root, path).split(sep).join('/');
 
 export class StateMaintenanceService {
-  constructor({ stateDir, now = () => new Date(), maxObjects = 10000, archiveService } = {}) {
+  constructor({
+    stateDir, now = () => new Date(), maxObjects = 10000, archiveService,
+    inspectLock = inspectSessionLock, lockInspectionOptions = {},
+  } = {}) {
     if (typeof stateDir !== 'string' || !isAbsolute(stateDir)) throw new Error('Invalid state root');
     this.stateDir = resolve(stateDir);
     this.now = now;
     this.maxObjects = maxObjects;
     this.archiveService = archiveService;
+    this.inspectLock = inspectLock;
+    this.lockInspectionOptions = lockInspectionOptions;
   }
 
   pathFor(relativePath) {
@@ -41,6 +47,28 @@ export class StateMaintenanceService {
         if (relativePath === '.maintenance-quarantine' || relativePath.startsWith('.maintenance-quarantine/')) continue;
         const stat = await lstat(path);
         if (entry.isDirectory()) {
+          if (entry.name.endsWith('.lock')) {
+            let status = 'invalid';
+            try { ({ status } = await this.inspectLock(path, this.lockInspectionOptions)); } catch { /* report invalid */ }
+            const categories = {
+              active: 'active_lock',
+              stale_reclaimable: 'stale_reclaimable_lock',
+              stale_unverified: 'stale_unverified_lock',
+              invalid: 'invalid_lock',
+              missing: 'invalid_lock',
+            };
+            items.push({
+              path: relativePath,
+              identifier: `sha256:${sha256(relativePath)}`,
+              object_kind: 'directory',
+              size: stat.size,
+              mtime_ms: stat.mtimeMs,
+              sha256: null,
+              category: categories[status] ?? 'invalid_lock',
+              action: 'report',
+            });
+            continue;
+          }
           items.push({ path: relativePath, identifier: `sha256:${sha256(relativePath)}`, object_kind: 'directory', size: stat.size, mtime_ms: stat.mtimeMs, sha256: null, category: 'directory', action: 'report' });
           await visit(path);
           if (truncated) return;
@@ -53,7 +81,7 @@ export class StateMaintenanceService {
         const source = await readFile(path);
         let category = 'regular_file';
         let action = 'retain';
-        if (entry.name.endsWith('.lock')) { category = 'session_lock'; action = 'report'; }
+        if (entry.name.endsWith('.lock')) { category = 'invalid_lock'; action = 'report'; }
         else if (entry.name.endsWith('.json')) {
           let value;
           try { value = JSON.parse(source.toString('utf8')); }

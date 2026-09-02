@@ -357,6 +357,65 @@ test('only an expired same-host owner with a dead pid is reclaimable', async () 
   });
 });
 
+test('reclaims an expired lock only after its same-host owner is confirmed dead', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.dead-owner.lock');
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, 'owner'), `${JSON.stringify({
+      version: 2,
+      owner_token: 'dead-owner',
+      pid: 12345,
+      hostname: 'test-host',
+      created_at: '2026-08-14T08:00:00.000Z',
+      heartbeat_at: '2026-08-14T08:00:01.000Z',
+    })}\n`);
+    let calls = 0;
+    await withSessionLock(lockPath, async () => { calls += 1; }, {
+      timeoutMs: 200,
+      retryMs: 5,
+      staleAfterMs: 1_000,
+      heartbeatMs: 10,
+      currentHostname: 'test-host',
+      getProcessState: () => 'dead',
+    });
+    assert.equal(calls, 1);
+    await assert.rejects(readFile(join(lockPath, 'owner'), 'utf8'), { code: 'ENOENT' });
+  });
+});
+
+test('concurrent reclaimers serialize after claiming one dead-owner lock', async () => {
+  await withStateDir(async (stateDir) => {
+    const lockPath = join(stateDir, '.dead-owner-race.lock');
+    await mkdir(lockPath);
+    await writeFile(join(lockPath, 'owner'), `${JSON.stringify({
+      version: 2,
+      owner_token: 'dead-owner',
+      pid: 12345,
+      hostname: 'test-host',
+      created_at: '2026-08-14T08:00:00.000Z',
+      heartbeat_at: '2026-08-14T08:00:01.000Z',
+    })}\n`);
+    let active = 0;
+    let maximum = 0;
+    const options = {
+      timeoutMs: 500,
+      retryMs: 5,
+      staleAfterMs: 1_000,
+      heartbeatMs: 10,
+      currentHostname: 'test-host',
+      getProcessState: (pid) => pid === 12345 ? 'dead' : 'alive',
+    };
+    const operation = () => withSessionLock(lockPath, async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      active -= 1;
+    }, options);
+    await Promise.all([operation(), operation()]);
+    assert.equal(maximum, 1);
+  });
+});
+
 test('times out without entering when an occupied lock has an old timestamp', async () => {
   await withStateDir(async (stateDir) => {
     const lockPath = join(stateDir, '.turn-state.lock');

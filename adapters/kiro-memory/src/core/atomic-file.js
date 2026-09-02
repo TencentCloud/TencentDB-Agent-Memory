@@ -89,6 +89,37 @@ export async function inspectSessionLock(lockPath, {
   return { status: 'stale_unverified' };
 }
 
+export async function tryReclaimSessionLock(lockPath, options = {}) {
+  const initial = await readOwner(lockPath);
+  if (initial.status !== 'valid') return false;
+  if ((await inspectSessionLock(lockPath, options)).status !== 'stale_reclaimable') return false;
+  const claimPath = join(lockPath, 'reclaim');
+  let claim;
+  let ownsClaim = false;
+  let renamed = false;
+  try {
+    try { claim = await open(claimPath, 'wx'); }
+    catch (error) { if (['EEXIST', 'ENOENT'].includes(error?.code)) return false; throw error; }
+    ownsClaim = true;
+    const current = await readOwner(lockPath);
+    if (current.status !== 'valid'
+      || current.owner.owner_token !== initial.owner.owner_token
+      || current.owner.heartbeat_at !== initial.owner.heartbeat_at
+      || (await inspectSessionLock(lockPath, options)).status !== 'stale_reclaimable') return false;
+    await claim.close();
+    claim = undefined;
+    const reclaimedPath = `${lockPath}.reclaimed.${randomUUID()}`;
+    try { await rename(lockPath, reclaimedPath); }
+    catch (error) { if (['ENOENT', 'EACCES', 'EBUSY', 'EPERM'].includes(error?.code)) return false; throw error; }
+    renamed = true;
+    await rm(reclaimedPath, { recursive: true, force: true });
+    return true;
+  } finally {
+    if (claim) await claim.close().catch(() => {});
+    if (ownsClaim && !renamed) await rm(claimPath, { force: true }).catch(() => {});
+  }
+}
+
 async function releaseSessionLock(lockPath, ownerId) {
   let ownerContents;
   try {
@@ -169,6 +200,9 @@ export async function withSessionLock(lockPath, operation, options = {}) {
           ownerId = undefined;
         }
         if (error?.code !== 'EEXIST') throw error;
+        await tryReclaimSessionLock(lockPath, {
+          staleAfterMs, nowMs, currentHostname, getProcessState,
+        }).catch(() => false);
       }
       await wait(retryMs);
     }

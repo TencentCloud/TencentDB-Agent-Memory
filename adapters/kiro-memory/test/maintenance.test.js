@@ -40,12 +40,32 @@ test('maintenance is dry-run by default and only proposes safe categories', asyn
     await mkdir(join(stateDir, 'sessions', 'hash', 'turns'), { recursive: true });
     await mkdir(join(stateDir, 'outbox'), { recursive: true });
     await writeFile(corrupt, '{bad');
-    await writeFile(lock, 'locked');
+    await mkdir(lock);
+    await writeFile(join(lock, 'owner'), `${JSON.stringify({
+      version: 2,
+      owner_token: 'expired-owner',
+      pid: 12345,
+      hostname: 'test-host',
+      created_at: '2026-06-01T00:00:00.000Z',
+      heartbeat_at: '2026-06-01T00:00:01.000Z',
+    })}\n`);
     await writeFile(pending, JSON.stringify(validForceOutbox(`cap_sha256_${'a'.repeat(64)}`)));
     const before = await readFile(corrupt, 'utf8');
-    const plan = await new StateMaintenanceService({ stateDir }).plan();
+    const plan = await new StateMaintenanceService({
+      stateDir,
+      lockInspectionOptions: {
+        staleAfterMs: 1_000,
+        nowMs: () => Date.parse('2026-06-01T00:01:00.000Z'),
+        currentHostname: 'test-host',
+        getProcessState: () => 'dead',
+      },
+    }).plan();
     assert.equal(plan.items.find((item) => item.path.endsWith('corrupt.json')).action, 'quarantine');
-    assert.equal(plan.items.find((item) => item.path.endsWith('.lock')).action, 'report');
+    const lockItem = plan.items.find((item) => item.path.endsWith('.lock'));
+    assert.equal(lockItem.action, 'report');
+    assert.equal(lockItem.category, 'stale_reclaimable_lock');
+    assert.equal(JSON.stringify(lockItem).includes('expired-owner'), false);
+    assert.equal(plan.items.some((item) => item.path.endsWith('/owner')), false);
     assert.equal(plan.items.find((item) => item.path.includes('outbox/')).action, 'retain');
     assert.equal(await readFile(corrupt, 'utf8'), before);
   } finally { await rm(stateDir, { recursive: true, force: true }); }
