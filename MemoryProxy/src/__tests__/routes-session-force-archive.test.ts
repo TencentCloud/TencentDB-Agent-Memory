@@ -4,7 +4,8 @@
  * 也必须能找到（单点化修复前会静默 "Session not found"）。
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
-import { forceArchiveSkill } from "../routes/session-force-archive.js";
+import { Hono } from "hono";
+import { forceArchiveSkill, createSessionForceArchiveHandler } from "../routes/session-force-archive.js";
 import { getSessionStore, __resetSessionStoreForTests } from "../session/store.js";
 
 vi.mock("../skill/core-client.js", () => ({
@@ -71,5 +72,34 @@ describe("forceArchiveSkill（路由核心，workbuddy codex 别名查找）", (
     });
     expect(result.success).toBe(false);
     expect(result.error).toContain("Session not found");
+  });
+});
+describe("force-archive HTTP 端点鉴权", () => {
+  it("admin.apiKey 已配置但 Bearer 缺失/错误 → 401", async () => {
+    const app = new Hono();
+    app.post("/x", createSessionForceArchiveHandler({ admin: { apiKey: "sek" } } as never));
+    const res = await app.request("/x", {
+      method: "POST",
+      headers: { authorization: "Bearer wrong", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("admin.apiKey 为空 → 公开，未命中会话返回 404 而非 401", async () => {
+    const app = new Hono();
+    app.post(
+      "/x",
+      createSessionForceArchiveHandler({
+        admin: { apiKey: "" },
+        coreSkill: { endpoint: "http://core", serviceToken: "t" },
+      } as never),
+    );
+    const res = await app.request("/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_key: "no-such-session", agent_source: "claude-code" }),
+    });
+    expect(res.status).toBe(404);
   });
 });

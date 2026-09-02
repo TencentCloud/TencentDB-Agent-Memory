@@ -16,6 +16,7 @@ import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { prewarmFromConfig } from "../injection/index.js";
 import type { SessionInitState, AgentDetail, TaskDetail } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
+import { checkAdminAuth, adminAuthError } from "./admin-auth.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -234,10 +235,13 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
 
 /**
  * 创建 HTTP handler，注册到 server.ts。
- * 走 admin auth 鉴权（复用 admin-auth.ts 的模式）。
+ * 鉴权：config.admin.apiKey 非空时要求 Bearer 匹配（复用 admin-auth.ts），
+ * apiKey 为空则公开（与 instance-destroy 语义一致）。
  */
 export function createSessionRefreshHandler(config: ProxyConfig) {
   return async (c: Context): Promise<Response> => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();

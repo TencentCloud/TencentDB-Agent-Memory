@@ -3,7 +3,8 @@
  * 关键回归是 workbuddy 会话在 codex: 前缀下也能被这些入口找到。
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
-import { refreshSessionCache } from "../routes/session-refresh.js";
+import { Hono } from "hono";
+import { refreshSessionCache, createSessionRefreshHandler } from "../routes/session-refresh.js";
 import {
   createTaskFromSession,
   updateTaskFromSession,
@@ -140,5 +141,33 @@ describe("session-task 路由核心（查找语义）", () => {
     });
     expect(r.success).toBe(false);
     expect(r.error).toContain("Session not found");
+  });
+});
+describe("refresh-cache HTTP 端点鉴权", () => {
+  it("admin.apiKey 已配置但 Bearer 缺失/错误 → 401", async () => {
+    const app = new Hono();
+    app.post("/x", createSessionRefreshHandler({ admin: { apiKey: "sek" } } as never));
+    const res = await app.request("/x", {
+      method: "POST",
+      headers: { authorization: "Bearer wrong", "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("admin.apiKey 为空 → 公开，未命中会话返回 404 而非 401", async () => {
+    const app = new Hono();
+    app.post(
+      "/x",
+      createSessionRefreshHandler({
+        admin: { apiKey: "" },
+      } as never),
+    );
+    const res = await app.request("/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_key: "no-such-session", agent_source: "claude-code" }),
+    });
+    expect(res.status).toBe(404);
   });
 });

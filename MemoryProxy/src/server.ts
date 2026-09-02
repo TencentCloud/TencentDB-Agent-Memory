@@ -21,6 +21,7 @@ import { injectionStatsToPrometheus } from "./common/injection-stats.js";
 import { autoSessionSizes, recentExpiredSessions } from "./session/auto-session.js";
 import { getSessionStats, getSessionStatsBreakdown } from "./common/session-stats.js";
 import { friendlyProxyError } from "./common/error-hint.js";
+import { checkAdminAuth, adminAuthError } from "./routes/admin-auth.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
@@ -119,7 +120,10 @@ export function createApp(config: ProxyConfig): Hono {
   });
 
   // 会话诊断：只返回聚合数量与决策计数，不暴露具体会话 ID。
+  // 鉴权与 admin 端点一致：config.admin.apiKey 非空时要求 Bearer，为空则公开（建议仅内网暴露）。
   app.get("/session-debug", (c) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     const snap = getSessionStats();
     const reuseRate = snap.created + snap.resumed > 0
       ? Number((snap.resumed / (snap.created + snap.resumed)).toFixed(3))
