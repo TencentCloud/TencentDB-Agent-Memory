@@ -143,6 +143,9 @@ function requireNodeSqlite(): typeof import("node:sqlite") {
 // Lazy-loaded singleton: initialised on first call to `buildFtsQuery`.
 // If @node-rs/jieba is unavailable, falls back to Unicode-regex splitting.
 
+/** Bound generated MATCH term count for untrusted or oversized input. */
+const FTS_MAX_QUERY_TOKENS = 64;
+
 interface JiebaInstance {
   cutForSearch(text: string, hmm: boolean): string[];
 }
@@ -183,6 +186,9 @@ const ZH_STOP_WORDS = new Set([
  *
  * Falls back to Unicode-regex splitting (`/[\p{L}\p{N}_]+/gu`) if
  * jieba is not installed.
+ *
+ * Duplicate terms are removed in first-seen order and output is limited to
+ * 64 terms so oversized input cannot create an unbounded number of OR clauses.
  *
  * Tokens are OR-joined as quoted FTS5 phrase terms so that a document
  * matching *any* token is returned.  BM25 naturally ranks documents that
@@ -225,7 +231,10 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  // Apply one final first-seen dedupe so fallback and tokenizer behavior match.
+  const quoted = [...new Set(tokens)]
+    .slice(0, FTS_MAX_QUERY_TOKENS)
+    .map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" OR ");
 }
 
