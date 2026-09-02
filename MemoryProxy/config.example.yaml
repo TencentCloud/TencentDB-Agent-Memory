@@ -569,6 +569,16 @@ sessionInit:
     taskHeader: "x-task-id"  # 携带 task_id 的请求头名（可选）
     onMismatch: "form"       # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
 
+  # 无稳定会话 ID 的客户端（Hermes / OpenClaw / DSH 等）自动生成服务端会话锁。
+  # autoConversationId:
+  #   enabled: true              # 缺失会话 ID 时自动生成（显式 ID 始终优先）
+  #   ttlMinutes: 30             # 会话 TTL；到期自然轮换
+  #   strategy: "per-key"        # per-key | per-key-msg（per-key-msg 按首问指纹分窗口）
+  #   deterministic: false       # true = sid 由 (keyId, scope, 指纹, epoch) 确定性派生，
+  #                              #         多实例/重启在同一 epoch 内收敛；
+  #                              #         多实例需共享 TDAI_SESSION_SIGNING_KEY
+  #   deterministicBucketMinutes: 30  # 可选：钉住 epoch 桶宽（必须 ≥ ttlMinutes），
+  #                                   # 只调 ttl 时不触发全量轮换
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
   # 的会话会**直接**注册为固定三元组，绕过所有表单/header 匹配逻辑；

@@ -50,6 +50,24 @@ function spaceOf(id: SessionIdentity): string {
   return id.spaceId ?? "";
 }
 
+/**
+ * 会话状态在 store 里的复合键（单点约定）：
+ *   `${agentSource}:${sessionKey}`，threadIsolation 开启且有 thread 时加 `:${threadId}`。
+ * WorkBuddy 的会话状态机复用 codex（历史上恒用 `codex:` 前缀），此处统一收敛别名，
+ * handler 与 archive fence 都调本函数，改约定只动这一处。
+ */
+export function buildStoreSessionKey(opts: {
+  agentSource: string;
+  sessionKey: string;
+  threadId?: string | null;
+  threadIsolation?: boolean;
+}): string {
+  const agent = opts.agentSource === "workbuddy" ? "codex" : opts.agentSource;
+  let key = `${agent}:${opts.sessionKey}`;
+  if (opts.threadIsolation && opts.threadId) key += `:${opts.threadId}`;
+  return key;
+}
+
 /** Context passed to getOrRecover for recovery. */
 export interface RecoveryContext {
   /** MetadataClient for kernel agent/task get during recovery. */
@@ -110,12 +128,32 @@ export class SessionStore {
    * silently degrades to memory-only for such keys.
    */
   bind(keyId: string, identity: SessionIdentity): void {
+    const prev = this.identities.get(keyId);
+    if (
+      prev &&
+      (prev.userId !== identity.userId || (prev.spaceId ?? "") !== (identity.spaceId ?? ""))
+    ) {
+      console.log(
+        `[session-store] key=${keyId} ownership takeover (prevUser=${prev.userId} newUser=${identity.userId}) — cross-user keyId reuse`,
+      );
+    }
     this.identities.set(keyId, identity);
   }
 
   /** Test-only helper: expose the identity map for assertions. */
   getBoundIdentity(keyId: string): SessionIdentity | undefined {
     return this.identities.get(keyId);
+  }
+
+  /** L1 state 自身携带的 user/space 归属校验（不依赖 bind 时序）。 */
+  private l1OwnedBy(state: SessionInitState, identity: SessionIdentity): boolean {
+    const info = (
+      state as { sessionInfo?: { user_id?: string; space_id?: string } | null }
+    ).sessionInfo;
+    const storedUserId = state.userId ?? info?.user_id;
+    if (storedUserId && identity.userId && storedUserId !== identity.userId) return false;
+    if (identity.spaceId && info?.space_id && info.space_id !== identity.spaceId) return false;
+    return true;
   }
 
   get(keyId: string): SessionInitState | undefined {
@@ -357,14 +395,12 @@ export class SessionStore {
     // 空间隔离（评审意见 9 落地）：恢复出的会话若属于不同 spaceId → 视为新会话，
     // 避免跨内核实例/项目误共享身份与记忆。只做"跨空间拦截"，不短路正常会话
     // （L1 是否权威由上游的"一律走 L2a"决定，此处不恢复旧短路行为）。
-    if (l1 && l1.status === "initialized") {
-      const l1Session = (l1 as { sessionInfo?: { space_id?: string } | null }).sessionInfo;
-      if (identity.spaceId && l1Session?.space_id && l1Session.space_id !== identity.spaceId) {
-        console.log(
-          `[cache] session=${keyId} space mismatch (stored=${l1Session.space_id} req=${identity.spaceId}) → treat as new session`,
-        );
-        return undefined;
-      }
+    if (l1 && l1.status === "initialized" && !this.l1OwnedBy(l1, identity)) {
+      const info = (l1 as { sessionInfo?: { user_id?: string; space_id?: string } | null }).sessionInfo;
+      console.log(
+        `[cache] session=${keyId} L1 owner mismatch (storedUser=${l1.userId ?? info?.user_id ?? "-"} storedSpace=${info?.space_id ?? "-"} reqUser=${identity.userId} reqSpace=${identity.spaceId ?? ""}) → treat as new session`,
+      );
+      return undefined;
     }
 
     // Step 2: L2a SessionRepo (Redis / SQLite / ProxyStorage) — full SessionInitState.
@@ -395,9 +431,12 @@ export class SessionStore {
     //
     // zombie / user-mismatch 已在 `this.get()` 与 `probeL2a` 内部各自 invalidate，
     // 走到这里的 l1 一定是 fresh + user 匹配的。
-    if (l1) {
+    if (l1 && this.l1OwnedBy(l1, identity)) {
       console.log(`[cache] session=${keyId} L1 fallback (L2a miss, status=${l1.status})`);
       return this.tagRecoverySource(l1, "l1");
+    }
+    if (l1) {
+      console.log(`[cache] session=${keyId} L1 fallback skipped (owner mismatch, L2a miss)`);
     }
 
     // Step 3: L2b Binding

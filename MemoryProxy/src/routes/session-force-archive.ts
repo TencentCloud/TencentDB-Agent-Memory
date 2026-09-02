@@ -10,7 +10,7 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { getCoreSkillClient } from "../skill/core-client.js";
 import type { SessionInitState } from "../session/types.js";
 
@@ -58,7 +58,7 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
   }
 
   // 从 SessionStore 取 session 状态
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
   const store = getSessionStore();
   const state: SessionInitState | undefined = store.get(compositeKey);
 

@@ -89,35 +89,40 @@ WILDCARD_FAMILIES="claude-sonnet-* claude-haiku-* claude-opus-* claude-fable-*"
 # 常见客户端模型名统一映射到上游 PROXY_UPSTREAM_MODEL（glm-4.5-air）：
 # Claude 系 + Codex/DeepSeek 系 + 智谱系 + 通义系
 FIXED_ALIASES="claude-sonnet-4-5 claude-sonnet-5 claude-sonnet-5.1 claude-sonnet-6 claude-haiku-3-5 claude-haiku-4 claude-opus-4 claude-opus-5 claude-fable-1 deepseek-v4-flash deepseek-v4-pro deepseek-chat deepseek-reasoner glm-4.5 glm-4.6v glm-4.6 qwen3.8-flash qwen-max"
+# 定价（元/百万 token）：costGuard 成本核算用，按实际上游价格覆盖
+PROXY_PRICE_INPUT="${PROXY_PRICE_INPUT:-0.6}"
+PROXY_PRICE_OUTPUT="${PROXY_PRICE_OUTPUT:-1.8}"
+PROXY_PRICE_CACHE_READ="${PROXY_PRICE_CACHE_READ:-0.05}"
+PROXY_PRICE_CACHE_WRITE="${PROXY_PRICE_CACHE_WRITE:-0}"
 ALL_ENTRIES=""
 # 上游模型自身条目：WorkBuddy 等客户端直接发送上游模型名（使用者自定义）时，
 # 必须能在定价表中命中，否则报 "not a registered display name" 错误。
 ALL_ENTRIES+="    - name: \"${PROXY_UPSTREAM_MODEL}\"
       modelName: \"${PROXY_UPSTREAM_MODEL}\"
-      input: 0.0
-      output: 0.0
-      cacheRead: 0.0
-      cacheWrite5m: 0.0
-      cacheWrite1h: 0.0
+      input: ${PROXY_PRICE_INPUT}
+      output: ${PROXY_PRICE_OUTPUT}
+      cacheRead: ${PROXY_PRICE_CACHE_READ}
+      cacheWrite5m: ${PROXY_PRICE_CACHE_WRITE}
+      cacheWrite1h: ${PROXY_PRICE_CACHE_WRITE}
 "
 for FAMILY in $WILDCARD_FAMILIES; do
   ALL_ENTRIES+="    - name: \"${PROXY_UPSTREAM_MODEL}\"
       modelName: \"${FAMILY}\"
-      input: 0.0
-      output: 0.0
-      cacheRead: 0.0
-      cacheWrite5m: 0.0
-      cacheWrite1h: 0.0
+      input: ${PROXY_PRICE_INPUT}
+      output: ${PROXY_PRICE_OUTPUT}
+      cacheRead: ${PROXY_PRICE_CACHE_READ}
+      cacheWrite5m: ${PROXY_PRICE_CACHE_WRITE}
+      cacheWrite1h: ${PROXY_PRICE_CACHE_WRITE}
 "
 done
 for ALIAS in $FIXED_ALIASES; do
   ALL_ENTRIES+="    - name: \"${PROXY_UPSTREAM_MODEL}\"
       modelName: \"${ALIAS}\"
-      input: 0.0
-      output: 0.0
-      cacheRead: 0.0
-      cacheWrite5m: 0.0
-      cacheWrite1h: 0.0
+      input: ${PROXY_PRICE_INPUT}
+      output: ${PROXY_PRICE_OUTPUT}
+      cacheRead: ${PROXY_PRICE_CACHE_READ}
+      cacheWrite5m: ${PROXY_PRICE_CACHE_WRITE}
+      cacheWrite1h: ${PROXY_PRICE_CACHE_WRITE}
 "
 done
 # 动态生成 injectors 列表：TDAI 关闭时不注入 tdai-memory（它占 ~3 万 token），

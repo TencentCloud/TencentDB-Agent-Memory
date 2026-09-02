@@ -9,14 +9,17 @@
 
 import type { Context } from "hono";
 import { getLogLevel } from "./report/log.js";
-import { createHash } from "node:crypto";
 import { writeLog, createPipeline } from "./logger.js";
 import {
-  apiKeyToKeyId,
   opikCreateLlmSpan,
   opikCreateTrace,
   uuidv7,
 } from "./opik.js";
+import { sessionStage } from "./stages/session.js";
+import { buildStoreSessionKey } from "./session/store.js";
+import type { ReqCtx } from "./stages/types.js";
+import { forwardStage, buildForwardHeaders } from "./stages/forward.js";
+import { buildArchiveCtx, writeL0, triggerSkill, createTdaiClient, type ArchiveCtx } from "./stages/archive.js";
 import { consumeInjectionStats } from "./injection/observer.js";
 import {
   langfuseReportGeneration,
@@ -28,7 +31,6 @@ import { countHumanTurns } from "./turnSeq.js";
 import type { ProxyConfig } from "./types.js";
 import {
   resolveForwardTarget,
-  resolveSessionKey,
   resolveLatestUserQuery,
   reportAnalyzerTrace,
   type ForwardTarget,
@@ -49,215 +51,25 @@ import { writeFailedReportRaw } from "./clickhouse.js";
 import { verifyUserKey } from "./auth.js";
 import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
-import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
-import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
-import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
+import { recordTdaiTurn } from "./tdai/recorder.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
-import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
-import { isMemoryWriteAllowed } from "./extraction-gate.js";
-import { extractUsageFromSseText } from "./common/sse-usage.js";
+import { isExtractionAllowed } from "./extraction-gate.js";
+import { buildObsInput, flattenAnthropicMessagesForOpik, extractUsageFromSseText } from "./stages/obs.js";
+import {
+  SKIP_REQUEST_HEADERS,
+  SKIP_RESPONSE_HEADERS,
+} from "./upstream/headers.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
 import {
-  enforceRateLimit,
   isRateLimitExceededError,
   recordInputTokenUsage,
 } from "./rate-limit/guard.js";
 
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  // 内部身份头只给 proxy/session-init 使用，不能透传给上游模型服务。
-  "x-tdai-user-key",
-]);
 
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
-
-/**
- * Build a per-request TdaiClient. `spaceId` (extracted from the request path
- * `/{agent}/{spaceId}/...`) overrides `config.tdai.serviceId` so writes/recalls
- * land on the correct kernel tenant. Falls back to config when the request
- * carries no spaceId (older single-tenant deployments).
- */
-function createTdaiClient(config: ProxyConfig, spaceId?: string): TdaiClient | null {
-  if (!config.tdai.enabled || !config.tdai.memory.enabled || !config.tdai.endpoint) return null;
-  return new TdaiClient({
-    enabled: config.tdai.enabled && config.tdai.memory.enabled,
-    endpoint: config.tdai.endpoint,
-    apiKey: config.tdai.apiKey,
-    serviceId: spaceId || config.tdai.serviceId,
-    writeL0: config.tdai.memory.writeL0,
-    recallL1: config.tdai.memory.recallL1,
-    injectL2L3: config.tdai.memory.injectL2L3,
-    l1Limit: config.tdai.memory.l1Limit,
-    l2Limit: config.tdai.memory.l2Limit,
-    recallCharBudget: config.tdai.memory.recallCharBudget,
-    timeoutMs: config.tdai.memory.timeoutMs,
-  });
-}
-
-/**
- * Normalize Anthropic top-level `system` field into a plain string for
- * observability. Anthropic accepts either a string or an array of content
- * blocks; here we join `text` blocks' text with "\n" and JSON-stringify
- * anything else. Returns "" when nothing textual is present.
- */
-function stringifyAnthropicSystem(system: unknown): string {
-  if (system === undefined || system === null) return "";
-  if (typeof system === "string") return system;
-  if (Array.isArray(system)) {
-    const parts: string[] = [];
-    for (const block of system) {
-      const b = block as Record<string, unknown>;
-      if (b && b.type === "text" && typeof b.text === "string" && b.text) {
-        parts.push(b.text);
-      }
-    }
-    return parts.join("\n");
-  }
-  return JSON.stringify(system);
-}
-
-/**
- * Build the `input` payload for Langfuse / Opik. Two modes:
- *
- * - Normal mode (default): calls `flattenAnthropicMessagesForOpik` — content
- *   arrays are stringified for compact display. Loses `cache_control` markers,
- *   `thinking` blocks with signatures, native `tool_use`/`tool_result` shape.
- *
- * - Debug mode (`langfuse.debug=true`): passes the raw Anthropic body straight
- *   through, preserving every native structure. Use when investigating cache
- *   markers, thinking-signature issues, or request classification. Costs 2-5x
- *   more upload bandwidth + Langfuse storage — leave off in production.
- */
-export function buildLangfuseInput(
-  messages: unknown[],
-  system: unknown,
-  debug: boolean,
-): unknown {
-  if (debug) {
-    // Preserve original shape end-to-end. Prepend a synthetic system message
-    // when it's non-empty so the display order matches other consumers.
-    const out: unknown[] = [];
-    if (system !== undefined && system !== null && system !== "") {
-      out.push({ role: "system", content: system });
-    }
-    return out.concat(messages);
-  }
-  return flattenAnthropicMessagesForOpik(messages, system);
-}
-
-/**
- * Flatten Anthropic messages for Opik / Langfuse display.
- *
- * Anthropic puts the system prompt on `body.system` (not inside `messages`),
- * so callers should pass it explicitly — otherwise the reported input omits
- * the system prompt entirely. When provided and non-empty, a synthetic
- * `{role:"system", content}` message is prepended to the result.
- */
-export function flattenAnthropicMessagesForOpik(
-  messages: unknown[],
-  system?: unknown,
-): unknown[] {
-  const result: unknown[] = [];
-  const systemText = stringifyAnthropicSystem(system);
-  if (systemText) {
-    result.push({ role: "system", content: systemText });
-  }
-  for (const msg of messages) {
-    const m = msg as Record<string, unknown>;
-    const role = m.role as string;
-    const content = m.content;
-
-    if (typeof content === "string") {
-      result.push({ role, content });
-      continue;
-    }
-
-    if (!Array.isArray(content)) {
-      result.push({ role, content: JSON.stringify(content) });
-      continue;
-    }
-
-    if (role === "assistant") {
-      const textParts: string[] = [];
-      const toolCalls: unknown[] = [];
-      for (const block of content) {
-        const b = block as Record<string, unknown>;
-        if (b.type === "text") {
-          textParts.push(b.text as string);
-        } else if (b.type === "tool_use") {
-          toolCalls.push(b);
-        } else if (b.type === "thinking" && b.thinking) {
-          textParts.push(`[thinking] ${(b.thinking as string).slice(0, 200)}`);
-        }
-      }
-      if (textParts.length > 0) {
-        result.push({ role: "assistant", content: textParts.join("\n") });
-      }
-      for (const tc of toolCalls) {
-        const t = tc as Record<string, unknown>;
-        const inputStr = typeof t.input === "string" ? t.input : JSON.stringify(t.input);
-        result.push({
-          role: "assistant",
-          content: JSON.stringify({ tool_call_id: t.id, tool_name: t.name, input: inputStr }, null, 2),
-        });
-      }
-    } else if (role === "user") {
-      const textParts: string[] = [];
-      const toolResults: unknown[] = [];
-      for (const block of content) {
-        const b = block as Record<string, unknown>;
-        if (b.type === "text") {
-          textParts.push(b.text as string);
-        } else if (b.type === "tool_result") {
-          toolResults.push(b);
-        } else {
-          textParts.push(JSON.stringify(b));
-        }
-      }
-      if (textParts.length > 0) {
-        result.push({ role: "user", content: textParts.join("\n") });
-      }
-      for (const tr of toolResults) {
-        const t = tr as Record<string, unknown>;
-        let resultContent: string;
-        if (typeof t.content === "string") {
-          resultContent = t.content;
-        } else if (Array.isArray(t.content)) {
-          resultContent = (t.content as Record<string, unknown>[])
-            .map((c) => (c.type === "text" ? c.text : JSON.stringify(c)))
-            .join("\n");
-        } else {
-          resultContent = JSON.stringify(t.content);
-        }
-        result.push({
-          role: "tool",
-          content: JSON.stringify({ tool_call_id: t.tool_use_id, is_error: t.is_error ?? false, result: resultContent }, null, 2),
-        });
-      }
-    } else {
-      const merged = content.map((b: unknown) => {
-        const block = b as Record<string, unknown>;
-        if (block.type === "text") return block.text as string;
-        return JSON.stringify(block);
-      }).join("\n");
-      result.push({ role, content: merged });
-    }
-  }
-  return result;
-}
 
 /**
  * 汇总一轮消息中的工具交互，供 Opik metadata 使用（Anthropic 形态：
@@ -380,212 +192,6 @@ function buildUpstreamBody(
   return { body: sanitized.body, sanitizedCount: sanitized.removed };
 }
 
-/**
- * Build upstream headers from request headers + cost guard auth overrides.
- */
-function buildUpstreamHeaders(
-  c: Context,
-  config: ProxyConfig,
-  target: ForwardTarget,
-  sessionKey?: string,
-  effectiveApiKey?: string,
-): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const [k, v] of c.req.raw.headers.entries()) {
-    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) {
-      headers[k] = v;
-    }
-  }
-  headers["content-type"] = "application/json";
-
-  // `effectiveApiKey` is pre-resolved by the caller according to the
-  // per-agent fallback rule (see the resolveEffectiveApiKey call site).
-  //   - non-empty string → inject as server-side key, drop client's own
-  //   - empty/undefined  → passthrough: keep whatever the client sent
-  // The cost-guard extension can still fully override via target.authHeaders.
-  if (effectiveApiKey && !target.authHeaders) {
-    const agent = c.req.path.split("/")[1] ?? "claude-code";
-    if (
-      config.upstream.agents[agent]?.anthropicToChat === true ||
-      config.upstream.agents[agent]?.anthropicToResponses === true
-    ) {
-      // TRACK 05A/05B：转成 Chat / Responses 后上游要 OpenAI 风格鉴权
-      // （Authorization: Bearer，不带 anthropic-version）。
-      headers["authorization"] = `Bearer ${effectiveApiKey}`;
-      delete headers["x-api-key"];
-      delete headers["anthropic-version"];
-    } else {
-      headers["x-api-key"] = effectiveApiKey;
-      delete headers["authorization"];
-    }
-  }
-
-  if (target.authHeaders) {
-    for (const [k, v] of Object.entries(target.authHeaders)) {
-      headers[k] = v;
-      if (k === "x-api-key") delete headers["authorization"];
-      if (k === "authorization") delete headers["x-api-key"];
-    }
-  }
-
-  if (sessionKey) {
-    headers["x-vertex-ai-session-id"] = sessionKey;
-  }
-  return headers;
-}
-
-/**
- * Forward request to upstream and handle retry if retryTarget is set.
- */
-async function forwardWithRetry(
-  target: ForwardTarget,
-  upstreamHeaders: Record<string, string>,
-  upstreamBody: Record<string, unknown>,
-  originalBody: Record<string, unknown>,
-  originalHeaders: Record<string, string>,
-  pipe: ReturnType<typeof createPipeline>,
-  forwardTimeoutMs: number,
-  sessionKeyForDebug?: string,
-  rateLimitContext?: { config: ProxyConfig; instanceId?: string },
-): Promise<{ resp: Response; retried: boolean }> {
-  let upstreamResp: Response | undefined;
-  let forwardFailed = false;
-
-  // ── Optional outbound body md5 debug log ───────────────────────────────
-  // 用于长稳观测：Anthropic KV cache 命中的必要条件是"从 body 头 → cache_control
-  // anchor 之前所有 bytes 完全一致"。所以要分开算三段 md5：
-  //   1. sysFullMd5    — md5(JSON.stringify(body.system))  全 system 序列化
-  //   2. sysStrMd5     — md5(body.system 拉平成字符串)    仅文本内容（对比用）
-  //   3. msgsPrefixMd5 — 找到 messages 里最后一个带 cache_control 的位置 N，
-  //                      md5(JSON.stringify(messages[0..N]))，即真正的 cache 前缀
-  //   4. msgsAnchorIdx — 上面那个 N（帮助定位命中长度）
-  //
-  // 任何一个 md5 变了都意味着 Anthropic 会 cache miss。
-  //
-  // 开启：PROXY_DEBUG_DUMP_OUTBOUND_MD5=1 node ...
-  if (process.env.PROXY_DEBUG_DUMP_OUTBOUND_MD5) {
-    try {
-      const sys = (upstreamBody as { system?: unknown }).system;
-      // Anthropic system 通常是字符串（CC）或 blocks 数组（少数 SDK）
-      const sysFullStr = sys === undefined ? "" : JSON.stringify(sys);
-      const sysTextStr = typeof sys === "string"
-        ? sys
-        : Array.isArray(sys)
-          ? sys.map((b) => (b as { text?: string }).text ?? "").join("\n")
-          : "";
-
-      const msgs = (upstreamBody as { messages?: Array<Record<string, unknown>> }).messages ?? [];
-      // 找 messages 里最后一个"内容里带 cache_control"的位置
-      let anchorIdx = -1;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const content = msgs[i]?.content;
-        if (Array.isArray(content)) {
-          const hasCache = content.some((b) => b && typeof b === "object" && "cache_control" in (b as object));
-          if (hasCache) { anchorIdx = i; break; }
-        }
-      }
-      // cache 前缀 = 从 body 头 → anchor（含）之前所有 messages 序列化后
-      const prefixEnd = anchorIdx >= 0 ? anchorIdx + 1 : msgs.length;
-      const msgsPrefixStr = JSON.stringify(msgs.slice(0, prefixEnd));
-
-      const sysFullMd5 = createHash("md5").update(sysFullStr).digest("hex").slice(0, 12);
-      const sysTextMd5 = createHash("md5").update(sysTextStr).digest("hex").slice(0, 12);
-      const msgsPrefixMd5 = createHash("md5").update(msgsPrefixStr).digest("hex").slice(0, 12);
-
-      // eslint-disable-next-line no-console
-      console.log(
-        `[outbound-md5] session=${sessionKeyForDebug ?? "?"} sysBytes=${sysFullStr.length} sysFullMd5=${sysFullMd5} sysTextMd5=${sysTextMd5} msgsCount=${msgs.length} msgsAnchorIdx=${anchorIdx} msgsPrefixBytes=${msgsPrefixStr.length} msgsPrefixMd5=${msgsPrefixMd5}`,
-      );
-    } catch (e) {
-      // best-effort；不应因 debug 崩流程
-      // eslint-disable-next-line no-console
-      console.log(`[outbound-md5] session=${sessionKeyForDebug ?? "?"} <error: ${(e as Error).message}>`);
-    }
-  }
-
-  if (rateLimitContext) {
-    await enforceRateLimit({
-      config: rateLimitContext.config,
-      instanceId: rateLimitContext.instanceId,
-      modelId: target.model,
-      protocol: "anthropic",
-    });
-  }
-  try {
-    upstreamResp = await fetch(target.url, {
-      method: "POST",
-      headers: upstreamHeaders,
-      body: JSON.stringify(upstreamBody),
-      signal: AbortSignal.timeout(forwardTimeoutMs),
-    });
-  } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === "TimeoutError") {
-      pipe.error("FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
-    } else {
-      pipe.error("FORWARD", err);
-    }
-    forwardFailed = true;
-  }
-
-  if (upstreamResp) {
-    pipe.forwardDone(upstreamResp.status);
-  }
-
-  const shouldRetry = target.retryTarget &&
-    (forwardFailed || (upstreamResp && upstreamResp.status >= 400 && upstreamResp.status < 500));
-
-  if (shouldRetry && target.retryTarget) {
-    const reason = forwardFailed ? "timeout/error" : `${upstreamResp!.status}`;
-    pipe.info("RETRY", `Routed model failed (${reason}), retrying with ${target.retryTarget.model}`);
-
-    const retryHeaders: Record<string, string> = { ...originalHeaders };
-    retryHeaders["content-type"] = "application/json";
-    if (sessionKeyForDebug) {
-      retryHeaders["x-vertex-ai-session-id"] = sessionKeyForDebug;
-    }
-
-    try {
-      if (rateLimitContext) {
-        await enforceRateLimit({
-          config: rateLimitContext.config,
-          instanceId: rateLimitContext.instanceId,
-          modelId: target.retryTarget.model,
-          protocol: "anthropic",
-        });
-      }
-      upstreamResp = await fetch(target.retryTarget.url, {
-        method: "POST",
-        headers: retryHeaders,
-        body: JSON.stringify(originalBody),
-        signal: AbortSignal.timeout(forwardTimeoutMs),
-      });
-      if (upstreamResp.ok) {
-        pipe.info("RETRY_SUCCESS", `Retry returned ${upstreamResp.status}`);
-      } else {
-        pipe.error("RETRY_FAILED", `Retry returned ${upstreamResp.status}`);
-      }
-      return { resp: upstreamResp, retried: true };
-    } catch (retryErr: unknown) {
-      if (isRateLimitExceededError(retryErr)) throw retryErr;
-      if (retryErr instanceof DOMException && retryErr.name === "TimeoutError") {
-        pipe.error("RETRY_FORWARD", `Timeout after ${forwardTimeoutMs / 1000}s`);
-      } else {
-        pipe.error("RETRY_FORWARD", retryErr);
-      }
-      throw new Error("Upstream request failed");
-    }
-  }
-
-  if (forwardFailed && !shouldRetry) {
-    throw new Error("Upstream request failed");
-  }
-
-  if (!upstreamResp) {
-    throw new Error("No upstream response available");
-  }
-
-  return { resp: upstreamResp, retried: false };
-}
 
 /** Main handler for POST /v1/messages (Anthropic Messages API). */
 export async function handleAnthropicMessages(
@@ -700,41 +306,27 @@ export async function handleAnthropicMessages(
 
   // ── Resolve apiKey → project name ──────────────────────────────────────
   const apiKey = extractApiKey(c);
-  let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
 
-  // ── Lowercased headers for agent profile detection + session key ──────────
-  const lcHeaders: Record<string, string> = {};
-  for (const [k, v] of c.req.raw.headers.entries()) {
-    lcHeaders[k.toLowerCase()] = v;
-  }
-
-// ── Session key: prefer conversation header, fallback to agent profile ───────────
-  const { resolveEffectiveConversationId, isNamespaceArchived, firstUserMessageFingerprint } = await import("./session/session-key.js");
-  const { conversationId, autoGenerated, reused, threadId } = resolveEffectiveConversationId(
+  // ── 会话解析（阶段化）────────────────────────────────────────────────
+  const sessionCtx: ReqCtx = {
     c,
-    keyId,
     config,
-    firstUserMessageFingerprint(body.messages),
-  );
-  if (autoGenerated) {
-    console.log(`[session-auto] action=${reused ? "resumed" : "created"} conversationId=${conversationId} keyId=${keyId}`);
-  }
-  const sessionKey = conversationId ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
-
-  // ── Auth verification (user_key → user_id) ──────────────────────────────────────
-  // Reuse the early verify result — it ran before body parse to decide the
-  // system-user short-circuit; running verify again here would double the
-  // network round-trip for every request.
-  const spaceId = earlySpaceId;
-  const userId = earlyVerify.userId
-    || c.req.header("x-user-id")
-    || c.req.header("x-cb-user-id")
-    || c.req.header("x-tdai-user-token")
-    || "";
-  if (userId) keyId = userId;
-
-  // sk-mem key（用于 TDAI ACL / MetadataClient 的 x-tdai-user-key）就是入口的 apiKey。
-  const callerUserKey = apiKey || null;
+    body,
+    agentSource,
+    apiKey,
+    earlySpaceId,
+    earlyUserId: earlyVerify.userId || "",
+  };
+  await sessionStage(sessionCtx);
+  const keyId = sessionCtx.keyId!;
+  const lcHeaders = sessionCtx.lcHeaders!;
+  const sessionKey = sessionCtx.sessionKey!;
+  const conversationId = sessionCtx.conversationId ?? null;
+  const threadId = sessionCtx.threadId ?? null;
+  const spaceId = sessionCtx.spaceId!;
+  const userId = sessionCtx.userId!;
+  const callerUserKey = sessionCtx.callerUserKey ?? null;
+  const { isNamespaceArchived } = await import("./session/session-key.js");
 
   // Activate Redis storage early — must run BEFORE session init.
   if (config.redis?.enabled) {
@@ -750,9 +342,9 @@ export async function handleAnthropicMessages(
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -820,16 +412,14 @@ export async function handleAnthropicMessages(
   }
   if (config.sessionInit?.enabled && conversationId && !skipSessionInit && !archivedNamespace) {
     try {
-      const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
+      const { getSessionStore, buildStoreSessionKey, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
- const compositeKey = config.sessionInit?.threadIsolation?.enabled && threadId
-   ? `${agentSource}:${sessionKey}:${threadId}`
-   : `${agentSource}:${sessionKey}`;
+ const compositeKey = buildStoreSessionKey({ agentSource, sessionKey, threadId, threadIsolation: config.sessionInit?.threadIsolation?.enabled });
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（参见 §4.4 边界处理）。
       const identity = {
@@ -1234,16 +824,20 @@ export async function handleAnthropicMessages(
     }
   }
 
-  const tdaiClient = assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
-  const tdaiIdentity = injectedSkipped
-    ? null
-    : deriveTdaiIdentity({
-        sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
-        userId: userId || null,
-        sessionKey,
-        userKey: callerUserKey,
-      });
-  const tdaiUserMessage = extractLatestUserMessage(messages);
+  const archiveCtx = buildArchiveCtx({
+    config,
+    sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
+    injectionSkipped: injectedSkipped,
+    input: messages,
+    sessionKey,
+    agentSource,
+    protocol: "anthropic",
+    userId,
+    callerUserKey,
+    spaceId,
+    threadId: threadId ?? null,
+    assetCapabilities,
+  });
 
   // ── Context injection (before cost guard) ────────────────────────────────
   // CC 分流：
@@ -1445,7 +1039,7 @@ export async function handleAnthropicMessages(
   const effectiveApiKey = agentUpstreamEntry
     ? (agentUpstreamEntry.apiKey ?? "")
     : config.upstream.apiKey;
-  const upstreamHeaders = buildUpstreamHeaders(c, config, target, sessionKey, effectiveApiKey);
+  const upstreamHeaders = buildForwardHeaders(c, config, { protocol: "anthropic", target, auth: { apiKey: effectiveApiKey, sessionKey } });
 
   // Optional private preparation stage. It rewrites `body` / `messages` in
   // place, so it has to land after every host-side mutation (injection, agent
@@ -1515,20 +1109,27 @@ export async function handleAnthropicMessages(
 
   const retryBody = sanitizeThinkingBlocks(body).body;
 
-  // ── Forward to upstream (with automatic retry if configured) ──────────────
+  // ── Forward to upstream（阶段化：forwardStage 统一鉴权/fetch/重试）──────────────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
-  pipe.forwardStart();
   let upstreamResp: Response;
   let retried = false;
 
   try {
-    const result = await forwardWithRetry(
-      target, upstreamHeaders, upstreamBody,
-      retryBody, originalHeaders,
-      pipe, forwardTimeoutMs,
-      sessionKey,
-      { config, instanceId: spaceId || undefined },
-    );
+    const result = await forwardStage(sessionCtx, {
+      protocol: "anthropic",
+      pipe,
+      target,
+      body: upstreamBody,
+      auth: { apiKey: effectiveApiKey, sessionKey },
+      retry: {
+        target: target.retryTarget ?? undefined,
+        originalBody: retryBody,
+        originalHeaders,
+        bodyModelOverride: false,
+        rateLimit: { instanceId: spaceId || undefined },
+      },
+      timeoutMs: forwardTimeoutMs,
+    });
     upstreamResp = result.resp;
     retried = result.retried;
   } catch (err: unknown) {
@@ -1541,7 +1142,7 @@ export async function handleAnthropicMessages(
       model: target.model,
       startTime,
       endTime: new Date().toISOString(),
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: buildObsInput({ protocol: "anthropic", messages, system: body.system, debug: langfuseDebug }),
       statusMessage: err instanceof Error ? err.message : "Upstream request failed",
       extraTags: ["error"],
       observationMetadata: { stage: "forward", ...debugMetadata },
@@ -1605,7 +1206,7 @@ export async function handleAnthropicMessages(
         model: effectiveModel,
         startTime,
         endTime: new Date().toISOString(),
-        input: buildLangfuseInput(messages, body.system, langfuseDebug),
+        input: buildObsInput({ protocol: "anthropic", messages, system: body.system, debug: langfuseDebug }),
         status: upstreamResp.status,
         statusMessage: errText.slice(0, 500),
         extraTags: ["error"],
@@ -1650,12 +1251,9 @@ export async function handleAnthropicMessages(
       routedFrom,
       pipe,
       sessionKeyForSkill: sessionKey,
+      threadId: threadId ?? null,
       agentSource,
-      sessionInfo,
-      tdaiClient,
-      tdaiIdentity,
-      tdaiUserMessage,
-      assetCapabilities,
+      archiveCtx,
       lf,
       spaceId,
       upstreamRequestId,
@@ -1771,7 +1369,7 @@ export async function handleAnthropicMessages(
         if (intents.length > 0) {
           emitModelIntentTelemetry({
             // 与 session_init_logs 对齐 compositeKey 形态
-            sessionKey: `${agentSource}:${sessionKey}`,
+            sessionKey: buildStoreSessionKey({ agentSource, sessionKey, threadId: threadId ?? null, threadIsolation: config.sessionInit?.threadIsolation?.enabled }),
             turnSeq: lf.turnSeq,
             spaceId,
             userId: keyId,
@@ -1851,7 +1449,7 @@ export async function handleAnthropicMessages(
       model: effectiveModel,
       startTime,
       endTime,
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: buildObsInput({ protocol: "anthropic", messages, system: body.system, debug: langfuseDebug }),
       output: langfuseOutput,
       usage,
       traceName: lf.traceName,
@@ -1870,7 +1468,7 @@ export async function handleAnthropicMessages(
       model: effectiveModel,
       startTime,
       endTime,
-      input: buildLangfuseInput(messages, body.system, langfuseDebug),
+      input: buildObsInput({ protocol: "anthropic", messages, system: body.system, debug: langfuseDebug }),
       status: upstreamResp.status,
       statusMessage: respText.slice(0, 500),
       extraTags: ["error"],
@@ -1884,42 +1482,31 @@ export async function handleAnthropicMessages(
   //          跳过 skill/L0 副作用。Credit 仍上报（token 消耗真实）。
   const isMainDialog = requestKind === "main";
 
-  // Skill extract trigger — count tool_use blocks + buffer conversation.
-  // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-  if (isMainDialog && isExtractionAllowed(config, "skill")) {
-    await triggerSkillExtractIfReady({
-      config,
-      sessionKey,
-      agentSource,
-      sessionInfo,
-      inputMessages: messages,
-      assistantMessage,
+  if (archiveCtx) {
+    await triggerSkill({
+      ctx: archiveCtx,
       protocol: "anthropic",
-      assetCapabilities,
+      assistantMessage,
+      mainDialog: isMainDialog,
+      onDialogSkip: () =>
+        console.log(`[cc-routing] skip skill buffer for kind=${requestKind} session=${sessionKey}`),
     });
-  } else if (isMainDialog) {
-    logExtractionSkipped(config, "skill", sessionKey);
-  } else {
-    console.log(`[cc-routing] skip skill buffer for kind=${requestKind} session=${sessionKey}`);
   }
-
-  // TDAI L0 write (non-streaming).
-  //
-  // 与 stream 分支 (1476-1481) 对称：把 user_query + assistant 回复写入 L0
-  // 短期记忆。**此前仅 stream=true 会写**，non-stream 请求（如工具/测试脚本
-  // 常用的 stream:false）沉默丢失。缺失该调用意味着 CC non-stream 场景
-  // 完全没有 L0 记忆写入。
-  if (isMainDialog && tdaiClient && isExtractionAllowed(config, "tdai-memory") && isMemoryWriteAllowed(config, sessionBypassed)) {
-    recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, outputContent)
-      .catch((err: unknown) => pipe.error("TDAI_L0", err));
-  } else if (isMainDialog && tdaiClient && sessionBypassed) {
-    console.log(`[session-init] session=${sessionKey} bypassed → L0 write skipped (bypassWritePolicy=${config.tdai?.memory?.bypassWritePolicy ?? "skip"})`);
-  } else if (isMainDialog && tdaiClient) {
-    logExtractionSkipped(config, "tdai-memory", sessionKey);
-  } else if (!isMainDialog) {
-    console.log(`[cc-routing] skip L0 write for kind=${requestKind} session=${sessionKey}`);
+  if (archiveCtx) {
+    await writeL0({
+      ctx: archiveCtx,
+      assistantText: outputContent ?? "",
+      mainDialog: isMainDialog,
+      l0MainDialogGate: true,
+      bypassed: sessionBypassed,
+      l0Mode: "fire",
+      onL0Error: (err: unknown) => pipe.error("TDAI_L0", err),
+      onBypassSkip: () =>
+        console.log(`[session-init] session=${sessionKey} bypassed → L0 write skipped (bypassWritePolicy=${config.tdai?.memory?.bypassWritePolicy ?? "skip"})`),
+      onDialogSkip: () =>
+        console.log(`[cc-routing] skip L0 write for kind=${requestKind} session=${sessionKey}`),
+    });
   }
-
   // Credit usage reporting (non-streaming). Failures are surfaced to the client
   // via the `x-credit-report-error` response header but never replace the
   // upstream LLM response body — the user-facing answer is preserved.
@@ -2085,17 +1672,15 @@ interface AnthropicTapContext {
   sessionKeyForSkill: string;
   /** Client type (URL path 第一段) — 透传给 extract trigger 作为三段隔离键之一。 */
   agentSource: string;
-  sessionInfo: Record<string, unknown> | null | undefined;
-  /** Tdai L0 write. */
-  tdaiClient: TdaiClient | null;
-  tdaiIdentity: TdaiIdentity | null;
-  tdaiUserMessage: TdaiMessage | null;
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
+  /** skill 归档 + TDAI L0 write hook 上下文；null 表示跳过归档。 */
+  archiveCtx: ArchiveCtx | null;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
   /** Space/tenant ID from request path. */
   spaceId?: string;
   /** Upstream response header `x-request-id` (empty when not returned). */
+  /** thread 维度（model-intent composite 与 init 日志对齐，threadIsolation 时带 :thread）。 */
+  threadId?: string | null;
   upstreamRequestId?: string;
   /** CC 请求分流类别，决定 stream 完成后是否触发 skill/L0 副作用。 */
   requestKind: CcRequestKind;
@@ -2217,7 +1802,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
             model: modelId,
             startTime,
             endTime,
-            input: buildLangfuseInput(inputMessages, system, ctx.langfuseDebug),
+            input: buildObsInput({ protocol: "anthropic", messages: inputMessages, system, debug: ctx.langfuseDebug }),
             output: outputText ? { role: "assistant", content: outputText } : undefined,
             usage,
             traceName: lf.traceName,
@@ -2244,23 +1829,19 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
       const isMainDialog = ctx.requestKind === "main";
 
       // Tdai L0 write
-      if (isMainDialog && ctx.tdaiClient && isExtractionAllowed(ctx.config, "tdai-memory") && isMemoryWriteAllowed(ctx.config, ctx.bypassed === true)) {
-        // Streaming 不 await（会拖慢 SSE 关流），trackWrite + withL0Retry 应对两条丢包线：
-        //   - trackWrite 注册 in-flight promise 到全局 set；SIGTERM 时 index.ts 会
-        //     flushPendingWrites 兜底，避免 pod rolling 时 event loop 未 flush 就退出丢 L0。
-        //   - withL0Retry 3 次退避重试（~3.5s），挡 tdai kernel 瞬断 / 5xx / 网络抖动。
-        trackWrite(
-          withL0Retry(() => recordTdaiTurn(
-            ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
-            outputText || null,
-          )).catch((err: unknown) => pipe.error("TDAI_L0", err))
-        );
-      } else if (isMainDialog && ctx.tdaiClient) {
-        logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKeyForSkill);
-      } else if (!isMainDialog) {
-        console.log(`[cc-routing] skip L0 write (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
+      if (ctx.archiveCtx) {
+        await writeL0({
+          ctx: ctx.archiveCtx,
+          assistantText: outputText,
+          mainDialog: isMainDialog,
+          l0MainDialogGate: true,
+          bypassed: ctx.bypassed === true,
+          l0Mode: "track",
+          onL0Error: (err: unknown) => pipe.error("TDAI_L0", err),
+          onDialogSkip: () =>
+            console.log(`[cc-routing] skip L0 write (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`),
+        });
       }
-
       pipe.streamDone(Object.keys(usage).length > 0 ? usage : null);
 
       // Report the completed response to the extension. Fire-and-forget; the
@@ -2294,7 +1875,7 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
           .map(([, v]) => ({ name: v.name, arguments: v.inputJson || "{}" }));
         if (intents.length > 0) {
           emitModelIntentTelemetry({
-            sessionKey: `${ctx.agentSource}:${ctx.sessionKey}`,
+            sessionKey: buildStoreSessionKey({ agentSource: ctx.agentSource, sessionKey: ctx.sessionKey, threadId: ctx.threadId ?? null, threadIsolation: ctx.config.sessionInit?.threadIsolation?.enabled }),
             turnSeq: ctx.lf.turnSeq,
             spaceId: ctx.spaceId,
             userId: ctx.keyId,
@@ -2306,26 +1887,17 @@ function consumeAnthropicStream(stream: ReadableStream<Uint8Array>, ctx: Anthrop
 
       // Skill extract trigger — after stream finalization.
       // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-      if (isMainDialog && isExtractionAllowed(ctx.config, "skill")) {
-        await triggerSkillExtractIfReady({
-          config: ctx.config,
-          sessionKey: ctx.sessionKeyForSkill,
-          agentSource: ctx.agentSource,
-          sessionInfo: ctx.sessionInfo,
-          inputMessages: ctx.inputMessages,
-          assistantMessage: outputText
-            ? { role: "assistant", content: outputText }
-            : null,
+      if (ctx.archiveCtx) {
+        await triggerSkill({
+          ctx: ctx.archiveCtx,
           protocol: "anthropic",
-          assetCapabilities: ctx.assetCapabilities,
+          assistantText: outputText,
           toolCallCountOverride: toolUseCount,
+          mainDialog: isMainDialog,
+          onDialogSkip: () =>
+            console.log(`[cc-routing] skip skill buffer (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`),
         });
-      } else if (isMainDialog) {
-        logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
-      } else {
-        console.log(`[cc-routing] skip skill buffer (stream) for kind=${ctx.requestKind} session=${ctx.sessionKeyForSkill}`);
       }
-
       // Credit usage reporting for streaming responses. The stream has already
       // been forwarded to the client; failures here are best-effort and can
       // only be observed via server logs (no way to retro-add response headers).

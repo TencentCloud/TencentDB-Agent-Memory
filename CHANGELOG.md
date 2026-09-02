@@ -9,6 +9,24 @@
 
 ---
 
+## [Unreleased]
+
+### 🔄 MemoryProxy 阶段化重构 + Session 隔离增强
+
+- 阶段化重构：会话解析 / 转发（含重试与协议翻译）/ 归档 / 观测收敛为统一阶段（stages/），
+  四个 handler 复用同一套实现，大幅减少重复逻辑
+- Session 隔离：
+  - 自动会话 ID 签名绑定 (keyId, scope, 首问指纹)，阻止跨线程 / 跨窗口复用；
+    新增 deterministic 模式（跨实例 / 重启收敛）与可钉 epoch 桶宽
+  - 会话归属 fencing：store 恢复跨用户 / 跨 space 拦截 + L0 写入前归属校验
+  - 会话结束台账（expired / pruned / evicted）与按 agent / space 分解计数
+  - 稳定兜底会话键（首问指纹 + 日桶），避免无会话客户端的孤儿记忆
+- 文档：config 示例补充 autoConversationId；README 新增多副本 / K8s 高可用
+  注意事项与监控告警建议
+- 埋点对齐：model-intent composite 与 init 日志统一走 buildStoreSessionKey（threadIsolation 时含 :thread）
+- 路由层（session-refresh / session-task / force-archive）补 workbuddy codex 别名回归用例
+- 设计文档更新：docs/design/2026-08-27-session-isolation-design.md 增补 2026-09-02 落地记录
+
 ## [2.0.1] — 2026-08-25
 
 ### 🚀 支持更多 Agent 客户端

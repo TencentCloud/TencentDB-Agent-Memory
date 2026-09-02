@@ -19,6 +19,7 @@
 
 import type { AgentContext, CacheStrategy, ContextBlock, HookPriority, InjectionHook } from "../types.js";
 import { getLogLevel } from "../../report/log.js";
+import { createHash } from "node:crypto";
 import { HOOK_PRIORITY } from "../types.js";
 import { getLastUserMessage, getMessageText } from "../context.js";
 import { extractUserQueryText } from "../../tdai/recorder.js";
@@ -437,17 +438,37 @@ export class TdaiIntentToolsInjector implements InjectionHook {
     }
   }
 
+  /** 查询向量缓存：同一句用户消息重复出现时不再调 embedding。 */
+  private queryVecCache = new Map<string, number[]>();
+  private static QUERY_VEC_CACHE_MAX = 512;
+
+  private async embedQueryVector(query: string): Promise<number[]> {
+    const trimmed = query.trim();
+    // 短查询对向量意图是噪声，关键词路径已覆盖，直接跳过省一次调用
+    if (trimmed.length < 4) return [];
+    const key = createHash("sha256").update(trimmed).digest("hex").slice(0, 24);
+    const hit = this.queryVecCache.get(key);
+    if (hit) return hit;
+    const vecs = await this.embedTexts([trimmed]);
+    const vec = vecs[0] ?? [];
+    if (this.queryVecCache.size >= TdaiIntentToolsInjector.QUERY_VEC_CACHE_MAX) {
+      this.queryVecCache.clear();
+    }
+    this.queryVecCache.set(key, vec);
+    return vec;
+  }
+
   /** 向量语义选择：返回 { ok, recipes }，ok=false 表示调用失败（上层走 LLM 兜底）。 */
   private async classifyWithEmbedding(query: string): Promise<{ ok: boolean; recipes: TdaiMemoryRecipeId[] }> {
     const e = this.cfg.embedding;
     if (!e || !e.baseUrl || !e.apiKey) return { ok: false, recipes: [] };
     try {
-      const [recipeVectors, qv] = await Promise.all([this.getRecipeVectors(), this.embedTexts([query])]);
-      if (!qv[0] || qv[0].length === 0) return { ok: false, recipes: [] };
+      const [recipeVectors, qv] = await Promise.all([this.getRecipeVectors(), this.embedQueryVector(query)]);
+      if (!qv || qv.length === 0) return { ok: false, recipes: [] };
       const scored: Array<{ id: TdaiMemoryRecipeId; score: number }> = [];
       for (const [id, vec] of recipeVectors) {
         if (!vec || vec.length === 0) continue;
-        scored.push({ id, score: cosineSimilarity(qv[0], vec) });
+        scored.push({ id, score: cosineSimilarity(qv, vec) });
       }
       scored.sort((a, b) => b.score - a.score);
       const selected = scored

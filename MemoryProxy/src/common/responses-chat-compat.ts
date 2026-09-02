@@ -19,6 +19,9 @@
  * 便于单测与后续 codex 复用。
  */
 
+import { createSseFrameParser, type SseFrameParser } from "./sse.js";
+import { recordConversion, recordStream, recordCacheUsage } from "./protocol-stats.js";
+
 // ── 工具函数 ─────────────────────────────────────────────────────────────────
 
 function randomId(): string {
@@ -31,6 +34,7 @@ interface ChatMessage {
   content: unknown;
   tool_call_id?: string;
   tool_calls?: Array<Record<string, unknown>>;
+  reasoning_content?: string;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {
@@ -99,6 +103,7 @@ export function responsesBodyToChat(
   body: Record<string, unknown>,
   opts?: { model?: string },
 ): Record<string, unknown> {
+  const _t0 = performance.now();
   // opts.model 为 Proxy 解析后的上游模型名（使用者自定义）；
   // 缺省时沿用客户端请求里的模型名。
   const model = opts?.model ?? (typeof body.model === "string" ? body.model : undefined);
@@ -113,6 +118,7 @@ export function responsesBodyToChat(
 
   const messages: ChatMessage[] = [];
   if (instructions.length > 0) messages.push({ role: "system", content: instructions });
+  let pendingReasoning = "";
 
   for (const raw of inputItems) {
     const item = asRecord(raw);
@@ -123,8 +129,15 @@ export function responsesBodyToChat(
       const role = item.role;
       if (role === "assistant") {
         const text = extractText(item.content);
-        if (text.length > 0) messages.push({ role: "assistant", content: text });
-      } else if (role === "user" || role === "developer" || role === "system") {
+        if (text.length > 0 || pendingReasoning) {
+          messages.push({
+            role: "assistant",
+            content: text,
+            ...(pendingReasoning ? { reasoning_content: pendingReasoning } : {}),
+          });
+          pendingReasoning = "";
+        }
+      } else if (role === "user") {
         const text = extractText(item.content);
         const images = extractImages(item.content);
         if (images.length > 0) {
@@ -135,6 +148,10 @@ export function responsesBodyToChat(
         } else if (text.length > 0) {
           messages.push({ role: "user", content: text });
         }
+      } else if (role === "developer" || role === "system") {
+        // developer/system 是系统级指令，落成 system 消息而非 user。
+        const text = extractText(item.content);
+        if (text.length > 0) messages.push({ role: "system", content: text });
       }
     } else if (type === "function_call") {
       const callId = typeof item.call_id === "string" ? item.call_id : `call_${randomId()}`;
@@ -157,8 +174,12 @@ export function responsesBodyToChat(
       const output =
         typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
       if (callId) messages.push({ role: "tool", tool_call_id: callId, content: output });
+    } else if (type === "reasoning") {
+      const summary = typeof item.summary === "string" ? item.summary : "";
+      if (summary) {
+        pendingReasoning = pendingReasoning ? `${pendingReasoning}\n${summary}` : summary;
+      }
     }
-    // type === "reasoning" / 未知类型 → 丢弃
   }
 
   const chat: Record<string, unknown> = {
@@ -215,6 +236,7 @@ export function responsesBodyToChat(
   if (typeof body.top_p === "number") chat.top_p = body.top_p;
   if (body.parallel_tool_calls !== undefined) chat.parallel_tool_calls = body.parallel_tool_calls;
 
+  recordConversion("responses_body_to_chat", performance.now() - _t0);
   return chat;
 }
 
@@ -321,11 +343,12 @@ export function createChatSseToResponses(opts: {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = typeof opts.model === "string" ? opts.model : "unknown";
+  recordStream("chat_to_responses");
 
   let state: {
     responseId: string;
     created: number;
-    buf: string;
+    parser: SseFrameParser;
     item: OpenItem | null;
     completedItems: Record<string, unknown>[];
     toolStates: Map<number, { id: string; name: string; args: string }>;
@@ -341,7 +364,7 @@ export function createChatSseToResponses(opts: {
       state = {
         responseId,
         created,
-        buf: "",
+        parser: createSseFrameParser(),
         item: null,
         completedItems: [],
         toolStates: new Map<number, { id: string; name: string; args: string }>(),
@@ -366,23 +389,14 @@ export function createChatSseToResponses(opts: {
     },
     transform(chunk, controller) {
       if (!state) return;
-      state.buf += decoder.decode(chunk, { stream: true });
-      const frames = state.buf.split("\n\n");
-      state.buf = frames.pop() ?? "";
-      for (const frame of frames) {
-        const dataLines = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6));
-        if (dataLines.length === 0) continue;
-        const payload = dataLines.join("\n");
-        if (payload === "[DONE]") {
+      for (const frame of state.parser.push(decoder.decode(chunk, { stream: true }))) {
+        if (frame.data === "[DONE]") {
           complete();
           continue;
         }
         let evt: Record<string, unknown>;
         try {
-          evt = JSON.parse(payload) as Record<string, unknown>;
+          evt = JSON.parse(frame.data) as Record<string, unknown>;
         } catch {
           continue;
         }
@@ -391,6 +405,17 @@ export function createChatSseToResponses(opts: {
     },
     flush() {
       if (!state) return;
+      for (const frame of state.parser.end()) {
+        if (frame.data === "[DONE]") {
+          complete();
+          continue;
+        }
+        try {
+          handleChatChunk(JSON.parse(frame.data) as Record<string, unknown>);
+        } catch {
+          /* skip malformed tail frame */
+        }
+      }
       // 上游可能不发送 [DONE]，直接收尾
       complete();
       state = null;
@@ -532,6 +557,13 @@ export function createChatSseToResponses(opts: {
 
   function handleChatChunk(evt: Record<string, unknown>) {
     if (!state) return;
+    const err = asRecord(evt.error);
+    if (err) {
+      // 上游 chat 内联错误帧 → Responses response.failed（错误不再被静默吞掉）
+      state.finished = true;
+      emit(sseFrame("response.failed", { type: "response.failed", error: err }));
+      return;
+    }
     if (evt.usage && typeof evt.usage === "object") {
       state.usage = evt.usage as Record<string, unknown>;
     }
@@ -614,10 +646,22 @@ export function chatJsonToResponses(
   json: Record<string, unknown>,
   opts: { model?: string },
 ): Record<string, unknown> {
+  const _t0 = performance.now();
   const choices = Array.isArray(json.choices) ? (json.choices as unknown[]) : [];
   const choice = asRecord(choices[0]) ?? {};
   const message = asRecord(choice.message) ?? {};
   const output: Record<string, unknown>[] = [];
+
+  const reasoning =
+    typeof message.reasoning_content === "string" ? message.reasoning_content : "";
+  if (reasoning.length > 0) {
+    output.push({
+      id: `rs_${randomId()}`,
+      type: "reasoning",
+      status: "completed",
+      summary: reasoning,
+    });
+  }
 
   const content = typeof message.content === "string" ? message.content : "";
   if (content.length > 0) {
@@ -648,6 +692,14 @@ export function chatJsonToResponses(
   }
 
   const usage = asRecord(json.usage) ?? {};
+  recordCacheUsage({
+    cached:
+      (asRecord(usage.prompt_tokens_details)?.cached_tokens as number | undefined) ??
+      (usage.cached_tokens as number | undefined) ??
+      0,
+    input: typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0,
+  });
+  recordConversion("chat_json_to_responses", performance.now() - _t0);
   return {
     id: `resp_${randomId()}`,
     object: "response",
@@ -699,6 +751,7 @@ export function chatBodyToResponses(
   body: Record<string, unknown>,
   opts?: { model?: string },
 ): Record<string, unknown> {
+  const _t0 = performance.now();
   const model = opts?.model ?? (typeof body.model === "string" ? body.model : undefined);
   const input: Array<Record<string, unknown>> = [];
   let instructions = "";
@@ -799,6 +852,7 @@ export function chatBodyToResponses(
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;
   if (body.parallel_tool_calls !== undefined) out.parallel_tool_calls = body.parallel_tool_calls;
+  recordConversion("chat_body_to_responses", performance.now() - _t0);
   return out;
 }
 
@@ -816,9 +870,10 @@ export function createResponsesSseToChatSse(opts: {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = typeof opts.model === "string" ? opts.model : "unknown";
+  recordStream("responses_to_chat");
 
   let state: {
-    buf: string;
+    parser: SseFrameParser;
     started: boolean;
     finished: boolean;
     chatId: string;
@@ -902,7 +957,7 @@ export function createResponsesSseToChatSse(opts: {
   return new TransformStream<Uint8Array, Uint8Array>({
     start(controller) {
       state = {
-        buf: "",
+        parser: createSseFrameParser(),
         started: false,
         finished: false,
         chatId: `chatcmpl_${randomId()}`,
@@ -916,27 +971,25 @@ export function createResponsesSseToChatSse(opts: {
     transform(chunk, controller) {
       if (!state) return;
       state.controller = controller;
-      state.buf += decoder.decode(chunk, { stream: true });
-      const frames = state.buf.split("\n\n");
-      state.buf = frames.pop() ?? "";
-      for (const frame of frames) {
-        // 兼容两种 SSE 帧格式：标准 `event: xxx` / `data: {...}`，
-        // 以及 DashScope 等上游的紧凑格式 `event:xxx` / `data:{...}`（冒号后无空格）。
-        const evtLine = frame.split("\n").find((l) => l.startsWith("event:"));
-        const dataLines = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trim());
-        if (dataLines.length === 0) continue;
-        const type = evtLine ? evtLine.slice(6).trim() : "message";
+      for (const frame of state.parser.push(decoder.decode(chunk, { stream: true }))) {
+        const type = frame.event ?? "message";
         try {
-          handleEvent(type, JSON.parse(dataLines.join("\n")) as Record<string, unknown>);
+          handleEvent(type, JSON.parse(frame.data) as Record<string, unknown>);
         } catch {
           /* skip malformed frame */
         }
       }
     },
     flush() {
+      if (!state) return;
+      for (const frame of state.parser.end()) {
+        const type = frame.event ?? "message";
+        try {
+          handleEvent(type, JSON.parse(frame.data) as Record<string, unknown>);
+        } catch {
+          /* skip malformed tail frame */
+        }
+      }
       finish();
       state = null;
     },
@@ -1049,7 +1102,14 @@ export function createResponsesSseToChatSse(opts: {
       return;
     }
     if (type === "response.failed") {
-      finish();
+      const err = asRecord(data.error);
+      if (err) {
+        // 上游失败原因透传给 chat 客户端（内联 error 帧，终止流）
+        emit(sseData({ error: err }));
+        state.finished = true;
+      } else {
+        finish();
+      }
       return;
     }
   }
@@ -1065,8 +1125,10 @@ export function responsesJsonToChatJson(
   json: Record<string, unknown>,
   opts: { model?: string },
 ): Record<string, unknown> {
+  const _t0 = performance.now();
   const output = Array.isArray(json.output) ? (json.output as unknown[]) : [];
   const textParts: string[] = [];
+  const reasoningParts: string[] = [];
   const toolCalls: unknown[] = [];
   let hasToolCall = false;
 
@@ -1103,8 +1165,10 @@ export function responsesJsonToChatJson(
               : JSON.stringify(it.arguments ?? {}),
         },
       });
+    } else if (it.type === "reasoning") {
+      const summary = typeof it.summary === "string" ? it.summary : "";
+      if (summary) reasoningParts.push(summary);
     }
-    // reasoning / 未知类型忽略
   }
 
   const usage = asRecord(json.usage) ?? {};
@@ -1112,10 +1176,13 @@ export function responsesJsonToChatJson(
     (asRecord(usage.input_tokens_details)?.cached_tokens as number | undefined) ??
     (usage.cached_tokens as number | undefined) ??
     0;
+  recordCacheUsage({ cached, input: typeof usage.input_tokens === "number" ? usage.input_tokens : 0 });
+  recordConversion("responses_json_to_chat_json", performance.now() - _t0);
   const message: Record<string, unknown> = {
     role: "assistant",
     content: textParts.join("\n") || null,
   };
+  if (reasoningParts.length > 0) message.reasoning_content = reasoningParts.join("\n");
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
   return {
     id: typeof json.id === "string" ? json.id : `chatcmpl_${randomId()}`,

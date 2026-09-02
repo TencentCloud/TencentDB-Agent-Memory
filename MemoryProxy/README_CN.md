@@ -308,6 +308,43 @@ MemoryProxy/
   package.json
 ```
 
+## 多副本 / K8s 高可用注意事项
+
+把 Proxy 部署成多副本（K8s Deployment + Service）时，请求会轮询到不同 Pod。
+对**自带稳定会话 ID** 的客户端（Claude Code / CodeBuddy / Codex / WorkBuddy），
+会话 ID 在请求头里天然一致，跨 Pod 无影响；它们的会话初始化状态走 SessionStore
+的 L2a/L2b（Redis / COS），本来就是为多节点设计的。
+
+真正要留意的是**不带稳定会话 ID 的客户端**（Hermes / OpenClaw / DSH 等）走
+`autoConversationId` 自动会话时的跨 Pod 收敛：
+
+1. **开 `deterministic: true`（推荐零成本起步）**：同一会话在任意 Pod 派生出
+   相同的 ID。硬前提是**所有副本共享同一个签名密钥** —— 用 K8s Secret 注入
+   环境变量 `TDAI_SESSION_SIGNING_KEY`；不共享则各 Pod 各签各的，等于没开。
+   已知边界：活跃对话跨过 epoch（默认 = ttlMinutes）边界时，落到从未见过该
+   会话的 Pod 会按新 epoch 派生新 ID → L0 会话断开一次。
+2. **粘性会话（`sessionAffinity: ClientIP`）**：单出口 IP 场景的运维兜底；
+   多客户端共享出口（NAT）或 Pod 滚动重启时会失效，不作为架构答案。
+3. **Redis 共享 auto-session（蓝图，尚未实现）**：把进程内的活跃会话表挪进
+   Redis，跨 Pod 严格连续 + 过期台账共享。设计见 `src/session/auto-session.ts`
+   头注释与 Session 隔离课题；需要时以独立 PR 落地。
+
+生产多副本前请确认：`config.redis.enabled`（SessionStore L2a/L2b 依赖）、
+`TDAI_SESSION_SIGNING_KEY` 已通过 Secret 注入、`autoConversationId` 按上表配置。
+
+### 可观测与告警建议
+
+`/metrics` 已导出会话相关计数（`tdai_auto_session_*`），建议对以下信号配置告警：
+
+- `tdai_auto_session_scope_rejected_total` / `ghost_rejected_total` **突变**：说明
+  出现跨线程/跨窗口复用或伪造会话 ID 的异常流量，需查日志定位来源；
+- `tdai_auto_session_reuse_rate` **骤降**：大量会话在创建而非续接，可能是客户端
+  会话 ID 丢失或配置变更导致全量轮换；
+- `fence_blocked / fence_allowed` 的**拦截率突变**：突然升高=会话归属在错乱；
+  长期为 0=写入前检查可能没匹配到记录（需复查 store 键约定与绑定路径）；
+- `tdai_auto_session_spaces_exceeded_total` > 0：空间标签超过导出上限（32），
+  说明租户数量增长，需评估指标拆分或聚合策略。
+
 ## 运行测试
 
 ```bash

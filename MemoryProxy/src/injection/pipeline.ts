@@ -25,6 +25,10 @@ import {
 import type { HookCacheRepo } from "../db/hookCacheRepo.js";
 import type { InjectionObserver, HookResult } from "./observer.js";
 import { NoopInjectionObserver } from "./observer.js";
+import {
+  recordInjectionPipelineEnd,
+  recordInjectionPipelineError,
+} from "../common/injection-stats.js";
 
 /** Optional pipeline behaviors (agent detection, etc.). */
 export interface InjectionPipelineOptions {
@@ -143,12 +147,21 @@ export class InjectionPipeline {
 
       // ── Observer: pipeline end ──────────────────────────────────────────
       const durationMs = Date.now() - pipelineStartMs;
+      recordInjectionPipelineEnd(
+        hookResults.map((r) => ({
+          hookId: r.hookId,
+          blockCount: r.blockCount,
+          durationMs: r.durationMs,
+          error: r.error,
+        })),
+      );
       safeCall(() => this.observer.onPipelineEnd(metadata, durationMs, hookResults));
 
       return result;
     } catch (err) {
       // ── Observer: pipeline error ────────────────────────────────────────
       const error = err instanceof Error ? err : new Error(String(err));
+      recordInjectionPipelineError();
       safeCall(() => this.observer.onPipelineError(metadata, error));
       throw err; // re-throw so callers can handle it
     }

@@ -9,6 +9,9 @@
  * 独立性约束：不 import 任何 client handler / adapter，纯函数 + TransformStream，便于单测。
  */
 
+import { createSseFrameParser } from "./sse.js";
+import { recordConversion, recordStream, recordCacheUsage } from "./protocol-stats.js";
+
 // ── 工具函数 ─────────────────────────────────────────────────────────────────
 
 function randomId(): string {
@@ -39,6 +42,26 @@ function blockText(content: unknown): string {
       return "";
     })
     .join("\n");
+}
+
+/** Anthropic tool_result.content → OpenAI tool 消息 content（支持文本 + 图片混合）。 */
+function anthropicToolResultToChatContent(content: unknown): unknown {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return content ?? "";
+  const parts: unknown[] = [];
+  for (const b of content) {
+    const r = asRecord(b);
+    if (!r) continue;
+    if (r.type === "text" && typeof r.text === "string") parts.push({ type: "text", text: r.text });
+    else if (r.type === "image") {
+      const url = anthropicImageToUrl(r.source);
+      if (url) parts.push({ type: "image_url", image_url: { url } });
+    }
+  }
+  if (parts.length === 1 && (parts[0] as Record<string, unknown>).type === "text") {
+    return (parts[0] as { text: string }).text;
+  }
+  return parts.length > 0 ? parts : "";
 }
 
 /** Anthropic image source → OpenAI image_url（base64 转 data URL，url 直用）。 */
@@ -92,7 +115,11 @@ function chatContentToAnthropic(content: unknown): unknown {
 
 // ── 请求体：Anthropic → Chat ────────────────────────────────────────────────
 
-export function anthropicToChat(body: Record<string, unknown>): Record<string, unknown> {
+export function anthropicToChat(
+  body: Record<string, unknown>,
+  opts: { preserveSignature?: boolean; onDropped?: (param: string) => void } = {},
+): Record<string, unknown> {
+  const _t0 = performance.now();
   const messages: Array<Record<string, unknown>> = [];
   const sysText = anthropicSystemToText(body.system);
   if (sysText) messages.push({ role: "system", content: sysText });
@@ -126,7 +153,7 @@ export function anthropicToChat(body: Record<string, unknown>): Record<string, u
           messages.push({
             role: "tool",
             tool_call_id: typeof blk.tool_use_id === "string" ? blk.tool_use_id : "",
-            content: blockText(blk.content),
+            content: anthropicToolResultToChatContent(blk.content),
           });
         }
       }
@@ -134,10 +161,16 @@ export function anthropicToChat(body: Record<string, unknown>): Record<string, u
     } else if (role === "assistant") {
       const textParts: string[] = [];
       const toolCalls: unknown[] = [];
+      let reasoning = "";
+      let reasoningSignature = "";
       for (const b of content) {
         const blk = asRecord(b);
         if (!blk) continue;
         if (blk.type === "text" && typeof blk.text === "string") textParts.push(blk.text);
+        else if (blk.type === "thinking" && typeof blk.thinking === "string") {
+          reasoning += blk.thinking;
+          if (typeof blk.signature === "string") reasoningSignature = blk.signature;
+        }
         else if (blk.type === "tool_use") {
           toolCalls.push({
             id: typeof blk.id === "string" ? blk.id : `call_${randomId()}`,
@@ -156,6 +189,10 @@ export function anthropicToChat(body: Record<string, unknown>): Record<string, u
         role: "assistant",
         content: textParts.join("\n") || null,
       };
+      if (reasoning) msg.reasoning_content = reasoning;
+      if (opts.preserveSignature && reasoningSignature) {
+        msg.anthropic_reasoning_signature = reasoningSignature;
+      }
       if (toolCalls.length > 0) msg.tool_calls = toolCalls;
       messages.push(msg);
     }
@@ -165,9 +202,26 @@ export function anthropicToChat(body: Record<string, unknown>): Record<string, u
   if (typeof body.max_tokens === "number") out.max_tokens = body.max_tokens;
   if (typeof body.temperature === "number") out.temperature = body.temperature;
   if (typeof body.top_p === "number") out.top_p = body.top_p;
+  const md = asRecord(body.metadata);
+  if (md && typeof md.user_id === "string") out.user = md.user_id;
+  if (opts.onDropped) {
+    if (body.top_k !== undefined) opts.onDropped("top_k");
+    if (body.thinking !== undefined) opts.onDropped("thinking");
+    if (md) {
+      for (const k of Object.keys(md)) {
+        if (k !== "user_id") opts.onDropped(`metadata.${k}`);
+      }
+    }
+  }
   if (body.stream === true) out.stream = true;
   const tools = anthropicToolsToChat(body.tools);
   if (tools) out.tools = tools;
+  if (Array.isArray(body.stop_sequences)) out.stop = body.stop_sequences;
+  const tc = anthropicToolChoiceToChat(body.tool_choice);
+  if (tc !== undefined) out.tool_choice = tc;
+  const tcObj = asRecord(body.tool_choice);
+  if (tcObj && tcObj.disable_parallel_tool_use === true) out.parallel_tool_calls = false;
+  recordConversion("anthropic_to_chat", performance.now() - _t0);
   return out;
 }
 
@@ -190,17 +244,63 @@ function anthropicToolsToChat(tools: unknown): unknown[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+/**
+ * Anthropic tool_choice → OpenAI chat tool_choice：
+ *   auto → auto；any → required；{type:"tool", name} → {type:"function", function:{name}}；
+ *   其它（none/未知）→ undefined（不输出，交给上游默认行为）。
+ */
+function anthropicToolChoiceToChat(tc: unknown): unknown {
+  if (tc === "auto") return "auto";
+  if (tc === "any" || asRecord(tc)?.type === "any") return "required";
+  const r = asRecord(tc);
+  if (r && r.type === "tool" && typeof r.name === "string") {
+    return { type: "function", function: { name: r.name } };
+  }
+  return undefined;
+}
+
+/**
+ * OpenAI chat tool_choice → Anthropic tool_choice：
+ *   auto → auto；required → any；{type:"function", function:{name}} → {type:"tool", name}；
+ *   none / 未知 → undefined（Anthropic 无 none 语义，省略即“按需”）。
+ */
+function chatToolChoiceToAnthropic(tc: unknown): unknown {
+  if (tc === "auto") return "auto";
+  if (tc === "required") return "any";
+  const r = asRecord(tc);
+  if (r && r.type === "function") {
+    const fn = asRecord(r.function);
+    if (fn && typeof fn.name === "string") return { type: "tool", name: fn.name };
+  }
+  return undefined;
+}
+
 // ── 请求体：Chat → Anthropic ────────────────────────────────────────────────
 
-export function chatToAnthropic(body: Record<string, unknown>): Record<string, unknown> {
+export function chatToAnthropic(
+  body: Record<string, unknown>,
+  opts: {
+    thinking?: "map" | "strip";
+    preserveSignature?: boolean;
+    onDropped?: (param: string) => void;
+  } = {},
+): Record<string, unknown> {
+  const _t0 = performance.now();
   const messages: Array<Record<string, unknown>> = [];
   let system = "";
+  const mapThinking = opts.thinking === "map";
 
   for (const raw of Array.isArray(body.messages) ? (body.messages as unknown[]) : []) {
     const m = asRecord(raw);
     if (!m) continue;
     const role = m.role;
     if (role === "system") {
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      system = system ? `${system}\n\n${text}` : text;
+      continue;
+    }
+    if (role === "developer") {
+      // OpenAI 新版 developer 角色语义等同 system（系统级指令），不能落成 user。
       const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
       system = system ? `${system}\n\n${text}` : text;
       continue;
@@ -212,14 +312,46 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
           {
             type: "tool_result",
             tool_use_id: typeof m.tool_call_id === "string" ? m.tool_call_id : "",
-            content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+            content: chatContentToAnthropic(m.content) ?? "",
           },
         ],
       });
       continue;
     }
+    if (role === "assistant" && asRecord(m.function_call)) {
+      const fc = asRecord(m.function_call);
+      const blocks: unknown[] = [];
+      if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });
+      let input: unknown = {};
+      if (fc && typeof fc.arguments === "string") {
+        try {
+          input = JSON.parse(fc.arguments);
+        } catch {
+          input = fc.arguments;
+        }
+      } else if (fc) {
+        input = fc.arguments ?? {};
+      }
+      blocks.push({
+        type: "tool_use",
+        id: `toolu_${randomId()}`,
+        name: typeof fc?.name === "string" ? fc.name : "",
+        input,
+      });
+      messages.push({ role: "assistant", content: blocks });
+      continue;
+    }
     if (role === "assistant" && Array.isArray(m.tool_calls)) {
       const blocks: unknown[] = [];
+      if (mapThinking && typeof m.reasoning_content === "string" && m.reasoning_content) {
+        blocks.push({
+          type: "thinking",
+          thinking: m.reasoning_content,
+          ...(opts.preserveSignature && typeof m.anthropic_reasoning_signature === "string"
+            ? { signature: m.anthropic_reasoning_signature }
+            : {}),
+        });
+      }
       if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });
       for (const tc of m.tool_calls as unknown[]) {
         const t = asRecord(tc);
@@ -243,6 +375,27 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
       messages.push({ role: "assistant", content: blocks });
       continue;
     }
+    if (
+      role === "assistant" &&
+      typeof m.reasoning_content === "string" &&
+      m.reasoning_content
+    ) {
+      const blocks: unknown[] = [];
+      if (mapThinking) {
+        blocks.push({
+          type: "thinking",
+          thinking: m.reasoning_content,
+          ...(opts.preserveSignature && typeof m.anthropic_reasoning_signature === "string"
+            ? { signature: m.anthropic_reasoning_signature }
+            : {}),
+        });
+      }
+      const converted = chatContentToAnthropic(m.content);
+      if (typeof converted === "string" && converted) blocks.push({ type: "text", text: converted });
+      else if (Array.isArray(converted)) blocks.push(...converted);
+      messages.push({ role: "assistant", content: blocks.length > 0 ? blocks : "" });
+      continue;
+    }
     messages.push({
       role: role === "assistant" ? "assistant" : "user",
       content: chatContentToAnthropic(m.content),
@@ -252,13 +405,60 @@ export function chatToAnthropic(body: Record<string, unknown>): Record<string, u
   const out: Record<string, unknown> = {
     model: body.model,
     messages,
-    max_tokens: typeof body.max_tokens === "number" ? body.max_tokens : 4096,
+    max_tokens:
+      typeof body.max_tokens === "number"
+        ? body.max_tokens
+        : typeof body.max_completion_tokens === "number"
+          ? body.max_completion_tokens
+          : 4096,
   };
   if (system) out.system = system;
   if (typeof body.temperature === "number") out.temperature = body.temperature;
+  if (typeof body.user === "string") out.metadata = { user_id: body.user };
   if (body.stream === true) out.stream = true;
   const tools = chatToolsToAnthropic(body.tools);
   if (tools) out.tools = tools;
+  else if (Array.isArray(body.functions)) {
+    const fns = (body.functions as unknown[])
+      .map((f) => {
+        const r = asRecord(f);
+        if (!r || typeof r.name !== "string") return null;
+        return {
+          name: r.name,
+          description: typeof r.description === "string" ? r.description : "",
+          input_schema: r.parameters ?? { type: "object", properties: {} },
+        };
+      })
+      .filter(Boolean) as unknown[];
+    if (fns.length > 0) out.tools = fns;
+  }
+  if (Array.isArray(body.stop)) out.stop_sequences = body.stop;
+  else if (typeof body.stop === "string") out.stop_sequences = [body.stop];
+  if (opts.onDropped) {
+    for (const k of [
+      "logprobs",
+      "top_logprobs",
+      "logit_bias",
+      "presence_penalty",
+      "frequency_penalty",
+      "seed",
+      "n",
+      "response_format",
+      "stream_options",
+    ]) {
+      if (body[k] !== undefined) opts.onDropped(k);
+    }
+  }
+  let tc = chatToolChoiceToAnthropic(body.tool_choice);
+  if (body.parallel_tool_calls === false) {
+    if (tc === undefined || tc === "auto") {
+      tc = { type: "auto", disable_parallel_tool_use: true };
+    } else if (asRecord(tc)) {
+      (tc as Record<string, unknown>).disable_parallel_tool_use = true;
+    }
+  }
+  if (tc !== undefined) out.tool_choice = tc;
+  recordConversion("chat_to_anthropic", performance.now() - _t0);
   return out;
 }
 
@@ -282,12 +482,41 @@ function chatToolsToAnthropic(tools: unknown): unknown[] | undefined {
 // ── 非流式 JSON 响应 ────────────────────────────────────────────────────────
 
 /** 上游 chat JSON → 客户端 anthropic JSON。 */
-export function chatJsonToAnthropicJson(json: Record<string, unknown>): Record<string, unknown> {
+export function chatJsonToAnthropicJson(
+  json: Record<string, unknown>,
+  opts: { thinking?: "map" | "strip"; preserveSignature?: boolean } = {},
+): Record<string, unknown> {
+  const _t0 = performance.now();
   const choice = asRecord((json.choices as unknown[] | undefined)?.[0]);
   const msg = asRecord(choice?.message);
   const content: unknown[] = [];
+  const reasoning =
+    opts.thinking === "map" && typeof msg?.reasoning_content === "string"
+      ? msg.reasoning_content
+      : "";
+  if (reasoning) {
+    content.push({
+      type: "thinking",
+      thinking: reasoning,
+      ...(opts.preserveSignature && typeof msg?.anthropic_reasoning_signature === "string"
+        ? { signature: msg.anthropic_reasoning_signature }
+        : {}),
+    });
+  }
   const text = typeof msg?.content === "string" ? msg.content : "";
   if (text) content.push({ type: "text", text });
+  const fc = asRecord(msg?.function_call);
+  if (fc && typeof fc.name === "string") {
+    let input: unknown = {};
+    if (typeof fc.arguments === "string") {
+      try {
+        input = JSON.parse(fc.arguments);
+      } catch {
+        input = fc.arguments;
+      }
+    }
+    content.push({ type: "tool_use", id: `toolu_${randomId()}`, name: fc.name, input });
+  }
   if (Array.isArray(msg?.tool_calls)) {
     for (const tc of msg.tool_calls as unknown[]) {
       const t = asRecord(tc);
@@ -309,6 +538,14 @@ export function chatJsonToAnthropicJson(json: Record<string, unknown>): Record<s
     }
   }
   const usage = asRecord(json.usage);
+  recordCacheUsage({
+    cached:
+      typeof usage?.cache_read_input_tokens === "number"
+        ? usage.cache_read_input_tokens
+        : 0,
+    input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
+  });
+  recordConversion("chat_json_to_anthropic_json", performance.now() - _t0);
   return {
     id: typeof json.id === "string" ? json.id : `msg_${randomId()}`,
     type: "message",
@@ -333,14 +570,24 @@ export function chatJsonToAnthropicJson(json: Record<string, unknown>): Record<s
 }
 
 /** 上游 anthropic JSON → 客户端 chat JSON。 */
-export function anthropicJsonToChatJson(json: Record<string, unknown>): Record<string, unknown> {
+export function anthropicJsonToChatJson(
+  json: Record<string, unknown>,
+  opts: { preserveSignature?: boolean } = {},
+): Record<string, unknown> {
+  const _t0 = performance.now();
   const content = Array.isArray(json.content) ? (json.content as unknown[]) : [];
   const textParts: string[] = [];
+  const reasoningParts: string[] = [];
+  let reasoningSignature = "";
   const toolCalls: unknown[] = [];
   for (const b of content) {
     const r = asRecord(b);
     if (!r) continue;
     if (r.type === "text" && typeof r.text === "string") textParts.push(r.text);
+    else if (r.type === "thinking" && typeof r.thinking === "string") {
+      reasoningParts.push(r.thinking);
+      if (typeof r.signature === "string") reasoningSignature = r.signature;
+    }
     else if (r.type === "tool_use") {
       toolCalls.push({
         id: typeof r.id === "string" ? r.id : `call_${randomId()}`,
@@ -353,7 +600,21 @@ export function anthropicJsonToChatJson(json: Record<string, unknown>): Record<s
     }
   }
   const usage = asRecord(json.usage);
+  recordCacheUsage({
+    cached:
+      typeof usage?.cached_tokens === "number"
+        ? usage.cached_tokens
+        : typeof (asRecord(usage?.prompt_tokens_details)?.cached_tokens) === "number"
+          ? (asRecord(usage?.prompt_tokens_details)?.cached_tokens as number)
+          : 0,
+    input: typeof usage?.input_tokens === "number" ? usage.input_tokens : 0,
+  });
+  recordConversion("anthropic_json_to_chat_json", performance.now() - _t0);
   const message: Record<string, unknown> = { role: "assistant", content: textParts.join("\n") || null };
+  if (reasoningParts.length > 0) message.reasoning_content = reasoningParts.join("\n");
+  if (opts.preserveSignature && reasoningSignature) {
+    message.anthropic_reasoning_signature = reasoningSignature;
+  }
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
   return {
     id: typeof json.id === "string" ? json.id : `chatcmpl_${randomId()}`,
@@ -387,23 +648,32 @@ export function anthropicJsonToChatJson(json: Record<string, unknown>): Record<s
 }
 
 function mapChatFinishToAnthropic(f: unknown): string {
-  return f === "tool_calls" ? "tool_use" : f === "length" ? "max_tokens" : "end_turn";
+  if (f === "tool_calls" || f === "function_call") return "tool_use";
+  if (f === "length") return "max_tokens";
+  return "end_turn"; // stop / content_filter / stop_sequence / null → end_turn（Anthropic 无 content_filter 语义）
 }
 
 function mapAnthropicStopToChat(s: unknown): string {
-  return s === "tool_use" ? "tool_calls" : s === "max_tokens" ? "length" : "stop";
+  if (s === "tool_use") return "tool_calls";
+  if (s === "max_tokens") return "length";
+  return "stop"; // end_turn / stop_sequence / refusal / pause_turn → stop
 }
 
 // ── 流式：上游 Anthropic SSE → 客户端 Chat SSE ──────────────────────────────
 
-export function createAnthropicSseToChatSse(opts: { model?: string } = {}): TransformStream<Uint8Array, Uint8Array> {
+export function createAnthropicSseToChatSse(
+  opts: { model?: string; preserveSignature?: boolean } = {},
+): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = opts.model ?? "unknown";
-  let buf = "";
+  recordStream("anthropic_to_chat");
+  const parser = createSseFrameParser();
   let started = false;
   let textIndex = -1;
+  let reasoningOpen = false;
   let toolStates = new Map<number, { id: string; name: string }>();
+  let stopReason: string | undefined;
   let usage: Record<string, unknown> | undefined;
   const toChatUsage = (u: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
     if (!u) return undefined;
@@ -460,7 +730,12 @@ export function createAnthropicSseToChatSse(opts: { model?: string } = {}): Tran
           {
             index: 0,
             delta: {},
-            finish_reason: toolStates.size > 0 ? "tool_calls" : "stop",
+            finish_reason:
+              toolStates.size > 0
+                ? "tool_calls"
+                : stopReason
+                  ? mapAnthropicStopToChat(stopReason)
+                  : "stop",
           },
         ],
       }),
@@ -508,6 +783,8 @@ export function createAnthropicSseToChatSse(opts: { model?: string } = {}): Tran
         );
       } else if (block?.type === "text") {
         textIndex = idx;
+      } else if (block?.type === "thinking") {
+        reasoningOpen = true;
       }
       return;
     }
@@ -541,12 +818,52 @@ export function createAnthropicSseToChatSse(opts: { model?: string } = {}): Tran
             ],
           }),
         );
+      } else if (
+        delta?.type === "thinking_delta" &&
+        typeof delta.thinking === "string"
+      ) {
+        ensureStarted();
+        emit(
+          sseData({
+            choices: [
+              {
+                index: 0,
+                delta: { reasoning_content: delta.thinking },
+                finish_reason: null,
+              },
+            ],
+          }),
+        );
+      } else if (
+        opts.preserveSignature &&
+        delta?.type === "signature_delta" &&
+        typeof delta.signature === "string"
+      ) {
+        ensureStarted();
+        emit(
+          sseData({
+            choices: [
+              {
+                index: 0,
+                delta: { reasoning_signature: delta.signature },
+                finish_reason: null,
+              },
+            ],
+          }),
+        );
       }
       return;
     }
     if (type === "message_delta") {
       const u = asRecord(data.usage);
       if (u) usage = { ...(usage ?? {}), ...u };
+      const d = asRecord(data.delta);
+      if (d && typeof d.stop_reason === "string") stopReason = d.stop_reason;
+      return;
+    }
+    if (type === "error") {
+      finished = true;
+      emit(sseData({ error: data.error ?? { message: "upstream error" } }));
       return;
     }
     if (type === "message_stop") {
@@ -561,25 +878,24 @@ export function createAnthropicSseToChatSse(opts: { model?: string } = {}): Tran
     },
     transform(chunk, c) {
       controller = c;
-      buf += decoder.decode(chunk, { stream: true });
-      const frames = buf.split("\n\n");
-      buf = frames.pop() ?? "";
-      for (const frame of frames) {
-        const evtLine = frame.split("\n").find((l) => l.startsWith("event: "));
-        const dataLines = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6));
-        if (dataLines.length === 0) continue;
-        const type = evtLine ? evtLine.slice(7).trim() : "message";
+      for (const frame of parser.push(decoder.decode(chunk, { stream: true }))) {
+        const type = frame.event ?? "message";
         try {
-          handleEvent(type, JSON.parse(dataLines.join("\n")) as Record<string, unknown>);
+          handleEvent(type, JSON.parse(frame.data) as Record<string, unknown>);
         } catch {
           /* skip malformed frame */
         }
       }
     },
     flush() {
+      for (const frame of parser.end()) {
+        const type = frame.event ?? "message";
+        try {
+          handleEvent(type, JSON.parse(frame.data) as Record<string, unknown>);
+        } catch {
+          /* skip malformed tail frame */
+        }
+      }
       finish();
     },
   });
@@ -587,14 +903,19 @@ export function createAnthropicSseToChatSse(opts: { model?: string } = {}): Tran
 
 // ── 流式：上游 Chat SSE → 客户端 Anthropic SSE ──────────────────────────────
 
-export function createChatSseToAnthropicSse(opts: { model?: string } = {}): TransformStream<Uint8Array, Uint8Array> {
+export function createChatSseToAnthropicSse(
+  opts: { model?: string; preserveSignature?: boolean } = {},
+): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = opts.model ?? "unknown";
-  let buf = "";
+  recordStream("chat_to_anthropic");
+  const parser = createSseFrameParser();
   let started = false;
   let finished = false;
-  let textOpened = false;
+  let nextBlock = 0;
+  let thinkingIndex = -1;
+  let textIndex = -1;
   let toolIndexByChat = new Map<number, number>();
   let toolIdByName = new Map<string, string>();
   let usage: Record<string, unknown> | undefined;
@@ -642,22 +963,40 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
     );
   };
 
-  const openText = () => {
-    if (textOpened) return;
-    textOpened = true;
+  const openThinking = () => {
+    if (thinkingIndex >= 0) return;
+    thinkingIndex = nextBlock++;
     emit(
       anthropicEvent("content_block_start", {
         type: "content_block_start",
-        index: 0,
+        index: thinkingIndex,
+        content_block: { type: "thinking", thinking: "" },
+      }),
+    );
+  };
+
+  const closeThinking = () => {
+    if (thinkingIndex < 0) return;
+    emit(anthropicEvent("content_block_stop", { type: "content_block_stop", index: thinkingIndex }));
+    thinkingIndex = -1;
+  };
+
+  const openText = () => {
+    if (textIndex >= 0) return;
+    textIndex = nextBlock++;
+    emit(
+      anthropicEvent("content_block_start", {
+        type: "content_block_start",
+        index: textIndex,
         content_block: { type: "text", text: "" },
       }),
     );
   };
 
   const closeText = () => {
-    if (!textOpened) return;
-    textOpened = false;
-    emit(anthropicEvent("content_block_stop", { type: "content_block_stop", index: 0 }));
+    if (textIndex < 0) return;
+    emit(anthropicEvent("content_block_stop", { type: "content_block_stop", index: textIndex }));
+    textIndex = -1;
   };
 
   const closeTools = () => {
@@ -671,6 +1010,7 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
   const finish = (stopReason?: string) => {
     if (finished) return;
     finished = true;
+    closeThinking();
     closeText();
     closeTools();
     emit(
@@ -691,6 +1031,12 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
     // 必须先于 choices 守卫读取，否则 include_usage 信息会丢。
     const u = asRecord(evt.usage);
     if (u) usage = u;
+    const err = asRecord(evt.error);
+    if (err) {
+      finished = true;
+      emit(anthropicEvent("error", { type: "error", error: err }));
+      return;
+    }
     const choices = Array.isArray(evt.choices) ? (evt.choices as unknown[]) : [];
     const choice = asRecord(choices[0]);
     if (!choice) return;
@@ -699,13 +1045,44 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
 
     if (delta?.role === "assistant") ensureStarted();
 
+    if (
+      typeof delta?.reasoning_content === "string" &&
+      delta.reasoning_content.length > 0
+    ) {
+      ensureStarted();
+      openThinking();
+      emit(
+        anthropicEvent("content_block_delta", {
+          type: "content_block_delta",
+          index: thinkingIndex,
+          delta: { type: "thinking_delta", thinking: delta.reasoning_content },
+        }),
+      );
+    }
+
+    if (
+      opts.preserveSignature &&
+      typeof delta?.reasoning_signature === "string" &&
+      delta.reasoning_signature.length > 0
+    ) {
+      ensureStarted();
+      openThinking();
+      emit(
+        anthropicEvent("content_block_delta", {
+          type: "content_block_delta",
+          index: thinkingIndex,
+          delta: { type: "signature_delta", signature: delta.reasoning_signature },
+        }),
+      );
+    }
+
     if (typeof delta?.content === "string" && delta.content.length > 0) {
       ensureStarted();
       openText();
       emit(
         anthropicEvent("content_block_delta", {
           type: "content_block_delta",
-          index: 0,
+          index: textIndex,
           delta: { type: "text_delta", text: delta.content },
         }),
       );
@@ -720,7 +1097,7 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
         let aIdx = toolIndexByChat.get(chatIdx);
         const fn = asRecord(t.function);
         if (aIdx === undefined) {
-          aIdx = textOpened ? 1 : 0 + toolIndexByChat.size;
+          aIdx = nextBlock++;
           toolIndexByChat.set(chatIdx, aIdx);
           const toolId = typeof t.id === "string" ? t.id : `toolu_${randomId()}`;
           toolIdByName.set(String(chatIdx), toolId);
@@ -763,28 +1140,30 @@ export function createChatSseToAnthropicSse(opts: { model?: string } = {}): Tran
     },
     transform(chunk, c) {
       controller = c;
-      buf += decoder.decode(chunk, { stream: true });
-      const frames = buf.split("\n\n");
-      buf = frames.pop() ?? "";
-      for (const frame of frames) {
-        const dataLines = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data: "))
-          .map((l) => l.slice(6));
-        if (dataLines.length === 0) continue;
-        const payload = dataLines.join("\n");
-        if (payload === "[DONE]") {
+      for (const frame of parser.push(decoder.decode(chunk, { stream: true }))) {
+        if (frame.data === "[DONE]") {
           finish(pendingFinishReason);
           continue;
         }
         try {
-          handleChunk(JSON.parse(payload) as Record<string, unknown>);
+          handleChunk(JSON.parse(frame.data) as Record<string, unknown>);
         } catch {
           /* skip malformed frame */
         }
       }
     },
     flush() {
+      for (const frame of parser.end()) {
+        if (frame.data === "[DONE]") {
+          finish(pendingFinishReason);
+          continue;
+        }
+        try {
+          handleChunk(JSON.parse(frame.data) as Record<string, unknown>);
+        } catch {
+          /* skip malformed tail frame */
+        }
+      }
       finish(pendingFinishReason);
     },
   });

@@ -103,7 +103,14 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     maxRetries: 3,
     injectAgentContext: true,
     injectTaskContext: true,
-    autoConversationId: { enabled: true, ttlMinutes: 30, strategy: "per-key" },
+    autoConversationId: {
+      enabled: true,
+      ttlMinutes: 30,
+      strategy: "per-key",
+      maxEntries: 2048,
+      maxWindowsPerKey: 8,
+      maxWindowsTotal: 4096,
+    },
     threadIsolation: { enabled: false },
     defaultTaskId: "default",
     // 全局默认严格（缺 task 走 mismatch）；仅无法弹表单的客户端按 agent 放宽
@@ -351,6 +358,46 @@ function parseUpstreamAgents(
  * Build the final ProxyConfig.
  * Priority (high → low): CLI overrides > YAML config file > defaults.
  */
+/** 校验 autoConversationId 配置，非法值直接抛错，避免带病启动。 */
+export function validateAutoConversationConfig(
+  cfg:
+    | {
+        ttlMinutes?: number;
+        deterministicBucketMinutes?: number;
+        strategy?: string;
+        maxEntries?: number;
+        maxWindowsPerKey?: number;
+        maxWindowsTotal?: number;
+      }
+    | undefined,
+): void {
+  if (!cfg) return;
+  if (cfg.ttlMinutes !== undefined && (!Number.isInteger(cfg.ttlMinutes) || cfg.ttlMinutes <= 0)) {
+    throw new Error(`autoConversationId.ttlMinutes 必须是正整数，当前值: ${cfg.ttlMinutes}`);
+  }
+  if (
+    cfg.deterministicBucketMinutes !== undefined &&
+    (!Number.isInteger(cfg.deterministicBucketMinutes) || cfg.deterministicBucketMinutes <= 0)
+  ) {
+    throw new Error(`autoConversationId.deterministicBucketMinutes 必须是正整数，当前值: ${cfg.deterministicBucketMinutes}`);
+  }
+  if (cfg.deterministicBucketMinutes !== undefined) {
+    const effectiveTtl = cfg.ttlMinutes ?? 30; // 运行时默认 30 分钟
+    if (cfg.deterministicBucketMinutes < effectiveTtl) {
+      throw new Error(`autoConversationId.deterministicBucketMinutes (${cfg.deterministicBucketMinutes}) 必须 ≥ 有效 ttlMinutes (${effectiveTtl})，否则空闲跨桶未过期时会话会确定性碰撞`);
+    }
+  }
+  for (const k of ["maxEntries", "maxWindowsPerKey", "maxWindowsTotal"] as const) {
+    const v = cfg[k];
+    if (v !== undefined && (!Number.isInteger(v) || v <= 0)) {
+      throw new Error(`autoConversationId.${k} 必须是正整数，当前值: ${String(v)}`);
+    }
+  }
+  if (cfg.strategy !== undefined && cfg.strategy !== "per-key" && cfg.strategy !== "per-key-msg") {
+    throw new Error(`autoConversationId.strategy 只支持 per-key / per-key-msg，当前值: ${cfg.strategy}`);
+  }
+}
+
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
@@ -531,17 +578,32 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
     maxRetries: yaml.sessionInit?.maxRetries ?? DEFAULT_CONFIG.sessionInit.maxRetries,
     injectAgentContext: yaml.sessionInit?.injectAgentContext ?? DEFAULT_CONFIG.sessionInit.injectAgentContext,
     injectTaskContext: yaml.sessionInit?.injectTaskContext ?? DEFAULT_CONFIG.sessionInit.injectTaskContext,
-    autoConversationId: {
-      enabled: typeof yaml.sessionInit?.autoConversationId?.enabled === "boolean"
-        ? yaml.sessionInit.autoConversationId.enabled
-        : DEFAULT_CONFIG.sessionInit.autoConversationId!.enabled,
-      ttlMinutes: typeof yaml.sessionInit?.autoConversationId?.ttlMinutes === "number"
-        ? yaml.sessionInit.autoConversationId.ttlMinutes
-        : DEFAULT_CONFIG.sessionInit.autoConversationId!.ttlMinutes,
-      strategy: yaml.sessionInit?.autoConversationId?.strategy === "per-key-msg"
-        ? "per-key-msg"
-        : "per-key",
-    },
+    autoConversationId: (() => {
+      const cfg = {
+        enabled: typeof yaml.sessionInit?.autoConversationId?.enabled === "boolean"
+          ? yaml.sessionInit.autoConversationId.enabled
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.enabled,
+        ttlMinutes: typeof yaml.sessionInit?.autoConversationId?.ttlMinutes === "number"
+          ? yaml.sessionInit.autoConversationId.ttlMinutes
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.ttlMinutes,
+        strategy: yaml.sessionInit?.autoConversationId?.strategy === "per-key-msg"
+          ? "per-key-msg"
+          : yaml.sessionInit?.autoConversationId?.strategy === "per-key"
+            ? "per-key"
+            : DEFAULT_CONFIG.sessionInit.autoConversationId!.strategy,
+        maxEntries: typeof yaml.sessionInit?.autoConversationId?.maxEntries === "number"
+          ? yaml.sessionInit.autoConversationId.maxEntries
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxEntries,
+        maxWindowsPerKey: typeof yaml.sessionInit?.autoConversationId?.maxWindowsPerKey === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsPerKey
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsPerKey,
+        maxWindowsTotal: typeof yaml.sessionInit?.autoConversationId?.maxWindowsTotal === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsTotal
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsTotal,
+      };
+      validateAutoConversationConfig(cfg);
+      return cfg;
+    })(),
     threadIsolation: {
       enabled: typeof yaml.sessionInit?.threadIsolation?.enabled === "boolean"
         ? yaml.sessionInit.threadIsolation.enabled

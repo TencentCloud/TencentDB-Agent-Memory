@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Codex Responses API handler.
  *
  * Handles `POST /v1/responses` + 3 aux endpoints (`/responses/compact`,
@@ -39,28 +39,19 @@ import {
 import { consumeInjectionStats } from "./injection/observer.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
-import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { codexAdapter } from "./agent-adapters/codex.js";
-import { resolveOrCreateSessionId } from "./session/auto-session.js";
-import { firstUserMessageFingerprint } from "./session/session-key.js";
-import { isNamespaceArchived } from "./session/session-key.js";
-import {
-  responsesBodyToChat,
-  createChatSseToResponses,
-  chatJsonToResponses,
-} from "./common/responses-chat-compat.js";
-import {
-  responsesToAnthropic,
-  createAnthropicSseToResponsesSse,
-  anthropicJsonToResponsesJson,
-} from "./common/responses-anthropic-compat.js";
+import { sessionStage } from "./stages/session.js";
+import type { ReqCtx, SessionAdapter } from "./stages/types.js";
+import { forwardStage } from "./stages/forward.js";
+import { buildArchiveCtx, triggerArchiveHooks, createTdaiClient, extractArchiveUserMessage, type ArchiveCtx } from "./stages/archive.js";
+import { buildObsInput, extractResponsesUsage } from "./stages/obs.js";
+import { isNamespaceArchived, firstUserMessageFingerprint } from "./session/session-key.js";
 import {
   DEFAULT_GATE_PREFIX,
   buildFormResponse as buildCodexFormResponse,
   codexFormAnswersAsMessages,
-  stripCodexFormArtifacts,
 } from "./session/codex/form.js";
 import { buildCodexInjectionBlock, type CodexInjectionInput } from "./common/codex-injection.js";
 import { log } from "./report/log.js";
@@ -70,69 +61,18 @@ import {
   langfuseTurnTraceId,
   type LangfuseTurnContext,
 } from "./langfuse.js";
-import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { recordTdaiTurn } from "./tdai/recorder.js";
-import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
-import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
-import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { isExtractionAllowed } from "./extraction-gate.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  "x-tdai-user-key",
-]);
-
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
-
-// ── TDAI L0 helpers (对齐 anthropicHandler / handler 姿势) ───────────────────
 
 /**
  * TDAI L0 客户端工厂 —— 跟 anthropicHandler.ts::createTdaiClient 语义一致。
  * spaceId 优先于 config 默认 serviceId, 便于多租户下 codex 请求上报到正确的
  * kernel 实例。config.tdai.memory.enabled=false 时返 null。
  */
-function createCodexTdaiClient(config: ProxyConfig, spaceId?: string): TdaiClient | null {
-  if (!config.tdai.enabled || !config.tdai.memory.enabled || !config.tdai.endpoint) return null;
-  return new TdaiClient({
-    enabled: config.tdai.enabled && config.tdai.memory.enabled,
-    endpoint: config.tdai.endpoint,
-    apiKey: config.tdai.apiKey,
-    serviceId: spaceId || config.tdai.serviceId,
-    writeL0: config.tdai.memory.writeL0,
-    recallL1: config.tdai.memory.recallL1,
-    injectL2L3: config.tdai.memory.injectL2L3,
-    l1Limit: config.tdai.memory.l1Limit,
-    l2Limit: config.tdai.memory.l2Limit,
-    recallCharBudget: config.tdai.memory.recallCharBudget,
-    timeoutMs: config.tdai.memory.timeoutMs,
-  });
-}
-
-/**
- * 从 codex `input[]` 抽最后一条 role=user 的真实用户文本, 组装 TdaiMessage。
- * 相当于 tdai/recorder.ts::extractLatestUserMessage 的 codex 变体 —— 差别在
- * 遍历判据 (type==="message" && role==="user") 与文本取值 (content[].input_text)。
- * 复用 codexAdapter.extractUserText, 保证跟 codexHandler 里 langfuse traceInput
- * 使用同一份用户提问文本 (docs/2026-08-07-codex-integration-plan.md §9)。
- */
-function extractLatestCodexUserMessage(input: unknown): TdaiMessage | null {
-  if (!Array.isArray(input)) return null;
-  const text = codexAdapter.extractUserText(input) ?? "";
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-  return { role: "user", content: trimmed };
-}
 
 /** 按 team_id 从元数据补齐团队名（walked-through 分支 [Team] 只有 id 时用）。 */
 async function resolveTeamName(
@@ -230,6 +170,39 @@ export function extractCodexSessionId(
   if (typeof meta?.session_id === "string") return meta.session_id;
   return null;
 }
+
+/** codex 的会话差异：responses 形状、client_metadata 会话 ID、traceId 兜底、keyId 直通。 */
+// 无显式会话时 fallback 的一次性 warn（避免刷屏）。
+const codexWarnedFallback = new Set<string>();
+const CODEX_SESSION_ADAPTER: SessionAdapter = {
+  extractRawSessionId(_c, lcHeaders, body) {
+    return extractCodexSessionId(lcHeaders, body);
+  },
+  userMessages(body) {
+    return body.input;
+  },
+  fallbackSessionKey(ctx, keyId) {
+    // 无显式会话时的稳定兜底：首条用户消息指纹，避免逐请求 traceId 产生孤儿记忆。
+    const fp = firstUserMessageFingerprint(ctx.body.input);
+    if (!fp) {
+      if (!codexWarnedFallback.has(keyId)) {
+        codexWarnedFallback.add(keyId);
+        console.warn(`[session-fallback] codex key=${keyId} no explicit session & no fingerprint — ephemeral key`);
+      }
+      return `${keyId}:${ctx.traceId}`;
+    }
+    // 日桶：同首问跨天自动轮换，避免无状态兜底键把不同日期的会话合并成永续会话。
+    const day = Math.floor(Date.now() / 86_400_000);
+    return `${keyId}:msg-${fp}:${day}`;
+  },
+  resolveThreadId(c) {
+    return c.req.header("x-thread-id") ?? null;
+  },
+  resolveIdentity(_ctx, keyId) {
+    // codex 的 keyId 已在调用方按 userId||apiKey 派生，阶段保持直通
+    return { keyId, userId: "", callerUserKey: null };
+  },
+};
 
 // ── Default mode gate detection (exported for unit tests) ────────────────────
 
@@ -342,36 +315,6 @@ interface CodexOpikCtx {
   model: string;
 }
 
-// ── Upstream request helpers ─────────────────────────────────────────────────
-
-function buildUpstreamHeaders(
-  c: Context,
-  config: ProxyConfig,
-): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const [k, v] of c.req.raw.headers.entries()) {
-    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) {
-      headers[k] = v;
-    }
-  }
-  // Codex uses OpenAI protocol: inject Bearer token
-  if (config.upstream.apiKey) {
-    headers["authorization"] = `Bearer ${config.upstream.apiKey}`;
-    delete headers["x-api-key"];
-  }
-  return headers;
-}
-
-function filterResponseHeaders(source: Headers): Headers {
-  const out = new Headers();
-  source.forEach((value, key) => {
-    if (!SKIP_RESPONSE_HEADERS.has(key.toLowerCase())) {
-      out.set(key, value);
-    }
-  });
-  return out;
-}
-
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 /**
@@ -452,22 +395,54 @@ export async function handleCodexEndpoint(
   if (isAuxiliary) {
     pipe.info("CODEX_AUX", `auxiliary request → passthrough (path=${path})`);
     // aux 不上报 langfuse（跟 CC/CB 对齐——sidequery/fork 类 aux 不算真对话轮）
-    return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null, null);
+    return (await forwardStage({ c, config }, {
+      protocol: "responses",
+      pipe,
+      agent: "codex",
+      body,
+      setContentType: true,
+      shape: {
+        enabled: true,
+        modelId,
+        errorBody: "read",
+        onFetchError: (err, { upstreamUrl }) => {
+          pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
+          return c.json(
+            { error: "Upstream request failed", detail: err instanceof Error ? err.message : String(err) },
+            502,
+          );
+        },
+        afterFetch: (_status, { upstreamUrl }) => {
+          writeLog(config, {
+            timestamp: startTime,
+            event: "request",
+            modelId,
+            keyId,
+            sessionKey: keyId,
+            upstreamUrl,
+            stream: true,
+            traceId,
+          });
+        },
+      },
+    })).resp;
   }
 
-  // ── 6. Session ID extraction ───────────────────────────────────────────────
-  const rawSessionId = extractCodexSessionId(headers, body);
-  const autoSession = resolveOrCreateSessionId(
-    rawSessionId,
-    keyId,
-    config.sessionInit?.autoConversationId,
-    firstUserMessageFingerprint(body.input),
-  );
-  if (autoSession.autoGenerated) {
-    console.log(`[session-auto] action=${autoSession.reused ? "resumed" : "created"} conversationId=${autoSession.sessionId} keyId=${keyId} strategy=${config.sessionInit?.autoConversationId?.strategy ?? "per-key"}`);
-  }
-  const sessionId = autoSession.sessionId || rawSessionId;
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  // ── 6. Session ID extraction（阶段化）────────────────────────────────────
+  const sessionCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "codex",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: "",
+    traceId,
+  };
+  await sessionStage(sessionCtx, CODEX_SESSION_ADAPTER);
+  const sessionId = sessionCtx.conversationId ?? null;
+  const sessionKey = sessionCtx.sessionKey!;
   const agentSource = "codex";
   const isStream = body.stream !== false;
 
@@ -524,9 +499,9 @@ export async function handleCodexEndpoint(
       const userText = codexAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -582,15 +557,13 @@ export async function handleCodexEndpoint(
     : false;
   if (config.sessionInit?.enabled && sessionId && !archivedNamespace) {
     try {
-      const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
+      const { getSessionStore, buildStoreSessionKey, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
- const compositeKey = config.sessionInit?.threadIsolation?.enabled && headers["x-thread-id"]
-   ? `${agentSource}:${sessionKey}:${headers["x-thread-id"]}`
-   : `${agentSource}:${sessionKey}`;
+ const compositeKey = buildStoreSessionKey({ agentSource, sessionKey, threadId: headers["x-thread-id"], threadIsolation: config.sessionInit?.threadIsolation?.enabled });
       const identity = {
         userId: userId || "anonymous",
         agentSource,
@@ -908,7 +881,7 @@ export async function handleCodexEndpoint(
         // ── L0 写入（同步 await，跟 CC/CB mem 命令路径对齐）──
         //   mem 命令是此 turn 唯一的落盘机会，不能 fire-and-forget (trackWrite)，
         //   必须显式等待落盘后再返回，避免进程未 flush 就退出导致丢失。
-        const tdaiClientForMem = createCodexTdaiClient(config, spaceId);
+        const tdaiClientForMem = createTdaiClient(config, spaceId);
         const tdaiIdentityForMem = deriveTdaiIdentity({
           sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
           userId: userId || null,
@@ -1015,7 +988,7 @@ export async function handleCodexEndpoint(
       // 意图 RAG 注入器靠 getLastUserMessage/extractUserQueryText 取 query，
       // 占位符会让它们拿到空信号而提前返回（Codex 的 RAG 因此一直不生效）。
       // 下游只读 system 消息的注入结果，真实文本不会泄漏到最终转发 body。
-      const codexUserText = extractLatestCodexUserMessage(input)?.content ?? ".";
+      const codexUserText = extractArchiveUserMessage(input, "responses", "codex")?.content ?? ".";
       const syntheticBody: Record<string, unknown> = {
         messages: [
           { role: "system", content: sessionContextBlock ?? "" },
@@ -1126,17 +1099,98 @@ export async function handleCodexEndpoint(
     config,
     sessionInfo: sessionInfo as Record<string, unknown> | null | undefined,
     injectionSkipped,
+    protocol: "responses",
     input,
     sessionKey,
     agentSource,
     spaceId,
     userId,
     callerUserKey,
+    threadId: sessionCtx.threadId ?? null,
     assetCapabilities,
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx, opikCtx);
+  return (await forwardStage({ c, config }, {
+    protocol: "responses",
+    pipe,
+    agent: "codex",
+    body,
+    setContentType: true,
+    shape: {
+      enabled: true,
+      modelId,
+      errorBody: "read",
+      onErrorStatus: (status, bodyText, { upstreamUrl }) => {
+        if (!lf || bodyText == null) return;
+        try {
+          langfuseReportFailure({
+            lf,
+            model: modelId,
+            startTime,
+            endTime: new Date().toISOString(),
+            input: buildObsInput({ protocol: "responses", agentSource: "codex", body }),
+            status,
+            statusMessage: bodyText.slice(0, 500),
+            extraTags: ["error"],
+            observationMetadata: { stage: "upstream", stream: true, upstreamUrl },
+          });
+        } catch (lfErr: unknown) {
+          pipe.error("LANGFUSE_SPAN", lfErr);
+        }
+      },
+      onFetchError: (err, { upstreamUrl }) => {
+        pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
+        if (lf) {
+          try {
+            langfuseReportFailure({
+              lf,
+              model: modelId,
+              startTime,
+              endTime: new Date().toISOString(),
+              input: buildObsInput({ protocol: "responses", agentSource: "codex", body }),
+              statusMessage: "forward error: " + (err instanceof Error ? err.message : String(err)) + "".slice(0, 500),
+              extraTags: ["error"],
+              observationMetadata: { stage: "forward", stream: true, upstreamUrl },
+            });
+          } catch (lfErr: unknown) {
+            pipe.error("LANGFUSE_SPAN", lfErr);
+          }
+        }
+        return c.json(
+          { error: "Upstream request failed", detail: err instanceof Error ? err.message : String(err) },
+          502,
+        );
+      },
+      tap: {
+        enabled: Boolean(lf) || Boolean(archiveCtx),
+        consume: (stream, { upstreamUrl }) =>
+          consumeCodexStream(stream, {
+            lf,
+            modelId,
+            startTime,
+            upstreamUrl,
+            inputBody: body,
+            pipe,
+            archiveCtx,
+            config,
+            opikCtx,
+          }),
+      },
+      afterFetch: (_status, { upstreamUrl }) => {
+        writeLog(config, {
+          timestamp: startTime,
+          event: "request",
+          modelId,
+          keyId,
+          sessionKey: keyId,
+          upstreamUrl,
+          stream: true,
+          traceId,
+        });
+      },
+    },
+  })).resp;
 }
 
 // ── Archive context (skill/conversation/add + TDAI L0 write) ─────────────────
@@ -1148,370 +1202,6 @@ export async function handleCodexEndpoint(
  * 只有 main 对话 + 已初始化 session + 未 bypass 才创建; 其它情况 archiveCtx=null,
  * forward 侧遇到 null 就跳过 hook (跟 CC/CB 的 isMainDialog 分支对齐)。
  */
-export interface CodexArchiveCtx {
-  config: ProxyConfig;
-  sessionKey: string;
-  agentSource: string;
-  sessionInfo: Record<string, unknown>;
-  spaceId: string;
-  /**
-   * 原始 codex `input[]` —— skill 归档时按 protocol="responses" 走
-   * normalize-conversation 内部 convertCodexInputItem 展开。
-   */
-  input: unknown[];
-  tdaiClient: TdaiClient | null;
-  tdaiIdentity: TdaiIdentity | null;
-  /** 从 `input[]` 抽出的最新用户提问 (extractLatestCodexUserMessage 提取)。 */
-  tdaiUserMessage: TdaiMessage | null;
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
-}
-
-function buildArchiveCtx(args: {
-  config: ProxyConfig;
-  sessionInfo: Record<string, unknown> | null | undefined;
-  injectionSkipped: boolean;
-  input: unknown[];
-  sessionKey: string;
-  agentSource: string;
-  spaceId: string;
-  userId: string;
-  callerUserKey: string | null;
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
-}): CodexArchiveCtx | null {
-  const { sessionInfo, injectionSkipped } = args;
-  if (injectionSkipped || !sessionInfo) return null;
-
-  const tdaiClient = args.assetCapabilities?.chat_memory === false
-    ? null
-    : createCodexTdaiClient(args.config, args.spaceId);
-  const tdaiIdentity = deriveTdaiIdentity({
-    sessionInfo,
-    userId: args.userId || null,
-    sessionKey: args.sessionKey,
-    userKey: args.callerUserKey,
-  });
-  const tdaiUserMessage = extractLatestCodexUserMessage(args.input);
-
-  return {
-    config: args.config,
-    sessionKey: args.sessionKey,
-    agentSource: args.agentSource,
-    sessionInfo,
-    spaceId: args.spaceId,
-    input: args.input,
-    tdaiClient,
-    tdaiIdentity,
-    tdaiUserMessage,
-    assetCapabilities: args.assetCapabilities,
-  };
-}
-
-/**
- * 流结束后触发 skill/conversation/add + TDAI L0 write, 对齐 CC/CB 的
- * anthropicHandler.ts:1867-1948 段。
- *
- * 参数:
- *   assistantText: SSE accumulator 累积的 assistant 文本
- *   toolUseCount:  流里累积的 function_call 数 (round 边界判据)
- *
- * 失败静默(错误已 log), 绝不阻塞 upstream 响应链。
- */
-async function triggerCodexArchiveHooks(
-  ctx: CodexArchiveCtx,
-  assistantText: string,
-  toolUseCount: number,
-): Promise<void> {
-  // ── TDAI L0 write ──
-  // 与 anthropicHandler stream 分支 (line 1867-1878) 对称:
-  //   - trackWrite 挂全局 in-flight set (index.ts flushPendingWrites 兜底 SIGTERM 丢包)
-  //   - withL0Retry 3 次退避挡 tdai kernel 瞬断
-  //   - stream 场景不 await, 让归档 hook 提前返回
-  if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
-    trackWrite(
-      withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
-      ).catch((err: unknown) => {
-        console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
-      }),
-    );
-  } else if (ctx.tdaiClient) {
-    logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKey);
-  }
-
-  // ── Skill conversation/add trigger ──
-  // 与 anthropicHandler stream 分支 (line 1928-1948) 对称: 归档写完再返, 保证
-  // 跨节点下一轮读到最新 buffer 状态; assistantMessage 用 stream accumulator 的
-  // outputText 拼一份 codex message 形态 (type:"message", role:"assistant",
-  // content:[{type:"output_text", text}]), toolCallCountOverride 由 stream 计数。
-  if (isExtractionAllowed(ctx.config, "skill")) {
-    const assistantMessage = assistantText
-      ? {
-          type: "message" as const,
-          role: "assistant" as const,
-          content: [{ type: "output_text" as const, text: assistantText }],
-        }
-      : null;
-    await triggerSkillExtractIfReady({
-      config: ctx.config,
-      sessionKey: ctx.sessionKey,
-      agentSource: ctx.agentSource,
-      sessionInfo: ctx.sessionInfo,
-      inputMessages: ctx.input,
-      assistantMessage,
-      protocol: "responses",
-      assetCapabilities: ctx.assetCapabilities,
-      toolCallCountOverride: toolUseCount,
-    });
-  } else {
-    logExtractionSkipped(ctx.config, "skill", ctx.sessionKey);
-  }
-}
-
-// ── Forward helper ───────────────────────────────────────────────────────────
-
-async function forwardToUpstream(
-  c: Context,
-  config: ProxyConfig,
-  body: Record<string, unknown>,
-  traceId: string,
-  startTime: string,
-  keyId: string,
-  modelId: string,
-  pipe: ReturnType<typeof createPipeline>,
-  lf: LangfuseTurnContext | null,
-  archiveCtx: CodexArchiveCtx | null = null,
-  opikCtx: CodexOpikCtx | null = null,
-): Promise<Response> {
-  // Per-agent upstream override (upstream.agents.codex.url) 优先于全局 url。
-  // 对齐 anthropicHandler.ts:1029 的解析姿势。codex 通常需要单独指向支持
-  // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
-  // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
-  const agentUpstreamEntry = config.upstream.agents?.["codex"];
-  // Chat Completions 兼容模式（upstream.agents.codex.chatCompletions: true）：
-  // 智谱 GLM 等上游只实现 /chat/completions。开启后把 Codex 的 Responses
-  // 请求翻译成 chat 格式转发，并把上游 chat SSE 翻译回 Responses SSE。
-  const chatCompat =
-    (agentUpstreamEntry as { chatCompletions?: boolean } | undefined)?.chatCompletions ===
-    true;
-  // TRACK 05B：Codex（Responses 客户端）→ Anthropic 风格上游。
-  // 开启后把 /v1/responses 翻译成 Anthropic /v1/messages 转发，并把上游
-  // Anthropic SSE 翻译回 Responses SSE（组合 Responses↔Chat↔Anthropic）。
-  const responsesToAnthropicCompat =
-    (agentUpstreamEntry as { responsesToAnthropic?: boolean } | undefined)
-      ?.responsesToAnthropic === true;
-  const upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  const upstreamPath = chatCompat
-    ? "/chat/completions"
-    : responsesToAnthropicCompat
-      ? "/messages"
-      : c.req.path;
-  const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
-  const upstreamHeaders = buildUpstreamHeaders(c, config);
-  upstreamHeaders["content-type"] = "application/json";
-  if (responsesToAnthropicCompat) {
-    // Anthropic 兼容上游要求版本头；Authorization Bearer 与 chat 路径一致
-    upstreamHeaders["anthropic-version"] = "2023-06-01";
-  }
-  // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
-  // 否则透传客户端 Bearer。
-  if (agentUpstreamEntry) {
-    if (agentUpstreamEntry.apiKey) {
-      upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
-    }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
-  }
-
-  pipe.forwardStart(upstreamUrl);
-
-  // ── 智谱 glm 系列 token 参数上限截断（防止 [1210] max_tokens 参数非法） ──
-  // 智谱 Anthropic / OpenAI 兼容端点统一限制：数值范围 [1, 32768]
-  // Codex/Responses API 还可能使用 max_output_tokens / max_completion_tokens，一并兜底。
-  const ZHIPU_MAX_TOKENS_CEIL = 32768;
-  const safeBody: Record<string, unknown> = { ...body };
-  for (const k of ["max_tokens", "max_output_tokens", "max_completion_tokens"] as const) {
-    const v = safeBody[k];
-    if (typeof v === "number" && v > ZHIPU_MAX_TOKENS_CEIL) {
-      safeBody[k] = ZHIPU_MAX_TOKENS_CEIL;
-    }
-  }
-  // ── 转发前剥离 codex session-init 假表单（function_call + output + 工具声明）──
-  // request_user_input 是 Codex 客户端内部工具，上游模型（GLM）拿不到 schema，
-  // 会模仿历史里的 function_call 生成非法调用（同 Claude Code AskUserQuestion
-  // 的 "Invalid tool parameters" 问题）。表单交互只属于 session-init 内部管线。
-  const strippedBody = stripCodexFormArtifacts(safeBody);
-  let forwardedBody: Record<string, unknown>;
-  if (chatCompat) {
-    forwardedBody = responsesBodyToChat(strippedBody, { model: modelId });
-  } else if (responsesToAnthropicCompat) {
-    forwardedBody = responsesToAnthropic(strippedBody, { model: modelId });
-    pipe.info("PROTOCOL", "codex responses→anthropic (responsesToAnthropic)");
-  } else {
-    forwardedBody = strippedBody;
-  }
-  const bodyStr = JSON.stringify(forwardedBody);
-
-  let upstreamResp: Response;
-  try {
-    upstreamResp = await fetch(upstreamUrl, {
-      method: "POST",
-      headers: upstreamHeaders,
-      body: bodyStr,
-    });
-  } catch (err: unknown) {
-    pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
-    // 上报 langfuse 失败（转发异常 —— 上游未回响应体，只有本地 fetch 抛错）
-    if (lf) {
-      try {
-        langfuseReportFailure({
-          lf,
-          model: modelId,
-          startTime,
-          endTime: new Date().toISOString(),
-          input: buildCodexLangfuseInput(body),
-          statusMessage: `forward error: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
-          extraTags: ["error"],
-          observationMetadata: { stage: "forward", stream: true, upstreamUrl },
-        });
-      } catch (lfErr: unknown) {
-        pipe.error("LANGFUSE_SPAN", lfErr);
-      }
-    }
-    return c.json(
-      { error: "Upstream request failed", detail: err instanceof Error ? err.message : String(err) },
-      502,
-    );
-  }
-
-  pipe.forwardDone(upstreamResp.status);
-
-  // Log usage
-  writeLog(config, {
-    timestamp: startTime,
-    event: "request",
-    modelId,
-    keyId,
-    sessionKey: keyId,
-    upstreamUrl,
-    stream: true,
-    traceId,
-  });
-
-  // ── 上游 4xx/5xx：拷贝一份 body 文本用于 langfuse 错误上报；成功则 tap ──
-  // codex Responses API 只有 SSE 流式响应，不区分 stream / non-stream 处理。
-  if (upstreamResp.status >= 400) {
-    // 4xx/5xx 通常返 JSON error（很小），完整读出来带进 langfuse 便于排查
-    const errText = await upstreamResp.text();
-    if (lf) {
-      try {
-        langfuseReportFailure({
-          lf,
-          model: modelId,
-          startTime,
-          endTime: new Date().toISOString(),
-          input: buildCodexLangfuseInput(body),
-          status: upstreamResp.status,
-          statusMessage: errText.slice(0, 500),
-          extraTags: ["error"],
-          observationMetadata: { stage: "upstream", stream: true, upstreamUrl },
-        });
-      } catch (lfErr: unknown) {
-        pipe.error("LANGFUSE_SPAN", lfErr);
-      }
-    }
-    return new Response(errText, {
-      status: upstreamResp.status,
-      headers: filterResponseHeaders(upstreamResp.headers),
-    });
-  }
-
-  // ── 兼容模式：把上游响应翻译回 Responses API ──
-  // chatCompat：上游 chat SSE/JSON → Responses；responsesToAnthropic：
-  // 上游 Anthropic SSE/JSON →（Chat）→ Responses。
-  if (chatCompat || responsesToAnthropicCompat) {
-    const contentType = upstreamResp.headers.get("content-type") ?? "";
-    const isSSE = contentType.includes("text/event-stream");
-    const sseHeaders = filterResponseHeaders(upstreamResp.headers);
-    sseHeaders.set("content-type", "text/event-stream");
-
-    if (isSSE && upstreamResp.body) {
-      const transformed = responsesToAnthropicCompat
-        ? upstreamResp.body.pipeThrough(
-            createAnthropicSseToResponsesSse({ model: modelId }),
-          )
-        : upstreamResp.body.pipeThrough(
-            createChatSseToResponses({ model: modelId }),
-          );
-      const needTap = Boolean(lf) || Boolean(archiveCtx);
-      if (!needTap) {
-        return new Response(transformed, {
-          status: upstreamResp.status,
-          headers: sseHeaders,
-        });
-      }
-      const [passStream, tapStream] = transformed.tee();
-      consumeCodexStream(tapStream, {
-        lf,
-        modelId,
-        startTime,
-        upstreamUrl,
-        inputBody: body,
-        pipe,
-        archiveCtx,
-        config,
-        opikCtx,
-      });
-      return new Response(passStream, {
-        status: upstreamResp.status,
-        headers: sseHeaders,
-      });
-    }
-
-    // 非 SSE：chat JSON → Responses JSON（上游统一 stream:true，此为兜底）
-    const rawText = await upstreamResp.text();
-    try {
-      const json = JSON.parse(rawText) as Record<string, unknown>;
-      const responsesJson = responsesToAnthropicCompat
-        ? anthropicJsonToResponsesJson(json, { model: modelId })
-        : chatJsonToResponses(json, { model: modelId });
-      return c.json(responsesJson);
-    } catch {
-      return new Response(rawText, {
-        status: upstreamResp.status,
-        headers: filterResponseHeaders(upstreamResp.headers),
-      });
-    }
-  }
-
-  // 2xx: aux 场景 (lf=null && archiveCtx=null) 直接透传不 tap; 主对话场景 tap
-  // 一份用于 langfuse 上报 + skill/L0 归档 hook (P1-P2 gap 修复)。
-  // 只要有 lf 或 archiveCtx 任一非空就必须 tee 一份 tap 流。
-  const needTap = Boolean(lf) || Boolean(archiveCtx);
-  if (!needTap || !upstreamResp.body) {
-    return new Response(upstreamResp.body, {
-      status: upstreamResp.status,
-      headers: filterResponseHeaders(upstreamResp.headers),
-    });
-  }
-
-  const [rawClientStream, tapStream] = upstreamResp.body.tee();
-  consumeCodexStream(tapStream, {
-    lf,
-    modelId,
-    startTime,
-    upstreamUrl,
-    inputBody: body,
-    pipe,
-    archiveCtx,
-    config,
-    opikCtx,
-  });
-
-  return new Response(rawClientStream, {
-    status: upstreamResp.status,
-    headers: filterResponseHeaders(upstreamResp.headers),
-  });
-}
-
 // ── Langfuse helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -1532,19 +1222,6 @@ export function countHumanTurnsCodex(input: unknown): number {
   return count;
 }
 
-/**
- * 构造送 langfuse 的 input —— codex 的 input[] 已经是结构化的对话历史，
- * 直接原样透传即可（跟 anthropic 的 buildLangfuseInput 目的一致：让
- * langfuse UI 上能看清"这一次调用的输入是啥"）。instructions 段单独带上,
- * 补齐上下文（codex 的 system prompt 在 body.instructions 而非 input）。
- */
-function buildCodexLangfuseInput(body: Record<string, unknown>): unknown {
-  const out: Record<string, unknown> = { input: body.input };
-  if (typeof body.instructions === "string" && body.instructions.length > 0) {
-    out.instructions = body.instructions;
-  }
-  return out;
-}
 
 export interface CodexTapContext {
   /**
@@ -1564,7 +1241,7 @@ export interface CodexTapContext {
    * skill 归档 + TDAI L0 write hook 上下文;
    * null 表示当前请求不需要触发归档 (aux / session 未初始化 / bypass)。
    */
-  archiveCtx?: CodexArchiveCtx | null;
+  archiveCtx?: ArchiveCtx | null;
 }
 
 /**
@@ -1615,7 +1292,7 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
             model: modelId,
             startTime,
             endTime,
-            input: buildCodexLangfuseInput(inputBody),
+            input: buildObsInput({ protocol: "responses", agentSource: "codex", body: inputBody }),
             output,
             usage: Object.keys(usage).length > 0 ? usage : undefined,
             traceName: lf.traceName,
@@ -1688,7 +1365,15 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
       // archiveCtx=null (aux / 未初始化 session / bypass) 直接跳过。
       if (archiveCtx) {
         try {
-          await triggerCodexArchiveHooks(archiveCtx, outputText, toolUseCount);
+          await triggerArchiveHooks({
+            ctx: archiveCtx,
+            protocol: "responses",
+            assistantText: outputText,
+            toolCallCountOverride: toolUseCount,
+            l0Mode: "track",
+            onL0Error: (err) =>
+              console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err)),
+          });
         } catch (archiveErr: unknown) {
           pipe.error("CODEX_ARCHIVE", archiveErr instanceof Error ? archiveErr : new Error(String(archiveErr)));
         }
@@ -1726,16 +1411,16 @@ export function consumeCodexStream(stream: ReadableStream<Uint8Array>, ctx: Code
               if (item?.type === "function_call") toolUseCount++;
             } else if (evtType === "response.completed") {
               const resp = evt.response as Record<string, unknown> | undefined;
-              if (resp?.usage) {
-                Object.assign(usage, resp.usage as Record<string, unknown>);
-              }
+              const completedUsage = extractResponsesUsage(evt);
+              if (completedUsage) Object.assign(usage, completedUsage);
               stopReason = (resp?.status as string) ?? "completed";
             } else if (evtType === "response.incomplete") {
               // max_output_tokens / 其它中断（Responses API 标准）
               const resp = evt.response as Record<string, unknown> | undefined;
               const details = resp?.incomplete_details as Record<string, unknown> | undefined;
               stopReason = `incomplete:${details?.reason ?? "unknown"}`;
-              if (resp?.usage) Object.assign(usage, resp.usage as Record<string, unknown>);
+              const incompleteUsage = extractResponsesUsage(evt);
+              if (incompleteUsage) Object.assign(usage, incompleteUsage);
             }
           } catch {
             // ignore malformed frames — 埋点级别的问题不阻塞

@@ -3,16 +3,17 @@
  * 的原生结构 + 客户端指纹尽量塞进 Langfuse 上报，供**排障 / 客户端逆向**用。
  *
  * 现状拆解（合并前的坑）：
- *   1. Anthropic 侧 `anthropicHandler.buildLangfuseInput` 已有 debug 分支，但
- *      只保留 messages+system 原生结构；output 仍取 text 拼接（tool_use /
+ *   1. Anthropic 侧曾经的 input builder 已有 debug 分支，但只保留
+ *      messages+system 原生结构；output 仍取 text 拼接（tool_use /
  *      thinking / stop_reason 丢失）；metadata 只有 stream/retried/upstreamUrl。
  *   2. OpenAI 协议 handler.ts 的 5 处 langfuse 上报**完全不读 debug flag**，
  *      硬编码走 flattenMessagesForOpik 压平 —— CodeBuddy 请求走的正是这条路径，
  *      开 debug 也抓不到 CB 原生 body。
  *
- * 本文件补的是**共用**部分 —— OpenAI 协议的 input builder + 通用 debug metadata。
- * Anthropic 侧的 input builder (`buildLangfuseInput`) 已在 anthropicHandler.ts 内联，
- * 不搬过来避免循环依赖。output 处理由各自 handler 自己按 debug flag 分岔。
+ * 阶段化后，4 个协议的 input builder 已统一收敛到 `stages/obs.ts::buildObsInput`
+ * （openai / anthropic / responses 按 protocol 参数分岔）。本文件只保留
+ * debug 门控的**通用 debug metadata**（buildRequestDebugMetadata）。
+ * output 处理由各 handler 自己按 debug flag 分岔。
  *
  * 详见 docs/design/2026-07-30-cc-request-routing-plan.md 附录以及本次提交的
  * commit message。
@@ -28,30 +29,6 @@ const HEADER_PREFIX_WHITELIST = ["x-", "cb-", "codebuddy-"];
 const STRING_TRUNC = 200;
 // tools 最多抓多少条（前 N 个足够识别客户端指纹了）。
 const TOOLS_MAX = 8;
-
-/**
- * OpenAI 协议 messages 的 langfuse input builder。
- *
- * - `debug=true`: 原样返回 messages 数组（保留 CodeBuddy 可能塞的字符串/数组
- *   content、`<additional_data>` / `<question_answer>` 等内部 tag、cache_control
- *   marker、tool_use 原生形态、thinking block 等）。
- * - `debug=false`: 走调用方传入的 fallback（一般是 handler.ts:flattenMessagesForOpik），
- *   把 content 数组压平为 role+string 形态，节省 langfuse 存储成本 2-5x。
- *
- * 参数 `fallback` 显式传入而非 import，是为了让 handler 保留自己那份 flatten
- * 实现（有 opik/opik-fork 侧其它调用点复用），本文件不负责 flatten 语义。
- */
-export function buildLangfuseInputChat(
-  messages: unknown[],
-  debug: boolean,
-  fallback: (m: unknown[]) => unknown[],
-): unknown {
-  if (debug) {
-    // 直接返回原始 messages 数组 —— 保留 role/content 原生结构。
-    return messages;
-  }
-  return fallback(messages);
-}
 
 // ─── Debug metadata ─────────────────────────────────────────────────────────
 

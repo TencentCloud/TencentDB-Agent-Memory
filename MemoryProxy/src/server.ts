@@ -1,6 +1,7 @@
 /** Hono app factory — registers all routes. */
 
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
@@ -14,6 +15,12 @@ import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
+import { protocolStatsToPrometheus } from "./common/protocol-stats.js";
+import { sessionStatsToPrometheus } from "./common/session-stats.js";
+import { injectionStatsToPrometheus } from "./common/injection-stats.js";
+import { autoSessionSizes, recentExpiredSessions } from "./session/auto-session.js";
+import { getSessionStats, getSessionStatsBreakdown } from "./common/session-stats.js";
+import { friendlyProxyError } from "./common/error-hint.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
@@ -101,6 +108,37 @@ export function createApp(config: ProxyConfig): Hono {
       },
     };
     return c.json(body, degraded ? 503 : 200);
+  });
+
+  // Prometheus 文本格式的协议转换性能指标（延迟分位数 + 上游缓存命中率）。
+  app.get("/metrics", (c) => {
+    return c.text(
+      protocolStatsToPrometheus() + sessionStatsToPrometheus() + injectionStatsToPrometheus(),
+      200,
+    );
+  });
+
+  // 会话诊断：只返回聚合数量与决策计数，不暴露具体会话 ID。
+  app.get("/session-debug", (c) => {
+    const snap = getSessionStats();
+    const reuseRate = snap.created + snap.resumed > 0
+      ? Number((snap.resumed / (snap.created + snap.resumed)).toFixed(3))
+      : 0;
+    const fenceTotal = snap.fenceBlocked + snap.fenceAllowed;
+    const fenceRate = fenceTotal > 0
+      ? Number((snap.fenceBlocked / fenceTotal).toFixed(3))
+      : 0;
+    return c.json({ ...autoSessionSizes(), expiredLedger: recentExpiredSessions().length, reuseRate, fenceRate, stats: snap, breakdown: getSessionStatsBreakdown() }, 200);
+  });
+
+  // 统一兜底：未捕获的异常返回带修复建议的 JSON，而不是裸文本。
+  app.onError((err, c) => {
+    const raw =
+      typeof (err as { status?: unknown }).status === "number"
+        ? ((err as { status?: unknown }).status as number)
+        : 500;
+    const status = (raw >= 400 && raw < 600 ? raw : 500) as ContentfulStatusCode;
+    return c.json({ error: friendlyProxyError(status, err.message) }, status);
   });
 
   // Whoami: resolve API key → key ID (plain text, easy to use with curl)
@@ -252,7 +290,7 @@ export function createApp(config: ProxyConfig): Hono {
   // body 打到 OpenAI /chat/completions 上游返 200 chatcmpl-* 让客户端崩。
   //
   // `/cost-guard` 语义：primary handler 检测到该段后启用 cost-guard 路由；
-  //   codex 侧的 handler 需要在 forwardToUpstream 时读 hasCostGuardMarker
+  //   codex 侧的转发阶段（stages/forward.ts::forwardStage）需要读 hasCostGuardMarker
   //   决定是否走 router。（当前 codexHandler.ts 尚未接 resolveForwardTarget，
   //   见 P1-6 报告；本 commit 只解决路由注册与 fall-through 静默 200 的
   //   问题，让请求先到达 codexHandler。cost-guard router 分流的实际支持

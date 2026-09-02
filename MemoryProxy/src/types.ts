@@ -312,6 +312,9 @@ export interface SessionInitConfig {
     enabled?: boolean;
     ttlMinutes?: number;
     strategy?: "per-key" | "per-key-msg";
+    maxEntries?: number;
+    maxWindowsPerKey?: number;
+    maxWindowsTotal?: number;
   };
   /**
    * thread 层隔离：enabled=true 时 x-thread-id 进入会话复合键
@@ -1012,6 +1015,9 @@ export interface RawYamlConfig {
       enabled?: boolean;
       ttlMinutes?: number;
       strategy?: string;
+      maxEntries?: number;
+      maxWindowsPerKey?: number;
+      maxWindowsTotal?: number;
     };
     threadIsolation?: {
       enabled?: boolean;

@@ -12,6 +12,7 @@ if (!process.version.startsWith("v22.")) {
 import { serve } from "@hono/node-server";
 import { buildConfig, parseArgv } from "./config.js";
 import { createApp } from "./server.js";
+import { pruneExpiredSessions } from "./session/auto-session.js";
 import {
   setExtensionDebug,
   shutdownGuard,
@@ -118,6 +119,15 @@ if (isRequestPrepareActive(config)) {
 }
 
 const app = createApp(config);
+
+// 定期清理过期的自动会话，避免低流量时过期条目长期滞留内存。
+// unref() 保证定时器不阻止进程退出。
+if (config.sessionInit?.autoConversationId?.enabled) {
+  setInterval(
+    () => pruneExpiredSessions(config.sessionInit?.autoConversationId?.ttlMinutes ?? 30),
+    5 * 60_000,
+  ).unref();
+}
 
 log.info("server.starting", {
   host: config.server.host,

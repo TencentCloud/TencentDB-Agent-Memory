@@ -12,7 +12,7 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { prewarmFromConfig } from "../injection/index.js";
 import type { SessionInitState, AgentDetail, TaskDetail } from "../session/types.js";
 import { getMetadataClient } from "../meta/client.js";
@@ -155,7 +155,7 @@ export async function refreshSessionCache(input: RefreshInput): Promise<RefreshR
   }
 
   // 从 SessionStore 取 session 状态
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
   const store = getSessionStore();
   const state: SessionInitState | undefined = store.get(compositeKey);
 

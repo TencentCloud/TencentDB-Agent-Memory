@@ -22,15 +22,9 @@ import type { ProxyConfig } from "./types.js";
 import { apiKeyToKeyId, extractBearerToken, uuidv7 } from "./opik.js";
 import { createPipeline, writeLog } from "./logger.js";
 import { extractSpaceIdFromPath } from "./credit-reporter.js";
-import { joinUrl } from "./guard-adapter.js";
 import { verifyUserKey } from "./auth.js";
 import { resolveModelId } from "./pricing.js";
 import { workbuddyAdapter } from "./agent-adapters/workbuddy.js";
-import {
-  responsesBodyToChat,
-  createChatSseToResponses,
-  chatJsonToResponses,
-} from "./common/responses-chat-compat.js";
 import {
   buildWorkbuddyInjectionBlock,
   type WorkbuddyInjectionInput,
@@ -51,30 +45,14 @@ import {
 } from "./langfuse.js";
 
 // ── TDAI L0 + Skill extraction imports ────────────────────────────────────────
-import { TdaiClient } from "./tdai/client.js";
-import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { recordTdaiTurn } from "./tdai/recorder.js";
-import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
-import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
-import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
-import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { sessionStage } from "./stages/session.js";
+import type { ReqCtx, SessionAdapter } from "./stages/types.js";
+import { forwardStage } from "./stages/forward.js";
+import { buildArchiveCtx, triggerArchiveHooks, createTdaiClient, type ArchiveCtx } from "./stages/archive.js";
+import { buildObsInput, extractResponsesUsage } from "./stages/obs.js";
+import { firstUserMessageFingerprint } from "./session/session-key.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
-
-const SKIP_REQUEST_HEADERS = new Set([
-  "host",
-  "content-length",
-  "transfer-encoding",
-  "connection",
-  "x-tdai-user-key",
-]);
-
-const SKIP_RESPONSE_HEADERS = new Set([
-  "content-encoding",
-  "transfer-encoding",
-  "content-length",
-  "connection",
-]);
 
 // ── Types (exported for unit tests) ──────────────────────────────────────────
 
@@ -178,6 +156,39 @@ export function extractWorkbuddySessionId(
   return null;
 }
 
+/** workbuddy 的会话差异：responses 形状、不自动生成会话、traceId 兜底、keyId 直通。 */
+// 无显式会话时 fallback 的一次性 warn（避免刷屏）。
+const workbuddyWarnedFallback = new Set<string>();
+const WORKBUDDY_SESSION_ADAPTER: SessionAdapter = {
+  extractRawSessionId(_c, lcHeaders, body) {
+    return extractWorkbuddySessionId(lcHeaders, body);
+  },
+  userMessages(body) {
+    return body.input;
+  },
+  fallbackSessionKey(ctx, keyId) {
+    // 无显式会话时的稳定兜底：首条用户消息指纹，避免逐请求 traceId 产生孤儿记忆。
+    const fp = firstUserMessageFingerprint(ctx.body.input);
+    if (!fp) {
+      if (!workbuddyWarnedFallback.has(keyId)) {
+        workbuddyWarnedFallback.add(keyId);
+        console.warn(`[session-fallback] workbuddy key=${keyId} no explicit session & no fingerprint — ephemeral key`);
+      }
+      return `${keyId}:${ctx.traceId}`;
+    }
+    // 日桶：同首问跨天自动轮换，避免无状态兜底键把不同日期的会话合并成永续会话。
+    const day = Math.floor(Date.now() / 86_400_000);
+    return `${keyId}:msg-${fp}:${day}`;
+  },
+  resolveThreadId(c) {
+    return c.req.header("x-thread-id") ?? null;
+  },
+  resolveIdentity(_ctx, keyId) {
+    return { keyId, userId: "", callerUserKey: null };
+  },
+  autoGenerate: false,
+};
+
 // ── Default mode gate detection ──────────────────────────────────────────────
 
 /**
@@ -272,407 +283,9 @@ export function countHumanTurnsWorkbuddy(input: unknown): number {
   return count;
 }
 
-// ── Workbuddy Archive Context (L0 write + Skill extract) ────────────────────
-
-/**
- * WorkBuddy L0/Skill 归档上下文, 对齐 codexHandler 的 CodexArchiveCtx 设计:
- *   - archiveCtx=null 时 forward/session bypass 侧直接跳过 hook
- *   - 失败静默 (内部 warn), 绝不阻塞上游响应
- */
-export interface WorkbuddyArchiveCtx {
-  config: ProxyConfig;
-  sessionKey: string;
-  agentSource: string;
-  sessionInfo: Record<string, unknown>;
-  userId: string;
-  /** 原始 body.input[] (responses API input items) */
-  input: unknown[];
-  tdaiClient: TdaiClient | null;
-  tdaiIdentity: TdaiIdentity | null;
-  tdaiUserMessage: TdaiMessage | null;
-  /**
-   * 资产能力开关（chat_memory / skill / ...）；用于 gate 归档 hook。
-   * 与 codexHandler.CodexArchiveCtx.assetCapabilities 对齐。
-   */
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
-}
-
-/**
- * 从 responses API body.input[] 提取 latest user message 用于 L0 write。
- */
-function extractLatestWorkbuddyUserMessage(input: unknown): TdaiMessage | null {
-  if (!Array.isArray(input)) return null;
-  const text = workbuddyAdapter.extractUserText(input);
-  if (!text) return null;
-  return { role: "user", content: text };
-}
-
-function createWorkbuddyTdaiClient(config: ProxyConfig): TdaiClient | null {
-  if (!config.tdai?.enabled || !config.tdai?.memory?.enabled || !config.tdai?.endpoint) return null;
-  return new TdaiClient({
-    enabled: config.tdai.enabled,
-    endpoint: config.tdai.endpoint,
-    apiKey: config.tdai.apiKey,
-    serviceId: config.tdai.serviceId,
-    writeL0: config.tdai.memory.writeL0,
-    recallL1: config.tdai.memory.recallL1,
-    injectL2L3: config.tdai.memory.injectL2L3,
-    l1Limit: config.tdai.memory.l1Limit,
-    l2Limit: config.tdai.memory.l2Limit,
-    recallCharBudget: config.tdai.memory.recallCharBudget,
-    timeoutMs: config.tdai.memory.timeoutMs,
-  });
-}
-
-function buildWorkbuddyArchiveCtx(args: {
-  config: ProxyConfig;
-  sessionInfo: Record<string, unknown> | null | undefined;
-  injectionSkipped: boolean;
-  input: unknown[];
-  sessionKey: string;
-  userId: string;
-  callerUserKey?: string | null;
-  assetCapabilities?: import("./injection/types.js").AssetCapabilityFlags;
-}): WorkbuddyArchiveCtx | null {
-  const { sessionInfo, injectionSkipped } = args;
-  if (injectionSkipped || !sessionInfo) return null;
-
-  // chat_memory=false 时用户显式关闭记忆 → 不创建 tdaiClient；skill 归档仍走。
-  // 对齐 codexHandler.buildArchiveCtx (line 855-857)。
-  const tdaiClient = args.assetCapabilities?.chat_memory === false
-    ? null
-    : createWorkbuddyTdaiClient(args.config);
-  const tdaiIdentity = deriveTdaiIdentity({
-    sessionInfo,
-    userId: args.userId || null,
-    sessionKey: args.sessionKey,
-    userKey: args.callerUserKey ?? null,
-  });
-  const tdaiUserMessage = extractLatestWorkbuddyUserMessage(args.input);
-
-  return {
-    config: args.config,
-    sessionKey: args.sessionKey,
-    agentSource: "workbuddy",
-    sessionInfo,
-    userId: args.userId,
-    input: args.input,
-    tdaiClient,
-    tdaiIdentity,
-    tdaiUserMessage,
-    assetCapabilities: args.assetCapabilities,
-  };
-}
-
-/**
- * 流结束后触发 TDAI L0 write + skill 提取, 对齐 codexHandler 的
- * triggerCodexArchiveHooks 逻辑。失败静默(内部已 warn), 不阻塞下游。
- *
- * @param ctx         归档上下文 (非 null 时有效)
- * @param assistantText stream accumulator 累积的 assistant 文本
- */
-async function triggerWorkbuddyArchiveHooks(
-  ctx: WorkbuddyArchiveCtx,
-  assistantText: string,
-  toolCallCountOverride?: number,
-): Promise<void> {
-  // ── TDAI L0 write ──
-  // 与 codexHandler triggerCodexArchiveHooks 对称:
-  //   trackWrite 挂全局 in-flight set (index.ts flushPendingWrites 兜底)
-  //   withL0Retry 3 次退避挡 tdai kernel 瞬断
-  //   stream 场景不 await, 让归档 hook 提前返回
-  //
-  // 注意：buildWorkbuddyArchiveCtx 已在 chat_memory=false 时把 tdaiClient 置 null，
-  // 所以此处不需要再判 assetCapabilities.chat_memory；tdaiClient 为 null 时自然跳过。
-  if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
-    trackWrite(
-      withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
-      ).catch((err: unknown) => {
-        console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
-      }),
-    );
-  } else if (ctx.tdaiClient) {
-    logExtractionSkipped(ctx.config, "tdai-memory", ctx.sessionKey);
-  }
-
-  // ── Skill conversation/add trigger ──
-  // 与 codexHandler 对称: 归档写完再返, 保证跨节点下一轮读到最新 buffer。
-  // assistantMessage 使用 stream accumulator 的 outputText 组装一份
-  // Responses API 格式的消息 (type:"message", role:"assistant",
-  // content:[{type:"output_text", text}]) —— 与 codexHandler 一致。
-  //
-  // protocol 必须传 "responses"：server.ts 注释明确说明 WorkBuddy 与 Codex 同协议，
-  // langfuse tag 也用 "protocol:responses"。若错传 "openai"，skill 提取时
-  // normalizeConversation 会按 Chat Completions 格式解析 messages[]，
-  // 与实际 body.input[] (Responses API) 错位。
-  if (isExtractionAllowed(ctx.config, "skill")) {
-    const assistantMessage = assistantText
-      ? {
-          type: "message" as const,
-          role: "assistant" as const,
-          content: [{ type: "output_text" as const, text: assistantText }],
-        }
-      : null;
-    await triggerSkillExtractIfReady({
-      config: ctx.config,
-      sessionKey: ctx.sessionKey,
-      agentSource: "workbuddy",
-      sessionInfo: ctx.sessionInfo,
-      inputMessages: ctx.input,
-      assistantMessage,
-      protocol: "responses",
-      assetCapabilities: ctx.assetCapabilities,
-      toolCallCountOverride,
-    });
-  } else {
-    logExtractionSkipped(ctx.config, "skill", ctx.sessionKey);
-  }
-}
-
 // ── Upstream helpers ─────────────────────────────────────────────────────────
 
-/**
- * 把 workbuddy 请求 body 结构化成 langfuse observation 的 `input` 字段。
- *
- * workbuddy 走 Responses API，请求体形态：
- *   - body.input:        Array<InputItem>（必有，用户消息 / 工具输出等）
- *   - body.instructions: string           （可选，system-level 指令）
- *
- * 组合策略（尽量减少 langfuse UI 嵌套层级）：
- *   - 有 instructions → 返回 { input, instructions }
- *   - 仅 input       → 直接返回 body.input
- *   - 都缺失         → 返回 undefined（langfuse 侧不写 input 字段）
- */
-function buildWorkbuddyLangfuseInput(body: Record<string, unknown>): unknown {
-  const hasInput = Array.isArray(body.input);
-  const hasInstructions =
-    typeof body.instructions === "string" && (body.instructions as string).length > 0;
-  if (!hasInput && !hasInstructions) return undefined;
-  if (hasInput && hasInstructions) {
-    return { input: body.input, instructions: body.instructions };
-  }
-  return hasInput ? body.input : { instructions: body.instructions };
-}
 
-function buildUpstreamHeaders(c: Context, config: ProxyConfig): Record<string, string> {
-  const h: Record<string, string> = {};
-  for (const [k, v] of c.req.raw.headers.entries()) {
-    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) h[k] = v;
-  }
-  if (config.upstream.apiKey) {
-    h["authorization"] = `Bearer ${config.upstream.apiKey}`;
-    delete h["x-api-key"];
-  }
-  return h;
-}
-
-function filterResponseHeaders(source: Headers): Headers {
-  const out = new Headers();
-  source.forEach((v, k) => {
-    if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) out.set(k, v);
-  });
-  return out;
-}
-
-/**
- * Forward the request to upstream. On SSE responses with `lf != null`, tees
- * the stream and reports usage/text to langfuse (best-effort).
- */
-async function forwardToUpstream(
-  c: Context,
-  config: ProxyConfig,
-  body: Record<string, unknown>,
-  traceId: string,
-  startTime: string,
-  keyId: string,
-  modelId: string,
-  pipe: ReturnType<typeof createPipeline>,
-  lf: LangfuseTurnContext | null,
-  archiveCtx: WorkbuddyArchiveCtx | null = null,
-): Promise<Response> {
-  // ── Per-agent upstream override ──
-  // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
-  // 未配置时回退到全局 config.upstream.{url,apiKey}。
-  const perAgent = (config.upstream as unknown as {
-    agents?: { workbuddy?: { url?: string; apiKey?: string; chatCompletions?: boolean } };
-  }).agents?.workbuddy;
-  // Chat Completions 兼容模式（upstream.agents.workbuddy.chatCompletions: true）：
-  // 智谱 GLM 等上游只实现 /chat/completions。开启后把 WorkBuddy 的 Responses
-  // 请求翻译成 chat 格式转发，并把上游 chat 响应翻译回 Responses。
-  const chatCompat = perAgent?.chatCompletions === true;
-  const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
-  const upstreamPath = chatCompat
-    ? "/chat/completions"
-    : c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
-  const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
-
-  const headers = buildUpstreamHeaders(c, config);
-  // 若 per-agent 指定了独立 apiKey，覆盖全局注入的 authorization
-  if (perAgent?.apiKey) {
-    headers["authorization"] = `Bearer ${perAgent.apiKey}`;
-    delete headers["x-api-key"];
-  }
-  const forwardedBody = chatCompat ? responsesBodyToChat(body, { model: modelId }) : body;
-  const bodyStr = JSON.stringify(forwardedBody);
-
-  // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
-  pipe.forwardStart(upstreamUrl);
-
-  // usage.log 记录请求（方便运营 / 计费统计），对齐 codex writeLog 用法
-  try {
-    writeLog(config, {
-      timestamp: startTime,
-      event: "request",
-      modelId,
-      keyId,
-      sessionKey: keyId,
-      upstreamUrl,
-      stream: true,
-    });
-  } catch {
-    /* logger best-effort */
-  }
-
-  let upstreamResp: Response;
-  try {
-    upstreamResp = await fetch(upstreamUrl, {
-      method: "POST",
-      headers,
-      body: bodyStr,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    pipe.info("WORKBUDDY_FORWARD_ERR", msg);
-    // 网络层失败 → langfuse failure 上报，让线上可视化能看到
-    if (lf) {
-      try {
-        langfuseReportFailure({
-          lf,
-          model: modelId,
-          startTime,
-          endTime: new Date().toISOString(),
-          input: buildWorkbuddyLangfuseInput(body),
-          statusMessage: `fetch_failed: ${msg}`.slice(0, 500),
-          extraTags: ["error"],
-          observationMetadata: {
-            stage: "forward",
-            stream: true,
-            upstreamUrl,
-            keyId,
-          },
-        });
-      } catch (lfErr: unknown) {
-        pipe.error("LANGFUSE_SPAN", lfErr);
-      }
-    }
-    return c.json({ error: `Upstream fetch failed: ${msg}` }, 502);
-  }
-
-  const respHeaders = filterResponseHeaders(upstreamResp.headers);
-  const contentType = upstreamResp.headers.get("content-type") ?? "";
-  const isSSE = contentType.includes("text/event-stream");
-
-  pipe.forwardDone(upstreamResp.status);
-
-  // 上游 4xx/5xx → langfuse failure 上报（body 已被上游消费，不重读，避免破坏流）
-  if (lf && upstreamResp.status >= 400) {
-    try {
-      langfuseReportFailure({
-        lf,
-        model: modelId,
-        startTime,
-        endTime: new Date().toISOString(),
-        input: buildWorkbuddyLangfuseInput(body),
-        status: upstreamResp.status,
-        statusMessage: `upstream_${upstreamResp.status}`,
-        extraTags: ["error"],
-        observationMetadata: {
-          stage: "upstream",
-          stream: true,
-          upstreamUrl,
-          keyId,
-          content_type: contentType,
-        },
-      });
-    } catch (lfErr: unknown) {
-      pipe.error("LANGFUSE_SPAN", lfErr);
-    }
-  }
-
-  // Non-SSE or no langfuse ctx → passthrough
-  // ── chatCompat：把上游 chat 响应翻译回 Responses API ──
-  if (chatCompat) {
-    const sseHeaders = new Headers(respHeaders);
-    sseHeaders.set("content-type", "text/event-stream");
-    if (isSSE && upstreamResp.body) {
-      const transformed = upstreamResp.body.pipeThrough(
-        createChatSseToResponses({ model: modelId }),
-      );
-      if (!lf) {
-        return new Response(transformed, {
-          status: upstreamResp.status,
-          headers: sseHeaders,
-        });
-      }
-      const [passStream, tapStream] = transformed.tee();
-      void consumeWorkbuddyStream(tapStream, {
-        startTime,
-        modelId,
-        keyId,
-        traceId,
-        lf,
-        config,
-        pipe,
-        archiveCtx,
-        inputBody: body,
-        upstreamUrl,
-      });
-      return new Response(passStream, {
-        status: upstreamResp.status,
-        headers: sseHeaders,
-      });
-    }
-    // 非 SSE：chat JSON → Responses JSON（上游统一 stream:true，此为兜底）
-    const rawText = await upstreamResp.text();
-    try {
-      const json = JSON.parse(rawText) as Record<string, unknown>;
-      return c.json(chatJsonToResponses(json, { model: modelId }));
-    } catch {
-      return new Response(rawText, {
-        status: upstreamResp.status,
-        headers: respHeaders,
-      });
-    }
-  }
-
-  if (!isSSE || !upstreamResp.body || !lf) {
-    return new Response(upstreamResp.body, {
-      status: upstreamResp.status,
-      headers: respHeaders,
-    });
-  }
-
-  // SSE + langfuse: tee & tap
-  const [passStream, tapStream] = upstreamResp.body.tee();
-  void consumeWorkbuddyStream(tapStream, {
-    startTime,
-    modelId,
-    keyId,
-    traceId,
-    lf,
-    config,
-    pipe,
-    archiveCtx,
-    inputBody: body,
-    upstreamUrl,
-  });
-
-  return new Response(passStream, {
-    status: upstreamResp.status,
-    headers: respHeaders,
-  });
-}
 
 /**
  * WorkBuddy tap context —— consumeWorkbuddyStream 的参数类型。
@@ -685,10 +298,10 @@ interface WorkbuddyTapContext {
   lf: LangfuseTurnContext | null;
   config: ProxyConfig;
   pipe: ReturnType<typeof createPipeline>;
-  archiveCtx: WorkbuddyArchiveCtx | null;
+  archiveCtx: ArchiveCtx | null;
   /**
    * 转发到上游的最终 body（含注入后的 input[]）。用于两个地方：
-   *   1) langfuse observation.input（buildWorkbuddyLangfuseInput）
+   *   1) langfuse observation.input（buildObsInput，responses/workbuddy 形状）
    *   2) 兜底 —— 目前未用，但对齐 codex 便于后续扩展
    */
   inputBody: Record<string, unknown>;
@@ -706,7 +319,7 @@ interface WorkbuddyTapContext {
  *   - toolUseCount 累积：Responses API 里 `response.output_item.done` +
  *     `item.type==="function_call"` 计一次工具调用；透传给 skill 归档做
  *     round 边界判据
- *   - buildWorkbuddyLangfuseInput(inputBody)：把 body.input + instructions
+ *   - buildObsInput(inputBody)：把 body.input + instructions
  *     结构化写入 langfuse observation.input，便于排障
  */
 async function consumeWorkbuddyStream(
@@ -774,16 +387,14 @@ async function consumeWorkbuddyStream(
             // done），下面 completed 分支才是权威 usage 来源。
             const resp = (evt.response ?? evt) as Record<string, unknown>;
             if (typeof resp?.id === "string") responseId = resp.id as string;
-            if (resp?.usage && typeof resp.usage === "object") {
-              usage = resp.usage as Record<string, unknown>;
-            }
+            const u = extractResponsesUsage(evt);
+            if (u) usage = u;
           }
           if (evtType === "response.completed") {
             const resp = (evt.response ?? evt) as Record<string, unknown>;
             if (typeof resp?.id === "string") responseId = resp.id as string;
-            if (resp?.usage && typeof resp.usage === "object") {
-              usage = resp.usage as Record<string, unknown>;
-            }
+            const u = extractResponsesUsage(evt);
+            if (u) usage = u;
           }
         } catch {
           /* ignore malformed frames */
@@ -811,7 +422,7 @@ async function consumeWorkbuddyStream(
       model: ctx.modelId,
       startTime: ctx.startTime,
       endTime,
-      input: buildWorkbuddyLangfuseInput(ctx.inputBody),
+      input: buildObsInput({ protocol: "responses", agentSource: "workbuddy", body: ctx.inputBody }),
       output: assistantText,
       usage: usage && Object.keys(usage).length > 0 ? usage : undefined,
       traceName: ctx.lf.traceName,
@@ -836,11 +447,19 @@ async function consumeWorkbuddyStream(
   }
 
   // ── TDAI L0 write + Skill extraction ──
-  // 对齐 codexHandler triggerCodexArchiveHooks: langfuse 上报后触发归档。
+  // 对齐 stages/archive.ts::triggerArchiveHooks: langfuse 上报后触发归档。
   // archiveCtx=null (aux/未初始化 session/bypass) 直接跳过。
   // Q: toolUseCount 透传给 skill 归档，作为 round 边界判据。
   if (ctx.archiveCtx && assistantText) {
-    await triggerWorkbuddyArchiveHooks(ctx.archiveCtx, assistantText, toolUseCount).catch(
+    await triggerArchiveHooks({
+      ctx: ctx.archiveCtx,
+      protocol: "responses",
+      assistantText,
+      toolCallCountOverride: toolUseCount,
+      l0Mode: "track",
+      onL0Error: (err) =>
+        console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err)),
+    }).catch(
       (err: unknown) => {
         ctx.pipe.info(
           "WORKBUDDY_ARCHIVE_ERR",
@@ -922,12 +541,55 @@ export async function handleWorkbuddyEndpoint(
   // ── 5. Aux passthrough ───────────────────────────────────────────────────
   if (isAuxiliary) {
     pipe.info("WORKBUDDY_AUX", `auxiliary request → passthrough (path=${path})`);
-    return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, null, null);
+    return (await forwardStage({ c, config }, {
+      protocol: "responses",
+      pipe,
+      agent: "workbuddy",
+      body,
+      path: c.req.path.replace(/^\/workbuddy\/[^/]+/, ""),
+      shape: {
+        enabled: true,
+        modelId,
+        errorBody: "passthrough",
+        beforeFetch: ({ upstreamUrl }) => {
+          try {
+            writeLog(config, {
+              timestamp: startTime,
+              event: "request",
+              modelId,
+              keyId,
+              sessionKey: keyId,
+              upstreamUrl,
+              stream: true,
+            });
+          } catch {
+            /* logger best-effort */
+          }
+        },
+        onFetchError: (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          pipe.info("WORKBUDDY_FORWARD_ERR", msg);
+          return c.json({ error: `Upstream fetch failed: ${msg}` }, 502);
+        },
+      },
+    })).resp;
   }
 
   // ── 6. Session ID + langfuse turn ctx ────────────────────────────────────
-  const sessionId = extractWorkbuddySessionId(headers, body);
-  const sessionKey = sessionId ?? `${keyId}:${traceId}`;
+  const sessionCtx: ReqCtx = {
+    c,
+    config,
+    body,
+    agentSource: "workbuddy",
+    apiKey,
+    keyIdOverride: keyId,
+    earlySpaceId: spaceId,
+    earlyUserId: "",
+    traceId,
+  };
+  await sessionStage(sessionCtx, WORKBUDDY_SESSION_ADAPTER);
+  const sessionId = sessionCtx.conversationId ?? null;
+  const sessionKey = sessionCtx.sessionKey!;
   const agentSource = "workbuddy";
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
@@ -978,9 +640,9 @@ export async function handleWorkbuddyEndpoint(
       const userText = workbuddyAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `codex:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({ agentSource: "workbuddy", sessionKey });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -1021,7 +683,7 @@ export async function handleWorkbuddyEndpoint(
 
   if (config.sessionInit?.enabled && sessionId) {
     try {
-      const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import(
+      const { getSessionStore, buildStoreSessionKey, handleSessionInit, parsePresetIdentity } = await import(
         "./session/index.js"
       );
       const { getMetadataClient } = await import("./meta/client.js");
@@ -1032,7 +694,7 @@ export async function handleWorkbuddyEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `codex:${sessionKey}`;
+      const compositeKey = buildStoreSessionKey({ agentSource: "workbuddy", sessionKey });
       const identity = {
         userId: userId || "anonymous",
         agentSource: "codex" as const,
@@ -1337,18 +999,28 @@ export async function handleWorkbuddyEndpoint(
         // assistantText 用 memResult.messageText (proxy 给用户的命令响应), 不是
         // userText (用户输入的命令) —— L0 write 把"用户问了什么 / 系统答了什么"
         // 配对写入, 用 userText 当 assistant 会颠倒语义。
-        const memArchiveCtx = buildWorkbuddyArchiveCtx({
+        const memArchiveCtx = buildArchiveCtx({
           config,
           sessionInfo,
           injectionSkipped,
           input,
           sessionKey,
+          agentSource: "workbuddy",
+          protocol: "responses",
           userId: userId || "",
           callerUserKey,
+          threadId: sessionCtx.threadId ?? null,
           assetCapabilities,
         });
         if (memArchiveCtx) {
-          void triggerWorkbuddyArchiveHooks(memArchiveCtx, memResult.messageText ?? "").catch((err: unknown) => {
+          void triggerArchiveHooks({
+            ctx: memArchiveCtx,
+            protocol: "responses",
+            assistantText: memResult.messageText ?? "",
+            l0Mode: "track",
+            onL0Error: (err) =>
+              console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err)),
+          }).catch((err: unknown) => {
             pipe.info(
               "WORKBUDDY_MEM_ARCHIVE_ERR",
               err instanceof Error ? err.message : String(err),
@@ -1460,15 +1132,110 @@ export async function handleWorkbuddyEndpoint(
   }
 
   // ── 10. Forward ──────────────────────────────────────────────────────────
-  const archiveCtx = buildWorkbuddyArchiveCtx({
+  const archiveCtx = buildArchiveCtx({
     config,
     sessionInfo,
     injectionSkipped,
     input,
     sessionKey,
+    agentSource: "workbuddy",
+    protocol: "responses",
     userId: userId || "",
     callerUserKey,
+    threadId: sessionCtx.threadId ?? null,
     assetCapabilities,
   });
-  return forwardToUpstream(c, config, body, traceId, startTime, keyId, modelId, pipe, lf, archiveCtx);
+  return (await forwardStage({ c, config }, {
+    protocol: "responses",
+    pipe,
+    agent: "workbuddy",
+    body,
+    path: c.req.path.replace(/^\/workbuddy\/[^/]+/, ""),
+    shape: {
+      enabled: true,
+      modelId,
+      errorBody: "passthrough",
+      beforeFetch: ({ upstreamUrl }) => {
+        try {
+          writeLog(config, {
+            timestamp: startTime,
+            event: "request",
+            modelId,
+            keyId,
+            sessionKey: keyId,
+            upstreamUrl,
+            stream: true,
+          });
+        } catch {
+          /* logger best-effort */
+        }
+      },
+      onErrorStatus: (status, _bodyText, { upstreamUrl, contentType }) => {
+        if (!lf) return;
+        try {
+          langfuseReportFailure({
+            lf,
+            model: modelId,
+            startTime,
+            endTime: new Date().toISOString(),
+            input: buildObsInput({ protocol: "responses", agentSource: "workbuddy", body }),
+            status,
+            statusMessage: "upstream_" + status,
+            extraTags: ["error"],
+            observationMetadata: {
+              stage: "upstream",
+              stream: true,
+              upstreamUrl,
+              keyId,
+              content_type: contentType,
+            },
+          });
+        } catch (lfErr: unknown) {
+          pipe.error("LANGFUSE_SPAN", lfErr);
+        }
+      },
+      onFetchError: (err, { upstreamUrl }) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        pipe.info("WORKBUDDY_FORWARD_ERR", msg);
+        if (lf) {
+          try {
+            langfuseReportFailure({
+              lf,
+              model: modelId,
+              startTime,
+              endTime: new Date().toISOString(),
+              input: buildObsInput({ protocol: "responses", agentSource: "workbuddy", body }),
+              statusMessage: (`fetch_failed: ` + msg).slice(0, 500),
+              extraTags: ["error"],
+              observationMetadata: {
+                stage: "forward",
+                stream: true,
+                upstreamUrl,
+                keyId,
+              },
+            });
+          } catch (lfErr: unknown) {
+            pipe.error("LANGFUSE_SPAN", lfErr);
+          }
+        }
+        return c.json({ error: `Upstream fetch failed: ${msg}` }, 502);
+      },
+      tap: {
+        enabled: Boolean(lf),
+        consume: (stream, { upstreamUrl }) =>
+          void consumeWorkbuddyStream(stream, {
+            startTime,
+            modelId,
+            keyId,
+            traceId,
+            lf,
+            config,
+            pipe,
+            archiveCtx,
+            inputBody: body,
+            upstreamUrl,
+          }),
+      },
+    },
+  })).resp;
 }

@@ -46,7 +46,7 @@ import { writeLog } from "./logger.js";
 import { log } from "./report/log.js";
 import { joinUrl } from "./guard-adapter.js";
 import { extractSpaceIdFromPath, tryReportCreditFromPath } from "./credit-reporter.js";
-import { extractSseUsage } from "./handler.js";
+import { extractUsageFromSseText as extractSseUsage } from "./stages/obs.js";
 import {
   opikCreateTrace,
   opikCreateLlmSpan,
