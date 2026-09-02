@@ -7,11 +7,23 @@ import { validateKnownStateObject } from './state-validation.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const normalizedRelative = (root, path) => relative(root, path).split(sep).join('/');
+const MAX_MIGRATION_OBJECTS = 10_000;
 
 export class StateMigrationService {
-  constructor({ stateDir, now = () => new Date(), afterPlan = async () => {}, afterObject = async () => {}, afterManifest = async () => {} } = {}) {
+  constructor({
+    stateDir,
+    now = () => new Date(),
+    afterPlan = async () => {},
+    afterObject = async () => {},
+    afterManifest = async () => {},
+    maxObjects = MAX_MIGRATION_OBJECTS,
+  } = {}) {
     if (typeof stateDir !== 'string' || !isAbsolute(stateDir)) throw new Error('Invalid state root');
+    if (!Number.isInteger(maxObjects) || maxObjects < 1 || maxObjects > MAX_MIGRATION_OBJECTS) {
+      throw new Error('Invalid migration scan limit');
+    }
     this.stateDir = resolve(stateDir);
+    this.maxObjects = maxObjects;
     this.now = now;
     this.afterPlan = afterPlan;
     this.afterObject = afterObject;
@@ -35,7 +47,7 @@ export class StateMigrationService {
       if (rel === 'state.json' || rel === '.migration' || rel.startsWith('.migration/')) continue;
       if (entry.isDirectory()) await this.scan(path, objects);
       else if (entry.isFile() && entry.name.endsWith('.json')) {
-        if (objects.length >= 10000) throw new Error('Migration scan limit exceeded');
+        if (objects.length >= this.maxObjects) throw new Error('Migration scan limit exceeded');
         const source = await readFile(path);
         let value;
         try { value = JSON.parse(source.toString('utf8')); }

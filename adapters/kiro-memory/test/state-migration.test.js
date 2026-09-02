@@ -6,6 +6,26 @@ import test from 'node:test';
 
 import { StateMigrationService } from '../src/core/state-migration.js';
 
+test('migration accepts a smaller scan bound but never exceeds the hard limit', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'kiro-migrate-bound-'));
+  try {
+    await mkdir(join(stateDir, 'sessions', 'hash', 'turns'), { recursive: true });
+    await writeFile(join(stateDir, 'sessions', 'hash', 'turns', 'a.json'), '{"version":1,"legacy":true}\n');
+    await writeFile(join(stateDir, 'sessions', 'hash', 'turns', 'b.json'), '{"version":1,"legacy":true}\n');
+
+    await assert.rejects(
+      new StateMigrationService({ stateDir, maxObjects: 1 }).migrate(),
+      /Migration scan limit exceeded/,
+    );
+    assert.throws(
+      () => new StateMigrationService({ stateDir, maxObjects: 10001 }),
+      /Invalid migration scan limit/,
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('migration freezes a deterministic plan, verifies legacy objects, and publishes v2 manifest last', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'kiro-migrate-'));
   try {

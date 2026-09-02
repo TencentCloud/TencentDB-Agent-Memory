@@ -42,8 +42,12 @@ The MCP server exposes `tdai_memory_search`, `tdai_conversation_search`, and `td
 
 Run `node scripts/migrate.mjs --project C:\path\to\project` when status reports legacy state. Migration is resumable and non-destructive: it verifies copied objects, publishes a manifest last, and will not automatically delete the source state. See [UPGRADE.md](./UPGRADE.md).
 
+Migration scans at most `10,000` JSON objects. A `stale lock` is reported by maintenance but is not automatically deleted, because age alone cannot prove that its owner is dead.
+
 `node scripts/maintenance.mjs --project C:\path\to\project` produces a dry-run plan. Apply only a reviewed, unchanged plan with `--apply`; changed or special objects are skipped or reported, never blindly deleted. Both `status.mjs` and `health.mjs` perform a bounded Gateway probe; status is human-readable while health emits one JSON document. `doctor.mjs` remains offline and verifies configuration plus installed artifacts.
 
 ## Safety and limits
 
 Recall text is untrusted context, not instructions. Capture records observable user prompts, tool traces, and available assistant output; it does not invent unavailable IDE content. Hook delivery is fail-open, while retries are bounded and non-retryable failures require manual review. Phase 2 does not silently downgrade state or configuration and will not automatically delete migration sources or quarantine contents.
+
+Hook-triggered Outbox work is FIFO and serial, with `maxItems=3` inside the 1500 ms flush budget. This protects interactive latency and ordering; higher-throughput background draining requires a separate rate-limit design.

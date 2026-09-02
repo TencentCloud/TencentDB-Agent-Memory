@@ -42,8 +42,12 @@ MCP 提供 `tdai_memory_search`、`tdai_conversation_search`、`tdai_memory_stat
 
 当状态提示 legacy 时运行 `node scripts/migrate.mjs --project C:\path\to\project`。迁移可恢复且非破坏性：逐项校验复制结果，最后发布 manifest，并且 will not automatically delete 源状态。详见 [UPGRADE_CN.md](./UPGRADE_CN.md)。
 
+Migration 最多扫描 `10,000` 个 JSON 对象。Maintenance 会报告 `stale lock`，但不会自动删除，因为仅凭存续时间无法证明持有进程已经退出。
+
 `node scripts/maintenance.mjs --project C:\path\to\project` 默认只生成 dry-run 计划；仅可用 `--apply` 应用已经审核且对象未变化的计划。特殊或变化对象只会跳过或报告。`status.mjs` 与 `health.mjs` 都执行有时限的 Gateway 探测；前者面向人，后者只输出一个 JSON 文档。`doctor.mjs` 保持离线并校验配置和安装产物。
 
 ## 安全与边界
 
 Recall 文本是不可信上下文，不是指令。Capture 只记录能观察到的用户提示、工具轨迹及可获得的 assistant 输出，不伪造 IDE 未提供的内容。Hook 投递 fail-open，重试有界，不可重试错误进入人工处理。Phase 2 不会静默降级配置或状态，也不会自动删除迁移源或隔离内容。
+
+Hook 触发的 Outbox 按 FIFO 串行处理，并在 1500 ms flush 预算内保持 `maxItems=3`。该边界用于保护交互延迟和顺序；更高吞吐的后台 drain 需要单独设计限流策略。

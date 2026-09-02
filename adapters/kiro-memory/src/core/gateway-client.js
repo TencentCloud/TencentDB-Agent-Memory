@@ -195,6 +195,7 @@ export class GatewayClient {
   }
 
   async skillSearch(query, limit, { timeoutMs, signal } = {}) {
+    // The v3 Skill Search wire contract names this field top_k; the public adapter option remains limit.
     const data = await this.post('/v3/skill/search', {
       team_id: this.config.teamId,
       agent_id: this.config.agentId,
