@@ -1,7 +1,7 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，80/80 通过：protocol-conformance 46、responses-anthropic-compat 10、
+> 全量回归：`npm test`（vitest，81/81 通过：protocol-conformance 47、responses-anthropic-compat 10、
 > sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -96,6 +96,8 @@ Responses ↔ Chat ↔ Anthropic
 流式不变量（测试覆盖）：message_start 至多一次、每个块成对 open/stop、message_delta/message_stop 至多一次、错误帧后不再发 [DONE]/message_stop；
 **tool index 重映射**：Anthropic content block index（thinking/text 也会占位）→ chat tool_calls 连续序号 0..n-1，
 不会把上游块 index 泄漏成跳号；
+**空内容流合法**：Chat→Anthropic 流即使只有 finish_reason/[DONE] 或直接 EOF，也先发 message_start
+再收 message_delta/message_stop，不产生缺头的非法 SSE 流；
 **错误透传对称**：Anthropic/Chat/Responses 三个方向的流式错误（error 事件 / 内联 error 帧 / response.failed）都会透传给客户端，不再静默吞掉。
 
 ## 设计决策与边界
@@ -128,7 +130,7 @@ Responses ↔ Chat ↔ Anthropic
 
 | 文件 | 用例数 | 覆盖 |
 |---|---|---|
-| protocol-conformance.test.ts | 46 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义 |
+| protocol-conformance.test.ts | 47 | thinking/signature/tool_choice/stop/parallel/error/finish_reason/user/多模态/legacy functions/onDropped/developer/round-trip/Responses 错误透传/确定性 + 流式 tool index 重映射/cache 统计字段/none 语义/空内容流 message_start |
 | sse.test.ts | 8 | 解析器健壮性（LF/CRLF/紧凑/多 data/注释/跨 chunk/[DONE]） |
 | sse-fuzz.test.ts | 4 | 模糊测试：随机输入不崩、任意切分不吞帧、多块拼接一致、1MB 大帧不截断 |
 | protocol-stats.test.ts | 4 | 性能统计：分位数/环形上限/缓存命中/Prometheus 导出 |
