@@ -45,6 +45,7 @@
 ### 🐛 修复
 
 #### 数据安全 / 数据隔离
+- **Checkpoint 聚合计数清理后漂移** ([#157](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/157))：新增 `CheckpointManager.recalibrate()`，启动时根据实际 L0/L1 数据校准 `total_processed`、`l0_conversations_count`、`total_memories_extracted`、`memories_since_last_persona`；`memory-cleaner` 删除过期分片或存储记录后会立即触发同一校准，避免状态页和 persona 触发阈值长期高估。校准只改聚合计数，不改 per-session runner/pipeline cursor，避免影响增量处理边界。
 - **L2 LLM 提取失败导致 `scene_blocks/` 被清空 / 半写入** ([#88](https://github.com/Tencent/TencentDB-Agent-Memory/issues/88))：Phase 1 已对 `scene_blocks/` 做完整快照，但 LLM 抛错时 `catch` 直接 `return`，沙箱里的部分写入 / 删除不会回滚，后续 recall 因此看不到场景导航，降级为碎片召回。新增 `BackupManager.findLatestBackup` + `restoreLatestDirectory`，在 LLM 失败时自动从最新备份恢复；采用 fail-soft 设计：无备份时不动目标目录，恢复过程自身的错误也不会替换原始 LLM 错误。
 - **Cleaner 安全加固**：`computeCutoffMsByLocalDay` 拒绝无效 cutoff（未来时间 / 距今不足 24h）；SQLite 与 TCVDB 在 `expired/total > 80%` 时阻止删除；`runOnce` 增加最小保留护栏（L0:50 / L1:20）并产出 `cleaner_summary` JSON 审计日志；新增 `__tests__/cleaner/verify-cleaner-safety.ts` E2E 校验。
 - **场景文件名含空格导致 Persona Scene Navigation 引用失效**：LLM 在 L2 偶发用 `Daily Rhythm in Shanghai.md` 这类含空格的名字创建 scene block，导致 `persona.md` 中 `### Path: scene_blocks/<name>.md` 引用无法被下游 `\S+\.md` 风格解析器（health-checker 等）识别，soak 后健康检查必报 `Scene Navigation 存在但无场景引用`。修复：(1) `scene-extraction` prompt 增加"📛 文件命名规范（强制）"段，禁止空格 / 括号 / 引号等标点；(2) 新增 `core/scene/filename-normalizer.ts`，在 `SceneExtractor.extract` Phase 5b（cleanup 后、`syncSceneIndex` 前）自动归一化文件名（空格 → `-`、剥离危险标点、冲突时追加 `-2` 后缀），下游 PersonaGenerator / recall / profile-sync 自动使用干净名，无需改动。

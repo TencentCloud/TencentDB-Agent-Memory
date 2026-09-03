@@ -65,6 +65,13 @@ export interface L0ConversationRecord {
   messages: ConversationMessage[];
 }
 
+export interface L0JsonlStats {
+  /** Parseable L0 JSONL message rows. */
+  messages: number;
+  /** Distinct capture batches, keyed by recordedAt. */
+  captures: number;
+}
+
 const TAG = "[memory-tdai][l0]";
 
 // ============================
@@ -391,6 +398,61 @@ export async function readConversationRecords(
 }
 
 /**
+ * Count persisted L0 JSONL rows for checkpoint recalibration.
+ *
+ * `messages` mirrors `total_processed` fallback semantics: one parseable
+ * JSONL row is one captured message. `captures` mirrors
+ * `l0_conversations_count`: one successful capture batch writes all rows with
+ * the same `recordedAt`, so distinct `recordedAt` values approximate the
+ * historical capture count without needing a separate batch table.
+ */
+export async function countL0JsonlStats(
+  baseDir: string,
+  logger?: Logger,
+): Promise<L0JsonlStats> {
+  const conversationsDir = path.join(baseDir, "conversations");
+  const dateFilePattern = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
+
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(conversationsDir, { withFileTypes: true });
+  } catch {
+    return { messages: 0, captures: 0 };
+  }
+
+  const captureKeys = new Set<string>();
+  let messages = 0;
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !dateFilePattern.test(entry.name)) continue;
+    const filePath = path.join(conversationsDir, entry.name);
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(filePath, "utf-8");
+    } catch {
+      logger?.warn?.(`${TAG} Failed to read L0 file for stats: ${filePath}`);
+      continue;
+    }
+
+    const lines = raw.split("\n").filter((line) => line.trim());
+    for (let i = 0; i < lines.length; i++) {
+      try {
+        const parsed = JSON.parse(lines[i]) as Partial<L0MessageRecord>;
+        messages++;
+        if (typeof parsed.recordedAt === "string" && parsed.recordedAt.length > 0) {
+          captureKeys.add(parsed.recordedAt);
+        }
+      } catch {
+        logger?.warn?.(`${TAG} Skipping malformed JSONL line while counting ${filePath}:${i + 1}`);
+      }
+    }
+  }
+
+  return { messages, captures: captureKeys.size };
+}
+
+/**
  * Read L0 messages across all conversation records for a session,
  * optionally filtered by a cursor timestamp (messages after the cursor).
  *
@@ -565,5 +627,4 @@ function extractUserAssistantMessages(messages: unknown[]): ConversationMessage[
 
   return result;
 }
-
 
