@@ -135,21 +135,37 @@ After logging in as admin:
    **exactly once** — **copy and save it right away**; the panel won't show the
    full value again.
 
-> You can also create a user via the API (the panel equivalent is steps 2–3 above).
-> Note that `user/create` requires **global admin** privilege — calling it with an
-> ordinary business user's key returns `permission_denied`:
+> You can also do this via the API (equivalent to panel steps 2–3). Note it takes
+> **two calls**: `user/create` only creates the user account and does **not** add it
+> to any Team; to "create a user and add to the team", you must then call
+> `team-member/add`. Both endpoints require **admin / team-admin** privilege —
+> calling them with an ordinary business user's key returns `permission_denied`:
 
 ```bash
-# Call with the admin key; panel equivalent: enter a Team → "Members" → "Add Member" → "Create New User & Add to Team"
 ADMIN_KEY=$(cat ./.admin-key)
+
+# Step 1: create the user (account only, NOT added to any team). Note the returned data.user_id and data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# Step 2: add that user_id to an existing Team (replace TEAM_ID; role is usually member)
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<user_id from step 1>","role":"member"}' | jq
 ```
 
-The response body's `data.default_user_key` (`sk-mem-...`) is the login
+> ⚠️ Running only step 1 (`user/create`) **creates a user that belongs to no team** —
+> it can't manage anything in the panel and won't appear in the session picker. You
+> must also run step 2 `team-member/add` to match the panel's "Create New User & Add
+> to Team". `team-member/add` requires the `team_id` Team to already exist, and you
+> cannot add yourself.
+
+The `data.default_user_key` (`sk-mem-...`) returned by step 1 is the login
 key for the new user — **save it now**; the panel won't show the full
 value again after creation.
 

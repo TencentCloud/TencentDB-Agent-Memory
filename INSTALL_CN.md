@@ -116,20 +116,34 @@ Knowledge Service Swagger（可选，看接口调试用）：
 4. 创建成功后弹窗会**一次性**显示该用户的 `user_key`（`sk-mem-...`），
    **务必当场复制保存**——面板之后不会再展示完整值。
 
-> 也可以用 API 创建用户（面板等价操作即上面第 2～3 步）。注意 `user/create` 需要
-> **全局 admin** 权限，用普通业务用户的 key 调用会返回 `permission_denied`：
+> 也可以用 API 完成（等价于面板第 2～3 步）。注意这需要**两步**：`user/create` 只
+> 创建用户账号、**不会**把它加进任何 Team；要"新建用户并加入团队"，还得再调一次
+> `team-member/add`。两个接口都需要 **admin / 团队 admin** 权限，用普通业务用户的 key 调用会返回 `permission_denied`：
 
 ```bash
-# 用 admin key 调用；面板等价操作：进入某个 Team →「成员管理」→「添加成员」→「新建用户并加入团队」
 ADMIN_KEY=$(cat ./.admin-key)
+
+# 第 1 步：创建用户（仅建账号，不加入任何团队）。记下返回的 data.user_id 与 data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# 第 2 步：把上一步的 user_id 加入某个已存在的 Team（TEAM_ID 换成目标团队，role 一般填 member）
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<上一步返回的 user_id>","role":"member"}' | jq
 ```
 
-返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
+> ⚠️ 只跑第 1 步（`user/create`）**只会建出一个不属于任何团队的用户**——它无法在面板里
+> 被自己管理，也进不了会话表单。务必接着跑第 2 步 `team-member/add` 才等于面板的
+> 「新建用户并加入团队」。`team-member/add` 要求 `team_id` 对应的 Team 已存在，且不能把
+> 自己 add 进去。
+
+第 1 步返回体里的 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
 **保存好**（面板无处再看到全值，只有创建时返回一次）。
 
 之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 业务用户，
