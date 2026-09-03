@@ -19,7 +19,7 @@ import { mapTeamMemberWithProfile } from "./team-member-view.js";
 import { generateId, generateRelationId, ID_PREFIX } from "../utils/id-generator.js";
 import {
   isMongoRelationIdCollision,
-  runWithGeneratedRelationId,
+  runWithGeneratedRelationIdAsync,
   RELATION_ID_RETRY_LIMIT,
 } from "./relation-id-insert.js";
 import { generateUserKey } from "../utils/crypto.js";
@@ -680,7 +680,7 @@ export class MongoMetadataStore implements IMetadataStore {
   // ============================================================
   async addTeamMember(input: AddTeamMemberInput): Promise<TeamMemberEntity> {
     const now = nowIso();
-    await runWithGeneratedRelationId(input.id, isMongoRelationIdCollision, async (id) => {
+    await runWithGeneratedRelationIdAsync(input.id, isMongoRelationIdCollision, async (id) => {
       await this.col("meta_team_members").updateOne(
         { team_id: input.team_id, user_id: input.user_id },
         {
@@ -911,7 +911,7 @@ export class MongoMetadataStore implements IMetadataStore {
   // ============================================================
   async linkTaskAgent(taskId: string, agentId: string, roleInTask?: string): Promise<TaskAgentEntity> {
     const now = nowIso();
-    await runWithGeneratedRelationId(undefined, isMongoRelationIdCollision, async (id) => {
+    await runWithGeneratedRelationIdAsync(undefined, isMongoRelationIdCollision, async (id) => {
       await this.col("meta_task_agents").updateOne(
         { task_id: taskId, agent_id: agentId },
         {
@@ -1217,7 +1217,7 @@ export class MongoMetadataStore implements IMetadataStore {
   // ============================================================
   async grantAcl(input: GrantAclInput): Promise<AclEntity> {
     const now = nowIso();
-    await runWithGeneratedRelationId(input.id, isMongoRelationIdCollision, async (id) => {
+    await runWithGeneratedRelationIdAsync(input.id, isMongoRelationIdCollision, async (id) => {
       await this.col("meta_asset_acl").updateOne(
         { asset_id: input.asset_id, subject_type: input.subject_type, subject_id: input.subject_id, permission: input.permission },
         {
