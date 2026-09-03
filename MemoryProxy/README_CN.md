@@ -197,6 +197,15 @@ Anthropic Messages 客户端：
 | `GET/PUT/DELETE` | `/v3/admin/rate-limits` | 查询 / 修改实例 × 模型 TPM/QPM |
 | `GET`  | `/health` | 运行时健康检查（含 `storage.effective`） |
 | `GET`  | `/whoami` | API Key → keyId（纯文本，便于 curl） |
+| `GET`  | `/metrics` | Prometheus 文本（协议转换 / 会话 / 注入指标，默认公开） |
+| `GET`  | `/session-debug` | 会话聚合诊断（需 admin key，建议仅内网） |
+| `POST` | `/v3/session/refresh-cache` | 刷新会话缓存（需 admin key） |
+| `POST` | `/v3/session/force-archive-skill` | 强制归档 skill buffer（需 admin key） |
+
+> 鉴权口径：`config.admin.apiKey` 非空时，`/session-debug`、`/v3/session/*`、
+> `/v3/admin/rate-limits`、`/v3/instance/proxy-destroy` 都要求
+> `Authorization: Bearer <admin.apiKey>`；为空则公开。生产建议配置 admin key 并仅内网暴露，
+> `/metrics` 默认公开（只有聚合数字，不含会话明细）。
 
 ## 配置说明
 
