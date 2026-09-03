@@ -271,6 +271,46 @@ Proxy 会依次做：`auth`（校验 user_key）→ `sessionInit`（选 team/age
 
 关掉完整流水线（只做透传）：`PROXY_FULL_STACK=0 ./start-proxy.sh`。
 
+## 用 OrcaRouter 作为上游
+
+[OrcaRouter](https://www.orcarouter.ai) 是一个 OpenAI 兼容的 AI 网关,同时面向模型和
+Agent。和 OpenRouter 一样,它在同一个 endpoint 后面暴露跨多家模型的
+provider/model 命名空间;除此之外它还叠加了自适应路由、自动故障转移、零加价
+推理、可观测、护栏(guardrails)以及 agent 工具治理。由于 Proxy 本身转发到任意
+OpenAI-compatible 上游,接 OrcaRouter **零代码改动**——只要把
+`PROXY_UPSTREAM_URL` 指到 OrcaRouter,proxy 的 `auth` → `sessionInit` → `injection`
+→ 转发链路原样运行。把 orcarouter 作为一等上游接入,意味着本项目的用户可以直接
+用这套能力,而不必把 OrcaRouter 当成一个匿名的自定义 base URL。
+
+同一 endpoint 上还运行着面向 AI agent 的网关级零信任安全——默认拒绝
+(default-deny)地审查每一轮 prompt/response 并治理每一次工具调用,应用代码零改动。
+
+### 完整三件套(`.env`)
+
+```bash
+# .env (deploy/global-images/)
+MEMORY_LLM_BASE_URL=https://api.orcarouter.ai/v1   # memory + hub 内部 LLM
+MEMORY_LLM_API_KEY=sk-orca-...
+MEMORY_LLM_MODEL=anthropic/claude-opus-4.8
+
+PROXY_UPSTREAM_URL=https://api.orcarouter.ai/v1     # proxy 转发 agent 到这里
+PROXY_UPSTREAM_API_KEY=sk-orca-...
+PROXY_UPSTREAM_MODEL=anthropic/claude-opus-4.8
+```
+
+### 手动配置 proxy(`config.yaml`)
+
+```yaml
+upstream:
+  url: https://api.orcarouter.ai/v1
+  apiKey: sk-orca-...
+```
+
+- Base URL:`https://api.orcarouter.ai/v1`(OpenAI 兼容,`/v1/chat/completions` 由 proxy 自动拼接)。
+- API key 以 `sk-orca-` 开头,在 OrcaRouter 控制台创建。
+- 模型 ID 用 `vendor/model` 格式(如 `anthropic/claude-opus-4.8`、`openai/gpt-4.1`),或用 `orcarouter/auto` 走自适应路由。
+- memory 组和 proxy 组都可以用 OrcaRouter;可以共用同一把 key / 模型,也可以各自不同。
+
 ## 可选能力：`sessionInit.defaultTaskId`（"本次不关联任务"选项）
 
 **做什么用。** 默认情况下,session-init 表单里 Task 一步只列出该用户在面板

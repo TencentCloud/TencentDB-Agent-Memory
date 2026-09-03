@@ -331,6 +331,38 @@ Injected automatically by the `pi-plugin` extension:
 
 Unlike the header-preselect agents (Hermes / OpenClaw), Pi does **not** require `x-task-id`: `task_id` is an optional business dimension in the kernel, and the proxy registers from `team + agent` alone (broad recall when the task is absent). If the required identity env vars (`TDAI_USER_KEY`, `TDAI_TEAM_ID`, `TDAI_AGENT_ID`) are missing, the plugin warns at load and skips registration so Pi still starts.
 
+## Using Proxy with OrcaRouter as the upstream
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible AI gateway built for both models and agents. Like OpenRouter, it exposes a provider/model namespace across many models — but it also combines adaptive routing, automatic failover, zero-markup inference, observability, guardrails, and agent-tool governance behind the same endpoint. Because the proxy forwards to any OpenAI-compatible upstream, OrcaRouter works with **zero code changes** — you just point `PROXY_UPSTREAM_URL` at OrcaRouter and the proxy's `auth` → `sessionInit` → `injection` → forward pipeline runs unchanged. Adding orcarouter as a first-class upstream means this project's users can use that stack directly, without treating OrcaRouter as an anonymous custom base URL.
+
+It also runs gateway-level, zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing every tool call on a default-deny basis, with no application code changes.
+
+### Full three-in-one stack (`.env`)
+
+```bash
+# .env (deploy/global-images/)
+MEMORY_LLM_BASE_URL=https://api.orcarouter.ai/v1   # memory + hub internal LLM
+MEMORY_LLM_API_KEY=sk-orca-...
+MEMORY_LLM_MODEL=anthropic/claude-opus-4.8
+
+PROXY_UPSTREAM_URL=https://api.orcarouter.ai/v1     # proxy forwards agents here
+PROXY_UPSTREAM_API_KEY=sk-orca-...
+PROXY_UPSTREAM_MODEL=anthropic/claude-opus-4.8
+```
+
+### Manual proxy config (`config.yaml`)
+
+```yaml
+upstream:
+  url: https://api.orcarouter.ai/v1
+  apiKey: sk-orca-...
+```
+
+- Base URL: `https://api.orcarouter.ai/v1` (OpenAI-compatible, `/v1/chat/completions` is appended automatically).
+- API keys start with `sk-orca-` and are created in the OrcaRouter console.
+- Model IDs use `vendor/model` format (e.g. `anthropic/claude-opus-4.8`, `openai/gpt-4.1`), or `orcarouter/auto` for adaptive routing.
+- Both the `memory` group and the `proxy` group accept OrcaRouter; they can share the same key/model or use different ones.
+
 ## Optional: `sessionInit.defaultTaskId` (the "no task binding" option)
 
 **What it does.** By default, the Task pick in the session-init form

@@ -77,7 +77,7 @@ Skill 与 Knowledge 沿用同样的思路：
 - npm 或 pnpm
 - 一个已运行的 **MemoryCore Gateway**（默认 `:8420`），提供 Auth / Skill / Meta / Memory API
 - Redis（默认承载会话/注入/Skill 状态；启用 `storage.enabled=true` 后可切换到其他后端）
-- 一个 OpenAI-compatible 上游 LLM API（TokenHub 或其他）
+- 一个 OpenAI-compatible 上游 LLM API（TokenHub、DeepSeek、OrcaRouter 或其他）
 
 ## 快速开始
 
