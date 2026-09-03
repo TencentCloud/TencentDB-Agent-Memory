@@ -57,6 +57,7 @@ export function renderTdaiMemoryToolsBlock(
   proxyBaseUrl: string,
   sessionId?: string,
   spaceId?: string,
+  agentSource?: string,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/memory-bridge/v3`;
@@ -65,6 +66,14 @@ export function renderTdaiMemoryToolsBlock(
   const sessionHeader = sessionId ? ` -H 'x-conversation-id: ${sessionId}'` : "";
   const tenantHeader = spaceId ? ` -H 'x-tdai-service-id: ${spaceId}'` : "";
   const authHeader = `${tenantHeader}${sessionHeader}`;
+
+  const cursorShellGuidance = agentSource === "cursor" ? [
+    "## Cursor PowerShell compatibility",
+    "- Cursor on Windows uses PowerShell. Do not execute the Bash curl examples or the `curl` alias; prefer `Invoke-RestMethod` + `ConvertTo-Json -Compress`.",
+    `- PowerShell memory search 示例： Invoke-RestMethod -Method Post -Uri '${bridge}/atomic/search' -Headers @{'x-tdai-service-id'='${spaceId ?? "default"}';'x-conversation-id'='${sessionId ?? "<session-id>"}'} -ContentType 'application/json; charset=utf-8' -Body (@{query='用户偏好的编程语言';limit=5} | ConvertTo-Json -Compress)`,
+    "- HTTP 4xx 直接报告，不要盲目探测其它路径或端口。",
+    "",
+  ] : [];
 
   const lines: string[] = [
     "<tdai_memory_tools>",
@@ -75,6 +84,7 @@ export function renderTdaiMemoryToolsBlock(
     "",
     "调用方式：Bash 里执行 curl 命中 proxy 的 memory-bridge 路径。proxy 会自动注入身份鉴权（team_id/user_id/agent_id），body 只需业务字段。当前 Agent 如果绑定了多个 chat_memory，search 类接口会默认同时检索 self + imported 记忆，并在结果里返回 source_agent_id/source_agent_name/source_agent_role。",
     "",
+    ...cursorShellGuidance,
     "覆盖范围：",
     "- L3（persona 长期画像）与 L2 场景索引（`<l2_scene_index>`）已直接注入 system，无需查询；",
     "- L2 正文按需用 tdai_read_scene 读取；",
@@ -161,18 +171,18 @@ export class TdaiMemoryToolsInjector implements InjectionHook {
       | Record<string, unknown>
       | undefined;
     const spaceId = typeof session?.space_id === "string" ? session.space_id : undefined;
-    return this.renderBlocks(identity.sessionId, spaceId);
+    return this.renderBlocks(identity.sessionId, spaceId, ctx.metadata.agentSource);
   }
 
   prewarm(input: PrewarmInput): ContextBlock[] {
     if (input.assetCapabilities?.chat_memory === false) return [];
-    return this.renderBlocks(input.sessionInfo.session_id, input.sessionInfo.space_id);
+    return this.renderBlocks(input.sessionInfo.session_id, input.sessionInfo.space_id, input.agentSource);
   }
 
-  private renderBlocks(sessionId: string, spaceId?: string): ContextBlock[] {
+  private renderBlocks(sessionId: string, spaceId?: string, agentSource?: string): ContextBlock[] {
     return [{
       type: "text",
-      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId),
+      content: renderTdaiMemoryToolsBlock(this.cfg.proxyBaseUrl, sessionId, spaceId, agentSource),
       metadata: {
         source: this.id,
         sessionId,

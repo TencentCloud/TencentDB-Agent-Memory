@@ -86,6 +86,11 @@ import {
   FormStage as DshFormStage,
 } from "./dsh/form.js";
 import {
+  buildFormResponse as buildCursorFormResponse,
+  FormData as CursorFormData,
+  FormStage as CursorFormStage,
+} from "./cursor/form.js";
+import {
   buildFormResponse as buildOpencodeFormResponse,
   FormData as OCFormData,
   FormStage as OCFormStage,
@@ -202,6 +207,21 @@ export async function handleSessionInit(
       modelId: reqCtx.modelId,
     };
     result.response = buildDshFormResponse(dshFd);
+  }
+
+  if (agentSource === "cursor" && result.intercepted && result.formData) {
+    const cbFd = result.formData;
+    const cursorFd: CursorFormData = {
+      teams: cbFd.teams,
+      stage: cbFd.stage as CursorFormStage,
+      selectedTeamId: cbFd.selectedTeamId,
+      selectedAgentId: cbFd.selectedAgentId,
+      pageIndex: 0,
+      retry: cbFd.retry,
+      stream: reqCtx.stream,
+      modelId: reqCtx.modelId,
+    };
+    result.response = buildCursorFormResponse(cursorFd);
   }
 
   // opencode 客户端（sst/opencode CLI，Bun 打包二进制）在 agent-loop 里维护一个

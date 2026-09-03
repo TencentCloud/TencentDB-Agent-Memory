@@ -304,6 +304,23 @@ export function createApp(config: ProxyConfig): Hono {
     app.post("/dsh/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
   }
 
+  // ── Cursor Agent endpoints ───────────────────────────────────────────────
+  // Cursor's native Override Base URL emits OpenAI Chat Completions. Accept
+  // both base-URL conventions because different settings UIs may append /v1.
+  app.post("/cursor/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
+  app.post("/cursor/:spaceId/chat/completions", (c) => handleChatCompletions(c, config));
+  app.post("/cursor/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
+  app.post("/cursor/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));
+  app.post("/cursor/:spaceId/v1/moderations", (c) => handleAuxiliaryEndpoint(c, config));
+  if (config.costGuard.markerOptIn) {
+    app.post("/cursor/:spaceId/cost-guard/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/cursor/:spaceId/cost-guard/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+  if (config.injection?.assetReflection?.markerOptIn) {
+    app.post("/cursor/:spaceId/analyse/v1/chat/completions", (c) => handleChatCompletions(c, config));
+    app.post("/cursor/:spaceId/analyse/chat/completions", (c) => handleChatCompletions(c, config));
+  }
+
   // opencode cost-guard / analyse marker 路由 —— 与 CC/CB/Codex/dsh 完全对称。
   // opencode 客户端走标准 OpenAI Chat Completions（POST /v1/chat/completions），
   // 路径形态与 CB/dsh 同族；因此 marker 段的路由形态与 dsh 一致：

@@ -39,7 +39,6 @@ import {
 } from "./extractor.js";
 import { getLastUserMessageText } from "./cleaner.js";
 import { emitSessionInitTelemetryIfCompleted } from "../init-telemetry.js";
-import { isDshRuntimeContextSnapshot } from "../../common/user-query-extractor.js";
 import {
   CODEX_MORE_LABEL,
   DEFAULT_GATE_PREFIX,
@@ -236,38 +235,6 @@ function detectWorkbuddyMorePage(
   // solo-page 断言；对齐 claude-code/init.ts 的 safeNextPage 回绕逻辑。
   const totalPages = computeCCPagination(Math.max(0, total), 0).totalPages;
   return nextPage > totalPages - 1 ? 0 : nextPage;
-}
-
-/** 判断是否是「全新」CodeBuddy / dsh 对话（最多一条真用户输入、无 assistant/tool）。
- *
- * dsh (deepseek-harness) 首帧 body 里塞 3 条**非用户输入**的 role=user 元数据:
- *   - <system-reminder> 工作区指令
- *   - "Current runtime context." 快照
- *   - <system-reminder>\nA skill is a reusable... 的 <available_skills> 列表
- * 若原样计数会把 dsh 首帧误判为"非全新"→ 上层 safety-net 跳过 session-init。
- * 这里在计数时跳过带 dsh 元数据签名的 user 消息(str content 且以已知锚点开头)。
- * 见 MemoryProxy/docs/dsh-recon/2026-08-14-dsh-capture-analysis.md §2.3。
- */
-function isFreshCBConversation(messages: MessageArr): boolean {
-  let userCount = 0;
-  for (const m of messages) {
-    const role = (m.role as string) ?? "";
-    if (role === "assistant" || role === "tool") return false;
-    if (role !== "user") continue;
-    // dsh 元数据 user 消息不算真用户输入
-    const c = (m as { content?: unknown }).content;
-    if (typeof c === "string") {
-      if (
-        c.startsWith("<system-reminder>") ||
-        isDshRuntimeContextSnapshot(c)
-      ) {
-        continue;
-      }
-    }
-    userCount++;
-    if (userCount > 1) return false;
-  }
-  return userCount <= 1;
 }
 
 async function fetchTeamsAndAgents(
@@ -849,8 +816,9 @@ async function handleSessionInitInner(
         //
         // opencode 说明：opencode 客户端原生 `question` tool 每次只能弹一个题，
         // 无法承载"同时问 agent+task"的语义，必须拆 stage（同 codex/wb/dsh）。
-        const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-        const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+        const splitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor" || agentSource === "opencode";
+        const nextStatus = splitStage ? "pending_agent_select" : "pending_agent_task";
+        const nextStage: FormData["stage"] = splitStage ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
           status: nextStatus,
           keyId: sessionKey,
@@ -1002,7 +970,7 @@ async function handleSessionInitInner(
         // codex 分支，避免落到 legacy agent_task stage 后 form 里只问 agent
         // 却按老语义处理的语义歧义。opencode 原生 `question` tool 每次只能弹
         // 一个题，也必须走 split stage。
-        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode";
+        const useSplitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor" || agentSource === "opencode";
         const nextStatus = useSplitStage ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = useSplitStage ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
@@ -1097,9 +1065,10 @@ async function handleSessionInitInner(
     }
 
     if (teamId && teamId !== BYPASS_MARKER) {
-      // codex/WB/dsh/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
-      const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
-      const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
+      // codex/WB/dsh/Cursor/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
+      const splitStage = isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "cursor" || agentSource === "opencode";
+      const nextStatus = splitStage ? "pending_agent_select" : "pending_agent_task";
+      const nextStage: FormData["stage"] = splitStage ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,

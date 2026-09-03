@@ -76,7 +76,7 @@ export function getLastUserMessageText(messages: RawMessage[]): string {
     // dsh 的 `call_dsh_session_init_`（dsh/form.ts TOOLCALL_PREFIX）、
     // opencode 的 `call_oc_session_init_`（opencode/form.ts TOOLCALL_PREFIX）。
     const tcid = (messages[i] as any).tool_call_id as string | undefined;
-    if (role === "tool" && tcid && /call_(wb_|dsh_|oc_)?session_init_/.test(tcid)) {
+    if (role === "tool" && tcid && /call_(wb_|dsh_|cursor_|oc_)?session_init_/.test(tcid)) {
       return text;
     }
 

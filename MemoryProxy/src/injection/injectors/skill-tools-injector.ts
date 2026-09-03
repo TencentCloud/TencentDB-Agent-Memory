@@ -61,6 +61,7 @@ export function renderSkillToolsBlock(
   allowLlmWrite = true,
   sessionId?: string,
   spaceId?: string,
+  agentSource?: string,
 ): string {
   const base = proxyBaseUrl.replace(/\/$/, "");
   const bridge = `${base}/skill-bridge/v3/skill`;
@@ -160,11 +161,22 @@ export function renderSkillToolsBlock(
     "- 42202 SKILL_PATCH_NOT_UNIQUE：old_string 不唯一，传 replace_all=true。",
   ];
 
+  const cursorShellGuidance = agentSource === "cursor" ? [
+    "Shell 兼容（必须遵守）：",
+    "- Cursor on Windows uses PowerShell. Do not use the `curl` alias or copy Bash quoting; prefer `Invoke-RestMethod` + `ConvertTo-Json -Compress`.",
+    `- PowerShell skill_view 示例： Invoke-RestMethod -Method Post -Uri '${bridge}/get-by-name' -Headers @{'x-tdai-service-id'='${spaceId ?? "default"}';'x-conversation-id'='${sessionId ?? "<session-id>"}'} -ContentType 'application/json; charset=utf-8' -Body (@{skill_name='<skill-name>';include_content=$true;include_manifest=$true} | ConvertTo-Json -Compress)`,
+    "- Bash/zsh 才使用下面的 curl 模板。HTTP 4xx 直接报告，不要盲目探测其它路径或端口。",
+    "",
+  ] : [];
+
   return [
     "<skill_tools>",
-    "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
+    agentSource === "cursor"
+      ? "以下是云端 skill 操作工具。**这些不是本地工具**，需要通过当前 shell 调用 proxy 的 skill-bridge 路径来执行。"
+      : "以下是云端 skill 操作工具。**这些不是本地工具**，需要用 Bash 调用 curl 命中 proxy 的 skill-bridge 路径来执行。",
     "proxy 会自动注入身份与鉴权（user_id / team_id / agent_id 由 session 决定），body 里你只需要传业务字段。",
     "",
+    ...cursorShellGuidance,
     "调用模板：",
     `  curl -sSk -X POST <bridge>/<action> -H 'content-type: application/json'${authHeader} -d '{...业务字段...}'`,
     `  其中 <bridge> = ${bridge}`,
@@ -210,10 +222,10 @@ export class SkillToolsInjector implements InjectionHook {
 
   async prewarm(input: PrewarmInput): Promise<ContextBlock[]> {
     if (input.assetCapabilities?.skill === false) return [];
-    return this.renderBlocks(undefined, input.sessionInfo.session_id, input.sessionInfo.space_id);
+    return this.renderBlocks(undefined, input.sessionInfo.session_id, input.sessionInfo.space_id, input.agentSource);
   }
 
-  private renderBlocks(ctx?: AgentContext, prewarmSessionId?: string, prewarmSpaceId?: string): ContextBlock[] {
+  private renderBlocks(ctx?: AgentContext, prewarmSessionId?: string, prewarmSpaceId?: string, prewarmAgentSource?: string): ContextBlock[] {
     const allowLlmWrite = this.config.allowLlmWrite ?? false;
 
     let sessionId = prewarmSessionId;
@@ -231,7 +243,8 @@ export class SkillToolsInjector implements InjectionHook {
       }
     }
 
-    const content = renderSkillToolsBlock(this.config.proxyBaseUrl, allowLlmWrite, sessionId, spaceId);
+    const agentSource = ctx?.metadata.agentSource ?? prewarmAgentSource;
+    const content = renderSkillToolsBlock(this.config.proxyBaseUrl, allowLlmWrite, sessionId, spaceId, agentSource);
     return [{
       type: "text",
       content,
