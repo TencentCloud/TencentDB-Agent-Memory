@@ -44,3 +44,13 @@ test-offload-sessions.sh
 
 # log files
 *.log
+
+# Local verification/runtime artifacts
+.deerflow-runtime/
+.real-tdai-data/
+.real-tdai-pipeline-data*/
+tmp-npm-cache/
+
+# Scratch dir: probe reports, API dumps, throwaway experiments.
+# Anything worth keeping belongs in scripts/ (tooling) or docs/ (evidence).
+tmp/

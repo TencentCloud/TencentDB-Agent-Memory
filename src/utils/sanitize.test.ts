@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { looksLikePromptInjection, shouldCaptureL0, shouldExtractL1 } from "./sanitize.js";
+import {
+  looksLikePromptInjection,
+  sanitizeText,
+  shouldCaptureL0,
+  shouldExtractL1,
+} from "./sanitize.js";
+
+describe("memory injection sanitization", () => {
+  it("removes full memories and reminder blocks while keeping user text", () => {
+    const input = [
+      "<relevant-memories>",
+      "full memory",
+      "</relevant-memories>",
+      "<memory-reminders>",
+      "short reminder",
+      "</memory-reminders>",
+      "Remember my actual request.",
+    ].join("\n");
+
+    expect(sanitizeText(input)).toBe("Remember my actual request.");
+  });
+});
 
 describe("prompt injection filtering", () => {
   it("detects common prompt-injection payloads", () => {
