@@ -13,6 +13,7 @@ import { serve } from "@hono/node-server";
 import { buildConfig, parseArgv } from "./config.js";
 import { createApp } from "./server.js";
 import { pruneExpiredSessions } from "./session/auto-session.js";
+import { getSessionStore } from "./session/store.js";
 import {
   setExtensionDebug,
   shutdownGuard,
@@ -127,6 +128,19 @@ if (config.sessionInit?.autoConversationId?.enabled) {
     () => pruneExpiredSessions(config.sessionInit?.autoConversationId?.ttlMinutes ?? 30),
     5 * 60_000,
   ).unref();
+}
+
+// 定期清理 SessionStore 里过期的 pending 状态（内存 + L2a 行），
+// 与 auto-session prune 同节奏，避免低流量时陈旧 pending 长期滞留；
+// 清理失败不影响主流程。
+if (config.sessionInit?.enabled) {
+  setInterval(() => {
+    try {
+      getSessionStore().cleanup();
+    } catch {
+      /* 清理失败不影响主流程 */
+    }
+  }, 5 * 60_000).unref();
 }
 
 log.info("server.starting", {
