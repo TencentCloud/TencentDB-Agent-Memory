@@ -8,7 +8,12 @@ const DEFAULT_UPSTREAM = "https://llm-upstream.example.com/v2/chat/completions";
 
 export const DEFAULT_CONFIG: ProxyConfig = {
   server: { host: "0.0.0.0", port: 8096, forwardTimeoutMs: 600_000 },
-  upstream: { url: DEFAULT_UPSTREAM, apiKey: "", agents: {} },
+  upstream: {
+    url: DEFAULT_UPSTREAM,
+    apiKey: "",
+    agents: {},
+    autoDetect: { enabled: false, timeoutMs: 3000 },
+  },
   log: {
     file: "",
     verbose: false,
@@ -243,18 +248,69 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
  * a glance).
  */
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: Record<
+    string,
+    {
+      url?: string;
+      apiKey?: string;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    } | null | undefined
+  > | undefined,
+): Record<
+  string,
+  {
+    url: string;
+    apiKey?: string;
+    chatCompletions?: boolean;
+    anthropicToChat?: boolean;
+    chatToAnthropic?: boolean;
+    responsesToAnthropic?: boolean;
+    anthropicToResponses?: boolean;
+  }
+> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<
+    string,
+    {
+      url: string;
+      apiKey?: string;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    }
+  > = {};
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
     if (typeof url !== "string" || url.length === 0) continue;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
+    const parsed: {
+      url: string;
+      apiKey?: string;
+      chatCompletions?: boolean;
+      anthropicToChat?: boolean;
+      chatToAnthropic?: boolean;
+      responsesToAnthropic?: boolean;
+      anthropicToResponses?: boolean;
+    } = typeof apiKey === "string" && apiKey.length > 0
       ? { url, apiKey }
       : { url };
+    for (const flag of [
+      "chatCompletions",
+      "anthropicToChat",
+      "chatToAnthropic",
+      "responsesToAnthropic",
+      "anthropicToResponses",
+    ] as const) {
+      if ((entry as Record<string, unknown>)[flag] === true) parsed[flag] = true;
+    }
+    out[name] = parsed;
   }
   return out;
 }
@@ -282,6 +338,14 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         DEFAULT_CONFIG.upstream.url,
       apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
       agents: parseUpstreamAgents(yaml.upstream?.agents),
+      autoDetect: {
+        enabled: typeof yaml.upstream?.autoDetect?.enabled === "boolean"
+          ? yaml.upstream.autoDetect.enabled
+          : DEFAULT_CONFIG.upstream.autoDetect!.enabled,
+        timeoutMs: typeof yaml.upstream?.autoDetect?.timeoutMs === "number"
+          ? yaml.upstream.autoDetect.timeoutMs
+          : DEFAULT_CONFIG.upstream.autoDetect!.timeoutMs,
+      },
     },
     log: {
       file: overrides.logFile ?? yaml.log?.file ?? DEFAULT_CONFIG.log.file,

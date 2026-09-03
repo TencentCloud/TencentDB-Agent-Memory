@@ -32,6 +32,7 @@ import { initSystemUsers } from "./systemUser.js";
 import { checkConnectivity } from "./connectivity.js";
 import { initProxyStorage, getEffectiveBackend } from "./storage/factory.js";
 import { flushPendingWrites, pendingWriteCount } from "./tdai/pending-writes.js";
+import { applyAutoDetect } from "./upstream/capability-probe.js";
 
 const overrides = parseArgv(process.argv);
 const config = buildConfig(overrides);
@@ -60,6 +61,17 @@ initAuth(config.auth);
 
 // ── Register internal service accounts (bypass whole pipeline on match) ──────
 initSystemUsers(config.systemUsers);
+
+// ── 上游协议能力自动探测（upstream.autoDetect.enabled=true 时） ───────────────
+// 探测结果写回 per-agent 转换标志；显式配置的开关始终优先（见 capability-probe.ts）。
+if (config.upstream.autoDetect?.enabled) {
+  try {
+    await applyAutoDetect(config);
+    log.info("upstream.probe.done", { enabled: true });
+  } catch (err: unknown) {
+    log.warn("upstream.probe.failed", { error: String(err) });
+  }
+}
 
 // ── Initialize ProxyStorage (dynamic import cost-guard for kernel-sts COS) ──
 // 必须 await —— dynamic import 是 async 的；不 await 直接进 createApp 会

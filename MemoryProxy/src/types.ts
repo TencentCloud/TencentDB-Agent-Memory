@@ -411,6 +411,19 @@ export interface AgentUpstreamEntry {
    * that fallback only applies when this agent has no entry at all.
    */
   apiKey?: string;
+  /**
+   * 上游兼容开关（协议接线用，显式配置优先于 autoDetect 探测结果）：
+   *  - chatCompletions       : Responses 客户端（codex/workbuddy）→ Chat 上游
+   *  - anthropicToChat       : Anthropic 客户端（claude-code）→ Chat 上游
+   *  - chatToAnthropic       : Chat 客户端（workbuddy）→ Anthropic 上游
+   *  - responsesToAnthropic  : Responses 客户端（codex）→ Anthropic 上游
+   *  - anthropicToResponses  : Anthropic 客户端（claude-code）→ Responses 上游
+   */
+  chatCompletions?: boolean;
+  anthropicToChat?: boolean;
+  chatToAnthropic?: boolean;
+  responsesToAnthropic?: boolean;
+  anthropicToResponses?: boolean;
 }
 
 /** Top-level proxy configuration (merged from config file + CLI args). */
@@ -429,6 +442,11 @@ export interface ProxyConfig {
      * Empty / missing entry → agent falls back to `url` + `apiKey`.
      */
     agents: Record<string, AgentUpstreamEntry>;
+    /** 启动时自动探测上游协议能力并生成转换标志（默认关，显式开关优先）。 */
+    autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+    };
   };
   log: {
     file: string;    // JSONL path; empty string disables file logging
@@ -729,8 +747,23 @@ export interface RawYamlConfig {
   upstream?: {
     url?: string;
     apiKey?: string;
+    autoDetect?: {
+      enabled?: boolean;
+      timeoutMs?: number;
+    };
     /** Per-agent override map. See `AgentUpstreamEntry`. */
-    agents?: Record<string, { url?: string; apiKey?: string } | null | undefined>;
+    agents?: Record<
+      string,
+      {
+        url?: string;
+        apiKey?: string;
+        chatCompletions?: boolean;
+        anthropicToChat?: boolean;
+        chatToAnthropic?: boolean;
+        responsesToAnthropic?: boolean;
+        anthropicToResponses?: boolean;
+      } | null | undefined
+    >;
   };
   log?: {
     file?: string;
