@@ -1,0 +1,13 @@
+# LibreChat custom config (librechat.yaml) — OpenAI-compatible custom endpoint
+# Docs: https://www.librechat.ai/docs/quick_start/custom_endpoints
+version: 1.3.13
+cache: true
+endpoints:
+  custom:
+    - name: 'TencentDB Agent Memory'
+      apiKey: '${TDB_MEM_USER_KEY}'   # resolved from .env — never commit the key
+      baseURL: 'http://127.0.0.1:8096/codebuddy/default'
+      models:
+        default: ['claude-sonnet-4-20250514']   # must equal PROXY_UPSTREAM_MODEL
+        fetch: false
+      titleConvo: false
