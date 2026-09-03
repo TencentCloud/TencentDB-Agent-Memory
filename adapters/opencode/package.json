@@ -1,0 +1,47 @@
+{
+  "name": "tencentdb-agent-memory-opencode-adapter",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for TencentDB Agent Memory v3 recall and capture",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tencentdb",
+    "agent-memory",
+    "long-term-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "adapters/opencode"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "README_CN.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.16"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.16",
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}
