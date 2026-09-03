@@ -45,6 +45,12 @@ import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
+import {
+  chatToAnthropic as chatToAnthropicReq,
+  anthropicJsonToChatJson,
+  createAnthropicSseToChatSse,
+} from "./common/chat-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
@@ -257,7 +263,7 @@ function buildUpstreamBody(
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
@@ -275,7 +281,15 @@ function buildUpstreamHeaders(
   // empty/undefined → passthrough (client's own Authorization survives).
   // cost-guard's `target.authHeaders` still gets to override everything.
   if (effectiveApiKey && !target.authHeaders) {
-    headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    const agent = c.req.path.split("/")[1] ?? "codebuddy";
+    if (config.upstream.agents[agent]?.chatToAnthropic === true) {
+      // TRACK 05A：转成 Anthropic 后上游要 x-api-key + anthropic-version。
+      headers["x-api-key"] = effectiveApiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      delete headers["authorization"];
+    } else {
+      headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    }
   }
 
   if (target.authHeaders) {
@@ -771,7 +785,7 @@ export async function handleChatCompletions(
         // reset 前旧 agent 累积的对话片段可能还没达到阈值，不 flush 会永久丢失。
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1057,10 +1071,10 @@ export async function handleChatCompletions(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
@@ -1285,7 +1299,10 @@ export async function handleChatCompletions(
     : config.upstream.apiKey;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
-  const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  if (config.upstream.agents[agentFromPath ?? ""]?.chatToAnthropic === true) {
+    forwardEndpoint = "/v1/messages";
+  }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
   // turn counting. ClickHouse keeps the raw session_key (it has its own
@@ -1420,7 +1437,12 @@ export async function handleChatCompletions(
     lf,
   });
 
-  const upstreamBody = buildUpstreamBody(body, target);
+  let upstreamBody = buildUpstreamBody(body, target);
+  // TRACK 05A：WorkBuddy/Chat 客户端指向 Anthropic 风格上游时，Chat 请求 → Anthropic 后再转发。
+  if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+    upstreamBody = chatToAnthropicReq(upstreamBody);
+    pipe.info("PROTOCOL", "workbuddy chat→anthropic (chatToAnthropic)");
+  }
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
   // default upstream (never the alternate route), so its apiKey must be applied
@@ -1500,6 +1522,7 @@ export async function handleChatCompletions(
   const effectiveModel = retried && target.retryTarget
     ? target.retryTarget.model
     : target.model;
+  const chatToAnthropicOn = config.upstream.agents[agentSource]?.chatToAnthropic === true;
 
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
@@ -1523,7 +1546,7 @@ export async function handleChatCompletions(
     // Log upstream error body for 4xx responses
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
-      const errText = await new Response(errBodyStream).text();
+      let errText = await new Response(errBodyStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -1551,6 +1574,11 @@ export async function handleChatCompletions(
         observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
       });
       pipe.streamDone(null);
+      if (chatToAnthropicOn) {
+        // 上游是 Anthropic 风格错误体，客户端（Chat）需要 OpenAI 风格错误 schema。
+        errText = toOpenAiErrorBody(errText);
+        return new Response(errText, { status: upstreamResp.status, headers: respHeaders });
+      }
       return new Response(clientPassStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
@@ -1588,17 +1616,33 @@ export async function handleChatCompletions(
       preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    const convertedStream = chatToAnthropicOn
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToChatSse({ model: effectiveModel }))
+      : upstreamResp.body;
+    const tappedStream = convertedStream.pipeThrough(passthrough);
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
 
   // ── Non-streaming response ───────────────────────────────────────────────
-  const respText = await upstreamResp.text();
+  let respText = await upstreamResp.text();
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
+  if (chatToAnthropicOn) {
+    if (upstreamResp.status >= 400) {
+      // 错误体不套成功转换（成功转换器会伪造空 message），只做 schema 映射。
+      respText = toOpenAiErrorBody(respText);
+    } else {
+      try {
+        const respJson = JSON.parse(respText) as Record<string, unknown>;
+        respText = JSON.stringify(anthropicJsonToChatJson(respJson));
+      } catch {
+        // 非 JSON / 空响应体：原样透传。
+      }
+    }
+  }
   try {
     const respJson = JSON.parse(respText) as Record<string, unknown>;
     if (respJson.usage && typeof respJson.usage === "object") {

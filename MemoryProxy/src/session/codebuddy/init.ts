@@ -103,6 +103,8 @@ export interface SessionInitResult {
    * 常量供跨 handler 判定即可。
    */
   bypassReason?: "default-gate";
+  /** mem:session-reset 触发时标记本次 init 是 reset 流程（跨 handler 判定用）。 */
+  resetFlow?: boolean;
   /**
    * Anthropic-only: pre-built `<session_context>` string the caller must
    * append to `body.system` (the ClaudeCode init module populates this;

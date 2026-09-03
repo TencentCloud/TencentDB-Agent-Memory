@@ -52,6 +52,17 @@ import { recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
+import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+} from "./common/responses-chat-compat.js";
+import {
+  responsesToAnthropic,
+  createAnthropicSseToResponsesSse,
+  anthropicJsonToResponsesJson,
+} from "./common/responses-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
@@ -489,10 +500,29 @@ async function forwardToUpstream(
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
   // 未配置时回退到全局 config.upstream.{url,apiKey}。
   const perAgent = (config.upstream as unknown as {
-    agents?: { workbuddy?: { url?: string; apiKey?: string } };
+    agents?: {
+      workbuddy?: {
+        url?: string;
+        apiKey?: string;
+        chatCompletions?: boolean;
+        responsesToAnthropic?: boolean;
+      };
+    };
   }).agents?.workbuddy;
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
-  const upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
+  const wbToAnthropic = perAgent?.responsesToAnthropic === true;
+  const wbToChat = perAgent?.chatCompletions === true;
+  let outboundBody: Record<string, unknown> = body;
+  let upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
+  if (wbToAnthropic) {
+    outboundBody = responsesToAnthropic(body, { model: modelId });
+    upstreamPath = "/v1/messages";
+    pipe.info("PROTOCOL", "workbuddy responses→anthropic (responsesToAnthropic)");
+  } else if (wbToChat) {
+    outboundBody = responsesBodyToChat(body, { model: modelId });
+    upstreamPath = "/chat/completions";
+    pipe.info("PROTOCOL", "workbuddy responses→chat (chatCompletions)");
+  }
   const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
 
   const headers = buildUpstreamHeaders(c, config);
@@ -501,7 +531,19 @@ async function forwardToUpstream(
     headers["authorization"] = `Bearer ${perAgent.apiKey}`;
     delete headers["x-api-key"];
   }
-  const bodyStr = JSON.stringify(body);
+  if (wbToAnthropic) {
+    // Responses → Anthropic：上游要 x-api-key + anthropic-version，不要 Bearer。
+    const clientBearer = (headers["authorization"] ?? "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    delete headers["authorization"];
+    delete headers["x-api-key"];
+    if (clientBearer) {
+      headers["x-api-key"] = clientBearer;
+      headers["anthropic-version"] = "2023-06-01";
+    }
+  }
+  const bodyStr = JSON.stringify(outboundBody);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
   pipe.forwardStart(upstreamUrl);
@@ -588,6 +630,28 @@ async function forwardToUpstream(
   }
 
   // Non-SSE or no langfuse ctx → passthrough
+  if (!isSSE && upstreamResp.body && (wbToAnthropic || wbToChat)) {
+    // stream:false 的 JSON 响应：成功体转回 Responses，错误体只做 schema 映射。
+    const raw = await upstreamResp.text();
+    try {
+      if (upstreamResp.status >= 400) {
+        return new Response(toOpenAiErrorBody(raw), {
+          status: upstreamResp.status,
+          headers: respHeaders,
+        });
+      }
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const converted = wbToAnthropic
+        ? anthropicJsonToResponsesJson(parsed, { model: modelId })
+        : chatJsonToResponses(parsed, { model: modelId });
+      return new Response(JSON.stringify(converted), {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      });
+    } catch {
+      return new Response(raw, { status: upstreamResp.status, headers: respHeaders });
+    }
+  }
   if (!isSSE || !upstreamResp.body || !lf) {
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,
@@ -596,7 +660,13 @@ async function forwardToUpstream(
   }
 
   // SSE + langfuse: tee & tap
-  const [passStream, tapStream] = upstreamResp.body.tee();
+  const upstreamStream =
+    wbToAnthropic
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToResponsesSse({ model: modelId }))
+      : wbToChat
+        ? upstreamResp.body.pipeThrough(createChatSseToResponses({ model: modelId }))
+        : upstreamResp.body;
+  const [passStream, tapStream] = upstreamStream.tee();
   void consumeWorkbuddyStream(tapStream, {
     startTime,
     modelId,
@@ -931,7 +1001,7 @@ export async function handleWorkbuddyEndpoint(
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
         const oldState = store.get(compositeKey);
         if (oldState?.status === "initialized" && oldState.sessionInfo && config.coreSkill?.endpoint) {
-          const si = oldState.sessionInfo as Record<string, string>;
+          const si = oldState.sessionInfo as unknown as Record<string, string>;
           if (si.space_id && si.user_id && si.team_id && si.agent_id) {
             import("./skill/core-client.js").then(({ getCoreSkillClient }) => {
               const client = getCoreSkillClient(config.coreSkill!);
@@ -1188,10 +1258,10 @@ export async function handleWorkbuddyEndpoint(
       if (initResult.resetFlow && initResult.justRegistered && !initResult.bypassed) {
         _resetFlowResult = {
           agentName: initResult.agentDetail?.name ?? "未知",
-          agentIdShort: (initResult.sessionInfo as Record<string, unknown>)?.agent_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).agent_id).slice(-8) : "",
-          teamId: (initResult.sessionInfo as Record<string, unknown>)?.team_id
-            ? String((initResult.sessionInfo as Record<string, unknown>).team_id).slice(-8) : "",
+          agentIdShort: (initResult.sessionInfo as unknown as Record<string, unknown>)?.agent_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).agent_id).slice(-8) : "",
+          teamId: (initResult.sessionInfo as unknown as Record<string, unknown>)?.team_id
+            ? String((initResult.sessionInfo as unknown as Record<string, unknown>).team_id).slice(-8) : "",
           taskName: initResult.taskDetail?.name,
         };
       }
