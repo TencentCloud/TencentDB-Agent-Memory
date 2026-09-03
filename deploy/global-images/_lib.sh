@@ -368,17 +368,20 @@ interactive_llm_setup() {
     PROXY_UPSTREAM_URL="$MEMORY_LLM_BASE_URL"
     PROXY_UPSTREAM_API_KEY="$MEMORY_LLM_API_KEY"
     PROXY_UPSTREAM_MODEL="$MEMORY_LLM_MODEL"
+    PROXY_UPSTREAM_PROTOCOL="$MEMORY_LLM_PROTOCOL"
     ok "proxy 组复用 memory 组配置，跳过重复检查"
   else
     while true; do
       base=$(prompt_with_default "proxy 组 UPSTREAM_URL" "${PROXY_UPSTREAM_URL:-}")
       key=$(prompt_with_default "proxy 组 UPSTREAM_API_KEY" "${PROXY_UPSTREAM_API_KEY:-}")
       model=$(prompt_with_default "proxy 组 UPSTREAM_MODEL" "${PROXY_UPSTREAM_MODEL:-}")
+      proto=$(prompt_protocol "${PROXY_UPSTREAM_PROTOCOL:-openai}")
 
-      if check_llm_group "proxy 组" "$base" "$key" "$model" openai; then
+      if check_llm_group "proxy 组" "$base" "$key" "$model" "$proto"; then
         PROXY_UPSTREAM_URL="$base"
         PROXY_UPSTREAM_API_KEY="$key"
         PROXY_UPSTREAM_MODEL="$model"
+        PROXY_UPSTREAM_PROTOCOL="$proto"
         break
       fi
       warn "proxy 组 LLM 通路检查未通过。"
@@ -395,6 +398,7 @@ interactive_llm_setup() {
   set_env_value PROXY_UPSTREAM_URL "$PROXY_UPSTREAM_URL" "$ENV_FILE"
   set_env_value PROXY_UPSTREAM_API_KEY "$PROXY_UPSTREAM_API_KEY" "$ENV_FILE"
   set_env_value PROXY_UPSTREAM_MODEL "$PROXY_UPSTREAM_MODEL" "$ENV_FILE"
+  set_env_value PROXY_UPSTREAM_PROTOCOL "$PROXY_UPSTREAM_PROTOCOL" "$ENV_FILE"
   ok "LLM 配置已保存到 $ENV_FILE"
 }
 
