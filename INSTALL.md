@@ -196,6 +196,7 @@ Every memory entry attaches to a `team / agent / task` triple:
 
      ```bash
      # Call with the business user's OWN user_key created in Step 1.5
+     # "name" is the team name — change it to whatever you want (the example uses repro-own-team)
      curl -sS -X POST http://localhost:8420/v3/meta/team/create \
        -H "x-tdai-user-key: <that business user's user_key>" \
        -H "x-tdai-service-id: default" \
@@ -203,10 +204,11 @@ Every memory entry attaches to a `team / agent / task` triple:
        -d '{"name":"repro-own-team","owner_user_id":"<that business user's user_id>"}' | jq
      ```
 
-     > `team/create` requires `owner_user_id` in the body to **equal the user_id of the
-     > calling key** (i.e. you can only create Teams you own), otherwise it returns
-     > `permission_denied`. Once created you are the owner and admin, and can manage
-     > assets / run sessions inside this Team right away.
+     > `name` is the team's display name and is up to you (avoid duplicates under the
+     > same user, or it returns `409`). `team/create` requires `owner_user_id` in the
+     > body to **equal the user_id of the calling key** (i.e. you can only create Teams
+     > you own), otherwise it returns `permission_denied`. Once created you are the
+     > owner and admin, and can manage assets / run sessions inside this Team right away.
 2. **Agent**: enter a Team → left sidebar **"Agents"** → New
    - Fill a clear `description` + `system prompt` (the agent's role)
    - e.g. `bug-fix engineer`, `frontend reviewer`, `SQL tuner`

@@ -167,6 +167,7 @@ Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
      ```bash
      # 用第 1.5 步创建的那个业务用户自己的 user_key 调用
+     # 其中 name 就是团队名，改成你想要的即可（示例用的是 repro-own-team）
      curl -sS -X POST http://localhost:8420/v3/meta/team/create \
        -H "x-tdai-user-key: <该业务用户的 user_key>" \
        -H "x-tdai-service-id: default" \
@@ -174,6 +175,7 @@ Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
        -d '{"name":"repro-own-team","owner_user_id":"<该业务用户的 user_id>"}' | jq
      ```
 
+     > `name` 是团队显示名，可自定义（同一用户名下不要重名，否则返回 `409`）。
      > `team/create` 要求 body 里的 `owner_user_id` **必须等于调用 key 对应的 user_id**
      > （即"只能建自己 own 的 Team"），否则返回 `permission_denied`。建成后你就是 owner
      > 兼 admin，可直接在这个 Team 内管资产、跑会话。
