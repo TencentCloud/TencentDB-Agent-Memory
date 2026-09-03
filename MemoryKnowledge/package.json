@@ -35,7 +35,7 @@
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.219.0",
     "ai": "^6.0.164",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "crc-32": "^1.2.2",
     "dayjs": "^1.11.20",
     "dotenv": "^16.4.0",
