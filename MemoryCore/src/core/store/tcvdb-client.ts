@@ -125,11 +125,16 @@ export class TcvdbClient {
    * Send a POST request to VectorDB API.
    * Handles auth, timeout, retries (5xx/timeout), and error unwrapping.
    */
-  async request<T = ApiResponse>(path: string, body: Record<string, unknown>): Promise<T> {
+  async request<T = ApiResponse>(
+    path: string,
+    body: Record<string, unknown>,
+    options: { maxRetries?: number } = {},
+  ): Promise<T> {
     let lastError: Error | undefined;
     const t0 = performance.now();
+    const maxRetries = options.maxRetries ?? MAX_RETRIES;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const tAttempt = performance.now();
       try {
         this.logger?.debug?.(`${TAG} → ${path} attempt=${attempt} body=${JSON.stringify(body).slice(0, 500)}`);
@@ -165,16 +170,16 @@ export class TcvdbClient {
         const attemptMs = Math.round(performance.now() - tAttempt);
         if (err instanceof TcvdbApiError && err.apiCode !== 0) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
-        if (attempt < MAX_RETRIES) {
+        if (attempt < maxRetries) {
           const delay = 500 * (attempt + 1);
-          this.logger?.debug?.(`${TAG} ${path} retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms (lastAttemptMs=${attemptMs}, error=${lastError.message})`);
+          this.logger?.debug?.(`${TAG} ${path} retry ${attempt + 1}/${maxRetries} in ${delay}ms (lastAttemptMs=${attemptMs}, error=${lastError.message})`);
           await new Promise((r) => setTimeout(r, delay));
         }
       }
     }
 
     const totalMs = Math.round(performance.now() - t0);
-    this.logger?.debug?.(`${TAG} ✗ ${path} totalMs=${totalMs} attempts=${MAX_RETRIES + 1} error=${lastError?.message}`);
+    this.logger?.debug?.(`${TAG} ✗ ${path} totalMs=${totalMs} attempts=${maxRetries + 1} error=${lastError?.message}`);
     throw lastError ?? new Error(`${TAG} ${path} failed after retries`);
   }
 
@@ -249,6 +254,27 @@ export class TcvdbClient {
       buildIndex: true,
       documents,
     });
+  }
+
+  async update(
+    collection: string,
+    query: Record<string, unknown>,
+    update: Record<string, unknown>,
+  ): Promise<number> {
+    // A conditional update is not safely retryable: the first attempt may have
+    // committed even when its response is lost. A blind retry would then return
+    // affectedCount=0 and turn a successful CAS into a false conflict.
+    const resp = await this.request<{ affectedCount: number }>(
+      "/document/update",
+      {
+        database: this.database,
+        collection,
+        query,
+        update,
+      },
+      { maxRetries: 0 },
+    );
+    return resp.affectedCount ?? 0;
   }
 
   async search(collection: string, searchParams: Record<string, unknown>): Promise<SearchResponse> {

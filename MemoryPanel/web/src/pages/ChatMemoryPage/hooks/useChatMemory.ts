@@ -426,12 +426,24 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
   // L1 = content 覆盖；L2 = 整份 scenario 正文覆盖（BFF 会剥 META 后写、内核重建 META）；
   // L3 = 整份 core persona 覆盖。失败时抛出，交由调用方（编辑弹窗）保留输入并提示。
   const handleSaveLayerItem = useCallback(
-    async (targetLayer: 'L1' | 'L2' | 'L3', itemId: string, content: string) => {
+    async (
+      targetLayer: 'L1' | 'L2' | 'L3',
+      itemId: string,
+      content: string,
+      expectedVersion?: number,
+    ): Promise<number | undefined> => {
       if (!selected?.id) return;
-      await chatMemoryApi.updateLayer(selected.id, targetLayer, {
+      const result = await chatMemoryApi.updateLayer(selected.id, targetLayer, {
         id: itemId,
         content,
+        ...(targetLayer === 'L1' && expectedVersion !== undefined
+          ? { expectedVersion }
+          : {}),
       });
+      const returnedVersion =
+        typeof result.version === 'string' && /^v\d+$/.test(result.version)
+          ? Number(result.version.slice(1))
+          : undefined;
       setBlocks((prev) =>
         prev.map((b) => {
           if (b.id !== selected.id) return b;
@@ -440,13 +452,20 @@ export function useChatMemory(props: { activeTeamId?: string | null } = {}) {
             layers: {
               ...b.layers,
               [targetLayer]: b.layers[targetLayer].map((item) =>
-                item.id === itemId ? { ...item, body: content } : item,
+                item.id === itemId
+                  ? {
+                      ...item,
+                      body: content,
+                      ...(returnedVersion !== undefined ? { version: returnedVersion } : {}),
+                    }
+                  : item,
               ),
             },
           };
         }),
       );
       tea.notify.success(t('memory.notify.editSuccess'));
+      return returnedVersion;
     },
     [selected?.id, t],
   );

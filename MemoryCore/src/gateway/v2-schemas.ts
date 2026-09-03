@@ -27,7 +27,6 @@ export {
   conversationQueryDataSchema,
   conversationDeleteDataSchema,
   atomicDetailSchema,
-  atomicUpdateRequestSchema,
   atomicUpdateDataSchema,
   atomicDeleteDataSchema,
   atomicQueryRequestSchema,
@@ -58,7 +57,6 @@ export type {
   ConversationQueryRequest,
   ConversationQueryData,
   ConversationDeleteData,
-  AtomicUpdateRequest,
   AtomicUpdateData,
   AtomicDeleteData,
   AtomicQueryRequest,
@@ -97,6 +95,7 @@ export interface ConversationItem extends GeneratedConversationItem {
 export type ConversationSearchHit = ConversationItem & { score: number };
 import {
   conversationItemSchema as _conversationItemSchema,
+  idFieldsSchema as _idFieldsSchema,
   scenarioReadRequestSchema as _scenarioReadRequestSchema,
   scenarioWriteRequestSchema as _scenarioWriteRequestSchema,
   scenarioRmRequestSchema as _scenarioRmRequestSchema,
@@ -143,11 +142,23 @@ export type ScenarioCountRequest = z.infer<typeof scenarioCountRequestSchema>;
 export const coreCountRequestSchema = z.object({});
 export type CoreCountRequest = z.infer<typeof coreCountRequestSchema>;
 
+/**
+ * Optional compare-and-swap guard for human-authored atomic updates.
+ * Omitting expected_version preserves the existing last-write-wins contract.
+ */
+export const atomicUpdateRequestSchema = _idFieldsSchema.and(z.object({
+  id: z.string(),
+  content: z.string().max(8192),
+  background: z.string().optional(),
+  expected_version: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - 1).optional(),
+}));
+export type AtomicUpdateRequest = z.infer<typeof atomicUpdateRequestSchema>;
+
 // ============================
 // Override: atomic response version exposure
 // ============================
 
-export interface AtomicDetail extends GeneratedAtomicDetail {
+export interface AtomicDetail extends Omit<GeneratedAtomicDetail, "version"> {
   /** Monotonic L1 memory version, starts from 0 and increments on update/merge. */
   version: number;
   team_id?: string;

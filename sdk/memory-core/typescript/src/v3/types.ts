@@ -104,6 +104,8 @@ export interface V3AtomicUpdateRequest {
   id: string;
   content: string;
   background?: string;
+  /** Reject the update when the stored version no longer matches. */
+  expected_version?: number;
   session_id?: string;
 }
 export type V3AtomicUpdateData = AtomicUpdateData;

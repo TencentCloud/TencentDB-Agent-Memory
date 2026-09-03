@@ -107,6 +107,8 @@ export interface AtomicDetail {
   type: string;
   content: string;
   background?: string;
+  /** Monotonic L1 version used for compare-and-swap updates. */
+  version?: number;
   created_at: string;
   updated_at: string;
 }
@@ -115,9 +117,13 @@ export interface AtomicUpdateRequest extends IdFields {
   id: string;
   content: string;
   background?: string;
+  /** Reject the update with HTTP 409 when the stored version no longer matches. */
+  expected_version?: number;
 }
 export interface AtomicUpdateData {
   id: string;
+  /** New monotonic version after a successful update (serialized by the API). */
+  version?: string;
   updated_at: string;
 }
 

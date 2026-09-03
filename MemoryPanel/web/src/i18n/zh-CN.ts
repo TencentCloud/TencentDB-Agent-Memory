@@ -641,6 +641,7 @@ export const zhCN = {
   'memory.notify.l2Failed': '加载 L2 原文失败',
   'memory.notify.editSuccess': '已保存',
   'memory.notify.editFailed': '保存失败',
+  'memory.notify.versionConflict': '内容已被其他编辑更新。草稿已保留，请刷新后合并再保存。',
   'memory.notify.copied': '已复制',
   'memory.notify.copyFailed': '复制失败',
   'memory.notify.searchFailed': '搜索失败',

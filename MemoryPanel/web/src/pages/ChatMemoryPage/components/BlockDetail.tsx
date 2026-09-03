@@ -8,6 +8,7 @@ import { getLayerCount, stripAtMention, extractRole, formatDisplayTime } from '.
 import { stripScenarioMeta, copyToClipboard } from '../utils/memory-utils';
 import { useUserDisplayName } from '@/services/user-profile-store';
 import { tea } from '@/lib/tea-bridge';
+import { ApiError } from '@/lib/api/base';
 import { MarkdownView } from '@/components/MarkdownView';
 import type { ChatMemorySearchHit } from '@/lib/teamApi';
 import {
@@ -446,7 +447,8 @@ export function BlockDetail({
     l: 'L1' | 'L2' | 'L3',
     id: string,
     content: string,
-  ) => Promise<void>;
+    expectedVersion?: number,
+  ) => Promise<number | undefined>;
   /** 分层语义搜索（L0 = 对话消息，L1 = 原子记忆）；未传则不显示搜索框 */
   onSearchLayer?: (l: 'L0' | 'L1', query: string) => Promise<ChatMemorySearchHit[]>;
 }) {
@@ -474,6 +476,7 @@ export function BlockDetail({
     layer: 'L1' | 'L2' | 'L3';
     id: string;
     title: string;
+    version?: number;
   } | null>(null);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -482,26 +485,52 @@ export function BlockDetail({
     if (layer === 'L0') return;
     // L2 正文带 META 头，编辑框只展示纯正文（写回时后端会用现有 META 重建）。
     const draft = layer === 'L2' ? stripScenarioMeta(item.body) : item.body;
-    setEditing({ layer: layer as 'L1' | 'L2' | 'L3', id: item.id, title: item.title });
+    setEditing({
+      layer: layer as 'L1' | 'L2' | 'L3',
+      id: item.id,
+      title: item.title,
+      version: item.version,
+    });
     setEditContent(draft);
   }
   async function saveEdit() {
     if (!editing || !onSaveLayerItem) return;
     setSaving(true);
     try {
-      await onSaveLayerItem(editing.layer, editing.id, editContent);
+      const returnedVersion = await onSaveLayerItem(
+        editing.layer,
+        editing.id,
+        editContent,
+        editing.version,
+      );
       // 搜索结果态：hook 的乐观更新只作用于分页列表，这里同步更新搜索结果条目，
       // 否则搜索视图里刚编辑的那条正文不会刷新。
       setSearchResults((prev) =>
         prev
           ? prev.map((it) =>
-              it.id === editing.id ? { ...it, body: editContent } : it,
+              it.id === editing.id
+                ? {
+                    ...it,
+                    body: editContent,
+                    ...(returnedVersion !== undefined ? { version: returnedVersion } : {}),
+                  }
+                : it,
             )
           : prev,
       );
       setEditing(null);
     } catch (e) {
-      tea.notify.error(e instanceof Error ? e.message : t('memory.notify.editFailed'));
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        e.rawMessage === 'ATOMIC_VERSION_CONFLICT'
+      ) {
+        // Keep both the draft and stale version in place. A blind retry must
+        // conflict again until the user reloads and reconciles the newer text.
+        tea.notify.error(t('memory.notify.versionConflict'));
+      } else {
+        tea.notify.error(e instanceof Error ? e.message : t('memory.notify.editFailed'));
+      }
     } finally {
       setSaving(false);
     }
