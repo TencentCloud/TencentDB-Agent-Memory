@@ -182,14 +182,21 @@ export class AnthropicAdapter implements ProtocolAdapter {
   }
 
   private parseTool(raw: Record<string, unknown>): AgentTool {
+    const { name, description, input_schema, cache_control, ...rest } = raw;
     const tool: AgentTool = {
-      name: (raw.name as string) ?? "unknown",
-      description: (raw.description as string) ?? "",
-      parameters: (raw.input_schema as Record<string, unknown>) ?? {},
+      name: (name as string) ?? "unknown",
+      description: (description as string) ?? "",
+      parameters: (input_schema as Record<string, unknown>) ?? {},
     };
-    if (raw.cache_control !== undefined) {
-      tool.cacheControl = raw.cache_control;
+
+    if (cache_control !== undefined) {
+      tool.cacheControl = cache_control;
     }
+    
+    if (Object.keys(rest).length > 0) {
+      tool.custom = rest;
+    }
+    
     return tool;
   }
 
@@ -281,9 +288,20 @@ export class AnthropicAdapter implements ProtocolAdapter {
       description: tool.description,
       input_schema: tool.parameters,
     };
+    
     if (tool.cacheControl !== undefined) {
       out.cache_control = tool.cacheControl;
     }
+    
+    if (tool.custom) {
+      Object.assign(out, tool.custom);
+      // Remove hallucinated fields for Anthropic server tools (which define a custom 'type')
+      if (typeof tool.custom.type === "string") {
+        delete out.description;
+        delete out.input_schema;
+      }
+    }
+    
     return out;
   }
 }
