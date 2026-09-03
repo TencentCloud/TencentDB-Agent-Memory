@@ -1380,6 +1380,10 @@ export class TdaiGateway {
       stores: {
         vectorStore: !!this.core.getVectorStore(),
         embeddingService: !!this.core.getEmbeddingService(),
+        // BM25 keyword search depends on the FTS5 module, which is not
+        // compiled into every official Node build (e.g. v22.13.1). When
+        // false, recall degrades to embedding-only (issue #679).
+        ftsAvailable: this.core.getVectorStore()?.isFtsAvailable() ?? false,
       },
       // Integrated services status
       services: {

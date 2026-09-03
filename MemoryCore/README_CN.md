@@ -54,6 +54,7 @@ MemoryCore 以 Standalone Runtime 形式开源，适合本地开发、单机部�
 - Node.js `>= 22.16.0`
 - npm
 - 一个 OpenAI-compatible LLM API；只读查询可以不触发 LLM，但记忆抽取和归纳需要有效凭证
+- **SQLite FTS5 模块**（BM25 关键词 / 混合召回需要）。官方 Node 二进制不保证包含 FTS5（如 v22.13.1 缺失、v22.23.2 有）。FTS5 缺失时关键词搜索静默返回空，召回降级为仅 embedding——可通过 `GET /health` 的 `stores.ftsAvailable` 查看
 
 ## 快速开始
 
