@@ -112,7 +112,10 @@ export function createApp(config: ProxyConfig): Hono {
   });
 
   // Prometheus 文本格式的协议转换性能指标（延迟分位数 + 上游缓存命中率）。
+  // 鉴权与 /session-debug 一致：config.admin.apiKey 非空时要求 Bearer，为空则公开。
   app.get("/metrics", (c) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     return c.text(
       protocolStatsToPrometheus() + sessionStatsToPrometheus() + injectionStatsToPrometheus(),
       200,
