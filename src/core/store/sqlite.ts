@@ -139,6 +139,10 @@ function requireNodeSqlite(): typeof import("node:sqlite") {
 // FTS5 helpers (adapted from openclaw core hybrid.ts)
 // ============================
 
+export function quoteFts5Phrase(token: string): string {
+  return `"${token.replaceAll('"', '""')}"`;
+}
+
 // ── Chinese word segmentation (jieba) ──
 // Lazy-loaded singleton: initialised on first call to `buildFtsQuery`.
 // If @node-rs/jieba is unavailable, falls back to Unicode-regex splitting.
@@ -225,7 +229,7 @@ export function buildFtsQuery(raw: string): string | null {
   }
 
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.map(quoteFts5Phrase);
   return quoted.join(" OR ");
 }
 
