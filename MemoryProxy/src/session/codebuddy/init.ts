@@ -849,6 +849,72 @@ async function handleSessionInitInner(
         //
         // opencode 说明：opencode 客户端原生 `question` tool 每次只能弹一个题，
         // 无法承载"同时问 agent+task"的语义，必须拆 stage（同 codex/wb/dsh）。
+        // 已预选的 Team 若仅有一个 Agent，也必须继续级联自动选择；否则
+        // OpenCode 会收到单选项 agent_select，而其 `question` form 会拒绝该页。
+        const selectedTeam = teams.find((team) => team.team_id === pr.teamId);
+        if (selectedTeam?.agents.length === 1) {
+          const soloAgent = selectedTeam.agents[0];
+          const nextState: SessionInitState = {
+            status: "pending_agent_select",
+            keyId: sessionKey,
+            startedAt: Date.now(),
+            attemptCount: 0,
+            userId,
+            cachedTeams: teams,
+            selectedTeamId: pr.teamId,
+            selectedAgentId: soloAgent.agent_id,
+          };
+          console.log(
+            `[session-init:cb] session=${compositeKey} preset team=${pr.teamId} only-agent=${soloAgent.agent_id} auto-select`,
+          );
+
+          if (selectedTeam.tasks.length === 0) {
+            await store.set(compositeKey, {
+              ...nextState,
+              status: "initialized",
+              sessionInfo: null,
+              agentDetail: null,
+              taskDetail: null,
+              bypassed: true,
+            } as SessionInitState);
+            console.log(
+              `[session-init:cb] session=${compositeKey} preset team has 0 tasks → bypass`,
+            );
+            return { intercepted: false, bypassed: true, justRegistered: true };
+          }
+
+          if (selectedTeam.tasks.length === 1) {
+            const soleTaskId = selectedTeam.tasks[0].task_id;
+            console.log(
+              `[session-init:cb] session=${compositeKey} preset auto-select single task=${soleTaskId} → completeRegistration`,
+            );
+            return completeRegistration(
+              { agent_id: soloAgent.agent_id, task_id: soleTaskId },
+              nextState, teams, compositeKey, sessionKey, userId,
+              config, store, messages, metadataClient, userKey, spaceId,
+            );
+          }
+
+          await store.set(compositeKey, {
+            ...nextState,
+            status: "pending_task_select",
+          });
+          console.log(
+            `[session-init:cb] session=${compositeKey} preset → pending_task_select (tasks=${selectedTeam.tasks.length})`,
+          );
+          const fd: FormData = {
+            teams,
+            stage: "task_select",
+            selectedTeamId: pr.teamId,
+            selectedAgentId: soloAgent.agent_id,
+            stream: reqCtx.stream,
+            questionsAsArray: reqCtx.questionsAsArray,
+            modelId: reqCtx.modelId,
+            protocol: reqCtx.protocol,
+          };
+          return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+        }
+
         const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
         const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
         await store.set(compositeKey, {
@@ -1097,19 +1163,87 @@ async function handleSessionInitInner(
     }
 
     if (teamId && teamId !== BYPASS_MARKER) {
+      const cachedTeams = state.cachedTeams ?? [];
+      const selectedTeam = cachedTeams.find((team) => team.team_id === teamId);
+
+      // 多 Team 场景也要按已选 Team 继续级联 auto-select。否则 OpenCode
+      // 会为仅一个 Agent 渲染 agent_select，而它的 question form 拒绝单选项。
+      if (selectedTeam?.agents.length === 1) {
+        const soloAgent = selectedTeam.agents[0];
+        const nextState: SessionInitState = {
+          ...state,
+          status: "pending_agent_select",
+          keyId: sessionKey,
+          attemptCount: 0,
+          cachedTeams,
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+        };
+        console.log(
+          `[session-init:cb] session=${compositeKey} team=${teamId} only-agent=${soloAgent.agent_id} auto-select`,
+        );
+
+        if (selectedTeam.tasks.length === 0) {
+          await store.set(compositeKey, {
+            ...nextState,
+            status: "initialized",
+            sessionInfo: null,
+            agentDetail: null,
+            taskDetail: null,
+            bypassed: true,
+          } as SessionInitState);
+          console.log(
+            `[session-init:cb] session=${compositeKey} team has 0 tasks → bypass`,
+          );
+          return { intercepted: false, bypassed: true, justRegistered: true };
+        }
+
+        if (selectedTeam.tasks.length === 1) {
+          const soleTaskId = selectedTeam.tasks[0].task_id;
+          console.log(
+            `[session-init:cb] session=${compositeKey} auto-select single task=${soleTaskId} → completeRegistration`,
+          );
+          return await completeRegistration(
+            { agent_id: soloAgent.agent_id, task_id: soleTaskId },
+            nextState, cachedTeams, compositeKey, sessionKey, userId,
+            config, store, messages, metadataClient, userKey, spaceId,
+          );
+        }
+
+        await store.set(compositeKey, {
+          ...nextState,
+          status: "pending_task_select",
+        });
+        console.log(
+          `[session-init:cb] session=${compositeKey} → pending_task_select (tasks=${selectedTeam.tasks.length})`,
+        );
+        const fd: FormData = {
+          teams: cachedTeams,
+          stage: "task_select",
+          selectedTeamId: teamId,
+          selectedAgentId: soloAgent.agent_id,
+          stream: reqCtx.stream,
+          questionsAsArray: reqCtx.questionsAsArray,
+          modelId: reqCtx.modelId,
+          protocol: reqCtx.protocol,
+        };
+        return { intercepted: true, response: buildFormResponse(fd), formData: fd };
+      }
+
       // codex/WB/dsh/opencode 拆 stage：先 agent_select → task_select；CB 老路径继续 agent_task 一发同时问。
       const nextStatus = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "pending_agent_select" : "pending_agent_task";
       const nextStage: FormData["stage"] = (isCodexClient || agentSource === "workbuddy" || agentSource === "dsh" || agentSource === "opencode") ? "agent_select" : "agent_task";
       const next: SessionInitState = {
         ...state,
         status: nextStatus,
+        cachedTeams,
         selectedTeamId: teamId,
         attemptCount: 0,
       };
       await store.set(compositeKey, next);
       console.log(`[session-init:cb] session=${compositeKey} team=${teamId} → ${nextStatus}`);
       const fd: FormData = {
-        teams: state.cachedTeams ?? [],
+        teams: cachedTeams,
         stage: nextStage,
         selectedTeamId: teamId,
         stream: reqCtx.stream,
