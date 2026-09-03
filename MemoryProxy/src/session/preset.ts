@@ -43,6 +43,11 @@ export interface PresetResolution {
   hadMismatch: boolean;
 }
 
+export interface PresetResolutionOptions {
+  taskMissingPolicy?: "skip" | "default" | "reject";
+  defaultTaskId?: string;
+}
+
 /**
  * Parse the preset identity from lowercased request headers using the configured
  * header names. Returns undefined when header auto-select is disabled or no team
@@ -77,8 +82,12 @@ export function parsePresetIdentity(
 export function resolvePresetIdentity(
   teams: TeamOption[],
   preset: PresetIdentity,
+  options: PresetResolutionOptions = {},
 ): PresetResolution {
-  const res: PresetResolution = { canRegister: false, hadMismatch: false };
+  const res: PresetResolution = {
+    canRegister: false,
+    hadMismatch: false,
+  };
   if (!preset.teamId) return res;
 
   const team = teams.find((t) => t.team_id === preset.teamId);
@@ -98,20 +107,17 @@ export function resolvePresetIdentity(
   if (preset.taskId) {
     const task = team.tasks.find((t) => t.task_id === preset.taskId);
     if (task) res.taskId = task.task_id;
-    // A stale/unknown task_id does NOT flip hadMismatch: task_id is an
-    // optional business dimension in the kernel (isolation.ts: "taskId is
-    // an optional business dimension for L0/L1 filtering"). An absent or
-    // stale task must not block registration — it just means recall is
-    // broadened across all of the agent's memories. Only an unknown team or
-    // unknown agent is a real identity mismatch (they're the mandatory
-    // dimensions); a task mismatch is silently dropped with a caller-side
-    // warning instead. See PR feat/task-optional-memory.
+    else res.hadMismatch = true;
+  } else if (options.taskMissingPolicy === "reject") {
+    res.hadMismatch = true;
+  } else if (options.taskMissingPolicy === "default") {
+    if (options.defaultTaskId) res.taskId = options.defaultTaskId;
+    else res.hadMismatch = true;
   }
 
-  // team + agent resolved → register directly. task_id is OPTIONAL: a
-  // missing/stale task yields undefined taskId (broad recall), not a block.
-  // This matches the kernel's own semantics and the interactive "本次不关联
-  // 任务" / defaultTaskId path.
+  // team + agent resolved → register directly. A genuinely missing task may
+  // remain undefined (skip), map to defaultTaskId, or reject. A provided but
+  // unknown task is always a mismatch and follows onMismatch at the caller.
   res.canRegister = !!res.agentId && !res.hadMismatch;
   return res;
 }

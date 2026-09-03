@@ -117,12 +117,18 @@ sessionInit:
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
+  taskMissingPolicy: "skip"
+  defaultTaskId: "no-task"
+  autoConversationId:
+    enabled: true
+    ttlMinutes: 30
+    strategy: "per-key"
   headerAutoSelect:
     enabled: true
     teamHeader: "x-team-id"
     agentHeader: "x-agent-id"
     taskHeader: "x-task-id"
-    onMismatch: "form"
+    onMismatch: "bypass"
 
 costGuard:
   enabled: false
@@ -131,6 +137,7 @@ costGuard:
 # knowledge 依赖 memory-hub 起来，否则 hook 内部会降级为空块。
 injection:
   enabled: true
+  externalGatewayUrl: "${MEMORY_HUB_PROXY_PUBLIC_URL:-http://127.0.0.1:${PROXY_PORT}}"
   injectors:
     - skill
     - knowledge
@@ -141,12 +148,27 @@ redis:
 YAML
 
 info "启动 proxy (image=$PROXY_IMAGE, port=$PROXY_PORT)"
+# Docker Desktop invoked from Git Bash/MSYS rewrites POSIX-looking arguments.
+# In particular, `/data/config.yaml:ro` can be expanded under the Git install
+# directory and split into a bogus `config.yaml;D` source. Convert only the
+# host side to a native Windows path, then disable MSYS argument conversion for
+# this docker invocation. Linux/macOS keep the original absolute POSIX path.
+CONFIG_MOUNT_SOURCE="$CONFIG_FILE"
+if command -v cygpath >/dev/null 2>&1; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      CONFIG_MOUNT_SOURCE="$(cygpath -w "$CONFIG_FILE")"
+      export MSYS_NO_PATHCONV=1
+      ;;
+  esac
+fi
+
 $DOCKER run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias proxy \
   --add-host=host.docker.internal:host-gateway \
   -p "${PROXY_PORT}:8096" \
-  -v "$CONFIG_FILE:/data/config.yaml:ro" \
+  --mount "type=bind,source=${CONFIG_MOUNT_SOURCE},target=/data/config.yaml,readonly" \
   "$PROXY_IMAGE" >/dev/null
 
 wait_healthy "$CONTAINER" 90

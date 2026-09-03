@@ -561,13 +561,18 @@ sessionInit:
   # 关闭时每个 session 只 warn 一次（避免长会话刷屏）。
   injectAgentContext: true  # false = 不注入 [Agent] 段（id/name/description/prompt）
   injectTaskContext: true   # false = 不注入 [Task] 段（id/name/description/goal）
+  # 请求只带 team + agent 时如何处理 task：
+  # skip（默认）= 不绑定 task，仅注入 Agent 级资产；default = 使用 defaultTaskId
+  # 占位；reject = 按 headerAutoSelect.onMismatch 处理。
+  taskMissingPolicy: "skip"
+  defaultTaskId: "default"
   # header 自动预选：首轮请求头已带身份字段时，去列表里校验存在性，命中则跳过对应选择步骤。
   headerAutoSelect:
     enabled: true            # 是否启用 header 预选
     teamHeader: "x-team-id"  # 携带 team_id 的请求头名
     agentHeader: "x-agent-id" # 携带 agent_id 的请求头名
     taskHeader: "x-task-id"  # 携带 task_id 的请求头名（可选）
-    onMismatch: "form"       # header 值查不到时：form=回退交互表单（默认）| bypass=跳过 session init
+    onMismatch: "bypass"     # 已提供的 header 值无效时：form=回退交互表单 | bypass=跳过 session init（默认）
 
   # ── DEBUG：本地开发/e2e 短路 ────────────────────────────────────────────────
   # 打开 debugForceIdentity 后，agentSource=workbuddy 和 agentSource=codebuddy
@@ -584,6 +589,18 @@ sessionInit:
   # 调试模式下输出详细诊断日志（请求 tools schema、system prompt 摘要等）。
   # 仅本地/E2E 联调使用，生产环境务必保持 false 或不配置。默认关闭。
   # debugVerboseLogging: false
+
+
+# ── 无 conversation header 的自动会话管理 ──────────────────────────────────
+# 显式 x-conversation-id / x-session-id 等始终优先；Proxy 同时记住它，确保
+# tool call 后续请求即使丢失 extra headers 也能续接。映射按 TTL 清理并受 LRU
+# 容量限制。此状态当前为进程内状态，多 Proxy 副本应让客户端使用插件动态 header，
+# 或使用粘性路由（详见 openclaw-provider-bridge/docs/architecture_CN.md）。
+autoConversationId:
+  enabled: true
+  ttlMinutes: 30
+  strategy: "per-key"       # per-key=单活跃会话；per-key-msg=按首条用户消息分区
+  maxEntries: 10000
 
 
 # ── TDAI Memory Gateway（core / openclaw-plugin） ────────────────────────────

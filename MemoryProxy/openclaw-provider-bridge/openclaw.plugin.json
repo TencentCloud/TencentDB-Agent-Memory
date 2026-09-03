@@ -1,0 +1,49 @@
+{
+  "id": "memory-proxy-bridge",
+  "name": "TencentDB Memory Proxy Bridge",
+  "version": "0.1.0",
+  "description": "Registers a Memory Proxy provider and attaches stable Agent/Session identity headers to every OpenClaw model request.",
+  "author": "TDAI Team",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "proxyUrl": { "type": "string", "default": "http://127.0.0.1:8096" },
+      "instanceId": { "type": "string", "default": "default" },
+      "api": { "type": "string", "enum": ["openai-completions", "anthropic-messages"], "default": "openai-completions" },
+      "agentMappings": {
+        "type": "object",
+        "description": "Map OpenClaw agent ids to Memory team/agent ids. Task is deliberately session-scoped and optional.",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "teamId": { "type": "string" },
+            "memoryAgentId": { "type": "string" }
+          },
+          "required": ["teamId", "memoryAgentId"],
+          "additionalProperties": false
+        }
+      },
+      "models": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "reasoning": { "type": "boolean" },
+            "input": { "type": "array", "items": { "type": "string", "enum": ["text", "image"] } },
+            "contextWindow": { "type": "number" },
+            "maxTokens": { "type": "number" }
+          },
+          "required": ["id"],
+          "additionalProperties": false
+        }
+      },
+      "stateFile": { "type": "string" },
+      "maxSessions": { "type": "number", "default": 5000, "minimum": 100 }
+    },
+    "required": ["agentMappings"],
+    "additionalProperties": false
+  }
+}

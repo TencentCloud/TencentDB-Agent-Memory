@@ -8,7 +8,20 @@
 
 ## 1. 客户端接入配置
 
-OpenClaw 通过**配置文件** `~/.openclaw/openclaw.json` 的 `models.providers` 段配置：
+推荐使用 [Memory Proxy Bridge 插件](../../MemoryProxy/openclaw-provider-bridge/README_CN.md)。插件注册 Provider，并按 OpenClaw Agent/Session 动态附加身份 header；不再需要静态维护 Task 和 Conversation ID。
+
+```bash
+export MEMORY_PROXY_URL="http://<proxy-host>:8096"
+export MEMORY_PROXY_INSTANCE_ID="<spaceId>"
+export MEMORY_PROXY_API_KEY="<业务用户的 sk-mem-... user_key>"
+export OPENCLAW_AGENT_ID="main"
+export TDAI_TEAM_ID="<team_id>"
+export TDAI_AGENT_ID="<agent_id>"
+export MEMORY_PROXY_MODEL_ID="glm-5.2"
+bash MemoryProxy/scripts/install-openclaw-provider-bridge.sh
+```
+
+旧版静态配置仍兼容。若暂不安装插件，可在 `~/.openclaw/openclaw.json` 的 `models.providers` 段配置：
 
 ```jsonc
 {
@@ -21,9 +34,7 @@ OpenClaw 通过**配置文件** `~/.openclaw/openclaw.json` 的 `models.provider
         "api": "openai-completions",
         "headers": {
           "x-team-id": "<从面板获取的 team_id>",
-          "x-agent-id": "<从面板获取的 agent_id>",
-          "x-task-id": "<从面板获取的 task_id>",
-          "x-conversation-id": "<自定义的会话标识>"
+          "x-agent-id": "<从面板获取的 agent_id>"
         },
         "request": {
           "allowPrivateNetwork": true
@@ -49,7 +60,7 @@ OpenClaw 通过**配置文件** `~/.openclaw/openclaw.json` 的 `models.provider
 - `baseUrl` — Proxy 地址 + `/openclaw/<spaceId>`；`default` 是 memory 实例 ID
 - `apiKey` — 业务用户的 `user_key`（从面板获取）
 - `api` — 必须为 `"openai-completions"`
-- `headers` — 必须包含 `x-team-id`、`x-agent-id`、`x-task-id`、`x-conversation-id`
+- `headers` — 只需 `x-team-id`、`x-agent-id`；Task 与 Conversation 均可省略
 - `models[].id` — 必须与 Proxy 上游配置的模型 ID 匹配
 - `allowPrivateNetwork: true` — 允许访问内网地址
 
@@ -61,9 +72,11 @@ OpenClaw 通过**配置文件** `~/.openclaw/openclaw.json` 的 `models.provider
 
 | 来源 | Header |
 |------|--------|
-| 唯一 | `x-conversation-id`（用户在配置文件中静态指定） |
+| 插件（推荐） | OpenClaw `sessionId`，每个窗口自动独立，并在每轮动态发送 |
+| Proxy 兜底 | 未传任何 session header 时按 API key 自动生成并续接，默认 30 分钟 TTL |
+| 旧配置 | 显式 `x-conversation-id` 原样优先 |
 
-与 Hermes 相同，OpenClaw 不自动管理 session ID，需手动更换。
+插件无需用户手动更换 ID。未安装插件时，Proxy 的 `autoConversationId` 仍能为单窗口场景兜底。
 
 ---
 
@@ -77,12 +90,16 @@ OpenClaw 与 Hermes 完全相同 —— **不支持交互式表单**，Session �
 |--------|------|------|
 | `x-team-id` | 团队 ID | ✅ |
 | `x-agent-id` | Agent ID | ✅ |
-| `x-task-id` | Task ID | ✅（当前版本） |
-| `x-conversation-id` | 会话标识 | ✅ |
+| `x-task-id` | Task ID | ❌；不传时仅使用 Agent 级资产 |
+| `x-conversation-id` | 会话标识 | ❌；插件或 Proxy 自动管理 |
 
 **处理逻辑**：
-- 四个 header 都存在且 valid → 直接注册 session，注入资产
-- 任一缺失 → session bypass（透传，不注入）
+- team + agent 都有效 → 直接注册；Task 可选
+- 缺 team/agent 或显式 Task 无效 → bypass，不会静默忽略或回退交互表单
+- `onMismatch: form` 对 OpenClaw 自动降级为 bypass，因为客户端没有表单能力
+- 插件在 tool call 后续请求上继续附加 header，避免回流断档
+
+HTTP 层由通用 `/:agent/:spaceId/v1/chat/completions` 路由保留 `agentSource=openclaw`；Session 层再由 `session/header-only` 独立分流，不进入 CodeBuddy/Claude Code 状态机。
 
 ---
 
@@ -98,19 +115,9 @@ OpenClaw 与 Hermes 完全相同 —— **不支持交互式表单**，Session �
 
 ---
 
-## 6. 已知限制
+## 6. 多副本说明
 
-与 Hermes 完全相同：
-
-### `x-task-id` 当前必填
-
-缺少时 session bypass，记忆注入不生效。  
-解决：proxy 配 `sessionInit.defaultTaskId: "no-task"` 后填固定值。
-
-### `x-conversation-id` 需手动管理
-
-- 同 ID 共享 session；新对话需手动换值
-- 部分 tool call 后续轮次可能不携带 headers → 那些轮次跳过注入
+插件每轮都发显式 OpenClaw Session ID，因此可跨 Proxy 副本。仅依赖 Proxy `autoConversationId` 的无 header 客户端，应使用粘性路由；自动映射当前是进程内 TTL/LRU 状态。
 
 ---
 

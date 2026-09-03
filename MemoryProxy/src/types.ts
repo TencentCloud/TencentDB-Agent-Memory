@@ -276,6 +276,13 @@ export interface SessionInitConfig {
    * 默认 "default"（开启）。若想关闭，在 YAML 中配为空字符串 `defaultTaskId: ""`。
    */
   defaultTaskId?: string;
+  /**
+   * Header identity is otherwise complete (team + agent) but task is absent.
+   * - skip: register without task and only use Agent-scoped assets (default)
+   * - default: bind defaultTaskId as the explicit no-task placeholder
+   * - reject: treat the missing task like a header mismatch
+   */
+  taskMissingPolicy: "skip" | "default" | "reject";
   headerAutoSelect?: {
     /** 是否启用 header 自动预选。默认 true。 */
     enabled: boolean;
@@ -285,9 +292,21 @@ export interface SessionInitConfig {
     agentHeader: string;
     /** 携带 task_id 的请求头名（小写）。默认 "x-task-id"。 */
     taskHeader: string;
-    /** header 值在用户可见列表中查不到时：'form' 回退交互表单（默认）| 'bypass' 直接跳过 session init。 */
+    /** header 值在用户可见列表中查不到时：'form' 回退交互表单 | 'bypass' 直接跳过 session init（默认）。 */
     onMismatch: "form" | "bypass";
   };
+}
+
+/** Automatic conversation-id fallback for clients that cannot keep headers. */
+export interface AutoConversationIdConfig {
+  /** Enable API-key-scoped conversation tracking. Default: true. */
+  enabled: boolean;
+  /** Idle expiry in minutes. Default: 30. */
+  ttlMinutes: number;
+  /** Single active session per key, or partition by the first user message. */
+  strategy: "per-key" | "per-key-msg";
+  /** Hard LRU bound for in-process active mappings. Default: 10000. */
+  maxEntries: number;
 }
 
 export interface TdaiConfig {
@@ -473,6 +492,7 @@ export interface ProxyConfig {
   injection: InjectionConfig;
   extraction: ExtractionConfig;
   sessionInit: SessionInitConfig;
+  autoConversationId: AutoConversationIdConfig;
   tdai: TdaiConfig;
   coreSkill: CoreSkillConfig;
   knowledge: KnowledgeConfig;
@@ -834,6 +854,7 @@ export interface RawYamlConfig {
     injectAgentContext?: boolean;
     injectTaskContext?: boolean;
     defaultTaskId?: string;
+    taskMissingPolicy?: "skip" | "default" | "reject";
     debugForceIdentity?: {
       team_id?: string;
       agent_id?: string;
@@ -848,6 +869,12 @@ export interface RawYamlConfig {
       taskHeader?: string;
       onMismatch?: "form" | "bypass";
     };
+  };
+  autoConversationId?: {
+    enabled?: boolean;
+    ttlMinutes?: number;
+    strategy?: "per-key" | "per-key-msg";
+    maxEntries?: number;
   };
   tdai?: {
     enabled?: boolean;

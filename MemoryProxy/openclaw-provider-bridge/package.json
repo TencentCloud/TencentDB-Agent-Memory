@@ -1,0 +1,25 @@
+{
+  "name": "@tencentdb-agent-memory/openclaw-provider-bridge",
+  "version": "0.1.0",
+  "description": "OpenClaw provider plugin for TencentDB Agent Memory Proxy",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "openclaw": { "extensions": ["./dist/index.js"] },
+  "files": ["dist/", "openclaw.plugin.json", "README.md", "README_CN.md", "docs/"],
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": { "node": ">=22.0.0" },
+  "peerDependencies": { "openclaw": ">=2026.8.1" },
+  "peerDependenciesMeta": { "openclaw": { "optional": true } },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "openclaw": "^2026.8.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.2"
+  }
+}

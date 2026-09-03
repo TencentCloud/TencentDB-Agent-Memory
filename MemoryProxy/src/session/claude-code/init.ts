@@ -445,11 +445,12 @@ async function completeRegistration(
   }
   // task_id is OPTIONAL for registration: the kernel treats task as an
   // optional business dimension (isolation.ts), so a header-identity agent
-  // with team+agent but no task (or a stale task) still registers and gets
-  // memory — recall just broadens across the agent's memories instead of
+  // with team+agent but no task may still register under taskMissingPolicy=skip
+  // and gets memory — recall broadens across the agent's memories instead of
   // narrowing to a task. The interactive "本次不关联任务" / defaultTaskId path
   // also lands here with task_id = defaultTaskId (a virtual value). Do NOT
-  // bypass when task_id is missing/undefined.
+  // bypass when task_id is missing/undefined. Invalid supplied task ids are
+  // rejected earlier by resolvePresetIdentity and never reach this function.
   const regData = buildRegistrationData(resolved, cachedTeams, sessionKey, regUserId);
   if (!regData) {
     console.warn(
@@ -745,7 +746,10 @@ async function handleSessionInitInner(
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
     if (presetIdentity && config.headerAutoSelect?.enabled) {
-      const pr = resolvePresetIdentity(teams, presetIdentity);
+      const pr = resolvePresetIdentity(teams, presetIdentity, {
+        taskMissingPolicy: config.taskMissingPolicy,
+        defaultTaskId: config.defaultTaskId,
+      });
 
       if (pr.hadMismatch) {
         if (config.headerAutoSelect.onMismatch === "bypass") {
@@ -767,15 +771,8 @@ async function handleSessionInitInner(
         console.warn(`[session-init:cc] session=${compositeKey} preset mismatch → fallback to form`);
         // fall through to the normal asset_confirm flow below
       } else if (pr.canRegister) {
-        // team + agent resolved → register directly (task optional). A missing
-        // task_id yields undefined → broad recall across the agent's memories;
-        // a stale (unknown) task_id was already dropped by resolvePresetIdentity
-        // (not echoed back) — warn so the operator can re-point the client.
-        if (presetIdentity?.taskId && !pr.taskId) {
-          console.warn(
-            `[session-init:cc] session=${compositeKey} preset task_id="${presetIdentity.taskId}" not found in team=${pr.teamId} → registering without a task (broad recall)`,
-          );
-        }
+        // Missing-task behavior was applied by resolvePresetIdentity; invalid
+        // task ids follow onMismatch and never reach this direct-register path.
         console.log(
           `[session-init:cc] session=${compositeKey} preset hit team=${pr.teamId} agent=${pr.agentId} task=${pr.taskId ?? "-"} → register directly`,
         );

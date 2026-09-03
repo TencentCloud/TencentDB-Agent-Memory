@@ -120,6 +120,9 @@ log.info("server.starting", {
     ? `${config.rateLimit.tpm} TPM / ${config.rateLimit.qpm} QPM`
     : "disabled",
   sessionInit: config.sessionInit.enabled ? "enabled" : "disabled",
+  autoConversationId: config.autoConversationId.enabled
+    ? `${config.autoConversationId.strategy}/${config.autoConversationId.ttlMinutes}m`
+    : "disabled",
   injection: config.injection.enabled ? config.injection.injectors.join(",") : "disabled",
   tdai: config.tdai.enabled ? config.tdai.endpoint : "disabled",
   coreSkill: config.coreSkill.serviceToken ? config.coreSkill.endpoint : "disabled",

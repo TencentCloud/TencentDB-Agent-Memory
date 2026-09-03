@@ -24,7 +24,8 @@ MemoryProxy 是一个**透明的 LLM 请求代理**：把编码 Agent（Claude C
 
 ## 核心能力
 
-- **会话初始化**：首次对话时拦截请求，通过交互式表单引导用户选择 team → agent → task，完成后把 agent/task 上下文注入 system prompt。支持从请求头（`x-team-id` / `x-agent-id` / `x-task-id`）自动预选。
+- **会话初始化**：首次对话时拦截请求，通过交互式表单或 header 预选身份。`team + agent` 即可注册，Task 可按 `skip/default/reject` 策略处理；OpenClaw/Hermes 由共享 header-only 模块直接注册或 bypass，永不进入表单状态机。
+- **自动会话续接**：缺少 conversation/session header 时按 API key 自动生成 UUID；显式 ID 优先并被记入活跃映射，tool call 后续请求丢 header 仍可续接。默认 TTL 30 分钟并有 LRU 上限。
 - **上下文注入**：把 Skill、Knowledge、Memory L2/L3 等按需注入 system prompt；L0/L1 通过只读工具接口暴露给模型主动查询，避免破坏上游 KV cache。
 - **对话回流（提取）**：每轮真人对话结束时，把对话切片同步发到 MemoryCore `/v3/skill/conversation/add`（Skill 归档）并写入 L0 短期记忆，供 core 侧后台抽取。
 - **鉴权与身份**：调用 MemoryCore `POST /v3/meta/auth/verify` 校验 `x-tdai-user-key`，解析出 `user_id` 作为全链路用户标识；`spaceId`（memory 实例 id）从 `/proxy/<spaceId>/...` 路径自动提取。
@@ -80,6 +81,8 @@ Skill 与 Knowledge 沿用同样的思路：
 - 一个 OpenAI-compatible 上游 LLM API（TokenHub 或其他）
 
 ## 快速开始
+
+OpenClaw 用户可直接使用 [Provider Bridge 插件](./openclaw-provider-bridge/README_CN.md)，它会按 OpenClaw Agent/Session 在每轮动态附加身份 header，并提供安装与联启脚本。
 
 ### 1. 安装依赖
 
@@ -216,7 +219,8 @@ Anthropic Messages 客户端：
 | `systemUsers` | 内部服务账号，命中后短路透传 |
 | `injection` | 上下文注入总开关与 injector 列表（`skill` / `knowledge` / `tdai-memory`） |
 | `extraction` | 对话回流总开关（skill 归档 + L0 写入） |
-| `sessionInit` | 会话初始化表单流程、header 自动预选策略 |
+| `sessionInit` | 会话初始化、header 自动预选与 `taskMissingPolicy` |
+| `autoConversationId` | 缺失会话 header 时的生成、续接、TTL 与 LRU 策略 |
 | `tdai` | MemoryCore 连接与 L0/L1/L2/L3 开关 |
 | `skill` | MemoryCore 数据面配置（Skill RAG、Skill 归档、Meta） |
 | `knowledge` | 独立的 knowledge gateway（可与 skill 不同） |
@@ -286,7 +290,7 @@ MemoryProxy/
     handler.ts / anthropicHandler.ts  OpenAI / Anthropic 请求处理器
     auth.ts / identity.ts             用户身份与鉴权
     systemUser.ts / systemUserPassthrough.ts  内部账号短路透传
-    session/                          会话初始化：表单流程、状态存储、Claude Code / CodeBuddy 适配
+    session/                          会话初始化：表单流程、header-only 分流、状态存储与客户端适配
     injection/                        注入 pipeline：skill / knowledge / tdai-memory 等 injector
     skill/                            Skill Bridge、conversation/add 归档触发、版本 pin
     memory/                           Memory Bridge 反向代理
