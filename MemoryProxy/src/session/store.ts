@@ -343,9 +343,14 @@ export class SessionStore {
       for (const row of rows) {
         // L1 key convention matches handler.ts / init.ts entry sites:
         //   `${agentSource}:${sessionId}`
+        // 统一走 buildStoreSessionKey（workbuddy → codex 别名归一），
+        // 避免历史 workbuddy 行恢复成查不到的重复 key。
         // Also bind full identity so subsequent set() persists back through
         // the correct (userId, agentSource, sessionId) key path.
-        const keyId = `${row.agentSource}:${row.sessionId}`;
+        const keyId = buildStoreSessionKey({
+          agentSource: row.agentSource,
+          sessionKey: row.sessionId,
+        });
         if (!this.states.has(keyId)) {
           this.states.set(keyId, row.state);
           this.identities.set(keyId, {
@@ -610,8 +615,13 @@ export class SessionStore {
   ): Promise<SessionInitState | undefined> {
     // Step 4.1: user mismatch → invalidate binding
     if (binding.userId && identity.userId && binding.userId !== identity.userId) {
-      console.log(`[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), invalidating`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      // binding 的存储键只有 (spaceId, sessionId)，跨用户直接 delete 会清掉
+      // owner 的绑定（他人持同一会话 ID 即可对 owner 造成 DoS）。这里只拒绝
+      // 恢复、不删除对方记录；owner 的会话由其后续请求自己恢复。
+      console.log(
+        `[session-recover] ${keyId} user mismatch (bound=${binding.userId}, current=${identity.userId}), ` +
+          `skip restore without deleting owner binding`,
+      );
       return undefined;
     }
 
@@ -668,8 +678,16 @@ export class SessionStore {
 
     // Step 4.3: dispatch
     if (agentNotFound) {
-      console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
-      await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      // 只有 owner（或无 userId 的旧记录）才清理失效 binding；
+      // 跨用户命中他人 binding 时保持只读拒绝，避免误删。
+      if (!binding.userId || binding.userId === identity.userId) {
+        console.log(`[session-recover] ${keyId} agent ${binding.agentId} not found, deleting binding`);
+        await this.bindingRepo?.deleteBinding(spaceOf(identity), identity.sessionId);
+      } else {
+        console.log(
+          `[session-recover] ${keyId} agent ${binding.agentId} not found (bound to other user), keep binding`,
+        );
+      }
       return undefined;
     }
     if (anyKernelError) {

@@ -9,6 +9,7 @@ import {
   type SessionIdentity,
 } from "../session/store.js";
 import type { SessionInitState } from "../session/types.js";
+import type { BindingRepo } from "../db/binding-repo.js";
 
 function makeIdentity(over: Partial<SessionIdentity> = {}): SessionIdentity {
   return {
@@ -153,5 +154,69 @@ describe("SessionStore L1 有界淘汰", () => {
     expect(store.get("claude-code:b")).toBeUndefined();
     expect(store.get("claude-code:a")).toBeDefined();
     expect(store.get("claude-code:c")).toBeDefined();
+  });
+});
+
+describe("SessionStore L2b binding 归属隔离（跨用户不删 owner 记录）", () => {
+  it("他人持同一 sessionId 命中 owner binding：拒绝恢复但不删除", async () => {
+    const deleted: string[] = [];
+    const bindingRepo: BindingRepo = {
+      async getBinding() {
+        return {
+          outcome: "initialized",
+          userId: "u1",
+          teamId: "t1",
+          agentId: "a1",
+          agentSource: "claude-code",
+        };
+      },
+      async putBinding() {},
+      async deleteBinding(_spaceId, sessionId) {
+        deleted.push(sessionId);
+      },
+      async touchLastSeen() {},
+    };
+    const store = new SessionStore(30 * 60 * 1000, undefined, bindingRepo);
+
+    const identityB = makeIdentity({ userId: "u2" });
+    const res = await store.getOrRecover("claude-code:c1", identityB, {});
+    expect(res).toBeUndefined();
+    expect(deleted).toEqual([]);
+  });
+
+  it("owner 自己发现 agent 已不存在：仍清理失效 binding（保留原行为）", async () => {
+    const deleted: string[] = [];
+    const notFound = async (): Promise<never> => {
+      const err = new Error("agent not found") as Error & { notFound?: boolean };
+      err.notFound = true;
+      throw err;
+    };
+    const bindingRepo: BindingRepo = {
+      async getBinding() {
+        return {
+          outcome: "initialized",
+          userId: "u1",
+          teamId: "t1",
+          agentId: "a1",
+          agentSource: "claude-code",
+        };
+      },
+      async putBinding() {},
+      async deleteBinding(_spaceId, sessionId) {
+        deleted.push(sessionId);
+      },
+      async touchLastSeen() {},
+    };
+    const store = new SessionStore(30 * 60 * 1000, undefined, bindingRepo);
+    const metadataClient = {
+      getAgent: notFound,
+      getTask: async () => null,
+    };
+
+    const res = await store.getOrRecover("claude-code:c1", makeIdentity(), {
+      metadataClient: metadataClient as never,
+    });
+    expect(res).toBeUndefined();
+    expect(deleted).toEqual(["c1"]);
   });
 });

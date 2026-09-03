@@ -406,6 +406,27 @@ describe("auto-session TTL / 多窗口 / 容量（可注入时钟）", () => {
     expect(y2.sessionId).toBe(y1.sessionId);
     expect(x1.sessionId).not.toBe(y1.sessionId);
   });
+
+  it("同一 key 不同 agentSource/space 不共享 auto 会话（per-key 隔离维度）", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 };
+    const metaCc = { agentSource: "claude-code", spaceId: "sp1" };
+    const a1 = resolveOrCreateSessionId(null, "iso-key", cfg, undefined, "", metaCc);
+    const a2 = resolveOrCreateSessionId(null, "iso-key", cfg, undefined, "", metaCc);
+    expect(a2.sessionId).toBe(a1.sessionId);
+    expect(a2.reused).toBe(true);
+
+    const b1 = resolveOrCreateSessionId(null, "iso-key", cfg, undefined, "", {
+      agentSource: "hermes",
+      spaceId: "sp1",
+    });
+    expect(b1.sessionId).not.toBe(a1.sessionId);
+
+    const c1 = resolveOrCreateSessionId(null, "iso-key", cfg, undefined, "", {
+      agentSource: "claude-code",
+      spaceId: "sp2",
+    });
+    expect(c1.sessionId).not.toBe(a1.sessionId);
+  });
 });
 
 describe("firstUserMessageFingerprint（跨协议首条用户消息指纹）", () => {
