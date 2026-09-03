@@ -204,8 +204,27 @@ gateway_endpoint）就把 `MEMORY_HUB_PROXY_PUBLIC_URL` 显式设为空字符串
 
 ## 常见问题
 
+**Q: Windows Git Bash 启动后，memory-core 为什么出现两份 `metadata.db` 或身份数据不一致？**
+
+旧版脚本可能被 MSYS 自动改写 Docker 的 `-v host:container:ro` 参数，导致
+`/data/config/tdai-gateway.yaml` 没有按预期挂载。当前 `start-memory-core.sh`
+会先用 `cygpath` 规范化宿主机路径，并为 `docker run` 禁用二次参数转换。
+升级脚本后重新执行 `./start-memory-core.sh` 即可；命名卷数据会保留。
+
+可用下面的命令确认容器内只有一个 metadata 数据源：
+
+```bash
+docker exec tdai-memory-core sh -lc \
+  'find /data /app -name metadata.db -type f 2>/dev/null | sort'
+```
+
 **Q: `./start-all.sh` 卡在 wait_healthy？**
 镜像可能还在拉取。用 `docker pull <IMAGE>` 手动预拉一次再跑脚本。
+
+如果日志显示 `No such container: tdai-memory-core`，说明旧脚本没有保留
+`docker run` 的真实错误。当前脚本会立即终止并输出 Docker 原始错误，不再用
+“容器不存在”的二次报错覆盖根因。Windows Git Bash 下还会关闭 MSYS 对 Docker
+挂载参数的二次路径转换；更新脚本后重新运行 `./start-all.sh` 即可。
 
 **Q: memory-hub 起来但 Panel 打不开？**
 

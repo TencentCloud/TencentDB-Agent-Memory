@@ -49,6 +49,7 @@ import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isHeaderOnlyAgent } from "./session/header-only/init.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { forkStreamWithBackgroundTap } from "./stream/background-tap.js";
 import {
   enforceRateLimit,
   isRateLimitExceededError,
@@ -1595,9 +1596,13 @@ export async function handleChatCompletions(
       preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    const clientStream = forkStreamWithBackgroundTap(
+      upstreamResp.body,
+      passthrough,
+      (err) => pipe.error("STREAM_BACKGROUND_TAP", err),
+    );
 
-    return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
+    return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
   }
 
   // ── Non-streaming response ───────────────────────────────────────────────

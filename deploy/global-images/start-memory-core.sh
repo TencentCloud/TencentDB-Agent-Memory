@@ -122,17 +122,42 @@ skill:
 YAML
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
-$DOCKER run -d --name "$CONTAINER" \
+# MSYS/Git Bash rewrites colon-delimited `-v host:container:ro` arguments and
+# can turn `/data/config/...` into a second Windows path.  The result is a
+# malformed bind mount plus two independent metadata.db files.  Convert the
+# host path once and disable further MSYS argument conversion for docker.exe.
+CORE_CONFIG_DOCKER_FILE="$CORE_CONFIG_FILE"
+if [[ -n "${MSYSTEM:-}" ]]; then
+  CORE_CONFIG_DOCKER_FILE="$(cygpath -w "$CORE_CONFIG_FILE")"
+fi
+
+DOCKER_RUN_ARGS=(run -d --name "$CONTAINER" \
   --network "$NETWORK" \
   --network-alias memory-core \
   -p "${MEMORY_CORE_PORT}:8420" \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
-  -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
+  -v "$CORE_CONFIG_DOCKER_FILE:/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \
   -e TDAI_GATEWAY_HOST=0.0.0.0 \
   -e TDAI_GATEWAY_API_KEY="$MEMORY_CORE_GATEWAY_API_KEY" \
   -e TDAI_DATA_DIR=/data/tdai-memory \
-  "$MEMORY_CORE_IMAGE" >/dev/null
+  "$MEMORY_CORE_IMAGE")
+
+# Do not hide docker run failures: otherwise wait_healthy only reports a
+# misleading "No such container" message.  On Git Bash, disable MSYS argument
+# conversion only for docker.exe after converting the host bind path ourselves.
+if [[ -n "${MSYSTEM:-}" ]]; then
+  if ! MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+    "$DOCKER" "${DOCKER_RUN_ARGS[@]}" >/dev/null; then
+    die "创建 $CONTAINER 失败，请根据上方 Docker 错误修正后重试。"
+  fi
+elif ! "$DOCKER" "${DOCKER_RUN_ARGS[@]}" >/dev/null; then
+  die "创建 $CONTAINER 失败，请根据上方 Docker 错误修正后重试。"
+fi
+
+if ! "$DOCKER" inspect "$CONTAINER" >/dev/null 2>&1; then
+  die "Docker 未创建 $CONTAINER；请检查 Docker Desktop 状态和上方输出。"
+fi
 
 wait_healthy "$CONTAINER" 90
 ok "memory-core 已启动 → http://localhost:${MEMORY_CORE_PORT}/"
