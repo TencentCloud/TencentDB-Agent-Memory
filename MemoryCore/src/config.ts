@@ -7,6 +7,8 @@
  * Minimal config (zero config): {} — all fields have sensible defaults.
  */
 
+import { isAbsolute } from "node:path";
+
 // ============================
 // Type definitions
 // ============================
@@ -533,7 +535,9 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
     temperature: num(offloadGroup, "temperature") ?? 0.2,
     stream: bool(offloadGroup, "stream") ?? false,
     forceTriggerThreshold: num(offloadGroup, "forceTriggerThreshold") ?? 4,
-    dataDir: optStr(offloadGroup, "dataDir"),
+    // offload.dataDir 契约为绝对路径（见 openclaw.plugin.json）。
+    // 空串与相对路径会被静默接受并随后作为存储根目录使用，导致数据落到进程 cwd —— 这里在解析期直接判为未设置。
+    dataDir: optAbsStr(offloadGroup, "dataDir"),
     defaultContextWindow: num(offloadGroup, "defaultContextWindow") ?? 200000,
     maxPairsPerBatch: num(offloadGroup, "maxPairsPerBatch") ?? 20,
     l2NullThreshold: num(offloadGroup, "l2NullThreshold") ?? 4,
@@ -689,6 +693,12 @@ function normalizePromptMode(value: string | undefined, fallback: MemoryPromptMo
 function optStr(src: Record<string, unknown>, key: string): string | undefined {
   const v = src[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** optStr, but only accepts a non-empty absolute path; anything else degrades to undefined. */
+function optAbsStr(src: Record<string, unknown>, key: string): string | undefined {
+  const v = optStr(src, key);
+  return v && isAbsolute(v) ? v : undefined;
 }
 
 function num(src: Record<string, unknown>, key: string): number | undefined {
