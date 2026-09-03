@@ -1,7 +1,7 @@
 # 会话策略：taskMissingPolicy 与 autoConversationId
 
 > 本文档对应的验收标准与自动化测试：`src/__tests__/session-acceptance.test.ts`（ACC-1..ACC-6），
-> 全量回归：`npm test`（vitest，108/108 通过）。
+> 全量回归：`npm test`（vitest，76/76 通过；含上游基线 8 个用例与本 PR 新增 68 个）。
 
 ## 背景
 
@@ -87,9 +87,11 @@ PROXY_AUTO_CONVERSATION_TTL_MINUTES=30
 | 5 | 无效 x-task-id → 按 onMismatch 处理（非静默忽略） | ACC-5 |
 | 6 | per-agent 策略（openclaw/hermes 宽松、其余严格） | ACC-6 |
 
-补充单元覆盖（`optimizations.test.ts`）：TTL 滑动窗口、per-key-msg 窗口上限/过期、
-容量清理、指纹稳定性、跨协议首条用户消息指纹（OpenAI/Anthropic/Responses）、
-created/resumed 语义、codex 路径显式会话 header 对齐。
+补充单元覆盖（本 PR 内 `session-isolation.test.ts` / `stages-session.test.ts` /
+`session-store-fence.test.ts`）：TTL 滑动窗口、per-key-msg 窗口上限/过期、
+容量清理、确定性派生与桶宽校验、指纹稳定性、跨协议首条用户消息指纹
+（OpenAI/Anthropic/Responses）、created/resumed 语义、codex 路径显式会话
+header 对齐。
 
 ## 4. 可观测性
 
@@ -146,5 +148,5 @@ created/resumed 语义、codex 路径显式会话 header 对齐。
   （Anthropic AskUserQuestion / Chat ask_followup_question / Responses tool 消息），
   这部分与“隔离”正交。
 
-对应自动化用例：`session-isolation.test.ts` 的“任意未知 AgentSource”分组与
-`optimizations.test.ts` 的未知 agentSource 全局策略用例。
+对应自动化用例：`session-isolation.test.ts` 的“任意未知 AgentSource”分组，
+以及 `session-acceptance.test.ts` 的 ACC-6（per-agent 全局/按客户端策略）。

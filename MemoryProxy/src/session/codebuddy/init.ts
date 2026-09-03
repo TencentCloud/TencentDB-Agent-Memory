@@ -107,8 +107,6 @@ export interface SessionInitResult {
   bypassReason?: "default-gate";
   /** mem:session-reset 触发时标记本次 init 是 reset 流程（跨 handler 判定用）。 */
   resetFlow?: boolean;
-  /** mem:session-reset 触发的时间戳，跨节点一致性校验用。 */
-  resetEpoch?: number;
   /**
    * Anthropic-only: pre-built `<session_context>` string the caller must
    * append to `body.system` (the ClaudeCode init module populates this;
@@ -116,6 +114,8 @@ export interface SessionInitResult {
    * interface so `session/index.ts`'s union type stays uniform.
    */
   systemAppend?: string | null;
+  /** mem:session-reset 触发的时间戳，跨节点一致性校验用。 */
+  resetEpoch?: number;
   /**
    * 原始 FormData —— 当 `intercepted === true` 时**总是**填充。
    *

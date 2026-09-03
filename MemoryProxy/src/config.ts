@@ -97,6 +97,8 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     autoConversationId: {
       enabled: true,
       ttlMinutes: 30,
+      deterministic: false,
+      deterministicBucketMinutes: undefined,
       strategy: "per-key",
       maxEntries: 2048,
       maxWindowsPerKey: 8,
@@ -475,6 +477,13 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         ttlMinutes: typeof yaml.sessionInit?.autoConversationId?.ttlMinutes === "number"
           ? yaml.sessionInit.autoConversationId.ttlMinutes
           : DEFAULT_CONFIG.sessionInit.autoConversationId!.ttlMinutes,
+        deterministic: typeof yaml.sessionInit?.autoConversationId?.deterministic === "boolean"
+          ? yaml.sessionInit.autoConversationId.deterministic
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.deterministic,
+        deterministicBucketMinutes:
+          typeof yaml.sessionInit?.autoConversationId?.deterministicBucketMinutes === "number"
+            ? yaml.sessionInit.autoConversationId.deterministicBucketMinutes
+            : DEFAULT_CONFIG.sessionInit.autoConversationId!.deterministicBucketMinutes,
         strategy: yaml.sessionInit?.autoConversationId?.strategy === "per-key-msg"
           ? "per-key-msg"
           : yaml.sessionInit?.autoConversationId?.strategy === "per-key"

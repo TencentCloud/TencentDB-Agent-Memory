@@ -308,6 +308,10 @@ export interface SessionInitConfig {
   autoConversationId?: {
     enabled?: boolean;
     ttlMinutes?: number;
+    /** true → sid 由 (keyId, scope, 首问指纹, epoch) 确定性派生（多实例收敛）。 */
+    deterministic?: boolean;
+    /** deterministic 模式的 epoch 桶宽（分钟），缺省 = ttlMinutes。 */
+    deterministicBucketMinutes?: number;
     strategy?: "per-key" | "per-key-msg";
     maxEntries?: number;
     maxWindowsPerKey?: number;
@@ -871,6 +875,8 @@ export interface RawYamlConfig {
     autoConversationId?: {
       enabled?: boolean;
       ttlMinutes?: number;
+      deterministic?: boolean;
+      deterministicBucketMinutes?: number;
       strategy?: string;
       maxEntries?: number;
       maxWindowsPerKey?: number;
