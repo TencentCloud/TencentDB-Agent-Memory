@@ -31,7 +31,7 @@
  *
  * # 两个适配点
  *   - `classifyRequest`: 三重信号判(compact / title / main)
- *   - `extractUserText`: content 是 str 直接返回(dsh messages.content 从不用 blocks)
+ *   - `extractUserText`: 过滤 runtime-context，并从多模态 content 中提取 text
  *
  * # 不同于 CB 的地方
  *   - dsh 主对话在 body.messages 里塞 4 条 role=user:真实用户输入 +
@@ -41,6 +41,7 @@
  *   - dsh 用户输入本身**不带 CB/workbuddy 那种 `<user_query>` wrapper**,直接透传
  */
 
+import { extractUserQueryText } from "../common/user-query-extractor.js";
 import type { AgentAdapter, RequestKind } from "./types.js";
 
 // ── Title-gen body-shape detection ───────────────────────────────────────────
@@ -96,18 +97,40 @@ function isDshTitleGen(body: Record<string, unknown>): boolean {
 // ── User text extraction ─────────────────────────────────────────────────────
 
 /**
- * dsh messages.content 是 str,直接返回。
- *
- * 抓包实证(fixtures/*.req.json 多条 messages 全 role=user + content:str):
- * dsh 从不用 Anthropic-style content-blocks 数组,连 tool_result 都是独立
- * role=tool 消息(而非嵌在 user 里)。
- *
- * 不做 CB 那种 `<user_query>` wrapper 剥离 —— dsh 主对话就是纯用户输入 +
- * 独立 `<system-reminder>` user 消息,没 wrapper 嵌套。
+ * Older dsh requests use string content; current multimodal requests use an
+ * OpenAI-style array containing text plus file/image_url blocks. Only text is
+ * eligible for memory and skill extraction, and all text passes through the
+ * shared harness-noise filter before being returned.
  */
 function extractDshUserText(content: unknown): string | null {
-  if (typeof content !== "string") return null;
-  return content.length > 0 ? content : null;
+  let raw = "";
+  if (typeof content === "string") {
+    raw = content;
+  } else if (Array.isArray(content)) {
+    raw = content
+      .flatMap((part) => {
+        if (!part || typeof part !== "object") return [];
+        const block = part as Record<string, unknown>;
+        return block.type === "text" && typeof block.text === "string"
+          ? [block.text]
+          : [];
+      })
+      .join("\n");
+  }
+
+  const extracted = raw ? extractUserQueryText(raw) : "";
+  return extracted.length > 0 ? extracted : null;
+}
+
+/** Whether the current dsh tool catalog can consume the proxy's init form. */
+export function dshCanRenderInteractiveForm(body: Record<string, unknown>): boolean {
+  const tools = body.tools;
+  if (!Array.isArray(tools)) return false;
+  return tools.some((tool) => {
+    if (!tool || typeof tool !== "object") return false;
+    const entry = tool as { function?: { name?: unknown }; name?: unknown };
+    return (entry.function?.name ?? entry.name) === "ask_user_question";
+  });
 }
 
 // ── Adapter export ───────────────────────────────────────────────────────────

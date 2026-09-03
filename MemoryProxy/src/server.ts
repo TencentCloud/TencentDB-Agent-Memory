@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { handleChatCompletions } from "./handler.js";
 import { handleAnthropicMessages } from "./anthropicHandler.js";
 import { handleAuxiliaryEndpoint } from "./auxiliaryHandler.js";
+import { handleDshFilesEndpoint } from "./dshFilesHandler.js";
 import { handleCodexEndpoint } from "./codexHandler.js";
 import { handleWorkbuddyEndpoint } from "./workbuddyHandler.js";
 import { apiKeyToKeyId, extractBearerToken } from "./opik.js";
@@ -287,6 +288,18 @@ export function createApp(config: ProxyConfig): Hono {
   // 的 classifyRequest 按 header + body 特征判(见其 doc)。
   app.post("/dsh/:spaceId/v1/chat/completions", (c) => handleChatCompletions(c, config));
   app.post("/dsh/:spaceId/chat/completions", (c) => handleChatCompletions(c, config));
+  // Modern dsh uploads multimodal content through the OpenAI-compatible Files
+  // API before sending file_id blocks to chat/completions. Keep this transport
+  // outside all memory/session pipelines; it only verifies the caller and
+  // transparently applies the configured dsh upstream credentials.
+  app.post("/dsh/:spaceId/files", (c) => handleDshFilesEndpoint(c, config));
+  app.get("/dsh/:spaceId/files", (c) => handleDshFilesEndpoint(c, config));
+  app.get("/dsh/:spaceId/files/:fileId", (c) => handleDshFilesEndpoint(c, config));
+  app.delete("/dsh/:spaceId/files/:fileId", (c) => handleDshFilesEndpoint(c, config));
+  app.post("/dsh/:spaceId/v1/files", (c) => handleDshFilesEndpoint(c, config));
+  app.get("/dsh/:spaceId/v1/files", (c) => handleDshFilesEndpoint(c, config));
+  app.get("/dsh/:spaceId/v1/files/:fileId", (c) => handleDshFilesEndpoint(c, config));
+  app.delete("/dsh/:spaceId/v1/files/:fileId", (c) => handleDshFilesEndpoint(c, config));
   // dsh 目前抓包未见 embeddings/moderations/completions,预留 aux 端点(与 CC/CB 对称)
   app.post("/dsh/:spaceId/v1/embeddings", (c) => handleAuxiliaryEndpoint(c, config));
   app.post("/dsh/:spaceId/v1/completions", (c) => handleAuxiliaryEndpoint(c, config));

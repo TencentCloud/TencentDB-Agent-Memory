@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { zstdDecompressSync } from 'node:zlib';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -69,6 +69,33 @@ interface ScannedSession {
 }
 interface ScanOptions {
   workspace?: string;
+}
+
+/** Decode the concatenated Zstandard frames used by current dsh sessions. */
+export function readZstdUtf8(path: string): string | null {
+  const outputs: Buffer[] = [];
+  try {
+    const source = readFileSync(path);
+    let offset = 0;
+    while (offset < source.length) {
+      const result = zstdDecompressSync(source.subarray(offset), { info: true });
+      const consumed = result.engine.bytesWritten;
+      if (!Number.isSafeInteger(consumed) || consumed <= 0) {
+        throw new Error(`Zstandard decoder consumed invalid byte count: ${consumed}`);
+      }
+      outputs.push(result.buffer);
+      offset += consumed;
+    }
+    return Buffer.concat(outputs).toString('utf8');
+  } catch (error: unknown) {
+    console.warn(
+      `[warn] 无法解压 dsh session (${path}): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    // dsh persists one independent frame per append batch. If the process was
+    // interrupted while writing the final frame, retain every complete frame
+    // before the torn suffix so historical turns remain importable.
+    return outputs.length > 0 ? Buffer.concat(outputs).toString('utf8') : null;
+  }
 }
 
 // ── 跨源共享扫盘工具（原 scan-util.ts）──
@@ -1992,18 +2019,6 @@ function scanSessionsOverride(kind: AgentKind, sessionsDir: string): ScannedSess
 }
 function make_dshAdapter(): IdeAdapter {
 const KIND = 'dsh' as const;
-
-function readZstdUtf8(path: string): string | null {
-  try {
-    const r = spawnSync('zstd', ['-d', '-c', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    if (r.status === 0) return r.stdout;
-    const fallback = spawnSync('unzstd', ['-c', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-    if (fallback.status === 0) return fallback.stdout;
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 /** 解析 dsh session（zstd 解压后是事件流 jsonl：每行 type + data）。 */
 function parseDshSessionLines(text: string): ScannedSession['messages'] {

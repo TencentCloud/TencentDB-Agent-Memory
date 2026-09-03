@@ -81,10 +81,10 @@ function isClaudeCodeInternalPrompt(text: string): boolean {
  * 固定开头，与 session-init 跳过逻辑同一锚点，避免 L0 把 harness 元数据
  * 当成用户输入。真实用户提问不会以这段英文开头。
  */
-export const DSH_RUNTIME_CONTEXT_PREFIX = "Current runtime context.";
+export const DSH_RUNTIME_CONTEXT_PREFIX = "Current runtime context";
 
 export function isDshRuntimeContextSnapshot(text: string): boolean {
-  return text.trimStart().startsWith(DSH_RUNTIME_CONTEXT_PREFIX);
+  return /^Current runtime context(?:\.|:)/.test(text.trimStart());
 }
 
 /**

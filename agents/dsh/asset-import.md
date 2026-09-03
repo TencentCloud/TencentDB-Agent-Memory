@@ -27,7 +27,8 @@
 
 ## 前置
 
-在仓库根执行。需要 Node >= 22，以及：
+在仓库根执行。需要 Node >= 22.19（与当前 dsh 的 Node 要求一致；使用 Node 内置 Zstandard 解压，无需额外安装
+`zstd` / `unzstd` 命令），以及：
 
 ```bash
 export PANEL_URL=http://127.0.0.1:8123

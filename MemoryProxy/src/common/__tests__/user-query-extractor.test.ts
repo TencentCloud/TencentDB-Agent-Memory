@@ -9,6 +9,9 @@ describe("isDshRuntimeContextSnapshot", () => {
   it("matches the DSH runtime-context prefix", () => {
     expect(isDshRuntimeContextSnapshot("Current runtime context. cwd=/workspace")).toBe(true);
     expect(isDshRuntimeContextSnapshot("  Current runtime context. policy=danger-full-access")).toBe(true);
+    expect(isDshRuntimeContextSnapshot(
+      "Current runtime context: none. Earlier runtime-context snapshots no longer apply.",
+    )).toBe(true);
   });
 
   it("does not match a real user question that only mentions the phrase", () => {
@@ -24,6 +27,9 @@ describe("extractUserQueryText", () => {
       "cwd=/workspace",
     ].join("\n");
     expect(extractUserQueryText(raw)).toBe("");
+    expect(extractUserQueryText(
+      "Current runtime context: none. Earlier runtime-context snapshots no longer apply.",
+    )).toBe("");
   });
 
   it("strips a standalone system-reminder to empty", () => {
@@ -47,6 +53,17 @@ describe("extractLatestUserMessage", () => {
       { role: "user", content: "<system-reminder>internal metadata</system-reminder>" },
     ]);
     expect(got).toEqual({ role: "user", content: "请检查这个项目并修复问题" });
+  });
+
+  it("skips the DSH cleared-context marker and returns the real user prompt", () => {
+    const got = extractLatestUserMessage([
+      { role: "user", content: "继续修复兼容问题" },
+      {
+        role: "user",
+        content: "Current runtime context: none. Earlier runtime-context snapshots no longer apply.",
+      },
+    ]);
+    expect(got).toEqual({ role: "user", content: "继续修复兼容问题" });
   });
 
   it("returns null when every user message is harness noise", () => {

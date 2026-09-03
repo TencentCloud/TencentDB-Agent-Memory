@@ -22,6 +22,7 @@ import { piAdapter } from "./pi.js";
 import { defaultAdapter } from "./default.js";
 
 export type { AgentAdapter, AgentKind, RequestKind } from "./types.js";
+export { dshCanRenderInteractiveForm } from "./dsh.js";
 
 export function resolveAgentAdapter(agentSource: string): AgentAdapter {
   switch (agentSource) {

@@ -25,7 +25,9 @@ llm-deepseek:
 
 **`~/.dsh/.credentials.yaml`**：
 ```yaml
-PROXY_USER_KEY: <业务用户的 sk-mem-... user_key>
+version: 1
+refs:
+  PROXY_USER_KEY: <业务用户的 sk-mem-... user_key>
 ```
 
 **权限硬要求**（dsh 启动时检查，不对直接拒启动）：

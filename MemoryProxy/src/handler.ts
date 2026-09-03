@@ -696,7 +696,7 @@ export async function handleChatCompletions(
   // header,title-gen 靠 body 特征三合一。这类请求**不能**走 session-init form,
   // 也不能触发 mem 拦截 / L0 写入 / skill 提取 —— 应该直接透传上游。
   // codebuddy / claude-code 客户端 adapter classifyRequest 恒返 "main",行为无变。
-  const { resolveAgentAdapter } = await import("./agent-adapters/index.js");
+  const { resolveAgentAdapter, dshCanRenderInteractiveForm } = await import("./agent-adapters/index.js");
   const _adapter = resolveAgentAdapter(agentSource);
   const _requestKind = _adapter.classifyRequest(body as Record<string, unknown>, c.req.path, lcHeaders);
   const isAuxiliary = _requestKind === "auxiliary";
@@ -718,36 +718,29 @@ export async function handleChatCompletions(
   // 但走独立的 header-driven session-init 分支(见下方 opencode 特化块),
   // 因此不需要走这里的 headless bypass —— opencode 能吃 mem 命令纯文本响应,
   // 也需要 injection / L0 / skill 提取,只是不能弹 form。
-  const _dshHeadless = agentSource === "dsh" && (() => {
-    const tools = (body as { tools?: unknown }).tools;
-    if (!Array.isArray(tools) || tools.length === 0) return false;
-    return !tools.some((t) => {
-      const fn = (t as { function?: { name?: string }; name?: string })?.function;
-      const n = fn?.name ?? (t as { name?: string })?.name;
-      return n === "ask_user_question";
-    });
-  })();
-  if (_dshHeadless) {
-    console.log(`[request-classify] session=${sessionKey} agent=dsh headless/no-preset (no ask_user_question tool) → bypass session-init, direct passthrough`);
+  const _dshNoForm = agentSource === "dsh"
+    && !dshCanRenderInteractiveForm(body as Record<string, unknown>);
+  if (_dshNoForm) {
+    console.log(`[request-classify] session=${sessionKey} agent=dsh no-form (no ask_user_question tool) → recover identity or use header auto-select`);
   }
 
   // ── mem:session-reset pre-hook ──
-  // hermes / openclaw 走 header 预选身份, dsh headless 无 ask_user_question tool —
+  // hermes / openclaw 走 header 预选身份,dsh no-form 无 ask_user_question tool —
   // 三者都没有交互式 form UI 可以弹,reset 后 session 会永远卡在 pending_asset_confirm。
   // 直接返回"不支持"文案。
   const _headerOnlyAgents = new Set(["hermes", "openclaw"]);
-  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshHeadless;
+  const _noFormAgent = _headerOnlyAgents.has(agentSource) || _dshNoForm;
   if (config.memCommand?.enabled && !isAuxiliary && _noFormAgent) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { buildMemResponse } = await import("./mem-command/response-builder.js");
-      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshHeadless=${_dshHeadless}`);
+      console.log(`[mem-command:pre] session-reset unsupported for agent=${agentSource} dshNoForm=${_dshNoForm}`);
       const msg = _headerOnlyAgents.has(agentSource)
         ? `⚠️ mem:session-reset 不支持 ${agentSource} 客户端。\n\n`
           + `${agentSource} 通过 x-team-id / x-agent-id / x-task-id 请求头预选身份，没有交互式表单入口。\n`
           + `请在客户端配置中直接更改这些请求头来切换 Team / Agent / Task。`
-        : "⚠️ mem:session-reset 不支持 dsh headless 模式。\n\n"
-          + "dsh 客户端在 headless / no-preset 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
+        : "⚠️ mem:session-reset 不支持 dsh no-form 模式。\n\n"
+          + "dsh 客户端在 headless / minimal 场景下不挂 ask_user_question tool，无法弹出资产选择表单。\n"
           + "请在带 ask_user_question preset 的 dsh 环境下使用。";
       return buildMemResponse(msg, {
         protocol: "openai",
@@ -756,7 +749,7 @@ export async function handleChatCompletions(
       });
     }
   }
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless && !_headerOnlyAgents.has(agentSource)) {
+  if (config.memCommand?.enabled && !isAuxiliary && !_dshNoForm && !_headerOnlyAgents.has(agentSource)) {
     const { isSessionResetCommand } = await import("./mem-command/pre-intercept.js");
     if (isSessionResetCommand(body as Record<string, unknown>, agentSource)) {
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
@@ -807,11 +800,11 @@ export async function handleChatCompletions(
   // ── Session Init (before injection pipeline) ─────────────────────────────
   let sessionInfo: Record<string, unknown> | null | undefined;
   let assetCapabilities: import("./injection/types.js").AssetCapabilityFlags | undefined;
-  let injectedSkipped = !conversationId || isAuxiliary || _dshHeadless;
+  let injectedSkipped = !conversationId || isAuxiliary;
   let sessionJustRegistered = false;
   let _resetFlowResult: { agentName: string; agentIdShort: string; teamId: string; taskName?: string | null; bypassed?: boolean } | null = null;
-  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshHeadless=${_dshHeadless} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
-  if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
+  console.log(`[injection-debug] conversationId=${conversationId} sessionKey=${sessionKey} userId=${userId} agentSource=${agentSource} kind=${_requestKind} dshNoForm=${_dshNoForm} sessionInitEnabled=${config.sessionInit?.enabled} injectionEnabled=${config.injection?.enabled} injectors=${JSON.stringify(config.injection?.injectors)} injectedSkipped=${injectedSkipped} spaceId=${spaceId}`);
+  if (config.sessionInit?.enabled && conversationId && !isAuxiliary) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
       const { getMetadataClient } = await import("./meta/client.js");
@@ -828,7 +821,7 @@ export async function handleChatCompletions(
       // 与 workbuddyHandler.ts 里的 kernelUserKey 逻辑对齐（那里也是客户端优先）。
       const kernelUserKey = apiKey || config.tdai?.apiKey || "";
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, kernelUserKey);
-      const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
+      let presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
       const compositeKey = `${agentSource}:${sessionKey}`;
@@ -844,8 +837,26 @@ export async function handleChatCompletions(
       const recovered = await store.getOrRecover(compositeKey, identity, {
         metadataClient,
         messages: body.messages as Array<Record<string, unknown>> ?? [],
-        presetIdentity,
+        // An empty sentinel tells history-scan not to persist a markerless
+        // bypass before no-form identity discovery gets a chance to run.
+        presetIdentity: presetIdentity ?? (_dshNoForm ? {} : undefined),
       });
+
+      if (_dshNoForm && recovered?.status !== "initialized" && !presetIdentity && userId) {
+        try {
+          const { resolveSoleAccessibleIdentity } = await import("./session/no-form-identity.js");
+          presetIdentity = await resolveSoleAccessibleIdentity(metadataClient, userId);
+          if (presetIdentity) {
+            console.log(
+              `[session-init] dsh no-form auto-selected sole agent=${presetIdentity.agentId} team=${presetIdentity.teamId}`,
+            );
+          }
+        } catch (error: unknown) {
+          console.warn(
+            `[session-init] dsh no-form identity discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
 
       let initResult: Awaited<ReturnType<typeof handleSessionInit>>;
       // Only treat the session as "recovered" when it's in a terminal state
@@ -893,6 +904,20 @@ export async function handleChatCompletions(
           bypassed: recovered.bypassed,
           justRegistered: needsPrewarm, // 只在 L2b / history-scan recovery 时触发 prewarm
         };
+      } else if (_dshNoForm && !presetIdentity) {
+        // A no-form dsh profile can still use an existing binding (handled
+        // above) or validated header identity. A genuinely new anonymous
+        // session has no safe way to answer the picker, so only this request
+        // bypasses memory; do not persist a bypass binding that would prevent a
+        // later request with x-team-id/x-agent-id from initializing.
+        injectedSkipped = true;
+        initResult = {
+          intercepted: false,
+          messages: (body.messages as Record<string, unknown>[]) ?? [],
+          sessionInfo: null,
+          bypassed: true,
+          justRegistered: false,
+        };
       } else {
         // opencode 走跟 codebuddy 完全同构的通用 else 分支（复用 handleSessionInit +
         // ask_followup_question form）。验证 opencode 客户端对未知 tool_call 的真实反应。
@@ -928,6 +953,14 @@ export async function handleChatCompletions(
       }
 
       // Case 1: Fake form returned → must not forward
+      if (initResult.intercepted && initResult.response && _dshNoForm) {
+        return c.json({
+          error: "dsh_identity_not_resolved",
+          message:
+            "This dsh profile cannot render ask_user_question. Provide valid "
+            + "x-team-id and x-agent-id headers, or reuse an initialized session.",
+        }, 409);
+      }
       if (initResult.intercepted && initResult.response) {
         return initResult.response;
       }
@@ -984,7 +1017,7 @@ export async function handleChatCompletions(
       // fallback 语义：sessionJustRegistered 在此已定型（见上文 L786），
       // checkFirst 场景可安全复用。
       let memCommandPending = false;
-      if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+      if (config.memCommand?.enabled && !isAuxiliary) {
         try {
           const { parseMemCommand, isMemCommandAllowed } = await import("./mem-command/index.js");
           let peek = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1109,7 +1142,7 @@ export async function handleChatCompletions(
   //
   // 请求分类：OpenAI 协议不做 CC 的 fork/sidequery 分流（handler.ts 没接 CC
   // routing），所有请求都视为 main —— 与 codebuddy adapter classifyRequest 一致。
-  if (config.memCommand?.enabled && !isAuxiliary && !_dshHeadless) {
+  if (config.memCommand?.enabled && !isAuxiliary) {
     const { parseMemCommand, isMemCommandAllowed, executeMemCommand, buildMemResponse, extractSimpleMessages, truncateArgs } = await import("./mem-command/index.js");
     // 常规检测：最后一条 user message
     let memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
@@ -1221,8 +1254,9 @@ export async function handleChatCompletions(
     }
   }
 
-  // aux 请求(compaction/title)/ dsh headless(无 UI 无 preset)不写 L0 —— 直接透传
-  const tdaiClient = isAuxiliary || _dshHeadless || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
+  // Auxiliary requests never write L0. No-form dsh requests may write when a
+  // persisted or header-selected identity was resolved above.
+  const tdaiClient = isAuxiliary || assetCapabilities?.chat_memory === false ? null : createTdaiClient(config, spaceId);
   const tdaiIdentity = injectedSkipped
     ? null
     : deriveTdaiIdentity({
@@ -1578,7 +1612,6 @@ export async function handleChatCompletions(
       sessionKeyForSkill: sessionKey,
       agentSource,
       isAuxiliary,
-      isDshHeadless: _dshHeadless,
       sessionInfo,
       lf,
       spaceId,
@@ -1787,8 +1820,9 @@ export async function handleChatCompletions(
 
   // Skill extract trigger — count tool calls + buffer conversation.
   // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-  // aux 请求(compaction/title)/dsh headless 不触发 skill 提取 —— 保持归档 buffer 语义纯净
-  if (!isAuxiliary && !_dshHeadless && isExtractionAllowed(config, "skill")) {
+  // Auxiliary requests do not enter the skill buffer. No-form dsh requests
+  // participate whenever session identity was resolved.
+  if (!isAuxiliary && isExtractionAllowed(config, "skill")) {
     await triggerSkillExtractIfReady({
       config,
       sessionKey,
@@ -1799,7 +1833,7 @@ export async function handleChatCompletions(
       protocol: "openai",
       assetCapabilities,
     });
-  } else if (!isAuxiliary && !_dshHeadless) {
+  } else if (!isAuxiliary) {
     logExtractionSkipped(config, "skill", sessionKey);
   }
 
@@ -1891,9 +1925,6 @@ interface TapContext {
   /** True when this request was classified as auxiliary (compaction/title-gen) —
    * downstream L0/skill extract paths must skip to keep buffer semantics clean. */
   isAuxiliary: boolean;
-  /** True when this dsh request came from CLI headless / no-preset (no ask_user_question
-   * in tools) — behaves like aux for downstream side-effects. */
-  isDshHeadless: boolean;
   sessionInfo: Record<string, unknown> | null | undefined;
   /** Langfuse turn-trace context (trace = one turn). */
   lf: LangfuseTurnContext;
@@ -2208,8 +2239,9 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
 
     // Skill extract trigger — after stream finalization.
     // 同步 await：直到 store 落盘再继续，保证下一轮跨节点读到最新数据。
-    // aux 请求(compaction/title)/dsh headless 跳过 skill 触发,保持归档 buffer 语义纯净。
-    if (!ctx.isAuxiliary && !ctx.isDshHeadless && isExtractionAllowed(ctx.config, "skill")) {
+    // Auxiliary requests skip skill extraction. No-form dsh participates when
+    // the session identity was resolved before forwarding.
+    if (!ctx.isAuxiliary && isExtractionAllowed(ctx.config, "skill")) {
       await triggerSkillExtractIfReady({
         config: ctx.config,
         sessionKey: ctx.sessionKeyForSkill,
@@ -2221,7 +2253,7 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
         assetCapabilities: ctx.assetCapabilities,
         toolCallCountOverride: toolCallAccumulators.size,
       });
-    } else if (!ctx.isAuxiliary && !ctx.isDshHeadless) {
+    } else if (!ctx.isAuxiliary) {
       logExtractionSkipped(ctx.config, "skill", ctx.sessionKeyForSkill);
     }
 

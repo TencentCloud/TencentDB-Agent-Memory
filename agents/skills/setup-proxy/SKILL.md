@@ -23,7 +23,7 @@ Memory Proxy 是一个 LLM 请求代理，在请求转发到上游 LLM 之前注
 | codebuddy | `~/.codebuddy/models.json` | OpenAI Chat | models 数组追加条目 |
 | codex | `~/.codex/config.toml` | OpenAI Responses | TOML 格式，必须 `wire_api = "responses"` |
 | workbuddy | `~/.workbuddy/models.json` | OpenAI Chat / Responses | 顶层数组 |
-| dsh | `~/.dsh/settings.yaml` + `~/.dsh/.credentials.yaml` | OpenAI Chat (无 /v1) | 两个文件 + chmod 700/600 |
+| dsh | `~/.dsh/settings.yaml` + `~/.dsh/.credentials.yaml` | OpenAI Chat (无 /v1) | 默认模型写入 `agent-default-model`；增量合并两个文件；chmod 700/600 |
 | hermes | `~/.hermes/config.yaml` | OpenAI Chat | 需 header 预选 (x-team-id/agent-id/task-id) |
 | openclaw | `~/.openclaw/openclaw.json` | OpenAI Chat | 需 header 预选 + allowPrivateNetwork |
 
@@ -252,6 +252,7 @@ PANEL_URL="${PANEL_URL}" TDAI_SERVICE_ID="${INSTANCE_ID}" TDAI_USER_KEY="${USER_
 
 - 一次只配一个 agent，配完后告诉用户可以再运行配置其他 agent
 - 脚本会自动备份原配置文件为 `.bak.<timestamp>`
+- dsh 配置只更新 TencentDB Agent Memory 管理的字段，会保留其他 namespace、模型目录和凭据
 - CC 的所有模型环境变量（HAIKU/SONNET/OPUS/SUBAGENT）都会统一设置为用户选的模型
 - Codex 首次对话前必须切 Plan 模式（Shift+Tab），这是客户端限制
 - dsh 的 URL 不带 `/v1`，这是客户端硬编码的
