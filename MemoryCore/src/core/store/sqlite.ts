@@ -2584,13 +2584,19 @@ export class VectorStore implements IMemoryStore {
         conditions.push("task_id = ?");
         params.push(filter.taskId);
       }
+      // Filter by recorded_at (write time, ISO TEXT) — NOT the `timestamp` column
+      // (message time). This must match the field returned to clients as
+      // ConversationItem.timestamp (see v2-router handleConversationQuery), so
+      // cursor pagination (before_ts → time_end) stays in one time dimension.
+      // Aligns with tcvdb queryL0Paginated (recorded_at_ms) and queryL0ForL1
+      // (recorded_at ASC). ISO 8601 UTC strings compare monotonically.
       if (filter.timeStartMs !== undefined) {
-        conditions.push("timestamp >= ?");
-        params.push(filter.timeStartMs);
+        conditions.push("recorded_at >= ?");
+        params.push(new Date(filter.timeStartMs).toISOString());
       }
       if (filter.timeEndMs !== undefined) {
-        conditions.push("timestamp <= ?");
-        params.push(filter.timeEndMs);
+        conditions.push("recorded_at <= ?");
+        params.push(new Date(filter.timeEndMs).toISOString());
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -2600,8 +2606,9 @@ export class VectorStore implements IMemoryStore {
       const countRow = this.db.prepare(countSql).get(...params) as { cnt: number } | undefined;
       const total = countRow?.cnt ?? 0;
 
-      // Fetch page
-      const dataSql = `SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id, role, message_text, recorded_at, timestamp FROM l0_conversations ${where} ORDER BY timestamp DESC LIMIT ? OFFSET ?`;
+      // Fetch page — ORDER BY recorded_at DESC (write time) matches the cursor
+      // dimension returned to clients and the time_end filter above.
+      const dataSql = `SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id, role, message_text, recorded_at, timestamp FROM l0_conversations ${where} ORDER BY recorded_at DESC LIMIT ? OFFSET ?`;
       const rows = this.db.prepare(dataSql).all(...params, filter.limit, filter.offset) as unknown as L0QueryRow[];
 
       return { rows, total };

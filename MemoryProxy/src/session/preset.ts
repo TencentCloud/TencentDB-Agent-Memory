@@ -105,7 +105,7 @@ export function resolvePresetIdentity(
     // broadened across all of the agent's memories. Only an unknown team or
     // unknown agent is a real identity mismatch (they're the mandatory
     // dimensions); a task mismatch is silently dropped with a caller-side
-    // warning instead. See PR feat/task-optional-memory.
+    // warning instead. See PR feat/task optional memory (#1131).
   }
 
   // team + agent resolved → register directly. task_id is OPTIONAL: a

@@ -99,7 +99,15 @@ memory:
     timeoutMs: 5000
   storeBackend: sqlite
   embedding:
-    provider: none
+    # Embedding 后端：默认走硅基流动 Qwen3-VL-Embedding-8B（4096 维，OpenAI 兼容 /v1/embeddings）。
+    # 通过 .env 的 MEMORY_EMBED_* 覆盖；provider/model/dimensions 变更时，容器启动会
+    # 自动 DROP+重建 vec0 表（见 src/core/store/sqlite.ts init()）并触发全量重嵌入。
+    # 历史：曾用本地 llama-server bge-m3 @8080（1024 维）；已弃用 llama，改硅基托管。
+    provider: "${MEMORY_EMBED_PROVIDER:-openai}"
+    baseUrl: "${MEMORY_EMBED_BASE_URL:-https://api.siliconflow.cn/v1}"
+    apiKey: "${MEMORY_EMBED_API_KEY:-}"
+    model: "${MEMORY_EMBED_MODEL:-Qwen/Qwen3-VL-Embedding-8B}"
+    dimensions: ${MEMORY_EMBED_DIMENSIONS:-4096}
 
 # ── Skill 模块 ──
 skill:
@@ -123,9 +131,8 @@ YAML
 
 info "启动 memory-core (image=$MEMORY_CORE_IMAGE, port=$MEMORY_CORE_PORT)"
 $DOCKER run -d --name "$CONTAINER" \
-  --network "$NETWORK" \
-  --network-alias memory-core \
-  -p "${MEMORY_CORE_PORT}:8420" \
+  --network host \
+  --add-host=host.docker.internal:host-gateway \
   -v "${MEMORY_CORE_VOLUME}:/data/tdai-memory" \
   -v "$CORE_CONFIG_FILE:/data/config/tdai-gateway.yaml:ro" \
   -e TDAI_GATEWAY_PORT=8420 \

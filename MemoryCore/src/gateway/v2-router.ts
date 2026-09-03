@@ -847,6 +847,9 @@ async function handleConversationQuery(body: unknown, _auth: V2AuthContext, requ
       task_id: r.task_id,
       role: r.role as ConversationItem["role"],
       content: r.message_text,
+      // `timestamp` exposed to clients = DB recorded_at (write time). The store
+      // filter/sort (queryL0Paginated) and the cursor (before_ts → time_end)
+      // both operate on this same dimension, so pagination is consistent.
       timestamp: r.recorded_at,
     }));
 
@@ -861,8 +864,11 @@ async function handleConversationQuery(body: unknown, _auth: V2AuthContext, requ
   if (iso?.userId) filtered = filtered.filter((r) => r.user_id === iso.userId);
   if (iso?.agentId) filtered = filtered.filter((r) => r.agent_id === iso.agentId);
   if (iso?.taskId) filtered = filtered.filter((r) => r.task_id === iso.taskId);
-  if (time_start) { const ms = new Date(time_start).getTime(); filtered = filtered.filter((r) => r.timestamp >= ms); }
-  if (time_end) { const ms = new Date(time_end).getTime(); filtered = filtered.filter((r) => r.timestamp <= ms); }
+  // Filter on recorded_at (write time) — the same dimension we return as
+  // `timestamp` below and that queryL0ForL1 sorts by. Comparing ISO strings
+  // against the caller's time_start/time_end (also ISO) is monotonic.
+  if (time_start) { filtered = filtered.filter((r) => r.recorded_at >= time_start); }
+  if (time_end) { filtered = filtered.filter((r) => r.recorded_at <= time_end); }
   const total = filtered.length;
   const page = filtered.slice(offset, offset + limit);
   const messages: ConversationItem[] = page.map((r) => ({
@@ -874,6 +880,8 @@ async function handleConversationQuery(body: unknown, _auth: V2AuthContext, requ
     task_id: r.task_id,
     role: r.role as ConversationItem["role"],
     content: r.message_text,
+    // `timestamp` exposed to clients = DB recorded_at (write time). Same
+    // dimension as the filter above; keeps cursor pagination consistent.
     timestamp: r.recorded_at,
   }));
 
@@ -979,6 +987,8 @@ async function handleConversationSearch(body: unknown, auth: V2AuthContext, requ
   }
 
   const messages: ConversationSearchHit[] = result.results.map((r) => ({
+    // `timestamp` = recorded_at (write time), consistent with the query path.
+    // Search is relevance-ranked, not time-paged, so no cursor implication.
     id: r.id, role: r.role as ConversationSearchHit["role"], content: r.content, timestamp: r.recorded_at, score: r.score,
   }));
 

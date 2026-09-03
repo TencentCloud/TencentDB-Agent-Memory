@@ -307,9 +307,13 @@ export interface L0CountFilter {
   userId?: string;
   agentId?: string;
   taskId?: string;
-  /** Timestamp >= (epoch ms, inclusive). */
+  /** recorded_at >= (epoch ms, inclusive). The store converts this to an ISO
+   *  string and compares against the DB `recorded_at` (write-time) column — the
+   *  same field returned to clients as ConversationItem.timestamp, so cursor
+   *  pagination (before_ts → time_end) stays in one time dimension. NOT the
+   *  `timestamp` column (message original time). */
   timeStartMs?: number;
-  /** Timestamp <= (epoch ms, inclusive). */
+  /** recorded_at <= (epoch ms, inclusive). See timeStartMs. */
   timeEndMs?: number;
 }
 
