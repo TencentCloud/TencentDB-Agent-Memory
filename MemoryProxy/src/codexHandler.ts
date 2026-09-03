@@ -1112,10 +1112,15 @@ export async function handleCodexEndpoint(
   });
 
   // ── 11. Forward to upstream ────────────────────────────────────────────────
+  // 把 per-agent 协议兼容开关传给 forwardStage（历史缺口：未传时上游 URL 会
+  // 拼成不存在的 /responses 路径）。
+  const codexUpstream = config.upstream.agents?.codex;
   return (await forwardStage({ c, config }, {
     protocol: "responses",
     pipe,
     agent: "codex",
+    chatCompletions: codexUpstream?.chatCompletions === true,
+    responsesToAnthropic: codexUpstream?.responsesToAnthropic === true,
     body,
     setContentType: true,
     shape: {
