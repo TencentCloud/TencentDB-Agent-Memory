@@ -176,7 +176,8 @@ export default function ChatMemoryPanel(
                 const isOwner = b.uploaded_by_user_id === currentUserId;
                 const canToggleScope = scopeTab === 'fixed' && isOwner && !!b.scope;
                 const canUnbind = scopeTab === 'fixed' && !isSelfChatMemory(b);
-                const l0Count = b.layer_counts?.L0_messages ?? 0;
+                // 列表不预置 0；只有选中后已读取到的真实计数才显示徽章。
+                const l0Count = b.layerCounts.L0;
                 return (
                   <div className="_memory-card">
                     {/* 第 1 行：标题（左） + 蓝色计数徽章（右） */}
@@ -189,7 +190,9 @@ export default function ChatMemoryPanel(
                           </span>
                         )}
                       </span>
-                      {l0Count > 0 && <span className="_memory-card-count">{l0Count}</span>}
+                      {typeof l0Count === 'number' && l0Count > 0 && (
+                        <span className="_memory-card-count">{l0Count}</span>
+                      )}
                     </div>
 
                     {/* 第 2 行：资产真实 id，等宽灰色 */}
