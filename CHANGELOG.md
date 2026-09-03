@@ -30,6 +30,12 @@
 
 不动配置 = 行为完全不变。
 
+### 🐛 修复
+
+#### 安全 / 输入净化
+
+- **FTS5 查询语法注入防护** ([#160](https://github.com/TencentCloud/TencentDB-Agent-Memory/issues/160))：`buildFtsQuery()` 现在会在构造 SQLite FTS5 `MATCH` 表达式前统一清洗 fallback / jieba 分词 token，过滤 `AND` / `OR` / `NOT` / `NEAR` 等保留操作符和 FTS5 语法字符，避免用户输入改变查询语义或触发语法错误。普通关键词搜索的 OR 召回策略保持不变，并新增真实 SQLite FTS5、VectorStore L1/L0 fallback 与普通召回对比测试。
+
 ---
 
 ## [0.3.6] - 2026-05-27
