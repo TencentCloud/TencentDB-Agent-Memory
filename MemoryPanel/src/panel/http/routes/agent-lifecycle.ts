@@ -10,7 +10,8 @@
  * 本路由的做法（业务级联收口在 control 层，不改内核）：
  *   1. auth/verify 反查 caller
  *   2. agent/get 拿到 agent，强校验 owner_user_id === caller（本期不允许 admin 代删）
- *   3. skill/list 按 owner_agent_id + active 分页拉全
+ *   3. skill/list 按 owner_agent_id + active 分页拉全；只有内核明确返回
+ *      404 "Skill module not enabled" 时，才把 capability 缺失视为没有 skill
  *   4. 逐条 skill/delete —— 任一失败立即中断，返回 500 + 已删列表 + 失败 skill_id
  *      + 内核错误 message；此时 agent/archive 不会被调用，caller 需要修复后重试
  *   5. 全部 skill 成功归档后调 meta/agent/archive
@@ -39,6 +40,7 @@ import {
 
 /** skill/list 一页 100 条 —— 与 knowledge fetchAllMetaListItems 分页步长对齐。 */
 const SKILL_LIST_PAGE = 100;
+const SKILL_MODULE_DISABLED_MESSAGE = 'Skill module not enabled';
 
 interface AgentRaw {
   agent_id: string;
@@ -52,6 +54,11 @@ interface SkillRow {
   skill_id: string;
   version: number;
   owner_agent_id?: string;
+}
+
+/** Only MemoryCore's explicit capability-absence response is safe to treat as no Skills. */
+function isSkillModuleDisabled(env: MetaEnvelope<unknown>): boolean {
+  return env.code === 404 && env.message === SKILL_MODULE_DISABLED_MESSAGE;
 }
 
 /** skill/list 分页拉取该 agent 名下所有 active skill。 */
@@ -76,7 +83,10 @@ async function listAgentSkills(
       },
       ctx,
     );
-    if (env.code !== 0) return { ok: false, envelope: env };
+    if (env.code !== 0) {
+      if (isSkillModuleDisabled(env)) return { ok: true, items: [] };
+      return { ok: false, envelope: env };
+    }
     const batch = extractListItems<SkillRow>(env);
     all.push(...batch);
     const total = (env.data as { total?: number } | null)?.total ?? all.length;
