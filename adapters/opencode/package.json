@@ -1,0 +1,67 @@
+{
+  "name": "@tencentdb-agent-memory/opencode-adapter",
+  "version": "0.1.0",
+  "description": "Durable, tool-aware OpenCode adapter for TencentDB Agent Memory",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tencentdb",
+    "agent-memory",
+    "skill-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
+    "directory": "adapters/opencode"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    }
+  },
+  "bin": {
+    "tdai-opencode": "./bin/tdai-opencode.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "scripts",
+    "README.md",
+    "README_CN.md",
+    "USER_GUIDE.md",
+    "USER_GUIDE_CN.md",
+    "SELF_INSTALL.md",
+    "SELF_INSTALL_CN.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm run build",
+    "e2e:local": "npm run build && node ./test/local-gateway-e2e.mjs",
+    "prepack": "npm run build",
+    "pack:check": "npm pack --dry-run",
+    "install:opencode": "node ./bin/tdai-opencode.mjs install",
+    "doctor:opencode": "node ./bin/tdai-opencode.mjs doctor"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.16 <2"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.18.16",
+    "@types/node": "22.19.8",
+    "typescript": "5.9.3",
+    "vitest": "4.1.0"
+  }
+}

@@ -10,6 +10,7 @@
  *   ⑥ 写回 data-current + meta
  */
 
+import { createHash } from "node:crypto";
 import {
   DEFAULT_COMPRESS_OPTIONS,
   type CompressibleMessage,
@@ -22,7 +23,7 @@ import {
   type OversizeOptions,
 } from "./oversize-strategy.js";
 import { prepareArchivePayload } from "./prepare-archive.js";
-import type { SkillBufferStorage, SessionKey, SessionMeta } from "./buffer-storage.js";
+import type { SkillBufferStorage, SessionKey, SessionMeta, SkillConversationIdempotencyResult } from "./buffer-storage.js";
 import type { SkillTriggerService } from "./trigger-service.js";
 import { obsLogger } from "../../report/obs-logger.js";
 
@@ -69,6 +70,8 @@ export interface AddConversationInput {
   agent_id: string;
   /** 业务侧 task 引用，透传到 archive 落地时的 task.task_ref_id。 */
   task_id?: string;
+  /** Optional stable client key used to make retries safe across restarts. */
+  idempotency_key?: string;
   messages: CompressibleMessage[];
   /**
    * 上游 HTTP handler 的 req_id，用于 obsLogger 分段事件关联链路。
@@ -120,6 +123,13 @@ export class HandlerValidationError extends Error {
   }
 }
 
+export class SkillIdempotencyConflictError extends Error {
+  constructor() {
+    super("Idempotency key already used with a different Skill conversation payload");
+    this.name = "SkillIdempotencyConflictError";
+  }
+}
+
 export class SkillConversationAddHandler {
   private readonly buffer: SkillBufferStorage;
   private readonly trigger: SkillTriggerService;
@@ -127,6 +137,7 @@ export class SkillConversationAddHandler {
   private readonly compressOptions: CompressOptions;
   private readonly oversizeOptions: OversizeOptions;
   private readonly now: () => number;
+  private readonly sessionChains = new Map<string, Promise<unknown>>();
 
   constructor(opts: SkillConversationAddHandlerOptions) {
     this.buffer = opts.buffer;
@@ -138,6 +149,19 @@ export class SkillConversationAddHandler {
   }
 
   async handle(input: AddConversationInput): Promise<AddConversationResult> {
+    const sessionKey = [input.instance_id, input.space_id, input.user_id, input.team_id, input.agent_id, input.session_id].join("|");
+    const previous = this.sessionChains.get(sessionKey) ?? Promise.resolve();
+    const current = previous.then(() => this.handleOnce(input), () => this.handleOnce(input));
+    const tail = current.then(() => undefined, () => undefined);
+    this.sessionChains.set(sessionKey, tail);
+    return current.finally(() => {
+      // A newer operation may already have replaced this tail while `current`
+      // was running. Only the owner of the current tail may remove the entry.
+      if (this.sessionChains.get(sessionKey) === tail) this.sessionChains.delete(sessionKey);
+    });
+  }
+
+  private async handleOnce(input: AddConversationInput): Promise<AddConversationResult> {
     // [obs] handler 内部分段：readBuffer / prepareArchive / trigger.archive / writeBack。
     // 走 obsLogger 底座（结构化事件 + FileLogger + ClickHouse 后端），
     // 通过 req_id 与上游 handleConversationAdd + trigger + worker 关联全链路。
@@ -153,6 +177,53 @@ export class SkillConversationAddHandler {
       agent_id: input.agent_id,
       session_id: input.session_id,
     };
+
+    const keyHash = input.idempotency_key ? createHash("sha256").update(input.idempotency_key).digest("hex") : undefined;
+    const payloadDigest = input.idempotency_key
+      ? createHash("sha256").update(JSON.stringify({
+        session_id: input.session_id, space_id: input.space_id, user_id: input.user_id,
+        team_id: input.team_id, agent_id: input.agent_id, task_id: input.task_id, messages: input.messages,
+      })).digest("hex")
+      : undefined;
+
+    if (keyHash && payloadDigest) {
+      const receipt = await this.buffer.readIdempotencyReceipt(sess, keyHash);
+      if (receipt) {
+        if (receipt.payload_digest !== payloadDigest) throw new SkillIdempotencyConflictError();
+        return receipt.result;
+      }
+      const marker = await this.buffer.findIdempotencyMarker(sess, keyHash);
+      if (marker) {
+        const markerDigest = marker.messages
+          .map((message) => message.metadata)
+          .find((metadata) => metadata && typeof metadata === "object" && (metadata as Record<string, unknown>).tdai_idempotency_payload_digest)
+          ?.tdai_idempotency_payload_digest;
+        if (markerDigest !== payloadDigest) throw new SkillIdempotencyConflictError();
+        let recovered: SkillConversationIdempotencyResult = { status: "ok" };
+        if (marker.kind === "archive") {
+          const archiveRes = await this.trigger.archive({
+            session: sess,
+            bufferAtTrigger: { messages: marker.messages },
+            taskRefId: input.task_id,
+            idempotencyKeyHash: keyHash,
+          });
+          recovered = { status: "archived", archived: {
+            task_id: archiveRes.taskId,
+            archived_at_ms: marker.archivedAtMs ?? archiveRes.archivedAtMs,
+            archive_key: marker.archiveKey ?? archiveRes.archiveKey,
+            reason: "bytes",
+          } };
+        }
+        await this.buffer.writeIdempotencyReceipt(sess, { version: 1, key_hash: keyHash, payload_digest: payloadDigest, result: recovered, created_at_ms: Date.now() });
+        return recovered;
+      }
+      input = {
+        ...input,
+        messages: input.messages.map((message, index) => index === 0
+          ? { ...message, metadata: { ...(message.metadata ?? {}), tdai_idempotency_key_hash: keyHash, tdai_idempotency_payload_digest: payloadDigest } }
+          : message),
+      };
+    }
 
     // ② 计算 raw_bytes
     const rawBytes = totalMessagesBytes(input.messages);
@@ -228,9 +299,10 @@ export class SkillConversationAddHandler {
         taskRefId: input.task_id,
         // 透传 req_id 给 trigger 内部分段事件（write_archive / mutex_* / enqueue_agent）
         perfRequestId: input.perfRequestId,
+        idempotencyKeyHash: keyHash,
       });
       obsLogger.info("skill.add_handler.trigger_archive", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Arch,
         task_id: archiveRes.taskId,
         archive_key: archiveRes.archiveKey,
@@ -257,7 +329,7 @@ export class SkillConversationAddHandler {
         this.buffer.writeMeta(sess, nextMeta),
       ]);
       obsLogger.info("skill.add_handler.write_back", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
         archived: true,
       });
@@ -291,7 +363,7 @@ export class SkillConversationAddHandler {
         this.buffer.writeMeta(sess, nextMeta),
       ]);
       obsLogger.info("skill.add_handler.write_back", {
-        req_id: rid, session_id: input.session_id, instance_id: input.instance_id, instance_id: input.instance_id,
+        req_id: rid, session_id: input.session_id, instance_id: input.instance_id,
         dur_ms: Date.now() - t0Wb,
         archived: false,
         tool_count: nextTool,
@@ -299,6 +371,12 @@ export class SkillConversationAddHandler {
       });
     }
 
+    if (keyHash && payloadDigest) {
+      await this.buffer.writeIdempotencyReceipt(sess, {
+        version: 1, key_hash: keyHash, payload_digest: payloadDigest,
+        result, created_at_ms: Date.now(),
+      });
+    }
     return result;
   }
 

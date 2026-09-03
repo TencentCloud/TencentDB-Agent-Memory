@@ -17,7 +17,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type http from "node:http";
 import { classifyError } from "./error-handler.js";
-import type { IMemoryStore, L0Record, ProfileSyncRecord } from "../core/store/types.js";
+import { DEFAULT_ISOLATION_ID, type IMemoryStore, type L0Record, type ProfileSyncRecord } from "../core/store/types.js";
 import type { EmbeddingService } from "../core/store/embedding.js";
 import { createScopedStorageAdapter, type StorageAdapter } from "../core/storage/adapter.js";
 import { StoragePaths } from "../core/storage/types.js";
@@ -32,6 +32,7 @@ import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 // ── Zod schemas (validated types + defaults) ──
 import {
   conversationAddRequestSchema,
+  digestConversationAddPayload,
   conversationQueryRequestSchema,
   conversationSearchRequestSchema,
   conversationDeleteRequestSchema,
@@ -664,7 +665,7 @@ export async function handleV2Route(
 async function handleConversationAdd(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = conversationAddRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { session_id, messages } = parsed.data;
+  const { session_id, messages, idempotency_key } = parsed.data;
 
   // Enforce three-dim isolation. user_id / agent_id come from request body
   // or x-tdai-* headers (resolved in dispatchV2Request).  When the gateway's
@@ -682,6 +683,46 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
 
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
+
+  const idempotencyScope = idempotency_key
+    ? {
+      serviceId: auth.serviceId,
+      teamId: iso?.teamId ?? DEFAULT_ISOLATION_ID,
+      agentId: iso?.agentId ?? DEFAULT_ISOLATION_ID,
+      userId: iso?.userId ?? DEFAULT_ISOLATION_ID,
+      sessionId: session_id,
+      idempotencyKey: idempotency_key,
+    }
+    : undefined;
+  const payloadDigest = idempotency_key ? digestConversationAddPayload(parsed.data) : undefined;
+
+  if (idempotencyScope) {
+    if (!store.claimConversationAdd || !store.readConversationAddReceipt) {
+      return errorEnvelope(
+        503,
+        "Store does not support transactional conversation idempotency for keyed requests",
+        requestId,
+      );
+    }
+    const receipt = await store.readConversationAddReceipt(idempotencyScope);
+    if (receipt) {
+      if (receipt.payloadDigest !== payloadDigest) {
+        return errorEnvelope(
+          409,
+          "Idempotency key already used with a different conversation payload",
+          requestId,
+        );
+      }
+      return successEnvelope<ConversationAddData>(
+        {
+          accepted_ids: receipt.acceptedIds,
+          accepted_versions: receipt.acceptedIds.map(() => "v1"),
+          total_count: receipt.acceptedIds.length,
+        },
+        requestId,
+      );
+    }
+  }
 
   // Quota check: memory limit
   if (deps.quotaManager) {
@@ -710,10 +751,10 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
     }
   }
 
-  const embedding = deps.getEmbedding();
   const acceptedIds: string[] = [];
   const acceptedRecords: L0Record[] = [];
   const ingestBaseMs = Date.now();
+  const rounds = messages.filter((m) => m.role === "user").length;
 
   for (const [index, msg] of messages.entries()) {
     const id = `msg-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -736,30 +777,93 @@ async function handleConversationAdd(body: unknown, auth: V2AuthContext, request
       timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : recordedAtMs,
     };
 
-    let emb: Float32Array | undefined;
-    if (embedding) {
-      try { emb = await embedding.embed(msg.content); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
-    }
-
-    await store.upsertL0(record, emb);
-    acceptedIds.push(id);
     acceptedRecords.push(record);
+  }
+
+  let idempotencyOutboxEventId: string | undefined;
+  if (idempotencyScope && payloadDigest) {
+    const embeddings = new Map<string, Float32Array>();
+    const embedding = deps.getEmbedding();
+    if (embedding) {
+      for (const record of acceptedRecords) {
+        try {
+          embeddings.set(record.id, await embedding.embed(record.messageText));
+        } catch (e) {
+          console.warn(`[v2-router] L0 embedding failed:`, e);
+        }
+      }
+    }
+    const claim = await store.claimConversationAdd!({
+      scope: idempotencyScope,
+      payloadDigest,
+      records: acceptedRecords,
+      ...(embeddings.size > 0 ? { embeddings } : {}),
+      pipelineRounds: rounds,
+    });
+    if (claim.status === "conflict") {
+      return errorEnvelope(
+        409,
+        "Idempotency key already used with a different conversation payload",
+        requestId,
+      );
+    }
+    if (claim.status === "unsupported") {
+      return errorEnvelope(
+        503,
+        "Store does not support transactional conversation idempotency for keyed requests",
+        requestId,
+      );
+    }
+    if (claim.status === "replay") {
+      return successEnvelope<ConversationAddData>(
+        {
+          accepted_ids: claim.receipt.acceptedIds,
+          accepted_versions: claim.receipt.acceptedIds.map(() => "v1"),
+          total_count: claim.receipt.acceptedIds.length,
+        },
+        requestId,
+      );
+    }
+    acceptedIds.push(...claim.receipt.acceptedIds);
+    idempotencyOutboxEventId = claim.outboxEvent.eventId;
+  } else {
+    const embedding = deps.getEmbedding();
+    for (const record of acceptedRecords) {
+      let emb: Float32Array | undefined;
+      if (embedding) {
+        try { emb = await embedding.embed(record.messageText); } catch (e) { console.warn(`[v2-router] L0 embedding failed:`, e); }
+      }
+
+      await store.upsertL0(record, emb);
+      acceptedIds.push(record.id);
+    }
   }
 
   // Notify pipeline: trigger async L1 extraction (service mode).
   // Each role=user message counts as one conversation round for threshold/timer logic.
   // teamId/agentId 透传给 captureAtomic 决定 hash slot 与锁粒度。
+  const ackIdempotencyOutbox = async () => {
+    if (!idempotencyOutboxEventId || !store.ackConversationOutbox) return;
+    try {
+      await store.ackConversationOutbox(idempotencyOutboxEventId);
+    } catch (err) {
+      deps.logger.warn(`${TAG} Pipeline outbox ack failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   if (deps.notifyPipeline) {
-    const rounds = messages.filter((m) => m.role === "user").length;
     if (rounds > 0) {
+      let pipelineNotified = false;
       try {
         await deps.notifyPipeline(auth.serviceId, session_id, rounds, iso?.teamId, iso?.agentId);
+        pipelineNotified = true;
       } catch (err) {
         // Non-fatal: L0 is already persisted, pipeline will catch up later
         deps.logger.warn(`${TAG} Pipeline notify failed for ${session_id}: ${err instanceof Error ? err.message : String(err)}`);
       }
+      if (pipelineNotified) await ackIdempotencyOutbox();
     }
   }
+  if (rounds === 0) await ackIdempotencyOutbox();
 
   // Standalone-only: mirror L0 to <dataDir>/conversations/<date>.jsonl.
   // Parity with v1 /capture (l0-recorder) path — gives humans a grep-able audit
