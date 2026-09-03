@@ -7,12 +7,18 @@
   "bin": {
     "migrate-sqlite-to-tcvdb": "./bin/migrate-sqlite-to-tcvdb.mjs",
     "export-tencent-vdb": "./bin/export-tencent-vdb.mjs",
-    "read-local-memory": "./bin/read-local-memory.mjs"
+    "read-local-memory": "./bin/read-local-memory.mjs",
+    "memory-tencentdb-mcp": "./dist/memory-tencentdb-mcp.mjs"
   },
   "exports": {
     ".": {
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./gateway-client": {
+      "types": "./dist/gateway-client.d.mts",
+      "import": "./dist/gateway-client.mjs",
+      "default": "./dist/gateway-client.mjs"
     }
   },
   "scripts": {
@@ -99,6 +105,7 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@ai-sdk/openai": "^3.0.53",
     "@node-rs/jieba": "^2.0.1",
     "@opentelemetry/api": "^1.9.0",

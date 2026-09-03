@@ -313,7 +313,7 @@ const routeTable: Record<string, Handler> = {
 };
 
 /** 已注册的 v3 路由路径（供测试 / 文档）。 */
-export const V3_ROUTES = Object.keys(routeTable);
+export const V3_ROUTES = Object.freeze(Object.keys(routeTable));
 
 /** MetadataError code → envelope code。 */
 function mapErrorCode(code: string): number {

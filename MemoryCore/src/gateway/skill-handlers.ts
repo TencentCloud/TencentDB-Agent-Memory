@@ -1156,3 +1156,8 @@ export function makeSkillRouteTable(): Record<string, SkillHandler> {
     "/v3/skill/conversation/force-archive": handleForceArchive,
   };
 }
+
+/** Public skill routes, exported for capability-registry coverage checks. */
+export const SKILL_PUBLIC_ROUTES = Object.freeze(
+  Object.keys(makeSkillRouteTable()),
+);
