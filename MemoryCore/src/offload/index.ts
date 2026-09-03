@@ -84,8 +84,19 @@ let _reclaimTimer: ReturnType<typeof setTimeout> | null = null;
 // Context Engine singleton — survives across registerOffload() calls.
 let _sharedEngine: OffloadContextEngine | null = null;
 let _contextEngineRegistered = false;
-/** Set to true when registerContextEngine returns ok=false or throws — all offload functions disabled. */
-let _contextEngineRejected = false;
+/** True only when the framework actually accepted registerContextEngine() for this plugin. */
+let _contextEngineSlotAcquired = false;
+/**
+ * Set to true when the Context Engine could not be registered: the
+ * contextEngine slot is assigned to another plugin, registerContextEngine()
+ * returned { ok: false }, or registration threw. Degraded, NOT disabled:
+ * only the Context Engine lifecycle (bootstrap/ingest/assemble/compact/
+ * afterTurn) is unavailable; independent local collection, preprocessing
+ * and L3 compression hooks stay active in local-only fallback mode.
+ */
+let _contextEngineUnavailable = false;
+/** Precise cause of _contextEngineUnavailable, surfaced via getContextEngineStatus(). */
+let _contextEngineUnavailableReason: string | null = null;
 
 // SessionRegistry singleton — MUST be shared between engine and hooks.
 // OpenClaw calls register() N times; hooks from different calls may coexist.
@@ -1005,10 +1016,11 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   const _trackedOn = (hookName: string, handler: (...args: any[]) => any) => {
     _hookNames.push(hookName);
     if (typeof api.on === "function") {
-      api.on(hookName, (...args: any[]) => {
-        if (_contextEngineRejected) return; // slot not acquired — all offload disabled
-        return handler(...args);
-      });
+      // Hooks are independent of the Context Engine lifecycle. They must stay
+      // active even when engine registration failed (_contextEngineUnavailable),
+      // so local collection, preprocessing and L3 compression keep working via
+      // the before_prompt_build fast path (local-only fallback mode).
+      api.on(hookName, (...args: any[]) => handler(...args));
     } else {
       logger.error(`[context-offload] api.on not available for hook "${hookName}"! Hook will not fire.`);
     }
@@ -1222,48 +1234,67 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
 
   if (!_contextEngineRegistered) {
     // Pre-check: verify config slots.contextEngine points to this plugin.
-    // If the slot is configured for another engine (e.g. "legacy"), we must NOT
-    // register — even if api.registerContextEngine() would return ok:true,
-    // the framework won't actually call our assemble(), causing L1.5 to never settle.
+    // A mismatch is degraded, not fatal: engine-dependent behavior stays
+    // unavailable, but hooks keep running in local-only fallback mode.
     const CE_PLUGIN_ID = "memory-tencentdb";
     const configSlotCE = (api.config as any)?.plugins?.slots?.contextEngine;
     if (configSlotCE !== CE_PLUGIN_ID) {
-      logger.warn(`[context-offload] Config plugins.slots.contextEngine="${configSlotCE ?? "(not set)"}" (expected "${CE_PLUGIN_ID}"). Context engine slot not assigned to this plugin - ALL offload functions disabled.`);
-      _contextEngineRejected = true;
-      return;
-    }
+      _contextEngineUnavailable = true;
+      _contextEngineUnavailableReason =
+        `plugins.slots.contextEngine="${configSlotCE ?? "(not set)"}" (expected "${CE_PLUGIN_ID}")`;
+      logger.warn(
+        `[context-offload] Context engine NOT registered: ${_contextEngineUnavailableReason}. ` +
+        `Context-engine-dependent behavior (CE bootstrap/ingest/assemble/compact/afterTurn) is unavailable; ` +
+        `falling back to local-only mode — local collection, preprocessing and L3 compression hooks remain active. ` +
+        `Set plugins.slots.contextEngine="${CE_PLUGIN_ID}" to enable the Context Engine.`,
+      );
+    } else {
+      // Slot is ours — attempt registration. A previous mismatch may be fixed
+      // by config reload, so clear any stale fallback state first.
+      _contextEngineUnavailable = false;
+      _contextEngineUnavailableReason = null;
 
-    // First registration — actually register with the framework
-    let ceSlotOccupied = false;
-    try {
-      const result = api.registerContextEngine(CE_PLUGIN_ID, () => engine) as any;
-      if (result && result.ok === false) {
-        logger.error(`[context-offload] registerContextEngine returned { ok: false, existingOwner: ${result.existingOwner ?? "?"} }. Context engine slot occupied — ALL offload functions disabled!`);
-        ceSlotOccupied = true;
-      } else {
-        _contextEngineRegistered = true;
-        logger.debug?.("[context-offload] Context engine registered successfully (first call)");
-      }
-    } catch (ceErr) {
-      logger.warn(`[context-offload] registerContextEngine factory failed: ${ceErr}, trying direct object`);
+      // First registration — actually register with the framework
+      let ceSlotOccupied = false;
       try {
-        const result2 = api.registerContextEngine(CE_PLUGIN_ID, engine) as any;
-        if (result2 && result2.ok === false) {
-          logger.error(`[context-offload] registerContextEngine direct returned { ok: false }. Context engine slot occupied — ALL offload functions disabled!`);
+        const result = api.registerContextEngine(CE_PLUGIN_ID, () => engine) as any;
+        if (result && result.ok === false) {
           ceSlotOccupied = true;
+          _contextEngineUnavailableReason =
+            `registerContextEngine("${CE_PLUGIN_ID}") returned { ok: false, existingOwner: ${result.existingOwner ?? "?"} }`;
         } else {
           _contextEngineRegistered = true;
-          logger.debug?.("[context-offload] Context engine registered successfully (direct mode)");
+          _contextEngineSlotAcquired = true;
+          logger.debug?.("[context-offload] Context engine registered successfully (first call)");
         }
-      } catch (ceErr2) {
-        logger.error(`[context-offload] registerContextEngine direct also failed: ${ceErr2}. ALL offload functions disabled!`);
-        ceSlotOccupied = true;
+      } catch (ceErr) {
+        logger.warn(`[context-offload] registerContextEngine factory failed: ${ceErr}, trying direct object`);
+        try {
+          const result2 = api.registerContextEngine(CE_PLUGIN_ID, engine) as any;
+          if (result2 && result2.ok === false) {
+            ceSlotOccupied = true;
+            _contextEngineUnavailableReason =
+              `registerContextEngine("${CE_PLUGIN_ID}") (direct) returned { ok: false, existingOwner: ${result2.existingOwner ?? "?"} }`;
+          } else {
+            _contextEngineRegistered = true;
+            _contextEngineSlotAcquired = true;
+            logger.debug?.("[context-offload] Context engine registered successfully (direct mode)");
+          }
+        } catch (ceErr2) {
+          ceSlotOccupied = true;
+          _contextEngineUnavailableReason = `registerContextEngine("${CE_PLUGIN_ID}") threw: ${ceErr2}`;
+        }
       }
-    }
-    if (ceSlotOccupied) {
-      _contextEngineRejected = true;
-      logger.error("[context-offload] Offload module DISABLED: context engine slot occupied by another plugin. All hooks will be no-ops.");
-      return; // Early exit — do not start reclaim scheduler either
+      if (ceSlotOccupied) {
+        // Degrade gracefully (issue #846): the CE lifecycle stays unavailable,
+        // but hooks remain active and the reclaim scheduler below still starts.
+        _contextEngineUnavailable = true;
+        logger.warn(
+          `[context-offload] Context engine NOT registered: ${_contextEngineUnavailableReason}. ` +
+          `Context-engine-dependent behavior (CE bootstrap/ingest/assemble/compact/afterTurn) is unavailable; ` +
+          `falling back to local-only mode — local collection, preprocessing and L3 compression hooks remain active.`,
+        );
+      }
     }
   } else {
     logger.debug?.("[context-offload] Context engine already registered, singleton updated (hot-refresh)");
@@ -1305,6 +1336,22 @@ export function registerOffload(api: any, offloadConfig: OffloadConfig): void {
   }
 
   logger.debug?.("[context-offload] Offload module registration complete.");
+}
+
+/**
+ * Read-only snapshot of Context Engine registration state (diagnostics/tests).
+ * - `registered`: the framework accepted registerContextEngine() for this plugin.
+ * - `unavailable`: the CE lifecycle could not be registered; the module runs in
+ *   local-only fallback mode — hooks for local collection, preprocessing and
+ *   L3 compression stay active.
+ * - `reason`: precise cause of `unavailable`, else null.
+ */
+export function getContextEngineStatus(): { registered: boolean; unavailable: boolean; reason: string | null } {
+  return {
+    registered: _contextEngineSlotAcquired,
+    unavailable: _contextEngineUnavailable,
+    reason: _contextEngineUnavailableReason,
+  };
 }
 
 // ─── OffloadContextEngine ────────────────────────────────────────────────────
@@ -2307,4 +2354,5 @@ export const _testExports = {
   isInternalMemorySession,
   simpleHash,
   OffloadContextEngine,
+  getContextEngineStatus,
 };
