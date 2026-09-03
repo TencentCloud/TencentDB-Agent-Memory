@@ -117,6 +117,10 @@ sessionInit:
   maxRetries: 3
   injectAgentContext: true
   injectTaskContext: true
+  # 兜底虚拟 task：当 team 下没有真实 task 时，session-init 用这个 id 当作
+  # "已关联任务"完成注册（跳过 getTask，taskDetail=null，仅注入 agent 上下文）。
+  # 没有它时 team 无 task 会直接 bypass，用户选"是"也无任何注入。
+  defaultTaskId: "task-default-session-init"
   headerAutoSelect:
     enabled: true
     teamHeader: "x-team-id"
