@@ -41,6 +41,7 @@ export interface Team {
   name: string;
   description: string;
   owner_user_id: string;
+  status: 'active' | 'archived';
   created_at_ms: number;
   members: TeamMember[];
 }
@@ -186,6 +187,7 @@ export function adaptTeam(bt: BackendTeam, members: TeamMember[]): Team {
     name: bt.name,
     description: bt.description ?? '',
     owner_user_id: bt.owner_user_id,
+    status: bt.status,
     created_at_ms: new Date(bt.created_at).getTime(),
     members,
   };

@@ -513,7 +513,8 @@ export async function handleV2Route(
     pathname.startsWith("/v3/knowledge/") ||
     pathname.startsWith("/v3/chat-memory/") ||
     pathname.startsWith("/v3/memory-prompt/") ||
-    pathname.startsWith("/v3/memory-generation-log/")
+    pathname.startsWith("/v3/memory-generation-log/") ||
+    pathname.startsWith("/v3/topology/")
   );
   if (!isV2 && !isV3) return false;
 

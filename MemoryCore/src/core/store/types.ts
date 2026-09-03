@@ -327,6 +327,33 @@ export interface L0PaginatedResult {
   total: number;
 }
 
+/** Bounded, metadata-only aggregation used by trusted topology callers. */
+export interface L0TaskActivityFilter {
+  teamId: string;
+  taskIds: string[];
+  userId?: string;
+  timeStartMs?: number;
+  timeEndMs?: number;
+}
+
+export interface L0TaskActivityRow {
+  team_id: string;
+  task_id: string;
+  user_id: string;
+  agent_id: string;
+  session_count: number;
+  l0_message_count: number;
+  first_seen_at?: string;
+  last_seen_at?: string;
+}
+
+export interface L0TaskActivityResult {
+  items: L0TaskActivityRow[];
+  completeness: "complete" | "partial";
+  truncated: boolean;
+  scanned_records?: number;
+}
+
 /** Filter for v2 L1 paginated query (`/atomic/query`). */
 export interface L1CountFilter {
   /** Filter by memory type (episodic/persona/instruction). */
@@ -649,6 +676,9 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * plus the total count of matching rows.
    */
   queryL0Paginated?(filter: L0PaginatedFilter): MaybePromise<L0PaginatedResult>;
+
+  /** Aggregate L0 activity without returning message content or embeddings. */
+  aggregateL0TaskActivity?(filter: L0TaskActivityFilter): MaybePromise<L0TaskActivityResult>;
 
   /**
    * L1 paginated query for v2 API `/atomic/query`.

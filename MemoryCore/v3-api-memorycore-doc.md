@@ -47,7 +47,7 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 
 | 层 | 路由范围 | 额外鉴权 |
 |---|---|---|
-| 数据面 | `/v3/conversation·atomic·scenario·core/*`、`/v3/skill/*`、`/v3/knowledge/*`、`/v3/chat-memory/*`、`/v3/memory-prompt/*`、`/v3/memory-generation-log/*` | `x-tdai-service-id`（实例 ID） |
+| 数据面 | `/v3/conversation·atomic·scenario·core/*`、`/v3/topology/*`、`/v3/skill/*`、`/v3/knowledge/*`、`/v3/chat-memory/*`、`/v3/memory-prompt/*`、`/v3/memory-generation-log/*` | `x-tdai-service-id`（实例 ID） |
 | 元数据面 | `/v3/meta/*` | `x-tdai-service-id` + `x-tdai-user-key`（用户 key，`auth/verify` 免 user-key） |
 | 内部运维面 | `/v3/internal/meta/*` | 仅 Bearer，**不解析** user-key |
 | 实例销毁 | `/v3/instance/destroy` | 仅 Bearer apiKey（v1 风格，运维接口） |
@@ -84,7 +84,7 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 
 | 模块 | 接口数 | 前缀 |
 |---|---|---|
-| L0–L3 数据面 | 18 | `/v3/conversation·atomic·scenario·core/*` |
+| L0–L3 数据面与拓扑聚合 | 19 | `/v3/conversation·atomic·scenario·core/*`、`/v3/topology/*` |
 | Skill | 17 | `/v3/skill/*` |
 | Knowledge 明细 | 5 | `/v3/knowledge/*` |
 | Chat-Memory | 1 | `/v3/chat-memory/*` |
@@ -94,13 +94,13 @@ v3 接口按鉴权方式分四层（均需 `Authorization: Bearer <KERNEL_AUTH_T
 | Internal Meta | 2 | `/v3/internal/meta/*` |
 | Instance Destroy | 1 | `/v3/instance/destroy` |
 
-**合计 108 个接口。**
+**合计 109 个接口。**
 
 ---
 
 ## 3. 接口明细
 
-## 3.1 L0–L3 数据面（18）
+## 3.1 L0–L3 数据面与拓扑聚合（19）
 
 > 记忆分层：L0 原始对话（conversation）、L1 记忆原子（atomic，含 episodic/persona/instruction 三类）、L2 场景文件（scenario）、L3 核心人格（core）。
 > 全部接口接受 4 ID 隔离字段（`team_id/agent_id/user_id/task_id`，body 或 Header）。
@@ -324,6 +324,46 @@ L3 计数（**仅 v3**）。
 **请求体**：`{}`（空对象）。
 
 **响应** `data`：`{ total: number }`。
+
+### POST /v3/topology/task-activity/aggregate
+
+供可信 Panel 服务按 Task 范围聚合 L0 活动，不提供普通浏览器直连能力。请求必须同时携带
+Bearer、`x-tdai-service-id`，并在 body 中显式指定 Team 与 1–100 个 Task。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `team_id` | string | 是 | 单一 Team 范围 |
+| `task_ids` | string[] | 是 | 去重后 1–100 个 Task |
+| `user_id` | string | 否 | self-only ACL 下的用户过滤 |
+| `time_start_ms` / `time_end_ms` | number | 否 | 可选毫秒时间范围，start 不得晚于 end |
+
+**响应** `data`：
+
+```json
+{
+  "items": [
+    {
+      "team_id": "team-1",
+      "task_id": "task-1",
+      "user_id": "user-1",
+      "agent_id": "agent-1",
+      "session_count": 2,
+      "l0_message_count": 8,
+      "first_seen_at": "2026-08-31T00:00:00.000Z",
+      "last_seen_at": "2026-08-31T01:00:00.000Z"
+    }
+  ],
+  "completeness": "complete",
+  "truncated": false,
+  "scanned_records": 8
+}
+```
+
+SQLite 返回精确 `GROUP BY`；TCVDB 只读取 metadata fields 并使用 hard cap。达到 cap 时
+`completeness=partial`、`truncated=true`，计数只能解释为下界。响应不包含
+`message_text/content/embedding/summary`。
 
 ---
 

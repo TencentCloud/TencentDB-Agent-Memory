@@ -15,6 +15,7 @@ import { MembersPage } from '@/pages/MembersPage';
 import { AgentsPage } from '@/pages/AgentsPage';
 import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { GuidePage } from '@/pages/GuidePage';
+import { TeamAtlasPage } from '@/pages/TeamAtlasPage';
 
 export const routes: RouteObject[] = [
   {
@@ -22,6 +23,7 @@ export const routes: RouteObject[] = [
     element: <ConsoleLayout />,
     children: [
       { index: true, element: <WorkbenchPage /> },
+      { path: 'atlas', element: <TeamAtlasPage /> },
       { path: 'wiki', element: <WikiPage /> },
       { path: 'code', element: <CodePage /> },
       { path: 'skills', element: <SkillsPage /> },

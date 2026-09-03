@@ -105,6 +105,7 @@ import { makeKnowledgeRouteTable } from "./knowledge-handlers.js";
 import { makeChatMemoryRouteTable, clearChatMemoryContentResilient } from "./chat-memory-handlers.js";
 import { makeMemoryPromptRouteTable } from "./memory-prompt-handlers.js";
 import { makeMemoryGenerationLogRouteTable } from "./memory-generation-log-handlers.js";
+import { makeTaskActivityRouteTable } from "./activity-handlers.js";
 import { handleOffloadV2Route } from "../offload_server/router.js";
 import type { OffloadV2Deps } from "../offload_server/router.js";
 import { resolveV3StrictIsolation } from "../utils/env-config.js";
@@ -1021,6 +1022,7 @@ export class TdaiGateway {
         ...makeChatMemoryRouteTable(),
         ...makeMemoryPromptRouteTable(),
         ...makeMemoryGenerationLogRouteTable(),
+        ...makeTaskActivityRouteTable(),
       } as Record<
         string,
         (body: unknown, auth: import("./v2-schemas.js").V2AuthContext, requestId: string, deps: unknown) => Promise<import("./v2-schemas.js").ApiResponseEnvelope>

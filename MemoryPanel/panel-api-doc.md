@@ -101,6 +101,8 @@
 | POST | `/api/v1/chat-memory/search` | 分层关键词检索（L0/L1） |
 | POST | `/api/v1/task/list-with-agents` | Task 列表聚合（含 linked agents） |
 | POST | `/api/v1/agent-overview/bootstrap` | Agent 概览引导数据聚合 |
+| POST | `/api/v1/topology/bootstrap` | Team Atlas 可见拓扑聚合 |
+| POST | `/api/v1/chat-memory/status` | Chat Memory 四层数量状态（不返回正文） |
 | POST | `/api/v1/agent/delete-cascade` | 删除 Agent（级联清 skill 后 archive） |
 | POST | `/api/v1/knowledge/wiki/*` | Wiki 知识库业务路由（14 个，见 §3.8） |
 | POST | `/api/v1/knowledge/code-graph/*` | Code-Graph 业务路由（8 个，见 §3.9） |
@@ -1221,6 +1223,78 @@ KS → Panel 的 S2S 状态回调（ingest/sync 完成或进度更新）。**无
 
 ---
 
+## 3.13 Team Atlas
+
+### POST /topology/bootstrap
+
+一次聚合当前用户可见的 Team、Task、Agent、四类 Asset 及其关系。`team_ids` 必填，
+去重后须包含 1–4 个 Team；每个 Team 都必须对 caller 可见，否则返回
+`403 TEAM_NOT_VISIBLE`。页面默认只请求 active Team，避免为所有可见 Team 做无范围聚合。
+
+**请求体**
+
+```json
+{ "team_ids": ["team-1", "team-2"], "mode": "actual" }
+```
+
+**响应 `data`**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `schema_version` | `2` | IR 契约版本 |
+| `mode` | `actual \| planned \| all` | 可视边模式；省略时默认 `all` |
+| `scope` | object | caller `user_id` 与实际 Team 范围 |
+| `completeness` | `complete \| partial` | 子数据源失败、达到 500 条来源上限或 Core 聚合 partial 时为 `partial` |
+| `summary` | object | Team、Task、Agent、Asset、Edge、Warning 数量 |
+| `nodes` | array | `identity/team/task/agent/skill/llm_wiki/code_graph/chat_memory` |
+| `edges` | array | 当前 mode 的结构、规划或运行态可视边 |
+| `activities` | array | `(team, task, user, agent)` L0/Participation canonical facts |
+| `plans` | array | 与 mode 无关的 `task-agent` 事实：`team_id/task_id/agent_id/role_in_task` |
+| `bindings` | array | 与 mode 无关的固定资产绑定事实：`team_id/agent_id/asset_id/asset_type` |
+| `warnings` | array | 缺失关系告警或 `SOURCE_PARTIAL` |
+
+节点 ID 使用 `<type>:<entity_id>` 命名空间。资产必须来自 caller 的
+`asset/list-accessible(action=read)` 结果；响应不会生成指向不可见节点的边。子数据源失败
+或达到 hard cap 时保留已确认数据，并且不会把未知状态推断成“空”。`activities`、`plans`
+和 `bindings` 不含正文、embedding 或摘要；Actual 的资产过滤和 Task 的规划数量必须使用
+canonical facts，不能从 mode-specific `edges` 反推。
+
+成员、Task、Agent、各资产类型、Skill、Participation，以及团队级 Task-Agent 和
+Agent-Fixed-Asset fan-out 各自最多保留 500 条。fan-out 共用团队级预算，不会对每个 Task
+或 Agent 分别放大上限；单个资产类型失败时仍保留其他类型已确认的数据。`activities` 的
+`counts_exact` 只有在 L0 与 Participation 两个来源均完整时才为 `true`；
+`chat_memory_registered` 在 Chat Memory 资产来源不完整且未找到对应资产时为 `null`，表示未知而不是未登记。
+Panel 会再次按 Task 可见性过滤 Core 聚合行，Core 即使错误返回越权 tuple 也不会进入响应。
+
+关系类型：`member_of/belongs_to/created_by/owns/planned_for/used_in_session/records_to/`
+`contains_task_l0/initialized_by/initialized_on/fixed_binding/recalled_from`。当前没有可验证的
+非零召回 telemetry，因此不生成 `recalled_from`。
+
+### POST /chat-memory/status
+
+按与 `/chat-memory/layer` 相同的 ACL，通过 Core 的四个 count 接口读取系统 Chat Memory
+的 L0/L1/L2/L3 数量。Panel 不调用 query/read 接口，也不返回任何记忆正文。
+
+**请求体**：`{ block_id: string }`
+
+**响应 `data`**
+
+```json
+{
+  "block_id": "chat_memory-team-1-agt-1",
+  "checked_at": "2026-08-28T00:00:00.000Z",
+  "availability": "partial",
+  "layer_counts": { "L0_messages": 12, "L1": null, "L2": 2, "L3": 1 },
+  "unavailable_layers": ["L1"]
+}
+```
+
+- 单层查询失败返回 `null`，不能解释为零。
+- 手动创建且没有 Agent 数据面的 `mem-*` 返回 `not_applicable`。
+- `availability` 取值：`complete`、`partial`、`unavailable`、`not_applicable`。
+
+---
+
 ## 4. 附录
 
 ### 4.1 废弃接口
@@ -1247,8 +1321,11 @@ KS → Panel 的 S2S 状态回调（ingest/sync 完成或进度更新）。**无
 | 400 | MISSING_INSTANCE_ID | 缺 `x-tdai-service-id` |
 | 400 | INVALID_INSTANCE | 实例不存在/无效 |
 | 400 | MISSING_USER_KEY | 缺 `x-tdai-user-key` |
+| 400 | MISSING_TEAM_IDS | Team Atlas 未传 1 个以上 `team_ids` |
+| 400 | ATLAS_TEAM_LIMIT_EXCEEDED | Team Atlas 一次请求超过 4 个 Team |
 | 401 | INVALID_USER_KEY | user_key 无效（auth/verify 失败） |
 | 403 | NOT_TEAM_MEMBER | 非团队成员 |
+| 403 | TEAM_NOT_VISIBLE | Team Atlas 请求包含不可见 Team |
 | 403 | FORBIDDEN | 无资源访问权限 |
 | 404 | KNOWLEDGE_NOT_FOUND | 知识资源不存在 |
 | 500 | INTERNAL | 未捕获异常 |

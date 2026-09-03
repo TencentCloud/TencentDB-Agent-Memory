@@ -11,6 +11,8 @@ import { registerTaskRoutes } from './routes/task.js';
 import { registerAgentOverviewRoutes } from './routes/agent-overview.js';
 import { registerAgentLifecycleRoutes } from './routes/agent-lifecycle.js';
 import { registerKnowledgeRoutes } from './routes/knowledge/index.js';
+import { registerTeamAtlasRoutes } from './routes/team-atlas.js';
+import { registerChatMemoryStatusRoutes } from './routes/chat-memory-status.js';
 
 const API_PREFIX = '/api/v1';
 
@@ -34,6 +36,8 @@ export function buildPanelApp(deps: PanelDeps): Hono {
   // Agent 生命周期业务路由：/agent/delete-cascade 在 control 层级联清 skill 再 archive
   registerAgentLifecycleRoutes(api, deps);
   registerKnowledgeRoutes(api, deps);
+  registerTeamAtlasRoutes(api, deps);
+  registerChatMemoryStatusRoutes(api, deps);
   app.route(API_PREFIX, api);
 
   app.onError((err, c) => {

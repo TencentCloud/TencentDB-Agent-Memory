@@ -30,6 +30,8 @@ import type {
   StoreLogger,
   L0PaginatedFilter,
   L0PaginatedResult,
+  L0TaskActivityFilter,
+  L0TaskActivityResult,
   L0CountFilter,
   L1CountFilter,
   L1PaginatedFilter,
@@ -1866,6 +1868,78 @@ export class TcvdbMemoryStore implements IMemoryStore {
       this.logger?.warn(`${TAG} [L0-queryPaginated] FAILED: ${err instanceof Error ? err.message : String(err)}`);
       return { rows: [], total: 0 };
     }
+  }
+
+  async aggregateL0TaskActivity(filter: L0TaskActivityFilter): Promise<L0TaskActivityResult> {
+    await this._ensureInit();
+    if (this.degraded) return { items: [], completeness: "partial", truncated: false, scanned_records: 0 };
+    if (!filter.teamId || filter.taskIds.length === 0) {
+      throw new Error("teamId and at least one taskId are required");
+    }
+
+    const hardCap = 10_000;
+    const pageSize = 500;
+    const taskIds = [...new Set(filter.taskIds)];
+    const conditions = [
+      eqFilter("team_id", filter.teamId),
+      `(${taskIds.map((taskId) => eqFilter("task_id", taskId)).join(" or ")})`,
+    ];
+    if (filter.userId !== undefined) conditions.push(eqFilter("user_id", filter.userId));
+    if (filter.timeStartMs !== undefined) conditions.push(`timestamp >= ${filter.timeStartMs}`);
+    if (filter.timeEndMs !== undefined) conditions.push(`timestamp <= ${filter.timeEndMs}`);
+    const filterExpr = joinFilter(conditions);
+    const groups = new Map<string, {
+      team_id: string; task_id: string; user_id: string; agent_id: string;
+      sessions: Set<string>; count: number; first: number; last: number;
+    }>();
+    let scanned = 0;
+    let truncated = false;
+
+    while (scanned < hardCap) {
+      const limit = Math.min(pageSize, hardCap - scanned);
+      const resp = await this.client.query(this.l0Collection, {
+        retrieveVector: false,
+        limit,
+        offset: scanned,
+        filter: filterExpr,
+        outputFields: ["team_id", "task_id", "user_id", "agent_id", "session_id", "timestamp", "recorded_at_ms"],
+        sort: [{ fieldName: "recorded_at_ms", direction: "asc" }],
+      });
+      const docs = resp.documents ?? [];
+      for (const doc of docs as any[]) {
+        const key = `${doc.team_id}\0${doc.task_id}\0${doc.user_id}\0${doc.agent_id}`;
+        const timestamp = Number(doc.timestamp ?? doc.recorded_at_ms ?? 0);
+        const group = groups.get(key) ?? {
+          team_id: String(doc.team_id ?? ""), task_id: String(doc.task_id ?? ""),
+          user_id: String(doc.user_id ?? ""), agent_id: String(doc.agent_id ?? ""),
+          sessions: new Set<string>(), count: 0, first: timestamp, last: timestamp,
+        };
+        group.sessions.add(String(doc.session_id ?? ""));
+        group.count += 1;
+        group.first = Math.min(group.first, timestamp);
+        group.last = Math.max(group.last, timestamp);
+        groups.set(key, group);
+      }
+      scanned += docs.length;
+      if (docs.length < limit) break;
+      if (scanned >= hardCap) truncated = true;
+    }
+
+    return {
+      items: [...groups.values()].map((group) => ({
+        team_id: group.team_id,
+        task_id: group.task_id,
+        user_id: group.user_id,
+        agent_id: group.agent_id,
+        session_count: group.sessions.size,
+        l0_message_count: group.count,
+        ...(group.first > 0 ? { first_seen_at: new Date(group.first).toISOString() } : {}),
+        ...(group.last > 0 ? { last_seen_at: new Date(group.last).toISOString() } : {}),
+      })),
+      completeness: truncated ? "partial" : "complete",
+      truncated,
+      scanned_records: scanned,
+    };
   }
 
   async queryL1Paginated(filter: L1PaginatedFilter): Promise<L1PaginatedResult> {
