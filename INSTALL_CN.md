@@ -88,47 +88,106 @@ cd TencentDB-Agent-Memory/deploy/global-images
 - admin 登录后可以直接使用 Wiki、CodeGraph、Skill 等资产管理功能，创建 Team / Agent / Task 等业务资产
 - 如果希望隔离运维与业务（推荐），可创建 `normal` 业务用户 → 复制新用户的 `user_key` → 退出 admin 换新用户登录
 
-> 换句话说：admin 是"运维口"用来管人，业务用户是"应用口"用来管资产。
-> 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
-> 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
+> **权限模型（先理解这一点，后面步骤才不会走错）**：
+> - **admin 是"运维口"**：负责**创建 Team、创建用户、把用户拉进 Team** 这类组织管理操作。
+>   面板上「新建团队」「新建用户」的入口**只有 admin 能看到**。
+> - **业务用户是"应用口"**：在**被 admin 加入的 Team 内**管理资产（Agent / Task / Skill /
+>   Wiki / CodeGraph / 记忆），并用自己的 `user_key` 去跑 Claude Code 等 coding agent。
+> - 单机本地体验也推荐遵循这个分层，不要用 admin key 直接跑 CC。
+> - 注：2.0.0-beta.1 中 admin 不能拥有业务资产；2.0.0 正式版起 admin 也可以直接操作资产。
 
 Knowledge Service Swagger（可选，看接口调试用）：
 <http://localhost:8424/docs>
 
-### 第 1.5 步：admin 建业务用户（可选，推荐隔离运维与业务）
+### 第 1.5 步：admin 建业务用户（推荐隔离运维与业务）
 
-面板左上角「用户管理」（或用 admin 直接调 API）新建一个用户：
+> **重要（当前版本的入口约定）**：面板上**没有独立的「用户管理」菜单**。创建业务用户
+> 的入口挂在**某个 Team 的成员管理**里，因此顺序是**先由 admin 建好一个 Team，再在这个
+> Team 里创建业务用户**。这一步只能由 admin 完成。
+
+用 admin 登录面板后：
+
+1. **先建一个 Team**：点击**左上角的 Team 切换器**（顶栏那个显示当前团队名的下拉）→
+   面板底部「**+ 新建团队**」→ 填团队名 → 创建。（此入口仅 admin 可见。）
+2. **进入该 Team 的成员管理**：左侧「**成员管理**」→ 右上角「**添加成员**」。
+3. 在弹窗里把「方式」切到「**新建用户并加入团队**」→ 填用户名（仅英文字母 / 数字 /
+   下划线）→ 点「**新建并添加**」。
+   - 需要指定初始 key 时，可打开「自定义 User_Key」开关；否则由内核自动生成。
+4. 创建成功后弹窗会**一次性**显示该用户的 `user_key`（`sk-mem-...`），
+   **务必当场复制保存**——面板之后不会再展示完整值。
+
+> 除面板操作外，上述流程也可通过 API 完成。请注意这需要**两个步骤**：`user/create` 仅
+> 创建用户账号，**不会**将其加入任何 Team；如需实现"新建用户并加入团队"，还须再调用
+> `team-member/add`。两个接口均需要 **admin / 团队 admin** 权限，使用普通业务用户的 key 调用将返回 `permission_denied`：
 
 ```bash
-# API 方式，更明确（面板里等价操作在「用户」→「新建」）
 ADMIN_KEY=$(cat ./.admin-key)
+
+# 第 1 步：创建用户（仅建账号，不加入任何团队）。记下返回的 data.user_id 与 data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# 第 2 步：把上一步的 user_id 加入某个已存在的 Team（TEAM_ID 换成目标团队，role 一般填 member）
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<上一步返回的 user_id>","role":"member"}' | jq
 ```
 
-返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
+> ⚠️ 只跑第 1 步（`user/create`）**只会建出一个不属于任何团队的用户**——它无法在面板里
+> 被自己管理，也进不了会话表单。务必接着跑第 2 步 `team-member/add` 才等于面板的
+> 「新建用户并加入团队」。`team-member/add` 要求 `team_id` 对应的 Team 已存在，且不能把
+> 自己 add 进去。
+
+第 1 步返回体里的 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
 **保存好**（面板无处再看到全值，只有创建时返回一次）。
 
-之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 用户，
-可以在自己名下建 Team / Agent / Task 了。当然，admin 也可以直接操作，这里只是推荐隔离。
+之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 业务用户，
+可以在 **admin 已经把你加入的 Team 内**管理 Agent / Task / Skill / Wiki / 记忆等资产了。
+
+> **面板上建 Team 只对 admin 开放。** 业务用户登录后**看不到「新建团队」入口**，这是
+> 面板的权限设计（不是 bug）。业务用户需要新 Team 时有两条路：① 让 admin 在面板里建好
+> 并把你加入；② 用自己的 key 调 `team/create` API 自助建（把 `owner_user_id` 填成自己，
+> 建成后自动成为该 Team admin）—— 详见下一步。
 
 ### 第 2 步：在面板里建 Team / Agent / Task
 
 Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
-1. **Team**（团队）：面板左侧「团队」→ 新建
+1. **Team**（团队）：**左上角的 Team 切换器**（顶栏显示当前团队名的下拉）→ 底部「**+ 新建团队**」
    - 一个 Team 是一组资产的归属容器（memory、skill、knowledge 都归 Team）
-2. **Agent**（智能体）：进入 Team → 「Agent」→ 新建
+   - ⚠️ **面板上只有 admin 能建 Team**；业务用户看不到这个入口属正常，请让 admin 建好并把你加入
+   - 💡 **业务用户想自助建 Team？** 面板没有入口，但可以用**自己的 key** 调 API，把
+     `owner_user_id` 填成自己的 user_id —— 内核会建出 Team 并**自动把你设为该 Team 的
+     admin**（无需再手动加成员）：
+
+     ```bash
+     # 用第 1.5 步创建的那个业务用户自己的 user_key 调用
+     # 其中 name 就是团队名，改成你想要的即可（示例用的是 repro-own-team）
+     curl -sS -X POST http://localhost:8420/v3/meta/team/create \
+       -H "x-tdai-user-key: <该业务用户的 user_key>" \
+       -H "x-tdai-service-id: default" \
+       -H "Content-Type: application/json" \
+       -d '{"name":"repro-own-team","owner_user_id":"<该业务用户的 user_id>"}' | jq
+     ```
+
+     > `name` 是团队显示名，可自定义（同一用户名下不要重名，否则返回 `409`）。
+     > `team/create` 要求 body 里的 `owner_user_id` **必须等于调用 key 对应的 user_id**
+     > （即"只能建自己 own 的 Team"），否则返回 `permission_denied`。建成后你就是 owner
+     > 兼 admin，可直接在这个 Team 内管资产、跑会话。
+2. **Agent**（智能体）：进入 Team → 左侧「**Agents 管理**」→ 新建
    - 给它填一段清晰的 `description` + `system prompt`（就是这个 agent 的角色说明）
    - 例：`bug-fix 工程师`、`前端评审 agent`、`SQL 优化师`
-3. **Task**（任务，可选）：Team → 「任务」→ 新建
+3. **Task**（任务，可选）：左侧「**任务看板**」→「**新建 Task**」
    - Task 是**这一次工作的抓手**，比如「修复登录页 XSS」「上线 v1.4 灰度」
    - 记忆会关联到 Task；不建 Task 也能用，但 L2/L3 会缺 Task 维度
+   - 若想让首次会话有"一键跳过 Task"入口，可给 proxy 配 `defaultTaskId`（见后文）
 
-先建**至少 1 个 Team + 1 个 Agent**，可选建 Task。
+先准备好**至少 1 个 Team**（admin 面板建、或业务用户用上面的 API 自助建），Team 内建**至少 1 个 Agent**，可选建 Task。
 
 ### 第 3 步：把 Claude Code 指向 Proxy
 
@@ -204,6 +263,12 @@ curl -s http://localhost:8420/health | jq .services.pipelineWorker
 
 **Q: 表单选择项里空空的，或者只有别人的 team？**
 请确认当前使用的账号已在面板中创建过 Team 和 Agent。如果用的是 admin 账号，确保已创建了相关资产；如果用的是业务用户账号，检查是否已在对应 team 下建过 Agent。
+
+**Q: 用业务用户登录后，找不到「新建团队」按钮？**
+这是面板的权限设计，不是 bug：**面板上建 Team 只对 admin 开放**。你有两种办法：
+① 让 admin 登录 → 左上角 Team 切换器 →「+ 新建团队」建好，再到该 Team 的「成员管理」把你加入；
+② 自己用 `team/create` API 建（`owner_user_id` 填自己的 user_id，建成后你就是该 Team 的 admin，
+见第 2 步的说明）。两种方式建好后，重新登录就能在会话表单里看到这个 Team。
 
 
 **Q: 面板显示"Panel API 8125 未启动"？**

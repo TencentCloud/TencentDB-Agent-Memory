@@ -98,52 +98,129 @@ Open **<http://localhost:8125>** in your browser (Panel UI).
   `normal` business user → copy that user's `user_key` → log out → log
   back in as the new user.
 
-> In short: admin is the "ops account" for managing users; business users
-> are the "app accounts" for managing assets. Even in a single-machine
-> local playground, keeping this split is recommended — don't use the
-> admin key to drive CC.
-> Note: in 2.0.0-beta.1, admin could not own business assets; starting
-> from 2.0.0 stable, admin can directly operate on assets.
+> **Permission model (understand this first, or the later steps won't add up)**:
+> - **admin is the "ops account"**: responsible for organization-level actions —
+>   **creating Teams, creating users, and adding users into Teams**. The
+>   "New Team" and "New User" entries in the panel are **visible only to admin**.
+> - **Business users are the "app accounts"**: they manage assets (Agent / Task /
+>   Skill / Wiki / CodeGraph / memory) **inside the Teams the admin added them to**,
+>   and use their own `user_key` to drive coding agents like Claude Code.
+> - Even in a single-machine local playground, keeping this split is recommended —
+>   don't use the admin key to drive CC.
+> - Note: in 2.0.0-beta.1, admin could not own business assets; starting
+>   from 2.0.0 stable, admin can directly operate on assets.
 
 Knowledge Service Swagger (optional, for API poking):
 <http://localhost:8424/docs>
 
-### Step 1.5: Admin creates a business user (optional, recommended for ops/business separation)
+### Step 1.5: Admin creates a business user (recommended for ops/business separation)
 
-Panel: top-left "Users" → "New" (or use the API directly):
+> **Important (entry-point convention in the current version)**: the panel has
+> **no standalone "Users" menu**. Creating a business user lives inside a
+> **Team's member management**, so the order is: **admin creates a Team first,
+> then creates the business user inside that Team**. Only admin can do this step.
+
+After logging in as admin:
+
+1. **Create a Team first**: click the **Team switcher in the top-left** (the
+   dropdown in the header showing the current team name) → **"+ New Team"** at
+   the bottom of the panel → enter a name → create. (This entry is admin-only.)
+2. **Open that Team's member management**: left sidebar → **"Members"** →
+   **"Add Member"** in the top-right.
+3. In the dialog, switch the mode to **"Create New User & Add to Team"** → enter a
+   username (letters / digits / underscore only) → click **"Create & Add"**.
+   - To assign an initial key yourself, toggle "Custom User_Key"; otherwise the
+     core generates one automatically.
+4. On success, the dialog shows the new user's `user_key` (`sk-mem-...`)
+   **exactly once** — **copy and save it right away**; the panel won't show the
+   full value again.
+
+> In addition to the panel, this flow can also be completed via the API. Note that it
+> requires **two steps**: `user/create` only creates the user account and does **not**
+> add it to any Team; to "create a user and add them to a team", you must also call
+> `team-member/add`. Both endpoints require **admin / team-admin** privilege —
+> calling them with an ordinary business user's key returns `permission_denied`:
 
 ```bash
 ADMIN_KEY=$(cat ./.admin-key)
+
+# Step 1: create the user (account only, NOT added to any team). Note the returned data.user_id and data.default_user_key
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
   -H "x-tdai-service-id: default" \
   -H "Content-Type: application/json" \
   -d '{"username":"you"}' | jq
+
+# Step 2: add that user_id to an existing Team (replace TEAM_ID; role is usually member)
+curl -sS -X POST http://localhost:8420/v3/meta/team-member/add \
+  -H "x-tdai-user-key: $ADMIN_KEY" \
+  -H "x-tdai-service-id: default" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id":"<TEAM_ID>","user_id":"<user_id from step 1>","role":"member"}' | jq
 ```
 
-The response body's `data.default_user_key` (`sk-mem-...`) is the login
+> ⚠️ Running only step 1 (`user/create`) **creates a user that belongs to no team** —
+> it can't manage anything in the panel and won't appear in the session picker. You
+> must also run step 2 `team-member/add` to match the panel's "Create New User & Add
+> to Team". `team-member/add` requires the `team_id` Team to already exist, and you
+> cannot add yourself.
+
+The `data.default_user_key` (`sk-mem-...`) returned by step 1 is the login
 key for the new user — **save it now**; the panel won't show the full
 value again after creation.
 
 Then log out of the panel and log back in with this new key — you're now
-a `normal` user and can create Team / Agent / Task under your own name.
-Of course, admin can also operate directly; this is just a recommended separation.
+a `normal` business user, and you can manage assets (Agent / Task / Skill /
+Wiki / memory) **inside the Team the admin already added you to**.
+
+> **Creating a Team in the panel is admin-only.** After logging in, a business user
+> **won't see the "New Team" entry** — this is the panel's permission design, not a
+> bug. When a business user needs a new Team, there are two ways: ① ask an admin to
+> create it in the panel and add you; ② create it yourself via the `team/create` API
+> with your own key (set `owner_user_id` to yourself — you automatically become that
+> Team's admin). See the next step.
 
 ### Step 2: Create Team / Agent / Task in the panel
 
 Every memory entry attaches to a `team / agent / task` triple:
 
-1. **Team**: sidebar → "Team" → New
+1. **Team**: the **Team switcher in the top-left** (the header dropdown showing the
+   current team name) → **"+ New Team"** at the bottom
    - A Team owns everything: memory, skill, knowledge
-2. **Agent**: enter a Team → "Agent" → New
+   - ⚠️ **Only admin can create a Team in the panel**; it's normal that a business
+     user doesn't see this entry — ask an admin to create it and add you
+   - 💡 **Want a business user to self-serve a Team?** There's no panel entry, but you
+     can call the API with **your own key** and set `owner_user_id` to your own user_id —
+     the core creates the Team and **automatically makes you its admin** (no separate
+     add-member step needed):
+
+     ```bash
+     # Call with the business user's OWN user_key created in Step 1.5
+     # "name" is the team name — change it to whatever you want (the example uses repro-own-team)
+     curl -sS -X POST http://localhost:8420/v3/meta/team/create \
+       -H "x-tdai-user-key: <that business user's user_key>" \
+       -H "x-tdai-service-id: default" \
+       -H "Content-Type: application/json" \
+       -d '{"name":"repro-own-team","owner_user_id":"<that business user's user_id>"}' | jq
+     ```
+
+     > `name` is the team's display name and is up to you (avoid duplicates under the
+     > same user, or it returns `409`). `team/create` requires `owner_user_id` in the
+     > body to **equal the user_id of the calling key** (i.e. you can only create Teams
+     > you own), otherwise it returns `permission_denied`. Once created you are the
+     > owner and admin, and can manage assets / run sessions inside this Team right away.
+2. **Agent**: enter a Team → left sidebar **"Agents"** → New
    - Fill a clear `description` + `system prompt` (the agent's role)
    - e.g. `bug-fix engineer`, `frontend reviewer`, `SQL tuner`
-3. **Task** (optional): Team → "Task" → New
+3. **Task** (optional): left sidebar **"Task Board"** → **"New Task"**
    - A Task is the concrete piece of work: "fix login XSS", "ship v1.4"
    - Memories link to Tasks; skipping Task still works but L2/L3 lose the
      Task dimension
+   - To give the first session a "skip Task" shortcut, configure `defaultTaskId`
+     on the proxy (see below)
 
-You'll want **at least 1 Team + 1 Agent** before you start; Task is optional.
+Get **at least 1 Team** ready (admin-created in the panel, or self-served by a
+business user via the API above), **at least 1 Agent** inside it; Task is optional.
 
 ### Step 3: Point Claude Code at the Proxy
 
@@ -225,6 +302,13 @@ Make sure the current account has created at least one Team and Agent in
 the panel. If using the admin account, ensure you've created the relevant
 assets; if using a business user, check that you've created Agents under
 the corresponding team.
+
+**Q: I logged in as a business user but there's no "New Team" button?**
+This is the panel's permission design, not a bug: **creating a Team in the panel is
+admin-only**. You have two options: ① ask an admin to log in → top-left Team switcher →
+"+ New Team", then add you under that Team's "Members"; ② create it yourself via the
+`team/create` API (set `owner_user_id` to your own user_id — you become that Team's
+admin; see Step 2). Either way, after you log back in the Team shows up in the picker.
 
 **Q: Panel shows "Panel API 8125 not started"?**
 `docker ps` and check `tdai-memory-hub` is healthy. If not, look at
