@@ -129,6 +129,38 @@ function chatContentToAnthropic(content: unknown): unknown {
   return blocks.length > 0 ? blocks : "";
 }
 
+/** Chat content（string / parts 数组）→ 统一的 Anthropic content block 数组。 */
+function contentToBlocks(content: unknown): unknown[] | null {
+  if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+  if (!Array.isArray(content)) return null;
+  return content as unknown[];
+}
+
+/**
+ * 合并相邻 user 消息的 content：tool_result 块必须排在 text/image 之前
+ * （Anthropic 工具结果语义），随后是文本；两个纯文本合并成一段字符串。
+ * 用于消除 Chat→Anthropic 时连续 user 消息导致的 400（roles must alternate）
+ * 以及 tool 消息 + 后续 user 文本会拆成两条 user 的问题。
+ */
+function mergeUserMessagesContent(a: unknown, b: unknown): unknown {
+  if (typeof a === "string" && typeof b === "string") {
+    if (!a) return b;
+    if (!b) return a;
+    return `${a}\n\n${b}`;
+  }
+  const aBlocks = contentToBlocks(a) ?? [];
+  const bBlocks = contentToBlocks(b) ?? [];
+  const blocks = [...aBlocks, ...bBlocks];
+  const toolResults = blocks.filter((x) => asRecord(x)?.type === "tool_result");
+  const rest = blocks.filter((x) => asRecord(x)?.type !== "tool_result");
+  const merged = [...toolResults, ...rest];
+  if (merged.length === 1) {
+    const only = asRecord(merged[0]);
+    if (only?.type === "text") return only.text;
+  }
+  return merged;
+}
+
 // ── 请求体：Anthropic → Chat ────────────────────────────────────────────────
 
 export function anthropicToChat(
@@ -312,6 +344,9 @@ export function chatToAnthropic(
   const messages: Array<Record<string, unknown>> = [];
   let system = "";
   const mapThinking = opts.thinking === "map";
+  // legacy functions：assistant function_call 转换时记录生成的 tool_use id，
+  // 随后的 role="function" 结果消息按 name 配对成 tool_result。
+  const legacyToolIds = new Map<string, string>();
 
   for (const raw of Array.isArray(body.messages) ? (body.messages as unknown[]) : []) {
     const m = asRecord(raw);
@@ -341,12 +376,33 @@ export function chatToAnthropic(
       });
       continue;
     }
+    if (role === "function") {
+      const fnName = typeof m.name === "string" ? m.name : "";
+      const callId = fnName ? legacyToolIds.get(fnName) : undefined;
+      if (callId) {
+        legacyToolIds.delete(fnName);
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: callId,
+              content: chatContentToAnthropic(m.content) ?? "",
+            },
+          ],
+        });
+        continue;
+      }
+      // 本请求内找不到对应的 function_call → 无法生成合法 tool_result，
+      // 落回普通 user 文本（保内容不丢，但语义降级）。
+    }
     if (role === "assistant" && asRecord(m.function_call)) {
       const fc = asRecord(m.function_call);
       const blocks: unknown[] = [];
       const assistantText = chatContentToText(m.content);
       if (assistantText) blocks.push({ type: "text", text: assistantText });
       let input: unknown = {};
+      let toolId = "";
       if (fc && typeof fc.arguments === "string") {
         try {
           input = JSON.parse(fc.arguments);
@@ -356,9 +412,11 @@ export function chatToAnthropic(
       } else if (fc) {
         input = fc.arguments ?? {};
       }
+      toolId = `toolu_${randomId()}`;
+      if (typeof fc?.name === "string") legacyToolIds.set(fc.name, toolId);
       blocks.push({
         type: "tool_use",
-        id: `toolu_${randomId()}`,
+        id: toolId,
         name: typeof fc?.name === "string" ? fc.name : "",
         input,
       });
@@ -427,9 +485,21 @@ export function chatToAnthropic(
     });
   }
 
+  // Anthropic 要求 user/assistant 角色严格交替；把相邻 user 消息合并成一条，
+  // 其中 tool_result 块前置（Anthropic 工具结果语义）。
+  const coalesced: Array<Record<string, unknown>> = [];
+  for (const m of messages) {
+    const last = coalesced[coalesced.length - 1];
+    if (m.role === "user" && last && last.role === "user") {
+      last.content = mergeUserMessagesContent(last.content, m.content);
+      continue;
+    }
+    coalesced.push({ ...m });
+  }
+
   const out: Record<string, unknown> = {
     model: body.model,
-    messages,
+    messages: coalesced,
     max_tokens:
       typeof body.max_tokens === "number"
         ? body.max_tokens

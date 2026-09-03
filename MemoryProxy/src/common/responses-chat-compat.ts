@@ -73,6 +73,26 @@ function extractImages(content: unknown): string[] {
 }
 
 /**
+ * Responses reasoning item 的 summary 字段可能是官方数组形态
+ * （[{type:"summary_text", text}]），也可能是部分上游/中间层的字符串形态；
+ * 统一抽成纯文本，避免把数组 JSON.stringify 后当摘要。
+ */
+function reasoningSummaryToText(summary: unknown): string {
+  if (typeof summary === "string") return summary;
+  if (!Array.isArray(summary)) return "";
+  const parts: string[] = [];
+  for (const part of summary) {
+    if (typeof part === "string") {
+      if (part) parts.push(part);
+      continue;
+    }
+    const p = asRecord(part);
+    if (p && typeof p.text === "string" && p.text) parts.push(p.text);
+  }
+  return parts.join("\n");
+}
+
+/**
  * 合并相邻同角色消息。
  * 仅合并 system/developer/user 连续消息；assistant 只在无 tool_calls 时合并，
  * tool 消息保持与前面 assistant 的配对关系不被破坏。
@@ -86,8 +106,14 @@ function mergeMessages(messages: ChatMessage[]): ChatMessage[] {
       last.role === m.role &&
       ((m.role === "system" || m.role === "developer" || m.role === "user") ||
         (m.role === "assistant" && !last.tool_calls && !m.tool_calls));
-    if (mergeable && typeof last.content === "string" && typeof m.content === "string") {
-      last.content = `${last.content}\n\n${m.content}`;
+    const mergedContent =
+      mergeable && typeof last.content === "string" && typeof m.content === "string"
+        ? `${last.content}\n\n${m.content}`
+        : mergeable && Array.isArray(last.content) && Array.isArray(m.content)
+          ? [...last.content, ...m.content]
+          : null;
+    if (mergedContent !== null) {
+      last.content = mergedContent;
     } else {
       out.push({ ...m, content: m.content });
     }
@@ -175,7 +201,7 @@ export function responsesBodyToChat(
         typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
       if (callId) messages.push({ role: "tool", tool_call_id: callId, content: output });
     } else if (type === "reasoning") {
-      const summary = typeof item.summary === "string" ? item.summary : "";
+      const summary = reasoningSummaryToText(item.summary);
       if (summary) {
         pendingReasoning = pendingReasoning ? `${pendingReasoning}\n${summary}` : summary;
       }
@@ -243,7 +269,7 @@ export function responsesBodyToChat(
 // ── 流式转换：chat.completion.chunk SSE → Responses SSE ──────────────────────
 
 interface OpenItem {
-  kind: "text" | "tool";
+  kind: "text" | "tool" | "reasoning";
   outputIndex: number;
   itemId: string;
   text?: string;
@@ -312,7 +338,43 @@ function toolItemDoneEvents(item: OpenItem): string[] {
   ];
 }
 
+function reasoningItemDoneEvents(item: OpenItem): string[] {
+  const text = item.text ?? "";
+  return [
+    sseFrame("response.reasoning_summary_text.done", {
+      item_id: item.itemId,
+      output_index: item.outputIndex,
+      summary_index: 0,
+      text,
+    }),
+    sseFrame("response.reasoning_summary_part.done", {
+      item_id: item.itemId,
+      output_index: item.outputIndex,
+      summary_index: 0,
+      part: { type: "summary_text", text },
+    }),
+    sseFrame("response.output_item.done", {
+      output_index: item.outputIndex,
+      item: {
+        id: item.itemId,
+        type: "reasoning",
+        status: "completed",
+        summary: text ? [{ type: "summary_text", text }] : [],
+      },
+    }),
+  ];
+}
+
 function finalItemShape(item: OpenItem): Record<string, unknown> {
+  if (item.kind === "reasoning") {
+    const text = item.text ?? "";
+    return {
+      id: item.itemId,
+      type: "reasoning",
+      status: "completed",
+      summary: text ? [{ type: "summary_text", text }] : [],
+    };
+  }
   if (item.kind === "text") {
     return {
       id: item.itemId,
@@ -472,6 +534,37 @@ export function createChatSseToResponses(opts: {
     );
   }
 
+  function startReasoningItem() {
+    if (!state) return;
+    if (state.items.some((i) => i.kind === "reasoning")) return;
+    const item: OpenItem = {
+      kind: "reasoning",
+      outputIndex: 0,
+      itemId: `rs_${randomId()}`,
+      text: "",
+    };
+    addItem(item);
+    emit(
+      sseFrame("response.output_item.added", {
+        output_index: item.outputIndex,
+        item: {
+          id: item.itemId,
+          type: "reasoning",
+          status: "in_progress",
+          summary: [],
+        },
+      }),
+    );
+    emit(
+      sseFrame("response.reasoning_summary_part.added", {
+        item_id: item.itemId,
+        output_index: item.outputIndex,
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      }),
+    );
+  }
+
   function feedTextDelta(delta: string) {
     if (!state) return;
     if (!state.textItem) startTextItem();
@@ -483,6 +576,22 @@ export function createChatSseToResponses(opts: {
         item_id: item.itemId,
         output_index: item.outputIndex,
         content_index: 0,
+        delta,
+      }),
+    );
+  }
+
+  function feedReasoningDelta(delta: string) {
+    if (!state) return;
+    if (!state.items.some((i) => i.kind === "reasoning")) startReasoningItem();
+    const item = state.items.find((i) => i.kind === "reasoning");
+    if (!item) return;
+    item.text = (item.text ?? "") + delta;
+    emit(
+      sseFrame("response.reasoning_summary_text.delta", {
+        item_id: item.itemId,
+        output_index: item.outputIndex,
+        summary_index: 0,
         delta,
       }),
     );
@@ -557,6 +666,9 @@ export function createChatSseToResponses(opts: {
       if (typeof delta.content === "string" && delta.content.length > 0) {
         feedTextDelta(delta.content);
       }
+      if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+        feedReasoningDelta(delta.reasoning_content);
+      }
       if (Array.isArray(delta.tool_calls)) {
         for (const rawTc of delta.tool_calls as unknown[]) {
           const tc = asRecord(rawTc);
@@ -582,7 +694,9 @@ export function createChatSseToResponses(opts: {
     // 收尾：所有已开启的输出项按 output_index 顺序发 done 事件；
     // 并行工具各自持有独立 item，参数不会再串到其它调用上。
     for (const item of state.items) {
-      if (item.kind === "text") {
+      if (item.kind === "reasoning") {
+        for (const e of reasoningItemDoneEvents(item)) emit(e);
+      } else if (item.kind === "text") {
         for (const e of textItemDoneEvents(item)) emit(e);
       } else {
         for (const e of toolItemDoneEvents(item)) emit(e);
@@ -595,13 +709,6 @@ export function createChatSseToResponses(opts: {
       (asRecord(usage?.prompt_tokens_details)?.cached_tokens as number | undefined) ??
       (usage?.cached_tokens as number | undefined) ??
       0;
-    if (usage && Object.keys(usage).length > 0) {
-      console.log(
-        `[usage-compat] responses.completed chat→responses: ` +
-          `prompt=${usage.prompt_tokens ?? "-"} completion=${usage.completion_tokens ?? "-"} ` +
-          `total=${usage.total_tokens ?? "-"} cached=${cachedTokens}`,
-      );
-    }
     emit(
       sseFrame("response.completed", {
         response: {
@@ -649,7 +756,7 @@ export function chatJsonToResponses(
       id: `rs_${randomId()}`,
       type: "reasoning",
       status: "completed",
-      summary: reasoning,
+      summary: [{ type: "summary_text", text: reasoning }],
     });
   }
 
@@ -1023,6 +1130,24 @@ export function createResponsesSseToChatSse(opts: {
       }
       return;
     }
+    if (type === "response.reasoning_summary_text.delta") {
+      const delta = data.delta;
+      if (typeof delta === "string" && delta.length > 0) {
+        ensureStarted();
+        emit(
+          sseData({
+            choices: [
+              {
+                index: 0,
+                delta: { reasoning_content: delta },
+                finish_reason: null,
+              },
+            ],
+          }),
+        );
+      }
+      return;
+    }
     if (type === "response.output_text.delta") {
       const delta = data.delta;
       if (typeof delta === "string" && delta.length > 0) {
@@ -1156,7 +1281,7 @@ export function responsesJsonToChatJson(
         },
       });
     } else if (it.type === "reasoning") {
-      const summary = typeof it.summary === "string" ? it.summary : "";
+      const summary = reasoningSummaryToText(it.summary);
       if (summary) reasoningParts.push(summary);
     }
   }
