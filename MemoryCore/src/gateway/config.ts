@@ -412,8 +412,18 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
           : {};
       }
       fileConfig = expandEnvVars(fileConfig) as Record<string, unknown>;
-    } catch {
+    } catch (err) {
       // Config file is optional — malformed files fall back to env-only config.
+      // But never fail silently: an invalid file means EVERY yaml setting
+      // (skill module, llm model, pipeline timings, ...) is ignored and the
+      // gateway runs on pure defaults with no visible trace. Logger is not
+      // available this early, so write straight to stderr.
+      const reason = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[tdai-gateway][config] WARNING: failed to load config file ${configPath}: ${reason}. ` +
+        "Falling back to env-only config — all yaml settings are ignored.\n",
+      );
+      fileConfig = {};
     }
   }
 

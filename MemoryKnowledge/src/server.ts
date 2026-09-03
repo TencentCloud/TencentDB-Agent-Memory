@@ -14,8 +14,8 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { swaggerUI } from "@hono/swagger-ui";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import { loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
@@ -139,8 +139,14 @@ async function startServer(): Promise<void> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
 }
 
-// Start server when run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Start server when run directly.
+// 跨平台比较：argv[1] 先转绝对路径再过 pathToFileURL —— 之前直接
+// `file://${argv[1]}` 在 Windows 上因盘符/反斜杠永远不相等，服务静默退出。
+const argv1 = process.argv[1];
+const isMain =
+  !!argv1 &&
+  import.meta.url === pathToFileURL(isAbsolute(argv1) ? argv1 : resolve(argv1)).href;
+if (isMain) {
   void startServer().catch((err) => {
     log.error("Knowledge service failed to start", {
       error: err instanceof Error ? err.message : String(err),
