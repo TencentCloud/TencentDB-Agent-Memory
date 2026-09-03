@@ -1044,7 +1044,7 @@ async function handleConversationDelete(body: unknown, auth: V2AuthContext, requ
 async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
   const parsed = atomicUpdateRequestSchema.safeParse(body);
   if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
-  const { id, content, background } = parsed.data;
+  const { id, content, background, expected_version: expectedVersion } = parsed.data;
 
   const store = deps.getStore();
   if (!store) return errorEnvelope(503, "Store not available", requestId);
@@ -1060,16 +1060,22 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
 
   // Build update: content is always overwritten; background (scene_name) only if provided.
   // user_id / agent_id are preserved from the existing row — updates don't
-  // re-derive them. If the caller supplied an isolation triple that does NOT
+  // re-derive them. If the caller supplied an isolation field that does NOT
   // match the existing row, we treat it as a permission denial.
   const iso = deps.requestIsolation;
+  if (iso?.teamId && record.team_id && record.team_id !== iso.teamId) {
+    return errorEnvelope(403, `Atomic note ${id} belongs to a different team`, requestId);
+  }
   if (iso?.userId && record.user_id && record.user_id !== iso.userId) {
     return errorEnvelope(403, `Atomic note ${id} belongs to a different user`, requestId);
   }
   if (iso?.agentId && record.agent_id && record.agent_id !== iso.agentId) {
     return errorEnvelope(403, `Atomic note ${id} belongs to a different agent`, requestId);
   }
-  const updatedVersion = (record.version ?? 0) + 1;
+  if (iso?.taskId && record.task_id && record.task_id !== iso.taskId) {
+    return errorEnvelope(403, `Atomic note ${id} belongs to a different task`, requestId);
+  }
+  const updatedVersion = (expectedVersion ?? record.version ?? 0) + 1;
   const updated: MemoryRecord = {
     id,
     content,
@@ -1094,7 +1100,28 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   let emb: Float32Array | undefined;
   if (embedding) { try { emb = await embedding.embed(content); } catch (e) { console.warn(`[v2-router] L1 embedding failed:`, e); } }
 
-  await store.upsertL1(updated, emb);
+  if (expectedVersion === undefined) {
+    const stored = await store.upsertL1(updated, emb);
+    if (!stored) return errorEnvelope(500, "ATOMIC_UPDATE_FAILED", requestId);
+  } else {
+    if (!store.compareAndSwapL1) {
+      return errorEnvelope(503, "ATOMIC_CAS_UNSUPPORTED", requestId);
+    }
+    const result = await store.compareAndSwapL1(updated, expectedVersion, emb);
+    if (result.status === "conflict") {
+      return errorEnvelope(409, "ATOMIC_VERSION_CONFLICT", requestId, {
+        error_code: "ATOMIC_VERSION_CONFLICT",
+        expected_version: expectedVersion,
+        current_version: result.currentVersion,
+      });
+    }
+    if (result.status === "not_found") {
+      return errorEnvelope(404, `Atomic note not found: ${id}`, requestId);
+    }
+    if (result.status === "failed") {
+      return errorEnvelope(500, "ATOMIC_UPDATE_FAILED", requestId);
+    }
+  }
 
   // 审计：L1 update — 用外部请求的 IdFields 而非 record 原值（per user 决策）
   await recordAudit(store, {

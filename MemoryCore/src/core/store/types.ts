@@ -548,6 +548,13 @@ export interface AuditQueryFilter {
   offset?: number;
 }
 
+/** Result of an L1 compare-and-swap update. */
+export type L1CompareAndSwapResult =
+  | { status: "updated" }
+  | { status: "conflict"; currentVersion: number }
+  | { status: "not_found" }
+  | { status: "failed" };
+
 export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStore {
   // ── Capabilities ───────────────────────────────────────────
 
@@ -570,6 +577,16 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   // ── L1 Write ─────────────────────────────────────────────
 
   upsertL1(record: MemoryRecord, embedding?: Float32Array): MaybePromise<boolean>;
+  /**
+   * Atomically replace an existing L1 record only when its persisted version
+   * equals `expectedVersion`. Implementations must not fall back to a
+   * read-then-write check.
+   */
+  compareAndSwapL1?(
+    record: MemoryRecord,
+    expectedVersion: number,
+    embedding?: Float32Array,
+  ): MaybePromise<L1CompareAndSwapResult>;
   deleteL1(recordId: string, filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Batch(recordIds: string[], filter?: IsolationFilter): MaybePromise<boolean>;
   deleteL1Expired(cutoffIso: string): MaybePromise<number>;

@@ -57,6 +57,7 @@ import type {
   MemoryContentClearResult,
   AuditEntry,
   AuditQueryFilter,
+  L1CompareAndSwapResult,
 } from "./types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
 import { SKILLS_DDL, SKILL_FTS_DDL } from "../skill/skill-store-ddl.js";
@@ -391,6 +392,8 @@ export class VectorStore implements IMemoryStore {
 
   // Prepared statements — L1 (initialized in init())
   private stmtUpsertMeta!: StatementSync;
+  private stmtCompareAndSwapMeta!: StatementSync;
+  private stmtGetL1Version!: StatementSync;
   private stmtDeleteVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtInsertVec?: StatementSync;   // optional — only set when vecTablesReady
   private stmtDeleteMeta!: StatementSync;
@@ -716,6 +719,33 @@ export class VectorStore implements IMemoryStore {
         user_id=excluded.user_id,
         agent_id=excluded.agent_id
     `);
+
+    this.stmtCompareAndSwapMeta = this.db.prepare(`
+      UPDATE l1_records SET
+        content = ?,
+        type = ?,
+        priority = ?,
+        scene_name = ?,
+        team_id = ?,
+        task_id = ?,
+        version = ?,
+        timestamp_str = ?,
+        timestamp_start = ?,
+        timestamp_end = ?,
+        updated_time = ?,
+        metadata_json = ?,
+        user_id = ?,
+        agent_id = ?
+      WHERE record_id = ?
+        AND version = ?
+        AND team_id = ?
+        AND user_id = ?
+        AND agent_id = ?
+        AND task_id = ?
+    `);
+    this.stmtGetL1Version = this.db.prepare(
+      "SELECT version FROM l1_records WHERE record_id = ?",
+    );
 
     if (this.dimensions > 0) {
       this.stmtDeleteVec = this.db.prepare("DELETE FROM l1_vec WHERE record_id = ?");
@@ -1457,6 +1487,117 @@ export class VectorStore implements IMemoryStore {
         `${TAG} [L1-upsert] FAILED (non-fatal) id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
+    }
+  }
+
+  /**
+   * Atomically replace an existing L1 row when its version matches.
+   * BEGIN IMMEDIATE serializes writers before the conditional UPDATE; vector
+   * and FTS side tables are committed in the same transaction.
+   */
+  compareAndSwapL1(
+    record: MemoryRecord,
+    expectedVersion: number,
+    embedding: Float32Array | undefined,
+  ): L1CompareAndSwapResult {
+    if (this.degraded) return { status: "failed" };
+
+    const { id: recordId, timestamps } = record;
+    const tsStr = timestamps[0] ?? "";
+    const tsStart = timestamps.length > 0
+      ? timestamps.reduce((a, b) => (a < b ? a : b))
+      : tsStr;
+    const tsEnd = timestamps.length > 0
+      ? timestamps.reduce((a, b) => (a > b ? a : b))
+      : tsStr;
+    const nextVersion = expectedVersion + 1;
+    const skipVec = !embedding || embedding.every((v) => v === 0) || !this.vecTablesReady;
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = this.stmtCompareAndSwapMeta.run(
+          record.content,
+          record.type,
+          record.priority,
+          record.scene_name,
+          record.teamId || DEFAULT_ISOLATION_ID,
+          record.taskId || "",
+          nextVersion,
+          tsStr,
+          tsStart,
+          tsEnd,
+          record.updatedAt,
+          JSON.stringify(record.metadata),
+          record.userId || DEFAULT_ISOLATION_ID,
+          record.agentId || DEFAULT_ISOLATION_ID,
+          recordId,
+          expectedVersion,
+          record.teamId || DEFAULT_ISOLATION_ID,
+          record.userId || DEFAULT_ISOLATION_ID,
+          record.agentId || DEFAULT_ISOLATION_ID,
+          record.taskId || "",
+        );
+
+        if (Number(result.changes) === 0) {
+          const current = this.stmtGetL1Version.get(recordId) as
+            | { version: number }
+            | undefined;
+          this.db.exec("ROLLBACK");
+          return current
+            ? { status: "conflict", currentVersion: Number(current.version) }
+            : { status: "not_found" };
+        }
+
+        if (!skipVec) {
+          this.stmtDeleteVec!.run(recordId);
+          this.stmtInsertVec!.run(
+            recordId,
+            Buffer.from(embedding!.buffer),
+            record.updatedAt,
+          );
+        }
+
+        if (this.ftsAvailable) {
+          try {
+            this.stmtL1FtsDelete.run(recordId);
+            this.stmtL1FtsInsert.run(
+              tokenizeForFts(record.content),
+              record.content,
+              recordId,
+              record.type,
+              record.priority,
+              record.scene_name,
+              record.sessionKey,
+              record.sessionId || DEFAULT_ISOLATION_ID,
+              record.teamId || DEFAULT_ISOLATION_ID,
+              record.taskId || "",
+              record.userId || DEFAULT_ISOLATION_ID,
+              record.agentId || DEFAULT_ISOLATION_ID,
+              nextVersion,
+              tsStr,
+              tsStart,
+              tsEnd,
+              JSON.stringify(record.metadata),
+            );
+          } catch (ftsErr) {
+            this.logger?.warn(
+              `${TAG} [L1-CAS] FTS write failed (non-fatal) id=${recordId}: ${ftsErr instanceof Error ? ftsErr.message : String(ftsErr)}`,
+            );
+          }
+        }
+
+        this.db.exec("COMMIT");
+        return { status: "updated" };
+      } catch (err) {
+        try { this.db.exec("ROLLBACK"); } catch { /* ignore rollback errors */ }
+        throw err;
+      }
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} [L1-CAS] FAILED id=${recordId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { status: "failed" };
     }
   }
 

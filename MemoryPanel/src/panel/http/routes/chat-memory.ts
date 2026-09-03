@@ -1241,6 +1241,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
               id: r.record_id ?? r.id,
               title: (r.type ?? "atomic") as string,
               body: r.content ?? "",
+              version: typeof r.version === "number" ? r.version : undefined,
               tags: r.tags ?? [],
               refs: [],
               // L1 时间来源（v3 内核实际返回）：
@@ -1577,7 +1578,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
 
   // ==========================================================================
   // POST /chat-memory/layer-update
-  //   body: { block_id, layer: 'L1'|'L2'|'L3', id?, content, summary? }
+  //   body: { block_id, layer: 'L1'|'L2'|'L3', id?, content, summary?, expected_version? }
   //
   // 编辑单层记忆内容（Owner-only —— 与 layer-delete / clear 同口径：读可以借入，
   // 但修改内容只允许资产 Owner，避免借入方改掉别人的记忆）：
@@ -1599,12 +1600,27 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
       const itemId = typeof body?.id === "string" ? body.id.trim() : "";
       const summary =
         typeof body?.summary === "string" ? body.summary : undefined;
+      const expectedVersionValue = body?.expected_version;
+      const expectedVersion =
+        typeof expectedVersionValue === "number" ? expectedVersionValue : undefined;
 
       if (!blockId) return respondControlError(c, 400, "MISSING_BLOCK_ID");
       if (layerRaw !== "L1" && layerRaw !== "L2" && layerRaw !== "L3")
         return respondControlError(c, 400, "INVALID_LAYER");
       const layer = layerRaw as "L1" | "L2" | "L3";
       if (content === null) return respondControlError(c, 400, "MISSING_CONTENT");
+      if (
+        expectedVersionValue !== undefined &&
+        (expectedVersion === undefined ||
+          !Number.isSafeInteger(expectedVersion) ||
+          expectedVersion < 0 ||
+          expectedVersion >= Number.MAX_SAFE_INTEGER)
+      ) {
+        return respondControlError(c, 400, "INVALID_EXPECTED_VERSION");
+      }
+      if (expectedVersion !== undefined && layer !== "L1") {
+        return respondControlError(c, 400, "EXPECTED_VERSION_REQUIRES_L1");
+      }
       // L1（记录主键）/ L2（文件路径）都需要定位单条；L3 是整份 persona，无需 id。
       if ((layer === "L1" || layer === "L2") && !itemId)
         return respondControlError(c, 400, "MISSING_ITEM_ID");
@@ -1644,7 +1660,14 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         if (layer === "L1") {
           const env = await deps.kernelHttp.postEnvelope<unknown>(
             "/v3/atomic/update",
-            { ...idFields, id: itemId, content },
+            {
+              ...idFields,
+              id: itemId,
+              content,
+              ...(expectedVersion !== undefined
+                ? { expected_version: expectedVersion }
+                : {}),
+            },
             cred,
           );
           return respondEnvelope(c, env);
@@ -1797,6 +1820,7 @@ export function registerChatMemoryRoutes(api: Hono, deps: PanelDeps): void {
         id: (r.id ?? r.record_id ?? "") as string,
         title: (r.type ?? "atomic") as string,
         body: (r.content ?? "") as string,
+        version: typeof r.version === "number" ? r.version : undefined,
         tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
         refs: [] as string[],
         score: typeof r.score === "number" ? r.score : undefined,

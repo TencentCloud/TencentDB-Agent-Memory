@@ -17,6 +17,8 @@ export interface AtomicItem {
   id: string;
   title: string;
   body: string;
+  /** L1 optimistic-concurrency version. */
+  version?: number;
   refs?: string[];
   tags?: string[];
   /** 条目创建/记录时间（ISO8601），仅展示，不参与排序 */

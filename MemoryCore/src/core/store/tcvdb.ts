@@ -45,6 +45,7 @@ import type {
   BatchDeleteResult,
   MemoryContentClearFilter,
   MemoryContentClearResult,
+  L1CompareAndSwapResult,
 } from "./types.js";
 import { DEFAULT_ISOLATION_ID } from "./types.js";
 import { TcvdbClient, TcvdbApiError } from "./tcvdb-client.js";
@@ -654,6 +655,86 @@ export class TcvdbMemoryStore implements IMemoryStore {
     } catch (err) {
       this.logger?.warn(`${TAG} [L1-upsert] FAILED id=${record.id}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
+    }
+  }
+
+  async compareAndSwapL1(
+    record: MemoryRecord,
+    expectedVersion: number,
+    _embedding?: Float32Array,
+  ): Promise<L1CompareAndSwapResult> {
+    try {
+      await this._ensureInit();
+      if (this.degraded) return { status: "failed" };
+
+      const tsStr = record.timestamps[0] ?? "";
+      const tsStart = record.timestamps.length > 0
+        ? record.timestamps.reduce((a, b) => (a < b ? a : b))
+        : tsStr;
+      const tsEnd = record.timestamps.length > 0
+        ? record.timestamps.reduce((a, b) => (a > b ? a : b))
+        : tsStr;
+      const nextVersion = expectedVersion + 1;
+      const update: Record<string, unknown> = {
+        text: record.content,
+        type: record.type,
+        priority: record.priority,
+        scene_name: record.scene_name,
+        team_id: record.teamId ?? "",
+        user_id: record.userId ?? "",
+        agent_id: record.agentId ?? "",
+        version: nextVersion,
+        session_key: record.sessionKey,
+        session_id: record.sessionId,
+        task_id: record.taskId ?? "",
+        timestamp_str: tsStr,
+        timestamp_start: tsStart,
+        timestamp_end: tsEnd,
+        updated_time_ms: isoToEpochMs(record.updatedAt),
+        metadata_json: JSON.stringify(record.metadata),
+        memory_type: DEFAULT_MEMORY_TYPE,
+      };
+      if (!this.embeddingEnabled) update.vector = [1];
+      if (this.bm25Encoder) {
+        const sparse = this.bm25Encoder.encodeTexts([record.content]);
+        if (sparse.length > 0 && sparse[0].length > 0) {
+          update.sparse_vector = sparse[0];
+        }
+      }
+
+      const affected = await this.client.update(
+        this.l1Collection,
+        {
+          documentIds: [record.id],
+          filter: joinFilter([
+            `version = ${expectedVersion}`,
+            ...buildIsolationConditions({
+              teamId: record.teamId ?? "",
+              userId: record.userId ?? "",
+              agentId: record.agentId ?? "",
+              taskId: record.taskId ?? "",
+            }),
+          ]),
+        },
+        update,
+      );
+      if (affected > 0) return { status: "updated" };
+
+      const current = await this.client.query(this.l1Collection, {
+        documentIds: [record.id],
+        retrieveVector: false,
+        outputFields: ["version"],
+        limit: 1,
+      });
+      const doc = current.documents?.[0];
+      return doc
+        ? { status: "conflict", currentVersion: Number(doc.version ?? 0) }
+        : { status: "not_found" };
+    } catch (err) {
+      this.logger?.warn(
+        `${TAG} [L1-CAS] FAILED id=${record.id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { status: "failed" };
     }
   }
 
