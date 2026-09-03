@@ -134,6 +134,12 @@ export function sessionStatsToPrometheus(): string {
   lines.push(`tdai_auto_session_fence_allowed_total ${stats.fenceAllowed}`);
   lines.push("# TYPE tdai_auto_session_fence_miss_total counter");
   lines.push(`tdai_auto_session_fence_miss_total ${stats.fenceMiss}`);
+  const fenceEvaluated = stats.fenceBlocked + stats.fenceAllowed + stats.fenceMiss;
+  const fenceCoverage = fenceEvaluated > 0
+    ? (stats.fenceBlocked + stats.fenceAllowed) / fenceEvaluated
+    : 0;
+  lines.push("# TYPE tdai_auto_session_fence_coverage gauge");
+  lines.push(`tdai_auto_session_fence_coverage ${fenceCoverage.toFixed(4)}`);
   const reuse =
     stats.created + stats.resumed > 0
       ? stats.resumed / (stats.created + stats.resumed)

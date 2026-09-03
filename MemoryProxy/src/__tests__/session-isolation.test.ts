@@ -520,10 +520,14 @@ describe("sessionStatsToPrometheus 输出格式", () => {
     recordSession("resumed", 3);
     recordSession("fenceBlocked", 2);
     recordSession("fenceAllowed", 8);
+    recordSession("fenceMiss", 2);
     const out = sessionStatsToPrometheus();
     expect(out).toContain("tdai_auto_session_reuse_rate 0.7500");
     expect(out).toContain("tdai_auto_session_fence_blocked_total 2");
     expect(out).toContain("tdai_auto_session_fence_allowed_total 8");
+    expect(out).toContain("tdai_auto_session_fence_miss_total 2");
+    // coverage = (2+8)/(2+8+2) = 0.8333
+    expect(out).toContain("tdai_auto_session_fence_coverage 0.8333");
     expect(out).toContain("tdai_auto_session_scope_rejected_total 0");
   });
 });

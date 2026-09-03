@@ -132,7 +132,12 @@ export function createApp(config: ProxyConfig): Hono {
     const fenceRate = fenceTotal > 0
       ? Number((snap.fenceBlocked / fenceTotal).toFixed(3))
       : 0;
-    return c.json({ ...autoSessionSizes(), expiredLedger: recentExpiredSessions().length, reuseRate, fenceRate, stats: snap, breakdown: getSessionStatsBreakdown() }, 200);
+    // fenceCoverage = 有归属信息可校验的写入占比（blocked+allowed）/ (blocked+allowed+miss）
+    const fenceEvaluated = fenceTotal + snap.fenceMiss;
+    const fenceCoverage = fenceEvaluated > 0
+      ? Number((fenceTotal / fenceEvaluated).toFixed(3))
+      : 0;
+    return c.json({ ...autoSessionSizes(), expiredLedger: recentExpiredSessions().length, reuseRate, fenceRate, fenceCoverage, stats: snap, breakdown: getSessionStatsBreakdown() }, 200);
   });
 
   // 统一兜底：未捕获的异常返回带修复建议的 JSON，而不是裸文本。
