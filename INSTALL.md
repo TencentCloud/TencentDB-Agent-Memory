@@ -135,9 +135,9 @@ After logging in as admin:
    **exactly once** — **copy and save it right away**; the panel won't show the
    full value again.
 
-> You can also do this via the API (equivalent to panel steps 2–3). Note it takes
-> **two calls**: `user/create` only creates the user account and does **not** add it
-> to any Team; to "create a user and add to the team", you must then call
+> In addition to the panel, this flow can also be completed via the API. Note that it
+> requires **two steps**: `user/create` only creates the user account and does **not**
+> add it to any Team; to "create a user and add them to a team", you must also call
 > `team-member/add`. Both endpoints require **admin / team-admin** privilege —
 > calling them with an ordinary business user's key returns `permission_denied`:
 

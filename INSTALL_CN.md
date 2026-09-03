@@ -116,9 +116,9 @@ Knowledge Service Swagger（可选，看接口调试用）：
 4. 创建成功后弹窗会**一次性**显示该用户的 `user_key`（`sk-mem-...`），
    **务必当场复制保存**——面板之后不会再展示完整值。
 
-> 也可以用 API 完成（等价于面板第 2～3 步）。注意这需要**两步**：`user/create` 只
-> 创建用户账号、**不会**把它加进任何 Team；要"新建用户并加入团队"，还得再调一次
-> `team-member/add`。两个接口都需要 **admin / 团队 admin** 权限，用普通业务用户的 key 调用会返回 `permission_denied`：
+> 除面板操作外，上述流程也可通过 API 完成。请注意这需要**两个步骤**：`user/create` 仅
+> 创建用户账号，**不会**将其加入任何 Team；如需实现"新建用户并加入团队"，还须再调用
+> `team-member/add`。两个接口均需要 **admin / 团队 admin** 权限，使用普通业务用户的 key 调用将返回 `permission_denied`：
 
 ```bash
 ADMIN_KEY=$(cat ./.admin-key)
