@@ -140,6 +140,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: false,
     url: "",
     timeoutMs: 5000,
+    gatewayApiKey: "",
   },
   systemUsers: [],
   admin: { apiKey: "" },
@@ -474,6 +475,15 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
+      // Precedence: env > yaml > default("") — aligned with core
+      // TDAI_GATEWAY_API_KEY ops habit and admin.apiKey above. The value is
+      // the gateway shared secret (TDAI_GATEWAY_API_KEY) sent as Bearer on
+      // auth/verify calls; empty = no Authorization header (legacy behavior,
+      // requires the gateway Bearer gate to stay disabled).
+      gatewayApiKey:
+        (process.env.TDAI_PROXY_GATEWAY_API_KEY ?? "").trim() ||
+        expandEnv(yaml.auth?.gatewayApiKey ?? "") ||
+        DEFAULT_CONFIG.auth.gatewayApiKey!,
     },
     // Entries without a non-empty userId are silently dropped — matching is
     // by userId now, and an empty userId would otherwise collide with
