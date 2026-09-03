@@ -45,6 +45,11 @@ import { deriveTdaiIdentity } from "./tdai/identity.js";
 import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
+import {
+  chatToAnthropic as chatToAnthropicReq,
+  anthropicJsonToChatJson,
+  createAnthropicSseToChatSse,
+} from "./common/chat-anthropic-compat.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
@@ -257,7 +262,7 @@ function buildUpstreamBody(
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
@@ -275,7 +280,15 @@ function buildUpstreamHeaders(
   // empty/undefined → passthrough (client's own Authorization survives).
   // cost-guard's `target.authHeaders` still gets to override everything.
   if (effectiveApiKey && !target.authHeaders) {
-    headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    const agent = c.req.path.split("/")[1] ?? "codebuddy";
+    if (config.upstream.agents[agent]?.chatToAnthropic === true) {
+      // TRACK 05A：转成 Anthropic 后上游要 x-api-key + anthropic-version。
+      headers["x-api-key"] = effectiveApiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      delete headers["authorization"];
+    } else {
+      headers["authorization"] = `Bearer ${effectiveApiKey}`;
+    }
   }
 
   if (target.authHeaders) {
@@ -1285,7 +1298,10 @@ export async function handleChatCompletions(
     : config.upstream.apiKey;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
-  const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/chat/completions";
+  if (config.upstream.agents[agentFromPath ?? ""]?.chatToAnthropic === true) {
+    forwardEndpoint = "/v1/messages";
+  }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
   // turn counting. ClickHouse keeps the raw session_key (it has its own
@@ -1420,7 +1436,12 @@ export async function handleChatCompletions(
     lf,
   });
 
-  const upstreamBody = buildUpstreamBody(body, target);
+  let upstreamBody = buildUpstreamBody(body, target);
+  // TRACK 05A：WorkBuddy/Chat 客户端指向 Anthropic 风格上游时，Chat 请求 → Anthropic 后再转发。
+  if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+    upstreamBody = chatToAnthropicReq(upstreamBody);
+    pipe.info("PROTOCOL", "workbuddy chat→anthropic (chatToAnthropic)");
+  }
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
   // default upstream (never the alternate route), so its apiKey must be applied
@@ -1588,7 +1609,10 @@ export async function handleChatCompletions(
       preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const tappedStream = upstreamResp.body.pipeThrough(passthrough);
+    const convertedStream = config.upstream.agents[agentSource]?.chatToAnthropic === true
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToChatSse({ model: effectiveModel }))
+      : upstreamResp.body;
+    const tappedStream = convertedStream.pipeThrough(passthrough);
 
     return new Response(tappedStream, { status: upstreamResp.status, headers: respHeaders });
   }
@@ -1600,7 +1624,12 @@ export async function handleChatCompletions(
   let usage: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
   try {
-    const respJson = JSON.parse(respText) as Record<string, unknown>;
+    let respJson = JSON.parse(respText) as Record<string, unknown>;
+    if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
+      respJson = anthropicJsonToChatJson(respJson);
+      // 转换后必须回写 respText：非流式路径从不重新序列化 respJson。
+      respText = JSON.stringify(respJson);
+    }
     if (respJson.usage && typeof respJson.usage === "object") {
       usage = respJson.usage as Record<string, unknown>;
     }

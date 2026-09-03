@@ -52,6 +52,8 @@ import { recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
+import { responsesBodyToChat, createChatSseToResponses } from "./common/responses-chat-compat.js";
+import { responsesToAnthropic, createAnthropicSseToResponsesSse } from "./common/responses-anthropic-compat.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
@@ -489,10 +491,29 @@ async function forwardToUpstream(
   // 对齐 codexHandler: 支持 config.upstream.agents?.workbuddy 单独指 URL/apiKey，
   // 未配置时回退到全局 config.upstream.{url,apiKey}。
   const perAgent = (config.upstream as unknown as {
-    agents?: { workbuddy?: { url?: string; apiKey?: string } };
+    agents?: {
+      workbuddy?: {
+        url?: string;
+        apiKey?: string;
+        chatCompletions?: boolean;
+        responsesToAnthropic?: boolean;
+      };
+    };
   }).agents?.workbuddy;
   const upstreamBase = ((perAgent?.url ?? config.upstream.url ?? "") as string).replace(/\/$/, "");
-  const upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
+  const wbToAnthropic = perAgent?.responsesToAnthropic === true;
+  const wbToChat = perAgent?.chatCompletions === true;
+  let outboundBody: Record<string, unknown> = body;
+  let upstreamPath = c.req.path.replace(/^\/workbuddy\/[^/]+/, "");
+  if (wbToAnthropic) {
+    outboundBody = responsesToAnthropic(body, { model: modelId });
+    upstreamPath = "/v1/messages";
+    pipe.info("PROTOCOL", "workbuddy responses→anthropic (responsesToAnthropic)");
+  } else if (wbToChat) {
+    outboundBody = responsesBodyToChat(body, { model: modelId });
+    upstreamPath = "/chat/completions";
+    pipe.info("PROTOCOL", "workbuddy responses→chat (chatCompletions)");
+  }
   const upstreamUrl = joinUrl(upstreamBase, upstreamPath);
 
   const headers = buildUpstreamHeaders(c, config);
@@ -501,7 +522,7 @@ async function forwardToUpstream(
     headers["authorization"] = `Bearer ${perAgent.apiKey}`;
     delete headers["x-api-key"];
   }
-  const bodyStr = JSON.stringify(body);
+  const bodyStr = JSON.stringify(outboundBody);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
   pipe.forwardStart(upstreamUrl);
@@ -596,7 +617,13 @@ async function forwardToUpstream(
   }
 
   // SSE + langfuse: tee & tap
-  const [passStream, tapStream] = upstreamResp.body.tee();
+  const upstreamStream =
+    wbToAnthropic
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToResponsesSse({ model: modelId }))
+      : wbToChat
+        ? upstreamResp.body.pipeThrough(createChatSseToResponses({ model: modelId }))
+        : upstreamResp.body;
+  const [passStream, tapStream] = upstreamStream.tee();
   void consumeWorkbuddyStream(tapStream, {
     startTime,
     modelId,

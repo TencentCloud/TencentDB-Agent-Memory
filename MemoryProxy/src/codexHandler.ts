@@ -54,6 +54,8 @@ import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import { responsesBodyToChat, createChatSseToResponses } from "./common/responses-chat-compat.js";
+import { responsesToAnthropic, createAnthropicSseToResponsesSse } from "./common/responses-anthropic-compat.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -1081,8 +1083,23 @@ async function forwardToUpstream(
   // Responses API 的兼容层——部分 OpenAI 兼容上游只实现
   // messages/chat_completions，不支持 /responses，此处允许按 agent 覆盖。
   const agentUpstreamEntry = config.upstream.agents?.["codex"];
+  const codexToAnthropic = agentUpstreamEntry?.responsesToAnthropic === true;
+  const codexToChat = agentUpstreamEntry?.chatCompletions === true;
+  let outboundBody: Record<string, unknown> = body;
+  let outboundEndpoint = c.req.path;
+  if (codexToAnthropic) {
+    // Responses 客户端（codex）→ Anthropic 风格上游：请求转 Anthropic，走 /v1/messages。
+    outboundBody = responsesToAnthropic(body, { model: modelId });
+    outboundEndpoint = "/v1/messages";
+    pipe.info("PROTOCOL", "codex responses→anthropic (responsesToAnthropic)");
+  } else if (codexToChat) {
+    // Responses 客户端（codex）→ Chat 风格上游：请求转 Chat，走 /chat/completions。
+    outboundBody = responsesBodyToChat(body, { model: modelId });
+    outboundEndpoint = "/chat/completions";
+    pipe.info("PROTOCOL", "codex responses→chat (chatCompletions)");
+  }
   const upstreamBase = agentUpstreamEntry?.url || config.upstream.url;
-  const upstreamUrl = joinUrl(upstreamBase, c.req.path);
+  const upstreamUrl = joinUrl(upstreamBase, outboundEndpoint);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
   // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
@@ -1101,7 +1118,7 @@ async function forwardToUpstream(
     upstreamResp = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders,
-      body: JSON.stringify(body),
+      body: JSON.stringify(outboundBody),
     });
   } catch (err: unknown) {
     pipe.error("CODEX_FORWARD", err instanceof Error ? err : new Error(String(err)));
@@ -1181,7 +1198,13 @@ async function forwardToUpstream(
     });
   }
 
-  const [rawClientStream, tapStream] = upstreamResp.body.tee();
+  const upstreamStream =
+    codexToAnthropic && upstreamResp.body
+      ? upstreamResp.body.pipeThrough(createAnthropicSseToResponsesSse({ model: modelId }))
+      : codexToChat && upstreamResp.body
+        ? upstreamResp.body.pipeThrough(createChatSseToResponses({ model: modelId }))
+        : upstreamResp.body;
+  const [rawClientStream, tapStream] = upstreamStream.tee();
   consumeCodexStream(tapStream, {
     lf,
     modelId,

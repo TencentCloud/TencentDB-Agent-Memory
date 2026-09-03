@@ -49,6 +49,16 @@ import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
+import {
+  anthropicToChat as anthropicToChatReq,
+  chatJsonToAnthropicJson,
+  createChatSseToAnthropicSse,
+} from "./common/chat-anthropic-compat.js";
+import {
+  anthropicToResponses as anthropicToResponsesReq,
+  responsesJsonToAnthropicJson,
+  createResponsesSseToAnthropicSse,
+} from "./common/responses-anthropic-compat.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
@@ -331,7 +341,7 @@ function buildUpstreamBody(
  */
 function buildUpstreamHeaders(
   c: Context,
-  _config: ProxyConfig,
+  config: ProxyConfig,
   target: ForwardTarget,
   sessionKey?: string,
   effectiveApiKey?: string,
@@ -350,8 +360,19 @@ function buildUpstreamHeaders(
   //   - empty/undefined  → passthrough: keep whatever the client sent
   // The cost-guard extension can still fully override via target.authHeaders.
   if (effectiveApiKey && !target.authHeaders) {
-    headers["x-api-key"] = effectiveApiKey;
-    delete headers["authorization"];
+    const agent = c.req.path.split("/")[1] ?? "claude-code";
+    if (
+      config.upstream.agents[agent]?.anthropicToChat === true ||
+      config.upstream.agents[agent]?.anthropicToResponses === true
+    ) {
+      // 转成 Chat / Responses 后上游要 OpenAI 风格鉴权（Bearer，无 anthropic-version）。
+      headers["authorization"] = `Bearer ${effectiveApiKey}`;
+      delete headers["x-api-key"];
+      delete headers["anthropic-version"];
+    } else {
+      headers["x-api-key"] = effectiveApiKey;
+      delete headers["authorization"];
+    }
   }
 
   if (target.authHeaders) {
@@ -1203,7 +1224,12 @@ export async function handleAnthropicMessages(
     config.upstream.url;
   // Normalize the request path to the canonical upstream endpoint so the
   // extension's URL joining matches the host whitelist behavior.
-  const forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/messages";
+  let forwardEndpoint = matchWhitelistEndpoint(c.req.path)?.upstreamEndpoint ?? "/messages";
+  if (agentUpstreamEntry?.anthropicToChat === true) {
+    forwardEndpoint = "/chat/completions";
+  } else if (agentUpstreamEntry?.anthropicToResponses === true) {
+    forwardEndpoint = "/responses";
+  }
   // Isolation key is user-namespaced (`${user}:${session}`) so two users that
   // share the same client session id can't contaminate each other's state /
   // turn counting. ClickHouse keeps the raw session_key (it has its own
@@ -1361,6 +1387,16 @@ export async function handleAnthropicMessages(
       `stripped ${sanitizedCount} invalid thinking block(s) from history`,
     );
   }
+  // ── 协议接线：Claude Code（Anthropic 客户端）→ Chat / Responses 风格上游 ──
+  const agentUpstream = config.upstream.agents[agentSource];
+  let convertedUpstreamBody = upstreamBody;
+  if (agentUpstream?.anthropicToChat === true) {
+    convertedUpstreamBody = anthropicToChatReq(upstreamBody);
+    pipe.info("PROTOCOL", "claude-code anthropic→chat (anthropicToChat)");
+  } else if (agentUpstream?.anthropicToResponses === true) {
+    convertedUpstreamBody = anthropicToResponsesReq(upstreamBody);
+    pipe.info("PROTOCOL", "claude-code anthropic→responses (anthropicToResponses)");
+  }
 
   // Retry headers: preserve original client headers (x-request-id, user-agent,
   // etc.), then force the primary upstream's auth — retry always goes to the
@@ -1382,7 +1418,11 @@ export async function handleAnthropicMessages(
     delete originalHeaders["authorization"];
   }
 
-  const retryBody = sanitizeThinkingBlocks(body).body;
+  const retryBody = sanitizeThinkingBlocks(
+    agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true
+      ? convertedUpstreamBody
+      : body,
+  ).body;
 
   // ── Forward to upstream (with automatic retry if configured) ──────────────
   const forwardTimeoutMs = config.server.forwardTimeoutMs ?? 600_000;
@@ -1392,7 +1432,7 @@ export async function handleAnthropicMessages(
 
   try {
     const result = await forwardWithRetry(
-      target, upstreamHeaders, upstreamBody,
+      target, upstreamHeaders, convertedUpstreamBody,
       retryBody, originalHeaders,
       pipe, forwardTimeoutMs,
       sessionKey,
@@ -1484,7 +1524,13 @@ export async function handleAnthropicMessages(
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
-    const [rawClientStream, tapStream] = upstreamResp.body.tee();
+    const upstreamStream =
+      agentUpstream?.anthropicToChat === true
+        ? upstreamResp.body.pipeThrough(createChatSseToAnthropicSse({ model: effectiveModel }))
+        : agentUpstream?.anthropicToResponses === true
+          ? upstreamResp.body.pipeThrough(createResponsesSseToAnthropicSse({ model: effectiveModel }))
+          : upstreamResp.body;
+    const [rawClientStream, tapStream] = upstreamStream.tee();
     pipe.streamStart();
 
     // Background: consume tap stream for Anthropic SSE → extract usage
@@ -1527,6 +1573,21 @@ export async function handleAnthropicMessages(
 
   // ── Non-streaming response ───────────────────────────────────────────────
   let respText = await upstreamResp.text();
+  if (agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true) {
+    try {
+      const upstreamJson = JSON.parse(respText) as Record<string, unknown>;
+      const anthJson = agentUpstream.anthropicToChat === true
+        ? chatJsonToAnthropicJson(upstreamJson)
+        : responsesJsonToAnthropicJson(upstreamJson);
+      respText = JSON.stringify(anthJson);
+      pipe.info(
+        "PROTOCOL",
+        `upstream ${agentUpstream.anthropicToChat === true ? "chat" : "responses"} → anthropic (non-stream)`,
+      );
+    } catch {
+      // 非 JSON / 错误体：原样透传，由上层错误处理。
+    }
+  }
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
