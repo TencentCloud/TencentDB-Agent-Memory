@@ -437,22 +437,25 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
 
   // LLM config
   //
-  // provider 支持两种模式：
-  //   - "openai"（默认）：直连 OpenAI 兼容服务
-  //   - "proxy"：走 context_proxy，运行期把 baseUrl 拼成 `${baseUrl}/proxy/<iid>/v1`，
-  //             Authorization 用 memory 系统用户 key。gateway 层负责最终解析，
-  //             见 src/gateway/llm-resolver.ts 的 resolveEffectiveLlmConfig。
+  // protocol（线协议）："openai"（默认，/chat/completions）| "anthropic"（/v1/messages）。
+  // provider（访问模式）："openai"（默认）| "proxy"（走 context_proxy，运行期把
+  //   baseUrl 拼成 `${baseUrl}/proxy/<iid>/v1`，Authorization 用 memory 系统用户 key；
+  //   gateway 层负责最终解析，见 src/gateway/llm-resolver.ts 的 resolveEffectiveLlmConfig）。
   const llmConfig = obj(fileConfig, "llm");
   const llmProxyConfig = obj(llmConfig, "proxy");
   const rawLlmProvider = env("TDAI_LLM_PROVIDER") ?? str(llmConfig, "provider");
   const llmProvider: "openai" | "proxy" =
     rawLlmProvider === "proxy" ? "proxy" : "openai";
+  const rawLlmProtocol = env("TDAI_LLM_PROTOCOL") ?? str(llmConfig, "protocol");
+  const llmProtocol: "openai" | "anthropic" =
+    rawLlmProtocol === "anthropic" ? "anthropic" : "openai";
   const llm: StandaloneLLMConfig = {
     baseUrl: env("TDAI_LLM_BASE_URL") ?? str(llmConfig, "baseUrl") ?? "https://api.openai.com/v1",
     apiKey: env("TDAI_LLM_API_KEY") ?? str(llmConfig, "apiKey") ?? "",
     model: env("TDAI_LLM_MODEL") ?? str(llmConfig, "model") ?? "gpt-4o",
     maxTokens: envInt("TDAI_LLM_MAX_TOKENS") ?? num(llmConfig, "maxTokens") ?? 4096,
     timeoutMs: envInt("TDAI_LLM_TIMEOUT_MS") ?? num(llmConfig, "timeoutMs") ?? 120_000,
+    protocol: llmProtocol,
     provider: llmProvider,
     proxy: {
       useMemorySystemUserKey: bool(llmProxyConfig, "useMemorySystemUserKey") ?? true,
@@ -494,6 +497,7 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
       model: llm.model,
       maxTokens: llm.maxTokens ?? 4096,
       timeoutMs: llm.timeoutMs ?? 120_000,
+      protocol: llm.protocol,
       provider: llm.provider,
       proxy: {
         useMemorySystemUserKey: llm.proxy?.useMemorySystemUserKey ?? true,

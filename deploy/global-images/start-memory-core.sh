@@ -68,6 +68,8 @@ llm:
   baseUrl: "${MEMORY_LLM_BASE_URL:-}"
   apiKey: "${MEMORY_LLM_API_KEY:-}"
   model: "${MEMORY_LLM_MODEL:-}"
+  # 线协议：openai（默认，/chat/completions）| anthropic（/v1/messages，x-api-key）
+  protocol: "${MEMORY_LLM_PROTOCOL:-openai}"
   maxTokens: 32000
   timeoutMs: 300000
 
