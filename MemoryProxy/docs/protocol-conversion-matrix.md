@@ -1,7 +1,7 @@
 # 协议转换字段映射矩阵（OpenAI Chat / Responses ↔ Anthropic Messages）
 
 > 本文档与测试一一对应：每个状态为 ✅ 的字段都有自动化用例兜底。
-> 全量回归：`npm test`（vitest，85/85 通过：protocol-conformance 49、responses-anthropic-compat 12、
+> 全量回归：`npm test`（vitest，93/93 通过：protocol-conformance 56、responses-anthropic-compat 13、
 > sse 8、sse-fuzz 4、protocol-stats 4、user-query-extractor 8）。
 > 分支内全量：`npx tsc --noEmit` 0 错误。
 
@@ -80,8 +80,8 @@ Responses ↔ Chat ↔ Anthropic
 |---|---|---|
 | instructions / developer / system | → system 消息 | ✅ |
 | input.message / function_call / function_call_output | → user/assistant / tool_calls / tool | ✅ |
-| input.reasoning.summary | → assistant.reasoning_content | ✅ |
-| output.reasoning | → reasoning_content → reasoning item | ✅ |
+| input.reasoning.summary（官方数组或字符串形态） | → assistant.reasoning_content | ✅ |
+| output.reasoning（summary 数组/字符串兼容） | → reasoning_content → reasoning item（`summary: [{type:"summary_text",text}]`） | ✅ |
 | tool_choice（Responses） | → Chat tool_choice | ✅ |
 
 ## 流式事件矩阵
@@ -92,6 +92,23 @@ Responses ↔ Chat ↔ Anthropic
 | OpenAI chat chunk / usage 尾帧 / [DONE] / error | Anthropic content_block_* / message_delta / message_stop / error | ✅ |
 | Responses response.* / output_item.* / response.completed / response.failed | Chat chunk / usage / [DONE] / error | ✅ |
 | Chat chunk / [DONE] / error | Responses response.created / output_item / response.completed / error | ✅ |
+
+### 流式 reasoning 补充（`response.reasoning_summary_text.delta`）
+
+| 上游事件 | 下游事件 | 状态 |
+|---|---|---|
+| Chat delta.reasoning_content | Responses output_item.added(reasoning) / reasoning_summary_part.added / reasoning_summary_text.delta | ✅ |
+| Responses reasoning_summary_text.delta | Chat delta.reasoning_content | ✅ |
+
+Responses reasoning item 按官方结构输出 `summary: [{ type: "summary_text", text }]`；
+输入侧同时兼容官方数组与部分上游的字符串形态。
+
+### legacy functions / 连续 user 消息（Anthropic 400 防护）
+
+- `role="function"` 结果消息按 function name 与前面 assistant `function_call` 生成的
+  `tool_use` id 配对成 `tool_result`（无配对时降级为普通文本）。
+- Chat→Anthropic 相邻 user 消息合并为一条，`tool_result` 块前置再跟文本，
+  满足 Anthropic roles 严格交替约束（tool 结果 + 后续提问不再触发 400）。
 
 流式不变量（测试覆盖）：message_start 至多一次、每个块成对 open/stop、message_delta/message_stop 至多一次、错误帧后不再发 [DONE]/message_stop；
 **tool index 重映射**：Anthropic content block index（thinking/text 也会占位）→ chat tool_calls 连续序号 0..n-1，

@@ -232,8 +232,64 @@ describe("Responses ↔ Chat reasoning 透传", () => {
       { model: "m" },
     );
     const output = resp.output as Array<Record<string, unknown>>;
-    expect(output[0]).toMatchObject({ type: "reasoning", summary: "推理摘要" });
+    expect(output[0]).toMatchObject({
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "推理摘要" }],
+    });
     expect(output[1]).toMatchObject({ type: "message" });
+  });
+
+  it("Responses 官方数组形态 summary → chat reasoning_content", () => {
+    const chat = responsesJsonToChatJson(
+      {
+        id: "r1",
+        output: [
+          {
+            id: "rs1",
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "推理摘要" }],
+            status: "completed",
+          },
+          {
+            id: "m1",
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "正文", annotations: [] }],
+          },
+        ],
+      },
+      { model: "m" },
+    );
+    const msg = (
+      (chat.choices as Array<Record<string, unknown>>)[0] as { message: Record<string, unknown> }
+    ).message;
+    expect(msg.reasoning_content).toBe("推理摘要");
+  });
+
+  it("chat 流式 reasoning_content → Responses reasoning SSE 事件", async () => {
+    const ts = createChatSseToResponses({ model: "m" });
+    const out = await runTransform(ts, [
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"推理中"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":"正文"},"finish_reason":null}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(out).toContain("response.output_item.added");
+    expect(out).toContain("response.reasoning_summary_text.delta");
+    expect(out).toContain("推理中");
+    expect(out).toContain('"type":"reasoning"');
+    expect(out).toContain('"summary":[{"type":"summary_text","text":"推理中"}]');
+  });
+
+  it("Responses reasoning SSE 事件 → chat 流式 reasoning_content", async () => {
+    const ts = createResponsesSseToChatSse({ model: "m" });
+    const out = await runTransform(ts, [
+      'event: response.reasoning_summary_text.delta\ndata: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"content_index":0,"delta":"推理中"}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"正文"}\n\n',
+      'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":2}}}\n\n',
+    ]);
+    expect(out).toContain('"reasoning_content":"推理中"');
+    expect(out).toContain('"content":"正文"');
   });
 });
 
@@ -500,6 +556,37 @@ describe("legacy functions / function_call 兼容", () => {
     });
     const blocks = anth.content as Array<Record<string, unknown>>;
     expect(blocks[0]).toMatchObject({ type: "tool_use", name: "f" });
+  });
+
+  it("legacy role=function 结果 → tool_result，且 id 与 function_call 生成的 tool_use 配对", () => {
+    const out = chatToAnthropic({
+      model: "m",
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          function_call: { name: "get_weather", arguments: '{"city":"SH"}' },
+        },
+        { role: "function", name: "get_weather", content: '{"temp":25}' },
+        { role: "user", content: "继续" },
+      ],
+    });
+    const msgs = out.messages as Array<Record<string, unknown>>;
+    const assistant = msgs.find((m) => m.role === "assistant")!;
+    const toolBlock = (assistant.content as Array<Record<string, unknown>>).find(
+      (b) => b.type === "tool_use",
+    )!;
+    const userBlocks = msgs.filter((m) => m.role === "user");
+    // role=function 结果 + 后续 user 文本必须合并成一条 user 消息，
+    // tool_result 前置，避免 Anthropic 连续 user 400。
+    expect(userBlocks).toHaveLength(1);
+    const blocks = userBlocks[0].content as Array<Record<string, unknown>>;
+    expect(blocks[0]).toMatchObject({
+      type: "tool_result",
+      tool_use_id: toolBlock.id,
+      content: '{"temp":25}',
+    });
+    expect(blocks[1]).toEqual({ type: "text", text: "继续" });
   });
 });
 
