@@ -49,6 +49,65 @@ export {
 export type StoreLogger = Logger;
 
 // ============================
+// Conversation Add Idempotency
+// ============================
+
+/**
+ * Full tenant-scoped identity for a keyed `/v3/conversation/add` request.
+ * All fields are required: a key is never reusable across any of these
+ * isolation dimensions.
+ */
+export interface ConversationIdempotencyScope {
+  serviceId: string;
+  teamId: string;
+  agentId: string;
+  userId: string;
+  sessionId: string;
+  idempotencyKey: string;
+}
+
+/** Durable result of a keyed conversation admission. */
+export interface ConversationReceipt {
+  receiptId: string;
+  scope: ConversationIdempotencyScope;
+  payloadDigest: string;
+  acceptedIds: string[];
+  /** Pending until the pipeline outbox event has been acknowledged. */
+  status: "pending" | "completed";
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
+/** A durable post-commit pipeline notification for one conversation receipt. */
+export interface ConversationOutboxEvent {
+  eventId: string;
+  receiptId: string;
+  serviceId: string;
+  sessionId: string;
+  rounds: number;
+  teamId: string;
+  agentId: string;
+  status: "pending" | "acknowledged";
+  createdAtMs: number;
+  acknowledgedAtMs?: number;
+}
+
+/** Outcome of atomically admitting (or reading) a keyed conversation add. */
+export type ConversationAddClaim =
+  | { status: "claimed"; receipt: ConversationReceipt; outboxEvent: ConversationOutboxEvent }
+  | { status: "replay"; receipt: ConversationReceipt; outboxEvent?: ConversationOutboxEvent }
+  | { status: "conflict" }
+  | { status: "unsupported" };
+
+/** Input that a capable store persists in one admission transaction. */
+export interface ClaimConversationAddInput {
+  scope: ConversationIdempotencyScope;
+  payloadDigest: string;
+  records: L0Record[];
+  pipelineRounds: number;
+}
+
+// ============================
 // L1 Types (Structured Memories)
 // ============================
 
@@ -559,6 +618,30 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * When `false` or absent, embedding is computed inline and passed to `upsertL0()`.
    */
   readonly supportsDeferredEmbedding?: boolean;
+
+  // ── Conversation add idempotency (optional backend capability) ──────
+
+  /**
+   * Atomically persist a new pending receipt, its L0 rows, and one pending
+   * pipeline outbox event; alternatively return a replay, conflict, or
+   * unsupported result. Backends without this method must reject keyed calls.
+   */
+  claimConversationAdd?(input: ClaimConversationAddInput): MaybePromise<ConversationAddClaim>;
+
+  /** Read a receipt by its complete, tenant-scoped identity. */
+  readConversationAddReceipt?(scope: ConversationIdempotencyScope): MaybePromise<ConversationReceipt | null>;
+
+  /**
+   * Mark a receipt completed only after its pipeline notification succeeds.
+   * This must not be used to mark the initial storage transaction complete.
+   */
+  completeConversationAdd?(receiptId: string): MaybePromise<ConversationReceipt | null>;
+
+  /**
+   * Acknowledge durable outbox delivery. SQLite implementations should update
+   * the outbox event and receipt completion state atomically.
+   */
+  ackConversationOutbox?(eventId: string): MaybePromise<boolean>;
 
   // ── Lifecycle (always sync) ──────────────────────────────
 

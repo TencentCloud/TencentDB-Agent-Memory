@@ -189,6 +189,27 @@ TDAI_MEMORY_INSTANCE_ID=default
 
 v3 记忆数据面要求 `team_id`、`agent_id`、`user_id`，可以通过请求体或对应的 `x-tdai-*` Header 传入；`session_id` 可选，用于限定会话范围。
 
+### 重试 `/v3/conversation/add`
+
+如果客户端可能重试一轮已完成对话，可以在 `POST /v3/conversation/add` 里传可选的 `idempotency_key`。同一个 service、team、agent、user、session 和消息正文必须复用同一个 key：
+
+```json
+{
+  "session_id": "session-1",
+  "team_id": "team-1",
+  "agent_id": "agent-1",
+  "user_id": "user-1",
+  "idempotency_key": "opencode-turn-01",
+  "messages": [
+    { "role": "user", "content": "hello", "timestamp": "2026-08-24T00:00:00.000Z" }
+  ]
+}
+```
+
+幂等范围由 `x-tdai-service-id`、`team_id`、`agent_id`、`user_id`、`session_id` 和 `idempotency_key` 共同决定。相同规范化正文的重放会返回首次成功的 `accepted_ids`，不会再次写入 L0，也不会再次通知 pipeline。相同 key 搭配不同正文会返回 `409`。无法提供原子 receipt、L0 写入和 outbox ACK 语义的后端，会对带 key 的请求返回 `503`；不带 key 的请求保持原有行为。
+
+SQLite 已提供公开版本的事务性保证。Redis 和 TCVDB 部署需要实现等价的 atomic claim 与 outbox acknowledgement 后，才能宣称跨副本 exactly-once。
+
 ## 自定义 Prompt 与生成溯源
 
 每个 Memory Instance 最多创建 500 个自定义 Prompt，单个 Prompt 内容最长 10,000 个 Unicode 字符。Prompt 本体和目标绑定分开存储，更新时保持 `memory_prompt_id` 不变并执行 `version += 1`，已有绑定的新生成任务会使用最新版本。
