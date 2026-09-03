@@ -9,6 +9,8 @@
  * 新增端点时，只需在 `WHITELIST_ENDPOINTS` 增加一条记录即可，无需散点修改。
  */
 
+import { AGENT_KINDS } from "../agent-adapters/types.js";
+
 /** 白名单端点元数据。 */
 export interface WhitelistEndpoint {
   /**
@@ -159,6 +161,15 @@ const SORTED_BY_SUFFIX_LEN: readonly WhitelistEndpoint[] = [...WHITELIST_ENDPOIN
 
 /** `/proxy/{spaceId}` 前缀正则：仅剥离一层，避免误伤路径中的 "proxy" 字面量。 */
 const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
+/** Agent URL 前缀 = AgentKind 成员（除 unknown）+ 协议名前缀，AGENT_PREFIX_RE 从此构造。 */
+const AGENT_URL_PREFIXES: readonly string[] = [
+  ...AGENT_KINDS.filter((kind) => kind !== "unknown"),
+  "anthropic",
+  "openai",
+];
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Agent 前缀正则：匹配 `/{agent}[/{spaceId}]/{v1|responses|...}` 形态。
  *   - `/claude-code/v1/messages`              → 剥 `/claude-code`
@@ -172,7 +183,10 @@ const PROXY_PREFIX_RE = /^\/proxy\/[^/]+/;
  * 白名单入口 `/v1/messages`、`/responses` 自身不会被误剥（因为它们不匹配 agent
  * 段——agent 段限定为已知名字）。
  */
-const AGENT_PREFIX_RE = /^\/(claude-code|codebuddy|codex|cursor|anthropic|openai|pi)(?:\/[^/]+)?(?=\/v1\/|\/responses(?:\/|$)|\/memories\/|\/realtime\/)/i;
+const AGENT_PREFIX_RE = new RegExp(
+  `^\\/(${AGENT_URL_PREFIXES.map(escapeRegExp).join("|")})(?:\\/[^/]+)?(?=\\/v1\\/|\\/responses(?:\\/|$)|\\/memories\\/|\\/realtime\\/)`,
+  "i",
+);
 
 /**
  * `/cost-guard` marker 正则：位于 `/{agent}/{spaceId}` 之后的独立 segment。
