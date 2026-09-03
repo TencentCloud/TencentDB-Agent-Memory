@@ -211,12 +211,12 @@ bash scripts/openclaw-after-tool-call-messages.patch.sh
 
 | 你的场景 | 走哪条路 |
 |---|---|
-| 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 2.A Docker（下文） |
+| 想从零启动一个带记忆能力的 Hermes（一条命令搞定） | 2.A Docker Compose（下文） |
 | 已经装好了Hermes，只想加上记忆能力 | 2.B 挂到已有 Hermes 上（再下文） |
 
-#### 2.A Docker（全新部署，需版本号 ≥ 0.3.4）
+#### 2.A Docker Compose（全新部署，需版本号 ≥ 0.3.4）
 
-Docker 镜像把 `hermes-agent` 和 `memory_tencentdb` provider 聚合在一起，Gateway 监听 `:8420`：
+Docker 镜像把 `hermes-agent` 和 `memory_tencentdb` provider 聚合在一起。推荐优先使用 Docker Compose，本地模型配置、Gateway 端口、重启策略和持久化 volume 都集中在同一个文件里。Gateway 在容器内监听 `:8420`：
 
 ```bash
 # ============ 配置参数说明 ============
@@ -225,26 +225,30 @@ Docker 镜像把 `hermes-agent` 和 `memory_tencentdb` provider 聚合在一起�
 # MODEL_NAME       模型名称，默认使用 DeepSeek-V3.2
 # MODEL_PROVIDER   服务商类型："custom" 适用于所有 OpenAI 兼容接口
 
-MODEL_API_KEY="your-api-key"
-MODEL_BASE_URL="https://api.lkeap.cloud.tencent.com/v1"
-MODEL_NAME="deepseek-v3.2"
-MODEL_PROVIDER="custom"
-
-# ============ docker run 参数说明 ============
-# -d                          后台（detached）模式运行容器
-# --name hermes-memory        容器命名，方便后续 docker exec / logs / stop
-# --restart unless-stopped    崩溃或宿主机重启时自动拉起
-# -p 8420:8420                宿主机端口 ↔ 容器端口（Hermes Gateway）
-# -e MODEL_*                  将上方配置参数注入容器环境变量
-# -v hermes_data:/opt/data    记忆数据持久化到命名卷（容器重启后数据不丢）
-
 # 进入 Docker 构建目录（已 clone 仓库并位于仓库根目录）
 cd docker/opensource
 
-# 构建
-docker build -f Dockerfile.hermes -t hermes-memory .
+# 创建 env 文件并填入 MODEL_API_KEY。
+cp .env.example .env
+$EDITOR .env
 
-# 运行
+# 构建并启动 Hermes + memory-tencentdb Gateway。
+docker compose up -d --build
+
+# 验证 Gateway
+curl http://localhost:8420/health
+
+# 进入 Hermes 对话
+docker compose exec hermes-memory hermes
+```
+
+> 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，只需要在 `.env` 中设置 `MODEL_API_KEY`。
+
+如果更习惯直接使用 Docker，也可以手动运行同一个镜像：
+
+```bash
+cd docker/opensource
+docker build -f Dockerfile.hermes -t hermes-memory .
 docker run -d \
   --name hermes-memory \
   --restart unless-stopped \
@@ -256,14 +260,9 @@ docker run -d \
   -v hermes_data:/opt/data \
   hermes-memory
 
-# 验证 Gateway
 curl http://localhost:8420/health
-
-# 进入 Hermes 对话
 docker exec -it hermes-memory hermes
 ```
-
-> 镜像内置了腾讯云 DeepSeek-V3.2 的默认值，如果你使用该模型，`MODEL_BASE_URL`/`MODEL_NAME`/`MODEL_PROVIDER` 可以省略，只传 `MODEL_API_KEY` 即可。
 
 #### 2.B 挂到已有 Hermes 上（无 Docker）
 
