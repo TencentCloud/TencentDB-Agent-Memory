@@ -3,7 +3,7 @@
  */
 
 import type { MemoryClient } from "@tencentdb-agent-memory/memory-sdk-ts-v2";
-import { formatRecallResult } from "../format.js";
+import { formatRecallResult, type ReadTool } from "../format.js";
 
 const TAG = "[memory-client-v3][recall]";
 
@@ -19,6 +19,8 @@ export interface RecallOptions {
   maxResults: number;
   includePersona: boolean;
   includeSceneNav: boolean;
+  /** Which scene-detail read tool is registered, guiding prompt injection. */
+  readTool?: ReadTool;
 }
 
 export interface RecallResult {
@@ -51,5 +53,5 @@ export async function performRecall(
     `persona=${personaContent ? "yes" : "no"}, scenes=${sceneEntries.length}`,
   );
 
-  return formatRecallResult(l1Items, personaContent, sceneEntries);
+  return formatRecallResult(l1Items, personaContent, sceneEntries, opts.readTool ?? "cos");
 }

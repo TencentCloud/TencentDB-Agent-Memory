@@ -13,6 +13,7 @@
   "scripts": {
     "clean": "rm -rf dist *.tgz",
     "build": "tsc",
+    "test": "vitest run",
     "prepack": "npm run clean && npm install --no-save --no-audit --no-fund && npm run build"
   },
   "dependencies": {
@@ -20,7 +21,8 @@
   },
   "devDependencies": {
     "typescript": "^5.5.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "vitest": "^4.1.2"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -184,6 +184,7 @@ openclaw gateway restart
 | `recall.includePersona` | `true` | 是否注入 L3 |
 | `recall.includeSceneNav` | `true` | 是否注入 L2 场景导航 |
 | `capture.enabled` | `true` | 是否自动捕获对话 |
+| `storage.localDir` | （空） | 本地场景记忆根目录的绝对路径。设置时注册 `tdai_read_local` 替代 `tdai_read_cos`（无 COS 部署，见 issue #762） |
 | `hooks.allowPromptInjection` | `true` | 仅在 OpenClaw `>= 2026.4.24` 写入 |
 | `hooks.allowConversationAccess` | `true` | 仅在 OpenClaw `>= 2026.4.24` 写入；non-bundled 上 L0 必需 |
 
@@ -214,5 +215,5 @@ openclaw-plugin/
 ## 注意
 
 - 仅客户端 adapter：不要在插件内启动 Memory Gateway 子进程，也不要在本地实现抽取逻辑。
-- 无 COS/STS 的 standalone：`tdai_read_cos` 应返回可读错误；capture/recall 不得依赖它。
+- 无 COS/STS 的 standalone：设置 `storage.localDir` 后注册 `tdai_read_local`，直接从本地目录读取场景记忆；capture/recall 不依赖文件读取。
 - Gateway 启动与更广 SDK 示例见仓库根目录 README。

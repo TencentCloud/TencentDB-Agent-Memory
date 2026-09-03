@@ -22,20 +22,35 @@ interface SceneEntry {
 }
 
 // ── Memory Tools Guide ──
-const MEMORY_TOOLS_GUIDE = `<memory-tools-guide>
+/** Which scene-detail read tool is actually registered (see issue #762). */
+export type ReadTool = "cos" | "local" | "none";
+
+/** Tool name for the current deployment, or null when no read tool exists. */
+export function readToolName(readTool: ReadTool): string | null {
+  if (readTool === "local") return "tdai_read_local";
+  if (readTool === "cos") return "tdai_read_cos";
+  return null;
+}
+
+function formatToolsGuide(readTool: ReadTool): string {
+  const tool = readToolName(readTool);
+  const readToolLine = tool
+    ? `- **${tool}**：读取记忆文件详情（使用下方 Scene Navigation 中的完整相对路径，如 scene_blocks/xxx.md；也可读 persona.md）。\n`
+    : "";
+  return `<memory-tools-guide>
 ## 记忆工具调用指南
 
 当上方注入的记忆片段不足以回答用户问题时，可主动调用以下工具获取更多信息：
 
 - **tdai_memory_search**：搜索结构化记忆（L1），适用于回忆用户偏好、历史事件、规则等。
 - **tdai_conversation_search**：搜索原始对话（L0），适用于查找具体消息原文、时间线、上下文细节。
-- **tdai_read_cos**：读取记忆文件详情（使用下方 Scene Navigation 中的完整相对路径，如 scene_blocks/xxx.md；也可读 persona.md）。
-
+${readToolLine}
 ### ⚠️ 调用次数限制
 每轮对话中，tdai_memory_search 和 tdai_conversation_search **合计最多调用 3 次**。
 - 首次搜索无结果时，可换关键词或换工具重试，但总调用次数不要超过 3 次。
 - 若 3 次搜索后仍无结果，说明该信息不在记忆中，请直接根据已有信息回复用户。
 </memory-tools-guide>`;
+}
 
 /**
  * Format L1 memories as prependContext.
@@ -65,6 +80,7 @@ function formatL1Memories(items: L1Item[]): string | undefined {
 function formatSystemContext(
   persona: string | null,
   scenes: SceneEntry[],
+  readTool: ReadTool,
 ): string | undefined {
   const parts: string[] = [];
 
@@ -79,16 +95,21 @@ function formatSystemContext(
   if (scenes.length > 0 && (!persona || !persona.includes("Scene Navigation"))) {
     parts.push("");
     parts.push("## 🗺️ Scene Navigation");
-    parts.push("*以下是当前场景记忆索引，可使用 tdai_read_cos 读取详细内容。*");
+    const tool = readToolName(readTool);
+    parts.push(
+      tool
+        ? `*以下是当前场景记忆索引，可使用 ${tool} 读取详细内容。*`
+        : "*以下是当前场景记忆索引。*",
+    );
     parts.push("");
     for (const scene of scenes) {
       parts.push(`- \`${scene.path}\``);
     }
   }
 
-  // Tools guide (always append)
+  // Tools guide (always append; content depends on which tools are registered)
   parts.push("");
-  parts.push(MEMORY_TOOLS_GUIDE);
+  parts.push(formatToolsGuide(readTool));
 
   const result = parts.join("\n").trim();
   return result || undefined;
@@ -101,9 +122,10 @@ export function formatRecallResult(
   l1Items: L1Item[],
   persona: string | null,
   scenes: SceneEntry[],
+  readTool: ReadTool = "cos",
 ): RecallResult {
   return {
     prependContext: formatL1Memories(l1Items),
-    appendSystemContext: formatSystemContext(persona, scenes),
+    appendSystemContext: formatSystemContext(persona, scenes, readTool),
   };
 }
