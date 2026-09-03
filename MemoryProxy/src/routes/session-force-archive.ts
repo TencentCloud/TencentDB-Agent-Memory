@@ -10,8 +10,9 @@
 
 import type { Context } from "hono";
 import type { ProxyConfig } from "../types.js";
-import { getSessionStore } from "../session/store.js";
+import { getSessionStore, buildStoreSessionKey } from "../session/store.js";
 import { getCoreSkillClient } from "../skill/core-client.js";
+import { checkAdminAuth, adminAuthError } from "./admin-auth.js";
 import type { SessionInitState } from "../session/types.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -58,7 +59,7 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
   }
 
   // 从 SessionStore 取 session 状态
-  const compositeKey = `${agentSource}:${sessionKey}`;
+  const compositeKey = buildStoreSessionKey({ agentSource, sessionKey });
   const store = getSessionStore();
   const state: SessionInitState | undefined = store.get(compositeKey);
 
@@ -112,6 +113,9 @@ export async function forceArchiveSkill(input: ForceArchiveInput): Promise<Force
  */
 export function createSessionForceArchiveHandler(config: ProxyConfig) {
   return async (c: Context): Promise<Response> => {
+    // admin auth：config.admin.apiKey 为空时公开，否则必须 Bearer 匹配。
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
     let body: Record<string, unknown>;
     try {
       body = await c.req.json<Record<string, unknown>>();

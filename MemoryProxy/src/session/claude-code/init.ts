@@ -20,7 +20,7 @@ import type {
   TeamOption,
 } from "../types.js";
 import { DEFAULT_TASK_LABEL } from "../types.js";
-import { SessionStore } from "../store.js";
+import { SessionStore, buildStoreSessionKey } from "../store.js";
 import { buildSessionInfo } from "../registrar.js";
 import {
   injectSessionContextWithToggles,
@@ -43,7 +43,7 @@ import {
   BYPASS_MARKER,
   MORE_MARKER,
 } from "./extractor.js";
-import { getLastUserMessageText } from "./cleaner.js";
+import { getLastUserMessageText, stripSessionInitFormArtifacts } from "./cleaner.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -59,6 +59,8 @@ export interface SessionRequestContext {
    * injection stays effective).
    */
   protocol?: "openai" | "anthropic";
+  /** thread 维度：threadIsolation 开启时进入 L1/状态机 store 键（持久层不承诺 thread 隔离）。 */
+  threadId?: string | null;
 }
 
 export interface SessionInitResult {
@@ -390,8 +392,9 @@ function applyArtifactsAndContext(
   config: SessionInitConfig,
   protocol: "openai" | "anthropic" | undefined,
 ): ArtifactsAndContextResult {
-  // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
-  // 现在**永远保留** session_init form 交互, 不做任何删除。
+  // 转发上游的消息已由 handleSessionInitInner 顶部 stripSessionInitFormArtifacts
+  // 净化（剥离 Proxy 假表单，见 cleaner.ts），这里只负责 <session_context> 注入，
+  // 不再做任何删除。
 
   // Anthropic keeps the system prompt on body.system, not in messages, so the
   // block is handed back through `systemAppend` and the handler applies it at
@@ -567,7 +570,13 @@ export async function handleSessionInit(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  // 键构造与 handler 侧一致（threadIsolation 后缀），持久层（L2a/L2b）仍按 sessionId 收敛。
+  const compositeKey = buildStoreSessionKey({
+    agentSource: "claude-code",
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   const prevStatus = store.get(compositeKey)?.status ?? "uninitialized";
   try {
     return await handleSessionInitInner(
@@ -597,14 +606,23 @@ async function handleSessionInitInner(
   spaceId?: string,
   presetIdentity?: PresetIdentity,
 ): Promise<SessionInitResult> {
-  const compositeKey = `claude-code:${sessionKey}`;
+  // 键构造与 handler 侧一致（threadIsolation 后缀），持久层（L2a/L2b）仍按 sessionId 收敛。
+  const compositeKey = buildStoreSessionKey({
+    agentSource: "claude-code",
+    sessionKey,
+    threadId: reqCtx.threadId ?? null,
+    threadIsolation: config.threadIsolation?.enabled === true,
+  });
   if (sessionKey === "unknown" || !sessionKey) return { intercepted: false };
 
   const state = store.get(compositeKey);
-  // 曾经这里会按 config.keepInitArtifacts 决定要不要 stripInitArtifacts,
-  // 现在**永远保留** session_init form 交互, 不做任何删除。变量名 stripped
-  // 保留只为下游调用点不用大改, 语义上就是 messages 本身。
-  const stripped = messages;
+  // 转发上游前剥离 Proxy 自己生成的 session_init 假表单（tool_use +
+  // 对应 tool_result）：实测上游模型会模仿历史里的 AskUserQuestion 再生成
+  // 一次非法调用（options 传成字符串），触发客户端 InputValidationError
+  // （UI 显示 "Invalid tool parameters"）。state machine 解析仍用原始
+  // `messages`（含表单回答），只有转发用的 `stripped` 是净化后的版本。
+  // 变量名保留仅为下游调用点不用大改。
+  const stripped = stripSessionInitFormArtifacts(messages);
 
   // ── DEBUG BYPASS ─────────────────────────────────────────────────────────
   // When `sessionInit.debugForceIdentity` is set (developer/e2e config),
@@ -745,7 +763,7 @@ async function handleSessionInitInner(
 
     // ── Header-driven pre-selection: skip forms when identity is provided ──
     if (presetIdentity && config.headerAutoSelect?.enabled) {
-      const pr = resolvePresetIdentity(teams, presetIdentity);
+      const pr = resolvePresetIdentity(teams, presetIdentity, config, "claude-code");
 
       if (pr.hadMismatch) {
         if (config.headerAutoSelect.onMismatch === "bypass") {

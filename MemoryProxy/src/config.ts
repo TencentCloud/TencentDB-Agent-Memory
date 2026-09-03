@@ -80,6 +80,11 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     // AssetReflectionInjector 被注册。marker 仍是 opt-in（不带 `/analyse/` 段
     // 的请求完全无感），只是把「必须显式开启」的负担从运营侧移除。
     assetReflection: { markerOptIn: true },
+    maxTotalChars: 0,
+    tuning: {
+      default: {},
+      perAgent: {},
+    },
   },
   // Extraction (write-side) defaults to fully permissive so that a config
   // without the `extraction:` block behaves identically to the pre-gate
@@ -88,12 +93,29 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: true,
     extractors: ["skill", "tdai-memory"],
   },
+  contextCompaction: {
+    enabled: false,
+    keepRounds: 5,
+    summarize: false,
+  },
   sessionInit: {
     enabled: false,
     maxRetries: 3,
     injectAgentContext: true,
     injectTaskContext: true,
+    autoConversationId: {
+      enabled: true,
+      ttlMinutes: 30,
+      strategy: "per-key",
+      maxEntries: 2048,
+      maxWindowsPerKey: 8,
+      maxWindowsTotal: 4096,
+    },
+    threadIsolation: { enabled: false },
     defaultTaskId: "default",
+    // 全局默认严格（缺 task 走 mismatch）；仅无法弹表单的客户端按 agent 放宽
+    taskMissingPolicy: "reject",
+    taskMissingPolicyByAgent: { openclaw: "skip", hermes: "skip" },
     headerAutoSelect: {
       enabled: true,
       teamHeader: "x-team-id",
@@ -109,6 +131,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     endpoint: "",
     apiKey: "local-proxy",
     serviceId: "default",
+    grants: [],
     memory: {
       enabled: false,
       inject: false,
@@ -117,6 +140,18 @@ export const DEFAULT_CONFIG: ProxyConfig = {
       injectL2L3: false,
       l1Limit: 5,
       l2Limit: 3,
+    recallCharBudget: 2000,
+    intentMode: "hybrid",
+    bypassWritePolicy: "skip",
+    bypassReadPolicy: "none",
+    intentEmbedding: {
+        baseUrl: "",
+        apiKey: "",
+        model: "",
+        dimensions: 1024,
+        minScore: 0.3,
+        timeoutMs: 3000,
+      },
       timeoutMs: 3000,
     },
   },
@@ -140,6 +175,7 @@ export const DEFAULT_CONFIG: ProxyConfig = {
     enabled: false,
     url: "",
     timeoutMs: 5000,
+    failPolicy: "fail-closed",
   },
   systemUsers: [],
   admin: { apiKey: "" },
@@ -235,6 +271,38 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
   return result;
 }
 
+/** 从宽松 yaml 里挑出已识别的注入微调字段（未知字段忽略）。 */
+function pickTuningOverrides(
+  raw: Record<string, unknown> | undefined,
+): Record<string, boolean | "always" | "on-intent" | "off" | number> {
+  const out: Record<string, boolean | "always" | "on-intent" | "off" | number> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const key of ["skillTools", "availableSkills", "profileMemory"] as const) {
+    if (typeof raw[key] === "boolean") out[key] = raw[key] as boolean;
+  }
+  const guide = raw.memoryToolsGuide;
+  if (guide === "always" || guide === "on-intent" || guide === "off") {
+    out.memoryToolsGuide = guide;
+  }
+  if (typeof raw.recallCharBudget === "number" && raw.recallCharBudget > 0) {
+    out.recallCharBudget = raw.recallCharBudget;
+  }
+  return out;
+}
+
+/** perAgent 逐客户端做同样的字段过滤。 */
+function mapPerAgentTuning(
+  raw: Record<string, Record<string, unknown>> | undefined,
+): Record<string, Record<string, boolean | "always" | "on-intent" | "off" | number>> {
+  const out: Record<string, Record<string, boolean | "always" | "on-intent" | "off" | number>> = {};
+  if (!raw || typeof raw !== "object") return out;
+  for (const [agent, overrides] of Object.entries(raw)) {
+    const picked = pickTuningOverrides(overrides ?? {});
+    if (Object.keys(picked).length > 0) out[agent] = picked;
+  }
+  return out;
+}
+
 /**
  * Parse `upstream.agents` from raw YAML into the normalized `AgentUpstreamEntry`
  * map. Entries without a non-empty `url` are silently dropped — an empty url
@@ -243,18 +311,45 @@ function parseCostGuard(yaml: RawYamlConfig): CostGuardConfig {
  * a glance).
  */
 function parseUpstreamAgents(
-  raw: Record<string, { url?: string; apiKey?: string } | null | undefined> | undefined,
-): Record<string, { url: string; apiKey?: string }> {
+  raw: Record<
+    string,
+    { url?: string; apiKey?: string; model?: string; chatCompletions?: boolean; anthropicToChat?: boolean; chatToAnthropic?: boolean; responsesToAnthropic?: boolean; anthropicToResponses?: boolean } | null | undefined
+  > | undefined,
+): Record<string, { url?: string; apiKey?: string; model?: string; chatCompletions?: boolean; anthropicToChat?: boolean; chatToAnthropic?: boolean; responsesToAnthropic?: boolean; anthropicToResponses?: boolean }> {
   if (!raw || typeof raw !== "object") return {};
-  const out: Record<string, { url: string; apiKey?: string }> = {};
+  const out: Record<string, { url?: string; apiKey?: string; model?: string; chatCompletions?: boolean; anthropicToChat?: boolean; chatToAnthropic?: boolean; responsesToAnthropic?: boolean; anthropicToResponses?: boolean }> = {};
   for (const [name, entry] of Object.entries(raw)) {
     if (!entry || typeof entry !== "object") continue;
     const url = (entry as { url?: unknown }).url;
-    if (typeof url !== "string" || url.length === 0) continue;
+    const model = (entry as { model?: unknown }).model;
+    const chatCompletions =
+      (entry as { chatCompletions?: unknown }).chatCompletions === true;
+    const anthropicToChat = (entry as { anthropicToChat?: unknown }).anthropicToChat === true;
+    const chatToAnthropic = (entry as { chatToAnthropic?: unknown }).chatToAnthropic === true;
+    const responsesToAnthropic =
+      (entry as { responsesToAnthropic?: unknown }).responsesToAnthropic === true;
+    const anthropicToResponses =
+      (entry as { anthropicToResponses?: unknown }).anthropicToResponses === true;
+    // 没有 url 也没有任何开关的条目视为无效，丢弃（回退全局 upstream）
+    if (
+      (typeof url !== "string" || url.length === 0) &&
+      !chatCompletions &&
+      !anthropicToChat &&
+      !chatToAnthropic &&
+      !responsesToAnthropic &&
+      !anthropicToResponses
+    ) continue;
     const apiKey = (entry as { apiKey?: unknown }).apiKey;
-    out[name] = typeof apiKey === "string" && apiKey.length > 0
-      ? { url, apiKey }
-      : { url };
+    out[name] = {
+      ...(typeof url === "string" && url.length > 0 ? { url } : {}),
+      ...(typeof apiKey === "string" && apiKey.length > 0 ? { apiKey } : {}),
+      ...(typeof model === "string" && model.length > 0 ? { model } : {}),
+      ...(chatCompletions ? { chatCompletions: true } : {}),
+      ...(anthropicToChat ? { anthropicToChat: true } : {}),
+      ...(chatToAnthropic ? { chatToAnthropic: true } : {}),
+      ...(responsesToAnthropic ? { responsesToAnthropic: true } : {}),
+      ...(anthropicToResponses ? { anthropicToResponses: true } : {}),
+    };
   }
   return out;
 }
@@ -263,6 +358,46 @@ function parseUpstreamAgents(
  * Build the final ProxyConfig.
  * Priority (high → low): CLI overrides > YAML config file > defaults.
  */
+/** 校验 autoConversationId 配置，非法值直接抛错，避免带病启动。 */
+export function validateAutoConversationConfig(
+  cfg:
+    | {
+        ttlMinutes?: number;
+        deterministicBucketMinutes?: number;
+        strategy?: string;
+        maxEntries?: number;
+        maxWindowsPerKey?: number;
+        maxWindowsTotal?: number;
+      }
+    | undefined,
+): void {
+  if (!cfg) return;
+  if (cfg.ttlMinutes !== undefined && (!Number.isInteger(cfg.ttlMinutes) || cfg.ttlMinutes <= 0)) {
+    throw new Error(`autoConversationId.ttlMinutes 必须是正整数，当前值: ${cfg.ttlMinutes}`);
+  }
+  if (
+    cfg.deterministicBucketMinutes !== undefined &&
+    (!Number.isInteger(cfg.deterministicBucketMinutes) || cfg.deterministicBucketMinutes <= 0)
+  ) {
+    throw new Error(`autoConversationId.deterministicBucketMinutes 必须是正整数，当前值: ${cfg.deterministicBucketMinutes}`);
+  }
+  if (cfg.deterministicBucketMinutes !== undefined) {
+    const effectiveTtl = cfg.ttlMinutes ?? 30; // 运行时默认 30 分钟
+    if (cfg.deterministicBucketMinutes < effectiveTtl) {
+      throw new Error(`autoConversationId.deterministicBucketMinutes (${cfg.deterministicBucketMinutes}) 必须 ≥ 有效 ttlMinutes (${effectiveTtl})，否则空闲跨桶未过期时会话会确定性碰撞`);
+    }
+  }
+  for (const k of ["maxEntries", "maxWindowsPerKey", "maxWindowsTotal"] as const) {
+    const v = cfg[k];
+    if (v !== undefined && (!Number.isInteger(v) || v <= 0)) {
+      throw new Error(`autoConversationId.${k} 必须是正整数，当前值: ${String(v)}`);
+    }
+  }
+  if (cfg.strategy !== undefined && cfg.strategy !== "per-key" && cfg.strategy !== "per-key-msg") {
+    throw new Error(`autoConversationId.strategy 只支持 per-key / per-key-msg，当前值: ${cfg.strategy}`);
+  }
+}
+
 export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
   const configPath = overrides.configFile || "config.yaml";
   const yaml = loadYamlConfig(configPath);
@@ -281,6 +416,14 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         yaml.upstream?.url ??
         DEFAULT_CONFIG.upstream.url,
       apiKey: yaml.upstream?.apiKey ?? DEFAULT_CONFIG.upstream.apiKey,
+      autoDetect: {
+        enabled: typeof yaml.upstream?.autoDetect?.enabled === "boolean"
+          ? yaml.upstream.autoDetect.enabled
+          : false,
+        timeoutMs: typeof yaml.upstream?.autoDetect?.timeoutMs === "number"
+          ? yaml.upstream.autoDetect.timeoutMs
+          : 3000,
+      },
       agents: parseUpstreamAgents(yaml.upstream?.agents),
     },
     log: {
@@ -362,6 +505,16 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       },
       sqlite: { dbPath: yaml.storage?.sqlite?.dbPath ?? DEFAULT_CONFIG.storage.sqlite.dbPath },
       fs: { fsRoot: yaml.storage?.fs?.fsRoot ?? DEFAULT_CONFIG.storage.fs.fsRoot },
+      archiveNamespaces: Array.isArray(yaml.storage?.archiveNamespaces)
+        ? yaml.storage.archiveNamespaces
+            .filter((r) => r && typeof r === "object")
+            .map((r) => ({
+              spaceId: typeof r.spaceId === "string" ? r.spaceId : undefined,
+              teamId: typeof r.teamId === "string" ? r.teamId : undefined,
+              agentId: typeof r.agentId === "string" ? r.agentId : undefined,
+            }))
+            .filter((r) => r.spaceId || r.teamId || r.agentId)
+        : DEFAULT_CONFIG.storage.archiveNamespaces,
     },
     costGuard: parseCostGuard(yaml),
     creditReport: {
@@ -382,32 +535,92 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         cacheWrite1h: m.cacheWrite1h ?? 0,
       })).filter((m) => m.name !== ""),
     },
-    injection: {
-      enabled: yaml.injection?.enabled ?? DEFAULT_CONFIG.injection.enabled,
-      injectors: yaml.injection?.injectors ?? DEFAULT_CONFIG.injection.injectors,
-      externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
-        ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
-        : undefined,
+  injection: {
+    enabled: yaml.injection?.enabled ?? DEFAULT_CONFIG.injection.enabled,
+    injectors: yaml.injection?.injectors ?? DEFAULT_CONFIG.injection.injectors,
+    externalGatewayUrl: typeof yaml.injection?.externalGatewayUrl === "string" && yaml.injection.externalGatewayUrl.trim() !== ""
+      ? yaml.injection.externalGatewayUrl.trim().replace(/\/$/, "")
+      : undefined,
       // 只接受 boolean；yaml 缺省或类型错走 default（关）。跟 costGuard.markerOptIn
       // 同姿势，保证线上未配 assetReflection: 段的 yaml 完全无感。
-      assetReflection: {
-        markerOptIn: typeof yaml.injection?.assetReflection?.markerOptIn === "boolean"
-          ? yaml.injection.assetReflection.markerOptIn
-          : DEFAULT_CONFIG.injection.assetReflection!.markerOptIn,
-      },
+    assetReflection: {
+      markerOptIn: typeof yaml.injection?.assetReflection?.markerOptIn === "boolean"
+        ? yaml.injection.assetReflection.markerOptIn
+        : DEFAULT_CONFIG.injection.assetReflection!.markerOptIn,
     },
+    maxTotalChars:
+      typeof yaml.injection?.maxTotalChars === "number" && yaml.injection.maxTotalChars > 0
+        ? yaml.injection.maxTotalChars
+        : DEFAULT_CONFIG.injection.maxTotalChars,
+    // 注入微调（A/B）：只透传已识别的字段，未知字段忽略。
+    tuning: {
+      default: pickTuningOverrides(yaml.injection?.tuning?.default),
+      perAgent: mapPerAgentTuning(yaml.injection?.tuning?.perAgent),
+    },
+  },
     extraction: {
       enabled: yaml.extraction?.enabled ?? DEFAULT_CONFIG.extraction.enabled,
       extractors: yaml.extraction?.extractors ?? DEFAULT_CONFIG.extraction.extractors,
+    },
+    contextCompaction: {
+      enabled: typeof yaml.contextCompaction?.enabled === "boolean"
+        ? yaml.contextCompaction.enabled
+        : DEFAULT_CONFIG.contextCompaction!.enabled,
+      keepRounds: typeof yaml.contextCompaction?.keepRounds === "number" && yaml.contextCompaction.keepRounds > 0
+        ? yaml.contextCompaction.keepRounds
+        : DEFAULT_CONFIG.contextCompaction!.keepRounds,
+      summarize: typeof yaml.contextCompaction?.summarize === "boolean"
+        ? yaml.contextCompaction.summarize
+        : DEFAULT_CONFIG.contextCompaction!.summarize,
     },
   sessionInit: {
     enabled: yaml.sessionInit?.enabled ?? DEFAULT_CONFIG.sessionInit.enabled,
     maxRetries: yaml.sessionInit?.maxRetries ?? DEFAULT_CONFIG.sessionInit.maxRetries,
     injectAgentContext: yaml.sessionInit?.injectAgentContext ?? DEFAULT_CONFIG.sessionInit.injectAgentContext,
     injectTaskContext: yaml.sessionInit?.injectTaskContext ?? DEFAULT_CONFIG.sessionInit.injectTaskContext,
+    autoConversationId: (() => {
+      const cfg = {
+        enabled: typeof yaml.sessionInit?.autoConversationId?.enabled === "boolean"
+          ? yaml.sessionInit.autoConversationId.enabled
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.enabled,
+        ttlMinutes: typeof yaml.sessionInit?.autoConversationId?.ttlMinutes === "number"
+          ? yaml.sessionInit.autoConversationId.ttlMinutes
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.ttlMinutes,
+        strategy: yaml.sessionInit?.autoConversationId?.strategy === "per-key-msg"
+          ? "per-key-msg"
+          : yaml.sessionInit?.autoConversationId?.strategy === "per-key"
+            ? "per-key"
+            : DEFAULT_CONFIG.sessionInit.autoConversationId!.strategy,
+        maxEntries: typeof yaml.sessionInit?.autoConversationId?.maxEntries === "number"
+          ? yaml.sessionInit.autoConversationId.maxEntries
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxEntries,
+        maxWindowsPerKey: typeof yaml.sessionInit?.autoConversationId?.maxWindowsPerKey === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsPerKey
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsPerKey,
+        maxWindowsTotal: typeof yaml.sessionInit?.autoConversationId?.maxWindowsTotal === "number"
+          ? yaml.sessionInit.autoConversationId.maxWindowsTotal
+          : DEFAULT_CONFIG.sessionInit.autoConversationId!.maxWindowsTotal,
+      };
+      validateAutoConversationConfig(cfg);
+      return cfg;
+    })(),
+    threadIsolation: {
+      enabled: typeof yaml.sessionInit?.threadIsolation?.enabled === "boolean"
+        ? yaml.sessionInit.threadIsolation.enabled
+        : DEFAULT_CONFIG.sessionInit.threadIsolation!.enabled,
+    },
     defaultTaskId: typeof yaml.sessionInit?.defaultTaskId === "string"
       ? (yaml.sessionInit.defaultTaskId.trim() || undefined)   // empty string → disabled
       : DEFAULT_CONFIG.sessionInit.defaultTaskId,
+    taskMissingPolicy: yaml.sessionInit?.taskMissingPolicy === "reject"
+      ? "reject"
+      : yaml.sessionInit?.taskMissingPolicy === "default"
+        ? "default"
+        : DEFAULT_CONFIG.sessionInit.taskMissingPolicy,
+    taskMissingPolicyByAgent: {
+      ...DEFAULT_CONFIG.sessionInit.taskMissingPolicyByAgent,
+      ...(yaml.sessionInit?.taskMissingPolicyByAgent ?? {}),
+    },
     headerAutoSelect: {
       enabled: yaml.sessionInit?.headerAutoSelect?.enabled ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.enabled,
       teamHeader: (yaml.sessionInit?.headerAutoSelect?.teamHeader ?? DEFAULT_CONFIG.sessionInit.headerAutoSelect!.teamHeader).toLowerCase(),
@@ -438,6 +651,21 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       endpoint: yaml.tdai?.endpoint ?? DEFAULT_CONFIG.tdai.endpoint,
       apiKey: yaml.tdai?.apiKey ?? DEFAULT_CONFIG.tdai.apiKey,
       serviceId: yaml.tdai?.serviceId ?? DEFAULT_CONFIG.tdai.serviceId,
+      grants: Array.isArray(yaml.tdai?.grants)
+        ? yaml.tdai.grants
+            .filter((g) => g && typeof g === "object")
+            .map((g) => ({
+              teamId: typeof g.teamId === "string" ? g.teamId : "",
+              agentId: typeof g.agentId === "string" ? g.agentId : "",
+            }))
+            .filter((g) => g.teamId && g.agentId)
+        : DEFAULT_CONFIG.tdai.grants,
+      grantsEndpoint: typeof yaml.tdai?.grantsEndpoint === "string" && yaml.tdai.grantsEndpoint.trim()
+        ? yaml.tdai.grantsEndpoint.trim()
+        : undefined,
+      grantsTtlSeconds: typeof yaml.tdai?.grantsTtlSeconds === "number" && yaml.tdai.grantsTtlSeconds > 0
+        ? yaml.tdai.grantsTtlSeconds
+        : 60,
       memory: {
         enabled: yaml.tdai?.memory?.enabled ?? DEFAULT_CONFIG.tdai.memory.enabled,
         inject: yaml.tdai?.memory?.inject ?? DEFAULT_CONFIG.tdai.memory.inject,
@@ -446,6 +674,31 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
         injectL2L3: yaml.tdai?.memory?.injectL2L3 ?? DEFAULT_CONFIG.tdai.memory.injectL2L3,
         l1Limit: yaml.tdai?.memory?.l1Limit ?? DEFAULT_CONFIG.tdai.memory.l1Limit,
         l2Limit: yaml.tdai?.memory?.l2Limit ?? DEFAULT_CONFIG.tdai.memory.l2Limit,
+        recallCharBudget:
+          yaml.tdai?.memory?.recallCharBudget ??
+          DEFAULT_CONFIG.tdai.memory.recallCharBudget,
+      intentMode: yaml.tdai?.memory?.intentMode ?? DEFAULT_CONFIG.tdai.memory.intentMode,
+      bypassWritePolicy:
+        yaml.tdai?.memory?.bypassWritePolicy === "write" ||
+        yaml.tdai?.memory?.bypassWritePolicy === "write-scoped"
+          ? yaml.tdai.memory.bypassWritePolicy
+          : DEFAULT_CONFIG.tdai.memory.bypassWritePolicy,
+      bypassReadPolicy:
+        yaml.tdai?.memory?.bypassReadPolicy === "self-only" ||
+        yaml.tdai?.memory?.bypassReadPolicy === "default"
+          ? yaml.tdai.memory.bypassReadPolicy
+          : DEFAULT_CONFIG.tdai.memory.bypassReadPolicy,
+      intentEmbedding: {
+          baseUrl: (yaml.tdai?.memory?.intentEmbedding?.baseUrl ?? "").trim(),
+          apiKey: (yaml.tdai?.memory?.intentEmbedding?.apiKey ?? "").trim(),
+          model: yaml.tdai?.memory?.intentEmbedding?.model ?? DEFAULT_CONFIG.tdai.memory.intentEmbedding!.model,
+          dimensions:
+            yaml.tdai?.memory?.intentEmbedding?.dimensions ?? DEFAULT_CONFIG.tdai.memory.intentEmbedding!.dimensions,
+          minScore:
+            yaml.tdai?.memory?.intentEmbedding?.minScore ?? DEFAULT_CONFIG.tdai.memory.intentEmbedding!.minScore,
+          timeoutMs:
+            yaml.tdai?.memory?.intentEmbedding?.timeoutMs ?? DEFAULT_CONFIG.tdai.memory.intentEmbedding!.timeoutMs,
+        },
         timeoutMs: yaml.tdai?.memory?.timeoutMs ?? DEFAULT_CONFIG.tdai.memory.timeoutMs,
       },
     },
@@ -474,6 +727,7 @@ export function buildConfig(overrides: CliOverrides = {}): ProxyConfig {
       enabled: yaml.auth?.enabled ?? DEFAULT_CONFIG.auth.enabled,
       url: yaml.auth?.url ?? DEFAULT_CONFIG.auth.url,
       timeoutMs: yaml.auth?.timeoutMs ?? DEFAULT_CONFIG.auth.timeoutMs,
+      failPolicy: yaml.auth?.failPolicy === "fail-open" ? "fail-open" : "fail-closed",
     },
     // Entries without a non-empty userId are silently dropped — matching is
     // by userId now, and an empty userId would otherwise collide with

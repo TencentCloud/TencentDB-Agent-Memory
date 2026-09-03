@@ -14,6 +14,13 @@ import { createRateLimitHandlers } from "./routes/rate-limits.js";
 import { hasAnalyseMarker, hasCostGuardMarker } from "./routes/whitelist.js";
 import { tryActivateStorage, tryActivateRedis } from "./injection/index.js";
 import { getEffectiveBackend } from "./storage/factory.js";
+import {
+  sessionStatsToPrometheus,
+  getSessionStats,
+  getSessionStatsBreakdown,
+} from "./common/session-stats.js";
+import { autoSessionSizes, recentExpiredSessions } from "./session/auto-session.js";
+import { checkAdminAuth, adminAuthError } from "./routes/admin-auth.js";
 import type { ProxyConfig } from "./types.js";
 
 export function createApp(config: ProxyConfig): Hono {
@@ -343,6 +350,45 @@ export function createApp(config: ProxyConfig): Hono {
 
   // OpenAI-compatible chat completions (catch-all for any remaining POST paths)
   app.post("/*", (c) => handleChatCompletions(c, config));
+
+  // 会话诊断：只返回聚合数量与决策计数，不暴露具体会话 ID。
+  // 鉴权与 admin 端点一致：config.admin.apiKey 非空时要求 Bearer，为空则公开（建议仅内网暴露）。
+  app.get("/session-debug", (c) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
+    const snap = getSessionStats();
+    const reuseRate = snap.created + snap.resumed > 0
+      ? Number((snap.resumed / (snap.created + snap.resumed)).toFixed(3))
+      : 0;
+    const fenceTotal = snap.fenceBlocked + snap.fenceAllowed;
+    const fenceRate = fenceTotal > 0
+      ? Number((snap.fenceBlocked / fenceTotal).toFixed(3))
+      : 0;
+    // fenceCoverage = 有归属信息可校验的写入占比（blocked+allowed）/ (blocked+allowed+miss)
+    const fenceEvaluated = fenceTotal + snap.fenceMiss;
+    const fenceCoverage = fenceEvaluated > 0
+      ? Number((fenceTotal / fenceEvaluated).toFixed(3))
+      : 0;
+    return c.json(
+      {
+        ...autoSessionSizes(),
+        expiredLedger: recentExpiredSessions().length,
+        reuseRate,
+        fenceRate,
+        fenceCoverage,
+        stats: snap,
+        breakdown: getSessionStatsBreakdown(),
+      },
+      200,
+    );
+  });
+
+  // 会话决策指标（Prometheus 文本）。鉴权口径与 /session-debug 一致。
+  app.get("/metrics", (c) => {
+    const authResult = checkAdminAuth(c, config.admin.apiKey);
+    if (authResult !== "ok") return adminAuthError(c, authResult);
+    return c.text(sessionStatsToPrometheus(), 200);
+  });
 
   return app;
 }
