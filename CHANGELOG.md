@@ -5,9 +5,19 @@
 [Semantic Versioning](https://semver.org/)。
 
 覆盖仓库全部开源模块：`MemoryCore` / `MemoryPanel` / `MemoryKnowledge` /
-`MemoryProxy` / SDK。
+`MemoryProxy` / SDK / `adapters/pi`。
 
 ---
+
+## [Unreleased]
+
+### 新增 Pi 原生适配器
+
+- 新增独立 `adapters/pi` 包，通过 Pi 生命周期接入 TencentDB Agent Memory v3：
+  `before_agent_start` 召回 L1（可选 L2/L3），`agent_settled` 捕获 L0，
+  并提供原生记忆搜索工具与 `/tdai-memory-status` 命令。
+- 适配器包含 Team/Agent/User 隔离、超时与 HTTPS 安全校验、fail-open 降级、
+  会话 marker 去重、常见凭据脱敏、中英文安装文档和独立测试/打包校验。
 
 ## [2.0.1] — 2026-08-25
 
