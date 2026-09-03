@@ -370,10 +370,16 @@ export class StorePool {
   // ════════════════════════════════════════════════════════
 
   private createSqliteStore(instanceId: string): PooledStore {
-    // Embedding service (远端 API, 如 OpenAI text-embedding)
+    // Embedding service: remote API (e.g. OpenAI) or local (node-llama-cpp,
+    // offline, no apiKey). provider="local" falls back to keyword-only until
+    // the GGUF model finishes warming up.
     let embeddingService: EmbeddingService | undefined;
     const embCfg = this.memoryCfg.embedding;
-    if (embCfg.enabled && embCfg.provider !== "local" && embCfg.provider !== "none" && embCfg.apiKey) {
+    if (
+      embCfg.enabled &&
+      embCfg.provider !== "none" &&
+      (embCfg.provider === "local" || embCfg.apiKey)
+    ) {
       embeddingService = createEmbeddingService({
         provider: embCfg.provider,
         baseUrl: embCfg.baseUrl,
@@ -382,6 +388,9 @@ export class StorePool {
         dimensions: embCfg.dimensions,
         maxInputChars: embCfg.maxInputChars,
       }, this.logger as StoreLogger);
+      // Kick off model download/load in the background. No-op for remote
+      // providers; idempotent for local.
+      embeddingService.startWarmup?.();
     }
 
     const dims = embCfg.dimensions ?? 0;
