@@ -83,6 +83,7 @@ cp -r agents ~/agents
 | [dsh (DeepSeek Harness)](./dsh/) | OpenAI Chat Completions | 交互式 Form + Headless Bypass | `ask_user_question` | ❌ (无上限) | ❌ | ✅ (无 tool 时) |
 | [Hermes](./hermes/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
 | [OpenClaw](./openclaw/) | OpenAI Chat Completions | Header 预选（无 Form） | N/A | N/A | N/A | ✅ (header 缺失时) |
+| [Pi](./pi/) | OpenAI Chat Completions | 交互式 Form（扩展注册 `ask_followup_question`） | `ask_followup_question`（自定义工具） | ❌ (扁平列表) | ❌ | ❌ (非 TUI 走静态预选) |
 
 ---
 
@@ -122,6 +123,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | `x-deepseek-harness-session-id` | `x-session-id` |
 | Hermes | `x-conversation-id` | — (用户静态配置) |
 | OpenClaw | `x-conversation-id` | — (用户静态配置) |
+| Pi | `x-conversation-id`（扩展注入 `pi-<sid>`） | `x-session-id` |
 
 ---
 
@@ -136,6 +138,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 | dsh | 配置文件 | `~/.dsh/settings.yaml` + `.credentials.yaml` | YAML 环境变量引用 |
 | Hermes | 配置文件 | `~/.hermes/config.yaml` | YAML `api_key` + headers |
 | OpenClaw | 配置文件 | `~/.openclaw/openclaw.json` | JSON `apiKey` + headers |
+| Pi | 环境变量 + 扩展自动发现 | env `TDAI_*` + `~/.pi/agent/extensions/pi-tdai-client`（无配置文件） | env `TDAI_USER_KEY` |
 
 ---
 
@@ -179,7 +182,7 @@ tsx agents/asset-import.ts --source claude-code --agent-id <id> --team-id <tid> 
 http://<proxy-host>:<port>/<agent-source>/<spaceId>
 ```
 
-- `<agent-source>`：必须从 Proxy 支持的值中选用：`claude-code`、`codebuddy`、`workbuddy`、`codex`、`hermes`、`openclaw`。其他平台可伪装成其中之一接入（如使用 `codebuddy`）
+- `<agent-source>`：必须从 Proxy 支持的值中选用：`claude-code`、`codebuddy`、`workbuddy`、`codex`、`hermes`、`openclaw`、`pi`。其他平台可伪装成其中之一接入（如使用 `codebuddy`）
 - `<spaceId>`：memory 实例 ID（本地部署固定为 `default`）
 
 ---
