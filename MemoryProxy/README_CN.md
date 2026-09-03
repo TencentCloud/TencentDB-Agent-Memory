@@ -351,6 +351,10 @@ MemoryProxy/
   会话 ID 丢失或配置变更导致全量轮换；
 - `fence_blocked / fence_allowed` 的**拦截率突变**：突然升高=会话归属在错乱；
   长期为 0=写入前检查可能没匹配到记录（需复查 store 键约定与绑定路径）；
+- `tdai_auto_session_fence_miss_total` **突增**：多副本下大量写入查不到归属信息，
+  检查 binding 是否正常落库 / 空间解析是否一致；
+- `tdai_auto_session_fence_coverage` **骤降**：第二道防线覆盖率下降，
+  说明越来越多 L0 写入在“无绑定信息”下放行；
 - `tdai_auto_session_spaces_exceeded_total` > 0：空间标签超过导出上限（32），
   说明租户数量增长，需评估指标拆分或聚合策略。
 

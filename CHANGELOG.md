@@ -25,7 +25,19 @@
   注意事项与监控告警建议
 - 埋点对齐：model-intent composite 与 init 日志统一走 buildStoreSessionKey（threadIsolation 时含 :thread）
 - 路由层（session-refresh / session-task / force-archive）补 workbuddy codex 别名回归用例
-- 设计文档更新：docs/design/2026-08-27-session-isolation-design.md 增补 2026-09-02 落地记录
+- 设计文档更新：docs/design/2026-08-27-session-isolation-design.md 整篇刷新（v3），
+  正文直接描述当前实现，不再以文末附注追加
+- Session 隔离后续加固：
+  - threadIsolation 语义如实收敛：状态机 store 键统一走 buildStoreSessionKey，
+    并明确“进程内分流 + 遥测分组、不承诺持久隔离”（默认关）
+  - 管理端点鉴权：/v3/session/refresh-cache、/v3/session/force-archive-skill 与
+    /session-debug 接入 admin.apiKey Bearer 校验（空则公开，语义与 instance-destroy 一致）
+  - SessionStore L1 有界 LRU + 周期清理：超限淘汰最旧（仅内存），过期 pending 定期清存储行
+  - archive 写侧 fence：L1 miss 时补查 binding repo，新增 fenceMiss / fenceCoverage 指标
+  - workbuddy raw auto-* 会话键同样过签名校验，防幽灵会话键
+- Proxy 修复：codexHandler 转发阶段补传 per-agent 协议开关
+  （chatCompletions / responsesToAnthropic），修复上游 URL 被拼成不存在的
+  /responses 路径导致的 404
 
 ## [2.0.1] — 2026-08-25
 
