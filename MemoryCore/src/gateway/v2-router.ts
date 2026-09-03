@@ -27,6 +27,7 @@ import type { PipelineWorker } from "../services/pipeline-worker.js";
 import { executeMemorySearch } from "../core/tools/memory-search.js";
 import { executeConversationSearch } from "../core/tools/conversation-search.js";
 import type { MemoryRecord } from "../core/record/l1-writer.js";
+import { ingestExplicitMemory } from "../core/record/explicit-memory.js";
 import { reportRecallMetrics } from "../core/report/metric-tracking-recall.js";
 
 // ── Zod schemas (validated types + defaults) ──
@@ -36,6 +37,7 @@ import {
   conversationSearchRequestSchema,
   conversationDeleteRequestSchema,
   conversationCountRequestSchema,
+  explicitMemoryWriteRequestSchema,
   atomicUpdateRequestSchema,
   atomicQueryRequestSchema,
   atomicSearchRequestSchema,
@@ -91,6 +93,7 @@ import {
   type UserData,
   type AgentData,
   type TaskData,
+  type ExplicitMemoryWriteData,
 } from "./v2-schemas.js";
 import { stripSceneNavigation } from "../core/scene/scene-navigation.js";
 import { buildProfileIsolationScope, buildProfileStableId, DEFAULT_PROFILE_SCOPE } from "../core/profile/profile-sync.js";
@@ -169,6 +172,7 @@ const V3_ALLOWED_SUBPATHS = new Set<string>([
   "/core/read",
   "/core/write",
   "/core/count",
+  "/memories/explicit",
 ]);
 
 /**
@@ -226,6 +230,8 @@ export interface V2RouterDeps {
   getEmbedding: () => EmbeddingService | undefined;
   /** Get the default StorageAdapter (standalone fallback). */
   getStorage: () => StorageAdapter | undefined;
+  /** Data root dir (used by explicit-memory ingest to write JSONL). */
+  dataBaseDir: string;
   logger: Logger;
 
   /**
@@ -429,6 +435,7 @@ const DATAPLANE_HANDLERS: Record<string, RouteHandler> = {
   "/core/read": handleCoreRead,
   "/core/write": handleCoreWrite,
   "/core/count": handleCoreCount,
+  "/memories/explicit": handleExplicitMemoryWrite,
 };
 
 const routeTable: Record<string, RouteHandler> = {
@@ -1108,6 +1115,48 @@ async function handleAtomicUpdate(body: unknown, _auth: V2AuthContext, requestId
   });
 
   return successEnvelope<AtomicUpdateData>({ id, version: `v${updatedVersion}`, updated_at: now }, requestId);
+}
+
+async function handleExplicitMemoryWrite(body: unknown, auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
+  const parsed = explicitMemoryWriteRequestSchema.safeParse(body);
+  if (!parsed.success) return errorEnvelope(400, formatZodError(parsed.error), requestId);
+  const { action, target, content, session_id, team_id, user_id, agent_id, task_id } = parsed.data;
+
+  // Enforce three-dim isolation — same contract as conversation/add.
+  if (deps.isolationConfig?.enforce && deps.requestIsolationMissing && deps.requestIsolationMissing.length > 0) {
+    return errorEnvelope(
+      422,
+      `Tenancy isolation required: missing ${deps.requestIsolationMissing.join(", ")}. ` +
+      `Provide via request body or x-tdai-{user-id,agent-id,session-id} headers.`,
+      requestId,
+    );
+  }
+  const iso = deps.requestIsolation;
+
+  const store = deps.getStore();
+  if (!store) return errorEnvelope(503, "Store not available", requestId);
+
+  const embedding = deps.getEmbedding();
+  const record = await ingestExplicitMemory({
+    action,
+    target,
+    content,
+    baseDir: deps.dataBaseDir,
+    sessionKey: session_id,
+    sessionId: session_id,
+    teamId: team_id ?? iso?.teamId,
+    userId: user_id ?? iso?.userId,
+    agentId: agent_id ?? iso?.agentId,
+    taskId: task_id ?? iso?.taskId,
+    logger: deps.logger,
+    vectorStore: store,
+    embeddingService: embedding,
+  });
+
+  const response: ExplicitMemoryWriteData = record
+    ? { stored: true, memory_id: record.id, type: record.type }
+    : { stored: false };
+  return successEnvelope<ExplicitMemoryWriteData>(response, requestId);
 }
 
 async function handleAtomicQuery(body: unknown, _auth: V2AuthContext, requestId: string, deps: V2RouterDeps): Promise<ApiResponseEnvelope> {
@@ -2275,6 +2324,7 @@ export {
   handleCoreRead,
   handleCoreWrite,
   handleCoreCount,
+  handleExplicitMemoryWrite,
   handleTeamCreate,
   handleTeamGet,
   handleTeamUpdate,
