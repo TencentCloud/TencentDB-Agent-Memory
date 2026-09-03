@@ -14,7 +14,7 @@ import { CompactionRequestSchemaV2 } from "../schemas.js";
 import { buildOffloadBasePath } from "../session-utils.js";
 import { applyFastPath } from "./fast-path.js";
 import { injectActiveMmd, injectHistoryMmds } from "./mmd-injector.js";
-import { resolveLevel, mildCompress, aggressiveCompress, emergencyCompress } from "./compressor.js";
+import { resolveLevel, mildCompress, aggressiveCompress, emergencyCompress, compressProtectedTail } from "./compressor.js";
 import { estimateMessageTokens, extractToolResultId } from "./helpers.js";
 import type { Message } from "./helpers.js";
 import { traceServerCompaction } from "../opik-tracer.js";
@@ -217,6 +217,17 @@ export async function handleCompaction(
     report.emergencyDeleted = em.deletedCount;
     aggRemainingTokens = em.remainingTokens;
     compactState.deletedOffloadIds.push(...em.deletedIds);
+
+    // If tokens remain above the emergency target, compress the protected tail:
+    // delete the oldest complete tool-call groups inside the tail while
+    // preserving its documented invariants.
+    if (aggRemainingTokens > emTargetTokens) {
+      const tailDeletedIds: string[] = [];
+      const tail = compressProtectedTail(messages, tokenArray, emTargetTokens, aggRemainingTokens, tailDeletedIds);
+      report.emergencyDeleted += tail.deletedCount;
+      aggRemainingTokens = tail.remainingTokens;
+      compactState.deletedOffloadIds.push(...tailDeletedIds);
+    }
   }
 
   // Step 7: Inject active MMD (after all compression, so position is correct)
