@@ -130,3 +130,21 @@ created/resumed 语义、codex 路径显式会话 header 对齐。
 3. 同 key 第二请求（仍无会话头）→ 日志不再生成新 ID（续接同一会话）；
 4. 等 TTL 后再请求 → 生成新 ID；
 5. 显式带 `x-conversation-id` 的旧客户端 → 行为不变（日志无 `[session-auto]`）。
+
+## 6. 任意 Agent 接入（隔离层 Agent 无关）
+
+会话隔离本身不依赖客户端白名单：任何新的 agent 前缀（URL 第一段，如 `/my-agent/...`）
+都会被当作独立命名空间，隔离由以下机制保证，与客户端是否“已适配”无关：
+
+- **存储命名空间**：L2a 行主键为 `spaceId:userId:agentSource:sessionId` 四段，未知
+  agentSource 与已知客户端同等隔离；L1 键按 `agentSource:sessionKey` 归属校验后才可用。
+- **autoConversationId**：无会话头的客户端由 Proxy 代发会话 ID，签名绑定
+  `keyId + spaceId + agentSource + scope + 首问指纹`，跨 agent / 跨 space / 跨线程复用一律拒绝。
+- **身份直连**：携带 `x-team-id + x-agent-id`（可选 task）的未知客户端直接注册，
+  不需要交互式表单；未携带身份头时才按协议形态走交互式表单。
+- **接入清单**：新客户端无需改动隔离层；需要做的只是按协议选择表单渲染器
+  （Anthropic AskUserQuestion / Chat ask_followup_question / Responses tool 消息），
+  这部分与“隔离”正交。
+
+对应自动化用例：`session-isolation.test.ts` 的“任意未知 AgentSource”分组与
+`optimizations.test.ts` 的未知 agentSource 全局策略用例。

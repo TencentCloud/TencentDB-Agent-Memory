@@ -59,6 +59,44 @@ describe("会话隔离（scope 维度）", () => {
   });
 });
 
+describe("任意未知 AgentSource（Agent 无关）", () => {
+  beforeEach(() => {
+    __resetAutoSessionForTests();
+    resetSessionStats();
+    __setAutoSessionNow(() => 1_000_000);
+  });
+  afterAll(() => {
+    __resetAutoSessionForTests();
+    resetSessionStats();
+    __setAutoSessionNow(() => Date.now());
+  });
+
+  it("同 key 下未知 agentSource 各自独立会话，同 agent+space 续接", () => {
+    const cfg = { enabled: true, ttlMinutes: 30 } as const;
+    const a1 = resolveOrCreateSessionId(
+      null, "k", cfg, undefined, "",
+      { agentSource: "brand-new-agent-a", spaceId: "sp1" },
+    );
+    const a2 = resolveOrCreateSessionId(
+      null, "k", cfg, undefined, "",
+      { agentSource: "brand-new-agent-b", spaceId: "sp1" },
+    );
+    expect(a2.sessionId).not.toBe(a1.sessionId);
+
+    // 同 (agent, space) 续接同一会话；不同 space 再隔离
+    const a3 = resolveOrCreateSessionId(
+      null, "k", cfg, undefined, "",
+      { agentSource: "brand-new-agent-a", spaceId: "sp1" },
+    );
+    expect(a3.sessionId).toBe(a1.sessionId);
+    const a4 = resolveOrCreateSessionId(
+      null, "k", cfg, undefined, "",
+      { agentSource: "brand-new-agent-a", spaceId: "sp2" },
+    );
+    expect(a4.sessionId).not.toBe(a1.sessionId);
+  });
+});
+
 describe("容量控制（LRU 淘汰）", () => {
   beforeEach(() => {
     __resetAutoSessionForTests();
