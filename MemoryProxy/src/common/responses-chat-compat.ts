@@ -349,9 +349,10 @@ export function createChatSseToResponses(opts: {
     responseId: string;
     created: number;
     parser: SseFrameParser;
-    item: OpenItem | null;
-    completedItems: Record<string, unknown>[];
-    toolStates: Map<number, { id: string; name: string; args: string }>;
+    items: OpenItem[];
+    textItem: OpenItem | null;
+    /** Chat tool_calls index → 已开启的 function_call 输出项。 */
+    toolsByChatIndex: Map<number, OpenItem>;
     usage: Record<string, unknown> | undefined;
     finished: boolean;
     controller: TransformStreamDefaultController<Uint8Array>;
@@ -365,9 +366,9 @@ export function createChatSseToResponses(opts: {
         responseId,
         created,
         parser: createSseFrameParser(),
-        item: null,
-        completedItems: [],
-        toolStates: new Map<number, { id: string; name: string; args: string }>(),
+        items: [],
+        textItem: null,
+        toolsByChatIndex: new Map<number, OpenItem>(),
         usage: undefined,
         finished: false,
         controller,
@@ -432,29 +433,23 @@ export function createChatSseToResponses(opts: {
     }
   }
 
-  function finishItem() {
-    if (!state || !state.item || state.item.finished) return;
-    state.item.finished = true;
-    const item = state.item;
-    if (item.kind === "text") {
-      for (const e of textItemDoneEvents(item)) emit(e);
-    } else {
-      for (const e of toolItemDoneEvents(item)) emit(e);
-    }
-    state.completedItems.push(finalItemShape(item));
-    state.item = null;
+  function addItem(item: OpenItem): void {
+    if (!state) return;
+    item.outputIndex = state.items.length;
+    state.items.push(item);
   }
 
   function startTextItem() {
     if (!state) return;
-    if (state.item) finishItem();
+    if (state.textItem) return;
     const item: OpenItem = {
       kind: "text",
-      outputIndex: state.completedItems.length,
+      outputIndex: 0,
       itemId: `msg_${randomId()}`,
       text: "",
     };
-    state.item = item;
+    addItem(item);
+    state.textItem = item;
     emit(
       sseFrame("response.output_item.added", {
         output_index: item.outputIndex,
@@ -477,37 +472,10 @@ export function createChatSseToResponses(opts: {
     );
   }
 
-  function startToolItem(callId: string, name: string) {
-    if (!state) return;
-    if (state.item) finishItem();
-    const item: OpenItem = {
-      kind: "tool",
-      outputIndex: state.completedItems.length,
-      itemId: callId.startsWith("call_") ? callId : `call_${randomId()}`,
-      callId,
-      name,
-      args: "",
-    };
-    state.item = item;
-    emit(
-      sseFrame("response.output_item.added", {
-        output_index: item.outputIndex,
-        item: {
-          id: item.itemId,
-          type: "function_call",
-          status: "in_progress",
-          call_id: callId,
-          name,
-          arguments: "",
-        },
-      }),
-    );
-  }
-
   function feedTextDelta(delta: string) {
     if (!state) return;
-    if (!state.item || state.item.kind !== "text") startTextItem();
-    const item = state.item;
+    if (!state.textItem) startTextItem();
+    const item = state.textItem;
     if (!item) return;
     item.text = (item.text ?? "") + delta;
     emit(
@@ -527,23 +495,37 @@ export function createChatSseToResponses(opts: {
     argsDelta: string | undefined,
   ) {
     if (!state) return;
-    let st = state.toolStates.get(index);
-    if (!st) {
-      st = { id: id ?? `call_${randomId()}`, name: name ?? "", args: "" };
-      state.toolStates.set(index, st);
-      startToolItem(st.id, st.name);
+    let item = state.toolsByChatIndex.get(index);
+    if (!item) {
+      const callId = id ?? `call_${randomId()}`;
+      item = {
+        kind: "tool",
+        outputIndex: 0,
+        itemId: callId.startsWith("call_") ? callId : `call_${randomId()}`,
+        callId,
+        name: name ?? "",
+        args: "",
+      };
+      addItem(item);
+      state.toolsByChatIndex.set(index, item);
+      emit(
+        sseFrame("response.output_item.added", {
+          output_index: item.outputIndex,
+          item: {
+            id: item.itemId,
+            type: "function_call",
+            status: "in_progress",
+            call_id: item.callId,
+            name: item.name,
+            arguments: "",
+          },
+        }),
+      );
     } else {
-      if (id) st.id = id;
-      if (name) {
-        st.name = name;
-        if (state.item?.kind === "tool") state.item.name = name;
-      }
+      if (id) item.callId = id;
+      if (name) item.name = name;
     }
     if (argsDelta) {
-      if (!state.item || state.item.kind !== "tool") startToolItem(st.id, st.name);
-      const item = state.item;
-      if (!item) return;
-      st.args += argsDelta;
       item.args = (item.args ?? "") + argsDelta;
       emit(
         sseFrame("response.function_call_arguments.delta", {
@@ -597,7 +579,15 @@ export function createChatSseToResponses(opts: {
   function complete() {
     if (!state || state.finished) return;
     state.finished = true;
-    finishItem();
+    // 收尾：所有已开启的输出项按 output_index 顺序发 done 事件；
+    // 并行工具各自持有独立 item，参数不会再串到其它调用上。
+    for (const item of state.items) {
+      if (item.kind === "text") {
+        for (const e of textItemDoneEvents(item)) emit(e);
+      } else {
+        for (const e of toolItemDoneEvents(item)) emit(e);
+      }
+    }
     const usage = state.usage;
     // usage 保真：保留上游 chat usage 的缓存命中字段（Responses 侧用
     // cached_tokens 单独暴露），避免转换层丢失缓存/计费信息。
@@ -620,7 +610,7 @@ export function createChatSseToResponses(opts: {
           created_at: state.created,
           status: "completed",
           model,
-          output: state.completedItems,
+          output: state.items.map(finalItemShape),
           usage:
             usage && Object.keys(usage).length > 0
               ? {
@@ -761,7 +751,7 @@ export function chatBodyToResponses(
     if (!m) continue;
     const role = m.role;
     if (role === "system" || role === "developer") {
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      const text = chatContentParts(m.content).text;
       instructions = instructions ? `${instructions}\n\n${text}` : text;
       continue;
     }
@@ -769,7 +759,7 @@ export function chatBodyToResponses(
       input.push({
         type: "function_call_output",
         call_id: typeof m.tool_call_id === "string" ? m.tool_call_id : "",
-        output: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+        output: chatContentParts(m.content).text,
       });
       continue;
     }

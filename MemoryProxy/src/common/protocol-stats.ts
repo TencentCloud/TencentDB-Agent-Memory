@@ -31,6 +31,8 @@ export interface ProtocolStatsSnapshot {
 
 const MAX_SAMPLES = 4096;
 const DURATIONS = new Map<string, number[]>();
+const DURATION_HEAD = new Map<string, number>();
+const DURATION_COUNT = new Map<string, number>();
 const STREAMS = new Map<string, number>();
 const cache = { requests: 0, cacheHitRequests: 0, cachedTokens: 0, inputTokens: 0 };
 /** 丢弃参数计数：key = `${kind}\u0000${param}`；param 只允许转换器内的固定名（metadata 聚合计数）。 */
@@ -46,11 +48,18 @@ function percentile(sorted: number[], p: number): number {
 export function recordConversion(kind: string, durationMs: number): void {
   let arr = DURATIONS.get(kind);
   if (!arr) {
-    arr = [];
+    arr = new Array<number>(MAX_SAMPLES);
     DURATIONS.set(kind, arr);
+    DURATION_HEAD.set(kind, 0);
+    DURATION_COUNT.set(kind, 0);
   }
-  arr.push(durationMs);
-  if (arr.length > MAX_SAMPLES) arr.shift();
+  let head = DURATION_HEAD.get(kind) ?? 0;
+  let count = DURATION_COUNT.get(kind) ?? 0;
+  arr[head] = durationMs;
+  head = (head + 1) % MAX_SAMPLES;
+  if (count < MAX_SAMPLES) count += 1;
+  DURATION_HEAD.set(kind, head);
+  DURATION_COUNT.set(kind, count);
 }
 
 /** 记录一个流式转换实例（只计数，不做每帧耗时）。 */
@@ -81,11 +90,12 @@ export function recordCacheUsage(usage: { cached?: number; input?: number } | un
 export function getProtocolStats(): ProtocolStatsSnapshot {
   const conversions: Record<string, ConversionKindStats> = {};
   for (const [kind, arr] of DURATIONS) {
-    if (arr.length === 0) continue;
-    const sorted = [...arr].sort((a, b) => a - b);
+    const count = DURATION_COUNT.get(kind) ?? 0;
+    if (count === 0) continue;
+    const sorted = arr.slice(0, count).sort((a, b) => a - b);
     conversions[kind] = {
-      count: arr.length,
-      totalMs: arr.reduce((a, b) => a + b, 0),
+      count,
+      totalMs: sorted.reduce((a, b) => a + b, 0),
       p50Ms: percentile(sorted, 50),
       p95Ms: percentile(sorted, 95),
       p99Ms: percentile(sorted, 99),
@@ -109,6 +119,8 @@ export function getProtocolStats(): ProtocolStatsSnapshot {
 
 export function resetProtocolStats(): void {
   DURATIONS.clear();
+  DURATION_HEAD.clear();
+  DURATION_COUNT.clear();
   STREAMS.clear();
   DROPPED.clear();
   cache.requests = 0;

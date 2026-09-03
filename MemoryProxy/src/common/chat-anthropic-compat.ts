@@ -44,6 +44,22 @@ function blockText(content: unknown): string {
     .join("\n");
 }
 
+/** Chat content（string 或 parts 数组）→ 纯文本，避免把数组 JSON.stringify 后当正文。 */
+function chatContentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const p of content) {
+    const r = asRecord(p);
+    if (!r) continue;
+    if (r.type === "text" && typeof r.text === "string") parts.push(r.text);
+    else if (r.type === "output_text" && typeof r.text === "string") parts.push(r.text);
+    else if (r.type === "input_text" && typeof r.text === "string") parts.push(r.text);
+    else if (r.type === "refusal" && typeof r.refusal === "string") parts.push(r.refusal);
+  }
+  return parts.join("\n\n");
+}
+
 /** Anthropic tool_result.content → OpenAI tool 消息 content（支持文本 + 图片混合）。 */
 function anthropicToolResultToChatContent(content: unknown): unknown {
   if (typeof content === "string") return content;
@@ -302,13 +318,13 @@ export function chatToAnthropic(
     if (!m) continue;
     const role = m.role;
     if (role === "system") {
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      const text = chatContentToText(m.content);
       system = system ? `${system}\n\n${text}` : text;
       continue;
     }
     if (role === "developer") {
       // OpenAI 新版 developer 角色语义等同 system（系统级指令），不能落成 user。
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "");
+      const text = chatContentToText(m.content);
       system = system ? `${system}\n\n${text}` : text;
       continue;
     }
@@ -328,7 +344,8 @@ export function chatToAnthropic(
     if (role === "assistant" && asRecord(m.function_call)) {
       const fc = asRecord(m.function_call);
       const blocks: unknown[] = [];
-      if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });
+      const assistantText = chatContentToText(m.content);
+      if (assistantText) blocks.push({ type: "text", text: assistantText });
       let input: unknown = {};
       if (fc && typeof fc.arguments === "string") {
         try {
@@ -359,7 +376,8 @@ export function chatToAnthropic(
             : {}),
         });
       }
-      if (typeof m.content === "string" && m.content) blocks.push({ type: "text", text: m.content });
+      const assistantText = chatContentToText(m.content);
+      if (assistantText) blocks.push({ type: "text", text: assistantText });
       for (const tc of m.tool_calls as unknown[]) {
         const t = asRecord(tc);
         if (!t) continue;
@@ -518,7 +536,7 @@ export function chatJsonToAnthropicJson(
         : {}),
     });
   }
-  const text = typeof msg?.content === "string" ? msg.content : "";
+  const text = chatContentToText(msg?.content);
   if (text) content.push({ type: "text", text });
   const fc = asRecord(msg?.function_call);
   if (fc && typeof fc.name === "string") {
@@ -935,11 +953,18 @@ export function createAnthropicSseToChatSse(
 // ── 流式：上游 Chat SSE → 客户端 Anthropic SSE ──────────────────────────────
 
 export function createChatSseToAnthropicSse(
-  opts: { model?: string; preserveSignature?: boolean } = {},
+  opts: {
+    model?: string;
+    preserveSignature?: boolean;
+    /** 与 chatJsonToAnthropicJson 同口径：默认 strip，thinking:"map" 才输出 thinking 块。 */
+    thinking?: "map" | "strip";
+  } = {},
 ): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const model = opts.model ?? "unknown";
+  // preserveSignature 需要 thinking 块承载 signature，因此视为 map。
+  const mapThinking = opts.thinking === "map" || opts.preserveSignature === true;
   recordStream("chat_to_anthropic");
   const parser = createSseFrameParser();
   let started = false;
@@ -1014,6 +1039,9 @@ export function createChatSseToAnthropicSse(
 
   const openText = () => {
     if (textIndex >= 0) return;
+    // 与 Anthropic 常规流式顺序对齐：先关闭仍在流中的 thinking 块，
+    // 再开 text 块，避免两个 content block 同时 open。
+    closeThinking();
     textIndex = nextBlock++;
     emit(
       anthropicEvent("content_block_start", {
@@ -1078,35 +1106,37 @@ export function createChatSseToAnthropicSse(
 
     if (delta?.role === "assistant") ensureStarted();
 
-    if (
-      typeof delta?.reasoning_content === "string" &&
-      delta.reasoning_content.length > 0
-    ) {
+    const reasoningContent =
+      mapThinking && typeof delta?.reasoning_content === "string"
+        ? delta.reasoning_content
+        : "";
+    const reasoningSignature =
+      opts.preserveSignature && typeof delta?.reasoning_signature === "string"
+        ? delta.reasoning_signature
+        : "";
+    if (reasoningContent.length > 0 || reasoningSignature.length > 0) {
       ensureStarted();
       openThinking();
-      emit(
-        anthropicEvent("content_block_delta", {
-          type: "content_block_delta",
-          index: thinkingIndex,
-          delta: { type: "thinking_delta", thinking: delta.reasoning_content },
-        }),
-      );
-    }
-
-    if (
-      opts.preserveSignature &&
-      typeof delta?.reasoning_signature === "string" &&
-      delta.reasoning_signature.length > 0
-    ) {
-      ensureStarted();
-      openThinking();
-      emit(
-        anthropicEvent("content_block_delta", {
-          type: "content_block_delta",
-          index: thinkingIndex,
-          delta: { type: "signature_delta", signature: delta.reasoning_signature },
-        }),
-      );
+      // Anthropic 约定 signature_delta 先于 thinking_delta 到达；
+      // 同一 chunk 里两者同时出现时也按该顺序输出。
+      if (reasoningSignature.length > 0) {
+        emit(
+          anthropicEvent("content_block_delta", {
+            type: "content_block_delta",
+            index: thinkingIndex,
+            delta: { type: "signature_delta", signature: reasoningSignature },
+          }),
+        );
+      }
+      if (reasoningContent.length > 0) {
+        emit(
+          anthropicEvent("content_block_delta", {
+            type: "content_block_delta",
+            index: thinkingIndex,
+            delta: { type: "thinking_delta", thinking: reasoningContent },
+          }),
+        );
+      }
     }
 
     if (typeof delta?.content === "string" && delta.content.length > 0) {
@@ -1130,6 +1160,9 @@ export function createChatSseToAnthropicSse(
         let aIdx = toolIndexByChat.get(chatIdx);
         const fn = asRecord(t.function);
         if (aIdx === undefined) {
+          // 工具块前若还有 thinking/text 块未收尾，先按序关闭。
+          closeThinking();
+          closeText();
           aIdx = nextBlock++;
           toolIndexByChat.set(chatIdx, aIdx);
           const toolId = typeof t.id === "string" ? t.id : `toolu_${randomId()}`;
