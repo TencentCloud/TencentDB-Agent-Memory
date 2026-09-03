@@ -1,0 +1,8 @@
+# ~/.config/goose/config.yaml
+# (Windows: %APPDATA%\Block\goose\config\config.yaml)
+GOOSE_PROVIDER: openai
+GOOSE_MODEL: claude-sonnet-4-20250514
+OPENAI_HOST: http://127.0.0.1:8096
+OPENAI_BASE_PATH: /codebuddy/default
+# OPENAI_API_KEY stays in the environment / keyring — never in this file:
+#   export OPENAI_API_KEY=sk-mem-...
