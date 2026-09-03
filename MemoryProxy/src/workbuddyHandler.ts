@@ -52,8 +52,17 @@ import { recordTdaiTurn } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
-import { responsesBodyToChat, createChatSseToResponses } from "./common/responses-chat-compat.js";
-import { responsesToAnthropic, createAnthropicSseToResponsesSse } from "./common/responses-anthropic-compat.js";
+import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+} from "./common/responses-chat-compat.js";
+import {
+  responsesToAnthropic,
+  createAnthropicSseToResponsesSse,
+  anthropicJsonToResponsesJson,
+} from "./common/responses-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
 
 // ── Handler-level constants ──────────────────────────────────────────────────
@@ -522,6 +531,18 @@ async function forwardToUpstream(
     headers["authorization"] = `Bearer ${perAgent.apiKey}`;
     delete headers["x-api-key"];
   }
+  if (wbToAnthropic) {
+    // Responses → Anthropic：上游要 x-api-key + anthropic-version，不要 Bearer。
+    const clientBearer = (headers["authorization"] ?? "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    delete headers["authorization"];
+    delete headers["x-api-key"];
+    if (clientBearer) {
+      headers["x-api-key"] = clientBearer;
+      headers["anthropic-version"] = "2023-06-01";
+    }
+  }
   const bodyStr = JSON.stringify(outboundBody);
 
   // 结构化埋点：与 codex 对齐（forwardStart / forwardDone / info 三段式）
@@ -609,6 +630,28 @@ async function forwardToUpstream(
   }
 
   // Non-SSE or no langfuse ctx → passthrough
+  if (!isSSE && upstreamResp.body && (wbToAnthropic || wbToChat)) {
+    // stream:false 的 JSON 响应：成功体转回 Responses，错误体只做 schema 映射。
+    const raw = await upstreamResp.text();
+    try {
+      if (upstreamResp.status >= 400) {
+        return new Response(toOpenAiErrorBody(raw), {
+          status: upstreamResp.status,
+          headers: respHeaders,
+        });
+      }
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const converted = wbToAnthropic
+        ? anthropicJsonToResponsesJson(parsed, { model: modelId })
+        : chatJsonToResponses(parsed, { model: modelId });
+      return new Response(JSON.stringify(converted), {
+        status: upstreamResp.status,
+        headers: respHeaders,
+      });
+    } catch {
+      return new Response(raw, { status: upstreamResp.status, headers: respHeaders });
+    }
+  }
   if (!isSSE || !upstreamResp.body || !lf) {
     return new Response(upstreamResp.body, {
       status: upstreamResp.status,

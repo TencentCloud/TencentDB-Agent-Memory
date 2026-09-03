@@ -54,8 +54,17 @@ import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
-import { responsesBodyToChat, createChatSseToResponses } from "./common/responses-chat-compat.js";
-import { responsesToAnthropic, createAnthropicSseToResponsesSse } from "./common/responses-anthropic-compat.js";
+import {
+  responsesBodyToChat,
+  createChatSseToResponses,
+  chatJsonToResponses,
+} from "./common/responses-chat-compat.js";
+import {
+  responsesToAnthropic,
+  createAnthropicSseToResponsesSse,
+  anthropicJsonToResponsesJson,
+} from "./common/responses-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -1102,13 +1111,22 @@ async function forwardToUpstream(
   const upstreamUrl = joinUrl(upstreamBase, outboundEndpoint);
   const upstreamHeaders = buildUpstreamHeaders(c, config);
   upstreamHeaders["content-type"] = "application/json";
-  // 覆盖 apiKey 与 per-agent 策略一致：agentUpstreamEntry.apiKey 优先，
-  // 否则透传客户端 Bearer。
-  if (agentUpstreamEntry) {
-    if (agentUpstreamEntry.apiKey) {
-      upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+  if (codexToAnthropic) {
+    // Responses → Anthropic：上游要 x-api-key + anthropic-version，不要 Bearer。
+    const configuredKey = agentUpstreamEntry?.apiKey;
+    const clientBearer = (upstreamHeaders["authorization"] ?? "")
+      .replace(/^Bearer\s+/i, "")
+      .trim();
+    const key = configuredKey || clientBearer || "";
+    delete upstreamHeaders["authorization"];
+    delete upstreamHeaders["x-api-key"];
+    if (key) {
+      upstreamHeaders["x-api-key"] = key;
+      upstreamHeaders["anthropic-version"] = "2023-06-01";
     }
-    // else: 保留 c.req.header('authorization') 里的客户端 key 透传
+  } else if (agentUpstreamEntry?.apiKey) {
+    upstreamHeaders["authorization"] = `Bearer ${agentUpstreamEntry.apiKey}`;
+    delete upstreamHeaders["x-api-key"];
   }
 
   pipe.forwardStart(upstreamUrl);
@@ -1163,7 +1181,11 @@ async function forwardToUpstream(
   // codex Responses API 只有 SSE 流式响应，不区分 stream / non-stream 处理。
   if (upstreamResp.status >= 400) {
     // 4xx/5xx 通常返 JSON error（很小），完整读出来带进 langfuse 便于排查
-    const errText = await upstreamResp.text();
+    let errText = await upstreamResp.text();
+    if (codexToAnthropic || codexToChat) {
+      // 上游错误体是 Anthropic / Chat schema，回给 Responses 客户端前统一转 OpenAI 错误。
+      errText = toOpenAiErrorBody(errText);
+    }
     if (lf) {
       try {
         langfuseReportFailure({
@@ -1196,6 +1218,29 @@ async function forwardToUpstream(
       status: upstreamResp.status,
       headers: filterResponseHeaders(upstreamResp.headers),
     });
+  }
+
+  // 非 SSE（stream:false 的 JSON 响应）：转换后直接回给客户端，避免把 JSON
+  // 当 SSE 帧消费导致内容被吞或挂起。
+  const upstreamContentType = upstreamResp.headers.get("content-type") ?? "";
+  if (!upstreamContentType.includes("text/event-stream") && (codexToAnthropic || codexToChat)) {
+    const raw = await upstreamResp.text();
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const converted = codexToAnthropic
+        ? anthropicJsonToResponsesJson(parsed, { model: modelId })
+        : chatJsonToResponses(parsed, { model: modelId });
+      return new Response(JSON.stringify(converted), {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    } catch {
+      // 非 JSON：原样透传。
+      return new Response(raw, {
+        status: upstreamResp.status,
+        headers: filterResponseHeaders(upstreamResp.headers),
+      });
+    }
   }
 
   const upstreamStream =

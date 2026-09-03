@@ -59,6 +59,7 @@ import {
   responsesJsonToAnthropicJson,
   createResponsesSseToAnthropicSse,
 } from "./common/responses-anthropic-compat.js";
+import { toAnthropicErrorBody } from "./upstream/protocol-errors.js";
 import type { CcRequestKind } from "./common/cc-request-classifier.js";
 import { buildRequestDebugMetadata } from "./common/langfuse-debug.js";
 import { resolveAgentAdapter } from "./agent-adapters/index.js";
@@ -1482,6 +1483,8 @@ export async function handleAnthropicMessages(
     ...routeLogMeta,
     ...(retried ? { retrySuccess: true } : {}),
   };
+  const convertedUpstream =
+    agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true;
 
   // ── Streaming response (Anthropic SSE) ──────────────────────────────────
   if (isStream) {
@@ -1493,7 +1496,7 @@ export async function handleAnthropicMessages(
     // Log error body for 4xx
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errStream, clientStream] = upstreamResp.body.tee();
-      const errText = await new Response(errStream).text();
+      let errText = await new Response(errStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -1521,6 +1524,11 @@ export async function handleAnthropicMessages(
         observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
       });
       pipe.streamDone(null);
+      if (convertedUpstream) {
+        // 上游是 Chat / Responses 风格错误体，客户端（Claude Code）需要 Anthropic 错误 schema。
+        errText = toAnthropicErrorBody(errText);
+        return new Response(errText, { status: upstreamResp.status, headers: respHeaders });
+      }
       return new Response(clientStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
@@ -1573,19 +1581,24 @@ export async function handleAnthropicMessages(
 
   // ── Non-streaming response ───────────────────────────────────────────────
   let respText = await upstreamResp.text();
-  if (agentUpstream?.anthropicToChat === true || agentUpstream?.anthropicToResponses === true) {
-    try {
-      const upstreamJson = JSON.parse(respText) as Record<string, unknown>;
-      const anthJson = agentUpstream.anthropicToChat === true
-        ? chatJsonToAnthropicJson(upstreamJson)
-        : responsesJsonToAnthropicJson(upstreamJson);
-      respText = JSON.stringify(anthJson);
-      pipe.info(
-        "PROTOCOL",
-        `upstream ${agentUpstream.anthropicToChat === true ? "chat" : "responses"} → anthropic (non-stream)`,
-      );
-    } catch {
-      // 非 JSON / 错误体：原样透传，由上层错误处理。
+  if (convertedUpstream) {
+    if (upstreamResp.status >= 400) {
+      // 错误体不套成功转换，只做 schema 映射；无法识别时原样透传。
+      respText = toAnthropicErrorBody(respText);
+    } else {
+      try {
+        const upstreamJson = JSON.parse(respText) as Record<string, unknown>;
+        const anthJson = agentUpstream?.anthropicToChat === true
+          ? chatJsonToAnthropicJson(upstreamJson)
+          : responsesJsonToAnthropicJson(upstreamJson);
+        respText = JSON.stringify(anthJson);
+        pipe.info(
+          "PROTOCOL",
+          `upstream ${agentUpstream?.anthropicToChat === true ? "chat" : "responses"} → anthropic (non-stream)`,
+        );
+      } catch {
+        // 非 JSON / 错误体：原样透传，由上层错误处理。
+      }
     }
   }
   const endTime = new Date().toISOString();

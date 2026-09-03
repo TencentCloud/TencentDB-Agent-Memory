@@ -36,6 +36,16 @@ upstream:
   # 留空则透传客户端原始 API Key。
   apiKey: "<YOUR_TOKENHUB_API_KEY>"
 
+  # ── 上游协议能力自动探测（upstream.autoDetect） ──────────────────────────
+  # enabled=true 时启动阶段对每个已知 agent（workbuddy / claude-code / codex）
+  # 的实际上游并行探测三种端点（Chat / Responses / Anthropic），并自动写入
+  # 下面的 per-agent 转换开关。探测用小请求（max_tokens=1），超时/网络错误
+  # 一律降级为直连；显式配置的开关始终优先于探测结果。
+  # 默认关闭：不开探测时，必须手动配置 per-agent 转换开关。
+  autoDetect:
+    enabled: false          # true 时自动探测；false 时按 agents 显式开关接线
+    timeoutMs: 3000         # 单端点探测超时（毫秒）
+
   # ── Per-Agent 覆盖 ─────────────────────────────────────────────────────────
   # 按 agent 名（URL 路径前缀 /{agent}/...）覆盖 url + apiKey。
   # Anthropic 和 OpenAI 协议共用同一张表。
@@ -59,13 +69,27 @@ upstream:
   #   2. upstream.agents[agent].url + upstream.agents[agent].apiKey
   #   3. costGuard.anthropicUpstream.url（仅 Anthropic 协议）
   #   4. upstream.url + upstream.apiKey（未命中 agent 时的默认）
+  #
+  # 协议转换开关（显式配置优先于 autoDetect；按 agent 前缀逐项可选）：
+  #   chatCompletions       Responses 客户端（codex / workbuddy 桌面）→ Chat 上游
+  #   anthropicToChat       Anthropic 客户端（claude-code）→ Chat 上游
+  #   chatToAnthropic       Chat 客户端（workbuddy 网页）→ Anthropic 上游
+  #   responsesToAnthropic  Responses 客户端（codex / workbuddy 桌面）→ Anthropic 上游
+  #   anthropicToResponses  Anthropic 客户端（claude-code）→ Responses 上游
   agents: {}
     # claude-code:                                        # 服务端 key 模式
     #   url: "https://claude-upstream.example.com/v1"
     #   apiKey: "sk-ant-agent-key"
+    #   anthropicToChat: true      # Claude Code 请求转 OpenAI Chat 后再转发
     # codex:                                              # 客户端 key 透传模式
     #   url: "https://codex-upstream.example.com/v1"
     #   # 不写 apiKey → 透传客户端自己带上来的 key，不走外层兜底
+    #   responsesToAnthropic: true # Codex /responses → Anthropic 上游
+    #   chatCompletions: true      # Codex /responses → Chat 上游（Chat 上游时选这项）
+    # workbuddy:
+    #   chatToAnthropic: true      # workbuddy 网页 /chat/completions → Anthropic 上游
+    #   responsesToAnthropic: true # workbuddy 桌面 /v1/responses → Anthropic 上游
+    #   chatCompletions: true      # workbuddy 桌面 /v1/responses → Chat 上游
     # 注意：workbuddy / codebuddy / claude-code 等客户端不需要单独配 per-agent override，
     # 它们的请求会自然落到外层 upstream.url + 鉴权走的 user_key，proxy 自动按 user_id
     # 在内核拉取对应的 team/agent/task 上下文（不需要手动创建资源）。

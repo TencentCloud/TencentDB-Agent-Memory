@@ -91,7 +91,11 @@ export function resolveAgentModes(
   caps: UpstreamCapabilities,
 ): Record<string, Partial<AgentUpstreamEntry>> {
   const wb: Partial<AgentUpstreamEntry> = {};
+  // WorkBuddy 有两条协议路径：网页端走 Chat，桌面端走 Responses，都要按
+  // 上游能力独立给出转换标志（两条路径互不替代）。
   if (!caps.chat && caps.anthropic) wb.chatToAnthropic = true;
+  if (!caps.responses && caps.anthropic) wb.responsesToAnthropic = true;
+  if (!caps.responses && !caps.anthropic && caps.chat) wb.chatCompletions = true;
 
   const cc: Partial<AgentUpstreamEntry> = {};
   if (!caps.anthropic && caps.chat) cc.anthropicToChat = true;

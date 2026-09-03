@@ -50,6 +50,7 @@ import {
   anthropicJsonToChatJson,
   createAnthropicSseToChatSse,
 } from "./common/chat-anthropic-compat.js";
+import { toOpenAiErrorBody } from "./upstream/protocol-errors.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
 import { emitModelIntentTelemetry } from "./session/model-intent-telemetry.js";
 import { isExtractionAllowed, logExtractionSkipped } from "./extraction-gate.js";
@@ -1521,6 +1522,7 @@ export async function handleChatCompletions(
   const effectiveModel = retried && target.retryTarget
     ? target.retryTarget.model
     : target.model;
+  const chatToAnthropicOn = config.upstream.agents[agentSource]?.chatToAnthropic === true;
 
   // A retry falls back to the model the client asked for, so the request ends
   // up costing what it would have cost unrouted — no saving to attribute.
@@ -1544,7 +1546,7 @@ export async function handleChatCompletions(
     // Log upstream error body for 4xx responses
     if (!retried && upstreamResp.status >= 400 && upstreamResp.status < 500) {
       const [errBodyStream, clientPassStream] = upstreamResp.body.tee();
-      const errText = await new Response(errBodyStream).text();
+      let errText = await new Response(errBodyStream).text();
       pipe.error("UPSTREAM_4xx", `status=${upstreamResp.status} body=${errText.slice(0, 1000)}`);
       writeLog(config, {
         timestamp: new Date().toISOString(),
@@ -1572,6 +1574,11 @@ export async function handleChatCompletions(
         observationMetadata: { stage: "upstream", stream: true, ...debugMetadata },
       });
       pipe.streamDone(null);
+      if (chatToAnthropicOn) {
+        // 上游是 Anthropic 风格错误体，客户端（Chat）需要 OpenAI 风格错误 schema。
+        errText = toOpenAiErrorBody(errText);
+        return new Response(errText, { status: upstreamResp.status, headers: respHeaders });
+      }
       return new Response(clientPassStream, { status: upstreamResp.status, headers: respHeaders });
     }
 
@@ -1609,7 +1616,7 @@ export async function handleChatCompletions(
       preparedStats,
     };
     const passthrough = createUsageTapTransform(tapCtx);
-    const convertedStream = config.upstream.agents[agentSource]?.chatToAnthropic === true
+    const convertedStream = chatToAnthropicOn
       ? upstreamResp.body.pipeThrough(createAnthropicSseToChatSse({ model: effectiveModel }))
       : upstreamResp.body;
     const tappedStream = convertedStream.pipeThrough(passthrough);
@@ -1618,18 +1625,26 @@ export async function handleChatCompletions(
   }
 
   // ── Non-streaming response ───────────────────────────────────────────────
-  const respText = await upstreamResp.text();
+  let respText = await upstreamResp.text();
   const endTime = new Date().toISOString();
 
   let usage: Record<string, unknown> | null = null;
   let assistantMessage: Record<string, unknown> | null = null;
-  try {
-    let respJson = JSON.parse(respText) as Record<string, unknown>;
-    if (config.upstream.agents[agentSource]?.chatToAnthropic === true) {
-      respJson = anthropicJsonToChatJson(respJson);
-      // 转换后必须回写 respText：非流式路径从不重新序列化 respJson。
-      respText = JSON.stringify(respJson);
+  if (chatToAnthropicOn) {
+    if (upstreamResp.status >= 400) {
+      // 错误体不套成功转换（成功转换器会伪造空 message），只做 schema 映射。
+      respText = toOpenAiErrorBody(respText);
+    } else {
+      try {
+        const respJson = JSON.parse(respText) as Record<string, unknown>;
+        respText = JSON.stringify(anthropicJsonToChatJson(respJson));
+      } catch {
+        // 非 JSON / 空响应体：原样透传。
+      }
     }
+  }
+  try {
+    const respJson = JSON.parse(respText) as Record<string, unknown>;
     if (respJson.usage && typeof respJson.usage === "object") {
       usage = respJson.usage as Record<string, unknown>;
     }
