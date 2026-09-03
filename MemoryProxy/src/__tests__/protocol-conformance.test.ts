@@ -167,7 +167,7 @@ describe("流式 thinking_delta ↔ reasoning_content", () => {
   });
 
   it("chat delta.reasoning_content → Anthropic thinking 块流", async () => {
-    const ts = createChatSseToAnthropicSse({ model: "m" });
+    const ts = createChatSseToAnthropicSse({ model: "m", thinking: "map" });
     const out = await runTransform(ts, [
       'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
       'data: {"choices":[{"index":0,"delta":{"reasoning_content":"推理中"},"finish_reason":null}]}\n\n',
@@ -182,6 +182,21 @@ describe("流式 thinking_delta ↔ reasoning_content", () => {
     expect(out).toContain('"type":"message_stop"');
     const stops = (out.match(/"type":"content_block_stop"/g) ?? []).length;
     expect(stops).toBe(2);
+  });
+
+  it("chat delta.reasoning_content 默认 strip（与矩阵口径一致，不产生无 signature 的 thinking）", async () => {
+    const ts = createChatSseToAnthropicSse({ model: "m" });
+    const out = await runTransform(ts, [
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"推理中"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":"正文"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(out).not.toContain('"type":"thinking"');
+    expect(out).not.toContain('"thinking":"推理中"');
+    expect(out).toContain('"type":"text_delta","text":"正文"');
+    expect(out).toContain('"type":"message_stop"');
   });
 });
 
@@ -541,6 +556,54 @@ describe("developer / system 角色语义", () => {
     const msgs = chat.messages as Array<Record<string, unknown>>;
     expect(msgs.some((m) => m.role === "system" && m.content === "规则")).toBe(true);
     expect(msgs.filter((m) => m.role === "user").length).toBe(1);
+  });
+
+  it("system/assistant 的 content 数组提取文本，不做 JSON.stringify", () => {
+    const anth = chatToAnthropic({
+      model: "m",
+      messages: [
+        {
+          role: "system",
+          content: [
+            { type: "text", text: "规则A" },
+            { type: "text", text: "规则B" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "我来查" }],
+          tool_calls: [
+            { id: "call_1", type: "function", function: { name: "f", arguments: '{"a":1}' } },
+          ],
+        },
+      ],
+    });
+    expect(anth.system).toBe("规则A\n\n规则B");
+    expect(anth.system).not.toContain("[{");
+    const asst = (anth.messages as Array<Record<string, unknown>>).find((m) => m.role === "assistant");
+    const blocks = asst?.content as Array<Record<string, unknown>>;
+    expect(blocks[0]).toEqual({ type: "text", text: "我来查" });
+    expect(blocks[1]).toMatchObject({ type: "tool_use", name: "f" });
+  });
+
+  it("chat JSON 的 assistant content 数组 → Anthropic text 块（不丢正文）", () => {
+    const out = chatJsonToAnthropicJson({
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "a" },
+              { type: "text", text: "b" },
+            ],
+          },
+        },
+      ],
+    });
+    expect(out.content).toEqual([
+      { type: "text", text: "a\n\nb" },
+    ]);
   });
 });
 

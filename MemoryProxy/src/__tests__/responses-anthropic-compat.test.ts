@@ -7,6 +7,7 @@ import {
   createAnthropicSseToResponsesSse,
   createResponsesSseToAnthropicSse,
 } from "../common/responses-anthropic-compat.js";
+import { createChatSseToResponses } from "../common/responses-chat-compat.js";
 import { getProtocolStats, resetProtocolStats } from "../common/protocol-stats.js";
 
 const encoder = new TextEncoder();
@@ -479,5 +480,46 @@ describe("组合层 JSON 响应 usage 只计一次", () => {
     expect(snap.cache.cacheHitRequests).toBe(1);
     expect(snap.cache.cachedTokens).toBe(60);
     expect(snap.cache.inputTokens).toBe(200);
+  });
+});
+
+describe("createChatSseToResponses（上游 Chat SSE → 客户端 Responses SSE）", () => {
+  it("并行工具调用：参数按 call index 归属各自 item，不串流", async () => {
+    const input =
+      'data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_0","type":"function","function":{"name":"f","arguments":""}},{"index":1,"id":"call_1","type":"function","function":{"name":"g","arguments":""}}]},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"a\\":"}},{"index":1,"function":{"arguments":"{\\"b\\":"}}]},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}},{"index":1,"function":{"arguments":"2}"}}]},"finish_reason":"tool_calls"}]}\n\n' +
+      "data: [DONE]\n\n";
+    const out = await runTransform(createChatSseToResponses({ model: "m" }), input);
+    const evts = frames(out);
+    const deltas = evts
+      .filter((e) => e.event === "response.function_call_arguments.delta")
+      .map((e) => ({ itemId: e.data.item_id, delta: e.data.delta }));
+    expect(deltas).toEqual([
+      { itemId: "call_0", delta: '{"a":' },
+      { itemId: "call_1", delta: '{"b":' },
+      { itemId: "call_0", delta: "1}" },
+      { itemId: "call_1", delta: "2}" },
+    ]);
+    const completed = evts.find((e) => e.event === "response.completed");
+    const output = (completed?.data.response as { output: Array<Record<string, unknown>> }).output;
+    expect(output).toEqual([
+      {
+        id: "call_0",
+        type: "function_call",
+        status: "completed",
+        call_id: "call_0",
+        name: "f",
+        arguments: '{"a":1}',
+      },
+      {
+        id: "call_1",
+        type: "function_call",
+        status: "completed",
+        call_id: "call_1",
+        name: "g",
+        arguments: '{"b":2}',
+      },
+    ]);
   });
 });
