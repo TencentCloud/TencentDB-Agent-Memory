@@ -381,6 +381,7 @@ export class StorePool {
         model: embCfg.model,
         dimensions: embCfg.dimensions,
         maxInputChars: embCfg.maxInputChars,
+        maxBatchSize: embCfg.maxBatchSize,
       }, this.logger as StoreLogger);
     }
 
