@@ -57,10 +57,16 @@ import { StorePool } from "../core/store/store-pool.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
-import { handleV2Route, errorEnvelope, makeRequestId } from "./v2-router.js";
+import {
+  handleV2Route,
+  errorEnvelope,
+  makeRequestId,
+  selectV3DataPlaneAuthMode,
+} from "./v2-router.js";
 import type { V2RouterDeps } from "./v2-router.js";
 import { handleV3MetaRoute, V3_PREFIX } from "../metadata/router/v3-meta-router.js";
 import { handleInternalMetaRoute, V3_INTERNAL_PREFIX } from "../metadata/router/internal-meta-router.js";
+import { extractUserKeyHeader } from "../metadata/router/auth.js";
 import { MetadataService } from "../metadata/service/metadata-service.js";
 import { ConfigParamService } from "../metadata/service/config-param-service.js";
 import { loadDefaultRegistry } from "../metadata/config/param-registry.js";
@@ -890,14 +896,27 @@ export class TdaiGateway {
       // /v3 = L0–L3 数据面"严格 isolation 版本"（team/agent/user/session 必填），共享同一组 handler 实现，
       //       仅在 dispatch 层多一层校验。详见 v2-router.ts 中 V3_PREFIX/V3_ALLOWED_SUBPATHS 注释。
       //
-      // Apply the develop-introduced apiKey gate first so v2/v3 inherits the
-      // optional shared-secret protection. v2's own `parseV2Auth` (Bearer +
-      // x-tdai-service-id) still runs inside `handleV2Route`, preserving
-      // its existing semantics. When `server.apiKey` is unset, this gate
-      // is a no-op (default-open), matching the develop_server_test
-      // baseline.
+      // Apply the optional shared-secret gate to legacy callers. Existing v3
+      // L0-L3 requests carrying x-tdai-user-key use the per-user metadata
+      // authorization inside handleV2Route instead; that path validates the
+      // requested user/team/agent scope before resolving memory storage.
       if (pathname.startsWith("/v2/") || pathname.startsWith("/v3/")) {
-        if (!this.checkAuthForV2(req, res)) return;
+        const userKey = extractUserKeyHeader(req.headers);
+        const v3AuthMode = selectV3DataPlaneAuthMode(
+          pathname,
+          userKey,
+          !!this.config.server.apiKey,
+        );
+        if (v3AuthMode === "reject") {
+          const requestId = makeRequestId();
+          sendJson(res, 401, errorEnvelope(
+            401,
+            "Unauthorized: v3 data plane requires a user key or configured service authentication",
+            requestId,
+          ));
+          return;
+        }
+        if (v3AuthMode !== "user_key" && !this.checkAuthForV2(req, res)) return;
       }
 
       const v2Deps: V2RouterDeps = {

@@ -82,14 +82,19 @@ class GatewaySupervisor:
         self,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
+        scheme: str = "http",
         gateway_cmd: Optional[str] = None,
         api_key: Optional[str] = None,
+        user_key: Optional[str] = None,
     ):
         """Construct the supervisor.
 
         Args:
             host: Gateway bind host.
             port: Gateway bind port.
+            scheme: Gateway URL scheme (``http`` or ``https``). HTTPS assumes
+                TLS is terminated by the configured remote endpoint or proxy;
+                the auto-started Node Gateway itself serves plain HTTP.
             gateway_cmd: Shell command to spawn the Gateway. Falls back to
                 ``MEMORY_TENCENTDB_GATEWAY_CMD`` env var when None.
             api_key: Optional Gateway Bearer token used by the **client**
@@ -100,17 +105,25 @@ class GatewaySupervisor:
                 ``server.apiKey`` on the Gateway side directly, in the same
                 place you'd configure its port and data dir). Both ends must
                 see the same secret; the plugin only handles the client half.
-                ``None`` / empty means "do not attach an Authorization
-                header", which preserves the legacy default.
+                ``None`` / empty lets the client use the per-user key as its
+                compatibility Bearer envelope, or ``local`` when neither key
+                is configured.
+            user_key: Optional Principal-owned TencentDB user key. The client
+                sends it as ``x-tdai-user-key`` for v3 L0-L3 authorization.
+                When ``api_key`` is absent it is also used as the non-empty
+                Bearer value required by the compatibility request envelope.
         """
         self._host = host
         self._port = port
-        self._base_url = f"http://{host}:{port}"
+        self._scheme = scheme
+        self._base_url = f"{scheme}://{host}:{port}"
         self._api_key = (api_key or "").strip() or None
+        self._user_key = (user_key or "").strip() or None
         self._client = MemoryTencentdbSdkClient(
             base_url=self._base_url,
             timeout=5,
             api_key=self._api_key,
+            user_key=self._user_key,
             service_id="default",
         )
         self._process: Optional[subprocess.Popen] = None

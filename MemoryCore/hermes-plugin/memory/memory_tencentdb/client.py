@@ -28,11 +28,13 @@ class MemoryTencentdbSdkClient:
         base_url: str = "http://127.0.0.1:8420",
         timeout: int = DEFAULT_TIMEOUT,
         api_key: Optional[str] = None,
+        user_key: Optional[str] = None,
         service_id: str = "default",
     ):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._api_key = (api_key or "").strip() or None
+        self._user_key = (user_key or "").strip() or None
         self._service_id = service_id or "default"
 
     def _build_headers(self, *, content_type: bool) -> Dict[str, str]:
@@ -42,8 +44,10 @@ class MemoryTencentdbSdkClient:
         # Always send Bearer token: if api_key is configured use it,
         # otherwise send "local" so parseV2Auth doesn't reject the request
         # (Gateway with auth=disabled ignores the token value).
-        headers["Authorization"] = f"Bearer {self._api_key or 'local'}"
+        headers["Authorization"] = f"Bearer {self._api_key or self._user_key or 'local'}"
         headers["x-tdai-service-id"] = self._service_id
+        if self._user_key:
+            headers["x-tdai-user-key"] = self._user_key
         return headers
 
     def _post(self, path: str, body: Dict[str, Any], timeout: Optional[int] = None) -> Dict[str, Any]:
@@ -72,12 +76,18 @@ class MemoryTencentdbSdkClient:
             logger.debug("memory-tencentdb Gateway %s failed: %s", path, e)
             raise
 
-    def _get(self, path: str, timeout: Optional[int] = None) -> Dict[str, Any]:
+    def _get(
+        self,
+        path: str,
+        timeout: Optional[int] = None,
+        *,
+        authenticated: bool = True,
+    ) -> Dict[str, Any]:
         """Make a GET request to the Gateway."""
         url = f"{self._base_url}{path}"
         req = urllib.request.Request(
             url,
-            headers=self._build_headers(content_type=False),
+            headers=self._build_headers(content_type=False) if authenticated else {},
             method="GET",
         )
         try:
@@ -102,8 +112,8 @@ class MemoryTencentdbSdkClient:
     # -- API methods ----------------------------------------------------------
 
     def health(self, timeout: int = 3) -> Dict[str, Any]:
-        """Check if the Gateway is healthy."""
-        return self._get("/health", timeout=timeout)
+        """Check if the Gateway is healthy without transmitting credentials."""
+        return self._get("/health", timeout=timeout, authenticated=False)
 
     # ── v3: conversation (L0) ────────────────────────────────────────────────
 

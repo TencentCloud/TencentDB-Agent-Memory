@@ -13,6 +13,17 @@ team_id / agent_id / user_id tenancy isolation.
 Config via environment variables:
   MEMORY_TENCENTDB_GATEWAY_HOST — Gateway host (default: 127.0.0.1)
   MEMORY_TENCENTDB_GATEWAY_PORT — Gateway port (default: 8420)
+  MEMORY_TENCENTDB_GATEWAY_SCHEME — Gateway URL scheme (http or https;
+                                  default: http)
+  MEMORY_TENCENTDB_TEAM_ID      — TencentDB Team scope when Hermes does not
+                                  provide ``team_id`` (default: default)
+  MEMORY_TENCENTDB_AGENT_ID     — TencentDB Agent scope when Hermes does not
+                                  provide ``agent_id`` (default: default)
+  MEMORY_TENCENTDB_USER_KEY     — Principal-owned TencentDB user key used to
+                                  authenticate v3 L0-L3 requests
+  HERMES_MANAGED_TENCENTDB_MEMORY_* — Optional managed aliases for Gateway,
+                                  Team and Agent values; these take precedence
+                                  over the corresponding Principal variables
   MEMORY_TENCENTDB_GATEWAY_CMD  — Command to start the Gateway (optional; if
                                   unset, the provider auto-discovers
                                   ``src/gateway/server.ts`` next to the plugin
@@ -76,6 +87,7 @@ _WATCHDOG_SHUTDOWN_TIMEOUT_SECS = 2.0
 # Gateway networking defaults (kept here so is_available/initialize stay in sync)
 _DEFAULT_GATEWAY_HOST = "127.0.0.1"
 _DEFAULT_GATEWAY_PORT = 8420
+_DEFAULT_GATEWAY_SCHEME = "http"
 
 # Default tenancy IDs for v3 isolation.
 _DEFAULT_TEAM_ID = "default"
@@ -83,25 +95,42 @@ _DEFAULT_AGENT_ID = "default"
 _DEFAULT_USER_ID = "default"
 
 
+def _first_environment_value(*names: str) -> Optional[str]:
+    """Return the first non-empty trimmed environment value."""
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+    return None
+
+
 def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
-    """Resolve MEMORY_TENCENTDB_GATEWAY_PORT with validation."""
-    raw = os.environ.get("MEMORY_TENCENTDB_GATEWAY_PORT")
-    if raw is None or not raw.strip():
+    """Resolve the managed or Principal Gateway port with validation."""
+    names = (
+        "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_PORT",
+        "MEMORY_TENCENTDB_GATEWAY_PORT",
+    )
+    raw = _first_environment_value(*names)
+    if raw is None:
         return default
+    source = next(
+        (name for name in names if (os.environ.get(name) or "").strip()),
+        "MEMORY_TENCENTDB_GATEWAY_PORT",
+    )
     try:
-        port = int(raw.strip())
+        port = int(raw)
     except ValueError:
         logger.warning(
-            "Invalid MEMORY_TENCENTDB_GATEWAY_PORT=%r (not an integer); "
+            "Invalid %s=%r (not an integer); "
             "falling back to default %d.",
-            raw, default,
+            source, raw, default,
         )
         return default
     if not (1 <= port <= 65535):
         logger.warning(
-            "MEMORY_TENCENTDB_GATEWAY_PORT=%d is out of range (1..65535); "
+            "%s=%d is out of range (1..65535); "
             "falling back to default %d.",
-            port, default,
+            source, port, default,
         )
         return default
     return port
@@ -109,11 +138,35 @@ def _resolve_gateway_port(default: int = _DEFAULT_GATEWAY_PORT) -> int:
 
 def _resolve_gateway_host(default: str = _DEFAULT_GATEWAY_HOST) -> str:
     """Resolve MEMORY_TENCENTDB_GATEWAY_HOST, trimming whitespace."""
-    raw = os.environ.get("MEMORY_TENCENTDB_GATEWAY_HOST")
+    return _first_environment_value(
+        "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_HOST",
+        "MEMORY_TENCENTDB_GATEWAY_HOST",
+    ) or default
+
+
+def _resolve_gateway_scheme(default: str = _DEFAULT_GATEWAY_SCHEME) -> str:
+    """Resolve and validate the Gateway URL scheme."""
+    names = (
+        "HERMES_MANAGED_TENCENTDB_MEMORY_GATEWAY_SCHEME",
+        "MEMORY_TENCENTDB_GATEWAY_SCHEME",
+    )
+    raw = _first_environment_value(*names)
     if raw is None:
         return default
-    host = raw.strip()
-    return host or default
+    scheme = raw.lower()
+    if scheme in {"http", "https"}:
+        return scheme
+    source = next(
+        (name for name in names if (os.environ.get(name) or "").strip()),
+        "MEMORY_TENCENTDB_GATEWAY_SCHEME",
+    )
+    logger.warning(
+        "Invalid %s=%r (expected http or https); falling back to default %s.",
+        source,
+        raw,
+        default,
+    )
+    return default
 
 
 def _resolve_gateway_api_key() -> Optional[str]:
@@ -126,6 +179,29 @@ def _resolve_gateway_api_key() -> Optional[str]:
         if value:
             return value
     return None
+
+
+def _resolve_user_key() -> Optional[str]:
+    """Read the Principal-owned TencentDB user key from the environment."""
+    return _first_environment_value("MEMORY_TENCENTDB_USER_KEY")
+
+
+def _resolve_tenancy_id(
+    explicit: Any,
+    *,
+    env_var: str,
+    managed_env_var: Optional[str] = None,
+    default: str,
+) -> str:
+    """Resolve an explicit Hermes scope before its deployment fallback."""
+    if explicit is not None:
+        value = str(explicit).strip()
+        if value:
+            return value
+    value = _first_environment_value(*((managed_env_var,) if managed_env_var else ()), env_var)
+    if value:
+        return value
+    return default
 
 
 # Candidate locations searched by _discover_gateway_cmd() when the user has not
@@ -517,11 +593,14 @@ class MemoryTencentdbProvider(MemoryProvider):
             return True
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
+        scheme = _resolve_gateway_scheme()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
         client = MemoryTencentdbSdkClient(
-            base_url=f"http://{host}:{port}",
+            base_url=f"{scheme}://{host}:{port}",
             timeout=2,
             api_key=api_key,
+            user_key=user_key,
             service_id="default",
         )
         try:
@@ -534,23 +613,38 @@ class MemoryTencentdbProvider(MemoryProvider):
         """Start or connect to the Gateway sidecar.
 
         v3: accepts team_id, agent_id, user_id for tenancy isolation.
-        All default to "default".
+        Team and Agent IDs fall back to their deployment environment variables;
+        all tenancy IDs retain "default" as the compatibility fallback.
         """
         self._session_id = session_id
         self._user_id = kwargs.get("user_id", _DEFAULT_USER_ID)
-        self._team_id = kwargs.get("team_id", _DEFAULT_TEAM_ID)
-        self._agent_id = kwargs.get("agent_id", _DEFAULT_AGENT_ID)
+        self._team_id = _resolve_tenancy_id(
+            kwargs.get("team_id"),
+            env_var="MEMORY_TENCENTDB_TEAM_ID",
+            managed_env_var="HERMES_MANAGED_TENCENTDB_MEMORY_TEAM_ID",
+            default=_DEFAULT_TEAM_ID,
+        )
+        self._agent_id = _resolve_tenancy_id(
+            kwargs.get("agent_id"),
+            env_var="MEMORY_TENCENTDB_AGENT_ID",
+            managed_env_var="HERMES_MANAGED_TENCENTDB_MEMORY_AGENT_ID",
+            default=_DEFAULT_AGENT_ID,
+        )
 
         host = _resolve_gateway_host()
         port = _resolve_gateway_port()
+        scheme = _resolve_gateway_scheme()
         gateway_cmd = os.environ.get("MEMORY_TENCENTDB_GATEWAY_CMD") or _discover_gateway_cmd()
         api_key = _resolve_gateway_api_key()
+        user_key = _resolve_user_key()
 
         self._supervisor = GatewaySupervisor(
             host=host,
             port=port,
+            scheme=scheme,
             gateway_cmd=gateway_cmd,
             api_key=api_key,
+            user_key=user_key,
         )
 
         self._initialized = True
@@ -954,18 +1048,48 @@ class MemoryTencentdbProvider(MemoryProvider):
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_PORT",
             },
             {
+                "key": "gateway_scheme",
+                "description": (
+                    "Gateway URL scheme: use http only for same-host loopback; "
+                    "remote Gateways carrying user keys must use https"
+                ),
+                "default": "http",
+                "env_var": "MEMORY_TENCENTDB_GATEWAY_SCHEME",
+            },
+            {
                 "key": "gateway_api_key",
                 "description": (
                     "Optional Bearer token attached to outbound Gateway "
                     "requests. Set this to the same secret you configure on "
                     "the Gateway side (``TDAI_GATEWAY_API_KEY`` / "
-                    "``server.apiKey``) so the Bearer comparison succeeds. "
-                    "Leave unset to skip the Authorization header entirely "
-                    "(legacy default; matches an open Gateway)."
+                    "``server.apiKey``) so the Bearer comparison succeeds."
                 ),
                 "secret": True,
                 "required": False,
                 "env_var": "MEMORY_TENCENTDB_GATEWAY_API_KEY",
+            },
+            {
+                "key": "team_id",
+                "description": "TencentDB Team scope when Hermes omits team_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_TEAM_ID",
+            },
+            {
+                "key": "user_key",
+                "description": (
+                    "Principal-owned TencentDB user key used to authenticate "
+                    "v3 L0-L3 requests. It must resolve to the same user_id "
+                    "that Hermes supplies during provider initialization."
+                ),
+                "secret": True,
+                "required": False,
+                "env_var": "MEMORY_TENCENTDB_USER_KEY",
+            },
+            {
+                "key": "agent_id",
+                "description": "TencentDB Agent scope when Hermes omits agent_id",
+                "default": "default",
+                "env_var": "MEMORY_TENCENTDB_AGENT_ID",
             },
             {
                 "key": "llm_api_key",
