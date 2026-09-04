@@ -97,10 +97,9 @@ Knowledge Service Swagger（可选，看接口调试用）：
 
 ### 第 1.5 步：admin 建业务用户（可选，推荐隔离运维与业务）
 
-面板左上角「用户管理」（或用 admin 直接调 API）新建一个用户：
+当前 Panel 没有独立的「用户管理」菜单。面板里的等价路径是：admin 先创建或进入一个 Team，在「成员管理」里「新建用户并加入团队」；该操作会先调 `user/create` 再调 `team-member/add`，新用户默认以当前 Team 的 `member` 角色加入。若只想建账号、不绑定 Team，用下面的 API 方式：
 
 ```bash
-# API 方式，更明确（面板里等价操作在「用户」→「新建」）
 ADMIN_KEY=$(cat ./.admin-key)
 curl -sS -X POST http://localhost:8420/v3/meta/user/create \
   -H "x-tdai-user-key: $ADMIN_KEY" \
@@ -112,21 +111,22 @@ curl -sS -X POST http://localhost:8420/v3/meta/user/create \
 返回体里 `data.default_user_key`（`sk-mem-...`）就是新用户的登录 key，
 **保存好**（面板无处再看到全值，只有创建时返回一次）。
 
-之后**面板退出登录**，用这把新 key 重新登录 —— 你现在是 `normal` 用户，
-可以在自己名下建 Team / Agent / Task 了。当然，admin 也可以直接操作，这里只是推荐隔离。
+注意：面板「新建用户并加入团队」是两阶段操作，若第二步因 Team 权限不足失败，全局账号已经创建，需要用 API 或 admin 手动补成员关系，避免孤立账号。
+
+之后**面板退出登录**，用这把新 key 重新登录。新 `normal` 用户能否自建 Team 以当前 Panel 的 TeamSwitcher 显示为准：若看不到创建入口，需要 admin 在「成员管理」里把该用户加入目标 Team 并提升角色，而不是退回 curl 猜测权限。
 
 ### 第 2 步：在面板里建 Team / Agent / Task
 
 Coding agent 用记忆必须落到具体 `team / agent / task` 三元组上：
 
-1. **Team**（团队）：面板左侧「团队」→ 新建
+1. **Team**（团队）：顶栏 TeamSwitcher → 新建（入口名称以当前 Panel 为准，旧版为左侧「团队」）
    - 一个 Team 是一组资产的归属容器（memory、skill、knowledge 都归 Team）
-2. **Agent**（智能体）：进入 Team → 「Agent」→ 新建
+2. **Agent**（智能体）：进入 Team → 「Agents 管理」→ 新建
    - 给它填一段清晰的 `description` + `system prompt`（就是这个 agent 的角色说明）
    - 例：`bug-fix 工程师`、`前端评审 agent`、`SQL 优化师`
-3. **Task**（任务，可选）：Team → 「任务」→ 新建
+3. **Task**（任务，可选）：Team → 「任务看板」→ 新建
    - Task 是**这一次工作的抓手**，比如「修复登录页 XSS」「上线 v1.4 灰度」
-   - 记忆会关联到 Task；不建 Task 也能用，但 L2/L3 会缺 Task 维度
+   - 记忆会关联到 Task；不建 Task 也能用，但交互式 session-init 在 Team 为 0 Task 且未配置 `sessionInit.defaultTaskId` 时会进入 bypass，需要「本次不关联任务」入口时按后文配置 `defaultTaskId`
 
 先建**至少 1 个 Team + 1 个 Agent**，可选建 Task。
 
