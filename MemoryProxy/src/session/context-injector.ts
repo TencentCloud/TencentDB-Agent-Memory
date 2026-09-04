@@ -71,6 +71,15 @@ function buildContextBlock(
     }
   }
 
+  lines.push("");
+  lines.push("[重要约束]");
+  lines.push("以上 session 上下文由 proxy 自动注入，session 初始化已完成。");
+  lines.push("- team / agent / task 的选择与关联已由 proxy 在 session 初始化阶段完成，你无需、也不应再自行查询或调用任何相关接口。");
+  lines.push("- 不要搜索或安装任何 CLI 工具来完成上述操作。");
+  lines.push("- 不要猜测或构造 proxy 未明确列出的任何 API 路径。");
+  lines.push("- 你唯一可用的外部工具是 <skill_tools> 和 <tdai_memory_tools> 中列出的 curl 命令。");
+  lines.push("- 如果用户的问题与团队资产无关，直接回答，不要执行任何额外操作。");
+
   lines.push(CTX_CLOSE);
   return lines.join("\n");
 }

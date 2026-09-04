@@ -37,6 +37,8 @@ const SKIP_REQUEST_HEADERS = new Set([
   "content-length",
   "transfer-encoding",
   "connection",
+  // Auth-decoupling header — never forward to upstream (prevents user_key leak)
+  "x-mem-user-key",
 ]);
 
 /** 响应头中不应回传给客户端的头（避免 stream 长度不一致等问题）。 */
@@ -171,11 +173,15 @@ export async function handleAuxiliaryEndpoint(
     return c.json({ error: "Unregistered endpoint" }, 404);
   }
 
-  // 1. 鉴权（先做本地 keyId 解析，再走 auth 服务校验以与主 handler 对称）
-  const apiKey =
-    c.req.header("x-api-key") ??
-    extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ??
-    "";
+  // 1. 鉴权（先做本地 keyId 解析，再走 auth 服务校验以与主 handler 对对称）
+  // When `auth.userKeyHeader` is configured, the user_key (sk-mem-*) moves to
+  // that header, freeing x-api-key / Authorization to carry the corporate
+  // gateway key for upstream passthrough.
+  const apiKey = config.auth.userKeyHeader
+    ? (c.req.header(config.auth.userKeyHeader) ?? c.req.header(config.auth.userKeyHeader.toLowerCase()) ?? "")
+    : (c.req.header("x-api-key") ??
+       extractBearerToken(c.req.header("authorization") ?? c.req.header("Authorization") ?? "") ??
+       "");
 
   let keyId = apiKey ? apiKeyToKeyId(apiKey) : "unknown";
 

@@ -6,12 +6,40 @@
  * - Returns structured result to allow caller to reject invalid keys
  * - x-tdai-service-id is derived from the request path's spaceId (not config)
  * - Configurable via YAML `auth` section
+ * - Supports `auth.userKeyHeader` to decouple the user_key (sk-mem-*) from the
+ *   client's Authorization header, enabling per-user corporate gateway key
+ *   passthrough to the upstream LLM.
  */
 
 import { log } from "./report/log.js";
+import { extractBearerToken } from "./opik.js";
 import type { AuthConfig } from "./types.js";
+import type { Context } from "hono";
 
 export type { AuthConfig };
+
+/**
+ * Extract the user_key (sk-mem-*) from a request, honoring `auth.userKeyHeader`.
+ *
+ * Resolution order:
+ *   1. If `userKeyHeader` is configured, read that header first (case-insensitive).
+ *      This frees the client's Authorization to carry a corporate gateway key
+ *      (sk-corp-*) that gets passthrough'd to the upstream LLM untouched.
+ *   2. Fall back to the legacy path: extract Bearer token from Authorization.
+ *
+ * This function never throws; returns "" when no user_key is found.
+ */
+export function extractUserKeyFromRequest(
+  c: Context,
+  userKeyHeader?: string,
+): string {
+  if (userKeyHeader) {
+    const v = c.req.header(userKeyHeader) ?? c.req.header(userKeyHeader.toLowerCase()) ?? "";
+    if (v) return v;
+  }
+  const authHeader = c.req.header("authorization") ?? c.req.header("Authorization") ?? "";
+  return extractBearerToken(authHeader);
+}
 
 /** Result of verifyUserKey call. */
 export interface VerifyUserResult {
