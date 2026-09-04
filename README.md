@@ -435,6 +435,8 @@ If `MEMORY_TENCENTDB_GATEWAY_API_KEY` is unset, the plugin also looks at `TDAI_G
 | `timezone` | `"system"` | Timezone for user/LLM-facing timestamps: `"system"` (follow process tz) / IANA name (`Asia/Shanghai`) / offset string (`+08:00`) |
 | `storeBackend` | `"sqlite"` | Storage backend: `sqlite` |
 | `recall.strategy` | `"hybrid"` | Recall strategy: `keyword` / `embedding` / `hybrid` (RRF fusion, recommended) |
+| `recall.injectionMode` | `"prepend"` | Dynamic L1 placement: `prepend` preserves current behavior; `append` uses OpenClaw `appendContext` on v2026.4.27+ and safely falls back on older/unknown hosts |
+| `recall.showInjected` | `false` | Persist plugin-generated `<relevant-memories>` for debugging; keep `false` to prevent stale recall replay and history growth |
 | `recall.maxResults` | `5` | Number of items returned per recall |
 | `recall.maxCharsPerMemory` | `0` | Max characters injected for one recalled L1 memory; `0` disables this guard |
 | `recall.maxTotalRecallChars` | `0` | Total character budget for auto-recalled L1 memories; `0` disables this guard |
