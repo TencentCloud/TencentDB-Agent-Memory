@@ -678,6 +678,7 @@ export async function handleChatCompletions(
   const conversationId = sessionStageCtx.conversationId;
   const sessionKey =
     sessionStageCtx.sessionKey ?? resolveSessionKey(config, lcHeaders, c.req.path, body, keyId);
+  const threadId = sessionStageCtx.threadId ?? null;
 
   // ── Auth verification (user_key → user_id) ──────────────────────────────────────
   // Reuse the early verify result — it ran before body parse to decide the
@@ -778,9 +779,14 @@ export async function handleChatCompletions(
       const { isMemCommandAllowed, parseMemCommand } = await import("./mem-command/index.js");
       const memCmd = parseMemCommand(body as Record<string, unknown>, agentSource);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({
+          agentSource,
+          sessionKey,
+          threadId,
+          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+        });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -830,6 +836,7 @@ export async function handleChatCompletions(
   if (config.sessionInit?.enabled && conversationId && !isAuxiliary && !_dshHeadless) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
+      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       // kernel /v3/meta/* 走 x-tdai-user-key 鉴权，需要 sk-mem-* 用户 key。
@@ -847,7 +854,12 @@ export async function handleChatCompletions(
       const presetIdentity = parsePresetIdentity(config.sessionInit, lcHeaders);
 
       // ── Session Recovery: try L2b binding before falling into session-init form ──
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = buildStoreSessionKey({
+        agentSource,
+        sessionKey,
+        threadId,
+        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+      });
       // Identity for repo/binding writes. userId 缺失时 fallback 到 `anonymous`
       // 复合键，保证 key path 分段合法（`u=anonymous` 走独立命名空间，天然与
       // 有 userId 的请求隔离）。参见 §4.4 边界处理。

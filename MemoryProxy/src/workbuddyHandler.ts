@@ -849,7 +849,8 @@ export async function handleWorkbuddyEndpoint(
 
   // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
   // workbuddy 不主动生成 auto ID（autoGenerate=false）；显式 session-id 缺失时
-  // 回退 `${keyId}:${traceId}`（原行为）。客户端回传 auto-* ID 仍过签名校验。
+  // 回退到首问指纹稳定键（无指纹再退回 `${keyId}:${traceId}`）。
+  // 客户端回传 auto-* ID 仍过签名校验。
   const sessionStageCtx: ReqCtx = {
     c,
     config,
@@ -864,6 +865,7 @@ export async function handleWorkbuddyEndpoint(
   await sessionStage(sessionStageCtx, WORKBUDDY_SESSION_ADAPTER);
   const sessionId = sessionStageCtx.conversationId;
   const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
+  const threadId = sessionStageCtx.threadId ?? null;
   const agentSource = "workbuddy";
   const isStream = body.stream !== false;
   const callerUserKey = apiKey || null;
@@ -914,9 +916,14 @@ export async function handleWorkbuddyEndpoint(
       const userText = workbuddyAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `codex:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({
+          agentSource,
+          sessionKey,
+          threadId,
+          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+        });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -960,6 +967,7 @@ export async function handleWorkbuddyEndpoint(
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import(
         "./session/index.js"
       );
+      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       // kernel 侧鉴权的 x-tdai-user-key 直接用客户端请求 bearer（与 codexHandler / anthropicHandler 对齐）。
@@ -968,7 +976,12 @@ export async function handleWorkbuddyEndpoint(
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `codex:${sessionKey}`;
+      const compositeKey = buildStoreSessionKey({
+        agentSource,
+        sessionKey,
+        threadId,
+        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+      });
       const identity = {
         userId: userId || "anonymous",
         agentSource: "codex" as const,

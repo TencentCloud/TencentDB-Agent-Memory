@@ -332,7 +332,8 @@ export async function handleCodexEndpoint(
 
   // ── 6. Session resolution（sessionStage 统一入口）──────────────────────────
   // 显式 session-id 优先；缺失时按 autoConversationId 自动生成/续接；自动生成
-  // 关闭时回退到 `${keyId}:${traceId}`（原行为）。auto-* 回传 ID 仍过签名校验。
+  // 关闭时回退到首问指纹稳定键（无指纹再退回 `${keyId}:${traceId}`）。
+  // auto-* 回传 ID 仍过签名校验。
   const sessionStageCtx: ReqCtx = {
     c,
     config,
@@ -347,6 +348,7 @@ export async function handleCodexEndpoint(
   await sessionStage(sessionStageCtx, CODEX_SESSION_ADAPTER);
   const sessionId = sessionStageCtx.conversationId;
   const sessionKey = sessionStageCtx.sessionKey ?? `${keyId}:${traceId}`;
+  const threadId = sessionStageCtx.threadId ?? null;
   const agentSource = "codex";
   const isStream = body.stream !== false;
 
@@ -401,9 +403,14 @@ export async function handleCodexEndpoint(
       const userText = codexAdapter.extractUserText(input) ?? "";
       const memCmd = parseCommandFromText(userText);
       if (memCmd && isMemCommandAllowed(config.memCommand, memCmd.command)) {
-        const { getSessionStore } = await import("./session/store.js");
+        const { getSessionStore, buildStoreSessionKey } = await import("./session/store.js");
         const store = getSessionStore();
-        const compositeKey = `${agentSource}:${sessionKey}`;
+        const compositeKey = buildStoreSessionKey({
+          agentSource,
+          sessionKey,
+          threadId,
+          threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+        });
         store.bind(compositeKey, { userId: userId || "anonymous", agentSource, sessionId: sessionKey, spaceId });
 
         // ── 强制归档旧 agent 的 skill buffer（best-effort）──
@@ -452,12 +459,18 @@ export async function handleCodexEndpoint(
   if (config.sessionInit?.enabled && sessionId) {
     try {
       const { getSessionStore, handleSessionInit, parsePresetIdentity } = await import("./session/index.js");
+      const { buildStoreSessionKey } = await import("./session/store.js");
       const { getMetadataClient } = await import("./meta/client.js");
       const store = getSessionStore();
       const metadataClient = getMetadataClient(config.coreSkill, spaceId, apiKey);
       const presetIdentity = parsePresetIdentity(config.sessionInit, headers);
 
-      const compositeKey = `${agentSource}:${sessionKey}`;
+      const compositeKey = buildStoreSessionKey({
+        agentSource,
+        sessionKey,
+        threadId,
+        threadIsolation: config.sessionInit?.threadIsolation?.enabled === true,
+      });
       const identity = {
         userId: userId || "anonymous",
         agentSource,
